@@ -136,6 +136,17 @@ type Defects = {
   financeReceiptDoubleOnReplay?: boolean;
   /** The receipt posts and allocates but the canonical receivable is left OPEN. */
   financeReceivableNotSettled?: boolean;
+  // ── FD2 — deal costs denominated once (SCRUM-319) ──
+  /** A cost entered in a foreign currency is recorded anyway — the integer lands at the wrong scale. */
+  feeAcceptsForeignCurrency?: boolean;
+  /** An actual entered in a foreign currency is patched onto the stored line. */
+  feeEditAcceptsForeignCurrency?: boolean;
+  /** A cost with no currency stated is accepted and denominated by guess. */
+  feeMissingCurrencyAccepted?: boolean;
+  /** The CREATE identity ignores the description — a changed intent replays the first row (AF-215-02). */
+  feeIdentityIgnoresDescription?: boolean;
+  /** The org currency lock does not cover deals and their costs — the original SCRUM-319 gap. */
+  currencyLockOmitsDeals?: boolean;
 };
 
 function makeBackend(defects: Defects = {}) {
@@ -198,6 +209,16 @@ function makeBackend(defects: Defects = {}) {
   /** Financed deals, their canonical finance-company receivables and allocations (FD1). */
   const financeApps = new Map<string, Record<string, any>>();
   const financeReceivables = new Map<string, Record<string, any>>();
+  /** Per-organization currency setting (FD2 creates disposable orgs). null = no settings row. */
+  const orgCurrency = new Map<string, string | null>([["org_1", defects.noOrgSettingsRow ? null : ORG_CURRENCY]]);
+  const effectiveCurrency = (orgId: string) => orgCurrency.get(orgId) ?? "JOD";
+  /** Deal cost lines and their CREATE identities (FD2). */
+  const financeDealFees = new Map<string, Record<string, any>>();
+  const feeByKey = new Map<string, { id: string; fingerprint: string }>();
+  const SUPPORTED_SCALES: Record<string, number> = { JOD: 3, KWD: 3, BHD: 3, OMR: 3, USD: 2, EUR: 2, GBP: 2, SAR: 2, AED: 2, QAR: 2, EGP: 2, JPY: 0 };
+  const orgHasDealRecords = (orgId: string) =>
+    [...financeApps.values()].some((app) => app.orgId === orgId) ||
+    [...financeDealFees.values()].some((fee) => fee.orgId === orgId);
   const allocations: Array<Record<string, any>> = [];
   const quotePrice = new Map<string, number>();
   const quoteCompany = new Map<string, string>();
@@ -486,7 +507,10 @@ function makeBackend(defects: Defects = {}) {
       case "orgSettings:get":
         // The product resolves the denomination from orgSettings, defaulting to
         // JOD when no row exists; the fake exposes the explicit form.
-        return { ok: true as const, value: defects.noOrgSettingsRow ? null : { orgId: "org_1", currency: ORG_CURRENCY } };
+        {
+          const current = orgCurrency.get(String(args.orgId));
+          return { ok: true as const, value: current === null || current === undefined ? null : { orgId: args.orgId, currency: current } };
+        }
       case "chartOfAccounts:initialize":
         return { ok: true as const, value: null };
       case "chartOfAccounts:list":
@@ -711,10 +735,31 @@ function makeBackend(defects: Defects = {}) {
         );
         return { ok: true as const, value: saleId };
       }
-      case "organizations:create":
+      case "organizations:create": {
         // A genuinely different organization the caller owns — what the TEN case
         // needs in order to test OWNERSHIP rather than id syntax.
-        return { ok: true as const, value: id("org") };
+        const orgId = id("org");
+        orgCurrency.set(orgId, null);
+        return { ok: true as const, value: orgId };
+      }
+      case "orgSettings:upsert": {
+        const orgId = String(args.orgId);
+        if (args.currency !== undefined && args.currency !== effectiveCurrency(orgId)) {
+          // The lock: once a deal or a money fact exists the currency is
+          // load-bearing. The SCRUM-319 gap was exactly that deals and their
+          // cost lines were not on the list.
+          if (!defects.currencyLockOmitsDeals && orgHasDealRecords(orgId)) {
+            return {
+              ok: false as const,
+              error: "The organization currency cannot be changed after financial records exist — stored amounts are not converted and would be misread. Contact support for a currency migration.",
+            };
+          }
+          orgCurrency.set(orgId, String(args.currency));
+        } else if (args.currency !== undefined) {
+          orgCurrency.set(orgId, String(args.currency));
+        }
+        return { ok: true as const, value: id("settings") };
+      }
       case "customers:create":
         return { ok: true as const, value: id("cust") };
       case "vehicles:create":
@@ -968,6 +1013,7 @@ function makeBackend(defects: Defects = {}) {
         const appId = id("fapp");
         financeApps.set(appId, {
           _id: appId,
+          orgId: String(args.orgId),
           quoteId: String(args.quoteId),
           customerId: quoteCustomer.get(String(args.quoteId)),
           companyId: quoteCompany.get(String(args.quoteId)),
@@ -1003,8 +1049,79 @@ function makeBackend(defects: Defects = {}) {
       case "financeDealCosts:recordDealFee": {
         const app = financeApps.get(String(args.applicationId));
         if (!app) return { ok: false as const, error: "Application not found." };
+        // Every cost write names the currency its integer is in (SCRUM-319).
+        const expected = args.expectedCurrency;
+        if (expected === undefined) {
+          if (!defects.feeMissingCurrencyAccepted) {
+            return { ok: false as const, error: "ArgumentValidationError: Object is missing the required field `expectedCurrency`." };
+          }
+        } else if (expected !== String(expected).toUpperCase() || SUPPORTED_SCALES[expected] === undefined) {
+          return { ok: false as const, error: `The currency this request was entered in ("${expected}") is not one AutoFlow can use, so recording this cost would store an amount at a scale nobody verified.` };
+        }
+        const dealCurrency = effectiveCurrency(app.orgId ?? "org_1");
+        if (expected !== undefined && expected !== dealCurrency && !defects.feeAcceptsForeignCurrency) {
+          return { ok: false as const, error: `This cost was entered in ${expected}, but the deal's costs are kept in ${dealCurrency}. Reload the deal and enter the amount in ${dealCurrency}.` };
+        }
+        const fingerprint = JSON.stringify({
+          applicationId: String(args.applicationId), feeType: args.feeType, expectedCurrency: expected ?? null,
+          description: defects.feeIdentityIgnoresDescription ? undefined : (args.description?.trim() || null),
+          estimatedAmountMinor: args.estimatedAmountMinor ?? null, actualAmountMinor: args.actualAmountMinor ?? null,
+          paidBy: args.paidBy, paidTo: args.paidTo, accountingTreatment: args.accountingTreatment,
+          deductedFromSettlement: args.deductedFromSettlement ?? false, paidAt: args.paidAt ?? null,
+        });
+        const key = String(args.idempotencyKey);
+        const prior = feeByKey.get(key);
+        if (prior) {
+          if (prior.fingerprint !== fingerprint) {
+            return { ok: false as const, error: "Idempotency key reused with different request content. Use a new key for a different operation." };
+          }
+          return { ok: true as const, value: prior.id };
+        }
+        const feeId = id("fee");
+        financeDealFees.set(feeId, {
+          _id: feeId, orgId: app.orgId ?? "org_1", applicationId: String(args.applicationId), currency: dealCurrency,
+          estimatedAmountMinor: args.estimatedAmountMinor, actualAmountMinor: args.actualAmountMinor, voidedAt: undefined,
+        });
+        feeByKey.set(key, { id: feeId, fingerprint });
         if (args.deductedFromSettlement) app.withheldMinor += Number(args.actualAmountMinor ?? 0);
-        return { ok: true as const, value: id("fee") };
+        return { ok: true as const, value: feeId };
+      }
+      case "financeDealCosts:recordActualFeeAmount": {
+        const fee = financeDealFees.get(String(args.feeId));
+        if (!fee) return { ok: false as const, error: "Deal cost not found in this organization." };
+        if (fee.voidedAt !== undefined) return { ok: false as const, error: "This cost has been voided. Add a new line instead." };
+        if (args.expectedCurrency !== fee.currency && !defects.feeEditAcceptsForeignCurrency) {
+          return { ok: false as const, error: `This amount was entered in ${args.expectedCurrency}, but this cost line is recorded in ${fee.currency}. Reload the deal and enter the amount in ${fee.currency}.` };
+        }
+        fee.actualAmountMinor = args.actualAmountMinor;
+        return { ok: true as const, value: fee._id };
+      }
+      case "financeDealCosts:voidDealFee": {
+        const fee = financeDealFees.get(String(args.feeId));
+        if (!fee) return { ok: false as const, error: "Deal cost not found in this organization." };
+        fee.voidedAt = Date.now();
+        return { ok: true as const, value: null };
+      }
+      case "financeDealCosts:listDealCosts": {
+        const app = financeApps.get(String(args.applicationId));
+        if (!app) return { ok: false as const, error: "Application not found." };
+        const live = [...financeDealFees.values()].filter((fee) => fee.applicationId === String(args.applicationId) && fee.voidedAt === undefined);
+        const currency = effectiveCurrency(app.orgId ?? "org_1");
+        const mixed = live.some((fee) => fee.currency !== currency);
+        return {
+          ok: true as const,
+          value: {
+            currency,
+            fees: live.map((fee) => ({ ...fee })),
+            summary: mixed ? null : {
+              lineCount: live.length,
+              estimatedTotalMinor: live.reduce((sum, fee) => sum + (fee.estimatedAmountMinor ?? 0), 0),
+              actualTotalMinor: live.reduce((sum, fee) => sum + (fee.actualAmountMinor ?? 0), 0),
+            },
+            summaryUnavailable: mixed ? { reason: "MIXED_DENOMINATION" } : null,
+            custody: [],
+          },
+        };
       }
       case "applications:finalizeDeal": {
         const app = financeApps.get(String(args.applicationId));
@@ -1248,7 +1365,7 @@ describe("the rehearsal passes against a backend that behaves", () => {
     expect(declined.map((d) => `${d.id}: ${d.detail}`)).toEqual([]);
     // And it actually ran the cases rather than finding nothing to do.
     expect(results.length).toBeGreaterThanOrEqual(18);
-    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "FD1", "C1", "C2"]) {
+    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "FD1", "FD2", "C1", "C2"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
     }
   });
@@ -1648,6 +1765,33 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     const results = await runAgainst({ financeReceiptDoubleOnReplay: true });
     expect(statusOf(results, "FD1")).toBe("FAIL");
     expect(detail(results, "FD1")).toMatch(/ACTIVE allocations on the receivable \(one receipt, replayed once\): expected 1, got 2/);
+  });
+
+  // ── FD2 — deal costs denominated once (SCRUM-319) ──
+  test("FD2 catches a cost entered in a foreign currency being recorded anyway", async () => {
+    const results = await runAgainst({ feeAcceptsForeignCurrency: true });
+    expect(statusOf(results, "FD2")).toBe("FAIL");
+    expect(detail(results, "FD2")).toMatch(/was accepted on a JOD deal \(sameScale\)/);
+  });
+  test("FD2 catches an actual entered in a foreign currency being patched onto the stored line", async () => {
+    const results = await runAgainst({ feeEditAcceptsForeignCurrency: true });
+    expect(statusOf(results, "FD2")).toBe("FAIL");
+    expect(detail(results, "FD2")).toMatch(/was patched onto a JOD line/);
+  });
+  test("FD2 catches a cost with NO currency stated being accepted", async () => {
+    const results = await runAgainst({ feeMissingCurrencyAccepted: true });
+    expect(statusOf(results, "FD2")).toBe("FAIL");
+    expect(detail(results, "FD2")).toMatch(/NO currency stated was accepted/);
+  });
+  test("FD2 catches a CREATE identity that ignores the description (AF-215-02)", async () => {
+    const results = await runAgainst({ feeIdentityIgnoresDescription: true });
+    expect(statusOf(results, "FD2")).toBe("FAIL");
+    expect(detail(results, "FD2")).toMatch(/different description was accepted as a replay/);
+  });
+  test("FD2 catches an org currency lock that omits deals and their costs", async () => {
+    const results = await runAgainst({ currencyLockOmitsDeals: true });
+    expect(statusOf(results, "FD2")).toBe("FAIL");
+    expect(detail(results, "FD2")).toMatch(/currency was changed to USD while deals and cost lines exist/);
   });
 
   test("FD1 catches a receipt that posts and allocates but leaves the receivable OPEN", async () => {
