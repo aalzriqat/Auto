@@ -39,6 +39,7 @@ import {
   FinanceCompanyDecisionCard,
   type FinanceDecisionFacts,
 } from "./FinanceCompanyDecisionCard";
+import { ResolveGapDialog } from "./ResolveGapDialog";
 import {
   RecordSubmittedQuotationDialog,
   type QuotationCalculation,
@@ -446,6 +447,7 @@ export function DealCockpit({
   const recordSubmittedQuotation = useMutation(api.financingEconomics.recordSubmittedQuotation);
   const reopenApproval = useMutation(api.financingEconomics.reopenApproval);
   const registerVehicleHandover = useMutation(api.applications.registerVehicleHandover);
+  const resolveAppraisalGap = useMutation(api.financingEconomics.resolveAppraisalGap);
   const registerExpectedPayment = useMutation(api.applications.registerExpectedPayment);
   const finalizeDeal = useMutation(api.applications.finalizeDeal);
   const approveDealerPurchaseAmount = useMutation(
@@ -940,6 +942,8 @@ export function DealCockpit({
 
   const [confirmingHandover, setConfirmingHandover] = useState(false);
   const [handoverSubmitting, setHandoverSubmitting] = useState(false);
+  const [resolvingGap, setResolvingGap] = useState(false);
+  const [gapSubmitting, setGapSubmitting] = useState(false);
   const [registeringPayment, setRegisteringPayment] = useState(false);
   const [paymentSubmitting, setPaymentSubmitting] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
@@ -1006,36 +1010,52 @@ export function DealCockpit({
     if (permissionsLoading || !deal) return undefined;
 
     /**
-     * The stage nothing can clear — and the reason this screen must not simply
-     * go quiet on it.
+     * The stage that used to have no exit (SCRUM-83).
      *
      * A finance company approving BELOW the submitted quotation is the ordinary
      * case; it is the whole reason an appraisal gap exists.
-     * `approveDealerPurchaseAmount` then writes `PENDING_NEGOTIATION`, which
-     * `deriveDealStages` does not count as resolved — and **no code anywhere
-     * writes the values that would resolve it**. `convex/utils/financingEconomics.ts`
-     * says so itself: the recording workflow does not exist yet. So this stage
-     * has no exit, and because the rail is strictly sequential it hides handover,
-     * settlement and every action after it.
+     * `approveDealerPurchaseAmount` writes `PENDING_NEGOTIATION`, which
+     * `deriveDealStages` does not count as resolved, and because the rail is
+     * strictly sequential the stage hid handover, settlement and every action
+     * after it. `resolveAppraisalGap` is the writer that was missing; this is
+     * its one entry point. The blocked state itself is NOT softened — it is true
+     * until somebody records who covers the shortfall.
      *
-     * No server mutation consults `gapResolution` — handover, expected payment
-     * and finalize all ignore it — so the deal is completable and the rail is
-     * merely refusing to name the step. Until SCRUM-78 that was survivable
-     * because the tail lived in the review dialog, which ignores the rail.
-     * Moving the tail here is what turns it into a dead end, so this change owes
-     * it an explanation rather than silence.
+     * Three obstacles, told apart rather than merged, lifecycle FIRST because it
+     * outranks both: the server refuses anything not APPROVED, anything already
+     * handed over and anything closed (handover seals the figures; finalization
+     * writes the sale against them), so offering the action there would promise
+     * a step guaranteed to fail. Then authority — the same permission that set
+     * the approved amount, and never the deal's own salesperson (the server
+     * refuses both). Then visibility: a caller who HOLDS the authority but whose
+     * money is withheld cannot be asked to allocate a figure the screen does not
+     * show them, and telling them to find an approver would name a problem they
+     * do not have.
      *
-     * Deliberately NOT an action, and deliberately not a relaxation of the
-     * blocked state. Who absorbs the shortfall — customer, dealership, or split
-     * — is a money decision that feeds the profit derivation, and inventing a
-     * way past it here would be answering that question by omission. SCRUM-83.
+     * The gap is read from the MONEY block, not the rail: the rail is
+     * deliberately qualitative so it can be shown to a caller who cannot see
+     * amounts, and a locally derived gap could disagree with the one the
+     * mutation reconciles against.
      */
     if (liveStage?.blocker === "GapUnresolved") {
+      const gapVisible = typeof deal.money?.appraisalGapMinor === "number";
+      const lifecycleSealed = deal.status !== "APPROVED" || handoverStage?.state === "COMPLETE";
+      const ownDeal = membership?.userId != null && membership.userId === app?.salespersonId;
       return {
         stageKey: liveStage.key,
-        actionKey: "",
-        onStart: () => {},
-        unavailableReasonKey: "GapResolutionUnavailable",
+        actionKey: "ResolveGapAction",
+        onStart: () => {
+          setResolvingGap(true);
+        },
+        unavailableReasonKey: lifecycleSealed
+          ? "GapResolutionSealed"
+          : !hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION)
+            ? "GapResolutionNeedsPermission"
+            : ownDeal
+              ? "GapResolutionSelfDeal"
+              : gapVisible
+                ? undefined
+                : "GapResolutionNeedsDealFigures",
       };
     }
 
@@ -1588,6 +1608,46 @@ export function DealCockpit({
             }
           : undefined
       }
+      gapResolution={{
+        resolving: resolvingGap,
+        submitting: gapSubmitting,
+        onOpenChange: setResolvingGap,
+        submittedQuotationMinor: economicsApp?.submittedQuotationMinor ?? null,
+        approvedPurchaseAmountMinor: economicsApp?.approvedDealerPurchaseAmountMinor ?? null,
+        /**
+         * RETHROWS, for the reason the handover submit documents: the refusal
+         * belongs to the attempt that earned it, and the server's messages
+         * name the figure that did not reconcile — the only thing that tells
+         * the operator which of five boxes to change.
+         */
+        onSubmit: async (values) => {
+          setGapSubmitting(true);
+          try {
+            await resolveAppraisalGap({
+              orgId,
+              applicationId,
+              // The stamp the DIALOG snapshotted when it opened, passed straight
+              // through. Re-reading it from `deal` here would undo that
+              // snapshot and hand the server a revision the operator never saw.
+              economicsStamp: values.economicsStamp ?? "",
+              customerGapShareMinor: values.customerGapShareMinor,
+              dealerGapShareMinor: values.dealerGapShareMinor,
+              customerGapCashToDealerMinor: values.customerGapCashToDealerMinor,
+              customerGapInstallmentToDealerMinor: values.customerGapInstallmentToDealerMinor,
+              customerGapToFinanceCompanyMinor: values.customerGapToFinanceCompanyMinor,
+              notes: values.notes || undefined,
+            });
+            toast.success(t("GapResolved"));
+            setResolvingGap(false);
+          } catch (error) {
+            const message = getErrorMessage(error);
+            toast.error(message);
+            throw new Error(message);
+          } finally {
+            setGapSubmitting(false);
+          }
+        },
+      }}
       handover={{
         confirming: confirmingHandover,
         submitting: handoverSubmitting,
@@ -1982,6 +2042,7 @@ export function DealCockpitView({
   financingPlan,
   handoverCosts,
   workflowAction,
+  gapResolution,
   handover,
   expectedPayment,
   finalize,
@@ -2139,6 +2200,25 @@ export function DealCockpitView({
     /** Rejects on refusal; the error belongs to the dialog's attempt. */
     onSubmit: (values: {
       notes?: string;
+      economicsStamp: string | undefined;
+    }) => Promise<void>;
+  };
+  /** Settling the shortfall left when the company approved below the quotation (SCRUM-83). */
+  gapResolution?: {
+    resolving: boolean;
+    submitting: boolean;
+    onOpenChange: (open: boolean) => void;
+    /** Context figures from the economics row; null when withheld from this caller. */
+    submittedQuotationMinor: number | null;
+    approvedPurchaseAmountMinor: number | null;
+    /** Rejects on refusal, so the dialog can name the figure that did not add up. */
+    onSubmit: (values: {
+      customerGapShareMinor: number;
+      dealerGapShareMinor: number;
+      customerGapCashToDealerMinor: number;
+      customerGapInstallmentToDealerMinor: number;
+      customerGapToFinanceCompanyMinor: number;
+      notes: string;
       economicsStamp: string | undefined;
     }) => Promise<void>;
   };
@@ -3274,6 +3354,27 @@ export function DealCockpitView({
             onSubmit={handleReopenApproved}
           />
         </>
+      )}
+
+      {/* Only for a deal that actually has a shortfall the caller can see. The
+          gap comes from the server's own money block — this screen never
+          derives it, because a locally computed gap could disagree with the one
+          the mutation reconciles against and reject the operator's arithmetic
+          for being right. */}
+      {gapResolution && typeof deal?.money?.appraisalGapMinor === "number" && (
+        <ResolveGapDialog
+          open={gapResolution.resolving}
+          submitting={gapResolution.submitting}
+          rawAppraisalGapMinor={deal.money.appraisalGapMinor}
+          submittedQuotationMinor={gapResolution.submittedQuotationMinor}
+          approvedPurchaseAmountMinor={gapResolution.approvedPurchaseAmountMinor}
+          economicsStamp={"economicsStamp" in deal ? deal.economicsStamp : undefined}
+          factor={factor}
+          money={money}
+          t={t}
+          onOpenChange={gapResolution.onOpenChange}
+          onSubmit={gapResolution.onSubmit}
+        />
       )}
 
       {handover && (

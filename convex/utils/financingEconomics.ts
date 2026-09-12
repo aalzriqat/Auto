@@ -21,6 +21,26 @@ import {
 export { classifyGapResolution, evaluateQuotationException } from "../../lib/financingEconomics";
 
 /**
+ * A stamp of the economics an irreversible confirmation is about, demanded back
+ * by the mutations that act on those figures.
+ *
+ * `convex/applications.ts` issues the SAME token (its private `economicsStamp`,
+ * served on `get` and `dealCockpit`) and `registerVehicleHandover` compares
+ * against it. That file is byte-pinned by `scripts/protectedSourcePins.test.ts`,
+ * so the helper cannot be exported from there without re-pinning; this copy
+ * exists for `resolveAppraisalGap`, and `financingEconomics.test.ts` holds the
+ * two together — a stamp served by `get` must satisfy this function — so the
+ * first divergence fails CI rather than refusing every gap resolution.
+ *
+ * Deliberately CARRYING NO MONEY: a revision counter that says nothing about the
+ * deal but that it changed (see the pinned original for why a digest of the
+ * figures would not have been safe either).
+ */
+export function economicsStamp(app: { economicsRevision?: number }): string {
+  return `v2|${app.economicsRevision ?? 0}`;
+}
+
+/**
  * Server-side vocabulary and invariants for the dealer side of a financed sale.
  *
  * The arithmetic itself lives in `packages/shared/src/financingEconomics.ts` so
