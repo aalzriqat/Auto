@@ -36,6 +36,8 @@ const stubs = vi.hoisted(() => ({
   permissions: new Set<string>(),
   mutationCalls: new Map<string, unknown[]>(),
   mutationFailures: new Map<string, string>(),
+  /** A mutation held open until the test settles it — for in-flight and late-response cases. */
+  mutationHolds: new Map<string, Promise<unknown>>(),
   membershipUserId: "user_manager",
 }));
 
@@ -59,6 +61,11 @@ vi.mock("convex/react", async () => {
         const calls = stubs.mutationCalls.get(name) ?? [];
         calls.push(args);
         stubs.mutationCalls.set(name, calls);
+        const hold = stubs.mutationHolds.get(name);
+        if (hold !== undefined) {
+          stubs.mutationHolds.delete(name);
+          await hold;
+        }
         const failure = stubs.mutationFailures.get(name);
         if (failure !== undefined) {
           stubs.mutationFailures.delete(name);
@@ -1063,17 +1070,142 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     expect(third.idempotencyKey).not.toBe(first.idempotencyKey);
     await screen.findByRole("alert");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    // Cancelling after a LOST response ends the intent but cannot undo a fee
-    // the server may have committed: the section says so, and never
-    // "cancelled". It stays until an attempt on this section succeeds.
-    expect(screen.getByTestId("deal-handover-costs-uncertain").textContent).toBe("HandoverCostOutcomeUnknown");
+    // Cancelling after a LOST response hides the form but cannot undo a fee
+    // the server may have committed: the section says so, scoped to THAT
+    // intent, and never "cancelled". A different cost's success does not
+    // clear it (SM-R5-03); only replaying or acknowledging that intent does.
+    expect(screen.getByTestId("deal-handover-costs-uncertain").textContent).toContain("HandoverCostOutcomeUnknown");
     fireEvent.click(screen.getByRole("button", { name: "AddHandoverCost" }));
     fireEvent.change(screen.getByLabelText(/CostAmountLabel/), { target: { value: "150" } });
     fireEvent.click(screen.getByRole("button", { name: "SaveHandoverCost" }));
     await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordDealFee")).toHaveLength(4));
     const fourth = mutationCalls.get("financeDealCosts:recordDealFee")![3] as Record<string, unknown>;
     expect(fourth.idempotencyKey).not.toBe(third.idempotencyKey);
+    await waitFor(() => expect(screen.queryByTestId("deal-handover-cost-add")).toBeNull());
+    expect(screen.getByTestId("deal-handover-costs-uncertain")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "HandoverCostAcknowledgeChecked" }));
+    expect(screen.queryByTestId("deal-handover-costs-uncertain")).toBeNull();
+  });
+
+  /** A frozen UNKNOWN add attempt: network-lost on the first send. */
+  async function frozenUnknownAdd(amount = "150") {
+    stubs.mutationFailures.set("financeDealCosts:recordDealFee", "network lost");
+    fireEvent.click(screen.getByRole("button", { name: "AddHandoverCost" }));
+    fireEvent.change(screen.getByLabelText(/CostAmountLabel/), { target: { value: amount } });
+    fireEvent.click(screen.getByRole("button", { name: "SaveHandoverCost" }));
+    await screen.findByTestId("deal-handover-cost-add-frozen");
+  }
+
+  test("SM-R5-01 — switching to another line's EDIT while an UNKNOWN add attempt is frozen keeps the uncertainty visible", async () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(COSTS_QUERY, costsPayload([transferLine]));
+    renderCockpit();
+    await frozenUnknownAdd();
+    fireEvent.click(within(screen.getByTestId("deal-handover-cost-fee_1")).getByRole("button", { name: "RecordActualCost" }));
+    // The form is gone, the edit form is open — and the notice for THAT intent is on screen.
+    expect(screen.queryByTestId("deal-handover-cost-add")).toBeNull();
+    expect(screen.getByTestId("deal-handover-cost-edit-fee_1")).toBeTruthy();
+    expect(screen.getByTestId("deal-handover-costs-uncertain").textContent).toContain("HandoverCostOutcomeUnknown");
+    expect(screen.getByTestId("deal-handover-costs-uncertain").textContent).not.toMatch(/cancel/i);
+  });
+
+  test("SM-R5-01 — switching to another line's REMOVE while an UNKNOWN add attempt is frozen keeps the uncertainty visible", async () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(COSTS_QUERY, costsPayload([transferLine]));
+    renderCockpit();
+    await frozenUnknownAdd();
+    fireEvent.click(within(screen.getByTestId("deal-handover-cost-fee_1")).getByRole("button", { name: "RemoveHandoverCost" }));
+    expect(screen.queryByTestId("deal-handover-cost-add")).toBeNull();
+    expect(screen.getByTestId("deal-handover-costs-uncertain")).toBeTruthy();
+  });
+
+  test("SM-R5-01 — an UNKNOWN attempt survives a loading flicker of the rows", async () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(COSTS_QUERY, costsPayload([transferLine]));
+    const view = renderCockpit();
+    await frozenUnknownAdd();
+    // The rows query goes back to loading and returns: neither the frozen form nor its intent is lost.
+    queryResults.delete(COSTS_QUERY);
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+    expect(screen.getByTestId("deal-handover-cost-add-frozen")).toBeTruthy();
+    queryResults.set(COSTS_QUERY, costsPayload([transferLine]));
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+    expect(screen.getByTestId("deal-handover-cost-add-frozen")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "RetryHandoverCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordDealFee")).toHaveLength(2));
+    const [first, second] = mutationCalls.get("financeDealCosts:recordDealFee") as Array<Record<string, unknown>>;
+    expect(second).toEqual(first);
+  });
+
+  test("SM-R5-03 — a later successful add of a DIFFERENT cost does not clear the earlier intent's uncertainty; replaying THAT intent does", async () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(COSTS_QUERY, costsPayload([transferLine]));
+    renderCockpit();
+    await frozenUnknownAdd("150");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    const notice = screen.getByTestId("deal-handover-costs-uncertain");
+    expect(notice.textContent).toContain("150 Jordanian Dinar");
+    // A different cost, added successfully.
+    fireEvent.click(screen.getByRole("button", { name: "AddHandoverCost" }));
+    fireEvent.change(screen.getByLabelText(/CostAmountLabel/), { target: { value: "25" } });
+    fireEvent.click(screen.getByRole("button", { name: "SaveHandoverCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordDealFee")).toHaveLength(2));
+    await waitFor(() => expect(screen.queryByTestId("deal-handover-cost-add")).toBeNull());
+    expect(screen.getByTestId("deal-handover-costs-uncertain")).toBeTruthy();
+    // Replaying the FIRST intent: same key, same payload, same currency — and only then is it resolved.
+    fireEvent.click(within(screen.getByTestId("deal-handover-costs-uncertain")).getByRole("button", { name: "RetryHandoverCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordDealFee")).toHaveLength(3));
+    const calls = mutationCalls.get("financeDealCosts:recordDealFee") as Array<Record<string, unknown>>;
+    expect(calls[2]).toEqual(calls[0]);
+    expect(calls[2].idempotencyKey).not.toBe(calls[1].idempotencyKey);
     await waitFor(() => expect(screen.queryByTestId("deal-handover-costs-uncertain")).toBeNull());
+  });
+
+  test("SM-R5-01 — acknowledging 'I have checked the lines' ends the intent without calling it cancelled; a new form is a NEW command", async () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(COSTS_QUERY, costsPayload([transferLine]));
+    renderCockpit();
+    await frozenUnknownAdd();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "HandoverCostAcknowledgeChecked" }));
+    expect(screen.queryByTestId("deal-handover-costs-uncertain")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "AddHandoverCost" }));
+    fireEvent.change(screen.getByLabelText(/CostAmountLabel/), { target: { value: "150" } });
+    fireEvent.click(screen.getByRole("button", { name: "SaveHandoverCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordDealFee")).toHaveLength(2));
+    const [first, second] = mutationCalls.get("financeDealCosts:recordDealFee") as Array<Record<string, unknown>>;
+    expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
+  });
+
+  test("SM-R5-01 — while an add is IN FLIGHT nothing can dismiss it; a LATE lost response lands on that intent's notice", async () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(COSTS_QUERY, costsPayload([transferLine]));
+    renderCockpit();
+    let settle: (value: unknown) => void = () => {};
+    stubs.mutationHolds.set("financeDealCosts:recordDealFee", new Promise((resolve) => { settle = resolve; }));
+    stubs.mutationFailures.set("financeDealCosts:recordDealFee", "network lost");
+    fireEvent.click(screen.getByRole("button", { name: "AddHandoverCost" }));
+    fireEvent.change(screen.getByLabelText(/CostAmountLabel/), { target: { value: "150" } });
+    fireEvent.click(screen.getByRole("button", { name: "SaveHandoverCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordDealFee")).toHaveLength(1));
+    // In flight: Cancel and the other line's Edit/Remove are inert.
+    expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
+    const edit = within(screen.getByTestId("deal-handover-cost-fee_1")).getByRole("button", { name: "RecordActualCost" }) as HTMLButtonElement;
+    expect(edit.disabled).toBe(true);
+    fireEvent.click(edit);
+    expect(screen.getByTestId("deal-handover-cost-add")).toBeTruthy();
+    expect(screen.queryByTestId("deal-handover-cost-edit-fee_1")).toBeNull();
+    // The late answer arrives: a lost response, matched to THIS intent.
+    settle(null);
+    await screen.findByTestId("deal-handover-cost-add-frozen");
+    expect(screen.getByTestId("deal-handover-cost-add-frozen").textContent).toBe("HandoverCostRetryFrozenUnknown");
+    expect(edit.disabled).toBe(false);
   });
 
   test("SCRUM-319 — a REFUSED attempt is the server's answer: nothing committed, no uncertainty notice on cancel", async () => {

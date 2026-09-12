@@ -224,6 +224,31 @@ export class HandoverCostAttemptError extends Error {
   }
 }
 
+/**
+ * One ADD intent: minted by the PANEL when the form opens, with the deal's
+ * served denomination captured at that moment (SCRUM-319). The form renders
+ * it; it does not own it — so hiding the form (Cancel, switching to another
+ * line, a loading flicker) cannot lose it.
+ */
+type AddIntent = { intentId: string; currency: string; scale: number };
+
+/**
+ * What has happened to an intent that has gone out at least once. Owned by
+ * the panel, keyed by intentId, so a late result is matched to THE attempt
+ * it belongs to and never to whatever form happens to be open by then.
+ *   SUBMITTING — in flight: nothing may dismiss or replace it;
+ *   REFUSED    — the server's own answer (ConvexError), nothing committed;
+ *   UNKNOWN    — the response was lost; the cost may already be recorded.
+ * `values` is the exact payload that went out; a retry replays it verbatim
+ * under the same intent (same idempotency key), never a re-parse of the form.
+ */
+type AddAttempt = {
+  intent: AddIntent;
+  values: NewHandoverCost;
+  status: "SUBMITTING" | "REFUSED" | "UNKNOWN";
+  message: string | null;
+};
+
 function isHandoverType(feeType: string): feeType is HandoverFeeType {
   return (HANDOVER_FEE_TYPES as ReadonlyArray<string>).includes(feeType);
 }
@@ -278,22 +303,99 @@ export function HandoverCostsPanel({
   onRecordActual: (feeId: string, values: ActualHandoverCost) => Promise<void>;
   onVoid: (feeId: string, reason: string) => Promise<void>;
 }>) {
-  const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [voidingId, setVoidingId] = useState<string | null>(null);
+  /** The add form's intent while the form is open; null when it is not. */
+  const [openIntent, setOpenIntent] = useState<AddIntent | null>(null);
+  /** Every attempt that has gone out and is not yet resolved, by intentId. */
+  const [attempts, setAttempts] = useState<Record<string, AddAttempt>>({});
+
+  const openAttempt = openIntent ? (attempts[openIntent.intentId] ?? null) : null;
+  const submittingAny = Object.values(attempts).some((attempt) => attempt.status === "SUBMITTING");
   /**
-   * An add form was cancelled after an attempt whose result never arrived.
-   * Cancelling ends the intent; it does not undo a fee the server may have
-   * committed before the response was lost. The operator is told exactly
-   * that, and asked to read the list before entering the same cost again —
-   * never that the original was cancelled.
+   * Attempts whose result never arrived and whose form is no longer open.
+   * Each stays visible, scoped to ITS intent, until the operator either
+   * replays that same intent successfully or states that the lines were
+   * checked. Neither a different cost's success nor closing the form clears
+   * it, and nothing here ever calls the original "cancelled": hiding a form
+   * does not undo a fee the server may have committed before the response
+   * was lost.
    */
-  const [uncertainAttempt, setUncertainAttempt] = useState(false);
+  const unresolved = Object.values(attempts).filter(
+    (attempt) => attempt.status === "UNKNOWN" && attempt.intent.intentId !== openIntent?.intentId
+  );
+
+  const openAdd = () => {
+    setEditingId(null);
+    setVoidingId(null);
+    setOpenIntent({ intentId: crypto.randomUUID(), currency: denomination.code, scale: scaleOf(denomination.code) });
+  };
+
+  /**
+   * THE one way the add form is hidden — explicit Cancel, switching to another
+   * line's Edit/Remove, or anything else that must close it. An attempt in
+   * flight is not safely cancelled, so it refuses (returns false) and the
+   * caller must not proceed. A REFUSED attempt, or no attempt, ends the
+   * intent (nothing was committed). An UNKNOWN attempt is kept: its notice
+   * takes over from the form, and its intent — and idempotency key — stay
+   * retained for a same-request replay.
+   */
+  const closeAddForm = (): boolean => {
+    if (!openIntent) return true;
+    const attempt = attempts[openIntent.intentId];
+    if (attempt?.status === "SUBMITTING") return false;
+    if (attempt?.status !== "UNKNOWN") {
+      if (attempt) {
+        setAttempts((prev) => {
+          const next = { ...prev };
+          delete next[openIntent.intentId];
+          return next;
+        });
+      }
+      if (attempt) onAbandonAdd(openIntent.intentId);
+    }
+    setOpenIntent(null);
+    return true;
+  };
+
+  /**
+   * Sends (or replays) exactly `values` under its intent. The outcome is
+   * written back by intentId, so a late answer to an attempt whose form has
+   * since been hidden still lands on that attempt — it is never dropped and
+   * never attributed to a newer form.
+   */
+  const submitAdd = async (intent: AddIntent, values: NewHandoverCost) => {
+    setAttempts((prev) => ({ ...prev, [intent.intentId]: { intent, values, status: "SUBMITTING", message: null } }));
+    try {
+      await onAdd(values);
+      setAttempts((prev) => {
+        const next = { ...prev };
+        delete next[intent.intentId];
+        return next;
+      });
+      setOpenIntent((current) => (current?.intentId === intent.intentId ? null : current));
+    } catch (caught) {
+      const outcome = caught instanceof HandoverCostAttemptError ? caught.outcome : "UNKNOWN";
+      const message = caught instanceof Error ? caught.message : t("UnexpectedError");
+      setAttempts((prev) => ({ ...prev, [intent.intentId]: { intent, values, status: outcome, message } }));
+    }
+  };
+
+  /** The operator states the lines were checked: that intent is over. Not "cancelled". */
+  const acknowledge = (intentId: string) => {
+    setAttempts((prev) => {
+      const next = { ...prev };
+      delete next[intentId];
+      return next;
+    });
+    onAbandonAdd(intentId);
+  };
 
   // `listDealCosts` serves live lines only; a voided line leaves the section
   // (its record survives server-side with reason, actor and time).
   const live = costs?.lines ?? [];
   const canAdd = canManage;
+  const adding = openIntent !== null;
 
   return (
     <Card data-testid="deal-handover-costs">
@@ -303,37 +405,75 @@ export function HandoverCostsPanel({
           <p className="text-xs text-muted-foreground">{t("HandoverCostsNote")}</p>
         </div>
         {canAdd && costs && !adding && (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              setEditingId(null);
-              setVoidingId(null);
-              setAdding(true);
-            }}
-          >
+          <Button type="button" size="sm" variant="outline" disabled={submittingAny} onClick={openAdd}>
             <Plus className="h-4 w-4 me-1.5" />
             {t("AddHandoverCost")}
           </Button>
         )}
       </CardHeader>
       <CardContent className="space-y-3">
+        {/* Unresolved attempts and the open form live OUTSIDE the rows branch:
+            a loading flicker or an unreadable moment must not hide either. */}
+        {unresolved.map((attempt) => (
+          <div
+            key={attempt.intent.intentId}
+            role="status"
+            className="space-y-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+            data-testid="deal-handover-costs-uncertain"
+            data-intent={attempt.intent.intentId}
+          >
+            <p>{t("HandoverCostOutcomeUnknown")}</p>
+            <p className="font-medium">
+              {t(FEE_TYPE_LABEL[attempt.values.feeType])}
+              {" · "}
+              <bdi dir="ltr">
+                {money(attempt.values.actualAmountMinor ?? attempt.values.estimatedAmountMinor ?? 0, attempt.intent.currency)}
+              </bdi>
+              {attempt.values.description && (
+                <>
+                  {" · "}
+                  <bdi>{attempt.values.description}</bdi>
+                </>
+              )}
+            </p>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={submittingAny}
+                onClick={() => acknowledge(attempt.intent.intentId)}
+              >
+                {t("HandoverCostAcknowledgeChecked")}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={submittingAny}
+                onClick={() => void submitAdd(attempt.intent, attempt.values)}
+              >
+                {t("RetryHandoverCost")}
+              </Button>
+            </div>
+          </div>
+        ))}
+        {openIntent && (
+          <AddForm
+            intent={openIntent}
+            attempt={openAttempt}
+            dealClosed={dealClosed}
+            t={t}
+            onCancel={() => void closeAddForm()}
+            onSubmit={(values) => submitAdd(openIntent, values)}
+          />
+        )}
         {costs === undefined ? (
           <p className="text-sm text-muted-foreground">
             {t(loading ? "HandoverCostsLoading" : "HandoverCostsUnavailable")}
           </p>
         ) : (
           <>
-            {uncertainAttempt && (
-              <p
-                role="status"
-                className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
-                data-testid="deal-handover-costs-uncertain"
-              >
-                {t("HandoverCostOutcomeUnknown")}
-              </p>
-            )}
             {/* Compact totals first: estimated and actual are different facts
                 and are never combined — and never summed across currencies:
                 the server serves no summary over mixed rows, only the reason. */}
@@ -465,8 +605,9 @@ export function HandoverCostsPanel({
                               size="icon"
                               className="h-7 w-7"
                               aria-label={t("RecordActualCost")}
+                              disabled={submittingAny}
                               onClick={() => {
-                                setAdding(false);
+                                if (!closeAddForm()) return;
                                 setVoidingId(null);
                                 setEditingId(line._id);
                               }}
@@ -479,8 +620,9 @@ export function HandoverCostsPanel({
                               size="icon"
                               className="h-7 w-7 text-destructive hover:text-destructive"
                               aria-label={t("RemoveHandoverCost")}
+                              disabled={submittingAny}
                               onClick={() => {
-                                setAdding(false);
+                                if (!closeAddForm()) return;
                                 setEditingId(null);
                                 setVoidingId(line._id);
                               }}
@@ -496,24 +638,6 @@ export function HandoverCostsPanel({
               ))}
             </ul>
 
-            {adding && (
-              <AddForm
-                currency={denomination.code}
-                scale={scaleOf(denomination.code)}
-                dealClosed={dealClosed}
-                t={t}
-                onCancel={(intentId, lastOutcome) => {
-                  if (lastOutcome !== null) onAbandonAdd(intentId);
-                  if (lastOutcome === "UNKNOWN") setUncertainAttempt(true);
-                  setAdding(false);
-                }}
-                onSubmit={async (values) => {
-                  await onAdd(values);
-                  setUncertainAttempt(false);
-                  setAdding(false);
-                }}
-              />
-            )}
           </>
         )}
       </CardContent>
@@ -522,19 +646,20 @@ export function HandoverCostsPanel({
 }
 
 function AddForm({
-  currency,
-  scale,
+  intent,
+  attempt,
   dealClosed,
   t,
   onCancel,
   onSubmit,
 }: Readonly<{
-  currency: string;
-  scale: number;
+  /** Minted by the panel when the form opened; carries the captured denomination. */
+  intent: AddIntent;
+  /** The panel's record of this intent's attempt, or null before the first one. */
+  attempt: AddAttempt | null;
   dealClosed: boolean;
   t: (key: string) => string;
-  /** `lastOutcome` is null when the form never attempted; the intent is then simply dropped. */
-  onCancel: (intentId: string, lastOutcome: "REFUSED" | "UNKNOWN" | null) => void;
+  onCancel: () => void;
   onSubmit: (values: NewHandoverCost) => Promise<void>;
 }>) {
   const [feeType, setFeeType] = useState<HandoverFeeType>("OWNERSHIP_TRANSFER");
@@ -545,67 +670,62 @@ function AddForm({
   const [amount, setAmount] = useState("");
   const [paidOn, setPaidOn] = useState("");
   const [reference, setReference] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [intentId] = useState(() => crypto.randomUUID());
+  const [validation, setValidation] = useState<string | null>(null);
   /**
-   * The denomination this form was OPENED under, captured once with the
-   * intent (SCRUM-319). The amount is parsed at this scale and sent with this
-   * code on every attempt, including a retry — never re-read from the props
-   * at submit time, so a settings change while the form is open cannot
+   * The denomination this form was OPENED under — captured by the panel with
+   * the intent (SCRUM-319). The amount is parsed at this scale and sent with
+   * this code on every attempt, including a retry — never re-read from the
+   * deal at submit time, so a settings change while the form is open cannot
    * silently reinterpret what the operator typed. If it no longer matches
    * the deal, the server refuses with nothing committed and says so here.
    */
-  const [captured] = useState(() => ({ currency, scale }));
+  const { currency, scale } = intent;
   /**
    * Once an attempt has gone out under this intent, the fields FREEZE. The
    * server deduplicates a retry by the command identity and a fingerprint of
    * the WHOLE persisted payload, so a retry that changed anything at all
-   * would be refused as a different intent under the same key. A retry
-   * therefore resends exactly what was submitted; changing anything means
-   * cancelling this intent and opening a new form (a new command).
-   *
-   * `lastOutcome` is what the last attempt's failure established: REFUSED is
-   * the server's own answer (nothing committed); UNKNOWN means the response
-   * was lost and the cost may already exist.
+   * would be refused as a different intent under the same key. Retry
+   * therefore replays the panel's stored payload verbatim; changing anything
+   * means cancelling this intent and opening a new form (a new command).
    */
-  const [lastOutcome, setLastOutcome] = useState<"REFUSED" | "UNKNOWN" | null>(null);
-  const attempted = lastOutcome !== null;
+  const submitting = attempt?.status === "SUBMITTING";
+  const attempted = attempt !== null;
+  const lastOutcome = attempt && attempt.status !== "SUBMITTING" ? attempt.status : null;
+  const error = validation ?? (lastOutcome !== null ? attempt?.message ?? null : null);
 
-  const amountMinor = parseMajor(amount, captured.scale);
+  const amountMinor = parseMajor(amount, scale);
   const amountInvalid = amount.trim() !== "" && amountMinor === null;
 
   return (
     <form
       className="space-y-3 rounded-md border border-dashed p-3"
       data-testid="deal-handover-cost-add"
-      onSubmit={async (event) => {
+      data-intent={intent.intentId}
+      onSubmit={(event) => {
         event.preventDefault();
-        if (amountMinor === null) {
-          setError(t("CostAmountRequired"));
+        if (submitting) return;
+        // A retry replays exactly what went out the first time.
+        if (attempt) {
+          void onSubmit(attempt.values);
           return;
         }
-        setSubmitting(true);
-        setError(null);
-        try {
-          await onSubmit({
-            intentId,
-            currency: captured.currency,
-            feeType,
-            description: description.trim() || undefined,
-            estimatedAmountMinor: figure === "ESTIMATED" ? amountMinor : undefined,
-            actualAmountMinor: figure === "ACTUAL" ? amountMinor : undefined,
-            paidTo: payee,
-            accountingTreatment: treatment,
-            paidAt: figure === "ACTUAL" && paidOn ? dateInputToUtcMs(paidOn) : undefined,
-            receiptReference: figure === "ACTUAL" ? reference.trim() || undefined : undefined,
-          });
-        } catch (caught) {
-          setError(caught instanceof Error ? caught.message : t("UnexpectedError"));
-          setLastOutcome(caught instanceof HandoverCostAttemptError ? caught.outcome : "UNKNOWN");
-        } finally {
-          setSubmitting(false);
+        if (amountMinor === null) {
+          setValidation(t("CostAmountRequired"));
+          return;
         }
+        setValidation(null);
+        void onSubmit({
+          intentId: intent.intentId,
+          currency,
+          feeType,
+          description: description.trim() || undefined,
+          estimatedAmountMinor: figure === "ESTIMATED" ? amountMinor : undefined,
+          actualAmountMinor: figure === "ACTUAL" ? amountMinor : undefined,
+          paidTo: payee,
+          accountingTreatment: treatment,
+          paidAt: figure === "ACTUAL" && paidOn ? dateInputToUtcMs(paidOn) : undefined,
+          receiptReference: figure === "ACTUAL" ? reference.trim() || undefined : undefined,
+        });
       }}
     >
       <p className="text-sm font-medium">{t("AddHandoverCost")}</p>
@@ -674,7 +794,7 @@ function AddForm({
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="handover-cost-amount">
-            {t("CostAmountLabel")} (<bdi dir="ltr">{captured.currency}</bdi>)
+            {t("CostAmountLabel")} (<bdi dir="ltr">{currency}</bdi>)
           </Label>
           <Input
             id="handover-cost-amount"
@@ -731,10 +851,10 @@ function AddForm({
         </p>
       )}
       <div className="flex justify-end gap-2">
-        <Button type="button" variant="ghost" size="sm" disabled={submitting} onClick={() => onCancel(intentId, lastOutcome)}>
+        <Button type="button" variant="ghost" size="sm" disabled={submitting} onClick={onCancel}>
           {t("Cancel")}
         </Button>
-        <Button type="submit" size="sm" disabled={submitting || amountMinor === null}>
+        <Button type="submit" size="sm" disabled={submitting || (!attempted && amountMinor === null)}>
           {submitting && <Loader2 className="h-4 w-4 me-1.5 animate-spin" />}
           {t(attempted ? "RetryHandoverCost" : "SaveHandoverCost")}
         </Button>

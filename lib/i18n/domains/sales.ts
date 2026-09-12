@@ -274,6 +274,7 @@ const dealRailMessages = defineBilingualMessages({
     "لم تصل نتيجة هذه المحاولة؛ قد يكون المصروف مسجّلاً بالفعل. تُعيد المحاولة إرسال الطلب نفسه دون تكراره. الإلغاء لا يلغي مصروفاً مسجّلاً.",
   ],
   RetryHandoverCost: ["Retry", "إعادة المحاولة"],
+  HandoverCostAcknowledgeChecked: ["I have checked the lines", "راجعتُ البنود"],
   NoHandoverCosts: ["No handover costs recorded yet.", "لم تُسجَّل مصاريف تسليم بعد."],
   AddHandoverCost: ["Add cost", "إضافة مصروف"],
   SaveHandoverCost: ["Save cost", "حفظ المصروف"],
