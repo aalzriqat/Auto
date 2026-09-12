@@ -33,20 +33,38 @@
  *   own `prod:<name>|` prefix, the deployment URL the function metadata
  *   reports, and the name the deployment answers for itself. Any disagreement
  *   with the expected name fails.
- * · **The E2E marker fails it.** `AUTOFLOW_DEPLOYMENT_CLASS=preview` is what
- *   every preview carries and what the E2E bootstrap requires; production
- *   must not. The `e2ePreviewBootstrap` table is covered by the table walk.
+ * · **The E2E marker is read in three states, and only one of them passes.**
+ *   `AUTOFLOW_DEPLOYMENT_CLASS=preview` is what every preview carries and what
+ *   the E2E bootstrap requires; production and dev carry NO value. The read is
+ *   PRESENT (a value came back — fails, whatever the value), VERIFIED_ABSENT
+ *   (the CLI's own not-found sentence, which also names the deployment it
+ *   looked at — the only pass), or UNREADABLE (non-zero exit, timeout, silence,
+ *   any other shape — fails). `convex env get` exits 0 for a missing variable,
+ *   so exit status alone cannot tell absence from anything (verified on a real
+ *   deployment, 2026-09-12); a failed read must never pass as an absent marker.
+ *   The `e2ePreviewBootstrap` table is covered by the table walk.
  * · **Scheduled functions are informational.** Crons are scheduled the moment
  *   code is deployed, so `_scheduled_functions` is non-empty on a correctly
  *   deployed empty deployment. It is reported, never counted as data.
- * · **Two operational tables are declared, not waived.** On the disposable
- *   control (`fantastic-blackbird-16`, 2026-09-12) the crons had written
- *   `cronHeartbeats` and `webhookLogs` rows within seconds of the push —
- *   append-only diagnostics the deployment writes about itself
- *   (`convex/crons.ts`, `adminSystem.logWebhookEvent`), retention-pruned,
- *   carrying no tenant or financial data. They are the ONLY tables allowed to
- *   hold rows, they are named in the report when they do, and the list is
- *   pinned by a test so it cannot quietly grow.
+ * · **Two operational tables are declared, and EVERY row in them is
+ *   validated — a table name is not provenance.** On the disposable control
+ *   (`fantastic-blackbird-16`, 2026-09-12) the crons had written
+ *   `cronHeartbeats` and `webhookLogs` rows within seconds of the push. But
+ *   `webhookLogs` is also where Clerk, WhatsApp, Resend, the payment provider
+ *   and the social OAuth callbacks are logged, so a row there is only harmless
+ *   if it is provably a cron self-report. When one of the two tables holds
+ *   rows, every row is read back (bounded, JSON lines) and checked against the
+ *   narrow shape its cron writer produces: the exact key set, the job name or
+ *   source the crons use, and none of the fields a provider delivery carries
+ *   (`eventId`, payload hashes/previews, receive counts). One rejected row,
+ *   an unparseable line, a read that exceeds the bound, or a read that fails
+ *   fails the verdict. The Instagram token-refresh cron logs under the same
+ *   `source` as Instagram provider traffic, so that one is admitted only by
+ *   its exact empty-deployment summary. The table list and the provenance
+ *   declarations are pinned by tests so neither can quietly grow. A pass means
+ *   business, component and storage state is empty and the diagnostics were
+ *   VERIFIED and disclosed by provenance and count — not that every table is
+ *   literally empty.
  *
  * Nothing here remediates. A failed verdict is a stop, not a reset.
  */
@@ -58,15 +76,71 @@
  */
 export const OPERATIONAL_DIAGNOSTIC_TABLES: ReadonlySet<string> = new Set(["cronHeartbeats", "webhookLogs"]);
 
+/**
+ * How many rows a declared diagnostic table may hold and still be validated.
+ * More than this is not "a few minutes of cron noise on an empty deployment";
+ * the checkpoint refuses rather than sample.
+ */
+export const DIAGNOSTIC_ROW_BOUND = 500;
+
+/**
+ * The only `cronHeartbeats` writers (`convex/crons.ts` triggerAlarms,
+ * `convex/subscriptions.ts` reconcileExpiredSubscriptions), by job name.
+ */
+export const HEARTBEAT_JOB_NAMES: ReadonlySet<string> = new Set(["check-upcoming-tasks", "reconcile-expired-subscriptions"]);
+
+/**
+ * `webhookLogs.source` values written ONLY by cron self-reports through
+ * `adminSystem.logWebhookEvent` (`convex/crons.ts`, `convex/marketplaceReports.ts`).
+ * Every provider/tenant-driven source (clerk, whatsapp, resend, payment,
+ * instagram*, facebook*, notification-*, support-inbox-notification,
+ * upgrade-request, marketplace-whatsapp) is deliberately NOT here.
+ */
+export const CRON_SELF_REPORT_SOURCES: ReadonlySet<string> = new Set([
+  "subscription-reminder",
+  "social-auto-reply-retry",
+  "fixed-asset-depreciation",
+  "fi-commission-recognition",
+  "prepaid-expense-amortization",
+  "marketplace-weekly-report",
+]);
+
+/**
+ * The Instagram token-refresh cron (`convex/crons.ts` triggerInstagramTokenRefresh)
+ * logs under `source: "instagram"` — the same source as provider traffic — so
+ * it is admitted only by the exact summary an EMPTY deployment produces.
+ */
+const INSTAGRAM_REFRESH_EMPTY_SUMMARY = /^Instagram token refresh cron: refreshed 0\/0 token\(s\) in this page\.$/;
+
+const HEARTBEAT_KEYS = { required: ["_id", "_creationTime", "jobName", "ranAt", "success"], optional: ["detail"] } as const;
+const SELF_REPORT_KEYS = { required: ["_id", "_creationTime", "createdAt", "source", "status", "summary"], optional: ["error"] } as const;
+
 export type Refusal = { ok: false; reason: string };
 
 export type TableReadOutcome = "EMPTY" | "NONEMPTY" | "UNREADABLE";
+
+/** The outcome of validating every row of a declared diagnostic table. */
+export interface DiagnosticValidation {
+  state: "VERIFIED" | "REJECTED" | "UNREADABLE";
+  rows: number;
+  /** provenance label → row count, e.g. `heartbeat:check-upcoming-tasks`. Labels only, never values. */
+  provenance: Record<string, number>;
+  reasons: string[];
+}
 
 export interface TableRead {
   component: string | null;
   table: string;
   outcome: TableReadOutcome;
+  /** Present only for a NONEMPTY root table in OPERATIONAL_DIAGNOSTIC_TABLES. */
+  diagnostics?: DiagnosticValidation;
 }
+
+/** `convex env get <name>`, in the three states that matter. */
+export type MarkerRead =
+  | { state: "PRESENT"; value: string }
+  | { state: "VERIFIED_ABSENT"; deployment: string; deploymentKind: string }
+  | { state: "UNREADABLE"; reason: string };
 
 export type ZeroStatePhase = "pre-deploy" | "post-deploy";
 
@@ -119,6 +193,124 @@ export function classifyTableRead(stdout: string, stderr: string, exitStatus: nu
   }
   if (/^_id\b/.test(lines[0])) return "NONEMPTY";
   return "UNREADABLE";
+}
+
+const ENV_NOT_FOUND =
+  /^[^A-Za-z]*Environment variable "([A-Za-z_][A-Za-z0-9_]*)" not found \(on ([a-z]+) deployment ([a-z0-9-]+)\)\.?$/;
+
+/**
+ * `convex env get <variable>`: PRESENT, VERIFIED_ABSENT or UNREADABLE.
+ * Verified on a real deployment (2026-09-12): a set variable prints its value
+ * on stdout and exits 0; a missing one prints
+ * `✖ Environment variable "X" not found (on dev deployment <name>)` on STDERR
+ * and ALSO exits 0; an unknown/denied deployment exits 1. Absence is accepted
+ * only from that exact sentence, for that exact variable — and the sentence's
+ * deployment name is returned so identity can be checked against it.
+ */
+export function classifyMarkerRead(
+  stdout: string,
+  stderr: string,
+  exitStatus: number | null,
+  variable = "AUTOFLOW_DEPLOYMENT_CLASS"
+): MarkerRead {
+  if (exitStatus !== 0) {
+    return { state: "UNREADABLE", reason: `env get exited ${exitStatus === null ? "without a status (timed out or failed to start)" : exitStatus}` };
+  }
+  const lines = cleanLines(stdout);
+  const notes = cleanLines(stderr);
+  if (lines.length === 1 && notes.length === 0) return { state: "PRESENT", value: lines[0] };
+  if (lines.length === 0 && notes.length === 1) {
+    const match = ENV_NOT_FOUND.exec(notes[0]);
+    if (match && match[1] === variable) return { state: "VERIFIED_ABSENT", deploymentKind: match[2], deployment: match[3] };
+    return { state: "UNREADABLE", reason: "env get printed something other than the not-found sentence for this variable." };
+  }
+  if (lines.length === 0 && notes.length === 0) {
+    return { state: "UNREADABLE", reason: "env get printed nothing; silence is not a verified absence." };
+  }
+  return { state: "UNREADABLE", reason: `env get printed an unexpected shape (${lines.length} stdout line(s), ${notes.length} stderr line(s)).` };
+}
+
+type Row = Record<string, unknown>;
+
+function exactKeys(row: Row, keys: { required: readonly string[]; optional: readonly string[] }): string | null {
+  for (const key of keys.required) if (!(key in row)) return `missing field ${key}`;
+  for (const key of Object.keys(row)) {
+    if (!keys.required.includes(key) && !keys.optional.includes(key)) return `unexpected field ${key}`;
+  }
+  return null;
+}
+
+/**
+ * One row of a declared diagnostic table: is it provably a cron self-report?
+ * Returns the provenance label, or the rule it broke. Never echoes values.
+ */
+export function validateDiagnosticRow(table: string, row: unknown): { ok: true; provenance: string } | { ok: false; reason: string } {
+  if (typeof row !== "object" || row === null || Array.isArray(row)) return { ok: false, reason: "not a document object" };
+  const doc = row as Row;
+  if (table === "cronHeartbeats") {
+    const shape = exactKeys(doc, HEARTBEAT_KEYS);
+    if (shape) return { ok: false, reason: shape };
+    if (typeof doc.jobName !== "string" || !HEARTBEAT_JOB_NAMES.has(doc.jobName)) return { ok: false, reason: "jobName is not a declared heartbeat writer" };
+    if (typeof doc.ranAt !== "number" || typeof doc.success !== "boolean") return { ok: false, reason: "ranAt/success are not the heartbeat types" };
+    if ("detail" in doc && typeof doc.detail !== "string") return { ok: false, reason: "detail is not a string" };
+    return { ok: true, provenance: `heartbeat:${doc.jobName}` };
+  }
+  if (table === "webhookLogs") {
+    const shape = exactKeys(doc, SELF_REPORT_KEYS);
+    if (shape) return { ok: false, reason: shape };
+    if (typeof doc.source !== "string" || typeof doc.status !== "string" || typeof doc.summary !== "string" || typeof doc.createdAt !== "number") {
+      return { ok: false, reason: "source/status/summary/createdAt are not the self-report types" };
+    }
+    if (doc.status !== "success" && doc.status !== "error") return { ok: false, reason: "status is an inbox lifecycle state, not a self-report outcome" };
+    if ("error" in doc && typeof doc.error !== "string") return { ok: false, reason: "error is not a string" };
+    if (CRON_SELF_REPORT_SOURCES.has(doc.source)) return { ok: true, provenance: `cron-report:${doc.source}` };
+    if (doc.source === "instagram" && doc.status === "success" && INSTAGRAM_REFRESH_EMPTY_SUMMARY.test(doc.summary)) {
+      return { ok: true, provenance: "cron-report:instagram-token-refresh(empty)" };
+    }
+    return { ok: false, reason: "source is not a cron self-report source" };
+  }
+  return { ok: false, reason: "table is not a declared diagnostic table" };
+}
+
+/**
+ * `convex data <table> --limit <bound + 1> --format jsonl` on a declared
+ * diagnostic table that the limit-one read found NONEMPTY. Every line must be a
+ * JSON document and every document must validate; more than `bound` rows, a
+ * failed read, silence, or any unparseable line refuses. Values are never kept.
+ */
+export function validateDiagnosticRows(
+  table: string,
+  stdout: string,
+  stderr: string,
+  exitStatus: number | null,
+  bound = DIAGNOSTIC_ROW_BOUND
+): DiagnosticValidation {
+  const unreadable = (reason: string): DiagnosticValidation => ({ state: "UNREADABLE", rows: 0, provenance: {}, reasons: [reason] });
+  if (exitStatus !== 0) return unreadable(`the bounded read of ${table} exited ${exitStatus ?? "without a status"}.`);
+  const lines = cleanLines(stdout);
+  if (lines.length === 0) {
+    return unreadable(`the bounded read of ${table} printed no documents although the limit-one read found some; refusing to reconcile silence.`);
+  }
+  if (lines.length > bound) {
+    return { state: "REJECTED", rows: lines.length, provenance: {}, reasons: [`${table} holds more than ${bound} rows; that is not empty-deployment cron noise, and the checkpoint does not sample.`] };
+  }
+  if (cleanLines(stderr).length > 0) return unreadable(`the bounded read of ${table} wrote to stderr; refusing to trust a partial read.`);
+  const provenance: Record<string, number> = {};
+  const reasons: string[] = [];
+  lines.forEach((line, index) => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      reasons.push(`${table} row ${index + 1}: not a JSON document.`);
+      return;
+    }
+    const verdict = validateDiagnosticRow(table, parsed);
+    if (verdict.ok) provenance[verdict.provenance] = (provenance[verdict.provenance] ?? 0) + 1;
+    else reasons.push(`${table} row ${index + 1}: ${verdict.reason}.`);
+  });
+  if (reasons.some((r) => r.endsWith("not a JSON document."))) return { state: "UNREADABLE", rows: lines.length, provenance, reasons };
+  return { state: reasons.length === 0 ? "VERIFIED" : "REJECTED", rows: lines.length, provenance, reasons };
 }
 
 /** `convex function-spec`: how many functions, and which deployment says so. */
@@ -178,8 +370,8 @@ export interface ZeroStateInput {
   /** What the deployment answers at /instance_name, when reachable. */
   reportedInstanceName: string | null;
   functionCount: number;
-  /** `AUTOFLOW_DEPLOYMENT_CLASS` as the deployment currently carries it. */
-  deploymentClass: string | null;
+  /** `AUTOFLOW_DEPLOYMENT_CLASS`: PRESENT, VERIFIED_ABSENT or UNREADABLE — never inferred. */
+  marker: MarkerRead;
   schemaTables: string[];
   listedTables: string[];
   /** Each mounted component's listing, or a refusal when it could not be read. */
@@ -199,8 +391,10 @@ export interface ZeroStateReport {
     componentTables: number;
     empty: number;
     nonEmpty: number;
-    /** Rows in the declared operational-diagnostic tables — reported, not counted as data. */
+    /** Declared operational-diagnostic tables whose EVERY row was VERIFIED as a cron self-report — disclosed, not counted as data. */
     operational: number;
+    /** Rows validated inside those tables. */
+    diagnosticRows: number;
     unreadable: number;
   };
   notes: string[];
@@ -221,20 +415,35 @@ export function decideZeroState(input: ZeroStateInput): ZeroStateReport {
   if (input.reportedInstanceName !== null && input.reportedInstanceName !== input.expectedDeployment) {
     reasons.push(`the deployment answers to ${input.reportedInstanceName}, not ${input.expectedDeployment}.`);
   }
+  // The not-found sentence echoes the deployment the CLI resolved — checked for
+  // disagreement, but it is the selector echoed back, not the deployment
+  // answering for itself, so it never satisfies identity on its own.
+  const marker = input.marker;
+  if (marker.state === "VERIFIED_ABSENT" && marker.deployment !== input.expectedDeployment) {
+    reasons.push(`the environment read answered for ${marker.deployment}, not ${input.expectedDeployment}.`);
+  }
   if (input.reportedUrl === null && input.reportedInstanceName === null && input.credentialDeployment === null) {
     reasons.push("no identity read-back succeeded; a deployment that will not say which one it is cannot be certified.");
   }
 
-  // ── E2E marker ───────────────────────────────────────────────────────────
-  if (input.deploymentClass === "preview") {
-    reasons.push("the deployment declares AUTOFLOW_DEPLOYMENT_CLASS=preview — the E2E preview marker. Production must never be a promoted preview.");
+  // ── E2E marker: PRESENT fails, UNREADABLE fails, only VERIFIED_ABSENT passes ──
+  if (input.marker.state === "PRESENT") {
+    reasons.push(
+      input.marker.value === "preview"
+        ? "the deployment declares AUTOFLOW_DEPLOYMENT_CLASS=preview — the E2E preview marker. Production must never be a promoted preview."
+        : "the deployment declares AUTOFLOW_DEPLOYMENT_CLASS with an unexpected value (not shown); production and dev carry none, so this is not the configuration a fresh target should have."
+    );
+  } else if (input.marker.state === "UNREADABLE") {
+    reasons.push(`the AUTOFLOW_DEPLOYMENT_CLASS marker could not be read (${input.marker.reason}); a failed read is not a verified absence.`);
   }
 
   const componentTables = input.components.reduce((sum, c) => sum + (c.tables?.length ?? 0), 0);
   const empty = input.reads.filter((r) => r.outcome === "EMPTY").length;
-  const isOperational = (r: TableRead) => r.component === null && OPERATIONAL_DIAGNOSTIC_TABLES.has(r.table);
-  const operational = input.reads.filter((r) => r.outcome === "NONEMPTY" && isOperational(r));
-  const nonEmpty = input.reads.filter((r) => r.outcome === "NONEMPTY" && !isOperational(r));
+  const isDeclared = (r: TableRead) => r.component === null && OPERATIONAL_DIAGNOSTIC_TABLES.has(r.table);
+  const declaredNonEmpty = input.reads.filter((r) => r.outcome === "NONEMPTY" && isDeclared(r));
+  const operational = declaredNonEmpty.filter((r) => r.diagnostics?.state === "VERIFIED");
+  const unverifiedDiagnostics = declaredNonEmpty.filter((r) => r.diagnostics?.state !== "VERIFIED");
+  const nonEmpty = input.reads.filter((r) => r.outcome === "NONEMPTY" && !isDeclared(r));
   const unreadable = input.reads.filter((r) => r.outcome === "UNREADABLE");
   const counts = {
     functions: input.functionCount,
@@ -242,8 +451,9 @@ export function decideZeroState(input: ZeroStateInput): ZeroStateReport {
     schemaTables: input.schemaTables.length,
     componentTables,
     empty,
-    nonEmpty: nonEmpty.length,
+    nonEmpty: nonEmpty.length + unverifiedDiagnostics.length,
     operational: operational.length,
+    diagnosticRows: operational.reduce((sum, r) => sum + (r.diagnostics?.rows ?? 0), 0),
     unreadable: unreadable.length,
   };
 
@@ -308,12 +518,21 @@ export function decideZeroState(input: ZeroStateInput): ZeroStateReport {
   if (!listed.has("e2ePreviewBootstrap") && input.schemaTables.includes("e2ePreviewBootstrap")) {
     reasons.push("the e2ePreviewBootstrap table is not listed, so the absence of an E2E marker row could not be verified.");
   }
-  if (operational.length > 0) {
-    notes.push(
-      `operational diagnostics hold rows written by the deployment's own crons since the push — ${operational
-        .map((r) => r.table)
-        .join(", ")} — declared in OPERATIONAL_DIAGNOSTIC_TABLES; reported, not counted as data.`
+  for (const read of unverifiedDiagnostics) {
+    const d = read.diagnostics;
+    reasons.push(
+      d === undefined
+        ? `${read.table} holds documents and its rows were never validated; a declared diagnostic table is exempt only row by row.`
+        : `${read.table} holds ${d.rows} row(s) that were NOT verified as cron diagnostics (${d.state}): ${d.reasons.slice(0, 4).join(" ")}${d.reasons.length > 4 ? ` (+${d.reasons.length - 4} more)` : ""}`
     );
+  }
+  for (const read of operational) {
+    const d = read.diagnostics!;
+    const byProvenance = Object.entries(d.provenance)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([label, n]) => `${label} ×${n}`)
+      .join(", ");
+    notes.push(`${read.table}: ${d.rows} row(s) VERIFIED as cron self-reports — ${byProvenance}; disclosed, not counted as data.`);
   }
   notes.push(
     input.scheduledFunctions === "NONEMPTY"
@@ -340,7 +559,7 @@ export function renderZeroStateSummary(input: {
   const { report } = input;
   const heading =
     report.verdict === "ZERO"
-      ? "Zero-state verified — the deployment holds no data"
+      ? "Zero-state verified — no business, component or storage data; verified cron diagnostics disclosed below"
       : report.verdict === "ABSENT_INFRASTRUCTURE"
         ? "Pre-deploy: no functions and no tables (infrastructure evidence only)"
         : "Zero-state NOT verified";
@@ -350,7 +569,7 @@ export function renderZeroStateSummary(input: {
     `- Deployment: \`${input.expectedDeployment}\` (${input.phase}, ${input.authMode})`,
     `- Commit: \`${input.releaseSha ?? "n/a"}\``,
     `- Functions: ${report.counts.functions} · listed tables: ${report.counts.listedTables} · schema tables: ${report.counts.schemaTables} · component tables: ${report.counts.componentTables}`,
-    `- Reads: ${report.counts.empty} empty · ${report.counts.nonEmpty} non-empty · ${report.counts.operational} operational-diagnostic · ${report.counts.unreadable} unreadable`,
+    `- Reads: ${report.counts.empty} empty · ${report.counts.nonEmpty} non-empty · ${report.counts.operational} operational-diagnostic (${report.counts.diagnosticRows} row(s) verified) · ${report.counts.unreadable} unreadable`,
     "",
   ];
   if (report.reasons.length > 0) {

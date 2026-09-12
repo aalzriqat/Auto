@@ -4,8 +4,12 @@
  *
  * Runs table listings, limit-one reads, function metadata and one environment
  * read against ONE named deployment, and decides whether it holds no data
- * (`post-deploy`) or nothing at all (`pre-deploy`). It never writes, never
- * pushes, never bootstraps and never remediates: a failed verdict is a stop.
+ * (`post-deploy`) or nothing at all (`pre-deploy`). When one of the two
+ * declared diagnostic tables holds rows, it reads that table back in full
+ * (bounded, JSON lines) so every row can be validated as a cron self-report —
+ * the rows are classified in memory and never printed or stored. It never
+ * writes, never pushes, never bootstraps and never remediates: a failed
+ * verdict is a stop.
  *
  * Two ways in, decided by the environment:
  *   · CI (the protected release job): `CONVEX_DEPLOY_KEY` holds the deployment
@@ -31,6 +35,9 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { forLog, parseDeployKeyTarget, requireBoundProductionKey } from "./releaseGuard.ts";
 import {
+  DIAGNOSTIC_ROW_BOUND,
+  OPERATIONAL_DIAGNOSTIC_TABLES,
+  classifyMarkerRead,
   classifyTableRead,
   componentNames,
   decideZeroState,
@@ -38,6 +45,7 @@ import {
   parseTableList,
   renderZeroStateSummary,
   schemaTableNames,
+  validateDiagnosticRows,
 } from "./zeroState.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -105,6 +113,16 @@ function readTable(table, component) {
   return classifyTableRead(r.stdout, r.stderr, r.status);
 }
 
+/**
+ * A NONEMPTY root table in OPERATIONAL_DIAGNOSTIC_TABLES: read every row back
+ * (one more than the bound, so exceeding it is detected) and validate each as
+ * a cron self-report. Provenance labels and counts survive; values do not.
+ */
+function readDiagnostics(table) {
+  const r = convex(["data", table, "--limit", String(DIAGNOSTIC_ROW_BOUND + 1), "--format", "jsonl"]);
+  return validateDiagnosticRows(table, r.stdout, r.stderr, r.status);
+}
+
 // 1. Function metadata — count, and the URL the deployment reports for itself.
 const specRaw = convex(["function-spec"]);
 const spec = parseFunctionSpec(specRaw.stdout, specRaw.status);
@@ -122,12 +140,11 @@ try {
   reportedInstanceName = null;
 }
 
-// 3. The E2E marker declaration, as the deployment currently carries it.
+// 3. The E2E marker declaration: PRESENT / VERIFIED_ABSENT / UNREADABLE.
+//    `env get` exits 0 whether or not the variable exists, so the classifier
+//    reads both streams; a failed or malformed read is UNREADABLE, never absent.
 const envRaw = convex(["env", "get", "AUTOFLOW_DEPLOYMENT_CLASS"]);
-const deploymentClass =
-  envRaw.status === 0
-    ? envRaw.stdout.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("(")).at(-1) ?? null
-    : null;
+const marker = classifyMarkerRead(envRaw.stdout, envRaw.stderr, envRaw.status);
 
 // 4. The scope: the deployment's own listing, each mounted component's listing,
 //    and the tables the repository schema declares.
@@ -141,7 +158,10 @@ const components = [];
 const reads = [];
 if (phase === "post-deploy") {
   for (const table of listing.tables) {
-    reads.push({ component: null, table, outcome: readTable(table, null) });
+    const outcome = readTable(table, null);
+    const read = { component: null, table, outcome };
+    if (outcome === "NONEMPTY" && OPERATIONAL_DIAGNOSTIC_TABLES.has(table)) read.diagnostics = readDiagnostics(table);
+    reads.push(read);
   }
   for (const name of mounted) {
     const raw = convex(["data", "--component", name]);
@@ -167,7 +187,7 @@ const report = decideZeroState({
   reportedUrl: spec.url,
   reportedInstanceName,
   functionCount: spec.functionCount,
-  deploymentClass,
+  marker,
   schemaTables,
   listedTables: listing.tables,
   components,
@@ -178,8 +198,12 @@ const report = decideZeroState({
 
 const summary = renderZeroStateSummary({ report, phase, expectedDeployment, releaseSha, authMode });
 console.log(`\n${summary}\n`);
+console.log(`  marker AUTOFLOW_DEPLOYMENT_CLASS: ${marker.state}`);
 for (const read of reads) {
-  if (read.outcome !== "EMPTY") console.log(`  ${read.outcome}: ${read.component ? `${read.component}/` : ""}${read.table}`);
+  if (read.outcome === "EMPTY") continue;
+  const d = read.diagnostics;
+  const detail = d ? ` — ${d.state}, ${d.rows} row(s): ${Object.entries(d.provenance).map(([k, n]) => `${k} ×${n}`).join(", ") || "none verified"}` : "";
+  console.log(`  ${read.outcome}: ${read.component ? `${read.component}/` : ""}${read.table}${detail}`);
 }
 if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
 

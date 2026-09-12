@@ -224,12 +224,21 @@ lists every table the deployment reports, every mounted component's tables and
 the file store, reads each with `--limit 1`, checks that functions exist and the
 schema's tables are all present, that the deployment answers to
 `CONVEX_PROD_DEPLOYMENT` (credential prefix, `function-spec` URL, `/instance_name`),
-and that it carries no `AUTOFLOW_DEPLOYMENT_CLASS=preview` marker. Only
-`cronHeartbeats` and `webhookLogs` may hold rows (the crons write them within
-seconds of a push — proven on the disposable control `fantastic-blackbird-16`,
-2026-09-12); they are reported, not counted. A nonexistent table prints the same
-sentence as an empty one, so only LISTED tables are read; an unreadable read is
-never zero. A failed verdict stops the run and changes nothing. It is a one-time
+and that the `AUTOFLOW_DEPLOYMENT_CLASS` marker read is VERIFIED_ABSENT — the
+CLI's own not-found sentence; `env get` exits 0 either way, so a PRESENT value
+(preview or anything else) fails and an UNREADABLE read (non-zero exit, timeout,
+silence, any other shape) fails too — a failed read is never an absent marker.
+Only `cronHeartbeats` and `webhookLogs` may hold rows, and only when EVERY row
+is read back (bounded, JSON lines) and validated as a cron self-report: the
+exact key set, a declared heartbeat job name or cron-only `source`, none of the
+fields a provider delivery carries. `webhookLogs` also logs Clerk / WhatsApp /
+Resend / payment / social traffic, so a table name is not provenance; one
+rejected row, more rows than the bound, or an unparseable read fails. Verified
+diagnostics are disclosed by provenance and count, never counted as data
+(controls 2026-09-12: `fantastic-blackbird-16` ZERO with 26 verified rows;
+`proficient-snail-903` FAIL, provider rows rejected after 84 valid cron rows).
+A nonexistent table prints the same sentence as an empty one, so only LISTED
+tables are read; an unreadable read is never zero. A failed verdict stops the run and changes nothing. It is a one-time
 launch checkpoint, never a standing gate — an established dealership's deployment
 is supposed to hold data. The same script runs from a workstation with a Convex
 account login (`--deployment <name>`) for the pre-bootstrap boundary and for
