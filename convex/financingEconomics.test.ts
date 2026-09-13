@@ -1752,11 +1752,14 @@ describe("LTV configuration", () => {
         source: "MANUAL_ENTRY",
         ltvPercent: 90,
       })
-    // The guard's OWN wording. `/approve/i` also matches the generic tenant-auth
-    // refusal "Missing required permissions: approve:finance_application", so a
-    // later change that moved this mutation behind a different permission would
-    // leave the test green while it proved a different rule.
-    ).rejects.toThrow(/may set the LTV this deal is financed at/i);
+    // The guard's OWN wording, which changed with the authority model
+    // (2026-09-13 15:33): establishing the rate now needs BOTH `view:finance`
+    // and `approve:finance_application`. Matching the guard rather than
+    // `/approve/i` still matters for the same reason as before - the generic
+    // tenant-auth refusal "Missing required permissions:
+    // approve:finance_application" would otherwise keep this green while
+    // proving a different rule.
+    ).rejects.toThrow(/needs both finance visibility and approval authority/i);
 
     // Refused BEFORE anything was written — not refused after recording the
     // quotation and leaving the rate behind, which would be the worse failure.
@@ -1797,7 +1800,7 @@ describe("LTV configuration", () => {
         source: "MANUAL_ENTRY",
         ltvPercent: 90,
       })
-    ).rejects.toThrow(/may set the LTV this deal is financed at/i);
+    ).rejects.toThrow(/needs both finance visibility and approval authority/i);
 
     /**
      * And the workflow is intact, which is the half that matters: the
@@ -1833,11 +1836,14 @@ describe("LTV configuration", () => {
         source: "MANUAL_ENTRY",
         ltvPercent: 70,
       })
-    // The guard's OWN wording. `/approve/i` also matches the generic tenant-auth
-    // refusal "Missing required permissions: approve:finance_application", so a
-    // later change that moved this mutation behind a different permission would
-    // leave the test green while it proved a different rule.
-    ).rejects.toThrow(/may set the LTV this deal is financed at/i);
+    // The guard's OWN wording, which changed with the authority model
+    // (2026-09-13 15:33): establishing the rate now needs BOTH `view:finance`
+    // and `approve:finance_application`. Matching the guard rather than
+    // `/approve/i` still matters for the same reason as before - the generic
+    // tenant-auth refusal "Missing required permissions:
+    // approve:finance_application" would otherwise keep this green while
+    // proving a different rule.
+    ).rejects.toThrow(/needs both finance visibility and approval authority/i);
 
     // The ordinary path is untouched: no rate argument, the snapshot's own rate
     // applies, and the salesperson records what was sent.

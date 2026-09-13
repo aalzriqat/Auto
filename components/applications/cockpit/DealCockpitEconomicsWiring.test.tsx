@@ -232,10 +232,41 @@ describe("the facts the card is given", () => {
     expect(screen.queryByText("FinanceCompanyLtvMissing")).toBeNull();
   });
 
-  test("tell an approver to record the rate rather than to go and find one", () => {
+  /**
+   * PREMISE CHANGED by the owner-proxy ruling of 2026-09-13 15:33 (SCRUM-117).
+   *
+   * This asserted that holding `approve:finance_application` was enough to be
+   * told "record the rate". Establishing a per-deal LTV now needs `view:finance`
+   * as well, because a role that may write the rate and may see the resulting
+   * quotation can solve for the operands it may not read. The default MANAGER
+   * template holds the approval and NOT the visibility, so that exact person
+   * now belongs in the other audience.
+   *
+   * Both halves are asserted, against the real component and the real
+   * permission hook, because the failure mode this guards is a screen that
+   * offers an input the server refuses.
+   */
+  test("a default-MANAGER-shaped approver is told who can establish the rate", () => {
     permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
     permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
     permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+    queryResults.set(COCKPIT_QUERY, cockpit(false));
+    queryResults.set(
+      ECONOMICS_QUERY,
+      economics({ companyRuleSnapshot: { ruleVersion: 1 }, appliedLtvPercent: undefined }, { requiresLtvPercent: true })
+    );
+
+    renderCockpit();
+
+    expect(screen.getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
+    expect(screen.queryByText("FinanceCompanyLtvMissing")).toBeNull();
+  });
+
+  test("tell a FINANCE-authorized approver to record the rate rather than to go and find one", () => {
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VIEW_FINANCE);
     queryResults.set(COCKPIT_QUERY, cockpit(false));
     queryResults.set(
       ECONOMICS_QUERY,

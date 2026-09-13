@@ -1122,7 +1122,22 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
       expect(refusals[0]).not.toContain("ACCEPTED");
     });
 
-    test("a non-finance APPROVER keeps the missing-rate MANUAL_ENTRY recovery", async () => {
+    /**
+     * INVERTED by the owner-proxy ruling of 2026-09-13 15:33 (SCRUM-117).
+     *
+     * This asserted that a default MANAGER - approval authority, no
+     * `view:finance` - could establish a missing rate through the MANUAL_ENTRY
+     * recovery. The ruling of 13:48 explicitly preserved that capability, and
+     * the owner-proxy has since said plainly that preserving it is what kept
+     * the write-then-read oracle alive: it is the exact actor and the exact
+     * door of the third reproduction.
+     *
+     * So the capability MOVES rather than disappearing. The case below now
+     * asserts both halves - the default MANAGER is refused, and a
+     * finance-authorized approver completes the same recovery - because an
+     * assertion that only refused would be satisfied by a workflow dead end.
+     */
+    test("the missing-rate recovery now requires a FINANCE-AUTHORIZED approver", async () => {
       const seeded = await quotableDeal("approverRecovery");
       await seeded.t.run(async (ctx) => {
         const app = (await ctx.db.get(seeded.applicationId))!;
@@ -1131,9 +1146,22 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
           companyRuleSnapshot: { ...app.companyRuleSnapshot!, defaultLtvPercent: undefined },
         });
       });
-      // default MANAGER: approves, but holds no view:finance.
-      const approver = seeded.asRole(templateFor("MANAGER"));
-      await approver.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      // default MANAGER: approves, but holds no view:finance. The reproduction actor.
+      const manager = seeded.asRole(templateFor("MANAGER"));
+      await expect(
+        manager.mutation(api.financingEconomics.recordSubmittedQuotation, {
+          orgId: seeded.orgId,
+          applicationId: seeded.applicationId,
+          submittedQuotationMinor: 9_300_000,
+          source: "MANUAL_ENTRY",
+          ltvPercent: 72.5,
+        })
+      ).rejects.toThrow(/needs both finance visibility and approval authority/i);
+
+      // And the recovery is not destroyed, only re-homed: the same call from an
+      // approver who may also READ the economics completes it.
+      const authorized = seeded.asRole([...templateFor("MANAGER"), PERMISSIONS.VIEW_FINANCE]);
+      await authorized.mutation(api.financingEconomics.recordSubmittedQuotation, {
         orgId: seeded.orgId,
         applicationId: seeded.applicationId,
         submittedQuotationMinor: 9_300_000,
@@ -1146,7 +1174,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
       expect(stored!.submittedQuotationMinor).toBe(9_300_000);
       expect(stored!.submittedQuotationSource).toBe("MANUAL_ENTRY");
       // …and the next canonical suggestion is consistent with what was written.
-      const next = await ask(approver, seeded);
+      const next = await ask(manager, seeded);
       expect(next.available).toBe(true);
       expect(JSON.stringify(next)).not.toContain(String(SENTINEL.targetNetProceeds));
     });
@@ -1166,7 +1194,13 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
       } catch (error) {
         refusal = error instanceof Error ? error.message : String(error);
       }
-      expect(refusal).toContain("CALCULATION_INPUTS_REQUIRE_FINANCE");
+      // The CODE changed with the authority model and the PROPERTY did not.
+      // `CALCULATION_INPUTS_REQUIRE_FINANCE` was the narrower guard for "a
+      // supplied rate plus calculated provenance"; the rate is now refused for
+      // this caller in every provenance mode, so that guard is subsumed rather
+      // than weakened. What this case is actually for - no speculative solve,
+      // no computed figure in the message - is asserted below, unchanged.
+      expect(refusal).toMatch(/needs both finance visibility and approval authority/i);
       // No computed-number feedback: the whole point of refusing BEFORE solving.
       expect(refusal).not.toContain(String(SENTINEL.targetNetProceeds));
       expect(/\d{5,}/.test(refusal)).toBe(false);
@@ -1223,6 +1257,327 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
       // The finance caller still gets the actionable message naming the setting.
       const finance = await ask(seeded.asRole(templateFor("ACCOUNTANT")), seeded);
       expect(JSON.stringify(finance)).toContain("4242424");
+    });
+  });
+
+  /**
+   * THE AUTHORITY MODEL that replaced the third round of argument filters
+   * (SCRUM-117, owner-proxy ruling 2026-09-13 15:33).
+   *
+   * Three CRITICALs came through three doors to one figure, and the third
+   * survived its own fix: round 3 closed `recordSubmittedQuotation` and left
+   * `approveDealerPurchaseAmount` - gated on `approve:finance_application`
+   * alone, which the default MANAGER holds WITHOUT `view:finance` - writing the
+   * same rate. The repair is not a fourth filter. Nobody barred from READING
+   * the economics may WRITE the operand they are barred from reading.
+   *
+   * These cases are written against the four repairs that would each look like
+   * a fix and leave the class reachable:
+   *
+   *   1. guarding only the reproduced endpoint (W2) and leaving W1;
+   *   2. guarding only W1 again and leaving W2 - the actual round-3 outcome;
+   *   3. keeping the "an EQUAL rate changes nothing" allowance, which is the
+   *      search oracle itself;
+   *   4. treating `view:finance` as sufficient, which would hand an ACCOUNTANT
+   *      a write authority they have never held.
+   */
+  describe("the LTV authority model: writing the rate requires reading the economics", () => {
+    /**
+     * A deal that is genuinely APPROVABLE, so a refusal in these cases can only
+     * be the authority guard.
+     *
+     * The approval clears - otherwise W2 refuses an already-approved deal and
+     * W1 refuses a quotation on one - but the recorded QUOTATION stays, because
+     * W2 requires one and a fixture that removed it would refuse for a reason
+     * that has nothing to do with the boundary. The handover stamp goes for the
+     * same reason,. Separation of duties needs no fixture work: `asRole`
+     * mints a fresh user per caller, so no caller here is the salesperson.
+     */
+    async function rateEstablishableDeal(tag: string) {
+      const seeded = await seedSentinelDeal(tag);
+      await seeded.t.run(async (ctx) => {
+        await ctx.db.patch(seeded.applicationId, {
+          approvedDealerPurchaseAmountMinor: undefined,
+          approvedPurchaseBasis: undefined,
+          approvedPurchaseApprovedBy: undefined,
+          approvedPurchaseApprovedAt: undefined,
+          vehicleHandoverAt: undefined,
+        });
+      });
+      return seeded;
+    }
+
+    /** A MANUAL approval needs its note; that is a basis rule, not an authority one. */
+    const APPROVAL = {
+      approvedAmountMinor: SENTINEL.approved,
+      basis: "MANUAL" as const,
+      notes: "the finance company confirmed this amount by phone",
+    };
+
+    /** Row + audit trail, for the zero-delta proof that a refusal wrote nothing. */
+    async function rowSnapshot(seeded: Seeded) {
+      return seeded.t.run(async (ctx) => {
+        const app = await ctx.db.get(seeded.applicationId);
+        const overrides = await ctx.db.query("financeApplicationOverrides").collect();
+        return JSON.stringify({ app, overrides: overrides.length });
+      });
+    }
+
+    const REFUSAL = /needs both finance visibility and approval authority/i;
+
+    /**
+     * The rate the deal actually stands on, and a different one.
+     *
+     * Both are probed at BOTH doors: the equal value is the one a fix that
+     * keeps the no-op allowance would let through, and it is the one that made
+     * the permission check a search oracle over a FINANCE-classified field.
+     */
+    const RATES: Array<[string, number]> = [
+      ["a DIFFERENT rate", 100],
+      ["the SAME rate the deal already carries", SENTINEL.ltvPercent],
+    ];
+
+    /**
+     * Every role that must be refused, and why each one is a distinct case:
+     *
+     *   - default MANAGER - the reproduction actor: approval authority, no
+     *     finance visibility;
+     *   - default ACCOUNTANT - finance visibility, NO approval authority. The
+     *     ruling is explicit that read permission grants no write authority,
+     *     and a fix that tested `view:finance` alone would pass every MANAGER
+     *     case above and still be wrong here;
+     *   - default SALES - neither.
+     */
+    const REFUSED_ROLES: Array<[string, () => Permission[]]> = [
+      ["default MANAGER (approval, no view:finance)", () => templateFor("MANAGER")],
+      ["default ACCOUNTANT (view:finance, no approval)", () => templateFor("ACCOUNTANT")],
+      ["default SALES (neither)", () => templateFor("SALES")],
+    ];
+
+    /**
+     * What THIS role must be refused BY, at THIS door.
+     *
+     * A role that does not hold the door's own permission never reaches the
+     * authority guard: `requireTenantAuth` answers first, and that precedence
+     * is correct - an ACCOUNTANT is not an approver and should be told so, not
+     * told about finance visibility. Demanding the authority message from every
+     * role would assert the wrong thing and would quietly break if the endpoint
+     * permission ever changed.
+     *
+     * So every role must be REFUSED and must write NOTHING; the role that
+     * actually reaches the guard must additionally be refused BY the guard.
+     * Without that second half a fix could delete the guard entirely and these
+     * cases would still pass on the endpoint permission alone.
+     */
+    const refusedByTheGuard = (permissions: Permission[], doorPermission: Permission) =>
+      permissions.includes(doorPermission);
+
+    test.each(REFUSED_ROLES)(
+      "W2 approveDealerPurchaseAmount refuses an explicit rate from %s, at every value, with ZERO delta",
+      async (label, permissions) => {
+        const seeded = await rateEstablishableDeal(`w2${label.replace(/\W/g, "")}`);
+        const caller = seeded.asRole(permissions());
+        const before = await rowSnapshot(seeded);
+
+        for (const [name, rate] of RATES) {
+          let refusal = "";
+          try {
+            await caller.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+              orgId: seeded.orgId,
+              applicationId: seeded.applicationId,
+              ...APPROVAL,
+              appliedLtvPercent: rate,
+            });
+          } catch (error) {
+            refusal = error instanceof Error ? error.message : String(error);
+          }
+          const reachesGuard = refusedByTheGuard(
+            permissions(),
+            PERMISSIONS.APPROVE_FINANCE_APPLICATION
+          );
+          expect(`${name}: refused=${refusal !== ""}`).toBe(`${name}: refused=true`);
+          expect(`${name}: byTheGuard=${reachesGuard && REFUSAL.test(refusal)}`).toBe(
+            `${name}: byTheGuard=${reachesGuard}`
+          );
+          // The refusal names no protected figure - an error is an output.
+          expect(
+            `${name} echoes the target: ${refusal.includes(String(SENTINEL.targetNetProceeds))}`
+          ).toBe(`${name} echoes the target: false`);
+        }
+
+        // THE CONTROL that makes the equal-rate case mean something: nothing
+        // was read about the deal to decide, and nothing was written. A guard
+        // that compared against the stored rate would still refuse - and would
+        // still be an oracle.
+        expect(await rowSnapshot(seeded)).toBe(before);
+      }
+    );
+
+    test.each(REFUSED_ROLES)(
+      "W1 recordSubmittedQuotation refuses an explicit rate from %s, at every value, with ZERO delta",
+      async (label, permissions) => {
+        const seeded = await rateEstablishableDeal(`w1${label.replace(/\W/g, "")}`);
+        const caller = seeded.asRole(permissions());
+        const before = await rowSnapshot(seeded);
+
+        for (const [name, rate] of RATES) {
+          let refusal = "";
+          try {
+            await caller.mutation(api.financingEconomics.recordSubmittedQuotation, {
+              orgId: seeded.orgId,
+              applicationId: seeded.applicationId,
+              submittedQuotationMinor: 9_000_000,
+              source: "MANUAL_ENTRY",
+              ltvPercent: rate,
+            });
+          } catch (error) {
+            refusal = error instanceof Error ? error.message : String(error);
+          }
+          const reachesGuard = refusedByTheGuard(
+            permissions(),
+            PERMISSIONS.CREATE_FINANCE_APPLICATION
+          );
+          expect(`${name}: refused=${refusal !== ""}`).toBe(`${name}: refused=true`);
+          expect(`${name}: byTheGuard=${reachesGuard && REFUSAL.test(refusal)}`).toBe(
+            `${name}: byTheGuard=${reachesGuard}`
+          );
+        }
+
+        expect(await rowSnapshot(seeded)).toBe(before);
+      }
+    );
+
+    /**
+     * THE REPRODUCTION, end to end, as the owner-proxy froze it (R-3).
+     *
+     * The control is the pre-write canonical answer: it is a DIFFERENT figure
+     * from the protected target, so a post-write answer equal to the target
+     * would isolate the manager-controlled rate as the cause. With the guard in
+     * place the write never lands and the answer never moves.
+     */
+    test("R-3: a default MANAGER cannot move the disclosed quotation by writing the rate", async () => {
+      const seeded = await rateEstablishableDeal("r3");
+      const manager = seeded.asRole(templateFor("MANAGER"));
+
+      const canonicalBefore = (await manager.query(
+        api.financingEconomics.suggestQuotationForApplication,
+        { orgId: seeded.orgId, applicationId: seeded.applicationId }
+      )) as Record<string, unknown>;
+      expect(canonicalBefore.available).toBe(true);
+      expect(canonicalBefore.submittedQuotationMinor).not.toBe(SENTINEL.targetNetProceeds);
+
+      await expect(
+        manager.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+          orgId: seeded.orgId,
+          applicationId: seeded.applicationId,
+          ...APPROVAL,
+          appliedLtvPercent: 100,
+        })
+      ).rejects.toThrow(REFUSAL);
+
+      const canonicalAfter = (await manager.query(
+        api.financingEconomics.suggestQuotationForApplication,
+        { orgId: seeded.orgId, applicationId: seeded.applicationId }
+      )) as Record<string, unknown>;
+      // Whole-answer equality: the operand did not move, the availability did
+      // not move, and no rule diagnostic moved either.
+      expect(JSON.stringify(canonicalAfter)).toBe(JSON.stringify(canonicalBefore));
+      expect(canonicalAfter.submittedQuotationMinor).not.toBe(SENTINEL.targetNetProceeds);
+    });
+
+    /**
+     * THE PRESERVATION HALF, and the reason the contract says OMISSION is
+     * untouched. A boundary that broke this would be a defect under the same
+     * ruling that demands the boundary: the default MANAGER operational
+     * workflow on an ALREADY-ESTABLISHED rate is explicitly retained.
+     */
+    test("a default MANAGER still approves a purchase amount when the rate is OMITTED", async () => {
+      const seeded = await rateEstablishableDeal("omission");
+      const manager = seeded.asRole(templateFor("MANAGER"));
+
+      await manager.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: seeded.orgId,
+        applicationId: seeded.applicationId,
+        ...APPROVAL,
+      });
+
+      const app = await seeded.t.run((ctx) => ctx.db.get(seeded.applicationId));
+      expect(app?.approvedDealerPurchaseAmountMinor).toBe(SENTINEL.approved);
+      // The established rate stands, untouched by an approval that did not name it.
+      expect(app?.appliedLtvPercent).toBe(SENTINEL.ltvPercent);
+    });
+
+    /**
+     * And the capability is not destroyed, only moved: a role holding BOTH
+     * `view:finance` and `approve:finance_application` establishes the rate.
+     * Without this case the suite would pass just as happily against a fix that
+     * refused everyone, which would be a workflow dead end rather than a
+     * boundary.
+     */
+    test("a finance-authorized approver CAN establish the rate at both doors", async () => {
+      const seeded = await rateEstablishableDeal("authorized");
+      const approver = seeded.asRole([...templateFor("MANAGER"), PERMISSIONS.VIEW_FINANCE]);
+
+      await approver.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seeded.orgId,
+        applicationId: seeded.applicationId,
+        submittedQuotationMinor: 9_000_000,
+        source: "MANUAL_ENTRY",
+        ltvPercent: 90,
+      });
+      expect(
+        (await seeded.t.run((ctx) => ctx.db.get(seeded.applicationId)))?.appliedLtvPercent
+      ).toBe(90);
+
+      await approver.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: seeded.orgId,
+        applicationId: seeded.applicationId,
+        ...APPROVAL,
+        appliedLtvPercent: 95,
+      });
+      expect(
+        (await seeded.t.run((ctx) => ctx.db.get(seeded.applicationId)))?.appliedLtvPercent
+      ).toBe(95);
+    });
+
+    /**
+     * THE RE-ARM DOOR the corrected map names (Codex round 4, validated).
+     *
+     * `reopenApproval` clears the approval and the whole gap allocation while
+     * LEAVING `appliedLtvPercent` standing, so it returns the deal to a state
+     * where W2 can be called again. That is correct behaviour - discarding a
+     * legitimately agreed rate would destroy real data - and it is only safe
+     * BECAUSE the re-approval can no longer set a new rate. This asserts the
+     * pairing, which is the part a future change could silently break.
+     */
+    test("re-arming the approval does not re-open the rate to a non-finance approver", async () => {
+      const seeded = await rateEstablishableDeal("rearm");
+      const manager = seeded.asRole(templateFor("MANAGER"));
+
+      await manager.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: seeded.orgId,
+        applicationId: seeded.applicationId,
+        ...APPROVAL,
+      });
+      await manager.mutation(api.financingEconomics.reopenApproval, {
+        orgId: seeded.orgId,
+        applicationId: seeded.applicationId,
+        reason: "the company revised its offer",
+      });
+
+      const reopened = await seeded.t.run((ctx) => ctx.db.get(seeded.applicationId));
+      expect(reopened?.approvedDealerPurchaseAmountMinor).toBeUndefined();
+      // The rate survived the reopen - and is now unreachable to this caller.
+      expect(reopened?.appliedLtvPercent).toBe(SENTINEL.ltvPercent);
+
+      await expect(
+        manager.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+          orgId: seeded.orgId,
+          applicationId: seeded.applicationId,
+          ...APPROVAL,
+          appliedLtvPercent: 100,
+        })
+      ).rejects.toThrow(REFUSAL);
     });
   });
 

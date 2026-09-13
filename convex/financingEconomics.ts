@@ -7,13 +7,14 @@ import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import {
+  mayEstablishAppliedLtv,
   mayReadFinanceEconomics,
   mayReadQuotationWorkflow,
   projectFinanceApplication,
   projectFinanceApplicationOverrides,
   requiresLtvPercentFor,
 } from "./utils/financeApplicationProjection";
-import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
+import { PERMISSIONS } from "./utils/permissions";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import {
   computeSubmittedQuotation,
@@ -1148,57 +1149,34 @@ export const recordSubmittedQuotation = mutation({
      * was not entitled to set.
      */
     if (args.ltvPercent !== undefined) {
-      const mayApprove =
-        isSystemOwnerRole(role) ||
-        role.permissions.includes(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
       /**
-       * THE NO-OP EXCEPTION IS ITSELF AN ORACLE for a caller who cannot read
-       * the rate.
+       * ONE authority question, asked before anything is read, compared,
+       * solved, audited or written.
        *
-       * The rule below used to be "a rate EQUAL to the established one changes
-       * nothing, so re-recording a quotation stays ordinary sales work". That
-       * is sound reasoning about WRITES and unsound about READS: the accept /
-       * refuse outcome is a comparison against `appliedLtvPercent ??
-       * snapshot.defaultLtvPercent`, both FINANCE-classified, so a salesperson
-       * could search for the stored rate by watching which value stops being
-       * refused. A permission check that answers a question about a protected
-       * value IS a disclosure of it.
+       * What stood here was a three-way test — approver, or finance-visible
+       * with an equal rate, or refuse — and the middle branch is what kept this
+       * subsystem leaking. It resolved the snapshot and compared the supplied
+       * rate against `app.appliedLtvPercent ?? snapshot.defaultLtvPercent`,
+       * both FINANCE-classified, so the accept/refuse outcome was itself a
+       * search oracle over the stored rate.
        *
-       * So for a caller who cannot read the rate, supplying one requires
-       * approver authority UNCONDITIONALLY — no comparison is performed, and
-       * nothing is read to decide. For a caller who CAN read it there is
-       * nothing to guess, so the original no-op allowance is kept exactly, and
-       * the ordinary configured path is untouched for them.
+       * The replacement asks nothing about the deal. `mayEstablishAppliedLtv`
+       * reads the ROLE and nothing else, so the refusal is independent of the
+       * stored rate and identical whether the supplied value is equal to it,
+       * different from it, or the deal has no rate at all. An equal value does
+       * not bypass — that allowance WAS the oracle.
+       *
+       * OMISSION is untouched: a deal whose rate is already established stays
+       * ordinary work for the roles that do that work. `DealCockpit` sends
+       * `ltvPercent` only while `requiresLtvPercent` is true, so no screen ever
+       * sends the argument this refuses unless the deal genuinely needs a rate
+       * established — which is precisely the decision that now needs both
+       * permissions.
        */
-      if (!mayApprove) {
-        if (!financeVisible) {
-          throw new ConvexError(
-            "Only a user who can approve finance applications may set the LTV this deal is financed at. Ask a manager to record the rate the financing company confirmed."
-          );
-        }
-        const snapshot = await resolveRuleSnapshot(ctx, app);
-        const establishedLtvPercent = app.appliedLtvPercent ?? snapshot.defaultLtvPercent;
-        if (args.ltvPercent !== establishedLtvPercent) {
-          throw new ConvexError(
-            "Only a user who can approve finance applications may set the LTV this deal is financed at. Ask a manager to record the rate the financing company confirmed."
-          );
-        }
-      }
-      /**
-       * A supplied rate combined with CALCULATED provenance is refused BEFORE
-       * the solver runs, for a caller who cannot read the economics.
-       *
-       * The approver's real capability is the missing-rate recovery, and the
-       * dialog uses MANUAL_ENTRY for exactly that case — so that path is
-       * preserved untouched. What is refused is the other shape: asking the
-       * solver to calculate at a rate of the caller's choosing and then
-       * comparing its output against a submitted amount, which is the same
-       * caller-controlled oracle as the monetary inputs above, wearing a
-       * permission the approver legitimately holds for a different purpose.
-       * Refused before solving, so no computed figure exists to feed back.
-       */
-      if (!financeVisible && args.source !== "MANUAL_ENTRY") {
-        throw new ConvexError("CALCULATION_INPUTS_REQUIRE_FINANCE");
+      if (!mayEstablishAppliedLtv(role)) {
+        throw new ConvexError(
+          "Setting the LTV this deal is financed at needs both finance visibility and approval authority. Ask a finance-authorized approver to record the rate the financing company confirmed."
+        );
       }
     }
 
@@ -1787,9 +1765,41 @@ export const approveDealerPurchaseAmount = mutation({
     outlierAcknowledged: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [
       PERMISSIONS.APPROVE_FINANCE_APPLICATION,
     ]);
+    /**
+     * THE SECOND LTV DOOR (SCRUM-117, owner-proxy ruling 2026-09-13 15:33).
+     *
+     * Round 3 closed `recordSubmittedQuotation` and this endpoint kept the same
+     * authority open: it is gated on `APPROVE_FINANCE_APPLICATION` alone, the
+     * default MANAGER template holds that without `view:finance`, and it writes
+     * `appliedLtvPercent` straight through. So the reproduced attack survived
+     * its own fix by moving one endpoint sideways — write 100 here, then make
+     * the ordinary argument-less suggestion call and read the protected target
+     * out of the answer.
+     *
+     * That is why the predicate is SHARED rather than restated. Two endpoints
+     * each carrying their own copy of one authority rule is exactly what let
+     * this one lag a round behind.
+     *
+     * Placed immediately after the auth call, so it precedes the ownership
+     * lookup's protected reads, `resolveRuleSnapshot`, `resolveAppliedLtv`,
+     * every solve, the override audit rows and the patch. A refusal therefore
+     * reads nothing about the deal and moves nothing on it, and is identical
+     * whether the supplied rate equals the stored one or not.
+     *
+     * OMISSION is untouched, and that is the whole operational workflow: the
+     * resolution below is `args.appliedLtvPercent ?? app.appliedLtvPercent`, so
+     * a default MANAGER still approves a purchase amount on a deal whose rate
+     * is already established. What they can no longer do is establish or change
+     * it.
+     */
+    if (args.appliedLtvPercent !== undefined && !mayEstablishAppliedLtv(role)) {
+      throw new ConvexError(
+        "Setting the LTV this deal is financed at needs both finance visibility and approval authority. Ask a finance-authorized approver to record the rate the financing company confirmed."
+      );
+    }
     assertMinorAmount(args.approvedAmountMinor, "Approved purchase amount");
     if (args.approvedAmountMinor <= 0) {
       throw new ConvexError("The approved purchase amount must be greater than zero.");

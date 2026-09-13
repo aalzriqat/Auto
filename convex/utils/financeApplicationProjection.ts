@@ -364,6 +364,47 @@ export function mayReadFinanceEconomics(role: Doc<"roles">): boolean {
 }
 
 /**
+ * May this caller ESTABLISH or CHANGE the per-deal `appliedLtvPercent`?
+ *
+ * The authority model replacing the third round of input filters (SCRUM-117,
+ * owner-proxy ruling 2026-09-13 15:33). Three CRITICALs in a row came through
+ * three different doors to the same figure, and they shared one shape:
+ *
+ *   quotation = f(hidden inputs, appliedLtvPercent)
+ *
+ * A role that may WRITE one operand and may SEE the output can solve for the
+ * rest — at 100% the dealer contribution collapses and the output IS the
+ * protected target in a single shot. Filtering arguments cannot fix that; the
+ * only durable repair is that nobody who is barred from READING the economics
+ * may WRITE the operand they are barred from reading.
+ *
+ * Hence BOTH permissions, not either:
+ *
+ *   • `approve:finance_application` — because the rate is an approval decision
+ *     and always was; this is the endpoint authority that already existed;
+ *   • `view:finance` — because a writer who cannot read the result is exactly
+ *     the actor every reproduction used.
+ *
+ * Read permission alone grants NO write authority: an ACCOUNTANT holds
+ * `view:finance` and not the approval, and is correctly refused here. The
+ * system owner passes both through `allows`.
+ *
+ * Deliberately NOT a variant of `visibilityFor` — that map answers "what may
+ * this role READ", and folding a write authority into it would be the same
+ * conflation that made `handoverEvidenceFor` derive one field's visibility
+ * from another's. This is a separate question with a separate answer, exported
+ * once so `recordSubmittedQuotation` and `approveDealerPurchaseAmount` cannot
+ * drift apart — the drift between those two is what left W2 open after round 3
+ * closed W1.
+ */
+export function mayEstablishAppliedLtv(role: Doc<"roles">): boolean {
+  return (
+    allows(role, PERMISSIONS.VIEW_FINANCE) &&
+    allows(role, PERMISSIONS.APPROVE_FINANCE_APPLICATION)
+  );
+}
+
+/**
  * The row as this caller may read it.
  *
  * Built by walking the classification, not by spreading and subtracting: a key

@@ -1299,6 +1299,25 @@ export function DealCockpit({
           currency: economicsApp.economicsCurrency ?? null,
           canRecordQuotation: hasPermission(PERMISSIONS.CREATE_FINANCE_APPLICATION),
           canRecordApproval: hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION),
+          /**
+           * Establishing this deal's own LTV is a NARROWER authority than
+           * approving it (SCRUM-117, owner-proxy ruling 2026-09-13 15:33).
+           *
+           * `recordSubmittedQuotation` and `approveDealerPurchaseAmount` both
+           * now require BOTH `view:finance` and `approve:finance_application`
+           * for an explicit rate, because a role that may WRITE the rate and
+           * may SEE the resulting quotation can solve for the operands it may
+           * not read. So the two capabilities separate here as well: a default
+           * MANAGER still records approvals on an established rate, and is no
+           * longer offered a field whose entry the server would refuse.
+           *
+           * Derived from the same permissions the server checks rather than
+           * from `canRecordApproval`, because deriving one capability from
+           * another is precisely how the screen and the boundary drift apart.
+           */
+          canEstablishLtvPercent:
+            hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION) &&
+            hasPermission(PERMISSIONS.VIEW_FINANCE),
           approvedAmountIsFarFromEvidence: economics?.approvedAmountIsFarFromEvidence ?? false,
           // What `recordAppraisal` itself requires for a finance-company or
           // independent appraisal. The dealer-estimate branch takes a different
@@ -1941,6 +1960,8 @@ export type FinanceDecisionWiring = {
   currency: string | null;
   canRecordQuotation: boolean;
   canRecordApproval: boolean;
+  /** May this caller establish the deal's own LTV — approval AND finance visibility. */
+  canEstablishLtvPercent: boolean;
   canRecordAppraisal: boolean;
   isOwnDeal: boolean;
   /**
@@ -2871,6 +2892,7 @@ export function DealCockpitView({
           facts={financeDecision.facts}
           canRecordQuotation={financeDecision.canRecordQuotation}
           canRecordApproval={financeDecision.canRecordApproval}
+          canEstablishLtvPercent={financeDecision.canEstablishLtvPercent}
           canRecordAppraisal={financeDecision.canRecordAppraisal}
           isOwnDeal={financeDecision.isOwnDeal}
           money={decisionMoney}
@@ -3237,7 +3259,7 @@ export function DealCockpitView({
             requiresLtvPercent={financeDecision.facts.ltvMissing}
             // The permission the SERVER checks for the rate — deliberately not
             // `canRecordQuotation`, which the SALES template also holds.
-            canSetLtvPercent={financeDecision.canRecordApproval}
+            canSetLtvPercent={financeDecision.canEstablishLtvPercent}
             factor={decisionFactor}
             money={decisionMoney}
             t={t}
