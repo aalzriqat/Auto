@@ -764,17 +764,62 @@ export const suggestQuotationForApplication = query({
      * one is called from the wizard with caller-supplied inputs, not mounted
      * beside a screen it can take down.
      */
+    /**
+     * THE INPUT BOUNDARY (SCRUM-117, owner-proxy ruling 2026-09-13 13:48).
+     *
+     * Gating the RESPONSE was not enough: the caller also controls the
+     * ARGUMENTS. Every one of the five what-if controls falls back to a stored
+     * field when omitted, so a caller who may not read those fields could pin
+     * four of them to chosen values and read the fifth out of the answer. With
+     * `estimatedDealerBorneExpensesMinor: 0`, `quotationBufferMinor: 0` and
+     * either `ltvPercent: 100` or a very large `customerFirstPaymentMinor`, the
+     * dealer contribution collapses to zero and the returned quotation IS
+     * `targetNetProceedsMinor` exactly — a FINANCE-classified field. Reproduced
+     * against `10791edb7` for the default SALES template, with a control
+     * showing the ordinary argument-less call returns a different figure.
+     *
+     * So a caller without VIEW_FINANCE gets the CANONICAL quotation for this
+     * deal and nothing else: solved from the stored application and its own
+     * rule snapshot, with every supplied control DISREGARDED. Not sanitized,
+     * not partially honored — disregarded, so no supplied value can move the
+     * calculation, the availability, or a rule diagnostic.
+     *
+     * ⚠️ ALL FIVE, and `ltvPercent` is the one to watch: four of them are
+     * monetary and it is easy to enumerate only those. It is the sharpest of
+     * them — at 100% the composition collapses in one step.
+     *
+     * A VIEW_FINANCE caller keeps the full simulator: it may read every operand
+     * anyway, so nothing is protected by refusing it a what-if.
+     */
+    const economicsVisible = mayReadFinanceEconomics(auth.role);
     let solved: Awaited<ReturnType<typeof solveQuotationForApplication>>;
     try {
-      solved = await solveQuotationForApplication(ctx, app, args);
+      solved = await solveQuotationForApplication(ctx, app, economicsVisible ? args : {});
     } catch (error) {
       if (!(error instanceof ConvexError)) throw error;
+      /**
+       * ERRORS ARE OUTPUTS TOO.
+       *
+       * `resolveAppliedLtv` and the minimum-first-payment guard put real
+       * figures in their messages — the snapshot's LTV bounds and the company's
+       * minimum payment — and this catch forwarded `error.data` verbatim. Those
+       * come from the deal's FROZEN snapshot, which can differ from the live
+       * company row, so the message could carry a deal-specific historical fact
+       * to a caller who may not read it. A non-finance caller gets a stable
+       * code instead; an unknown error still rethrows rather than becoming an
+       * "available: false" success, and an auth/tenancy error is never swallowed
+       * because only ConvexError is caught at all.
+       */
       return {
         appliedLtvPercent: undefined,
         currency,
         ruleVersion: undefined,
         available: false as const,
-        reason: typeof error.data === "string" ? error.data : "RULES_UNAVAILABLE",
+        reason: economicsVisible
+          ? typeof error.data === "string"
+            ? error.data
+            : "RULES_UNAVAILABLE"
+          : ("RULES_UNAVAILABLE" as const),
       };
     }
 
@@ -786,7 +831,6 @@ export const suggestQuotationForApplication = query({
      * `JSON.stringify` drops the blanks on the wire — the same technique
      * `projectFinanceApplication` uses on the row.
      */
-    const economicsVisible = mayReadFinanceEconomics(auth.role);
     const base = {
       appliedLtvPercent: economicsVisible
         ? (solved.appliedLtvPercent as number | undefined)
@@ -804,6 +848,14 @@ export const suggestQuotationForApplication = query({
       return { ...base, available: false as const, reason: "NO_TARGET_RECORDED" as const };
     }
     if (!solved.result.available) {
+      /**
+       * KEPT for every caller. Unlike the thrown messages caught above, this is
+       * the solver's own fixed enumeration of rule states and carries no
+       * figure — and with all five what-if controls disregarded for a
+       * non-finance caller, they cannot STEER which reason appears either, so
+       * it is not an oracle. Withholding it would only cost the operator the
+       * sentence telling them which company setting to fix.
+       */
       return { ...base, available: false as const, reason: solved.result.reason };
     }
     /**
@@ -1025,6 +1077,47 @@ export const recordSubmittedQuotation = mutation({
     }
 
     /**
+     * THE INPUT BOUNDARY, on the WRITE side (same ruling).
+     *
+     * Fixing only the query would have left a write-then-read route, and this
+     * is the half I had missed: the patch below does not merely solve from
+     * these arguments, it PERSISTS them. `targetSellingAmountMinor` fans out
+     * into `targetSellingAmountMinor` AND `targetNetProceedsMinor`;
+     * `estimatedDealerBorneExpensesMinor` into two more; the resolved first
+     * payment and buffer are written as well. So a caller without VIEW_FINANCE
+     * could record a MANUAL_ENTRY carrying chosen inputs — no solver check
+     * applies to that mode — and then read the now-poisoned row back through
+     * the canonical, "safe", override-free query. The arithmetic that recovers
+     * the hidden figure is identical; only the timing changes.
+     *
+     * Hence REFUSED rather than ignored, and refused HERE: before the LTV
+     * guard, before the solver, before the audit rows and before `ctx.db.patch`.
+     * Ignoring them silently would be worse than refusing — the operator would
+     * believe they had recorded a target that was never stored.
+     *
+     * Applies to EVERY provenance mode, MANUAL_ENTRY included. The quotation
+     * amount, its source and the override reason remain ordinary operator
+     * inputs; only the calculation OPERANDS need finance authority.
+     *
+     * The code is stable and names no protected value. Nothing in the product
+     * sends these: `DealCockpit` calls the query argument-less and sends the
+     * mutation only `submittedQuotationMinor` / `source` / `overrideReason` /
+     * `ltvPercent`.
+     */
+    const financeVisible = mayReadFinanceEconomics(role);
+    if (!financeVisible) {
+      const suppliedCalculationInputs = [
+        args.targetSellingAmountMinor,
+        args.estimatedDealerBorneExpensesMinor,
+        args.quotationBufferMinor,
+        args.customerFirstPaymentMinor,
+      ].some((value) => value !== undefined);
+      if (suppliedCalculationInputs) {
+        throw new ConvexError("CALCULATION_INPUTS_REQUIRE_FINANCE");
+      }
+    }
+
+    /**
      * Naming the rate this deal is financed at is an APPROVER's decision.
      *
      * Recording the quotation is a transcription — "this is the figure we sent"
@@ -1055,15 +1148,57 @@ export const recordSubmittedQuotation = mutation({
      * was not entitled to set.
      */
     if (args.ltvPercent !== undefined) {
-      const snapshot = await resolveRuleSnapshot(ctx, app);
-      const establishedLtvPercent = app.appliedLtvPercent ?? snapshot.defaultLtvPercent;
       const mayApprove =
         isSystemOwnerRole(role) ||
         role.permissions.includes(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
-      if (args.ltvPercent !== establishedLtvPercent && !mayApprove) {
-        throw new ConvexError(
-          "Only a user who can approve finance applications may set the LTV this deal is financed at. Ask a manager to record the rate the financing company confirmed."
-        );
+      /**
+       * THE NO-OP EXCEPTION IS ITSELF AN ORACLE for a caller who cannot read
+       * the rate.
+       *
+       * The rule below used to be "a rate EQUAL to the established one changes
+       * nothing, so re-recording a quotation stays ordinary sales work". That
+       * is sound reasoning about WRITES and unsound about READS: the accept /
+       * refuse outcome is a comparison against `appliedLtvPercent ??
+       * snapshot.defaultLtvPercent`, both FINANCE-classified, so a salesperson
+       * could search for the stored rate by watching which value stops being
+       * refused. A permission check that answers a question about a protected
+       * value IS a disclosure of it.
+       *
+       * So for a caller who cannot read the rate, supplying one requires
+       * approver authority UNCONDITIONALLY — no comparison is performed, and
+       * nothing is read to decide. For a caller who CAN read it there is
+       * nothing to guess, so the original no-op allowance is kept exactly, and
+       * the ordinary configured path is untouched for them.
+       */
+      if (!mayApprove) {
+        if (!financeVisible) {
+          throw new ConvexError(
+            "Only a user who can approve finance applications may set the LTV this deal is financed at. Ask a manager to record the rate the financing company confirmed."
+          );
+        }
+        const snapshot = await resolveRuleSnapshot(ctx, app);
+        const establishedLtvPercent = app.appliedLtvPercent ?? snapshot.defaultLtvPercent;
+        if (args.ltvPercent !== establishedLtvPercent) {
+          throw new ConvexError(
+            "Only a user who can approve finance applications may set the LTV this deal is financed at. Ask a manager to record the rate the financing company confirmed."
+          );
+        }
+      }
+      /**
+       * A supplied rate combined with CALCULATED provenance is refused BEFORE
+       * the solver runs, for a caller who cannot read the economics.
+       *
+       * The approver's real capability is the missing-rate recovery, and the
+       * dialog uses MANUAL_ENTRY for exactly that case — so that path is
+       * preserved untouched. What is refused is the other shape: asking the
+       * solver to calculate at a rate of the caller's choosing and then
+       * comparing its output against a submitted amount, which is the same
+       * caller-controlled oracle as the monetary inputs above, wearing a
+       * permission the approver legitimately holds for a different purpose.
+       * Refused before solving, so no computed figure exists to feed back.
+       */
+      if (!financeVisible && args.source !== "MANUAL_ENTRY") {
+        throw new ConvexError("CALCULATION_INPUTS_REQUIRE_FINANCE");
       }
     }
 
@@ -1290,23 +1425,38 @@ export const recordSubmittedQuotation = mutation({
         );
       }
       if (!solverResult.available) {
+        // The reason is a fixed enumeration of RULE STATES (an unrecorded
+        // offset rule, and so on) and carries no figure, so it stays: it tells
+        // the operator which setting to fix. Ruling #4 is about computed
+        // NUMBERS, and removing this as well cost actionable guidance for no
+        // security gain.
         throw new ConvexError(
           `This quotation is recorded as ${modeLabel}, but the calculator could not run (${solverResult.reason}). Submit it as a manual entry instead.`
         );
       }
       const matchesSolver =
         solverResult.submittedQuotationMinor === args.submittedQuotationMinor;
+      /**
+       * NAMES NO FIGURE. The message used to read "...the calculator produced
+       * 10231041 minor units, not 1", which handed the computed value to
+       * anyone who could call this mutation — a third route to the same leak,
+       * through an error rather than a response, and one that no response-shape
+       * gate would ever have caught. The operator already sees the calculated
+       * figure on the screen they are submitting from, so nothing is lost.
+       */
       if (args.source === "SYSTEM_CALCULATED" && !matchesSolver) {
         throw new ConvexError(
-          `This quotation is recorded as calculated by the system, but the calculator produced ${solverResult.submittedQuotationMinor} minor units, not ${args.submittedQuotationMinor}. Record it as a calculated quotation with an override and say why it differs.`
+          "This quotation is recorded as calculated by the system, but it does not match the calculated figure. Record it as a calculated quotation with an override and say why it differs, or submit it as a manual entry."
         );
       }
       // An "override" that departs from nothing is not an override. Letting it
       // through would put a departure on the record, complete with a reason
       // explaining a difference that does not exist.
       if (args.source === "CALCULATED_WITH_OVERRIDE" && matchesSolver) {
+        // Names no figure either: the caller supplied the amount, so saying it
+        // MATCHES the calculation discloses the calculation.
         throw new ConvexError(
-          `This quotation is recorded as an override, but it matches the calculated figure of ${solverResult.submittedQuotationMinor} minor units exactly. Record it as calculated by the system instead.`
+          "This quotation is recorded as an override, but it matches the calculated figure exactly. Record it as calculated by the system instead."
         );
       }
     }
