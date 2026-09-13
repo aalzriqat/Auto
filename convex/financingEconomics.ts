@@ -5,7 +5,12 @@ import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
-import { requireOwnedRow, requireTenantAuth, redactSettlementEvidence } from "./utils/tenancy";
+import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
+import {
+  projectFinanceApplication,
+  projectFinanceApplicationOverrides,
+  requiresLtvPercentFor,
+} from "./utils/financeApplicationProjection";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import {
@@ -777,39 +782,46 @@ export const getEconomics = query({
       .withIndex("by_application", (q) => q.eq("applicationId", args.applicationId))
       .collect();
 
-    // Cost-bearing figures follow the same rule as everywhere else in the
-    // codebase (see the vehicle queries): SALES and RECEPTION hold
-    // VIEW_FINANCE_APPLICATIONS but not VIEW_COST_PRICE. Stripping them here
-    // rather than when something first writes them means the day
-    // vehiclePurchaseCostMinor starts being populated is not the day the
-    // vehicle's cost quietly starts reaching the sales floor.
-    //
-    // Blanked rather than omitted so the returned shape stays the same for
-    // every caller — a union of "has the key" and "does not" would make every
-    // consumer narrow before reading anything.
-    const canSeeCost =
-      isSystemOwnerRole(auth.role) ||
-      auth.role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
-
-    // The redaction's OWN decision about the approved amount, reused rather
+    // The projection's OWN decision about the approved amount, reused rather
     // than restated. Whether this caller may see the figure is a rule that
-    // lives in one place; asking the redacted row is how the anomaly verdict
+    // lives in one place; asking the projected row is how the anomaly verdict
     // below inherits it instead of maintaining a second copy that could drift.
-    const visibleApp = redactSettlementEvidence(app, auth.role);
+    //
+    // Cost follows the same allowlist (VIEW_COST_PRICE): SALES and RECEPTION
+    // hold VIEW_FINANCE_APPLICATIONS but not that, and the day
+    // vehiclePurchaseCostMinor starts being populated must not be the day the
+    // vehicle's cost quietly reaches the sales floor.
+    const visibleApp = projectFinanceApplication(app, auth.role);
     const approvedAmountVisible = visibleApp.approvedDealerPurchaseAmountMinor !== undefined;
 
     return {
-      application: {
-        // Through the SAME helper `applications.get` uses. This query authorizes
-        // on VIEW_FINANCE_APPLICATIONS, which the default SALES template holds,
-        // and spread the whole document while redacting exactly one field — so
-        // gating the other two doors left the settlement evidence readable here
-        // by a weaker role than the one that had just been closed.
-        ...visibleApp,
-        vehiclePurchaseCostMinor: canSeeCost ? app.vehiclePurchaseCostMinor : undefined,
-      },
+      application: visibleApp,
       appraisals: appraisals.sort((a, b) => b.appraisedAt - a.appraisedAt),
-      overrides: overrides.sort((a, b) => b.changedAt - a.changedAt),
+      /**
+       * The history, projected (SCRUM-117).
+       *
+       * `recordOverride` stringifies every corrected figure into
+       * `previousValue`/`newValue` and takes a free-text reason, so the raw
+       * rows restated the approved amount and the gap allocation to a caller
+       * the projection above had just withheld them from — the third of the
+       * three documented recovery routes, and the one the row projection
+       * cannot reach.
+       */
+      overrides: projectFinanceApplicationOverrides(
+        overrides.sort((a, b) => b.changedAt - a.changedAt),
+        auth.role
+      ),
+      /**
+       * Whether the operator must name the purchase LTV for this deal, as a
+       * FACT rather than as three fields to compare.
+       *
+       * The screen derived it from `companyRuleSnapshot` and
+       * `appliedLtvPercent`, both of which are now finance-gated — and a SALES
+       * caller who is not told the rate is missing types a quotation the server
+       * then refuses. Published as a boolean that names no rate, so the
+       * ordinary workflow survives the boundary.
+       */
+      requiresLtvPercent: requiresLtvPercentFor(app),
       /**
        * Whether the recorded approved amount is unlike every figure on file.
        *
@@ -2082,7 +2094,9 @@ export const listNeedingReconciliation = query({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
+    ]);
     const page = await ctx.db
       .query("financeApplications")
       .withIndex("by_org_reconciliation", (q) =>
@@ -2092,32 +2106,46 @@ export const listNeedingReconciliation = query({
 
     return {
       ...page,
-      page: page.page.map((app) => ({
-        _id: app._id,
-        _creationTime: app._creationTime,
-        customerId: app.customerId,
-        vehicleId: app.vehicleId,
-        companyId: app.companyId,
-        status: app.status,
-        financingReconciliationReason: app.financingReconciliationReason,
-        economicsCurrency: app.economicsCurrency,
-        submittedQuotationMinor: app.submittedQuotationMinor,
-        approvedDealerPurchaseAmountMinor: app.approvedDealerPurchaseAmountMinor,
-        appliedLtvPercent: app.appliedLtvPercent,
-        financeCompanyFundedPortionMinor: app.financeCompanyFundedPortionMinor,
-        dealerContributionMinor: app.dealerContributionMinor,
-        rawAppraisalGapMinor: app.rawAppraisalGapMinor,
-        expectedDealerRemittanceMinor: app.expectedDealerRemittanceMinor,
-        // The migration's own note for a disbursed row says "re-enter the
-        // approved purchase amount, the applied LTV and the actual receipt".
-        // Carrying `disbursedAt` but not the amount told a triager THAT money
-        // moved and not how much — so working the queue meant opening every row.
-        disbursedAt: app.disbursedAt,
-        disbursedAmountMinor: app.disbursedAmountMinor,
-        actualDealerReceiptTotalMinor: app.actualDealerReceiptTotalMinor,
-        finalizedSaleId: app.finalizedSaleId,
-        updatedAt: app.updatedAt,
-      })),
+      /**
+       * Built from the PROJECTED row, not the raw one (SCRUM-117).
+       *
+       * This queue authorizes on VIEW_FINANCE_APPLICATIONS and hand-listed the
+       * quotation, the approved amount, the LTV, the funded portion, the dealer
+       * contribution, the raw gap and the remittance — every figure the
+       * boundary withholds elsewhere, served raw to the same default SALES and
+       * MANAGER templates. A door that assembles its own row is exactly the
+       * shape an allowlist exists to catch; it now reads what the caller may
+       * read and nothing else.
+       */
+      page: page.page.map((app) => {
+        const visible = projectFinanceApplication(app, role);
+        return {
+          _id: visible._id,
+          _creationTime: visible._creationTime,
+          customerId: visible.customerId,
+          vehicleId: visible.vehicleId,
+          companyId: visible.companyId,
+          status: visible.status,
+          financingReconciliationReason: visible.financingReconciliationReason,
+          economicsCurrency: visible.economicsCurrency,
+          submittedQuotationMinor: visible.submittedQuotationMinor,
+          approvedDealerPurchaseAmountMinor: visible.approvedDealerPurchaseAmountMinor,
+          appliedLtvPercent: visible.appliedLtvPercent,
+          financeCompanyFundedPortionMinor: visible.financeCompanyFundedPortionMinor,
+          dealerContributionMinor: visible.dealerContributionMinor,
+          rawAppraisalGapMinor: visible.rawAppraisalGapMinor,
+          expectedDealerRemittanceMinor: visible.expectedDealerRemittanceMinor,
+          // The migration's own note for a disbursed row says "re-enter the
+          // approved purchase amount, the applied LTV and the actual receipt".
+          // Carrying `disbursedAt` but not the amount told a triager THAT money
+          // moved and not how much — so working the queue meant opening every row.
+          disbursedAt: visible.disbursedAt,
+          disbursedAmountMinor: visible.disbursedAmountMinor,
+          actualDealerReceiptTotalMinor: visible.actualDealerReceiptTotalMinor,
+          finalizedSaleId: visible.finalizedSaleId,
+          updatedAt: visible.updatedAt,
+        };
+      }),
     };
   },
 });

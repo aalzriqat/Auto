@@ -11,8 +11,11 @@ import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import {
   requireTenantAuth,
-  redactSettlementEvidence,
+  // The finance-application read boundary (SCRUM-117): an exhaustive
+  // allowlist, not a blocklist. Every door that returns one of these rows
+  // goes through it.
 } from "./utils/tenancy";
+import { projectFinanceApplication } from "./utils/financeApplicationProjection";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
@@ -1537,7 +1540,7 @@ export const list = query({
           // same VIEW_SALES as the detail query — so redacting the three detail
           // endpoints while leaving this one open would hand the same evidence
           // to the same caller through the paginated list. The fourth door.
-          ...redactSettlementEvidence(app, role),
+          ...projectFinanceApplication(app, role),
           customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
           vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
           // Not `company ? company.name : "Cash / Direct"`. A
@@ -1621,7 +1624,7 @@ export const get = query({
      * `settlementAdviceRequiresReconciliation` ungated so a stuck deal is still
      * visible to the people who work it.
      */
-    const visibleApp = redactSettlementEvidence(app, role);
+    const visibleApp = projectFinanceApplication(app, role);
 
     const customer = await ctx.db.get(app.customerId);
     const vehicle = await ctx.db.get(app.vehicleId);
@@ -1767,7 +1770,7 @@ async function handoverEvidenceFor(
   approvedAmountIsFarFromEvidence: boolean;
   currency: { code: string; scale: number } | null;
 }> {
-  const visibleAmount = redactSettlementEvidence(app, role).approvedDealerPurchaseAmountMinor;
+  const visibleAmount = projectFinanceApplication(app, role).approvedDealerPurchaseAmountMinor;
   const maySeeFigures = visibleAmount !== undefined;
   const appraisals = await ctx.db
     .query("financeAppraisals")

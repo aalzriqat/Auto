@@ -530,11 +530,17 @@ export function DealCockpit({
    * against a company created through the settings form, which never asked for
    * the field.
    */
-  const ltvMissing =
-    economicsApp !== null &&
-    economicsApp.companyRuleSnapshot !== undefined &&
-    economicsApp.appliedLtvPercent === undefined &&
-    economicsApp.companyRuleSnapshot.defaultLtvPercent === undefined;
+  /**
+   * ASKED, not derived (SCRUM-117).
+   *
+   * This read `companyRuleSnapshot` and `appliedLtvPercent` off the economics
+   * row and compared them here. Both are finance-gated now, so a caller without
+   * `view:finance` computed "the rate is present" from two blanks and was shown
+   * no rate field and no guidance — then the server refused the quotation. The
+   * server answers the question it already owns and publishes a boolean that
+   * names no rate; the screen stops holding a second opinion.
+   */
+  const ltvMissing = economics?.requiresLtvPercent === true;
   const suggestion = useQuery(
     api.financingEconomics.suggestQuotationForApplication,
     canOfferQuotation ? { orgId, applicationId } : "skip"
