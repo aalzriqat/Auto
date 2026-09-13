@@ -10,6 +10,28 @@
  * `applications.get` (view:sales), `applications.list`,
  * `financingEconomics.getEconomics` and the reconciliation queue.
  *
+ * ## The tiers (owner-proxy ruling, 2026-09-13)
+ *
+ * This suite originally asserted ONE wall: nothing reconstructable reaches a
+ * caller without `view:finance`. That was ruled TOO BROAD for the product, and
+ * the ruling replaced it with five tiers. The sweep now proves the tiering,
+ * which means it proves PRESENCE as well as absence - a boundary that blanked
+ * the screens SALES types into and MANAGER approves from would be a defect
+ * under the same ruling that demands the boundary.
+ *
+ *   quotation      create: OR approve: a finance application, OR view:finance
+ *   approval + raw gap    approve: OR confirm:disbursement OR view:finance
+ *   gap allocation        approve: OR view:finance (NOT confirm:disbursement)
+ *   frozen net receivable confirm:disbursement OR view:finance
+ *   everything else       view:finance
+ *
+ * A MANAGER holding quotation and approval can compute `gap = quotation -
+ * approved`. RULED ACCEPTED as an operational approval fact; this suite asserts
+ * both halves are present for that role deliberately, so nobody later "fixes"
+ * it as a leak.
+ *
+ * ## How it is tested
+ *
  * The owner-proxy ruling is explicit about how this is tested, because the
  * previous attempt asserted a boundary its own fixture could never establish:
  *
@@ -20,7 +42,16 @@
  *     property-by-property check — a leak rendered in major units, formatted,
  *     stringified into an override row or nested one level deeper walks past
  *     every named-property assertion;
- *   • positive controls, so the sweep cannot pass by returning nothing.
+ *   • positive controls, so the sweep cannot pass by returning nothing;
+ *   • and, added by this successor after the first candidate was blocked, the
+ *     QUOTATION CALCULATOR'S LIVE BRANCH. `suggestQuotationForApplication`
+ *     falls back from omitted arguments to the stored row, so it echoed
+ *     finance-gated figures to anyone holding `view:finance_applications` - and
+ *     the first fixture never set `targetNetProceedsMinor`, so the solver
+ *     always returned NO_TARGET_RECORDED and the branch that leaks was never
+ *     executed by any of the ten cases. A sweep that never runs the leaking
+ *     branch is not evidence of a boundary. `assertCalculatorLive` below is the
+ *     anti-vacuity guard that stops that recurring.
  *
  * Every sentinel below is a value that appears nowhere else in the fixture, so
  * a hit is always this deal's protected figure and never a coincidence.
@@ -57,6 +88,12 @@ const SENTINEL = {
   netReceivable: 8_115_031,
   supplierDisbursed: 13_517_033,
   targetSelling: 10_531_037,
+  /**
+   * The solver's stored fallback, and the reason this successor exists: with
+   * this field unset the calculator answers NO_TARGET_RECORDED and never runs
+   * the branch that echoed the deal's economics.
+   */
+  targetNetProceeds: 10_231_041,
   cost: 9_517_039,
   ltvPercent: 83.7,
   notes: "APPROVEDNOTE-SENTINEL-11517003",
@@ -66,66 +103,79 @@ const SENTINEL = {
   overrideNew: "OVERRIDENEW-SENTINEL-11517003",
 } as const;
 
-/** Every sentinel a caller without `view:finance` must never receive. */
-const FINANCE_SENTINELS: string[] = [
-  String(SENTINEL.quotation),
-  String(SENTINEL.rawGap),
-  String(SENTINEL.customerShare),
-  String(SENTINEL.dealerShare),
-  String(SENTINEL.cashToDealer),
-  String(SENTINEL.installmentsToDealer),
-  String(SENTINEL.toFinanceCompany),
+/**
+ * Ruling #3: the accounting economics. `view:finance` and nothing weaker - no
+ * workflow tier is entitled to any of these.
+ */
+const FINANCE_ONLY_SENTINELS: string[] = [
+  // The rate, and the funding composition it produces.
+  String(SENTINEL.ltvPercent),
+  String(SENTINEL.funded),
+  String(SENTINEL.unfinanced),
+  String(SENTINEL.dealerContribution),
   String(SENTINEL.remittance),
-  String(SENTINEL.supplierDisbursed),
+  // The solver's INPUTS. Publishing the quotation is ruled safe; publishing
+  // what it was computed from is not.
   String(SENTINEL.targetSelling),
-  SENTINEL.notes,
+  String(SENTINEL.targetNetProceeds),
+  // Settlement evidence, tier 1, unchanged by the ruling.
+  String(SENTINEL.supplierDisbursed),
   SENTINEL.reference,
-  SENTINEL.gapNote,
+  // Free text that records an amount, and the override history that restates
+  // one - the third documented recovery route for the approved figure.
+  SENTINEL.notes,
   SENTINEL.overrideReason,
   SENTINEL.overrideNew,
 ];
 
 /**
- * The two figures the supplier-disbursement confirmation must prefill. Gated at
- * `view:finance` OR `confirm:finance_disbursement` — the product's existing
- * tier-2 rule, kept deliberately: a role whose whole job is confirming that
- * payment cannot do it against a blank amount. Asserted SEPARATELY so the
- * wider gate is visible in the test rather than hidden inside the finance set.
+ * The wizard's own input, chosen to collide with no sentinel: it computes from
+ * its arguments alone, so every figure in its payload derives from this and
+ * none of it can be mistaken for this deal's stored economics.
  */
-const DISBURSEMENT_SENTINELS: string[] = [
-  String(SENTINEL.approved),
-  String(SENTINEL.netReceivable),
-  // The approved amount's decomposition: `funded + contribution` IS the
-  // approved amount, so the two classes cannot be separated without either
-  // disclosing the whole figure with an extra step or blanking a confirmation
-  // screen entitled to it. Reconstructs the APPROVAL only — the appraisal gap
-  // also needs the submitted quotation, which stays finance-gated.
-  String(SENTINEL.funded),
-  String(SENTINEL.unfinanced),
-  String(SENTINEL.dealerContribution),
+const WIZARD_OWN_TARGET = 7_400_000;
+
+/** Ruling #1: a quotation-workflow fact, not an accounting secret. */
+const QUOTATION_SENTINELS: string[] = [String(SENTINEL.quotation)];
+
+/** Ruling #2: approval facts for the roles that approve and that disburse. */
+const APPROVAL_SENTINELS: string[] = [String(SENTINEL.approved), String(SENTINEL.rawGap)];
+
+/** Ruling #4: needed to RESOLVE the gap, and not ordinary sales visibility. */
+const GAP_ALLOCATION_SENTINELS: string[] = [
+  String(SENTINEL.customerShare),
+  String(SENTINEL.dealerShare),
+  String(SENTINEL.cashToDealer),
+  String(SENTINEL.installmentsToDealer),
+  String(SENTINEL.toFinanceCompany),
+  SENTINEL.gapNote,
 ];
 
 /**
- * The applied LTV, asserted SEPARATELY and deliberately.
- *
- * It is finance-gated on the ROW — it travels there beside the amounts, and the
- * division `funded ÷ (ltv / 100)` is the documented first recovery route for
- * the approved amount. But `suggestQuotationForApplication` is the pre-approval
- * CALCULATOR: it exists so a SALES caller can work out what to quote, it
- * returns a suggested amount by design, and it echoes the rate it used. Gating
- * the rate there while returning the suggestion would be theatre.
- *
- * The route stays closed regardless, because the operand it needs — the funded
- * portion — is withheld from that same caller. This constant keeps the
- * exception visible in the test rather than hidden by a missing assertion.
+ * Ruling #3's one narrow workflow exception: the frozen net receivable
+ * `confirmDisbursement` checks the confirmed amount against. Withheld from the
+ * default MANAGER, the cockpit would send the principal on every deal carrying
+ * a deposit or a withheld fee and be refused with no field to correct it.
  */
-const LTV_SENTINEL = String(SENTINEL.ltvPercent);
-const LTV_CALCULATOR_DOORS = [
-  "financingEconomics.suggestQuotationForApplication",
-  "financingEconomics.suggestQuotation",
-];
-const isCalculator = (door: string) => LTV_CALCULATOR_DOORS.some((name) => door.startsWith(name));
+const DISBURSEMENT_SENTINELS: string[] = [String(SENTINEL.netReceivable)];
 
+/**
+ * `suggestQuotation` - the WIZARD calculator - stays in the door list and is
+ * swept like every other door, but it is not part of this boundary and cannot
+ * be: it takes caller-supplied inputs against the LIVE company row and never
+ * reads a `financeApplications` row at all, so it has no stored deal figure to
+ * disclose. The fixture proves that rather than asserting it - the live company
+ * carries a different rate (85) from the deal's snapshot
+ * (`SENTINEL.ltvPercent`), so a sentinel hit on that door would mean the wizard
+ * had somehow reached this deal.
+ *
+ * Its sibling `suggestQuotationForApplication` DOES read the row, and the
+ * previous candidate's carve-out for it - "the calculator echoes the rate it
+ * used, by design" - is DELETED rather than narrowed. That carve-out was the
+ * shape of the CRITICAL: an exception written into the test made the leak look
+ * like a decision. The rate is now `undefined` there for every caller without
+ * `view:finance`, so no door needs an exception and none is granted.
+ */
 const templateFor = (name: string): Permission[] => {
   const template = DEFAULT_ROLE_TEMPLATES.find((row) => row.name === name);
   if (!template) throw new Error(`no default template named ${name}`);
@@ -182,6 +232,7 @@ async function seedSentinelDeal(suffix: string): Promise<Seeded> {
       isActive: true,
       maxFinancingLTV: 85,
       defaultLtvPercent: 85,
+      customerFirstPaymentOffsetsUnfinancedShare: true,
     })
   );
   const salespersonId = await t.run((ctx) =>
@@ -230,6 +281,17 @@ async function seedSentinelDeal(suffix: string): Promise<Seeded> {
       // Every protected figure, at its sentinel.
       vehiclePurchaseCostMinor: SENTINEL.cost,
       targetSellingAmountMinor: SENTINEL.targetSelling,
+      /**
+       * THE EVIDENCE GAP THIS SUCCESSOR REPAIRS.
+       *
+       * `recordSubmittedQuotation` writes this on every recorded quotation and
+       * `solveQuotationForApplication` falls back to it when the caller omits
+       * an argument - which the cockpit always does. Unset, the calculator
+       * answers NO_TARGET_RECORDED and the ten cases below swept a door that
+       * never ran its leaking branch. `assertCalculatorLive` fails loudly if
+       * this ever stops producing a live suggestion.
+       */
+      targetNetProceedsMinor: SENTINEL.targetNetProceeds,
       submittedQuotationMinor: SENTINEL.quotation,
       submittedQuotationSource: "MANUAL_ENTRY",
       appliedLtvPercent: SENTINEL.ltvPercent,
@@ -259,6 +321,15 @@ async function seedSentinelDeal(suffix: string): Promise<Seeded> {
         ruleVersion: 1,
         companyName: "Boundary Finance",
         defaultLtvPercent: SENTINEL.ltvPercent,
+        /**
+         * Without this the solver answers OFFSET_RULE_UNKNOWN and refuses to
+         * calculate - which is exactly how the first candidate's fixture left
+         * the leaking branch unexecuted. `computeSubmittedQuotation` returns
+         * unavailable when the rule is UNSET, deliberately, because different
+         * companies structure the unfinanced share differently and a guess
+         * would move money.
+         */
+        customerFirstPaymentOffsetsUnfinancedShare: true,
       },
     })
   );
@@ -302,14 +373,24 @@ async function seedSentinelDeal(suffix: string): Promise<Seeded> {
   return { t, orgId, applicationId, companyId, asRole };
 }
 
-/** Recursive key set, so a nested payload cannot hide a field name. */
-const keysOf = (value: unknown, into = new Set<string>()): Set<string> => {
+/**
+ * Every value carried under `field`, at any depth.
+ *
+ * The key check below asks whether a gated NAME carries a gated VALUE, not
+ * whether the name exists at all. Two doors publish a deliberate `number |
+ * null` contract - `handoverEvidence` is built for a confirmation screen that
+ * branches on `!= null` - so the key survives serialization carrying `null`,
+ * while a withheld row field is dropped entirely. `null` discloses nothing, and
+ * demanding key-absence there would force the product to change its shape to
+ * satisfy a test. A non-null value under a gated name is the actual defect.
+ */
+const valuesUnder = (value: unknown, field: string, into: unknown[] = []): unknown[] => {
   if (Array.isArray(value)) {
-    for (const item of value) keysOf(item, into);
+    for (const item of value) valuesUnder(item, field, into);
   } else if (value !== null && typeof value === "object") {
     for (const [key, nested] of Object.entries(value)) {
-      into.add(key);
-      keysOf(nested, into);
+      if (key === field) into.push(nested);
+      valuesUnder(nested, field, into);
     }
   }
   return into;
@@ -369,11 +450,20 @@ async function allDoors(seeded: Seeded, caller: ReturnType<Seeded["asRole"]>) {
     await call("financingEconomics.suggestQuotationForApplication", () =>
       caller.query(api.financingEconomics.suggestQuotationForApplication, { orgId, applicationId })
     ),
+    /**
+     * Deliberately NOT called with this deal's sentinels.
+     *
+     * The wizard computes entirely from its ARGUMENTS, so handing it
+     * `SENTINEL.targetSelling` would make it echo a "protected" figure straight
+     * back and the sweep would report the caller's own input as a leak. A
+     * distinct value keeps a hit on this door meaning what a hit on every other
+     * door means.
+     */
     await call("financingEconomics.suggestQuotation", () =>
       caller.query(api.financingEconomics.suggestQuotation, {
         orgId,
         companyId,
-        targetSellingAmountMinor: SENTINEL.targetSelling,
+        targetSellingAmountMinor: WIZARD_OWN_TARGET,
         estimatedDealerBorneExpensesMinor: 0,
         customerFirstPaymentMinor: 0,
       })
@@ -409,56 +499,212 @@ function scan(doors: Array<[string, unknown]>, sentinels: string[]): string[] {
   return hits;
 }
 
+/**
+ * The calculator actually RAN. The guard the first candidate did not have.
+ *
+ * Asserted from a `view:finance` caller, which is entitled to the whole
+ * payload: if this door is not answering `available: true` with a real figure,
+ * every negative assertion about it below is vacuous and must not be believed.
+ */
+async function assertCalculatorLive(seeded: Seeded) {
+  const suggestion = (await seeded
+    .asRole(templateFor("ACCOUNTANT"))
+    .query(api.financingEconomics.suggestQuotationForApplication, {
+      orgId: seeded.orgId,
+      applicationId: seeded.applicationId,
+    })) as { available: boolean; reason?: string; submittedQuotationMinor?: number };
+  expect(`calculator available: ${suggestion.available} ${suggestion.reason ?? ""}`.trim()).toBe(
+    "calculator available: true"
+  );
+  expect(typeof suggestion.submittedQuotationMinor).toBe("number");
+}
+
 describe("the finance-application read boundary (SCRUM-117)", () => {
-  test.each([
-    ["default SALES", () => templateFor("SALES"), false],
-    ["default MANAGER", () => templateFor("MANAGER"), false],
-    [
-      "a custom application-view-only role",
-      () => [PERMISSIONS.VIEW_SALES, PERMISSIONS.VIEW_FINANCE_APPLICATIONS] as Permission[],
-      false,
-    ],
-  ])("%s receives no finance figure from any door", async (label, permissions) => {
-    const seeded = await seedSentinelDeal(`neg${label.replace(/\W/g, "")}`);
-    const caller = seeded.asRole(permissions());
-    const doors = await allDoors(seeded, caller);
-
-    // ANTI-VACUITY: the deal must actually have come back, or this proves
-    // nothing at all.
-    const [, listed] = doors[0] as [string, { page: unknown[] }];
-    expect(listed.page.length).toBeGreaterThan(0);
-    const [, detail] = doors[1];
-    expect(detail).toBeTruthy();
-
-    expect(scan(doors, FINANCE_SENTINELS)).toEqual([]);
-    // The rate: absent everywhere except the calculator that is entitled to it.
-    expect(scan(doors, [LTV_SENTINEL]).filter((hit) => !isCalculator(hit))).toEqual([]);
-  });
-
-  test("default SALES receives neither the approved amount, its decomposition, nor the frozen net receivable", async () => {
-    const seeded = await seedSentinelDeal("negSalesTier2");
-    const doors = await allDoors(seeded, seeded.asRole(templateFor("SALES")));
-    expect(scan(doors, DISBURSEMENT_SENTINELS)).toEqual([]);
+  test("the calculator's stored-row branch is live in this fixture", async () => {
+    await assertCalculatorLive(await seedSentinelDeal("calcLive"));
   });
 
   /**
-   * The one deliberate widening, pinned so it is a decision rather than a leak.
-   *
-   * The default MANAGER holds `confirm:finance_disbursement`, and the
-   * supplier-disbursement confirmation prefills from these two figures. That is
-   * the product's existing tier-2 rule, unchanged by this work; everything else
-   * on the row is still withheld from them, which the negative sweep above
-   * asserts for the same role.
+   * Ruling #5. A role holding only `view:finance_applications` runs no
+   * quotation and no approval, so it reads lifecycle and status and NOTHING
+   * priced - not even the quotation the workflow tiers are entitled to.
    */
-  test("default MANAGER still gets the two disbursement prefills, and nothing else", async () => {
-    const seeded = await seedSentinelDeal("mgrTier2");
+  test("a custom application-view-only role receives no figure of any tier", async () => {
+    const seeded = await seedSentinelDeal("viewOnly");
+    await assertCalculatorLive(seeded);
+    const caller = seeded.asRole([
+      PERMISSIONS.VIEW_SALES,
+      PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
+    ] as Permission[]);
+    const doors = await allDoors(seeded, caller);
+
+    // ANTI-VACUITY: the deal came back. An empty page passes every scan below.
+    const [, listed] = doors[0] as [string, { page: unknown[] }];
+    expect(listed.page.length).toBeGreaterThan(0);
+    expect(doors[1][1]).toBeTruthy();
+
+    expect(
+      scan(doors, [
+        ...FINANCE_ONLY_SENTINELS,
+        ...QUOTATION_SENTINELS,
+        ...APPROVAL_SENTINELS,
+        ...GAP_ALLOCATION_SENTINELS,
+        ...DISBURSEMENT_SENTINELS,
+      ])
+    ).toEqual([]);
+
+    // …and the calculator refuses it outright rather than suggesting a figure.
+    const suggestion = (await caller.query(
+      api.financingEconomics.suggestQuotationForApplication,
+      { orgId: seeded.orgId, applicationId: seeded.applicationId }
+    )) as { available: boolean; reason: string; submittedQuotationMinor?: number };
+    expect(`${suggestion.available} / ${suggestion.reason}`).toBe("false / NOT_AUTHORIZED");
+    expect(suggestion.submittedQuotationMinor).toBeUndefined();
+  });
+
+  /**
+   * Ruling #1 for the role it exists for: default SALES holds
+   * `create:finance_application`, types the submitted quotation, and may read
+   * it back. Everything the approval and the accounting own stays shut.
+   */
+  test("default SALES gets the quotation, and no approval, gap, allocation or economics", async () => {
+    const seeded = await seedSentinelDeal("sales");
+    await assertCalculatorLive(seeded);
+    const doors = await allDoors(seeded, seeded.asRole(templateFor("SALES")));
+
+    const [, listed] = doors[0] as [string, { page: unknown[] }];
+    expect(listed.page.length).toBeGreaterThan(0);
+
+    // PRESENT - the ruling forbids blanking the screen this role types into.
+    expect(JSON.stringify(doors)).toContain(String(SENTINEL.quotation));
+    // ABSENT - every other tier.
+    expect(
+      scan(doors, [
+        ...FINANCE_ONLY_SENTINELS,
+        ...APPROVAL_SENTINELS,
+        ...GAP_ALLOCATION_SENTINELS,
+        ...DISBURSEMENT_SENTINELS,
+      ])
+    ).toEqual([]);
+  });
+
+  /**
+   * The calculator, per role, on the branch that leaked.
+   *
+   * This is the CRITICAL, pinned. A SALES caller still gets a suggestion to
+   * type into `عرض السعر المرسل`; what it no longer carries is the rate, the
+   * funding composition, the projected proceeds or the LTV cap flag.
+   */
+  test("the calculator suggests to SALES without disclosing what it computed from", async () => {
+    const seeded = await seedSentinelDeal("calcSales");
+    await assertCalculatorLive(seeded);
+    const suggestion = (await seeded
+      .asRole(templateFor("SALES"))
+      .query(api.financingEconomics.suggestQuotationForApplication, {
+        orgId: seeded.orgId,
+        applicationId: seeded.applicationId,
+      })) as Record<string, unknown>;
+
+    // The workflow half survives.
+    expect(suggestion.available).toBe(true);
+    expect(typeof suggestion.submittedQuotationMinor).toBe("number");
+    expect(suggestion.currency).toBe("JOD");
+
+    // The economics half does not travel - by VALUE, so a figure rendered
+    // differently cannot walk past a key check.
+    for (const field of [
+      "appliedLtvPercent",
+      "ruleVersion",
+      "projectedNetProceedsMinor",
+      "customerCoversUnfinancedPortion",
+      "financeCompanyFundedPortionMinor",
+      "unfinancedPortionMinor",
+      "dealerContributionMinor",
+      "customerFirstPaymentSurplusMinor",
+      "ltvBaseCapApplied",
+    ]) {
+      expect(`${field}: ${suggestion[field]}`).toBe(`${field}: undefined`);
+    }
+    // And the stored operands it solved against stay behind the wall.
+    const serialized = JSON.stringify(suggestion);
+    for (const sentinel of FINANCE_ONLY_SENTINELS) {
+      expect(`calculator leaks ${sentinel}: ${serialized.includes(sentinel)}`).toBe(
+        `calculator leaks ${sentinel}: false`
+      );
+    }
+  });
+
+  test("the same calculator hands a view:finance caller the whole payload", async () => {
+    const seeded = await seedSentinelDeal("calcFinance");
+    const suggestion = (await seeded
+      .asRole(templateFor("ACCOUNTANT"))
+      .query(api.financingEconomics.suggestQuotationForApplication, {
+        orgId: seeded.orgId,
+        applicationId: seeded.applicationId,
+      })) as Record<string, unknown>;
+    expect(suggestion.available).toBe(true);
+    // The positive control for the gate above: these ARE reachable, so the
+    // undefined-checks in the previous case mean something.
+    expect(suggestion.appliedLtvPercent).toBe(SENTINEL.ltvPercent);
+    expect(typeof suggestion.financeCompanyFundedPortionMinor).toBe("number");
+    expect(typeof suggestion.projectedNetProceedsMinor).toBe("number");
+  });
+
+  /**
+   * Rulings #2 and #4, and the reconstruction the ruling ACCEPTS.
+   *
+   * Default MANAGER approves the purchase and confirms the disbursement, so it
+   * reads the quotation, the approved amount, the raw gap, the allocation it
+   * must resolve, and the frozen net receivable it confirms against. It can
+   * therefore compute `gap = quotation - approved`. Asserted deliberately, in
+   * both directions, so that a later reviewer reads a DECISION here and not an
+   * oversight - the ruling is explicit that this must not be called a leak.
+   */
+  test("default MANAGER gets the approval workflow in full, and no accounting economics", async () => {
+    const seeded = await seedSentinelDeal("manager");
+    await assertCalculatorLive(seeded);
     const doors = await allDoors(seeded, seeded.asRole(templateFor("MANAGER")));
     const serialized = JSON.stringify(doors);
-    expect(serialized).toContain(String(SENTINEL.approved));
-    expect(serialized).toContain(String(SENTINEL.funded));
-    // …and still nothing from the finance class: no quotation, no gap, no
-    // allocation, no override contents.
-    expect(scan(doors, FINANCE_SENTINELS)).toEqual([]);
+
+    for (const sentinel of [
+      ...QUOTATION_SENTINELS,
+      ...APPROVAL_SENTINELS,
+      ...GAP_ALLOCATION_SENTINELS,
+      ...DISBURSEMENT_SENTINELS,
+    ]) {
+      expect(`MANAGER sees ${sentinel}: ${serialized.includes(sentinel)}`).toBe(
+        `MANAGER sees ${sentinel}: true`
+      );
+    }
+    // RULED ACCEPTED, stated as an assertion rather than left implicit.
+    expect(SENTINEL.quotation - SENTINEL.approved).toBe(SENTINEL.rawGap);
+
+    // The accounting economics remain shut for the same caller.
+    expect(scan(doors, FINANCE_ONLY_SENTINELS)).toEqual([]);
+  });
+
+  /**
+   * Ruling #4's exclusion, isolated: the gap ALLOCATION is not disbursement
+   * business. A role that only confirms payments resolves no gap.
+   */
+  test("a confirm-disbursement-only role reads the approval but not the gap allocation", async () => {
+    const seeded = await seedSentinelDeal("disburseOnly");
+    const doors = await allDoors(
+      seeded,
+      seeded.asRole([
+        PERMISSIONS.VIEW_SALES,
+        PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
+        PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+      ] as Permission[])
+    );
+    const serialized = JSON.stringify(doors);
+    for (const sentinel of [...APPROVAL_SENTINELS, ...DISBURSEMENT_SENTINELS]) {
+      expect(`sees ${sentinel}: ${serialized.includes(sentinel)}`).toBe(`sees ${sentinel}: true`);
+    }
+    expect(scan(doors, [...GAP_ALLOCATION_SENTINELS, ...FINANCE_ONLY_SENTINELS])).toEqual([]);
+    // No quotation authority, so no quotation - the gap subtraction is not
+    // available to this role in either direction.
+    expect(scan(doors, QUOTATION_SENTINELS)).toEqual([]);
   });
 
   test.each([
@@ -474,14 +720,13 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
     const doors = await allDoors(seeded, caller);
     const serialized = JSON.stringify(doors);
     // The positive control is the whole reason the negative sweeps mean
-    // something: these exact strings ARE reachable, for a role entitled to them.
+    // something: every tier IS reachable, for a role entitled to all of them.
     for (const sentinel of [
-      String(SENTINEL.funded),
-      String(SENTINEL.rawGap),
-      String(SENTINEL.customerShare),
-      String(SENTINEL.quotation),
-      SENTINEL.gapNote,
-      SENTINEL.overrideReason,
+      ...FINANCE_ONLY_SENTINELS.filter((value) => value !== String(SENTINEL.targetSelling)),
+      ...QUOTATION_SENTINELS,
+      ...APPROVAL_SENTINELS,
+      ...GAP_ALLOCATION_SENTINELS,
+      ...DISBURSEMENT_SENTINELS,
     ]) {
       expect(`${_label} sees ${sentinel}: ${serialized.includes(sentinel)}`).toBe(
         `${_label} sees ${sentinel}: true`
@@ -489,16 +734,78 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
     }
   });
 
+  /**
+   * Absence by KEY as well as by value, for the most restricted caller that
+   * still runs the workflow.
+   *
+   * The value sweep above is the stronger assertion - it catches a figure
+   * rendered in major units, formatted, or stringified into an override row.
+   * This one catches the opposite failure: a key that survives with a
+   * plausible-looking substitute value, which a sentinel scan cannot see.
+   *
+   * `submittedQuotationMinor` is deliberately NOT in this list any more. Ruling
+   * #1 makes it a quotation-workflow fact and default SALES is entitled to it;
+   * the case above asserts it is PRESENT for exactly this caller.
+   */
   test("the gated field names are gone by KEY, not merely blanked", async () => {
     const seeded = await seedSentinelDeal("keysGone");
     const doors = await allDoors(seeded, seeded.asRole(templateFor("SALES")));
     for (const [name, response] of doors) {
+      /**
+       * ONE door is excluded, and as a DOOR rather than as a field.
+       *
+       * `suggestQuotation` is the WIZARD: it takes caller-supplied inputs
+       * against the LIVE company row and never reads a `financeApplications`
+       * row, so its entire payload is derived from what the caller just passed
+       * in and it holds no stored deal figure to disclose. Every name below
+       * appears in it legitimately, describing the caller's own hypothetical.
+       *
+       * The case further down PROVES the separation rather than asserting it -
+       * the rate it echoes is the company's 85, not this deal's
+       * `SENTINEL.ltvPercent` - and the VALUE sweep still covers this door with
+       * every sentinel of every tier, so a wizard that ever learned to read
+       * this row would be caught there.
+       *
+       * Its sibling `suggestQuotationForApplication` DOES read the row and is
+       * NOT excluded. The previous candidate's carve-out for it - "the
+       * calculator echoes the rate it used, by design" - is deleted rather than
+       * narrowed: that carve-out was the shape of the CRITICAL, an exception
+       * written into a test until a leak read as a decision.
+       */
+      if (name.replace(" (refused)", "") === "financingEconomics.suggestQuotation") continue;
       for (const field of [
-        // The calculator echoes the rate it used, by design — see
-        // LTV_CALCULATOR_DOOR. Excluded here for that door and only that door,
-        // so the exception is visible rather than a missing assertion.
-        ...(isCalculator(name) ? [] : ["appliedLtvPercent"]),
+        /**
+         * Accounting economics (ruling #3).
+         *
+         * `appliedLtvPercent` carries ONE exclusion, and it is a DOOR
+         * exclusion rather than a field exclusion: `suggestQuotation` is the
+         * WIZARD, which takes caller-supplied inputs against the LIVE company
+         * row and never reads a `financeApplications` row, so it holds no
+         * stored deal figure to disclose. The case below PROVES that rather
+         * than asserting it - the rate it echoes is the company's 85, not this
+         * deal's `SENTINEL.ltvPercent`.
+         *
+         * Its sibling `suggestQuotationForApplication` DOES read the row, and
+         * the previous candidate's carve-out for it - "the calculator echoes
+         * the rate it used, by design" - is DELETED, not narrowed. That
+         * carve-out was the shape of the CRITICAL: an exception written into a
+         * test made a leak look like a decision.
+         */
+        "appliedLtvPercent",
+        "financeCompanyFundedPortionMinor",
+        "unfinancedPortionMinor",
+        "dealerContributionMinor",
+        "expectedDealerRemittanceMinor",
+        "targetSellingAmountMinor",
+        "targetNetProceedsMinor",
+        "companyRuleSnapshot",
+        "quotationCalculationSnapshot",
+        "approvedPurchaseNotes",
+        "supplierDisbursedAmountMinor",
+        "supplierDisbursementReference",
+        // Approval workflow (ruling #2) - SALES neither approves nor disburses.
         "rawAppraisalGapMinor",
+        // Gap allocation (ruling #4).
         "customerGapShareMinor",
         "dealerGapShareMinor",
         "customerGapCashToDealerMinor",
@@ -507,17 +814,35 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
         "gapResolvedAt",
         "gapResolvedBy",
         "gapResolutionNotes",
-        "submittedQuotationMinor",
-        "approvedPurchaseNotes",
-        "companyRuleSnapshot",
-        "supplierDisbursedAmountMinor",
-        "supplierDisbursementReference",
       ]) {
-        expect(`${name} exposes ${field}: ${keysOf(response).has(field)}`).toBe(
-          `${name} exposes ${field}: false`
+        const disclosed = valuesUnder(response, field).filter((value) => value != null);
+        expect(`${name} exposes ${field}: ${JSON.stringify(disclosed)}`).toBe(
+          `${name} exposes ${field}: []`
         );
       }
     }
+  });
+
+  /**
+   * The one exclusion above, proven rather than asserted.
+   *
+   * If the wizard ever started resolving its rules from an application row, the
+   * rate it echoes would become this deal's - and this test is the only thing
+   * that would notice the exclusion silently widening into a leak.
+   */
+  test("the wizard calculator echoes the LIVE company rate, never this deal's", async () => {
+    const seeded = await seedSentinelDeal("wizardRate");
+    const suggestion = (await seeded
+      .asRole(templateFor("SALES"))
+      .query(api.financingEconomics.suggestQuotation, {
+        orgId: seeded.orgId,
+        companyId: seeded.companyId,
+        targetSellingAmountMinor: SENTINEL.targetSelling,
+        estimatedDealerBorneExpensesMinor: 0,
+        customerFirstPaymentMinor: 0,
+      })) as { appliedLtvPercent?: number };
+    expect(suggestion.appliedLtvPercent).toBe(85);
+    expect(suggestion.appliedLtvPercent).not.toBe(SENTINEL.ltvPercent);
   });
 
   /**

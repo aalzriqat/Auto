@@ -4602,8 +4602,18 @@ describe("a settlement advice that contradicts the approval", () => {
         // the confirmation permission legitimately carries the workflow fields
         // (see the MANAGER test above), so a role that keeps it is a different
         // caller with a different, correct answer.
+        // `approve:finance_application` joined this list under the owner-proxy
+        // ruling of 2026-09-13, which made the approved dealer purchase amount
+        // an APPROVAL-workflow fact rather than a disbursement-only one: the
+        // role that approves the purchase may read the figure it approved.
+        // Until this line was updated the caller built here still held it, so
+        // the premise - "a caller who cannot see money" - had quietly stopped
+        // being true of the role it was constructing.
         permissions: role.permissions.filter(
-          (p) => p !== "view:finance" && p !== "confirm:finance_disbursement"
+          (p) =>
+            p !== "view:finance" &&
+            p !== "confirm:finance_disbursement" &&
+            p !== "approve:finance_application"
         ),
         isSystemOwnerRole: false,
       });
@@ -4768,8 +4778,15 @@ describe("a settlement advice that contradicts the approval", () => {
     await s.t.run(async (ctx) => {
       const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === s.orgId)!;
       await ctx.db.patch(role._id, {
+        // See the sibling test above: `approve:finance_application` joined this
+        // list under the owner-proxy ruling of 2026-09-13, which made the
+        // approved amount an APPROVAL-workflow fact. Without it the caller this
+        // builds still holds approval authority and reads the figure legitimately.
         permissions: role.permissions.filter(
-          (p) => p !== "view:finance" && p !== "confirm:finance_disbursement"
+          (p) =>
+            p !== "view:finance" &&
+            p !== "confirm:finance_disbursement" &&
+            p !== "approve:finance_application"
         ),
         isSystemOwnerRole: false,
       });
