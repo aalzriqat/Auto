@@ -162,10 +162,50 @@ describe("protected source content pins", () => {
        * recomputed FROM THE FILE with this test's own normalization.
        */
       file: "convex/applications.ts",
-      bytes: 219221,
-      sha256: "8762cdd63a98cfff9a4558cd77615db95108ff073ea8509bd319c1cc49772dd8",
+      bytes: 219445,
+      sha256: "5e1e348c20067a98a01409f8cc91c67d89e7a3dcfbe515b675f9a20c9906886e",
     },
     {
+      /**
+       * -- RENEWAL 2026-09-13 - SCRUM-117 --------------------------------
+       *
+       * Previous reviewed postimage, superseded by the entry above:
+       *
+       *   bytes:  219221
+       *   sha256: 8762cdd63a98cfff9a4558cd77615db95108ff073ea8509bd319c1cc49772dd8
+       *
+       * Renewed because the finance-application READ BOUNDARY moved out of
+       * `convex/utils/tenancy.ts` and into an exhaustive allowlist,
+       * `convex/utils/financeApplicationProjection.ts`. The leak SCRUM-117
+       * closes is in this file's own doors — `applications.get` (VIEW_SALES)
+       * and `applications.list` spread the row — so the boundary could not be
+       * moved without changing what they return.
+       *
+       * The delta is FOUR lines: one import, and three call sites where
+       * `redactSettlementEvidence(app, role)` becomes
+       * `projectFinanceApplication(app, role)` (in `list`, in `get`, and in
+       * `handoverEvidenceFor`). No control flow, query, predicate, permission
+       * check, workflow or `ctx.db` access changed, so none of the constructs
+       * this ratchet exists to catch is touched by the delta. Read the four
+       * hunks; do not take this note's word for their scope.
+       *
+       * Renewed under explicit owner-proxy authorization, granted for exactly
+       * that scope and no wider (#scrum-215, 2026-09-13, in reply to the
+       * cross-lane notice posted BEFORE the change — the same order the
+       * SCRUM-57 renewal followed). The instruction attached to it: rerun the
+       * ratchet and the suites, freeze the successor SHA, then Sonnet MAX and
+       * Codex high on that exact SHA before any merge decision.
+       *
+       * The pin was not weakened, bypassed, deleted, generalized or made
+       * vacuous to obtain a green check: it is still an exact byte + sha256 pin
+       * on the same two files, the negative control below is untouched, and
+       * normalization and the bare-CR rejection are unchanged. Both constants
+       * were recomputed FROM THE FILE with this test's own normalization, not
+       * copied from a report, a Jira comment or a chat message.
+       *
+       * `convex/dealWorkspace.ts` is untouched by SCRUM-117 and keeps its
+       * existing postimage.
+       */
       /**
        * The P3 read-model wrapper. Pinned because it is the file that composes
        * the cash-custody flag and the appraisal provenance on top of an
