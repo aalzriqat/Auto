@@ -1774,18 +1774,47 @@ describe("LTV configuration", () => {
     });
     expect((await readApp(seed, applicationId)).appliedLtvPercent).toBe(90);
 
-    // Once it is established, the deal is an ordinary one again: the
-    // salesperson re-records the quotation at the SAME rate without needing an
-    // approver, because that rate is no longer their decision to make.
+    /**
+     * INVERTED by the owner-proxy ruling of 2026-09-13 13:48 (SCRUM-117).
+     *
+     * This used to assert that once the rate was established, SALES could
+     * re-record the quotation while re-sending the SAME rate, because a no-op
+     * moves nothing. That is sound about WRITES and unsound about READS: the
+     * accept/refuse outcome was a comparison against `appliedLtvPercent ??
+     * snapshot.defaultLtvPercent`, both FINANCE-classified, so a salesperson
+     * could search for the stored rate by watching which value stopped being
+     * refused. A permission check that answers a question about a protected
+     * value discloses it.
+     *
+     * So for a caller who cannot READ the rate, supplying one now requires
+     * approver authority unconditionally — no comparison is performed at all.
+     */
+    await expect(
+      asSales.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: jod(13_400),
+        source: "MANUAL_ENTRY",
+        ltvPercent: 90,
+      })
+    ).rejects.toThrow(/may set the LTV this deal is financed at/i);
+
+    /**
+     * And the workflow is intact, which is the half that matters: the
+     * salesperson re-records WITHOUT naming a rate, which is what the dialog
+     * actually sends. `RecordSubmittedQuotationDialog` includes `ltvPercent`
+     * only while `requiresLtvPercent` is true, and establishing the rate above
+     * made it false — so no screen ever sends the argument this now refuses.
+     */
     await asSales.mutation(api.financingEconomics.recordSubmittedQuotation, {
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(13_400),
       source: "MANUAL_ENTRY",
-      ltvPercent: 90,
     });
     const requoted = await readApp(seed, applicationId);
     expect(requoted.submittedQuotationMinor).toBe(jod(13_400));
+    // The approver's rate stands, untouched by the re-record.
     expect(requoted.appliedLtvPercent).toBe(90);
   });
 
@@ -2159,7 +2188,9 @@ describe("overrides and audit", () => {
         estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
         customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
       })
-    ).rejects.toThrow(/calculator produced/i);
+    // The message no longer NAMES the calculated figure (SCRUM-117 ruling #4:
+    // errors are outputs). It still refuses, and still says why.
+    ).rejects.toThrow(/does not match the calculated figure/i);
 
     // Nothing was written: the label and the amount contradict each other, so
     // there is no version of this record worth keeping.
@@ -2297,7 +2328,9 @@ describe("overrides and audit", () => {
         source: "SYSTEM_CALCULATED",
         ...inputs,
       })
-    ).rejects.toThrow(/calculator produced/i);
+    // The message no longer NAMES the calculated figure (SCRUM-117 ruling #4:
+    // errors are outputs). It still refuses, and still says why.
+    ).rejects.toThrow(/does not match the calculated figure/i);
 
     // The application-scoped figure is accepted. That is the property worth
     // pinning: what the user is shown is what the guard takes.

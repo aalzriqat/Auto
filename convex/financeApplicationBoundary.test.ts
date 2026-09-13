@@ -880,6 +880,352 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
     expect(economics.overrides[0].reason).toBeUndefined();
   });
 
+  /**
+   * ===================================================================
+   * THE INPUT BOUNDARY (owner-proxy ruling 2026-09-13 13:48)
+   * ===================================================================
+   *
+   * The response-shape gate above was not the whole boundary. The caller also
+   * controls the ARGUMENTS, and every what-if control falls back to a stored
+   * field when omitted — so pinning four and reading the fifth out of the
+   * answer recovers a FINANCE-classified operand exactly. Worse, the MUTATION
+   * persists those arguments, so the same arithmetic works write-then-read even
+   * if the query alone were fixed.
+   *
+   * These cases are written to KILL four specific wrong fixes:
+   *   1. a query-only fix (the mutation still persists chosen inputs);
+   *   2. an error-TEXT-only fix (the value still travels in the payload);
+   *   3. a fix that sanitizes the solver object while raw args still reach
+   *      `fannedOutInputs`, the audit rows and `ctx.db.patch`;
+   *   4. a fix that enumerates the four MONETARY controls and forgets
+   *      `ltvPercent`, which is the sharpest of the five.
+   */
+  describe("the input boundary: arguments cannot be used to read a protected operand", () => {
+    /** A deal that can still take a quotation: the writer refuses once approved. */
+    async function quotableDeal(tag: string) {
+      const seeded = await seedSentinelDeal(tag);
+      await seeded.t.run(async (ctx) => {
+        await ctx.db.patch(seeded.applicationId, {
+          approvedDealerPurchaseAmountMinor: undefined,
+          submittedQuotationMinor: undefined,
+          submittedQuotationSource: undefined,
+        });
+      });
+      return seeded;
+    }
+
+    const ask = (
+      caller: ReturnType<Seeded["asRole"]>,
+      seeded: Seeded,
+      overrides: Record<string, number> = {}
+    ) =>
+      caller.query(api.financingEconomics.suggestQuotationForApplication, {
+        orgId: seeded.orgId,
+        applicationId: seeded.applicationId,
+        ...overrides,
+      }) as Promise<Record<string, unknown>>;
+
+    /**
+     * Every what-if control, alone — so forgetting ONE is a failure here — plus
+     * the two combinations that were actually reproduced against `10791edb7`.
+     */
+    const PROBES: Array<[string, Record<string, number>]> = [
+      ["targetSellingAmountMinor alone", { targetSellingAmountMinor: 1 }],
+      ["estimatedDealerBorneExpensesMinor alone", { estimatedDealerBorneExpensesMinor: 0 }],
+      ["quotationBufferMinor alone", { quotationBufferMinor: 0 }],
+      ["customerFirstPaymentMinor alone", { customerFirstPaymentMinor: 999_999_999 }],
+      ["ltvPercent alone — THE FIFTH CONTROL", { ltvPercent: 100 }],
+      [
+        "reproduced combination 1: ltv 100 + zeroed expenses/buffer",
+        { estimatedDealerBorneExpensesMinor: 0, quotationBufferMinor: 0, ltvPercent: 100 },
+      ],
+      [
+        "reproduced combination 2: huge first payment + zeroed expenses/buffer",
+        {
+          estimatedDealerBorneExpensesMinor: 0,
+          quotationBufferMinor: 0,
+          customerFirstPaymentMinor: 999_999_999,
+        },
+      ],
+    ];
+
+    test.each([
+      ["default SALES", () => templateFor("SALES")],
+      ["default MANAGER (no view:finance)", () => templateFor("MANAGER")],
+    ])(
+      "%s: every probe returns EXACTLY the no-override answer, not merely a sentinel-free one",
+      async (label, permissions) => {
+        const seeded = await quotableDeal(`probe${label.replace(/\W/g, "")}`);
+        const caller = seeded.asRole(permissions());
+
+        const canonical = await ask(caller, seeded);
+        // ANTI-VACUITY, and the CONTROL that makes every probe meaningful: the
+        // allowed answer exists, and it is NOT the hidden operand. Without
+        // this, "the probe returned the canonical answer" could be satisfied by
+        // the canonical answer itself being the leak.
+        expect(canonical.available).toBe(true);
+        expect(typeof canonical.submittedQuotationMinor).toBe("number");
+        expect(canonical.submittedQuotationMinor).not.toBe(SENTINEL.targetNetProceeds);
+
+        for (const [name, overrides] of PROBES) {
+          const probed = await ask(caller, seeded, overrides);
+          // WHOLE-ANSWER EQUALITY. Asserting only "does not contain the
+          // sentinel" would pass a fix that merely blanked one field while the
+          // operand still moved the figure — and would not notice the caller
+          // steering availability or a rule diagnostic either.
+          expect(`${name}: ${JSON.stringify(probed)}`).toBe(
+            `${name}: ${JSON.stringify(canonical)}`
+          );
+          expect(`${name} leaks the operand: ${JSON.stringify(probed).includes(String(SENTINEL.targetNetProceeds))}`)
+            .toBe(`${name} leaks the operand: false`);
+        }
+      }
+    );
+
+    test("a deal with no stored target stays unavailable even when the caller supplies one", async () => {
+      const seeded = await quotableDeal("noTarget");
+      await seeded.t.run(async (ctx) => {
+        await ctx.db.patch(seeded.applicationId, { targetNetProceedsMinor: undefined });
+      });
+      const caller = seeded.asRole(templateFor("SALES"));
+      const supplied = await ask(caller, seeded, { targetSellingAmountMinor: 5_000_000 });
+      // The caller cannot conjure a calculation the deal does not have — which
+      // is also what stops them using the calculator as a general oracle.
+      expect(`${supplied.available} / ${supplied.reason}`).toBe("false / NO_TARGET_RECORDED");
+    });
+
+    test("a view:finance caller KEEPS the full simulator — the fix gates disclosure, not capability", async () => {
+      const seeded = await quotableDeal("financeSim");
+      const caller = seeded.asRole(templateFor("ACCOUNTANT"));
+      const canonical = await ask(caller, seeded);
+      const simulated = await ask(caller, seeded, { targetSellingAmountMinor: 4_000_000 });
+      expect(canonical.available).toBe(true);
+      expect(simulated.available).toBe(true);
+      // The what-if MUST still move for them, or the fix has broken the tool
+      // rather than the leak.
+      expect(simulated.submittedQuotationMinor).not.toBe(canonical.submittedQuotationMinor);
+      expect(typeof simulated.appliedLtvPercent).toBe("number");
+    });
+
+    /** The whole row plus its audit trail, for a zero-delta comparison. */
+    async function snapshotOf(seeded: Seeded) {
+      return seeded.t.run(async (ctx) => {
+        const app = await ctx.db.get(seeded.applicationId);
+        const overrides = await ctx.db.query("financeApplicationOverrides").collect();
+        return JSON.stringify({ app, overrides: overrides.length });
+      });
+    }
+
+    test.each([
+      ["MANUAL_ENTRY", "MANUAL_ENTRY"],
+      ["SYSTEM_CALCULATED", "SYSTEM_CALCULATED"],
+      ["CALCULATED_WITH_OVERRIDE", "CALCULATED_WITH_OVERRIDE"],
+    ])(
+      "the write path refuses the calculation operands in %s mode, with ZERO committed delta",
+      async (label, source) => {
+        const seeded = await quotableDeal(`write${label}`);
+        const caller = seeded.asRole(templateFor("SALES"));
+        const before = await snapshotOf(seeded);
+
+        for (const [name, field] of [
+          ["target", "targetSellingAmountMinor"],
+          ["expenses", "estimatedDealerBorneExpensesMinor"],
+          ["buffer", "quotationBufferMinor"],
+          ["first payment", "customerFirstPaymentMinor"],
+        ] as const) {
+          let refusal = "";
+          try {
+            await caller.mutation(api.financingEconomics.recordSubmittedQuotation, {
+              orgId: seeded.orgId,
+              applicationId: seeded.applicationId,
+              submittedQuotationMinor: 9_000_000,
+              source: source as "MANUAL_ENTRY",
+              ...(source === "CALCULATED_WITH_OVERRIDE" ? { overrideReason: "probe" } : {}),
+              [field]: 1_234_567,
+            } as never);
+          } catch (error) {
+            refusal = error instanceof Error ? error.message : String(error);
+          }
+          // A STABLE CODE, naming no protected value.
+          expect(`${label}/${name}: ${refusal.includes("CALCULATION_INPUTS_REQUIRE_FINANCE")}`).toBe(
+            `${label}/${name}: true`
+          );
+          expect(`${label}/${name} echoes the operand: ${refusal.includes(String(SENTINEL.targetNetProceeds))}`)
+            .toBe(`${label}/${name} echoes the operand: false`);
+        }
+
+        // NOTHING was committed — row, calculation inputs, provenance, snapshot
+        // and the audit table all byte-identical. This is what kills a fix that
+        // sanitizes the solver while raw args still reach the patch.
+        expect(await snapshotOf(seeded)).toBe(before);
+
+        // …and therefore no write-then-query route: the canonical answer a
+        // non-finance caller can still get is unchanged.
+        const after = await ask(caller, seeded);
+        expect(JSON.stringify(after).includes(String(SENTINEL.targetNetProceeds))).toBe(false);
+      }
+    );
+
+    test("the ordinary quotation write still works for SALES, with and without an override reason", async () => {
+      const seeded = await quotableDeal("ordinaryWrite");
+      const caller = seeded.asRole(templateFor("SALES"));
+      await caller.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seeded.orgId,
+        applicationId: seeded.applicationId,
+        submittedQuotationMinor: 9_100_000,
+        source: "MANUAL_ENTRY",
+      });
+      const stored = await seeded.t.run((ctx) => ctx.db.get(seeded.applicationId));
+      expect(stored!.submittedQuotationMinor).toBe(9_100_000);
+      expect(stored!.submittedQuotationSource).toBe("MANUAL_ENTRY");
+      // The operator's own inputs are untouched by this boundary.
+      await caller.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seeded.orgId,
+        applicationId: seeded.applicationId,
+        submittedQuotationMinor: 9_200_000,
+        source: "CALCULATED_WITH_OVERRIDE",
+        overrideReason: "the finance company asked for a round figure",
+      });
+      const after = await seeded.t.run((ctx) => ctx.db.get(seeded.applicationId));
+      expect(after!.submittedQuotationMinor).toBe(9_200_000);
+      expect(after!.submittedQuotationOverrideReason).toBe(
+        "the finance company asked for a round figure"
+      );
+    });
+
+    test("SALES cannot probe the stored rate through the no-op LTV allowance", async () => {
+      const seeded = await quotableDeal("ltvProbe");
+      const caller = seeded.asRole(templateFor("SALES"));
+      const refusals: string[] = [];
+      // The stored rate is SENTINEL.ltvPercent. Under the old rule, sending the
+      // RIGHT one was permitted and a wrong one refused — so accept/refuse was
+      // a search oracle over a FINANCE-classified value. Both must now refuse,
+      // identically.
+      for (const rate of [SENTINEL.ltvPercent, 61.5]) {
+        try {
+          await caller.mutation(api.financingEconomics.recordSubmittedQuotation, {
+            orgId: seeded.orgId,
+            applicationId: seeded.applicationId,
+            submittedQuotationMinor: 9_000_000,
+            source: "MANUAL_ENTRY",
+            ltvPercent: rate,
+          });
+          refusals.push(`rate ${rate}: ACCEPTED`);
+        } catch (error) {
+          refusals.push(`rate ${rate}: ${error instanceof Error ? error.message : "?"}`);
+        }
+      }
+      // IDENTICAL outcomes: the response distinguishes nothing about the rate.
+      expect(refusals[0].replace(String(SENTINEL.ltvPercent), "<rate>")).toBe(
+        refusals[1].replace("61.5", "<rate>")
+      );
+      expect(refusals[0]).not.toContain("ACCEPTED");
+    });
+
+    test("a non-finance APPROVER keeps the missing-rate MANUAL_ENTRY recovery", async () => {
+      const seeded = await quotableDeal("approverRecovery");
+      await seeded.t.run(async (ctx) => {
+        const app = (await ctx.db.get(seeded.applicationId))!;
+        await ctx.db.patch(seeded.applicationId, {
+          appliedLtvPercent: undefined,
+          companyRuleSnapshot: { ...app.companyRuleSnapshot!, defaultLtvPercent: undefined },
+        });
+      });
+      // default MANAGER: approves, but holds no view:finance.
+      const approver = seeded.asRole(templateFor("MANAGER"));
+      await approver.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seeded.orgId,
+        applicationId: seeded.applicationId,
+        submittedQuotationMinor: 9_300_000,
+        source: "MANUAL_ENTRY",
+        ltvPercent: 72.5,
+      });
+      const stored = await seeded.t.run((ctx) => ctx.db.get(seeded.applicationId));
+      // The rate, the amount and the provenance all landed together.
+      expect(stored!.appliedLtvPercent).toBe(72.5);
+      expect(stored!.submittedQuotationMinor).toBe(9_300_000);
+      expect(stored!.submittedQuotationSource).toBe("MANUAL_ENTRY");
+      // …and the next canonical suggestion is consistent with what was written.
+      const next = await ask(approver, seeded);
+      expect(next.available).toBe(true);
+      expect(JSON.stringify(next)).not.toContain(String(SENTINEL.targetNetProceeds));
+    });
+
+    test("a supplied rate with CALCULATED provenance refuses before any speculative solve", async () => {
+      const seeded = await quotableDeal("ltvCalculated");
+      const approver = seeded.asRole(templateFor("MANAGER"));
+      let refusal = "";
+      try {
+        await approver.mutation(api.financingEconomics.recordSubmittedQuotation, {
+          orgId: seeded.orgId,
+          applicationId: seeded.applicationId,
+          submittedQuotationMinor: 1,
+          source: "SYSTEM_CALCULATED",
+          ltvPercent: 100,
+        });
+      } catch (error) {
+        refusal = error instanceof Error ? error.message : String(error);
+      }
+      expect(refusal).toContain("CALCULATION_INPUTS_REQUIRE_FINANCE");
+      // No computed-number feedback: the whole point of refusing BEFORE solving.
+      expect(refusal).not.toContain(String(SENTINEL.targetNetProceeds));
+      expect(/\d{5,}/.test(refusal)).toBe(false);
+    });
+
+    test("the mismatch errors name no computed figure, in either direction", async () => {
+      const seeded = await quotableDeal("mismatchErrors");
+      const caller = seeded.asRole(templateFor("SALES"));
+      const messages: string[] = [];
+      for (const [source, amount, extra] of [
+        ["SYSTEM_CALCULATED", 1, {}],
+        ["CALCULATED_WITH_OVERRIDE", 1, { overrideReason: "probe" }],
+      ] as const) {
+        try {
+          await caller.mutation(api.financingEconomics.recordSubmittedQuotation, {
+            orgId: seeded.orgId,
+            applicationId: seeded.applicationId,
+            submittedQuotationMinor: amount,
+            source: source as "SYSTEM_CALCULATED",
+            ...extra,
+          });
+        } catch (error) {
+          messages.push(error instanceof Error ? error.message : String(error));
+        }
+      }
+      expect(messages.length).toBeGreaterThan(0);
+      for (const message of messages) {
+        // No long number anywhere: not the operand, not the computed quotation.
+        expect(`"${message}" carries a figure: ${/\d{5,}/.test(message)}`).toBe(
+          `"${message}" carries a figure: false`
+        );
+        expect(message).not.toContain(String(SENTINEL.targetNetProceeds));
+      }
+    });
+
+    test("a snapshot rule failure reports a safe code, not the historical bound", async () => {
+      const seeded = await quotableDeal("snapshotBounds");
+      // A frozen snapshot that diverges from the live company row: its minimum
+      // first payment is a DEAL-SPECIFIC historical fact, and the solver names
+      // it in the ConvexError the query used to forward verbatim.
+      await seeded.t.run(async (ctx) => {
+        const app = (await ctx.db.get(seeded.applicationId))!;
+        await ctx.db.patch(seeded.applicationId, {
+          companyRuleSnapshot: {
+            ...app.companyRuleSnapshot!,
+            minimumCustomerFirstPaymentMinor: 4_242_424,
+          },
+        });
+      });
+      const sales = await ask(seeded.asRole(templateFor("SALES")), seeded);
+      expect(sales.available).toBe(false);
+      expect(`${sales.reason}`).toBe("RULES_UNAVAILABLE");
+      expect(JSON.stringify(sales)).not.toContain("4242424");
+      // The finance caller still gets the actionable message naming the setting.
+      const finance = await ask(seeded.asRole(templateFor("ACCOUNTANT")), seeded);
+      expect(JSON.stringify(finance)).toContain("4242424");
+    });
+  });
+
   test("a deal whose rules carry no rate tells even a SALES caller the rate is missing", async () => {
     const seeded = await seedSentinelDeal("ltvMissing");
     await seeded.t.run(async (ctx) => {
