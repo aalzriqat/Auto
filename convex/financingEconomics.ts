@@ -7,6 +7,8 @@ import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import {
+  mayReadFinanceEconomics,
+  mayReadQuotationWorkflow,
   projectFinanceApplication,
   projectFinanceApplicationOverrides,
   requiresLtvPercentFor,
@@ -632,6 +634,35 @@ export const suggestQuotation = query({
  * them from the application's own snapshot — the rules the deal is actually
  * governed by — so the figure it returns is the figure
  * `recordSubmittedQuotation` will accept as SYSTEM_CALCULATED.
+ *
+ * ## The read boundary (SCRUM-117, owner-proxy ruling 2026-09-13)
+ *
+ * This query was the hole in the row projection, and the hole was not the
+ * SOLVER, it was the RETURN SHAPE. Three facts composed into a bypass:
+ *
+ *   1. it authorized on VIEW_FINANCE_APPLICATIONS alone, which the default
+ *      SALES and MANAGER templates both carry;
+ *   2. `solveQuotationForApplication` falls back from an omitted argument to
+ *      the STORED row (`targetForSolver = overrides.targetSellingAmountMinor ??
+ *      app.targetNetProceedsMinor`), and `recordSubmittedQuotation` populates
+ *      that fallback on every recorded quotation — so the cockpit's own
+ *      argument-less call ran entirely off gated figures;
+ *   3. for SYSTEM_CALCULATED provenance the writer REQUIRES solver output to
+ *      equal the stored quotation, so the response was an exact echo of it —
+ *      together with `appliedLtvPercent` and the whole funding composition.
+ *
+ * The ruling fixes it as a POLICY REFINEMENT, not by blanking the calculator:
+ *
+ *   • the internal calculation may still read the stored row. Internal use is
+ *     not disclosure; the RETURNED SHAPE is the security boundary;
+ *   • the minimal quotation-workflow result — available/unavailable, a
+ *     non-sensitive reason, the currency to label it in, and the suggested
+ *     amount — requires QUOTATION-WORKFLOW authority (`create:` or `approve:`
+ *     a finance application, or `view:finance`), not merely
+ *     `view:finance_applications`. A custom view-only role gets nothing;
+ *   • the accounting economics — `appliedLtvPercent`, the funding composition,
+ *     the projected proceeds, the LTV cap flag — require `view:finance`, and
+ *     are `undefined` for everyone else rather than a different return shape.
  */
 export const suggestQuotationForApplication = query({
   args: {
@@ -644,7 +675,35 @@ export const suggestQuotationForApplication = query({
     ltvPercent: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
+    const auth = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
+    ]);
+    /**
+     * The quotation-workflow tier, ON TOP of the module's own door permission.
+     *
+     * `requireTenantAuth` takes an array with AND semantics, which cannot
+     * express "any of the roles that legitimately quote", so the OR lives here
+     * — but it lives here as the projection's own exported predicate, not as a
+     * second hand-written copy of the rule.
+     *
+     * REFUSED AS AN ANSWER, NOT AS A THROW, and not because a soft refusal is
+     * gentler: a ConvexError out of a query reaches `useQuery` during render
+     * and takes the whole deal screen down. This file carries two other
+     * comments written after exactly that failure. Nothing is disclosed either
+     * way — the payload is the same "no calculation for you" the unavailable
+     * branches already return — so the safe shape is the one that cannot lose
+     * a screen. The cockpit never reaches it: it skips the query unless the
+     * caller holds `create:finance_application`.
+     */
+    if (!mayReadQuotationWorkflow(auth.role)) {
+      return {
+        appliedLtvPercent: undefined,
+        currency: await getOrgCurrency(ctx, args.orgId),
+        ruleVersion: undefined,
+        available: false as const,
+        reason: "NOT_AUTHORIZED" as const,
+      };
+    }
     for (const [value, label] of [
       [args.targetSellingAmountMinor, "Target selling amount"],
       [args.estimatedDealerBorneExpensesMinor, "Estimated dealer-borne expenses"],
@@ -719,10 +778,23 @@ export const suggestQuotationForApplication = query({
       };
     }
 
+    /**
+     * Ruling #3: the rate and the rule version are accounting economics, so a
+     * quotation-workflow caller without `view:finance` gets the SAME KEYS with
+     * `undefined` values rather than a narrower object. One return shape means
+     * no consumer has to narrow a union to read the amount, and
+     * `JSON.stringify` drops the blanks on the wire — the same technique
+     * `projectFinanceApplication` uses on the row.
+     */
+    const economicsVisible = mayReadFinanceEconomics(auth.role);
     const base = {
-      appliedLtvPercent: solved.appliedLtvPercent as number | undefined,
+      appliedLtvPercent: economicsVisible
+        ? (solved.appliedLtvPercent as number | undefined)
+        : undefined,
       currency,
-      ruleVersion: solved.snapshot.ruleVersion as number | undefined,
+      ruleVersion: economicsVisible
+        ? (solved.snapshot.ruleVersion as number | undefined)
+        : undefined,
     };
 
     // No target recorded anywhere is a different state from the solver running
@@ -734,19 +806,36 @@ export const suggestQuotationForApplication = query({
     if (!solved.result.available) {
       return { ...base, available: false as const, reason: solved.result.reason };
     }
+    /**
+     * The quotation itself travels to the whole quotation-workflow tier (ruling
+     * #1); everything the figure was BUILT FROM stays behind `view:finance`
+     * (ruling #3). `undefined` rather than omitted, for the reason above.
+     *
+     * `customerCoversUnfinancedPortion` and `ltvBaseCapApplied` look
+     * qualitative and are not: each names how the composition resolved, and the
+     * ruling withholds the composition. `projectedNetProceedsMinor` is the
+     * solver's own output figure. All four are economics.
+     */
+    const composition = solved.result.composition;
     return {
       ...base,
       available: true as const,
       submittedQuotationMinor: solved.result.submittedQuotationMinor,
-      projectedNetProceedsMinor: solved.result.projectedNetProceedsMinor,
-      customerCoversUnfinancedPortion: solved.result.customerCoversUnfinancedPortion,
-      financeCompanyFundedPortionMinor:
-        solved.result.composition.financeCompanyFundedPortionMinor,
-      unfinancedPortionMinor: solved.result.composition.unfinancedPortionMinor,
-      dealerContributionMinor: solved.result.composition.dealerContributionMinor,
-      customerFirstPaymentSurplusMinor:
-        solved.result.composition.customerFirstPaymentSurplusMinor,
-      ltvBaseCapApplied: solved.result.composition.ltvBaseCapApplied,
+      projectedNetProceedsMinor: economicsVisible
+        ? solved.result.projectedNetProceedsMinor
+        : undefined,
+      customerCoversUnfinancedPortion: economicsVisible
+        ? solved.result.customerCoversUnfinancedPortion
+        : undefined,
+      financeCompanyFundedPortionMinor: economicsVisible
+        ? composition.financeCompanyFundedPortionMinor
+        : undefined,
+      unfinancedPortionMinor: economicsVisible ? composition.unfinancedPortionMinor : undefined,
+      dealerContributionMinor: economicsVisible ? composition.dealerContributionMinor : undefined,
+      customerFirstPaymentSurplusMinor: economicsVisible
+        ? composition.customerFirstPaymentSurplusMinor
+        : undefined,
+      ltvBaseCapApplied: economicsVisible ? composition.ltvBaseCapApplied : undefined,
     };
   },
 });

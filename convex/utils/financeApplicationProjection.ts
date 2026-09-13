@@ -26,22 +26,53 @@ import { PERMISSIONS, isSystemOwnerRole, type Permission } from "./permissions";
  *
  * ## The classes
  *
- * - `OPEN` — lifecycle, identity, dimensions and workflow metadata. Carries no
- *   monetary quantity and reconstructs none. This is what keeps the ordinary
- *   application workflow working for SALES and MANAGER, which the owner-proxy
- *   ruling (SCRUM-117) requires: requiring VIEW_FINANCE for the whole query was
- *   considered and rejected.
- * - `FINANCE` — VIEW_FINANCE. Every amount, every snapshot that carries one,
- *   every free-text field that records one in practice, the metadata of the
- *   monetary agreements (who settled the gap, when, why), and every OPERAND a
- *   withheld amount can be reconstructed from. `appliedLtvPercent` is in here
- *   for exactly that reason: with the funded portion it divides straight back
- *   to the approved amount, which is how a `view:sales` caller recovered it.
- * - `DISBURSEMENT_WORKFLOW` — VIEW_FINANCE *or* CONFIRM_FINANCE_DISBURSEMENT.
- *   The two figures the supplier-disbursement confirmation screen must prefill.
- *   Narrower than OPEN and wider than FINANCE on purpose: a role whose whole job
- *   is confirming that payment cannot do it against a blank amount.
- * - `COST` — VIEW_COST_PRICE, the rule the vehicle queries already apply.
+ * Five workflow tiers, not one wall. The owner-proxy ruling of 2026-09-13
+ * SUPERSEDED this module's first formulation ("every reconstructable operand is
+ * VIEW_FINANCE-only") as too broad for the product, after independently
+ * checking the default templates on main `75372e0e5`: default SALES and default
+ * MANAGER both legitimately run finance applications and neither holds
+ * VIEW_FINANCE, so a single finance wall either blanks the screen SALES must
+ * type into or the one MANAGER must approve from.
+ *
+ * - `OPEN` - lifecycle, identity, dimensions and workflow metadata. Carries no
+ *   monetary quantity and reconstructs none.
+ * - `QUOTATION_WORKFLOW` - CREATE_FINANCE_APPLICATION *or*
+ *   APPROVE_FINANCE_APPLICATION *or* VIEW_FINANCE. The submitted quotation is a
+ *   QUOTATION-WORKFLOW FACT, not an accounting secret: SALES types it and
+ *   MANAGER approves against it. Ruling #1.
+ * - `APPROVAL_WORKFLOW` - APPROVE_FINANCE_APPLICATION *or*
+ *   CONFIRM_FINANCE_DISBURSEMENT *or* VIEW_FINANCE. The approved dealer purchase
+ *   amount and the RAW appraisal gap. Ruling #2.
+ *
+ *   WARNING: a holder of both this class and `QUOTATION_WORKFLOW` - default
+ *   MANAGER - can compute `gap = quotation - approved`. That is RULED ACCEPTED,
+ *   not a leak: it is the operational approval fact that role exists to act on.
+ *   Do not "fix" it by narrowing either class, and do not report it as a defect
+ *   in a later review; the ruling is explicit that it must not be described as
+ *   a leak.
+ * - `GAP_ALLOCATION` - APPROVE_FINANCE_APPLICATION *or* VIEW_FINANCE, and
+ *   deliberately NOT CONFIRM_FINANCE_DISBURSEMENT. The customer/dealer shares,
+ *   their three destinations, and the resolver/time/notes. Needed to resolve the
+ *   approval workflow; not ordinary sales visibility, and nothing the
+ *   disbursement tier must see to confirm a payment. Ruling #4.
+ * - `DISBURSEMENT_WORKFLOW` - VIEW_FINANCE *or* CONFIRM_FINANCE_DISBURSEMENT.
+ *   Exactly ONE field, `financedSaleNetReceivableMinor`: the narrow
+ *   already-approved workflow exception ruling #3 allows. Load-bearing, not
+ *   cosmetic - see the note on the field itself.
+ * - `FINANCE` - VIEW_FINANCE. The accounting economics, per ruling #3:
+ *   `appliedLtvPercent`, the funding composition (funded / unfinanced / dealer
+ *   contribution), the expected dealer remittance, the customer-to-finance-
+ *   company amount, profit and cost economics, every calculation snapshot and
+ *   its operands, and every free-text field that records an amount in practice.
+ *   Also every solver INPUT (`targetSellingAmountMinor`,
+ *   `targetNetProceedsMinor`, the buffer, the dealer-borne expenses):
+ *   publishing the quotation is ruled safe, publishing what it was computed
+ *   FROM is not.
+ * - `COST` - VIEW_COST_PRICE, the rule the vehicle queries already apply.
+ *
+ * A role holding only VIEW_FINANCE_APPLICATIONS - a custom view-only role -
+ * therefore reads `OPEN` and nothing else: lifecycle and status, no quotation,
+ * no approval, no raw gap, no allocation, no composition, no cost. Ruling #5.
  *
  * ## What this does NOT claim
  *
@@ -52,7 +83,14 @@ import { PERMISSIONS, isSystemOwnerRole, type Permission } from "./permissions";
  * Anything else that learns to return one of these rows must call this helper —
  * that obligation is what the sweep enforces.
  */
-type FieldVisibility = "OPEN" | "FINANCE" | "DISBURSEMENT_WORKFLOW" | "COST";
+type FieldVisibility =
+  | "OPEN"
+  | "QUOTATION_WORKFLOW"
+  | "APPROVAL_WORKFLOW"
+  | "GAP_ALLOCATION"
+  | "DISBURSEMENT_WORKFLOW"
+  | "FINANCE"
+  | "COST";
 
 /**
  * Every key of the row, classified. Total by type: adding a schema field
@@ -148,7 +186,8 @@ const FIELD_VISIBILITY: Record<
 
   // --- The money, and everything it can be rebuilt from --------------------
   targetSellingAmountMinor: "FINANCE",
-  submittedQuotationMinor: "FINANCE",
+  /** Ruling #1: the workflow fact SALES records and MANAGER approves against. */
+  submittedQuotationMinor: "QUOTATION_WORKFLOW",
   /** Free text explaining a figure, which in practice restates it. */
   submittedQuotationOverrideReason: "FINANCE",
   /** The solver's own inputs and result. */
@@ -164,6 +203,26 @@ const FIELD_VISIBILITY: Record<
    */
   appliedLtvPercent: "FINANCE",
   customerFirstPaymentMinor: "FINANCE",
+  /**
+   * The approved amount's DECOMPOSITION. Ruling #3 names all three as
+   * accounting economics behind `view:finance`.
+   *
+   * An earlier revision of this module put them in the disbursement tier,
+   * arguing they could not be separated from the approval because
+   * `funded + contribution` IS the approved amount. Ruling #3 resolves that the
+   * other way round, and it costs nothing: the tier that may read the approval
+   * now reads it DIRECTLY (`approvedDealerPurchaseAmountMinor` is
+   * `APPROVAL_WORKFLOW`), so there is no addition left to perform, and for
+   * everyone else the composition is analysis rather than workflow. Strictly
+   * tighter than main `75372e0e5`, where all three were ungated on every door.
+   *
+   * The screens that show them - `FinanceCompanyDecisionCard`,
+   * `ConfirmHandoverDialog` - already render each row only when it is non-null,
+   * so a caller without `view:finance` loses those rows and no other behavior.
+   */
+  financeCompanyFundedPortionMinor: "FINANCE",
+  unfinancedPortionMinor: "FINANCE",
+  dealerContributionMinor: "FINANCE",
   customerContributionToFinanceCompanyMinor: "FINANCE",
   dealerContributionSettlement: "FINANCE",
   customerContributionSettlement: "FINANCE",
@@ -196,15 +255,16 @@ const FIELD_VISIBILITY: Record<
   disbursementIdempotencyKey: "FINANCE",
 
   // --- The appraisal gap: the amount, its allocation and its metadata ------
-  rawAppraisalGapMinor: "FINANCE",
-  customerGapShareMinor: "FINANCE",
-  dealerGapShareMinor: "FINANCE",
-  customerGapCashToDealerMinor: "FINANCE",
-  customerGapInstallmentToDealerMinor: "FINANCE",
-  customerGapToFinanceCompanyMinor: "FINANCE",
-  gapResolvedAt: "FINANCE",
-  gapResolvedBy: "FINANCE",
-  gapResolutionNotes: "FINANCE",
+  /** Ruling #2: an approval fact for the roles that approve and disburse. */
+  rawAppraisalGapMinor: "APPROVAL_WORKFLOW",
+  customerGapShareMinor: "GAP_ALLOCATION",
+  dealerGapShareMinor: "GAP_ALLOCATION",
+  customerGapCashToDealerMinor: "GAP_ALLOCATION",
+  customerGapInstallmentToDealerMinor: "GAP_ALLOCATION",
+  customerGapToFinanceCompanyMinor: "GAP_ALLOCATION",
+  gapResolvedAt: "GAP_ALLOCATION",
+  gapResolvedBy: "GAP_ALLOCATION",
+  gapResolutionNotes: "GAP_ALLOCATION",
 
   // --- Settlement evidence: tier 1, unchanged ------------------------------
   supplierDisbursedAmountMinor: "FINANCE",
@@ -213,35 +273,38 @@ const FIELD_VISIBILITY: Record<
   supplierDisbursementConfirmedAt: "FINANCE",
   supplierDisbursementConfirmedBy: "FINANCE",
 
-  // --- The disbursement confirmation's two prefills ------------------------
+  // --- The approval, and the one disbursement prefill ----------------------
   /**
-   * Tier 2, now a real boundary rather than a display gate: the recovery routes
-   * that made the old comment honest (the LTV division, the approval notes, the
-   * override history) are closed above and in `projectFinanceApplicationOverrides`.
-   */
-  approvedDealerPurchaseAmountMinor: "DISBURSEMENT_WORKFLOW",
-  /**
-   * The approved amount's own DECOMPOSITION, and therefore its own class.
+   * Ruling #2 moved this from the disbursement tier to the APPROVAL tier: the
+   * role that APPROVES the purchase may read the amount it approved, and so may
+   * the role that confirms the payment against it.
    *
-   * `handoverEvidenceFor` states the rule this follows, and states it as an
-   * invariant rather than a preference: with the approved amount withheld but
-   * its two addends shown, an operator recovers it by adding them —
-   * `funded + contribution` IS the approved amount. So a caller who may see the
-   * figure may see the split, and a caller who may not, sees neither. Splitting
-   * these two classes apart would either disclose the whole number with an
-   * extra step or blank a confirmation screen that is entitled to it.
+   * The three recovery routes that made the old `redactSettlementEvidence`
+   * comment honest are closed independently of this class: the LTV division
+   * (both operands are FINANCE), the approval notes (FINANCE), and the
+   * stringified override history (`projectFinanceApplicationOverrides`). So for
+   * a role outside this tier this is a real boundary, not a display gate.
    *
-   * They reconstruct the APPROVED AMOUNT and nothing else: the appraisal gap
-   * needs the submitted quotation, which is FINANCE above, so this class cannot
-   * rebuild the figure SCRUM-117 is about.
+   * Its decomposition - funded, unfinanced, dealer contribution - is FINANCE
+   * above rather than sitting beside it. An earlier revision of this module
+   * argued they could not be separated, because `funded + contribution` IS the
+   * approval. Ruling #3 resolves that the other way round and it costs nothing:
+   * the tier that may read the approval reads it DIRECTLY, so there is no
+   * addition to perform, and the composition is accounting analysis for
+   * everyone else. Strictly tighter than main `75372e0e5`, where all three were
+   * ungated.
    */
-  financeCompanyFundedPortionMinor: "DISBURSEMENT_WORKFLOW",
-  unfinancedPortionMinor: "DISBURSEMENT_WORKFLOW",
-  dealerContributionMinor: "DISBURSEMENT_WORKFLOW",
+  approvedDealerPurchaseAmountMinor: "APPROVAL_WORKFLOW",
   /**
-   * The frozen net receivable the finance-company disbursement is confirmed
-   * against. Same gate as the amount beside it, for the same reason: the
-   * confirmation screen cannot ask about a figure it may not read.
+   * The ONLY member of `DISBURSEMENT_WORKFLOW`, and the narrow exception ruling
+   * #3 permits for an already-approved workflow tier. Load-bearing, not
+   * cosmetic: `confirmDisbursement` checks the caller's amount against this
+   * frozen net receivable FIRST, and `DealCockpit` sends
+   * `financedSaleNetReceivableMinor ?? principal`. Withheld from the default
+   * MANAGER - who holds CONFIRM_FINANCE_DISBURSEMENT and not VIEW_FINANCE -
+   * every deal carrying an applied deposit or a withheld fee would confirm the
+   * principal and be refused, from a dialog offering no field to correct it.
+   * That is the workflow dead-end the ruling forbids.
    */
   financedSaleNetReceivableMinor: "DISBURSEMENT_WORKFLOW",
 
@@ -253,15 +316,51 @@ function allows(role: Doc<"roles">, permission: Permission): boolean {
   return isSystemOwnerRole(role) || role.permissions.includes(permission);
 }
 
-/** Which classes this role may read. */
+/**
+ * Which classes this role may read.
+ *
+ * VIEW_FINANCE satisfies every economic tier, so an ACCOUNTANT or an OWNER is
+ * never narrowed by a workflow permission they do not hold. The workflow
+ * permissions are OR-ed, deliberately: `requireTenantAuth` takes an array with
+ * AND semantics, which is the right default for a door and the wrong one for
+ * "any of the roles that legitimately participate".
+ */
 function visibilityFor(role: Doc<"roles">): Record<FieldVisibility, boolean> {
   const finance = allows(role, PERMISSIONS.VIEW_FINANCE);
+  const approves = allows(role, PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+  const disburses = allows(role, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
   return {
     OPEN: true,
+    QUOTATION_WORKFLOW:
+      finance || approves || allows(role, PERMISSIONS.CREATE_FINANCE_APPLICATION),
+    APPROVAL_WORKFLOW: finance || approves || disburses,
+    GAP_ALLOCATION: finance || approves,
+    DISBURSEMENT_WORKFLOW: finance || disburses,
     FINANCE: finance,
-    DISBURSEMENT_WORKFLOW: finance || allows(role, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT),
     COST: allows(role, PERMISSIONS.VIEW_COST_PRICE),
   };
+}
+
+/**
+ * May this caller take part in the QUOTATION workflow (ruling #1)?
+ *
+ * Exported so `suggestQuotationForApplication` gates its result on the SAME
+ * rule that classifies `submittedQuotationMinor` above, rather than on a second
+ * copy of it. The calculator is the door that echoed the stored quotation back
+ * without any quotation authority at all - the CRITICAL this successor closes -
+ * and two hand-written copies of one boundary is how the next one arrives.
+ */
+export function mayReadQuotationWorkflow(role: Doc<"roles">): boolean {
+  return visibilityFor(role).QUOTATION_WORKFLOW;
+}
+
+/**
+ * May this caller read the accounting economics (ruling #3)?
+ *
+ * The gate on the calculator's LTV, funding composition and projected proceeds.
+ */
+export function mayReadFinanceEconomics(role: Doc<"roles">): boolean {
+  return visibilityFor(role).FINANCE;
 }
 
 /**
@@ -322,18 +421,33 @@ export function projectFinanceApplication<T extends Doc<"financeApplications">>(
  * the first time a new command records a correction under a name nobody
  * predicted, and the values are free text that can restate a figure whatever
  * the row is called. What survives is the fact that a correction happened, by
- * whom and when — the audit trail's existence, without its contents.
+ * whom and when - the audit trail's existence, without its contents.
+ *
+ * The return type is WIDENED rather than cast (Sonnet MAX, LOW). The first
+ * version wrote `undefined as unknown as string` into `newValue` and `reason`,
+ * which are required on the row, so every consumer was told by the type system
+ * that a field this function had just blanked was a `string`. No consumer read
+ * them yet, which is exactly when a contract lie is cheap to fix.
  */
+export type ProjectedFinanceApplicationOverride = Omit<
+  Doc<"financeApplicationOverrides">,
+  "previousValue" | "newValue" | "reason"
+> & {
+  previousValue?: string;
+  newValue?: string;
+  reason?: string;
+};
+
 export function projectFinanceApplicationOverrides(
   overrides: Array<Doc<"financeApplicationOverrides">>,
   role: Doc<"roles">
-): Array<Doc<"financeApplicationOverrides">> {
+): Array<ProjectedFinanceApplicationOverride> {
   if (allows(role, PERMISSIONS.VIEW_FINANCE)) return overrides;
   return overrides.map((row) => ({
     ...row,
     previousValue: undefined,
-    newValue: undefined as unknown as string,
-    reason: undefined as unknown as string,
+    newValue: undefined,
+    reason: undefined,
   }));
 }
 
