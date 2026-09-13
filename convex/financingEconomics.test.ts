@@ -4337,28 +4337,35 @@ describe("handover seals the approved amount, and the amount that was verified",
     ).rejects.toThrow(/confirm/i);
   });
 
-  test("the reconciliation queue shows SALES the approved amount unredacted", async () => {
+  test("the reconciliation queue no longer shows SALES the approved amount (SCRUM-117)", async () => {
     const { seed, applicationId } = await approvedDeal();
     const asSales = await defaultSalesCaller(seed);
     await seed.t.run((ctx) =>
       ctx.db.patch(applicationId, { needsFinancingReconciliation: true })
     );
 
-    // Why a visibility predicate could never have been the basis, proven by
-    // QUERYING the surface rather than reasoning about permissions.
+    // Why a visibility predicate could never have been the basis for a WRITE
+    // obligation — and, now, what that same surface returns instead.
     //
-    // `getEconomics` and `applications.get` both redact this field, so the
-    // predicate looked exhaustive from those two doors. `listNeedingReconciliation`
-    // authorizes on `view:finance_applications` alone and projects the raw row,
-    // so the same figure reaches a caller the predicate says cannot see it.
-    // Codex named `getEconomics` as well; that half does not reproduce — this
-    // is the surface that does.
+    // This queue authorizes on `view:finance_applications` alone and used to
+    // hand-assemble the raw row, so the approved amount reached a caller the
+    // other two doors withheld it from. It builds its row from the allowlisted
+    // projection now (SCRUM-117), so the figure is gone from this door too.
+    //
+    // The ORIGINAL point of this test is preserved and is still true: handover
+    // is not gated on who can see the figure — `salesonly` in the matrix below
+    // hands over without ever reading it. What changed is the leak, not the
+    // rule.
     const queue = await asSales.query(api.financingEconomics.listNeedingReconciliation, {
       orgId: seed.orgId,
       paginationOpts: { numItems: 10, cursor: null },
     });
     const row = queue.page.find((entry) => entry._id === applicationId);
-    expect(row?.approvedDealerPurchaseAmountMinor).toBe(jod(11_500));
+    // ANTI-VACUITY: the deal IS in the queue; the absence below is a redaction,
+    // not an empty page.
+    expect(row).toBeTruthy();
+    expect(row?.approvedDealerPurchaseAmountMinor).toBeUndefined();
+    expect(JSON.stringify(row)).not.toContain(String(jod(11_500)));
   });
 
   /**

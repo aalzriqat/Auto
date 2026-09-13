@@ -5045,21 +5045,26 @@ describe("a settlement advice that contradicts the approval", () => {
   });
 
   /**
-   * A CHARACTERIZATION test. It pins what is true today, not what ought to be.
+   * The test that was WRITTEN TO FAIL, now read forward (SCRUM-117).
    *
-   * `redactSettlementEvidence` blanks `approvedDealerPurchaseAmountMinor` for a
-   * caller without finance permissions, and the comments around it used to read
-   * as though that closed something. It does not: the same caller recovers the
-   * figure from `applications.list` alone. This asserts that reality so nobody
-   * infers a boundary from the presence of the gate.
+   * It used to be a characterization: `redactSettlementEvidence` blanked
+   * `approvedDealerPurchaseAmountMinor` for a caller without finance
+   * permissions, and this asserted that the same caller recovered the figure
+   * anyway — from `financeCompanyFundedPortionMinor ÷ (appliedLtvPercent / 100)`
+   * and from the approval notes — so that nobody could infer a boundary from
+   * the presence of a gate. Its own comment said: when this is done, THIS TEST
+   * MUST FAIL, and that failure is the point.
    *
-   * ⚠️ WHEN SCRUM-35 IS DONE THIS TEST MUST FAIL, and that failure is the point
-   * — it is what forces the decision to be made deliberately. Do not "repair"
-   * it by closing only the override history and the reconciliation queue: both
-   * derivations below live in a query that already applies the redaction, so
-   * that repair would leave this test passing and the exposure intact.
+   * It failed. The boundary is now an exhaustive allowlist
+   * (`convex/utils/financeApplicationProjection.ts`), so the assertions are
+   * inverted rather than deleted: both recovery routes are closed, and the
+   * per-role sweep in `convex/financeApplicationBoundary.test.ts` proves it for
+   * every default template with unique sentinels across every public door.
+   *
+   * The third route — the stringified override history — is closed by
+   * `projectFinanceApplicationOverrides` and asserted there.
    */
-  test("the approved amount is NOT confidential today — a sales-only caller derives it", async () => {
+  test("the approved amount IS confidential now — both derivations are closed", async () => {
     const APPROVED = 18_437;
     const { s, applicationId } = await paidDeal("s30Tier2Characterize", APPROVED);
     await s.t.run(async (ctx) => {
@@ -5075,21 +5080,26 @@ describe("a settlement advice that contradicts the approval", () => {
       paginationOpts: { numItems: 20, cursor: null },
     })) as unknown as { page: Array<Record<string, unknown>> };
     const row = listed.page.find((r) => r._id === applicationId)!;
+    // ANTI-VACUITY: the deal came back. An empty page would pass every
+    // assertion below while proving nothing.
     expect(row).toBeTruthy();
+    expect(row.status).toBeTruthy();
 
-    // The gate itself works — the field really is blanked.
+    // The gate itself, unchanged.
     expect(row.approvedDealerPurchaseAmountMinor).toBeUndefined();
 
-    // ...and the number is right there anyway, twice.
-    //
-    // 1. The funded portion and the LTV travel together, so the approval is one
-    //    division away. At 100% LTV, which this fixture uses, they are equal.
-    const funded = row.financeCompanyFundedPortionMinor as number;
-    const ltv = row.appliedLtvPercent as number;
-    expect(Math.round(funded / (ltv / 100))).toBe(APPROVED * SCALE);
+    // 1. The division route: both operands are gone, so there is nothing to
+    //    divide. Asserted as keys, because a blanked field is dropped from the
+    //    payload rather than present and empty.
+    for (const field of ["financeCompanyFundedPortionMinor", "appliedLtvPercent"]) {
+      expect(`${field}: ${Object.hasOwn(row, field)}`).toBe(`${field}: false`);
+    }
 
-    // 2. And the approval notes record it as free text.
-    expect(String(row.approvedPurchaseNotes)).toContain(String(APPROVED));
+    // 2. The free-text route: the approval notes are gone too, and the figure
+    //    appears nowhere in the whole serialized row under any spelling.
+    expect(Object.hasOwn(row, "approvedPurchaseNotes")).toBe(false);
+    expect(JSON.stringify(row)).not.toContain(String(APPROVED));
+    expect(JSON.stringify(row)).not.toContain(String(APPROVED * SCALE));
   });
 
   /**

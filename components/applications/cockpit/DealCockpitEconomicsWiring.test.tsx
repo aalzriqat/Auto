@@ -111,7 +111,7 @@ function cockpit(approvedPurchaseComplete: boolean) {
 }
 
 /** `financingEconomics.getEconomics`'s payload, likewise trimmed. */
-function economics(application: Record<string, unknown>) {
+function economics(application: Record<string, unknown>, extra: Record<string, unknown> = {}) {
   return {
     application: {
       _id: APP,
@@ -123,6 +123,14 @@ function economics(application: Record<string, unknown>) {
     },
     appraisals: [],
     overrides: [],
+    /**
+     * ASKED, not derived (SCRUM-117). The screen used to compare
+     * `companyRuleSnapshot` against `appliedLtvPercent` itself; both are
+     * finance-gated now, so the server publishes the answer as a boolean and
+     * these fixtures state it the same way the query does.
+     */
+    requiresLtvPercent: false,
+    ...extra,
   };
 }
 
@@ -212,7 +220,7 @@ describe("the facts the card is given", () => {
     queryResults.set(COCKPIT_QUERY, cockpit(false));
     queryResults.set(
       ECONOMICS_QUERY,
-      economics({ companyRuleSnapshot: { ruleVersion: 1 }, appliedLtvPercent: undefined })
+      economics({ companyRuleSnapshot: { ruleVersion: 1 }, appliedLtvPercent: undefined }, { requiresLtvPercent: true })
     );
 
     renderCockpit();
@@ -231,7 +239,7 @@ describe("the facts the card is given", () => {
     queryResults.set(COCKPIT_QUERY, cockpit(false));
     queryResults.set(
       ECONOMICS_QUERY,
-      economics({ companyRuleSnapshot: { ruleVersion: 1 }, appliedLtvPercent: undefined })
+      economics({ companyRuleSnapshot: { ruleVersion: 1 }, appliedLtvPercent: undefined }, { requiresLtvPercent: true })
     );
 
     renderCockpit();
