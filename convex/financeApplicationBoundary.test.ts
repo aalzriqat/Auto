@@ -1448,6 +1448,49 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
     );
 
     /**
+     * THE OTHER HALF OF THE CONJUNCTION, found by the Sonnet MAX closure round
+     * and confirmed by an executed mutant.
+     *
+     * Every refusal case above is a caller who lacks `view:finance`. They all
+     * still refuse if the predicate is weakened to `approve:finance_application`
+     * alone - so none of them can catch the opposite weakening, to
+     * `view:finance` alone. Catching that needs a caller who HOLDS
+     * `view:finance`, does NOT hold the approval, and still reaches the guard.
+     *
+     * At `approveDealerPurchaseAmount` no such caller can exist: the endpoint's
+     * own permission IS the approval, so `requireTenantAuth` answers first.
+     * `recordSubmittedQuotation` is the only writer where the row is reachable,
+     * because its door is `create:finance_application`. A SALES template plus
+     * `view:finance` is exactly that shape - and a plausible real custom role,
+     * a "finance analyst who may quote but not approve".
+     *
+     * The predicate's own truth table is covered directly in
+     * `convex/utils/financeApplicationProjection.test.ts`, since the row that
+     * is unreachable HERE is unreachable by construction rather than by
+     * omission, and no integration suite can close it.
+     */
+    test("W1 refuses an explicit rate from a caller with view:finance but NO approval", async () => {
+      const seeded = await rateEstablishableDeal("viewNoApprove");
+      const analyst = seeded.asRole([...templateFor("SALES"), PERMISSIONS.VIEW_FINANCE]);
+      const before = await rowSnapshot(seeded);
+
+      for (const [name, rate] of RATES) {
+        await expect(
+          analyst.mutation(api.financingEconomics.recordSubmittedQuotation, {
+            orgId: seeded.orgId,
+            applicationId: seeded.applicationId,
+            submittedQuotationMinor: 9_000_000,
+            source: "MANUAL_ENTRY",
+            ltvPercent: rate,
+          }),
+          name
+        ).rejects.toThrow(REFUSAL);
+      }
+
+      expect(await rowSnapshot(seeded)).toBe(before);
+    });
+
+    /**
      * THE REPRODUCTION, end to end, as the owner-proxy froze it (R-3).
      *
      * The control is the pre-write canonical answer: it is a DIFFERENT figure
