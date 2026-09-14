@@ -587,20 +587,13 @@ html[dir="rtl"] .lv2 .band-veil{background:linear-gradient(260deg,hsl(224 46% 10
 @media (max-width:640px){.lv2 .band-copy{padding:32px 24px}}
 
 .lv2 .pricing{padding:0 0 88px}
-.lv2 .toggle{display:inline-flex;background:hsl(40 16% 93%);border-radius:999px;padding:4px;
-  border:1px solid var(--line-soft)}
-.lv2 .toggle button{border:0;background:transparent;padding:.5rem 1.1rem;border-radius:999px;font-size:.85rem;
-  font-weight:700;color:var(--muted);transition:background .3s,color .3s,box-shadow .3s}
-.lv2 .toggle button.on{background:var(--surface);color:var(--ink-strong);box-shadow:var(--shadow-s)}
 .lv2 .plan{max-width:450px;margin:34px auto 0;background:var(--surface);border:1px solid var(--line-soft);
   border-radius:26px;padding:34px;box-shadow:var(--shadow-l);text-align:center;position:relative}
 .lv2 .plan-badge{position:absolute;top:-12px;inset-inline-start:50%;transform:translateX(-50%);
   background:var(--primary);color:#fff;font-size:.7rem;font-weight:800;border-radius:999px;padding:.3rem .8rem;
   white-space:nowrap}
 html[dir="rtl"] .lv2 .plan-badge{transform:translateX(50%)}
-.lv2 .plan .amount{font-size:3.2rem;font-weight:850;color:var(--ink-strong);letter-spacing:-.03em;
-  font-variant-numeric:tabular-nums;line-height:1;margin:12px 0 4px;unicode-bidi:isolate}
-.lv2 .plan .per{font-size:.85rem;color:var(--muted)}
+.lv2 .plan-note{font-size:.95rem;color:var(--muted);margin:6px 0 0}
 .lv2 .plan ul{list-style:none;padding:0;margin:24px 0;text-align:start;display:grid;gap:9px}
 .lv2 .plan li{font-size:.87rem;display:flex;gap:9px;color:var(--ink)}
 .lv2 .plan li svg{width:17px;height:17px;stroke:var(--green);fill:none;stroke-width:2.6;flex:none;margin-top:.3em}
@@ -644,8 +637,7 @@ html[lang="ar"] .lv2 .foot-grid h4{letter-spacing:normal;text-transform:none;fon
 .lv2 .post-src-title{font-weight:750;color:var(--ink-strong);font-size:.9rem}
 .lv2 .post-src-amount{font-size:.78rem;color:var(--muted);font-variant-numeric:tabular-nums;unicode-bidi:isolate}
 .lv2 .post-mini{margin:0}
-.lv2 .toggle-wrap{margin-top:22px}
-.lv2 .plan-name{font-size:1.15rem}
+.lv2 .plan-name{font-size:1.6rem;font-weight:850;color:var(--ink-strong);letter-spacing:-.02em;margin:14px 0 0}
 .lv2 .plan-cta{width:100%;justify-content:center}
 .lv2 .brand-foot{margin-bottom:12px}
 .lv2 .foot-bottom a:hover{color:var(--primary-ink)}
