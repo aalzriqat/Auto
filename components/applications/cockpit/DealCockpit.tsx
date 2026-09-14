@@ -576,6 +576,10 @@ export function DealCockpit({
   // an action that appears and then vanishes reads as a bug, and the server is
   // the authority either way.
   const canCorrectAdvice = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
+  // `supplierReceivables.recordReceipt` requires the same permission. Fails
+  // closed while loading, and is never inferred from a role name or from
+  // VIEW_FINANCE — a custom role that can read the money block cannot settle.
+  const canSettleSupplier = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
 
   /**
    * ---- The facts and commands the Review dialog used to own ----------------
@@ -1870,6 +1874,7 @@ export function DealCockpit({
         },
       }}
       canCorrectAdvice={canCorrectAdvice}
+      canSettleSupplier={canSettleSupplier}
       onCorrectSettlementAdvice={async (correction) => {
         correctionKeyRef.current ??= `amend-supplier-advice:${crypto.randomUUID()}`;
         await amendAdvice({
@@ -1947,6 +1952,11 @@ export function SaleDealCockpit({
 }: Readonly<{ orgId: Id<"organizations">; saleId: Id<"sales"> }>) {
   const deal = useQuery(api.sales.dealCockpit, { orgId, saleId });
   const recordReceipt = useMutation(api.supplierReceivables.recordReceipt);
+  const { hasPermission, isLoading: permissionsLoading } = usePermissions();
+  // The cash path settles a supplier through the SAME mutation, gated by the
+  // SAME permission (MANAGE_FINANCE), so it carries the same caller capability
+  // — closed while the membership loads, never inferred from a role name.
+  const canSettleSupplier = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
 
   /**
    * A financed sale is rendered here, not sent elsewhere.
@@ -1973,6 +1983,7 @@ export function SaleDealCockpit({
     <DealCockpitView
       deal={deal}
       backHref={`/${orgId}/deals`}
+      canSettleSupplier={canSettleSupplier}
       onRecordSupplierReceipt={async (receivableId, receipt) => {
         await recordReceipt({
           orgId,
@@ -2044,27 +2055,29 @@ type ServedEvidence = {
 type SummaryFact = {
   labelKey: string;
   value: string | null;
-  /** What a null value means: never recorded, or served without its working. */
-  unavailableKey: "NotRecorded" | "ProfitBreakdownUnavailable";
+  /** What a null value means — only ever "never recorded" here. */
+  unavailableKey: "NotRecorded";
 };
 
 /**
- * The two non-party facts of the summary, each labelled for exactly what it is.
- * Pure: reads served facts, formats them, and never sums or re-scales.
+ * The non-party facts of the summary, each labelled for exactly what it is.
+ * Pure: reads served facts, formats them, and never sums, re-scales, selects
+ * between or substitutes them.
  *
- * AVAILABLE profit — selected by the BASIS the server put on it, never by
- * `dealKind`: an applicationless FINANCED/LEASE sale is `dealKind: "FINANCED"`
- * and its profit is an ACCOUNTING_RESULT built on the sale price; read as a
- * management estimate it has no approved-purchase line and its recorded sale
- * price was reported as "not recorded". An available profit whose `lines` are
- * EMPTY is a headline served without its working: the tiles say the breakdown
- * is unavailable, not that the figures were never recorded.
+ * AVAILABLE profit — ONE tile per line the server served, in the server's
+ * order, labelled through `PROFIT_LINE_LABEL`. Nothing is chosen by basis, by
+ * `dealKind`, or by what the other lines hold: a SOURCED vehicle's zero
+ * VEHICLE_COST and its SUPPLIER_ENTITLEMENT both stand, because deciding that
+ * one of them "explains" the margin is an economic classification, and this
+ * screen is not the authority on any. An available profit whose `lines` are
+ * EMPTY is a headline served without its working, which the caller says as
+ * "breakdown unavailable" rather than inventing tiles reading "not recorded".
  *
- * UNAVAILABLE profit — there is no basis to read, so the fact-set follows the
- * server's own identity of the deal: `applicationId: null` is a sale (cash or
- * applicationless financed) and gets sale labels with nothing to fill them; an
- * application gets the approved-purchase labels, filled from
- * `handoverEvidence` where the server already serves those two figures
+ * UNAVAILABLE profit — there is no basis and no lines to read, so the fact-set
+ * follows the server's own identity of the deal: `applicationId: null` is a
+ * sale (cash or applicationless financed) and gets sale labels with nothing to
+ * fill them; an application gets the approved-purchase labels, filled ONLY from
+ * the two explicitly named `handoverEvidence` fields the server already serves
  * redacted and denominated (a management figure withheld for want of the
  * supplier settlement still has them on record).
  */
@@ -2080,81 +2093,35 @@ function selectSummaryFacts({
   evidence: ServedEvidence | undefined;
   money: (minor: number) => string;
   moneyIn: (minor: number, currency: ServedEvidence["currency"]) => string | null;
-}>): { primary: SummaryFact; secondary: SummaryFact } {
-  const saleLabels = { primary: "LineSalePrice", secondary: "LineVehicleCost" } as const;
-  const applicationLabels = {
-    primary: "LineApprovedPurchase",
-    secondary: "LineDealerContribution",
-  } as const;
-
+}>): ReadonlyArray<SummaryFact> {
   if (!profit.available) {
     if (applicationId === null) {
-      return {
-        primary: { labelKey: saleLabels.primary, value: null, unavailableKey: "NotRecorded" },
-        secondary: { labelKey: saleLabels.secondary, value: null, unavailableKey: "NotRecorded" },
-      };
+      return [
+        { labelKey: "LineSalePrice", value: null, unavailableKey: "NotRecorded" },
+        { labelKey: "LineVehicleCost", value: null, unavailableKey: "NotRecorded" },
+      ];
     }
     const served = (minor: number | null | undefined) =>
       minor != null && evidence ? moneyIn(minor, evidence.currency) : null;
-    return {
-      primary: {
-        labelKey: applicationLabels.primary,
+    return [
+      {
+        labelKey: "LineApprovedPurchase",
         value: served(evidence?.approvedPurchaseAmountMinor),
         unavailableKey: "NotRecorded",
       },
-      secondary: {
-        labelKey: applicationLabels.secondary,
+      {
+        labelKey: "LineDealerContribution",
         value: served(evidence?.dealerContributionMinor),
         unavailableKey: "NotRecorded",
       },
-    };
+    ];
   }
 
-  const line = (key: string) => profit.lines.find((l) => l.key === key) ?? null;
-  const unavailableKey = profit.lines.length === 0 ? "ProfitBreakdownUnavailable" : "NotRecorded";
-  if (profit.basis === "ACCOUNTING_RESULT") {
-    const price = line("SALE_PRICE");
-    // What the server actually emits (`accountingProfit`): SALE_PRICE and
-    // VEHICLE_COST always, SUPPLIER_ENTITLEMENT only on a SOURCED vehicle.
-    // A consigned car has no capitalized cost, so its VEHICLE_COST line is a
-    // real zero AND a SUPPLIER_ENTITLEMENT line sits beside it — and that
-    // entitlement is the figure that explains the margin. `??` on the cost
-    // line never reached it, so every consignment tile read "vehicle cost:
-    // 0". The entitlement is preferred ONLY when the cost is zero and the
-    // entitlement exists; a direct purchase with a zero cost and no
-    // entitlement keeps its zero, because that zero is the fact on record.
-    // Selection only — no figure is summed, netted or derived here.
-    const vehicleCost = line("VEHICLE_COST");
-    const entitlement = line("SUPPLIER_ENTITLEMENT");
-    const cost =
-      vehicleCost && vehicleCost.amountMinor === 0 && entitlement ? entitlement : (vehicleCost ?? entitlement);
-    return {
-      primary: {
-        labelKey: saleLabels.primary,
-        value: price ? money(price.amountMinor) : null,
-        unavailableKey,
-      },
-      secondary: {
-        labelKey: cost ? (PROFIT_LINE_LABEL[cost.key] ?? cost.key) : saleLabels.secondary,
-        value: cost ? money(cost.amountMinor) : null,
-        unavailableKey,
-      },
-    };
-  }
-  const approved = line("APPROVED_PURCHASE");
-  const contribution = line("DEALER_CONTRIBUTION");
-  return {
-    primary: {
-      labelKey: applicationLabels.primary,
-      value: approved ? money(approved.amountMinor) : null,
-      unavailableKey,
-    },
-    secondary: {
-      labelKey: applicationLabels.secondary,
-      value: contribution ? money(contribution.amountMinor) : null,
-      unavailableKey,
-    },
-  };
+  return profit.lines.map((line) => ({
+    labelKey: PROFIT_LINE_LABEL[line.key] ?? line.key,
+    value: money(line.amountMinor),
+    unavailableKey: "NotRecorded",
+  }));
 }
 
 /**
@@ -2238,9 +2205,9 @@ type SummaryEvidence = Readonly<{
 }>;
 
 /**
- * The two facts of the deal itself. Each figure is served, not derived, and
- * each label names the line it shows — see `selectSummaryFacts` for the
- * selection rules, so "approved purchase amount" is never "deal value".
+ * The facts of the deal itself. Each figure is served, not derived, and each
+ * label names the line it shows — see `selectSummaryFacts` for what is (and is
+ * not) done to them, so "approved purchase amount" is never "deal value".
  */
 function DealSummaryFacts({
   profit,
@@ -2253,16 +2220,23 @@ function DealSummaryFacts({
   money: (minor: number) => string;
   t: (key: string) => string;
 }>) {
-  const { primary, secondary } = selectSummaryFacts({ profit, money, ...summary });
+  const facts = selectSummaryFacts({ profit, money, ...summary });
+  if (facts.length === 0) {
+    // A headline served without its working. Said once, here, rather than as
+    // tiles claiming figures were never recorded.
+    return <p className="text-sm text-muted-foreground">{t("ProfitBreakdownUnavailable")}</p>;
+  }
   return (
     <div className="grid grid-cols-2 gap-2">
-      <MoneyFact label={t(primary.labelKey)} value={primary.value} unavailableKey={primary.unavailableKey} t={t} />
-      <MoneyFact
-        label={t(secondary.labelKey)}
-        value={secondary.value}
-        unavailableKey={secondary.unavailableKey}
-        t={t}
-      />
+      {facts.map((fact) => (
+        <MoneyFact
+          key={fact.labelKey}
+          label={t(fact.labelKey)}
+          value={fact.value}
+          unavailableKey={fact.unavailableKey}
+          t={t}
+        />
+      ))}
     </div>
   );
 }
@@ -2410,7 +2384,7 @@ function ProfitBreakdown({
 }
 
 /**
- * The money card: headline, the two deal facts, the parties and the working,
+ * The money card: headline, the served deal facts, the parties and the working,
  * each its own component above. This only composes them in reading order.
  */
 function MoneyPanel({
@@ -2443,7 +2417,7 @@ function MoneyPanel({
       </CardHeader>
       <CardContent className="space-y-4">
         <ProfitHeadline profit={profit} money={money} t={t} />
-        {/* Two facts on the deal itself, then one per party the server names. */}
+        {/* One fact per served line of the deal itself, then one per party the server names. */}
         <DealSummaryFacts profit={profit} summary={summary} money={money} t={t} />
         {parties && (
           <div className="space-y-2">
@@ -2535,6 +2509,7 @@ export function DealCockpitView({
   expectedPayment,
   finalize,
   canCorrectAdvice = false,
+  canSettleSupplier: callerMaySettleSupplier = false,
   onCorrectSettlementAdvice,
   onRecordSupplierReceipt,
   activeAppraisalProvider = null,
@@ -2742,6 +2717,16 @@ export function DealCockpitView({
    * action rather than offering one the server will refuse.
    */
   canCorrectAdvice?: boolean;
+  /**
+   * Whether this caller may record a supplier receipt (MANAGE_FINANCE — the
+   * permission `supplierReceivables.recordReceipt` requires). The route and
+   * the supplier's position say whether there is a claim to settle; only this
+   * says whether THIS operator may settle it. Same contract as
+   * `canCorrectAdvice`: passed in, never read from a hook in presentation, and
+   * defaulting to `false` so a container that forgets it hides the action
+   * rather than offering one the server will refuse.
+   */
+  canSettleSupplier?: boolean;
   onCorrectSettlementAdvice?: (correction: {
     amountMajor: number;
     reference?: string;
@@ -3020,7 +3005,11 @@ export function DealCockpitView({
     (workflowAction.unavailableReasonKey === "FinalizeNeedsSettlementRoute" ||
       workflowAction.unavailableReasonKey === "FinalizeNeedsRouteAndPermission");
   const supplierRow = deal.money?.parties.find((p) => p.party === "SUPPLIER");
+  // A claim to settle AND a caller the server would accept the receipt from.
+  // The first three terms are the deal's state; the last is the operator's
+  // authority, decided by the container from MANAGE_FINANCE and never here.
   const canSettleSupplier =
+    callerMaySettleSupplier &&
     deal.money?.settlesDirectToSupplier === true &&
     deal.money.routeKnown &&
     supplierRow?.position === "OWED_TO_DEALERSHIP";

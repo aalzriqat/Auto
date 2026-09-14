@@ -202,24 +202,40 @@ function financedDeal(): FinancedDealCockpitData {
 }
 
 /**
- * Whose move each stage of the fixture is, as the SCREEN must say it — one
- * i18n key per stage, written by hand from the stage's server authority and
- * the recorded appraisal provenance (`APPRAISAL` is `MIRROR` but was appraised
- * by an INDEPENDENT appraiser, so it must NOT read "Finance company"). Resolved
- * through the real dictionaries and written beside the markup, so the browser
- * gate asserts the label it can SEE against an expectation that was never
- * derived from the render.
+ * Whose move each stage of the fixture is, as the SCREEN must say it — the
+ * LITERAL visible string per stage, in each language, written by hand from the
+ * stage's server authority and the recorded appraisal provenance (`APPRAISAL`
+ * is `MIRROR` but was appraised by an INDEPENDENT appraiser, so it must NOT
+ * read "Finance company" / "شركة التمويل").
+ *
+ * Deliberately NOT looked up in `dictionaries`: the render uses the real
+ * dictionaries, and an expectation resolved through the same table would agree
+ * with any string that table held — a mistranslated or swapped entry would
+ * paint and pass. These literals are the independent oracle; if the product
+ * copy changes on purpose, this list changes with it, by hand, in review.
  */
-const EXPECTED_STAGE_OWNER_KEYS: ReadonlyArray<string> = [
-  "StageOwnerDealership", // APPLICATION · DEALER
-  "StageOwnerFinanceCompany", // CREDIT_DECISION · MIRROR
-  "AppraisalByIndependent", // APPRAISAL · MIRROR, provenance INDEPENDENT
-  "StageOwnerFinanceCompany", // APPROVED_PURCHASE · MIRROR
-  "StageOwnerDealership", // DELIVERY_ACTIONS · DEALER
-  "StageOwnerFinanceCompany", // DISBURSEMENT · MIRROR
-  "StageOwnerDealership", // HANDOVER · DEALER
-  "StageOwnerDealership", // SETTLEMENT · DEALER
-];
+const EXPECTED_STAGE_OWNERS: Readonly<Record<"en" | "ar", ReadonlyArray<string>>> = {
+  en: [
+    "Dealership", // APPLICATION · DEALER
+    "Finance company", // CREDIT_DECISION · MIRROR
+    "An independent appraiser", // APPRAISAL · MIRROR, provenance INDEPENDENT
+    "Finance company", // APPROVED_PURCHASE · MIRROR
+    "Dealership", // DELIVERY_ACTIONS · DEALER
+    "Finance company", // DISBURSEMENT · MIRROR
+    "Dealership", // HANDOVER · DEALER
+    "Dealership", // SETTLEMENT · DEALER
+  ],
+  ar: [
+    "المعرض", // APPLICATION · DEALER
+    "شركة التمويل", // CREDIT_DECISION · MIRROR
+    "مُخمِّن مستقل", // APPRAISAL · MIRROR, provenance INDEPENDENT
+    "شركة التمويل", // APPROVED_PURCHASE · MIRROR
+    "المعرض", // DELIVERY_ACTIONS · DEALER
+    "شركة التمويل", // DISBURSEMENT · MIRROR
+    "المعرض", // HANDOVER · DEALER
+    "المعرض", // SETTLEMENT · DEALER
+  ],
+};
 
 /**
  * Generation is opted into with exactly `DEAL_COCKPIT_VISUAL_FIXTURE=1`; any
@@ -250,12 +266,16 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
     // Not an empty render: the headline and the rail are both in the markup.
     expect(html).toContain("data-testid=\"deal-header\"");
     expect(html).toContain("data-testid=\"deal-stage-rail\"");
-    expect(EXPECTED_STAGE_OWNER_KEYS).toHaveLength(deal.stages.length);
-    const table = dictionaries[locale] as Record<string, string>;
-    const expectedOwners = EXPECTED_STAGE_OWNER_KEYS.map((key) => {
-      expect(table[key], `${locale} dictionary has no ${key}`).toBeTruthy();
-      return table[key];
-    });
+    const expectedOwners = EXPECTED_STAGE_OWNERS[locale];
+    // Positive control: one literal per stage, none blank, and — in the
+    // language that shares no glyphs with the other — the Arabic list is
+    // Arabic, so a copy-paste of the English column cannot pass as the oracle.
+    expect(expectedOwners).toHaveLength(deal.stages.length);
+    expect(expectedOwners).toHaveLength(8);
+    for (const owner of expectedOwners) expect(owner.trim()).toBe(owner);
+    for (const owner of expectedOwners) expect(owner.length).toBeGreaterThan(0);
+    const arabicLetters = /[؀-ۿ]/;
+    for (const owner of expectedOwners) expect(arabicLetters.test(owner)).toBe(locale === "ar");
     mkdirSync(outDir, { recursive: true });
     writeFileSync(resolve(outDir, `deal-cockpit-${locale}.html`), html);
     writeFileSync(

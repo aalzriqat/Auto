@@ -437,13 +437,20 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
     return label?.parentElement?.textContent ?? null;
   }
 
-  test("a SOURCED result labels the cost tile with the supplier entitlement, never with a zero vehicle cost", () => {
-    // Real server shape: VEHICLE_COST 0 AND SUPPLIER_ENTITLEMENT 17,000. The
-    // entitlement is the figure that explains the 3,000 margin; the zero is
-    // true but says nothing.
+  /**
+   * The screen renders the lines the server named and classifies NOTHING from
+   * their combination. An earlier build substituted the entitlement for a zero
+   * cost and hid the entitlement beside a non-zero cost — deciding, on the
+   * client, which figure "explains" the margin. Whether a zero VEHICLE_COST on
+   * a SOURCED vehicle is meaningful is the server's economics, not this tile's.
+   */
+  test("the real SOURCED shape renders BOTH its zero vehicle cost AND its supplier entitlement", () => {
+    // What `accountingProfit` emits for a SOURCED vehicle: SALE_PRICE 20,000,
+    // VEHICLE_COST 0 AND SUPPLIER_ENTITLEMENT 17,000.
     renderCockpit(cashDealFixture());
+    expect(summaryTile("LineSalePrice")).toMatch(/20,000 د\.أ/);
+    expect(summaryTile("LineVehicleCost")).toMatch(/LineVehicleCost0 د\.أ/);
     expect(summaryTile("LineSupplierEntitlement")).toMatch(/17,000 د\.أ/);
-    expect(summaryTile("LineVehicleCost")).toBeNull();
   });
 
   test("a DIRECT purchase whose recognized cost is zero keeps its zero — no entitlement, no substitution", () => {
@@ -466,7 +473,7 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
     expect(screen.queryByText("LineSupplierEntitlement")).toBeNull();
   });
 
-  test("a non-zero vehicle cost stays the cost tile even when an entitlement is also served", () => {
+  test("a non-zero vehicle cost served BESIDE an entitlement renders both, suppressing neither", () => {
     renderCockpit(
       cashDealFixture({
         money: {
@@ -483,7 +490,39 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
       })
     );
     expect(summaryTile("LineVehicleCost")).toMatch(/16,000 د\.أ/);
-    expect(summaryTile("LineSupplierEntitlement")).toBeNull();
+    expect(summaryTile("LineSupplierEntitlement")).toMatch(/1,000 د\.أ/);
+  });
+
+  test("a financed estimate renders every line the server served, in the server's order", () => {
+    renderCockpit(
+      dealFixture({
+        money: {
+          ...dealFixture().money,
+          profit: {
+            ...dealFixture().money!.profit,
+            lines: [
+              { key: "APPROVED_PURCHASE", sign: 1, amountMinor: 12_500 * SCALE },
+              { key: "SUPPLIER_SETTLEMENT", sign: -1, amountMinor: 9_500 * SCALE },
+              { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: 500 * SCALE },
+              { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: 90 * SCALE },
+            ],
+          },
+        },
+      })
+    );
+    const tiles = screen
+      .getAllByText(/^Line/)
+      .filter((el) => el.tagName === "P" && el.closest("details") === null)
+      .map((el) => el.textContent);
+    expect(tiles).toEqual([
+      "LineApprovedPurchase",
+      "LineSupplierSettlement",
+      "LineDealerContribution",
+      "LineActualExpenses",
+    ]);
+    expect(summaryTile("LineSupplierSettlement")).toMatch(/9,500 د\.أ/);
+    // No tile stands in for a line the server did not send.
+    expect(screen.queryByText("NotRecorded")).toBeNull();
   });
 
   test("a management profit awaiting the supplier settlement still shows the served approved amount and contribution", () => {
@@ -554,10 +593,23 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
   });
 
   test("the approved purchase amount is labelled as such, not as the deal value", () => {
-    renderCockpit();
-    // `getAllByText`: the approved line also heads the collapsed breakdown.
+    renderCockpit(
+      dealFixture({
+        money: {
+          ...dealFixture().money,
+          profit: {
+            ...dealFixture().money!.profit,
+            lines: [
+              { key: "APPROVED_PURCHASE", sign: 1, amountMinor: 12_500 * SCALE },
+              { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: 500 * SCALE },
+            ],
+          },
+        },
+      })
+    );
+    // `getAllByText`: both lines also head the collapsed breakdown.
     expect(screen.getAllByText("LineApprovedPurchase").length).toBeGreaterThan(0);
-    expect(screen.getByText("LineDealerContribution")).toBeTruthy();
+    expect(screen.getAllByText("LineDealerContribution").length).toBeGreaterThan(0);
     expect(screen.queryByText("FactDealValue")).toBeNull();
   });
 

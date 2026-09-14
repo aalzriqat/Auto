@@ -33,7 +33,9 @@ import { test, expect, type Page } from "@playwright/test";
  *   - the header, the headline figure and the stage rail are painted on
  *     screen, and the header sits above (never over) the essentials row;
  *   - every stage's OWNER label is painted with a non-zero box, and reads
- *     exactly the string the dictionary holds for that stage's owner;
+ *     exactly the hand-written literal the bridge expects for that stage's
+ *     owner, in EN and in AR — an oracle independent of the dictionaries the
+ *     render itself uses;
  *   - the theme actually took: the shell paints its production background for
  *     the theme asked for, the body paints the `--background` token, and light
  *     and dark differ;
@@ -290,12 +292,15 @@ for (const locale of LOCALES) {
           expect(headline!.x + headline!.width).toBeLessThanOrEqual(mainBox!.x + mainBox!.width);
 
           // Every stage's owner is PAINTED — visible, with a real box — and
-          // reads exactly the dictionary string the bridge wrote as the
-          // expectation for that stage. jsdom's visibility is a style lookup;
-          // this is layout.
+          // reads exactly the literal the bridge wrote as the expectation for
+          // that stage. jsdom's visibility is a style lookup; this is layout.
           const owners = page.getByTestId("deal-stage-owner");
+          // The oracle is a hand-written literal list in the bridge, NOT a
+          // dictionary lookup; the positive control is its exact length —
+          // the financed rail's eight stages — so an empty or truncated
+          // expectation can never make the loop below vacuous.
           const expectedOwners = expectedFor(locale).stageOwners;
-          expect(expectedOwners.length).toBeGreaterThan(0);
+          expect(expectedOwners).toHaveLength(8);
           await expect(owners).toHaveCount(expectedOwners.length);
           for (const [index, expected] of expectedOwners.entries()) {
             const owner = owners.nth(index);
