@@ -146,6 +146,36 @@ type Seeded = Awaited<ReturnType<typeof seedDealership>>;
  * is the rest. Both are quote figures, and neither says who the finance company
  * pays — that is the route.
  */
+/**
+ * Records an unsettled approval shortfall as the dealership's, so the deal can
+ * go out (SCRUM-116). A no-op on a deal with no gap, a zero gap, or one already
+ * settled — the settlement is a recorded decision, never a re-decision.
+ */
+async function settleShortfallAsDealerAbsorbs(s: Seeded, applicationId: Id<"financeApplications">) {
+  const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+  const gap = app?.rawAppraisalGapMinor;
+  if (app === null || gap === undefined || !(gap > 0)) return;
+  if (
+    app.gapResolution === "CUSTOMER_ABSORBS" ||
+    app.gapResolution === "DEALER_ABSORBS" ||
+    app.gapResolution === "SPLIT"
+  ) {
+    return;
+  }
+  const served = await s.asApprover.query(api.applications.get, { orgId: s.orgId, applicationId });
+  if (!served?.economicsStamp) throw new Error("the deal payload carried no economics stamp");
+  await s.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+    orgId: s.orgId,
+    applicationId,
+    economicsStamp: served.economicsStamp,
+    customerGapShareMinor: 0,
+    dealerGapShareMinor: gap,
+    customerGapCashToDealerMinor: 0,
+    customerGapInstallmentToDealerMinor: 0,
+    customerGapToFinanceCompanyMinor: 0,
+  });
+}
+
 async function runDeal(
   s: Seeded,
   opts: {
@@ -1345,6 +1375,8 @@ describe("the deal cockpit query", () => {
       basis: "MANUAL",
       notes: "Approved below the quotation.",
     });
+    // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+    await settleShortfallAsDealerAbsorbs(s, applicationId);
 
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
     await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
@@ -2855,6 +2887,8 @@ describe("the supplier is never made debtor for money that did not reach him", (
       basis: "MANUAL",
       notes: `Approved at ${approvedAmount}.`,
     });
+    // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+    await settleShortfallAsDealerAbsorbs(s, applicationId);
     return { s, applicationId };
   }
 
@@ -3321,6 +3355,8 @@ describe("the claim cannot be reopened through a second door", () => {
       basis: "MANUAL",
       notes: "Approved in the deal's pinned currency.",
     });
+    // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+    await settleShortfallAsDealerAbsorbs(s, applicationId);
 
     // The org switches reporting currency AFTER the approval is frozen.
     // `orgSettings` does not count `financeApplications` among the rows that
@@ -3450,6 +3486,8 @@ describe("automatic commission is based on recognized earnings, not the commerci
       basis: "MANUAL",
       notes: `Approved at ${approvedAmount}.`,
     });
+    // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+    await settleShortfallAsDealerAbsorbs(s, applicationId);
     const saleId = await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
@@ -3568,6 +3606,8 @@ describe("the sales reports reconcile to the ledger on a financed direct deal", 
       basis: "MANUAL",
       notes: `Approved at ${approvedAmount}.`,
     });
+    // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+    await settleShortfallAsDealerAbsorbs(s, applicationId);
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
     return s;
   }
@@ -3690,6 +3730,8 @@ describe("financed direct evidence that has gone missing fails closed", () => {
       basis: "MANUAL",
       notes: `Approved at ${approvedAmount}.`,
     });
+    // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+    await settleShortfallAsDealerAbsorbs(s, applicationId);
     const saleId = (await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
@@ -4306,6 +4348,8 @@ describe("a settlement advice that contradicts the approval", () => {
       basis: "MANUAL",
       notes: `Approved at ${approvedAmount}.`,
     });
+    // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+    await settleShortfallAsDealerAbsorbs(s, applicationId);
     const saleId = await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
@@ -4878,6 +4922,8 @@ describe("a settlement advice that contradicts the approval", () => {
             notes: `Approved at ${amount}.`,
           });
         }
+        // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+        await settleShortfallAsDealerAbsorbs(s, id);
       },
     });
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
@@ -5614,6 +5660,8 @@ describe("amending one field of a settlement advice", () => {
       basis: "MANUAL",
       notes: "Approved at 18,000.",
     });
+    // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+    await settleShortfallAsDealerAbsorbs(s, applicationId);
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
     // The advice as it actually arrived: wrong amount, but a real cheque number
     // and a real date, both of which are the evidence.
@@ -5735,6 +5783,8 @@ describe("one recognized-earning rule, asked identically by every surface", () =
       basis: "MANUAL",
       notes: "Approved at 18,000.",
     });
+    // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+    await settleShortfallAsDealerAbsorbs(s, applicationId);
     const saleId = (await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
@@ -6050,6 +6100,8 @@ describe("one recognized-earning rule, asked identically by every surface", () =
       basis: "MANUAL",
       notes: "Approved at 18,000.",
     });
+    // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+    await settleShortfallAsDealerAbsorbs(s, applicationId);
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
     return { s, applicationId };
   }

@@ -43,6 +43,7 @@ import {
 } from "./utils/money";
 import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
 import {
+  assertAppraisalGapSettledToAdvance,
   buildRuleSnapshot,
   creditDecisionForStatus,
   deriveDealStages,
@@ -261,6 +262,10 @@ function assertDealerEconomicsReady(
       `This deal's funding split could not be calculated. Resolve the reconciliation note on it before ${action}.`
     );
   }
+  // A positive appraisal gap nobody has settled (SCRUM-116). Enforced here and
+  // not only by the stage rail: a gap the handover stamps is sealed against the
+  // one writer that can settle it, and finalization posts from the split.
+  assertAppraisalGapSettledToAdvance(app, action);
 }
 
 /**

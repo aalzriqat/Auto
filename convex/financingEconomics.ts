@@ -2424,10 +2424,12 @@ export const reopenApproval = mutation({
  *
  * WHAT THIS IS NOT ALLOWED TO GET WRONG, in order of what it costs:
  *
- * 1. The destinations are recorded, never inferred. `recomputeAndPatchEconomics`
- *    composes the owner's profit from `customerGapCashToDealerMinor +
- *    customerGapInstallmentToDealerMinor` and deliberately excludes
- *    `customerGapToFinanceCompanyMinor` — money the customer pays the financier
+ * 1. The destinations are recorded, never inferred. `deriveManagementProfit`
+ *    (read by `dealCockpit`) folds `customerGapCashToDealerMinor +
+ *    customerGapInstallmentToDealerMinor` into the owner's profit, and
+ *    `recomputeAndPatchEconomics` feeds the same sum to the remittance analysis
+ *    as money the customer paid the dealership directly; both deliberately
+ *    exclude `customerGapToFinanceCompanyMinor` — money the customer pays the financier
  *    is not dealership money and must never become a dealer receivable or
  *    profit. A writer that recorded the share and omitted the split would
  *    understate the profit by the entire gap and nothing downstream would
@@ -2526,10 +2528,38 @@ export const resolveAppraisalGap = mutation({
         "Only an approved application can have its appraisal gap settled."
       );
     }
+    // ONE exception to the handover seal, and it is exactly as wide as the
+    // shape that needs it (SCRUM-116). Handover now refuses a positive gap
+    // nobody has settled (`assertAppraisalGapSettledToAdvance`), so every gap
+    // still open after the vehicle went out is one of two things: a row from
+    // before that gate existed, or a gap created by the FIRST approval the
+    // server permits AFTER handover (it refuses only a CHANGE to a recorded
+    // approval). The second is the ordinary direct-route order and would be
+    // stranded without this — unable to settle here, refused at finalization,
+    // `reopenApproval` sealed too. It is told apart by the record, not
+    // inferred: an approval timestamp LATER than the handover's is a gap the
+    // handover never stamped, and there is nothing sealed to disturb. An
+    // approval timestamp EARLIER than the handover's is the pre-gate shape and
+    // keeps the seal — no longer produced, and a repair decision rather than
+    // something to settle after the fact.
+    //
+    // EQUAL timestamps are temporally ambiguous: two transactions can share a
+    // `Date.now()` millisecond, so equality can be the recovery shape or an
+    // equal-time legacy row, and the record cannot tell them apart. The
+    // ambiguity is deliberately admitted (`>=`, not `>`) because a strict
+    // comparison would strand exactly the recovery this exists for, while
+    // admitting an equal-time legacy row lets it be settled through the same
+    // reviewed writer instead of being stranded too. Finalization seals both
+    // shapes. The one-resolution rule below is untouched.
     if (app.vehicleHandoverAt !== undefined) {
-      throw new ConvexError(
-        "The vehicle has already been handed over on this deal, so its figures are sealed and the appraisal gap can no longer be settled here."
-      );
+      const approvalNotBeforeHandover =
+        app.approvedPurchaseApprovedAt !== undefined &&
+        app.approvedPurchaseApprovedAt >= app.vehicleHandoverAt;
+      if (!approvalNotBeforeHandover) {
+        throw new ConvexError(
+          "The vehicle has already been handed over on this deal, so its figures are sealed and the appraisal gap can no longer be settled here."
+        );
+      }
     }
     if (app.finalizedSaleId !== undefined) {
       throw new ConvexError(

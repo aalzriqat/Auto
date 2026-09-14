@@ -119,9 +119,9 @@ describe("one deal, one backend command", () => {
 describe("no copy sends the operator to Review for an action the Deal performs", () => {
   /**
    * Keys whose action now lives on the Deal screen. `GapResolutionUnavailable`
-   * is deliberately NOT here: nothing in AutoFlow records a gap resolution yet
-   * (SCRUM-83), so there is no Deal action to point at instead, and the
-   * pointer is retired only when Review is.
+   * is not here because it no longer exists: SCRUM-83 (PR #303) gave the Deal
+   * screen a gap-resolution action and retired that copy from both catalogs,
+   * so there is no pointer left to migrate.
    */
   const MIGRATED = ["FinalizeNeedsSettlementRoute", "FinalizeNeedsRouteAndPermission"] as const;
   const REVIEW_POINTER = [/Finance Applications\s*→\s*Review/i, /طلبات التمويل\s*←\s*مراجعة/];

@@ -474,23 +474,47 @@ describe("the appraisal-gap stage", () => {
     expect(within(block).getByText("GapResolutionSealed")).toBeTruthy();
   });
 
-  test("a handed-over deal is not offered a gap resolution either", () => {
-    // Handover SEALS these figures, and the server refuses on
-    // `vehicleHandoverAt` independently of status — a handed-over deal is still
-    // APPROVED, which is precisely the state a bare status check would miss.
+  /**
+   * The handover seal and its one exception (SCRUM-116), keyed on the same two
+   * timestamps the mutation compares. Handover now refuses an unsettled gap at
+   * the server, so a gap still open after the vehicle went out is either a row
+   * the handover already stamped (sealed — a repair decision) or one created by
+   * the first approval recorded AFTER handover, which must be offered: it is
+   * what finalization is waiting on, and nothing else can settle it.
+   */
+  const HANDED_OVER_STAGES = [
+    { key: "APPRAISAL", state: "COMPLETE" },
+    { key: "GAP_RESOLUTION", state: "BLOCKED", blocker: "GapUnresolved" },
+    { key: "HANDOVER", state: "COMPLETE" },
+    { key: "SETTLEMENT", state: "PENDING" },
+  ];
+  function handedOverApp(overrides: Record<string, unknown>) {
+    return {
+      _id: APP,
+      quoteId: "quote_1",
+      status: "APPROVED",
+      salespersonId: "user_other",
+      companyId: "company_1",
+      economicsCurrency: "JOD",
+      quote: { totalFinancedAmount: 15000 },
+      vehicle: { sourceType: "OWNED" },
+      deposits: [],
+      hasExternalFinancier: true,
+      canSettleDirectToSupplier: false,
+      directRouteRefusal: null,
+      ...overrides,
+    };
+  }
+
+  test("a handed-over deal whose gap the handover already stamped is not offered a resolution", () => {
     grantTheWholeTail();
     permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
     permissions.add(PERMISSIONS.VIEW_FINANCE);
+    queryResults.set(COCKPIT_QUERY, gapDeal({ stages: HANDED_OVER_STAGES }));
+    // Approved first, handed over afterwards: the pre-gate shape.
     queryResults.set(
-      COCKPIT_QUERY,
-      gapDeal({
-        stages: [
-          { key: "APPRAISAL", state: "COMPLETE" },
-          { key: "GAP_RESOLUTION", state: "BLOCKED", blocker: "GapUnresolved" },
-          { key: "HANDOVER", state: "COMPLETE" },
-          { key: "SETTLEMENT", state: "PENDING" },
-        ],
-      })
+      "applications:get",
+      handedOverApp({ approvedPurchaseApprovedAt: 1_000, vehicleHandoverAt: 2_000 })
     );
 
     renderCockpit();
@@ -498,6 +522,23 @@ describe("the appraisal-gap stage", () => {
     const block = nextStepBlock();
     expect(within(block).queryByRole("button", { name: "ResolveGapAction" })).toBeNull();
     expect(within(block).getByText("GapResolutionSealed")).toBeTruthy();
+  });
+
+  test("a gap created by an approval recorded AFTER handover IS offered the resolution (SCRUM-116)", () => {
+    grantTheWholeTail();
+    permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VIEW_FINANCE);
+    queryResults.set(COCKPIT_QUERY, gapDeal({ stages: HANDED_OVER_STAGES }));
+    queryResults.set(
+      "applications:get",
+      handedOverApp({ vehicleHandoverAt: 1_000, approvedPurchaseApprovedAt: 2_000 })
+    );
+
+    renderCockpit();
+
+    const block = nextStepBlock();
+    expect(within(block).getByRole("button", { name: "ResolveGapAction" })).toBeTruthy();
+    expect(within(block).queryByText("GapResolutionSealed")).toBeNull();
   });
 
   test("the dialog shows the recorded quotation, the approved amount and the exact gap, and records a customer-absorbs split against the stamp the screen was opened with", async () => {

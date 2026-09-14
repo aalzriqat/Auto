@@ -3808,6 +3808,16 @@ describe("handover seals the approved amount, and the amount that was verified",
       basis: "APPRAISAL",
     });
     await seed.t.run((ctx) => ctx.db.patch(applicationId, { status: "APPROVED" }));
+    // Approved 1,000 below the quotation, so the deal carries a gap — and since
+    // SCRUM-116 handover refuses an UNSETTLED one, ahead of the stamp and
+    // denomination checks this suite is about. Settled here so these cases keep
+    // proving the seal and the stamp; the gate has its own suite below.
+    await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await servedStamp(seed, applicationId),
+      ...allocation(1_000, 0, { cash: 1_000 }),
+    });
     return { seed, applicationId };
   }
 
@@ -4855,9 +4865,130 @@ describe("resolving the appraisal gap", () => {
     expect((await gapFields(seed, applicationId)).gapResolution).toBe("PENDING_NEGOTIATION");
   });
 
-  test("once the vehicle is handed over the figures are sealed", async () => {
+  /**
+   * The handover seal, and its ONE exception (SCRUM-116).
+   *
+   * Handover now REFUSES an unsettled gap (`assertAppraisalGapSettledToAdvance`),
+   * so a gap still open after the vehicle went out is one of exactly two
+   * shapes: a row from before that gate existed (the approval predates the
+   * handover), or a gap created by the first approval the server permits AFTER
+   * handover — the order the direct-route fixtures in
+   * `financedConsignedSettlement.test.ts` walk. The second would otherwise be
+   * stranded (unable to settle, refused at finalization, `reopenApproval`
+   * sealed), so it is let through, told apart by the approval's own timestamp
+   * being no earlier than the handover's (equality is ambiguous and admitted;
+   * see the next case). The first keeps the seal. The recovery is
+   * driven through the REAL writers below — handover first, then the approval —
+   * so the timestamps are the ones production writes, not patched ones.
+   */
+  test("a gap created by the first approval recorded after handover can still be settled, and finalization then gets past the gate", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { status: "APPROVED", creditDecision: "APPROVED" })
+    );
+    // No quotation yet, so the gate has nothing to hold: the legacy carve-out.
+    await seed.asUser.mutation(api.applications.registerVehicleHandover, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: (await seed.asUser.query(api.applications.handoverStamp, {
+        orgId: seed.orgId,
+        applicationId,
+      })) as string,
+    });
+    const handedOverAt = (await readApp(seed, applicationId)).vehicleHandoverAt;
+    expect(handedOverAt).toBeTypeOf("number");
+
+    // The first approval AFTER handover — permitted, and 1,000 below the quotation.
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+    });
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        expectedPaymentMethod: "BANK_TRANSFER",
+        expectedPaymentDate: Date.now(),
+      })
+    );
+    const gapped = await readApp(seed, applicationId);
+    expect(gapped.gapResolution).toBe("PENDING_NEGOTIATION");
+    expect(gapped.approvedPurchaseApprovedAt).toBeTypeOf("number");
+    // Whatever the clock did — later, or the same millisecond — the record is
+    // left exactly as the writers made it. The rule is `>=` for that reason.
+    expect(gapped.approvedPurchaseApprovedAt! >= (handedOverAt as number)).toBe(true);
+
+    await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await servedStamp(seed, applicationId),
+      ...allocation(0, 1_000),
+    });
+    expect((await gapFields(seed, applicationId)).gapResolution).toBe("DEALER_ABSORBS");
+
+    // Past the SCRUM-116 gate now. This fixture carries no legal invoice and
+    // no accounting classification, so finalization must stop at THAT later
+    // precondition — the one the gate used to stand in front of — and not at
+    // the gap. Asserted on the refusal it does give, so a gate that still fired
+    // (or a finalization that quietly went through) both fail here.
+    let refusal: unknown;
+    try {
+      await seed.asUser.mutation(api.applications.finalizeDeal, {
+        orgId: seed.orgId,
+        applicationId,
+        idempotencyKey: `scrum116-settled-${applicationId}`,
+      });
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal).toBeInstanceOf(Error);
+    const message = String((refusal as Error).message);
+    expect(message).not.toMatch(/appraisal gap/i);
+    expect(message).toMatch(/classif/i);
+  });
+
+  test("an approval and a handover in the SAME millisecond are admitted to the exception, ambiguity and all", async () => {
+    // Two transactions can share a `Date.now()`, so an equal-time row may be
+    // the recovery shape or an equal-time legacy row — the record cannot tell.
+    // The ambiguity is admitted on purpose: a strict comparison would strand
+    // exactly the recovery the exception exists for, and admitting the legacy
+    // twin lets it be settled through this reviewed writer rather than
+    // stranded too. Asserted at the boundary rather than rewritten away.
     const { seed, applicationId } = await seedGappedDeal();
-    await seed.t.run((ctx) => ctx.db.patch(applicationId, { vehicleHandoverAt: Date.now() }));
+    const approvedAt = (await readApp(seed, applicationId)).approvedPurchaseApprovedAt;
+    expect(approvedAt).toBeTypeOf("number");
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { vehicleHandoverAt: approvedAt }));
+
+    await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await servedStamp(seed, applicationId),
+      ...allocation(0, 1_000),
+    });
+    expect((await gapFields(seed, applicationId)).gapResolution).toBe("DEALER_ABSORBS");
+  });
+
+  test("a gap the handover already stamped stays sealed — the exception is only for an approval recorded after it", async () => {
+    // The pre-gate shape: approved below the quotation FIRST, handed over
+    // afterwards with the gap still open. Handover refuses this now, so the
+    // row is patched into existence the way legacy data would carry it. The
+    // approval's timestamp precedes the handover's, so the seal holds: this is
+    // a repair decision, not something to settle after the vehicle left.
+    const { seed, applicationId } = await seedGappedDeal();
+    const approvedAt = (await readApp(seed, applicationId)).approvedPurchaseApprovedAt;
+    expect(approvedAt).toBeTypeOf("number");
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { vehicleHandoverAt: (approvedAt as number) + 1 })
+    );
     await expect(
       seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
         orgId: seed.orgId,
@@ -4866,5 +4997,244 @@ describe("resolving the appraisal gap", () => {
         ...allocation(1_000, 0, { cash: 1_000 }),
       })
     ).rejects.toThrow(/sealed/i);
+    expect((await gapFields(seed, applicationId)).gapResolution).toBe("PENDING_NEGOTIATION");
+  });
+
+  test("the ordinary order — settled before handover — is unchanged: one resolution, then the vehicle goes out", async () => {
+    const { seed, applicationId } = await seedGappedDeal();
+    await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await servedStamp(seed, applicationId),
+      ...allocation(1_000, 0, { cash: 1_000 }),
+    });
+    await seed.asUser.mutation(api.applications.registerVehicleHandover, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: (await seed.asUser.query(api.applications.handoverStamp, {
+        orgId: seed.orgId,
+        applicationId,
+      })) as string,
+    });
+    // The one-resolution rule is untouched by the exception: after handover
+    // the approval is sealed, and a second allocation is refused on the FIRST
+    // rule it meets, which names the already-recorded agreement.
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await servedStamp(seed, applicationId),
+        ...allocation(0, 1_000),
+      })
+    ).rejects.toThrow(/sealed|already been agreed/i);
+    expect((await gapFields(seed, applicationId)).gapResolution).toBe("CUSTOMER_ABSORBS");
+  });
+
+  test("once the deal is closed the figures are sealed", async () => {
+    const { seed, applicationId } = await seedGappedDeal();
+    // The seal is keyed on the sale, not on the status: `finalizeDeal` writes
+    // both, but a bare status check would miss a closed deal a status repair
+    // put back to APPROVED.
+    const saleId = await seed.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: seed.orgId,
+        vehicleId: seed.vehicleId,
+        customerId: seed.customerId,
+        salespersonId: seed.userId,
+        salePrice: 12_500,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+      } as never)
+    );
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { finalizedSaleId: saleId }));
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await servedStamp(seed, applicationId),
+        ...allocation(1_000, 0, { cash: 1_000 }),
+      })
+    ).rejects.toThrow(/closed/i);
+    expect((await gapFields(seed, applicationId)).gapResolution).toBe("PENDING_NEGOTIATION");
+  });
+
+  test("an application that is not APPROVED cannot have its gap settled", async () => {
+    const { seed, applicationId } = await seedGappedDeal();
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { status: "UNDER_REVIEW" }));
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await servedStamp(seed, applicationId),
+        ...allocation(1_000, 0, { cash: 1_000 }),
+      })
+    ).rejects.toThrow(/approved application/i);
+    expect((await gapFields(seed, applicationId)).gapResolution).toBe("PENDING_NEGOTIATION");
+  });
+});
+
+/**
+ * SCRUM-116 — the refusal behind the rail.
+ *
+ * Until this landed, an unsettled appraisal gap was enforced by `deriveDealStages`
+ * alone: the rail marked GAP_RESOLUTION blocked and hid the tail, but the two
+ * mutations behind it never asked. `registerVehicleHandover` on a gapped deal
+ * succeeded — and handover SEALS the deal against `resolveAppraisalGap`, so the
+ * step that should have waited for the settlement closed the only path to it.
+ * `finalizeDeal` then posted the sale from a split nobody had recorded.
+ *
+ * Every case calls the mutation DIRECTLY, with the stamp the screen would have
+ * sent, because the property under test is that the server refuses without the
+ * rail. The controls are the shapes the gate must let through: no gap recorded
+ * (legacy), a zero gap (NOT_REQUIRED as the approval wrote it) and a settled gap
+ * in each of its three forms. The contradiction case pins the ALLOWLIST: a fix
+ * written as "anything but PENDING_NEGOTIATION" would let a positive gap marked
+ * NOT_REQUIRED through, and NOT_REQUIRED is only ever written for a zero gap.
+ */
+describe("advancing a deal whose appraisal gap is unsettled (SCRUM-116)", () => {
+  async function handoverStamp(seed: Seed, applicationId: Id<"financeApplications">) {
+    const stamp = await seed.asUser.query(api.applications.handoverStamp, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    if (!stamp) throw new Error("handoverStamp issued no economics stamp.");
+    return stamp;
+  }
+
+  test("handover is refused while the gap is unsettled, nothing is written, and the refusal carries no figure", async () => {
+    const { seed, applicationId } = await seedGappedDeal();
+    expect((await gapFields(seed, applicationId)).gapResolution).toBe("PENDING_NEGOTIATION");
+
+    let refusal: unknown;
+    try {
+      await seed.asUser.mutation(api.applications.registerVehicleHandover, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await handoverStamp(seed, applicationId),
+      });
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal).toBeInstanceOf(Error);
+    const message = String((refusal as Error).message);
+    expect(message).toMatch(/appraisal gap/i);
+    // The gap is a FINANCE-class field; `register:vehicle_handover` is held by
+    // roles the projection withholds it from. A refusal is a response too.
+    expect(message).not.toMatch(/1[,.]?000/);
+
+    const app = await readApp(seed, applicationId);
+    expect(app.vehicleHandoverAt).toBeUndefined();
+    expect(app.gapResolution).toBe("PENDING_NEGOTIATION");
+  });
+
+  test("finalization is refused too — even on a deal handed over before this guard existed", async () => {
+    const { seed, applicationId } = await seedGappedDeal();
+    // The shape a deal left behind by the old code has: handed over against an
+    // unsettled gap, payment expected, never finalized.
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        vehicleHandoverAt: Date.now(),
+        expectedPaymentMethod: "BANK_TRANSFER",
+        expectedPaymentDate: Date.now(),
+      })
+    );
+
+    await expect(
+      seed.asUser.mutation(api.applications.finalizeDeal, {
+        orgId: seed.orgId,
+        applicationId,
+        idempotencyKey: `scrum116-finalize-${applicationId}`,
+      })
+    ).rejects.toThrow(/appraisal gap/i);
+
+    const app = await readApp(seed, applicationId);
+    expect(app.finalizedSaleId).toBeUndefined();
+    expect(app.status).toBe("APPROVED");
+    expect(await seed.t.run((ctx) => ctx.db.query("sales").collect())).toEqual([]);
+  });
+
+  test.each([
+    { resolution: "CUSTOMER_ABSORBS", split: allocation(1_000, 0, { cash: 1_000 }) },
+    { resolution: "DEALER_ABSORBS", split: allocation(0, 1_000) },
+    { resolution: "SPLIT", split: allocation(600, 400, { cash: 100, installments: 500 }) },
+  ])("once the gap is settled as $resolution, handover proceeds", async ({ resolution, split }) => {
+    const { seed, applicationId } = await seedGappedDeal();
+    await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await servedStamp(seed, applicationId),
+      ...split,
+    });
+    expect((await gapFields(seed, applicationId)).gapResolution).toBe(resolution);
+
+    await seed.asUser.mutation(api.applications.registerVehicleHandover, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await handoverStamp(seed, applicationId),
+    });
+    expect((await readApp(seed, applicationId)).vehicleHandoverAt).toBeTypeOf("number");
+  });
+
+  test("a deal approved at its quotation has no gap and is not held", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(12_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(12_500),
+      basis: "APPRAISAL",
+    });
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { status: "APPROVED", creditDecision: "APPROVED" })
+    );
+    const before = await gapFields(seed, applicationId);
+    expect(before.rawAppraisalGapMinor).toBe(0);
+    expect(before.gapResolution).toBe("NOT_REQUIRED");
+
+    await seed.asUser.mutation(api.applications.registerVehicleHandover, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await handoverStamp(seed, applicationId),
+    });
+    expect((await readApp(seed, applicationId)).vehicleHandoverAt).toBeTypeOf("number");
+  });
+
+  test("a legacy row with a quotation and approval but no gap recorded is not held", async () => {
+    const { seed, applicationId } = await seedGappedDeal();
+    // A deal from before the gap model: the figures exist, the gap was never
+    // worked out and no resolution was ever written. The gate has nothing to
+    // refuse on and must not invent a shortfall.
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { rawAppraisalGapMinor: undefined, gapResolution: undefined })
+    );
+
+    await seed.asUser.mutation(api.applications.registerVehicleHandover, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await handoverStamp(seed, applicationId),
+    });
+    expect((await readApp(seed, applicationId)).vehicleHandoverAt).toBeTypeOf("number");
+  });
+
+  test("a positive gap marked NOT_REQUIRED is a contradiction, and is held", async () => {
+    const { seed, applicationId } = await seedGappedDeal();
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { gapResolution: "NOT_REQUIRED" }));
+
+    await expect(
+      seed.asUser.mutation(api.applications.registerVehicleHandover, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await handoverStamp(seed, applicationId),
+      })
+    ).rejects.toThrow(/appraisal gap/i);
+    expect((await readApp(seed, applicationId)).vehicleHandoverAt).toBeUndefined();
   });
 });

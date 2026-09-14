@@ -1031,7 +1031,14 @@ export function DealCockpit({
      * outranks both: the server refuses anything not APPROVED, anything already
      * handed over and anything closed (handover seals the figures; finalization
      * writes the sale against them), so offering the action there would promise
-     * a step guaranteed to fail. Then authority — the same permission that set
+     * a step guaranteed to fail. One exception, the server's own (SCRUM-116):
+     * handover now refuses an unsettled gap, so a gap still open after the
+     * vehicle went out came from an approval recorded no earlier than handover
+     * — the approval's timestamp says so; an equal timestamp is ambiguous and
+     * admitted on purpose — and settling it is exactly what finalization is
+     * waiting on. The rail shows this stage again in that case and the action
+     * must be there, keyed on the same two timestamps the mutation compares.
+     * Then authority — the same permission that set
      * the approved amount, and never the deal's own salesperson (the server
      * refuses both). Then visibility: a caller who HOLDS the authority but whose
      * money is withheld cannot be asked to allocate a figure the screen does not
@@ -1045,7 +1052,16 @@ export function DealCockpit({
      */
     if (liveStage?.blocker === "GapUnresolved") {
       const gapVisible = typeof deal.money?.appraisalGapMinor === "number";
-      const lifecycleSealed = deal.status !== "APPROVED" || handoverStage?.state === "COMPLETE";
+      const handedOverAt = app?.vehicleHandoverAt;
+      // `>=`, as the mutation compares: equal timestamps are ambiguous (two
+      // writes can share a millisecond) and are deliberately admitted.
+      const approvalNotBeforeHandover =
+        handedOverAt !== undefined &&
+        app?.approvedPurchaseApprovedAt !== undefined &&
+        app.approvedPurchaseApprovedAt >= handedOverAt;
+      const lifecycleSealed =
+        deal.status !== "APPROVED" ||
+        ((handoverStage?.state === "COMPLETE" || handedOverAt !== undefined) && !approvalNotBeforeHandover);
       const ownDeal = membership?.userId != null && membership.userId === app?.salespersonId;
       return {
         stageKey: liveStage.key,
