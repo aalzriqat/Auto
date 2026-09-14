@@ -3,6 +3,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { getOrgCurrency } from "../accounting/workflowHooks";
 import { assertSupportedDenomination, supportedCurrencyScale } from "./money";
+import { MAX_LIVE_DEAL_FEE_LINES, frozenPolicyExceedsLiveCapacity } from "./dealCostLimits";
 
 /**
  * A caller-stated denomination, validated against server authority BEFORE any
@@ -24,23 +25,65 @@ export function assertExpectedCurrency(expectedCurrency: string, action: string)
   }
 }
 
+/**
+ * Every live cost line on a deal, from ONE bounded read on
+ * `by_application_voidedAt` — the index answers "live" itself, so removed
+ * lines are neither read nor counted. Callers hand the lines on to the pure
+ * rules below rather than reading them again: the completeness check and the
+ * deductions it feeds are then judged on the same lines by construction.
+ * Past the cap it refuses with nothing written; removing a line that should
+ * not be there brings the deal back under it.
+ */
+export async function loadActiveFees(
+  ctx: QueryCtx | MutationCtx,
+  applicationId: Id<"financeApplications">
+): Promise<Array<Doc<"financeDealFees">>> {
+  const live = await ctx.db
+    .query("financeDealFees")
+    .withIndex("by_application_voidedAt", (q) =>
+      q.eq("applicationId", applicationId).eq("voidedAt", undefined)
+    )
+    .take(MAX_LIVE_DEAL_FEE_LINES + 1);
+  if (live.length > MAX_LIVE_DEAL_FEE_LINES) {
+    throw new ConvexError(
+      `This deal has more than ${MAX_LIVE_DEAL_FEE_LINES} live cost lines, which is more than one read can verify. Nothing has been changed: a partial list of a deal's costs reads like the whole one. Remove the lines that should not be there to bring it back under the limit.`
+    );
+  }
+  return live;
+}
+
+/**
+ * Refuses the line that would take a deal past `MAX_LIVE_DEAL_FEE_LINES`.
+ * Judged on the live lines one `loadActiveFees` read returned, by BOTH
+ * writers that create a line, inside their idempotent section — so an exact
+ * replay of a line already written still returns it, and the product never
+ * creates the state the bounded read refuses to serve.
+ */
+export function assertRoomForAnotherLine(
+  liveFees: ReadonlyArray<Doc<"financeDealFees">>,
+  action: string
+): void {
+  if (liveFees.length >= MAX_LIVE_DEAL_FEE_LINES) {
+    throw new ConvexError(
+      `This deal already has ${MAX_LIVE_DEAL_FEE_LINES} live cost lines, the most one deal can carry, so ${action} is refused. Nothing has been changed; remove a line that should not be there first.`
+    );
+  }
+}
+
 /** The denominations carried by a deal's live money facts: cost lines and custody records. */
 export async function dealMoneyFactCurrencies(
   ctx: QueryCtx | MutationCtx,
   applicationId: Id<"financeApplications">
 ): Promise<Set<string>> {
   const [fees, custody] = await Promise.all([
-    ctx.db
-      .query("financeDealFees")
-      .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
-      .collect(),
+    loadActiveFees(ctx, applicationId),
     ctx.db
       .query("financeDealCustody")
       .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
       .collect(),
   ]);
   const currencies = new Set<string>();
-  for (const fee of fees) if (fee.voidedAt === undefined) currencies.add(fee.currency);
+  for (const fee of fees) currencies.add(fee.currency);
   for (const row of custody) currencies.add(row.currency);
   return currencies;
 }
@@ -93,18 +136,6 @@ export async function resolveDealCurrency(
  * without a cycle.
  */
 
-/** Live cost lines on a deal: everything not voided. */
-async function activeFees(
-  ctx: QueryCtx | MutationCtx,
-  applicationId: Id<"financeApplications">
-): Promise<Array<Doc<"financeDealFees">>> {
-  const rows = await ctx.db
-    .query("financeDealFees")
-    .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
-    .collect();
-  return rows.filter((row) => row.voidedAt === undefined);
-}
-
 /**
  * The live line that records the actual for the configured fee at
  * `templateIndex` — the one `recordTemplateFeeActual` wrote against that
@@ -154,23 +185,38 @@ export function unrecordedConfiguredFeePositions(
  * not charge is recorded as an actual of zero — a fact — not left blank.
  *
  * Applied at BOTH doors, by this one function. `classifyDealAccounting` is the
- * first; `finalizeDeal` (through `resolveFinancedSalePlan`) is the second —
- * because a deal classified under the OLDER rule, before this check existed,
- * still carries a valid `CLASSIFIED` flag, and finalization trusting that flag
- * alone would post the sale with every configured position unrecorded
- * (Codex-high MEDIUM on 229608039). Re-checking at the commit point makes the
- * stronger rule bind from this deploy forward for every deal not yet closed,
- * whichever rule it was classified under.
+ * first; `finalizeDeal` (through `resolveFinancedSalePlan`, on every route,
+ * before the plan's own coverage question) is the second — because a deal
+ * classified under the OLDER rule, before this check existed, still carries
+ * a valid `CLASSIFIED` flag, and finalization trusting that flag alone would
+ * post the sale with every configured position unrecorded (Codex-high MEDIUM
+ * on 229608039); and because a DIRECT-route deal is never asked for a
+ * classification at all, so finalization is the only door its configured
+ * fees are checked at. Checking at the commit point makes the rule bind from
+ * this deploy forward for every deal not yet closed, whichever route it
+ * takes and whichever rule it was classified under.
+ *
+ * Pure: it judges the live rows it is handed — each door reads them once,
+ * bounded, through `loadActiveFees`, and every other rule at that door is
+ * applied to the same rows. Nothing is read again here.
  */
-export async function assertConfiguredFeesRecorded(
-  ctx: QueryCtx | MutationCtx,
-  app: Doc<"financeApplications">,
+export function assertConfiguredFeesRecorded(
+  snapshot: Doc<"financeApplications">["companyRuleSnapshot"],
+  liveFees: ReadonlyArray<Doc<"financeDealFees">>,
   action: string
-): Promise<void> {
-  const missing = unrecordedConfiguredFeePositions(
-    app.companyRuleSnapshot,
-    await activeFees(ctx, app._id)
-  );
+): void {
+  // Closure CAPACITY, not configuration policy: a frozen policy with more
+  // fees than a deal can carry live can never be completed, and the count
+  // below would describe that as "N fees have no actual" for as long as
+  // anyone tried. Name the cause instead. A policy frozen past the
+  // configuration limit but within capacity is still closeable and passes
+  // through to the count. Frozen policy is never rewritten here.
+  if (frozenPolicyExceedsLiveCapacity(snapshot?.feeTemplates)) {
+    throw new ConvexError(
+      `This deal's frozen finance-company policy configures ${snapshot?.feeTemplates?.length} fees, more than the ${MAX_LIVE_DEAL_FEE_LINES} live cost lines a deal can carry, so it cannot be closed under that policy. A frozen policy is never rewritten: correct the company's fee templates and re-create this application.`
+    );
+  }
+  const missing = unrecordedConfiguredFeePositions(snapshot, liveFees);
   if (missing.length > 0) {
     throw new ConvexError(
       `${missing.length} fee(s) configured by this deal's finance company have no actual recorded. Record what was actually paid for each of them — zero if it was not charged — before ${action}.`
@@ -186,13 +232,13 @@ export async function assertConfiguredFeesRecorded(
  * pays or who is paid: a dealership can bear a cost the company still bills it
  * for, and the company can withhold a cost somebody else ultimately owes. Only
  * the flag says whether this particular amount reduces the transfer.
+ *
+ * Pure, over the rows one `loadActiveFees` read returned.
  */
-export async function settlementDeductedFees(
-  ctx: QueryCtx | MutationCtx,
-  applicationId: Id<"financeApplications">
-): Promise<Array<Doc<"financeDealFees">>> {
-  const rows = await activeFees(ctx, applicationId);
-  return rows.filter((row) => row.deductedFromSettlement === true);
+export function settlementDeductedFees(
+  liveFees: ReadonlyArray<Doc<"financeDealFees">>
+): Array<Doc<"financeDealFees">> {
+  return liveFees.filter((row) => row.deductedFromSettlement === true);
 }
 
 /**
@@ -239,11 +285,14 @@ export function settlementDeductedActualMinor(
   return total;
 }
 
-/** Both steps together, for a caller that only wants the number. */
+/** All three steps together — one bounded read, the filter, the sum — for a caller that only wants the number. */
 export async function settlementDeductedTotalMinor(
   ctx: QueryCtx | MutationCtx,
   applicationId: Id<"financeApplications">,
   currency: string
 ): Promise<number> {
-  return settlementDeductedActualMinor(await settlementDeductedFees(ctx, applicationId), currency);
+  return settlementDeductedActualMinor(
+    settlementDeductedFees(await loadActiveFees(ctx, applicationId)),
+    currency
+  );
 }

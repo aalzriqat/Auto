@@ -7680,3 +7680,118 @@ describe("a stale finance application cannot tear down the sale that replaced it
     expect(cancelled?.status).toBe("CANCELLED");
   });
 });
+
+/**
+ * The finance company's configured fees gate finalization on the DIRECT route
+ * too. A direct-route deal is never asked for a classification, so this is
+ * the only door its configured fees have — and the first placement of the
+ * finalization gate (behind the plan's coverage question, which the direct
+ * route never passes) let a deal close with a configured fee unrecorded
+ * (correction to the Codex-high MEDIUM on 229608039). The company's policy is
+ * snapshotted onto the deal when the application is created, so the
+ * templates go on the company BEFORE `runDeal`. Both cases carry the legacy
+ * `CLASSIFIED` flag the finding was about: it is neither trusted nor
+ * disturbed.
+ */
+describe("DIRECT_TO_SUPPLIER: the finance company's configured fees gate finalization", () => {
+  const TEMPLATES = [
+    {
+      feeType: "APPRAISAL_FEE" as const,
+      description: "Valuation",
+      estimatedAmountMinor: 80 * SCALE,
+      paidBy: "DEALER" as const,
+      paidTo: "APPRAISER" as const,
+      includedInQuotation: false,
+      deductedFromSettlement: false,
+      refundable: false,
+      accountingTreatment: "APPRAISAL_EXPENSE" as const,
+    },
+    {
+      feeType: "COMMISSION" as const,
+      description: "Commission",
+      estimatedAmountMinor: 300 * SCALE,
+      paidBy: "DEALER" as const,
+      paidTo: "FINANCE_COMPANY" as const,
+      includedInQuotation: false,
+      deductedFromSettlement: true,
+      refundable: false,
+      accountingTreatment: "FINANCE_COMPANY_COMMISSION" as const,
+    },
+  ];
+
+  /** A consigned car, a company with two configured fees, the deal walked to the direct route's finalizable state. */
+  async function directDeal(tag: string) {
+    const s = await seedDealership(tag);
+    await s.t.run((ctx) => ctx.db.patch(s.companyId, { feeTemplates: TEMPLATES }));
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: false });
+    // What `runDeal` records for the direct route only when it finalizes itself.
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE }));
+    return { s, applicationId };
+  }
+  const recordActual = (
+    s: Seeded,
+    line: { applicationId: Id<"financeApplications">; templateIndex: number; feeType: "APPRAISAL_FEE" | "COMMISSION"; actualAmountMinor: number }
+  ) =>
+    s.asUser.mutation(api.financeDealCosts.recordTemplateFeeActual, {
+      orgId: s.orgId,
+      ...line,
+      expectedCurrency: "JOD",
+      idempotencyKey: crypto.randomUUID(),
+    });
+  /** Planted AFTER the actuals: recording a cost clears a classification, and the legacy state is a deal classified with its checklist as it stands. */
+  const plantLegacyClassified = (s: Seeded, applicationId: Id<"financeApplications">) =>
+    s.t.run((ctx) => ctx.db.patch(applicationId, { accountingClassification: "CLASSIFIED" }));
+  const finalize = (s: Seeded, applicationId: Id<"financeApplications">) =>
+    s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
+  /** Every table finalization writes to, counted whole, plus the two rows it patches. */
+  const FINALIZATION_TABLES = [
+    "sales",
+    "journalEntries",
+    "journalLines",
+    "pendingAccountingEvents",
+    "receivableDocuments",
+    "vehicleSupplierReceivables",
+    "vehicleSupplierPayables",
+    "dealerProductDeferrals",
+    "applicationStatusLog",
+    "commandIdempotency",
+  ] as const;
+  const footprint = (s: Seeded, applicationId: Id<"financeApplications">) =>
+    s.t.run(async (ctx) => {
+      const counts: Record<string, number> = {};
+      for (const table of FINALIZATION_TABLES) counts[table] = (await ctx.db.query(table).collect()).length;
+      return { counts, app: await ctx.db.get(applicationId), vehicle: await ctx.db.get(s.vehicleId) };
+    });
+
+  test("a configured fee with no actual refuses finalization, and leaves no artifact — the legacy flag included", async () => {
+    const { s, applicationId } = await directDeal("directGate");
+    await recordActual(s, { applicationId, templateIndex: 0, feeType: "APPRAISAL_FEE", actualAmountMinor: 80 * SCALE });
+    await plantLegacyClassified(s, applicationId);
+    const before = await footprint(s, applicationId);
+    expect(before.app?.status).toBe("APPROVED");
+    expect(before.app?.accountingClassification).toBe("CLASSIFIED");
+
+    await expect(finalize(s, applicationId)).rejects.toThrow(/1 fee\(s\) configured by this deal's finance company/i);
+
+    const after = await footprint(s, applicationId);
+    expect(after.counts).toEqual(before.counts);
+    expect(after.app).toEqual(before.app);
+    expect(after.vehicle).toEqual(before.vehicle);
+    expect(after.app?.accountingClassification).toBe("CLASSIFIED");
+    expect(after.app?.finalizedSaleId).toBeUndefined();
+  });
+
+  test("with every configured actual recorded — one of them zero — the same deal finalizes (control)", async () => {
+    const { s, applicationId } = await directDeal("directGateControl");
+    await recordActual(s, { applicationId, templateIndex: 0, feeType: "APPRAISAL_FEE", actualAmountMinor: 80 * SCALE });
+    await recordActual(s, { applicationId, templateIndex: 1, feeType: "COMMISSION", actualAmountMinor: 0 });
+    await plantLegacyClassified(s, applicationId);
+
+    const saleId = await finalize(s, applicationId);
+    expect(saleId).toBeTruthy();
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(app?.status).toBe("CLOSED");
+    expect(app?.finalizedSaleId).toBe(saleId);
+    expect((await footprint(s, applicationId)).counts.sales).toBe(1);
+  });
+});

@@ -6,6 +6,7 @@ import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 import { deriveExpectedFees } from "./financeDealCosts";
+import { MAX_FEE_TEMPLATES, MAX_LIVE_DEAL_FEE_LINES } from "./utils/dealCostLimits";
 
 /**
  * The handover-cost checklist the finance company's FROZEN policy implies
@@ -887,6 +888,277 @@ describe("finalization re-checks configured fees, whichever rule the deal was cl
     expect(saleId).toBeTruthy();
     expect(await salesOf(s)).toHaveLength(1);
     expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
+  });
+});
+
+/**
+ * The lines every closure rule is judged on come from ONE bounded read
+ * (`loadActiveFees`) over the deal's LIVE lines, and the bound fails CLOSED:
+ * past `MAX_LIVE_DEAL_FEE_LINES` the read refuses instead of returning a
+ * prefix that reads like the whole. Live lines, not rows: removing a line
+ * brings a deal back under the cap, so no deal is ever unreadable for good.
+ * The overflow is seeded RAW — it is not a state the product's writers are
+ * presented as free to create.
+ */
+describe("the bounded fee read behind every closure rule", () => {
+  /** Live additional-cost lines written straight to the table — the only way to stand a deal AT or past the cap without the product's writers. */
+  async function seedLiveLines(seed: Seed, applicationId: Id<"financeApplications">, count: number) {
+    return await seed.t.run(async (ctx) => {
+      const ids: Id<"financeDealFees">[] = [];
+      for (let n = 0; n < count; n++) {
+        ids.push(
+          await ctx.db.insert("financeDealFees", {
+            orgId: seed.orgId,
+            applicationId,
+            feeType: "OTHER_CLOSING_EXPENSE",
+            description: `line ${n}`,
+            currency: "JOD",
+            actualAmountMinor: 1,
+            paidBy: "DEALER",
+            paidTo: "OTHER",
+            accountingTreatment: "SELLING_EXPENSE",
+            includedInQuotation: false,
+            deductedFromSettlement: false,
+            refundable: false,
+            source: "MANUAL",
+            createdBy: seed.userId,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          })
+        );
+      }
+      return ids;
+    });
+  }
+  const voidLine = (seed: Seed, feeId: Id<"financeDealFees">) =>
+    seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "Recorded on the wrong deal." });
+
+  test("past the live-line cap the screen and the classification door refuse without writing; removing one line makes the deal readable again", async () => {
+    const seed = await seedDealer("cap");
+    const companyId = await createCompany(seed, "Two Fees", COMPANY_B_TEMPLATES);
+    const applicationId = await createApplicationFor(seed, companyId);
+    // Classification asks for the invoice before it reads a single line.
+    await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+      orgId: seed.orgId,
+      applicationId,
+      legalInvoiceAmountMinor: jod(20_000),
+      legalInvoiceNumber: "INV-CAP",
+      legalInvoiceDate: Date.now(),
+      issuedTo: "FINANCE_COMPANY",
+    });
+
+    // One past the cap, every one of them live.
+    const seeded = await seedLiveLines(seed, applicationId, MAX_LIVE_DEAL_FEE_LINES + 1);
+    const snapshotOf = () =>
+      seed.t.run(async (ctx) => ({
+        app: await ctx.db.get(applicationId),
+        rows: await ctx.db
+          .query("financeDealFees")
+          .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+          .collect(),
+      }));
+    const before = await snapshotOf();
+
+    // The screen and the closure door refuse — for the bound, not for the
+    // configured fees the checklist still has unrecorded — and write nothing.
+    const overflow = new RegExp(`more than ${MAX_LIVE_DEAL_FEE_LINES} live cost lines`);
+    await expect(costsOf(seed, applicationId)).rejects.toThrow(overflow);
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, { orgId: seed.orgId, applicationId, notes: "x" })
+    ).rejects.toThrow(overflow);
+    expect(await snapshotOf()).toEqual(before);
+
+    // The real void — a patch, not a delete — takes the deal back to the cap,
+    // and the read serves again: the cap counts live lines only.
+    await voidLine(seed, seeded[0]);
+    const served = await costsOf(seed, applicationId);
+    expect(served.fees).toHaveLength(MAX_LIVE_DEAL_FEE_LINES);
+    expect(served.fees.map((fee) => fee._id)).not.toContain(seeded[0]);
+    expect(served.expected.rows.map((row) => row.actual)).toEqual([null, null]);
+    expect((await snapshotOf()).rows).toHaveLength(MAX_LIVE_DEAL_FEE_LINES + 1);
+  });
+
+  /**
+   * The product never creates the state the read refuses: AT the cap, both
+   * writers that create a line refuse the 501st — before the classification
+   * is touched and with no command record kept — and after one line is
+   * removed the same write goes through, whose exact replay then still wins
+   * at the cap, because the bound is checked inside the idempotent section.
+   */
+  test("at the live-line cap both writers refuse a new line with no classification or command artifact; one removal permits it, and its exact replay still wins", async () => {
+    const seed = await seedDealer("capWriters");
+    const companyId = await createCompany(seed, "Two Fees", COMPANY_B_TEMPLATES);
+    const applicationId = await createApplicationFor(seed, companyId);
+    const seeded = await seedLiveLines(seed, applicationId, MAX_LIVE_DEAL_FEE_LINES);
+    // A legacy classification: what a refused write must leave exactly as it is.
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { accountingClassification: "CLASSIFIED" }));
+    const stateOf = () =>
+      seed.t.run(async (ctx) => ({
+        app: await ctx.db.get(applicationId),
+        commands: (await ctx.db.query("commandIdempotency").collect()).length,
+        overrides: (await ctx.db.query("financeApplicationOverrides").collect()).length,
+        live: (await ctx.db
+          .query("financeDealFees")
+          .withIndex("by_application_voidedAt", (q) => q.eq("applicationId", applicationId).eq("voidedAt", undefined))
+          .collect()).length,
+      }));
+    const before = await stateOf();
+    expect(before.live).toBe(MAX_LIVE_DEAL_FEE_LINES);
+
+    const atCap = new RegExp(`already has ${MAX_LIVE_DEAL_FEE_LINES} live cost lines`);
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
+        orgId: seed.orgId,
+        applicationId,
+        feeType: "OTHER_CLOSING_EXPENSE",
+        paidBy: "DEALER",
+        paidTo: "OTHER",
+        accountingTreatment: "SELLING_EXPENSE",
+        deductedFromSettlement: false,
+        actualAmountMinor: jod(5),
+        expectedCurrency: "JOD",
+        idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(atCap);
+    await expect(recordTemplateActual(seed, applicationId, 0, "APPRAISAL_FEE", jod(80))).rejects.toThrow(atCap);
+    expect(await stateOf()).toEqual(before);
+
+    // One removal makes room; the configured actual is recorded, and THAT
+    // write is the one that clears the classification.
+    await voidLine(seed, seeded[0]);
+    const key = crypto.randomUUID();
+    const feeId = await recordTemplateActual(seed, applicationId, 0, "APPRAISAL_FEE", jod(80), { idempotencyKey: key });
+    const recorded = await stateOf();
+    expect(recorded.live).toBe(MAX_LIVE_DEAL_FEE_LINES);
+    expect(recorded.app?.accountingClassification).toBe("PENDING_CLASSIFICATION");
+    expect(recorded.commands).toBe(before.commands + 1);
+
+    // Full again — and the exact replay of the line just written still wins.
+    expect(await recordTemplateActual(seed, applicationId, 0, "APPRAISAL_FEE", jod(80), { idempotencyKey: key })).toBe(feeId);
+    expect(await stateOf()).toEqual(recorded);
+  });
+});
+/**
+ * A policy with more fees than a deal can carry live is a deal that can never
+ * close. It is refused where the policy is WRITTEN or FROZEN, before any
+ * write; a policy already on the record is never rewritten or truncated —
+ * a legacy company past the cap still takes an unrelated edit and is
+ * repaired by an explicit compliant list. A deal already frozen past the
+ * configuration limit is held only to closure CAPACITY (the live-line cap):
+ * within it the deal is still closeable; past it the closure door refuses
+ * with the cause.
+ */
+describe("the fee-template cap", () => {
+  const templates = (count: number): Template[] =>
+    Array.from({ length: count }, (_, n) => ({ ...COMPANY_A_TEMPLATES[1], description: `Fee ${n}` }));
+  const companyFields = { profitRate: 5, maxTermMonths: 60, gracePeriodMonths: 0, isActive: true, defaultLtvPercent: 80 };
+  const tooMany = new RegExp(`${MAX_FEE_TEMPLATES + 1} fee templates is more than the ${MAX_FEE_TEMPLATES} one finance company can configure`);
+  const policyTables = (seed: Seed) =>
+    seed.t.run(async (ctx) => ({
+      companies: await ctx.db.query("financeCompanies").collect(),
+      versions: await ctx.db.query("financeCompanyRuleVersions").collect(),
+      applications: await ctx.db.query("financeApplications").collect(),
+    }));
+
+  test("create and an explicit update accept the cap and refuse one past it before any write", async () => {
+    expect(MAX_FEE_TEMPLATES).toBeLessThan(MAX_LIVE_DEAL_FEE_LINES);
+    const seed = await seedDealer("templateCap");
+    const companyId = await createCompany(seed, "At the cap", templates(MAX_FEE_TEMPLATES));
+    await seed.asUser.mutation(api.finance.updateCompany, {
+      orgId: seed.orgId,
+      id: companyId,
+      name: "At the cap",
+      ...companyFields,
+      feeTemplates: templates(MAX_FEE_TEMPLATES),
+    });
+    const before = await policyTables(seed);
+    expect(before.companies[0]?.feeTemplates).toHaveLength(MAX_FEE_TEMPLATES);
+
+    await expect(createCompany(seed, "Past the cap", templates(MAX_FEE_TEMPLATES + 1))).rejects.toThrow(tooMany);
+    await expect(
+      seed.asUser.mutation(api.finance.updateCompany, {
+        orgId: seed.orgId,
+        id: companyId,
+        name: "At the cap",
+        ...companyFields,
+        feeTemplates: templates(MAX_FEE_TEMPLATES + 1),
+      })
+    ).rejects.toThrow(tooMany);
+    expect(await policyTables(seed)).toEqual(before);
+  });
+
+  test("a legacy company past the cap: an unrelated edit still saves with the list verbatim, no application can freeze it, and an explicit compliant list repairs it", async () => {
+    const seed = await seedDealer("legacyOversize");
+    const oversized = templates(MAX_FEE_TEMPLATES + 1);
+    const companyId = await seed.t.run((ctx) =>
+      ctx.db.insert("financeCompanies", { orgId: seed.orgId, name: "Legacy", ...companyFields, feeTemplates: oversized })
+    );
+
+    await seed.asUser.mutation(api.finance.updateCompany, { orgId: seed.orgId, id: companyId, name: "Legacy, renamed", ...companyFields });
+    const renamed = await seed.t.run((ctx) => ctx.db.get(companyId));
+    expect(renamed?.name).toBe("Legacy, renamed");
+    expect(renamed?.feeTemplates).toEqual(oversized);
+
+    const quoteId = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerId,
+      vehicleId: seed.vehicleId,
+      vehiclePrice: 20_000,
+      downPayment: 0,
+      termMonths: 48,
+      mode: "CONFIGURED_FINANCE_COMPANY",
+      companyId,
+      totalFinancedAmount: 20_000,
+    });
+    await expect(seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId })).rejects.toThrow(tooMany);
+    expect((await policyTables(seed)).applications).toEqual([]);
+
+    await seed.asUser.mutation(api.finance.updateCompany, { orgId: seed.orgId, id: companyId, name: "Legacy, renamed", ...companyFields, feeTemplates: templates(2) });
+    const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId });
+    expect((await seed.t.run((ctx) => ctx.db.get(applicationId)))?.companyRuleSnapshot?.feeTemplates).toHaveLength(2);
+  });
+
+  test("a deal already frozen past closure capacity is refused at the closure door with the cause, not a count of unrecorded fees", async () => {
+    const seed = await seedDealer("frozenOversize");
+    const companyId = await createCompany(seed, "Two Fees", COMPANY_B_TEMPLATES);
+    const applicationId = await createApplicationFor(seed, companyId);
+    // Frozen before any cap existed, past what a deal can ever carry live.
+    // (One past the CONFIGURATION limit would still be closeable and is not
+    // what this door refuses.)
+    await seed.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      if (!app?.companyRuleSnapshot) throw new Error("no snapshot");
+      await ctx.db.patch(applicationId, {
+        companyRuleSnapshot: { ...app.companyRuleSnapshot, feeTemplates: templates(MAX_LIVE_DEAL_FEE_LINES + 1) },
+      });
+    });
+    await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+      orgId: seed.orgId,
+      applicationId,
+      legalInvoiceAmountMinor: jod(20_000),
+      legalInvoiceNumber: "INV-OVERSIZE",
+      legalInvoiceDate: Date.now(),
+      issuedTo: "FINANCE_COMPANY",
+    });
+    const feeId = await recordTemplateActual(seed, applicationId, 0, "LICENSING", jod(250));
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "checked" });
+    const classify = () =>
+      seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, { orgId: seed.orgId, applicationId, notes: "x" });
+
+    await expect(classify()).rejects.toThrow(
+      new RegExp(`frozen finance-company policy configures ${MAX_LIVE_DEAL_FEE_LINES + 1} fees, more than the ${MAX_LIVE_DEAL_FEE_LINES} live cost lines`)
+    );
+
+    // Control: one past the CONFIGURATION limit is within capacity — still
+    // closeable, so the door asks for the unrecorded fees, not the cause above.
+    await seed.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      if (!app?.companyRuleSnapshot) throw new Error("no snapshot");
+      await ctx.db.patch(applicationId, {
+        companyRuleSnapshot: { ...app.companyRuleSnapshot, feeTemplates: templates(MAX_FEE_TEMPLATES + 1) },
+      });
+    });
+    await expect(classify()).rejects.toThrow(new RegExp(`^${MAX_FEE_TEMPLATES} fee\\(s\\) configured by this deal's finance company have no actual`));
   });
 });
 

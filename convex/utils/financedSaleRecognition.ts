@@ -9,6 +9,7 @@ import {
 } from "./financedSalePostingPlan";
 import {
   assertConfiguredFeesRecorded,
+  loadActiveFees,
   settlementDeductedActualMinor,
   settlementDeductedFees,
 } from "./settlementDeductions";
@@ -24,6 +25,10 @@ import { toMinorUnits } from "./money";
  * none is inferred from the gap between two others, and there is no partial
  * result: either the whole plan is derivable or finalization stops before it has
  * written anything.
+ *
+ * One refusal here is NOT scoped to the deals the plan covers: a configured
+ * fee with no actual recorded stops finalization on every route, before the
+ * coverage question is asked. See `resolveFinancedSalePlan`.
  */
 
 /** Deals this model covers. Everything else posts the way it always did. */
@@ -62,19 +67,29 @@ export async function resolveFinancedSalePlan(
     depositTreatment?: string;
   }
 ): Promise<FinancedSalePostingPlan | undefined> {
+  // ONE bounded read of the deal's live cost lines serves every rule below;
+  // the rows are handed on, never read again, so the completeness gate and
+  // the deductions the plan posts from are judged on the same rows.
+  const liveFees = await loadActiveFees(ctx, app._id);
+
+  // Every fee the finance company's FROZEN policy configures must have an
+  // actual on the record before the deal can close — on EVERY route, which
+  // is why this runs before the coverage question below. A direct-route deal
+  // is never asked for a classification, so this is the only door its
+  // configured fees are checked at; a through-dealership deal was checked
+  // when it was classified, and is checked again here rather than trusted
+  // from the `CLASSIFIED` flag, because a deal classified before
+  // configured-fee completeness existed carries a flag that was valid under
+  // the older rule, and the plan reads recorded deductions only — it would
+  // have posted the sale with every configured position unrecorded
+  // (Codex-high MEDIUM on 229608039). A deal whose snapshot configures
+  // nothing — a cash sale, a manual financier, no company — passes through
+  // untouched. Before the first write, like every other refusal here.
+  assertConfiguredFeesRecorded(app.companyRuleSnapshot, liveFees, "finalizing");
+
   if (!financedSaleRecognitionApplies(app, opts)) return undefined;
 
-  // The stronger closure rule, re-checked here rather than trusted from the
-  // `CLASSIFIED` flag finalization has already required (Codex-high MEDIUM on
-  // 229608039). A deal classified before configured-fee completeness existed
-  // carries a flag that was valid under the older rule; this plan reads
-  // recorded deductions only, so it would have posted the sale with every
-  // configured checklist position unrecorded. Same population as this plan —
-  // the one whose classification is finalization's evidence — and before the
-  // first write, like every other refusal in this function.
-  await assertConfiguredFeesRecorded(ctx, app, "finalizing");
-
-  const fees = await settlementDeductedFees(ctx, app._id);
+  const fees = settlementDeductedFees(liveFees);
   // The plan settles in `opts.currency` (the deal's pinned denomination at
   // finalize). A deducted line recorded in any other currency refuses here,
   // before the receivable is opened for a figure that mixed fils and cents.

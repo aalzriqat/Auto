@@ -4,6 +4,7 @@ import { mutation } from "./functions";
 import { Id } from "./_generated/dataModel";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { assertFeeTemplatesWithinLimit } from "./utils/dealCostLimits";
 import {
   assertMinorAmount,
   assertPercent,
@@ -232,6 +233,7 @@ export const createCompany = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireOwner(ctx, args.orgId);
     assertDealerRulesValid(args);
+    assertFeeTemplatesWithinLimit(args.feeTemplates, "Creating this finance company");
     const acceptedStatuses = await sanitizeAcceptedStatuses(ctx, args.orgId, args.acceptedStatuses);
     const companyId = await ctx.db.insert("financeCompanies", {
       ...args,
@@ -266,6 +268,12 @@ export const updateCompany = mutation({
 
     const existing = await ctx.db.get(id);
     if (!existing || existing.orgId !== orgId) throw new ConvexError("Not found");
+    // Only a list the caller SENDS is held to the template cap. A company
+    // already past it (frozen before the cap existed) still takes an edit
+    // that leaves the list alone — carried verbatim by the merge below, never
+    // truncated — and is repaired by the first edit that sends a compliant
+    // list. Refused before any write, like the rest of the validation.
+    assertFeeTemplatesWithinLimit(args.feeTemplates, "Saving these fee templates");
     // Writes back the sanitized list, so a company carrying ids of
     // since-deleted statuses is repaired the first time it is saved.
     const acceptedStatuses = await sanitizeAcceptedStatuses(ctx, orgId, updates.acceptedStatuses);

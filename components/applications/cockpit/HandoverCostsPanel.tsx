@@ -583,23 +583,13 @@ export function HandoverCostsPanel({
               <div>
                 <dt className="text-xs text-muted-foreground">{t("CostsExpectedTotal")}</dt>
                 <dd className="font-medium">
-                  {/* From the finance company's frozen policy when the deal
-                      carries one; a deal that configures nothing says so
-                      rather than showing a zero. Without a checklist (older
-                      payloads) the lines' own estimates stand in. */}
-                  {expected ? (
-                    expected.expectedTotalMinor === null ? (
-                      <span className="font-normal text-muted-foreground">{t("FactUnavailable")}</span>
-                    ) : (
-                      <bdi className="tabular-nums" dir="ltr">
-                        {money(expected.expectedTotalMinor, expected.currency)}
-                      </bdi>
-                    )
-                  ) : (
-                    <bdi className="tabular-nums" dir="ltr">
-                      {money(costs.summary.estimatedTotalMinor, denomination.code)}
-                    </bdi>
-                  )}
+                  <ExpectedTotal
+                    expected={expected}
+                    estimatedTotalMinor={costs.summary.estimatedTotalMinor}
+                    denominationCode={denomination.code}
+                    money={money}
+                    t={t}
+                  />
                 </dd>
               </div>
               <div>
@@ -926,6 +916,47 @@ export function HandoverCostsPanel({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * The "expected" figure of the totals row. From the finance company's frozen
+ * policy when the deal carries one — a deal that configures nothing says so
+ * rather than showing a zero. Without a checklist (older payloads) the lines'
+ * own estimates stand in, in the deal's denomination.
+ *
+ * Its own component only so the panel stays inside Sonar's cognitive-
+ * complexity budget (S3776, 20 > 15 on the nested ternary this replaces);
+ * what is shown, and when, did not move.
+ */
+function ExpectedTotal({
+  expected,
+  estimatedTotalMinor,
+  denominationCode,
+  money,
+  t,
+}: Readonly<{
+  expected: HandoverExpectedCosts | null;
+  /** `summary.estimatedTotalMinor` — the lines' own estimates, summed server-side. */
+  estimatedTotalMinor: number;
+  denominationCode: string;
+  money: (minor: number, currency: string) => string;
+  t: (key: string) => string;
+}>) {
+  if (!expected) {
+    return (
+      <bdi className="tabular-nums" dir="ltr">
+        {money(estimatedTotalMinor, denominationCode)}
+      </bdi>
+    );
+  }
+  if (expected.expectedTotalMinor === null) {
+    return <span className="font-normal text-muted-foreground">{t("FactUnavailable")}</span>;
+  }
+  return (
+    <bdi className="tabular-nums" dir="ltr">
+      {money(expected.expectedTotalMinor, expected.currency)}
+    </bdi>
   );
 }
 

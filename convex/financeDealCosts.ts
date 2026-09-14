@@ -11,7 +11,9 @@ import { getOrgCurrency } from "./accounting/workflowHooks";
 import {
   assertConfiguredFeesRecorded,
   assertExpectedCurrency,
+  assertRoomForAnotherLine,
   exactTemplateLine,
+  loadActiveFees,
   resolveDealCurrency,
 } from "./utils/settlementDeductions";
 import { assertSupportedDenomination } from "./utils/money";
@@ -133,18 +135,6 @@ function assertMayUndoReconciliation(
   throw new ConvexError(
     `${action} needs the permission to confirm finance disbursements, because somebody has already reconciled it.`
   );
-}
-
-/** Live cost lines: everything not voided. */
-async function activeFeesFor(
-  ctx: QueryCtx | MutationCtx,
-  applicationId: Id<"financeApplications">
-): Promise<Array<Doc<"financeDealFees">>> {
-  const rows = await ctx.db
-    .query("financeDealFees")
-    .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
-    .collect();
-  return rows.filter((row) => row.voidedAt === undefined);
 }
 
 async function custodyFor(
@@ -687,13 +677,17 @@ export const listDealCosts = query({
       APPLICATION_NOT_FOUND
     );
 
-    const fees = await activeFeesFor(ctx, args.applicationId);
+    // The same bounded read the writers make, and the ONE thing this read
+    // refuses on: past `MAX_LIVE_DEAL_FEE_LINES` the screen would be showing
+    // a prefix of a deal's costs that reads like the whole of them.
+    const fees = await loadActiveFees(ctx, args.applicationId);
     const custodyRows = await custodyFor(ctx, args.applicationId);
 
-    // The deal's denomination as the WRITERS would resolve it. A read never
-    // refuses (a query that throws blanks the screen), so a contradiction is
-    // reported in the payload instead: the per-line facts stay readable in
-    // their own currency, and every scalar total is withheld with the reason.
+    // The deal's denomination as the WRITERS would resolve it. Short of that
+    // row cap a read does not refuse (a query that throws blanks the screen),
+    // so a contradiction is reported in the payload instead: the per-line
+    // facts stay readable in their own currency, and every scalar total is
+    // withheld with the reason.
     const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
     const lineCurrencies = [...new Set(fees.map((fee) => fee.currency))];
     const foreignLineCurrencies = lineCurrencies.filter((code) => code !== currency);
@@ -894,6 +888,12 @@ export const recordDealFee = mutation({
         }),
       },
       async () => {
+        // Inside the idempotent section, before anything is written: an
+        // exact replay of a line already recorded returns it above this,
+        // and a NEW line on a deal already at the live-line cap is refused
+        // with the classification untouched and no command record kept.
+        assertRoomForAnotherLine(await loadActiveFees(ctx, args.applicationId), "recording this cost");
+
         await invalidateClassification(
           ctx, app, user._id,
           "A new cost was added to the deal after its accounting was classified."
@@ -1072,16 +1072,28 @@ export const recordTemplateFeeActual = mutation({
         // Inside the idempotent section on purpose: a replay of the SAME
         // intent returns the line it already wrote before reaching this, while
         // a NEW intent against a position that already has a live line is
-        // refused here and rolls back with nothing committed.
-        const live = await activeFeesFor(ctx, args.applicationId);
-        const existing = live.find(
-          (fee) => fee.source === "COMPANY_TEMPLATE" && fee.templateIndex === args.templateIndex
-        );
+        // refused here and rolls back with nothing committed. Proven on the
+        // live-position index with every field an equality and `.unique()`:
+        // a second live line at one position is a state this writer never
+        // creates, and if one is ever found the read refuses rather than picks.
+        const existing = await ctx.db
+          .query("financeDealFees")
+          .withIndex("by_application_source_templateIndex_voidedAt", (q) =>
+            q
+              .eq("applicationId", args.applicationId)
+              .eq("source", "COMPANY_TEMPLATE")
+              .eq("templateIndex", args.templateIndex)
+              .eq("voidedAt", undefined)
+          )
+          .unique();
         if (existing) {
           throw new ConvexError(
             "An actual is already recorded for this configured fee. Edit that line to change the amount, or remove it first."
           );
         }
+        // Same bound as `recordDealFee`, in the same place: before the
+        // classification is touched or the line exists.
+        assertRoomForAnotherLine(await loadActiveFees(ctx, args.applicationId), "recording this cost");
 
         await invalidateClassification(
           ctx, app, user._id,
@@ -1904,7 +1916,7 @@ export const classifyDealAccounting = mutation({
       );
     }
 
-    const fees = await activeFeesFor(ctx, args.applicationId);
+    const fees = await loadActiveFees(ctx, args.applicationId);
     const summary = summarizeFees(fees);
     // A deal with no live cost lines is the state "nobody itemized anything",
     // which `summarizeFees` deliberately reports as NOT fully reconciled —
@@ -1929,9 +1941,9 @@ export const classifyDealAccounting = mutation({
     }
     // Every fee the finance company's FROZEN policy configures needs an actual
     // on the record too — the counts above cannot see a configured fee nobody
-    // recorded. One rule for this door and for finalization's; see
-    // `assertConfiguredFeesRecorded`.
-    await assertConfiguredFeesRecorded(ctx, app, "closing");
+    // recorded. One rule for this door and for finalization's, judged on the
+    // rows already read above; see `assertConfiguredFeesRecorded`.
+    assertConfiguredFeesRecorded(app.companyRuleSnapshot, fees, "closing");
 
     // Read the arithmetic, not the stored status. A record can be closed and
     // still be unbalanced — a late receipt against a RECONCILED record is
