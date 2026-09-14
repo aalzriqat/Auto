@@ -154,6 +154,7 @@ import type * as utils_commitmentCutover from "../utils/commitmentCutover.js";
 import type * as utils_commitmentKernel from "../utils/commitmentKernel.js";
 import type * as utils_commitmentSources from "../utils/commitmentSources.js";
 import type * as utils_commitmentWriters from "../utils/commitmentWriters.js";
+import type * as utils_dealCostLimits from "../utils/dealCostLimits.js";
 import type * as utils_dedup from "../utils/dedup.js";
 import type * as utils_defaultChart from "../utils/defaultChart.js";
 import type * as utils_depositAllocation from "../utils/depositAllocation.js";
@@ -383,6 +384,7 @@ declare const fullApi: ApiFromModules<{
   "utils/commitmentKernel": typeof utils_commitmentKernel;
   "utils/commitmentSources": typeof utils_commitmentSources;
   "utils/commitmentWriters": typeof utils_commitmentWriters;
+  "utils/dealCostLimits": typeof utils_dealCostLimits;
   "utils/dedup": typeof utils_dedup;
   "utils/defaultChart": typeof utils_defaultChart;
   "utils/depositAllocation": typeof utils_depositAllocation;
