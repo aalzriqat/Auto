@@ -165,6 +165,7 @@ import type * as utils_env from "../utils/env.js";
 import type * as utils_errors from "../utils/errors.js";
 import type * as utils_expenseAmortization from "../utils/expenseAmortization.js";
 import type * as utils_facebookApi from "../utils/facebookApi.js";
+import type * as utils_financeApplicationProjection from "../utils/financeApplicationProjection.js";
 import type * as utils_financeStatuses from "../utils/financeStatuses.js";
 import type * as utils_financedSalePostingPlan from "../utils/financedSalePostingPlan.js";
 import type * as utils_financedSaleRecognition from "../utils/financedSaleRecognition.js";
@@ -393,6 +394,7 @@ declare const fullApi: ApiFromModules<{
   "utils/errors": typeof utils_errors;
   "utils/expenseAmortization": typeof utils_expenseAmortization;
   "utils/facebookApi": typeof utils_facebookApi;
+  "utils/financeApplicationProjection": typeof utils_financeApplicationProjection;
   "utils/financeStatuses": typeof utils_financeStatuses;
   "utils/financedSalePostingPlan": typeof utils_financedSalePostingPlan;
   "utils/financedSaleRecognition": typeof utils_financedSaleRecognition;

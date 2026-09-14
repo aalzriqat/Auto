@@ -1120,7 +1120,7 @@ export const salesEn = {
    * control with no named owner is a dead end.
    */
   DealPurchaseLtvNeedsApprover:
-    "This deal was created before its finance company had a purchase LTV, and a deal keeps the rules it was created under. A manager must record the rate the finance company confirmed for this deal before the quotation can be recorded.",
+    "This deal was created before its finance company had a purchase LTV, and a deal keeps the rules it was created under. Someone who can both approve finance applications and view finance figures must record the rate the finance company confirmed for this deal before the quotation can be recorded.",
   ApprovedPurchaseLtvDrivesSplit:
     "This rate divides the approved amount into the financed and unfinanced portions.",
   RecordApprovedPurchaseAction: "Record approved amount",
@@ -2075,7 +2075,7 @@ export const salesAr = {
     "نسبة قيمة المركبة التي تشتريها شركة التمويل، لهذه الصفقة فقط. أما ضبط النسبة على الشركة نفسها فيسري على الصفقات القادمة لا على هذه.",
   DealPurchaseLtvInvalid: "أدخل نسبة أكبر من صفر ولا تتجاوز 100.",
   DealPurchaseLtvNeedsApprover:
-    "أُنشئت هذه الصفقة قبل تسجيل نسبة الشراء لشركة التمويل، وتبقى كل صفقة خاضعة للقواعد التي أُنشئت بها. يجب أن يسجّل المدير النسبة التي أقرّتها شركة التمويل لهذه الصفقة قبل تسجيل عرض السعر.",
+    "أُنشئت هذه الصفقة قبل تسجيل نسبة الشراء لشركة التمويل، وتبقى كل صفقة خاضعة للقواعد التي أُنشئت بها. يجب أن يسجّل النسبةَ التي أقرّتها شركة التمويل لهذه الصفقة شخصٌ يملك صلاحية اعتماد طلبات التمويل والاطلاع على الأرقام المالية معًا، قبل تسجيل عرض السعر.",
   ApprovedPurchaseLtvDrivesSplit:
     "هذه النسبة هي التي تقسّم المبلغ المعتمد إلى جزء مموَّل وآخر غير مموَّل.",
   RecordApprovedPurchaseAction: "تسجيل المبلغ المعتمد",
