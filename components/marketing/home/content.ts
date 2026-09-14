@@ -360,6 +360,8 @@ export const ACCT_FEATURES: readonly AcctFeature[] = [
 
 export const GROW = {
   eyebrow: { en: "Growth", ar: "النمو" },
+  pause: { en: "Pause rotation", ar: "إيقاف التدوير مؤقتاً" },
+  play: { en: "Resume rotation", ar: "استئناف التدوير" },
   title: { en: "Grow beyond the showroom floor", ar: "انطلق خارج صالة العرض" },
   lede: {
     en: "A bilingual public website, a unified social inbox, and internal team chat — everything that touches a customer or a coworker, in one place.",

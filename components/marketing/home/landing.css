@@ -310,7 +310,7 @@ html[lang="ar"] .lv2 .pill{text-transform:none;letter-spacing:normal;font-size:.
   .lv2 .floor-stage{min-height:auto;display:block}
   .lv2 .floor-copy{background:none;padding:0 0 30px;max-width:none}
   .lv2 .floor-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px}
-  .lv2 .vcard{position:static!important;width:auto;--fx:0!important;--fy:24px!important;--fr:0deg!important;--rr:0deg!important}
+  .lv2 .vcard{position:static!important;width:auto;--fx:0px!important;--fy:24px!important;--fr:0deg!important;--rr:0deg!important}
 }
 
 /* ===========================================================
@@ -516,6 +516,13 @@ html[dir="rtl"] .lv2 .slot[data-pos="-1"]{transform:translateX(158px) rotate(7de
 html[dir="rtl"] .lv2 .slot[data-pos="1"]{transform:translateX(-158px) rotate(-7deg) scale(.86)}
 html[dir="rtl"] .lv2 .slot[data-pos="2"]{transform:translateX(-292px) rotate(-13deg) scale(.72)}
 .lv2 .carousel-caption{text-align:center;margin-top:22px;min-height:56px}
+/* WCAG 2.2.2: moving content that runs longer than five seconds needs a pause */
+.lv2 .carousel-ctl{display:flex;justify-content:center;margin-top:10px}
+.lv2 .carousel-ctl button{width:36px;height:36px;border-radius:50%;background:var(--surface);
+  border:1px solid var(--line);display:grid;place-items:center;box-shadow:var(--shadow-s);
+  transition:transform .3s var(--spring),border-color .2s}
+.lv2 .carousel-ctl button:hover{transform:scale(1.08);border-color:var(--primary)}
+.lv2 .carousel-ctl svg{width:14px;height:14px;fill:var(--ink-strong)}
 .lv2 .carousel-caption b{display:block;font-size:1.15rem;color:var(--ink-strong);font-weight:750}
 .lv2 .carousel-caption span{font-size:.88rem;color:var(--muted)}
 .lv2 .carousel-caption b,.lv2 .carousel-caption span{transition:opacity .3s,transform .3s}

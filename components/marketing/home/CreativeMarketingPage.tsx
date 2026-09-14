@@ -661,12 +661,13 @@ function IntegrationsCarousel({ locale, reduced }: { locale: string; reduced: bo
   const [index, setIndex] = useState(0);
   const [shown, setShown] = useState(0);
   const [swap, setSwap] = useState(false);
+  const [paused, setPaused] = useState(false);
   const n = INTEGRATIONS.length;
   /* the caption swap is a 300ms timer; hold its id so unmount can clear it */
   const swapTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(swapTimer.current), []);
 
-  useTicker(2600, !reduced, () => {
+  useTicker(2600, !reduced && !paused, () => {
     const next = (index + 1) % n;
     setIndex(next);
     setSwap(true);
@@ -696,6 +697,20 @@ function IntegrationsCarousel({ locale, reduced }: { locale: string; reduced: bo
       <div className={swap ? "carousel-caption swap" : "carousel-caption"} aria-live="polite">
         <b>{pick(locale, item.name)}</b>
         <span>{pick(locale, item.sub)}</span>
+      </div>
+      <div className="carousel-ctl">
+        <button
+          type="button"
+          aria-pressed={paused}
+          aria-label={pick(locale, paused ? GROW.play : GROW.pause)}
+          onClick={() => setPaused((p) => !p)}
+        >
+          {paused ? (
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l12-7.5z" /></svg>
+          ) : (
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4.5h4.5v15H6zM13.5 4.5H18v15h-4.5z" /></svg>
+          )}
+        </button>
       </div>
     </>
   );
@@ -802,7 +817,7 @@ function Faq({ locale }: { locale: string }) {
               <span>{pick(locale, f.q)}</span>
               <span className="plus" aria-hidden="true" />
             </button>
-            <div className="a" id={panelId}>
+            <div className="a" id={panelId} aria-hidden={!isOpen}>
               <p>{pick(locale, f.a)}</p>
             </div>
           </div>
