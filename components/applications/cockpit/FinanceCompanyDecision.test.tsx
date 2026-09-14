@@ -132,6 +132,9 @@ function wiring(overrides: WiringOverrides = {}): FinanceDecisionWiring {
     currency: "JOD",
     canRecordQuotation: true,
     canRecordApproval: true,
+    // Defaults to the FULL authority so existing cases keep their meaning; the
+    // cases that care about the narrower LTV authority set it explicitly.
+    canEstablishLtvPercent: true,
     isOwnDeal: false,
     calculation: { state: "UNAVAILABLE" },
     appraisal: null,
@@ -666,14 +669,50 @@ describe("recording the submitted quotation", () => {
    * unblocks it, because a withdrawn action with no named owner is a dead end.
    */
   test("the action is withdrawn from a caller who cannot set the deal's missing rate", () => {
-    renderCockpit(wiring({ canRecordApproval: false, facts: { ltvMissing: true } }));
+    renderCockpit(
+      wiring({
+        canRecordApproval: false,
+        canEstablishLtvPercent: false,
+        facts: { ltvMissing: true },
+      })
+    );
 
     expect(cardButton("RecordQuotationAction")).toBeUndefined();
     expect(screen.getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
   });
 
+  /**
+   * THE CASE THE NEW AUTHORITY MODEL ADDS, and the one a fix keyed on the old
+   * capability would fail (SCRUM-117, 2026-09-13 15:33).
+   *
+   * A default MANAGER still records approvals - `canRecordApproval` is true -
+   * and can no longer establish the deal's rate, because that needs
+   * `view:finance` as well. Keyed on the approval capability the card would
+   * offer them a dialog the server refuses; keyed on the narrower one it tells
+   * them who unblocks the deal.
+   */
+  test("a default MANAGER, who approves but cannot establish the rate, is told who can", () => {
+    renderCockpit(
+      wiring({
+        canRecordApproval: true,
+        canEstablishLtvPercent: false,
+        facts: { ltvMissing: true },
+      })
+    );
+
+    expect(cardButton("RecordQuotationAction")).toBeUndefined();
+    expect(screen.getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
+    expect(screen.queryByText("FinanceCompanyLtvMissing")).toBeNull();
+  });
+
   test("and is offered once the rate is not the thing standing in the way", () => {
-    renderCockpit(wiring({ canRecordApproval: false, facts: { ltvMissing: false } }));
+    renderCockpit(
+      wiring({
+        canRecordApproval: false,
+        canEstablishLtvPercent: false,
+        facts: { ltvMissing: false },
+      })
+    );
 
     // The withdrawal above is about the missing RATE, not about the permission:
     // recording what was sent is ordinary sales work on a configured deal.

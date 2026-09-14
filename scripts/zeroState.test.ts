@@ -9,6 +9,7 @@ import { describe, expect, test } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import {
+  CONVEX_DEPLOY_KEY_SELECTOR_NOTICE,
   CRON_SELF_REPORT_SOURCES,
   DIAGNOSTIC_ROW_BOUND,
   HEARTBEAT_JOB_NAMES,
@@ -417,6 +418,57 @@ describe("diagnostic rows — provenance is validated row by row, from the CLI's
     expect(validateDiagnosticRows("webhookLogs", "", "", null).state).toBe("UNREADABLE");
     expect(validateDiagnosticRows("webhookLogs", NOISE, "There are no documents in this table.\n", 0)).toMatchObject({ state: "UNREADABLE", reasons: [expect.stringMatching(/refusing to reconcile silence/)] });
     expect(validateDiagnosticRows("webhookLogs", CRON_REPORT_ROW + "\n", "✖ something\n", 0).state).toBe("UNREADABLE");
+  });
+});
+
+/**
+ * Run 34705827721 (2026-09-12, the first production deploy-key run of this
+ * verifier) failed as UNREADABLE on every marker and bounded read: in
+ * deploy-key mode the CLI ignores the `--prod` selector and says so on stderr
+ * before every command (convex 1.42.1 `cli/lib/api.ts`, `logWarning` under
+ * `source === "deployKey"`). Reproduced read-only against
+ * `clever-mockingbird-719` with a probe key. That ONE exact line is noise;
+ * nothing else on stderr becomes tolerable because of it.
+ */
+describe("deploy-key mode — the CLI's selector notice is the one tolerated stderr line", () => {
+  const ENV_ABSENT_PROD = '✖ Environment variable "AUTOFLOW_DEPLOYMENT_CLASS" not found (on prod deployment clever-mockingbird-719)\n';
+  test("the notice is pinned verbatim", () => {
+    expect(CONVEX_DEPLOY_KEY_SELECTOR_NOTICE).toBe("Ignoring `--prod`, `--preview-name`, or `--deployment-name` flags and using deployment from CONVEX_DEPLOY_KEY");
+  });
+  test("marker: notice + the not-found sentence (the observed 0/2 shape) is a VERIFIED absence naming the prod deployment", () => {
+    expect(classifyMarkerRead("", CONVEX_DEPLOY_KEY_SELECTOR_NOTICE + "\n" + ENV_ABSENT_PROD, 0)).toEqual({ state: "VERIFIED_ABSENT", deploymentKind: "prod", deployment: "clever-mockingbird-719" });
+    expect(classifyMarkerRead(NOISE, NOISE + CONVEX_DEPLOY_KEY_SELECTOR_NOTICE + "\n" + ENV_ABSENT_PROD, 0).state).toBe("VERIFIED_ABSENT");
+  });
+  test("marker: notice + a value on stdout is PRESENT (a marked deployment still fails, it is not hidden behind the notice)", () => {
+    expect(classifyMarkerRead("preview\n", CONVEX_DEPLOY_KEY_SELECTOR_NOTICE + "\n", 0)).toEqual({ state: "PRESENT", value: "preview" });
+  });
+  test("marker: the notice alone, or the notice plus anything else, stays UNREADABLE", () => {
+    expect(classifyMarkerRead("", CONVEX_DEPLOY_KEY_SELECTOR_NOTICE + "\n", 0)).toMatchObject({ state: "UNREADABLE", reason: /silence/ });
+    expect(classifyMarkerRead("", CONVEX_DEPLOY_KEY_SELECTOR_NOTICE + "\n✖ something\n", 0).state).toBe("UNREADABLE");
+    expect(classifyMarkerRead("", CONVEX_DEPLOY_KEY_SELECTOR_NOTICE + "\n" + ENV_ABSENT_PROD + "✖ something\n", 0).state).toBe("UNREADABLE");
+  });
+  test("bounded read: the notice as the only stderr line is not a partial read; any other line still is", () => {
+    expect(validateDiagnosticRows("webhookLogs", CRON_REPORT_ROW + "\n", CONVEX_DEPLOY_KEY_SELECTOR_NOTICE + "\n", 0)).toMatchObject({ state: "VERIFIED", rows: 1 });
+    expect(validateDiagnosticRows("webhookLogs", CRON_REPORT_ROW + "\n", CONVEX_DEPLOY_KEY_SELECTOR_NOTICE + "\n✖ something\n", 0).state).toBe("UNREADABLE");
+    expect(validateDiagnosticRows("webhookLogs", CRON_REPORT_ROW + "\n", "✖ something\n" + CONVEX_DEPLOY_KEY_SELECTOR_NOTICE + "\n", 0).state).toBe("UNREADABLE");
+  });
+  test("near-misses are NOT the notice: a prefix, a suffix, a different flag list, or a different source", () => {
+    for (const variant of [
+      "✖ " + CONVEX_DEPLOY_KEY_SELECTOR_NOTICE,
+      CONVEX_DEPLOY_KEY_SELECTOR_NOTICE + " (deprecated)",
+      CONVEX_DEPLOY_KEY_SELECTOR_NOTICE.replace("`--prod`, ", ""),
+      "Ignoring `--prod`, `--preview-name`, or `--deployment-name` flags since this command was run with --url and --admin-key",
+      "The `--deployment` flag cannot be used with CONVEX_DEPLOY_KEY.",
+    ]) {
+      expect(classifyMarkerRead("", variant + "\n" + ENV_ABSENT_PROD, 0).state, variant).toBe("UNREADABLE");
+      expect(validateDiagnosticRows("webhookLogs", CRON_REPORT_ROW + "\n", variant + "\n", 0).state, variant).toBe("UNREADABLE");
+    }
+  });
+  test("the limit-one read and the listing tolerate the notice the same way — and still refuse silence", () => {
+    expect(classifyTableRead("", CONVEX_DEPLOY_KEY_SELECTOR_NOTICE + "\nThere are no documents in this table.\n", 0)).toBe("EMPTY");
+    expect(classifyTableRead("", CONVEX_DEPLOY_KEY_SELECTOR_NOTICE + "\n", 0)).toBe("UNREADABLE");
+    expect(parseTableList("", CONVEX_DEPLOY_KEY_SELECTOR_NOTICE + "\nThere are no tables in the clever-mockingbird-719 deployment's database.\n", 0)).toEqual({ ok: true, tables: [] });
+    expect(parseTableList("", CONVEX_DEPLOY_KEY_SELECTOR_NOTICE + "\n", 0).ok).toBe(false);
   });
 });
 

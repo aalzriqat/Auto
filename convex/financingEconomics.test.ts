@@ -1754,11 +1754,14 @@ describe("LTV configuration", () => {
         source: "MANUAL_ENTRY",
         ltvPercent: 90,
       })
-    // The guard's OWN wording. `/approve/i` also matches the generic tenant-auth
-    // refusal "Missing required permissions: approve:finance_application", so a
-    // later change that moved this mutation behind a different permission would
-    // leave the test green while it proved a different rule.
-    ).rejects.toThrow(/may set the LTV this deal is financed at/i);
+    // The guard's OWN wording, which changed with the authority model
+    // (2026-09-13 15:33): establishing the rate now needs BOTH `view:finance`
+    // and `approve:finance_application`. Matching the guard rather than
+    // `/approve/i` still matters for the same reason as before - the generic
+    // tenant-auth refusal "Missing required permissions:
+    // approve:finance_application" would otherwise keep this green while
+    // proving a different rule.
+    ).rejects.toThrow(/needs both finance visibility and approval authority/i);
 
     // Refused BEFORE anything was written — not refused after recording the
     // quotation and leaving the rate behind, which would be the worse failure.
@@ -1776,18 +1779,47 @@ describe("LTV configuration", () => {
     });
     expect((await readApp(seed, applicationId)).appliedLtvPercent).toBe(90);
 
-    // Once it is established, the deal is an ordinary one again: the
-    // salesperson re-records the quotation at the SAME rate without needing an
-    // approver, because that rate is no longer their decision to make.
+    /**
+     * INVERTED by the owner-proxy ruling of 2026-09-13 13:48 (SCRUM-117).
+     *
+     * This used to assert that once the rate was established, SALES could
+     * re-record the quotation while re-sending the SAME rate, because a no-op
+     * moves nothing. That is sound about WRITES and unsound about READS: the
+     * accept/refuse outcome was a comparison against `appliedLtvPercent ??
+     * snapshot.defaultLtvPercent`, both FINANCE-classified, so a salesperson
+     * could search for the stored rate by watching which value stopped being
+     * refused. A permission check that answers a question about a protected
+     * value discloses it.
+     *
+     * So for a caller who cannot READ the rate, supplying one now requires
+     * approver authority unconditionally — no comparison is performed at all.
+     */
+    await expect(
+      asSales.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: jod(13_400),
+        source: "MANUAL_ENTRY",
+        ltvPercent: 90,
+      })
+    ).rejects.toThrow(/needs both finance visibility and approval authority/i);
+
+    /**
+     * And the workflow is intact, which is the half that matters: the
+     * salesperson re-records WITHOUT naming a rate, which is what the dialog
+     * actually sends. `RecordSubmittedQuotationDialog` includes `ltvPercent`
+     * only while `requiresLtvPercent` is true, and establishing the rate above
+     * made it false — so no screen ever sends the argument this now refuses.
+     */
     await asSales.mutation(api.financingEconomics.recordSubmittedQuotation, {
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(13_400),
       source: "MANUAL_ENTRY",
-      ltvPercent: 90,
     });
     const requoted = await readApp(seed, applicationId);
     expect(requoted.submittedQuotationMinor).toBe(jod(13_400));
+    // The approver's rate stands, untouched by the re-record.
     expect(requoted.appliedLtvPercent).toBe(90);
   });
 
@@ -1806,11 +1838,14 @@ describe("LTV configuration", () => {
         source: "MANUAL_ENTRY",
         ltvPercent: 70,
       })
-    // The guard's OWN wording. `/approve/i` also matches the generic tenant-auth
-    // refusal "Missing required permissions: approve:finance_application", so a
-    // later change that moved this mutation behind a different permission would
-    // leave the test green while it proved a different rule.
-    ).rejects.toThrow(/may set the LTV this deal is financed at/i);
+    // The guard's OWN wording, which changed with the authority model
+    // (2026-09-13 15:33): establishing the rate now needs BOTH `view:finance`
+    // and `approve:finance_application`. Matching the guard rather than
+    // `/approve/i` still matters for the same reason as before - the generic
+    // tenant-auth refusal "Missing required permissions:
+    // approve:finance_application" would otherwise keep this green while
+    // proving a different rule.
+    ).rejects.toThrow(/needs both finance visibility and approval authority/i);
 
     // The ordinary path is untouched: no rate argument, the snapshot's own rate
     // applies, and the salesperson records what was sent.
@@ -2161,7 +2196,9 @@ describe("overrides and audit", () => {
         estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
         customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
       })
-    ).rejects.toThrow(/calculator produced/i);
+    // The message no longer NAMES the calculated figure (SCRUM-117 ruling #4:
+    // errors are outputs). It still refuses, and still says why.
+    ).rejects.toThrow(/does not match the calculated figure/i);
 
     // Nothing was written: the label and the amount contradict each other, so
     // there is no version of this record worth keeping.
@@ -2299,7 +2336,9 @@ describe("overrides and audit", () => {
         source: "SYSTEM_CALCULATED",
         ...inputs,
       })
-    ).rejects.toThrow(/calculator produced/i);
+    // The message no longer NAMES the calculated figure (SCRUM-117 ruling #4:
+    // errors are outputs). It still refuses, and still says why.
+    ).rejects.toThrow(/does not match the calculated figure/i);
 
     // The application-scoped figure is accepted. That is the property worth
     // pinning: what the user is shown is what the guard takes.
@@ -4339,28 +4378,35 @@ describe("handover seals the approved amount, and the amount that was verified",
     ).rejects.toThrow(/confirm/i);
   });
 
-  test("the reconciliation queue shows SALES the approved amount unredacted", async () => {
+  test("the reconciliation queue no longer shows SALES the approved amount (SCRUM-117)", async () => {
     const { seed, applicationId } = await approvedDeal();
     const asSales = await defaultSalesCaller(seed);
     await seed.t.run((ctx) =>
       ctx.db.patch(applicationId, { needsFinancingReconciliation: true })
     );
 
-    // Why a visibility predicate could never have been the basis, proven by
-    // QUERYING the surface rather than reasoning about permissions.
+    // Why a visibility predicate could never have been the basis for a WRITE
+    // obligation — and, now, what that same surface returns instead.
     //
-    // `getEconomics` and `applications.get` both redact this field, so the
-    // predicate looked exhaustive from those two doors. `listNeedingReconciliation`
-    // authorizes on `view:finance_applications` alone and projects the raw row,
-    // so the same figure reaches a caller the predicate says cannot see it.
-    // Codex named `getEconomics` as well; that half does not reproduce — this
-    // is the surface that does.
+    // This queue authorizes on `view:finance_applications` alone and used to
+    // hand-assemble the raw row, so the approved amount reached a caller the
+    // other two doors withheld it from. It builds its row from the allowlisted
+    // projection now (SCRUM-117), so the figure is gone from this door too.
+    //
+    // The ORIGINAL point of this test is preserved and is still true: handover
+    // is not gated on who can see the figure — `salesonly` in the matrix below
+    // hands over without ever reading it. What changed is the leak, not the
+    // rule.
     const queue = await asSales.query(api.financingEconomics.listNeedingReconciliation, {
       orgId: seed.orgId,
       paginationOpts: { numItems: 10, cursor: null },
     });
     const row = queue.page.find((entry) => entry._id === applicationId);
-    expect(row?.approvedDealerPurchaseAmountMinor).toBe(jod(11_500));
+    // ANTI-VACUITY: the deal IS in the queue; the absence below is a redaction,
+    // not an empty page.
+    expect(row).toBeTruthy();
+    expect(row?.approvedDealerPurchaseAmountMinor).toBeUndefined();
+    expect(JSON.stringify(row)).not.toContain(String(jod(11_500)));
   });
 
   /**

@@ -11,8 +11,11 @@ import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import {
   requireTenantAuth,
-  redactSettlementEvidence,
+  // The finance-application read boundary (SCRUM-117): an exhaustive
+  // allowlist, not a blocklist. Every door that returns one of these rows
+  // goes through it.
 } from "./utils/tenancy";
+import { projectFinanceApplication } from "./utils/financeApplicationProjection";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
@@ -1537,7 +1540,7 @@ export const list = query({
           // same VIEW_SALES as the detail query — so redacting the three detail
           // endpoints while leaving this one open would hand the same evidence
           // to the same caller through the paginated list. The fourth door.
-          ...redactSettlementEvidence(app, role),
+          ...projectFinanceApplication(app, role),
           customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
           vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
           // Not `company ? company.name : "Cash / Direct"`. A
@@ -1621,7 +1624,7 @@ export const get = query({
      * `settlementAdviceRequiresReconciliation` ungated so a stuck deal is still
      * visible to the people who work it.
      */
-    const visibleApp = redactSettlementEvidence(app, role);
+    const visibleApp = projectFinanceApplication(app, role);
 
     const customer = await ctx.db.get(app.customerId);
     const vehicle = await ctx.db.get(app.vehicleId);
@@ -1767,7 +1770,24 @@ async function handoverEvidenceFor(
   approvedAmountIsFarFromEvidence: boolean;
   currency: { code: string; scale: number } | null;
 }> {
-  const visibleAmount = redactSettlementEvidence(app, role).approvedDealerPurchaseAmountMinor;
+  /**
+   * EVERY figure here comes from the projection, each under its OWN class.
+   *
+   * This used to derive all three from one boolean: "may this caller see the
+   * approved amount?" gated the amount AND its two addends. That was coherent
+   * while they shared a visibility class. The owner-proxy ruling of 2026-09-13
+   * split them - the approval is an APPROVAL_WORKFLOW fact, its decomposition
+   * is accounting economics behind `view:finance` - and a single derived
+   * boolean then published the composition to every role holding
+   * `approve:finance_application` or `confirm:finance_disbursement`.
+   *
+   * So the boolean is no longer allowed to speak for fields it does not
+   * classify. Each field is read from `projected`, which makes
+   * `financeApplicationProjection` the single authority rather than one of two
+   * places that have to agree.
+   */
+  const projected = projectFinanceApplication(app, role);
+  const visibleAmount = projected.approvedDealerPurchaseAmountMinor;
   const maySeeFigures = visibleAmount !== undefined;
   const appraisals = await ctx.db
     .query("financeAppraisals")
@@ -1775,10 +1795,8 @@ async function handoverEvidenceFor(
     .collect();
   return {
     approvedPurchaseAmountMinor: visibleAmount ?? null,
-    financeCompanyFundedPortionMinor: maySeeFigures
-      ? app.financeCompanyFundedPortionMinor ?? null
-      : null,
-    dealerContributionMinor: maySeeFigures ? app.dealerContributionMinor ?? null : null,
+    financeCompanyFundedPortionMinor: projected.financeCompanyFundedPortionMinor ?? null,
+    dealerContributionMinor: projected.dealerContributionMinor ?? null,
     approvedAmountIsFarFromEvidence: approvedAmountIsFarFromEvidenceFor(
       app,
       appraisals,

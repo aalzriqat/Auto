@@ -5,8 +5,16 @@ import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
-import { requireOwnedRow, requireTenantAuth, redactSettlementEvidence } from "./utils/tenancy";
-import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
+import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
+import {
+  mayEstablishAppliedLtv,
+  mayReadFinanceEconomics,
+  mayReadQuotationWorkflow,
+  projectFinanceApplication,
+  projectFinanceApplicationOverrides,
+  requiresLtvPercentFor,
+} from "./utils/financeApplicationProjection";
+import { PERMISSIONS } from "./utils/permissions";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import {
   computeSubmittedQuotation,
@@ -630,6 +638,35 @@ export const suggestQuotation = query({
  * them from the application's own snapshot — the rules the deal is actually
  * governed by — so the figure it returns is the figure
  * `recordSubmittedQuotation` will accept as SYSTEM_CALCULATED.
+ *
+ * ## The read boundary (SCRUM-117, owner-proxy ruling 2026-09-13)
+ *
+ * This query was the hole in the row projection, and the hole was not the
+ * SOLVER, it was the RETURN SHAPE. Three facts composed into a bypass:
+ *
+ *   1. it authorized on VIEW_FINANCE_APPLICATIONS alone, which the default
+ *      SALES and MANAGER templates both carry;
+ *   2. `solveQuotationForApplication` falls back from an omitted argument to
+ *      the STORED row (`targetForSolver = overrides.targetSellingAmountMinor ??
+ *      app.targetNetProceedsMinor`), and `recordSubmittedQuotation` populates
+ *      that fallback on every recorded quotation — so the cockpit's own
+ *      argument-less call ran entirely off gated figures;
+ *   3. for SYSTEM_CALCULATED provenance the writer REQUIRES solver output to
+ *      equal the stored quotation, so the response was an exact echo of it —
+ *      together with `appliedLtvPercent` and the whole funding composition.
+ *
+ * The ruling fixes it as a POLICY REFINEMENT, not by blanking the calculator:
+ *
+ *   • the internal calculation may still read the stored row. Internal use is
+ *     not disclosure; the RETURNED SHAPE is the security boundary;
+ *   • the minimal quotation-workflow result — available/unavailable, a
+ *     non-sensitive reason, the currency to label it in, and the suggested
+ *     amount — requires QUOTATION-WORKFLOW authority (`create:` or `approve:`
+ *     a finance application, or `view:finance`), not merely
+ *     `view:finance_applications`. A custom view-only role gets nothing;
+ *   • the accounting economics — `appliedLtvPercent`, the funding composition,
+ *     the projected proceeds, the LTV cap flag — require `view:finance`, and
+ *     are `undefined` for everyone else rather than a different return shape.
  */
 export const suggestQuotationForApplication = query({
   args: {
@@ -642,7 +679,91 @@ export const suggestQuotationForApplication = query({
     ltvPercent: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
+    const auth = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
+    ]);
+    /**
+     * The quotation-workflow tier, ON TOP of the module's own door permission.
+     *
+     * `requireTenantAuth` takes an array with AND semantics, which cannot
+     * express "any of the roles that legitimately quote", so the OR lives here
+     * — but it lives here as the projection's own exported predicate, not as a
+     * second hand-written copy of the rule.
+     *
+     * REFUSED AS AN ANSWER, NOT AS A THROW, and not because a soft refusal is
+     * gentler: a ConvexError out of a query reaches `useQuery` during render
+     * and takes the whole deal screen down. This file carries two other
+     * comments written after exactly that failure. Nothing is disclosed either
+     * way — the payload is the same "no calculation for you" the unavailable
+     * branches already return — so the safe shape is the one that cannot lose
+     * a screen. The cockpit never reaches it: it skips the query unless the
+     * caller holds `create:finance_application`.
+     */
+    if (!mayReadQuotationWorkflow(auth.role)) {
+      return {
+        appliedLtvPercent: undefined,
+        currency: await getOrgCurrency(ctx, args.orgId),
+        ruleVersion: undefined,
+        available: false as const,
+        reason: "NOT_AUTHORIZED" as const,
+      };
+    }
+    /**
+     * A SIMULATION IS A REQUEST THIS CALLER MAY NOT MAKE — said out loud
+     * (SCRUM-117, owner-proxy ruling 2026-09-14 08:31, superseding the 13:48
+     * instruction to disregard these arguments silently).
+     *
+     * What stood here honored the five what-if controls for a `view:finance`
+     * caller and quietly dropped them for everyone else, answering
+     * `available: true` with the canonical figure and no indication that the
+     * inputs had been ignored. That was my instruction at the time and it did
+     * not leak — the figure returned was the deal's own canonical quotation,
+     * and no product screen sends an override — but it made one request mean
+     * two different calculations depending on who asked, with nothing in the
+     * response to tell them apart. An ambiguous calculation contract is a
+     * defect even when it is not a disclosure.
+     *
+     * So an unauthorized simulation is now REFUSED rather than reinterpreted.
+     *
+     * PRESENCE, not truthiness. `value !== undefined` is the test, so
+     * `quotationBufferMinor: 0` and a value equal to the one already stored are
+     * refused exactly like any other. Truthiness would have let `0` through —
+     * and `0` is half of the reproduced attack, which pinned expenses and
+     * buffer to zero.
+     *
+     * ALL FIVE, `ltvPercent` included. Four are monetary and it is easy to
+     * enumerate only those; the rate is the sharpest of them, because at 100%
+     * the composition collapses in a single step.
+     *
+     * Decided from the authenticated role and the arguments alone, BEFORE the
+     * ownership read, the rule snapshot and the solver — so a refused request
+     * reads nothing about the deal and can carry nothing out of it. The
+     * currency comes from the ORG, which this caller is already authenticated
+     * against, and is the same field the `NOT_AUTHORIZED` answer above
+     * carries.
+     *
+     * An ANSWER, not a throw, for the reason documented above: a `ConvexError`
+     * out of a query reaches `useQuery` during render and takes the whole deal
+     * screen down.
+     */
+    const economicsVisible = mayReadFinanceEconomics(auth.role);
+    const suppliedAnyOverride = [
+      args.targetSellingAmountMinor,
+      args.estimatedDealerBorneExpensesMinor,
+      args.quotationBufferMinor,
+      args.customerFirstPaymentMinor,
+      args.ltvPercent,
+    ].some((value) => value !== undefined);
+    if (!economicsVisible && suppliedAnyOverride) {
+      return {
+        appliedLtvPercent: undefined,
+        currency: await getOrgCurrency(ctx, args.orgId),
+        ruleVersion: undefined,
+        available: false as const,
+        reason: "OVERRIDES_REQUIRE_FINANCE" as const,
+      };
+    }
+
     for (const [value, label] of [
       [args.targetSellingAmountMinor, "Target selling amount"],
       [args.estimatedDealerBorneExpensesMinor, "Estimated dealer-borne expenses"],
@@ -703,24 +824,78 @@ export const suggestQuotationForApplication = query({
      * one is called from the wizard with caller-supplied inputs, not mounted
      * beside a screen it can take down.
      */
+    /**
+     * ONE BASIS, FOR EVERY READER.
+     *
+     * `args` unconditionally, which is the point: anyone who reaches this line
+     * either holds `view:finance` — and keeps the full simulator, since nothing
+     * is protected by refusing a what-if to someone who may read every operand
+     * anyway — or supplied no override at all, because the refusal above turned
+     * them back. The role-conditioned substitution that used to sit here is
+     * gone, so the same application state and the same request can no longer
+     * produce two different numerical bases.
+     *
+     * The five controls still fall back to stored fields when omitted, which is
+     * exactly why the refusal above exists rather than a filter here: a caller
+     * who may not read those fields could otherwise pin four of them and read
+     * the fifth out of the answer. Reproduced against `10791edb7` for the
+     * default SALES template — `estimatedDealerBorneExpensesMinor: 0`,
+     * `quotationBufferMinor: 0` and either `ltvPercent: 100` or a very large
+     * `customerFirstPaymentMinor` collapses the dealer contribution to zero and
+     * the returned quotation IS `targetNetProceedsMinor` — with a control
+     * showing the ordinary argument-less call returns a different figure.
+     *
+     * `economicsVisible` still governs what the RESPONSE carries: the rate, the
+     * rule version, the composition and the projected proceeds are accounting
+     * economics and stay behind `view:finance` either way.
+     */
     let solved: Awaited<ReturnType<typeof solveQuotationForApplication>>;
     try {
       solved = await solveQuotationForApplication(ctx, app, args);
     } catch (error) {
       if (!(error instanceof ConvexError)) throw error;
+      /**
+       * ERRORS ARE OUTPUTS TOO.
+       *
+       * `resolveAppliedLtv` and the minimum-first-payment guard put real
+       * figures in their messages — the snapshot's LTV bounds and the company's
+       * minimum payment — and this catch forwarded `error.data` verbatim. Those
+       * come from the deal's FROZEN snapshot, which can differ from the live
+       * company row, so the message could carry a deal-specific historical fact
+       * to a caller who may not read it. A non-finance caller gets a stable
+       * code instead; an unknown error still rethrows rather than becoming an
+       * "available: false" success, and an auth/tenancy error is never swallowed
+       * because only ConvexError is caught at all.
+       */
       return {
         appliedLtvPercent: undefined,
         currency,
         ruleVersion: undefined,
         available: false as const,
-        reason: typeof error.data === "string" ? error.data : "RULES_UNAVAILABLE",
+        reason: economicsVisible
+          ? typeof error.data === "string"
+            ? error.data
+            : "RULES_UNAVAILABLE"
+          : ("RULES_UNAVAILABLE" as const),
       };
     }
 
+    /**
+     * Ruling #3: the rate and the rule version are accounting economics, so a
+     * quotation-workflow caller without `view:finance` gets the SAME KEYS with
+     * `undefined` values rather than a narrower object. One return shape means
+     * no consumer has to narrow a union to read the amount, and
+     * `JSON.stringify` drops the blanks on the wire — the same technique
+     * `projectFinanceApplication` uses on the row.
+     */
     const base = {
-      appliedLtvPercent: solved.appliedLtvPercent as number | undefined,
+      appliedLtvPercent: economicsVisible
+        ? (solved.appliedLtvPercent as number | undefined)
+        : undefined,
       currency,
-      ruleVersion: solved.snapshot.ruleVersion as number | undefined,
+      ruleVersion: economicsVisible
+        ? (solved.snapshot.ruleVersion as number | undefined)
+        : undefined,
     };
 
     // No target recorded anywhere is a different state from the solver running
@@ -730,21 +905,46 @@ export const suggestQuotationForApplication = query({
       return { ...base, available: false as const, reason: "NO_TARGET_RECORDED" as const };
     }
     if (!solved.result.available) {
+      /**
+       * KEPT for every caller. Unlike the thrown messages caught above, this is
+       * the solver's own fixed enumeration of rule states and carries no
+       * figure — and with all five what-if controls disregarded for a
+       * non-finance caller, they cannot STEER which reason appears either, so
+       * it is not an oracle. Withholding it would only cost the operator the
+       * sentence telling them which company setting to fix.
+       */
       return { ...base, available: false as const, reason: solved.result.reason };
     }
+    /**
+     * The quotation itself travels to the whole quotation-workflow tier (ruling
+     * #1); everything the figure was BUILT FROM stays behind `view:finance`
+     * (ruling #3). `undefined` rather than omitted, for the reason above.
+     *
+     * `customerCoversUnfinancedPortion` and `ltvBaseCapApplied` look
+     * qualitative and are not: each names how the composition resolved, and the
+     * ruling withholds the composition. `projectedNetProceedsMinor` is the
+     * solver's own output figure. All four are economics.
+     */
+    const composition = solved.result.composition;
     return {
       ...base,
       available: true as const,
       submittedQuotationMinor: solved.result.submittedQuotationMinor,
-      projectedNetProceedsMinor: solved.result.projectedNetProceedsMinor,
-      customerCoversUnfinancedPortion: solved.result.customerCoversUnfinancedPortion,
-      financeCompanyFundedPortionMinor:
-        solved.result.composition.financeCompanyFundedPortionMinor,
-      unfinancedPortionMinor: solved.result.composition.unfinancedPortionMinor,
-      dealerContributionMinor: solved.result.composition.dealerContributionMinor,
-      customerFirstPaymentSurplusMinor:
-        solved.result.composition.customerFirstPaymentSurplusMinor,
-      ltvBaseCapApplied: solved.result.composition.ltvBaseCapApplied,
+      projectedNetProceedsMinor: economicsVisible
+        ? solved.result.projectedNetProceedsMinor
+        : undefined,
+      customerCoversUnfinancedPortion: economicsVisible
+        ? solved.result.customerCoversUnfinancedPortion
+        : undefined,
+      financeCompanyFundedPortionMinor: economicsVisible
+        ? composition.financeCompanyFundedPortionMinor
+        : undefined,
+      unfinancedPortionMinor: economicsVisible ? composition.unfinancedPortionMinor : undefined,
+      dealerContributionMinor: economicsVisible ? composition.dealerContributionMinor : undefined,
+      customerFirstPaymentSurplusMinor: economicsVisible
+        ? composition.customerFirstPaymentSurplusMinor
+        : undefined,
+      ltvBaseCapApplied: economicsVisible ? composition.ltvBaseCapApplied : undefined,
     };
   },
 });
@@ -780,39 +980,46 @@ export const getEconomics = query({
       .withIndex("by_application", (q) => q.eq("applicationId", args.applicationId))
       .collect();
 
-    // Cost-bearing figures follow the same rule as everywhere else in the
-    // codebase (see the vehicle queries): SALES and RECEPTION hold
-    // VIEW_FINANCE_APPLICATIONS but not VIEW_COST_PRICE. Stripping them here
-    // rather than when something first writes them means the day
-    // vehiclePurchaseCostMinor starts being populated is not the day the
-    // vehicle's cost quietly starts reaching the sales floor.
-    //
-    // Blanked rather than omitted so the returned shape stays the same for
-    // every caller — a union of "has the key" and "does not" would make every
-    // consumer narrow before reading anything.
-    const canSeeCost =
-      isSystemOwnerRole(auth.role) ||
-      auth.role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
-
-    // The redaction's OWN decision about the approved amount, reused rather
+    // The projection's OWN decision about the approved amount, reused rather
     // than restated. Whether this caller may see the figure is a rule that
-    // lives in one place; asking the redacted row is how the anomaly verdict
+    // lives in one place; asking the projected row is how the anomaly verdict
     // below inherits it instead of maintaining a second copy that could drift.
-    const visibleApp = redactSettlementEvidence(app, auth.role);
+    //
+    // Cost follows the same allowlist (VIEW_COST_PRICE): SALES and RECEPTION
+    // hold VIEW_FINANCE_APPLICATIONS but not that, and the day
+    // vehiclePurchaseCostMinor starts being populated must not be the day the
+    // vehicle's cost quietly reaches the sales floor.
+    const visibleApp = projectFinanceApplication(app, auth.role);
     const approvedAmountVisible = visibleApp.approvedDealerPurchaseAmountMinor !== undefined;
 
     return {
-      application: {
-        // Through the SAME helper `applications.get` uses. This query authorizes
-        // on VIEW_FINANCE_APPLICATIONS, which the default SALES template holds,
-        // and spread the whole document while redacting exactly one field — so
-        // gating the other two doors left the settlement evidence readable here
-        // by a weaker role than the one that had just been closed.
-        ...visibleApp,
-        vehiclePurchaseCostMinor: canSeeCost ? app.vehiclePurchaseCostMinor : undefined,
-      },
+      application: visibleApp,
       appraisals: appraisals.sort((a, b) => b.appraisedAt - a.appraisedAt),
-      overrides: overrides.sort((a, b) => b.changedAt - a.changedAt),
+      /**
+       * The history, projected (SCRUM-117).
+       *
+       * `recordOverride` stringifies every corrected figure into
+       * `previousValue`/`newValue` and takes a free-text reason, so the raw
+       * rows restated the approved amount and the gap allocation to a caller
+       * the projection above had just withheld them from — the third of the
+       * three documented recovery routes, and the one the row projection
+       * cannot reach.
+       */
+      overrides: projectFinanceApplicationOverrides(
+        overrides.sort((a, b) => b.changedAt - a.changedAt),
+        auth.role
+      ),
+      /**
+       * Whether the operator must name the purchase LTV for this deal, as a
+       * FACT rather than as three fields to compare.
+       *
+       * The screen derived it from `companyRuleSnapshot` and
+       * `appliedLtvPercent`, both of which are now finance-gated — and a SALES
+       * caller who is not told the rate is missing types a quotation the server
+       * then refuses. Published as a boolean that names no rate, so the
+       * ordinary workflow survives the boundary.
+       */
+      requiresLtvPercent: requiresLtvPercentFor(app),
       /**
        * Whether the recorded approved amount is unlike every figure on file.
        *
@@ -878,6 +1085,88 @@ export const recordSubmittedQuotation = mutation({
     const { user, role } = await requireTenantAuth(ctx, args.orgId, [
       PERMISSIONS.CREATE_FINANCE_APPLICATION,
     ]);
+    /**
+     * THE AUTHORITY DECISION COMES FIRST, BEFORE ANYTHING IS READ ABOUT THE DEAL.
+     *
+     * The cross-family review round found this guard sitting after
+     * `requireOwnedRow` and the closed / already-approved lifecycle branches, so
+     * the refusal an unauthorized caller received varied with the row's state.
+     *
+     * I could not reproduce the disclosure that was said to create - the
+     * already-approved branch is unconditional and fires for the same caller
+     * sending no `ltvPercent` at all, so the endpoint's ordinary use already
+     * tells them that much - but the ordering is worth fixing on its own terms.
+     * Asking the authority question first makes the refusal independent of every
+     * row fact rather than of the stored RATE alone, mirrors the sibling
+     * `approveDealerPurchaseAmount`, and strictly REDUCES what an unauthorized
+     * caller learns.
+     *
+     * Tenancy is unaffected: `requireOwnedRow` still runs before every
+     * authorized read and write below, so a caller who passes this check still
+     * cannot reach another tenant's row.
+     */
+    /**
+     * Naming the rate this deal is financed at is an APPROVER's decision.
+     *
+     * Recording the quotation is a transcription — "this is the figure we sent"
+     * — and the SALES template may do it. `ltvPercent` is a different act. It is
+     * stored as `appliedLtvPercent` and scales the finance company's funded
+     * portion, which fixes the unfinanced portion and therefore the dealership's
+     * own contribution: a salesperson able to set it could move the dealer's
+     * money by typing a different number into the field beside the amount. The
+     * sibling `approveDealerPurchaseAmount` already takes this same rate behind
+     * `APPROVE_FINANCE_APPLICATION`; this door did not, so the weaker role
+     * reached the same figure by the earlier step.
+     *
+     * The guard fires only where the argument is LOAD-BEARING — where it
+     * establishes or moves the rate the deal already stands on:
+     *
+     *  - snapshot carries no default and none has been recorded → any rate is
+     *    the exceptional per-deal recovery, and needs an approver;
+     *  - the deal already has a rate and the caller re-sends the SAME one →
+     *    nothing moves, and re-recording a quotation stays ordinary sales work;
+     *  - the snapshot's own configured rate, sent explicitly → likewise a
+     *    no-op, so the normal configured path is untouched;
+     *  - a rate DIFFERENT from either → an override of the company's rules,
+     *    which moves exactly the money the recovery case does and gets exactly
+     *    the same authority.
+     *
+     * Checked before the solver runs and before anything is patched, so a
+     * refusal never leaves a recorded quotation standing on a rate the recorder
+     * was not entitled to set.
+     */
+    if (args.ltvPercent !== undefined) {
+      /**
+       * ONE authority question, asked before anything is read, compared,
+       * solved, audited or written.
+       *
+       * What stood here was a three-way test — approver, or finance-visible
+       * with an equal rate, or refuse — and the middle branch is what kept this
+       * subsystem leaking. It resolved the snapshot and compared the supplied
+       * rate against `app.appliedLtvPercent ?? snapshot.defaultLtvPercent`,
+       * both FINANCE-classified, so the accept/refuse outcome was itself a
+       * search oracle over the stored rate.
+       *
+       * The replacement asks nothing about the deal. `mayEstablishAppliedLtv`
+       * reads the ROLE and nothing else, so the refusal is independent of the
+       * stored rate and identical whether the supplied value is equal to it,
+       * different from it, or the deal has no rate at all. An equal value does
+       * not bypass — that allowance WAS the oracle.
+       *
+       * OMISSION is untouched: a deal whose rate is already established stays
+       * ordinary work for the roles that do that work. `DealCockpit` sends
+       * `ltvPercent` only while `requiresLtvPercent` is true, so no screen ever
+       * sends the argument this refuses unless the deal genuinely needs a rate
+       * established — which is precisely the decision that now needs both
+       * permissions.
+       */
+      if (!mayEstablishAppliedLtv(role)) {
+        throw new ConvexError(
+          "Setting the LTV this deal is financed at needs both finance visibility and approval authority. Ask a finance-authorized approver to record the rate the financing company confirmed."
+        );
+      }
+    }
+
     assertMinorAmount(args.submittedQuotationMinor, "Submitted quotation");
     if (args.targetSellingAmountMinor !== undefined) {
       assertMinorAmount(args.targetSellingAmountMinor, "Target selling amount");
@@ -927,47 +1216,46 @@ export const recordSubmittedQuotation = mutation({
     }
 
     /**
-     * Naming the rate this deal is financed at is an APPROVER's decision.
+     * THE INPUT BOUNDARY, on the WRITE side (same ruling).
      *
-     * Recording the quotation is a transcription — "this is the figure we sent"
-     * — and the SALES template may do it. `ltvPercent` is a different act. It is
-     * stored as `appliedLtvPercent` and scales the finance company's funded
-     * portion, which fixes the unfinanced portion and therefore the dealership's
-     * own contribution: a salesperson able to set it could move the dealer's
-     * money by typing a different number into the field beside the amount. The
-     * sibling `approveDealerPurchaseAmount` already takes this same rate behind
-     * `APPROVE_FINANCE_APPLICATION`; this door did not, so the weaker role
-     * reached the same figure by the earlier step.
+     * Fixing only the query would have left a write-then-read route, and this
+     * is the half I had missed: the patch below does not merely solve from
+     * these arguments, it PERSISTS them. `targetSellingAmountMinor` fans out
+     * into `targetSellingAmountMinor` AND `targetNetProceedsMinor`;
+     * `estimatedDealerBorneExpensesMinor` into two more; the resolved first
+     * payment and buffer are written as well. So a caller without VIEW_FINANCE
+     * could record a MANUAL_ENTRY carrying chosen inputs — no solver check
+     * applies to that mode — and then read the now-poisoned row back through
+     * the canonical, "safe", override-free query. The arithmetic that recovers
+     * the hidden figure is identical; only the timing changes.
      *
-     * The guard fires only where the argument is LOAD-BEARING — where it
-     * establishes or moves the rate the deal already stands on:
+     * Hence REFUSED rather than ignored, and refused HERE: before the LTV
+     * guard, before the solver, before the audit rows and before `ctx.db.patch`.
+     * Ignoring them silently would be worse than refusing — the operator would
+     * believe they had recorded a target that was never stored.
      *
-     *  - snapshot carries no default and none has been recorded → any rate is
-     *    the exceptional per-deal recovery, and needs an approver;
-     *  - the deal already has a rate and the caller re-sends the SAME one →
-     *    nothing moves, and re-recording a quotation stays ordinary sales work;
-     *  - the snapshot's own configured rate, sent explicitly → likewise a
-     *    no-op, so the normal configured path is untouched;
-     *  - a rate DIFFERENT from either → an override of the company's rules,
-     *    which moves exactly the money the recovery case does and gets exactly
-     *    the same authority.
+     * Applies to EVERY provenance mode, MANUAL_ENTRY included. The quotation
+     * amount, its source and the override reason remain ordinary operator
+     * inputs; only the calculation OPERANDS need finance authority.
      *
-     * Checked before the solver runs and before anything is patched, so a
-     * refusal never leaves a recorded quotation standing on a rate the recorder
-     * was not entitled to set.
+     * The code is stable and names no protected value. Nothing in the product
+     * sends these: `DealCockpit` calls the query argument-less and sends the
+     * mutation only `submittedQuotationMinor` / `source` / `overrideReason` /
+     * `ltvPercent`.
      */
-    if (args.ltvPercent !== undefined) {
-      const snapshot = await resolveRuleSnapshot(ctx, app);
-      const establishedLtvPercent = app.appliedLtvPercent ?? snapshot.defaultLtvPercent;
-      const mayApprove =
-        isSystemOwnerRole(role) ||
-        role.permissions.includes(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
-      if (args.ltvPercent !== establishedLtvPercent && !mayApprove) {
-        throw new ConvexError(
-          "Only a user who can approve finance applications may set the LTV this deal is financed at. Ask a manager to record the rate the financing company confirmed."
-        );
+    const financeVisible = mayReadFinanceEconomics(role);
+    if (!financeVisible) {
+      const suppliedCalculationInputs = [
+        args.targetSellingAmountMinor,
+        args.estimatedDealerBorneExpensesMinor,
+        args.quotationBufferMinor,
+        args.customerFirstPaymentMinor,
+      ].some((value) => value !== undefined);
+      if (suppliedCalculationInputs) {
+        throw new ConvexError("CALCULATION_INPUTS_REQUIRE_FINANCE");
       }
     }
+
 
     // The same resolution `suggestQuotationForApplication` runs, so the figure
     // the user was shown is the figure the guard below accepts. Two copies of
@@ -1192,23 +1480,38 @@ export const recordSubmittedQuotation = mutation({
         );
       }
       if (!solverResult.available) {
+        // The reason is a fixed enumeration of RULE STATES (an unrecorded
+        // offset rule, and so on) and carries no figure, so it stays: it tells
+        // the operator which setting to fix. Ruling #4 is about computed
+        // NUMBERS, and removing this as well cost actionable guidance for no
+        // security gain.
         throw new ConvexError(
           `This quotation is recorded as ${modeLabel}, but the calculator could not run (${solverResult.reason}). Submit it as a manual entry instead.`
         );
       }
       const matchesSolver =
         solverResult.submittedQuotationMinor === args.submittedQuotationMinor;
+      /**
+       * NAMES NO FIGURE. The message used to read "...the calculator produced
+       * 10231041 minor units, not 1", which handed the computed value to
+       * anyone who could call this mutation — a third route to the same leak,
+       * through an error rather than a response, and one that no response-shape
+       * gate would ever have caught. The operator already sees the calculated
+       * figure on the screen they are submitting from, so nothing is lost.
+       */
       if (args.source === "SYSTEM_CALCULATED" && !matchesSolver) {
         throw new ConvexError(
-          `This quotation is recorded as calculated by the system, but the calculator produced ${solverResult.submittedQuotationMinor} minor units, not ${args.submittedQuotationMinor}. Record it as a calculated quotation with an override and say why it differs.`
+          "This quotation is recorded as calculated by the system, but it does not match the calculated figure. Record it as a calculated quotation with an override and say why it differs, or submit it as a manual entry."
         );
       }
       // An "override" that departs from nothing is not an override. Letting it
       // through would put a departure on the record, complete with a reason
       // explaining a difference that does not exist.
       if (args.source === "CALCULATED_WITH_OVERRIDE" && matchesSolver) {
+        // Names no figure either: the caller supplied the amount, so saying it
+        // MATCHES the calculation discloses the calculation.
         throw new ConvexError(
-          `This quotation is recorded as an override, but it matches the calculated figure of ${solverResult.submittedQuotationMinor} minor units exactly. Record it as calculated by the system instead.`
+          "This quotation is recorded as an override, but it matches the calculated figure exactly. Record it as calculated by the system instead."
         );
       }
     }
@@ -1539,9 +1842,41 @@ export const approveDealerPurchaseAmount = mutation({
     outlierAcknowledged: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [
       PERMISSIONS.APPROVE_FINANCE_APPLICATION,
     ]);
+    /**
+     * THE SECOND LTV DOOR (SCRUM-117, owner-proxy ruling 2026-09-13 15:33).
+     *
+     * Round 3 closed `recordSubmittedQuotation` and this endpoint kept the same
+     * authority open: it is gated on `APPROVE_FINANCE_APPLICATION` alone, the
+     * default MANAGER template holds that without `view:finance`, and it writes
+     * `appliedLtvPercent` straight through. So the reproduced attack survived
+     * its own fix by moving one endpoint sideways — write 100 here, then make
+     * the ordinary argument-less suggestion call and read the protected target
+     * out of the answer.
+     *
+     * That is why the predicate is SHARED rather than restated. Two endpoints
+     * each carrying their own copy of one authority rule is exactly what let
+     * this one lag a round behind.
+     *
+     * Placed immediately after the auth call, so it precedes the ownership
+     * lookup's protected reads, `resolveRuleSnapshot`, `resolveAppliedLtv`,
+     * every solve, the override audit rows and the patch. A refusal therefore
+     * reads nothing about the deal and moves nothing on it, and is identical
+     * whether the supplied rate equals the stored one or not.
+     *
+     * OMISSION is untouched, and that is the whole operational workflow: the
+     * resolution below is `args.appliedLtvPercent ?? app.appliedLtvPercent`, so
+     * a default MANAGER still approves a purchase amount on a deal whose rate
+     * is already established. What they can no longer do is establish or change
+     * it.
+     */
+    if (args.appliedLtvPercent !== undefined && !mayEstablishAppliedLtv(role)) {
+      throw new ConvexError(
+        "Setting the LTV this deal is financed at needs both finance visibility and approval authority. Ask a finance-authorized approver to record the rate the financing company confirmed."
+      );
+    }
     assertMinorAmount(args.approvedAmountMinor, "Approved purchase amount");
     if (args.approvedAmountMinor <= 0) {
       throw new ConvexError("The approved purchase amount must be greater than zero.");
@@ -2317,7 +2652,9 @@ export const listNeedingReconciliation = query({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
+    ]);
     const page = await ctx.db
       .query("financeApplications")
       .withIndex("by_org_reconciliation", (q) =>
@@ -2327,32 +2664,46 @@ export const listNeedingReconciliation = query({
 
     return {
       ...page,
-      page: page.page.map((app) => ({
-        _id: app._id,
-        _creationTime: app._creationTime,
-        customerId: app.customerId,
-        vehicleId: app.vehicleId,
-        companyId: app.companyId,
-        status: app.status,
-        financingReconciliationReason: app.financingReconciliationReason,
-        economicsCurrency: app.economicsCurrency,
-        submittedQuotationMinor: app.submittedQuotationMinor,
-        approvedDealerPurchaseAmountMinor: app.approvedDealerPurchaseAmountMinor,
-        appliedLtvPercent: app.appliedLtvPercent,
-        financeCompanyFundedPortionMinor: app.financeCompanyFundedPortionMinor,
-        dealerContributionMinor: app.dealerContributionMinor,
-        rawAppraisalGapMinor: app.rawAppraisalGapMinor,
-        expectedDealerRemittanceMinor: app.expectedDealerRemittanceMinor,
-        // The migration's own note for a disbursed row says "re-enter the
-        // approved purchase amount, the applied LTV and the actual receipt".
-        // Carrying `disbursedAt` but not the amount told a triager THAT money
-        // moved and not how much — so working the queue meant opening every row.
-        disbursedAt: app.disbursedAt,
-        disbursedAmountMinor: app.disbursedAmountMinor,
-        actualDealerReceiptTotalMinor: app.actualDealerReceiptTotalMinor,
-        finalizedSaleId: app.finalizedSaleId,
-        updatedAt: app.updatedAt,
-      })),
+      /**
+       * Built from the PROJECTED row, not the raw one (SCRUM-117).
+       *
+       * This queue authorizes on VIEW_FINANCE_APPLICATIONS and hand-listed the
+       * quotation, the approved amount, the LTV, the funded portion, the dealer
+       * contribution, the raw gap and the remittance — every figure the
+       * boundary withholds elsewhere, served raw to the same default SALES and
+       * MANAGER templates. A door that assembles its own row is exactly the
+       * shape an allowlist exists to catch; it now reads what the caller may
+       * read and nothing else.
+       */
+      page: page.page.map((app) => {
+        const visible = projectFinanceApplication(app, role);
+        return {
+          _id: visible._id,
+          _creationTime: visible._creationTime,
+          customerId: visible.customerId,
+          vehicleId: visible.vehicleId,
+          companyId: visible.companyId,
+          status: visible.status,
+          financingReconciliationReason: visible.financingReconciliationReason,
+          economicsCurrency: visible.economicsCurrency,
+          submittedQuotationMinor: visible.submittedQuotationMinor,
+          approvedDealerPurchaseAmountMinor: visible.approvedDealerPurchaseAmountMinor,
+          appliedLtvPercent: visible.appliedLtvPercent,
+          financeCompanyFundedPortionMinor: visible.financeCompanyFundedPortionMinor,
+          dealerContributionMinor: visible.dealerContributionMinor,
+          rawAppraisalGapMinor: visible.rawAppraisalGapMinor,
+          expectedDealerRemittanceMinor: visible.expectedDealerRemittanceMinor,
+          // The migration's own note for a disbursed row says "re-enter the
+          // approved purchase amount, the applied LTV and the actual receipt".
+          // Carrying `disbursedAt` but not the amount told a triager THAT money
+          // moved and not how much — so working the queue meant opening every row.
+          disbursedAt: visible.disbursedAt,
+          disbursedAmountMinor: visible.disbursedAmountMinor,
+          actualDealerReceiptTotalMinor: visible.actualDealerReceiptTotalMinor,
+          finalizedSaleId: visible.finalizedSaleId,
+          updatedAt: visible.updatedAt,
+        };
+      }),
     };
   },
 });

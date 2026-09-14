@@ -83,6 +83,13 @@ type FinanceCompanyDecisionCardProps = {
   canRecordQuotation: boolean;
   /** `approve:finance_application` — the approval writer's own permission. */
   canRecordApproval: boolean;
+  /**
+   * May this caller establish the deal's own LTV?
+   *
+   * `approve:finance_application` AND `view:finance`. Narrower than
+   * `canRecordApproval` on purpose - see the note on the quotation row.
+   */
+  canEstablishLtvPercent: boolean;
   /** `review:finance_application` — what `recordAppraisal` itself requires. */
   canRecordAppraisal: boolean;
   /**
@@ -141,6 +148,7 @@ export function FinanceCompanyDecisionCard({
   facts,
   canRecordQuotation,
   canRecordApproval,
+  canEstablishLtvPercent,
   canRecordAppraisal,
   isOwnDeal,
   money,
@@ -157,17 +165,22 @@ export function FinanceCompanyDecisionCard({
   // to reopen the approval instead. Offering the action anyway would produce a
   // refusal the screen cannot act on, since reopening has no UI yet.
   //
-  // Withdrawn too where the deal's rate is missing and this caller may not set
-  // it. `recordSubmittedQuotation` refuses an `ltvPercent` without
-  // `approve:finance_application`, and without a rate there is nothing to
-  // record — so for that one caller on that one deal the action could only ever
-  // open a dialog it cannot submit. The row's note names who unblocks it, which
-  // is the same treatment the approval action already gets from this card.
+  // Withdrawn too where the deal's rate is missing and this caller may not
+  // ESTABLISH it. `recordSubmittedQuotation` refuses an explicit `ltvPercent`
+  // from anyone without both `approve:finance_application` and `view:finance`
+  // (SCRUM-117, 2026-09-13 15:33), and without a rate there is nothing to
+  // record — so for that caller on that deal the action could only ever open a
+  // dialog it cannot submit. The row's note names who unblocks it, which is the
+  // same treatment the approval action already gets from this card.
+  //
+  // The capability moved and this condition moved with it: keyed on
+  // `canRecordApproval` it would keep offering the action to a default MANAGER,
+  // whose entry the server now refuses.
   const quotationActionAvailable =
     canRecordQuotation &&
     !facts.closed &&
     !facts.approvedPurchaseRecorded &&
-    (!facts.ltvMissing || canRecordApproval);
+    (!facts.ltvMissing || canEstablishLtvPercent);
   const approvalActionAvailable =
     canRecordApproval && !isOwnDeal && !facts.closed && quotationRecorded;
   // "Not in play until the quotation has gone out" is owned by the ROW's own
@@ -287,7 +300,14 @@ export function FinanceCompanyDecisionCard({
                 // record it with the quotation; whoever cannot is told who
                 // unblocks the deal, rather than being sent to a field that is
                 // not there and a server that would refuse them.
-                canRecordApproval
+                //
+                // Keyed on `canEstablishLtvPercent`, NOT on `canRecordApproval`
+                // (SCRUM-117, 2026-09-13 15:33): establishing the rate now needs
+                // finance visibility as well as approval authority, so a default
+                // MANAGER belongs in the second audience even though they still
+                // record approvals. Keying this on the wrong capability would
+                // send exactly that person to a field the server refuses.
+                canEstablishLtvPercent
                 ? t("FinanceCompanyLtvMissing")
                 : t("DealPurchaseLtvNeedsApprover")
               : undefined

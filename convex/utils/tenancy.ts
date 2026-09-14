@@ -1,7 +1,7 @@
 import { QueryCtx, MutationCtx } from "../_generated/server";
 import { Id, Doc, TableNames } from "../_generated/dataModel";
 import { ConvexError } from "convex/values";
-import { Permission, PERMISSIONS, isSystemOwnerRole } from "./permissions";
+import { Permission, isSystemOwnerRole } from "./permissions";
 import { throwAppError, AppErrorCode } from "./errors";
 import { getValidatedEnv } from "./env";
 import { writeAuditLog } from "./auditLog";
@@ -441,166 +441,19 @@ export async function requireOwnedRow<T extends OrgScopedTable>(
  * while consumers keep one type instead of a union they must narrow.
  */
 /**
- * Whether this role is shown the approved purchase amount at all.
+ * The finance-application read boundary moved OUT of this file (SCRUM-117).
  *
- * Exported because a second caller now needs the SAME answer, and asking it a
- * second way is how the two drift. `registerVehicleHandover` requires an
- * `VIEW_FINANCE` or `CONFIRM_FINANCE_DISBURSEMENT`, matching the tier-2 gate
- * below exactly.
+ * What used to live here was `redactSettlementEvidence`: spread the whole row,
+ * blank six named fields. A blocklist over a 111-field document fails open by
+ * omission, and it did — the appraisal gap, its allocation, the resolver and
+ * the free-text note reached default SALES and MANAGER through
+ * `applications.get`, `applications.list` and `financingEconomics.getEconomics`.
  *
- * ⚠️ NOT EXPORTED, DELIBERATELY. This is one display gate among several — it
- * answers what `redactSettlementEvidence` withholds, and nothing more. It is
- * NOT an authority on who can see the approved amount: `listNeedingReconciliation`
- * serves that same figure raw under `VIEW_FINANCE_APPLICATIONS`, which this
- * predicate does not mention.
- *
- * `registerVehicleHandover` was briefly built on it, to decide who had to
- * confirm the figure they were shown. That was wrong in both directions —
- * default SALES holds neither permission and so was never asked, while a
- * `confirm:finance_disbursement` role without `view:finance_applications` was
- * asked for a figure its screen could not display. Handover now compares a
- * stamp issued to every caller, and asks nothing about who is looking. Do not
- * reach for this to gate a WRITE.
+ * The replacement is an exhaustive ALLOWLIST in
+ * `convex/utils/financeApplicationProjection.ts`: a total `Record` over the
+ * row's own keys, so a new schema field without a visibility decision is a type
+ * error rather than a silent disclosure. Every door that returns one of these
+ * rows calls `projectFinanceApplication`; the structural sweep in
+ * `convex/financedConsignedSettlement.test.ts` enforces that on the whole
+ * serialized response of every public query of both application modules.
  */
-function canSeeApprovedPurchaseAmount(role: Doc<"roles">): boolean {
-  return (
-    isSystemOwnerRole(role) ||
-    role.permissions.includes(PERMISSIONS.VIEW_FINANCE) ||
-    role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT)
-  );
-}
-
-export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
-  app: T,
-  role: Doc<"roles">
-): T {
-  const has = (permission: Permission) =>
-    isSystemOwnerRole(role) || role.permissions.includes(permission);
-  const canSeeFinance = has(PERMISSIONS.VIEW_FINANCE);
-  const canWorkDisbursement = canSeeApprovedPurchaseAmount(role);
-
-  return {
-    ...app,
-
-    // Tier 1 — AMOUNTS. What the advice says was paid, the cheque or wire
-    // reference, and the approval frozen beside a discrepancy.
-    supplierDisbursedAmountMinor: canSeeFinance ? app.supplierDisbursedAmountMinor : undefined,
-    supplierDisbursementReference: canSeeFinance ? app.supplierDisbursementReference : undefined,
-    supplierDisbursementApprovedAtRecordingMinor: canSeeFinance
-      ? app.supplierDisbursementApprovedAtRecordingMinor
-      : undefined,
-
-    // Tier 2 — the one figure the confirmation SCREEN needs to prefill. Without
-    // it the amount field opens blank and gets typed from memory, and a typo
-    // locks the deal in a state only MANAGE_FINANCE can repair.
-    //
-    // ⚠️ THIS IS A DISPLAY GATE, NOT A CONFIDENTIALITY BOUNDARY. Do not build
-    // anything on the assumption that a caller without the permission cannot
-    // learn this number. Measured at 6f63c35a, a `view:sales` caller recovers
-    // it from `applications.list` alone, three independent ways:
-    //
-    //   • `financeCompanyFundedPortionMinor ÷ (appliedLtvPercent / 100)` —
-    //     both fields are in the same row, and at 100% LTV they are equal;
-    //   • `approvedPurchaseNotes`, free text that in practice records it
-    //     ("Approved at 18902.");
-    //   • `financingEconomics.getEconomics().overrides[]`, where
-    //     `recordOverride` stringifies the amount into previousValue/newValue.
-    //
-    // Closing any one of those does not create the boundary, which is why they
-    // were NOT patched here — a partial fix would leave the same false
-    // assurance behind a longer comment. Tier 1 below IS a real boundary,
-    // pinned across every exported query OF `applications.ts` AND
-    // `financingEconomics.ts` — the two application-facing modules, not the
-    // whole backend — by the structural test in
-    // convex/financedConsignedSettlement.test.ts, which asserts those three
-    // field names are absent by KEY from each whole serialized response. Any
-    // other module that learns to return a `financeApplications` row is outside
-    // that guard and must call this helper. Establishing a genuine tier-2
-    // boundary means reworking the economics projection as a whole; tracked
-    // separately rather than improvised inside this release.
-    //
-    // Note the direction of travel is still correct: `origin/main` returned
-    // this field outright from `getEconomics` and `applications.get`, so this
-    // release strictly reduces exposure. It just does not eliminate it.
-    approvedDealerPurchaseAmountMinor: canWorkDisbursement
-      ? app.approvedDealerPurchaseAmountMinor
-      : undefined,
-
-    // Tier 3 — WHETHER, not how much, and not WHEN or BY WHOM.
-    //
-    // Round 11 ungated all three of these together. That was right about the
-    // status and wrong about its two siblings, and it took an external reviewer
-    // four rounds to make the distinction stick: the dead-end below is caused by
-    // hiding *whether* the supplier was paid, and `supplierDisbursementStatus`
-    // answers that on its own — it is written only when an advice is recorded,
-    // so its mere presence is the signal. The exact payment timestamp and the
-    // identity of the person who recorded it answer no question a sales caller
-    // has. They are settlement-evidence metadata that happened to be sitting
-    // next to a deliberately public field.
-    //
-    // Gated at VIEW_FINANCE, with the tier-1 evidence, and NOT at
-    // `canWorkDisbursement`. The first attempt used the looser gate on the
-    // rationale that the confirmation screen prefills from these — but moving
-    // the label, badge and button onto the status in that same change removed
-    // the last client read of either field. Both reviewers enumerated the repo
-    // independently and found none: the confirmation dialog prefills only an
-    // amount, and the correction screen takes `recordedAt` from `dealCockpit`,
-    // which is already VIEW_FINANCE-gated. A justification that described
-    // behaviour the same commit deleted is not a justification.
-    supplierDisbursementConfirmedAt: canSeeFinance
-      ? app.supplierDisbursementConfirmedAt
-      : undefined,
-    supplierDisbursementConfirmedBy: canSeeFinance
-      ? app.supplierDisbursementConfirmedBy
-      : undefined,
-    //
-    // These carry no monetary quantity, and withholding them was actively
-    // harmful: `settlesDirectToSupplier` stays visible, so a role without them
-    // read "awaiting supplier disbursement" on a deal the financier had already
-    // settled — permanently, with no state that could ever clear it. The same
-    // user is told by `dealCockpit` that the advice needs reconciling, because
-    // that query publishes `settlementAdviceRequiresReconciliation` to every
-    // VIEW_SALES caller on the stated principle that a state nobody is shown is
-    // not a recovery path. Two doors were giving one fact opposite answers, and
-    // the cancellation refusal discloses it in its message regardless.
-    //
-    // The status alone carries that, and it is written only when an advice is
-    // recorded, so its presence answers "has the supplier been paid" without
-    // disclosing anything about the payment. The two consumers that used to
-    // branch on the timestamp — the status label and the paid badge in
-    // `ApplicationDetailsDialog` — now read this field, so the dead-end stays
-    // closed while the evidence beside it is gated.
-    //
-    // NORMALIZED, because the field is legitimately absent on a recorded
-    // advice: it post-dates those rows. `amendSupplierDisbursementAdvice`
-    // treats absence the same way, with `?? "CONFIRMED"`.
-    //
-    // ⚠️ THE PUBLISHED VALUE IS A DISPLAY PROXY FOR "AN ADVICE IS ON FILE",
-    // NOT AN ASSERTION THAT IT AGREED WITH THE APPROVAL. The schema's "could
-    // only be written when the amounts matched" does not survive checking: the
-    // pre-status writer validated only that the amount was positive and never
-    // compared it against `approvedDealerPurchaseAmountMinor` — that comparison
-    // first exists in this release. So a legacy row may hold an advice that
-    // disagreed, and this derivation would still publish CONFIRMED for it.
-    //
-    // Harmless today because every consumer tests truthiness only, and because
-    // reconciliation, obligations and cancellation all read the RAW field on
-    // the document rather than this projection. Do not branch on
-    // `=== "CONFIRMED"` from a redacted payload; ask the raw field, as
-    // `dealCockpit` does for `settlementAdviceRequiresReconciliation`.
-    //
-    // Publishing the raw value handed that row a permanent
-    // "awaiting supplier disbursement", a hidden paid badge, and a confirm
-    // button that reappears and throws against the server's `confirmedAt`
-    // guard — rounds 9 and 10 both back, for every role including OWNER.
-    //
-    // Derived here rather than in the three consumers so the invariant is
-    // stated once, on the boundary that already decides what "paid" means.
-    supplierDisbursementStatus:
-      app.supplierDisbursementStatus ??
-      (app.supplierDisbursementConfirmedAt !== undefined ||
-      app.supplierDisbursedAmountMinor !== undefined
-        ? ("CONFIRMED" as const)
-        : undefined),
-  };
-}

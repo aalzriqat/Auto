@@ -162,10 +162,112 @@ describe("protected source content pins", () => {
        * recomputed FROM THE FILE with this test's own normalization.
        */
       file: "convex/applications.ts",
-      bytes: 219221,
-      sha256: "8762cdd63a98cfff9a4558cd77615db95108ff073ea8509bd319c1cc49772dd8",
+      bytes: 220303,
+      sha256: "fc4a12211280087bd25a9b5a1305aabaa6976289bd5586f759697a9158e1e72c",
     },
     {
+      /**
+       * -- RENEWAL 2026-09-13 (2) - SCRUM-117 F3 -------------------------
+       *
+       * Previous reviewed postimage, superseded by the entry above:
+       *
+       *   bytes:  219445
+       *   sha256: 5e1e348c20067a98a01409f8cc91c67d89e7a3dcfbe515b675f9a20c9906886e
+       *
+       * The FIRST renewal below moved the boundary helper. This one repairs a
+       * leak that renewal EXPOSED, and it is the only reason the file changed
+       * again.
+       *
+       * The owner-proxy ruling of 2026-09-13 10:36 replaced SCRUM-117's single
+       * VIEW_FINANCE wall with five workflow tiers. That split the approved
+       * dealer purchase amount (an APPROVAL-workflow fact) from its
+       * decomposition (accounting economics behind `view:finance`). But
+       * `handoverEvidenceFor` gated the amount AND its two addends on ONE
+       * derived boolean, `maySeeFigures` = "may this caller see the approved
+       * amount?" - coherent while they shared a class, and once they did not,
+       * that boolean published `financeCompanyFundedPortionMinor` and
+       * `dealerContributionMinor` to every holder of
+       * `approve:finance_application` or `confirm:finance_disbursement`.
+       *
+       * Caught by this lane's own retiered sentinel sweep, not by a reviewer:
+       * four leak assertions across `applications.get` and
+       * `applications.dealCockpit`. The ruling's evidence bar - a MANAGER
+       * cannot obtain the composition - is unreachable without this change,
+       * and the code is in this file only.
+       *
+       * THE DELTA, in full:
+       *
+       *   1. `const projected = projectFinanceApplication(app, role)` - the
+       *      SAME call that was already in this function under the first
+       *      renewal, hoisted into a local rather than newly introduced;
+       *   2. `visibleAmount` reads `projected.approvedDealerPurchaseAmountMinor`
+       *      instead of re-deriving it from that call inline;
+       *   3. two returned fields read `projected.X ?? null` instead of
+       *      `maySeeFigures ? app.X ?? null : null`.
+       *
+       * Net +3 functional lines, -5. No new query, control flow, permission
+       * check, `ctx.db` access, export or workflow behavior: it REMOVES a
+       * conditional and routes two fields through the canonical projected row,
+       * which makes `financeApplicationProjection` the single authority instead
+       * of one of two places that had to agree. Read the hunk; do not take this
+       * note's word for its scope.
+       *
+       * Authorized explicitly and narrowly by the owner-proxy (#scrum-215,
+       * 2026-09-13), in reply to a disclosure that named this exact hunk, both
+       * recomputed constants and the residuals BEFORE any of it was frozen. The
+       * pin was left RED in the interim rather than renewed on my own judgement,
+       * and the extension granted covers this correction and nothing wider. The
+       * same ruling confirms `financedSaleNetReceivableMinor` may remain visible
+       * to `confirm:finance_disbursement` as the one narrow disbursement figure,
+       * which widens nothing else.
+       *
+       * Both constants recomputed FROM THE FILE with this test's own
+       * normalization, not copied from a report, a Jira comment or a chat
+       * message. The pin is not weakened, bypassed, deleted, generalized or made
+       * vacuous: same two files, same exact byte + sha256 pins, negative control
+       * untouched, normalization and bare-CR rejection unchanged.
+       * `convex/dealWorkspace.ts` remains untouched.
+       */
+      /**
+       * -- RENEWAL 2026-09-13 - SCRUM-117 --------------------------------
+       *
+       * Previous reviewed postimage, superseded by the entry above:
+       *
+       *   bytes:  219221
+       *   sha256: 8762cdd63a98cfff9a4558cd77615db95108ff073ea8509bd319c1cc49772dd8
+       *
+       * Renewed because the finance-application READ BOUNDARY moved out of
+       * `convex/utils/tenancy.ts` and into an exhaustive allowlist,
+       * `convex/utils/financeApplicationProjection.ts`. The leak SCRUM-117
+       * closes is in this file's own doors — `applications.get` (VIEW_SALES)
+       * and `applications.list` spread the row — so the boundary could not be
+       * moved without changing what they return.
+       *
+       * The delta is FOUR lines: one import, and three call sites where
+       * `redactSettlementEvidence(app, role)` becomes
+       * `projectFinanceApplication(app, role)` (in `list`, in `get`, and in
+       * `handoverEvidenceFor`). No control flow, query, predicate, permission
+       * check, workflow or `ctx.db` access changed, so none of the constructs
+       * this ratchet exists to catch is touched by the delta. Read the four
+       * hunks; do not take this note's word for their scope.
+       *
+       * Renewed under explicit owner-proxy authorization, granted for exactly
+       * that scope and no wider (#scrum-215, 2026-09-13, in reply to the
+       * cross-lane notice posted BEFORE the change — the same order the
+       * SCRUM-57 renewal followed). The instruction attached to it: rerun the
+       * ratchet and the suites, freeze the successor SHA, then Sonnet MAX and
+       * Codex high on that exact SHA before any merge decision.
+       *
+       * The pin was not weakened, bypassed, deleted, generalized or made
+       * vacuous to obtain a green check: it is still an exact byte + sha256 pin
+       * on the same two files, the negative control below is untouched, and
+       * normalization and the bare-CR rejection are unchanged. Both constants
+       * were recomputed FROM THE FILE with this test's own normalization, not
+       * copied from a report, a Jira comment or a chat message.
+       *
+       * `convex/dealWorkspace.ts` is untouched by SCRUM-117 and keeps its
+       * existing postimage.
+       */
       /**
        * The P3 read-model wrapper. Pinned because it is the file that composes
        * the cash-custody flag and the appraisal provenance on top of an
