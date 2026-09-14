@@ -1,13 +1,19 @@
 "use client";
 
-import { Check, Minus } from "lucide-react";
+import { Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
-
-export type RailStageState = "COMPLETE" | "CURRENT" | "BLOCKED" | "PENDING" | "STOPPED";
+import {
+  isLiveStageState,
+  STAGE_NODE_CLASS,
+  STAGE_STATE_KEY,
+  stageNodeContent,
+  type DealStageState,
+} from "./DealStagePresentation";
 
 export type RailStage = Readonly<{
   key: string;
-  state: RailStageState;
+  /** The server's classification, unchanged — see `DealStagePresentation`. */
+  state: DealStageState;
   label: string;
   /**
    * Whose move the step is, already resolved to display text. Carried on
@@ -19,15 +25,6 @@ export type RailStage = Readonly<{
   blocker?: string;
 }>;
 
-/** The i18n key that states each node's state to assistive technology. */
-const STAGE_STATE_KEY: Record<RailStageState, string> = {
-  COMPLETE: "StageStateComplete",
-  CURRENT: "StageStateCurrent",
-  BLOCKED: "StageStateBlocked",
-  PENDING: "StageStatePending",
-  STOPPED: "StageStateStopped",
-};
-
 /**
  * The compact stage rail: one node per stage, in order.
  *
@@ -37,38 +34,13 @@ const STAGE_STATE_KEY: Record<RailStageState, string> = {
  * completed stages are neutral (a muted tick, not a green one — eight green
  * markers on a closed deal were competing with each other and with the one
  * action that mattered), future stages are quiet, and only a BLOCKED stage
- * carries the amber that means "somebody is waiting on something".
- *
- * Semantic colours only, and paired ones: every node pairs a background token
- * with its own foreground (`bg-primary`/`text-primary-foreground`,
- * `bg-card`/`text-muted-foreground`). The blocked node is the one that has no
- * app token, so it is a light amber tint under a dark amber index — AA in both
- * themes — rather than white on a filled amber, which measured 3.19:1.
+ * carries the amber that means "somebody is waiting on something". The
+ * per-state colours, glyphs and state names live in `DealStagePresentation`,
+ * shared with the focus row, so the two cannot describe one state differently.
  *
  * `aria-current="step"` marks the live node and each node's accessible name
  * carries its label, state, owner and blocker, so none of this is colour alone.
  */
-function stageNodeClass(state: RailStageState): string {
-  switch (state) {
-    case "CURRENT":
-      return "border-primary bg-primary text-primary-foreground";
-    case "BLOCKED":
-      return "border-amber-700 bg-amber-500/15 text-amber-900 dark:border-amber-400 dark:bg-amber-400/15 dark:text-amber-200";
-    case "COMPLETE":
-      return "border-border bg-card text-muted-foreground";
-    case "STOPPED":
-      return "border-dashed border-border bg-card text-muted-foreground";
-    default:
-      return "border-border bg-card text-muted-foreground";
-  }
-}
-
-function stageNodeContent(state: RailStageState, index: number): React.ReactNode {
-  if (state === "COMPLETE") return <Check className="h-3.5 w-3.5" aria-hidden />;
-  if (state === "STOPPED") return <Minus className="h-3.5 w-3.5" aria-hidden />;
-  return <bdi dir="ltr">{index + 1}</bdi>;
-}
-
 export function DealStageRail({
   stages,
   t,
@@ -76,7 +48,7 @@ export function DealStageRail({
   return (
     <ol className="flex flex-wrap gap-y-3" data-testid="deal-stage-rail">
       {stages.map((stage, index) => {
-        const live = stage.state === "CURRENT" || stage.state === "BLOCKED";
+        const live = isLiveStageState(stage.state);
         // The accessible NAME of the node — label, state, owner, blocker, in
         // that order — and the tooltip says the same thing.
         const name = [stage.label, t(STAGE_STATE_KEY[stage.state]), stage.owner, stage.blocker]
@@ -101,7 +73,7 @@ export function DealStageRail({
               />
             )}
             <span
-              className={`relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 text-xs font-semibold ${stageNodeClass(stage.state)}`}
+              className={`relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 text-xs font-semibold ${STAGE_NODE_CLASS[stage.state]}`}
             >
               {stageNodeContent(stage.state, index)}
             </span>
@@ -117,7 +89,10 @@ export function DealStageRail({
                 live node's panel below repeats it as a badge; here it is only
                 type, so eight owners do not compete with the one action. */}
             {stage.owner && (
-              <span className="min-w-0 max-w-full break-words text-[11px] leading-snug text-muted-foreground">
+              <span
+                className="min-w-0 max-w-full break-words text-[11px] leading-snug text-muted-foreground"
+                data-testid="deal-stage-owner"
+              >
                 <bdi>{stage.owner}</bdi>
               </span>
             )}

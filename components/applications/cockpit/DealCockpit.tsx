@@ -27,15 +27,19 @@ import { format, isValid } from "date-fns";
 import {
   AlertTriangle,
   ArrowLeft,
-  Check,
   ChevronDown,
-  CircleDot,
   Clock,
   Lock,
   Minus,
   Ban,
 } from "lucide-react";
 import { DealStageRail, DealStagesComplete } from "./DealStageRail";
+import {
+  isLiveStageState,
+  STAGE_ICON,
+  type DealCockpitData,
+  type DealStageState,
+} from "./DealStagePresentation";
 import { SupplierSettlementDialog } from "./SupplierSettlementDialog";
 import { SettlementAdviceCorrectionDialog } from "./SettlementAdviceCorrectionDialog";
 import {
@@ -150,8 +154,6 @@ const MOMENT_UNAVAILABLE = "—";
 function renderMoment(value: number | undefined, pattern: string): string {
   return isRenderableMoment(value) ? format(value, pattern) : MOMENT_UNAVAILABLE;
 }
-
-type StageState = "COMPLETE" | "CURRENT" | "BLOCKED" | "PENDING" | "STOPPED";
 
 const STAGE_LABEL: Record<string, string> = {
   /** CASH only — the cash rail's anchor stage. */
@@ -312,19 +314,6 @@ const PROFIT_BLOCKED_REASON: Record<
 };
 
 /**
- * Keyed by state rather than tested with a ternary chain. The chain drew three
- * SonarCloud findings, and its final `else` silently absorbed any state it did
- * not name — so a new one rendered as PENDING's dash instead of failing.
- */
-const STAGE_ICON: Record<StageState, React.ReactNode> = {
-  COMPLETE: <Check className="h-4 w-4 text-emerald-600" />,
-  STOPPED: <Ban className="h-4 w-4 text-muted-foreground" />,
-  BLOCKED: <AlertTriangle className="h-4 w-4 text-amber-600" />,
-  CURRENT: <CircleDot className="h-4 w-4 text-primary" />,
-  PENDING: <Minus className="h-4 w-4 text-muted-foreground/60" />,
-};
-
-/**
  * Why the close cannot be taken — and it takes BOTH conditions, because the
  * two interact rather than merely coexisting.
  *
@@ -410,9 +399,7 @@ function Money({ children }: Readonly<{ children: React.ReactNode }>) {
  * the timeline — is common to both and rendered by the same code below. The one
  * thing that must not be shared is the headline: see `MoneyPanel`.
  */
-export type DealCockpitData =
-  | NonNullable<(typeof api.dealWorkspace.financedDealCockpit)["_returnType"]>
-  | NonNullable<(typeof api.sales.dealCockpit)["_returnType"]>;
+export type { DealCockpitData } from "./DealStagePresentation";
 
 /**
  * The data half: one query, one mutation, no presentation.
@@ -3009,7 +2996,7 @@ export function DealCockpitView({
   }
 
   const stages = deal.stages;
-  const live = stages.find((s) => s.state === "CURRENT" || s.state === "BLOCKED");
+  const live = stages.find((s) => isLiveStageState(s.state));
   // A finished deal gets one calm completion line instead of a rail of ticks;
   // the rail itself stays one click away. Every other deal — live, or stopped
   // with nothing left to do — shows the rail as-is, because on a stopped deal
@@ -3018,7 +3005,7 @@ export function DealCockpitView({
   const liveIndex = live ? stages.findIndex((s) => s.key === live.key) : -1;
   const railStages = stages.map((stage) => ({
     key: stage.key,
-    state: stage.state as StageState,
+    state: stage.state,
     label: t(STAGE_LABEL[stage.key] ?? stage.key),
     // The same provenance-gated resolution the focus panel uses, so a node
     // and the panel can never name different parties for one step.
@@ -3497,7 +3484,7 @@ export function DealCockpitView({
           the block that carries the action, and that is exactly this. */}
       {live ? (
         <StageFocusRow
-          state={live.state as StageState}
+          state={live.state}
           label={t(STAGE_LABEL[live.key] ?? live.key)}
           position={liveIndex + 1}
           total={stages.length}
@@ -4057,7 +4044,7 @@ function StageFocusRow({
   t,
   children,
 }: Readonly<{
-  state: StageState;
+  state: DealStageState;
   label: string;
   /** 1-based place on the rail, for the "Stage 3 / 8" kicker. */
   position: number;
@@ -4078,7 +4065,7 @@ function StageFocusRow({
   outstandingDocuments: ReadonlyArray<{ ruleId: string; name: string }>;
   t: (key: string) => string;
 }>) {
-  const icon = STAGE_ICON[state] ?? STAGE_ICON.PENDING;
+  const icon = STAGE_ICON[state];
 
   return (
     <Card

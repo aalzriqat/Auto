@@ -11,15 +11,17 @@
  * operator reads. `playwright/visual/deal-cockpit.visual.spec.ts` styles it
  * with the compiled app stylesheet and looks at it.
  *
- * Gated on `DEAL_COCKPIT_VISUAL_FIXTURE` so the ordinary suite never writes
- * files. The spec sets it and runs this file itself.
+ * Gated on `DEAL_COCKPIT_VISUAL_FIXTURE=1` so the ordinary suite never writes
+ * files, and writes only into the fresh per-run directory the spec names in
+ * `DEAL_COCKPIT_VISUAL_FIXTURE_DIR`. The spec sets both and runs this file.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { Id } from "@/convex/_generated/dataModel";
 import { dictionaries } from "@/lib/i18n/dictionaries";
-import type { DealCockpitData } from "./DealCockpit";
+import type { DealCockpitData } from "./DealStagePresentation";
 
 const language = vi.hoisted(() => ({ locale: "ar" as "ar" | "en" }));
 
@@ -50,22 +52,53 @@ vi.mock("@/components/accounting/AccountingTabShared", () => ({
 
 import { DealCockpitView } from "./DealCockpit";
 
+/**
+ * The financed member of the read model — what `financedDealCockpit` returns.
+ * Named so the fixture is checked against the one shape it claims to be, not
+ * against the union, where an object literal that misses a financed field can
+ * be reported against the cash member instead.
+ */
+type FinancedDealCockpitData = Extract<DealCockpitData, { dealKind: "FINANCED" }>;
+
 const SCALE = 1_000;
 
-/** A financed deal mid-flight: one blocked stage, a management headline, a supplier. */
-function financedDeal(): DealCockpitData {
+/**
+ * A financed deal mid-flight: one blocked stage, a management headline, a
+ * supplier. Every field the server returns is present and structurally checked
+ * (`satisfies`, no cast), so a field the server adds or renames breaks this
+ * bridge at compile time rather than painting a screenshot of a stale shape.
+ * The ids are the only casts: they are the server's branded ids, and the
+ * fixture stands in for the server. Nothing here is derived on the client.
+ */
+function financedDeal(): FinancedDealCockpitData {
+  const profit = {
+    available: true,
+    basis: "MANAGEMENT_ESTIMATE",
+    amountMinor: 2_410 * SCALE,
+    currency: "JOD",
+    classification: "ESTIMATED_AWAITING_SETTLEMENT",
+    postable: false,
+    lines: [
+      { key: "APPROVED_PURCHASE", sign: 1, amountMinor: 12_500 * SCALE },
+      { key: "SUPPLIER_SETTLEMENT", sign: -1, amountMinor: 9_500 * SCALE },
+      { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: 500 * SCALE },
+      { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: 90 * SCALE },
+    ],
+  } satisfies NonNullable<FinancedDealCockpitData["money"]>["profit"];
+
   return {
     dealKind: "FINANCED",
     denomination: { code: "JOD", scale: 3 },
     dealRef: "app_2048",
-    applicationId: "app_2048",
+    applicationId: "app_2048" as Id<"financeApplications">,
     saleId: null,
+    canonicalSaleId: null,
     status: "APPROVED",
     createdAt: Date.UTC(2026, 6, 28, 9, 30),
     updatedAt: Date.UTC(2026, 7, 9, 14, 5),
-    customer: { id: "c1", name: "سامر الخطيب", phone: "0790112233" },
+    customer: { id: "c1" as Id<"customers">, name: "سامر الخطيب", phone: "0790112233" },
     vehicle: {
-      id: "v1",
+      id: "v1" as Id<"vehicles">,
       label: "Volkswagen e-Golf 2020",
       vin: "WVWZZZAUZLW901234",
       consigned: true,
@@ -73,71 +106,161 @@ function financedDeal(): DealCockpitData {
     },
     salespersonName: "ليث العمري",
     financeCompanyName: "شركة التمويل الوطني",
+    activeAppraisalProvider: "INDEPENDENT",
     stages: [
       { key: "APPLICATION", state: "COMPLETE", authority: "DEALER" },
       { key: "CREDIT_DECISION", state: "COMPLETE", authority: "MIRROR" },
       { key: "APPRAISAL", state: "COMPLETE", authority: "MIRROR" },
-      { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "DEALER" },
+      { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
       { key: "DELIVERY_ACTIONS", state: "BLOCKED", blocker: "DocumentsIncomplete", authority: "DEALER" },
       { key: "DISBURSEMENT", state: "PENDING", authority: "MIRROR" },
       { key: "HANDOVER", state: "PENDING", authority: "DEALER" },
       { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
     ],
     documents: [
-      { ruleId: "r1", name: "سند نقل الملكية", required: true, status: "MISSING" },
-      { ruleId: "r2", name: "هوية العميل", required: true, status: "VERIFIED" },
+      {
+        ruleId: "r1" as Id<"companyDocumentRules">,
+        name: "سند نقل الملكية",
+        required: true,
+        status: "MISSING",
+        uploadedAt: undefined,
+      },
+      {
+        ruleId: "r2" as Id<"companyDocumentRules">,
+        name: "هوية العميل",
+        required: true,
+        status: "VERIFIED",
+        uploadedAt: Date.UTC(2026, 7, 1, 10, 0),
+      },
     ],
     timeline: [
-      { toStatus: "PENDING_DOCS", changedAt: Date.UTC(2026, 6, 28, 9, 30), actorName: "ليث العمري" },
-      { toStatus: "APPROVED", changedAt: Date.UTC(2026, 7, 9, 14, 5), actorName: "رنا حداد" },
+      {
+        fromStatus: undefined,
+        toStatus: "PENDING_DOCS",
+        changedAt: Date.UTC(2026, 6, 28, 9, 30),
+        actorName: "ليث العمري",
+        note: undefined,
+      },
+      {
+        fromStatus: "PENDING_DOCS",
+        toStatus: "APPROVED",
+        changedAt: Date.UTC(2026, 7, 9, 14, 5),
+        actorName: "رنا حداد",
+        note: undefined,
+      },
     ],
     money: {
       currency: "JOD",
       settlesDirectToSupplier: false,
       routeKnown: true,
-      profit: {
-        available: true,
-        basis: "MANAGEMENT_ESTIMATE",
-        amountMinor: 2_410 * SCALE,
-        currency: "JOD",
-        classification: "ESTIMATED_AWAITING_SETTLEMENT",
-        postable: false,
-        lines: [
-          { key: "APPROVED_PURCHASE", sign: 1, amountMinor: 12_500 * SCALE },
-          { key: "SUPPLIER_SETTLEMENT", sign: -1, amountMinor: 9_500 * SCALE },
-          { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: 500 * SCALE },
-          { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: 90 * SCALE },
-        ],
-      },
+      profit,
+      managementProfit: profit,
       expenses: { lines: [], actualTotalMinor: 90 * SCALE, awaitingActuals: 1 },
       parties: [
-        { party: "CUSTOMER", name: "سامر الخطيب", position: "DEALERSHIP_HOLDS", amountMinor: 500 * SCALE, currency: "JOD" },
-        { party: "FINANCIER", name: "شركة التمويل الوطني", position: "OWED_TO_DEALERSHIP", amountMinor: 12_000 * SCALE, currency: "JOD" },
-        { party: "SUPPLIER", name: "شركة عمّان للاستيراد", position: "DEALERSHIP_OWES", amountMinor: 9_500 * SCALE, currency: "JOD" },
+        {
+          party: "CUSTOMER",
+          name: "سامر الخطيب",
+          position: "DEALERSHIP_HOLDS",
+          amountMinor: 500 * SCALE,
+          currency: "JOD",
+          reference: undefined,
+        },
+        {
+          party: "FINANCIER",
+          name: "شركة التمويل الوطني",
+          position: "OWED_TO_DEALERSHIP",
+          amountMinor: 12_000 * SCALE,
+          currency: "JOD",
+        },
+        {
+          party: "SUPPLIER",
+          name: "شركة عمّان للاستيراد",
+          position: "DEALERSHIP_OWES",
+          amountMinor: 9_500 * SCALE,
+          currency: "JOD",
+          reference: undefined,
+          receivableId: undefined,
+        },
       ],
       appraisalGapMinor: 300 * SCALE,
     },
+    handoverEvidence: {
+      approvedPurchaseAmountMinor: 12_500 * SCALE,
+      financeCompanyFundedPortionMinor: 12_000 * SCALE,
+      dealerContributionMinor: 500 * SCALE,
+      approvedAmountIsFarFromEvidence: false,
+      currency: { code: "JOD", scale: 3 },
+    },
+    settlementAdviceDiscrepancy: null,
     settlementAdviceRequiresReconciliation: false,
-  } as unknown as DealCockpitData;
+    expectedPaymentRegistered: false,
+    supplierSettlementRouteRequired: false,
+    economicsRecorded: true,
+    economicsStamp: "fixture-economics-stamp",
+    pendingDepositResolution: false,
+  } satisfies FinancedDealCockpitData;
 }
 
-const OUT_DIR = resolve(process.cwd(), "test-results/deal-cockpit-visual/fixtures");
+/**
+ * Whose move each stage of the fixture is, as the SCREEN must say it — one
+ * i18n key per stage, written by hand from the stage's server authority and
+ * the recorded appraisal provenance (`APPRAISAL` is `MIRROR` but was appraised
+ * by an INDEPENDENT appraiser, so it must NOT read "Finance company"). Resolved
+ * through the real dictionaries and written beside the markup, so the browser
+ * gate asserts the label it can SEE against an expectation that was never
+ * derived from the render.
+ */
+const EXPECTED_STAGE_OWNER_KEYS: ReadonlyArray<string> = [
+  "StageOwnerDealership", // APPLICATION · DEALER
+  "StageOwnerFinanceCompany", // CREDIT_DECISION · MIRROR
+  "AppraisalByIndependent", // APPRAISAL · MIRROR, provenance INDEPENDENT
+  "StageOwnerFinanceCompany", // APPROVED_PURCHASE · MIRROR
+  "StageOwnerDealership", // DELIVERY_ACTIONS · DEALER
+  "StageOwnerFinanceCompany", // DISBURSEMENT · MIRROR
+  "StageOwnerDealership", // HANDOVER · DEALER
+  "StageOwnerDealership", // SETTLEMENT · DEALER
+];
 
-describe.skipIf(!process.env.DEAL_COCKPIT_VISUAL_FIXTURE)("deal cockpit visual fixture", () => {
+/**
+ * Generation is opted into with exactly `DEAL_COCKPIT_VISUAL_FIXTURE=1`; any
+ * other value, including a stray truthy one, leaves the ordinary suite as the
+ * ordinary suite. The output directory is NOT a fixed path: the Playwright
+ * gate creates a fresh per-run directory and passes it here, so a file left
+ * behind by an earlier run can never stand in for one this run failed to
+ * write. Asked to generate without a directory, the bridge FAILS — it does
+ * not fall back to a shared location that could carry stale artifacts.
+ */
+const GENERATE = process.env.DEAL_COCKPIT_VISUAL_FIXTURE === "1";
+const OUT_DIR = process.env.DEAL_COCKPIT_VISUAL_FIXTURE_DIR;
+
+describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
   test.each(["en", "ar"] as const)("writes the %s markup", (locale) => {
+    expect(OUT_DIR, "DEAL_COCKPIT_VISUAL_FIXTURE_DIR must name this run's fresh directory").toBeTruthy();
+    const outDir = resolve(OUT_DIR!);
     language.locale = locale;
+    const deal = financedDeal();
     const html = renderToStaticMarkup(
       <DealCockpitView
-        deal={financedDeal()}
+        deal={deal}
         backHref="/org_1/deals"
-        activeAppraisalProvider="INDEPENDENT"
+        activeAppraisalProvider={deal.activeAppraisalProvider}
         onRecordSupplierReceipt={async () => {}}
       />
     );
     // Not an empty render: the headline and the rail are both in the markup.
     expect(html).toContain("data-testid=\"deal-header\"");
     expect(html).toContain("data-testid=\"deal-stage-rail\"");
-    mkdirSync(OUT_DIR, { recursive: true });
-    writeFileSync(resolve(OUT_DIR, `deal-cockpit-${locale}.html`), html);
+    expect(EXPECTED_STAGE_OWNER_KEYS).toHaveLength(deal.stages.length);
+    const table = dictionaries[locale] as Record<string, string>;
+    const expectedOwners = EXPECTED_STAGE_OWNER_KEYS.map((key) => {
+      expect(table[key], `${locale} dictionary has no ${key}`).toBeTruthy();
+      return table[key];
+    });
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(resolve(outDir, `deal-cockpit-${locale}.html`), html);
+    writeFileSync(
+      resolve(outDir, `deal-cockpit-${locale}.expected.json`),
+      JSON.stringify({ stageOwners: expectedOwners }, null, 2)
+    );
   });
 });
