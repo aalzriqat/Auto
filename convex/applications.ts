@@ -54,6 +54,7 @@ import {
   positionForObligation,
   settlementIsComplete,
   settlementStatusForFacts,
+  supplierReceiptActionability,
   type FinanceCompanyRuleSnapshot,
   type ObligationState,
   type SettlementObligations,
@@ -1381,6 +1382,18 @@ async function buildCockpitMoney(
       awaitingActuals: feesAwaitingActuals,
     },
     parties,
+    /**
+     * Whether "Settle supplier" may be recorded NOW, decided here from the same
+     * claim `recordReceipt` will refuse on. The supplier row above keeps saying
+     * what is owed; this says what may be done about it — a DISPUTED claim is
+     * still OWED_TO_DEALERSHIP and still not collectable.
+     */
+    supplierReceipt: supplierReceiptActionability({
+      routeKnown,
+      settlesDirect,
+      claim: supplierClaim ? { id: supplierClaim._id, status: supplierClaim.status } : undefined,
+      obligation: settlementFacts.obligations.supplier,
+    }),
     /** `فرق تخمين` — a read of what was recorded, never a fresh computation. */
     appraisalGapMinor: app.rawAppraisalGapMinor,
   };

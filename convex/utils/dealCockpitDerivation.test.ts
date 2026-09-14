@@ -15,6 +15,7 @@ import {
   deriveCashDealStages,
   deriveDealStages,
   deriveManagementProfit,
+  supplierReceiptActionability,
 } from "./financingEconomics";
 
 function stages(overrides: Partial<DealStageFacts> = {}) {
@@ -662,5 +663,65 @@ describe("the disbursement stage", () => {
     expect(
       rail({ status: "CLOSED", finalizedSaleId: "sale1" }).state("DISBURSEMENT")
     ).not.toBe("COMPLETE");
+  });
+});
+
+/**
+ * Whether a receipt may be recorded against the supplier's claim: the server's
+ * verdict, from the same facts `recordReceipt` refuses on. Every gap fails
+ * CLOSED, and only one refusal — a dispute — is named for the screen to explain.
+ */
+describe("supplier receipt actionability", () => {
+  const openDirect = {
+    routeKnown: true,
+    settlesDirect: true,
+    claim: { id: "recv_1", status: "OPEN" as const },
+    obligation: "OPEN" as const,
+  };
+
+  test("an OPEN or PARTIALLY_PAID claim on the direct route, with an open obligation, is actionable", () => {
+    expect(supplierReceiptActionability(openDirect)).toEqual({ actionable: true });
+    expect(
+      supplierReceiptActionability({ ...openDirect, claim: { id: "recv_1", status: "PARTIALLY_PAID" } })
+    ).toEqual({ actionable: true });
+  });
+
+  test("a DISPUTED claim is refused by name, ahead of every other reading", () => {
+    // Even with an OPEN obligation and a direct route: the dispute is the
+    // reason, so the screen can say what to do about it.
+    expect(
+      supplierReceiptActionability({ ...openDirect, claim: { id: "recv_1", status: "DISPUTED" } })
+    ).toEqual({ actionable: false, reason: "CLAIM_DISPUTED" });
+  });
+
+  test("every gap fails closed", () => {
+    expect(supplierReceiptActionability({ ...openDirect, routeKnown: false })).toEqual({
+      actionable: false,
+      reason: "ROUTE_UNKNOWN",
+    });
+    expect(supplierReceiptActionability({ ...openDirect, settlesDirect: false })).toEqual({
+      actionable: false,
+      reason: "NOT_DIRECT_ROUTE",
+    });
+    expect(supplierReceiptActionability({ ...openDirect, claim: undefined })).toEqual({
+      actionable: false,
+      reason: "NO_CLAIM",
+    });
+    // An id the projection could not resolve is no claim at all.
+    expect(
+      supplierReceiptActionability({ ...openDirect, claim: { id: "", status: "OPEN" } })
+    ).toEqual({ actionable: false, reason: "NO_CLAIM" });
+    for (const status of ["PAID", "CANCELLED"] as const) {
+      expect(
+        supplierReceiptActionability({ ...openDirect, claim: { id: "recv_1", status } })
+      ).toEqual({ actionable: false, reason: "CLAIM_NOT_OPEN" });
+    }
+    // An unreadable or finished obligation is never a licence to collect.
+    for (const obligation of ["UNKNOWN", "CLOSED", "NONE"] as const) {
+      expect(supplierReceiptActionability({ ...openDirect, obligation })).toEqual({
+        actionable: false,
+        reason: "OBLIGATION_NOT_OPEN",
+      });
+    }
   });
 });

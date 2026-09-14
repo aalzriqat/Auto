@@ -22,6 +22,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { PERMISSIONS } from "@/convex/utils/permissions";
+import type { SupplierReceiptActionability } from "@/convex/utils/financingEconomics";
 import type { DealCockpitData } from "./DealStagePresentation";
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
@@ -151,6 +152,7 @@ function financedDirectDeal(): FinancedDealCockpitData {
       managementProfit: profit,
       expenses: { lines: [], actualTotalMinor: 0, awaitingActuals: 0 },
       parties: [SUPPLIER_OWES_MARGIN],
+      supplierReceipt: { actionable: true },
       appraisalGapMinor: undefined,
     },
     handoverEvidence: {
@@ -218,6 +220,7 @@ function cashDirectDeal(): CashDealCockpitData {
       },
       expenses: { lines: [], actualTotalMinor: 0, awaitingActuals: 0 },
       parties: [SUPPLIER_OWES_MARGIN],
+      supplierReceipt: { actionable: true },
       appraisalGapMinor: undefined,
     },
   } satisfies CashDealCockpitData;
@@ -272,6 +275,14 @@ const PATHS = [
           });
           rerender(element());
         },
+        serveSupplierReceipt: (supplierReceipt: SupplierReceiptActionability) => {
+          const deal = financedDirectDeal();
+          stubs.queryResults.set("dealWorkspace:financedDealCockpit", {
+            ...deal,
+            money: { ...deal.money!, supplierReceipt },
+          });
+          rerender(element());
+        },
       };
     },
   },
@@ -288,6 +299,14 @@ const PATHS = [
           stubs.queryResults.set("sales:dealCockpit", {
             ...deal,
             money: { ...deal.money!, parties: [SUPPLIER_IS_OWED] },
+          });
+          rerender(element());
+        },
+        serveSupplierReceipt: (supplierReceipt: SupplierReceiptActionability) => {
+          const deal = cashDirectDeal();
+          stubs.queryResults.set("sales:dealCockpit", {
+            ...deal,
+            money: { ...deal.money!, supplierReceipt },
           });
           rerender(element());
         },
@@ -382,5 +401,70 @@ describe.each(PATHS)("$path closes an open supplier settlement the moment author
     tree.rerender();
     expect(settleButton()).not.toBeNull();
     expect(screen.queryByText("SettleSupplierTitle")).toBeNull();
+  });
+});
+
+/**
+ * A DISPUTED claim is still OWED_TO_DEALERSHIP — the money is genuinely owed,
+ * the two sides just disagree about it — and `recordReceipt` refuses it on
+ * sight. The screen used to offer "Settle supplier" from the position alone, so
+ * a fully authorized operator was handed a form whose submit could only fail.
+ * The SERVER now says whether the receipt may be recorded, beside the position;
+ * the position stays truthful and the action follows the verdict — including
+ * when the dispute is raised while the form is open.
+ */
+describe.each(PATHS)("$path withholds the settlement on a DISPUTED claim, and says why", ({ mount }) => {
+  const DISPUTED = { actionable: false, reason: "CLAIM_DISPUTED" } as const;
+
+  test("served disputed from the start: the position is still owed, no action, guidance instead", () => {
+    stubs.membership = FINANCE_MANAGER;
+    const tree = mount();
+    tree.serveSupplierReceipt(DISPUTED);
+
+    // The obligation is not rewritten to hide the button...
+    expect(screen.getByText("PositionOwedToDealership")).toBeTruthy();
+    // ...the button the server would refuse is absent, not merely disabled...
+    expect(settleButton()).toBeNull();
+    expect(screen.queryByText("SettleSupplierTitle")).toBeNull();
+    // ...and the tile says what to do about it.
+    expect(screen.getByRole("status").textContent).toBe("SupplierClaimDisputedGuidance");
+  });
+
+  test("positive control: the same deal served actionable offers the action and no guidance", () => {
+    stubs.membership = FINANCE_MANAGER;
+    const tree = mount();
+    tree.serveSupplierReceipt({ actionable: true });
+    expect(settleButton()).not.toBeNull();
+    expect(screen.queryByText("SupplierClaimDisputedGuidance")).toBeNull();
+  });
+
+  test("open → disputed while the form is open: the dialog unmounts and the action goes with it", () => {
+    stubs.membership = FINANCE_MANAGER;
+    const tree = mount();
+    fireEvent.click(settleButton()!);
+    expect(screen.getByText("SettleSupplierTitle")).toBeTruthy();
+
+    tree.serveSupplierReceipt(DISPUTED);
+    expect(screen.queryByText("SettleSupplierTitle")).toBeNull();
+    expect(settleButton()).toBeNull();
+    expect(screen.getByText("SupplierClaimDisputedGuidance")).toBeTruthy();
+  });
+
+  test("lifting the dispute restores the action without re-opening the form nobody re-requested", () => {
+    stubs.membership = FINANCE_MANAGER;
+    const tree = mount();
+    fireEvent.click(settleButton()!);
+    tree.serveSupplierReceipt(DISPUTED);
+    tree.serveSupplierReceipt({ actionable: true });
+    expect(settleButton()).not.toBeNull();
+    expect(screen.queryByText("SettleSupplierTitle")).toBeNull();
+  });
+
+  test("a non-dispute refusal withholds the action silently, and MANAGE_FINANCE cannot override it", () => {
+    stubs.membership = { roleName: "OWNER", permissions: [] };
+    const tree = mount();
+    tree.serveSupplierReceipt({ actionable: false, reason: "CLAIM_NOT_OPEN" });
+    expect(settleButton()).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
   });
 });

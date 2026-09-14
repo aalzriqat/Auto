@@ -1253,6 +1253,69 @@ describe("the deal cockpit query", () => {
     expect(by("FINANCIER").position).toBe("NOT_INVOLVED");
   });
 
+  /**
+   * The position says what is OWED; `supplierReceipt` says what may be DONE.
+   * A DISPUTED claim is still owed — the two sides disagree about it — and
+   * `recordReceipt` refuses it, so the projection must carry the refusal
+   * beside a position it does NOT rewrite. Before this, the screen read the
+   * position alone and offered a settlement the server refused on submit.
+   */
+  test("an OPEN direct claim is served as actionable — the positive control", async () => {
+    const s = await seedDealership("cockpitActionable");
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+
+    const view = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    expect(view!.money!.supplierReceipt).toEqual({ actionable: true });
+  });
+
+  test("a DISPUTED direct claim stays OWED_TO_DEALERSHIP at its full balance, and is NOT actionable", async () => {
+    const s = await seedDealership("cockpitDisputed");
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+    const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
+    await s.asUser.mutation(api.supplierReceivables.setDisputed, {
+      orgId: s.orgId,
+      receivableId: claim._id,
+      disputed: true,
+      reason: "Supplier says the agreed margin was lower",
+    });
+
+    const view = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    const supplier = view!.money!.parties.find((p) => p.party === "SUPPLIER")!;
+
+    // The money is still owed, in full, and the row still names the claim.
+    expect(supplier.position).toBe("OWED_TO_DEALERSHIP");
+    expect(supplier.amountMinor).toBe(MARGIN * SCALE);
+    expect(supplier.receivableId).toBe(claim._id);
+    // ...but nothing may be recorded against it, for a reason the screen can name.
+    expect(view!.money!.supplierReceipt).toEqual({ actionable: false, reason: "CLAIM_DISPUTED" });
+    // The same verdict the mutation reaches, so the two cannot disagree.
+    await expect(
+      s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId: s.orgId,
+        receivableId: claim._id,
+        amount: MARGIN,
+      })
+    ).rejects.toThrow(/under dispute/);
+  });
+
+  test("THROUGH_DEALERSHIP has no claim to collect, so the receipt is not actionable on that route", async () => {
+    const s = await seedDealership("cockpitThroughNoReceipt");
+    const { applicationId } = await runDeal(s, { route: "THROUGH_DEALERSHIP", finalize: true });
+
+    const view = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    expect(view!.money!.supplierReceipt).toEqual({ actionable: false, reason: "NOT_DIRECT_ROUTE" });
+  });
+
   test("the supplier payable is converted from major units at the currency's own scale", async () => {
     // The trap: `amountDue` is stored in MAJOR units on both supplier tables,
     // while every `*Minor` field on the application is minor. JOD is a

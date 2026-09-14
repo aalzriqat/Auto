@@ -2266,16 +2266,21 @@ const PARTY_FACT_LABEL: Record<string, string> = {
 /**
  * One tile per party the server names, with the supplier's settlement action
  * beside the claim it settles. `onSettleSupplier` is present only when the
- * SERVER would accept the command from this caller.
+ * SERVER would accept the command from this caller. `supplierGuidance` takes
+ * the action's place when the server has said WHY it would not — a disputed
+ * claim is still owed, and the tile must say what to do about it rather than
+ * offer a button whose submit is refused.
  */
 function DealPartyFacts({
   parties,
   onSettleSupplier,
+  supplierGuidance,
   money,
   t,
 }: Readonly<{
   parties: DealMoney["parties"];
   onSettleSupplier: (() => void) | undefined;
+  supplierGuidance: string | undefined;
   money: (minor: number) => string;
   t: (key: string) => string;
 }>) {
@@ -2310,6 +2315,10 @@ function DealPartyFacts({
                 <Button size="sm" className="h-9" onClick={onSettleSupplier}>
                   {t("SettleSupplierAction")}
                 </Button>
+              ) : party.party === "SUPPLIER" && supplierGuidance ? (
+                <p role="status" className="text-xs text-muted-foreground">
+                  {supplierGuidance}
+                </p>
               ) : undefined
             }
             t={t}
@@ -2406,6 +2415,7 @@ function MoneyPanel({
     items: DealMoney["parties"];
     appraisalGap: Readonly<{ amountMinor: number | undefined }> | null;
     onSettleSupplier: (() => void) | undefined;
+    supplierGuidance: string | undefined;
   }> | null;
   t: (key: string) => string;
 }>) {
@@ -2424,6 +2434,7 @@ function MoneyPanel({
             <DealPartyFacts
               parties={parties.items}
               onSettleSupplier={parties.onSettleSupplier}
+              supplierGuidance={parties.supplierGuidance}
               money={money}
               t={t}
             />
@@ -2784,14 +2795,28 @@ export function DealCockpitView({
   const [reopenError, setReopenError] = useState<string | null>(null);
 
   // A claim to settle AND a caller the server would accept the receipt from.
-  // The first three terms are the deal's state; the last is the operator's
+  // The first four terms are the deal's state; the last is the operator's
   // authority, decided by the container from MANAGE_FINANCE and never here.
+  //
+  // `supplierReceipt` is the SERVER's own verdict on whether `recordReceipt`
+  // would take the command, formed from the claim's status. The position alone
+  // was not enough: a DISPUTED claim reads OWED_TO_DEALERSHIP — the money IS
+  // still owed — and the screen offered a settlement the mutation refuses on
+  // sight. The position stays truthful; the action follows the verdict.
   const supplierRow = deal?.money?.parties.find((p) => p.party === "SUPPLIER");
+  const supplierReceipt = deal?.money?.supplierReceipt;
   const canSettleSupplier =
     callerMaySettleSupplier &&
     deal?.money?.settlesDirectToSupplier === true &&
     deal.money.routeKnown &&
-    supplierRow?.position === "OWED_TO_DEALERSHIP";
+    supplierRow?.position === "OWED_TO_DEALERSHIP" &&
+    supplierReceipt?.actionable === true;
+  // Named guidance for the one refusal the operator can act on. Every other
+  // reason simply withholds the button, as before.
+  const supplierGuidance =
+    supplierReceipt?.actionable === false && supplierReceipt.reason === "CLAIM_DISPUTED"
+      ? t("SupplierClaimDisputedGuidance")
+      : undefined;
 
   // Authority is LIVE, not a snapshot taken when the dialog opened. If the
   // membership finishes loading without MANAGE_FINANCE, is revoked mid-entry,
@@ -3593,6 +3618,7 @@ export function DealCockpitView({
                             ? { amountMinor: deal.money.appraisalGapMinor }
                             : null,
                         onSettleSupplier: canSettleSupplier ? () => setSettlingSupplier(true) : undefined,
+                        supplierGuidance,
                       }
                     : null
                 }

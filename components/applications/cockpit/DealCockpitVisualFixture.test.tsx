@@ -182,6 +182,8 @@ function financedDeal(): FinancedDealCockpitData {
           receivableId: undefined,
         },
       ],
+      // THROUGH_DEALERSHIP: nothing to collect from the supplier on this route.
+      supplierReceipt: { actionable: false, reason: "NOT_DIRECT_ROUTE" },
       appraisalGapMinor: 300 * SCALE,
     },
     handoverEvidence: {

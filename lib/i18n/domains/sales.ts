@@ -1204,6 +1204,8 @@ export const salesEn = {
   DocumentsComplete: "complete",
   MoneyPanelHidden: "You do not have permission to view this deal's figures.",
   SettleSupplierAction: "Settle supplier",
+  SupplierClaimDisputedGuidance:
+    "This claim is under dispute. Resolve the dispute before recording any money against it.",
   SettleSupplierTitle: "Record what the supplier paid back",
   SettleSupplierDesc:
     "The finance company paid {supplier} directly, so what remains is the dealership's margin on the deal. Record what {supplier} has actually paid back — not what is owed.",
@@ -2169,6 +2171,8 @@ export const salesAr = {
   DocumentsComplete: "مكتملة",
   MoneyPanelHidden: "لا تملك صلاحية عرض أرقام هذه الصفقة.",
   SettleSupplierAction: "تسوية المورد",
+  SupplierClaimDisputedGuidance:
+    "هذه المطالبة قيد النزاع. سوِّ النزاع أولاً قبل تسجيل أي مبلغ عليها.",
   SettleSupplierTitle: "تسجيل ما سدَّده المورد",
   SettleSupplierDesc:
     "شركة التمويل دفعت إلى {supplier} مباشرة، والمتبقي هو هامش المعرض على الصفقة. سجِّل ما سدَّده {supplier} فعلياً، لا ما هو مستحق عليه.",
