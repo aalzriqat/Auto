@@ -1,6 +1,7 @@
 /**
- * The 114-entry economic-command classification ratchet (SCRUM-313; 113 at the
- * RC, +1 for SCRUM-83's `financingEconomics.resolveAppraisalGap`).
+ * The 115-entry economic-command classification ratchet (SCRUM-313; 113 at the
+ * RC, +1 for SCRUM-83's `financingEconomics.resolveAppraisalGap`, +1 for
+ * SCRUM-215's `financeDealCosts.recordTemplateFeeActual`).
  *
  * OWNER RULING: every public mutation that can reach a money-bearing sink must
  * carry EXACTLY ONE classification, and this must FAIL whenever a new public

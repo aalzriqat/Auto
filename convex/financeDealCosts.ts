@@ -8,7 +8,12 @@ import { AppErrorCode } from "./utils/errors";
 import { runWithIdempotency } from "./utils/idempotency";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { getOrgCurrency } from "./accounting/workflowHooks";
-import { assertExpectedCurrency, resolveDealCurrency } from "./utils/settlementDeductions";
+import {
+  assertConfiguredFeesRecorded,
+  assertExpectedCurrency,
+  exactTemplateLine,
+  resolveDealCurrency,
+} from "./utils/settlementDeductions";
 import { assertSupportedDenomination } from "./utils/money";
 import { reconcileEmployeeCustody } from "../lib/financingEconomics";
 import { recomputeEconomicsForApplication } from "./financingEconomics";
@@ -362,10 +367,10 @@ export function deriveExpectedFees(args: {
   const rows: ExpectedFeeRow[] = configured.map((template, templateIndex) => {
     const duplicateIdentity = (identityCounts.get(templateIdentity(template)) ?? 0) > 1;
 
-    // The line that names this position, or nothing.
-    const matched = args.fees.find(
-      (fee) => fee.source === "COMPANY_TEMPLATE" && fee.templateIndex === templateIndex
-    );
+    // The line that names this position, or nothing — the same matcher the
+    // closure gates use, so the checklist cannot show a row as recorded that
+    // classification or finalization would refuse.
+    const matched = exactTemplateLine(args.fees, templateIndex);
     if (matched) claimed.add(matched._id);
 
     return {
@@ -1923,29 +1928,10 @@ export const classifyDealAccounting = mutation({
       );
     }
     // Every fee the finance company's FROZEN policy configures needs an actual
-    // on the record too. The expected rows are derived from the snapshot and
-    // are not lines, so the counts above cannot see them: with two configured
-    // templates and one actual recorded, `linesAwaitingActual` is zero and the
-    // deal would classify with a configured cost silently missing. The gate
-    // asks the snapshot directly. A fee the company did not charge is
-    // recorded as an actual of zero — a fact — not left blank.
-    const expected = deriveExpectedFees({
-      snapshot: app.companyRuleSnapshot,
-      fees,
-      currency: app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId)),
-      actualTotalMinor: summary.actualTotalMinor,
-    });
-    // `row.actual` is EXACT by construction (the line that names the
-    // position); a legacy or look-alike template line with no position is
-    // never attached to a row, so it cannot satisfy this either.
-    const unrecordedTemplates = expected.rows.filter(
-      (row) => row.actual === null || row.actual.actualAmountMinor === undefined
-    );
-    if (unrecordedTemplates.length > 0) {
-      throw new ConvexError(
-        `${unrecordedTemplates.length} fee(s) configured by this deal's finance company have no actual recorded. Record what was actually paid for each of them — zero if it was not charged — before closing.`
-      );
-    }
+    // on the record too — the counts above cannot see a configured fee nobody
+    // recorded. One rule for this door and for finalization's; see
+    // `assertConfiguredFeesRecorded`.
+    await assertConfiguredFeesRecorded(ctx, app, "closing");
 
     // Read the arithmetic, not the stored status. A record can be closed and
     // still be unbalanced — a late receipt against a RECONCILED record is

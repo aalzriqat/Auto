@@ -657,6 +657,239 @@ describe("duplicate templates", () => {
   });
 });
 
+/**
+ * Codex-high MEDIUM on 229608039 — existing classifications bypass
+ * configured-fee completion.
+ *
+ * `classifyDealAccounting` asks the snapshot for every configured fee, but
+ * `finalizeDeal` trusted the `CLASSIFIED` flag it found. A deal classified under
+ * the OLDER rule — before configured-fee completeness existed — still carries
+ * a valid flag, and the posting plan reads recorded deductions only, so
+ * finalization completed with every configured checklist position unrecorded.
+ * Reproduced here the way the upgrade path produces it: the row carries a
+ * classification no writer on this branch would grant, and finalization is
+ * asked to post it. Failing-first: with the finalization re-check disabled the
+ * sale was created; with it, finalization refuses before any write.
+ */
+describe("finalization re-checks configured fees, whichever rule the deal was classified under", () => {
+  const PRICE = 20_000;
+
+  async function seedFinalizable(tag: string) {
+    const t = convexTestWithComponents(schema, MODULES);
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: `Finalize ${tag}`, createdAt: Date.now() })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", {
+        orgId,
+        plan: "professional",
+        status: "active",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
+    const userId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: `fin_${tag}_user`, email: `fin.${tag}@x.com`, name: "Seller" })
+    );
+    const approverId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: `fin_${tag}_appr`, email: `fin.${tag}.appr@x.com`, name: "Approver" })
+    );
+    const roleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ALL_PERMISSIONS, isSystemOwnerRole: true })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: approverId, roleId }));
+    await t.run((ctx) =>
+      ctx.db.insert("orgSettings", {
+        orgId,
+        currency: "JOD",
+        currencySymbol: "JD",
+        enabledPaymentTypes: ["CASH", "BANK_TRANSFER"],
+      })
+    );
+    const asUser = t.withIdentity({ subject: `fin_${tag}_user`, clerkId: `fin_${tag}_user` });
+    const asApprover = t.withIdentity({ subject: `fin_${tag}_appr`, clerkId: `fin_${tag}_appr` });
+
+    await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+    const fiscalYear = new Date().getUTCFullYear();
+    await asUser.mutation(api.accountingPeriods.create, {
+      orgId,
+      startDate: Date.UTC(fiscalYear, 0, 1),
+      endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+      fiscalYear,
+      periodNumber: 1,
+    });
+    const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
+    await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Buyer", lastName: tag })
+    );
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: `FINVIN${tag}`,
+        make: "Kia",
+        model: "Sportage",
+        year: 2024,
+        mileage: 10,
+        color: "Blue",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        sellingPrice: PRICE,
+        status: "AVAILABLE",
+        sourceType: "STOCK" as const,
+        purchasePrice: 15_000,
+      })
+    );
+    // 100% LTV: the company funds the whole approval and the dealership
+    // contributes nothing, so no NETTED refusal and a knowable remittance —
+    // the fixture Codex described.
+    const companyId = await asUser.mutation(api.finance.createCompany, {
+      orgId,
+      name: `Finance ${tag}`,
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      defaultLtvPercent: 100,
+      isActive: true,
+      feeTemplates: COMPANY_B_TEMPLATES,
+    });
+    return { t, orgId, userId, approverId, customerId, vehicleId, companyId, asUser, asApprover };
+  }
+
+  type Finalizable = Awaited<ReturnType<typeof seedFinalizable>>;
+
+  /** Quote → application → APPROVED → quotation/approval at the price → handover → payment → invoice → one reconciled zero line. */
+  async function walkToClassification(s: Finalizable) {
+    const quoteId = await s.asUser.mutation(api.quotes.saveQuote, {
+      orgId: s.orgId,
+      customerId: s.customerId,
+      vehicleId: s.vehicleId,
+      vehiclePrice: PRICE,
+      downPayment: 0,
+      termMonths: 48,
+      mode: "CONFIGURED_FINANCE_COMPANY",
+      companyId: s.companyId,
+      totalFinancedAmount: PRICE,
+    });
+    const applicationId = await s.asUser.mutation(api.applications.createFromQuote, { orgId: s.orgId, quoteId });
+    await s.asUser.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "UNDER_REVIEW" });
+    await s.asApprover.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "APPROVED" });
+    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(PRICE),
+      source: "MANUAL_ENTRY",
+    });
+    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: s.orgId,
+      applicationId,
+      approvedAmountMinor: jod(PRICE),
+      basis: "MANUAL",
+      notes: "Approved at the quotation.",
+    });
+    const stamp = await s.asUser.query(api.applications.handoverStamp, { orgId: s.orgId, applicationId });
+    await s.asUser.mutation(api.applications.registerVehicleHandover, {
+      orgId: s.orgId,
+      applicationId,
+      economicsStamp: stamp as string,
+    });
+    await s.asUser.mutation(api.applications.registerExpectedPayment, {
+      orgId: s.orgId,
+      applicationId,
+      method: "BANK_TRANSFER",
+      expectedDate: Date.now(),
+    });
+    await s.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+      orgId: s.orgId,
+      applicationId,
+      legalInvoiceAmountMinor: jod(PRICE),
+      legalInvoiceNumber: `INV-${applicationId}`,
+      legalInvoiceDate: Date.now(),
+      issuedTo: "FINANCE_COMPANY",
+    });
+    const zeroLine = await s.asUser.mutation(api.financeDealCosts.recordDealFee, {
+      orgId: s.orgId,
+      applicationId,
+      feeType: "OTHER_CLOSING_EXPENSE",
+      paidBy: "DEALER",
+      paidTo: "OTHER",
+      accountingTreatment: "SELLING_EXPENSE",
+      deductedFromSettlement: false,
+      actualAmountMinor: 0,
+      description: "No closing costs on this deal.",
+      expectedCurrency: "JOD",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId: zeroLine, notes: "Nothing to match." });
+    return applicationId;
+  }
+
+  const finalize = (s: Finalizable, applicationId: Id<"financeApplications">) =>
+    s.asUser.mutation(api.applications.finalizeDeal, {
+      orgId: s.orgId,
+      applicationId,
+      idempotencyKey: crypto.randomUUID(),
+    });
+  const salesOf = (s: Finalizable) => s.t.run((ctx) => ctx.db.query("sales").collect());
+
+  test("a deal classified under the older rule cannot finalize while a configured fee has no actual — and nothing is written", async () => {
+    const s = await seedFinalizable("legacyClassified");
+    const applicationId = await walkToClassification(s);
+
+    // What the upgrade path leaves behind: a classification no writer on this
+    // branch would grant. The line-based rules it was classified under are all
+    // satisfied (one reconciled zero line); both configured fees are unrecorded.
+    await expect(
+      s.asUser.mutation(api.financeDealCosts.classifyDealAccounting, { orgId: s.orgId, applicationId, notes: "established" })
+    ).rejects.toThrow(/configured by this deal's finance company/i);
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { accountingClassification: "CLASSIFIED" }));
+    const expected = (await costsOf(s as never, applicationId)).expected;
+    expect(expected.rows.map((row) => row.actual)).toEqual([null, null]);
+
+    await expect(finalize(s, applicationId)).rejects.toThrow(/configured by this deal's finance company/i);
+    expect(await salesOf(s)).toEqual([]);
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(app?.status).toBe("APPROVED");
+    expect(app?.finalizedSaleId).toBeUndefined();
+  });
+
+  test("with every configured fee recorded and the deal classified under the stronger rule, the same deal finalizes (control)", async () => {
+    const s = await seedFinalizable("recorded");
+    const applicationId = await walkToClassification(s);
+
+    const first = await s.asUser.mutation(api.financeDealCosts.recordTemplateFeeActual, {
+      orgId: s.orgId,
+      applicationId,
+      templateIndex: 0,
+      feeType: "APPRAISAL_FEE",
+      actualAmountMinor: jod(80),
+      expectedCurrency: "JOD",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    // Not charged: zero is a recorded fact, not a blank.
+    const second = await s.asUser.mutation(api.financeDealCosts.recordTemplateFeeActual, {
+      orgId: s.orgId,
+      applicationId,
+      templateIndex: 1,
+      feeType: "COMMISSION",
+      actualAmountMinor: 0,
+      expectedCurrency: "JOD",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    for (const feeId of [first, second]) {
+      await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "checked" });
+    }
+    await s.asUser.mutation(api.financeDealCosts.classifyDealAccounting, { orgId: s.orgId, applicationId, notes: "established" });
+
+    const saleId = await finalize(s, applicationId);
+    expect(saleId).toBeTruthy();
+    expect(await salesOf(s)).toHaveLength(1);
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
+  });
+});
+
 describe("closing the deal", () => {
   async function invoiced(seed: Seed, applicationId: Id<"financeApplications">) {
     await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {

@@ -8,6 +8,7 @@ import {
   type SettlementComponentInput,
 } from "./financedSalePostingPlan";
 import {
+  assertConfiguredFeesRecorded,
   settlementDeductedActualMinor,
   settlementDeductedFees,
 } from "./settlementDeductions";
@@ -63,6 +64,16 @@ export async function resolveFinancedSalePlan(
 ): Promise<FinancedSalePostingPlan | undefined> {
   if (!financedSaleRecognitionApplies(app, opts)) return undefined;
 
+  // The stronger closure rule, re-checked here rather than trusted from the
+  // `CLASSIFIED` flag finalization has already required (Codex-high MEDIUM on
+  // 229608039). A deal classified before configured-fee completeness existed
+  // carries a flag that was valid under the older rule; this plan reads
+  // recorded deductions only, so it would have posted the sale with every
+  // configured checklist position unrecorded. Same population as this plan —
+  // the one whose classification is finalization's evidence — and before the
+  // first write, like every other refusal in this function.
+  await assertConfiguredFeesRecorded(ctx, app, "finalizing");
+
   const fees = await settlementDeductedFees(ctx, app._id);
   // The plan settles in `opts.currency` (the deal's pinned denomination at
   // finalize). A deducted line recorded in any other currency refuses here,
@@ -113,8 +124,16 @@ export async function resolveFinancedSalePlan(
           feeDeductionsMinor,
         }).grossRemittanceMinor;
 
+  // A deducted line whose RECORDED actual is exactly zero withholds nothing and
+  // is not a component: the company configured the fee and charged nothing for
+  // it, which the handover-cost checklist records as a zero (a fact) rather
+  // than leaving the line blank. `settlementDeductedActualMinor` already
+  // contributes nothing for it; feeding it to the plan as a component would
+  // have refused the deal for "no usable amount" — a refusal meant for a line
+  // nobody quantified (`undefined`), which is still excluded here, and for a
+  // corrupt negative, which still reaches the plan and is still refused.
   const components: SettlementComponentInput[] = fees
-    .filter((fee) => fee.actualAmountMinor !== undefined)
+    .filter((fee) => fee.actualAmountMinor !== undefined && fee.actualAmountMinor !== 0)
     .map((fee) => ({
       sourceKind: "FEE" as const,
       sourceId: fee._id,

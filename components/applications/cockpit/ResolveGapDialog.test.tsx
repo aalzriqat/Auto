@@ -253,19 +253,35 @@ describe("the figures are a snapshot", () => {
 });
 
 describe("Arabic, right-to-left", () => {
-  test("renders every control with the Arabic keys under a RTL document direction", () => {
-    document.documentElement.dir = "rtl";
+  /**
+   * The direction asserted is the one the COMPONENT derives: `DialogContent`
+   * reads `useLanguage().isRtl` and sets `dir` on the dialog element itself.
+   * An earlier version of this test assigned `document.documentElement.dir`
+   * and then read it back — an assertion that could not fail whatever the
+   * dialog did (Codex-high LOW on 229608039). The LTR control below is what
+   * makes the RTL assertion falsifiable.
+   */
+  test("renders every control with the Arabic keys, and the dialog itself is laid out right-to-left", () => {
     language.rtl = true;
     try {
       renderDialog({ t: (key: string) => `ع:${key}` });
-      expect(screen.getByRole("dialog")).toBeTruthy();
+      const dialog = screen.getByRole("dialog");
+      expect(dialog.getAttribute("dir")).toBe("rtl");
       expect(screen.getByRole("radio", { name: /ع:GapDealerAbsorbs/ })).toBeTruthy();
       expect(screen.getByLabelText("ع:GapCashToDealer")).toBeTruthy();
-      expect(screen.getByTestId("gap-amount").textContent).toBe("1,000 JOD");
-      expect(document.documentElement.dir).toBe("rtl");
+      // Figures stay isolated from the surrounding direction: the amount is a
+      // <bdi>, so "1,000 JOD" reads the same way in either.
+      const amount = screen.getByTestId("gap-amount");
+      expect(amount.tagName).toBe("BDI");
+      expect(amount.textContent).toBe("1,000 JOD");
     } finally {
       language.rtl = false;
-      document.documentElement.dir = "";
     }
+  });
+
+  test("the same dialog is laid out left-to-right in English (control)", () => {
+    language.rtl = false;
+    renderDialog();
+    expect(screen.getByRole("dialog").getAttribute("dir")).toBe("ltr");
   });
 });

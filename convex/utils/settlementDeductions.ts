@@ -106,6 +106,79 @@ async function activeFees(
 }
 
 /**
+ * The live line that records the actual for the configured fee at
+ * `templateIndex` — the one `recordTemplateFeeActual` wrote against that
+ * position — or nothing. EXACT by construction: a COMPANY_TEMPLATE line with no
+ * position (legacy, or written to the table by anything else) never satisfies a
+ * configured row, however well its type and description happen to match.
+ * Shared by the checklist (`listDealCosts.expected`) and both closure gates,
+ * so the screen and the refusals cannot disagree about what "recorded" means.
+ */
+export function exactTemplateLine(
+  liveFees: ReadonlyArray<Doc<"financeDealFees">>,
+  templateIndex: number
+): Doc<"financeDealFees"> | undefined {
+  return liveFees.find(
+    (fee) =>
+      fee.voidedAt === undefined &&
+      fee.source === "COMPANY_TEMPLATE" &&
+      fee.templateIndex === templateIndex
+  );
+}
+
+/**
+ * Positions in the deal's frozen `companyRuleSnapshot.feeTemplates` that have
+ * no exact live line carrying an actual. Empty when nothing is configured.
+ */
+export function unrecordedConfiguredFeePositions(
+  snapshot: Doc<"financeApplications">["companyRuleSnapshot"],
+  liveFees: ReadonlyArray<Doc<"financeDealFees">>
+): number[] {
+  const templates = snapshot?.feeTemplates ?? [];
+  const missing: number[] = [];
+  templates.forEach((_template, templateIndex) => {
+    const line = exactTemplateLine(liveFees, templateIndex);
+    if (!line || line.actualAmountMinor === undefined) missing.push(templateIndex);
+  });
+  return missing;
+}
+
+/**
+ * Every fee the finance company's FROZEN policy configures must have an actual
+ * on the record before the deal's accounting can be established or posted.
+ *
+ * The expected rows are derived from the snapshot and are not lines, so the
+ * line-based counts (`linesAwaitingActual`, `fullyReconciled`) cannot see a
+ * configured fee nobody recorded: with two templates and one reconciled actual
+ * they are satisfied. This asks the snapshot directly. A fee the company did
+ * not charge is recorded as an actual of zero — a fact — not left blank.
+ *
+ * Applied at BOTH doors, by this one function. `classifyDealAccounting` is the
+ * first; `finalizeDeal` (through `resolveFinancedSalePlan`) is the second —
+ * because a deal classified under the OLDER rule, before this check existed,
+ * still carries a valid `CLASSIFIED` flag, and finalization trusting that flag
+ * alone would post the sale with every configured position unrecorded
+ * (Codex-high MEDIUM on 229608039). Re-checking at the commit point makes the
+ * stronger rule bind from this deploy forward for every deal not yet closed,
+ * whichever rule it was classified under.
+ */
+export async function assertConfiguredFeesRecorded(
+  ctx: QueryCtx | MutationCtx,
+  app: Doc<"financeApplications">,
+  action: string
+): Promise<void> {
+  const missing = unrecordedConfiguredFeePositions(
+    app.companyRuleSnapshot,
+    await activeFees(ctx, app._id)
+  );
+  if (missing.length > 0) {
+    throw new ConvexError(
+      `${missing.length} fee(s) configured by this deal's finance company have no actual recorded. Record what was actually paid for each of them — zero if it was not charged — before ${action}.`
+    );
+  }
+}
+
+/**
  * The live cost lines the company takes out of the remittance rather than
  * billing separately.
  *

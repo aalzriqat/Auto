@@ -1931,12 +1931,25 @@ describe("the submitted quotation is prefilled from the calculation", () => {
     expect(screen.getByText("QuotationDiffersFromCalculation")).toBeTruthy();
   });
 
-  test("renders right-to-left in Arabic with the prefilled figure present", () => {
+  /**
+   * Direction is asserted on the dialog element the component renders —
+   * `DialogContent` sets `dir` from `useLanguage().isRtl` — in BOTH languages,
+   * so the Arabic assertion can actually fail (Codex-high LOW on 229608039:
+   * the previous version checked only that a dialog existed).
+   */
+  test("renders right-to-left in Arabic with the prefilled figure present, and left-to-right in English", () => {
     language.locale = "ar";
     try {
-      render(<RecordSubmittedQuotationDialog {...dialogProps()} />);
+      const view = render(<RecordSubmittedQuotationDialog {...dialogProps()} />);
       expect(amountField().value).toBe("12500");
-      expect(screen.getByRole("dialog")).toBeTruthy();
+      expect(screen.getByRole("dialog").getAttribute("dir")).toBe("rtl");
+      // The amount input keeps its own tabular rendering inside the RTL dialog.
+      expect(amountField().className).toContain("tabular-nums");
+      view.unmount();
+
+      language.locale = "en";
+      render(<RecordSubmittedQuotationDialog {...dialogProps()} />);
+      expect(screen.getByRole("dialog").getAttribute("dir")).toBe("ltr");
     } finally {
       language.locale = "ar";
     }
