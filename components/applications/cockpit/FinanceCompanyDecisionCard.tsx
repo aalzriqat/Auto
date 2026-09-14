@@ -181,6 +181,31 @@ export function FinanceCompanyDecisionCard({
     !facts.closed &&
     !facts.approvedPurchaseRecorded &&
     (!facts.ltvMissing || canEstablishLtvPercent);
+  // Who may record THIS deal's missing rate: the full callable capability, not
+  // the rate authority alone (SCRUM-322). The rate is only ever written
+  // together with the quotation, through `recordSubmittedQuotation`, whose door
+  // is `create:finance_application` — so a custom role holding
+  // `approve:finance_application` + `view:finance` without CREATE can name the
+  // rate and still has no way to record it (the other rate writer,
+  // `approveDealerPurchaseAmount`, refuses until a quotation exists). Keyed on
+  // the rate authority alone, the note below told exactly that role to "record
+  // the rate when you record the quotation" beside a row with no action. The
+  // note and the button are now keyed on the same predicate, so the self-service
+  // instruction is only ever shown to someone who can carry it out; everyone
+  // else is told who can. No backend check changes: both writers still refuse.
+  const canRecordMissingRate = canRecordQuotation && canEstablishLtvPercent;
+  // Same fact, two audiences. Whoever can record the rate is told to record it
+  // with the quotation; whoever cannot — a default SALES (no approval), a
+  // default MANAGER (no finance visibility, SCRUM-117 2026-09-13 15:33), or the
+  // SCRUM-322 custom role (rate authority without CREATE) — is told who can,
+  // rather than being sent to a field that is not there and a server that would
+  // refuse them. Absent once a quotation exists or the deal is closed.
+  let missingRateNote: string | undefined;
+  if (facts.submittedQuotationMinor === null && facts.ltvMissing && !facts.closed) {
+    missingRateNote = canRecordMissingRate
+      ? t("FinanceCompanyLtvMissing")
+      : t("DealPurchaseLtvNeedsApprover");
+  }
   const approvalActionAvailable =
     canRecordApproval && !isOwnDeal && !facts.closed && quotationRecorded;
   // "Not in play until the quotation has gone out" is owned by the ROW's own
@@ -294,24 +319,7 @@ export function FinanceCompanyDecisionCard({
               <span className="text-muted-foreground">{t("NotRecordedYet")}</span>
             )
           }
-          note={
-            facts.submittedQuotationMinor === null && facts.ltvMissing && !facts.closed
-              ? // Same fact, two audiences. Whoever can set the rate is told to
-                // record it with the quotation; whoever cannot is told who
-                // unblocks the deal, rather than being sent to a field that is
-                // not there and a server that would refuse them.
-                //
-                // Keyed on `canEstablishLtvPercent`, NOT on `canRecordApproval`
-                // (SCRUM-117, 2026-09-13 15:33): establishing the rate now needs
-                // finance visibility as well as approval authority, so a default
-                // MANAGER belongs in the second audience even though they still
-                // record approvals. Keying this on the wrong capability would
-                // send exactly that person to a field the server refuses.
-                canEstablishLtvPercent
-                ? t("FinanceCompanyLtvMissing")
-                : t("DealPurchaseLtvNeedsApprover")
-              : undefined
-          }
+          note={missingRateNote}
           action={
             quotationActionAvailable ? (
               <Button size="sm" variant={quotationRecorded ? "outline" : "default"} onClick={onRecordQuotation}>

@@ -114,7 +114,9 @@ function dealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
   } as unknown as DealCockpitData;
 }
 
-const noopAsync = async (_values?: unknown) => {};
+const noopAsync = async (values?: unknown) => {
+  void values;
+};
 
 /**
  * `facts` is merged rather than replaced, so a case that varies one fact does
@@ -717,6 +719,84 @@ describe("recording the submitted quotation", () => {
     // The withdrawal above is about the missing RATE, not about the permission:
     // recording what was sent is ordinary sales work on a configured deal.
     expect(cardButton("RecordQuotationAction")).toBeTruthy();
+  });
+
+  /**
+   * SCRUM-322 — the note and the button were keyed on DIFFERENT capabilities.
+   *
+   * The self-service copy ("record the rate when you record the quotation")
+   * was keyed on the rate authority alone, while the button needs
+   * `create:finance_application` as well. A custom role holding
+   * `approve:finance_application` + `view:finance` but NOT CREATE was therefore
+   * told to do something this card gave it no way to do — and the backend
+   * offers no other way in: the only two rate writers each refuse it
+   * (`recordSubmittedQuotation` needs CREATE; `approveDealerPurchaseAmount`
+   * needs a quotation first). Self-service guidance requires the FULL callable
+   * capability; otherwise the note names who actually can.
+   *
+   * Four shapes, asserted on both halves (which note, and whether the action
+   * exists), so a fix keyed on any two of the three permissions fails here.
+   */
+  describe("the missing-rate guidance is keyed on the capability the action needs (SCRUM-322)", () => {
+    test("APPROVE + view:finance WITHOUT create: no self-service instruction, no action", () => {
+      renderCockpit(
+        wiring({
+          canRecordQuotation: false,
+          canRecordApproval: true,
+          canEstablishLtvPercent: true,
+          facts: { ltvMissing: true },
+        })
+      );
+
+      expect(cardButton("RecordQuotationAction")).toBeUndefined();
+      expect(screen.queryByText("FinanceCompanyLtvMissing")).toBeNull();
+      expect(screen.getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
+    });
+
+    test("all three held: told to record the rate with the quotation, and offered the action", () => {
+      renderCockpit(
+        wiring({
+          canRecordQuotation: true,
+          canRecordApproval: true,
+          canEstablishLtvPercent: true,
+          facts: { ltvMissing: true },
+        })
+      );
+
+      expect(cardButton("RecordQuotationAction")).toBeTruthy();
+      expect(screen.getByText("FinanceCompanyLtvMissing")).toBeTruthy();
+      expect(screen.queryByText("DealPurchaseLtvNeedsApprover")).toBeNull();
+    });
+
+    test("CREATE + APPROVE without view:finance (default MANAGER): told who can, no action", () => {
+      renderCockpit(
+        wiring({
+          canRecordQuotation: true,
+          canRecordApproval: true,
+          canEstablishLtvPercent: false,
+          facts: { ltvMissing: true },
+        })
+      );
+
+      expect(cardButton("RecordQuotationAction")).toBeUndefined();
+      expect(screen.queryByText("FinanceCompanyLtvMissing")).toBeNull();
+      expect(screen.getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
+    });
+
+    test("CREATE without APPROVE (default SALES): told who can, no action", () => {
+      renderCockpit(
+        wiring({
+          canRecordQuotation: true,
+          canRecordApproval: false,
+          canEstablishLtvPercent: false,
+          facts: { ltvMissing: true },
+        })
+      );
+
+      expect(cardButton("RecordQuotationAction")).toBeUndefined();
+      expect(screen.queryByText("FinanceCompanyLtvMissing")).toBeNull();
+      expect(screen.getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
+    });
   });
 
   /**
@@ -1680,5 +1760,198 @@ describe("a flagged amount does not look ordinary at the one-way door", () => {
     const dialog = openHandover(false, null);
     expect(within(dialog).queryByText("HandoverAmountLooksUnusual")).toBeNull();
     expect(within(dialog).getByText("HandoverSealsApprovedAmount")).toBeTruthy();
+  });
+});
+
+/**
+ * SCRUM-321 — the submitted quotation is PREFILLED from the calculation.
+ *
+ * Owner-proxy 2026-09-12 20:45: when AutoFlow has a server calculation, the
+ * amount opens already carrying it and the operator explicitly records it;
+ * a calculation that lands while the dialog is open fills the field ONCE and
+ * only while it is still pristine — the operator's own typing is never
+ * overwritten. Provenance follows the amount exactly as before: untouched
+ * prefill → SYSTEM_CALCULATED, edited → CALCULATED_WITH_OVERRIDE + reason,
+ * no calculation → MANUAL_ENTRY.
+ */
+describe("the submitted quotation is prefilled from the calculation", () => {
+  type DialogProps = Parameters<typeof RecordSubmittedQuotationDialog>[0];
+  function dialogProps(overrides: Partial<DialogProps> = {}): DialogProps {
+    return {
+      open: true,
+      submitting: false,
+      error: null,
+      calculation: { state: "AVAILABLE", minor: 12_500 * JOD },
+      requiresLtvPercent: false,
+      canSetLtvPercent: true,
+      factor: JOD,
+      money: (minor: number) => `${minor / JOD} JOD`,
+      t: (key: string) => key,
+      onOpenChange: () => {},
+      onSubmit: () => {},
+      ...overrides,
+    };
+  }
+  const amountField = () => screen.getByLabelText("QuotationAmountLabel") as HTMLInputElement;
+  const submitButton = () =>
+    screen.getByRole("button", { name: "RecordQuotationAction" }) as HTMLButtonElement;
+
+  test("a calculation available at open is already in the field, and an untouched save records it as calculated", () => {
+    const onSubmit = vi.fn();
+    render(<RecordSubmittedQuotationDialog {...dialogProps({ onSubmit })} />);
+
+    expect(amountField().value).toBe("12500");
+    expect(screen.getByText("QuotationMatchesCalculation")).toBeTruthy();
+    // Explicit save is still required: nothing was recorded by opening.
+    expect(onSubmit).not.toHaveBeenCalled();
+    fireEvent.click(submitButton());
+    expect(onSubmit).toHaveBeenCalledWith({
+      submittedQuotationMinor: 12_500 * JOD,
+      source: "SYSTEM_CALCULATED",
+      overrideReason: undefined,
+    });
+  });
+
+  test("opened while the calculator is still answering, a pristine field is filled once when the figure arrives", () => {
+    const view = render(
+      <RecordSubmittedQuotationDialog {...dialogProps({ calculation: { state: "LOADING" } })} />
+    );
+    expect(amountField().value).toBe("");
+    expect(submitButton().disabled).toBe(true);
+
+    view.rerender(
+      <RecordSubmittedQuotationDialog
+        {...dialogProps({ calculation: { state: "AVAILABLE", minor: 12_500 * JOD } })}
+      />
+    );
+    expect(amountField().value).toBe("12500");
+    expect(screen.getByText("QuotationMatchesCalculation")).toBeTruthy();
+    expect(submitButton().disabled).toBe(false);
+  });
+
+  test("a figure the operator already typed is NEVER overwritten by a calculation that arrives later", () => {
+    const onSubmit = vi.fn();
+    const view = render(
+      <RecordSubmittedQuotationDialog
+        {...dialogProps({ calculation: { state: "LOADING" }, onSubmit })}
+      />
+    );
+    fireEvent.change(amountField(), { target: { value: "13000" } });
+
+    view.rerender(
+      <RecordSubmittedQuotationDialog
+        {...dialogProps({ calculation: { state: "AVAILABLE", minor: 12_500 * JOD }, onSubmit })}
+      />
+    );
+    expect(amountField().value).toBe("13000");
+    // The typed figure departs from the calculation, so it is an override and
+    // needs its reason — the prefill did not silently reclassify it.
+    expect(screen.getByText("QuotationDiffersFromCalculation")).toBeTruthy();
+    expect(submitButton().disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("QuotationOverrideReasonLabel"), {
+      target: { value: "the sent document carried 13,000" },
+    });
+    fireEvent.click(submitButton());
+    expect(onSubmit).toHaveBeenCalledWith({
+      submittedQuotationMinor: 13_000 * JOD,
+      source: "CALCULATED_WITH_OVERRIDE",
+      overrideReason: "the sent document carried 13,000",
+    });
+  });
+
+  test("a field the operator cleared stays cleared when the figure arrives — pristine means untouched, not empty", () => {
+    const view = render(
+      <RecordSubmittedQuotationDialog {...dialogProps({ calculation: { state: "LOADING" } })} />
+    );
+    fireEvent.change(amountField(), { target: { value: "13000" } });
+    fireEvent.change(amountField(), { target: { value: "" } });
+
+    view.rerender(
+      <RecordSubmittedQuotationDialog
+        {...dialogProps({ calculation: { state: "AVAILABLE", minor: 12_500 * JOD } })}
+      />
+    );
+    expect(amountField().value).toBe("");
+  });
+
+  test("editing the prefilled figure turns it into an override that requires a reason", () => {
+    const onSubmit = vi.fn();
+    render(<RecordSubmittedQuotationDialog {...dialogProps({ onSubmit })} />);
+    fireEvent.change(amountField(), { target: { value: "12400" } });
+    expect(screen.getByText("QuotationDiffersFromCalculation")).toBeTruthy();
+    expect(submitButton().disabled).toBe(true);
+    fireEvent.click(submitButton());
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  test("with no calculation the field opens empty and the entry stays manual", () => {
+    const onSubmit = vi.fn();
+    render(
+      <RecordSubmittedQuotationDialog
+        {...dialogProps({ calculation: { state: "UNAVAILABLE" }, onSubmit })}
+      />
+    );
+    expect(amountField().value).toBe("");
+    expect(screen.getByText("QuotationCalculatorUnavailable")).toBeTruthy();
+    fireEvent.change(amountField(), { target: { value: "11500" } });
+    fireEvent.click(submitButton());
+    expect(onSubmit).toHaveBeenCalledWith({
+      submittedQuotationMinor: 11_500 * JOD,
+      source: "MANUAL_ENTRY",
+      overrideReason: undefined,
+    });
+  });
+
+  test("closing and reopening resets to the CURRENT calculation, discarding the previous entry", () => {
+    const view = render(<RecordSubmittedQuotationDialog {...dialogProps()} />);
+    fireEvent.change(amountField(), { target: { value: "13000" } });
+
+    view.rerender(<RecordSubmittedQuotationDialog {...dialogProps({ open: false })} />);
+    view.rerender(
+      <RecordSubmittedQuotationDialog
+        {...dialogProps({ calculation: { state: "AVAILABLE", minor: 12_750 * JOD } })}
+      />
+    );
+    expect(amountField().value).toBe("12750");
+    expect(screen.getByText("QuotationMatchesCalculation")).toBeTruthy();
+  });
+
+  test("a later CHANGE of an available calculation does not move a prefilled figure the operator has already seen", () => {
+    // The prefill is a one-shot: once the field carries a figure — prefilled or
+    // typed — a live query moving underneath must not rewrite what is on
+    // screen. The operator still sees "differs from the calculation".
+    const view = render(<RecordSubmittedQuotationDialog {...dialogProps()} />);
+    expect(amountField().value).toBe("12500");
+    view.rerender(
+      <RecordSubmittedQuotationDialog
+        {...dialogProps({ calculation: { state: "AVAILABLE", minor: 12_750 * JOD } })}
+      />
+    );
+    expect(amountField().value).toBe("12500");
+    expect(screen.getByText("QuotationDiffersFromCalculation")).toBeTruthy();
+  });
+
+  /**
+   * Direction is asserted on the dialog element the component renders —
+   * `DialogContent` sets `dir` from `useLanguage().isRtl` — in BOTH languages,
+   * so the Arabic assertion can actually fail (Codex-high LOW on 229608039:
+   * the previous version checked only that a dialog existed).
+   */
+  test("renders right-to-left in Arabic with the prefilled figure present, and left-to-right in English", () => {
+    language.locale = "ar";
+    try {
+      const view = render(<RecordSubmittedQuotationDialog {...dialogProps()} />);
+      expect(amountField().value).toBe("12500");
+      expect(screen.getByRole("dialog").getAttribute("dir")).toBe("rtl");
+      // The amount input keeps its own tabular rendering inside the RTL dialog.
+      expect(amountField().className).toContain("tabular-nums");
+      view.unmount();
+
+      language.locale = "en";
+      render(<RecordSubmittedQuotationDialog {...dialogProps()} />);
+      expect(screen.getByRole("dialog").getAttribute("dir")).toBe("ltr");
+    } finally {
+      language.locale = "ar";
+    }
   });
 });

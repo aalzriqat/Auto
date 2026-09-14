@@ -22,6 +22,7 @@ import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/d
 import { depositMethodValidator, type DepositMethod } from "./utils/depositRecording";
 import { completeSale } from "./utils/saleCompletion";
 import { resolveFinancedSalePlan } from "./utils/financedSaleRecognition";
+import { assertFeeTemplatesWithinLimit } from "./utils/dealCostLimits";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
 import { registerChequeCore, markChequeClearedCore, assertNoActiveAllocations } from "./collections";
@@ -43,6 +44,7 @@ import {
 } from "./utils/money";
 import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
 import {
+  assertAppraisalGapSettledToAdvance,
   buildRuleSnapshot,
   creditDecisionForStatus,
   deriveDealStages,
@@ -261,6 +263,10 @@ function assertDealerEconomicsReady(
       `This deal's funding split could not be calculated. Resolve the reconciliation note on it before ${action}.`
     );
   }
+  // A positive appraisal gap nobody has settled (SCRUM-116). Enforced here and
+  // not only by the stage rail: a gap the handover stamps is sealed against the
+  // one writer that can settle it, and finalization posts from the split.
+  assertAppraisalGapSettledToAdvance(app, action);
 }
 
 /**
@@ -2360,6 +2366,16 @@ export const createFromQuote = mutation({
     let companyRuleVersionId: Id<"financeCompanyRuleVersions"> | undefined;
     if (quoteCompany) {
       companyRuleSnapshot = buildRuleSnapshot(quoteCompany);
+      // New snapshots are held to the configuration policy before they are
+      // frozen. Its lower template limit reserves capacity under the deal's
+      // live-line ceiling for additional costs; an older snapshot above this
+      // policy but within live capacity remains closeable and is never
+      // rewritten here. The company is repaired by an explicit compliant
+      // list; the snapshot is never truncated to fit.
+      assertFeeTemplatesWithinLimit(
+        companyRuleSnapshot.feeTemplates,
+        `Creating an application under ${quoteCompany.name}`
+      );
       const versionRow = await ctx.db
         .query("financeCompanyRuleVersions")
         .withIndex("by_company_version", (q) =>

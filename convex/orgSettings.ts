@@ -181,7 +181,16 @@ export const upsert = mutation({
       // denominated in the org currency of its day, so presence of the row is
       // the invariant — the same rule the journal-entry check applies above.
       // Onboarding stays open: a fresh org has no application.
-      const [ledger, pending, txns, comp, advances, expenseRow, obDraft, journal, dealFee, dealCustody, financeApp] = await Promise.all([
+      // `financeCompanies` is the same EXISTENCE LOCK one step earlier
+      // (SCRUM-215 handover costs, PR #303). A company's rules carry minor
+      // units with no currency of their own — `feeTemplates[].estimatedAmountMinor`,
+      // `minimumCustomerFirstPaymentMinor` — denominated in the org currency
+      // of their day, and every application created later SNAPSHOTS them and
+      // reads them in the deal's currency. Reproduced before this line: a
+      // company configured with a 120.000 JOD valuation fee while the org was
+      // otherwise fresh, the org switched to USD, and every later deal expected
+      // a 1,200.00 USD valuation. Presence of the row is the invariant.
+      const [ledger, pending, txns, comp, advances, expenseRow, obDraft, journal, dealFee, dealCustody, financeApp, financeCompany] = await Promise.all([
         ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
         ctx.db.query("pendingAccountingEvents").withIndex("by_org_status", (q) => q.eq("orgId", args.orgId)).first(),
         ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
@@ -196,10 +205,11 @@ export const upsert = mutation({
         ctx.db.query("financeDealFees").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
         ctx.db.query("financeDealCustody").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
         ctx.db.query("financeApplications").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
+        ctx.db.query("financeCompanies").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
       ]);
       if (
         ledger || pending || txns || comp || advances || expenseRow || obDraft || journal ||
-        dealFee || dealCustody || financeApp
+        dealFee || dealCustody || financeApp || financeCompany
       ) {
         throw new ConvexError(
           "The organization currency cannot be changed after financial records exist — stored amounts are not converted and would be misread. Contact support for a currency migration."

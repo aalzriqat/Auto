@@ -146,6 +146,36 @@ type Seeded = Awaited<ReturnType<typeof seedDealership>>;
  * is the rest. Both are quote figures, and neither says who the finance company
  * pays — that is the route.
  */
+/**
+ * Records an unsettled approval shortfall as the dealership's, so the deal can
+ * go out (SCRUM-116). A no-op on a deal with no gap, a zero gap, or one already
+ * settled — the settlement is a recorded decision, never a re-decision.
+ */
+async function settleShortfallAsDealerAbsorbs(s: Seeded, applicationId: Id<"financeApplications">) {
+  const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+  const gap = app?.rawAppraisalGapMinor;
+  if (app === null || gap === undefined || !(gap > 0)) return;
+  if (
+    app.gapResolution === "CUSTOMER_ABSORBS" ||
+    app.gapResolution === "DEALER_ABSORBS" ||
+    app.gapResolution === "SPLIT"
+  ) {
+    return;
+  }
+  const served = await s.asApprover.query(api.applications.get, { orgId: s.orgId, applicationId });
+  if (!served?.economicsStamp) throw new Error("the deal payload carried no economics stamp");
+  await s.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+    orgId: s.orgId,
+    applicationId,
+    economicsStamp: served.economicsStamp,
+    customerGapShareMinor: 0,
+    dealerGapShareMinor: gap,
+    customerGapCashToDealerMinor: 0,
+    customerGapInstallmentToDealerMinor: 0,
+    customerGapToFinanceCompanyMinor: 0,
+  });
+}
+
 async function runDeal(
   s: Seeded,
   opts: {
@@ -1345,6 +1375,8 @@ describe("the deal cockpit query", () => {
       basis: "MANUAL",
       notes: "Approved below the quotation.",
     });
+    // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+    await settleShortfallAsDealerAbsorbs(s, applicationId);
 
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
     await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
@@ -2855,6 +2887,8 @@ describe("the supplier is never made debtor for money that did not reach him", (
       basis: "MANUAL",
       notes: `Approved at ${approvedAmount}.`,
     });
+    // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+    await settleShortfallAsDealerAbsorbs(s, applicationId);
     return { s, applicationId };
   }
 
@@ -3321,6 +3355,8 @@ describe("the claim cannot be reopened through a second door", () => {
       basis: "MANUAL",
       notes: "Approved in the deal's pinned currency.",
     });
+    // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+    await settleShortfallAsDealerAbsorbs(s, applicationId);
 
     // The org switches reporting currency AFTER the approval is frozen.
     // `orgSettings` does not count `financeApplications` among the rows that
@@ -3450,6 +3486,8 @@ describe("automatic commission is based on recognized earnings, not the commerci
       basis: "MANUAL",
       notes: `Approved at ${approvedAmount}.`,
     });
+    // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+    await settleShortfallAsDealerAbsorbs(s, applicationId);
     const saleId = await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
@@ -3568,6 +3606,8 @@ describe("the sales reports reconcile to the ledger on a financed direct deal", 
       basis: "MANUAL",
       notes: `Approved at ${approvedAmount}.`,
     });
+    // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+    await settleShortfallAsDealerAbsorbs(s, applicationId);
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
     return s;
   }
@@ -3690,6 +3730,8 @@ describe("financed direct evidence that has gone missing fails closed", () => {
       basis: "MANUAL",
       notes: `Approved at ${approvedAmount}.`,
     });
+    // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+    await settleShortfallAsDealerAbsorbs(s, applicationId);
     const saleId = (await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
@@ -4306,6 +4348,8 @@ describe("a settlement advice that contradicts the approval", () => {
       basis: "MANUAL",
       notes: `Approved at ${approvedAmount}.`,
     });
+    // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+    await settleShortfallAsDealerAbsorbs(s, applicationId);
     const saleId = await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
@@ -4878,6 +4922,8 @@ describe("a settlement advice that contradicts the approval", () => {
             notes: `Approved at ${amount}.`,
           });
         }
+        // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+        await settleShortfallAsDealerAbsorbs(s, id);
       },
     });
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
@@ -5614,6 +5660,8 @@ describe("amending one field of a settlement advice", () => {
       basis: "MANUAL",
       notes: "Approved at 18,000.",
     });
+    // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+    await settleShortfallAsDealerAbsorbs(s, applicationId);
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
     // The advice as it actually arrived: wrong amount, but a real cheque number
     // and a real date, both of which are the evidence.
@@ -5735,6 +5783,8 @@ describe("one recognized-earning rule, asked identically by every surface", () =
       basis: "MANUAL",
       notes: "Approved at 18,000.",
     });
+    // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+    await settleShortfallAsDealerAbsorbs(s, applicationId);
     const saleId = (await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
@@ -6050,6 +6100,8 @@ describe("one recognized-earning rule, asked identically by every surface", () =
       basis: "MANUAL",
       notes: "Approved at 18,000.",
     });
+    // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
+    await settleShortfallAsDealerAbsorbs(s, applicationId);
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
     return { s, applicationId };
   }
@@ -7626,5 +7678,120 @@ describe("a stale finance application cannot tear down the sale that replaced it
 
     const cancelled = await s.t.run((ctx) => ctx.db.get(saleId!));
     expect(cancelled?.status).toBe("CANCELLED");
+  });
+});
+
+/**
+ * The finance company's configured fees gate finalization on the DIRECT route
+ * too. A direct-route deal is never asked for a classification, so this is
+ * the only door its configured fees have — and the first placement of the
+ * finalization gate (behind the plan's coverage question, which the direct
+ * route never passes) let a deal close with a configured fee unrecorded
+ * (correction to the Codex-high MEDIUM on 229608039). The company's policy is
+ * snapshotted onto the deal when the application is created, so the
+ * templates go on the company BEFORE `runDeal`. Both cases carry the legacy
+ * `CLASSIFIED` flag the finding was about: it is neither trusted nor
+ * disturbed.
+ */
+describe("DIRECT_TO_SUPPLIER: the finance company's configured fees gate finalization", () => {
+  const TEMPLATES = [
+    {
+      feeType: "APPRAISAL_FEE" as const,
+      description: "Valuation",
+      estimatedAmountMinor: 80 * SCALE,
+      paidBy: "DEALER" as const,
+      paidTo: "APPRAISER" as const,
+      includedInQuotation: false,
+      deductedFromSettlement: false,
+      refundable: false,
+      accountingTreatment: "APPRAISAL_EXPENSE" as const,
+    },
+    {
+      feeType: "COMMISSION" as const,
+      description: "Commission",
+      estimatedAmountMinor: 300 * SCALE,
+      paidBy: "DEALER" as const,
+      paidTo: "FINANCE_COMPANY" as const,
+      includedInQuotation: false,
+      deductedFromSettlement: true,
+      refundable: false,
+      accountingTreatment: "FINANCE_COMPANY_COMMISSION" as const,
+    },
+  ];
+
+  /** A consigned car, a company with two configured fees, the deal walked to the direct route's finalizable state. */
+  async function directDeal(tag: string) {
+    const s = await seedDealership(tag);
+    await s.t.run((ctx) => ctx.db.patch(s.companyId, { feeTemplates: TEMPLATES }));
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: false });
+    // What `runDeal` records for the direct route only when it finalizes itself.
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE }));
+    return { s, applicationId };
+  }
+  const recordActual = (
+    s: Seeded,
+    line: { applicationId: Id<"financeApplications">; templateIndex: number; feeType: "APPRAISAL_FEE" | "COMMISSION"; actualAmountMinor: number }
+  ) =>
+    s.asUser.mutation(api.financeDealCosts.recordTemplateFeeActual, {
+      orgId: s.orgId,
+      ...line,
+      expectedCurrency: "JOD",
+      idempotencyKey: crypto.randomUUID(),
+    });
+  /** Planted AFTER the actuals: recording a cost clears a classification, and the legacy state is a deal classified with its checklist as it stands. */
+  const plantLegacyClassified = (s: Seeded, applicationId: Id<"financeApplications">) =>
+    s.t.run((ctx) => ctx.db.patch(applicationId, { accountingClassification: "CLASSIFIED" }));
+  const finalize = (s: Seeded, applicationId: Id<"financeApplications">) =>
+    s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
+  /** Every table finalization writes to, counted whole, plus the two rows it patches. */
+  const FINALIZATION_TABLES = [
+    "sales",
+    "journalEntries",
+    "journalLines",
+    "pendingAccountingEvents",
+    "receivableDocuments",
+    "vehicleSupplierReceivables",
+    "vehicleSupplierPayables",
+    "dealerProductDeferrals",
+    "applicationStatusLog",
+    "commandIdempotency",
+  ] as const;
+  const footprint = (s: Seeded, applicationId: Id<"financeApplications">) =>
+    s.t.run(async (ctx) => {
+      const counts: Record<string, number> = {};
+      for (const table of FINALIZATION_TABLES) counts[table] = (await ctx.db.query(table).collect()).length;
+      return { counts, app: await ctx.db.get(applicationId), vehicle: await ctx.db.get(s.vehicleId) };
+    });
+
+  test("a configured fee with no actual refuses finalization, and leaves no artifact — the legacy flag included", async () => {
+    const { s, applicationId } = await directDeal("directGate");
+    await recordActual(s, { applicationId, templateIndex: 0, feeType: "APPRAISAL_FEE", actualAmountMinor: 80 * SCALE });
+    await plantLegacyClassified(s, applicationId);
+    const before = await footprint(s, applicationId);
+    expect(before.app?.status).toBe("APPROVED");
+    expect(before.app?.accountingClassification).toBe("CLASSIFIED");
+
+    await expect(finalize(s, applicationId)).rejects.toThrow(/1 fee\(s\) configured by this deal's finance company/i);
+
+    const after = await footprint(s, applicationId);
+    expect(after.counts).toEqual(before.counts);
+    expect(after.app).toEqual(before.app);
+    expect(after.vehicle).toEqual(before.vehicle);
+    expect(after.app?.accountingClassification).toBe("CLASSIFIED");
+    expect(after.app?.finalizedSaleId).toBeUndefined();
+  });
+
+  test("with every configured actual recorded — one of them zero — the same deal finalizes (control)", async () => {
+    const { s, applicationId } = await directDeal("directGateControl");
+    await recordActual(s, { applicationId, templateIndex: 0, feeType: "APPRAISAL_FEE", actualAmountMinor: 80 * SCALE });
+    await recordActual(s, { applicationId, templateIndex: 1, feeType: "COMMISSION", actualAmountMinor: 0 });
+    await plantLegacyClassified(s, applicationId);
+
+    const saleId = await finalize(s, applicationId);
+    expect(saleId).toBeTruthy();
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(app?.status).toBe("CLOSED");
+    expect(app?.finalizedSaleId).toBe(saleId);
+    expect((await footprint(s, applicationId)).counts.sales).toBe(1);
   });
 });

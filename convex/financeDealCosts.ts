@@ -8,7 +8,14 @@ import { AppErrorCode } from "./utils/errors";
 import { runWithIdempotency } from "./utils/idempotency";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { getOrgCurrency } from "./accounting/workflowHooks";
-import { assertExpectedCurrency, resolveDealCurrency } from "./utils/settlementDeductions";
+import {
+  assertConfiguredFeesRecorded,
+  assertExpectedCurrency,
+  assertRoomForAnotherLine,
+  exactTemplateLine,
+  loadActiveFees,
+  resolveDealCurrency,
+} from "./utils/settlementDeductions";
 import { assertSupportedDenomination } from "./utils/money";
 import { reconcileEmployeeCustody } from "../lib/financingEconomics";
 import { recomputeEconomicsForApplication } from "./financingEconomics";
@@ -130,18 +137,6 @@ function assertMayUndoReconciliation(
   );
 }
 
-/** Live cost lines: everything not voided. */
-async function activeFeesFor(
-  ctx: QueryCtx | MutationCtx,
-  applicationId: Id<"financeApplications">
-): Promise<Array<Doc<"financeDealFees">>> {
-  const rows = await ctx.db
-    .query("financeDealFees")
-    .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
-    .collect();
-  return rows.filter((row) => row.voidedAt === undefined);
-}
-
 async function custodyFor(
   ctx: QueryCtx | MutationCtx,
   applicationId: Id<"financeApplications">
@@ -237,6 +232,180 @@ export function summarizeFees(fees: Array<Doc<"financeDealFees">>) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// What the finance company's policy says this handover SHOULD cost
+// ---------------------------------------------------------------------------
+
+/** One configured fee, as the application's frozen rule snapshot carries it. */
+type FeeTemplate = NonNullable<
+  NonNullable<Doc<"financeApplications">["companyRuleSnapshot"]>["feeTemplates"]
+>[number];
+
+/** Display-only identity used to flag duplicate configured rows; never a match key. */
+function templateIdentity(template: { feeType: string; description?: string }): string {
+  return `${template.feeType}|${(template.description ?? "").trim().toLowerCase()}`;
+}
+
+export type ExpectedFeeRow = {
+  /** Position in the frozen snapshot — the ONLY stable reference to this template. */
+  templateIndex: number;
+  feeType: FeeTemplate["feeType"];
+  description: string | undefined;
+  expectedAmountMinor: number;
+  paidBy: FeeTemplate["paidBy"];
+  paidTo: FeeTemplate["paidTo"];
+  includedInQuotation: boolean;
+  deductedFromSettlement: boolean;
+  refundable: boolean;
+  accountingTreatment: FeeTemplate["accountingTreatment"];
+  /**
+   * Another template in the same snapshot shares this one's feeType and
+   * description. Addressing by position keeps the two distinct, so an actual
+   * recorded against one never satisfies the other; the flag exists so a
+   * screen can label the pair.
+   */
+  duplicateIdentity: boolean;
+  /**
+   * The live line that records this fee's actual — the one
+   * `recordTemplateFeeActual` wrote against this position, and nothing else.
+   */
+  actual: {
+    feeId: Id<"financeDealFees">;
+    actualAmountMinor: number | undefined;
+    currency: string;
+    status: ReturnType<typeof deriveFeeStatus>;
+  } | null;
+};
+
+/**
+ * The expected side of the handover-cost checklist, derived READ-ONLY from
+ * the application's frozen `companyRuleSnapshot.feeTemplates` (owner product
+ * correction, #scrum-215 2026-09-12 21:05).
+ *
+ * The rules a deal was created under are the rules it is costed against. The
+ * snapshot is written once at application creation and never re-read from the
+ * live company, so editing the company's fees next month changes what FUTURE
+ * deals expect and leaves this one exactly as it was — the same property the
+ * LTV and tolerance rules already have. Nothing here reads `financeCompanies`.
+ *
+ * What is NOT invented:
+ *   - a deal with no snapshot, or a snapshot with no templates, has no expected
+ *     rows and a null expected total — "not configured" is reported as such,
+ *     never as zero;
+ *   - the expected total sums the configured template estimates only; the
+ *     actual total sums recorded actuals only (every live line, template or
+ *     unplanned); their difference is a COMPARISON and is never an amount
+ *     assumed still payable;
+ *   - an unplanned line (no template) leaves the expected total untouched.
+ *
+ * Denomination: the snapshot carries no currency. Template amounts were
+ * entered under the organisation's currency, which the SCRUM-319 lock freezes
+ * once any cost or custody row exists, and the deal's lines are kept in that
+ * same currency — so the expected figures are stated in the deal currency the
+ * caller passes. The comparison is withheld (null) whenever the actual total
+ * is, i.e. over mixed-denomination lines.
+ *
+ * Matching an actual to its template is EXACT or nothing. A line written by
+ * `recordTemplateFeeActual` carries the template's POSITION and is the only
+ * line a configured row ever shows as its actual, duplicates or not. A
+ * COMPANY_TEMPLATE line with no position — from before that writer, or
+ * written to the table by anything else — is never attached to a configured
+ * row, however well its feeType and description happen to match: attaching it
+ * would show the fee as recorded and hide the exact record action while
+ * closure (which trusts positions only) still refused, and once the exact
+ * line was recorded both would count toward the actual total. Such a line
+ * stays visible as an unplanned/history line instead. The same stable
+ * reference governs the checklist and the closure gate.
+ */
+export function deriveExpectedFees(args: {
+  snapshot: Doc<"financeApplications">["companyRuleSnapshot"];
+  /** Live (non-void) lines on the deal. */
+  fees: Array<Doc<"financeDealFees">>;
+  /** The deal's currency, as `listDealCosts` resolves it. */
+  currency: string;
+  /** Null when the recorded actuals cannot be summed (mixed denomination). */
+  actualTotalMinor: number | null;
+}): {
+  source: "COMPANY_RULE_SNAPSHOT" | "NO_SNAPSHOT" | "NO_TEMPLATES";
+  currency: string;
+  rows: ExpectedFeeRow[];
+  /** Sum of the configured template estimates; null when nothing is configured. */
+  expectedTotalMinor: number | null;
+  /** Sum of recorded actuals over every live line, template or unplanned; null over mixed denomination. */
+  actualTotalMinor: number | null;
+  /** expected − actual, a comparison only; null whenever either side is. */
+  differenceMinor: number | null;
+  /** Live lines outside the checklist: unplanned costs, and template lines that carry no position (legacy or otherwise). */
+  unplannedLineIds: Id<"financeDealFees">[];
+} {
+  const templates = args.snapshot?.feeTemplates;
+  const source =
+    args.snapshot === undefined
+      ? ("NO_SNAPSHOT" as const)
+      : !templates || templates.length === 0
+        ? ("NO_TEMPLATES" as const)
+        : ("COMPANY_RULE_SNAPSHOT" as const);
+  const configured = source === "COMPANY_RULE_SNAPSHOT" && templates ? templates : [];
+
+  const identityCounts = new Map<string, number>();
+  for (const template of configured) {
+    const key = templateIdentity(template);
+    identityCounts.set(key, (identityCounts.get(key) ?? 0) + 1);
+  }
+
+  const claimed = new Set<Id<"financeDealFees">>();
+  const rows: ExpectedFeeRow[] = configured.map((template, templateIndex) => {
+    const duplicateIdentity = (identityCounts.get(templateIdentity(template)) ?? 0) > 1;
+
+    // The line that names this position, or nothing — the same matcher the
+    // closure gates use, so the checklist cannot show a row as recorded that
+    // classification or finalization would refuse.
+    const matched = exactTemplateLine(args.fees, templateIndex);
+    if (matched) claimed.add(matched._id);
+
+    return {
+      templateIndex,
+      feeType: template.feeType,
+      description: template.description,
+      expectedAmountMinor: template.estimatedAmountMinor,
+      paidBy: template.paidBy,
+      paidTo: template.paidTo,
+      includedInQuotation: template.includedInQuotation,
+      deductedFromSettlement: template.deductedFromSettlement,
+      refundable: template.refundable,
+      accountingTreatment: template.accountingTreatment,
+      duplicateIdentity,
+      actual: matched
+        ? {
+            feeId: matched._id,
+            actualAmountMinor: matched.actualAmountMinor,
+            currency: matched.currency,
+            status: deriveFeeStatus(matched),
+          }
+        : null,
+    };
+  });
+
+  const expectedTotalMinor =
+    source === "COMPANY_RULE_SNAPSHOT"
+      ? rows.reduce((total, row) => total + row.expectedAmountMinor, 0)
+      : null;
+  const differenceMinor =
+    expectedTotalMinor !== null && args.actualTotalMinor !== null
+      ? expectedTotalMinor - args.actualTotalMinor
+      : null;
+
+  return {
+    source,
+    currency: args.currency,
+    rows,
+    expectedTotalMinor,
+    actualTotalMinor: args.actualTotalMinor,
+    differenceMinor,
+    unplannedLineIds: args.fees.filter((fee) => !claimed.has(fee._id)).map((fee) => fee._id),
+  };
+}
+
 /**
  * Where one custody record stands, using the shared engine for the arithmetic.
  *
@@ -267,17 +436,25 @@ export function summarizeCustody(
   };
 }
 
-/** Sum of recorded actuals on the lines this custody paid for. */
-async function custodyActualExpensesMinor(
-  ctx: QueryCtx | MutationCtx,
+/**
+ * Sum recorded actuals for one custody from the deal's already-bounded LIVE
+ * fee set. Callers must pass the result of `loadActiveFees`: querying by
+ * custody and filtering voids afterwards would read an unbounded add/void
+ * history and could strand both reconciliation and classification at the
+ * platform transaction limit even while the deal had fewer than 500 live
+ * lines.
+ */
+function custodyActualExpensesMinor(
+  liveFees: ReadonlyArray<Doc<"financeDealFees">>,
   custodyId: Id<"financeDealCustody">
-): Promise<number> {
-  const rows = await ctx.db
-    .query("financeDealFees")
-    .withIndex("by_custody", (q) => q.eq("custodyId", custodyId))
-    .collect();
-  return rows
-    .filter((row) => row.voidedAt === undefined && row.actualAmountMinor !== undefined)
+): number {
+  return liveFees
+    .filter(
+      (row) =>
+        row.voidedAt === undefined &&
+        row.custodyId === custodyId &&
+        row.actualAmountMinor !== undefined
+    )
     .reduce((sum, row) => sum + (row.actualAmountMinor ?? 0), 0);
 }
 
@@ -508,13 +685,17 @@ export const listDealCosts = query({
       APPLICATION_NOT_FOUND
     );
 
-    const fees = await activeFeesFor(ctx, args.applicationId);
+    // The same bounded read the writers make, and the ONE thing this read
+    // refuses on: past `MAX_LIVE_DEAL_FEE_LINES` the screen would be showing
+    // a prefix of a deal's costs that reads like the whole of them.
+    const fees = await loadActiveFees(ctx, args.applicationId);
     const custodyRows = await custodyFor(ctx, args.applicationId);
 
-    // The deal's denomination as the WRITERS would resolve it. A read never
-    // refuses (a query that throws blanks the screen), so a contradiction is
-    // reported in the payload instead: the per-line facts stay readable in
-    // their own currency, and every scalar total is withheld with the reason.
+    // The deal's denomination as the WRITERS would resolve it. Short of that
+    // row cap a read does not refuse (a query that throws blanks the screen),
+    // so a contradiction is reported in the payload instead: the per-line
+    // facts stay readable in their own currency, and every scalar total is
+    // withheld with the reason.
     const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
     const lineCurrencies = [...new Set(fees.map((fee) => fee.currency))];
     const foreignLineCurrencies = lineCurrencies.filter((code) => code !== currency);
@@ -540,21 +721,32 @@ export const listDealCosts = query({
         ...row,
         summary: custodyMismatch
           ? null
-          : summarizeCustody(row, await custodyActualExpensesMinor(ctx, row._id)),
+          : summarizeCustody(row, custodyActualExpensesMinor(fees, row._id)),
         summaryUnavailable: custodyMismatch
           ? { reason: "MIXED_DENOMINATION" as const, custodyCurrency: row.currency, dealCurrency: currency }
           : null,
       });
     }
 
+    const summary = summaryUnavailable === null ? summarizeFees(fees) : null;
     return {
       currency,
       fees: fees.map((fee) => ({ ...fee, status: deriveFeeStatus(fee) })),
       // Null, never a plausible number, when the lines do not share the deal's
       // currency. A client that renders `summary.actualTotalMinor` has to
       // handle the absence — that is the contract, not a hidden total.
-      summary: summaryUnavailable === null ? summarizeFees(fees) : null,
+      summary,
       summaryUnavailable,
+      // The checklist the finance company's frozen policy implies — expected
+      // rows and total derived from the application's own rule snapshot, each
+      // matched to the live line that records its actual. Read-only: nothing
+      // here is a line, and nothing here is written.
+      expected: deriveExpectedFees({
+        snapshot: app.companyRuleSnapshot,
+        fees,
+        currency,
+        actualTotalMinor: summary ? summary.actualTotalMinor : null,
+      }),
       custody,
       // Stated rather than derived: PENDING_CLASSIFICATION is what an unset
       // value means, and saying so beats every caller re-deriving it.
@@ -606,6 +798,17 @@ export const recordDealFee = mutation({
       PERMISSIONS.CREATE_FINANCE_APPLICATION,
     ]);
     assertExpectedCurrency(args.expectedCurrency, "recording this cost");
+    // A configured fee's line is written by `recordTemplateFeeActual` alone,
+    // which copies the finance company's policy from the deal's frozen
+    // snapshot. Minting the COMPANY_TEMPLATE source here would let a caller
+    // author a line that reads exactly like one — feeType, description,
+    // expectation and all — and have the checklist and the closure gate treat
+    // a configured fee as recorded on the caller's say-so.
+    if (args.source === "COMPANY_TEMPLATE") {
+      throw new ConvexError(
+        "A configured fee is recorded through the deal's checklist, against the finance company's own template — not as a typed line. Record the actual for the configured fee, or record this as an additional cost."
+      );
+    }
     // Inline rather than behind a helper: scripts/tenantWriteGuard only accepts
     // proof it can see inside the handler, and "the ownership check is
     // somewhere else" is the exact shape that shipped two Criticals.
@@ -693,6 +896,12 @@ export const recordDealFee = mutation({
         }),
       },
       async () => {
+        // Inside the idempotent section, before anything is written: an
+        // exact replay of a line already recorded returns it above this,
+        // and a NEW line on a deal already at the live-line cap is refused
+        // with the classification untouched and no command record kept.
+        assertRoomForAnotherLine(await loadActiveFees(ctx, args.applicationId), "recording this cost");
+
         await invalidateClassification(
           ctx, app, user._id,
           "A new cost was added to the deal after its accounting was classified."
@@ -718,6 +927,209 @@ export const recordDealFee = mutation({
           receiptReference: args.receiptReference?.trim() || undefined,
           documentStorageIds: args.documentStorageIds,
           source: args.source ?? "MANUAL",
+          createdBy: user._id,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+    );
+  },
+});
+
+/**
+ * Records the ACTUAL paid for a fee the finance company's frozen policy
+ * configures — the only thing an operator enters on a configured row (owner
+ * product correction, #scrum-215 2026-09-12 21:05).
+ *
+ * The caller names WHICH configured fee, by its position in the application's
+ * frozen `companyRuleSnapshot.feeTemplates`, and the amount they paid. Every
+ * other field of the line — the expected amount, description, who pays, who is
+ * paid, the quotation and settlement flags, the accounting treatment — is
+ * copied from that snapshot entry HERE. The client restates none of the
+ * company's policy and cannot author an expectation: the line's
+ * `estimatedAmountMinor` is the template's, so a receipt that differs from it
+ * is a comparison, never a rewrite.
+ *
+ * The position is the reference because the snapshot is immutable per
+ * application, so it is exact even when two templates are identical — a name
+ * would be ambiguous there; a position is not. It is validated the way
+ * `v.number()` does not: a safe non-negative integer inside the array, and the
+ * `feeType` the caller saw must be the one at that position (a stale reference
+ * from an older render is refused, not silently re-pointed). Stored on the
+ * line so the checklist can match it back exactly.
+ *
+ * One live line per position. A second recording against the same position
+ * is refused and directed to `recordActualFeeAmount` on the existing line —
+ * the same rule keeps a retry honest: the same key with the same intent
+ * replays the first line's id; a new key against an existing line is refused
+ * inside the idempotent section, so nothing is committed. Voiding the line
+ * (audited) frees the position again.
+ *
+ * Not a new way to spend. The row it writes is an ordinary `financeDealFees`
+ * line with the same fates as every other: re-recorded through
+ * `recordActualFeeAmount`, checked through `reconcileDealFee`, voided through
+ * `voidDealFee`, invalidating the classification like any other cost, summed
+ * by `summarizeFees` and by `settlementDeductedTotalMinor` under the template's
+ * own `deductedFromSettlement` flag.
+ */
+export const recordTemplateFeeActual = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    /** Position of the template in the application's frozen snapshot. */
+    templateIndex: v.number(),
+    /** The fee type the caller saw at that position — a cross-check, never a source of policy. */
+    feeType: financeFeeTypeValidator,
+    actualAmountMinor: v.number(),
+    /** REQUIRED. The currency the caller counted `actualAmountMinor` in (SCRUM-319). */
+    expectedCurrency: v.string(),
+    paidAt: v.optional(v.number()),
+    receiptReference: v.optional(v.string()),
+    documentStorageIds: v.optional(v.array(v.id("_storage"))),
+    custodyId: v.optional(v.id("financeDealCustody")),
+    idempotencyKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.CREATE_FINANCE_APPLICATION,
+    ]);
+    assertExpectedCurrency(args.expectedCurrency, "recording this cost");
+    const app = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId,
+      APPLICATION_NOT_FOUND
+    );
+
+    // The reference, validated positively. `v.number()` admits NaN, Infinity,
+    // negatives and fractions, and every one of them indexes an array to
+    // `undefined` without a word.
+    if (!Number.isSafeInteger(args.templateIndex) || args.templateIndex < 0) {
+      throw new ConvexError(
+        `The configured fee reference must be a non-negative whole number (got ${args.templateIndex}).`
+      );
+    }
+    const templates = app.companyRuleSnapshot?.feeTemplates ?? [];
+    if (app.companyRuleSnapshot === undefined || templates.length === 0) {
+      throw new ConvexError(
+        "This deal's finance company configured no fees when the deal was created, so there is no configured fee to record an actual for. Record it as an additional cost instead."
+      );
+    }
+    if (args.templateIndex >= templates.length) {
+      throw new ConvexError(
+        `This deal's finance company configured ${templates.length} fee(s); there is no configured fee at position ${args.templateIndex}. Reload the deal.`
+      );
+    }
+    const template = templates[args.templateIndex];
+    if (template.feeType !== args.feeType) {
+      throw new ConvexError(
+        "The configured fee at that position is not the one you were shown. Reload the deal and record the actual against the fee as it is now listed."
+      );
+    }
+    assertMinorAmount(args.actualAmountMinor, "Actual amount");
+    // A timestamp, not a number: `v.number()` admits NaN, Infinity and
+    // negatives, and a stored NaN date is a row no report can order.
+    if (
+      args.paidAt !== undefined &&
+      (!Number.isSafeInteger(args.paidAt) || args.paidAt < 0)
+    ) {
+      throw new ConvexError(`The paid date must be a real timestamp (got ${args.paidAt}).`);
+    }
+
+    let custodyId: Id<"financeDealCustody"> | undefined;
+    if (args.custodyId) {
+      custodyId = await resolveFeeCustody(
+        ctx, args.orgId, args.applicationId, args.custodyId, template.paidBy
+      );
+    }
+
+    // The deal's denomination, proven BEFORE any write, exactly as
+    // `recordDealFee` proves it (SCRUM-319).
+    const currency = await resolveDealCurrency(ctx, app, "recording this cost");
+    if (args.expectedCurrency !== currency) {
+      throw new ConvexError(
+        `This cost was entered in ${args.expectedCurrency}, but the deal's costs are kept in ${currency}. Reload the deal and enter the amount in ${currency}.`
+      );
+    }
+
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "financeDealCosts.recordTemplateFeeActual",
+        economic: true,
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        // The WHOLE persisted input, position included: the same key against a
+        // different position, amount, date, reference, attachment or custody
+        // is a different intent and is refused, not replayed.
+        fingerprint: JSON.stringify({
+          applicationId: args.applicationId,
+          templateIndex: args.templateIndex,
+          feeType: args.feeType,
+          expectedCurrency: args.expectedCurrency,
+          actualAmountMinor: args.actualAmountMinor,
+          custodyId: args.custodyId ?? null,
+          paidAt: args.paidAt ?? null,
+          receiptReference: args.receiptReference?.trim() || null,
+          documentStorageIds: args.documentStorageIds?.map((id) => id.toString()) ?? null,
+        }),
+      },
+      async () => {
+        // Inside the idempotent section on purpose: a replay of the SAME
+        // intent returns the line it already wrote before reaching this, while
+        // a NEW intent against a position that already has a live line is
+        // refused here and rolls back with nothing committed. Proven on the
+        // live-position index with every field an equality and `.unique()`:
+        // a second live line at one position is a state this writer never
+        // creates, and if one is ever found the read refuses rather than picks.
+        const existing = await ctx.db
+          .query("financeDealFees")
+          .withIndex("by_application_source_templateIndex_voidedAt", (q) =>
+            q
+              .eq("applicationId", args.applicationId)
+              .eq("source", "COMPANY_TEMPLATE")
+              .eq("templateIndex", args.templateIndex)
+              .eq("voidedAt", undefined)
+          )
+          .unique();
+        if (existing) {
+          throw new ConvexError(
+            "An actual is already recorded for this configured fee. Edit that line to change the amount, or remove it first."
+          );
+        }
+        // Same bound as `recordDealFee`, in the same place: before the
+        // classification is touched or the line exists.
+        assertRoomForAnotherLine(await loadActiveFees(ctx, args.applicationId), "recording this cost");
+
+        await invalidateClassification(
+          ctx, app, user._id,
+          "A new cost was added to the deal after its accounting was classified."
+        );
+
+        const now = Date.now();
+        return await ctx.db.insert("financeDealFees", {
+          orgId: args.orgId,
+          applicationId: args.applicationId,
+          feeType: template.feeType,
+          description: template.description?.trim() || undefined,
+          currency,
+          // The template's expectation, copied — never the caller's.
+          estimatedAmountMinor: template.estimatedAmountMinor,
+          actualAmountMinor: args.actualAmountMinor,
+          paidBy: template.paidBy,
+          paidTo: template.paidTo,
+          accountingTreatment: template.accountingTreatment,
+          includedInQuotation: template.includedInQuotation,
+          deductedFromSettlement: template.deductedFromSettlement,
+          refundable: template.refundable,
+          custodyId,
+          paidAt: args.paidAt,
+          receiptReference: args.receiptReference?.trim() || undefined,
+          documentStorageIds: args.documentStorageIds,
+          source: "COMPANY_TEMPLATE",
+          templateIndex: args.templateIndex,
           createdBy: user._id,
           createdAt: now,
           updatedAt: now,
@@ -1253,7 +1665,10 @@ export const reconcileDealCustody = mutation({
 
     const summary = summarizeCustody(
       custody,
-      await custodyActualExpensesMinor(ctx, args.custodyId)
+      custodyActualExpensesMinor(
+        await loadActiveFees(ctx, custody.applicationId),
+        args.custodyId
+      )
     );
     const writeOffReason = args.writeOffReason?.trim();
 
@@ -1512,7 +1927,7 @@ export const classifyDealAccounting = mutation({
       );
     }
 
-    const fees = await activeFeesFor(ctx, args.applicationId);
+    const fees = await loadActiveFees(ctx, args.applicationId);
     const summary = summarizeFees(fees);
     // A deal with no live cost lines is the state "nobody itemized anything",
     // which `summarizeFees` deliberately reports as NOT fully reconciled —
@@ -1535,6 +1950,11 @@ export const classifyDealAccounting = mutation({
         `${summary.linesAwaitingReconciliation} cost(s) on this deal have an amount but nobody has checked it. Reconcile them before closing.`
       );
     }
+    // Every fee the finance company's FROZEN policy configures needs an actual
+    // on the record too — the counts above cannot see a configured fee nobody
+    // recorded. One rule for this door and for finalization's, judged on the
+    // rows already read above; see `assertConfiguredFeesRecorded`.
+    assertConfiguredFeesRecorded(app.companyRuleSnapshot, fees, "closing");
 
     // Read the arithmetic, not the stored status. A record can be closed and
     // still be unbalanced — a late receipt against a RECONCILED record is
@@ -1549,7 +1969,7 @@ export const classifyDealAccounting = mutation({
       }
       const custodySummary = summarizeCustody(
         row,
-        await custodyActualExpensesMinor(ctx, row._id)
+        custodyActualExpensesMinor(fees, row._id)
       );
       if (!custodySummary.settled && row.status !== "WRITTEN_OFF") {
         throw new ConvexError(

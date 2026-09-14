@@ -21,6 +21,26 @@ import {
 export { classifyGapResolution, evaluateQuotationException } from "../../lib/financingEconomics";
 
 /**
+ * A stamp of the economics an irreversible confirmation is about, demanded back
+ * by the mutations that act on those figures.
+ *
+ * `convex/applications.ts` issues the SAME token (its private `economicsStamp`,
+ * served on `get` and `dealCockpit`) and `registerVehicleHandover` compares
+ * against it. That file is byte-pinned by `scripts/protectedSourcePins.test.ts`,
+ * so the helper cannot be exported from there without re-pinning; this copy
+ * exists for `resolveAppraisalGap`, and `financingEconomics.test.ts` holds the
+ * two together — a stamp served by `get` must satisfy this function — so the
+ * first divergence fails CI rather than refusing every gap resolution.
+ *
+ * Deliberately CARRYING NO MONEY: a revision counter that says nothing about the
+ * deal but that it changed (see the pinned original for why a digest of the
+ * figures would not have been safe either).
+ */
+export function economicsStamp(app: { economicsRevision?: number }): string {
+  return `v2|${app.economicsRevision ?? 0}`;
+}
+
+/**
  * Server-side vocabulary and invariants for the dealer side of a financed sale.
  *
  * The arithmetic itself lives in `packages/shared/src/financingEconomics.ts` so
@@ -243,7 +263,12 @@ export const feePartyValidator = v.union(
   v.literal("OTHER")
 );
 
-/** A default fee a finance company usually charges. Always editable per deal. */
+/**
+ * A fee a finance company charges. Snapshotted onto each application at
+ * creation and READ-ONLY there: the expectation on a deal is the company's
+ * policy as it stood that day, never edited per deal — what is recorded per
+ * deal is the ACTUAL paid against it (`recordTemplateFeeActual`).
+ */
 export const financeFeeTemplateValidator = v.object({
   feeType: financeFeeTypeValidator,
   description: v.optional(v.string()),
@@ -588,6 +613,61 @@ export function assertGapResolutionValid(
   if (violations.length > 0) {
     throw new ConvexError(violations.map((violation) => violation.message).join(" "));
   }
+}
+
+/**
+ * The resolutions that SETTLE a positive appraisal gap — the ones
+ * `resolveAppraisalGap` derives from an allocation that reconciles to the gap.
+ * `NOT_REQUIRED` is deliberately absent: `approveDealerPurchaseAmount` writes it
+ * only when the gap is zero, so a positive gap carrying it is a row that
+ * contradicts itself, and the safe reading of a contradiction is "unsettled".
+ */
+export function appraisalGapIsSettled(gapResolution: GapResolution): boolean {
+  return (
+    gapResolution === "CUSTOMER_ABSORBS" ||
+    gapResolution === "DEALER_ABSORBS" ||
+    gapResolution === "SPLIT"
+  );
+}
+
+/**
+ * Refuses to advance a deal whose positive appraisal gap nobody has settled
+ * (SCRUM-116).
+ *
+ * Until this existed the gap was enforced by the stage rail alone:
+ * `deriveDealStages` marks GAP_RESOLUTION blocked and hides the tail behind it,
+ * but `registerVehicleHandover` and `finalizeDeal` never asked. A direct call —
+ * or any screen that does not draw the rail — could hand the vehicle over
+ * against a shortfall nobody had allocated, and handover then SEALS the deal
+ * against `resolveAppraisalGap`, so the only path that could settle it was
+ * closed by the step that should have waited for it. Finalization is worse: it
+ * posts the sale from `dealerContributionMinor` and the profit composition,
+ * both of which the unrecorded split still moves.
+ *
+ * Scope is exactly the rail's: a gap that is present and positive, without a
+ * settling resolution. Every other shape passes — no gap recorded (a deal that
+ * predates the model, or one not yet approved), a zero gap (`NOT_REQUIRED`, as
+ * the approval wrote it), and a settled one. The caller decides whether a deal
+ * is in the population at all; `assertDealerEconomicsReady` already lets a
+ * deal with no quotation through before reaching this.
+ *
+ * Runs at the mutation boundary through that shared precondition, before the
+ * first write, because a refusal expressed only in the rail is a rendering, not
+ * a rule. The message names the step that unblocks it.
+ */
+export function assertAppraisalGapSettledToAdvance(
+  app: { rawAppraisalGapMinor?: number; gapResolution?: GapResolution },
+  action: string
+): void {
+  const gap = app.rawAppraisalGapMinor;
+  if (gap === undefined || !(gap > 0)) return;
+  if (appraisalGapIsSettled(app.gapResolution)) return;
+  // No figure in the message. The gap is a FINANCE-class field under the
+  // SCRUM-117 projection and `register:vehicle_handover` is held by roles the
+  // projection withholds it from; a refusal is a response like any other.
+  throw new ConvexError(
+    `The finance company approved less than the quotation on this deal, and who covers the difference has not been agreed. Resolve the appraisal gap before ${action}.`
+  );
 }
 
 
@@ -1461,18 +1541,19 @@ export type DealProfit = ManagementProfit | AccountingProfit;
  * Understating an owner's profit is not the safe direction; it is the same
  * defect wearing the opposite sign.
  *
- * ⚠️ READ THIS BEFORE BUILDING THE GAP-RESOLUTION MUTATION. As of 2026-08-10
- * **no production code writes either field.** Every occurrence sets them to
- * `undefined`; nothing writes `gapResolution: CUSTOMER_ABSORBS | DEALER_ABSORBS
- * | SPLIT` either. The recording workflow does not exist yet, so this line is
- * structurally zero on every current deal and the `?? 0` is safe — but it is
- * safe by circumstance, NOT because absence means "no gap was negotiated".
+ * The writer exists now: `resolveAppraisalGap` (SCRUM-83, PR #303) records
+ * both shares and all three destinations together, and refuses anything that
+ * does not reconcile to the deal's own gap. Until 2026-09-12 no production
+ * code wrote either field — every occurrence set them to `undefined` and this
+ * line was structurally zero — and the `?? 0` survives from that era: it is
+ * still right for a deal with no gap and for one whose gap is unsettled, where
+ * absence means "nothing agreed yet", never "the customer pays nothing".
  *
- * The composition is wired in advance precisely so the future writer cannot be
- * forgotten. A writer that populates `customerGapShareMinor` (the share) and
- * omits these two DESTINATION fields would silently understate profit by the
- * whole gap, and nothing here would notice. Populate both. Tracked as H-7b on
- * SCRUM-26.
+ * The composition was wired in advance precisely so the writer could not be
+ * forgotten. A writer that populated `customerGapShareMinor` (the share) and
+ * omitted these two DESTINATION fields would silently understate profit by the
+ * whole gap, and nothing here would notice — which is why the mutation takes
+ * every destination as a required argument. (Was H-7b on SCRUM-26.)
  */
 export function deriveManagementProfit(args: {
   /** A cancelled deal has no profit: its journal was reversed. */

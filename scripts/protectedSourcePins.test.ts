@@ -160,10 +160,71 @@ describe("protected source content pins", () => {
        * generalized or made vacuous. Same exact byte + sha256 pin, same negative
        * control, same normalization and bare-CR rejection. Both constants were
        * recomputed FROM THE FILE with this test's own normalization.
+       *
+       * -- RENEWAL 2026-09-14 - SCRUM-116 (in the SCRUM-83/321 lane, PR #303) --
+       *
+       * Previous reviewed postimage, superseded by this entry:
+       *
+       *   bytes:  220303
+       *   sha256: fc4a12211280087bd25a9b5a1305aabaa6976289bd5586f759697a9158e1e72c
+       *
+       * Renewed because an unsettled appraisal gap was enforced by the stage
+       * rail alone: `registerVehicleHandover` and `finalizeDeal` never asked,
+       * and handover seals the deal against `resolveAppraisalGap`. The delta is
+       * exactly two hunks: one import name (`assertAppraisalGapSettledToAdvance`
+       * from `./utils/financingEconomics`) and one call to it, with a three-line
+       * comment, appended as the last check of `assertDealerEconomicsReady` —
+       * the precondition BOTH mutations already run before their first write.
+       * The refusal itself, its allowlist and its message live in the unpinned
+       * utils module. No new control flow, query, predicate, permission check
+       * or `ctx.db` access in this file. Read the two hunks; do not take this
+       * note's word for their scope.
+       *
+       * Authorized by the implementing session's owner-side instruction of
+       * 2026-09-14 ("add a minimal server-side refusal ... if the byte pin must
+       * move, use the existing measured pin-renewal governance and disclose
+       * it; do not weaken #305 boundaries"), disclosed on Jira SCRUM-117 /
+       * SCRUM-83 and in #scrum-215 with the cross-lane notice to the ratchet
+       * lane (AF-65). The pin is not weakened, bypassed, deleted, generalized
+       * or made vacuous: same exact byte + sha256 pin, same negative control,
+       * same normalization and bare-CR rejection. Both constants were
+       * recomputed FROM THE FILE with this test's own normalization.
+       * `convex/dealWorkspace.ts` is untouched.
+       *
+       * -- RENEWAL 2026-09-14 (2) - fee-template cap (SCRUM-83/321 lane, PR #303) --
+       *
+       * Previous reviewed postimage, superseded by this entry:
+       *
+       *   bytes:  220628
+       *   sha256: dacdbfc9682687836350415a0fd4a4fa381c0900956c1c93576f96eab6b1103a
+       *
+       * Renewed because finance-company configuration needed a bounded policy
+       * that reserves room below `MAX_LIVE_DEAL_FEE_LINES` for a deal's
+       * additional costs, and `createFromQuote` could otherwise freeze a newly
+       * noncompliant company policy onto an application. The delta is exactly
+       * two hunks: one import (`assertFeeTemplatesWithinLimit` from
+       * `./utils/dealCostLimits`) and one call to it on the snapshot just built,
+       * with its comment, before the version-row read and before any write. The
+       * limit, its message and its sibling checks on the company writers live
+       * in the unpinned modules. No new control flow of its own,
+       * no query, predicate, permission check or `ctx.db` access in this file.
+       * Read the two hunks; do not take this note's word for their scope.
+       *
+       * Made under the same owner-side instruction as the entry above ("if
+       * the byte pin must move, use the existing measured pin-renewal
+       * governance and disclose it; do not weaken #305 boundaries"), in
+       * response to the owner-proxy's preflight finding of 2026-09-14 that the
+       * live-line cap made an oversized policy a dead end. This renewal is
+       * part of the candidate evidence to disclose on Jira SCRUM-117 and in
+       * #scrum-215 before merge. The pin is not
+       * weakened, bypassed, deleted, generalized or made vacuous: same exact
+       * byte + sha256 pin, same negative control, same normalization and
+       * bare-CR rejection. Both constants were recomputed FROM THE FILE with
+       * this test's own normalization. `convex/dealWorkspace.ts` is untouched.
        */
       file: "convex/applications.ts",
-      bytes: 220303,
-      sha256: "fc4a12211280087bd25a9b5a1305aabaa6976289bd5586f759697a9158e1e72c",
+      bytes: 221281,
+      sha256: "62928d43246a13a21bf5877451a7ac3c3c897b76b98610505091ecd1fa9a0f92",
     },
     {
       /**

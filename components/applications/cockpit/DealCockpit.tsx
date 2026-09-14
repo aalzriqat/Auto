@@ -39,6 +39,7 @@ import {
   FinanceCompanyDecisionCard,
   type FinanceDecisionFacts,
 } from "./FinanceCompanyDecisionCard";
+import { ResolveGapDialog } from "./ResolveGapDialog";
 import {
   RecordSubmittedQuotationDialog,
   type QuotationCalculation,
@@ -85,6 +86,7 @@ import { FinancingPlanPanel, type FinancingPlanFacts } from "./FinancingPlanPane
 import {
   HandoverCostAttemptError,
   HandoverCostsPanel,
+  type ExpectedHandoverRow,
   type ActualHandoverCost,
   type HandoverCostsData,
   type NewHandoverCost,
@@ -446,6 +448,7 @@ export function DealCockpit({
   const recordSubmittedQuotation = useMutation(api.financingEconomics.recordSubmittedQuotation);
   const reopenApproval = useMutation(api.financingEconomics.reopenApproval);
   const registerVehicleHandover = useMutation(api.applications.registerVehicleHandover);
+  const resolveAppraisalGap = useMutation(api.financingEconomics.resolveAppraisalGap);
   const registerExpectedPayment = useMutation(api.applications.registerExpectedPayment);
   const finalizeDeal = useMutation(api.applications.finalizeDeal);
   const approveDealerPurchaseAmount = useMutation(
@@ -595,6 +598,7 @@ export function DealCockpit({
     canViewApplications && deal ? { orgId, applicationId } : "skip"
   );
   const recordDealFee = useMutation(api.financeDealCosts.recordDealFee);
+  const recordTemplateFeeActual = useMutation(api.financeDealCosts.recordTemplateFeeActual);
   const recordActualFeeAmount = useMutation(api.financeDealCosts.recordActualFeeAmount);
   const voidDealFee = useMutation(api.financeDealCosts.voidDealFee);
   const updateStatus = useMutation(api.applications.updateStatus);
@@ -704,11 +708,12 @@ export function DealCockpit({
         }
       : undefined;
   /**
-   * رسوم ومصاريف تسليم السيارة — ADD / EDIT / REMOVE on the canonical
-   * `financeDealCosts` commands (c19384). `recordDealFee` is an economic
-   * command and takes a retained identity keyed on the add form's own intent;
-   * the other two are idempotent by construction (a set and a void) and the
-   * server takes no identity for them.
+   * رسوم ومصاريف تسليم السيارة — RECORD / ADD / EDIT / REMOVE on the canonical
+   * `financeDealCosts` commands (c19384). Two are economic and take a retained
+   * identity: `recordTemplateFeeActual` keyed on (deal, template position) and
+   * `recordDealFee` keyed on the add form's own intent. EDIT and REMOVE are
+   * idempotent by construction (a set and a void) and the server takes no
+   * identity for them.
    */
   const handoverCosts =
     app && deal
@@ -736,6 +741,35 @@ export function DealCockpit({
                 // such, never turned into a zero or a cast here.
                 summary: dealCosts.summary,
                 summaryUnavailable: dealCosts.summaryUnavailable,
+                // The finance company's frozen policy, derived server-side from
+                // the deal's own rule snapshot. Passed through as served: the
+                // expected figures, the totals and the comparison are the
+                // server's, and nothing is summed or matched here.
+                expected: dealCosts.expected
+                  ? {
+                      source: dealCosts.expected.source,
+                      currency: dealCosts.expected.currency,
+                      rows: dealCosts.expected.rows.map((row) => ({
+                        templateIndex: row.templateIndex,
+                        feeType: row.feeType,
+                        description: row.description,
+                        expectedAmountMinor: row.expectedAmountMinor,
+                        duplicateIdentity: row.duplicateIdentity,
+                        actual: row.actual
+                          ? {
+                              feeId: row.actual.feeId,
+                              actualAmountMinor: row.actual.actualAmountMinor,
+                              currency: row.actual.currency,
+                              status: row.actual.status,
+                            }
+                          : null,
+                      })),
+                      expectedTotalMinor: dealCosts.expected.expectedTotalMinor,
+                      actualTotalMinor: dealCosts.expected.actualTotalMinor,
+                      differenceMinor: dealCosts.expected.differenceMinor,
+                      unplannedLineIds: dealCosts.expected.unplannedLineIds,
+                    }
+                  : null,
               } satisfies HandoverCostsData)
             : undefined,
           // The currency a new line is recorded in, as the SERVER resolves it
@@ -760,7 +794,10 @@ export function DealCockpit({
                 expectedCurrency: values.currency,
                 feeType: values.feeType,
                 description: values.description,
-                estimatedAmountMinor: values.estimatedAmountMinor,
+                // An ADDITIONAL cost: actual only. The UI never authors an
+                // expectation — those are the finance company's, from the
+                // deal's frozen snapshot (owner correction 2026-09-12 21:05).
+                estimatedAmountMinor: undefined,
                 actualAmountMinor: values.actualAmountMinor,
                 paidBy: "DEALER",
                 paidTo: values.paidTo,
@@ -781,6 +818,50 @@ export function DealCockpit({
           },
           onAbandonAdd: (intentId: string) => {
             commandId.retire(`record-deal-fee:${applicationId}:${intentId}`);
+          },
+          /**
+           * The ACTUAL for a fee the finance company's policy configures. The
+           * caller names WHICH fee by its position in the deal's frozen
+           * snapshot and what it saw there; the server copies every other
+           * field from that entry and refuses a stale or out-of-range
+           * reference.
+           *
+           * One retained identity per (deal, position), with the SAME outcome
+           * discipline as the additional-cost add: a REFUSED attempt is the
+           * server's own answer (ConvexError, nothing committed) and releases
+           * the identity, so the next submit is a new command; an UNKNOWN
+           * attempt (lost response) KEEPS it, so the form's verbatim retry
+           * replays the same line and a changed payload is refused as a
+           * different intent. The server's one-live-line-per-position rule is
+           * what makes this lifecycle safe end to end: after a lost response,
+           * replay, cancel-and-record-again, or a second operator can land at
+           * most one actual on the row.
+           */
+          onRecordTemplateActual: async (row: ExpectedHandoverRow, values: ActualHandoverCost) => {
+            const intent = `record-template-fee:${applicationId}:${row.templateIndex}`;
+            try {
+              await recordTemplateFeeActual({
+                orgId,
+                applicationId,
+                templateIndex: row.templateIndex,
+                feeType: row.feeType,
+                actualAmountMinor: values.actualAmountMinor,
+                // REQUIRED: the deal's denomination the amount was counted in.
+                expectedCurrency: values.currency,
+                paidAt: values.paidAt,
+                receiptReference: values.receiptReference,
+                idempotencyKey: commandId.for(intent),
+              });
+              commandId.retire(intent);
+              toast.success(t("HandoverCostSaved"));
+            } catch (error) {
+              const outcome = isConvexError(error) ? "REFUSED" : "UNKNOWN";
+              if (outcome === "REFUSED") commandId.retire(intent);
+              throw new HandoverCostAttemptError(getErrorMessage(error), outcome);
+            }
+          },
+          onAbandonTemplateActual: (row: ExpectedHandoverRow) => {
+            commandId.retire(`record-template-fee:${applicationId}:${row.templateIndex}`);
           },
           onRecordActual: async (feeId: string, values: ActualHandoverCost) => {
             try {
@@ -946,6 +1027,8 @@ export function DealCockpit({
 
   const [confirmingHandover, setConfirmingHandover] = useState(false);
   const [handoverSubmitting, setHandoverSubmitting] = useState(false);
+  const [resolvingGap, setResolvingGap] = useState(false);
+  const [gapSubmitting, setGapSubmitting] = useState(false);
   const [registeringPayment, setRegisteringPayment] = useState(false);
   const [paymentSubmitting, setPaymentSubmitting] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
@@ -1012,36 +1095,68 @@ export function DealCockpit({
     if (permissionsLoading || !deal) return undefined;
 
     /**
-     * The stage nothing can clear — and the reason this screen must not simply
-     * go quiet on it.
+     * The stage that used to have no exit (SCRUM-83).
      *
      * A finance company approving BELOW the submitted quotation is the ordinary
      * case; it is the whole reason an appraisal gap exists.
-     * `approveDealerPurchaseAmount` then writes `PENDING_NEGOTIATION`, which
-     * `deriveDealStages` does not count as resolved — and **no code anywhere
-     * writes the values that would resolve it**. `convex/utils/financingEconomics.ts`
-     * says so itself: the recording workflow does not exist yet. So this stage
-     * has no exit, and because the rail is strictly sequential it hides handover,
-     * settlement and every action after it.
+     * `approveDealerPurchaseAmount` writes `PENDING_NEGOTIATION`, which
+     * `deriveDealStages` does not count as resolved, and because the rail is
+     * strictly sequential the stage hid handover, settlement and every action
+     * after it. `resolveAppraisalGap` is the writer that was missing; this is
+     * its one entry point. The blocked state itself is NOT softened — it is true
+     * until somebody records who covers the shortfall.
      *
-     * No server mutation consults `gapResolution` — handover, expected payment
-     * and finalize all ignore it — so the deal is completable and the rail is
-     * merely refusing to name the step. Until SCRUM-78 that was survivable
-     * because the tail lived in the review dialog, which ignores the rail.
-     * Moving the tail here is what turns it into a dead end, so this change owes
-     * it an explanation rather than silence.
+     * Three obstacles, told apart rather than merged, lifecycle FIRST because it
+     * outranks both: the server refuses anything not APPROVED, anything already
+     * handed over and anything closed (handover seals the figures; finalization
+     * writes the sale against them), so offering the action there would promise
+     * a step guaranteed to fail. One exception, the server's own (SCRUM-116):
+     * handover now refuses an unsettled gap, so a gap still open after the
+     * vehicle went out came from an approval recorded no earlier than handover
+     * — the approval's timestamp says so; an equal timestamp is ambiguous and
+     * admitted on purpose — and settling it is exactly what finalization is
+     * waiting on. The rail shows this stage again in that case and the action
+     * must be there, keyed on the same two timestamps the mutation compares.
+     * Then authority — the same permission that set
+     * the approved amount, and never the deal's own salesperson (the server
+     * refuses both). Then visibility: a caller who HOLDS the authority but whose
+     * money is withheld cannot be asked to allocate a figure the screen does not
+     * show them, and telling them to find an approver would name a problem they
+     * do not have.
      *
-     * Deliberately NOT an action, and deliberately not a relaxation of the
-     * blocked state. Who absorbs the shortfall — customer, dealership, or split
-     * — is a money decision that feeds the profit derivation, and inventing a
-     * way past it here would be answering that question by omission. SCRUM-83.
+     * The gap is read from the MONEY block, not the rail: the rail is
+     * deliberately qualitative so it can be shown to a caller who cannot see
+     * amounts, and a locally derived gap could disagree with the one the
+     * mutation reconciles against.
      */
     if (liveStage?.blocker === "GapUnresolved") {
+      const gapVisible = typeof deal.money?.appraisalGapMinor === "number";
+      const handedOverAt = app?.vehicleHandoverAt;
+      // `>=`, as the mutation compares: equal timestamps are ambiguous (two
+      // writes can share a millisecond) and are deliberately admitted.
+      const approvalNotBeforeHandover =
+        handedOverAt !== undefined &&
+        app?.approvedPurchaseApprovedAt !== undefined &&
+        app.approvedPurchaseApprovedAt >= handedOverAt;
+      const lifecycleSealed =
+        deal.status !== "APPROVED" ||
+        ((handoverStage?.state === "COMPLETE" || handedOverAt !== undefined) && !approvalNotBeforeHandover);
+      const ownDeal = membership?.userId != null && membership.userId === app?.salespersonId;
       return {
         stageKey: liveStage.key,
-        actionKey: "",
-        onStart: () => {},
-        unavailableReasonKey: "GapResolutionUnavailable",
+        actionKey: "ResolveGapAction",
+        onStart: () => {
+          setResolvingGap(true);
+        },
+        unavailableReasonKey: lifecycleSealed
+          ? "GapResolutionSealed"
+          : !hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION)
+            ? "GapResolutionNeedsPermission"
+            : ownDeal
+              ? "GapResolutionSelfDeal"
+              : gapVisible
+                ? undefined
+                : "GapResolutionNeedsDealFigures",
       };
     }
 
@@ -1613,6 +1728,46 @@ export function DealCockpit({
             }
           : undefined
       }
+      gapResolution={{
+        resolving: resolvingGap,
+        submitting: gapSubmitting,
+        onOpenChange: setResolvingGap,
+        submittedQuotationMinor: economicsApp?.submittedQuotationMinor ?? null,
+        approvedPurchaseAmountMinor: economicsApp?.approvedDealerPurchaseAmountMinor ?? null,
+        /**
+         * RETHROWS, for the reason the handover submit documents: the refusal
+         * belongs to the attempt that earned it, and the server's messages
+         * name the figure that did not reconcile — the only thing that tells
+         * the operator which of five boxes to change.
+         */
+        onSubmit: async (values) => {
+          setGapSubmitting(true);
+          try {
+            await resolveAppraisalGap({
+              orgId,
+              applicationId,
+              // The stamp the DIALOG snapshotted when it opened, passed straight
+              // through. Re-reading it from `deal` here would undo that
+              // snapshot and hand the server a revision the operator never saw.
+              economicsStamp: values.economicsStamp ?? "",
+              customerGapShareMinor: values.customerGapShareMinor,
+              dealerGapShareMinor: values.dealerGapShareMinor,
+              customerGapCashToDealerMinor: values.customerGapCashToDealerMinor,
+              customerGapInstallmentToDealerMinor: values.customerGapInstallmentToDealerMinor,
+              customerGapToFinanceCompanyMinor: values.customerGapToFinanceCompanyMinor,
+              notes: values.notes || undefined,
+            });
+            toast.success(t("GapResolved"));
+            setResolvingGap(false);
+          } catch (error) {
+            const message = getErrorMessage(error);
+            toast.error(message);
+            throw new Error(message);
+          } finally {
+            setGapSubmitting(false);
+          }
+        },
+      }}
       handover={{
         confirming: confirmingHandover,
         submitting: handoverSubmitting,
@@ -2009,6 +2164,7 @@ export function DealCockpitView({
   financingPlan,
   handoverCosts,
   workflowAction,
+  gapResolution,
   handover,
   expectedPayment,
   finalize,
@@ -2129,7 +2285,7 @@ export function DealCockpitView({
    */
   financingPlan?: { facts: FinancingPlanFacts; formatMajor: (major: number, currency: string) => string };
   /**
-   * The handover-cost section with its three commands wired — financed deals
+   * The handover-cost section with its four commands wired — financed deals
    * only. When present it REPLACES the read-only expenses card: same lines,
    * same canonical record, plus the controls.
    */
@@ -2166,6 +2322,25 @@ export function DealCockpitView({
     /** Rejects on refusal; the error belongs to the dialog's attempt. */
     onSubmit: (values: {
       notes?: string;
+      economicsStamp: string | undefined;
+    }) => Promise<void>;
+  };
+  /** Settling the shortfall left when the company approved below the quotation (SCRUM-83). */
+  gapResolution?: {
+    resolving: boolean;
+    submitting: boolean;
+    onOpenChange: (open: boolean) => void;
+    /** Context figures from the economics row; null when withheld from this caller. */
+    submittedQuotationMinor: number | null;
+    approvedPurchaseAmountMinor: number | null;
+    /** Rejects on refusal, so the dialog can name the figure that did not add up. */
+    onSubmit: (values: {
+      customerGapShareMinor: number;
+      dealerGapShareMinor: number;
+      customerGapCashToDealerMinor: number;
+      customerGapInstallmentToDealerMinor: number;
+      customerGapToFinanceCompanyMinor: number;
+      notes: string;
       economicsStamp: string | undefined;
     }) => Promise<void>;
   };
@@ -3302,6 +3477,27 @@ export function DealCockpitView({
             onSubmit={handleReopenApproved}
           />
         </>
+      )}
+
+      {/* Only for a deal that actually has a shortfall the caller can see. The
+          gap comes from the server's own money block — this screen never
+          derives it, because a locally computed gap could disagree with the one
+          the mutation reconciles against and reject the operator's arithmetic
+          for being right. */}
+      {gapResolution && typeof deal?.money?.appraisalGapMinor === "number" && (
+        <ResolveGapDialog
+          open={gapResolution.resolving}
+          submitting={gapResolution.submitting}
+          rawAppraisalGapMinor={deal.money.appraisalGapMinor}
+          submittedQuotationMinor={gapResolution.submittedQuotationMinor}
+          approvedPurchaseAmountMinor={gapResolution.approvedPurchaseAmountMinor}
+          economicsStamp={"economicsStamp" in deal ? deal.economicsStamp : undefined}
+          factor={factor}
+          money={money}
+          t={t}
+          onOpenChange={gapResolution.onOpenChange}
+          onSubmit={gapResolution.onSubmit}
+        />
       )}
 
       {handover && (

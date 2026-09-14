@@ -3038,6 +3038,17 @@ export default defineSchema({
 
     /** Whether the line came from the company's fee template or was typed. */
     source: v.union(v.literal("COMPANY_TEMPLATE"), v.literal("MANUAL")),
+    /**
+     * WHICH configured fee this line is the actual for: the position of the
+     * template in the application's frozen `companyRuleSnapshot.feeTemplates`.
+     * Written only by `recordTemplateFeeActual`, which resolves every other
+     * template field from that entry server-side. Exact by construction — the
+     * snapshot is immutable per application — so two identical templates are
+     * two positions, never one ambiguous name. A COMPANY_TEMPLATE line without
+     * it predates that writer and remains visible only as legacy/unplanned
+     * history; it never satisfies a configured template row.
+     */
+    templateIndex: v.optional(v.number()),
 
     /**
      * Set only when a person has confirmed the actual against its evidence.
@@ -3060,7 +3071,22 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_application", ["applicationId"])
-    .index("by_custody", ["custodyId"]),
+    .index("by_custody", ["custodyId"])
+    // A deal's LIVE lines, read without its removed ones: `loadActiveFees`
+    // bounds every closure read on this index (`voidedAt` = `undefined`), so
+    // the bound counts what is live — a removed line stays as a row for its
+    // trace and never moves a deal toward the cap.
+    .index("by_application_voidedAt", ["applicationId", "voidedAt"])
+    // The one LIVE line per configured position. `recordTemplateFeeActual`
+    // proves uniqueness against this index with every field an equality —
+    // `voidedAt` last, so `undefined` (live) is the one value asked for — and
+    // `.unique()`, which refuses a second live line rather than choosing one.
+    .index("by_application_source_templateIndex_voidedAt", [
+      "applicationId",
+      "source",
+      "templateIndex",
+      "voidedAt",
+    ]),
 
   /**
    * Money handed to an employee to go and pay a financed deal's closing costs.

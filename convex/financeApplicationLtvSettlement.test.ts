@@ -416,6 +416,35 @@ describe("SCRUM-117 settlement consequence — one fixture, two arms", () => {
     });
 
     expect(afterApproval?.appliedLtvPercent).toBe(SNAPSHOT_LTV);
+
+    // Every figure this arm reports is asserted, not just observed (CodeRabbit
+    // on #305): a control that carried one `expect` would not have noticed the
+    // finalization walk breaking or the posting changing on this route. At 80%
+    // of 20,000 the company funds 16,000, the dealership contributes 4,000 and
+    // — PAID_SEPARATELY — still expects the whole 20,000 remitted; the walk
+    // completes; this route freezes no `financedSalePlan`, so the
+    // finance-company claim is the 1210 journal line and nothing else.
+    expect(walk.stoppedAt).toBeNull();
+    expect(afterApproval?.financeCompanyFundedPortionMinor).toBe(16_000 * SCALE);
+    expect(afterApproval?.unfinancedPortionMinor).toBe(4_000 * SCALE);
+    expect(afterApproval?.dealerContributionMinor).toBe(4_000 * SCALE);
+    expect(afterApproval?.expectedDealerRemittanceMinor).toBe(VEHICLE_PRICE * SCALE);
+    expect(finalRow?.appliedLtvPercent).toBe(SNAPSHOT_LTV);
+    expect(plan).not.toBeNull();
+    expect((plan as Record<string, unknown>).planAbsent).toBe(true);
+    const saleEntries = entries.filter((entry) => entry.sourceType === "sales");
+    expect(saleEntries).toHaveLength(1);
+    const posted = saleEntries[0].lines.map((line) => [
+      line.account.split(" ")[0],
+      line.debitMinor,
+      line.creditMinor,
+    ]);
+    expect(posted).toEqual([
+      ["1210", VEHICLE_PRICE * SCALE, 0],
+      ["4100", 0, VEHICLE_PRICE * SCALE],
+      ["5100", PURCHASE_COST * SCALE, 0],
+      ["1400", 0, PURCHASE_COST * SCALE],
+    ]);
   }, 180_000);
 
   test("REPRO: non-finance MANAGER writes ltvPercent=100 via MANUAL_ENTRY, then approves with the rate omitted", async () => {

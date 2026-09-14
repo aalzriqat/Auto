@@ -277,6 +277,35 @@ describe("the facts the card is given", () => {
 
     expect(screen.getByText("FinanceCompanyLtvMissing")).toBeTruthy();
     expect(screen.queryByText("DealPurchaseLtvNeedsApprover")).toBeNull();
+    expect(screen.getByRole("button", { name: "RecordQuotationAction" })).toBeTruthy();
+  });
+
+  /**
+   * SCRUM-322 — the exact custom-role shape the previous case silently
+   * supplied the control for. `roles.create` accepts any valid permission set,
+   * so a role can hold the rate authority (`approve:finance_application` +
+   * `view:finance`) WITHOUT `create:finance_application`. The card's
+   * self-service note used to be keyed on the rate authority alone, while the
+   * action needs CREATE too — so this role was told to record the rate with
+   * the quotation and given no way to do it, and the server offers no other
+   * door (both rate writers refuse it). Asserted through the real permission
+   * hook and the real component, on the note AND the action.
+   */
+  test("APPROVE + view:finance without CREATE is told who can, and is not offered the action (SCRUM-322)", () => {
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VIEW_FINANCE);
+    queryResults.set(COCKPIT_QUERY, cockpit(false));
+    queryResults.set(
+      ECONOMICS_QUERY,
+      economics({ companyRuleSnapshot: { ruleVersion: 1 }, appliedLtvPercent: undefined }, { requiresLtvPercent: true })
+    );
+
+    renderCockpit();
+
+    expect(screen.queryByText("FinanceCompanyLtvMissing")).toBeNull();
+    expect(screen.getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "RecordQuotationAction" })).toBeNull();
   });
 
   test("do not claim a missing LTV for a legacy deal with no snapshot at all", () => {
