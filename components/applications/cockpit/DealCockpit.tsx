@@ -2035,7 +2035,8 @@ function MoneyPanel({
   showParties,
   appraisalGapMinor,
   showAppraisalGap,
-  dealKind,
+  evidence,
+  moneyIn,
   canSettleSupplier,
   onSettleSupplier,
   t,
@@ -2048,7 +2049,22 @@ function MoneyPanel({
   appraisalGapMinor: number | undefined;
   /** Only where an application exists; a cash deal has no appraisal. */
   showAppraisalGap: boolean;
-  dealKind: DealCockpitData["dealKind"];
+  /**
+   * The recorded approved amount and contribution as the SERVER projects them
+   * (`handoverEvidence`): already redacted per caller, already denominated.
+   * Read only when the profit carries no lines — a management figure that is
+   * unavailable for want of the supplier settlement still has these on record.
+   * Financed cockpit payloads only; absent elsewhere.
+   */
+  evidence:
+    | {
+        approvedPurchaseAmountMinor: number | null;
+        dealerContributionMinor: number | null;
+        currency: { code: string; scale: number } | null;
+      }
+    | undefined;
+  /** Spells a served figure at the SERVED scale, or withholds it. */
+  moneyIn: (minor: number, currency: { code: string; scale: number } | null) => string | null;
   canSettleSupplier: boolean;
   onSettleSupplier: () => void;
   t: (key: string) => string;
@@ -2069,22 +2085,66 @@ function MoneyPanel({
   const isManagementEstimate = profit.available && profit.basis === "MANAGEMENT_ESTIMATE";
 
   /**
-   * The two non-party facts, read straight off the server's own derivation
-   * lines — never summed, never re-scaled. A line the projection does not
-   * carry (a cash deal has no dealership contribution; a financed deal with no
-   * approved amount has no lines at all) is an unavailable fact, not a zero.
+   * The two non-party facts, each labelled for exactly what it is.
+   *
+   * Selected by the BASIS the server put on the profit, never by `dealKind`:
+   * an applicationless FINANCED/LEASE sale is `dealKind: "FINANCED"` and its
+   * profit is an ACCOUNTING_RESULT built on the sale price — read as a
+   * management estimate it has no approved-purchase line, and its recorded
+   * sale price was reported as "not recorded". The basis is the only thing
+   * that says which lines exist.
+   *
+   * When the profit carries no lines at all (a management figure withheld for
+   * want of the supplier settlement, say), the approved amount and the
+   * contribution may still be on the record, and the server already serves
+   * them redacted and denominated in `handoverEvidence`. They are read from
+   * there — never summed, never re-scaled here. What neither source carries
+   * is an unavailable fact, not a zero.
+   *
+   * The labels are the derivation lines' own: "approved purchase amount" is
+   * not "deal value" — the quote's vehicle price can differ from what the
+   * finance company approved, and a tile must say which one it shows.
    */
   const line = (key: string) =>
     profit.available ? (profit.lines.find((l) => l.key === key) ?? null) : null;
-  const dealValueLine = dealKind === "CASH" ? line("SALE_PRICE") : line("APPROVED_PURCHASE");
-  const fourthLine =
-    dealKind === "CASH"
-      ? (line("VEHICLE_COST") ?? line("SUPPLIER_ENTITLEMENT"))
-      : line("DEALER_CONTRIBUTION");
-  const fourthLabel =
-    dealKind === "CASH" && fourthLine
-      ? t(PROFIT_LINE_LABEL[fourthLine.key] ?? fourthLine.key)
-      : t("FactDealerContribution");
+  type Fact = { labelKey: string; value: string | null };
+  let primary: Fact;
+  let secondary: Fact;
+  if (profit.available && profit.basis === "ACCOUNTING_RESULT") {
+    const price = line("SALE_PRICE");
+    const cost = line("VEHICLE_COST") ?? line("SUPPLIER_ENTITLEMENT");
+    primary = { labelKey: "LineSalePrice", value: price ? money(price.amountMinor) : null };
+    secondary = {
+      labelKey: cost ? (PROFIT_LINE_LABEL[cost.key] ?? cost.key) : "LineVehicleCost",
+      value: cost ? money(cost.amountMinor) : null,
+    };
+  } else if (profit.available) {
+    const approved = line("APPROVED_PURCHASE");
+    const contribution = line("DEALER_CONTRIBUTION");
+    primary = {
+      labelKey: "LineApprovedPurchase",
+      value: approved ? money(approved.amountMinor) : null,
+    };
+    secondary = {
+      labelKey: "LineDealerContribution",
+      value: contribution ? money(contribution.amountMinor) : null,
+    };
+  } else {
+    primary = {
+      labelKey: "LineApprovedPurchase",
+      value:
+        evidence?.approvedPurchaseAmountMinor != null
+          ? moneyIn(evidence.approvedPurchaseAmountMinor, evidence.currency)
+          : null,
+    };
+    secondary = {
+      labelKey: "LineDealerContribution",
+      value:
+        evidence?.dealerContributionMinor != null
+          ? moneyIn(evidence.dealerContributionMinor, evidence.currency)
+          : null,
+    };
+  }
   const partyFactLabel: Record<string, string> = {
     CUSTOMER: "FactCustomer",
     FINANCIER: "FactFinancier",
@@ -2138,25 +2198,16 @@ function MoneyPanel({
 
       {/* --- the six facts ------------------------------------------------ */}
       {/* Two on the deal itself, then one per party the server names. Each
-          figure is served, not derived: the deal value is the approved
-          purchase (or sale price) line, the contribution is its own line, and
-          the parties carry their own amount and position. */}
+          figure is served, not derived, and each label names the line it
+          shows. */}
       <div className="grid grid-cols-2 gap-2">
-        <MoneyFact
-          label={t("FactDealValue")}
-          value={dealValueLine ? money(dealValueLine.amountMinor) : null}
-          t={t}
-        />
-        <MoneyFact
-          label={fourthLabel}
-          value={fourthLine ? money(fourthLine.amountMinor) : null}
-          t={t}
-        />
+        <MoneyFact label={t(primary.labelKey)} value={primary.value} t={t} />
+        <MoneyFact label={t(secondary.labelKey)} value={secondary.value} t={t} />
       </div>
 
       {showParties && (
         <div className="space-y-2">
-          <p className="text-xs text-muted-foreground">{t("DealPartiesHeading")}</p>
+          <h3 className="text-xs font-normal text-muted-foreground">{t("DealPartiesHeading")}</h3>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-2">
             {parties.map((party) => {
               const positioned = party.position !== "NOT_INVOLVED" && party.position !== "UNKNOWN";
@@ -2736,6 +2787,18 @@ export function DealCockpitView({
    */
   const handoverEvidence =
     deal && "handoverEvidence" in deal ? deal.handoverEvidence : undefined;
+  /**
+   * A figure at the denomination the SERVER served with it (`{code, scale}`),
+   * for the summary's evidence facts. No guessing scaler: a served figure
+   * without a served denomination is withheld, and the marker follows the
+   * same locale rule as every other amount on the screen.
+   */
+  const servedMoney = (minor: number, served: { code: string; scale: number } | null) => {
+    if (denominationUnusable || served === null) return null;
+    const servedMarker =
+      locale === "ar" && served.code === currency.code ? currency.symbol : served.code;
+    return `${(minor / Math.pow(10, served.scale)).toLocaleString()} ${servedMarker}`;
+  };
   // Withheld outright rather than approximated: a figure the operator cannot
   // tell is wrong is worse than a visible blank beside the restatement notice.
   const decisionMoney = (minor: number) =>
@@ -2787,6 +2850,9 @@ export function DealCockpitView({
     key: stage.key,
     state: stage.state as StageState,
     label: t(STAGE_LABEL[stage.key] ?? stage.key),
+    // The same provenance-gated resolution the focus panel uses, so a node
+    // and the panel can never name different parties for one step.
+    owner: stageOwnerLabel(stage, activeAppraisalProvider, t),
     blocker: stage.blocker ? t(`Blocker${stage.blocker}`) : undefined,
   }));
   // Whether the close is being refused for want of the settlement route — the
@@ -3239,10 +3305,10 @@ export function DealCockpitView({
             onToggle={() => setShowCompleted((open) => !open)}
             t={t}
           />
-          {showCompleted && <DealStageRail stages={railStages} />}
+          {showCompleted && <DealStageRail stages={railStages} t={t} />}
         </div>
       ) : (
-        <DealStageRail stages={railStages} />
+        <DealStageRail stages={railStages} t={t} />
       )}
 
       {/* --- the current stage: the primary surface ----------------------- */}
@@ -3346,7 +3412,8 @@ export function DealCockpitView({
                 showParties={deal.money.parties.length > 0 || deal.applicationId !== null}
                 appraisalGapMinor={deal.money.appraisalGapMinor}
                 showAppraisalGap={deal.applicationId !== null}
-                dealKind={deal.dealKind}
+                evidence={handoverEvidence ?? undefined}
+                moneyIn={servedMoney}
                 canSettleSupplier={canSettleSupplier}
                 onSettleSupplier={() => setSettlingSupplier(true)}
                 t={t}

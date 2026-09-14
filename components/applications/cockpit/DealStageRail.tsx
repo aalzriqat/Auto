@@ -9,8 +9,24 @@ export type RailStage = Readonly<{
   key: string;
   state: RailStageState;
   label: string;
+  /**
+   * Whose move the step is, already resolved to display text. Carried on
+   * every node — in the accessible text and the tooltip, not as a visible
+   * pill — so ownership of the non-live steps survives the compact rail
+   * without eight badges competing with the one that matters.
+   */
+  owner?: string;
   blocker?: string;
 }>;
+
+/** The i18n key that states each node's state to assistive technology. */
+const STAGE_STATE_KEY: Record<RailStageState, string> = {
+  COMPLETE: "StageStateComplete",
+  CURRENT: "StageStateCurrent",
+  BLOCKED: "StageStateBlocked",
+  PENDING: "StageStatePending",
+  STOPPED: "StageStateStopped",
+};
 
 /**
  * The compact stage rail: one node per stage, in order.
@@ -23,15 +39,21 @@ export type RailStage = Readonly<{
  * action that mattered), future stages are quiet, and only a BLOCKED stage
  * carries the amber that means "somebody is waiting on something".
  *
- * Semantic colours only. `aria-current="step"` marks the live node so the
- * emphasis is not purely visual.
+ * Semantic colours only, and paired ones: every node pairs a background token
+ * with its own foreground (`bg-primary`/`text-primary-foreground`,
+ * `bg-card`/`text-muted-foreground`). The blocked node is the one that has no
+ * app token, so it is a light amber tint under a dark amber index — AA in both
+ * themes — rather than white on a filled amber, which measured 3.19:1.
+ *
+ * `aria-current="step"` marks the live node and each node states its state
+ * and owner in visually hidden text, so none of this is colour alone.
  */
 function stageNodeClass(state: RailStageState): string {
   switch (state) {
     case "CURRENT":
       return "border-primary bg-primary text-primary-foreground";
     case "BLOCKED":
-      return "border-amber-600 bg-amber-600 text-white dark:border-amber-500 dark:bg-amber-500 dark:text-black";
+      return "border-amber-700 bg-amber-500/15 text-amber-900 dark:border-amber-400 dark:bg-amber-400/15 dark:text-amber-200";
     case "COMPLETE":
       return "border-border bg-card text-muted-foreground";
     case "STOPPED":
@@ -47,17 +69,25 @@ function stageNodeContent(state: RailStageState, index: number): React.ReactNode
   return <bdi dir="ltr">{index + 1}</bdi>;
 }
 
-export function DealStageRail({ stages }: Readonly<{ stages: ReadonlyArray<RailStage> }>) {
+export function DealStageRail({
+  stages,
+  t,
+}: Readonly<{ stages: ReadonlyArray<RailStage>; t: (key: string) => string }>) {
   return (
     <ol className="flex flex-wrap gap-y-3" data-testid="deal-stage-rail">
       {stages.map((stage, index) => {
         const live = stage.state === "CURRENT" || stage.state === "BLOCKED";
+        // The tooltip and the accessible text say the same things, in the
+        // same order: state, owner, blocker.
+        const detail = [t(STAGE_STATE_KEY[stage.state]), stage.owner, stage.blocker]
+          .filter(Boolean)
+          .join(" · ");
         return (
           <li
             key={stage.key}
             className="relative flex min-w-0 basis-1/4 flex-col items-center gap-1.5 px-1 text-center sm:flex-1"
             aria-current={live ? "step" : undefined}
-            title={stage.blocker}
+            title={detail}
           >
             {/* The connector, drawn behind the node from the previous one.
                 Hidden on the first node and on phones, where the rail wraps
@@ -81,6 +111,7 @@ export function DealStageRail({ stages }: Readonly<{ stages: ReadonlyArray<RailS
             >
               {stage.label}
             </span>
+            <span className="sr-only">{detail}</span>
           </li>
         );
       })}
@@ -108,7 +139,7 @@ export function DealStagesComplete({
 }>) {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white dark:bg-emerald-500 dark:text-black">
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-emerald-700 bg-emerald-500/15 text-emerald-800 dark:border-emerald-400 dark:bg-emerald-400/15 dark:text-emerald-200">
         <Check className="h-4 w-4" aria-hidden />
       </span>
       <p className="min-w-0 flex-1 text-sm font-medium">

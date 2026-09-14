@@ -307,6 +307,124 @@ describe("a cash headline and a financed headline cannot be confused", () => {
   });
 });
 
+/**
+ * The six-fact summary reads the SERVER's own facts and labels them for what
+ * they are. Three ways it could lie, each pinned:
+ *
+ * 1. Selecting the lines by `dealKind`. An applicationless FINANCED/LEASE sale
+ *    is `dealKind: "FINANCED"` (`sales.dealCockpit`) and its profit is an
+ *    ACCOUNTING_RESULT built on `SALE_PRICE` — reading it as a management
+ *    estimate found no `APPROVED_PURCHASE` line and reported the recorded sale
+ *    price as "not recorded". The basis the server puts on the profit is the
+ *    only thing that says which lines exist.
+ * 2. Reporting "not recorded" for figures the server already serves. When the
+ *    management profit is unavailable ONLY for want of the supplier settlement,
+ *    the approved amount and the contribution are on the record and travel in
+ *    `handoverEvidence`, already redacted and already denominated.
+ * 3. Calling the approved purchase amount "deal value". The quote's vehicle
+ *    price can differ from what the finance company approved; the tile has to
+ *    say which one it is.
+ */
+describe("the six-fact summary reads server facts, never dealKind", () => {
+  test("an applicationless FINANCED sale shows its recorded sale price under the sale-price label", () => {
+    renderCockpit(
+      cashDealFixture({
+        // What `sales.dealCockpit` emits for `financingType: "FINANCED"` with
+        // no application: FINANCED, still no applicationId, accounting basis.
+        dealKind: "FINANCED",
+        applicationId: null,
+      })
+    );
+    // `getAllByText`: the same line labels also head the collapsed breakdown.
+    expect(screen.getAllByText("LineSalePrice").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("LineSupplierEntitlement").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/20,000/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/17,000/).length).toBeGreaterThan(0);
+    expect(screen.queryByText("NotRecorded")).toBeNull();
+    expect(screen.queryByText("LineApprovedPurchase")).toBeNull();
+  });
+
+  test("a management profit awaiting the supplier settlement still shows the served approved amount and contribution", () => {
+    renderCockpit(
+      dealFixture({
+        money: {
+          ...dealFixture().money,
+          profit: { available: false, reason: "NoSupplierSettlement" },
+        },
+        handoverEvidence: {
+          approvedPurchaseAmountMinor: 12_500 * SCALE,
+          financeCompanyFundedPortionMinor: 11_500 * SCALE,
+          dealerContributionMinor: 500 * SCALE,
+          approvedAmountIsFarFromEvidence: false,
+          currency: { code: "JOD", scale: 3 },
+        },
+      })
+    );
+    expect(screen.getByText("ProfitNotCalculable")).toBeTruthy();
+    expect(screen.getByText("LineApprovedPurchase")).toBeTruthy();
+    expect(screen.getByText(/12,500 د\.أ/)).toBeTruthy();
+    expect(screen.getByText("LineDealerContribution")).toBeTruthy();
+    expect(screen.getByText(/^500 د\.أ/)).toBeTruthy();
+    expect(screen.queryByText("NotRecorded")).toBeNull();
+  });
+
+  test("a served figure is spelled at the SERVED scale, never the deal's", () => {
+    // The evidence carries its own denomination. A two-decimal pin read at the
+    // deal's three-decimal scale would print 1,250,000 as 1,250.
+    language.locale = "en";
+    renderCockpit(
+      dealFixture({
+        money: {
+          ...dealFixture().money,
+          profit: { available: false, reason: "NoSupplierSettlement" },
+        },
+        handoverEvidence: {
+          approvedPurchaseAmountMinor: 1_250_000,
+          financeCompanyFundedPortionMinor: null,
+          dealerContributionMinor: null,
+          approvedAmountIsFarFromEvidence: false,
+          currency: { code: "USD", scale: 2 },
+        },
+      })
+    );
+    expect(screen.getByText(/12,500 USD/)).toBeTruthy();
+    expect(screen.queryByText(/1,250 USD/)).toBeNull();
+  });
+
+  test("evidence the server withheld or cannot denominate is 'not recorded', never a guessed figure", () => {
+    renderCockpit(
+      dealFixture({
+        money: {
+          ...dealFixture().money,
+          profit: { available: false, reason: "NoSupplierSettlement" },
+        },
+        handoverEvidence: {
+          approvedPurchaseAmountMinor: 12_500 * SCALE,
+          financeCompanyFundedPortionMinor: null,
+          dealerContributionMinor: null,
+          approvedAmountIsFarFromEvidence: false,
+          currency: null,
+        },
+      })
+    );
+    expect(screen.queryByText(/12,500/)).toBeNull();
+    expect(screen.getAllByText("NotRecorded").length).toBeGreaterThan(0);
+  });
+
+  test("the approved purchase amount is labelled as such, not as the deal value", () => {
+    renderCockpit();
+    // `getAllByText`: the approved line also heads the collapsed breakdown.
+    expect(screen.getAllByText("LineApprovedPurchase").length).toBeGreaterThan(0);
+    expect(screen.getByText("LineDealerContribution")).toBeTruthy();
+    expect(screen.queryByText("FactDealValue")).toBeNull();
+  });
+
+  test("the parties row carries a real heading", () => {
+    renderCockpit();
+    expect(screen.getByRole("heading", { name: "DealPartiesHeading" })).toBeTruthy();
+  });
+});
+
 describe("the cash rail is shorter, not greyed out", () => {
   test("the finance-only stages are ABSENT from a cash deal, not rendered inactive", () => {
     renderCockpit(cashDealFixture());
@@ -1170,6 +1288,60 @@ describe("the current stage has exactly one working surface, beneath the rail", 
     fireEvent.click(screen.getByRole("button", { name: "ShowStages" }));
     expect(screen.getByTestId("deal-stage-rail")).toBeTruthy();
     expect(screen.getByText("StageSettlement")).toBeTruthy();
+  });
+
+  test("every rail node states its state and its owner to assistive technology, not only by colour", () => {
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          stages: [
+            { key: "APPLICATION", state: "COMPLETE", authority: "DEALER" },
+            { key: "CREDIT_DECISION", state: "BLOCKED", blocker: "AwaitingCreditDecision", authority: "MIRROR" },
+            { key: "HANDOVER", state: "PENDING", authority: "DEALER" },
+            { key: "SETTLEMENT", state: "STOPPED", authority: "DEALER" },
+          ],
+        })}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    const rail = screen.getByTestId("deal-stage-rail");
+    const nodes = Array.from(rail.querySelectorAll("li")).map((li) => li.textContent ?? "");
+    expect(nodes[0]).toContain("StageStateComplete");
+    expect(nodes[1]).toContain("StageStateBlocked");
+    expect(nodes[2]).toContain("StageStatePending");
+    expect(nodes[3]).toContain("StageStateStopped");
+    // Ownership survives on the non-live nodes, in the accessible text and the
+    // tooltip rather than as a visible pill on every node.
+    expect(nodes[0]).toContain("StageOwnerDealership");
+    expect(nodes[1]).toContain("StageOwnerFinanceCompany");
+    expect(rail.querySelectorAll("li")[0].getAttribute("title")).toContain("StageOwnerDealership");
+  });
+
+  test("in Arabic the header and rail render the same identity, status and live stage", () => {
+    language.locale = "ar";
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          stages: [
+            { key: "APPLICATION", state: "COMPLETE", authority: "DEALER" },
+            { key: "HANDOVER", state: "CURRENT", authority: "DEALER" },
+          ],
+        })}
+        backHref="/org_1/deals"
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    const header = screen.getByTestId("deal-header");
+    expect(header.textContent).toContain("DealCockpitTitle");
+    expect(header.textContent).toContain("#2048");
+    expect(header.textContent).toContain("Approved");
+    expect(header.textContent).toContain("StageOwnerDealership");
+    expect(screen.getByRole("link", { name: "BackToDeals" }).getAttribute("href")).toBe("/org_1/deals");
+    const rail = screen.getByTestId("deal-stage-rail");
+    expect(rail.querySelectorAll("li")).toHaveLength(2);
+    expect(rail.querySelector('[aria-current="step"]')?.textContent).toContain("StageHandover");
+    // The Arabic currency marker sits beside the figure on the same screen.
+    expect(screen.getByText(/2,410 د\.أ/)).toBeTruthy();
   });
 
   test("a stage with nothing outstanding says so in the focus row, and a blocker replaces it", () => {

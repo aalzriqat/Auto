@@ -250,11 +250,15 @@ const dealRailMessages = defineBilingualMessages({
   ShowStages: ["Show stages", "عرض المراحل"],
   HideStages: ["Hide stages", "إخفاء المراحل"],
   FinancialSummaryHeading: ["Financial summary", "الملخص المالي"],
-  FactDealValue: ["Deal value", "قيمة الصفقة"],
   FactCustomer: ["Customer", "العميل"],
   FactFinancier: ["Finance company", "شركة التمويل"],
-  FactDealerContribution: ["Dealership contribution", "مساهمة المعرض"],
   FactSupplier: ["Supplier", "المورد"],
+  /** Read to assistive technology on every rail node; colour alone is not state. */
+  StageStateComplete: ["Complete", "مكتملة"],
+  StageStateCurrent: ["Current stage", "المرحلة الحالية"],
+  StageStateBlocked: ["Blocked", "متوقفة"],
+  StageStatePending: ["Not started", "لم تبدأ"],
+  StageStateStopped: ["Will not continue", "لن تستكمل"],
   ProfitBreakdownToggle: ["How this is calculated", "طريقة الاحتساب"],
   DealEssentialsHeading: ["Deal essentials", "أساسيات الصفقة"],
 
