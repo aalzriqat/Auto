@@ -331,6 +331,51 @@ describe("the expected checklist comes from the application's frozen snapshot", 
   });
 });
 
+describe("the denomination of a configured expectation (SCRUM-319)", () => {
+  /**
+   * Templates store `estimatedAmountMinor` with NO currency of their own —
+   * they are minor units in the organisation's currency of the day. The org
+   * currency lock (`orgSettings.upsert`) watched applications, cost lines,
+   * custody and the ledger, but not `financeCompanies`: an org could configure
+   * a company with JOD templates while otherwise fresh, switch to USD, and
+   * every application created afterwards would snapshot the same integers and
+   * this feature would read 120,000 minor (120.000 JOD) as 1,200.00 USD — a
+   * ten-fold expectation on every deal, financially live the moment an actual
+   * is compared against it. Reproduced before it was fixed: with the lock
+   * missing, the switch succeeded and the checklist reported USD.
+   *
+   * The fix is the existing lock's own shape — a conservative EXISTENCE lock
+   * on `financeCompanies` (`by_org`, first row): a company that exists at all
+   * carries minor-unit rules (templates, minimum first payment) denominated in
+   * the org currency of its day, so presence of the row is the invariant.
+   * Onboarding stays open: a fresh org has no company.
+   */
+  test("the org currency is locked once a finance company exists, so a snapshotted template can never be re-read at another scale", async () => {
+    const seed = await seedDealer("ccyLock");
+    await createCompany(seed, "Company A", COMPANY_A_TEMPLATES);
+
+    await expect(
+      seed.asUser.mutation(api.orgSettings.upsert, { orgId: seed.orgId, currency: "USD", currencySymbol: "$" })
+    ).rejects.toThrow(/cannot be changed after financial records exist/i);
+
+    // Control: the org is still JOD and the checklist is denominated in it.
+    const applicationId = await createApplicationFor(
+      seed,
+      (await seed.t.run((ctx) => ctx.db.query("financeCompanies").collect()))[0]._id
+    );
+    const expected = (await costsOf(seed, applicationId)).expected;
+    expect(expected.currency).toBe("JOD");
+    expect(expected.rows[0].expectedAmountMinor).toBe(jod(120));
+  });
+
+  test("a fresh org with no company can still choose its currency (onboarding control)", async () => {
+    const seed = await seedDealer("ccyFresh");
+    await seed.asUser.mutation(api.orgSettings.upsert, { orgId: seed.orgId, currency: "USD", currencySymbol: "$" });
+    const settings = await seed.asUser.query(api.orgSettings.get, { orgId: seed.orgId });
+    expect(settings?.currency).toBe("USD");
+  });
+});
+
 describe("recording the actual for a configured fee", () => {
   test("copies the template's every field from the snapshot and keeps the expectation beside the actual", async () => {
     const seed = await seedDealer("copy");
