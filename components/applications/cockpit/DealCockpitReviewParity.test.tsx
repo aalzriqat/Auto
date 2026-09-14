@@ -1511,6 +1511,131 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     expect(mutationCalls.get("financeDealCosts:recordDealFee") ?? []).toHaveLength(0);
   });
 
+  /**
+   * The configured-row recording has the same outcome discipline as the
+   * additional-cost add (SM-R5 / SCRUM-319): a lost response FREEZES the form
+   * and Retry replays the identical payload under the same retained identity;
+   * a refusal is the server's answer, releases the identity, and the next
+   * submit is a new command. The server's one-live-line-per-position rule is
+   * what makes even the simplest operator behaviour safe after a lost
+   * response (proved server-side in handoverExpectedCosts.test.ts).
+   */
+  function oneOpenRow() {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(
+      COSTS_QUERY,
+      withChecklist([], {
+        source: "COMPANY_RULE_SNAPSHOT",
+        currency: "JOD",
+        rows: [EXPECTED_ROWS[0]],
+        expectedTotalMinor: 250_000,
+        actualTotalMinor: 0,
+        differenceMinor: 250_000,
+        unplannedLineIds: [],
+      })
+    );
+  }
+
+  test("a LOST response on a configured recording freezes the form; Retry replays the identical payload under the SAME identity", async () => {
+    oneOpenRow();
+    stubs.mutationFailures.set("financeDealCosts:recordTemplateFeeActual", "network lost");
+    renderCockpit();
+
+    fireEvent.click(screen.getByRole("button", { name: "RecordTemplateActual" }));
+    const form = screen.getByTestId("deal-handover-expected-record-0");
+    fireEvent.change(within(form).getByLabelText(/CostAmountLabel/), { target: { value: "265" } });
+    fireEvent.click(within(form).getByRole("button", { name: "SaveActualCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordTemplateFeeActual")).toHaveLength(1));
+
+    // Frozen: the fields are disabled, the note says the line may already
+    // exist, and the only submit is a verbatim retry.
+    await screen.findByRole("alert");
+    expect(screen.getByTestId("deal-handover-expected-record-0-frozen").textContent).toBe("HandoverCostRetryFrozenUnknown");
+    expect(within(form).getByLabelText(/CostAmountLabel/).closest("fieldset")?.disabled).toBe(true);
+    expect(within(form).queryByRole("button", { name: "SaveActualCost" })).toBeNull();
+    fireEvent.click(within(form).getByRole("button", { name: "RetryHandoverCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordTemplateFeeActual")).toHaveLength(2));
+
+    const [first, second] = mutationCalls.get("financeDealCosts:recordTemplateFeeActual") as Array<Record<string, unknown>>;
+    expect(first).toMatchObject({ templateIndex: 0, actualAmountMinor: 265_000, expectedCurrency: "JOD" });
+    expect(second).toEqual(first);
+    expect(second.idempotencyKey).toBe(first.idempotencyKey);
+  });
+
+  test("a REFUSED configured recording is the server's answer: fields stay editable and the next submit is a NEW command", async () => {
+    oneOpenRow();
+    stubs.mutationFailures.set(
+      "financeDealCosts:recordTemplateFeeActual",
+      "refused:This cost was entered in JOD, but the deal's costs are kept in USD."
+    );
+    renderCockpit();
+
+    fireEvent.click(screen.getByRole("button", { name: "RecordTemplateActual" }));
+    const form = screen.getByTestId("deal-handover-expected-record-0");
+    fireEvent.change(within(form).getByLabelText(/CostAmountLabel/), { target: { value: "265" } });
+    fireEvent.click(within(form).getByRole("button", { name: "SaveActualCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordTemplateFeeActual")).toHaveLength(1));
+    expect((await screen.findByRole("alert")).textContent).toContain("kept in USD");
+    expect(screen.queryByTestId("deal-handover-expected-record-0-frozen")).toBeNull();
+    expect(within(form).getByLabelText(/CostAmountLabel/).closest("fieldset")?.disabled).toBe(false);
+
+    fireEvent.change(within(form).getByLabelText(/CostAmountLabel/), { target: { value: "270" } });
+    fireEvent.click(within(form).getByRole("button", { name: "SaveActualCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordTemplateFeeActual")).toHaveLength(2));
+    const [first, second] = mutationCalls.get("financeDealCosts:recordTemplateFeeActual") as Array<Record<string, unknown>>;
+    expect(second.actualAmountMinor).toBe(270_000);
+    expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
+  });
+
+  test("cancelling after a LOST response ends that identity: a fresh form for the same row is a NEW command", async () => {
+    oneOpenRow();
+    stubs.mutationFailures.set("financeDealCosts:recordTemplateFeeActual", "network lost");
+    renderCockpit();
+
+    fireEvent.click(screen.getByRole("button", { name: "RecordTemplateActual" }));
+    let form = screen.getByTestId("deal-handover-expected-record-0");
+    fireEvent.change(within(form).getByLabelText(/CostAmountLabel/), { target: { value: "265" } });
+    fireEvent.click(within(form).getByRole("button", { name: "SaveActualCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordTemplateFeeActual")).toHaveLength(1));
+    await screen.findByTestId("deal-handover-expected-record-0-frozen");
+    fireEvent.click(within(form).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByTestId("deal-handover-expected-record-0")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "RecordTemplateActual" }));
+    form = screen.getByTestId("deal-handover-expected-record-0");
+    fireEvent.change(within(form).getByLabelText(/CostAmountLabel/), { target: { value: "265" } });
+    fireEvent.click(within(form).getByRole("button", { name: "SaveActualCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordTemplateFeeActual")).toHaveLength(2));
+    const [first, second] = mutationCalls.get("financeDealCosts:recordTemplateFeeActual") as Array<Record<string, unknown>>;
+    // A new identity — and if the lost attempt DID land, the server refuses
+    // this one on the position rule; either way one actual at most.
+    expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
+  });
+
+  test("a configured row whose line is not in the served payload shows its figures but offers no edit or remove", () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(
+      COSTS_QUERY,
+      withChecklist([], {
+        source: "COMPANY_RULE_SNAPSHOT",
+        currency: "JOD",
+        rows: [EXPECTED_ROWS[1]],
+        expectedTotalMinor: 90_000,
+        actualTotalMinor: 95_000,
+        differenceMinor: -5_000,
+        unplannedLineIds: [],
+      })
+    );
+    renderCockpit();
+    const stamps = screen.getByTestId("deal-handover-expected-1");
+    expect(stamps.textContent).toContain("CostStatusActual");
+    expect(within(stamps).queryByRole("button", { name: "RecordActualCost" })).toBeNull();
+    expect(within(stamps).queryByRole("button", { name: "RemoveHandoverCost" })).toBeNull();
+    expect(within(stamps).queryByRole("button", { name: "RecordTemplateActual" })).toBeNull();
+  });
+
   test("a deal whose company configured nothing says so — no zero, no checklist rows, additional costs still recordable", () => {
     readableDeal();
     permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);

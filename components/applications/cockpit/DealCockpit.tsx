@@ -823,9 +823,18 @@ export function DealCockpit({
            * caller names WHICH fee by its position in the deal's frozen
            * snapshot and what it saw there; the server copies every other
            * field from that entry and refuses a stale or out-of-range
-           * reference. One retained identity per (deal, position): a retry of
-           * the same recording replays the same line; a different recording
-           * against the same position is refused server-side.
+           * reference.
+           *
+           * One retained identity per (deal, position), with the SAME outcome
+           * discipline as the additional-cost add: a REFUSED attempt is the
+           * server's own answer (ConvexError, nothing committed) and releases
+           * the identity, so the next submit is a new command; an UNKNOWN
+           * attempt (lost response) KEEPS it, so the form's verbatim retry
+           * replays the same line and a changed payload is refused as a
+           * different intent. The server's one-live-line-per-position rule is
+           * what makes this lifecycle safe end to end: after a lost response,
+           * replay, cancel-and-record-again, or a second operator can land at
+           * most one actual on the row.
            */
           onRecordTemplateActual: async (row: ExpectedHandoverRow, values: ActualHandoverCost) => {
             const intent = `record-template-fee:${applicationId}:${row.templateIndex}`;
@@ -834,7 +843,7 @@ export function DealCockpit({
                 orgId,
                 applicationId,
                 templateIndex: row.templateIndex,
-                feeType: row.feeType as Parameters<typeof recordTemplateFeeActual>[0]["feeType"],
+                feeType: row.feeType,
                 actualAmountMinor: values.actualAmountMinor,
                 // REQUIRED: the deal's denomination the amount was counted in.
                 expectedCurrency: values.currency,
@@ -845,8 +854,13 @@ export function DealCockpit({
               commandId.retire(intent);
               toast.success(t("HandoverCostSaved"));
             } catch (error) {
-              throw new Error(getErrorMessage(error));
+              const outcome = isConvexError(error) ? "REFUSED" : "UNKNOWN";
+              if (outcome === "REFUSED") commandId.retire(intent);
+              throw new HandoverCostAttemptError(getErrorMessage(error), outcome);
             }
+          },
+          onAbandonTemplateActual: (row: ExpectedHandoverRow) => {
+            commandId.retire(`record-template-fee:${applicationId}:${row.templateIndex}`);
           },
           onRecordActual: async (feeId: string, values: ActualHandoverCost) => {
             try {

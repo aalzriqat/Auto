@@ -9,6 +9,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { dateInputToUtcMs, todayDateInput } from "@/lib/dateInput";
+import type { Doc } from "@/convex/_generated/dataModel";
+
+/** The fee-type union the server validates — the row carries it as such, so no cast is needed to send it back. */
+export type ServedFeeType = Doc<"financeDealFees">["feeType"];
 
 /**
  * رسوم ومصاريف تسليم السيارة — the costs of handing THIS car to THIS customer,
@@ -178,7 +182,7 @@ export type HandoverCostsSummaryUnavailable = {
  */
 export type ExpectedHandoverRow = {
   templateIndex: number;
-  feeType: string;
+  feeType: ServedFeeType;
   description: string | undefined;
   expectedAmountMinor: number;
   /** Another configured fee shares this one's type and description. */
@@ -328,6 +332,7 @@ export function HandoverCostsPanel({
   onRecordActual,
   onVoid,
   onRecordTemplateActual,
+  onAbandonTemplateActual,
 }: Readonly<{
   /** `undefined` while loading or when this caller may not read the cost rows. */
   costs: HandoverCostsData | undefined;
@@ -356,8 +361,19 @@ export function HandoverCostsPanel({
    * Records the ACTUAL for a configured fee, by its position in the deal's
    * frozen snapshot. Every other field is the server's. Absent when the
    * container predates the checklist; the rows then render without an action.
+   *
+   * Rejects with `HandoverCostAttemptError` so the form can tell a REFUSED
+   * attempt (the server's answer, nothing committed) from an UNKNOWN one (the
+   * response was lost; the line may exist).
    */
   onRecordTemplateActual?: (row: ExpectedHandoverRow, values: ActualHandoverCost) => Promise<void>;
+  /**
+   * The operator closed a configured row's form after an attempt whose result
+   * never arrived: that recording's retained identity is over. Safe by the
+   * server's one-live-line-per-position rule — a later attempt under a NEW
+   * identity is either the first to land, or refused because the lost one did.
+   */
+  onAbandonTemplateActual?: (row: ExpectedHandoverRow) => void;
 }>) {
   /** The configured row whose record form is open, by position. */
   const [recordingTemplateIndex, setRecordingTemplateIndex] = useState<number | null>(null);
@@ -459,22 +475,14 @@ export function HandoverCostsPanel({
   const live = (costs?.lines ?? []).filter(
     (line) => !expected || expected.unplannedLineIds.includes(line._id)
   );
-  /** The served line a configured row's actual points at — the shared forms edit the LINE. */
-  const lineFor = (row: ExpectedHandoverRow): HandoverCostLine => {
-    const found = costs?.lines.find((line) => line._id === row.actual?.feeId);
-    return (
-      found ?? {
-        _id: row.actual?.feeId ?? "",
-        feeType: row.feeType,
-        currency: row.actual?.currency ?? denomination.code,
-        description: row.description,
-        actualAmountMinor: row.actual?.actualAmountMinor,
-        paidBy: "DEALER",
-        paidTo: "OTHER",
-        status: row.actual?.status ?? "UNQUANTIFIED",
-      }
-    );
-  };
+  /**
+   * The served line a configured row's actual points at — EXACT lookup, or
+   * nothing. The shared edit/void forms act on a LINE, so a row whose line is
+   * not in the served payload (a moment between two query results, a legacy
+   * payload) gets no edit/void controls rather than a fabricated target.
+   */
+  const lineFor = (row: ExpectedHandoverRow): HandoverCostLine | undefined =>
+    row.actual === null ? undefined : costs?.lines.find((line) => line._id === row.actual?.feeId);
   const canAdd = canManage;
   const adding = openIntent !== null;
 
@@ -657,7 +665,10 @@ export function HandoverCostsPanel({
                             scale={scaleOf(checklist.currency)}
                             currency={checklist.currency}
                             t={t}
-                            onCancel={() => setRecordingTemplateIndex(null)}
+                            onCancel={(afterUnknown) => {
+                              if (afterUnknown) onAbandonTemplateActual?.(row);
+                              setRecordingTemplateIndex(null);
+                            }}
                             onSubmit={async (values) => {
                               await onRecordTemplateActual(row, values);
                               setRecordingTemplateIndex(null);
@@ -719,7 +730,7 @@ export function HandoverCostsPanel({
                                   {t("RecordTemplateActual")}
                                 </Button>
                               )}
-                              {canManage && row.actual !== null && row.actual.currency === denomination.code && (
+                              {canManage && row.actual !== null && row.actual.currency === denomination.code && lineFor(row) && (
                                 <div className="flex gap-1">
                                   <Button
                                     type="button"
@@ -758,27 +769,27 @@ export function HandoverCostsPanel({
                             </div>
                           </div>
                         )}
-                        {row.actual !== null && editingId === row.actual.feeId && (
+                        {row.actual !== null && editingId === row.actual.feeId && lineFor(row) && (
                           <div className="mt-3">
                             <ActualForm
-                              line={lineFor(row)}
+                              line={lineFor(row) as HandoverCostLine}
                               scale={scaleOf(row.actual.currency)}
                               t={t}
                               onCancel={() => setEditingId(null)}
                               onSubmit={async (values) => {
-                                await onRecordActual(lineFor(row)._id, values);
+                                await onRecordActual((lineFor(row) as HandoverCostLine)._id, values);
                                 setEditingId(null);
                               }}
                             />
                           </div>
                         )}
-                        {row.actual !== null && voidingId === row.actual.feeId && (
+                        {row.actual !== null && voidingId === row.actual.feeId && lineFor(row) && (
                           <div className="mt-3">
                             <VoidForm
                               t={t}
                               onCancel={() => setVoidingId(null)}
                               onSubmit={async (reason) => {
-                                await onVoid(lineFor(row)._id, reason);
+                                await onVoid((lineFor(row) as HandoverCostLine)._id, reason);
                                 setVoidingId(null);
                               }}
                             />
@@ -1142,7 +1153,8 @@ function TemplateActualForm({
   scale: number;
   currency: string;
   t: (key: string) => string;
-  onCancel: () => void;
+  /** `afterUnknown`: the form is closing on an attempt whose result never arrived. */
+  onCancel: (afterUnknown: boolean) => void;
   onSubmit: (values: ActualHandoverCost) => Promise<void>;
 }>) {
   const [amount, setAmount] = useState("");
@@ -1150,6 +1162,23 @@ function TemplateActualForm({
   const [reference, setReference] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * The exact payload of an attempt whose result was LOST. From then on the
+   * fields freeze and Retry replays this verbatim under the same retained
+   * identity: the server deduplicates by identity plus a fingerprint of the
+   * whole payload, so a changed amount under that identity would be refused as
+   * a different intent. A REFUSED attempt (the server's own answer, nothing
+   * committed) does not freeze anything — the identity is released by the
+   * container and the next submit is a new command.
+   *
+   * What makes the simpler lifecycle SAFE here, unlike the additional-cost
+   * form: the server keeps ONE live line per (deal, position). Whatever the
+   * operator does after a lost response — replay, cancel and record again
+   * under a new identity — at most one actual can ever land on this row; the
+   * second attempt is either the first to commit or is refused because the
+   * lost one did.
+   */
+  const [frozen, setFrozen] = useState<ActualHandoverCost | null>(null);
   const amountMinor = parseMajor(amount, scale);
   const amountInvalid = amount.trim() !== "" && amountMinor === null;
   const fieldId = `handover-expected-${row.templateIndex}`;
@@ -1160,20 +1189,28 @@ function TemplateActualForm({
       data-testid={`deal-handover-expected-record-${row.templateIndex}`}
       onSubmit={async (event) => {
         event.preventDefault();
-        if (amountMinor === null) {
+        if (submitting) return;
+        const values: ActualHandoverCost | null =
+          frozen ??
+          (amountMinor === null
+            ? null
+            : {
+                actualAmountMinor: amountMinor,
+                paidAt: paidOn ? dateInputToUtcMs(paidOn) : undefined,
+                receiptReference: reference.trim() || undefined,
+                currency,
+              });
+        if (values === null) {
           setError(t("CostAmountRequired"));
           return;
         }
         setSubmitting(true);
         setError(null);
         try {
-          await onSubmit({
-            actualAmountMinor: amountMinor,
-            paidAt: paidOn ? dateInputToUtcMs(paidOn) : undefined,
-            receiptReference: reference.trim() || undefined,
-            currency,
-          });
+          await onSubmit(values);
         } catch (caught) {
+          const outcome = caught instanceof HandoverCostAttemptError ? caught.outcome : "UNKNOWN";
+          if (outcome === "UNKNOWN") setFrozen(values);
           setError(caught instanceof Error ? caught.message : t("UnexpectedError"));
         } finally {
           setSubmitting(false);
@@ -1192,6 +1229,12 @@ function TemplateActualForm({
       <p className="text-xs text-muted-foreground">
         {t("CostExpected")}: <bdi dir="ltr">{row.expectedAmountMinor / Math.pow(10, scale)} {currency}</bdi>
       </p>
+      {frozen && (
+        <p className="text-xs text-amber-700 dark:text-amber-400" data-testid={`deal-handover-expected-record-${row.templateIndex}-frozen`}>
+          {t("HandoverCostRetryFrozenUnknown")}
+        </p>
+      )}
+      <fieldset disabled={frozen !== null || submitting} className="contents">
       <div className="grid gap-3 sm:grid-cols-3">
         <div className="space-y-1.5">
           <Label htmlFor={`${fieldId}-amount`}>
@@ -1225,18 +1268,19 @@ function TemplateActualForm({
           />
         </div>
       </div>
+      </fieldset>
       {error && (
         <p role="alert" className="text-xs font-medium text-destructive">
           {error}
         </p>
       )}
       <div className="flex justify-end gap-2">
-        <Button type="button" variant="ghost" size="sm" disabled={submitting} onClick={onCancel}>
+        <Button type="button" variant="ghost" size="sm" disabled={submitting} onClick={() => onCancel(frozen !== null)}>
           {t("Cancel")}
         </Button>
-        <Button type="submit" size="sm" disabled={submitting || amountMinor === null}>
+        <Button type="submit" size="sm" disabled={submitting || (frozen === null && amountMinor === null)}>
           {submitting && <Loader2 className="h-4 w-4 me-1.5 animate-spin" />}
-          {t("SaveActualCost")}
+          {t(frozen ? "RetryHandoverCost" : "SaveActualCost")}
         </Button>
       </div>
     </form>
