@@ -2075,11 +2075,13 @@ type SummaryFact = {
  *
  * UNAVAILABLE profit — there is no basis and no lines to read, so the fact-set
  * follows the server's own identity of the deal: `applicationId: null` is a
- * sale (cash or applicationless financed) and gets sale labels with nothing to
- * fill them; an application gets the approved-purchase labels, filled ONLY from
- * the two explicitly named `handoverEvidence` fields the server already serves
- * redacted and denominated (a management figure withheld for want of the
- * supplier settlement still has them on record).
+ * sale (cash or applicationless financed) and gets NO tiles at all, because the
+ * sale read model serves no price or cost outside the profit and a "not
+ * recorded" tile would contradict a row that has one; an application gets the
+ * approved-purchase labels, filled ONLY from the two explicitly named
+ * `handoverEvidence` fields the server already serves redacted and denominated
+ * (a management figure withheld for want of the supplier settlement still has
+ * them on record).
  */
 function selectSummaryFacts({
   profit,
@@ -2095,12 +2097,15 @@ function selectSummaryFacts({
   moneyIn: (minor: number, currency: ServedEvidence["currency"]) => string | null;
 }>): ReadonlyArray<SummaryFact> {
   if (!profit.available) {
-    if (applicationId === null) {
-      return [
-        { labelKey: "LineSalePrice", value: null, unavailableKey: "NotRecorded" },
-        { labelKey: "LineVehicleCost", value: null, unavailableKey: "NotRecorded" },
-      ];
-    }
+    // A SALE whose profit the server withheld (a draft not yet completed, a
+    // cancelled deal, an unreadable margin, a legacy financed-direct row it
+    // refuses to vouch for). The read model serves no sale price or vehicle
+    // cost OUTSIDE the profit, so there is nothing authoritative to put in a
+    // tile — and a tile reading "Sale price: not recorded" over a pending sale
+    // that has a price on its row is a false statement, not a cautious one.
+    // No facts: the caller states that the breakdown is unavailable, and the
+    // headline above already says why.
+    if (applicationId === null) return [];
     const served = (minor: number | null | undefined) =>
       minor != null && evidence ? moneyIn(minor, evidence.currency) : null;
     return [

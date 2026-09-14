@@ -698,7 +698,7 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
   test.each([
     ["a cash sale", { dealKind: "CASH" }],
     ["an applicationless FINANCED sale", { dealKind: "FINANCED" }],
-  ])("%s whose margin is unavailable keeps sale labels, never approved-purchase ones", (_label, shape) => {
+  ])("%s whose margin is unavailable asserts NO sale figures — and never approved-purchase ones", (_label, shape) => {
     // Server-identified by `applicationId: null` — the ONLY discriminator the
     // unavailable case may use, because an unavailable profit has no basis.
     renderCockpit(
@@ -711,9 +711,85 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
         },
       })
     );
-    expect(screen.getByText("LineSalePrice")).toBeTruthy();
+    expect(screen.queryByText("LineSalePrice")).toBeNull();
+    expect(screen.queryByText("LineVehicleCost")).toBeNull();
     expect(screen.queryByText("LineApprovedPurchase")).toBeNull();
     expect(screen.queryByText("LineDealerContribution")).toBeNull();
+    expect(screen.getByText("ProfitBreakdownUnavailable")).toBeTruthy();
+  });
+
+  /**
+   * FINANCIAL. The sale read model serves a price and a cost ONLY inside an
+   * available profit. When the server withholds the profit — a PENDING draft
+   * that already has its sale price on the row, a legacy financed-direct row
+   * it refuses to vouch for, an unreadable margin, a cancelled deal — the
+   * screen used to paint "Sale price: Not recorded" and "Vehicle cost: Not
+   * recorded". Both are false: the figures were not served, not absent. The
+   * screen must state the profit is unavailable and why, and claim nothing
+   * about the figures it was not given — no tile, no "not recorded", no zero.
+   */
+  describe("an unavailable sale profit is stated as unavailable, never as missing figures", () => {
+    const REASONS = [
+      "SaleNotCompleted",
+      "FinancedDirectUnverified",
+      "UnknownMargin",
+      "DealCancelled",
+    ] as const;
+
+    /** Every MoneyFact tile's text, wherever it sits in the money card. */
+    function moneyTiles(container: HTMLElement): string[] {
+      return Array.from(container.querySelectorAll(".rounded-md.border.p-3")).map(
+        (el) => el.textContent ?? ""
+      );
+    }
+
+    test.each(REASONS)("%s: the reason is shown; no sale-price or cost tile, no 'not recorded', no figure", (reason) => {
+      const { container } = renderCockpit(
+        cashDealFixture({
+          // A PENDING draft: its row carries the agreed price (20,000 on the
+          // fixture's completed twin), but the server serves no profit for it
+          // and therefore no price. The screen may not claim otherwise.
+          status: reason === "SaleNotCompleted" ? "PENDING" : "COMPLETED",
+          stages: [
+            { key: "SALE_AGREED", state: "COMPLETE" },
+            { key: "HANDOVER", state: "PENDING" },
+            { key: "SETTLEMENT", state: "PENDING" },
+          ],
+          money: {
+            ...cashDealFixture().money,
+            profit: { available: false, reason },
+            parties: [],
+          },
+        })
+      );
+      // The honest state, with the server's own reason.
+      expect(screen.getByText("ProfitNotCalculable")).toBeTruthy();
+      expect(screen.getByText(`Profit${reason}`)).toBeTruthy();
+      expect(screen.getByText("ProfitBreakdownUnavailable")).toBeTruthy();
+      // No claim about figures the server did not serve.
+      expect(screen.queryByText("LineSalePrice")).toBeNull();
+      expect(screen.queryByText("LineVehicleCost")).toBeNull();
+      expect(screen.queryByText("LineSupplierEntitlement")).toBeNull();
+      expect(screen.queryByText("NotRecorded")).toBeNull();
+      expect(container.querySelector(".text-3xl")).toBeNull();
+      // Not one money tile on the whole card — no value, no placeholder.
+      expect(moneyTiles(container)).toEqual([]);
+      // And no formatted amount anywhere in the financial summary, so a zero
+      // or a stale 20,000 cannot leak in under another label.
+      const card = screen.getByText("FinancialSummaryHeading").closest("[class*='rounded']")!;
+      expect(card.textContent).not.toMatch(/\d[\d,]* د\.أ/);
+    });
+
+    test("a completed sale with a real 20,000 sale price still shows it once the server serves the profit", () => {
+      // The control: same fixture, profit available. This is the ONLY route
+      // by which a sale price reaches the screen, and it must still work.
+      const { container } = renderCockpit(cashDealFixture());
+      expect(summaryTile("LineSalePrice")).toMatch(/LineSalePrice20,000 د\.أ/);
+      expect(screen.queryByText("ProfitBreakdownUnavailable")).toBeNull();
+      // The tile selector the unavailable cases assert EMPTY does find tiles
+      // when there are some: three line tiles and the supplier's party tile.
+      expect(moneyTiles(container)).toHaveLength(4);
+    });
   });
 
   test("an applicationless FINANCED sale is titled as a sale, not as a finance application", () => {
