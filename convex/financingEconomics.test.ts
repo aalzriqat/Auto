@@ -4583,6 +4583,62 @@ describe("resolving the appraisal gap", () => {
     expect(stage?.blocker).toBe("GapUnresolved");
   });
 
+  /**
+   * Sonnet F2 on aa1d896f6: the wiring from the recorded split to the owner's
+   * headline, proved end to end through the query the screen reads rather than
+   * by inspecting the row. `deriveManagementProfit` folds the customer's
+   * DEALER-BOUND destinations (cash + instalments) into the profit and leaves
+   * what the customer pays the finance company out — so a 1,000 gap settled
+   * as 600 cash + 300 instalments + 100 to the financier moves the headline by
+   * exactly 900, not 1,000 and not 0. Anti-vacuity: the profit must be
+   * AVAILABLE on both reads, or a "moved by 900" on two unavailable figures
+   * would prove nothing.
+   */
+  test("dealCockpit's profit moves by the customer's dealer-bound share, and not by what goes to the financier", async () => {
+    const { seed, applicationId } = await seedGappedDeal();
+    // The headline subtracts what the supplier ends up with, and withholds
+    // itself while that is unknown. A through-dealership deal reads it from the
+    // vehicle's supplier payable, so give this one a payable to settle.
+    await seed.t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierPayables", {
+        orgId: seed.orgId,
+        vehicleId: seed.vehicleId,
+        sourcedFromName: "Amman Importer Co",
+        amountDue: 9_500,
+        currency: "JOD",
+        status: "DUE_ON_SALE",
+        createdBy: seed.userId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
+    const profitOf = async () => {
+      const cockpit = await seed.asUser.query(api.applications.dealCockpit, {
+        orgId: seed.orgId,
+        applicationId,
+      });
+      const profit = cockpit?.money?.profit;
+      if (!profit || !profit.available) {
+        throw new Error(`profit not available: ${JSON.stringify(profit)}`);
+      }
+      return profit;
+    };
+    const before = await profitOf();
+
+    await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await servedStamp(seed, applicationId),
+      ...allocation(1_000, 0, { cash: 600, installments: 300, financeCompany: 100 }),
+    });
+
+    const after = await profitOf();
+    expect(after.amountMinor - before.amountMinor).toBe(jod(900));
+    const directLine = after.lines.find((line) => line.key === "CUSTOMER_DIRECT_TO_DEALER");
+    expect(directLine?.amountMinor).toBe(jod(900));
+    expect(before.lines.find((line) => line.key === "CUSTOMER_DIRECT_TO_DEALER")?.amountMinor).toBe(0);
+  });
+
   test("the customer absorbs all of it, paid in cash to the dealership", async () => {
     const { seed, applicationId } = await seedGappedDeal();
     const stamp = await servedStamp(seed, applicationId);

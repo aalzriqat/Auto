@@ -257,7 +257,13 @@ export function RecordSubmittedQuotationDialog({
                   variant="link"
                   size="sm"
                   className="h-auto p-0 text-xs"
-                  onClick={() => setAmount(String(calculatedMinor / factor))}
+                  onClick={() => {
+                    // An operator's choice, like typing: once they have asked
+                    // for the calculated figure, the one-shot prefill must not
+                    // move the field again if the calculation changes underneath.
+                    touchedRef.current = true;
+                    setAmount(String(calculatedMinor / factor));
+                  }}
                 >
                   {t("QuotationUseCalculated")}
                 </Button>
