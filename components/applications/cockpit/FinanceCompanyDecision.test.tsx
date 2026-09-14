@@ -720,6 +720,84 @@ describe("recording the submitted quotation", () => {
   });
 
   /**
+   * SCRUM-322 — the note and the button were keyed on DIFFERENT capabilities.
+   *
+   * The self-service copy ("record the rate when you record the quotation")
+   * was keyed on the rate authority alone, while the button needs
+   * `create:finance_application` as well. A custom role holding
+   * `approve:finance_application` + `view:finance` but NOT CREATE was therefore
+   * told to do something this card gave it no way to do — and the backend
+   * offers no other way in: the only two rate writers each refuse it
+   * (`recordSubmittedQuotation` needs CREATE; `approveDealerPurchaseAmount`
+   * needs a quotation first). Self-service guidance requires the FULL callable
+   * capability; otherwise the note names who actually can.
+   *
+   * Four shapes, asserted on both halves (which note, and whether the action
+   * exists), so a fix keyed on any two of the three permissions fails here.
+   */
+  describe("the missing-rate guidance is keyed on the capability the action needs (SCRUM-322)", () => {
+    test("APPROVE + view:finance WITHOUT create: no self-service instruction, no action", () => {
+      renderCockpit(
+        wiring({
+          canRecordQuotation: false,
+          canRecordApproval: true,
+          canEstablishLtvPercent: true,
+          facts: { ltvMissing: true },
+        })
+      );
+
+      expect(cardButton("RecordQuotationAction")).toBeUndefined();
+      expect(screen.queryByText("FinanceCompanyLtvMissing")).toBeNull();
+      expect(screen.getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
+    });
+
+    test("all three held: told to record the rate with the quotation, and offered the action", () => {
+      renderCockpit(
+        wiring({
+          canRecordQuotation: true,
+          canRecordApproval: true,
+          canEstablishLtvPercent: true,
+          facts: { ltvMissing: true },
+        })
+      );
+
+      expect(cardButton("RecordQuotationAction")).toBeTruthy();
+      expect(screen.getByText("FinanceCompanyLtvMissing")).toBeTruthy();
+      expect(screen.queryByText("DealPurchaseLtvNeedsApprover")).toBeNull();
+    });
+
+    test("CREATE + APPROVE without view:finance (default MANAGER): told who can, no action", () => {
+      renderCockpit(
+        wiring({
+          canRecordQuotation: true,
+          canRecordApproval: true,
+          canEstablishLtvPercent: false,
+          facts: { ltvMissing: true },
+        })
+      );
+
+      expect(cardButton("RecordQuotationAction")).toBeUndefined();
+      expect(screen.queryByText("FinanceCompanyLtvMissing")).toBeNull();
+      expect(screen.getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
+    });
+
+    test("CREATE without APPROVE (default SALES): told who can, no action", () => {
+      renderCockpit(
+        wiring({
+          canRecordQuotation: true,
+          canRecordApproval: false,
+          canEstablishLtvPercent: false,
+          facts: { ltvMissing: true },
+        })
+      );
+
+      expect(cardButton("RecordQuotationAction")).toBeUndefined();
+      expect(screen.queryByText("FinanceCompanyLtvMissing")).toBeNull();
+      expect(screen.getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
+    });
+  });
+
+  /**
    * The dialog's own guard, tested directly.
    *
    * The card no longer opens it in this state, so this is defence in depth

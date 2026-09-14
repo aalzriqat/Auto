@@ -69,15 +69,19 @@ type RecordSubmittedQuotationDialogProps = {
    */
   requiresLtvPercent: boolean;
   /**
-   * Whether this caller may SET that rate — `approve:finance_application`.
+   * Whether this caller may SET that rate — `approve:finance_application` AND
+   * `view:finance`, the pair `recordSubmittedQuotation` checks before it will
+   * accept an explicit `ltvPercent` (SCRUM-117, owner-proxy ruling 2026-09-13
+   * 15:33). Approval authority alone is no longer enough: a default MANAGER
+   * holds it without finance visibility and is refused.
    *
    * Separate from `requiresLtvPercent` because they answer different questions:
    * one is about the deal, the other about the person. Recording the quotation
    * is a transcription and the SALES template may do it; naming the rate the
    * deal is financed at moves the dealership's own contribution, so the server
-   * refuses it from anyone who cannot approve. Rendering the field to a caller
-   * whose entry will be refused is the shape this dialog exists to avoid — the
-   * field is replaced by who to ask instead.
+   * refuses it from anyone without both permissions. Rendering the field to a
+   * caller whose entry will be refused is the shape this dialog exists to avoid
+   * — the field is replaced by who to ask instead.
    */
   canSetLtvPercent: boolean;
   /** 10^scale for the deal's own pinned currency — never the org's. */

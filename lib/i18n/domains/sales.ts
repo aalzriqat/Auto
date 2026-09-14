@@ -1189,12 +1189,20 @@ export const salesEn = {
     "The share of the vehicle the finance company buys at, for this deal only. Setting the rate on the company itself applies to future deals, not to this one.",
   DealPurchaseLtvInvalid: "Enter a rate greater than zero and no more than 100.",
   /**
-   * Shown instead of the field, to a caller who may record the quotation but not
-   * set the rate it is financed at. Says who unblocks it, because a disabled
+   * Shown to a caller who cannot record this deal's missing rate themselves —
+   * on the quotation row instead of the self-service instruction, and in the
+   * dialog instead of the rate field. Says who unblocks it, because a disabled
    * control with no named owner is a dead end.
+   *
+   * Names ALL THREE permissions the recovery actually needs (SCRUM-322): the
+   * rate is only ever written together with the quotation, so the actor must
+   * hold `create:finance_application` as well as the rate authority
+   * (`approve:finance_application` + `view:finance`). Naming only the rate
+   * authority sent a custom role holding exactly that, and no CREATE, to an
+   * action it cannot take. The dealership owner holds all three.
    */
   DealPurchaseLtvNeedsApprover:
-    "This deal was created before its finance company had a purchase LTV, and a deal keeps the rules it was created under. Someone who can both approve finance applications and view finance figures must record the rate the finance company confirmed for this deal before the quotation can be recorded.",
+    "This deal was created before its finance company had a purchase LTV, and a deal keeps the rules it was created under. The quotation and the rate the finance company confirmed for this deal must be recorded together, by someone who can record finance applications, approve them and view finance figures — all three, as the dealership owner can.",
   ApprovedPurchaseLtvDrivesSplit:
     "This rate divides the approved amount into the financed and unfinanced portions.",
   RecordApprovedPurchaseAction: "Record approved amount",
@@ -2138,7 +2146,7 @@ export const salesAr = {
     "نسبة قيمة المركبة التي تشتريها شركة التمويل، لهذه الصفقة فقط. أما ضبط النسبة على الشركة نفسها فيسري على الصفقات القادمة لا على هذه.",
   DealPurchaseLtvInvalid: "أدخل نسبة أكبر من صفر ولا تتجاوز 100.",
   DealPurchaseLtvNeedsApprover:
-    "أُنشئت هذه الصفقة قبل تسجيل نسبة الشراء لشركة التمويل، وتبقى كل صفقة خاضعة للقواعد التي أُنشئت بها. يجب أن يسجّل النسبةَ التي أقرّتها شركة التمويل لهذه الصفقة شخصٌ يملك صلاحية اعتماد طلبات التمويل والاطلاع على الأرقام المالية معًا، قبل تسجيل عرض السعر.",
+    "أُنشئت هذه الصفقة قبل تسجيل نسبة الشراء لشركة التمويل، وتبقى كل صفقة خاضعة للقواعد التي أُنشئت بها. يجب تسجيل عرض السعر والنسبة التي أقرّتها شركة التمويل لهذه الصفقة معًا، على يد شخص يملك الصلاحيات الثلاث مجتمعة: تسجيل طلبات التمويل واعتمادها والاطلاع على الأرقام المالية — كما يملكها مالك المعرض.",
   ApprovedPurchaseLtvDrivesSplit:
     "هذه النسبة هي التي تقسّم المبلغ المعتمد إلى جزء مموَّل وآخر غير مموَّل.",
   RecordApprovedPurchaseAction: "تسجيل المبلغ المعتمد",
