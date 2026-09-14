@@ -3038,6 +3038,17 @@ export default defineSchema({
 
     /** Whether the line came from the company's fee template or was typed. */
     source: v.union(v.literal("COMPANY_TEMPLATE"), v.literal("MANUAL")),
+    /**
+     * WHICH configured fee this line is the actual for: the position of the
+     * template in the application's frozen `companyRuleSnapshot.feeTemplates`.
+     * Written only by `recordTemplateFeeActual`, which resolves every other
+     * template field from that entry server-side. Exact by construction — the
+     * snapshot is immutable per application — so two identical templates are
+     * two positions, never one ambiguous name. A COMPANY_TEMPLATE line without
+     * it predates that writer and is matched to its template by identity only
+     * where the identity is unique in the snapshot (see `listDealCosts`).
+     */
+    templateIndex: v.optional(v.number()),
 
     /**
      * Set only when a person has confirmed the actual against its evidence.

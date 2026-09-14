@@ -86,6 +86,7 @@ import { FinancingPlanPanel, type FinancingPlanFacts } from "./FinancingPlanPane
 import {
   HandoverCostAttemptError,
   HandoverCostsPanel,
+  type ExpectedHandoverRow,
   type ActualHandoverCost,
   type HandoverCostsData,
   type NewHandoverCost,
@@ -597,6 +598,7 @@ export function DealCockpit({
     canViewApplications && deal ? { orgId, applicationId } : "skip"
   );
   const recordDealFee = useMutation(api.financeDealCosts.recordDealFee);
+  const recordTemplateFeeActual = useMutation(api.financeDealCosts.recordTemplateFeeActual);
   const recordActualFeeAmount = useMutation(api.financeDealCosts.recordActualFeeAmount);
   const voidDealFee = useMutation(api.financeDealCosts.voidDealFee);
   const updateStatus = useMutation(api.applications.updateStatus);
@@ -738,6 +740,35 @@ export function DealCockpit({
                 // such, never turned into a zero or a cast here.
                 summary: dealCosts.summary,
                 summaryUnavailable: dealCosts.summaryUnavailable,
+                // The finance company's frozen policy, derived server-side from
+                // the deal's own rule snapshot. Passed through as served: the
+                // expected figures, the totals and the comparison are the
+                // server's, and nothing is summed or matched here.
+                expected: dealCosts.expected
+                  ? {
+                      source: dealCosts.expected.source,
+                      currency: dealCosts.expected.currency,
+                      rows: dealCosts.expected.rows.map((row) => ({
+                        templateIndex: row.templateIndex,
+                        feeType: row.feeType,
+                        description: row.description,
+                        expectedAmountMinor: row.expectedAmountMinor,
+                        duplicateIdentity: row.duplicateIdentity,
+                        actual: row.actual
+                          ? {
+                              feeId: row.actual.feeId,
+                              actualAmountMinor: row.actual.actualAmountMinor,
+                              currency: row.actual.currency,
+                              status: row.actual.status,
+                            }
+                          : null,
+                      })),
+                      expectedTotalMinor: dealCosts.expected.expectedTotalMinor,
+                      actualTotalMinor: dealCosts.expected.actualTotalMinor,
+                      differenceMinor: dealCosts.expected.differenceMinor,
+                      unplannedLineIds: dealCosts.expected.unplannedLineIds,
+                    }
+                  : null,
               } satisfies HandoverCostsData)
             : undefined,
           // The currency a new line is recorded in, as the SERVER resolves it
@@ -762,7 +793,10 @@ export function DealCockpit({
                 expectedCurrency: values.currency,
                 feeType: values.feeType,
                 description: values.description,
-                estimatedAmountMinor: values.estimatedAmountMinor,
+                // An ADDITIONAL cost: actual only. The UI never authors an
+                // expectation — those are the finance company's, from the
+                // deal's frozen snapshot (owner correction 2026-09-12 21:05).
+                estimatedAmountMinor: undefined,
                 actualAmountMinor: values.actualAmountMinor,
                 paidBy: "DEALER",
                 paidTo: values.paidTo,
@@ -783,6 +817,36 @@ export function DealCockpit({
           },
           onAbandonAdd: (intentId: string) => {
             commandId.retire(`record-deal-fee:${applicationId}:${intentId}`);
+          },
+          /**
+           * The ACTUAL for a fee the finance company's policy configures. The
+           * caller names WHICH fee by its position in the deal's frozen
+           * snapshot and what it saw there; the server copies every other
+           * field from that entry and refuses a stale or out-of-range
+           * reference. One retained identity per (deal, position): a retry of
+           * the same recording replays the same line; a different recording
+           * against the same position is refused server-side.
+           */
+          onRecordTemplateActual: async (row: ExpectedHandoverRow, values: ActualHandoverCost) => {
+            const intent = `record-template-fee:${applicationId}:${row.templateIndex}`;
+            try {
+              await recordTemplateFeeActual({
+                orgId,
+                applicationId,
+                templateIndex: row.templateIndex,
+                feeType: row.feeType as Parameters<typeof recordTemplateFeeActual>[0]["feeType"],
+                actualAmountMinor: values.actualAmountMinor,
+                // REQUIRED: the deal's denomination the amount was counted in.
+                expectedCurrency: values.currency,
+                paidAt: values.paidAt,
+                receiptReference: values.receiptReference,
+                idempotencyKey: commandId.for(intent),
+              });
+              commandId.retire(intent);
+              toast.success(t("HandoverCostSaved"));
+            } catch (error) {
+              throw new Error(getErrorMessage(error));
+            }
           },
           onRecordActual: async (feeId: string, values: ActualHandoverCost) => {
             try {

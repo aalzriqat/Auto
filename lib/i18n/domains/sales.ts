@@ -367,6 +367,37 @@ const dealRailMessages = defineBilingualMessages({
   CostPayeeLabel: ["Paid to", "مدفوع إلى"],
   CostDescriptionLabel: ["Description (optional)", "الوصف (اختياري)"],
   CostFigureLabel: ["Figure", "الرقم"],
+  // The checklist the finance company's frozen policy implies (owner product
+  // correction, #scrum-215 2026-09-12 21:05): expected is read-only and comes
+  // from the deal's rule snapshot; the operator records actuals only.
+  HandoverExpectedHeading: ["From the finance company's policy", "بحسب سياسة شركة التمويل"],
+  HandoverExpectedNote: [
+    "Expected amounts come from the finance company's fee settings as they were when this deal was created. Record only what was actually paid; the expectation is never edited here.",
+    "المبالغ المتوقّعة مأخوذة من إعدادات رسوم شركة التمويل كما كانت عند إنشاء هذه الصفقة. سجِّل ما دُفع فعليًا فقط؛ لا يُعدَّل المتوقّع هنا.",
+  ],
+  HandoverExpectedNotConfigured: [
+    "This deal's finance company had no fees configured when the deal was created, so nothing is expected from its policy. Record what was actually paid as additional costs.",
+    "لم تكن لدى شركة التمويل رسوم مضبوطة عند إنشاء هذه الصفقة، فلا يوجد متوقّع بحسب سياستها. سجِّل ما دُفع فعليًا كمصاريف إضافية.",
+  ],
+  HandoverExpectedNoSnapshot: [
+    "This deal carries no record of its finance company's rules, so nothing is expected from its policy.",
+    "لا تحمل هذه الصفقة سجلًا لقواعد شركة التمويل، فلا يوجد متوقّع بحسب سياستها.",
+  ],
+  CostExpected: ["Expected", "المتوقّع"],
+  CostNotRecorded: ["Not recorded", "غير مسجّل"],
+  CostsDifference: ["Expected − actual", "المتوقّع − الفعلي"],
+  CostsDifferenceNote: [
+    "A comparison only — not an amount still owed.",
+    "للمقارنة فقط — وليس مبلغًا لا يزال مستحقًا.",
+  ],
+  RecordTemplateActual: ["Record actual", "تسجيل الفعلي"],
+  TemplateConfiguredTwice: ["Configured twice", "مضبوط مرتين"],
+  AdditionalCostsHeading: ["Additional costs", "مصاريف إضافية"],
+  AddAdditionalCost: ["Add additional cost", "إضافة مصروف إضافي"],
+  AdditionalCostNote: [
+    "A cost that was not configured on the finance company. It is recorded as actually paid and does not change the expected total.",
+    "مصروف غير مضبوط لدى شركة التمويل. يُسجَّل كما دُفع فعليًا ولا يغيّر إجمالي المتوقّع.",
+  ],
   CostAmountLabel: ["Amount", "المبلغ"],
   CostAmountRequired: ["Enter a valid amount.", "أدخل مبلغًا صحيحًا."],
   CostPaidOnLabel: ["Paid on", "تاريخ الدفع"],

@@ -573,10 +573,17 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // enforce; the analyser found it and counted it in the analysed set. The
   // skipped counts are unchanged. Pinned FROM THE ANALYSER'S OUTPUT on this
   // tree, not by adding one to the previous line.
+  //
+  // `financeDealCosts.recordTemplateFeeActual` (SCRUM-215 handover costs,
+  // PR #303) — 488 → 489 total, 316 → 317 analysed. Same shape: `orgId` plus a
+  // caller-supplied `applicationId`, read through `requireOwnedRow` after
+  // `requireTenantAuth`; the analyser found it and counted it in the analysed
+  // set. Skipped counts unchanged. Re-measured FROM THE ANALYSER on this tree
+  // ({"totalMutations":489,"analysed":317,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 488,
-      analysed: 316,
+      totalMutations: 489,
+      analysed: 317,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 157,
     });

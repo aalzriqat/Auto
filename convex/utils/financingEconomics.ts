@@ -263,7 +263,12 @@ export const feePartyValidator = v.union(
   v.literal("OTHER")
 );
 
-/** A default fee a finance company usually charges. Always editable per deal. */
+/**
+ * A fee a finance company charges. Snapshotted onto each application at
+ * creation and READ-ONLY there: the expectation on a deal is the company's
+ * policy as it stood that day, never edited per deal — what is recorded per
+ * deal is the ACTUAL paid against it (`recordTemplateFeeActual`).
+ */
 export const financeFeeTemplateValidator = v.object({
   feeType: financeFeeTypeValidator,
   description: v.optional(v.string()),

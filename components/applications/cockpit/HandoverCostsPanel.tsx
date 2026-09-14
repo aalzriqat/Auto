@@ -18,8 +18,13 @@ import { dateInputToUtcMs, todayDateInput } from "@/lib/dateInput";
  * `listDealCosts` and written through the three commands that already exist
  * for it — nothing is a vehicle expense, nothing is a second ledger:
  *
- *   ADD    → `recordDealFee`         (retained command identity; the form's
- *                                     own intent, minted when it opens)
+ *   RECORD → `recordTemplateFeeActual` (the ACTUAL for a fee the finance
+ *                                     company's frozen policy configures;
+ *                                     every other field is copied server-side
+ *                                     from the deal's rule snapshot)
+ *   ADD    → `recordDealFee`         (an ADDITIONAL, unplanned cost — actual
+ *                                     only; retained command identity, the
+ *                                     form's own intent, minted when it opens)
  *   EDIT   → `recordActualFeeAmount` (the ACTUAL figure, its date and its
  *                                     receipt reference; the estimate on the
  *                                     line is preserved beside it)
@@ -163,11 +168,50 @@ export type HandoverCostsSummaryUnavailable = {
   lineCurrencies: ReadonlyArray<string>;
 };
 
+/**
+ * One fee the finance company's FROZEN policy configures, as `listDealCosts`
+ * derives it from the application's own rule snapshot (owner product
+ * correction, #scrum-215 2026-09-12 21:05). Read-only: the expectation is the
+ * company's, never typed here, and `actual` is EXACTLY the line
+ * `recordTemplateFeeActual` wrote against this position — nothing is matched
+ * by name.
+ */
+export type ExpectedHandoverRow = {
+  templateIndex: number;
+  feeType: string;
+  description: string | undefined;
+  expectedAmountMinor: number;
+  /** Another configured fee shares this one's type and description. */
+  duplicateIdentity: boolean;
+  actual: {
+    feeId: string;
+    actualAmountMinor: number | undefined;
+    currency: string;
+    status: string;
+  } | null;
+};
+
+export type HandoverExpectedCosts = {
+  source: "COMPANY_RULE_SNAPSHOT" | "NO_SNAPSHOT" | "NO_TEMPLATES";
+  currency: string;
+  rows: ReadonlyArray<ExpectedHandoverRow>;
+  /** Sum of the configured expectations; null when nothing is configured. */
+  expectedTotalMinor: number | null;
+  /** Recorded actuals over every live line; null over mixed denomination. */
+  actualTotalMinor: number | null;
+  /** expected − actual — a comparison, never an amount still payable. */
+  differenceMinor: number | null;
+  /** Live lines outside the checklist: unplanned costs and position-less template lines. */
+  unplannedLineIds: ReadonlyArray<string>;
+};
+
 export type HandoverCostsData = {
   lines: ReadonlyArray<HandoverCostLine>;
   /** Null exactly when `summaryUnavailable` says why. Never a plausible number over mixed rows. */
   summary: HandoverCostsSummary | null;
   summaryUnavailable: HandoverCostsSummaryUnavailable | null;
+  /** The policy checklist. Absent on a payload that predates it; the section then renders lines only. */
+  expected?: HandoverExpectedCosts | null;
 };
 
 /**
@@ -191,9 +235,14 @@ export type NewHandoverCost = {
   currency: string;
   feeType: HandoverFeeType;
   description: string | undefined;
-  /** Exactly one of the two may be present; a line with neither is refused here. */
-  estimatedAmountMinor: number | undefined;
-  actualAmountMinor: number | undefined;
+  /**
+   * Always undefined from this form. An ADDITIONAL cost is what was actually
+   * paid; expectations come from the finance company's policy and are never
+   * authored here. Kept in the shape so the container's payload and its
+   * retry fingerprint are unchanged for older intents.
+   */
+  estimatedAmountMinor: undefined;
+  actualAmountMinor: number;
   paidTo: HandoverPayee;
   accountingTreatment: HandoverTreatment;
   paidAt: number | undefined;
@@ -278,6 +327,7 @@ export function HandoverCostsPanel({
   onAbandonAdd,
   onRecordActual,
   onVoid,
+  onRecordTemplateActual,
 }: Readonly<{
   /** `undefined` while loading or when this caller may not read the cost rows. */
   costs: HandoverCostsData | undefined;
@@ -302,7 +352,15 @@ export function HandoverCostsPanel({
   onAbandonAdd: (intentId: string) => void;
   onRecordActual: (feeId: string, values: ActualHandoverCost) => Promise<void>;
   onVoid: (feeId: string, reason: string) => Promise<void>;
+  /**
+   * Records the ACTUAL for a configured fee, by its position in the deal's
+   * frozen snapshot. Every other field is the server's. Absent when the
+   * container predates the checklist; the rows then render without an action.
+   */
+  onRecordTemplateActual?: (row: ExpectedHandoverRow, values: ActualHandoverCost) => Promise<void>;
 }>) {
+  /** The configured row whose record form is open, by position. */
+  const [recordingTemplateIndex, setRecordingTemplateIndex] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [voidingId, setVoidingId] = useState<string | null>(null);
   /** The add form's intent while the form is open; null when it is not. */
@@ -392,8 +450,31 @@ export function HandoverCostsPanel({
   };
 
   // `listDealCosts` serves live lines only; a voided line leaves the section
-  // (its record survives server-side with reason, actor and time).
-  const live = costs?.lines ?? [];
+  // (its record survives server-side with reason, actor and time). With a
+  // checklist present, the lines it accounts for are shown IN it; the list
+  // below carries what is outside it — additional costs, and template lines
+  // that carry no position.
+  const expected = costs?.expected ?? null;
+  const checklist = expected && expected.source === "COMPANY_RULE_SNAPSHOT" ? expected : null;
+  const live = (costs?.lines ?? []).filter(
+    (line) => !expected || expected.unplannedLineIds.includes(line._id)
+  );
+  /** The served line a configured row's actual points at — the shared forms edit the LINE. */
+  const lineFor = (row: ExpectedHandoverRow): HandoverCostLine => {
+    const found = costs?.lines.find((line) => line._id === row.actual?.feeId);
+    return (
+      found ?? {
+        _id: row.actual?.feeId ?? "",
+        feeType: row.feeType,
+        currency: row.actual?.currency ?? denomination.code,
+        description: row.description,
+        actualAmountMinor: row.actual?.actualAmountMinor,
+        paidBy: "DEALER",
+        paidTo: "OTHER",
+        status: row.actual?.status ?? "UNQUANTIFIED",
+      }
+    );
+  };
   const canAdd = canManage;
   const adding = openIntent !== null;
 
@@ -494,9 +575,23 @@ export function HandoverCostsPanel({
               <div>
                 <dt className="text-xs text-muted-foreground">{t("CostsExpectedTotal")}</dt>
                 <dd className="font-medium">
-                  <bdi className="tabular-nums" dir="ltr">
-                    {money(costs.summary.estimatedTotalMinor, denomination.code)}
-                  </bdi>
+                  {/* From the finance company's frozen policy when the deal
+                      carries one; a deal that configures nothing says so
+                      rather than showing a zero. Without a checklist (older
+                      payloads) the lines' own estimates stand in. */}
+                  {expected ? (
+                    expected.expectedTotalMinor === null ? (
+                      <span className="font-normal text-muted-foreground">{t("FactUnavailable")}</span>
+                    ) : (
+                      <bdi className="tabular-nums" dir="ltr">
+                        {money(expected.expectedTotalMinor, expected.currency)}
+                      </bdi>
+                    )
+                  ) : (
+                    <bdi className="tabular-nums" dir="ltr">
+                      {money(costs.summary.estimatedTotalMinor, denomination.code)}
+                    </bdi>
+                  )}
                 </dd>
               </div>
               <div>
@@ -507,6 +602,17 @@ export function HandoverCostsPanel({
                   </bdi>
                 </dd>
               </div>
+              {expected?.differenceMinor !== null && expected?.differenceMinor !== undefined && (
+                <div data-testid="deal-handover-costs-difference">
+                  <dt className="text-xs text-muted-foreground">{t("CostsDifference")}</dt>
+                  <dd className="font-medium">
+                    <bdi className="tabular-nums" dir="ltr">
+                      {money(expected.differenceMinor, expected.currency)}
+                    </bdi>
+                    <span className="ms-1.5 text-xs font-normal text-muted-foreground">{t("CostsDifferenceNote")}</span>
+                  </dd>
+                </div>
+              )}
               {costs.summary.linesAwaitingActual > 0 && (
                 <div>
                   <dt className="text-xs text-muted-foreground">{t("CostsAwaitingActual")}</dt>
@@ -518,6 +624,173 @@ export function HandoverCostsPanel({
             </dl>
             )}
             <Separator />
+
+            {/* The finance company's policy, as the deal froze it: one row per
+                configured fee — what it says, what was actually paid, and the
+                one action a row without an actual has. Nothing here is typed
+                as an expectation. */}
+            {expected && (
+              <section className="space-y-2" data-testid="deal-handover-expected">
+                <div className="space-y-0.5">
+                  <p className="text-sm font-medium">{t("HandoverExpectedHeading")}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {t(
+                      checklist
+                        ? "HandoverExpectedNote"
+                        : expected.source === "NO_SNAPSHOT"
+                          ? "HandoverExpectedNoSnapshot"
+                          : "HandoverExpectedNotConfigured"
+                    )}
+                  </p>
+                </div>
+                {checklist && (
+                  <ul className="space-y-1.5">
+                    {checklist.rows.map((row) => (
+                      <li
+                        key={row.templateIndex}
+                        className="rounded-md border p-3 text-sm"
+                        data-testid={`deal-handover-expected-${row.templateIndex}`}
+                      >
+                        {recordingTemplateIndex === row.templateIndex && onRecordTemplateActual ? (
+                          <TemplateActualForm
+                            row={row}
+                            scale={scaleOf(checklist.currency)}
+                            currency={checklist.currency}
+                            t={t}
+                            onCancel={() => setRecordingTemplateIndex(null)}
+                            onSubmit={async (values) => {
+                              await onRecordTemplateActual(row, values);
+                              setRecordingTemplateIndex(null);
+                            }}
+                          />
+                        ) : (
+                          <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+                            <div className="min-w-0 space-y-1">
+                              <p className="font-medium">
+                                {t(FEE_TYPE_LABEL[row.feeType] ?? row.feeType)}
+                                {row.description && (
+                                  <span className="text-muted-foreground">
+                                    {" · "}
+                                    <bdi>{row.description}</bdi>
+                                  </span>
+                                )}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                <Badge variant="outline" className="me-1.5">
+                                  {row.actual
+                                    ? t(STATUS_LABEL[row.actual.status] ?? row.actual.status)
+                                    : t("CostNotRecorded")}
+                                </Badge>
+                                {row.duplicateIdentity && (
+                                  <Badge variant="outline" className="me-1.5">
+                                    {t("TemplateConfiguredTwice")}
+                                  </Badge>
+                                )}
+                              </p>
+                            </div>
+                            <div className="flex items-start gap-3">
+                              <dl className="grid grid-cols-[auto_auto] gap-x-3 text-end text-xs">
+                                <dt className="text-muted-foreground">{t("CostExpected")}</dt>
+                                <dd className="tabular-nums">
+                                  <bdi dir="ltr">{money(row.expectedAmountMinor, checklist.currency)}</bdi>
+                                </dd>
+                                <dt className="text-muted-foreground">{t("CostActual")}</dt>
+                                <dd className="font-semibold tabular-nums">
+                                  {row.actual?.actualAmountMinor === undefined ? (
+                                    <span className="font-normal text-muted-foreground">{t("FactUnavailable")}</span>
+                                  ) : (
+                                    <bdi dir="ltr">{money(row.actual.actualAmountMinor, row.actual.currency)}</bdi>
+                                  )}
+                                </dd>
+                              </dl>
+                              {canManage && row.actual === null && onRecordTemplateActual && (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={submittingAny}
+                                  onClick={() => {
+                                    if (!closeAddForm()) return;
+                                    setEditingId(null);
+                                    setVoidingId(null);
+                                    setRecordingTemplateIndex(row.templateIndex);
+                                  }}
+                                >
+                                  {t("RecordTemplateActual")}
+                                </Button>
+                              )}
+                              {canManage && row.actual !== null && row.actual.currency === denomination.code && (
+                                <div className="flex gap-1">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7"
+                                    aria-label={t("RecordActualCost")}
+                                    disabled={submittingAny}
+                                    onClick={() => {
+                                      if (!closeAddForm()) return;
+                                      setRecordingTemplateIndex(null);
+                                      setVoidingId(null);
+                                      setEditingId(row.actual?.feeId ?? null);
+                                    }}
+                                  >
+                                    <Pencil className="h-3.5 w-3.5" />
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7 text-destructive hover:text-destructive"
+                                    aria-label={t("RemoveHandoverCost")}
+                                    disabled={submittingAny}
+                                    onClick={() => {
+                                      if (!closeAddForm()) return;
+                                      setRecordingTemplateIndex(null);
+                                      setEditingId(null);
+                                      setVoidingId(row.actual?.feeId ?? null);
+                                    }}
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                        {row.actual !== null && editingId === row.actual.feeId && (
+                          <div className="mt-3">
+                            <ActualForm
+                              line={lineFor(row)}
+                              scale={scaleOf(row.actual.currency)}
+                              t={t}
+                              onCancel={() => setEditingId(null)}
+                              onSubmit={async (values) => {
+                                await onRecordActual(lineFor(row)._id, values);
+                                setEditingId(null);
+                              }}
+                            />
+                          </div>
+                        )}
+                        {row.actual !== null && voidingId === row.actual.feeId && (
+                          <div className="mt-3">
+                            <VoidForm
+                              t={t}
+                              onCancel={() => setVoidingId(null)}
+                              onSubmit={async (reason) => {
+                                await onVoid(lineFor(row)._id, reason);
+                                setVoidingId(null);
+                              }}
+                            />
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="pt-1 text-sm font-medium">{t("AdditionalCostsHeading")}</p>
+              </section>
+            )}
 
             {live.length === 0 && !adding && (
               <p className="text-sm text-muted-foreground">{t("NoHandoverCosts")}</p>
@@ -666,7 +939,6 @@ function AddForm({
   const [treatment, setTreatment] = useState<HandoverTreatment>(defaultTreatmentFor("OWNERSHIP_TRANSFER"));
   const [payee, setPayee] = useState<HandoverPayee>("GOVERNMENT");
   const [description, setDescription] = useState("");
-  const [figure, setFigure] = useState<"ESTIMATED" | "ACTUAL">("ESTIMATED");
   const [amount, setAmount] = useState("");
   const [paidOn, setPaidOn] = useState("");
   const [reference, setReference] = useState("");
@@ -714,21 +986,25 @@ function AddForm({
           return;
         }
         setValidation(null);
+        // An ADDITIONAL cost is what was actually paid. There is no expected
+        // figure to type: expectations are the finance company's, read from
+        // the deal's frozen snapshot, and this form never authors one.
         void onSubmit({
           intentId: intent.intentId,
           currency,
           feeType,
           description: description.trim() || undefined,
-          estimatedAmountMinor: figure === "ESTIMATED" ? amountMinor : undefined,
-          actualAmountMinor: figure === "ACTUAL" ? amountMinor : undefined,
+          estimatedAmountMinor: undefined,
+          actualAmountMinor: amountMinor,
           paidTo: payee,
           accountingTreatment: treatment,
-          paidAt: figure === "ACTUAL" && paidOn ? dateInputToUtcMs(paidOn) : undefined,
-          receiptReference: figure === "ACTUAL" ? reference.trim() || undefined : undefined,
+          paidAt: paidOn ? dateInputToUtcMs(paidOn) : undefined,
+          receiptReference: reference.trim() || undefined,
         });
       }}
     >
       <p className="text-sm font-medium">{t("AddHandoverCost")}</p>
+      <p className="text-xs text-muted-foreground">{t("AdditionalCostNote")}</p>
       {dealClosed && <p className="text-xs text-muted-foreground">{t("HandoverCostAfterCloseNote")}</p>}
       {attempted && (
         <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="deal-handover-cost-add-frozen">
@@ -781,20 +1057,8 @@ function AddForm({
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="handover-cost-figure">{t("CostFigureLabel")}</Label>
-          <select
-            id="handover-cost-figure"
-            className={selectClass}
-            value={figure}
-            onChange={(event) => setFigure(event.target.value as "ESTIMATED" | "ACTUAL")}
-          >
-            <option value="ESTIMATED">{t("CostEstimated")}</option>
-            <option value="ACTUAL">{t("CostActual")}</option>
-          </select>
-        </div>
-        <div className="space-y-1.5">
           <Label htmlFor="handover-cost-amount">
-            {t("CostAmountLabel")} (<bdi dir="ltr">{currency}</bdi>)
+            {t("CostActual")} · {t("CostAmountLabel")} (<bdi dir="ltr">{currency}</bdi>)
           </Label>
           <Input
             id="handover-cost-amount"
@@ -805,28 +1069,24 @@ function AddForm({
             onChange={(event) => setAmount(event.target.value)}
           />
         </div>
-        {figure === "ACTUAL" && (
-          <>
-            <div className="space-y-1.5">
-              <Label htmlFor="handover-cost-paid-on">{t("CostPaidOnLabel")}</Label>
-              <Input
-                id="handover-cost-paid-on"
-                type="date"
-                max={todayDateInput()}
-                value={paidOn}
-                onChange={(event) => setPaidOn(event.target.value)}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="handover-cost-reference">{t("ReceiptReferenceLabel")}</Label>
-              <Input
-                id="handover-cost-reference"
-                value={reference}
-                onChange={(event) => setReference(event.target.value)}
-              />
-            </div>
-          </>
-        )}
+        <div className="space-y-1.5">
+          <Label htmlFor="handover-cost-paid-on">{t("CostPaidOnLabel")}</Label>
+          <Input
+            id="handover-cost-paid-on"
+            type="date"
+            max={todayDateInput()}
+            value={paidOn}
+            onChange={(event) => setPaidOn(event.target.value)}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="handover-cost-reference">{t("ReceiptReferenceLabel")}</Label>
+          <Input
+            id="handover-cost-reference"
+            value={reference}
+            onChange={(event) => setReference(event.target.value)}
+          />
+        </div>
         <div className="space-y-1.5 sm:col-span-2">
           <Label htmlFor="handover-cost-treatment">{t("CostTreatmentLabel")}</Label>
           <select
@@ -857,6 +1117,126 @@ function AddForm({
         <Button type="submit" size="sm" disabled={submitting || (!attempted && amountMinor === null)}>
           {submitting && <Loader2 className="h-4 w-4 me-1.5 animate-spin" />}
           {t(attempted ? "RetryHandoverCost" : "SaveHandoverCost")}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+/**
+ * The one thing an operator enters on a configured row: what was actually
+ * paid (with its date and receipt). The expectation on the row is the finance
+ * company's and is shown, not typed; every other field of the resulting line
+ * is copied server-side from the deal's frozen snapshot.
+ */
+function TemplateActualForm({
+  row,
+  scale,
+  currency,
+  t,
+  onCancel,
+  onSubmit,
+}: Readonly<{
+  row: ExpectedHandoverRow;
+  /** The scale of the deal's denomination — the amount is recorded in it. */
+  scale: number;
+  currency: string;
+  t: (key: string) => string;
+  onCancel: () => void;
+  onSubmit: (values: ActualHandoverCost) => Promise<void>;
+}>) {
+  const [amount, setAmount] = useState("");
+  const [paidOn, setPaidOn] = useState("");
+  const [reference, setReference] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const amountMinor = parseMajor(amount, scale);
+  const amountInvalid = amount.trim() !== "" && amountMinor === null;
+  const fieldId = `handover-expected-${row.templateIndex}`;
+
+  return (
+    <form
+      className="space-y-3"
+      data-testid={`deal-handover-expected-record-${row.templateIndex}`}
+      onSubmit={async (event) => {
+        event.preventDefault();
+        if (amountMinor === null) {
+          setError(t("CostAmountRequired"));
+          return;
+        }
+        setSubmitting(true);
+        setError(null);
+        try {
+          await onSubmit({
+            actualAmountMinor: amountMinor,
+            paidAt: paidOn ? dateInputToUtcMs(paidOn) : undefined,
+            receiptReference: reference.trim() || undefined,
+            currency,
+          });
+        } catch (caught) {
+          setError(caught instanceof Error ? caught.message : t("UnexpectedError"));
+        } finally {
+          setSubmitting(false);
+        }
+      }}
+    >
+      <p className="text-sm font-medium">
+        {t(FEE_TYPE_LABEL[row.feeType] ?? row.feeType)}
+        {row.description && (
+          <span className="text-muted-foreground">
+            {" · "}
+            <bdi>{row.description}</bdi>
+          </span>
+        )}
+      </p>
+      <p className="text-xs text-muted-foreground">
+        {t("CostExpected")}: <bdi dir="ltr">{row.expectedAmountMinor / Math.pow(10, scale)} {currency}</bdi>
+      </p>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="space-y-1.5">
+          <Label htmlFor={`${fieldId}-amount`}>
+            {t("CostActual")} · {t("CostAmountLabel")} (<bdi dir="ltr">{currency}</bdi>)
+          </Label>
+          <Input
+            id={`${fieldId}-amount`}
+            inputMode="decimal"
+            className="tabular-nums"
+            value={amount}
+            aria-invalid={amountInvalid}
+            onChange={(event) => setAmount(event.target.value)}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={`${fieldId}-paid-on`}>{t("CostPaidOnLabel")}</Label>
+          <Input
+            id={`${fieldId}-paid-on`}
+            type="date"
+            max={todayDateInput()}
+            value={paidOn}
+            onChange={(event) => setPaidOn(event.target.value)}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={`${fieldId}-reference`}>{t("ReceiptReferenceLabel")}</Label>
+          <Input
+            id={`${fieldId}-reference`}
+            value={reference}
+            onChange={(event) => setReference(event.target.value)}
+          />
+        </div>
+      </div>
+      {error && (
+        <p role="alert" className="text-xs font-medium text-destructive">
+          {error}
+        </p>
+      )}
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" disabled={submitting} onClick={onCancel}>
+          {t("Cancel")}
+        </Button>
+        <Button type="submit" size="sm" disabled={submitting || amountMinor === null}>
+          {submitting && <Loader2 className="h-4 w-4 me-1.5 animate-spin" />}
+          {t("SaveActualCost")}
         </Button>
       </div>
     </form>

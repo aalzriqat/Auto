@@ -1043,11 +1043,14 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
       applicationId: APP,
       feeType: "LICENSING",
       description: "Plates",
-      // JOD, scale 3: 150 → 150,000 minor. An ESTIMATE, so no actual. The
-      // currency the integer was counted in is NAMED (SCRUM-319).
+      // JOD, scale 3: 150 → 150,000 minor. An ACTUAL — the add form records
+      // an additional cost as paid; expectations are the finance company's,
+      // from the deal's frozen snapshot, and the UI never authors one (owner
+      // correction 2026-09-12 21:05). The currency the integer was counted in
+      // is NAMED (SCRUM-319).
       expectedCurrency: "JOD",
-      estimatedAmountMinor: 150_000,
-      actualAmountMinor: undefined,
+      estimatedAmountMinor: undefined,
+      actualAmountMinor: 150_000,
       paidBy: "DEALER",
       paidTo: "GOVERNMENT",
       accountingTreatment: "SELLING_EXPENSE",
@@ -1245,7 +1248,7 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     fireEvent.click(screen.getByRole("button", { name: "SaveHandoverCost" }));
     await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordDealFee")).toHaveLength(1));
     // JOD scale 3 and the JOD code — what the operator saw, not the new setting.
-    expect(mutationCalls.get("financeDealCosts:recordDealFee")![0]).toMatchObject({ expectedCurrency: "JOD", estimatedAmountMinor: 150_000 });
+    expect(mutationCalls.get("financeDealCosts:recordDealFee")![0]).toMatchObject({ expectedCurrency: "JOD", actualAmountMinor: 150_000 });
   });
 
   test("SCRUM-319 — no pinned economics currency: an early cost is ADDED in the currency the server serves, which the first cost then fixes", async () => {
@@ -1262,7 +1265,7 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     fireEvent.change(screen.getByLabelText(/CostAmountLabel/), { target: { value: "25" } });
     fireEvent.click(screen.getByRole("button", { name: "SaveHandoverCost" }));
     await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordDealFee")).toHaveLength(1));
-    expect(mutationCalls.get("financeDealCosts:recordDealFee")![0]).toMatchObject({ expectedCurrency: "JOD", estimatedAmountMinor: 25_000 });
+    expect(mutationCalls.get("financeDealCosts:recordDealFee")![0]).toMatchObject({ expectedCurrency: "JOD", actualAmountMinor: 25_000 });
     // The JOD line on a JOD deal is the deal's denomination: editable, totals shown.
     expect(within(screen.getByTestId("deal-handover-cost-fee_1")).getByRole("button", { name: "RecordActualCost" })).toBeTruthy();
     expect(screen.getByTestId("deal-handover-costs-totals")).toBeTruthy();
@@ -1398,5 +1401,147 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     const line = screen.getByTestId("deal-handover-cost-fee_1");
     expect(line.textContent).toContain("CostStatusUnquantified");
     expect(line.textContent).toContain("FactUnavailable");
+  });
+
+  /**
+   * The checklist the finance company's FROZEN policy implies (owner product
+   * correction, #scrum-215 2026-09-12 21:05). Rendered from the server's
+   * `expected` payload as served: rows, totals and the comparison are the
+   * server's; the only thing an operator does on a configured row is record
+   * what was actually paid, addressed by the row's POSITION in the snapshot.
+   */
+  const EXPECTED_ROWS = [
+    { templateIndex: 0, feeType: "LICENSING", description: "Plates", expectedAmountMinor: 250_000, duplicateIdentity: false, actual: null },
+    {
+      templateIndex: 1,
+      feeType: "STAMPS",
+      description: "Legal stamps",
+      expectedAmountMinor: 90_000,
+      duplicateIdentity: false,
+      actual: { feeId: "fee_1", actualAmountMinor: 95_000, currency: "JOD", status: "ACTUAL_RECORDED" },
+    },
+  ];
+  function withChecklist(
+    lines: Array<Record<string, unknown>>,
+    expected: Record<string, unknown>
+  ) {
+    return { ...costsPayload(lines), expected };
+  }
+
+  test("the checklist shows each configured fee with its expected (read-only) and actual figures; the expected total is the policy's, not the lines'", () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(
+      COSTS_QUERY,
+      withChecklist(
+        [
+          { ...transferLine, feeType: "STAMPS", estimatedAmountMinor: 90_000, actualAmountMinor: 95_000, status: "ACTUAL_RECORDED" },
+          { ...transferLine, _id: "fee_extra", feeType: "OTHER_CLOSING_EXPENSE", description: "Towing", estimatedAmountMinor: undefined, actualAmountMinor: 40_000, status: "ACTUAL_RECORDED" },
+        ],
+        {
+          source: "COMPANY_RULE_SNAPSHOT",
+          currency: "JOD",
+          rows: EXPECTED_ROWS,
+          expectedTotalMinor: 340_000,
+          actualTotalMinor: 135_000,
+          differenceMinor: 205_000,
+          unplannedLineIds: ["fee_extra"],
+        }
+      )
+    );
+    renderCockpit();
+
+    const plates = screen.getByTestId("deal-handover-expected-0");
+    expect(plates.textContent).toContain("Plates");
+    expect(plates.textContent).toContain("CostNotRecorded");
+    expect(within(plates).getByRole("button", { name: "RecordTemplateActual" })).toBeTruthy();
+    const stamps = screen.getByTestId("deal-handover-expected-1");
+    expect(stamps.textContent).toContain("CostStatusActual");
+    expect(within(stamps).queryByRole("button", { name: "RecordTemplateActual" })).toBeNull();
+
+    // The recorded template line is IN the checklist, not repeated below it;
+    // the unplanned line is listed as an additional cost.
+    expect(screen.queryByTestId("deal-handover-cost-fee_1")).toBeNull();
+    expect(screen.getByTestId("deal-handover-cost-fee_extra").textContent).toContain("Towing");
+
+    const totals = screen.getByTestId("deal-handover-costs-totals");
+    // 340 expected from the policy (250 + 90), never the lines' 90.
+    expect(totals.textContent).toContain("340");
+    expect(totals.textContent).not.toContain("90 ");
+    expect(screen.getByTestId("deal-handover-costs-difference").textContent).toContain("CostsDifferenceNote");
+  });
+
+  test("recording a configured fee's actual sends its POSITION and the deal currency — and nothing about the policy", async () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(
+      COSTS_QUERY,
+      withChecklist([], {
+        source: "COMPANY_RULE_SNAPSHOT",
+        currency: "JOD",
+        rows: [EXPECTED_ROWS[0]],
+        expectedTotalMinor: 250_000,
+        actualTotalMinor: 0,
+        differenceMinor: 250_000,
+        unplannedLineIds: [],
+      })
+    );
+    renderCockpit();
+
+    fireEvent.click(screen.getByRole("button", { name: "RecordTemplateActual" }));
+    const form = screen.getByTestId("deal-handover-expected-record-0");
+    fireEvent.change(within(form).getByLabelText(/CostAmountLabel/), { target: { value: "265" } });
+    fireEvent.click(within(form).getByRole("button", { name: "SaveActualCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:recordTemplateFeeActual")).toHaveLength(1));
+
+    const call = mutationCalls.get("financeDealCosts:recordTemplateFeeActual")![0] as Record<string, unknown>;
+    expect(call).toMatchObject({
+      orgId: ORG,
+      applicationId: APP,
+      templateIndex: 0,
+      feeType: "LICENSING",
+      actualAmountMinor: 265_000,
+      expectedCurrency: "JOD",
+    });
+    // No expectation, payee, treatment or flags leave the client.
+    for (const key of ["estimatedAmountMinor", "paidBy", "paidTo", "accountingTreatment", "deductedFromSettlement", "source"]) {
+      expect(key in call).toBe(false);
+    }
+    expect(call.idempotencyKey).toMatch(/^record-template-fee:app_2048:0:[0-9a-f-]{36}$/);
+    expect(mutationCalls.get("financeDealCosts:recordDealFee") ?? []).toHaveLength(0);
+  });
+
+  test("a deal whose company configured nothing says so — no zero, no checklist rows, additional costs still recordable", () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(
+      COSTS_QUERY,
+      withChecklist([], {
+        source: "NO_TEMPLATES",
+        currency: "JOD",
+        rows: [],
+        expectedTotalMinor: null,
+        actualTotalMinor: 0,
+        differenceMinor: null,
+        unplannedLineIds: [],
+      })
+    );
+    renderCockpit();
+    expect(screen.getByTestId("deal-handover-expected").textContent).toContain("HandoverExpectedNotConfigured");
+    expect(screen.queryByTestId("deal-handover-expected-0")).toBeNull();
+    expect(screen.getByTestId("deal-handover-costs-totals").textContent).toContain("FactUnavailable");
+    expect(screen.queryByTestId("deal-handover-costs-difference")).toBeNull();
+    expect(screen.getByRole("button", { name: "AddHandoverCost" })).toBeTruthy();
+  });
+
+  test("the add form records an ADDITIONAL cost as actually paid, and has no expected figure to type", () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(COSTS_QUERY, costsPayload());
+    renderCockpit();
+    fireEvent.click(screen.getByRole("button", { name: "AddHandoverCost" }));
+    expect(screen.getByTestId("deal-handover-cost-add").textContent).toContain("AdditionalCostNote");
+    expect(screen.queryByLabelText("CostFigureLabel")).toBeNull();
+    expect(screen.getByLabelText("CostPaidOnLabel")).toBeTruthy();
   });
 });
