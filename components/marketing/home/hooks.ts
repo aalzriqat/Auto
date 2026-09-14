@@ -23,9 +23,9 @@ const readReducedMotion = () => window.matchMedia(RM_QUERY).matches;
 const serverReducedMotion = () => false;
 
 /**
- * Reads `prefers-reduced-motion` and keeps the `<html>` classes the stylesheet
- * keys on (`rm`, `force-motion`) in sync. Both classes are removed on unmount
- * so nothing leaks onto the next route.
+ * Reads `prefers-reduced-motion` and keeps the `<html>` class the stylesheet
+ * keys on (`force-motion`, the visitor's override) in sync. It is removed on
+ * unmount so nothing leaks onto the next route.
  */
 export function useMotionPreference(): MotionState {
   const system = useSyncExternalStore(subscribeReducedMotion, readReducedMotion, serverReducedMotion);
@@ -34,12 +34,11 @@ export function useMotionPreference(): MotionState {
 
   useEffect(() => {
     const root = document.documentElement;
-    root.classList.toggle("rm", reduced);
     root.classList.toggle("force-motion", forced);
     return () => {
-      root.classList.remove("rm", "force-motion");
+      root.classList.remove("force-motion");
     };
-  }, [reduced, forced]);
+  }, [forced]);
 
   const forceMotion = useCallback(() => setForced(true), []);
 

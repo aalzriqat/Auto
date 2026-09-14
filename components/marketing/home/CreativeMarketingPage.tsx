@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { SiteVisitorTracker } from "@/components/analytics/SiteVisitorTracker";
 import "./landing.css";
@@ -662,12 +662,16 @@ function IntegrationsCarousel({ locale, reduced }: { locale: string; reduced: bo
   const [shown, setShown] = useState(0);
   const [swap, setSwap] = useState(false);
   const n = INTEGRATIONS.length;
+  /* the caption swap is a 300ms timer; hold its id so unmount can clear it */
+  const swapTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(swapTimer.current), []);
 
   useTicker(2600, !reduced, () => {
     const next = (index + 1) % n;
     setIndex(next);
     setSwap(true);
-    setTimeout(() => {
+    clearTimeout(swapTimer.current);
+    swapTimer.current = setTimeout(() => {
       setShown(next);
       setSwap(false);
     }, 300);
