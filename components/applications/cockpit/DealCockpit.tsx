@@ -2117,11 +2117,22 @@ function selectSummaryFacts({
     ];
   }
 
+  // The served sign travels with the figure: a deduction reads as one in the
+  // tile exactly as it does in the breakdown, so the tiles never show the
+  // magnitude of a cost as if it were an inflow.
   return profit.lines.map((line) => ({
     labelKey: PROFIT_LINE_LABEL[line.key] ?? line.key,
-    value: money(line.amountMinor),
+    value: signedMoney(line, money),
     unavailableKey: "NotRecorded",
   }));
+}
+
+/** One served line, spelled with the sign the server put on it. */
+function signedMoney(
+  line: Readonly<{ sign: number; amountMinor: number }>,
+  money: (minor: number) => string
+): string {
+  return `${line.sign < 0 ? "− " : ""}${money(line.amountMinor)}`;
 }
 
 /**
@@ -2347,37 +2358,20 @@ function ProfitBreakdown({
         <span>{t("ProfitBreakdownToggle")}</span>
       </summary>
       {/* A working of one figure, kept as a single column — these lines are a
-          SUM, and the order they are read in is part of the meaning. */}
+          SUM, and the order they are read in is part of the meaning. EVERY
+          served line is listed, zeros included: a zero term is a fact the
+          server chose to state, and dropping it would make the working look
+          like it hides a term — which an earlier allowlist did, silently, for
+          any key it had not heard of. */}
       <dl className="max-w-xl space-y-1.5 pt-2 text-sm">
-        {profit.lines
-          // A zero on an OPTIONAL line is noise, not information: the
-          // customer-direct amount has no writer yet, so it would read
-          // "0.000" on every deal forever, and the dealer contribution is
-          // zero on any fully funded deal. The lines the mockup always shows
-          // stay, so the derivation never looks like it is hiding a term.
-          // The cash lines are all always-shown: three terms, and a zero
-          // cost on an agent sale is a fact worth stating.
-          .filter(
-            (line) =>
-              line.amountMinor !== 0 ||
-              line.key === "APPROVED_PURCHASE" ||
-              line.key === "SUPPLIER_SETTLEMENT" ||
-              line.key === "ACTUAL_EXPENSES" ||
-              line.key === "SALE_PRICE" ||
-              line.key === "VEHICLE_COST" ||
-              line.key === "SUPPLIER_ENTITLEMENT"
-          )
-          .map((line) => (
-            <div key={line.key} className="flex items-center justify-between gap-4">
-              <dt className="text-muted-foreground">{t(PROFIT_LINE_LABEL[line.key] ?? line.key)}</dt>
-              <dd>
-                <Money>
-                  {line.sign < 0 ? "− " : ""}
-                  {money(line.amountMinor)}
-                </Money>
-              </dd>
-            </div>
-          ))}
+        {profit.lines.map((line) => (
+          <div key={line.key} className="flex items-center justify-between gap-4">
+            <dt className="text-muted-foreground">{t(PROFIT_LINE_LABEL[line.key] ?? line.key)}</dt>
+            <dd>
+              <Money>{signedMoney(line, money)}</Money>
+            </dd>
+          </div>
+        ))}
       </dl>
     </details>
   );
@@ -2784,6 +2778,26 @@ export function DealCockpitView({
   const [reopenSubmitting, setReopenSubmitting] = useState(false);
   const [reopenError, setReopenError] = useState<string | null>(null);
 
+  // A claim to settle AND a caller the server would accept the receipt from.
+  // The first three terms are the deal's state; the last is the operator's
+  // authority, decided by the container from MANAGE_FINANCE and never here.
+  const supplierRow = deal?.money?.parties.find((p) => p.party === "SUPPLIER");
+  const canSettleSupplier =
+    callerMaySettleSupplier &&
+    deal?.money?.settlesDirectToSupplier === true &&
+    deal.money.routeKnown &&
+    supplierRow?.position === "OWED_TO_DEALERSHIP";
+
+  // Authority is LIVE, not a snapshot taken when the dialog opened. If the
+  // membership finishes loading without MANAGE_FINANCE, is revoked mid-entry,
+  // or the deal's state stops allowing a settlement, the open dialog closes
+  // itself IN THE SAME RENDER (React's adjust-state-during-render pattern, so
+  // no frame ever paints the form under a lost grant, and regaining the grant
+  // later does not re-open a form nobody asked for). The dialog is also
+  // mounted only while the action is offered, and the submit path re-checks,
+  // so a stale form cannot send the command.
+  if (!canSettleSupplier && settlingSupplier) setSettlingSupplier(false);
+
   // Never a hardcoded ÷1000. JOD, KWD, BHD and OMR are three-decimal; most
   // currencies are two. Baking one scale in would be a 100x error everywhere
   // else — the same trap the accounting screens already solved with this helper.
@@ -3004,29 +3018,26 @@ export function DealCockpitView({
     workflowAction?.stageKey === "SETTLEMENT" &&
     (workflowAction.unavailableReasonKey === "FinalizeNeedsSettlementRoute" ||
       workflowAction.unavailableReasonKey === "FinalizeNeedsRouteAndPermission");
-  const supplierRow = deal.money?.parties.find((p) => p.party === "SUPPLIER");
-  // A claim to settle AND a caller the server would accept the receipt from.
-  // The first three terms are the deal's state; the last is the operator's
-  // authority, decided by the container from MANAGE_FINANCE and never here.
-  const canSettleSupplier =
-    callerMaySettleSupplier &&
-    deal.money?.settlesDirectToSupplier === true &&
-    deal.money.routeKnown &&
-    supplierRow?.position === "OWED_TO_DEALERSHIP";
-
   const handleSupplierReceipt = async (receipt: {
     amount: number;
     receiptMethod?: PaymentMethod;
     receiptReference?: string;
     receivedAt?: number;
   }) => {
+    // Fail closed on the authority as it stands NOW, not as it stood when the
+    // form was opened. The server would refuse anyway; this stops the screen
+    // from issuing a command it already knows will be refused.
+    if (!canSettleSupplier || !supplierRow?.receivableId) {
+      setSettlingSupplier(false);
+      return;
+    }
     setSubmitting(true);
     try {
       // Keyed to THIS claim, whose id the server resolved. The screen never
       // lets a client name a receivable of its own choosing.
       receiptKeyRef.current ??= crypto.randomUUID();
       await onRecordSupplierReceipt(
-        supplierRow!.receivableId as Id<"vehicleSupplierReceivables">,
+        supplierRow.receivableId as Id<"vehicleSupplierReceivables">,
         { ...receipt, idempotencyKey: receiptKeyRef.current }
       );
       // Only now: a failed attempt keeps its key so retrying is the same
@@ -3778,7 +3789,10 @@ export function DealCockpitView({
         </div>
       </div>
 
-      {supplierRow && (
+      {/* Mounted only while the action is offered: losing authority or the
+          settle-able state UNMOUNTS an open dialog rather than leaving a form
+          whose submit the server will refuse. */}
+      {supplierRow && canSettleSupplier && (
         <SupplierSettlementDialog
           open={settlingSupplier}
           submitting={submitting}

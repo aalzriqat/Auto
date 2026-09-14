@@ -448,9 +448,12 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
     // What `accountingProfit` emits for a SOURCED vehicle: SALE_PRICE 20,000,
     // VEHICLE_COST 0 AND SUPPLIER_ENTITLEMENT 17,000.
     renderCockpit(cashDealFixture());
-    expect(summaryTile("LineSalePrice")).toMatch(/20,000 د\.أ/);
-    expect(summaryTile("LineVehicleCost")).toMatch(/LineVehicleCost0 د\.أ/);
-    expect(summaryTile("LineSupplierEntitlement")).toMatch(/17,000 د\.أ/);
+    // The served SIGN travels with each figure: the inflow is unsigned, both
+    // deductions carry the minus — a "17,000" tile with no sign would read
+    // as money the dealership receives.
+    expect(summaryTile("LineSalePrice")).toMatch(/LineSalePrice20,000 د\.أ/);
+    expect(summaryTile("LineVehicleCost")).toMatch(/LineVehicleCost− 0 د\.أ/);
+    expect(summaryTile("LineSupplierEntitlement")).toMatch(/LineSupplierEntitlement− 17,000 د\.أ/);
   });
 
   test("a DIRECT purchase whose recognized cost is zero keeps its zero — no entitlement, no substitution", () => {
@@ -469,7 +472,7 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
         },
       })
     );
-    expect(summaryTile("LineVehicleCost")).toMatch(/LineVehicleCost0 د\.أ/);
+    expect(summaryTile("LineVehicleCost")).toMatch(/LineVehicleCost− 0 د\.أ/);
     expect(screen.queryByText("LineSupplierEntitlement")).toBeNull();
   });
 
@@ -489,8 +492,8 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
         },
       })
     );
-    expect(summaryTile("LineVehicleCost")).toMatch(/16,000 د\.أ/);
-    expect(summaryTile("LineSupplierEntitlement")).toMatch(/1,000 د\.أ/);
+    expect(summaryTile("LineVehicleCost")).toMatch(/− 16,000 د\.أ/);
+    expect(summaryTile("LineSupplierEntitlement")).toMatch(/− 1,000 د\.أ/);
   });
 
   test("a financed estimate renders every line the server served, in the server's order", () => {
@@ -520,9 +523,67 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
       "LineDealerContribution",
       "LineActualExpenses",
     ]);
-    expect(summaryTile("LineSupplierSettlement")).toMatch(/9,500 د\.أ/);
+    expect(summaryTile("LineApprovedPurchase")).toMatch(/LineApprovedPurchase12,500 د\.أ/);
+    expect(summaryTile("LineSupplierSettlement")).toMatch(/− 9,500 د\.أ/);
     // No tile stands in for a line the server did not send.
     expect(screen.queryByText("NotRecorded")).toBeNull();
+  });
+
+  /**
+   * Every served line is visible in BOTH places — the tiles and the collapsed
+   * working — zeros included and in server order. An earlier breakdown kept an
+   * allowlist of keys and dropped a zero on any other line, so a zero
+   * customer-direct amount, a zero contribution on a fully funded deal, and any
+   * key the server adds later vanished from the working while still being in
+   * the sum it explains.
+   */
+  test("zero-valued and unfamiliar lines stay visible in the tiles AND the breakdown, in server order", () => {
+    const { container } = renderCockpit(
+      dealFixture({
+        money: {
+          ...dealFixture().money,
+          profit: {
+            ...dealFixture().money!.profit,
+            lines: [
+              { key: "APPROVED_PURCHASE", sign: 1, amountMinor: 12_500 * SCALE },
+              { key: "CUSTOMER_DIRECT_TO_DEALER", sign: 1, amountMinor: 0 },
+              { key: "SUPPLIER_SETTLEMENT", sign: -1, amountMinor: 9_500 * SCALE },
+              { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: 0 },
+              { key: "FUTURE_SERVER_LINE", sign: -1, amountMinor: 0 },
+              { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: 90 * SCALE },
+            ],
+          },
+        },
+      })
+    );
+    const served = [
+      "LineApprovedPurchase",
+      "LineCustomerDirectToDealer",
+      "LineSupplierSettlement",
+      "LineDealerContribution",
+      "FUTURE_SERVER_LINE",
+      "LineActualExpenses",
+    ];
+    // Tiles: one per line, server order, zeros spelled with their sign.
+    const tiles = Array.from(container.querySelectorAll("p"))
+      .filter((el) => served.includes(el.textContent ?? "") && el.closest("details") === null)
+      .map((el) => el.textContent);
+    expect(tiles).toEqual(served);
+    expect(summaryTile("LineCustomerDirectToDealer")).toMatch(/LineCustomerDirectToDealer0 د\.أ/);
+    expect(summaryTile("LineDealerContribution")).toMatch(/LineDealerContribution− 0 د\.أ/);
+    expect(summaryTile("FUTURE_SERVER_LINE")).toMatch(/FUTURE_SERVER_LINE− 0 د\.أ/);
+    // Breakdown: the same six terms, same order, nothing filtered.
+    const breakdown = Array.from(container.querySelectorAll("details dt")).map((el) => el.textContent);
+    expect(breakdown).toEqual(served);
+    const breakdownValues = Array.from(container.querySelectorAll("details dd")).map((el) => el.textContent);
+    expect(breakdownValues).toEqual([
+      "12,500 د.أ",
+      "0 د.أ",
+      "− 9,500 د.أ",
+      "− 0 د.أ",
+      "− 0 د.أ",
+      "− 90 د.أ",
+    ]);
   });
 
   test("a management profit awaiting the supplier settlement still shows the served approved amount and contribution", () => {

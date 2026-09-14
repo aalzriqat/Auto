@@ -244,22 +244,59 @@ afterEach(() => {
   stubs.membership = undefined;
 });
 
-describe.each([
+/** A supplier the dealership OWES (gross route): the state that offers no settlement. */
+const SUPPLIER_IS_OWED = { ...SUPPLIER_OWES_MARGIN, position: "DEALERSHIP_OWES" as const };
+
+/**
+ * Each container, mounted once and re-rendered in place — the same React tree
+ * the operator is looking at, fed a NEW membership or a NEW deal by the
+ * stubbed hooks, exactly as the live queries would feed it. A FRESH element is
+ * built for every re-render: handing React the identical element object lets
+ * it bail out of the container entirely, and a test that "re-rendered" that
+ * way would be asserting against the screen it never repainted.
+ */
+const PATHS = [
   {
     path: "the financed DealCockpit",
     mount: () => {
+      const element = () => <DealCockpit orgId={ORG} applicationId={APP} />;
       stubs.queryResults.set("dealWorkspace:financedDealCockpit", financedDirectDeal());
-      return render(<DealCockpit orgId={ORG} applicationId={APP} />);
+      const { rerender } = render(element());
+      return {
+        rerender: () => rerender(element()),
+        withdrawClaim: () => {
+          const deal = financedDirectDeal();
+          stubs.queryResults.set("dealWorkspace:financedDealCockpit", {
+            ...deal,
+            money: { ...deal.money!, parties: [SUPPLIER_IS_OWED] },
+          });
+          rerender(element());
+        },
+      };
     },
   },
   {
     path: "the cash SaleDealCockpit",
     mount: () => {
+      const element = () => <SaleDealCockpit orgId={ORG} saleId={SALE} />;
       stubs.queryResults.set("sales:dealCockpit", cashDirectDeal());
-      return render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
+      const { rerender } = render(element());
+      return {
+        rerender: () => rerender(element()),
+        withdrawClaim: () => {
+          const deal = cashDirectDeal();
+          stubs.queryResults.set("sales:dealCockpit", {
+            ...deal,
+            money: { ...deal.money!, parties: [SUPPLIER_IS_OWED] },
+          });
+          rerender(element());
+        },
+      };
     },
   },
-])("$path offers the supplier settlement only to a caller who may record it", ({ mount }) => {
+];
+
+describe.each(PATHS)("$path offers the supplier settlement only to a caller who may record it", ({ mount }) => {
   test("a VIEW_FINANCE + VIEW_SALES custom role WITHOUT MANAGE_FINANCE sees no action and can open no dialog", () => {
     stubs.membership = FINANCE_READER;
     mount();
@@ -294,5 +331,56 @@ describe.each([
     stubs.membership = { roleName: "OWNER", permissions: [] };
     mount();
     expect(settleButton()).not.toBeNull();
+  });
+});
+
+/**
+ * Authority is LIVE. The membership query can resolve or be revoked while the
+ * receipt form is open, and the deal can stop being settle-able under it (the
+ * route changed, the claim was collected elsewhere). A dialog that stayed open
+ * would carry a submit the server refuses — and the operator would learn that
+ * only after typing the amount. The open dialog must go, on both paths, the
+ * moment the capability does.
+ */
+describe.each(PATHS)("$path closes an open supplier settlement the moment authority is lost", ({ mount }) => {
+  function openAsManager() {
+    stubs.membership = FINANCE_MANAGER;
+    const tree = mount();
+    fireEvent.click(settleButton()!);
+    expect(screen.getByText("SettleSupplierTitle")).toBeTruthy();
+    return tree;
+  }
+
+  test("authorized → membership WITHOUT MANAGE_FINANCE: the dialog is gone and the action with it", () => {
+    const tree = openAsManager();
+    stubs.membership = FINANCE_READER;
+    tree.rerender();
+    expect(screen.queryByText("SettleSupplierTitle")).toBeNull();
+    expect(settleButton()).toBeNull();
+  });
+
+  test("authorized → membership LOADING again: the dialog is gone, not held open on a stale grant", () => {
+    const tree = openAsManager();
+    stubs.membership = undefined;
+    tree.rerender();
+    expect(screen.queryByText("SettleSupplierTitle")).toBeNull();
+    expect(settleButton()).toBeNull();
+  });
+
+  test("authorized → the deal no longer has a claim to settle: the dialog is gone", () => {
+    const tree = openAsManager();
+    tree.withdrawClaim();
+    expect(screen.queryByText("SettleSupplierTitle")).toBeNull();
+    expect(settleButton()).toBeNull();
+  });
+
+  test("regaining authority does not silently re-open the form the operator never re-requested", () => {
+    const tree = openAsManager();
+    stubs.membership = FINANCE_READER;
+    tree.rerender();
+    stubs.membership = FINANCE_MANAGER;
+    tree.rerender();
+    expect(settleButton()).not.toBeNull();
+    expect(screen.queryByText("SettleSupplierTitle")).toBeNull();
   });
 });
