@@ -3045,8 +3045,8 @@ export default defineSchema({
      * template field from that entry server-side. Exact by construction — the
      * snapshot is immutable per application — so two identical templates are
      * two positions, never one ambiguous name. A COMPANY_TEMPLATE line without
-     * it predates that writer and is matched to its template by identity only
-     * where the identity is unique in the snapshot (see `listDealCosts`).
+     * it predates that writer and remains visible only as legacy/unplanned
+     * history; it never satisfies a configured template row.
      */
     templateIndex: v.optional(v.number()),
 

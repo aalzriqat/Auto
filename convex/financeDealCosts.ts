@@ -246,7 +246,7 @@ type FeeTemplate = NonNullable<
   NonNullable<Doc<"financeApplications">["companyRuleSnapshot"]>["feeTemplates"]
 >[number];
 
-/** The identity a template is matched by when no position is recorded. */
+/** Display-only identity used to flag duplicate configured rows; never a match key. */
 function templateIdentity(template: { feeType: string; description?: string }): string {
   return `${template.feeType}|${(template.description ?? "").trim().toLowerCase()}`;
 }

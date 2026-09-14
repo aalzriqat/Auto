@@ -161,6 +161,10 @@ export function RecordSubmittedQuotationDialog({
     if (!open || prefilledRef.current || touchedRef.current) return;
     if (calculation.state !== "AVAILABLE") return;
     prefilledRef.current = true;
+    // This is the deliberate handoff from an asynchronously arriving server
+    // suggestion into a controlled input; the touched guard prevents it from
+    // becoming a props-to-state synchronization loop.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAmount(String(calculation.minor / factor));
   }, [open, calculation, factor]);
 

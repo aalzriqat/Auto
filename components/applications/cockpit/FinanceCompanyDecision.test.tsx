@@ -114,7 +114,9 @@ function dealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
   } as unknown as DealCockpitData;
 }
 
-const noopAsync = async (_values?: unknown) => {};
+const noopAsync = async (values?: unknown) => {
+  void values;
+};
 
 /**
  * `facts` is merged rather than replaced, so a case that varies one fact does
