@@ -1448,6 +1448,104 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
     );
 
     /**
+     * THE REFUSAL SAYS THE SAME THING WHATEVER THE ROW SAYS.
+     *
+     * Raised by the cross-family round: the guard used to sit after
+     * `requireOwnedRow` and the closed / already-approved branches, so an
+     * unauthorized caller got a different error depending on the deal's state.
+     *
+     * I did not accept the disclosure claim attached to it - the
+     * already-approved branch is unconditional and answers the same caller who
+     * sends no rate at all, so that fact was never gated behind this argument -
+     * but the ordering property is worth holding on its own, and it is the kind
+     * of property that silently rots when someone later inserts a "cheap" row
+     * read above the guard. So it is asserted rather than commented.
+     *
+     * Four states that previously produced four different answers: an open
+     * deal, an approved one, a closed one, and an id that does not exist. All
+     * four must now return the authority refusal, byte-identical, and move
+     * nothing.
+     */
+    test("the explicit-rate refusal is identical across every row state", async () => {
+      const seeded = await rateEstablishableDeal("ordering");
+      const caller = seeded.asRole(templateFor("SALES"));
+
+      const refusalFor = async (applicationId: typeof seeded.applicationId) => {
+        try {
+          await caller.mutation(api.financingEconomics.recordSubmittedQuotation, {
+            orgId: seeded.orgId,
+            applicationId,
+            submittedQuotationMinor: 9_000_000,
+            source: "MANUAL_ENTRY",
+            ltvPercent: 100,
+          });
+          return "NOT REFUSED";
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+      };
+
+      const before = await rowSnapshot(seeded);
+      // Captured rather than hardcoded: the fixture's own status is the thing
+      // being restored, and a literal here would drift the moment it changes.
+      const originalStatus = (await seeded.t.run((ctx) =>
+        ctx.db.get(seeded.applicationId)
+      ))!.status;
+      const open = await refusalFor(seeded.applicationId);
+
+      // A closed deal, which used to answer "this application is closed" first.
+      await seeded.t.run(async (ctx) => {
+        await ctx.db.patch(seeded.applicationId, { status: "CLOSED" });
+      });
+      const closed = await refusalFor(seeded.applicationId);
+
+      // An approved deal, which used to answer "already approved" first.
+      await seeded.t.run(async (ctx) => {
+        await ctx.db.patch(seeded.applicationId, {
+          status: originalStatus,
+          approvedDealerPurchaseAmountMinor: SENTINEL.approved,
+        });
+      });
+      const approved = await refusalFor(seeded.applicationId);
+
+      /**
+       * A row in ANOTHER TENANT, which used to answer "not found" first.
+       *
+       * A real row rather than a made-up id: an invented id is rejected by the
+       * argument validator before the handler runs at all, which would make
+       * this case prove nothing about ordering. Copied from the fixture's own
+       * application so it is well-formed in every respect except ownership.
+       */
+      const foreignId = await seeded.t.run(async (ctx) => {
+        const otherOrgId = await ctx.db.insert("organizations", {
+          name: "Another dealership",
+          createdAt: Date.now(),
+        });
+        const app = (await ctx.db.get(seeded.applicationId))!;
+        const { _id, _creationTime, ...rest } = app;
+        return ctx.db.insert("financeApplications", { ...rest, orgId: otherOrgId });
+      });
+      const foreign = await refusalFor(foreignId);
+
+      expect(`open: ${open}`).toBe(`open: ${open}`);
+      expect(REFUSAL.test(open)).toBe(true);
+      // Byte-identical, not merely all-refused: an answer that VARIES with the
+      // row is the property being denied, so comparing the strings is the test.
+      expect(`closed: ${closed}`).toBe(`closed: ${open}`);
+      expect(`approved: ${approved}`).toBe(`approved: ${open}`);
+      expect(`foreign: ${foreign}`).toBe(`foreign: ${open}`);
+
+      // Restore the fixture row so the zero-delta comparison is meaningful.
+      await seeded.t.run(async (ctx) => {
+        await ctx.db.patch(seeded.applicationId, {
+          status: originalStatus,
+          approvedDealerPurchaseAmountMinor: undefined,
+        });
+      });
+      expect(await rowSnapshot(seeded)).toBe(before);
+    });
+
+    /**
      * THE OTHER HALF OF THE CONJUNCTION, found by the Sonnet MAX closure round
      * and confirmed by an executed mutant.
      *

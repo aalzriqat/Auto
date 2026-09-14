@@ -1029,6 +1029,88 @@ export const recordSubmittedQuotation = mutation({
     const { user, role } = await requireTenantAuth(ctx, args.orgId, [
       PERMISSIONS.CREATE_FINANCE_APPLICATION,
     ]);
+    /**
+     * THE AUTHORITY DECISION COMES FIRST, BEFORE ANYTHING IS READ ABOUT THE DEAL.
+     *
+     * The cross-family review round found this guard sitting after
+     * `requireOwnedRow` and the closed / already-approved lifecycle branches, so
+     * the refusal an unauthorized caller received varied with the row's state.
+     *
+     * I could not reproduce the disclosure that was said to create - the
+     * already-approved branch is unconditional and fires for the same caller
+     * sending no `ltvPercent` at all, so the endpoint's ordinary use already
+     * tells them that much - but the ordering is worth fixing on its own terms.
+     * Asking the authority question first makes the refusal independent of every
+     * row fact rather than of the stored RATE alone, mirrors the sibling
+     * `approveDealerPurchaseAmount`, and strictly REDUCES what an unauthorized
+     * caller learns.
+     *
+     * Tenancy is unaffected: `requireOwnedRow` still runs before every
+     * authorized read and write below, so a caller who passes this check still
+     * cannot reach another tenant's row.
+     */
+    /**
+     * Naming the rate this deal is financed at is an APPROVER's decision.
+     *
+     * Recording the quotation is a transcription — "this is the figure we sent"
+     * — and the SALES template may do it. `ltvPercent` is a different act. It is
+     * stored as `appliedLtvPercent` and scales the finance company's funded
+     * portion, which fixes the unfinanced portion and therefore the dealership's
+     * own contribution: a salesperson able to set it could move the dealer's
+     * money by typing a different number into the field beside the amount. The
+     * sibling `approveDealerPurchaseAmount` already takes this same rate behind
+     * `APPROVE_FINANCE_APPLICATION`; this door did not, so the weaker role
+     * reached the same figure by the earlier step.
+     *
+     * The guard fires only where the argument is LOAD-BEARING — where it
+     * establishes or moves the rate the deal already stands on:
+     *
+     *  - snapshot carries no default and none has been recorded → any rate is
+     *    the exceptional per-deal recovery, and needs an approver;
+     *  - the deal already has a rate and the caller re-sends the SAME one →
+     *    nothing moves, and re-recording a quotation stays ordinary sales work;
+     *  - the snapshot's own configured rate, sent explicitly → likewise a
+     *    no-op, so the normal configured path is untouched;
+     *  - a rate DIFFERENT from either → an override of the company's rules,
+     *    which moves exactly the money the recovery case does and gets exactly
+     *    the same authority.
+     *
+     * Checked before the solver runs and before anything is patched, so a
+     * refusal never leaves a recorded quotation standing on a rate the recorder
+     * was not entitled to set.
+     */
+    if (args.ltvPercent !== undefined) {
+      /**
+       * ONE authority question, asked before anything is read, compared,
+       * solved, audited or written.
+       *
+       * What stood here was a three-way test — approver, or finance-visible
+       * with an equal rate, or refuse — and the middle branch is what kept this
+       * subsystem leaking. It resolved the snapshot and compared the supplied
+       * rate against `app.appliedLtvPercent ?? snapshot.defaultLtvPercent`,
+       * both FINANCE-classified, so the accept/refuse outcome was itself a
+       * search oracle over the stored rate.
+       *
+       * The replacement asks nothing about the deal. `mayEstablishAppliedLtv`
+       * reads the ROLE and nothing else, so the refusal is independent of the
+       * stored rate and identical whether the supplied value is equal to it,
+       * different from it, or the deal has no rate at all. An equal value does
+       * not bypass — that allowance WAS the oracle.
+       *
+       * OMISSION is untouched: a deal whose rate is already established stays
+       * ordinary work for the roles that do that work. `DealCockpit` sends
+       * `ltvPercent` only while `requiresLtvPercent` is true, so no screen ever
+       * sends the argument this refuses unless the deal genuinely needs a rate
+       * established — which is precisely the decision that now needs both
+       * permissions.
+       */
+      if (!mayEstablishAppliedLtv(role)) {
+        throw new ConvexError(
+          "Setting the LTV this deal is financed at needs both finance visibility and approval authority. Ask a finance-authorized approver to record the rate the financing company confirmed."
+        );
+      }
+    }
+
     assertMinorAmount(args.submittedQuotationMinor, "Submitted quotation");
     if (args.targetSellingAmountMinor !== undefined) {
       assertMinorAmount(args.targetSellingAmountMinor, "Target selling amount");
@@ -1118,67 +1200,6 @@ export const recordSubmittedQuotation = mutation({
       }
     }
 
-    /**
-     * Naming the rate this deal is financed at is an APPROVER's decision.
-     *
-     * Recording the quotation is a transcription — "this is the figure we sent"
-     * — and the SALES template may do it. `ltvPercent` is a different act. It is
-     * stored as `appliedLtvPercent` and scales the finance company's funded
-     * portion, which fixes the unfinanced portion and therefore the dealership's
-     * own contribution: a salesperson able to set it could move the dealer's
-     * money by typing a different number into the field beside the amount. The
-     * sibling `approveDealerPurchaseAmount` already takes this same rate behind
-     * `APPROVE_FINANCE_APPLICATION`; this door did not, so the weaker role
-     * reached the same figure by the earlier step.
-     *
-     * The guard fires only where the argument is LOAD-BEARING — where it
-     * establishes or moves the rate the deal already stands on:
-     *
-     *  - snapshot carries no default and none has been recorded → any rate is
-     *    the exceptional per-deal recovery, and needs an approver;
-     *  - the deal already has a rate and the caller re-sends the SAME one →
-     *    nothing moves, and re-recording a quotation stays ordinary sales work;
-     *  - the snapshot's own configured rate, sent explicitly → likewise a
-     *    no-op, so the normal configured path is untouched;
-     *  - a rate DIFFERENT from either → an override of the company's rules,
-     *    which moves exactly the money the recovery case does and gets exactly
-     *    the same authority.
-     *
-     * Checked before the solver runs and before anything is patched, so a
-     * refusal never leaves a recorded quotation standing on a rate the recorder
-     * was not entitled to set.
-     */
-    if (args.ltvPercent !== undefined) {
-      /**
-       * ONE authority question, asked before anything is read, compared,
-       * solved, audited or written.
-       *
-       * What stood here was a three-way test — approver, or finance-visible
-       * with an equal rate, or refuse — and the middle branch is what kept this
-       * subsystem leaking. It resolved the snapshot and compared the supplied
-       * rate against `app.appliedLtvPercent ?? snapshot.defaultLtvPercent`,
-       * both FINANCE-classified, so the accept/refuse outcome was itself a
-       * search oracle over the stored rate.
-       *
-       * The replacement asks nothing about the deal. `mayEstablishAppliedLtv`
-       * reads the ROLE and nothing else, so the refusal is independent of the
-       * stored rate and identical whether the supplied value is equal to it,
-       * different from it, or the deal has no rate at all. An equal value does
-       * not bypass — that allowance WAS the oracle.
-       *
-       * OMISSION is untouched: a deal whose rate is already established stays
-       * ordinary work for the roles that do that work. `DealCockpit` sends
-       * `ltvPercent` only while `requiresLtvPercent` is true, so no screen ever
-       * sends the argument this refuses unless the deal genuinely needs a rate
-       * established — which is precisely the decision that now needs both
-       * permissions.
-       */
-      if (!mayEstablishAppliedLtv(role)) {
-        throw new ConvexError(
-          "Setting the LTV this deal is financed at needs both finance visibility and approval authority. Ask a finance-authorized approver to record the rate the financing company confirmed."
-        );
-      }
-    }
 
     // The same resolution `suggestQuotationForApplication` runs, so the figure
     // the user was shown is the figure the guard below accepts. Two copies of
