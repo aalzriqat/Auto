@@ -1,139 +1,186 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 
-interface FinanceInputs {
-  carPrice: number;
-  downPayment: number;
-  apr: number;
-  term: number;
+/* ---------------------------------------------------------------------- */
+/* Reduced motion                                                          */
+/* ---------------------------------------------------------------------- */
+
+export type MotionState = Readonly<{
+  /** true when the system asks for reduced motion AND the visitor has not overridden it */
+  reduced: boolean;
+  /** true once the visitor clicked "Play anyway" */
+  forced: boolean;
+  forceMotion: () => void;
+}>;
+
+const RM_QUERY = "(prefers-reduced-motion: reduce)";
+
+function subscribeReducedMotion(onChange: () => void) {
+  const mq = window.matchMedia(RM_QUERY);
+  mq.addEventListener("change", onChange);
+  return () => mq.removeEventListener("change", onChange);
 }
+const readReducedMotion = () => window.matchMedia(RM_QUERY).matches;
+const serverReducedMotion = () => false;
 
-interface FinanceTotals {
-  principal: number;
-  monthlyInstallment: number;
-  totalPaid: number;
-  totalInterest: number;
-  principalPercent: number;
-  strokeDasharray: number;
-  strokeDashoffset: number;
-}
-
-const PIPELINE_STAGE_COUNT = 4;
-const FINANCE_RING_RADIUS = 40;
-
-export function useFinanceCalculator() {
-  const [carPrice, setCarPrice] = useState(95000);
-  const [downPayment, setDownPayment] = useState(20000);
-  const [apr, setApr] = useState(5.4);
-  const [term, setTerm] = useState(60);
-
-  const updateCarPrice = (nextCarPrice: number) => {
-    setCarPrice(nextCarPrice);
-    setDownPayment((currentDownPayment) => Math.min(currentDownPayment, nextCarPrice));
-  };
-
-  const updateDownPayment = (nextDownPayment: number) => {
-    setDownPayment(Math.min(nextDownPayment, carPrice));
-  };
-
-  return {
-    carPrice,
-    downPayment,
-    apr,
-    term,
-    setCarPrice: updateCarPrice,
-    setDownPayment: updateDownPayment,
-    setApr,
-    setTerm,
-    ...financeTotals({ carPrice, downPayment, apr, term }),
-  };
-}
-
-export function usePipelineSimulation() {
-  const [pipelineStage, setPipelineStage] = useState(0);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+/**
+ * Reads `prefers-reduced-motion` and keeps the `<html>` classes the stylesheet
+ * keys on (`rm`, `force-motion`) in sync. Both classes are removed on unmount
+ * so nothing leaks onto the next route.
+ */
+export function useMotionPreference(): MotionState {
+  const system = useSyncExternalStore(subscribeReducedMotion, readReducedMotion, serverReducedMotion);
+  const [forced, setForced] = useState(false);
+  const reduced = system && !forced;
 
   useEffect(() => {
+    const root = document.documentElement;
+    root.classList.toggle("rm", reduced);
+    root.classList.toggle("force-motion", forced);
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-      }
+      root.classList.remove("rm", "force-motion");
     };
-  }, []);
+  }, [reduced, forced]);
 
-  const advancePipelineStage = () => {
-    setPipelineStage((currentStage) => (currentStage + 1) % PIPELINE_STAGE_COUNT);
-  };
+  const forceMotion = useCallback(() => setForced(true), []);
 
-  const simulatePipelineAutoRun = () => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
+  return { reduced, forced, forceMotion };
+}
+
+/* ---------------------------------------------------------------------- */
+/* Reveal engine                                                           */
+/* ---------------------------------------------------------------------- */
+
+export const REVEAL_SELECTOR =
+  ".reveal, .reveal-scale, .blur-in, .mini, .spine, .hero-car, .floor-stage, .post-demo";
+
+/**
+ * Adds `.in` to every reveal target as it enters the viewport, and removes it
+ * again only when the element leaves BELOW the viewport (the reader scrolled
+ * back up past it). Re-arming on exit-upwards would make sections flicker as
+ * they leave the top of the screen.
+ *
+ * Re-runs whenever `key` changes so remounted targets (a headline keyed by
+ * locale) get observed again.
+ */
+export function useReveal(root: RefObject<HTMLElement | null>, reduced: boolean, key: string) {
+  useEffect(() => {
+    const host = root.current;
+    if (!host) return;
+    const targets = Array.from(host.querySelectorAll<HTMLElement>(REVEAL_SELECTOR));
+
+    if (reduced || !("IntersectionObserver" in window)) {
+      targets.forEach((el) => el.classList.add("in"));
+      return;
     }
 
-    let nextStage = 0;
-    setPipelineStage(0);
+    const io = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((e) => {
+          if (e.isIntersecting) {
+            e.target.classList.add("in");
+          } else if (e.boundingClientRect.top > 0) {
+            e.target.classList.remove("in");
+          }
+        });
+      },
+      { threshold: 0.15, rootMargin: "0px 0px -6% 0px" },
+    );
+    targets.forEach((el) => io.observe(el));
+    return () => io.disconnect();
+  }, [root, reduced, key]);
+}
 
-    intervalRef.current = setInterval(() => {
-      nextStage++;
-      if (nextStage >= PIPELINE_STAGE_COUNT) {
-        if (intervalRef.current) {
-          clearInterval(intervalRef.current);
-          intervalRef.current = null;
-        }
+/* ---------------------------------------------------------------------- */
+/* Scroll: nav shadow + deal-flow rail progress                            */
+/* ---------------------------------------------------------------------- */
 
-        return;
+/**
+ * One rAF-throttled scroll listener that (a) reports whether the page has
+ * scrolled past the top and (b) drives the deal-flow rail fill and per-step
+ * "on" state directly on the DOM — writing per-frame values through React
+ * state would re-render the whole page on every scroll tick.
+ */
+export function useScrollRail(track: RefObject<HTMLElement | null>, reduced: boolean): boolean {
+  const [scrolled, setScrolled] = useState(false);
+  const scrolledRef = useRef(false);
+
+  useEffect(() => {
+    let ticking = false;
+
+    const frame = () => {
+      ticking = false;
+      const next = window.scrollY > 24;
+      if (next !== scrolledRef.current) {
+        scrolledRef.current = next;
+        setScrolled(next);
       }
 
-      setPipelineStage(nextStage);
-    }, 2000);
-  };
+      const el = track.current;
+      if (!el) return;
+      const rail = el.querySelector<HTMLElement>(".flow-rail");
+      const steps = el.querySelectorAll<HTMLElement>(".flow-step");
+      const r = el.getBoundingClientRect();
+      const vh = window.innerHeight;
+      /* progress 0..1 as the track crosses the middle band of the viewport */
+      const raw = (vh * 0.72 - r.top) / (r.height + vh * 0.12);
+      const p = Math.max(0, Math.min(1, raw));
+      rail?.style.setProperty("--p", String(reduced ? 1 : p));
+      steps.forEach((s) => {
+        s.classList.toggle("on", reduced || s.getBoundingClientRect().top < vh * 0.78);
+      });
+    };
 
-  return { pipelineStage, advancePipelineStage, simulatePipelineAutoRun };
+    const onScroll = () => {
+      if (!ticking) {
+        ticking = true;
+        requestAnimationFrame(frame);
+      }
+    };
+
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll, { passive: true });
+    frame();
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [track, reduced]);
+
+  return scrolled;
 }
 
-export function useRoiEstimator() {
-  const [monthlySales, setMonthlySales] = useState(35);
+/* ---------------------------------------------------------------------- */
+/* Interval that pauses under reduced motion                               */
+/* ---------------------------------------------------------------------- */
 
-  return {
-    monthlySales,
-    setMonthlySales,
-    hoursSavedPerWk: Math.round(monthlySales * 0.85),
-    annualSavingsDollars: Math.round(monthlySales * 38 * 12),
-  };
+export function useTicker(ms: number, active: boolean, onTick: () => void) {
+  const cb = useRef(onTick);
+  useEffect(() => {
+    cb.current = onTick;
+  });
+  useEffect(() => {
+    if (!active) return;
+    const id = setInterval(() => cb.current(), ms);
+    return () => clearInterval(id);
+  }, [ms, active]);
 }
 
-function financeTotals(inputs: FinanceInputs): FinanceTotals {
-  const principal = Math.max(0, inputs.carPrice - inputs.downPayment);
-  const monthlyInterestRate = inputs.apr / 12 / 100;
-  const paymentTotals = amortizedPaymentTotals(principal, monthlyInterestRate, inputs.term);
-  const principalPercent = paymentTotals.totalPaid > 0 ? (principal / paymentTotals.totalPaid) * 100 : 100;
-  const strokeDasharray = 2 * Math.PI * FINANCE_RING_RADIUS;
+/* ---------------------------------------------------------------------- */
+/* Smooth anchor scrolling, scoped to this page's lifetime                 */
+/* ---------------------------------------------------------------------- */
 
-  return {
-    principal,
-    ...paymentTotals,
-    principalPercent,
-    strokeDasharray,
-    strokeDashoffset: strokeDasharray * (1 - principalPercent / 100),
-  };
-}
-
-function amortizedPaymentTotals(
-  principal: number,
-  monthlyInterestRate: number,
-  term: number,
-) {
-  if (principal <= 0) {
-    return { monthlyInstallment: 0, totalPaid: 0, totalInterest: 0 };
-  }
-
-  if (monthlyInterestRate === 0) {
-    return { monthlyInstallment: principal / term, totalPaid: principal, totalInterest: 0 };
-  }
-
-  const compoundFactor = Math.pow(1 + monthlyInterestRate, term);
-  const monthlyInstallment = (principal * monthlyInterestRate * compoundFactor) / (compoundFactor - 1);
-  const totalPaid = monthlyInstallment * term;
-
-  return { monthlyInstallment, totalPaid, totalInterest: totalPaid - principal };
+/**
+ * `scroll-behavior` has to live on <html> to affect anchor jumps, and a
+ * stylesheet rule there would leak onto every other route once this page's
+ * CSS is loaded. Set it on mount, restore on unmount.
+ */
+export function useSmoothScroll(reduced: boolean) {
+  useEffect(() => {
+    const root = document.documentElement;
+    const prev = root.style.scrollBehavior;
+    root.style.scrollBehavior = reduced ? "auto" : "smooth";
+    return () => {
+      root.style.scrollBehavior = prev;
+    };
+  }, [reduced]);
 }

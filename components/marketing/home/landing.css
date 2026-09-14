@@ -1,0 +1,659 @@
+/* ===========================================================
+   AutoFlow landing page v2 — SCRUM-323 (port of the SCRUM-301 prototype)
+
+   Every rule is scoped under `.lv2`, the page root, so loading this
+   stylesheet leaks nothing onto other routes. The only exceptions are the
+   `html[lang]` / `html[dir]` / `html.force-motion` ancestors, which the
+   LanguageProvider and the motion hook set on <html>.
+
+   Tokens mirror app/globals.css :root (light theme).
+   Dials: DESIGN_VARIANCE 7 / MOTION_INTENSITY 7 / VISUAL_DENSITY 3
+   =========================================================== */
+
+.lv2{
+  --bg:hsl(40 20% 97%);
+  --surface:hsl(0 0% 100%);
+  --ink:hsl(220 10% 25%);
+  --ink-strong:hsl(222 30% 12%);
+  --muted:hsl(220 10% 45%);
+  --line:hsl(40 14% 88%);
+  --line-soft:hsl(40 14% 92%);
+  --primary:hsl(236 82% 58%);
+  --primary-ink:hsl(236 60% 34%);
+  --primary-wash:hsl(236 82% 58% / .08);
+  --amber:hsl(38 92% 50%);
+  --red:hsl(348 83% 47%);
+  --green:hsl(160 62% 38%);
+  --r:.75rem;
+  --shadow-s:0 1px 2px hsl(35 20% 40% / .06), 0 2px 6px hsl(35 20% 40% / .05);
+  --shadow-m:0 2px 4px hsl(35 20% 40% / .05), 0 12px 28px hsl(35 20% 40% / .09);
+  --shadow-l:0 4px 8px hsl(35 20% 40% / .05), 0 28px 64px hsl(35 20% 40% / .14);
+  --maxw:1180px;
+  --ease:cubic-bezier(.22,1,.36,1);
+  --spring:cubic-bezier(.34,1.32,.44,1);
+  /* +1 in LTR, -1 in RTL — mirrors directional fly-in offsets. Set inline by the page. */
+  --dirsign:1;
+
+  background:hsl(40 14% 93%);color:var(--ink);font-size:16px;line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+  /* `clip`, not `hidden`: hidden would turn the page root into a scroll container */
+  overflow-x:clip;
+}
+/* the font itself is inherited from <body>, where the LanguageProvider swaps Inter / Cairo */
+
+
+
+
+.lv2 img,.lv2 svg{max-width:100%;display:block}
+/* width/height attrs apply as CSS — without this the hero car renders 2.5x too tall */
+.lv2 img{height:auto}
+.lv2 a{color:inherit;text-decoration:none}
+.lv2 button{font:inherit;color:inherit;cursor:pointer}
+.lv2 :focus-visible{outline:3px solid var(--primary);outline-offset:3px;border-radius:6px}
+
+/* The whole page sits inset on a warm ground — borrowed frame device */
+.lv2 .frame{
+  max-width:1480px;margin:0 auto;background:var(--bg);
+  border-radius:2rem;overflow:hidden;
+  box-shadow:0 0 0 1px hsl(40 14% 86%),0 30px 90px hsl(35 20% 40% / .10);
+}
+@media (max-width:900px){.lv2 .frame{border-radius:0}}
+.lv2 .wrap{max-width:var(--maxw);margin-inline:auto;padding-inline:24px}
+.lv2 section{position:relative}
+/* the pill nav is fixed — anchor targets must clear it */
+.lv2 [id]{scroll-margin-top:112px}
+
+/* ---------- Typography ---------- */
+.lv2 .eyebrow{font-size:.75rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--primary-ink)}
+html[lang="ar"] .lv2 .eyebrow{letter-spacing:normal;text-transform:none;font-size:.85rem}
+.lv2 h1,.lv2 h2,.lv2 h3{color:var(--ink-strong);margin:0;line-height:1.08;letter-spacing:-.025em;font-weight:800}
+html[lang="ar"] .lv2 h1,html[lang="ar"] .lv2 h2,html[lang="ar"] .lv2 h3{letter-spacing:normal;line-height:1.4}
+.lv2 h1{font-size:clamp(2.5rem,5.8vw,4.4rem)}
+.lv2 h2{font-size:clamp(1.9rem,4vw,3rem)}
+.lv2 h3{font-size:1.0625rem;font-weight:700;line-height:1.35}
+.lv2 .lede{font-size:1.0625rem;color:var(--muted);max-width:58ch;margin:0}
+.lv2 .section-head{text-align:center;max-width:46rem;margin-inline:auto;margin-bottom:56px}
+.lv2 .section-head .lede{margin:16px auto 0;text-align:center}
+.lv2 .section-head .eyebrow{display:block;margin-bottom:14px}
+
+/* ---------- Buttons ---------- */
+.lv2 .btn{
+  display:inline-flex;align-items:center;gap:.5rem;padding:.85rem 1.4rem;border-radius:999px;
+  border:1px solid transparent;font-weight:650;font-size:.95rem;white-space:nowrap;
+  transition:transform .35s var(--spring),box-shadow .35s var(--ease),background .25s;
+}
+.lv2 .btn:hover{transform:translateY(-2px)}
+.lv2 .btn-primary{background:var(--primary);color:#fff;box-shadow:0 6px 18px hsl(236 82% 58% / .32)}
+.lv2 .btn-primary:hover{box-shadow:0 12px 30px hsl(236 82% 58% / .42)}
+.lv2 .btn-ghost{background:var(--surface);border-color:var(--line);color:var(--ink-strong);box-shadow:var(--shadow-s)}
+.lv2 .btn-lg{padding:1.05rem 1.9rem;font-size:1rem}
+
+/* ---------- Floating pill nav ---------- */
+.lv2 .nav{position:fixed;inset-inline:0;top:18px;z-index:80;display:flex;justify-content:center;
+  pointer-events:none;padding-inline:16px}
+.lv2 .nav-pill{
+  pointer-events:auto;display:flex;align-items:center;gap:8px;
+  background:hsl(0 0% 100% / .8);backdrop-filter:blur(18px) saturate(1.4);
+  border:1px solid hsl(40 14% 88% / .9);border-radius:999px;
+  padding-block:8px;padding-inline-start:18px;padding-inline-end:8px;
+  box-shadow:var(--shadow-m);transition:box-shadow .4s var(--ease);
+}
+.lv2 .nav.scrolled .nav-pill{box-shadow:var(--shadow-l)}
+.lv2 .brand{display:flex;align-items:center;gap:9px;font-weight:800;color:var(--ink-strong);
+  font-size:1.05rem;letter-spacing:-.02em}
+.lv2 .brand-mark{width:30px;height:30px;border-radius:9px;flex:none;
+  background:linear-gradient(155deg,hsl(236 82% 64%),hsl(236 82% 48%));
+  display:grid;place-items:center}
+.lv2 .brand-mark svg{width:18px;height:18px;stroke:#fff;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.lv2 .nav-links{display:flex;gap:2px;margin-inline:14px}
+.lv2 .nav-links a{padding:.5rem .8rem;border-radius:999px;font-size:.9rem;color:var(--muted);
+  font-weight:550;transition:background .2s,color .2s}
+.lv2 .nav-links a:hover{background:var(--primary-wash);color:var(--primary-ink)}
+.lv2 .nav-actions{display:flex;align-items:center;gap:6px}
+.lv2 .lang-btn{background:transparent;border:1px solid var(--line);border-radius:999px;
+  padding:.45rem .8rem;font-size:.78rem;font-weight:700;color:var(--muted);
+  transition:border-color .2s,color .2s}
+.lv2 .lang-btn:hover{border-color:var(--primary);color:var(--primary-ink)}
+.lv2 .nav-signin{padding:.55rem .9rem;font-size:.9rem;font-weight:600;color:var(--ink-strong)}
+.lv2 .nav-cta{background:var(--ink-strong);color:#fff;border-radius:999px;padding:.62rem 1.15rem;
+  font-size:.9rem;font-weight:650;transition:transform .3s var(--spring),background .25s}
+.lv2 .nav-cta:hover{transform:translateY(-2px);background:var(--primary)}
+@media (max-width:1120px){.lv2 .nav-links{display:none}}
+/* The brand asset the LIVE site serves: public/logo.png -> /logo.png, taken from
+   origin/main (commit 4558c2e97 "Rebuild the brand logo assets from a properly
+   matted source"). MEASURED 1200x686 with the art filling the canvas, so it needs
+   no crop and carries its own dark card — no backing chip either. */
+.lv2 .brand-logo{height:42px;width:auto}
+.lv2 .foot .brand-logo{height:68px}
+@media (max-width:620px){.lv2 .nav-signin{display:none}.lv2 .brand-logo{height:32px}}
+
+/* ===========================================================
+   MOTION PRIMITIVES
+   =========================================================== */
+.lv2 .blur-in > span{
+  display:inline-block;opacity:0;filter:blur(20px);transform:translateY(.55em) scale(.94);
+  transition:opacity .9s var(--ease),filter .9s var(--ease),transform 1s var(--ease);
+  transition-delay:var(--d,0ms);
+}
+.lv2 .blur-in.in > span{opacity:1;filter:blur(0);transform:none}
+.lv2 .blur-in > span{will-change:filter,opacity,transform}
+.lv2 .reveal{opacity:0;transform:translateY(42px);
+  transition:opacity .8s var(--ease),transform .95s var(--ease);transition-delay:var(--d,0ms)}
+.lv2 .reveal.in{opacity:1;transform:none}
+.lv2 .reveal-scale{opacity:0;transform:scale(.9) translateY(36px);
+  transition:opacity .8s var(--ease),transform 1s var(--spring);transition-delay:var(--d,0ms)}
+.lv2 .reveal-scale.in{opacity:1;transform:none}
+
+@media (prefers-reduced-motion:reduce){
+  /* scroll-behavior on <html> is handled by the useSmoothScroll hook */
+  html:not(.force-motion) .lv2 :is(.blur-in > span,.reveal,.reveal-scale,.vcard,.spine-node,
+  .spine-chip,.hero-car,.flow-card,.queue-row,.bar,.balanced){
+    opacity:1!important;filter:none!important;transform:none!important;transition:none!important
+  }
+  html:not(.force-motion) .lv2 *{animation:none!important}
+}
+
+/* ===========================================================
+   HERO — signature element: the deal spine
+   =========================================================== */
+.lv2 .hero{padding-top:132px;padding-bottom:20px;overflow:hidden}
+.lv2 .hero-inner{text-align:center;position:relative;z-index:2}
+.lv2 .hero h1{margin-inline:auto;max-width:16ch}
+/* Arabic runs 20-30% longer per line at the same measure */
+html[lang="ar"] .lv2 .hero h1{max-width:24ch}
+.lv2 .hero .lede{margin:22px auto 0;text-align:center;font-size:1.12rem;max-width:52ch}
+.lv2 .hero-cta{display:flex;gap:12px;justify-content:center;margin-top:32px;flex-wrap:wrap}
+
+.lv2 .spine{position:relative;height:300px;margin-bottom:4px}
+.lv2 .spine-rail{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.lv2 .spine-rail path{fill:none;stroke-linecap:round;stroke-linejoin:round}
+.lv2 .rail-base{stroke:hsl(220 12% 78%);stroke-width:1.5;
+  stroke-dasharray:1400;stroke-dashoffset:1400;transition:stroke-dashoffset 1.7s var(--ease) .1s}
+.lv2 .spine.in .rail-base{stroke-dashoffset:0}
+/* The lit overlay is the trail the travelling deal leaves. Its dash offset is
+   written per frame by app.js (negative in RTL, so it fills from the other end). */
+.lv2 .rail-lit{stroke:var(--primary);stroke-width:2.5;opacity:0;
+  transition:opacity .4s linear}
+.lv2 .spine.running .rail-lit,.lv2 .spine.lit-static .rail-lit{opacity:.92}
+
+/* the deal itself, positioned per frame in physical px from the spine's left edge */
+.lv2 .spine-pulse{position:absolute;left:0;top:0;width:13px;height:13px;border-radius:50%;
+  background:var(--primary);transform:translate(-50%,-50%);opacity:0;pointer-events:none;z-index:3;
+  box-shadow:0 0 0 5px hsl(236 82% 58% / .15),0 0 24px 7px hsl(236 82% 58% / .42)}
+/* No opacity transition and no .running rule: app.js writes the alpha every
+   frame so the deal can fade in and out WHILE moving. A transition here would
+   lag those ramps and reintroduce the hang at both ends. */
+/* mobile fallback rail fill — inset-inline-start + a % width grows the right way in RTL */
+.lv2 .spine::after{content:"";display:none;position:absolute;top:50%;inset-inline-start:0;height:2.5px;
+  width:calc(var(--lit,0) * 100%);background:var(--primary);border-radius:2px;
+  transform:translateY(-50%);opacity:0;transition:opacity .4s linear}
+/* translateX(-50%) always moves LEFT in screen space, so a node positioned by
+   inset-inline-start lands a full tile off-centre in RTL. Mirror it via --dirsign. */
+.lv2 .spine-node{position:absolute;
+  transform:translate(calc(-50% * var(--dirsign)),-50%) scale(.4);opacity:0;
+  transition:opacity .6s var(--ease),transform .8s var(--spring);transition-delay:var(--d,0ms)}
+.lv2 .spine.in .spine-node{opacity:1;transform:translate(calc(-50% * var(--dirsign)),-50%) scale(1)}
+.lv2 .node-tile{width:62px;height:62px;border-radius:19px;display:grid;place-items:center;position:relative;
+  background:var(--surface);box-shadow:var(--shadow-m);border:1px solid var(--line-soft);
+  transition:transform .55s var(--spring),box-shadow .55s var(--ease),border-color .55s var(--ease)}
+/* a stage the deal has already passed stays lifted — the rail reads as progress, not decoration */
+.lv2 .spine-node.lit .node-tile{transform:scale(1.09);border-color:hsl(236 82% 58% / .45);
+  box-shadow:0 14px 34px hsl(236 82% 58% / .26)}
+.lv2 .spine-node.lit .node-label{color:var(--ink-strong)}
+.lv2 .node-tile::after{content:"";position:absolute;inset:-1px;border-radius:inherit;
+  border:2px solid var(--primary);opacity:0;pointer-events:none}
+.lv2 .spine-node.ping .node-tile::after{animation:lv2-nodePing .9s var(--ease)}
+@keyframes lv2-nodePing{from{opacity:.6;transform:scale(1)}to{opacity:0;transform:scale(1.6)}}
+/* The chip flash is a TRANSITION, not an animation: `animation` is already
+   spoken for by lv2-bob, and re-declaring it restarted the bob mid-float. */
+.lv2 .spine-chip.ping{box-shadow:0 12px 34px hsl(236 82% 58% / .34)}
+.lv2 .node-tile.is-primary{background:linear-gradient(160deg,hsl(236 82% 64%),hsl(236 82% 50%));
+  border-color:transparent;box-shadow:0 10px 30px hsl(236 82% 58% / .38);width:76px;height:76px;border-radius:24px}
+.lv2 .node-tile.is-primary svg{stroke:#fff;width:34px;height:34px}
+.lv2 .node-tile svg{width:27px;height:27px;stroke:var(--primary);fill:none;stroke-width:1.8;
+  stroke-linecap:round;stroke-linejoin:round}
+.lv2 .node-label{position:absolute;top:calc(100% + 10px);inset-inline-start:50%;transform:translateX(-50%);
+  font-size:.72rem;font-weight:700;color:var(--muted);white-space:nowrap}
+html[dir="rtl"] .lv2 .node-label{transform:translateX(50%)}
+.lv2 .spine-chip{
+  position:absolute;background:var(--surface);border:1px solid var(--line-soft);border-radius:14px;
+  box-shadow:var(--shadow-m);padding:10px 13px;display:flex;align-items:center;gap:9px;
+  font-size:.78rem;font-weight:600;color:var(--ink-strong);white-space:nowrap;
+  opacity:0;transform:translateY(16px) scale(.9);
+  /* per-property delays: the entrance is staggered by --d, the later flash is not */
+  transition:opacity .7s var(--ease) var(--d,0ms),transform .9s var(--spring) var(--d,0ms),
+             box-shadow .5s var(--ease) 0ms;
+}
+.lv2 .spine.in .spine-chip{opacity:1;transform:none;animation:lv2-bob 6s ease-in-out infinite;animation-delay:var(--d,0ms)}
+@keyframes lv2-bob{0%,100%{translate:0 0}50%{translate:0 -7px}}
+.lv2 .chip-dot{width:8px;height:8px;border-radius:50%;flex:none}
+.lv2 .chip-sub{font-size:.68rem;color:var(--muted);font-weight:500}
+@media (max-width:820px){
+  /* the desktop spine is a diagonal with 5 nodes; at this width they collide.
+     Re-lay it as a flat 4-stage rail and drop the decorative centre node. */
+  .lv2 .spine{height:170px}
+  .lv2 .spine-chip{display:none}
+  .lv2 .spine-rail{display:none}
+  .lv2 .spine::after{display:block}
+  .lv2 .spine.running::after,.lv2 .spine.lit-static::after{opacity:.92}
+  .lv2 .spine-node.lit .node-tile{transform:scale(1.06)}
+  .lv2 .spine::before{
+    content:"";position:absolute;inset-inline:0;top:50%;height:1.5px;
+    background:hsl(220 12% 82%);transform:translateY(-50%);
+  }
+  .lv2 .node-tile{width:48px;height:48px;border-radius:15px}
+  .lv2 .node-tile svg{width:21px;height:21px}
+  .lv2 .spine-node{top:50%!important}
+  .lv2 .spine-node:nth-of-type(1){inset-inline-start:13%!important}
+  .lv2 .spine-node:nth-of-type(2){inset-inline-start:37%!important}
+  .lv2 .spine-node:nth-of-type(3){display:none}
+  .lv2 .spine-node:nth-of-type(4){inset-inline-start:63%!important}
+  .lv2 .spine-node:nth-of-type(5){inset-inline-start:87%!important}
+  .lv2 .node-label{font-size:.66rem;top:calc(100% + 8px)}
+}
+
+/* hero vehicle plate */
+.lv2 .hero-car{
+  margin:44px auto 0;max-width:940px;position:relative;
+  opacity:0;transform:translateY(46px) scale(.96);
+  transition:opacity 1s var(--ease) .1s,transform 1.2s var(--spring) .1s;
+}
+.lv2 .hero-car.in{opacity:1;transform:none}
+.lv2 .hero-car img{width:100%;border-radius:20px}
+.lv2 .hero-car::after{
+  content:"";position:absolute;inset-inline:12%;bottom:6px;height:36px;border-radius:50%;
+  background:radial-gradient(closest-side,hsl(35 20% 40% / .22),transparent);
+}
+.lv2 .trust{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:34px}
+.lv2 .trust span{font-size:.78rem;font-weight:600;color:var(--muted);background:var(--surface);
+  border:1px solid var(--line-soft);border-radius:999px;padding:.4rem .85rem}
+
+/* ===========================================================
+   VEHICLE FLOOR — cards fly in and part around the headline
+   =========================================================== */
+.lv2 .floor{padding:96px 0 104px;overflow:hidden}
+.lv2 .floor-stage{position:relative;min-height:980px;display:grid;place-items:center}
+.lv2 .floor-copy{position:relative;z-index:5;text-align:center;max-width:34rem;padding:36px 20px;
+  background:radial-gradient(closest-side,var(--bg) 64%,hsl(40 20% 97% / 0))}
+.lv2 .floor-copy h2{font-size:clamp(1.8rem,3.4vw,2.7rem)}
+.lv2 .vcard{
+  position:absolute;width:216px;background:var(--surface);border:1px solid var(--line-soft);
+  border-radius:18px;padding:11px;box-shadow:var(--shadow-m);z-index:2;
+  opacity:0;
+  transform:translate(calc(var(--fx,0px) * var(--dirsign)),var(--fy,0px)) rotate(var(--fr,0deg)) scale(.82);
+  transition:opacity .9s var(--ease),transform 1.15s var(--spring);transition-delay:var(--d,0ms);
+}
+.lv2 .floor-stage.in .vcard{opacity:1;transform:translate(0,0) rotate(var(--rr,0deg)) scale(1)}
+.lv2 .vcard-img{background:hsl(40 16% 96%);border-radius:12px;overflow:hidden;margin-bottom:10px;aspect-ratio:4/3}
+.lv2 .vcard-img img{width:100%;height:100%;object-fit:cover}
+/* fixed two-line title so every card is exactly the same height —
+   without this the scatter positions collide when a name wraps */
+.lv2 .vcard-title{font-size:.84rem;font-weight:700;color:var(--ink-strong);line-height:1.3;
+  height:2.6em;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.lv2 .vcard-vin{font-size:.67rem;color:var(--muted);font-family:ui-monospace,'SF Mono',Menlo,monospace;
+  margin-top:3px;unicode-bidi:isolate}
+.lv2 .vcard-row{display:flex;align-items:center;justify-content:space-between;margin-top:9px;gap:8px}
+.lv2 .vcard-price{font-weight:800;color:var(--ink-strong);font-size:.92rem;font-variant-numeric:tabular-nums}
+.lv2 .pill{font-size:.63rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;
+  padding:.22rem .5rem;border-radius:999px;display:inline-flex;align-items:center;gap:.3rem;white-space:nowrap}
+html[lang="ar"] .lv2 .pill{text-transform:none;letter-spacing:normal;font-size:.68rem}
+.lv2 .pill::before{content:"";width:5px;height:5px;border-radius:50%;background:currentColor;flex:none}
+.lv2 .pill-available{background:hsl(160 62% 38% / .12);color:hsl(160 62% 26%)}
+.lv2 .pill-reserved{background:hsl(38 92% 50% / .18);color:hsl(28 80% 32%)}
+.lv2 .pill-reserved::before{border-radius:1px;transform:rotate(45deg)}
+.lv2 .pill-sold{background:hsl(220 10% 45% / .13);color:hsl(220 10% 33%)}
+.lv2 .pill-sold::before{border-radius:1px}
+.lv2 .pill-sourced{background:hsl(236 82% 58% / .12);color:var(--primary-ink)}
+.lv2 .pill-sourced::before{width:6px;height:6px;border-radius:1px;transform:rotate(45deg)}
+.lv2 .floor-note{text-align:center;font-size:.8rem;color:var(--muted);margin-top:26px}
+@media (max-width:960px){
+  .lv2 .floor-stage{min-height:auto;display:block}
+  .lv2 .floor-copy{background:none;padding:0 0 30px;max-width:none}
+  .lv2 .floor-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px}
+  .lv2 .vcard{position:static!important;width:auto;--fx:0!important;--fy:24px!important;--fr:0deg!important;--rr:0deg!important}
+}
+
+/* ===========================================================
+   ROLE BENTO
+   =========================================================== */
+.lv2 .bento{padding:96px 0}
+.lv2 .bento-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:18px}
+.lv2 .bcard{
+  background:var(--surface);border:1px solid var(--line-soft);border-radius:22px;padding:22px;
+  box-shadow:var(--shadow-s);display:flex;flex-direction:column;gap:14px;overflow:hidden;
+  transition:box-shadow .45s var(--ease),transform .45s var(--ease),border-color .3s;
+}
+.lv2 .bcard:hover{box-shadow:var(--shadow-l);transform:translateY(-4px);border-color:hsl(236 60% 82%)}
+.lv2 .bcard.span-2{grid-column:span 2}
+.lv2 .bcard.span-3{grid-column:span 3}
+.lv2 .bcard-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.lv2 .bcard h3{font-size:1.15rem}
+.lv2 .role-tag{font-size:.7rem;font-weight:800;color:var(--primary-ink);background:var(--primary-wash);
+  padding:.25rem .55rem;border-radius:999px;white-space:nowrap}
+.lv2 .bcard p{margin:0;font-size:.87rem;color:var(--muted);line-height:1.55}
+.lv2 .bcard ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
+.lv2 .bcard li{font-size:.82rem;color:var(--muted);display:flex;gap:8px;align-items:flex-start}
+.lv2 .bcard li::before{content:"";width:5px;height:5px;border-radius:50%;background:var(--primary);
+  flex:none;margin-top:.55em}
+.lv2 .mini{background:hsl(40 16% 96%);border:1px solid var(--line-soft);border-radius:14px;
+  padding:14px;margin-top:auto}
+@media (max-width:1000px){
+  .lv2 .bento-grid{grid-template-columns:repeat(2,1fr)}
+  .lv2 .bcard.span-2,.lv2 .bcard.span-3{grid-column:span 1}
+}
+@media (max-width:620px){.lv2 .bento-grid{grid-template-columns:1fr}}
+
+/* mini: bars */
+/* time flows left-to-right in both locales — a time axis must not mirror
+   (RTL.md "Do not mirror"). Only the axis labels below follow the text direction. */
+.lv2 .bars{display:flex;align-items:flex-end;gap:8px;height:84px;direction:ltr}
+.lv2 .bar{flex:1;border-radius:6px 6px 3px 3px;height:0;
+  background:linear-gradient(180deg,hsl(236 82% 66%),hsl(236 82% 54%));
+  transition:height 1s var(--spring);transition-delay:var(--d,0ms)}
+.lv2 .bar.alt{background:linear-gradient(180deg,hsl(38 92% 62%),hsl(38 92% 50%))}
+.lv2 .in .bar{height:var(--h)}
+.lv2 .bars-axis{display:flex;justify-content:space-between;font-size:.62rem;color:var(--muted);margin-top:7px}
+
+/* mini: approval queue */
+.lv2 .queue-row{display:flex;align-items:center;gap:9px;background:var(--surface);
+  border:1px solid var(--line-soft);border-radius:10px;padding:8px 10px;font-size:.74rem;
+  opacity:0;transform:translateX(-14px);
+  transition:opacity .6s var(--ease),transform .7s var(--ease);transition-delay:var(--d,0ms)}
+html[dir="rtl"] .lv2 .queue-row{transform:translateX(14px)}
+.lv2 .in .queue-row{opacity:1;transform:none}
+.lv2 .queue-row + .queue-row{margin-top:7px}
+.lv2 .queue-row strong{color:var(--ink-strong);font-weight:700}
+.lv2 .push-end{margin-inline-start:auto}
+.lv2 .mini-btn{font-size:.66rem;font-weight:800;padding:.22rem .5rem;border-radius:6px;border:0}
+.lv2 .mini-btn.ok{background:hsl(160 62% 38% / .16);color:hsl(160 62% 24%)}
+.lv2 .mini-btn.no{background:hsl(348 83% 47% / .12);color:hsl(348 70% 38%)}
+
+/* mini: pipeline */
+.lv2 .pipe-mini{display:flex;gap:7px;align-items:stretch}
+.lv2 .pipe-col{flex:1;background:var(--surface);border:1px solid var(--line-soft);border-radius:10px;
+  padding:7px;min-height:76px}
+.lv2 .pipe-col b{font-size:.58rem;color:var(--muted);font-weight:700;display:block;margin-bottom:6px;
+  text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lv2 .pipe-chip{height:14px;border-radius:5px;background:hsl(236 82% 58% / .2);margin-bottom:5px;
+  transition:background .5s,opacity .5s}
+.lv2 .pipe-chip.hot{background:hsl(236 82% 58% / .65)}
+
+/* mini: reception log */
+.lv2 .log-line{display:flex;gap:9px;align-items:center;font-size:.74rem;padding:6px 0;
+  border-bottom:1px dashed var(--line)}
+.lv2 .log-line:last-child{border-bottom:0}
+.lv2 .log-time{font-size:.64rem;color:var(--muted);font-variant-numeric:tabular-nums;min-width:42px;
+  unicode-bidi:isolate}
+.lv2 .avatar-dot{width:23px;height:23px;border-radius:50%;display:grid;place-items:center;
+  font-size:.6rem;font-weight:800;color:#fff;flex:none}
+
+/* mini: journal */
+.lv2 .journal{width:100%;border-collapse:collapse;font-size:.74rem}
+.lv2 .journal td{padding:5px 4px;border-bottom:1px solid var(--line-soft)}
+.lv2 .journal th{padding:0 4px 6px;font-size:.62rem;font-weight:800;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid var(--line)}
+html[lang="ar"] .lv2 .journal th{text-transform:none;letter-spacing:normal;font-size:.68rem}
+.lv2 .journal th:first-child{text-align:start}
+.lv2 .journal th.num{text-align:end}
+.lv2 .journal .num{text-align:end;font-variant-numeric:tabular-nums;font-weight:700;color:var(--ink-strong)}
+.lv2 .journal tr:last-child td{border-bottom:0}
+.lv2 .balanced{margin-top:10px;display:inline-flex;align-items:center;gap:6px;font-size:.7rem;
+  font-weight:800;color:hsl(160 62% 24%);background:hsl(160 62% 38% / .13);border-radius:999px;
+  padding:.28rem .6rem;opacity:0;transform:scale(.8);
+  transition:opacity .5s var(--ease),transform .6s var(--spring);transition-delay:1.15s}
+.lv2 .in .balanced{opacity:1;transform:none}
+
+/* ===========================================================
+   DEAL FLOW — scroll driven
+   =========================================================== */
+.lv2 .flow{padding:96px 0 104px;
+  background:linear-gradient(180deg,transparent,hsl(236 40% 96%) 18%,hsl(236 40% 96%) 82%,transparent)}
+.lv2 .flow-track{position:relative;margin-top:52px}
+.lv2 .flow-rail{position:absolute;inset-inline-start:50%;top:0;bottom:0;width:2px;
+  background:hsl(236 30% 87%);transform:translateX(-50%)}
+.lv2 .flow-rail i{position:absolute;inset-inline-start:0;top:0;width:100%;display:block;
+  height:calc(var(--p,0) * 100%);background:var(--primary);
+  box-shadow:0 0 14px hsl(236 82% 58% / .5)}
+.lv2 .flow-step{position:relative;display:grid;grid-template-columns:1fr 78px 1fr;align-items:center;padding:24px 0}
+.lv2 .flow-card{background:var(--surface);border:1px solid var(--line-soft);border-radius:20px;padding:22px;
+  box-shadow:var(--shadow-s);max-width:412px;opacity:0;transform:translateY(24px) scale(.97);
+  transition:opacity .7s var(--ease),transform .8s var(--spring),box-shadow .5s}
+.lv2 .flow-step.on .flow-card{opacity:1;transform:none;box-shadow:var(--shadow-m)}
+/* explicit columns — never rely on source order for placement */
+.lv2 .flow-step:nth-child(odd) .flow-card{grid-column:1;justify-self:end}
+.lv2 .flow-step:nth-child(even) .flow-card{grid-column:3;justify-self:start}
+.lv2 .flow-dot{grid-column:2;justify-self:center;width:40px;height:40px;border-radius:50%;
+  background:var(--surface);border:2px solid hsl(236 30% 87%);display:grid;place-items:center;
+  font-weight:800;font-size:.85rem;color:var(--muted);z-index:2;font-variant-numeric:tabular-nums;
+  transition:border-color .5s,color .5s,background .5s,transform .6s var(--spring)}
+.lv2 .flow-step.on .flow-dot{border-color:var(--primary);background:var(--primary);color:#fff;transform:scale(1.12)}
+.lv2 .flow-card h3{font-size:1.2rem;margin-bottom:8px}
+.lv2 .flow-card p{margin:10px 0 0;font-size:.89rem;color:var(--muted)}
+.lv2 .flow-status{font-size:.7rem;font-weight:800;color:var(--primary-ink);background:var(--primary-wash);
+  border-radius:999px;padding:.25rem .6rem;display:inline-block}
+@media (max-width:860px){
+  .lv2 .flow-step{grid-template-columns:44px 1fr;gap:14px;padding:14px 0}
+  .lv2 .flow-rail{inset-inline-start:21px;transform:none}
+  .lv2 .flow-dot{grid-column:1;justify-self:start}
+  .lv2 .flow-step .flow-card,.lv2 .flow-step:nth-child(even) .flow-card,.lv2 .flow-step:nth-child(odd) .flow-card{
+    grid-column:2;justify-self:stretch;max-width:none}
+}
+
+/* ===========================================================
+   CALCULATOR
+   =========================================================== */
+.lv2 .calc{padding:96px 0}
+.lv2 .calc-grid{display:grid;grid-template-columns:1.05fr .95fr;gap:24px;align-items:stretch}
+.lv2 .panel{background:var(--surface);border:1px solid var(--line-soft);border-radius:24px;padding:28px;
+  box-shadow:var(--shadow-m)}
+.lv2 .panel-dark{background:linear-gradient(165deg,hsl(224 40% 17%),hsl(224 46% 10%));
+  border-color:transparent;color:hsl(220 20% 86%);display:flex;flex-direction:column;justify-content:center}
+.lv2 .panel-dark h3{color:#fff;font-size:.95rem;font-weight:650;opacity:.72}
+.lv2 .field{margin-bottom:22px}
+.lv2 .field:last-of-type{margin-bottom:8px}
+.lv2 .field-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:9px;gap:10px}
+.lv2 .field label{font-size:.85rem;font-weight:650;color:var(--ink-strong)}
+.lv2 .field output{font-size:.95rem;font-weight:800;color:var(--primary-ink);font-variant-numeric:tabular-nums;
+  unicode-bidi:isolate}
+.lv2 input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:6px;border-radius:999px;
+  background:linear-gradient(90deg,var(--primary) var(--pct,50%),hsl(40 14% 88%) var(--pct,50%));outline:none}
+html[dir="rtl"] .lv2 input[type=range]{
+  background:linear-gradient(270deg,var(--primary) var(--pct,50%),hsl(40 14% 88%) var(--pct,50%));direction:rtl}
+.lv2 input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;
+  background:#fff;border:2px solid var(--primary);box-shadow:0 2px 8px hsl(236 82% 58% / .4);cursor:grab;
+  transition:transform .2s var(--spring)}
+.lv2 input[type=range]::-webkit-slider-thumb:active{transform:scale(1.18);cursor:grabbing}
+.lv2 input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:#fff;
+  border:2px solid var(--primary);cursor:grab}
+.lv2 .big{font-size:clamp(2.3rem,4.6vw,3.2rem);font-weight:850;letter-spacing:-.03em;line-height:1;
+  font-variant-numeric:tabular-nums;color:#fff;margin-top:6px;unicode-bidi:isolate}
+.lv2 .big small{font-size:1rem;font-weight:650;opacity:.65;margin-inline-start:.45rem;letter-spacing:0}
+.lv2 .breakdown{margin-top:24px;border-top:1px solid hsl(220 20% 100% / .15);padding-top:16px}
+.lv2 .breakdown div{display:flex;justify-content:space-between;padding:7px 0;font-size:.87rem;gap:16px}
+.lv2 .breakdown span:last-child{font-weight:700;color:#fff;font-variant-numeric:tabular-nums;unicode-bidi:isolate}
+@media (max-width:900px){.lv2 .calc-grid{grid-template-columns:1fr}}
+
+/* ===========================================================
+   ACCOUNTING
+   =========================================================== */
+.lv2 .acct{padding:96px 0}
+.lv2 .acct-grid{display:grid;grid-template-columns:1fr 1fr;gap:44px;align-items:center}
+.lv2 .post-demo{background:var(--surface);border:1px solid var(--line-soft);border-radius:24px;padding:22px;
+  box-shadow:var(--shadow-m)}
+.lv2 .post-src{display:flex;align-items:center;gap:12px;background:hsl(40 16% 96%);border-radius:14px;padding:12px 14px}
+.lv2 .post-src img{width:64px;border-radius:8px}
+.lv2 .post-arrow{display:grid;place-items:center;padding:12px 0;color:var(--muted)}
+.lv2 .post-arrow svg{width:20px;height:20px;animation:lv2-drop 2.6s ease-in-out infinite;stroke:currentColor;
+  fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+@keyframes lv2-drop{0%,100%{transform:translateY(0);opacity:.45}50%{transform:translateY(5px);opacity:1}}
+.lv2 .feature-list{display:grid;gap:16px}
+.lv2 .fitem{display:flex;gap:14px;align-items:flex-start}
+.lv2 .ficon{width:40px;height:40px;border-radius:12px;background:var(--primary-wash);display:grid;
+  place-items:center;flex:none}
+.lv2 .ficon svg{width:20px;height:20px;stroke:var(--primary);fill:none;stroke-width:1.8;
+  stroke-linecap:round;stroke-linejoin:round}
+.lv2 .fitem h3{font-size:.98rem;margin-bottom:3px}
+.lv2 .fitem p{margin:0;font-size:.85rem;color:var(--muted)}
+@media (max-width:900px){.lv2 .acct-grid{grid-template-columns:1fr;gap:32px}}
+
+/* ===========================================================
+   GROW / integrations carousel
+   =========================================================== */
+.lv2 .integr{padding:92px 0 104px;overflow:hidden}
+.lv2 .carousel{position:relative;height:210px;display:grid;place-items:center}
+.lv2 .slot{position:absolute;width:130px;height:130px;border-radius:28px;background:var(--surface);
+  border:1px solid var(--line-soft);box-shadow:var(--shadow-m);display:grid;place-items:center;
+  transition:transform .85s var(--ease),opacity .85s var(--ease),box-shadow .85s var(--ease)}
+.lv2 .slot svg{width:56px;height:56px}
+.lv2 .slot[data-pos="-2"]{transform:translateX(-292px) rotate(-13deg) scale(.72);opacity:.32}
+.lv2 .slot[data-pos="-1"]{transform:translateX(-158px) rotate(-7deg) scale(.86);opacity:.7}
+.lv2 .slot[data-pos="0"]{transform:translateX(0) rotate(0deg) scale(1.12);opacity:1;box-shadow:var(--shadow-l)}
+.lv2 .slot[data-pos="1"]{transform:translateX(158px) rotate(7deg) scale(.86);opacity:.7}
+.lv2 .slot[data-pos="2"]{transform:translateX(292px) rotate(13deg) scale(.72);opacity:.32}
+.lv2 .slot[data-pos="hide"]{transform:scale(.5);opacity:0;pointer-events:none}
+html[dir="rtl"] .lv2 .slot[data-pos="-2"]{transform:translateX(292px) rotate(13deg) scale(.72)}
+html[dir="rtl"] .lv2 .slot[data-pos="-1"]{transform:translateX(158px) rotate(7deg) scale(.86)}
+html[dir="rtl"] .lv2 .slot[data-pos="1"]{transform:translateX(-158px) rotate(-7deg) scale(.86)}
+html[dir="rtl"] .lv2 .slot[data-pos="2"]{transform:translateX(-292px) rotate(-13deg) scale(.72)}
+.lv2 .carousel-caption{text-align:center;margin-top:22px;min-height:56px}
+.lv2 .carousel-caption b{display:block;font-size:1.15rem;color:var(--ink-strong);font-weight:750}
+.lv2 .carousel-caption span{font-size:.88rem;color:var(--muted)}
+.lv2 .carousel-caption b,.lv2 .carousel-caption span{transition:opacity .3s,transform .3s}
+.lv2 .carousel-caption.swap b,.lv2 .carousel-caption.swap span{opacity:0;transform:translateY(6px)}
+@media (max-width:780px){
+  .lv2 .slot{width:100px;height:100px;border-radius:22px}
+  .lv2 .slot svg{width:44px;height:44px}
+  .lv2 .slot[data-pos="-2"],.lv2 .slot[data-pos="2"]{opacity:0}
+  .lv2 .slot[data-pos="-1"]{transform:translateX(-116px) rotate(-8deg) scale(.8)}
+  .lv2 .slot[data-pos="1"]{transform:translateX(116px) rotate(8deg) scale(.8)}
+  html[dir="rtl"] .lv2 .slot[data-pos="-1"]{transform:translateX(116px) rotate(8deg) scale(.8)}
+  html[dir="rtl"] .lv2 .slot[data-pos="1"]{transform:translateX(-116px) rotate(-8deg) scale(.8)}
+}
+
+/* ===========================================================
+   VOICES (placeholder testimonials)
+   =========================================================== */
+.lv2 .voices{padding:92px 0 100px;overflow:hidden}
+.lv2 .voice-stage{position:relative;height:340px;display:grid;place-items:center}
+.lv2 .voice{position:absolute;width:min(400px,86vw);background:var(--surface);border:1px solid var(--line-soft);
+  border-radius:22px;padding:26px;box-shadow:var(--shadow-m);text-align:center;
+  transition:transform .8s var(--ease),opacity .8s var(--ease)}
+.lv2 .voice[data-pos="0"]{transform:none;opacity:1;z-index:3;box-shadow:var(--shadow-l)}
+.lv2 .voice[data-pos="-1"]{transform:translateX(-52%) rotate(-8deg) scale(.88);opacity:.45;z-index:1}
+.lv2 .voice[data-pos="1"]{transform:translateX(52%) rotate(8deg) scale(.88);opacity:.45;z-index:1}
+.lv2 .voice[data-pos="hide"]{transform:scale(.7);opacity:0}
+html[dir="rtl"] .lv2 .voice[data-pos="-1"]{transform:translateX(52%) rotate(8deg) scale(.88)}
+html[dir="rtl"] .lv2 .voice[data-pos="1"]{transform:translateX(-52%) rotate(-8deg) scale(.88)}
+/* No portraits by design — a generated face must not be attached to a real
+   person's name. The quote mark is the card's visual anchor instead. */
+.lv2 .voice-mark{
+  font-family:Georgia,'Times New Roman',serif;font-size:3.4rem;line-height:.6;
+  color:var(--primary);opacity:.28;height:1.5rem;margin-bottom:.35rem;user-select:none;
+}
+.lv2 .voice p{margin:0 0 14px;font-size:1rem;color:var(--ink-strong);line-height:1.6;font-weight:450}
+.lv2 .voice .stars{color:var(--amber);letter-spacing:.14em;margin:0 0 10px;font-size:.85rem}
+.lv2 .voice .who{font-weight:750;color:var(--ink-strong)}
+.lv2 .voice .role{font-size:.82rem;color:var(--muted)}
+.lv2 .voice-nav{display:flex;gap:10px;justify-content:center;margin-top:20px}
+.lv2 .vnav{width:40px;height:40px;border-radius:50%;background:var(--surface);border:1px solid var(--line);
+  display:grid;place-items:center;box-shadow:var(--shadow-s);
+  transition:transform .3s var(--spring),border-color .2s}
+.lv2 .vnav:hover{transform:scale(1.08);border-color:var(--primary)}
+.lv2 .vnav svg{width:16px;height:16px;stroke:var(--ink-strong);fill:none;stroke-width:2.2;
+  stroke-linecap:round;stroke-linejoin:round}
+html[dir="rtl"] .lv2 .vnav svg{transform:scaleX(-1)}
+.lv2 .sample-note{text-align:center;font-size:.72rem;color:var(--muted);margin-top:18px;opacity:.9}
+
+/* ===========================================================
+   CTA band + PRICING + FAQ
+   =========================================================== */
+.lv2 .band{padding:0 0 96px}
+.lv2 .band-inner{position:relative;border-radius:26px;overflow:hidden;min-height:340px;display:grid;
+  align-items:center;box-shadow:var(--shadow-l)}
+.lv2 .band-inner img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.lv2 .band-veil{position:absolute;inset:0;
+  background:linear-gradient(100deg,hsl(224 46% 10% / .88) 34%,hsl(224 46% 10% / .30))}
+html[dir="rtl"] .lv2 .band-veil{background:linear-gradient(260deg,hsl(224 46% 10% / .88) 34%,hsl(224 46% 10% / .30))}
+.lv2 .band-copy{position:relative;z-index:2;padding:46px 40px;max-width:36rem;color:hsl(220 20% 88%)}
+.lv2 .band-copy h2{color:#fff;font-size:clamp(1.7rem,3.2vw,2.5rem)}
+.lv2 .band-copy p{margin:14px 0 24px;font-size:1rem}
+@media (max-width:640px){.lv2 .band-copy{padding:32px 24px}}
+
+.lv2 .pricing{padding:0 0 88px}
+.lv2 .toggle{display:inline-flex;background:hsl(40 16% 93%);border-radius:999px;padding:4px;
+  border:1px solid var(--line-soft)}
+.lv2 .toggle button{border:0;background:transparent;padding:.5rem 1.1rem;border-radius:999px;font-size:.85rem;
+  font-weight:700;color:var(--muted);transition:background .3s,color .3s,box-shadow .3s}
+.lv2 .toggle button.on{background:var(--surface);color:var(--ink-strong);box-shadow:var(--shadow-s)}
+.lv2 .plan{max-width:450px;margin:34px auto 0;background:var(--surface);border:1px solid var(--line-soft);
+  border-radius:26px;padding:34px;box-shadow:var(--shadow-l);text-align:center;position:relative}
+.lv2 .plan-badge{position:absolute;top:-12px;inset-inline-start:50%;transform:translateX(-50%);
+  background:var(--primary);color:#fff;font-size:.7rem;font-weight:800;border-radius:999px;padding:.3rem .8rem;
+  white-space:nowrap}
+html[dir="rtl"] .lv2 .plan-badge{transform:translateX(50%)}
+.lv2 .plan .amount{font-size:3.2rem;font-weight:850;color:var(--ink-strong);letter-spacing:-.03em;
+  font-variant-numeric:tabular-nums;line-height:1;margin:12px 0 4px;unicode-bidi:isolate}
+.lv2 .plan .per{font-size:.85rem;color:var(--muted)}
+.lv2 .plan ul{list-style:none;padding:0;margin:24px 0;text-align:start;display:grid;gap:9px}
+.lv2 .plan li{font-size:.87rem;display:flex;gap:9px;color:var(--ink)}
+.lv2 .plan li svg{width:17px;height:17px;stroke:var(--green);fill:none;stroke-width:2.6;flex:none;margin-top:.3em}
+
+.lv2 .faq{padding:0 0 104px;max-width:820px;margin-inline:auto}
+.lv2 .q{border-bottom:1px solid var(--line)}
+.lv2 .q > button{width:100%;background:none;border:0;text-align:start;padding:20px 0;display:flex;gap:16px;
+  align-items:center;justify-content:space-between;font-size:1rem;font-weight:650;color:var(--ink-strong)}
+.lv2 .plus{width:22px;height:22px;flex:none;position:relative;transition:transform .4s var(--ease)}
+.lv2 .plus::before,.lv2 .plus::after{content:"";position:absolute;background:var(--primary);border-radius:2px}
+.lv2 .plus::before{inset-inline-start:0;top:10px;width:22px;height:2px}
+.lv2 .plus::after{inset-inline-start:10px;top:0;width:2px;height:22px;transition:opacity .3s}
+.lv2 .q.open .plus{transform:rotate(180deg)}
+.lv2 .q.open .plus::after{opacity:0}
+.lv2 .q .a{max-height:0;overflow:hidden;transition:max-height .5s var(--ease)}
+.lv2 .q.open .a{max-height:400px}
+.lv2 .q .a p{margin:0 0 20px;font-size:.91rem;color:var(--muted);max-width:66ch}
+
+/* ===========================================================
+   FOOTER
+   =========================================================== */
+.lv2 .foot{background:var(--surface);border-top:1px solid var(--line-soft);padding-top:66px;overflow:hidden}
+.lv2 .foot-grid{display:grid;grid-template-columns:1.7fr repeat(3,1fr);gap:30px;padding-bottom:52px}
+.lv2 .foot-grid h4{font-size:.78rem;font-weight:800;color:var(--ink-strong);margin:0 0 12px;
+  letter-spacing:.07em;text-transform:uppercase}
+html[lang="ar"] .lv2 .foot-grid h4{letter-spacing:normal;text-transform:none;font-size:.85rem}
+.lv2 .foot-grid a,.lv2 .foot-grid li,.lv2 .foot-grid p{font-size:.87rem;color:var(--muted);line-height:1.95}
+.lv2 .foot-grid ul{list-style:none;margin:0;padding:0}
+.lv2 .foot-grid a:hover{color:var(--primary-ink)}
+.lv2 .foot-bottom{border-top:1px solid var(--line-soft);padding:20px 0;display:flex;
+  justify-content:space-between;gap:14px;flex-wrap:wrap;font-size:.8rem;color:var(--muted)}
+@media (max-width:820px){.lv2 .foot-grid{grid-template-columns:1fr 1fr}}
+
+
+
+/* invisible anchor aliases so the previous page's #features / #analytics /
+   #finance / #roles links still land on the right section */
+.lv2 .anchor{display:block;height:0;width:0;overflow:hidden}
+
+/* small utility classes that replaced the prototype's inline styles */
+.lv2 .post-src-title{font-weight:750;color:var(--ink-strong);font-size:.9rem}
+.lv2 .post-src-amount{font-size:.78rem;color:var(--muted);font-variant-numeric:tabular-nums;unicode-bidi:isolate}
+.lv2 .post-mini{margin:0}
+.lv2 .toggle-wrap{margin-top:22px}
+.lv2 .plan-name{font-size:1.15rem}
+.lv2 .plan-cta{width:100%;justify-content:center}
+.lv2 .brand-foot{margin-bottom:12px}
+.lv2 .foot-bottom a:hover{color:var(--primary-ink)}
+
+/* ---------- reduced-motion notice ----------
+   A system "reduce motion" setting silently disables everything on this page.
+   Say so, and offer an override, rather than looking broken. */
+.lv2 .rm-note{
+  position:fixed;inset-block-end:14px;inset-inline-end:14px;z-index:90;display:flex;
+  align-items:center;gap:10px;background:var(--ink-strong);color:#fff;font-size:.74rem;
+  font-weight:600;border-radius:999px;padding:.5rem .6rem .5rem 1rem;box-shadow:var(--shadow-l);
+  max-width:min(420px,calc(100vw - 28px));
+}
+
+.lv2 .rm-note button{
+  background:var(--primary);color:#fff;border:0;border-radius:999px;
+  padding:.4rem .8rem;font-size:.72rem;font-weight:750;white-space:nowrap;
+}
