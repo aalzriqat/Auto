@@ -705,6 +705,62 @@ export const suggestQuotationForApplication = query({
         reason: "NOT_AUTHORIZED" as const,
       };
     }
+    /**
+     * A SIMULATION IS A REQUEST THIS CALLER MAY NOT MAKE — said out loud
+     * (SCRUM-117, owner-proxy ruling 2026-09-14 08:31, superseding the 13:48
+     * instruction to disregard these arguments silently).
+     *
+     * What stood here honored the five what-if controls for a `view:finance`
+     * caller and quietly dropped them for everyone else, answering
+     * `available: true` with the canonical figure and no indication that the
+     * inputs had been ignored. That was my instruction at the time and it did
+     * not leak — the figure returned was the deal's own canonical quotation,
+     * and no product screen sends an override — but it made one request mean
+     * two different calculations depending on who asked, with nothing in the
+     * response to tell them apart. An ambiguous calculation contract is a
+     * defect even when it is not a disclosure.
+     *
+     * So an unauthorized simulation is now REFUSED rather than reinterpreted.
+     *
+     * PRESENCE, not truthiness. `value !== undefined` is the test, so
+     * `quotationBufferMinor: 0` and a value equal to the one already stored are
+     * refused exactly like any other. Truthiness would have let `0` through —
+     * and `0` is half of the reproduced attack, which pinned expenses and
+     * buffer to zero.
+     *
+     * ALL FIVE, `ltvPercent` included. Four are monetary and it is easy to
+     * enumerate only those; the rate is the sharpest of them, because at 100%
+     * the composition collapses in a single step.
+     *
+     * Decided from the authenticated role and the arguments alone, BEFORE the
+     * ownership read, the rule snapshot and the solver — so a refused request
+     * reads nothing about the deal and can carry nothing out of it. The
+     * currency comes from the ORG, which this caller is already authenticated
+     * against, and is the same field the `NOT_AUTHORIZED` answer above
+     * carries.
+     *
+     * An ANSWER, not a throw, for the reason documented above: a `ConvexError`
+     * out of a query reaches `useQuery` during render and takes the whole deal
+     * screen down.
+     */
+    const economicsVisible = mayReadFinanceEconomics(auth.role);
+    const suppliedAnyOverride = [
+      args.targetSellingAmountMinor,
+      args.estimatedDealerBorneExpensesMinor,
+      args.quotationBufferMinor,
+      args.customerFirstPaymentMinor,
+      args.ltvPercent,
+    ].some((value) => value !== undefined);
+    if (!economicsVisible && suppliedAnyOverride) {
+      return {
+        appliedLtvPercent: undefined,
+        currency: await getOrgCurrency(ctx, args.orgId),
+        ruleVersion: undefined,
+        available: false as const,
+        reason: "OVERRIDES_REQUIRE_FINANCE" as const,
+      };
+    }
+
     for (const [value, label] of [
       [args.targetSellingAmountMinor, "Target selling amount"],
       [args.estimatedDealerBorneExpensesMinor, "Estimated dealer-borne expenses"],
@@ -766,36 +822,33 @@ export const suggestQuotationForApplication = query({
      * beside a screen it can take down.
      */
     /**
-     * THE INPUT BOUNDARY (SCRUM-117, owner-proxy ruling 2026-09-13 13:48).
+     * ONE BASIS, FOR EVERY READER.
      *
-     * Gating the RESPONSE was not enough: the caller also controls the
-     * ARGUMENTS. Every one of the five what-if controls falls back to a stored
-     * field when omitted, so a caller who may not read those fields could pin
-     * four of them to chosen values and read the fifth out of the answer. With
-     * `estimatedDealerBorneExpensesMinor: 0`, `quotationBufferMinor: 0` and
-     * either `ltvPercent: 100` or a very large `customerFirstPaymentMinor`, the
-     * dealer contribution collapses to zero and the returned quotation IS
-     * `targetNetProceedsMinor` exactly — a FINANCE-classified field. Reproduced
-     * against `10791edb7` for the default SALES template, with a control
+     * `args` unconditionally, which is the point: anyone who reaches this line
+     * either holds `view:finance` — and keeps the full simulator, since nothing
+     * is protected by refusing a what-if to someone who may read every operand
+     * anyway — or supplied no override at all, because the refusal above turned
+     * them back. The role-conditioned substitution that used to sit here is
+     * gone, so the same application state and the same request can no longer
+     * produce two different numerical bases.
+     *
+     * The five controls still fall back to stored fields when omitted, which is
+     * exactly why the refusal above exists rather than a filter here: a caller
+     * who may not read those fields could otherwise pin four of them and read
+     * the fifth out of the answer. Reproduced against `10791edb7` for the
+     * default SALES template — `estimatedDealerBorneExpensesMinor: 0`,
+     * `quotationBufferMinor: 0` and either `ltvPercent: 100` or a very large
+     * `customerFirstPaymentMinor` collapses the dealer contribution to zero and
+     * the returned quotation IS `targetNetProceedsMinor` — with a control
      * showing the ordinary argument-less call returns a different figure.
      *
-     * So a caller without VIEW_FINANCE gets the CANONICAL quotation for this
-     * deal and nothing else: solved from the stored application and its own
-     * rule snapshot, with every supplied control DISREGARDED. Not sanitized,
-     * not partially honored — disregarded, so no supplied value can move the
-     * calculation, the availability, or a rule diagnostic.
-     *
-     * ⚠️ ALL FIVE, and `ltvPercent` is the one to watch: four of them are
-     * monetary and it is easy to enumerate only those. It is the sharpest of
-     * them — at 100% the composition collapses in one step.
-     *
-     * A VIEW_FINANCE caller keeps the full simulator: it may read every operand
-     * anyway, so nothing is protected by refusing it a what-if.
+     * `economicsVisible` still governs what the RESPONSE carries: the rate, the
+     * rule version, the composition and the projected proceeds are accounting
+     * economics and stay behind `view:finance` either way.
      */
-    const economicsVisible = mayReadFinanceEconomics(auth.role);
     let solved: Awaited<ReturnType<typeof solveQuotationForApplication>>;
     try {
-      solved = await solveQuotationForApplication(ctx, app, economicsVisible ? args : {});
+      solved = await solveQuotationForApplication(ctx, app, args);
     } catch (error) {
       if (!(error instanceof ConvexError)) throw error;
       /**

@@ -384,6 +384,17 @@ async function seedSentinelDeal(suffix: string): Promise<Seeded> {
  * demanding key-absence there would force the product to change its shape to
  * satisfy a test. A non-null value under a gated name is the actual defect.
  */
+/**
+ * JSON with its keys sorted, so a whole-answer comparison asserts the SHAPE and
+ * the VALUES rather than the order a serializer happened to emit them in.
+ */
+const stable = (value: unknown): string =>
+  JSON.stringify(value, (_key, nested) =>
+    nested && typeof nested === "object" && !Array.isArray(nested)
+      ? Object.fromEntries(Object.entries(nested).sort(([a], [b]) => a.localeCompare(b)))
+      : nested
+  );
+
 const valuesUnder = (value: unknown, field: string, into: unknown[] = []): unknown[] => {
   if (Array.isArray(value)) {
     for (const item of value) valuesUnder(item, field, into);
@@ -947,40 +958,123 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
           customerFirstPaymentMinor: 999_999_999,
         },
       ],
+      /**
+       * The two shapes the ruling calls out by name, because both would evade a
+       * guard written the obvious way.
+       *
+       * ZERO: `value !== undefined` is the test, not truthiness. A truthy check
+       * would let `0` through - and `0` is half of the reproduced attack, which
+       * pinned expenses and buffer to zero to collapse the contribution.
+       *
+       * EQUAL-TO-STORED: a guard that first compared the supplied value against
+       * the stored one would accept these as harmless no-ops, and the
+       * accept/refuse outcome would itself be a search oracle over the
+       * FINANCE-classified field being compared. Same mistake the LTV write
+       * guard made two rounds ago, in the read direction.
+       */
+      ["a ZERO override - truthiness would let this through", { quotationBufferMinor: 0 }],
+      [
+        "every override EQUAL to what the deal already stores",
+        {
+          targetSellingAmountMinor: SENTINEL.targetSelling,
+          ltvPercent: SENTINEL.ltvPercent,
+        },
+      ],
     ];
 
+    /**
+     * PREMISE CHANGED by the owner-proxy ruling of 2026-09-14 08:31, which
+     * narrowly supersedes the 13:48 instruction this block was written to.
+     *
+     * These cases used to assert that an override-bearing request from a
+     * non-finance caller returned EXACTLY the no-override answer - the
+     * arguments silently disregarded. That did not leak: the figure returned
+     * was the deal's own canonical quotation. But it made one request mean two
+     * different calculations depending on who asked, with nothing in the
+     * response to tell them apart, and an ambiguous calculation contract is a
+     * defect even when it is not a disclosure.
+     *
+     * The request is now REFUSED. The security property the old assertion
+     * protected is strictly stronger under the new one - a refused request is
+     * computed from nothing at all - so the sentinel sweep is kept rather than
+     * dropped, now over the refusal payload.
+     */
     test.each([
       ["default SALES", () => templateFor("SALES")],
       ["default MANAGER (no view:finance)", () => templateFor("MANAGER")],
     ])(
-      "%s: every probe returns EXACTLY the no-override answer, not merely a sentinel-free one",
+      "%s: every override-bearing request is REFUSED, and carries no calculation",
       async (label, permissions) => {
         const seeded = await quotableDeal(`probe${label.replace(/\W/g, "")}`);
         const caller = seeded.asRole(permissions());
 
+        /**
+         * THE POSITIVE CONTROL, and the anti-vacuity guard: the canonical
+         * request still works for this very caller and still answers with a
+         * real figure that is NOT the hidden operand. Without it, "every
+         * override is refused" would be satisfied by a query that refused
+         * everyone - which would be a broken screen, not a boundary.
+         */
         const canonical = await ask(caller, seeded);
-        // ANTI-VACUITY, and the CONTROL that makes every probe meaningful: the
-        // allowed answer exists, and it is NOT the hidden operand. Without
-        // this, "the probe returned the canonical answer" could be satisfied by
-        // the canonical answer itself being the leak.
         expect(canonical.available).toBe(true);
         expect(typeof canonical.submittedQuotationMinor).toBe("number");
         expect(canonical.submittedQuotationMinor).not.toBe(SENTINEL.targetNetProceeds);
 
         for (const [name, overrides] of PROBES) {
           const probed = await ask(caller, seeded, overrides);
-          // WHOLE-ANSWER EQUALITY. Asserting only "does not contain the
-          // sentinel" would pass a fix that merely blanked one field while the
-          // operand still moved the figure — and would not notice the caller
-          // steering availability or a rule diagnostic either.
-          expect(`${name}: ${JSON.stringify(probed)}`).toBe(
-            `${name}: ${JSON.stringify(canonical)}`
+          // The whole answer, compared as one string: availability, reason and
+          // the absence of every economic field at once. A per-field assertion
+          // would not notice a calculated amount arriving beside the refusal.
+          // Key ORDER is a serialization detail, so both sides are normalized;
+          // the SET of keys and their values is the contract being asserted.
+          expect(`${name}: ${stable(probed)}`).toBe(
+            `${name}: ${stable({
+              currency: canonical.currency,
+              available: false,
+              reason: "OVERRIDES_REQUIRE_FINANCE",
+            })}`
           );
+          // Kept from the old premise: no operand may appear in the payload by
+          // any route, refusal included.
           expect(`${name} leaks the operand: ${JSON.stringify(probed).includes(String(SENTINEL.targetNetProceeds))}`)
             .toBe(`${name} leaks the operand: false`);
         }
       }
     );
+
+    /**
+     * The refusal is decided from the ROLE and the ARGUMENTS, before the deal
+     * is read at all - so it cannot depend on the deal, and a deal that does
+     * not belong to this caller answers the same way.
+     *
+     * This is the read-side twin of the ordering property asserted for the
+     * quotation writer, and it exists for the same reason: the property rots
+     * the moment someone moves a "cheap" row read above the check.
+     */
+    test("an override-bearing request is refused identically for a deal in another tenant", async () => {
+      const seeded = await quotableDeal("refuseOrdering");
+      const caller = seeded.asRole(templateFor("SALES"));
+
+      const own = await ask(caller, seeded, { ltvPercent: 100 });
+
+      const foreignId = await seeded.t.run(async (ctx) => {
+        const otherOrgId = await ctx.db.insert("organizations", {
+          name: "Another dealership",
+          createdAt: Date.now(),
+        });
+        const app = (await ctx.db.get(seeded.applicationId))!;
+        const { _id, _creationTime, ...rest } = app;
+        return ctx.db.insert("financeApplications", { ...rest, orgId: otherOrgId });
+      });
+      const foreign = (await caller.query(
+        api.financingEconomics.suggestQuotationForApplication,
+        { orgId: seeded.orgId, applicationId: foreignId, ltvPercent: 100 }
+      )) as Record<string, unknown>;
+
+      expect(own.reason).toBe("OVERRIDES_REQUIRE_FINANCE");
+      // Byte-identical: the answer says nothing about which row was named.
+      expect(`foreign: ${JSON.stringify(foreign)}`).toBe(`foreign: ${JSON.stringify(own)}`);
+    });
 
     test("a deal with no stored target stays unavailable even when the caller supplies one", async () => {
       const seeded = await quotableDeal("noTarget");
@@ -989,9 +1083,25 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
       });
       const caller = seeded.asRole(templateFor("SALES"));
       const supplied = await ask(caller, seeded, { targetSellingAmountMinor: 5_000_000 });
-      // The caller cannot conjure a calculation the deal does not have — which
-      // is also what stops them using the calculator as a general oracle.
-      expect(`${supplied.available} / ${supplied.reason}`).toBe("false / NO_TARGET_RECORDED");
+      /**
+       * PREMISE CHANGED with the 08:31 ruling, and the outcome is now STRONGER.
+       *
+       * This used to answer NO_TARGET_RECORDED: the supplied target was
+       * disregarded and the deal genuinely had none. The refusal now comes
+       * first, before the deal is read at all — so the caller cannot conjure a
+       * calculation the deal does not have, AND learns nothing about whether it
+       * has one.
+       */
+      expect(`${supplied.available} / ${supplied.reason}`).toBe(
+        "false / OVERRIDES_REQUIRE_FINANCE"
+      );
+
+      // The canonical request still reports the real state, which is what the
+      // operator needs and is no longer entangled with the override refusal.
+      const canonical = await ask(caller, seeded);
+      expect(`${canonical.available} / ${canonical.reason}`).toBe(
+        "false / NO_TARGET_RECORDED"
+      );
     });
 
     test("a view:finance caller KEEPS the full simulator — the fix gates disclosure, not capability", async () => {
