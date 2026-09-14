@@ -135,6 +135,22 @@ function isRenderableMoment(value: number | undefined): value is number {
   return typeof value === "number" && isValid(new Date(value));
 }
 
+/**
+ * A stored moment as display text, or a calm dash when it cannot be one.
+ *
+ * The header's "last updated" and the essentials' "opened on" went straight to
+ * `format()`, so the same `NaN` / `Infinity` / out-of-range row that the
+ * timeline was already guarded against would still have lost the whole screen
+ * through either of them. One helper for both, so neither can drift back.
+ * The dash is language-neutral on purpose: it is the absence of a date, not a
+ * status the operator has to act on, and the row it sits in is still readable.
+ */
+const MOMENT_UNAVAILABLE = "—";
+
+function renderMoment(value: number | undefined, pattern: string): string {
+  return isRenderableMoment(value) ? format(value, pattern) : MOMENT_UNAVAILABLE;
+}
+
 type StageState = "COMPLETE" | "CURRENT" | "BLOCKED" | "PENDING" | "STOPPED";
 
 const STAGE_LABEL: Record<string, string> = {
@@ -2111,7 +2127,20 @@ function selectSummaryFacts({
   const unavailableKey = profit.lines.length === 0 ? "ProfitBreakdownUnavailable" : "NotRecorded";
   if (profit.basis === "ACCOUNTING_RESULT") {
     const price = line("SALE_PRICE");
-    const cost = line("VEHICLE_COST") ?? line("SUPPLIER_ENTITLEMENT");
+    // What the server actually emits (`accountingProfit`): SALE_PRICE and
+    // VEHICLE_COST always, SUPPLIER_ENTITLEMENT only on a SOURCED vehicle.
+    // A consigned car has no capitalized cost, so its VEHICLE_COST line is a
+    // real zero AND a SUPPLIER_ENTITLEMENT line sits beside it — and that
+    // entitlement is the figure that explains the margin. `??` on the cost
+    // line never reached it, so every consignment tile read "vehicle cost:
+    // 0". The entitlement is preferred ONLY when the cost is zero and the
+    // entitlement exists; a direct purchase with a zero cost and no
+    // entitlement keeps its zero, because that zero is the fact on record.
+    // Selection only — no figure is summed, netted or derived here.
+    const vehicleCost = line("VEHICLE_COST");
+    const entitlement = line("SUPPLIER_ENTITLEMENT");
+    const cost =
+      vehicleCost && vehicleCost.amountMinor === 0 && entitlement ? entitlement : (vehicleCost ?? entitlement);
     return {
       primary: {
         labelKey: saleLabels.primary,
@@ -2141,28 +2170,72 @@ function selectSummaryFacts({
   };
 }
 
-function MoneyPanel({
-  money,
+/**
+ * The headline figure and its qualifier — the ONE branch this screen is not
+ * allowed to get wrong.
+ *
+ * A financed deal's headline is a MANAGEMENT figure built on a spread that
+ * appears on no invoice: it is `postable: false` and must never be shown
+ * without its qualifier. A cash deal's is an ordinary accounting result that
+ * reconciles to the GL, and stamping an "estimated / never postable" badge on
+ * it would be just as false in the other direction.
+ *
+ * Read off `basis` rather than from the presence of a `classification` field,
+ * so the distinction is one the type system enforces: `AccountingProfit` has
+ * no `classification` to read, and TypeScript refuses the access outside this
+ * branch. That is what makes the two impossible to confuse rather than merely
+ * unlikely to be.
+ */
+function ProfitHeadline({
   profit,
-  parties,
-  showParties,
-  appraisalGapMinor,
-  showAppraisalGap,
-  applicationId,
-  evidence,
-  moneyIn,
-  canSettleSupplier,
-  onSettleSupplier,
+  money,
   t,
 }: Readonly<{
-  money: (minor: number) => string;
   profit: DealMoney["profit"];
-  parties: DealMoney["parties"];
-  /** Whether the party row is shown at all — absent on an owned cash sale. */
-  showParties: boolean;
-  appraisalGapMinor: number | undefined;
-  /** Only where an application exists; a cash deal has no appraisal. */
-  showAppraisalGap: boolean;
+  money: (minor: number) => string;
+  t: (key: string) => string;
+}>) {
+  const isManagementEstimate = profit.available && profit.basis === "MANAGEMENT_ESTIMATE";
+  return (
+    <div className="space-y-1">
+      <p className="text-sm text-muted-foreground">{t("NetDealershipProfit")}</p>
+      {profit.available ? (
+        <>
+          <div className="flex flex-wrap items-baseline gap-3">
+            <p className="text-3xl font-semibold">
+              <Money>{money(profit.amountMinor)}</Money>
+            </p>
+            {/* The qualifier is not decoration. It renders from the same
+                object as the amount, so there is no code path that shows one
+                without the other.
+                A cash deal gets NO badge here — not a green one saying
+                "postable". The absence of a caveat is the normal case, and
+                labelling it would train the eye to skip the badge that
+                actually matters. */}
+            {profit.basis === "MANAGEMENT_ESTIMATE" && (
+              <Badge variant="outline" className="border-amber-500/60 text-amber-700 dark:text-amber-400">
+                {profit.classification === "ACTUAL_UNPOSTABLE"
+                  ? t("ProfitActualUnpostable")
+                  : t("ProfitEstimatedAwaitingSettlement")}
+              </Badge>
+            )}
+          </div>
+          {isManagementEstimate && (
+            <p className="text-xs text-muted-foreground">{t("ManagementFigureNote")}</p>
+          )}
+        </>
+      ) : (
+        <>
+          <p className="text-2xl font-semibold text-muted-foreground">{t("ProfitNotCalculable")}</p>
+          <p className="text-xs text-muted-foreground">{t(PROFIT_BLOCKED_REASON[profit.reason])}</p>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** What `DealSummaryFacts` needs beyond the profit — the served evidence and its formatter. */
+type SummaryEvidence = Readonly<{
   /** The server's own identity of the deal: `null` is a sale, cash or applicationless financed. */
   applicationId: string | null;
   /**
@@ -2175,206 +2248,233 @@ function MoneyPanel({
   evidence: ServedEvidence | undefined;
   /** Spells a served figure at the SERVED scale, or withholds it. */
   moneyIn: (minor: number, currency: ServedEvidence["currency"]) => string | null;
-  canSettleSupplier: boolean;
-  onSettleSupplier: () => void;
+}>;
+
+/**
+ * The two facts of the deal itself. Each figure is served, not derived, and
+ * each label names the line it shows — see `selectSummaryFacts` for the
+ * selection rules, so "approved purchase amount" is never "deal value".
+ */
+function DealSummaryFacts({
+  profit,
+  summary,
+  money,
+  t,
+}: Readonly<{
+  profit: DealMoney["profit"];
+  summary: SummaryEvidence;
+  money: (minor: number) => string;
   t: (key: string) => string;
 }>) {
-  // The ONE branch this screen is not allowed to get wrong.
-  //
-  // A financed deal's headline is a MANAGEMENT figure built on a spread that
-  // appears on no invoice: it is `postable: false` and must never be shown
-  // without its qualifier. A cash deal's is an ordinary accounting result that
-  // reconciles to the GL, and stamping an "estimated / never postable" badge on
-  // it would be just as false in the other direction.
-  //
-  // Read off `basis` rather than from the presence of a `classification` field,
-  // so the distinction is one the type system enforces: `AccountingProfit` has
-  // no `classification` to read, and TypeScript refuses the access outside this
-  // branch. That is what makes the two impossible to confuse rather than merely
-  // unlikely to be.
-  const isManagementEstimate = profit.available && profit.basis === "MANAGEMENT_ESTIMATE";
-
-  // See `selectSummaryFacts` for the selection rules; the labels are the
-  // derivation lines' own, so "approved purchase amount" is never "deal value".
-  const { primary, secondary } = selectSummaryFacts({
-    profit,
-    applicationId,
-    evidence,
-    money,
-    moneyIn,
-  });
-  const partyFactLabel: Record<string, string> = {
-    CUSTOMER: "FactCustomer",
-    FINANCIER: "FactFinancier",
-    SUPPLIER: "FactSupplier",
-  };
-
+  const { primary, secondary } = selectSummaryFacts({ profit, money, ...summary });
   return (
-  <Card>
-    <CardHeader className="pb-3">
-      <CardTitle className="text-base">{t("FinancialSummaryHeading")}</CardTitle>
-    </CardHeader>
-    <CardContent className="space-y-4">
-      <div className="space-y-1">
-        <p className="text-sm text-muted-foreground">{t("NetDealershipProfit")}</p>
-        {profit.available ? (
-          <>
-            <div className="flex flex-wrap items-baseline gap-3">
-              <p className="text-3xl font-semibold">
-                <Money>{money(profit.amountMinor)}</Money>
-              </p>
-              {/* The qualifier is not decoration. It renders from
-                  the same object as the amount, so there is no code
-                  path that shows one without the other.
-                  A cash deal gets NO badge here — not a green one
-                  saying "postable". The absence of a caveat is the
-                  normal case, and labelling it would train the eye to
-                  skip the badge that actually matters. */}
-              {profit.basis === "MANAGEMENT_ESTIMATE" && (
-                <Badge variant="outline" className="border-amber-500/60 text-amber-700 dark:text-amber-400">
-                  {profit.classification === "ACTUAL_UNPOSTABLE"
-                    ? t("ProfitActualUnpostable")
-                    : t("ProfitEstimatedAwaitingSettlement")}
-                </Badge>
-              )}
+    <div className="grid grid-cols-2 gap-2">
+      <MoneyFact label={t(primary.labelKey)} value={primary.value} unavailableKey={primary.unavailableKey} t={t} />
+      <MoneyFact
+        label={t(secondary.labelKey)}
+        value={secondary.value}
+        unavailableKey={secondary.unavailableKey}
+        t={t}
+      />
+    </div>
+  );
+}
+
+const PARTY_FACT_LABEL: Record<string, string> = {
+  CUSTOMER: "FactCustomer",
+  FINANCIER: "FactFinancier",
+  SUPPLIER: "FactSupplier",
+};
+
+/**
+ * One tile per party the server names, with the supplier's settlement action
+ * beside the claim it settles. `onSettleSupplier` is present only when the
+ * SERVER would accept the command from this caller.
+ */
+function DealPartyFacts({
+  parties,
+  onSettleSupplier,
+  money,
+  t,
+}: Readonly<{
+  parties: DealMoney["parties"];
+  onSettleSupplier: (() => void) | undefined;
+  money: (minor: number) => string;
+  t: (key: string) => string;
+}>) {
+  return (
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-2">
+      {parties.map((party) => {
+        const positioned = party.position !== "NOT_INVOLVED" && party.position !== "UNKNOWN";
+        return (
+          <MoneyFact
+            key={party.party}
+            label={t(PARTY_FACT_LABEL[party.party] ?? PARTY_LABEL[party.party] ?? party.party)}
+            value={positioned ? money(party.amountMinor) : null}
+            note={
+              <>
+                <span>{t(POSITION_LABEL[party.position] ?? party.position)}</span>
+                {party.name && (
+                  <>
+                    {" · "}
+                    <bdi>{party.name}</bdi>
+                  </>
+                )}
+                {party.reference && (
+                  <>
+                    {" · "}
+                    <bdi>{party.reference}</bdi>
+                  </>
+                )}
+              </>
+            }
+            action={
+              party.party === "SUPPLIER" && onSettleSupplier ? (
+                <Button size="sm" className="h-9" onClick={onSettleSupplier}>
+                  {t("SettleSupplierAction")}
+                </Button>
+              ) : undefined
+            }
+            t={t}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Only where an APPLICATION exists. `فرق تخمين` is the difference between the
+ * finance company's appraisal and the price — a cash deal has no appraisal, so
+ * "no appraisal gap" would be answering a question nobody asked. The caller
+ * decides presence; this only spells the served figure.
+ */
+function AppraisalGapNote({
+  amountMinor,
+  money,
+  t,
+}: Readonly<{
+  amountMinor: number | undefined;
+  money: (minor: number) => string;
+  t: (key: string) => string;
+}>) {
+  return (
+    <p className="text-xs text-muted-foreground">
+      {t("AppraisalGapLabel")}: {amountMinor ? <Money>{money(amountMinor)}</Money> : t("NoAppraisalGap")}
+    </p>
+  );
+}
+
+/**
+ * The working of the headline figure, collapsed. No disclosure over an empty
+ * working: the tiles already say the breakdown is unavailable.
+ */
+function ProfitBreakdown({
+  profit,
+  money,
+  t,
+}: Readonly<{
+  profit: DealMoney["profit"];
+  money: (minor: number) => string;
+  t: (key: string) => string;
+}>) {
+  if (!profit.available || profit.lines.length === 0) return null;
+  return (
+    <details className="group">
+      <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 text-sm text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+        <ChevronDown className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180" aria-hidden />
+        <span>{t("ProfitBreakdownToggle")}</span>
+      </summary>
+      {/* A working of one figure, kept as a single column — these lines are a
+          SUM, and the order they are read in is part of the meaning. */}
+      <dl className="max-w-xl space-y-1.5 pt-2 text-sm">
+        {profit.lines
+          // A zero on an OPTIONAL line is noise, not information: the
+          // customer-direct amount has no writer yet, so it would read
+          // "0.000" on every deal forever, and the dealer contribution is
+          // zero on any fully funded deal. The lines the mockup always shows
+          // stay, so the derivation never looks like it is hiding a term.
+          // The cash lines are all always-shown: three terms, and a zero
+          // cost on an agent sale is a fact worth stating.
+          .filter(
+            (line) =>
+              line.amountMinor !== 0 ||
+              line.key === "APPROVED_PURCHASE" ||
+              line.key === "SUPPLIER_SETTLEMENT" ||
+              line.key === "ACTUAL_EXPENSES" ||
+              line.key === "SALE_PRICE" ||
+              line.key === "VEHICLE_COST" ||
+              line.key === "SUPPLIER_ENTITLEMENT"
+          )
+          .map((line) => (
+            <div key={line.key} className="flex items-center justify-between gap-4">
+              <dt className="text-muted-foreground">{t(PROFIT_LINE_LABEL[line.key] ?? line.key)}</dt>
+              <dd>
+                <Money>
+                  {line.sign < 0 ? "− " : ""}
+                  {money(line.amountMinor)}
+                </Money>
+              </dd>
             </div>
-            {isManagementEstimate && (
-              <p className="text-xs text-muted-foreground">{t("ManagementFigureNote")}</p>
-            )}
-          </>
-        ) : (
-          <>
-            <p className="text-2xl font-semibold text-muted-foreground">
-              {t("ProfitNotCalculable")}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {t(PROFIT_BLOCKED_REASON[profit.reason])}
-            </p>
-          </>
-        )}
-      </div>
+          ))}
+      </dl>
+    </details>
+  );
+}
 
-      {/* --- the six facts ------------------------------------------------ */}
-      {/* Two on the deal itself, then one per party the server names. Each
-          figure is served, not derived, and each label names the line it
-          shows. */}
-      <div className="grid grid-cols-2 gap-2">
-        <MoneyFact
-          label={t(primary.labelKey)}
-          value={primary.value}
-          unavailableKey={primary.unavailableKey}
-          t={t}
-        />
-        <MoneyFact
-          label={t(secondary.labelKey)}
-          value={secondary.value}
-          unavailableKey={secondary.unavailableKey}
-          t={t}
-        />
-      </div>
-
-      {showParties && (
-        <div className="space-y-2">
-          <h3 className="text-xs font-normal text-muted-foreground">{t("DealPartiesHeading")}</h3>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-2">
-            {parties.map((party) => {
-              const positioned = party.position !== "NOT_INVOLVED" && party.position !== "UNKNOWN";
-              return (
-                <MoneyFact
-                  key={party.party}
-                  label={t(partyFactLabel[party.party] ?? PARTY_LABEL[party.party] ?? party.party)}
-                  value={positioned ? money(party.amountMinor) : null}
-                  note={
-                    <>
-                      <span>{t(POSITION_LABEL[party.position] ?? party.position)}</span>
-                      {party.name && (
-                        <>
-                          {" · "}
-                          <bdi>{party.name}</bdi>
-                        </>
-                      )}
-                      {party.reference && (
-                        <>
-                          {" · "}
-                          <bdi>{party.reference}</bdi>
-                        </>
-                      )}
-                    </>
-                  }
-                  action={
-                    party.party === "SUPPLIER" && canSettleSupplier ? (
-                      <Button size="sm" className="h-9" onClick={onSettleSupplier}>
-                        {t("SettleSupplierAction")}
-                      </Button>
-                    ) : undefined
-                  }
-                  t={t}
-                />
-              );
-            })}
-          </div>
-          {/* Only where an APPLICATION exists. `فرق تخمين` is the difference
-              between the finance company's appraisal and the price — a cash
-              deal has no appraisal, so "no appraisal gap" would be answering
-              a question nobody asked. */}
-          {showAppraisalGap && (
-            <p className="text-xs text-muted-foreground">
-              {t("AppraisalGapLabel")}:{" "}
-              {appraisalGapMinor ? <Money>{money(appraisalGapMinor)}</Money> : t("NoAppraisalGap")}
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* No disclosure over an empty working: the tiles already say the
-          breakdown is unavailable. */}
-      {profit.available && profit.lines.length > 0 && (
-        <details className="group">
-          <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 text-sm text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
-            <ChevronDown
-              className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180"
-              aria-hidden
+/**
+ * The money card: headline, the two deal facts, the parties and the working,
+ * each its own component above. This only composes them in reading order.
+ */
+function MoneyPanel({
+  money,
+  profit,
+  summary,
+  parties,
+  t,
+}: Readonly<{
+  money: (minor: number) => string;
+  profit: DealMoney["profit"];
+  summary: SummaryEvidence;
+  /**
+   * The party row, or `null` when there is nobody to list — an OWNED cash sale
+   * has no third party at all, so the row would be a heading over nothing.
+   * `appraisalGap` is `null` on a deal with no application, which has no
+   * appraisal to have a gap in.
+   */
+  parties: Readonly<{
+    items: DealMoney["parties"];
+    appraisalGap: Readonly<{ amountMinor: number | undefined }> | null;
+    onSettleSupplier: (() => void) | undefined;
+  }> | null;
+  t: (key: string) => string;
+}>) {
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">{t("FinancialSummaryHeading")}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <ProfitHeadline profit={profit} money={money} t={t} />
+        {/* Two facts on the deal itself, then one per party the server names. */}
+        <DealSummaryFacts profit={profit} summary={summary} money={money} t={t} />
+        {parties && (
+          <div className="space-y-2">
+            <h3 className="text-xs font-normal text-muted-foreground">{t("DealPartiesHeading")}</h3>
+            <DealPartyFacts
+              parties={parties.items}
+              onSettleSupplier={parties.onSettleSupplier}
+              money={money}
+              t={t}
             />
-            <span>{t("ProfitBreakdownToggle")}</span>
-          </summary>
-          {/* A working of one figure, kept as a single column — these lines
-              are a SUM, and the order they are read in is part of the meaning. */}
-          <dl className="max-w-xl space-y-1.5 pt-2 text-sm">
-            {profit.lines
-              // A zero on an OPTIONAL line is noise, not information:
-              // the customer-direct amount has no writer yet, so it
-              // would read "0.000" on every deal forever, and the
-              // dealer contribution is zero on any fully funded deal.
-              // The lines the mockup always shows stay, so the
-              // derivation never looks like it is hiding a term.
-              // The cash lines are all always-shown: three terms, and
-              // a zero cost on an agent sale is a fact worth stating.
-              .filter(
-                (line) =>
-                  line.amountMinor !== 0 ||
-                  line.key === "APPROVED_PURCHASE" ||
-                  line.key === "SUPPLIER_SETTLEMENT" ||
-                  line.key === "ACTUAL_EXPENSES" ||
-                  line.key === "SALE_PRICE" ||
-                  line.key === "VEHICLE_COST" ||
-                  line.key === "SUPPLIER_ENTITLEMENT"
-              )
-              .map((line) => (
-              <div key={line.key} className="flex items-center justify-between gap-4">
-                <dt className="text-muted-foreground">{t(PROFIT_LINE_LABEL[line.key] ?? line.key)}</dt>
-                <dd>
-                  <Money>
-                    {line.sign < 0 ? "− " : ""}
-                    {money(line.amountMinor)}
-                  </Money>
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </details>
-      )}
-    </CardContent>
-  </Card>
+            {parties.appraisalGap && (
+              <AppraisalGapNote amountMinor={parties.appraisalGap.amountMinor} money={money} t={t} />
+            )}
+          </div>
+        )}
+        <ProfitBreakdown profit={profit} money={money} t={t} />
+      </CardContent>
+    </Card>
   );
 }
 
@@ -3101,11 +3201,18 @@ export function DealCockpitView({
           in view while the operator works down the rail and the money —
           the owner's workspace shell. Negative margins let the bar span the
           page padding; the backdrop keeps it legible over scrolled content. */}
-      {/* The negative margins mirror the workspace `main` padding exactly
-          (p-3 / sm:p-4 / md:p-6 / lg:p-8): one step wider than the padding
-          and the bar is the page's only horizontal overflow. */}
+      {/* The negative HORIZONTAL margins mirror the workspace `main` padding
+          exactly (p-3 / sm:p-4 / md:p-6 / lg:p-8): one step wider than the
+          padding and the bar is the page's only horizontal overflow.
+          No negative TOP margin, deliberately. `main` is the scroll container
+          and a sticky box is clamped inside its containing block, so Chromium
+          shifts a `-mt-*` header straight back down by the same amount: the
+          bar never moved up, only the essentials row under it did — and at
+          `lg` the 32px shift ate the 24px gap and put the row's labels under
+          the bar. `playwright/visual/deal-cockpit.visual.spec.ts` measures
+          this in a real engine. */}
       <div
-        className="sticky top-0 z-20 -mx-3 -mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 border-b bg-background/95 px-3 py-2.5 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:-mx-4 sm:-mt-4 sm:px-4 md:-mx-6 md:-mt-6 md:px-6 lg:-mx-8 lg:-mt-8 lg:px-8"
+        className="sticky top-0 z-20 -mx-3 flex flex-wrap items-center gap-x-4 gap-y-2 border-b bg-background/95 px-3 py-2.5 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:-mx-4 sm:px-4 md:-mx-6 md:px-6 lg:-mx-8 lg:px-8"
         data-testid="deal-header"
       >
         {backHref && (
@@ -3142,7 +3249,7 @@ export function DealCockpitView({
             </span>
           )}
           <span className="text-xs text-muted-foreground">
-            {t("LastUpdated")}: <bdi>{format(deal.updatedAt ?? deal.createdAt, "d MMM yyyy HH:mm")}</bdi>
+            {t("LastUpdated")}: <bdi>{renderMoment(deal.updatedAt ?? deal.createdAt, "d MMM yyyy HH:mm")}</bdi>
           </span>
         </div>
         {/* The exceptional action, in the header and quiet on purpose: it is
@@ -3229,7 +3336,7 @@ export function DealCockpitView({
           <dt className="text-xs text-muted-foreground">{t("DealOwner")}</dt>
           <dd className="min-w-0 break-words font-medium">
             <bdi>{deal.salespersonName}</bdi>{" "}
-            <bdi className="font-normal text-muted-foreground">{format(deal.createdAt, "d MMM yyyy")}</bdi>
+            <bdi className="font-normal text-muted-foreground">{renderMoment(deal.createdAt, "d MMM yyyy")}</bdi>
           </dd>
         </div>
       </dl>
@@ -3480,15 +3587,23 @@ export function DealCockpitView({
               <MoneyPanel
                 money={money}
                 profit={deal.money.profit}
-                parties={deal.money.parties}
-                showParties={deal.money.parties.length > 0 || deal.applicationId !== null}
-                appraisalGapMinor={deal.money.appraisalGapMinor}
-                showAppraisalGap={deal.applicationId !== null}
-                applicationId={deal.applicationId}
-                evidence={handoverEvidence ?? undefined}
-                moneyIn={servedMoney}
-                canSettleSupplier={canSettleSupplier}
-                onSettleSupplier={() => setSettlingSupplier(true)}
+                summary={{
+                  applicationId: deal.applicationId,
+                  evidence: handoverEvidence ?? undefined,
+                  moneyIn: servedMoney,
+                }}
+                parties={
+                  deal.money.parties.length > 0 || deal.applicationId !== null
+                    ? {
+                        items: deal.money.parties,
+                        appraisalGap:
+                          deal.applicationId !== null
+                            ? { amountMinor: deal.money.appraisalGapMinor }
+                            : null,
+                        onSettleSupplier: canSettleSupplier ? () => setSettlingSupplier(true) : undefined,
+                      }
+                    : null
+                }
                 t={t}
               />
 

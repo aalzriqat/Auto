@@ -43,6 +43,45 @@ vi.mock("@/components/accounting/AccountingTabShared", () => ({
 
 import { DealCockpitView } from "./DealCockpit";
 
+/**
+ * A `toBeVisible` with jest-dom's semantics, defined here because this repo's
+ * `vitest.setup.ts` deliberately installs no jest-dom (see
+ * `OpeningBalanceApprovalPanel.test.tsx`). Visible means: attached, and neither
+ * the element nor any ancestor is `display: none`, `visibility: hidden`,
+ * `opacity: 0`, carries the `hidden` attribute, or is a closed `<details>`
+ * body — plus `.sr-only`, which is this codebase's screen-reader-only class
+ * and is visually hidden by its stylesheet, which jsdom never loads.
+ */
+function isVisible(el: Element): boolean {
+  if (!el.isConnected) return false;
+  for (let node: Element | null = el; node; node = node.parentElement) {
+    if (node.hasAttribute("hidden") || node.classList.contains("sr-only")) return false;
+    const style = getComputedStyle(node);
+    if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
+    if (node.tagName === "DETAILS" && !node.hasAttribute("open") && !el.closest("summary")) return false;
+  }
+  return true;
+}
+
+expect.extend({
+  toBeVisible(received: unknown) {
+    const pass = received instanceof Element && isVisible(received);
+    return {
+      pass,
+      message: () =>
+        `expected element ${pass ? "not " : ""}to be visible: ${
+          received instanceof Element ? received.outerHTML.slice(0, 200) : String(received)
+        }`,
+    };
+  },
+});
+
+declare module "vitest" {
+  interface Assertion {
+    toBeVisible(): void;
+  }
+}
+
 const SCALE = 1_000;
 
 function dealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
@@ -179,6 +218,41 @@ describe("the currency marker", () => {
   });
 });
 
+/**
+ * A corrupt stored moment loses ONE cell, never the screen.
+ *
+ * `z.number()` and `v.number()` both accept every finite double, and date-fns
+ * `format` throws `RangeError: Invalid time value` on `NaN`, `±Infinity` and
+ * any finite value outside the ±8.64e15 ms Date domain. The timeline was
+ * already guarded; the header's "last updated" and the essentials' "opened on"
+ * went straight to `format()` and would have taken the whole cockpit down.
+ */
+describe("a corrupt moment in the header or essentials never loses the screen", () => {
+  test.each([
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["-Infinity", Number.NEGATIVE_INFINITY],
+    ["one past the Date domain", 8_640_000_000_000_001],
+    ["Number.MAX_VALUE", Number.MAX_VALUE],
+  ])("createdAt = %s renders the deal with a calm dash where the date would be", (_label, moment) => {
+    // `updatedAt` undefined so the header falls through to `createdAt`, and
+    // the essentials cell reads `createdAt` directly — both guarded paths hit.
+    renderCockpit(dealFixture({ createdAt: moment, updatedAt: undefined }));
+    const header = screen.getByTestId("deal-header");
+    expect(header.textContent).toContain("DealCockpitTitle");
+    expect(header.textContent).toContain("LastUpdated: —");
+    expect(screen.getByText("DealOwner").parentElement?.textContent).toContain("—");
+    // The rest of the screen is intact, not a blank error boundary.
+    expect(screen.getByText(/2,410/)).toBeTruthy();
+  });
+
+  test("a corrupt updatedAt alone is guarded too, without touching a valid createdAt", () => {
+    renderCockpit(dealFixture({ updatedAt: Number.NaN }));
+    expect(screen.getByTestId("deal-header").textContent).toContain("LastUpdated: —");
+    expect(screen.getByText("DealOwner").parentElement?.textContent).toMatch(/Jul 2026/);
+  });
+});
+
 describe("the headline figure", () => {
   test("always renders its qualifier alongside the amount", () => {
     renderCockpit();
@@ -243,8 +317,14 @@ function cashDealFixture(overrides: Record<string, unknown> = {}): DealCockpitDa
         amountMinor: 3_000 * SCALE,
         currency: "JOD",
         reconcilesToLedger: true,
+        // The shape `accountingProfit` actually emits for a SOURCED vehicle:
+        // VEHICLE_COST is ALWAYS present and is a real zero on consignment,
+        // with the supplier's entitlement beside it. An earlier fixture
+        // carried the entitlement WITHOUT the cost line — a shape the server
+        // never produces — and let a tile reading "vehicle cost: 0" pass.
         lines: [
           { key: "SALE_PRICE", sign: 1, amountMinor: 20_000 * SCALE },
+          { key: "VEHICLE_COST", sign: -1, amountMinor: 0 },
           { key: "SUPPLIER_ENTITLEMENT", sign: -1, amountMinor: 17_000 * SCALE },
         ],
       },
@@ -342,6 +422,68 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
     expect(screen.getAllByText(/17,000/).length).toBeGreaterThan(0);
     expect(screen.queryByText("NotRecorded")).toBeNull();
     expect(screen.queryByText("LineApprovedPurchase")).toBeNull();
+  });
+
+  /**
+   * The summary TILES, as distinct from the collapsed breakdown. The same
+   * label keys head both, so a global `getAllByText` cannot tell "the tile
+   * says entitlement" from "the breakdown lists it" — which is exactly how a
+   * tile reading "vehicle cost: 0" on every consignment stayed green.
+   */
+  function summaryTile(labelKey: string): string | null {
+    const label = screen
+      .queryAllByText(labelKey)
+      .find((el) => el.tagName === "P" && el.closest("details") === null);
+    return label?.parentElement?.textContent ?? null;
+  }
+
+  test("a SOURCED result labels the cost tile with the supplier entitlement, never with a zero vehicle cost", () => {
+    // Real server shape: VEHICLE_COST 0 AND SUPPLIER_ENTITLEMENT 17,000. The
+    // entitlement is the figure that explains the 3,000 margin; the zero is
+    // true but says nothing.
+    renderCockpit(cashDealFixture());
+    expect(summaryTile("LineSupplierEntitlement")).toMatch(/17,000 د\.أ/);
+    expect(summaryTile("LineVehicleCost")).toBeNull();
+  });
+
+  test("a DIRECT purchase whose recognized cost is zero keeps its zero — no entitlement, no substitution", () => {
+    renderCockpit(
+      cashDealFixture({
+        money: {
+          ...cashDealFixture().money,
+          profit: {
+            ...cashDealFixture().money!.profit,
+            amountMinor: 20_000 * SCALE,
+            lines: [
+              { key: "SALE_PRICE", sign: 1, amountMinor: 20_000 * SCALE },
+              { key: "VEHICLE_COST", sign: -1, amountMinor: 0 },
+            ],
+          },
+        },
+      })
+    );
+    expect(summaryTile("LineVehicleCost")).toMatch(/LineVehicleCost0 د\.أ/);
+    expect(screen.queryByText("LineSupplierEntitlement")).toBeNull();
+  });
+
+  test("a non-zero vehicle cost stays the cost tile even when an entitlement is also served", () => {
+    renderCockpit(
+      cashDealFixture({
+        money: {
+          ...cashDealFixture().money,
+          profit: {
+            ...cashDealFixture().money!.profit,
+            lines: [
+              { key: "SALE_PRICE", sign: 1, amountMinor: 20_000 * SCALE },
+              { key: "VEHICLE_COST", sign: -1, amountMinor: 16_000 * SCALE },
+              { key: "SUPPLIER_ENTITLEMENT", sign: -1, amountMinor: 1_000 * SCALE },
+            ],
+          },
+        },
+      })
+    );
+    expect(summaryTile("LineVehicleCost")).toMatch(/16,000 د\.أ/);
+    expect(summaryTile("LineSupplierEntitlement")).toBeNull();
   });
 
   test("a management profit awaiting the supplier settlement still shows the served approved amount and contribution", () => {
@@ -1372,21 +1514,24 @@ describe("the current stage has exactly one working surface, beneath the rail", 
       })
     ).toBeTruthy();
     // Ownership of the non-live nodes is also VISIBLE, as muted text under
-    // the label, for mouse, keyboard and touch users alike.
-    const visibleOwners = items.map((li) =>
-      Array.from(li.querySelectorAll("span:not(.sr-only)")).map((s) => s.textContent).join(" ")
-    );
-    expect(visibleOwners[0]).toContain("StageOwnerDealership");
-    expect(visibleOwners[2]).toContain("StageOwnerDealership");
+    // the label, for mouse, keyboard and touch users alike. Queried by the
+    // text the operator reads and asserted visible — not scraped from
+    // `span:not(.sr-only)`, which passed for text in any element that merely
+    // lacked that one class.
+    expect(within(items[0]).getByText("StageOwnerDealership")).toBeVisible();
+    expect(within(items[2]).getByText("StageOwnerDealership")).toBeVisible();
   });
 
-  test("in Arabic, under an RTL dark shell, the header and rail render the same identity, status and live stage", () => {
+  test("in Arabic, inside an RTL container, the header and rail render the same identity, status and live stage", () => {
     language.locale = "ar";
-    // Rendered inside the same wrapper the app provides: `dir="rtl"` on the
-    // document and the `.dark` theme class, so the assertions below hold for
-    // the bidi/theme context the Arabic operator actually gets.
+    // Rendered inside a `dir="rtl"` wrapper so the bidi context matches what
+    // the Arabic operator gets. What this CAN assert is content and the
+    // direction attribute; what it CANNOT is paint — jsdom applies no
+    // stylesheet, so `.dark` tokens, logical-property mirroring and layout
+    // are unobservable here. Those are asserted in a real engine by
+    // `playwright/visual/deal-cockpit.visual.spec.ts`.
     render(
-      <div dir="rtl" className="dark">
+      <div dir="rtl">
         <DealCockpitView
           deal={dealFixture({
             stages: [
