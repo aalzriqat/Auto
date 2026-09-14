@@ -242,6 +242,22 @@ const dealRailMessages = defineBilingualMessages({
   DealTabDocuments: ["Documents", "المستندات"],
   DealTabActivity: ["Activity", "السجل"],
 
+  /** The compact deal header, stage rail and six-fact money summary. */
+  BackToDeals: ["Deals", "الصفقات"],
+  /** "Stage 3 / 8" — the numbers are rendered beside it as their own LTR run. */
+  StageOfLabel: ["Stage", "المرحلة"],
+  DealAllStagesComplete: ["All stages complete", "اكتملت جميع المراحل"],
+  ShowStages: ["Show stages", "عرض المراحل"],
+  HideStages: ["Hide stages", "إخفاء المراحل"],
+  FinancialSummaryHeading: ["Financial summary", "الملخص المالي"],
+  FactDealValue: ["Deal value", "قيمة الصفقة"],
+  FactCustomer: ["Customer", "العميل"],
+  FactFinancier: ["Finance company", "شركة التمويل"],
+  FactDealerContribution: ["Dealership contribution", "مساهمة المعرض"],
+  FactSupplier: ["Supplier", "المورد"],
+  ProfitBreakdownToggle: ["How this is calculated", "طريقة الاحتساب"],
+  DealEssentialsHeading: ["Deal essentials", "أساسيات الصفقة"],
+
   /** رسوم ومصاريف تسليم السيارة — the handover-cost section on the Deal. */
   HandoverCostsHeading: ["Vehicle handover fees and costs", "رسوم ومصاريف تسليم السيارة"],
   HandoverCostsNote: [

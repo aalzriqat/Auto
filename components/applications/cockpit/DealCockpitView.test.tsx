@@ -1102,16 +1102,19 @@ describe("two surfaces describing one step must not name different parties", () 
 });
 
 /**
- * The live stage exists ONCE on the screen.
+ * The live stage has ONE working surface on the screen.
  *
  * The rail used to name the current stage and a separate "next step" card
  * beneath it named the same stage again and held its button — two
- * representations of one fact, free to disagree. The stage the deal is on now
- * opens IN PLACE inside the rail, and the block carrying the action keeps the
- * `deal-next-step` id so the specs anchored to it still find the action.
+ * representations of one fact, free to disagree. The compact rail now marks
+ * the live node (`aria-current="step"`) as a progress readout only, and the
+ * focus panel directly beneath it is the one block that carries the action;
+ * both are rendered from the same `live` stage. The name therefore appears
+ * exactly twice — rail node and panel heading — and the action exactly once,
+ * on the block that keeps the `deal-next-step` id the specs anchor to.
  */
-describe("the current stage is represented exactly once, inside the rail", () => {
-  test("the live stage's name appears once and the action lives on it", () => {
+describe("the current stage has exactly one working surface, beneath the rail", () => {
+  test("the rail marks the live stage, the panel names it, and the action lives on the panel", () => {
     render(
       <DealCockpitView
         deal={dealFixture({
@@ -1126,13 +1129,47 @@ describe("the current stage is represented exactly once, inside the rail", () =>
       />
     );
 
-    expect(screen.getAllByText("StageHandover")).toHaveLength(1);
+    // Rail node + panel heading, and nothing else names the stage.
+    expect(screen.getAllByText("StageHandover")).toHaveLength(2);
     expect(screen.queryByText("NextStepHeading")).toBeNull();
+    // The rail marks exactly the stage the panel is working.
+    const rail = screen.getByTestId("deal-stage-rail");
+    const current = rail.querySelectorAll('[aria-current="step"]');
+    expect(current).toHaveLength(1);
+    expect(current[0].textContent).toContain("StageHandover");
     const focus = screen.getByTestId("deal-next-step");
     expect(focus.textContent).toContain("StageHandover");
     expect(focus.textContent).toContain("RegisterHandoverAction");
+    // The rail is a readout: no button lives on it.
+    expect(rail.querySelector("button")).toBeNull();
     // Exactly one recommended CTA on the whole screen.
     expect(screen.getAllByRole("button", { name: "RegisterHandoverAction" })).toHaveLength(1);
+  });
+
+  test("a finished deal shows one calm completion state, with the rail one click away", () => {
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          status: "CLOSED",
+          stages: [
+            { key: "APPLICATION", state: "COMPLETE", authority: "DEALER" },
+            { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+            { key: "SETTLEMENT", state: "COMPLETE", authority: "DEALER" },
+          ],
+        })}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    expect(screen.getByText("DealAllStagesComplete")).toBeTruthy();
+    // No stage is being worked, so no working surface and no stopped notice.
+    expect(screen.queryByTestId("deal-next-step")).toBeNull();
+    expect(screen.queryByText("DealStopped")).toBeNull();
+    // The rail is not painted by default; the operator can still ask for it.
+    expect(screen.queryByTestId("deal-stage-rail")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "ShowStages" }));
+    expect(screen.getByTestId("deal-stage-rail")).toBeTruthy();
+    expect(screen.getByText("StageSettlement")).toBeTruthy();
   });
 
   test("a stage with nothing outstanding says so in the focus row, and a blocker replaces it", () => {
