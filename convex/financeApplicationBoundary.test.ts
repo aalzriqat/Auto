@@ -187,11 +187,18 @@ type Seeded = {
   orgId: Id<"organizations">;
   applicationId: Id<"financeApplications">;
   companyId: Id<"financeCompanies">;
-  asRole: (
-    permissions: Permission[],
-    isSystemOwnerRole?: boolean
-  ) => ReturnType<ReturnType<typeof convexTestWithComponents>["withIdentity"]>;
+  /**
+   * Promise-returning on purpose (CodeRabbit on #305): the identity is only
+   * usable once its user, role and membership rows have committed, and a
+   * setup that could fail silently would let a refusal test pass for the
+   * wrong reason — a missing membership refused by `requireTenantAuth`
+   * wearing the costume of the property under test.
+   */
+  asRole: (permissions: Permission[], isSystemOwnerRole?: boolean) => Promise<Caller>;
 };
+
+/** An authenticated harness caller — what `asRole` resolves to. */
+type Caller = ReturnType<ReturnType<typeof convexTestWithComponents>["withIdentity"]>;
 
 /**
  * One deal, every protected figure set to its sentinel, plus an override row —
@@ -347,13 +354,14 @@ async function seedSentinelDeal(suffix: string): Promise<Seeded> {
   );
 
   let seq = 0;
-  const asRole = (permissions: Permission[], isSystemOwnerRole = false) => {
+  const asRole = async (permissions: Permission[], isSystemOwnerRole = false) => {
     seq += 1;
     const clerkId = `boundary_${suffix}_${seq}`;
-    // Synchronous-looking, but the identity is only usable after these writes;
-    // the caller awaits the queries, so the inserts below are already applied.
     const identity = t.withIdentity({ subject: clerkId });
-    void t.run(async (ctx) => {
+    // Awaited, so an insert that fails reaches the owning test as a failure
+    // rather than as a membership-less caller whose refusal looks like the
+    // property under test.
+    await t.run(async (ctx) => {
       const userId = await ctx.db.insert("users", {
         clerkId,
         email: `${clerkId}@example.com`,
@@ -413,7 +421,7 @@ const valuesUnder = (value: unknown, field: string, into: unknown[] = []): unkno
  * The door list is checked against the modules' own REGISTERED public queries,
  * so a query added tomorrow fails here instead of quietly not being covered.
  */
-async function allDoors(seeded: Seeded, caller: ReturnType<Seeded["asRole"]>) {
+async function allDoors(seeded: Seeded, caller: Caller) {
   const paginationOpts = { numItems: 20, cursor: null };
   const { orgId, applicationId, companyId } = seeded;
   /**
@@ -518,8 +526,7 @@ function scan(doors: Array<[string, unknown]>, sentinels: string[]): string[] {
  * every negative assertion about it below is vacuous and must not be believed.
  */
 async function assertCalculatorLive(seeded: Seeded) {
-  const suggestion = (await seeded
-    .asRole(templateFor("ACCOUNTANT"))
+  const suggestion = (await (await seeded.asRole(templateFor("ACCOUNTANT")))
     .query(api.financingEconomics.suggestQuotationForApplication, {
       orgId: seeded.orgId,
       applicationId: seeded.applicationId,
@@ -543,7 +550,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
   test("a custom application-view-only role receives no figure of any tier", async () => {
     const seeded = await seedSentinelDeal("viewOnly");
     await assertCalculatorLive(seeded);
-    const caller = seeded.asRole([
+    const caller = await seeded.asRole([
       PERMISSIONS.VIEW_SALES,
       PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
     ] as Permission[]);
@@ -581,7 +588,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
   test("default SALES gets the quotation, and no approval, gap, allocation or economics", async () => {
     const seeded = await seedSentinelDeal("sales");
     await assertCalculatorLive(seeded);
-    const doors = await allDoors(seeded, seeded.asRole(templateFor("SALES")));
+    const doors = await allDoors(seeded, await seeded.asRole(templateFor("SALES")));
 
     const [, listed] = doors[0] as [string, { page: unknown[] }];
     expect(listed.page.length).toBeGreaterThan(0);
@@ -609,8 +616,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
   test("the calculator suggests to SALES without disclosing what it computed from", async () => {
     const seeded = await seedSentinelDeal("calcSales");
     await assertCalculatorLive(seeded);
-    const suggestion = (await seeded
-      .asRole(templateFor("SALES"))
+    const suggestion = (await (await seeded.asRole(templateFor("SALES")))
       .query(api.financingEconomics.suggestQuotationForApplication, {
         orgId: seeded.orgId,
         applicationId: seeded.applicationId,
@@ -647,8 +653,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
 
   test("the same calculator hands a view:finance caller the whole payload", async () => {
     const seeded = await seedSentinelDeal("calcFinance");
-    const suggestion = (await seeded
-      .asRole(templateFor("ACCOUNTANT"))
+    const suggestion = (await (await seeded.asRole(templateFor("ACCOUNTANT")))
       .query(api.financingEconomics.suggestQuotationForApplication, {
         orgId: seeded.orgId,
         applicationId: seeded.applicationId,
@@ -674,7 +679,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
   test("default MANAGER gets the approval workflow in full, and no accounting economics", async () => {
     const seeded = await seedSentinelDeal("manager");
     await assertCalculatorLive(seeded);
-    const doors = await allDoors(seeded, seeded.asRole(templateFor("MANAGER")));
+    const doors = await allDoors(seeded, await seeded.asRole(templateFor("MANAGER")));
     const serialized = JSON.stringify(doors);
 
     for (const sentinel of [
@@ -702,7 +707,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
     const seeded = await seedSentinelDeal("disburseOnly");
     const doors = await allDoors(
       seeded,
-      seeded.asRole([
+      await seeded.asRole([
         PERMISSIONS.VIEW_SALES,
         PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
         PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
@@ -727,7 +732,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
     isOwner
   ) => {
     const seeded = await seedSentinelDeal(`pos${_label.replace(/\W/g, "")}`);
-    const caller = seeded.asRole(permissions(), isOwner as boolean);
+    const caller = await seeded.asRole(permissions(), isOwner as boolean);
     const doors = await allDoors(seeded, caller);
     const serialized = JSON.stringify(doors);
     // The positive control is the whole reason the negative sweeps mean
@@ -760,7 +765,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
    */
   test("the gated field names are gone by KEY, not merely blanked", async () => {
     const seeded = await seedSentinelDeal("keysGone");
-    const doors = await allDoors(seeded, seeded.asRole(templateFor("SALES")));
+    const doors = await allDoors(seeded, await seeded.asRole(templateFor("SALES")));
     for (const [name, response] of doors) {
       /**
        * ONE door is excluded, and as a DOOR rather than as a field.
@@ -843,8 +848,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
    */
   test("the wizard calculator echoes the LIVE company rate, never this deal's", async () => {
     const seeded = await seedSentinelDeal("wizardRate");
-    const suggestion = (await seeded
-      .asRole(templateFor("SALES"))
+    const suggestion = (await (await seeded.asRole(templateFor("SALES")))
       .query(api.financingEconomics.suggestQuotation, {
         orgId: seeded.orgId,
         companyId: seeded.companyId,
@@ -863,7 +867,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
    */
   test("the ordinary workflow survives: lifecycle, dimensions and the derived LTV question", async () => {
     const seeded = await seedSentinelDeal("workflow");
-    const caller = seeded.asRole(templateFor("SALES"));
+    const caller = await seeded.asRole(templateFor("SALES"));
     const detail = (await caller.query(api.applications.get, {
       orgId: seeded.orgId,
       applicationId: seeded.applicationId,
@@ -926,7 +930,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
     }
 
     const ask = (
-      caller: ReturnType<Seeded["asRole"]>,
+      caller: Caller,
       seeded: Seeded,
       overrides: Record<string, number> = {}
     ) =>
@@ -1006,7 +1010,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
       "%s: every override-bearing request is REFUSED, and carries no calculation",
       async (label, permissions) => {
         const seeded = await quotableDeal(`probe${label.replace(/\W/g, "")}`);
-        const caller = seeded.asRole(permissions());
+        const caller = await seeded.asRole(permissions());
 
         /**
          * THE POSITIVE CONTROL, and the anti-vacuity guard: the canonical
@@ -1053,7 +1057,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
      */
     test("an override-bearing request is refused identically for a deal in another tenant", async () => {
       const seeded = await quotableDeal("refuseOrdering");
-      const caller = seeded.asRole(templateFor("SALES"));
+      const caller = await seeded.asRole(templateFor("SALES"));
 
       const own = await ask(caller, seeded, { ltvPercent: 100 });
 
@@ -1081,7 +1085,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
       await seeded.t.run(async (ctx) => {
         await ctx.db.patch(seeded.applicationId, { targetNetProceedsMinor: undefined });
       });
-      const caller = seeded.asRole(templateFor("SALES"));
+      const caller = await seeded.asRole(templateFor("SALES"));
       const supplied = await ask(caller, seeded, { targetSellingAmountMinor: 5_000_000 });
       /**
        * PREMISE CHANGED with the 08:31 ruling, and the outcome is now STRONGER.
@@ -1106,7 +1110,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
 
     test("a view:finance caller KEEPS the full simulator — the fix gates disclosure, not capability", async () => {
       const seeded = await quotableDeal("financeSim");
-      const caller = seeded.asRole(templateFor("ACCOUNTANT"));
+      const caller = await seeded.asRole(templateFor("ACCOUNTANT"));
       const canonical = await ask(caller, seeded);
       const simulated = await ask(caller, seeded, { targetSellingAmountMinor: 4_000_000 });
       expect(canonical.available).toBe(true);
@@ -1134,7 +1138,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
       "the write path refuses the calculation operands in %s mode, with ZERO committed delta",
       async (label, source) => {
         const seeded = await quotableDeal(`write${label}`);
-        const caller = seeded.asRole(templateFor("SALES"));
+        const caller = await seeded.asRole(templateFor("SALES"));
         const before = await snapshotOf(seeded);
 
         for (const [name, field] of [
@@ -1178,7 +1182,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
 
     test("the ordinary quotation write still works for SALES, with and without an override reason", async () => {
       const seeded = await quotableDeal("ordinaryWrite");
-      const caller = seeded.asRole(templateFor("SALES"));
+      const caller = await seeded.asRole(templateFor("SALES"));
       await caller.mutation(api.financingEconomics.recordSubmittedQuotation, {
         orgId: seeded.orgId,
         applicationId: seeded.applicationId,
@@ -1205,7 +1209,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
 
     test("SALES cannot probe the stored rate through the no-op LTV allowance", async () => {
       const seeded = await quotableDeal("ltvProbe");
-      const caller = seeded.asRole(templateFor("SALES"));
+      const caller = await seeded.asRole(templateFor("SALES"));
       const refusals: string[] = [];
       // The stored rate is SENTINEL.ltvPercent. Under the old rule, sending the
       // RIGHT one was permitted and a wrong one refused — so accept/refuse was
@@ -1257,7 +1261,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
         });
       });
       // default MANAGER: approves, but holds no view:finance. The reproduction actor.
-      const manager = seeded.asRole(templateFor("MANAGER"));
+      const manager = await seeded.asRole(templateFor("MANAGER"));
       await expect(
         manager.mutation(api.financingEconomics.recordSubmittedQuotation, {
           orgId: seeded.orgId,
@@ -1270,7 +1274,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
 
       // And the recovery is not destroyed, only re-homed: the same call from an
       // approver who may also READ the economics completes it.
-      const authorized = seeded.asRole([...templateFor("MANAGER"), PERMISSIONS.VIEW_FINANCE]);
+      const authorized = await seeded.asRole([...templateFor("MANAGER"), PERMISSIONS.VIEW_FINANCE]);
       await authorized.mutation(api.financingEconomics.recordSubmittedQuotation, {
         orgId: seeded.orgId,
         applicationId: seeded.applicationId,
@@ -1291,7 +1295,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
 
     test("a supplied rate with CALCULATED provenance refuses before any speculative solve", async () => {
       const seeded = await quotableDeal("ltvCalculated");
-      const approver = seeded.asRole(templateFor("MANAGER"));
+      const approver = await seeded.asRole(templateFor("MANAGER"));
       let refusal = "";
       try {
         await approver.mutation(api.financingEconomics.recordSubmittedQuotation, {
@@ -1318,7 +1322,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
 
     test("the mismatch errors name no computed figure, in either direction", async () => {
       const seeded = await quotableDeal("mismatchErrors");
-      const caller = seeded.asRole(templateFor("SALES"));
+      const caller = await seeded.asRole(templateFor("SALES"));
       const messages: string[] = [];
       for (const [source, amount, extra] of [
         ["SYSTEM_CALCULATED", 1, {}],
@@ -1360,12 +1364,12 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
           },
         });
       });
-      const sales = await ask(seeded.asRole(templateFor("SALES")), seeded);
+      const sales = await ask(await seeded.asRole(templateFor("SALES")), seeded);
       expect(sales.available).toBe(false);
       expect(`${sales.reason}`).toBe("RULES_UNAVAILABLE");
       expect(JSON.stringify(sales)).not.toContain("4242424");
       // The finance caller still gets the actionable message naming the setting.
-      const finance = await ask(seeded.asRole(templateFor("ACCOUNTANT")), seeded);
+      const finance = await ask(await seeded.asRole(templateFor("ACCOUNTANT")), seeded);
       expect(JSON.stringify(finance)).toContain("4242424");
     });
   });
@@ -1486,7 +1490,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
       "W2 approveDealerPurchaseAmount refuses an explicit rate from %s, at every value, with ZERO delta",
       async (label, permissions) => {
         const seeded = await rateEstablishableDeal(`w2${label.replace(/\W/g, "")}`);
-        const caller = seeded.asRole(permissions());
+        const caller = await seeded.asRole(permissions());
         const before = await rowSnapshot(seeded);
 
         for (const [name, rate] of RATES) {
@@ -1527,7 +1531,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
       "W1 recordSubmittedQuotation refuses an explicit rate from %s, at every value, with ZERO delta",
       async (label, permissions) => {
         const seeded = await rateEstablishableDeal(`w1${label.replace(/\W/g, "")}`);
-        const caller = seeded.asRole(permissions());
+        const caller = await seeded.asRole(permissions());
         const before = await rowSnapshot(seeded);
 
         for (const [name, rate] of RATES) {
@@ -1578,7 +1582,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
      */
     test("the explicit-rate refusal is identical across every row state", async () => {
       const seeded = await rateEstablishableDeal("ordering");
-      const caller = seeded.asRole(templateFor("SALES"));
+      const caller = await seeded.asRole(templateFor("SALES"));
 
       const refusalFor = async (applicationId: typeof seeded.applicationId) => {
         try {
@@ -1679,7 +1683,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
      */
     test("W1 refuses an explicit rate from a caller with view:finance but NO approval", async () => {
       const seeded = await rateEstablishableDeal("viewNoApprove");
-      const analyst = seeded.asRole([...templateFor("SALES"), PERMISSIONS.VIEW_FINANCE]);
+      const analyst = await seeded.asRole([...templateFor("SALES"), PERMISSIONS.VIEW_FINANCE]);
       const before = await rowSnapshot(seeded);
 
       for (const [name, rate] of RATES) {
@@ -1708,7 +1712,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
      */
     test("R-3: a default MANAGER cannot move the disclosed quotation by writing the rate", async () => {
       const seeded = await rateEstablishableDeal("r3");
-      const manager = seeded.asRole(templateFor("MANAGER"));
+      const manager = await seeded.asRole(templateFor("MANAGER"));
 
       const canonicalBefore = (await manager.query(
         api.financingEconomics.suggestQuotationForApplication,
@@ -1744,7 +1748,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
      */
     test("a default MANAGER still approves a purchase amount when the rate is OMITTED", async () => {
       const seeded = await rateEstablishableDeal("omission");
-      const manager = seeded.asRole(templateFor("MANAGER"));
+      const manager = await seeded.asRole(templateFor("MANAGER"));
 
       await manager.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
         orgId: seeded.orgId,
@@ -1767,7 +1771,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
      */
     test("a finance-authorized approver CAN establish the rate at both doors", async () => {
       const seeded = await rateEstablishableDeal("authorized");
-      const approver = seeded.asRole([...templateFor("MANAGER"), PERMISSIONS.VIEW_FINANCE]);
+      const approver = await seeded.asRole([...templateFor("MANAGER"), PERMISSIONS.VIEW_FINANCE]);
 
       await approver.mutation(api.financingEconomics.recordSubmittedQuotation, {
         orgId: seeded.orgId,
@@ -1803,7 +1807,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
      */
     test("re-arming the approval does not re-open the rate to a non-finance approver", async () => {
       const seeded = await rateEstablishableDeal("rearm");
-      const manager = seeded.asRole(templateFor("MANAGER"));
+      const manager = await seeded.asRole(templateFor("MANAGER"));
 
       await manager.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
         orgId: seeded.orgId,
@@ -1841,8 +1845,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
         companyRuleSnapshot: { ...app.companyRuleSnapshot!, defaultLtvPercent: undefined },
       });
     });
-    const economics = (await seeded
-      .asRole(templateFor("SALES"))
+    const economics = (await (await seeded.asRole(templateFor("SALES")))
       .query(api.financingEconomics.getEconomics, {
         orgId: seeded.orgId,
         applicationId: seeded.applicationId,
