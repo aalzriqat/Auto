@@ -19,8 +19,8 @@ export type ServedFeeType = Doc<"financeDealFees">["feeType"];
  * managed on the Deal (owner requirement, SCRUM-215 c19384).
  *
  * Everything here is the canonical `financeDealCosts` record, read through
- * `listDealCosts` and written through the three commands that already exist
- * for it — nothing is a vehicle expense, nothing is a second ledger:
+ * `listDealCosts` and written through four commands — nothing is a vehicle
+ * expense, nothing is a second ledger:
  *
  *   RECORD → `recordTemplateFeeActual` (the ACTUAL for a fee the finance
  *                                     company's frozen policy configures;
@@ -347,7 +347,7 @@ export function HandoverCostsPanel({
   scaleOf: (currency: string) => number;
   /** Spells a minor amount IN THE GIVEN currency. */
   money: (minor: number, currency: string) => string;
-  /** `create:finance_application` — the permission all three commands check. */
+  /** `create:finance_application` — the permission RECORD, ADD, EDIT and REMOVE all check. */
   canManage: boolean;
   /** Informational only; the server decides what a closed deal still accepts. */
   dealClosed: boolean;

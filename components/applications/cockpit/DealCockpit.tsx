@@ -708,11 +708,12 @@ export function DealCockpit({
         }
       : undefined;
   /**
-   * رسوم ومصاريف تسليم السيارة — ADD / EDIT / REMOVE on the canonical
-   * `financeDealCosts` commands (c19384). `recordDealFee` is an economic
-   * command and takes a retained identity keyed on the add form's own intent;
-   * the other two are idempotent by construction (a set and a void) and the
-   * server takes no identity for them.
+   * رسوم ومصاريف تسليم السيارة — RECORD / ADD / EDIT / REMOVE on the canonical
+   * `financeDealCosts` commands (c19384). Two are economic and take a retained
+   * identity: `recordTemplateFeeActual` keyed on (deal, template position) and
+   * `recordDealFee` keyed on the add form's own intent. EDIT and REMOVE are
+   * idempotent by construction (a set and a void) and the server takes no
+   * identity for them.
    */
   const handoverCosts =
     app && deal
@@ -2284,7 +2285,7 @@ export function DealCockpitView({
    */
   financingPlan?: { facts: FinancingPlanFacts; formatMajor: (major: number, currency: string) => string };
   /**
-   * The handover-cost section with its three commands wired — financed deals
+   * The handover-cost section with its four commands wired — financed deals
    * only. When present it REPLACES the read-only expenses card: same lines,
    * same canonical record, plus the controls.
    */

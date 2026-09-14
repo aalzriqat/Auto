@@ -418,6 +418,13 @@ const REQUIRED_FINGERPRINT_FIELDS: Array<[string, string, string[]]> = [
     "financeDealCosts.recordDealFee",
     ["deductedFromSettlement"],
   ],
+  // The position selects the template whose deductedFromSettlement is copied
+  // onto the line — so it, not the flag, is what changes the dealer remittance.
+  [
+    "convex/financeDealCosts.ts",
+    "financeDealCosts.recordTemplateFeeActual",
+    ["templateIndex"],
+  ],
   // Selects the credit account in hookEmployeeAdvancePaid.
   ["convex/payroll.ts", "payroll.recordAdvance", ["method"]],
 ];
@@ -529,7 +536,7 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
   "./vehicles": ["create", "createReservation"],
   "./workOrders": ["create"],
   "./expenses": ["create"],
-  "./financeDealCosts": ["recordDealFee", "openDealCustody", "recordCustodyMovement"],
+  "./financeDealCosts": ["recordDealFee", "recordTemplateFeeActual", "openDealCustody", "recordCustodyMovement"],
   "./paymentIntents": ["create", "markSettled"],
   "./payroll": ["recordAdvance", "recoverAdvance"],
   "./prepaidExpenses": ["correctSchedule"],
@@ -586,7 +593,13 @@ describe("SCRUM-57 — classification ratchet", () => {
     // recordEquityMovement, vehicles.create / createReservation,
     // workOrders.create). RE-MEASURED against the combined tree, never carried
     // over because it happened to compile.
-    expect(checked).toBe(37);
+    //
+    // 37 -> 38 by SCRUM-215 handover costs (PR #303):
+    // +financeDealCosts.recordTemplateFeeActual, the actual-only writer for a
+    // fee the finance company's frozen policy configures — runWithIdempotency
+    // with economic: true, the template POSITION in its fingerprint. Found by
+    // this ratchet on the full run at 6b98ada00, added here and to the census.
+    expect(checked).toBe(38);
   });
 
   /**
@@ -647,9 +660,9 @@ describe("SCRUM-57 — classification ratchet", () => {
     expect(missingFromSource, "listed in the manifest but not economic in the source").toEqual([]);
 
     // The denominator, asserted rather than described.
-    expect(economicInSource.size).toBe(37);
+    expect(economicInSource.size).toBe(38);
     expect([...nonEconomicInSource].sort()).toEqual(["sales.createDraft"]);
-    expect(economicInSource.size + nonEconomicInSource.size).toBe(38);
+    expect(economicInSource.size + nonEconomicInSource.size).toBe(39);
   });
 
   /**
