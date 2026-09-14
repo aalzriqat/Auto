@@ -8,7 +8,7 @@
  * plainly visible the moment the page was looked at.
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { DealCockpitData } from "./DealCockpit";
 
 const language = vi.hoisted(() => ({ locale: "ar" as "ar" | "en" }));
@@ -422,6 +422,49 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
   test("the parties row carries a real heading", () => {
     renderCockpit();
     expect(screen.getByRole("heading", { name: "DealPartiesHeading" })).toBeTruthy();
+  });
+
+  test("an available accounting result with NO lines says the breakdown is unavailable, never 'not recorded'", () => {
+    // The headline is real and served; only its working is absent. "Not
+    // recorded" would claim the sale price was never entered.
+    renderCockpit(
+      cashDealFixture({
+        money: {
+          ...cashDealFixture().money,
+          profit: { ...cashDealFixture().money!.profit, lines: [] },
+        },
+      })
+    );
+    expect(screen.getAllByText(/3,000/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("ProfitBreakdownUnavailable").length).toBeGreaterThan(0);
+    expect(screen.queryByText("NotRecorded")).toBeNull();
+  });
+
+  test.each([
+    ["a cash sale", { dealKind: "CASH" }],
+    ["an applicationless FINANCED sale", { dealKind: "FINANCED" }],
+  ])("%s whose margin is unavailable keeps sale labels, never approved-purchase ones", (_label, shape) => {
+    // Server-identified by `applicationId: null` — the ONLY discriminator the
+    // unavailable case may use, because an unavailable profit has no basis.
+    renderCockpit(
+      cashDealFixture({
+        ...shape,
+        applicationId: null,
+        money: {
+          ...cashDealFixture().money,
+          profit: { available: false, reason: "UnknownMargin" },
+        },
+      })
+    );
+    expect(screen.getByText("LineSalePrice")).toBeTruthy();
+    expect(screen.queryByText("LineApprovedPurchase")).toBeNull();
+    expect(screen.queryByText("LineDealerContribution")).toBeNull();
+  });
+
+  test("an applicationless FINANCED sale is titled as a sale, not as a finance application", () => {
+    renderCockpit(cashDealFixture({ dealKind: "FINANCED", applicationId: null }));
+    expect(screen.getByText(/DealCockpitTitleCash/)).toBeTruthy();
+    expect(screen.queryByText(/DealCockpitTitle$/)).toBeNull();
   });
 });
 
@@ -1304,33 +1347,59 @@ describe("the current stage has exactly one working surface, beneath the rail", 
         onRecordSupplierReceipt={async () => {}}
       />
     );
-    const rail = screen.getByTestId("deal-stage-rail");
-    const nodes = Array.from(rail.querySelectorAll("li")).map((li) => li.textContent ?? "");
-    expect(nodes[0]).toContain("StageStateComplete");
-    expect(nodes[1]).toContain("StageStateBlocked");
-    expect(nodes[2]).toContain("StageStatePending");
-    expect(nodes[3]).toContain("StageStateStopped");
-    // Ownership survives on the non-live nodes, in the accessible text and the
-    // tooltip rather than as a visible pill on every node.
-    expect(nodes[0]).toContain("StageOwnerDealership");
-    expect(nodes[1]).toContain("StageOwnerFinanceCompany");
-    expect(rail.querySelectorAll("li")[0].getAttribute("title")).toContain("StageOwnerDealership");
+    // The ACCESSIBLE NAME of each node carries label, state, owner and
+    // blocker — asserted through the role, not by scraping text content.
+    const items = within(screen.getByTestId("deal-stage-rail")).getAllByRole("listitem");
+    expect(items).toHaveLength(4);
+    expect(
+      within(screen.getByTestId("deal-stage-rail")).getByRole("listitem", {
+        name: /StageApplication.*StageStateComplete.*StageOwnerDealership/,
+      })
+    ).toBeTruthy();
+    expect(
+      within(screen.getByTestId("deal-stage-rail")).getByRole("listitem", {
+        name: /StageCreditDecision.*StageStateBlocked.*StageOwnerFinanceCompany.*BlockerAwaitingCreditDecision/,
+      })
+    ).toBeTruthy();
+    expect(
+      within(screen.getByTestId("deal-stage-rail")).getByRole("listitem", {
+        name: /StageHandover.*StageStatePending.*StageOwnerDealership/,
+      })
+    ).toBeTruthy();
+    expect(
+      within(screen.getByTestId("deal-stage-rail")).getByRole("listitem", {
+        name: /StageSettlement.*StageStateStopped/,
+      })
+    ).toBeTruthy();
+    // Ownership of the non-live nodes is also VISIBLE, as muted text under
+    // the label, for mouse, keyboard and touch users alike.
+    const visibleOwners = items.map((li) =>
+      Array.from(li.querySelectorAll("span:not(.sr-only)")).map((s) => s.textContent).join(" ")
+    );
+    expect(visibleOwners[0]).toContain("StageOwnerDealership");
+    expect(visibleOwners[2]).toContain("StageOwnerDealership");
   });
 
-  test("in Arabic the header and rail render the same identity, status and live stage", () => {
+  test("in Arabic, under an RTL dark shell, the header and rail render the same identity, status and live stage", () => {
     language.locale = "ar";
+    // Rendered inside the same wrapper the app provides: `dir="rtl"` on the
+    // document and the `.dark` theme class, so the assertions below hold for
+    // the bidi/theme context the Arabic operator actually gets.
     render(
-      <DealCockpitView
-        deal={dealFixture({
-          stages: [
-            { key: "APPLICATION", state: "COMPLETE", authority: "DEALER" },
-            { key: "HANDOVER", state: "CURRENT", authority: "DEALER" },
-          ],
-        })}
-        backHref="/org_1/deals"
-        onRecordSupplierReceipt={async () => {}}
-      />
+      <div dir="rtl" className="dark">
+        <DealCockpitView
+          deal={dealFixture({
+            stages: [
+              { key: "APPLICATION", state: "COMPLETE", authority: "DEALER" },
+              { key: "HANDOVER", state: "CURRENT", authority: "DEALER" },
+            ],
+          })}
+          backHref="/org_1/deals"
+          onRecordSupplierReceipt={async () => {}}
+        />
+      </div>
     );
+    expect(screen.getByTestId("deal-header").closest("[dir='rtl']")).toBeTruthy();
     const header = screen.getByTestId("deal-header");
     expect(header.textContent).toContain("DealCockpitTitle");
     expect(header.textContent).toContain("#2048");

@@ -11,9 +11,9 @@ export type RailStage = Readonly<{
   label: string;
   /**
    * Whose move the step is, already resolved to display text. Carried on
-   * every node — in the accessible text and the tooltip, not as a visible
-   * pill — so ownership of the non-live steps survives the compact rail
-   * without eight badges competing with the one that matters.
+   * every node as muted type under the label (and in the accessible name),
+   * never as a pill, so ownership of the non-live steps survives the compact
+   * rail without eight badges competing with the one that matters.
    */
   owner?: string;
   blocker?: string;
@@ -45,8 +45,8 @@ const STAGE_STATE_KEY: Record<RailStageState, string> = {
  * app token, so it is a light amber tint under a dark amber index — AA in both
  * themes — rather than white on a filled amber, which measured 3.19:1.
  *
- * `aria-current="step"` marks the live node and each node states its state
- * and owner in visually hidden text, so none of this is colour alone.
+ * `aria-current="step"` marks the live node and each node's accessible name
+ * carries its label, state, owner and blocker, so none of this is colour alone.
  */
 function stageNodeClass(state: RailStageState): string {
   switch (state) {
@@ -77,17 +77,18 @@ export function DealStageRail({
     <ol className="flex flex-wrap gap-y-3" data-testid="deal-stage-rail">
       {stages.map((stage, index) => {
         const live = stage.state === "CURRENT" || stage.state === "BLOCKED";
-        // The tooltip and the accessible text say the same things, in the
-        // same order: state, owner, blocker.
-        const detail = [t(STAGE_STATE_KEY[stage.state]), stage.owner, stage.blocker]
+        // The accessible NAME of the node — label, state, owner, blocker, in
+        // that order — and the tooltip says the same thing.
+        const name = [stage.label, t(STAGE_STATE_KEY[stage.state]), stage.owner, stage.blocker]
           .filter(Boolean)
           .join(" · ");
         return (
           <li
             key={stage.key}
-            className="relative flex min-w-0 basis-1/4 flex-col items-center gap-1.5 px-1 text-center sm:flex-1"
+            className="relative flex min-w-0 basis-1/4 flex-col items-center gap-1 px-1 text-center sm:flex-1"
             aria-current={live ? "step" : undefined}
-            title={detail}
+            aria-label={name}
+            title={name}
           >
             {/* The connector, drawn behind the node from the previous one.
                 Hidden on the first node and on phones, where the rail wraps
@@ -111,7 +112,15 @@ export function DealStageRail({
             >
               {stage.label}
             </span>
-            <span className="sr-only">{detail}</span>
+            {/* Whose move it is, VISIBLE on every node in the quietest register
+                — a tooltip alone is invisible to keyboard and touch users. The
+                live node's panel below repeats it as a badge; here it is only
+                type, so eight owners do not compete with the one action. */}
+            {stage.owner && (
+              <span className="min-w-0 max-w-full break-words text-[11px] leading-snug text-muted-foreground">
+                <bdi>{stage.owner}</bdi>
+              </span>
+            )}
           </li>
         );
       })}

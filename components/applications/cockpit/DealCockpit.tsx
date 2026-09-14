@@ -2002,12 +2002,15 @@ type DealMoney = NonNullable<DealCockpitData["money"]>;
 function MoneyFact({
   label,
   value,
+  unavailableKey = "NotRecorded",
   note,
   action,
   t,
 }: Readonly<{
   label: string;
   value: string | null;
+  /** What a `null` value means here — "never recorded" by default. */
+  unavailableKey?: string;
   note?: React.ReactNode;
   action?: React.ReactNode;
   t: (key: string) => string;
@@ -2016,7 +2019,7 @@ function MoneyFact({
     <div className="flex min-w-0 flex-col gap-0.5 rounded-md border p-3">
       <p className="text-xs text-muted-foreground">{label}</p>
       {value === null ? (
-        <p className="text-sm text-muted-foreground">{t("NotRecorded")}</p>
+        <p className="text-sm text-muted-foreground">{t(unavailableKey)}</p>
       ) : (
         <p className="text-base font-semibold leading-snug">
           <Money>{value}</Money>
@@ -2028,6 +2031,116 @@ function MoneyFact({
   );
 }
 
+/** A recorded figure as the server projects it, with the denomination it served. */
+type ServedEvidence = {
+  approvedPurchaseAmountMinor: number | null;
+  dealerContributionMinor: number | null;
+  currency: { code: string; scale: number } | null;
+};
+
+type SummaryFact = {
+  labelKey: string;
+  value: string | null;
+  /** What a null value means: never recorded, or served without its working. */
+  unavailableKey: "NotRecorded" | "ProfitBreakdownUnavailable";
+};
+
+/**
+ * The two non-party facts of the summary, each labelled for exactly what it is.
+ * Pure: reads served facts, formats them, and never sums or re-scales.
+ *
+ * AVAILABLE profit — selected by the BASIS the server put on it, never by
+ * `dealKind`: an applicationless FINANCED/LEASE sale is `dealKind: "FINANCED"`
+ * and its profit is an ACCOUNTING_RESULT built on the sale price; read as a
+ * management estimate it has no approved-purchase line and its recorded sale
+ * price was reported as "not recorded". An available profit whose `lines` are
+ * EMPTY is a headline served without its working: the tiles say the breakdown
+ * is unavailable, not that the figures were never recorded.
+ *
+ * UNAVAILABLE profit — there is no basis to read, so the fact-set follows the
+ * server's own identity of the deal: `applicationId: null` is a sale (cash or
+ * applicationless financed) and gets sale labels with nothing to fill them; an
+ * application gets the approved-purchase labels, filled from
+ * `handoverEvidence` where the server already serves those two figures
+ * redacted and denominated (a management figure withheld for want of the
+ * supplier settlement still has them on record).
+ */
+function selectSummaryFacts({
+  profit,
+  applicationId,
+  evidence,
+  money,
+  moneyIn,
+}: Readonly<{
+  profit: DealMoney["profit"];
+  applicationId: string | null;
+  evidence: ServedEvidence | undefined;
+  money: (minor: number) => string;
+  moneyIn: (minor: number, currency: ServedEvidence["currency"]) => string | null;
+}>): { primary: SummaryFact; secondary: SummaryFact } {
+  const saleLabels = { primary: "LineSalePrice", secondary: "LineVehicleCost" } as const;
+  const applicationLabels = {
+    primary: "LineApprovedPurchase",
+    secondary: "LineDealerContribution",
+  } as const;
+
+  if (!profit.available) {
+    if (applicationId === null) {
+      return {
+        primary: { labelKey: saleLabels.primary, value: null, unavailableKey: "NotRecorded" },
+        secondary: { labelKey: saleLabels.secondary, value: null, unavailableKey: "NotRecorded" },
+      };
+    }
+    const served = (minor: number | null | undefined) =>
+      minor != null && evidence ? moneyIn(minor, evidence.currency) : null;
+    return {
+      primary: {
+        labelKey: applicationLabels.primary,
+        value: served(evidence?.approvedPurchaseAmountMinor),
+        unavailableKey: "NotRecorded",
+      },
+      secondary: {
+        labelKey: applicationLabels.secondary,
+        value: served(evidence?.dealerContributionMinor),
+        unavailableKey: "NotRecorded",
+      },
+    };
+  }
+
+  const line = (key: string) => profit.lines.find((l) => l.key === key) ?? null;
+  const unavailableKey = profit.lines.length === 0 ? "ProfitBreakdownUnavailable" : "NotRecorded";
+  if (profit.basis === "ACCOUNTING_RESULT") {
+    const price = line("SALE_PRICE");
+    const cost = line("VEHICLE_COST") ?? line("SUPPLIER_ENTITLEMENT");
+    return {
+      primary: {
+        labelKey: saleLabels.primary,
+        value: price ? money(price.amountMinor) : null,
+        unavailableKey,
+      },
+      secondary: {
+        labelKey: cost ? (PROFIT_LINE_LABEL[cost.key] ?? cost.key) : saleLabels.secondary,
+        value: cost ? money(cost.amountMinor) : null,
+        unavailableKey,
+      },
+    };
+  }
+  const approved = line("APPROVED_PURCHASE");
+  const contribution = line("DEALER_CONTRIBUTION");
+  return {
+    primary: {
+      labelKey: applicationLabels.primary,
+      value: approved ? money(approved.amountMinor) : null,
+      unavailableKey,
+    },
+    secondary: {
+      labelKey: applicationLabels.secondary,
+      value: contribution ? money(contribution.amountMinor) : null,
+      unavailableKey,
+    },
+  };
+}
+
 function MoneyPanel({
   money,
   profit,
@@ -2035,6 +2148,7 @@ function MoneyPanel({
   showParties,
   appraisalGapMinor,
   showAppraisalGap,
+  applicationId,
   evidence,
   moneyIn,
   canSettleSupplier,
@@ -2049,22 +2163,18 @@ function MoneyPanel({
   appraisalGapMinor: number | undefined;
   /** Only where an application exists; a cash deal has no appraisal. */
   showAppraisalGap: boolean;
+  /** The server's own identity of the deal: `null` is a sale, cash or applicationless financed. */
+  applicationId: string | null;
   /**
    * The recorded approved amount and contribution as the SERVER projects them
    * (`handoverEvidence`): already redacted per caller, already denominated.
-   * Read only when the profit carries no lines — a management figure that is
-   * unavailable for want of the supplier settlement still has these on record.
-   * Financed cockpit payloads only; absent elsewhere.
+   * Read only when the profit is unavailable — a management figure withheld
+   * for want of the supplier settlement still has these on record. Financed
+   * cockpit payloads only; absent elsewhere.
    */
-  evidence:
-    | {
-        approvedPurchaseAmountMinor: number | null;
-        dealerContributionMinor: number | null;
-        currency: { code: string; scale: number } | null;
-      }
-    | undefined;
+  evidence: ServedEvidence | undefined;
   /** Spells a served figure at the SERVED scale, or withholds it. */
-  moneyIn: (minor: number, currency: { code: string; scale: number } | null) => string | null;
+  moneyIn: (minor: number, currency: ServedEvidence["currency"]) => string | null;
   canSettleSupplier: boolean;
   onSettleSupplier: () => void;
   t: (key: string) => string;
@@ -2084,67 +2194,15 @@ function MoneyPanel({
   // unlikely to be.
   const isManagementEstimate = profit.available && profit.basis === "MANAGEMENT_ESTIMATE";
 
-  /**
-   * The two non-party facts, each labelled for exactly what it is.
-   *
-   * Selected by the BASIS the server put on the profit, never by `dealKind`:
-   * an applicationless FINANCED/LEASE sale is `dealKind: "FINANCED"` and its
-   * profit is an ACCOUNTING_RESULT built on the sale price — read as a
-   * management estimate it has no approved-purchase line, and its recorded
-   * sale price was reported as "not recorded". The basis is the only thing
-   * that says which lines exist.
-   *
-   * When the profit carries no lines at all (a management figure withheld for
-   * want of the supplier settlement, say), the approved amount and the
-   * contribution may still be on the record, and the server already serves
-   * them redacted and denominated in `handoverEvidence`. They are read from
-   * there — never summed, never re-scaled here. What neither source carries
-   * is an unavailable fact, not a zero.
-   *
-   * The labels are the derivation lines' own: "approved purchase amount" is
-   * not "deal value" — the quote's vehicle price can differ from what the
-   * finance company approved, and a tile must say which one it shows.
-   */
-  const line = (key: string) =>
-    profit.available ? (profit.lines.find((l) => l.key === key) ?? null) : null;
-  type Fact = { labelKey: string; value: string | null };
-  let primary: Fact;
-  let secondary: Fact;
-  if (profit.available && profit.basis === "ACCOUNTING_RESULT") {
-    const price = line("SALE_PRICE");
-    const cost = line("VEHICLE_COST") ?? line("SUPPLIER_ENTITLEMENT");
-    primary = { labelKey: "LineSalePrice", value: price ? money(price.amountMinor) : null };
-    secondary = {
-      labelKey: cost ? (PROFIT_LINE_LABEL[cost.key] ?? cost.key) : "LineVehicleCost",
-      value: cost ? money(cost.amountMinor) : null,
-    };
-  } else if (profit.available) {
-    const approved = line("APPROVED_PURCHASE");
-    const contribution = line("DEALER_CONTRIBUTION");
-    primary = {
-      labelKey: "LineApprovedPurchase",
-      value: approved ? money(approved.amountMinor) : null,
-    };
-    secondary = {
-      labelKey: "LineDealerContribution",
-      value: contribution ? money(contribution.amountMinor) : null,
-    };
-  } else {
-    primary = {
-      labelKey: "LineApprovedPurchase",
-      value:
-        evidence?.approvedPurchaseAmountMinor != null
-          ? moneyIn(evidence.approvedPurchaseAmountMinor, evidence.currency)
-          : null,
-    };
-    secondary = {
-      labelKey: "LineDealerContribution",
-      value:
-        evidence?.dealerContributionMinor != null
-          ? moneyIn(evidence.dealerContributionMinor, evidence.currency)
-          : null,
-    };
-  }
+  // See `selectSummaryFacts` for the selection rules; the labels are the
+  // derivation lines' own, so "approved purchase amount" is never "deal value".
+  const { primary, secondary } = selectSummaryFacts({
+    profit,
+    applicationId,
+    evidence,
+    money,
+    moneyIn,
+  });
   const partyFactLabel: Record<string, string> = {
     CUSTOMER: "FactCustomer",
     FINANCIER: "FactFinancier",
@@ -2201,8 +2259,18 @@ function MoneyPanel({
           figure is served, not derived, and each label names the line it
           shows. */}
       <div className="grid grid-cols-2 gap-2">
-        <MoneyFact label={t(primary.labelKey)} value={primary.value} t={t} />
-        <MoneyFact label={t(secondary.labelKey)} value={secondary.value} t={t} />
+        <MoneyFact
+          label={t(primary.labelKey)}
+          value={primary.value}
+          unavailableKey={primary.unavailableKey}
+          t={t}
+        />
+        <MoneyFact
+          label={t(secondary.labelKey)}
+          value={secondary.value}
+          unavailableKey={secondary.unavailableKey}
+          t={t}
+        />
       </div>
 
       {showParties && (
@@ -2258,7 +2326,9 @@ function MoneyPanel({
         </div>
       )}
 
-      {profit.available && (
+      {/* No disclosure over an empty working: the tiles already say the
+          breakdown is unavailable. */}
+      {profit.available && profit.lines.length > 0 && (
         <details className="group">
           <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 text-sm text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
             <ChevronDown
@@ -3051,12 +3121,14 @@ export function DealCockpitView({
             first row and the identity gets a clean row of its own. */}
         <div className="order-last flex min-w-0 basis-full flex-wrap items-center gap-x-3 gap-y-1 sm:order-none sm:flex-1 sm:basis-0">
           <h1 className="whitespace-nowrap text-xl font-semibold tracking-tight">
-            {/* The TITLE is polymorphic too, and this was only visible by
-                rendering: a cash deal headed `طلب تمويل` ("finance
-                application") names a record that does not exist for it.
-                `dealRef` rather than the application id, for the same reason —
-                a cash deal has no application. Both queries supply it. */}
-            {t(deal.dealKind === "CASH" ? "DealCockpitTitleCash" : "DealCockpitTitle")}{" "}
+            {/* The TITLE names the RECORD, so it follows the server's own
+                identity of the deal (`applicationId`), not `dealKind`: an
+                applicationless FINANCED/LEASE sale is `dealKind: "FINANCED"`
+                and still has no finance application to be titled after —
+                headed `طلب تمويل` it named a record that does not exist for
+                it. `dealRef` rather than the application id for the same
+                reason. Both queries supply both. */}
+            {t(deal.applicationId === null ? "DealCockpitTitleCash" : "DealCockpitTitle")}{" "}
             <bdi className="font-normal text-muted-foreground">#{String(deal.dealRef).slice(-4)}</bdi>
           </h1>
           <Badge variant={deal.status === "APPROVED" || deal.status === "CLOSED" ? "default" : "secondary"}>
@@ -3412,6 +3484,7 @@ export function DealCockpitView({
                 showParties={deal.money.parties.length > 0 || deal.applicationId !== null}
                 appraisalGapMinor={deal.money.appraisalGapMinor}
                 showAppraisalGap={deal.applicationId !== null}
+                applicationId={deal.applicationId}
                 evidence={handoverEvidence ?? undefined}
                 moneyIn={servedMoney}
                 canSettleSupplier={canSettleSupplier}

@@ -260,6 +260,8 @@ const dealRailMessages = defineBilingualMessages({
   StageStatePending: ["Not started", "لم تبدأ"],
   StageStateStopped: ["Will not continue", "لن تستكمل"],
   ProfitBreakdownToggle: ["How this is calculated", "طريقة الاحتساب"],
+  /** The headline is served but its working is not — distinct from "never recorded". */
+  ProfitBreakdownUnavailable: ["Breakdown unavailable", "التفصيل غير متاح"],
   DealEssentialsHeading: ["Deal essentials", "أساسيات الصفقة"],
 
   /** رسوم ومصاريف تسليم السيارة — the handover-cost section on the Deal. */
