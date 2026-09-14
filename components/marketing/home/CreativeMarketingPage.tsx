@@ -29,7 +29,6 @@ import {
   NAV_LINKS,
   OWNER_POINTS,
   PIPE_COLUMNS,
-  PLAN_MONTHLY,
   PLAN_POINTS,
   PL_BARS,
   PRICING,
@@ -765,28 +764,16 @@ function VoicesCarousel({ locale }: { locale: string }) {
 /* ====================================================================== */
 
 function Pricing({ locale }: { locale: string }) {
-  const [annual, setAnnual] = useState(false);
-  const v = annual ? Math.round(PLAN_MONTHLY * 0.8) : PLAN_MONTHLY;
   return (
     <>
-      <SectionHead locale={locale} eyebrow={PRICING.eyebrow} title={PRICING.title} lede={PRICING.lede}>
-        <div className="toggle-wrap">
-          <div className="toggle" role="group">
-            <button type="button" className={annual ? "" : "on"} aria-pressed={!annual} onClick={() => setAnnual(false)}>
-              {pick(locale, PRICING.monthly)}
-            </button>
-            <button type="button" className={annual ? "on" : ""} aria-pressed={annual} onClick={() => setAnnual(true)}>
-              {pick(locale, PRICING.annual)}
-            </button>
-          </div>
-        </div>
-      </SectionHead>
+      <SectionHead locale={locale} eyebrow={PRICING.eyebrow} title={PRICING.title} lede={PRICING.lede} />
 
+      {/* No amount on the card by owner decision (SCRUM-326): the plan name is
+          the focal point and the note beneath it takes the old amount's slot. */}
       <div className="plan reveal-scale">
         <span className="plan-badge">{pick(locale, PRICING.badge)}</span>
         <h3 className="plan-name">{pick(locale, PRICING.plan)}</h3>
-        <div className="amount">{money(locale, v)}</div>
-        <div className="per">{pick(locale, annual ? PRICING.perMonthAnnual : PRICING.perMonth)}</div>
+        <p className="plan-note">{pick(locale, PRICING.note)}</p>
         <ul>
           {PLAN_POINTS.map((p) => (
             <li key={p.en}>

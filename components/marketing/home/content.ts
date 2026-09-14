@@ -5,8 +5,9 @@
  * copy; it resolves each pair through `pick(locale, bi)` so a translation gap
  * is a type error rather than an English fallback in the Arabic UI.
  *
- * Currency is ONE constant. Change `CURRENCY` and `PLAN_MONTHLY` to
- * re-denominate the whole page.
+ * Currency is ONE constant. Change `CURRENCY` to re-denominate the whole
+ * page (vehicle floor and calculator). The plan card carries no price by
+ * owner decision (SCRUM-326).
  */
 
 export type Locale = "en" | "ar";
@@ -18,9 +19,6 @@ export function pick(locale: string, bi: Bi): string {
 }
 
 export const CURRENCY: Bi = { en: "JOD", ar: "د.أ" };
-
-/** Indicative plan price shown on the page. The owner sets the real figure. */
-export const PLAN_MONTHLY = 249;
 
 /** Where every generated image for this page lives. Filenames are a contract. */
 export const IMG = "/marketing/landing-v2";
@@ -459,13 +457,10 @@ export const BAND = {
 export const PRICING = {
   eyebrow: { en: "Pricing", ar: "الأسعار" },
   title: { en: "Elite dealership plans", ar: "الاستثمار في التميز" },
-  lede: { en: "Zero complexity. One simple price built for high-performance showrooms.", ar: "لا توجد تعقيدات. باقة واحدة تشمل كل شيء، مصممة للمعارض التي لا ترضى بأقل من الكمال." },
-  monthly: { en: "Monthly Billing", ar: "فاتورة شهرية" },
-  annual: { en: "Annual Billing (20% Off)", ar: "فاتورة سنوية (خصم 20%)" },
+  lede: { en: "Zero complexity. One plan built for high-performance showrooms.", ar: "لا توجد تعقيدات. باقة واحدة تشمل كل شيء، مصممة للمعارض التي لا ترضى بأقل من الكمال." },
   badge: { en: "Best Value", ar: "الأكثر طلباً" },
   plan: { en: "AutoFlow Complete", ar: "أوتوفلو المتكاملة" },
-  perMonth: { en: "per month", ar: "شهرياً" },
-  perMonthAnnual: { en: "per month, billed annually", ar: "شهرياً، تُدفع سنوياً" },
+  note: { en: "One plan. Everything included.", ar: "باقة واحدة. كل شيء مشمول." },
   cta: { en: "Elevate Your Dealership Now", ar: "ارتقِ بمعرضك إلى النخبة الآن" },
 } as const satisfies Record<string, Bi>;
 
