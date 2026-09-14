@@ -11,7 +11,7 @@ import path from "node:path";
 import {
   CONVEX_DEPLOY_KEY_SELECTOR_NOTICE,
   CRON_SELF_REPORT_SOURCES,
-  DIAGNOSTIC_ROW_BOUND,
+  DIAGNOSTIC_ROW_BOUNDS,
   HEARTBEAT_JOB_NAMES,
   OPERATIONAL_DIAGNOSTIC_TABLES,
   classifyMarkerRead,
@@ -19,6 +19,7 @@ import {
   componentNames,
   decideZeroState,
   deploymentNameFromUrl,
+  diagnosticRowBound,
   parseFunctionSpec,
   parseTableList,
   renderZeroStateSummary,
@@ -337,7 +338,24 @@ describe("diagnostic rows — provenance is validated row by row, from the CLI's
     for (const provider of ["clerk", "whatsapp", "resend", "payment", "instagram", "facebook", "instagram-oauth", "facebook-oauth", "notification-email", "marketplace-whatsapp"]) {
       expect(CRON_SELF_REPORT_SOURCES.has(provider)).toBe(false);
     }
-    expect(DIAGNOSTIC_ROW_BOUND).toBe(500);
+  });
+
+  test("the row ceilings are pinned per table and derived from schedule × retention, not a flat guess", () => {
+    // cronHeartbeats: 2 five-minute jobs × 288 runs/day × (7-day retention + 1 day prune lag).
+    expect(DIAGNOSTIC_ROW_BOUNDS.cronHeartbeats).toBe(2 * 288 * 8);
+    expect(DIAGNOSTIC_ROW_BOUNDS.cronHeartbeats).toBe(4608);
+    // webhookLogs: (96 fifteen-minute + 2 daily) × (30-day retention + 1 day lag) + 5 weekly + 3 monthly × 2.
+    expect(DIAGNOSTIC_ROW_BOUNDS.webhookLogs).toBe(98 * 31 + 5 + 6);
+    expect(DIAGNOSTIC_ROW_BOUNDS.webhookLogs).toBe(3049);
+    // Exactly the declared tables have a ceiling; nothing else is ever admissible at any count.
+    expect(Object.keys(DIAGNOSTIC_ROW_BOUNDS).sort()).toEqual([...OPERATIONAL_DIAGNOSTIC_TABLES].sort());
+    expect(diagnosticRowBound("cronHeartbeats")).toBe(4608);
+    expect(diagnosticRowBound("webhookLogs")).toBe(3049);
+    expect(diagnosticRowBound("organizations")).toBeUndefined();
+    expect(diagnosticRowBound("toString")).toBeUndefined();
+    // Steady state under retention alone (7 × 576 = 4,032) fits with the lag day to spare; the old flat 500 does not.
+    expect(DIAGNOSTIC_ROW_BOUNDS.cronHeartbeats).toBeGreaterThan(7 * 576);
+    expect(DIAGNOSTIC_ROW_BOUNDS.cronHeartbeats).toBeGreaterThan(500);
   });
 
   test("CONTROL: real heartbeat rows and a real cron self-report row are VERIFIED with provenance counts", () => {
@@ -403,13 +421,79 @@ describe("diagnostic rows — provenance is validated row by row, from the CLI's
     expect(validateDiagnosticRow("webhookLogs", null).ok).toBe(false);
   });
 
-  test("more rows than the bound is REJECTED, not sampled", () => {
-    const lines = Array.from({ length: DIAGNOSTIC_ROW_BOUND + 1 }, () => CRON_REPORT_ROW).join("\n");
-    const r = validateDiagnosticRows("webhookLogs", lines, "", 0);
-    expect(r.state).toBe("REJECTED");
-    expect(r.rows).toBe(DIAGNOSTIC_ROW_BOUND + 1);
-    expect(r.reasons[0]).toMatch(/more than 500 rows/);
-    expect(validateDiagnosticRows("webhookLogs", Array.from({ length: DIAGNOSTIC_ROW_BOUND }, () => CRON_REPORT_ROW).join("\n"), "", 0).state).toBe("VERIFIED");
+  /**
+   * Production run 34859139237 (2026-09-14) deployed 0e49938cd to
+   * `clever-mockingbird-719` and stopped on the flat 500-row bound. A read-only
+   * full fetch found 1,146 `cronHeartbeats` rows — 573 `check-upcoming-tasks`
+   * and 573 `reconcile-expired-subscriptions`, zero invalid, spanning
+   * 2026-09-12T16:40:15Z to 2026-09-14T16:20:13Z: exactly two five-minute jobs
+   * for 47h40m. That shape must VERIFY, with every row read.
+   */
+  test("REGRESSION 34859139237: 1,146 legitimate heartbeat rows (573 per job, 47 hours of two five-minute jobs) are VERIFIED, every one read", () => {
+    const start = Date.UTC(2026, 8, 12, 16, 40, 15);
+    const rows: string[] = [];
+    for (let tick = 0; tick < 573; tick++) {
+      const ranAt = start + tick * 5 * 60 * 1000;
+      rows.push(JSON.stringify({ _creationTime: ranAt + 0.7, _id: `nd7a${String(tick).padStart(28, "0")}`, detail: "Triggered alarms for 0 tasks.", jobName: "check-upcoming-tasks", ranAt, success: true }));
+      rows.push(JSON.stringify({ _creationTime: ranAt + 1.1, _id: `nd7r${String(tick).padStart(28, "0")}`, detail: "0 expired of 0 scanned", jobName: "reconcile-expired-subscriptions", ranAt: ranAt + 1, success: true }));
+    }
+    expect(rows).toHaveLength(1146);
+    const r = validateDiagnosticRows("cronHeartbeats", NOISE + rows.join("\n") + "\n", CONVEX_DEPLOY_KEY_SELECTOR_NOTICE + "\n", 0);
+    expect(r).toEqual({ state: "VERIFIED", rows: 1146, provenance: { "heartbeat:check-upcoming-tasks": 573, "heartbeat:reconcile-expired-subscriptions": 573 }, reasons: [] });
+    // Every row is still read: one bad row among the 1,146 — at the end, where a sample would miss it — REJECTS.
+    const poisoned = [...rows.slice(0, 1145), rows[1145].replace('"reconcile-expired-subscriptions"', '"backfill-ledger"')];
+    const p = validateDiagnosticRows("cronHeartbeats", poisoned.join("\n"), "", 0);
+    expect(p.state).toBe("REJECTED");
+    expect(p.rows).toBe(1146);
+    expect(p.reasons).toEqual(["cronHeartbeats row 1146: jobName is not a declared heartbeat writer."]);
+    // And a full retention window of steady-state heartbeats (7 × 576 = 4,032) is VERIFIED too.
+    const week = Array.from({ length: 4032 }, (_, i) => HEARTBEAT_ROWS[i % 2]).join("\n");
+    expect(validateDiagnosticRows("cronHeartbeats", week, "", 0)).toMatchObject({ state: "VERIFIED", rows: 4032 });
+  });
+
+  test("more rows than a table's ceiling is REJECTED, not sampled — at the ceiling it is still fully validated", () => {
+    for (const [table, row] of [["cronHeartbeats", HEARTBEAT_ROWS[0]], ["webhookLogs", CRON_REPORT_ROW]] as const) {
+      const bound = DIAGNOSTIC_ROW_BOUNDS[table];
+      const over = validateDiagnosticRows(table, Array.from({ length: bound + 1 }, () => row).join("\n"), "", 0);
+      expect(over.state, table).toBe("REJECTED");
+      expect(over.rows, table).toBe(bound + 1);
+      expect(over.provenance, table).toEqual({});
+      expect(over.reasons[0], table).toMatch(new RegExp(`^${table} holds more than ${bound} rows`));
+      expect(over.reasons[0], table).toMatch(/does not sample/);
+      const at = validateDiagnosticRows(table, Array.from({ length: bound }, () => row).join("\n"), "", 0);
+      expect(at.state, table).toBe("VERIFIED");
+      expect(at.rows, table).toBe(bound);
+      expect(Object.values(at.provenance).reduce((a, b) => a + b, 0), table).toBe(bound);
+    }
+    // The ceilings are per table: a heartbeat count that is fine for cronHeartbeats is over webhookLogs' ceiling.
+    expect(DIAGNOSTIC_ROW_BOUNDS.cronHeartbeats).toBeGreaterThan(DIAGNOSTIC_ROW_BOUNDS.webhookLogs);
+    expect(validateDiagnosticRows("webhookLogs", Array.from({ length: DIAGNOSTIC_ROW_BOUNDS.cronHeartbeats }, () => CRON_REPORT_ROW).join("\n"), "", 0).state).toBe("REJECTED");
+    // The old flat bound is gone: 501 valid rows pass on both tables.
+    expect(validateDiagnosticRows("cronHeartbeats", Array.from({ length: 501 }, () => HEARTBEAT_ROWS[1]).join("\n"), "", 0).state).toBe("VERIFIED");
+    expect(validateDiagnosticRows("webhookLogs", Array.from({ length: 501 }, () => CRON_REPORT_ROW).join("\n"), "", 0).state).toBe("VERIFIED");
+  });
+
+  test("a table with no ceiling is REJECTED before any row is read; a test override still applies only to a declared table", () => {
+    expect(validateDiagnosticRows("organizations", CRON_REPORT_ROW + "\n", "", 0)).toEqual({ state: "REJECTED", rows: 0, provenance: {}, reasons: ["organizations is not a declared diagnostic table; it has no admissible row count."] });
+    expect(validateDiagnosticRows("organizations", "", "", 1).state).toBe("REJECTED");
+    expect(validateDiagnosticRows("webhookLogs", CRON_REPORT_ROW + "\n" + CRON_REPORT_ROW + "\n", "", 0, 1).state).toBe("REJECTED");
+  });
+
+  test("the over-ceiling verdict surfaces in the report with the ceiling, never a sampled pass", () => {
+    const rows = Array.from({ length: DIAGNOSTIC_ROW_BOUNDS.cronHeartbeats + 1 }, () => HEARTBEAT_ROWS[0]).join("\n");
+    const diagnostics = validateDiagnosticRows("cronHeartbeats", rows, "", 0);
+    const schema = [...SCHEMA, "cronHeartbeats", "webhookLogs"];
+    const report = decideZeroState(
+      healthy({
+        schemaTables: schema,
+        listedTables: schema,
+        reads: [...reads(), { component: null, table: "cronHeartbeats", outcome: "NONEMPTY", diagnostics }, { component: null, table: "webhookLogs", outcome: "EMPTY" }],
+      })
+    );
+    expect(report.verdict).toBe("FAIL");
+    expect(report.counts.nonEmpty).toBe(1);
+    expect(report.counts.operational).toBe(0);
+    expect(report.reasons.join(" ")).toMatch(/cronHeartbeats holds 4609 row\(s\) that were NOT verified as cron diagnostics \(REJECTED\): cronHeartbeats holds more than 4608 rows/);
   });
 
   test("an unparseable line, a failed read, silence, or stderr output is UNREADABLE — never a partial pass", () => {

@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { componentNames } from "./zeroState";
+import { DIAGNOSTIC_ROW_BOUNDS, componentNames } from "./zeroState";
 
 // ── the process boundaries ──────────────────────────────────────────────────
 type Spawned = { file: string; cli: string; args: string[]; env: Record<string, string | undefined> };
@@ -378,7 +378,8 @@ describe("diagnostic tables are read back in full and validated — the shell is
     const bounded = r.commands.filter((c) => c[0] === "data" && c.includes("--format"));
     expect(bounded.map((c) => c[1]).sort()).toEqual(["cronHeartbeats", "webhookLogs"]);
     for (const c of bounded) {
-      expect(c.slice(2, 6)).toEqual(["--limit", "501", "--format", "jsonl"]);
+      // Each table is read at its own retention-derived bound + 1, so an overflow is observable without sampling.
+      expect(c.slice(2, 6)).toEqual(["--limit", String(DIAGNOSTIC_ROW_BOUNDS[c[1]] + 1), "--format", "jsonl"]);
       expect(c.slice(-2)).toEqual(["--deployment", DEPLOYMENT]);
     }
     expect(r.summary).toMatch(/cronHeartbeats: 2 row\(s\) VERIFIED as cron self-reports — heartbeat:check-upcoming-tasks ×2/);
@@ -397,10 +398,11 @@ describe("diagnostic tables are read back in full and validated — the shell is
   });
 
   test("more rows than the bound: the read asks for bound + 1, sees it exceeded, and fails without sampling", async () => {
-    answer = deploymentAnswers({ nonEmpty: { cronHeartbeats: Array.from({ length: 800 }, () => HEARTBEAT_ROW) } });
+    const bound = DIAGNOSTIC_ROW_BOUNDS.cronHeartbeats;
+    answer = deploymentAnswers({ nonEmpty: { cronHeartbeats: Array.from({ length: bound + 300 }, () => HEARTBEAT_ROW) } });
     const r = await accountLogin();
     expect(r.exitCode).toBe(1);
-    expect(r.summary).toMatch(/cronHeartbeats holds 501 row\(s\) that were NOT verified .*more than 500 rows/);
+    expect(r.summary).toMatch(new RegExp(`cronHeartbeats holds ${bound + 1} row\\(s\\) that were NOT verified .*more than ${bound} rows`));
   });
 
   test("a failed bounded read is UNREADABLE and fails it", async () => {
