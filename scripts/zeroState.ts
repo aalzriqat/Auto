@@ -53,18 +53,33 @@
  *   `webhookLogs` is also where Clerk, WhatsApp, Resend, the payment provider
  *   and the social OAuth callbacks are logged, so a row there is only harmless
  *   if it is provably a cron self-report. When one of the two tables holds
- *   rows, every row is read back (bounded, JSON lines) and checked against the
- *   narrow shape its cron writer produces: the exact key set, the job name or
- *   source the crons use, and none of the fields a provider delivery carries
- *   (`eventId`, payload hashes/previews, receive counts). One rejected row,
- *   an unparseable line, a read that exceeds the bound, or a read that fails
- *   fails the verdict. The Instagram token-refresh cron logs under the same
- *   `source` as Instagram provider traffic, so that one is admitted only by
- *   its exact empty-deployment summary. The table list and the provenance
- *   declarations are pinned by tests so neither can quietly grow. A pass means
- *   business, component and storage state is empty and the diagnostics were
- *   VERIFIED and disclosed by provenance and count — not that every table is
- *   literally empty.
+ *   rows, every row is read back (JSON lines, up to a per-table ceiling) and
+ *   checked against the narrow shape its cron writer produces: the exact key
+ *   set, the job name or source the crons use, and none of the fields a
+ *   provider delivery carries (`eventId`, payload hashes/previews, receive
+ *   counts). One rejected row, an unparseable line, a read that exceeds the
+ *   ceiling, or a read that fails fails the verdict. The Instagram
+ *   token-refresh cron logs under the same `source` as Instagram provider
+ *   traffic, so that one is admitted only by its exact empty-deployment
+ *   summary. The table list and the provenance declarations are pinned by
+ *   tests so neither can quietly grow. A pass means business, component and
+ *   storage state is empty and the diagnostics were VERIFIED and disclosed by
+ *   provenance and count — not that every table is literally empty.
+ * · **The row ceiling is derived from retention, not from "a few minutes of
+ *   noise".** A single 500-row bound was crossed by an honest deployment:
+ *   production run 34859139237 (2026-09-14) stopped on 1,146 `cronHeartbeats`
+ *   rows — 573 per declared job, every one valid — after two five-minute jobs
+ *   had run for 47 hours since the push. Two jobs every five minutes under
+ *   seven-day retention is ~4,032 rows at steady state, so 500 stops being
+ *   true about 21 hours after any deploy. Each table's ceiling
+ *   (`DIAGNOSTIC_ROW_BOUNDS`) is now what its declared writers can accrue
+ *   under their documented schedule and retention (`convex/crons.ts`,
+ *   `adminSystem.pruneOperationalLogs`: heartbeats 7 days, webhook logs 30
+ *   days), plus one day of prune lag — 4,608 and 3,049 rows. Every row up to
+ *   the ceiling is still read and validated; nothing is sampled. Beyond it the
+ *   table is holding more than its own crons can explain, and that is a
+ *   refusal. The ceilings are pinned by tests, as is the 1,146-row shape that
+ *   stopped the run.
  *
  * Nothing here remediates. A failed verdict is a stop, not a reset.
  */
@@ -75,13 +90,6 @@
  * fails the verdict.
  */
 export const OPERATIONAL_DIAGNOSTIC_TABLES: ReadonlySet<string> = new Set(["cronHeartbeats", "webhookLogs"]);
-
-/**
- * How many rows a declared diagnostic table may hold and still be validated.
- * More than this is not "a few minutes of cron noise on an empty deployment";
- * the checkpoint refuses rather than sample.
- */
-export const DIAGNOSTIC_ROW_BOUND = 500;
 
 /**
  * The only `cronHeartbeats` writers (`convex/crons.ts` triggerAlarms,
@@ -104,6 +112,46 @@ export const CRON_SELF_REPORT_SOURCES: ReadonlySet<string> = new Set([
   "prepaid-expense-amortization",
   "marketplace-weekly-report",
 ]);
+
+/**
+ * How many rows each declared diagnostic table may hold and still be validated
+ * row by row. Each ceiling is what the table's declared writers can accrue
+ * under their documented schedule (`convex/crons.ts`) and retention
+ * (`adminSystem.pruneOperationalLogs`), plus one day of prune lag as slack
+ * (the prune runs hourly; the slack also absorbs the extra tick a redeploy
+ * fires). Every row up to the ceiling is read and validated — nothing is
+ * sampled. More than the ceiling means the table holds more than its own
+ * crons can explain, and the checkpoint refuses.
+ *
+ * Do not lower these back toward "a few minutes of noise": production run
+ * 34859139237 (2026-09-14) stopped on 1,146 valid `cronHeartbeats` rows under
+ * a flat 500-row bound, 47 hours after the push.
+ */
+const DAY_MS = 24 * 60 * 60 * 1000;
+const RUNS_PER_DAY = {
+  everyFiveMinutes: DAY_MS / (5 * 60 * 1000),
+  everyFifteenMinutes: DAY_MS / (15 * 60 * 1000),
+  daily: 1,
+} as const;
+/** `adminSystem.ts` CRON_HEARTBEAT_RETENTION_MS / WEBHOOK_LOG_RETENTION_MS in days, plus one day of prune lag. */
+const HEARTBEAT_WINDOW_DAYS = 7 + 1;
+const WEBHOOK_LOG_WINDOW_DAYS = 30 + 1;
+export const DIAGNOSTIC_ROW_BOUNDS: Readonly<Record<string, number>> = {
+  // Both HEARTBEAT_JOB_NAMES run every five minutes and write one row per run: 576/day over 8 days → 4,608.
+  cronHeartbeats: HEARTBEAT_JOB_NAMES.size * RUNS_PER_DAY.everyFiveMinutes * HEARTBEAT_WINDOW_DAYS,
+  // social-auto-reply-retry every 15 minutes (96/day); subscription-reminder and
+  // the Instagram token refresh daily; marketplace-weekly-report weekly (≤5 in
+  // 31 days); three monthly jobs (≤2 each in 31 days) → 3,049.
+  webhookLogs:
+    (RUNS_PER_DAY.everyFifteenMinutes + 2 * RUNS_PER_DAY.daily) * WEBHOOK_LOG_WINDOW_DAYS +
+    Math.ceil(WEBHOOK_LOG_WINDOW_DAYS / 7) +
+    3 * 2,
+};
+
+/** The ceiling for a declared diagnostic table; `undefined` for anything else — an undeclared table has no admissible row count. */
+export function diagnosticRowBound(table: string): number | undefined {
+  return Object.prototype.hasOwnProperty.call(DIAGNOSTIC_ROW_BOUNDS, table) ? DIAGNOSTIC_ROW_BOUNDS[table] : undefined;
+}
 
 /**
  * The Instagram token-refresh cron (`convex/crons.ts` triggerInstagramTokenRefresh)
@@ -284,26 +332,38 @@ export function validateDiagnosticRow(table: string, row: unknown): { ok: true; 
 }
 
 /**
- * `convex data <table> --limit <bound + 1> --format jsonl` on a declared
+ * `convex data <table> --limit <ceiling + 1> --format jsonl` on a declared
  * diagnostic table that the limit-one read found NONEMPTY. Every line must be a
- * JSON document and every document must validate; more than `bound` rows, a
- * failed read, silence, or any unparseable line refuses. Values are never kept.
+ * JSON document and every document must validate; more rows than the table's
+ * retention-derived ceiling (`DIAGNOSTIC_ROW_BOUNDS`), a failed read, silence,
+ * or any unparseable line refuses. Values are never kept. `bound` overrides the
+ * ceiling for tests only; a table with no ceiling is refused outright.
  */
 export function validateDiagnosticRows(
   table: string,
   stdout: string,
   stderr: string,
   exitStatus: number | null,
-  bound = DIAGNOSTIC_ROW_BOUND
+  bound: number | undefined = diagnosticRowBound(table)
 ): DiagnosticValidation {
   const unreadable = (reason: string): DiagnosticValidation => ({ state: "UNREADABLE", rows: 0, provenance: {}, reasons: [reason] });
+  if (bound === undefined) {
+    return { state: "REJECTED", rows: 0, provenance: {}, reasons: [`${table} is not a declared diagnostic table; it has no admissible row count.`] };
+  }
   if (exitStatus !== 0) return unreadable(`the bounded read of ${table} exited ${exitStatus ?? "without a status"}.`);
   const lines = cleanLines(stdout);
   if (lines.length === 0) {
     return unreadable(`the bounded read of ${table} printed no documents although the limit-one read found some; refusing to reconcile silence.`);
   }
   if (lines.length > bound) {
-    return { state: "REJECTED", rows: lines.length, provenance: {}, reasons: [`${table} holds more than ${bound} rows; that is not empty-deployment cron noise, and the checkpoint does not sample.`] };
+    return {
+      state: "REJECTED",
+      rows: lines.length,
+      provenance: {},
+      reasons: [
+        `${table} holds more than ${bound} rows — more than its declared cron writers can accrue under their schedule and retention; that is not empty-deployment cron noise, and the checkpoint does not sample.`,
+      ],
+    };
   }
   if (cleanLines(stderr).length > 0) return unreadable(`the bounded read of ${table} wrote to stderr; refusing to trust a partial read.`);
   const provenance: Record<string, number> = {};
@@ -553,7 +613,7 @@ export function decideZeroState(input: ZeroStateInput): ZeroStateReport {
         : "_scheduled_functions could not be read; informational only."
   );
   notes.push(
-    "READ-ONLY COMMANDS / WRITE-CAPABLE CREDENTIAL: the commands issued were data listings, limit-one reads, function metadata and one environment read. Convex deploy keys carry full capability regardless of their label; read-only was the behaviour of this script, not an enforcement of the credential."
+    "READ-ONLY COMMANDS / WRITE-CAPABLE CREDENTIAL: the commands issued were data listings, limit-one reads, bounded full reads of the declared diagnostic tables, function metadata and one environment read. Convex deploy keys carry full capability regardless of their label; read-only was the behaviour of this script, not an enforcement of the credential."
   );
 
   return { verdict: reasons.length === 0 ? "ZERO" : "FAIL", reasons, counts, notes };

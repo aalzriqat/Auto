@@ -35,12 +35,12 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { forLog, parseDeployKeyTarget, requireBoundProductionKey } from "./releaseGuard.ts";
 import {
-  DIAGNOSTIC_ROW_BOUND,
   OPERATIONAL_DIAGNOSTIC_TABLES,
   classifyMarkerRead,
   classifyTableRead,
   componentNames,
   decideZeroState,
+  diagnosticRowBound,
   parseFunctionSpec,
   parseTableList,
   renderZeroStateSummary,
@@ -91,7 +91,7 @@ if (keyTarget.kind !== "missing") {
 if (!existsSync(CONVEX_CLI)) fail(`The repository-local Convex CLI is missing at ${CONVEX_CLI}.`);
 
 console.log(`Zero-state verification: ${expectedDeployment} · ${phase} · ${authMode}`);
-console.log(`READ-ONLY COMMANDS / WRITE-CAPABLE CREDENTIAL — only listings, limit-one reads, function metadata and one env read are issued.`);
+console.log(`READ-ONLY COMMANDS / WRITE-CAPABLE CREDENTIAL — only listings, limit-one reads, bounded full reads of the declared diagnostic tables, function metadata and one env read are issued.`);
 
 // ─── The CLI, read-only ─────────────────────────────────────────────────────
 /** Runs the CLI and returns both streams and the status; neither stream is ever printed (they may carry data). */
@@ -115,11 +115,15 @@ function readTable(table, component) {
 
 /**
  * A NONEMPTY root table in OPERATIONAL_DIAGNOSTIC_TABLES: read every row back
- * (one more than the bound, so exceeding it is detected) and validate each as
- * a cron self-report. Provenance labels and counts survive; values do not.
+ * (one more than the table's retention-derived ceiling, so exceeding it is
+ * detected — the CLI pages through `--limit` without a cap) and validate each
+ * as a cron self-report. Provenance labels and counts survive; values do not.
+ * A table with no ceiling is never read; the validator refuses it.
  */
 function readDiagnostics(table) {
-  const r = convex(["data", table, "--limit", String(DIAGNOSTIC_ROW_BOUND + 1), "--format", "jsonl"]);
+  const bound = diagnosticRowBound(table);
+  if (bound === undefined) return validateDiagnosticRows(table, "", "", 0);
+  const r = convex(["data", table, "--limit", String(bound + 1), "--format", "jsonl"]);
   return validateDiagnosticRows(table, r.stdout, r.stderr, r.status);
 }
 
