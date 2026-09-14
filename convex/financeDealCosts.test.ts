@@ -4,6 +4,7 @@ import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import { MAX_LIVE_DEAL_FEE_LINES } from "./utils/dealCostLimits";
 import { ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 
 type TestConvex = ConvexTestInstance<typeof schema>;
@@ -1175,6 +1176,85 @@ describe("the legal invoice and accounting classification", () => {
       notes: "Invoice, agreement and settlement advice all on file.",
     });
 
+    expect((await readCosts(seed)).accountingClassification).toBe("CLASSIFIED");
+  });
+
+  test("voided custody-cost history cannot strand reconciliation or classification", async () => {
+    const seed = await seedDeal("bounded-custody");
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+      orgId: seed.orgId,
+      applicationId: seed.applicationId,
+      userId: seed.employeeId,
+      issuedMinor: jod(120),
+      idempotencyKey: crypto.randomUUID(),
+    });
+
+    // More historical rows than the live-fee cap, all voided. A custody-scoped
+    // `.collect()` followed by an in-memory void filter reads this entire tail
+    // on every screen, reconciliation and classification attempt. The product
+    // must instead reuse the deal's bounded live-fee read, whose index excludes
+    // these rows before they enter the transaction.
+    await seed.t.run(async (ctx) => {
+      for (let n = 0; n <= MAX_LIVE_DEAL_FEE_LINES; n += 1) {
+        await ctx.db.insert("financeDealFees", {
+          orgId: seed.orgId,
+          applicationId: seed.applicationId,
+          feeType: "LICENSING",
+          description: `Voided custody cost ${n}`,
+          currency: "JOD",
+          actualAmountMinor: jod(999),
+          paidBy: "EMPLOYEE",
+          paidTo: "GOVERNMENT",
+          accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+          includedInQuotation: false,
+          deductedFromSettlement: false,
+          refundable: false,
+          custodyId,
+          source: "MANUAL",
+          voidedAt: Date.now(),
+          voidedBy: seed.userId,
+          voidReason: "Historical correction",
+          createdBy: seed.userId,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      }
+    });
+
+    const liveFeeId = await addFee(seed, {
+      actualAmountMinor: jod(120),
+      paidBy: "EMPLOYEE",
+      custodyId,
+    });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: seed.orgId,
+      feeId: liveFeeId,
+      notes: "Matched to the receipt.",
+    });
+    await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+      orgId: seed.orgId,
+      applicationId: seed.applicationId,
+      legalInvoiceAmountMinor: jod(10_500),
+      legalInvoiceNumber: "INV-BOUNDED-CUSTODY",
+      legalInvoiceDate: Date.now(),
+      issuedTo: "CUSTOMER",
+    });
+
+    const costs = await readCosts(seed);
+    expect(costs.fees.map((fee) => fee._id)).toEqual([liveFeeId]);
+    expect(costs.custody[0]?.summary?.actualExpensesMinor).toBe(jod(120));
+    expect(costs.custody[0]?.summary?.settled).toBe(true);
+
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+      orgId: seed.orgId,
+      custodyId,
+      notes: "Only the live receipt belongs in the balance.",
+    });
+    await seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, {
+      orgId: seed.orgId,
+      applicationId: seed.applicationId,
+      notes: "Invoice, live costs and custody all reconcile.",
+    });
     expect((await readCosts(seed)).accountingClassification).toBe("CLASSIFIED");
   });
 

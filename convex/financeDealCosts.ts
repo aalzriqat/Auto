@@ -436,17 +436,25 @@ export function summarizeCustody(
   };
 }
 
-/** Sum of recorded actuals on the lines this custody paid for. */
-async function custodyActualExpensesMinor(
-  ctx: QueryCtx | MutationCtx,
+/**
+ * Sum recorded actuals for one custody from the deal's already-bounded LIVE
+ * fee set. Callers must pass the result of `loadActiveFees`: querying by
+ * custody and filtering voids afterwards would read an unbounded add/void
+ * history and could strand both reconciliation and classification at the
+ * platform transaction limit even while the deal had fewer than 500 live
+ * lines.
+ */
+function custodyActualExpensesMinor(
+  liveFees: ReadonlyArray<Doc<"financeDealFees">>,
   custodyId: Id<"financeDealCustody">
-): Promise<number> {
-  const rows = await ctx.db
-    .query("financeDealFees")
-    .withIndex("by_custody", (q) => q.eq("custodyId", custodyId))
-    .collect();
-  return rows
-    .filter((row) => row.voidedAt === undefined && row.actualAmountMinor !== undefined)
+): number {
+  return liveFees
+    .filter(
+      (row) =>
+        row.voidedAt === undefined &&
+        row.custodyId === custodyId &&
+        row.actualAmountMinor !== undefined
+    )
     .reduce((sum, row) => sum + (row.actualAmountMinor ?? 0), 0);
 }
 
@@ -713,7 +721,7 @@ export const listDealCosts = query({
         ...row,
         summary: custodyMismatch
           ? null
-          : summarizeCustody(row, await custodyActualExpensesMinor(ctx, row._id)),
+          : summarizeCustody(row, custodyActualExpensesMinor(fees, row._id)),
         summaryUnavailable: custodyMismatch
           ? { reason: "MIXED_DENOMINATION" as const, custodyCurrency: row.currency, dealCurrency: currency }
           : null,
@@ -1657,7 +1665,10 @@ export const reconcileDealCustody = mutation({
 
     const summary = summarizeCustody(
       custody,
-      await custodyActualExpensesMinor(ctx, args.custodyId)
+      custodyActualExpensesMinor(
+        await loadActiveFees(ctx, custody.applicationId),
+        args.custodyId
+      )
     );
     const writeOffReason = args.writeOffReason?.trim();
 
@@ -1958,7 +1969,7 @@ export const classifyDealAccounting = mutation({
       }
       const custodySummary = summarizeCustody(
         row,
-        await custodyActualExpensesMinor(ctx, row._id)
+        custodyActualExpensesMinor(fees, row._id)
       );
       if (!custodySummary.settled && row.status !== "WRITTEN_OFF") {
         throw new ConvexError(
