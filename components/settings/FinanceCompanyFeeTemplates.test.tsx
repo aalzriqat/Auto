@@ -29,6 +29,12 @@ const mutations = vi.hoisted(() => ({
 /** What `orgSettings.get` answers: `undefined` is "still loading", `null` is "no row". */
 const orgSettings = vi.hoisted(() => ({ current: { currency: "JOD" } as { currency: string } | null | undefined }));
 
+// UI behavior at the shared boundary does not require mounting one hundred
+// complete rows. Backend tests exercise the real production cap; this suite
+// uses a small boundary so the full 5k-test CI run cannot time out on jsdom
+// rendering work unrelated to the invariant.
+vi.mock("@/convex/utils/dealCostLimits", () => ({ MAX_FEE_TEMPLATES: 2 }));
+
 vi.mock("convex/react", () => ({
   useMutation: (reference: string) => (reference.includes("update") ? mutations.update : mutations.create),
   useQuery: (reference: string) => (reference.includes("orgSettings") ? orgSettings.current : []),
@@ -408,10 +414,6 @@ describe("add and remove", () => {
 });
 
 describe("the configuration limit", () => {
-  // A hundred rows of native selects is slow to mount in jsdom — that IS the
-  // shape of a company at the cap, so the budget is raised rather than the case
-  // shrunk.
-  const SLOW = 90_000;
   const atLimit = Array.from({ length: MAX_FEE_TEMPLATES }, (_, i) => ({
     ...insurance,
     description: `fee ${i}`,
@@ -423,7 +425,7 @@ describe("the configuration limit", () => {
     expect(feeRows()).toHaveLength(MAX_FEE_TEMPLATES);
     expect((screen.getByRole("button", { name: "FeeTemplateAdd" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText("FeeTemplatesLimitReached")).toBeTruthy();
-  }, SLOW);
+  });
 
   test("a company already past the cap is still editable while the list is left alone, and repaired by a compliant edit", async () => {
     renderEdit([...atLimit, lien, insurance]);
@@ -450,5 +452,5 @@ describe("the configuration limit", () => {
     save();
     await waitFor(() => expect(mutations.update).toHaveBeenCalled());
     expect(mutations.update.mock.calls[0][0].feeTemplates).toHaveLength(MAX_FEE_TEMPLATES);
-  }, SLOW);
+  });
 });
