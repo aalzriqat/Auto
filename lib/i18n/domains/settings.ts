@@ -231,8 +231,10 @@ export const settingsEn = {
   FeeTemplateCount: "{count} of {max}",
   FeeTemplatesLimitReached: "The limit of {max} expected costs has been reached.",
   FeeTemplatesOverLimit:
-    "This company has more expected costs than the limit of {max}. Remove some before saving changes to the list.",
+    "This company has more expected costs than the limit of {max}. New applications cannot use this policy until you reduce the list; unrelated company details can still be saved.",
   FeeTemplatesCurrencyLoading: "Loading the organisation currency…",
+  FeeTemplatesCurrencyUnsupported:
+    'The organisation currency "{currency}" is not supported for fee amounts. Correct the currency before editing expected costs.',
   FeeTemplateType: "Fee type",
   FeeTemplateDescription: "Description (optional)",
   FeeTemplateEstimatedAmount: "Estimated amount",
@@ -941,8 +943,10 @@ export const settingsAr = {
   FeeTemplateCount: "{count} من {max}",
   FeeTemplatesLimitReached: "تم بلوغ الحد الأقصى وهو {max} مصروفًا متوقعًا.",
   FeeTemplatesOverLimit:
-    "لدى هذه الشركة مصاريف متوقعة أكثر من الحد الأقصى وهو {max}. أزِل بعضها قبل حفظ التغييرات على القائمة.",
+    "لدى هذه الشركة مصاريف متوقعة أكثر من الحد الأقصى وهو {max}. لا يمكن للطلبات الجديدة استخدام هذه السياسة حتى تُخفَّض القائمة؛ ويمكن حفظ بيانات الشركة الأخرى.",
   FeeTemplatesCurrencyLoading: "جارٍ تحميل عملة المؤسسة…",
+  FeeTemplatesCurrencyUnsupported:
+    'عملة المؤسسة "{currency}" غير مدعومة لمبالغ الرسوم. صحّح العملة قبل تعديل المصاريف المتوقعة.',
   FeeTemplateType: "نوع الرسم",
   FeeTemplateDescription: "الوصف (اختياري)",
   FeeTemplateEstimatedAmount: "المبلغ التقديري",

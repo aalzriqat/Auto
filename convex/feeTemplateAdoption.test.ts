@@ -120,6 +120,8 @@ async function dealFrozenBeforeFees(s: Seed) {
     orgId: s.orgId,
     name: "Late Fees Finance",
     ...COMPANY_FIELDS,
+    expectedCurrency: "JOD",
+    expectedRuleVersion: 1,
     feeTemplates: TEMPLATES,
   });
   return { companyId, applicationId };
@@ -191,6 +193,8 @@ describe("fee-template adoption", () => {
       orgId: s.orgId,
       name: "Late Fees Finance",
       ...COMPANY_FIELDS,
+      expectedCurrency: "JOD",
+      expectedRuleVersion: 2,
       feeTemplates: [{ ...TEMPLATES[0], estimatedAmountMinor: jod(999) }],
     });
     const costs = await costsOf(s, applicationId);
@@ -209,6 +213,7 @@ describe("fee-template adoption", () => {
       name: "Configured Finance",
       defaultLtvPercent: 80,
       ...COMPANY_FIELDS,
+      expectedCurrency: "JOD",
       feeTemplates: TEMPLATES,
     });
     const quoteId = await s.asOwner.mutation(api.quotes.saveQuote, {
@@ -312,6 +317,8 @@ describe("fee-template adoption", () => {
       name: "Late Fees Finance",
       ...COMPANY_FIELDS,
       isActive: false,
+      expectedCurrency: "JOD",
+      expectedRuleVersion: 2,
       feeTemplates: TEMPLATES,
     });
     expect((await costsOf(s, applicationId)).expected.adoption.state).toBe("COMPANY_INACTIVE");

@@ -67,14 +67,22 @@ export type ParsedMinorAmount =
 /**
  * Major-unit text → minor-unit integer at `scale` decimal places, exactly.
  *
- * Accepts plain decimal notation only (`12`, `12.5`, `.5`, `12.`), which is
- * what a numeric input yields. Trailing zeros past the scale are tolerated
+ * Accepts plain decimal notation (`12`, `12.5`, `.5`, `12.`), including the
+ * equivalent Arabic-Indic/Persian digits and Arabic decimal separator.
+ * Trailing zeros past the scale are tolerated
  * (`1.50000` at scale 3 is `1500`); any other digit past it is refused rather
  * than rounded, because the operator typed a figure the currency cannot hold
  * and silently rounding it would store a number they never saw.
  */
 export function parseMajorToMinor(value: string, scale: number): ParsedMinorAmount {
-  const trimmed = value.trim();
+  // Arabic keyboards commonly produce Arabic-Indic/Persian digits and the
+  // Arabic decimal separator. Normalize only those unambiguous characters;
+  // grouping separators stay invalid so "1,250" is never guessed.
+  const trimmed = value
+    .trim()
+    .replace(/[٠-٩]/g, (digit) => String(digit.charCodeAt(0) - 0x660))
+    .replace(/[۰-۹]/g, (digit) => String(digit.charCodeAt(0) - 0x6f0))
+    .replace(/٫/g, ".");
   if (trimmed === "") return { ok: false, problem: "EMPTY" };
   const match = /^(\d*)(?:\.(\d*))?$/.exec(trimmed);
   if (!match || (match[1] === "" && (match[2] ?? "") === "")) {

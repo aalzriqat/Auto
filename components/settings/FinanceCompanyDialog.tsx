@@ -20,7 +20,7 @@ import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/sonner";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { MAX_FEE_TEMPLATES } from "@/convex/utils/dealCostLimits";
-import { scaleForCurrency } from "@/convex/utils/money";
+import { denominationOf } from "@/convex/utils/money";
 import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
 import { interpolate } from "@/lib/i18n/interpolate";
 import { getErrorMessage } from "@/lib/errors";
@@ -124,6 +124,8 @@ export function FinanceCompanyDialog({
     acceptedStatuses?: string[];
     /** The company's expected handover costs; each new deal freezes a copy. */
     feeTemplates?: FinanceFeeTemplate[];
+    /** Optimistic-concurrency token for dealer rules, including fee templates. */
+    ruleVersion?: number;
   };
 }) {
   const { activeOrgId } = useOrg();
@@ -135,15 +137,18 @@ export function FinanceCompanyDialog({
   // list below waits for its query.
   const orgSettings = useOrgSettings();
   const feeCurrency = useMemo(() => {
-    if (orgSettings === undefined) return undefined;
+    if (orgSettings === undefined) return { state: "loading" } as const;
     const code = orgSettings?.currency ?? "JOD";
+    const denomination = denominationOf(code);
+    if (!denomination) return { state: "unsupported", code } as const;
     return {
-      code,
-      scale: scaleForCurrency(code),
+      state: "ready",
+      code: denomination.code,
+      scale: denomination.scale,
       label: locale === "ar" && code === "JOD" ? "دينار اردني" : code,
-    };
+    } as const;
   }, [locale, orgSettings]);
-  const currencyScale = feeCurrency?.scale;
+  const currencyScale = feeCurrency.state === "ready" ? feeCurrency.scale : undefined;
 
   const createCompany = useMutation(api.finance.createCompany);
   const updateCompany = useMutation(api.finance.updateCompany);
@@ -236,10 +241,10 @@ export function FinanceCompanyDialog({
     [feeRows, currencyScale]
   );
   const feeProblemCount = feeConversion ? Object.keys(feeConversion.problems).length : 0;
-  // Only a list the operator SENDS is held to the cap (the server does the
-  // same): a company frozen past it before the cap existed still takes an
-  // edit that leaves the list alone.
-  const feeRowsOverLimit = feeRowsTouched && feeRows.length > MAX_FEE_TEMPLATES;
+  // Always surface legacy over-limit policy because new applications cannot
+  // snapshot it. Submission is blocked only after the operator touches the
+  // list; unrelated company details can still be repaired/saved unchanged.
+  const feeRowsOverLimit = feeRows.length > MAX_FEE_TEMPLATES;
 
   const updateFeeRow = (key: string, patch: Partial<FeeTemplateFormRow>) => {
     setFeeRowsTouched(true);
@@ -298,13 +303,13 @@ export function FinanceCompanyDialog({
     // The fee list is all-or-nothing. A row that fails to convert is not
     // dropped from the payload — that would save the company's policy with
     // one expected cost silently missing — the save is refused instead.
-    if (feeConversion === null) return;
+    if (feeCurrency.state !== "ready" || feeConversion === null) return;
     if (feeProblemCount > 0) {
       setShowFeeProblems(true);
       toast.error(t("FeeTemplatesFixBeforeSave"));
       return;
     }
-    if (feeRowsOverLimit) {
+    if (feeRowsTouched && feeRowsOverLimit) {
       toast.error(interpolate(t("FeeTemplatesOverLimit"), { max: MAX_FEE_TEMPLATES }));
       return;
     }
@@ -337,6 +342,11 @@ export function FinanceCompanyDialog({
         // whole, an emptied one as `[]`, which the server applies as "no
         // expected costs" rather than reading as "leave it alone".
         feeTemplates: feeRowsTouched ? feeConversion.templates : undefined,
+        // These are write preconditions, not persisted company fields. Convex
+        // re-reads both authorities in the mutation transaction before any
+        // amount can be committed under a stale denomination or policy.
+        expectedCurrency: feeRowsTouched ? feeCurrency.code : undefined,
+        expectedRuleVersion: feeRowsTouched && company ? company.ruleVersion ?? 1 : undefined,
       };
       if (company) {
         await updateCompany({
@@ -537,13 +547,17 @@ export function FinanceCompanyDialog({
                 {interpolate(t("FeeTemplateCount"), { count: feeRows.length, max: MAX_FEE_TEMPLATES })}
               </span>
             </div>
-            {feeCurrency === undefined ? (
+            {feeCurrency.state === "loading" ? (
               <p className="text-xs text-muted-foreground">{t("FeeTemplatesCurrencyLoading")}</p>
+            ) : feeCurrency.state === "unsupported" ? (
+              <p role="alert" className="text-xs font-medium text-destructive">
+                {interpolate(t("FeeTemplatesCurrencyUnsupported"), { currency: feeCurrency.code })}
+              </p>
             ) : feeRows.length === 0 ? (
               <p className="text-xs text-muted-foreground">{t("FeeTemplatesEmpty")}</p>
             ) : (
               <ul className="grid gap-2">
-                {feeRows.map((row) => (
+                {feeRows.map((row, index) => (
                   <FeeTemplateRowEditor
                     key={row.key}
                     row={row}
@@ -552,6 +566,7 @@ export function FinanceCompanyDialog({
                     currencyLabel={feeCurrency.label}
                     currencyCode={feeCurrency.code}
                     currencyScale={feeCurrency.scale}
+                    rowIndex={index}
                     t={t}
                     onChange={(patch) => updateFeeRow(row.key, patch)}
                     onRemove={() => removeFeeRow(row.key)}
@@ -571,7 +586,7 @@ export function FinanceCompanyDialog({
                 variant="outline"
                 size="sm"
                 onClick={addFeeRow}
-                disabled={feeCurrency === undefined || feeRows.length >= MAX_FEE_TEMPLATES}
+                disabled={feeCurrency.state !== "ready" || feeRows.length >= MAX_FEE_TEMPLATES}
               >
                 <Plus className="h-4 w-4" />
                 {t("FeeTemplateAdd")}
@@ -619,7 +634,7 @@ export function FinanceCompanyDialog({
                 still empty or a fee amount would be scaled by a guess. */}
             <Button
               type="submit"
-              disabled={isLoading || loadedCustomerStatuses === undefined || feeCurrency === undefined}
+              disabled={isLoading || loadedCustomerStatuses === undefined || feeCurrency.state !== "ready"}
             >
               {isLoading ? t("Saving..." as any) : t("Save" as any)}
             </Button>
@@ -644,6 +659,7 @@ function FeeTemplateRowEditor({
   currencyLabel,
   currencyCode,
   currencyScale,
+  rowIndex,
   t,
   onChange,
   onRemove,
@@ -656,6 +672,7 @@ function FeeTemplateRowEditor({
   currencyLabel: string;
   currencyCode: string;
   currencyScale: number;
+  rowIndex: number;
   t: (key: string) => string;
   onChange: (patch: Partial<FeeTemplateFormRow>) => void;
   onRemove: () => void;
@@ -728,7 +745,7 @@ function FeeTemplateRowEditor({
           size="icon"
           // `mt-5` = the label line (text-xs) plus the gap, so the icon sits beside the input.
           className="row-start-1 col-start-2 mt-5 text-destructive hover:text-destructive sm:col-start-3"
-          aria-label={t("FeeTemplateRemove")}
+          aria-label={`${t("FeeTemplateRemove")} ${rowIndex + 1}: ${t(FEE_TYPE_LABEL[row.feeType])}`}
           onClick={onRemove}
         >
           <Trash2 className="h-4 w-4" />

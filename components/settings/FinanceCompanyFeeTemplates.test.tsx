@@ -100,6 +100,7 @@ function renderEdit(feeTemplates: FinanceFeeTemplate[] | undefined, adminFees?: 
         gracePeriodMonths: 0,
         adminFees,
         defaultLtvPercent: 90,
+        ruleVersion: 7,
         isActive: true,
         feeTemplates,
       }}
@@ -191,6 +192,10 @@ describe("no silent loss", () => {
       lien,
       { ...insurance, estimatedAmountMinor: 275_000 },
     ]);
+    expect(mutations.update.mock.calls[0][0]).toMatchObject({
+      expectedCurrency: "JOD",
+      expectedRuleVersion: 7,
+    });
   });
 
   test("a row with an unusable amount blocks the save instead of vanishing from the payload", async () => {
@@ -249,6 +254,7 @@ describe("creation and update payload conversion", () => {
         refundable: false,
       },
     ]);
+    expect(mutations.create.mock.calls[0][0].expectedCurrency).toBe("JOD");
   });
 
   test("scales at the ORG currency: the same figure is cents for a USD org", async () => {
@@ -273,6 +279,15 @@ describe("creation and update payload conversion", () => {
     expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "FeeTemplateAdd" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText("FeeTemplatesCurrencyLoading")).toBeTruthy();
+  });
+
+  test("an unsupported legacy currency refuses fee editing instead of using the scale-2 fallback", () => {
+    orgSettings.current = { currency: "JD" };
+    renderCreate();
+
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "FeeTemplateAdd" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("FeeTemplatesCurrencyUnsupported")).toBeTruthy();
   });
 
   test("the advanced accounting fields are sent as chosen", async () => {
@@ -325,10 +340,19 @@ describe("creation and update payload conversion", () => {
 });
 
 describe("add and remove", () => {
+  test("each remove button has a unique accessible name", () => {
+    renderEdit([insurance, insurance]);
+
+    const names = feeRows().map((row) =>
+      within(row).getByRole("button", { name: /FeeTemplateRemove/ }).getAttribute("aria-label")
+    );
+    expect(new Set(names).size).toBe(2);
+  });
+
   test("removing a row sends the remaining list, and removing the last one sends an empty list", async () => {
     renderEdit([lien, insurance]);
 
-    fireEvent.click(within(feeRows()[0]).getByRole("button", { name: "FeeTemplateRemove" }));
+    fireEvent.click(within(feeRows()[0]).getByRole("button", { name: /FeeTemplateRemove 1:/ }));
     expect(feeRows()).toHaveLength(1);
     save();
 
@@ -336,7 +360,7 @@ describe("add and remove", () => {
     expect(mutations.update.mock.calls[0][0].feeTemplates).toEqual([insurance]);
 
     mutations.update.mockClear();
-    fireEvent.click(within(feeRows()[0]).getByRole("button", { name: "FeeTemplateRemove" }));
+    fireEvent.click(within(feeRows()[0]).getByRole("button", { name: /FeeTemplateRemove 1:/ }));
     expect(feeRows()).toHaveLength(0);
     save();
 
@@ -385,6 +409,8 @@ describe("the configuration limit", () => {
   test("a company already past the cap is still editable while the list is left alone, and repaired by a compliant edit", async () => {
     renderEdit([...atLimit, lien, insurance]);
 
+    expect(screen.getByRole("alert").textContent).toBe("FeeTemplatesOverLimit");
+
     // Untouched: omitted, carried verbatim by the server (its own rule).
     fireEvent.change(document.querySelectorAll("input")[0], { target: { value: "Renamed" } });
     save();
@@ -393,14 +419,14 @@ describe("the configuration limit", () => {
     mutations.update.mockClear();
 
     // Touched but still over: refused here, exactly as the server would.
-    fireEvent.click(within(feeRows()[0]).getByRole("button", { name: "FeeTemplateRemove" }));
+    fireEvent.click(within(feeRows()[0]).getByRole("button", { name: /FeeTemplateRemove 1:/ }));
     expect(screen.getByRole("alert").textContent).toBe("FeeTemplatesOverLimit");
     save();
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("FeeTemplatesOverLimit"));
     expect(mutations.update).not.toHaveBeenCalled();
 
     // Down to the cap: sent, and accepted.
-    fireEvent.click(within(feeRows()[0]).getByRole("button", { name: "FeeTemplateRemove" }));
+    fireEvent.click(within(feeRows()[0]).getByRole("button", { name: /FeeTemplateRemove 1:/ }));
     expect(screen.queryByRole("alert")).toBeNull();
     save();
     await waitFor(() => expect(mutations.update).toHaveBeenCalled());

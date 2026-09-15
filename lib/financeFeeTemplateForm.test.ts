@@ -61,9 +61,15 @@ describe("parseMajorToMinor", () => {
   test("refuses anything that is not a plain non-negative decimal", () => {
     expect(parseMajorToMinor("", 3)).toEqual({ ok: false, problem: "EMPTY" });
     expect(parseMajorToMinor("   ", 3)).toEqual({ ok: false, problem: "EMPTY" });
-    for (const bad of ["-5", "1e3", "1,000", "abc", ".", "+5", "0x10", "١٢"]) {
+    for (const bad of ["-5", "1e3", "1,000", "abc", ".", "+5", "0x10"]) {
       expect(parseMajorToMinor(bad, 3), bad).toEqual({ ok: false, problem: "NOT_A_NUMBER" });
     }
+  });
+
+  test("accepts Arabic-Indic and Persian digits without accepting grouping ambiguity", () => {
+    expect(parseMajorToMinor("١٢٫٥٠٠", 3)).toEqual({ ok: true, minor: 12_500 });
+    expect(parseMajorToMinor("۱۲٫۵", 3)).toEqual({ ok: true, minor: 12_500 });
+    expect(parseMajorToMinor("١٬٠٠٠", 3)).toEqual({ ok: false, problem: "NOT_A_NUMBER" });
   });
 
   test("refuses an amount past the safe-integer range instead of storing a corrupted one", () => {
