@@ -84,7 +84,12 @@ export type DealFinancialSummaryInputs = Readonly<{
    * policy is configured. Customer- and financier-borne templates are NOT in
    * these figures — they are not the dealership's outlay.
    */
-  expectedDealerBorne: Readonly<{ totalMinor: number | null; remainingMinor: number | null }>;
+  expectedDealerBorne: Readonly<{
+    totalMinor: number | null;
+    remainingMinor: number | null;
+    /** Why both are null, when they are — a missing policy is not the only way. */
+    reason: "NO_POLICY" | "MIXED_DENOMINATION" | "UNSAFE_AMOUNT" | null;
+  }>;
 }>;
 
 /**
@@ -150,6 +155,8 @@ export type DealFinancialSummary = Readonly<{
     awaitingActuals: number;
     knownCommittedMinor: number | null;
     expectedCostsRemainingMinor: number | null;
+    /** Why the expected side is unknown, when it is. */
+    expectedCostsReason: "NO_POLICY" | "MIXED_DENOMINATION" | "UNSAFE_AMOUNT" | null;
     totalExpectedMinor: number | null;
   }>;
   supplier: Readonly<{
@@ -263,6 +270,7 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
       awaitingActuals: input.expenses.awaitingActuals,
       knownCommittedMinor,
       expectedCostsRemainingMinor,
+      expectedCostsReason: input.expectedDealerBorne.reason,
       totalExpectedMinor,
     },
     supplier: {

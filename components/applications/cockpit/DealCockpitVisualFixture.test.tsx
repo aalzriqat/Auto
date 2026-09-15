@@ -229,6 +229,7 @@ function financedOverview(): FinancedDealOverviewData {
         awaitingActuals: 1,
         knownCommittedMinor: 590 * SCALE,
         expectedCostsRemainingMinor: 250 * SCALE,
+        expectedCostsReason: null,
         totalExpectedMinor: 840 * SCALE,
       },
       supplier: { consigned: true, direction: "DEALERSHIP_OWES", amountMinor: 9_500 * SCALE, route: "THROUGH_DEALERSHIP" },

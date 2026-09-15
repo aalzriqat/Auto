@@ -2522,10 +2522,10 @@ function MoneyPanel({
    * painted from the legacy figure in its place. A cash deal has no overview
    * and keeps the accounting result the sale cockpit serves.
    */
-  const canonicalProfit: DealMoney["profit"] | null = overview
+  const canonicalProfit: DealMoney["profit"] | "LOADING" | "WITHHELD" = overview
     ? overview.loading
-      ? null
-      : (overview.data?.financialSummary?.profit ?? profit)
+      ? "LOADING"
+      : (overview.data?.financialSummary?.profit ?? "WITHHELD")
     : profit;
   return (
     <Card>
@@ -2533,11 +2533,21 @@ function MoneyPanel({
         <CardTitle className="text-base">{t("FinancialSummaryHeading")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {canonicalProfit === null ? (
+        {canonicalProfit === "LOADING" ? (
           <div className="space-y-2" data-testid="deal-financial-overview-loading">
             <p className="text-sm text-muted-foreground">{t("NetDealershipProfit")}</p>
             <Skeleton className="h-9 w-40" />
             <p className="text-xs text-muted-foreground">{t("OverviewLoading")}</p>
+          </div>
+        ) : canonicalProfit === "WITHHELD" ? (
+          // The overview answered without a summary (withheld, or the deal
+          // was not readable through it). The legacy consignment figure is
+          // NOT a substitute: it is a different derivation and would paint a
+          // contradictory headline exactly where the authority is silent.
+          <div className="space-y-1" data-testid="deal-financial-overview-withheld">
+            <p className="text-sm text-muted-foreground">{t("NetDealershipProfit")}</p>
+            <p className="text-2xl font-semibold text-muted-foreground">{t("ProfitNotCalculable")}</p>
+            <p className="text-xs text-muted-foreground">{t("ProfitOverviewWithheld")}</p>
           </div>
         ) : (
           <ProfitHeadline profit={canonicalProfit} money={money} t={t} />
@@ -2546,7 +2556,7 @@ function MoneyPanel({
           <DealFinancialOverview summary={overview.data.financialSummary} money={overview.moneyIn} t={t} />
         )}
         {/* One fact per served line of the deal itself, then one per party the server names. */}
-        {canonicalProfit !== null && (
+        {typeof canonicalProfit !== "string" && (
           <DealSummaryFacts profit={canonicalProfit} summary={summary} money={money} t={t} />
         )}
         {parties && (
@@ -2564,7 +2574,7 @@ function MoneyPanel({
             )}
           </div>
         )}
-        {canonicalProfit !== null && <ProfitBreakdown profit={canonicalProfit} money={money} t={t} />}
+        {typeof canonicalProfit !== "string" && <ProfitBreakdown profit={canonicalProfit} money={money} t={t} />}
         {overview?.data?.vehicleCostBasis && (
           <VehicleCostBasisSection
             basis={overview.data.vehicleCostBasis}

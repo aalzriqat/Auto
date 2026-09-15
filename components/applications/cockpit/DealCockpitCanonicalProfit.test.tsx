@@ -99,6 +99,7 @@ function overview(): FinancedDealOverviewData {
         awaitingActuals: 0,
         knownCommittedMinor: 590 * SCALE,
         expectedCostsRemainingMinor: null,
+        expectedCostsReason: "NO_POLICY",
         totalExpectedMinor: null,
       },
       supplier: { consigned: false, direction: "NOT_INVOLVED", amountMinor: 0, route: "THROUGH_DEALERSHIP" },
@@ -121,6 +122,52 @@ function overview(): FinancedDealOverviewData {
     vehicleCostBasis: null,
     dealerPreparation: null,
   };
+}
+
+/** A genuine CASH sale — no application, an accounting result that reconciles. */
+function cashDeal(): DealCockpitData {
+  return {
+    dealKind: "CASH",
+    denomination: { code: "JOD", scale: 3 },
+    dealRef: "sale_1",
+    applicationId: null,
+    saleId: "sale_1" as Id<"sales">,
+    financingApplicationId: null,
+    status: "COMPLETED",
+    createdAt: Date.UTC(2026, 6, 28),
+    updatedAt: Date.UTC(2026, 7, 9),
+    customer: { id: "c1" as Id<"customers">, name: "Samer", phone: "0790112233" },
+    vehicle: { id: "v1" as Id<"vehicles">, label: "Kia Sportage 2022", vin: "KNAPX81ABN7000001", consigned: false, supplierName: undefined },
+    salespersonName: "Laith",
+    financeCompanyName: null,
+    stages: [
+      { key: "SALE_AGREED", state: "COMPLETE", authority: "DEALER" },
+      { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+      { key: "SETTLEMENT", state: "BLOCKED", blocker: "AwaitingSettlement", authority: "DEALER" },
+    ],
+    documents: [],
+    timeline: [],
+    money: {
+      currency: "JOD",
+      settlesDirectToSupplier: false,
+      routeKnown: true,
+      profit: {
+        available: true,
+        basis: "ACCOUNTING_RESULT",
+        amountMinor: 3_000 * SCALE,
+        currency: "JOD",
+        reconcilesToLedger: true,
+        lines: [
+          { key: "SALE_PRICE", sign: 1, amountMinor: 20_000 * SCALE },
+          { key: "VEHICLE_COST", sign: -1, amountMinor: 17_000 * SCALE },
+        ],
+      },
+      expenses: { lines: [], actualTotalMinor: 0, awaitingActuals: 0 },
+      parties: [],
+      appraisalGapMinor: undefined,
+    },
+    settlementAdviceRequiresReconciliation: false,
+  } as unknown as DealCockpitData;
 }
 
 const money = (minor: number, currency: string) => `${(minor / SCALE).toLocaleString("en-US")} ${currency}`;
@@ -163,9 +210,32 @@ describe("one canonical profit on the financed cockpit", () => {
     expect(screen.queryByText("2,110 JOD")).toBeNull();
   });
 
-  test("without an overview (a cash deal, or a caller the server serves none to) the cockpit's own profit stands", () => {
-    render(<DealCockpitView deal={stockDeal()} onRecordSupplierReceipt={async () => {}} />);
-    expect(screen.getByText(salesEn.ProfitNeedsSupplierSettlement)).toBeTruthy();
+  test("an overview that resolved WITHOUT a summary withholds the headline — the legacy figure is never a substitute", () => {
+    for (const data of [null, { financialSummary: null, vehicleCostBasis: null, dealerPreparation: null }] as const) {
+      render(
+        <DealCockpitView
+          deal={stockDeal()}
+          onRecordSupplierReceipt={async () => {}}
+          financialOverview={{ data, loading: false }}
+          custodyMoney={money}
+        />
+      );
+      expect(screen.getByTestId("deal-financial-overview-withheld")).toBeTruthy();
+      expect(screen.getByText(salesEn.ProfitOverviewWithheld)).toBeTruthy();
+      // Neither the consignment reason nor any figure from the cockpit's own profit paints.
+      expect(screen.queryByText(salesEn.ProfitNeedsSupplierSettlement)).toBeNull();
+      expect(screen.queryByTestId("deal-financial-overview-loading")).toBeNull();
+      expect(screen.queryByTestId("deal-financial-overview")).toBeNull();
+      cleanup();
+    }
+  });
+
+  test("a genuine CASH deal has no overview and keeps the accounting result the sale cockpit serves", () => {
+    render(<DealCockpitView deal={cashDeal()} onRecordSupplierReceipt={async () => {}} />);
+    expect(screen.getAllByText("3,000 JOD").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(salesEn.LineSalePrice).length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByTestId("deal-financial-overview")).toBeNull();
+    expect(screen.queryByTestId("deal-financial-overview-withheld")).toBeNull();
+    expect(screen.queryByTestId("deal-financial-overview-loading")).toBeNull();
   });
 });

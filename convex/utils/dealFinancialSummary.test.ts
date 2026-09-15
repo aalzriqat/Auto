@@ -59,7 +59,7 @@ function inputs(overrides: Partial<DealFinancialSummaryInputs> = {}): DealFinanc
       customerGapCashToDealerMinor: 200_000,
       expectedDealerRemittanceMinor: 9_200_000,
     },
-    expectedDealerBorne: { totalMinor: 400_000, remainingMinor: 250_000 },
+    expectedDealerBorne: { totalMinor: 400_000, remainingMinor: 250_000, reason: null },
     ...overrides,
   };
 }
@@ -185,6 +185,7 @@ describe("deriveDealFinancialSummary", () => {
         awaitingActuals: 1,
         knownCommittedMinor: 1_800_000,
         expectedCostsRemainingMinor: 250_000,
+        expectedCostsReason: null,
         totalExpectedMinor: 2_050_000,
       });
     });
@@ -196,13 +197,17 @@ describe("deriveDealFinancialSummary", () => {
       expect(s.dealerOutlay.recordedCostsMinor).toBe(150_000);
     });
     test("no policy configured: the known subtotal stands, the expected total is unknown — not zero", () => {
-      const s = deriveDealFinancialSummary(inputs({ expectedDealerBorne: { totalMinor: null, remainingMinor: null } }));
+      const s = deriveDealFinancialSummary(inputs({ expectedDealerBorne: { totalMinor: null, remainingMinor: null, reason: "NO_POLICY" } }));
       expect(s.dealerOutlay.knownCommittedMinor).toBe(1_800_000);
       expect(s.dealerOutlay.expectedCostsRemainingMinor).toBeNull();
+      expect(s.dealerOutlay.expectedCostsReason).toBe("NO_POLICY");
       expect(s.dealerOutlay.totalExpectedMinor).toBeNull();
+      const mixed = deriveDealFinancialSummary(inputs({ expectedDealerBorne: { totalMinor: null, remainingMinor: null, reason: "MIXED_DENOMINATION" } }));
+      expect(mixed.dealerOutlay.expectedCostsReason).toBe("MIXED_DENOMINATION");
+      expect(mixed.dealerOutlay.totalExpectedMinor).toBeNull();
     });
     test("a policy fully recorded leaves zero remaining and the total equals the known figure", () => {
-      const s = deriveDealFinancialSummary(inputs({ expectedDealerBorne: { totalMinor: 400_000, remainingMinor: 0 } }));
+      const s = deriveDealFinancialSummary(inputs({ expectedDealerBorne: { totalMinor: 400_000, remainingMinor: 0, reason: null } }));
       expect(s.dealerOutlay.expectedCostsRemainingMinor).toBe(0);
       expect(s.dealerOutlay.totalExpectedMinor).toBe(1_800_000);
     });
@@ -249,7 +254,7 @@ describe("deriveDealFinancialSummary", () => {
         parties: [],
         app: {},
         expenses: { actualTotalMinor: 0, awaitingActuals: 0 },
-        expectedDealerBorne: { totalMinor: null, remainingMinor: null },
+        expectedDealerBorne: { totalMinor: null, remainingMinor: null, reason: "NO_POLICY" },
         profit: { available: false, reason: "NoApprovedPurchaseAmount" },
         vehicleConsigned: null,
       })
@@ -267,6 +272,7 @@ describe("deriveDealFinancialSummary", () => {
       awaitingActuals: 0,
       knownCommittedMinor: null,
       expectedCostsRemainingMinor: null,
+      expectedCostsReason: "NO_POLICY",
       totalExpectedMinor: null,
     });
     expect(s.supplier).toEqual({ consigned: null, direction: "UNKNOWN", amountMinor: null, route: "THROUGH_DEALERSHIP" });

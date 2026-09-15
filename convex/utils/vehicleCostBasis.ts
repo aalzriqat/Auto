@@ -1,5 +1,28 @@
 import type { Doc } from "../_generated/dataModel";
-import { toMinorSameCurrencyOrUndefined } from "./money";
+import { scaleForCurrency } from "./money";
+
+/**
+ * A major-unit amount as minor units, ONLY when it is exactly representable
+ * in the currency's minor unit — or `undefined`.
+ *
+ * The GL authority (`computeVehicleCapitalizedCost`) adds major units and
+ * rounds ONCE; this module itemizes, so it converts per component. The two
+ * agree iff every component is itself a whole number of minor units: then
+ * rounding each is the identity and the sum of the parts is the rounded
+ * whole. A component carrying a fraction of a minor unit (100.0005 JOD =
+ * 100000.5 fils) is a row nobody can post exactly, and rather than pick a
+ * rounding that could drift from the GL by a fils it is refused here.
+ * Non-finite, negative and unsafe values are refused the same way.
+ */
+function exactMinorOrUndefined(major: number, currency: string): number | undefined {
+  if (!Number.isFinite(major) || major < 0) return undefined;
+  const scaled = major * Math.pow(10, scaleForCurrency(currency));
+  const rounded = Math.round(scaled);
+  if (!Number.isSafeInteger(rounded)) return undefined;
+  // Tolerance for binary floating point (0.1 + 0.2), not for a real fraction.
+  if (Math.abs(scaled - rounded) > 1e-6) return undefined;
+  return rounded;
+}
 
 /**
  * What the vehicle cost the dealership BEFORE this deal existed — the cost
@@ -168,9 +191,15 @@ export function deriveDealerPreparationExpenses(args: {
       excluded.afterCutoffCount += 1;
       continue;
     }
-    const net = row.amount - (row.taxAmount ?? 0);
-    const netMinor = toMinorSameCurrencyOrUndefined(net, args.orgCurrency, currency);
-    if (netMinor === undefined || netMinor < 0) return { available: false, reason: "UNREADABLE_AMOUNT", currency };
+    // Both operands must be exact in the minor unit so that net = amount − tax
+    // is exact too; a fractional-minor operand is refused, never rounded.
+    const amountMinor = exactMinorOrUndefined(row.amount, currency);
+    const taxMinor = exactMinorOrUndefined(row.taxAmount ?? 0, currency);
+    if (amountMinor === undefined || taxMinor === undefined) {
+      return { available: false, reason: "UNREADABLE_AMOUNT", currency };
+    }
+    const netMinor = amountMinor - taxMinor;
+    if (netMinor < 0) return { available: false, reason: "UNREADABLE_AMOUNT", currency };
     rows.push({ id: row._id, title: row.title, category: row.category, date: row.date, netMinor });
   }
   rows.sort((a, b) => a.date - b.date);
@@ -244,8 +273,7 @@ export function deriveVehicleCostBasis(args: {
   if (args.expenses.length > MAX_COST_BASIS_EXPENSES) {
     return { available: false, reason: "TOO_MANY_ROWS", currency, consigned };
   }
-  const minor = (major: number): number | undefined =>
-    toMinorSameCurrencyOrUndefined(major, args.orgCurrency, currency);
+  const minor = (major: number): number | undefined => exactMinorOrUndefined(major, currency);
 
   const baseMajor = consigned ? args.vehicle.sourceCost : args.vehicle.purchasePrice;
   // Zero is MISSING, not a real cost — the same rule `vehicleHasCostBasis`
@@ -261,7 +289,7 @@ export function deriveVehicleCostBasis(args: {
   }
   const baseMinor = minor(baseMajor);
   const landedMajor = args.vehicle.landedCostTotal ?? 0;
-  const landedCostMinor = consigned ? null : landedMajor < 0 ? undefined : (minor(landedMajor) ?? undefined);
+  const landedCostMinor = consigned ? null : (minor(landedMajor) ?? undefined);
   if (baseMinor === undefined || landedCostMinor === undefined) {
     return { available: false, reason: "UNREADABLE_AMOUNT", currency, consigned };
   }
@@ -301,7 +329,7 @@ export function deriveVehicleCostBasis(args: {
     if (row.capitalizedAmount === undefined) {
       return { available: false, reason: "UNREADABLE_AMOUNT", currency, consigned };
     }
-    const capitalizedMinor = row.capitalizedAmount < 0 ? undefined : minor(row.capitalizedAmount);
+    const capitalizedMinor = minor(row.capitalizedAmount);
     if (capitalizedMinor === undefined) {
       return { available: false, reason: "UNREADABLE_AMOUNT", currency, consigned };
     }

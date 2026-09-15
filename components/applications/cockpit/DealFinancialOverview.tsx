@@ -126,6 +126,14 @@ export function DealFinancialOverview({
   const outlay = summary.dealerOutlay;
   const recordedNote =
     outlay.awaitingActuals > 0 ? `${outlay.awaitingActuals} ${t("OverviewCostsAwaiting")}` : undefined;
+  // Why the expected side is unknown, when it is: no policy is the common
+  // case, but a foreign-currency actual or an unsafe figure withholds it too,
+  // and each is a different sentence.
+  const expectedUnknownNote = {
+    NO_POLICY: t("OverviewNoPolicy"),
+    MIXED_DENOMINATION: t("OverviewExpectedMixedDenomination"),
+    UNSAFE_AMOUNT: t("OverviewExpectedUnreadable"),
+  }[outlay.expectedCostsReason ?? "NO_POLICY"];
 
   return (
     <section aria-labelledby="deal-overview-heading" data-testid="deal-financial-overview">
@@ -191,7 +199,7 @@ export function DealFinancialOverview({
           testId="overview-expected-remaining"
           label={t("OverviewCostsExpectedRemaining")}
           value={m(outlay.expectedCostsRemainingMinor)}
-          note={outlay.expectedCostsRemainingMinor === null ? t("OverviewNoPolicy") : undefined}
+          note={outlay.expectedCostsRemainingMinor === null ? expectedUnknownNote : undefined}
         />
         <Fact
           testId="overview-dealer-paid"
@@ -201,7 +209,7 @@ export function DealFinancialOverview({
             outlay.totalExpectedMinor === null
               ? outlay.knownCommittedMinor === null
                 ? t("OverviewDealerPaidUnknown")
-                : t("OverviewNoPolicy")
+                : expectedUnknownNote
               : t("OverviewDealerPaidNote")
           }
           emphasis

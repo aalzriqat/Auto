@@ -8,7 +8,7 @@ import { getOrgCurrency } from "./accounting/workflowHooks";
 import { deriveExpectedFees, summarizeFees, type ExpectedFeeRow } from "./financeDealCosts";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
-import { loadActiveFees } from "./utils/settlementDeductions";
+import { loadActiveFees, unrecordedConfiguredFeePositions } from "./utils/settlementDeductions";
 import {
   deriveStockManagementProfit,
   withPreparationExpenses,
@@ -17,6 +17,7 @@ import {
 import {
   deriveDealFinancialSummary,
   type DealFinancialSummary,
+  type DealFinancialSummaryInputs,
 } from "./utils/dealFinancialSummary";
 import {
   deriveDealerPreparationExpenses,
@@ -81,16 +82,31 @@ export type FinancedDealOverview = Readonly<{
  */
 export function dealerBorneExpected(
   source: ReturnType<typeof deriveExpectedFees>["source"],
-  rows: ReadonlyArray<ExpectedFeeRow>
-): { totalMinor: number | null; remainingMinor: number | null } {
-  if (source !== "COMPANY_RULE_SNAPSHOT") return { totalMinor: null, remainingMinor: null };
+  rows: ReadonlyArray<ExpectedFeeRow>,
+  /** The deal's denomination; a matched actual in any other is refused, never netted. */
+  dealCurrency: string
+): DealFinancialSummaryInputs["expectedDealerBorne"] {
+  if (source !== "COMPANY_RULE_SNAPSHOT") return { totalMinor: null, remainingMinor: null, reason: "NO_POLICY" };
   const dealerRows = rows.filter((row) => row.paidBy === "DEALER" || row.paidBy === "EMPLOYEE");
+  // FAIL CLOSED: an actual recorded in another currency cannot be subtracted
+  // from an expectation in this one, and a template or actual amount that is
+  // not a safe non-negative integer is not a figure.
+  const safe = (n: number) => Number.isSafeInteger(n) && n >= 0;
+  if (dealerRows.some((row) => row.actual !== null && row.actual.currency !== dealCurrency)) {
+    return { totalMinor: null, remainingMinor: null, reason: "MIXED_DENOMINATION" };
+  }
+  if (dealerRows.some((row) => !safe(row.expectedAmountMinor) || (row.actual?.actualAmountMinor !== undefined && !safe(row.actual.actualAmountMinor)))) {
+    return { totalMinor: null, remainingMinor: null, reason: "UNSAFE_AMOUNT" };
+  }
   const totalMinor = dealerRows.reduce((sum, row) => sum + row.expectedAmountMinor, 0);
   const remainingMinor = dealerRows.reduce(
     (sum, row) => sum + Math.max(0, row.expectedAmountMinor - (row.actual?.actualAmountMinor ?? 0)),
     0
   );
-  return { totalMinor, remainingMinor };
+  if (!Number.isSafeInteger(totalMinor) || !Number.isSafeInteger(remainingMinor)) {
+    return { totalMinor: null, remainingMinor: null, reason: "UNSAFE_AMOUNT" };
+  }
+  return { totalMinor, remainingMinor, reason: null };
 }
 
 /**
@@ -239,11 +255,14 @@ export const financedDealOverview = query({
        * "Fully settled" on the cockpit's own terms, so a STOCK headline is
        * called ACTUAL exactly when a consignment one would be. Money settled
        * is the SETTLEMENT stage, which the cockpit derives from
-       * `settlementFacts.moneySettled`; the expense half is the same
-       * `summarizeFees` predicate `summarizeCockpitExpenses` applies —
-       * every live line in the deal's currency, none awaiting an actual, none
-       * awaiting reconciliation. RECORDED and RECONCILED are different claims;
-       * only the second may call the figure actual.
+       * `settlementFacts.moneySettled`; the expense half is FULL
+       * reconciliation in the closure's own sense: `summarizeFees.fullyReconciled`
+       * (at least one live line, none awaiting an actual, none awaiting a
+       * checked reconciliation), every live line in the deal's currency, and
+       * — per `settlementDeductions` — no configured fee position still
+       * without a recorded actual. A deal with no cost lines at all, or with a
+       * configured fee nobody has recorded, has not finished its costs and is
+       * never called ACTUAL. RECORDED and RECONCILED are different claims.
        */
       const moneySettled =
         cockpit.stages.find((stage) => stage.key === "SETTLEMENT")?.state === "COMPLETE";
@@ -251,8 +270,8 @@ export const financedDealOverview = query({
       const feeSummary = summarizeFees(sameCurrencyFees);
       const expensesFullyReconciled =
         sameCurrencyFees.length === fees.length &&
-        feeSummary.linesAwaitingActual === 0 &&
-        feeSummary.linesAwaitingReconciliation === 0;
+        feeSummary.fullyReconciled &&
+        unrecordedConfiguredFeePositions(app.companyRuleSnapshot, fees).length === 0;
       const fullySettled = moneySettled && expensesFullyReconciled;
       financialSummary = deriveDealFinancialSummary({
         currency: cockpit.money.currency,
@@ -270,7 +289,7 @@ export const financedDealOverview = query({
         }),
         vehicleConsigned: consigned,
         app,
-        expectedDealerBorne: dealerBorneExpected(expected.source, expected.rows),
+        expectedDealerBorne: dealerBorneExpected(expected.source, expected.rows, cockpit.money.currency),
       });
     }
 

@@ -156,6 +156,26 @@ describe("deriveVehicleCostBasis", () => {
       expect(basis(stock, [expense({ capitalizedAmount: -100 })])).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
       expect(basis(stock, [expense({ capitalizedAmount: Number.POSITIVE_INFINITY })])).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
     });
+    test("a component carrying a fraction of a minor unit is refused, so the itemized sum can never drift from the GL's once-rounded total", () => {
+      // 100.0005 JOD is 100000.5 fils: not postable exactly, and rounding it
+      // here could differ from rounding the GL's major-unit sum by a fils.
+      expect(basis({ ...stock, purchasePrice: 9_500.0005 }, [])).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
+      expect(basis({ ...stock, landedCostTotal: 0.0004 }, [])).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
+      expect(basis(stock, [expense({ capitalizedAmount: 100.0005 })])).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
+      expect(basis({ ...sourced, sourceCost: 8_000.0001 }, [])).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
+    });
+    test("exact minor-unit components itemize with no sum drift: the parts add to the GL's once-rounded total", () => {
+      const b = basis({ ...stock, purchasePrice: 9_500.125, landedCostTotal: 0.1 }, [
+        expense({ capitalizedAmount: 120.5 }),
+        expense({ capitalizedAmount: 0.2 }),
+      ]);
+      if (!b.available) throw new Error("expected available");
+      // The GL authority: sum the majors, round once.
+      const glOnce = Math.round((9_500.125 + 0.1 + 120.5 + 0.2) * 1_000);
+      expect(b.baseMinor + (b.landedCostMinor ?? 0) + b.eligibleExpensesMinor).toBe(glOnce);
+      expect(b.totalBeforeDealMinor).toBe(glOnce);
+      expect(b.expenses.map((e) => e.capitalizedMinor)).toEqual([120_500, 200]);
+    });
     test("an aggregate that leaves the safe range is withheld, even when every operand is safe", () => {
       const nearMax = Number.MAX_SAFE_INTEGER / 1000 - 1; // major units that convert to a safe minor amount
       const rows = [expense({ capitalizedAmount: nearMax }), expense({ capitalizedAmount: nearMax })];

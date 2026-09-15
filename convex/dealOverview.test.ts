@@ -220,6 +220,76 @@ describe("dealOverview.financedDealOverview", () => {
     expect(await classificationOf()).toBe("ACTUAL_UNPOSTABLE");
   });
 
+  test("STOCK: settled money with NO cost lines at all is still an estimate — nothing is reconciled", async () => {
+    const s = await seed("18");
+    const applicationId = await insertApplication(s);
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { settlementStatus: "FULLY_SETTLED" }));
+    const view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+    const profit = view!.financialSummary!.profit;
+    if (!profit.available || profit.basis !== "MANAGEMENT_ESTIMATE") throw new Error("expected a management estimate");
+    expect(profit.classification).toBe("ESTIMATED_AWAITING_SETTLEMENT");
+  });
+
+  test("STOCK: a configured fee with no recorded line keeps the figure an estimate even when every recorded line is reconciled", async () => {
+    const s = await seed("19");
+    const applicationId = await insertApplication(s);
+    await s.t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        settlementStatus: "FULLY_SETTLED",
+        companyRuleSnapshot: {
+          ruleVersion: 1,
+          companyName: "Policy Co",
+          feeTemplates: [
+            {
+              feeType: "LICENSING",
+              description: "Plates",
+              estimatedAmountMinor: 250_000,
+              paidBy: "DEALER",
+              paidTo: "GOVERNMENT",
+              includedInQuotation: false,
+              deductedFromSettlement: false,
+              refundable: false,
+              accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+            },
+          ],
+        },
+      })
+    );
+    // An unplanned line, recorded and reconciled — but the CONFIGURED fee has no line.
+    const feeId = await s.asOwner.mutation(api.financeDealCosts.recordDealFee, {
+      orgId: s.orgId,
+      applicationId,
+      feeType: "OTHER_CLOSING_EXPENSE",
+      paidBy: "DEALER",
+      paidTo: "OTHER",
+      accountingTreatment: "SELLING_EXPENSE",
+      actualAmountMinor: 10_000,
+      expectedCurrency: "JOD",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "checked" });
+    const classificationOf = async () => {
+      const view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      const profit = view!.financialSummary!.profit;
+      if (!profit.available || profit.basis !== "MANAGEMENT_ESTIMATE") throw new Error("expected a management estimate");
+      return profit.classification;
+    };
+    expect(await classificationOf()).toBe("ESTIMATED_AWAITING_SETTLEMENT");
+    // Record and reconcile the configured fee: now, and only now, actual.
+    const templateFeeId = await s.asOwner.mutation(api.financeDealCosts.recordTemplateFeeActual, {
+      orgId: s.orgId,
+      applicationId,
+      templateIndex: 0,
+      feeType: "LICENSING",
+      actualAmountMinor: 250_000,
+      expectedCurrency: "JOD",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(await classificationOf()).toBe("ESTIMATED_AWAITING_SETTLEMENT");
+    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId: templateFeeId, notes: "checked" });
+    expect(await classificationOf()).toBe("ACTUAL_UNPOSTABLE");
+  });
+
   test("STOCK: an unreadable capitalized row refuses the profit rather than overstating it", async () => {
     const s = await seed("12");
     await insertExpense(s, { capitalizedAmount: undefined });
@@ -236,18 +306,33 @@ describe("dealOverview.financedDealOverview", () => {
     await insertExpense(s, { accountingTreatment: "PERIOD_EXPENSE", capitalizedAmount: undefined, status: "PENDING" });
     const applicationId = await insertApplication(s);
     await insertExpense(s, { accountingTreatment: "PERIOD_EXPENSE", capitalizedAmount: undefined });
+    // The supplier's payable makes the consignment profit AVAILABLE on the
+    // through-dealership route: approved 11,000 − payable 8,000 − contribution 1,650.
+    await s.t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierPayables", {
+        orgId: s.orgId,
+        vehicleId: s.vehicleId,
+        sourcedFromName: "Supplier Co",
+        amountDue: 8_000,
+        amountPaid: 0,
+        currency: "JOD",
+        status: "DUE_ON_SALE",
+        createdBy: s.userId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
     const cockpit = await s.asOwner.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
     const view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
     const served = view!.financialSummary!.profit;
     const own = cockpit!.money!.profit;
-    // The cockpit's figure on this fixture is unavailable (no supplier settlement yet); it passes through with its reason.
-    if (!own.available) {
-      expect(served).toEqual(own);
-    } else {
-      if (!served.available || served.basis !== "MANAGEMENT_ESTIMATE") throw new Error("expected a management estimate");
-      expect(served.amountMinor).toBe(own.amountMinor - 100_000);
-      expect(served.lines.filter((l) => l.key === "PREPARATION_EXPENSES")).toHaveLength(1);
-    }
+    if (!own.available || own.basis !== "MANAGEMENT_ESTIMATE") throw new Error("expected the cockpit's consignment estimate");
+    expect(own.amountMinor).toBe(11_000_000 - 8_000_000 - 1_650_000);
+    if (!served.available || served.basis !== "MANAGEMENT_ESTIMATE") throw new Error("expected a management estimate");
+    // Exactly the pre-deal preparation spend, subtracted once, as its own line; every other line untouched.
+    expect(served.amountMinor).toBe(own.amountMinor - 100_000);
+    expect(served.lines).toEqual([...own.lines, { key: "PREPARATION_EXPENSES", sign: -1, amountMinor: 100_000 }]);
+    expect(served.lines.find((l) => l.key === "SUPPLIER_SETTLEMENT")?.amountMinor).toBe(8_000_000);
     // The preparation figure itself is served beside the supplier's cost, never added to it.
     const prep = view!.dealerPreparation!;
     if (!prep.available) throw new Error("expected available");

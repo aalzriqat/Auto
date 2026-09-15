@@ -31,6 +31,7 @@ const summary: FinancialSummaryData = {
     awaitingActuals: 1,
     knownCommittedMinor: 1_800_000,
     expectedCostsRemainingMinor: 250_000,
+    expectedCostsReason: null,
     totalExpectedMinor: 2_050_000,
   },
   supplier: { consigned: true, direction: "DEALERSHIP_OWES", amountMinor: 9_000_000, route: "THROUGH_DEALERSHIP" },
@@ -125,7 +126,7 @@ describe("DealFinancialOverview", () => {
       <DealFinancialOverview
         summary={{
           ...summary,
-          dealerOutlay: { ...summary.dealerOutlay, expectedCostsRemainingMinor: null, totalExpectedMinor: null },
+          dealerOutlay: { ...summary.dealerOutlay, expectedCostsRemainingMinor: null, expectedCostsReason: "NO_POLICY", totalExpectedMinor: null },
         }}
         money={money}
         t={tEn}
@@ -163,6 +164,7 @@ describe("DealFinancialOverview", () => {
         awaitingActuals: 0,
         knownCommittedMinor: null,
         expectedCostsRemainingMinor: null,
+        expectedCostsReason: "NO_POLICY",
         totalExpectedMinor: null,
       },
       supplier: { consigned: null, direction: "UNKNOWN", amountMinor: null, route: "UNKNOWN" },

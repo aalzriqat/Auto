@@ -146,6 +146,7 @@ function financedOverview() {
         awaitingActuals: 0,
         knownCommittedMinor: null,
         expectedCostsRemainingMinor: null,
+        expectedCostsReason: "NO_POLICY",
         totalExpectedMinor: null,
       },
       supplier: { consigned: true, direction: "UNKNOWN", amountMinor: null, route: "THROUGH_DEALERSHIP" },

@@ -85,6 +85,14 @@ describe("deriveDealerPreparationExpenses", () => {
     expect(prep(many)).toMatchObject({ available: false, reason: "TOO_MANY_ROWS" });
   });
 
+  test("a fractional-minor amount or tax is refused rather than rounded; exact ones net exactly", () => {
+    expect(prep([expense({ amount: 116.0005 })])).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
+    expect(prep([expense({ taxAmount: 16.0004 })])).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
+    const p = prep([expense({ amount: 116.125, taxAmount: 16.025 })]);
+    if (!p.available) throw new Error("expected available");
+    expect(p.totalMinor).toBe(116_125 - 16_025);
+  });
+
   test("an unreadable amount or a negative net withholds the figure", () => {
     expect(prep([expense({ amount: Number.NaN })])).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
     expect(prep([expense({ amount: 10, taxAmount: 20 })])).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
