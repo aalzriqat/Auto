@@ -177,6 +177,14 @@ describe("the composition boundary at every real caller", () => {
         expectedDealerRemittanceMinor: 11_000_000,
       })
     );
+    // Finalization now judges the deal's costs as they stand: one live line,
+    // a reconciled zero actual, exactly the shape a deal with no costs records.
+    const feeId = await s.asOwner.mutation(api.financeDealCosts.recordDealFee, {
+      orgId: s.orgId, applicationId: s.applicationId, feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER",
+      accountingTreatment: "SELLING_EXPENSE", deductedFromSettlement: false, actualAmountMinor: 0, expectedCurrency: "JOD",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "nothing to match" });
     const plan = async (pair: { cash?: number; installment?: number }) => {
       await setGap(s, pair);
       return await s.t.run(async (ctx) => {

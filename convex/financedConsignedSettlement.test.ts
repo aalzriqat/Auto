@@ -7858,3 +7858,158 @@ describe("DIRECT_TO_SUPPLIER: the finance company's configured fees gate finaliz
     expect((await footprint(s, applicationId)).counts.sales).toBe(1);
   });
 });
+
+describe("finalization judges the deal's costs as they are NOW, never the stored CLASSIFIED stamp", () => {
+  /** Every table finalization writes to, counted whole, plus the application row. */
+  const FINALIZATION_TABLES = [
+    "sales",
+    "journalEntries",
+    "journalLines",
+    "pendingAccountingEvents",
+    "receivableDocuments",
+    "vehicleSupplierReceivables",
+    "vehicleSupplierPayables",
+    "dealerProductDeferrals",
+    "applicationStatusLog",
+    "commandIdempotency",
+  ] as const;
+  const footprint = (s: Seeded, applicationId: Id<"financeApplications">) =>
+    s.t.run(async (ctx) => {
+      const counts: Record<string, number> = {};
+      for (const table of FINALIZATION_TABLES) counts[table] = (await ctx.db.query(table).collect()).length;
+      return { counts, app: await ctx.db.get(applicationId), vehicle: await ctx.db.get(s.vehicleId) };
+    });
+  const finalize = (s: Seeded, applicationId: Id<"financeApplications">) =>
+    s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
+  /** The economics handover seals, recorded through the real writers while the door is open. */
+  const approveEconomics = async (s: Seeded, applicationId: Id<"financeApplications">) => {
+    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s.orgId, applicationId, submittedQuotationMinor: VEHICLE_PRICE * SCALE, source: "MANUAL_ENTRY",
+    });
+    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: s.orgId, applicationId, approvedAmountMinor: VEHICLE_PRICE * SCALE, basis: "MANUAL", notes: "Approved at the quotation.",
+    });
+  };
+  /** The legal invoice and the classification, exactly as `runDeal` records them when it finalizes itself. */
+  const invoiceAndClassify = async (s: Seeded, applicationId: Id<"financeApplications">) => {
+    await s.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+      orgId: s.orgId, applicationId, legalInvoiceAmountMinor: VEHICLE_PRICE * SCALE,
+      legalInvoiceNumber: `INV-${applicationId}`, legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
+    });
+    const feeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, {
+      expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
+      feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
+      deductedFromSettlement: false, actualAmountMinor: 0, description: "The dealership bore no closing costs on this deal.",
+    });
+    await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Nothing to match." });
+    await s.asUser.mutation(api.financeDealCosts.classifyDealAccounting, { orgId: s.orgId, applicationId, notes: "Invoice and settlement advice on file." });
+    return feeId;
+  };
+  /** A through-dealership deal walked by the real writers to CLASSIFIED, one step short of finalizing. */
+  async function classifiedDeal(tag: string) {
+    const s = await seedDealership(tag);
+    const { applicationId } = await runDeal(s, {
+      route: "THROUGH_DEALERSHIP",
+      finalize: false,
+      beforeHandover: (id) => approveEconomics(s, id),
+    });
+    await invoiceAndClassify(s, applicationId);
+    const app = (await s.t.run((ctx) => ctx.db.get(applicationId)))!;
+    expect(app.accountingClassification).toBe("CLASSIFIED");
+    const liveFee = (await s.t.run((ctx) =>
+      ctx.db.query("financeDealFees").withIndex("by_application", (q) => q.eq("applicationId", applicationId)).collect()
+    )).find((fee) => fee.voidedAt === undefined)!;
+    expect(liveFee.deductedFromSettlement).toBe(false);
+    return { s, applicationId, liveFee };
+  }
+  async function expectRefusedWithNoFootprint(s: Seeded, applicationId: Id<"financeApplications">, reason: RegExp) {
+    const before = await footprint(s, applicationId);
+    await expect(finalize(s, applicationId)).rejects.toThrow(reason);
+    const after = await footprint(s, applicationId);
+    expect(after.counts).toEqual(before.counts);
+    expect(after.app).toEqual(before.app);
+    expect(after.vehicle).toEqual(before.vehicle);
+    expect(after.app?.status).not.toBe("CLOSED");
+    expect(after.app?.finalizedSaleId).toBeUndefined();
+    expect(after.counts.sales).toBe(0);
+    expect(after.counts.journalEntries).toBe(0);
+    expect(after.counts.receivableDocuments).toBe(0);
+    expect(after.counts.commandIdempotency).toBe(before.counts.commandIdempotency);
+  }
+
+  test.each([
+    ["NaN", Number.NaN],
+    ["an unsafe integer", Number.MAX_SAFE_INTEGER + 2],
+    ["a fraction", 10.5],
+    ["a negative", -1],
+  ])("a CLASSIFIED deal whose non-deducted live fee is raw-corrupted to %s is refused, with no sale, journal, receivable, status or idempotency write", async (_label, corrupt) => {
+    const { s, applicationId, liveFee } = await classifiedDeal(`fin-${_label}`);
+    await s.t.run((ctx) => ctx.db.patch(liveFee._id, { actualAmountMinor: corrupt }));
+    // The stamp survives the raw edit — exactly the state this gate exists for.
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))!.accountingClassification).toBe("CLASSIFIED");
+    await expectRefusedWithNoFootprint(s, applicationId, /not a readable figure/);
+  });
+
+  test("a CLASSIFIED deal whose live fee has since lost its reconciliation, or its actual, is refused", async () => {
+    const a = await classifiedDeal("fin-unchecked");
+    await a.s.t.run((ctx) => ctx.db.patch(a.liveFee._id, { reconciledAt: undefined, reconciledBy: undefined }));
+    await expectRefusedWithNoFootprint(a.s, a.applicationId, /nobody has checked/);
+
+    const b = await classifiedDeal("fin-no-actual");
+    await b.s.t.run((ctx) => ctx.db.patch(b.liveFee._id, { actualAmountMinor: undefined, reconciledAt: undefined, reconciledBy: undefined }));
+    await expectRefusedWithNoFootprint(b.s, b.applicationId, /no actual amount recorded/);
+  });
+
+  test("a legacy deal stamped CLASSIFIED raw over an unchecked new line is refused; a line in another currency likewise", async () => {
+    const a = await classifiedDeal("fin-legacy");
+    // A real new line clears the classification; the legacy shape is the stamp planted back over it.
+    await a.s.asUser.mutation(api.financeDealCosts.recordDealFee, {
+      expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: a.s.orgId, applicationId: a.applicationId,
+      feeType: "LICENSING", paidBy: "DEALER", paidTo: "GOVERNMENT", accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE", actualAmountMinor: 90 * SCALE,
+    });
+    expect((await a.s.t.run((ctx) => ctx.db.get(a.applicationId)))!.accountingClassification).not.toBe("CLASSIFIED");
+    await a.s.t.run((ctx) => ctx.db.patch(a.applicationId, { accountingClassification: "CLASSIFIED" }));
+    await expectRefusedWithNoFootprint(a.s, a.applicationId, /nobody has checked/);
+
+    const b = await classifiedDeal("fin-mixed");
+    await b.s.t.run((ctx) => ctx.db.patch(b.liveFee._id, { currency: "USD" }));
+    await expectRefusedWithNoFootprint(b.s, b.applicationId, /not in JOD/);
+  });
+
+  test("an estimate-less exact-position actual (corrupt frozen estimate) still finalizes once reconciled and classified", async () => {
+    const s = await seedDealership("fin-estimateless");
+    await s.t.run((ctx) =>
+      ctx.db.patch(s.companyId, {
+        feeTemplates: [
+          {
+            feeType: "APPRAISAL_FEE", description: "Valuation", estimatedAmountMinor: Number.NaN, paidBy: "DEALER", paidTo: "APPRAISER",
+            includedInQuotation: false, deductedFromSettlement: false, refundable: false, accountingTreatment: "APPRAISAL_EXPENSE",
+          },
+        ],
+      })
+    );
+    const { applicationId } = await runDeal(s, {
+      route: "THROUGH_DEALERSHIP",
+      finalize: false,
+      beforeHandover: async (id) => {
+        await approveEconomics(s, id);
+        const feeId = await s.asUser.mutation(api.financeDealCosts.recordTemplateFeeActual, {
+          orgId: s.orgId, applicationId: id, templateIndex: 0, feeType: "APPRAISAL_FEE",
+          expectedCurrency: "JOD", actualAmountMinor: 80 * SCALE, idempotencyKey: crypto.randomUUID(),
+        });
+        await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "matched" });
+      },
+    });
+    await invoiceAndClassify(s, applicationId);
+    const line = (await s.t.run((ctx) =>
+      ctx.db.query("financeDealFees").withIndex("by_application", (q) => q.eq("applicationId", applicationId)).collect()
+    )).find((fee) => fee.source === "COMPANY_TEMPLATE")!;
+    expect(line.estimatedAmountMinor).toBeUndefined();
+    expect(line.actualAmountMinor).toBe(80 * SCALE);
+    const saleId = await finalize(s, applicationId);
+    const app = (await s.t.run((ctx) => ctx.db.get(applicationId)))!;
+    expect(app.status).toBe("CLOSED");
+    expect(app.finalizedSaleId).toBe(saleId);
+    expect(app.companyRuleSnapshot?.feeTemplates?.[0].estimatedAmountMinor).toBeNaN();
+  });
+});
