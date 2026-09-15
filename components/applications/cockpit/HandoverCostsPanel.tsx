@@ -164,10 +164,11 @@ export type HandoverCostsSummary = {
  * Why the server withheld the totals. `listDealCosts` serves `summary: null`
  * together with this whenever the lines do not all share the deal's currency
  * — a sum across denominations is not a number, so none is served, and this
- * section says why instead of showing one.
+ * section says why instead of showing one. `UNSAFE_AMOUNT` is the other way a
+ * total is not a number: a line carrying an amount nobody can read.
  */
 export type HandoverCostsSummaryUnavailable = {
-  reason: "MIXED_DENOMINATION";
+  reason: "MIXED_DENOMINATION" | "UNSAFE_AMOUNT";
   dealCurrency: string;
   lineCurrencies: ReadonlyArray<string>;
 };
@@ -184,7 +185,9 @@ export type ExpectedHandoverRow = {
   templateIndex: number;
   feeType: ServedFeeType;
   description: string | undefined;
-  expectedAmountMinor: number;
+  /** The frozen estimate, or null with `expectedAmountReason` when the stored value is not a readable figure. */
+  expectedAmountMinor: number | null;
+  expectedAmountReason: "UNSAFE_AMOUNT" | null;
   /** Another configured fee shares this one's type and description. */
   duplicateIdentity: boolean;
   actual: {
@@ -199,15 +202,42 @@ export type HandoverExpectedCosts = {
   source: "COMPANY_RULE_SNAPSHOT" | "NO_SNAPSHOT" | "NO_TEMPLATES";
   currency: string;
   rows: ReadonlyArray<ExpectedHandoverRow>;
-  /** Sum of the configured expectations; null when nothing is configured. */
+  /** Sum of the configured expectations; null when nothing is configured, or with `expectedTotalReason` when it cannot be read. */
   expectedTotalMinor: number | null;
+  expectedTotalReason: "UNSAFE_AMOUNT" | null;
   /** Recorded actuals over every live line; null over mixed denomination. */
   actualTotalMinor: number | null;
   /** expected − actual — a comparison, never an amount still payable. */
   differenceMinor: number | null;
   /** Live lines outside the checklist: unplanned costs and position-less template lines. */
   unplannedLineIds: ReadonlyArray<string>;
+  /**
+   * Whether "not configured" is the whole story. Served by the same read that
+   * serves the checklist: the frozen snapshot is NEVER read live, but the
+   * screen says when the company has since configured fees an owner may
+   * adopt onto a deal that has not yet been costed. Absent on older payloads.
+   */
+  adoption?: HandoverFeeAdoption;
 };
+
+export type HandoverFeeAdoption = {
+  state:
+    | "NOT_NEEDED"
+    | "AVAILABLE"
+    | "COMPANY_HAS_NO_TEMPLATES"
+    | "NO_COMPANY_SNAPSHOT"
+    | "COMPANY_INACTIVE"
+    | "BLOCKED_COSTS_RECORDED"
+    | "BLOCKED_DEAL_PROGRESSED"
+    /** A stored company template amount is not readable; the mutation would refuse, so nothing is offered. */
+    | "COMPANY_TEMPLATES_UNREADABLE"
+    /** More templates than one policy may carry; the mutation would refuse, so nothing is offered. */
+    | "COMPANY_TEMPLATES_OVER_LIMIT";
+  liveTemplateCount: number;
+  liveRuleVersion: number | null;
+  adopted: { at: number; fromRuleVersion: number } | null;
+};
+
 
 export type HandoverCostsData = {
   lines: ReadonlyArray<HandoverCostLine>;
@@ -333,6 +363,7 @@ export function HandoverCostsPanel({
   onVoid,
   onRecordTemplateActual,
   onAbandonTemplateActual,
+  onAdoptCompanyFees,
 }: Readonly<{
   /** `undefined` while loading or when this caller may not read the cost rows. */
   costs: HandoverCostsData | undefined;
@@ -374,6 +405,12 @@ export function HandoverCostsPanel({
    * identity is either the first to land, or refused because the lost one did.
    */
   onAbandonTemplateActual?: (row: ExpectedHandoverRow) => void;
+  /**
+   * Adopts the company's configured fees onto a deal frozen without any —
+   * owner-only, audited, refused by the server outside the AVAILABLE state.
+   * Absent for a caller who may not, so the notice renders without an action.
+   */
+  onAdoptCompanyFees?: (reason: string) => Promise<void>;
 }>) {
   /** The configured row whose record form is open, by position. */
   const [recordingTemplateIndex, setRecordingTemplateIndex] = useState<number | null>(null);
@@ -568,8 +605,8 @@ export function HandoverCostsPanel({
                 the server serves no summary over mixed rows, only the reason. */}
             {costs.summary === null ? (
               <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="deal-handover-costs-mixed">
-                {t("HandoverCostsMixedCurrency")}
-                {costs.summaryUnavailable && (
+                {t(costs.summaryUnavailable?.reason === "UNSAFE_AMOUNT" ? "HandoverCostsUnreadableAmount" : "HandoverCostsMixedCurrency")}
+                {costs.summaryUnavailable && costs.summaryUnavailable.reason === "MIXED_DENOMINATION" && (
                   <>
                     {" "}
                     (<bdi dir="ltr">{costs.summaryUnavailable.lineCurrencies.join(", ")}</bdi>
@@ -641,6 +678,9 @@ export function HandoverCostsPanel({
                     )}
                   </p>
                 </div>
+                {expected.adoption && (
+                  <FeeAdoptionNotice adoption={expected.adoption} t={t} onAdopt={onAdoptCompanyFees} />
+                )}
                 {checklist && (
                   <ul className="space-y-1.5">
                     {checklist.rows.map((row) => (
@@ -676,7 +716,9 @@ export function HandoverCostsPanel({
                                   </span>
                                 )}
                               </p>
-                              <p className="text-xs text-muted-foreground">
+                              {/* A div, not a p: `Badge` renders a div, and a div inside a p is
+                                  invalid HTML that the browser re-parents on hydration. */}
+                              <div className="text-xs text-muted-foreground">
                                 <Badge variant="outline" className="me-1.5">
                                   {row.actual
                                     ? t(STATUS_LABEL[row.actual.status] ?? row.actual.status)
@@ -687,13 +729,19 @@ export function HandoverCostsPanel({
                                     {t("TemplateConfiguredTwice")}
                                   </Badge>
                                 )}
-                              </p>
+                              </div>
                             </div>
                             <div className="flex items-start gap-3">
                               <dl className="grid grid-cols-[auto_auto] gap-x-3 text-end text-xs">
                                 <dt className="text-muted-foreground">{t("CostExpected")}</dt>
                                 <dd className="tabular-nums">
-                                  <bdi dir="ltr">{money(row.expectedAmountMinor, checklist.currency)}</bdi>
+                                  {row.expectedAmountMinor === null ? (
+                                    <span className="font-normal text-amber-700 dark:text-amber-400" data-testid={`deal-handover-expected-${row.templateIndex}-unreadable`}>
+                                      {t("CostExpectedUnreadable")}
+                                    </span>
+                                  ) : (
+                                    <bdi dir="ltr">{money(row.expectedAmountMinor, checklist.currency)}</bdi>
+                                  )}
                                 </dd>
                                 <dt className="text-muted-foreground">{t("CostActual")}</dt>
                                 <dd className="font-semibold tabular-nums">
@@ -836,7 +884,8 @@ export function HandoverCostsPanel({
                             </span>
                           )}
                         </p>
-                        <p className="text-xs text-muted-foreground">
+                        {/* A div, not a p — see the configured-fee row above. */}
+                        <div className="text-xs text-muted-foreground">
                           <Badge variant="outline" className="me-1.5">
                             {t(STATUS_LABEL[line.status] ?? line.status)}
                           </Badge>
@@ -845,7 +894,7 @@ export function HandoverCostsPanel({
                               {t("ReceiptReferenceLabel")}: <bdi dir="ltr">{line.receiptReference}</bdi>
                             </>
                           )}
-                        </p>
+                        </div>
                       </div>
                       <div className="flex items-start gap-3">
                         <dl className="grid grid-cols-[auto_auto] gap-x-3 text-end text-xs">
@@ -951,7 +1000,15 @@ function ExpectedTotal({
     );
   }
   if (expected.expectedTotalMinor === null) {
-    return <span className="font-normal text-muted-foreground">{t("FactUnavailable")}</span>;
+    // "Not configured" and "configured but unreadable" are different facts;
+    // only the second is a defect somebody has to fix.
+    return expected.expectedTotalReason === "UNSAFE_AMOUNT" ? (
+      <span className="font-normal text-amber-700 dark:text-amber-400" data-testid="deal-handover-expected-total-unreadable">
+        {t("CostsExpectedTotalUnreadable")}
+      </span>
+    ) : (
+      <span className="font-normal text-muted-foreground">{t("FactUnavailable")}</span>
+    );
   }
   return (
     <bdi className="tabular-nums" dir="ltr">
@@ -1166,6 +1223,96 @@ function AddForm({
 }
 
 /**
+ * What the server says about adopting the company's since-configured fees:
+ * a sentence for every non-trivial state, and the owner's action only in
+ * the one state the server would accept it.
+ */
+function FeeAdoptionNotice({
+  adoption,
+  t,
+  onAdopt,
+}: Readonly<{
+  adoption: HandoverFeeAdoption;
+  t: (key: string) => string;
+  onAdopt: ((reason: string) => Promise<void>) | undefined;
+}>) {
+  const [reason, setReason] = useState("");
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  if (adoption.state === "NOT_NEEDED") {
+    return adoption.adopted ? (
+      <p className="text-xs text-muted-foreground" data-testid="deal-handover-fees-adopted">
+        {t("HandoverExpectedAdopted")} <bdi dir="ltr">{adoption.adopted.fromRuleVersion}</bdi>
+      </p>
+    ) : null;
+  }
+  const noticeKey =
+    adoption.state === "AVAILABLE"
+      ? "HandoverExpectedAdoptable"
+      : adoption.state === "BLOCKED_COSTS_RECORDED"
+        ? "HandoverExpectedAdoptBlockedCosts"
+        : adoption.state === "BLOCKED_DEAL_PROGRESSED"
+          ? "HandoverExpectedAdoptBlockedProgressed"
+          : adoption.state === "COMPANY_INACTIVE"
+            ? "HandoverExpectedAdoptCompanyInactive"
+            : adoption.state === "COMPANY_TEMPLATES_UNREADABLE"
+              ? "HandoverExpectedAdoptCompanyUnreadable"
+              : adoption.state === "COMPANY_TEMPLATES_OVER_LIMIT"
+                ? "HandoverExpectedAdoptCompanyOverLimit"
+                : null;
+  if (noticeKey === null) return null;
+  return (
+    <div className="space-y-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm" data-testid="deal-handover-fee-adoption">
+      <p className="text-amber-800 dark:text-amber-300">
+        {t(noticeKey)} (<bdi dir="ltr">{adoption.liveTemplateCount}</bdi>)
+      </p>
+      {adoption.state === "AVAILABLE" && onAdopt && !open && (
+        <Button type="button" size="sm" variant="outline" onClick={() => setOpen(true)}>
+          {t("AdoptCompanyFees")}
+        </Button>
+      )}
+      {open && onAdopt && (
+        <form
+          className="space-y-2"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            if (!reason.trim()) return;
+            setSubmitting(true);
+            setError(null);
+            try {
+              await onAdopt(reason.trim());
+              setOpen(false);
+            } catch (err) {
+              setError(err instanceof Error ? err.message : String(err));
+            } finally {
+              setSubmitting(false);
+            }
+          }}
+        >
+          <Label htmlFor="handover-adopt-reason">{t("AdoptCompanyFeesReason")}</Label>
+          <Input id="handover-adopt-reason" value={reason} onChange={(e) => setReason(e.target.value)} required />
+          {error && (
+            <p role="alert" className="text-xs font-medium text-destructive">
+              {error}
+            </p>
+          )}
+          <div className="flex gap-2">
+            <Button type="submit" size="sm" disabled={submitting || !reason.trim()}>
+              {submitting && <Loader2 className="h-4 w-4 me-1.5 animate-spin" />}
+              {t("AdoptCompanyFeesConfirm")}
+            </Button>
+            <Button type="button" size="sm" variant="ghost" disabled={submitting} onClick={() => setOpen(false)}>
+              {t("Cancel")}
+            </Button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
+
+/**
  * The one thing an operator enters on a configured row: what was actually
  * paid (with its date and receipt). The expectation on the row is the finance
  * company's and is shown, not typed; every other field of the resulting line
@@ -1258,7 +1405,12 @@ function TemplateActualForm({
         )}
       </p>
       <p className="text-xs text-muted-foreground">
-        {t("CostExpected")}: <bdi dir="ltr">{row.expectedAmountMinor / Math.pow(10, scale)} {currency}</bdi>
+        {t("CostExpected")}:{" "}
+        {row.expectedAmountMinor === null ? (
+          <span className="text-amber-700 dark:text-amber-400">{t("CostExpectedUnreadable")}</span>
+        ) : (
+          <bdi dir="ltr">{row.expectedAmountMinor / Math.pow(10, scale)} {currency}</bdi>
+        )}
       </p>
       {frozen && (
         <p className="text-xs text-amber-700 dark:text-amber-400" data-testid={`deal-handover-expected-record-${row.templateIndex}-frozen`}>

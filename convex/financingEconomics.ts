@@ -36,6 +36,7 @@ import {
   deriveEconomics,
   economicsStamp,
   evaluateQuotationException,
+  requireCustomerGapToDealer,
   resolveAppliedLtv,
   selectActiveAppraisal,
   type FinanceCompanyRuleSnapshot,
@@ -151,8 +152,9 @@ async function recomputeAndPatchEconomics(
     return;
   }
 
-  const customerGapToDealer =
-    (app.customerGapCashToDealerMinor ?? 0) + (app.customerGapInstallmentToDealerMinor ?? 0);
+  // Refused before any write: a corrupt component must not be recomputed
+  // into the stored economics, and added inline a corrupt pair cancels.
+  const customerGapToDealer = requireCustomerGapToDealer(app, "recomputing this deal's economics");
 
   // The appraisal the approval was actually based on, for companies whose LTV
   // rule multiplies the appraisal rather than the approved amount.

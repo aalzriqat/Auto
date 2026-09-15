@@ -41,6 +41,22 @@ export const MAX_LIVE_DEAL_FEE_LINES = 500;
  */
 export const MAX_FEE_TEMPLATES = 100;
 
+/**
+ * How many custody records one deal's DECISION reads may carry.
+ *
+ * The one-open-per-person rule, the classification gate and the deal's
+ * denomination proof decide on EVERY custody record of the deal, so their
+ * read is not the screen's bounded prefix (`MAX_DEAL_CUSTODY_RECORDS` in
+ * `financeDealCosts`, which reports truncation) — a prefix would let a second
+ * open record, or a foreign-currency record, hide past the cap. Nor is it
+ * unbounded: a `.collect()` grows until the platform's read limits fail the
+ * mutation opaquely. So the read takes ONE past this cap and, past it,
+ * REFUSES with a named reason; nothing is sampled. A deal has one custodian,
+ * occasionally two; a hundred records is not a deal, it is a record that
+ * needs a person.
+ */
+export const MAX_DEAL_CUSTODY_DECISION_RECORDS = 100;
+
 /** Configuration policy: whether a list has more templates than one company may configure. */
 export function feeTemplatesExceedConfigurationLimit(
   feeTemplates: ReadonlyArray<unknown> | undefined

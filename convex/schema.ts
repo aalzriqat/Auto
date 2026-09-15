@@ -3202,7 +3202,11 @@ export default defineSchema({
     recordedAt: v.number(),
   })
     .index("by_org", ["orgId"])
-    .index("by_custody", ["custodyId"]),
+    .index("by_custody", ["custodyId"])
+    // "Has this movement been reversed?" as one indexed point read, so a
+    // paginated page of movements can mark each row without re-reading the
+    // whole log to find the reversal that names it.
+    .index("by_reverses", ["reversesEntryId"]),
 
   /**
    * Audit trail for every manual override of a financing figure.

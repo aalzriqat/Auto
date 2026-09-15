@@ -349,7 +349,7 @@ describe("the appraisal-gap stage", () => {
   };
   const GAP_STAGES = [
     { key: "APPRAISAL", state: "COMPLETE" },
-    { key: "GAP_RESOLUTION", state: "BLOCKED", blocker: "GapUnresolved" },
+    { key: "APPROVED_PURCHASE", state: "BLOCKED", blocker: "GapUnresolved" },
     { key: "HANDOVER", state: "PENDING" },
     { key: "SETTLEMENT", state: "PENDING" },
   ];
@@ -484,7 +484,7 @@ describe("the appraisal-gap stage", () => {
    */
   const HANDED_OVER_STAGES = [
     { key: "APPRAISAL", state: "COMPLETE" },
-    { key: "GAP_RESOLUTION", state: "BLOCKED", blocker: "GapUnresolved" },
+    { key: "APPROVED_PURCHASE", state: "BLOCKED", blocker: "GapUnresolved" },
     { key: "HANDOVER", state: "COMPLETE" },
     { key: "SETTLEMENT", state: "PENDING" },
   ];
@@ -668,7 +668,7 @@ describe("the appraisal-gap stage", () => {
       COCKPIT_QUERY,
       cockpit({
         stages: [
-          { key: "GAP_RESOLUTION", state: "BLOCKED", blocker: "GapUnresolved" },
+          { key: "APPROVED_PURCHASE", state: "BLOCKED", blocker: "GapUnresolved" },
           { key: "HANDOVER", state: "PENDING" },
           { key: "SETTLEMENT", state: "PENDING" },
         ],

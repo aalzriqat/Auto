@@ -46,6 +46,7 @@ import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/pr
 import {
   assertAppraisalGapSettledToAdvance,
   buildRuleSnapshot,
+  composeCustomerGapToDealer,
   creditDecisionForStatus,
   deriveDealStages,
   deriveManagementProfit,
@@ -1330,7 +1331,13 @@ async function buildCockpitMoney(
   // deals that were completely finished.
   const fullySettled = moneySettled && expensesFullyReconciled;
 
-  const managementProfit = deriveManagementProfit({
+  // H-7b: the customer's gap contribution, composed at the shared boundary
+  // with each stored component validated BEFORE the addition — added inline,
+  // a corrupt pair (−100 + 200) cancelled into a safe operand.
+  const customerGapToDealer = composeCustomerGapToDealer(app);
+  const managementProfit = !customerGapToDealer.readable
+    ? ({ available: false, reason: "CorruptInput" } as const)
+    : deriveManagementProfit({
       // A cancelled sale keeps its approval, its recorded margin and its
       // disbursement, so every input stays computable and the figure they
       // produce describes a deal whose journal was reversed.
@@ -1341,13 +1348,9 @@ async function buildCockpitMoney(
       // recomputed from today's LTV and first payment — the same rule the
       // margin now follows, for the same reason.
       dealerContributionMinor: app.dealerContributionMinor,
-      // H-7b: the offsetting half. Composed from the two stored gap fields the
-      // same way `recomputeAndPatchEconomics` composes it, so the cockpit and
-      // the economics engine cannot disagree about what the customer paid the
-      // dealership directly.
-      customerDirectToDealerMinor:
-        (app.customerGapCashToDealerMinor ?? 0) +
-        (app.customerGapInstallmentToDealerMinor ?? 0),
+      // H-7b: the offsetting half, from the same composition the economics
+      // engine uses, so the cockpit and the engine cannot disagree about it.
+      customerDirectToDealerMinor: customerGapToDealer.amountMinor,
       actualExpensesMinor,
       currency,
       fullySettled,

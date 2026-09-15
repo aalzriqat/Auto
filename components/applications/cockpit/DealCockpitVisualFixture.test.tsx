@@ -51,6 +51,8 @@ vi.mock("@/components/accounting/AccountingTabShared", () => ({
 }));
 
 import { DealCockpitView } from "./DealCockpit";
+import type { FinancedDealOverviewData } from "./DealFinancialOverview";
+import type { DealCustodyWiring } from "./DealCustodyPanel";
 
 /**
  * The financed member of the read model — what `financedDealCockpit` returns.
@@ -204,6 +206,118 @@ function financedDeal(): FinancedDealCockpitData {
 }
 
 /**
+ * The overview the server composes for the same deal: every figure consistent
+ * with the money payload above, the cost basis on a consigned car (the
+ * supplier's cost, no landed cost, no capitalized expenses by construction).
+ */
+function financedOverview(): FinancedDealOverviewData {
+  return {
+    financialSummary: {
+      currency: "JOD",
+      customerSalePrice: { amountMinor: 13_200 * SCALE, basis: "TARGET_SELLING_AMOUNT" },
+      approvedPurchaseAmountMinor: 12_500 * SCALE,
+      customerPaidToDealer: { heldDepositMinor: 500 * SCALE, totalMinor: 500 * SCALE },
+      // Agreed under the gap resolution, not received: its own row, never inside "paid".
+      customerGapCashPlannedMinor: 200 * SCALE,
+      customerFirstPaymentMinor: 1_200 * SCALE,
+      financier: {
+        fundedPortionMinor: 12_000 * SCALE,
+        // Pre-finalization: no receivable yet, so the expected remittance, as an estimate.
+        outstanding: { state: "ESTIMATED_PRE_RECEIVABLE", amountMinor: 11_500 * SCALE, basis: "EXPECTED_DEALER_REMITTANCE" },
+      },
+      dealerOutlay: {
+        plannedContributionMinor: 500 * SCALE,
+        recordedCostsMinor: 90 * SCALE,
+        recordedCostsReason: null,
+        awaitingActuals: 1,
+        knownCommittedMinor: 590 * SCALE,
+        expectedCostsRemainingMinor: 250 * SCALE,
+        expectedCostsReason: null,
+        totalExpectedMinor: 840 * SCALE,
+        aggregateReason: null,
+      },
+      supplier: { consigned: true, direction: "DEALERSHIP_OWES", amountMinor: 9_500 * SCALE, route: "THROUGH_DEALERSHIP" },
+      unreadable: [],
+      profit: {
+        available: true,
+        basis: "MANAGEMENT_ESTIMATE",
+        amountMinor: 2_350 * SCALE,
+        currency: "JOD",
+        classification: "ESTIMATED_AWAITING_SETTLEMENT",
+        postable: false,
+        lines: [
+          { key: "APPROVED_PURCHASE", sign: 1, amountMinor: 12_500 * SCALE },
+          { key: "SUPPLIER_SETTLEMENT", sign: -1, amountMinor: 9_500 * SCALE },
+          { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: 500 * SCALE },
+          { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: 90 * SCALE },
+          { key: "PREPARATION_EXPENSES", sign: -1, amountMinor: 60 * SCALE },
+        ],
+      },
+    },
+    vehicleCostBasis: {
+      available: true,
+      currency: "JOD",
+      consigned: true,
+      baseMinor: 9_500 * SCALE,
+      landedCostMinor: null,
+      expenses: [],
+      eligibleExpensesMinor: 0,
+      totalBeforeDealMinor: 9_500 * SCALE,
+      excluded: { pendingCount: 0, reversedCount: 0, periodExpenseCount: 1, afterCutoffCount: 0 },
+      cutoffCreationTime: Date.UTC(2026, 6, 28, 9, 30),
+      lineDetail: "SERVED",
+    },
+    // The dealership detailed the supplier's car before the deal: shown beside
+    // the supplier's cost, subtracted once from the headline above.
+    dealerPreparation: {
+      available: true,
+      currency: "JOD",
+      expenses: [
+        { id: "exp_1" as Id<"expenses">, title: "تلميع وتنظيف", category: "DETAILING", date: Date.UTC(2026, 6, 20), netMinor: 60 * SCALE },
+      ],
+      totalMinor: 60 * SCALE,
+      excluded: { pendingCount: 0, reversedCount: 0, otherCount: 1, afterCutoffCount: 0 },
+      lineDetail: "SERVED",
+    },
+  };
+}
+
+/** One open custody, mid-handover: 700 advanced, 340 spent, 360 still held. */
+function custodyWiring(): DealCustodyWiring {
+  return {
+    records: [
+      {
+        _id: "cust_1",
+        userId: "u_rami",
+        userName: "رامي حسن",
+        currency: "JOD",
+        status: "OPEN",
+        issuedMinor: 700 * SCALE,
+        returnedMinor: 0,
+        reimbursedMinor: 0,
+        summary: {
+          actualExpensesMinor: 340 * SCALE,
+          employeeOwesDealerMinor: 360 * SCALE,
+          reimbursementOutstandingMinor: 0,
+          reimbursementOverpaidMinor: 0,
+          overReturnedMinor: 0,
+          settled: false,
+        },
+      },
+    ],
+    loading: false,
+    truncated: false,
+    currency: "JOD",
+    expectedTotalMinor: 340 * SCALE,
+    // The log is a live paginated query in the app; the static fixture has none.
+    renderMovements: () => null,
+  };
+}
+
+const custodyMoney = (minor: number, currency: string) =>
+  `${(minor / SCALE).toLocaleString()} ${currency === "JOD" && language.locale === "ar" ? "دينار اردني" : currency}`;
+
+/**
  * Whose move each stage of the fixture is, as the SCREEN must say it — the
  * LITERAL visible string per stage, in each language, written by hand from the
  * stage's server authority and the recorded appraisal provenance (`APPRAISAL`
@@ -263,11 +377,19 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
         backHref="/org_1/deals"
         activeAppraisalProvider={deal.activeAppraisalProvider}
         onRecordSupplierReceipt={async () => {}}
+        financialOverview={{ data: financedOverview(), loading: false }}
+        custody={custodyWiring()}
+        custodyMoney={custodyMoney}
       />
     );
-    // Not an empty render: the headline and the rail are both in the markup.
+    // Not an empty render: the headline, the rail, the overview and the
+    // custody section are all in the markup.
     expect(html).toContain("data-testid=\"deal-header\"");
     expect(html).toContain("data-testid=\"deal-stage-rail\"");
+    expect(html).toContain("data-testid=\"deal-financial-overview\"");
+    expect(html).toContain("data-testid=\"deal-cost-basis\"");
+    expect(html).toContain("data-testid=\"deal-preparation\"");
+    expect(html).toContain("data-testid=\"deal-custody\"");
     const expectedOwners = EXPECTED_STAGE_OWNERS[locale];
     // Positive control: one literal per stage, none blank, and — in the
     // language that shares no glyphs with the other — the Arabic list is

@@ -16,6 +16,8 @@ import {
 import { heldDepositRowsForVehicle } from "./saleCompletion";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { toMinorUnits } from "./money";
+import { requireCustomerGapToDealer } from "./financingEconomics";
+import { summarizeFees } from "./feeSummary";
 
 /**
  * Turns one finance application into the plan its sale will post from, or
@@ -41,6 +43,51 @@ export function financedSaleRecognitionApplies(
   // company there is no counterparty to owe one.
   if (opts.settlesDirect) return false;
   return app.companyId !== undefined;
+}
+
+/**
+ * What "this deal's costs are closable" means, asked of the live rows at the
+ * moment of finalization — the same five conditions `classifyDealAccounting`
+ * establishes, re-established here because the stamp does not travel with
+ * the rows: at least one live line; every live line in the deal's currency;
+ * every live amount a readable figure (the summary's own verdict, which also
+ * refuses an overflowing sum); every line carrying an actual; every actual
+ * reconciled. An estimate-less line recorded against a configured position
+ * passes — it carries a real, reconciled actual — and the configured
+ * positions themselves are proven by `assertConfiguredFeesRecorded` above.
+ * Throws uncaught, before the first write.
+ */
+function assertCostsClosable(liveFees: ReadonlyArray<Doc<"financeDealFees">>, currency: string): void {
+  if (liveFees.length === 0) {
+    throw new ConvexError(
+      "No costs are itemized on this deal, so its accounting cannot be finalized. Record them, or a zero-cost line saying the dealership bore none, then classify the deal again."
+    );
+  }
+  const foreign = liveFees.filter((fee) => fee.currency !== currency);
+  if (foreign.length > 0) {
+    throw new ConvexError(
+      `${foreign.length} cost line(s) on this deal are not in ${currency}, so its costs cannot be finalized until the records agree.`
+    );
+  }
+  const summary = summarizeFees([...liveFees]);
+  if (summary.amountsUnreadable !== null) {
+    throw new ConvexError(
+      "A cost amount on this deal is not a readable figure, so its accounting cannot be finalized until the line is corrected and the deal is classified again."
+    );
+  }
+  if (summary.linesAwaitingActual > 0) {
+    throw new ConvexError(
+      `${summary.linesAwaitingActual} cost(s) on this deal have no actual amount recorded, so its accounting cannot be finalized. Record them and classify the deal again.`
+    );
+  }
+  if (summary.linesAwaitingReconciliation > 0) {
+    throw new ConvexError(
+      `${summary.linesAwaitingReconciliation} cost(s) on this deal have an amount nobody has checked, so its accounting cannot be finalized. Reconcile them and classify the deal again.`
+    );
+  }
+  if (!summary.fullyReconciled) {
+    throw new ConvexError("This deal's costs are not fully reconciled, so its accounting cannot be finalized.");
+  }
 }
 
 export async function resolveFinancedSalePlan(
@@ -88,6 +135,12 @@ export async function resolveFinancedSalePlan(
   assertConfiguredFeesRecorded(app.companyRuleSnapshot, liveFees, "finalizing");
 
   if (!financedSaleRecognitionApplies(app, opts)) return undefined;
+
+  // The CURRENT state of the deal's costs, judged on the rows just read —
+  // never on the stored `accountingClassification` stamp, which describes the
+  // moment it was written: lines added, re-recorded or raw-edited since, and
+  // legacy rows stamped before today's rules, carry it just the same.
+  assertCostsClosable(liveFees, opts.currency);
 
   const fees = settlementDeductedFees(liveFees);
   // The plan settles in `opts.currency` (the deal's pinned denomination at
@@ -160,9 +213,7 @@ export async function resolveFinancedSalePlan(
   // What the customer independently owes the dealership on this deal — the gap
   // they are paying directly, in cash or by instalment. It is NOT the vehicle
   // consideration, which the financing company owes as the legal buyer.
-  const customerReceivableMinor =
-    (app.customerGapCashToDealerMinor ?? 0) +
-    (app.customerGapInstallmentToDealerMinor ?? 0);
+  const customerReceivableMinor = requireCustomerGapToDealer(app, "building this sale's posting plan");
 
   // H — the deposit slice this sale actually consumes, read from the deposit
   // rows holding THIS car. Not `quote.downPayment`, which is an intention

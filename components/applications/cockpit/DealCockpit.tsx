@@ -91,6 +91,14 @@ import { DisbursementConfirmationDialog } from "../DisbursementConfirmationDialo
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { FinancingPlanPanel, type FinancingPlanFacts } from "./FinancingPlanPanel";
 import {
+  DealFinancialOverview,
+  DealerPreparationSection,
+  VehicleCostBasisSection,
+  type FinancedDealOverviewData,
+} from "./DealFinancialOverview";
+import { DealCustodyPanel, type DealCustodyWiring } from "./DealCustodyPanel";
+import { CustodyMovementsList } from "./CustodyMovementsList";
+import {
   HandoverCostAttemptError,
   HandoverCostsPanel,
   type ExpectedHandoverRow,
@@ -272,10 +280,12 @@ const STATUS_LABEL: Record<string, string> = {
 
 const PROFIT_LINE_LABEL: Record<string, string> = {
   APPROVED_PURCHASE: "LineApprovedPurchase",
-  CUSTOMER_DIRECT_TO_DEALER: "LineCustomerDirectToDealer",
+  /** PLANNED — `resolveAppraisalGap`'s allocation, never a receipt. The label says so. */
+  CUSTOMER_PLANNED_TO_DEALER: "LineCustomerPlannedToDealer",
   SUPPLIER_SETTLEMENT: "LineSupplierSettlement",
   DEALER_CONTRIBUTION: "LineDealerContribution",
   ACTUAL_EXPENSES: "LineActualExpenses",
+  PREPARATION_EXPENSES: "LinePreparationExpenses",
   /** CASH only. A different derivation, so deliberately different keys. */
   SALE_PRICE: "LineSalePrice",
   VEHICLE_COST: "LineVehicleCost",
@@ -293,6 +303,14 @@ const PROFIT_BLOCKED_REASON: Record<
   "NoApprovedPurchaseAmount"
   | "NoSupplierSettlement"
   | "NoDealerContribution"
+  /** STOCK only: the dealership's own car carries no cost basis to measure against. */
+  | "NoVehicleCost"
+  /** SOURCED only: the dealership's preparation spend on the supplier's car cannot be stated. */
+  | "PreparationExpensesUnreadable"
+  /** A dealer-borne cost line is in another currency: the cost operand would be partial. */
+  | "ExpensesMixedDenomination"
+  /** A cost line's amount is not a safe non-negative integer, or the lines overflow: the cost operand is not a figure. */
+  | "ExpensesUnreadable"
   | "CorruptInput"
   | "DealCancelled"
   /** CASH only: `dealershipMargin === null`, which is UNKNOWN and never zero. */
@@ -306,6 +324,10 @@ const PROFIT_BLOCKED_REASON: Record<
   NoApprovedPurchaseAmount: "ProfitNeedsApprovedPurchase",
   NoSupplierSettlement: "ProfitNeedsSupplierSettlement",
   NoDealerContribution: "ProfitNeedsDealerContribution",
+  NoVehicleCost: "ProfitNeedsVehicleCost",
+  PreparationExpensesUnreadable: "ProfitPreparationUnreadable",
+  ExpensesMixedDenomination: "ProfitExpensesMixedDenomination",
+  ExpensesUnreadable: "ProfitExpensesUnreadable",
   CorruptInput: "ProfitInputCorrupt",
   DealCancelled: "ProfitDealCancelled",
   UnknownMargin: "ProfitUnknownMargin",
@@ -461,7 +483,7 @@ export function DealCockpit({
     api.financingEconomics.approveDealerPurchaseAmount
   );
   const recordAppraisal = useMutation(api.financingEconomics.recordAppraisal);
-  const { hasPermission, isLoading: permissionsLoading, membership } = usePermissions();
+  const { hasPermission, isLoading: permissionsLoading, membership, isOwner } = usePermissions();
   const router = useRouter();
 
   /**
@@ -607,7 +629,16 @@ export function DealCockpit({
     api.financeDealCosts.listDealCosts,
     canViewApplications && deal ? { orgId, applicationId } : "skip"
   );
+  /**
+   * The financial overview — a sibling read model composed on the server from
+   * the cockpit's own money payload plus the vehicle's pre-deal cost basis.
+   * Gated by the same permission the cockpit itself takes (view:sales); the
+   * server withholds each half by its own permission (view:finance,
+   * view:cost_price) and returns null for it, never a zero.
+   */
+  const overview = useQuery(api.dealOverview.financedDealOverview, deal ? { orgId, applicationId } : "skip");
   const recordDealFee = useMutation(api.financeDealCosts.recordDealFee);
+  const adoptCompanyFeeTemplates = useMutation(api.financeDealCosts.adoptCompanyFeeTemplates);
   const recordTemplateFeeActual = useMutation(api.financeDealCosts.recordTemplateFeeActual);
   const recordActualFeeAmount = useMutation(api.financeDealCosts.recordActualFeeAmount);
   const voidDealFee = useMutation(api.financeDealCosts.voidDealFee);
@@ -764,6 +795,7 @@ export function DealCockpit({
                         feeType: row.feeType,
                         description: row.description,
                         expectedAmountMinor: row.expectedAmountMinor,
+                        expectedAmountReason: row.expectedAmountReason,
                         duplicateIdentity: row.duplicateIdentity,
                         actual: row.actual
                           ? {
@@ -775,9 +807,12 @@ export function DealCockpit({
                           : null,
                       })),
                       expectedTotalMinor: dealCosts.expected.expectedTotalMinor,
+                      expectedTotalReason: dealCosts.expected.expectedTotalReason,
                       actualTotalMinor: dealCosts.expected.actualTotalMinor,
                       differenceMinor: dealCosts.expected.differenceMinor,
                       unplannedLineIds: dealCosts.expected.unplannedLineIds,
+                      // The honest "not configured" state — reported, never applied.
+                      adoption: dealCosts.expected.adoption,
                     }
                   : null,
               } satisfies HandoverCostsData)
@@ -793,6 +828,18 @@ export function DealCockpit({
             }`,
           canManage: canCreateApplication,
           dealClosed: app.status === "CLOSED",
+          // Owner-only on the server (the authority that edits the company's
+          // fees); the notice still renders for everyone, the action does not.
+          onAdoptCompanyFees: isOwner
+            ? async (reason: string) => {
+                try {
+                  await adoptCompanyFeeTemplates({ orgId, applicationId, reason });
+                  toast.success(t("CompanyFeesAdopted"));
+                } catch (error) {
+                  throw new Error(getErrorMessage(error));
+                }
+              }
+            : undefined,
           onAdd: async (values: NewHandoverCost) => {
             const feeIntent = `record-deal-fee:${applicationId}:${values.intentId}`;
             try {
@@ -1505,6 +1552,41 @@ export function DealCockpit({
         }
       : undefined;
 
+  /**
+   * عهدة الموظف — READ-ONLY on this screen (see `DealCustodyPanel` for why:
+   * the custody module is off-ledger, so its commands are not offered here as
+   * money actions until canonical posting exists). The summary comes off the
+   * bounded `listDealCosts` read; each record's movement log is a separate
+   * paginated query, mounted only when the operator opens it.
+   */
+  const custodyMoney = (minor: number, currency: string) =>
+    `${(minor / Math.pow(10, scaleForCurrency(currency))).toLocaleString()} ${
+      currency === orgCurrency.code ? orgCurrency.displayLabel : currency
+    }`;
+  const custody: DealCustodyWiring | undefined =
+    app && deal
+      ? {
+          loading: permissionsLoading || (canViewApplications && dealCosts === undefined),
+          records: dealCosts?.custody,
+          truncated: dealCosts?.custodyTruncated ?? false,
+          currency: dealCosts?.currency ?? economicsCurrencyCode,
+          expectedTotalMinor: dealCosts?.expected?.expectedTotalMinor ?? null,
+          renderMovements: (custodyId: string) => {
+            const record = dealCosts?.custody.find((row) => row._id === custodyId);
+            return (
+              <CustodyMovementsList
+                orgId={orgId}
+                custodyId={custodyId as Id<"financeDealCustody">}
+                currency={record?.currency ?? dealCosts?.currency ?? economicsCurrencyCode}
+                money={custodyMoney}
+                formatDate={(ms: number) => renderMoment(ms, "d MMM yyyy")}
+                t={t}
+              />
+            );
+          },
+        }
+      : undefined;
+
   return (
     <DealCockpitView
       deal={deal}
@@ -1512,6 +1594,9 @@ export function DealCockpit({
       financeDecision={financeDecision}
       financingPlan={financingPlan ? { facts: financingPlan, formatMajor: formatPlanMajor } : undefined}
       handoverCosts={handoverCosts}
+      financialOverview={deal ? { data: overview ?? undefined, loading: overview === undefined } : undefined}
+      custody={custody}
+      custodyMoney={custodyMoney}
       workflowAction={workflowAction}
       // Both are financed-only and come straight off the wrapper's payload.
       // `?? null` / `?? false` cover the loading and unreadable cases, where
@@ -2400,11 +2485,23 @@ function MoneyPanel({
   profit,
   summary,
   parties,
+  overview,
   t,
 }: Readonly<{
   money: (minor: number) => string;
   profit: DealMoney["profit"];
   summary: SummaryEvidence;
+  /**
+   * The server's overview, rendered between the headline and the served
+   * lines when present. Financed deals only; a cash deal has no overview and
+   * the panel is unchanged without one.
+   */
+  overview?: {
+    data: FinancedDealOverviewData | null | undefined;
+    loading: boolean;
+    moneyIn: (minor: number, currency: string) => string;
+    formatDate: (ms: number) => string;
+  };
   /**
    * The party row, or `null` when there is nobody to list — an OWNED cash sale
    * has no third party at all, so the row would be a heading over nothing.
@@ -2419,15 +2516,58 @@ function MoneyPanel({
   }> | null;
   t: (key: string) => string;
 }>) {
+  /**
+   * ONE profit authority per screen.
+   *
+   * On a financed deal the overview read model serves the route-aware
+   * headline (consignment economics less preparation spend on a SOURCED car;
+   * cost-basis economics on the dealership's own STOCK), derived on the
+   * server from the same snapshot as every other overview figure. The
+   * cockpit's own `money.profit` is the consignment-only derivation, which on
+   * a STOCK deal reads "no supplier settlement" — so painting it as the
+   * headline beside the overview's figure put two contradictory profits on one
+   * card. Here the overview's profit drives the headline, the fact tiles and
+   * the breakdown alike, and while the overview is still loading nothing is
+   * painted from the legacy figure in its place. A cash deal has no overview
+   * and keeps the accounting result the sale cockpit serves.
+   */
+  const canonicalProfit: DealMoney["profit"] | "LOADING" | "WITHHELD" = overview
+    ? overview.loading
+      ? "LOADING"
+      : (overview.data?.financialSummary?.profit ?? "WITHHELD")
+    : profit;
   return (
     <Card>
       <CardHeader className="pb-3">
         <CardTitle className="text-base">{t("FinancialSummaryHeading")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <ProfitHeadline profit={profit} money={money} t={t} />
+        {canonicalProfit === "LOADING" ? (
+          <div className="space-y-2" data-testid="deal-financial-overview-loading">
+            <p className="text-sm text-muted-foreground">{t("NetDealershipProfit")}</p>
+            <Skeleton className="h-9 w-40" />
+            <p className="text-xs text-muted-foreground">{t("OverviewLoading")}</p>
+          </div>
+        ) : canonicalProfit === "WITHHELD" ? (
+          // The overview answered without a summary (withheld, or the deal
+          // was not readable through it). The legacy consignment figure is
+          // NOT a substitute: it is a different derivation and would paint a
+          // contradictory headline exactly where the authority is silent.
+          <div className="space-y-1" data-testid="deal-financial-overview-withheld">
+            <p className="text-sm text-muted-foreground">{t("NetDealershipProfit")}</p>
+            <p className="text-2xl font-semibold text-muted-foreground">{t("ProfitNotCalculable")}</p>
+            <p className="text-xs text-muted-foreground">{t("ProfitOverviewWithheld")}</p>
+          </div>
+        ) : (
+          <ProfitHeadline profit={canonicalProfit} money={money} t={t} />
+        )}
+        {overview && !overview.loading && overview.data?.financialSummary && (
+          <DealFinancialOverview summary={overview.data.financialSummary} money={overview.moneyIn} t={t} />
+        )}
         {/* One fact per served line of the deal itself, then one per party the server names. */}
-        <DealSummaryFacts profit={profit} summary={summary} money={money} t={t} />
+        {typeof canonicalProfit !== "string" && (
+          <DealSummaryFacts profit={canonicalProfit} summary={summary} money={money} t={t} />
+        )}
         {parties && (
           <div className="space-y-2">
             <h3 className="text-xs font-normal text-muted-foreground">{t("DealPartiesHeading")}</h3>
@@ -2443,7 +2583,23 @@ function MoneyPanel({
             )}
           </div>
         )}
-        <ProfitBreakdown profit={profit} money={money} t={t} />
+        {typeof canonicalProfit !== "string" && <ProfitBreakdown profit={canonicalProfit} money={money} t={t} />}
+        {overview?.data?.vehicleCostBasis && (
+          <VehicleCostBasisSection
+            basis={overview.data.vehicleCostBasis}
+            money={overview.moneyIn}
+            formatDate={overview.formatDate}
+            t={t}
+          />
+        )}
+        {overview?.data?.dealerPreparation && (
+          <DealerPreparationSection
+            preparation={overview.data.dealerPreparation}
+            money={overview.moneyIn}
+            formatDate={overview.formatDate}
+            t={t}
+          />
+        )}
       </CardContent>
     </Card>
   );
@@ -2513,6 +2669,9 @@ export function DealCockpitView({
   financeDecision,
   financingPlan,
   handoverCosts,
+  financialOverview,
+  custody,
+  custodyMoney,
   workflowAction,
   gapResolution,
   handover,
@@ -2643,6 +2802,16 @@ export function DealCockpitView({
    * same canonical record, plus the controls.
    */
   handoverCosts?: Omit<React.ComponentProps<typeof HandoverCostsPanel>, "t">;
+  /**
+   * The server's financial overview and vehicle cost basis — financed deals
+   * only. `data` is undefined while loading; each half is null when the
+   * server withheld it for this caller.
+   */
+  financialOverview?: { data: FinancedDealOverviewData | null | undefined; loading: boolean };
+  /** The employee cash-custody section with its commands wired — financed deals only. */
+  custody?: DealCustodyWiring;
+  /** Spells a minor amount IN THE GIVEN currency, for the custody section. */
+  custodyMoney?: (minor: number, currency: string) => string;
   /**
    * The action belonging to the stage the rail currently names.
    *
@@ -3609,6 +3778,19 @@ export function DealCockpitView({
                   evidence: handoverEvidence ?? undefined,
                   moneyIn: servedMoney,
                 }}
+                overview={
+                  financialOverview && custodyMoney
+                    ? {
+                        ...financialOverview,
+                        // The panel's own short-form spelling for figures in
+                        // the deal's currency (the marker the headline uses),
+                        // the explicit code for anything else.
+                        moneyIn: (minor: number, currency: string) =>
+                          currency === dealCurrency ? money(minor) : custodyMoney(minor, currency),
+                        formatDate: (ms: number) => renderMoment(ms, "d MMM yyyy"),
+                      }
+                    : undefined
+                }
                 parties={
                   deal.money.parties.length > 0 || deal.applicationId !== null
                     ? {
@@ -3737,6 +3919,14 @@ export function DealCockpitView({
               whenever this section is present so the same lines are not
               listed twice. */}
           {handoverCosts && <HandoverCostsPanel {...handoverCosts} t={t} />}
+
+          {/* --- عهدة الموظف ------------------------------------------------ */}
+          {/* Beside the costs it pays for, under the same permission to read.
+              READ-ONLY: the balances are the server's and no command is
+              offered until custody movements post to the books. */}
+          {custody && custodyMoney && (
+            <DealCustodyPanel wiring={custody} money={custodyMoney} t={t} />
+          )}
 
           {/* --- documents · activity ------------------------------------- */}
           {/* One card, two tabs, below the money: the checklist that also DOES

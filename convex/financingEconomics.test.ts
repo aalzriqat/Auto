@@ -4578,7 +4578,8 @@ describe("resolving the appraisal gap", () => {
       orgId: seed.orgId,
       applicationId,
     });
-    const stage = cockpit?.stages.find((s) => s.key === "GAP_RESOLUTION");
+    // The gap is a task inside the approved-purchase stage, not a rail step.
+    const stage = cockpit?.stages.find((s) => s.key === "APPROVED_PURCHASE");
     expect(stage?.state).toBe("BLOCKED");
     expect(stage?.blocker).toBe("GapUnresolved");
   });
@@ -4634,9 +4635,9 @@ describe("resolving the appraisal gap", () => {
 
     const after = await profitOf();
     expect(after.amountMinor - before.amountMinor).toBe(jod(900));
-    const directLine = after.lines.find((line) => line.key === "CUSTOMER_DIRECT_TO_DEALER");
+    const directLine = after.lines.find((line) => line.key === "CUSTOMER_PLANNED_TO_DEALER");
     expect(directLine?.amountMinor).toBe(jod(900));
-    expect(before.lines.find((line) => line.key === "CUSTOMER_DIRECT_TO_DEALER")?.amountMinor).toBe(0);
+    expect(before.lines.find((line) => line.key === "CUSTOMER_PLANNED_TO_DEALER")?.amountMinor).toBe(0);
   });
 
   test("the customer absorbs all of it, paid in cash to the dealership", async () => {
@@ -4668,7 +4669,7 @@ describe("resolving the appraisal gap", () => {
       orgId: seed.orgId,
       applicationId,
     });
-    expect(cockpit?.stages.find((s) => s.key === "GAP_RESOLUTION")?.state).toBe("COMPLETE");
+    expect(cockpit?.stages.find((s) => s.key === "APPROVED_PURCHASE")?.state).toBe("COMPLETE");
   });
 
   test("the dealership absorbs all of it", async () => {

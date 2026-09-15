@@ -124,6 +124,40 @@ function financedDeal(overrides: Record<string, unknown> = {}): DealCockpitData 
   } as unknown as DealCockpitData;
 }
 
+/**
+ * The overview the application-keyed screen also subscribes to. On a financed
+ * deal the headline is the OVERVIEW's profit — one authority — so a test that
+ * proves "the financed money rendered" has to answer this query too; without
+ * it the screen shows the loading state on purpose, never the legacy figure.
+ */
+function financedOverview() {
+  const money = (financedDeal() as { money: { profit: unknown } }).money;
+  return {
+    financialSummary: {
+      currency: "JOD",
+      customerSalePrice: null,
+      approvedPurchaseAmountMinor: 12_500 * SCALE,
+      customerPaidToDealer: null,
+      customerFirstPaymentMinor: null,
+      financier: { fundedPortionMinor: null, outstanding: { state: "NOT_YET_RECEIVABLE", amountMinor: null, basis: null } },
+      dealerOutlay: {
+        plannedContributionMinor: null,
+        recordedCostsMinor: 0,
+        awaitingActuals: 0,
+        knownCommittedMinor: null,
+        expectedCostsRemainingMinor: null,
+        expectedCostsReason: "NO_POLICY",
+        totalExpectedMinor: null,
+      },
+      supplier: { consigned: true, direction: "UNKNOWN", amountMinor: null, route: "THROUGH_DEALERSHIP" },
+      unreadable: [],
+      profit: money.profit,
+    },
+    vehicleCostBasis: null,
+    dealerPreparation: null,
+  };
+}
+
 /** The cash shape, as `sales.dealCockpit` returns it. */
 function cashDeal(overrides: Record<string, unknown> = {}): DealCockpitData {
   return {
@@ -180,6 +214,7 @@ describe("the sale URL is the deal's one address", () => {
   test("a FINANCED sale renders ON the sale route rather than redirecting away", () => {
     queryResults.set("sales:dealCockpit", cashDeal({ financingApplicationId: APP, money: null }));
     queryResults.set("dealWorkspace:financedDealCockpit", financedDeal());
+    queryResults.set("dealOverview:financedDealOverview", financedOverview());
 
     render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
 
@@ -224,6 +259,7 @@ describe("the application URL hands a finalized deal to the sale", () => {
    */
   test("an application with no sale yet stays where it is", () => {
     queryResults.set("dealWorkspace:financedDealCockpit", financedDeal({ saleId: null }));
+    queryResults.set("dealOverview:financedDealOverview", financedOverview());
 
     render(<DealCockpit orgId={ORG} applicationId={APP} />);
 
@@ -247,6 +283,7 @@ describe("the application URL hands a finalized deal to the sale", () => {
       "dealWorkspace:financedDealCockpit",
       financedDeal({ saleId: SALE, canonicalSaleId: null })
     );
+    queryResults.set("dealOverview:financedDealOverview", financedOverview());
 
     render(<DealCockpit orgId={ORG} applicationId={APP} />);
 
