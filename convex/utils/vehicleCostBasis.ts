@@ -174,13 +174,9 @@ export function deriveDealerPreparationExpenses(args: {
     rows.push({ id: row._id, title: row.title, category: row.category, date: row.date, netMinor });
   }
   rows.sort((a, b) => a.date - b.date);
-  return {
-    available: true,
-    currency,
-    expenses: rows,
-    totalMinor: rows.reduce((sum, row) => sum + row.netMinor, 0),
-    excluded,
-  };
+  const totalMinor = rows.reduce((sum, row) => sum + row.netMinor, 0);
+  if (!Number.isSafeInteger(totalMinor)) return { available: false, reason: "UNREADABLE_AMOUNT", currency };
+  return { available: true, currency, expenses: rows, totalMinor, excluded };
 }
 
 export type VehicleCostBasisExpense = Readonly<{
@@ -252,11 +248,20 @@ export function deriveVehicleCostBasis(args: {
     toMinorSameCurrencyOrUndefined(major, args.orgCurrency, currency);
 
   const baseMajor = consigned ? args.vehicle.sourceCost : args.vehicle.purchasePrice;
-  if (baseMajor === undefined || baseMajor === null) {
+  // Zero is MISSING, not a real cost — the same rule `vehicleHasCostBasis`
+  // applies: a zero basis makes the whole approved amount read as profit,
+  // which is exactly the overstatement this figure exists to prevent. A
+  // negative base is corrupt, not small. Non-finite and unsafe values are
+  // refused by the guarded conversion.
+  if (baseMajor === undefined || baseMajor === null || baseMajor === 0) {
     return { available: false, reason: "NO_COST_RECORDED", currency, consigned };
   }
+  if (!(baseMajor > 0)) {
+    return { available: false, reason: "UNREADABLE_AMOUNT", currency, consigned };
+  }
   const baseMinor = minor(baseMajor);
-  const landedCostMinor = consigned ? null : (minor(args.vehicle.landedCostTotal ?? 0) ?? undefined);
+  const landedMajor = args.vehicle.landedCostTotal ?? 0;
+  const landedCostMinor = consigned ? null : landedMajor < 0 ? undefined : (minor(landedMajor) ?? undefined);
   if (baseMinor === undefined || landedCostMinor === undefined) {
     return { available: false, reason: "UNREADABLE_AMOUNT", currency, consigned };
   }
@@ -296,7 +301,7 @@ export function deriveVehicleCostBasis(args: {
     if (row.capitalizedAmount === undefined) {
       return { available: false, reason: "UNREADABLE_AMOUNT", currency, consigned };
     }
-    const capitalizedMinor = minor(row.capitalizedAmount);
+    const capitalizedMinor = row.capitalizedAmount < 0 ? undefined : minor(row.capitalizedAmount);
     if (capitalizedMinor === undefined) {
       return { available: false, reason: "UNREADABLE_AMOUNT", currency, consigned };
     }
@@ -310,6 +315,12 @@ export function deriveVehicleCostBasis(args: {
   }
   eligible.sort((a, b) => a.date - b.date);
   const eligibleExpensesMinor = eligible.reduce((sum, row) => sum + row.capitalizedMinor, 0);
+  const totalBeforeDealMinor = baseMinor + (landedCostMinor ?? 0) + eligibleExpensesMinor;
+  // Every operand is a safe non-negative integer; their sum can still leave
+  // the safe range, and a sum that did is not a cost basis.
+  if (!Number.isSafeInteger(eligibleExpensesMinor) || !Number.isSafeInteger(totalBeforeDealMinor)) {
+    return { available: false, reason: "UNREADABLE_AMOUNT", currency, consigned };
+  }
 
   return {
     available: true,
@@ -319,7 +330,7 @@ export function deriveVehicleCostBasis(args: {
     landedCostMinor,
     expenses: eligible,
     eligibleExpensesMinor,
-    totalBeforeDealMinor: baseMinor + (landedCostMinor ?? 0) + eligibleExpensesMinor,
+    totalBeforeDealMinor,
     excluded,
     cutoffCreationTime: args.cutoffCreationTime,
   };

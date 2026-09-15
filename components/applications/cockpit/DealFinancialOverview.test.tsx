@@ -39,10 +39,10 @@ const summary: FinancialSummaryData = {
     basis: "MANAGEMENT_ESTIMATE",
     amountMinor: 1_250_000,
     currency: "JOD",
-    classification: "ESTIMATED",
+    classification: "ESTIMATED_AWAITING_SETTLEMENT",
     postable: false,
     lines: [],
-  } as unknown as FinancialSummaryData["profit"],
+  },
 };
 
 afterEach(cleanup);
@@ -55,7 +55,8 @@ describe("DealFinancialOverview", () => {
     expect(fact("overview-sale-price").getByText(salesEn.OverviewBasisTargetSelling)).toBeTruthy();
     expect(fact("overview-customer-paid").getByText("700 JOD")).toBeTruthy();
     expect(fact("overview-financier").getByText("9,350 JOD")).toBeTruthy();
-    expect(fact("overview-financier").getByText(/still to collect 4,000 JOD/)).toBeTruthy();
+    expect(fact("overview-financier-balance").getByText("4,000 JOD")).toBeTruthy();
+    expect(fact("overview-financier-balance").getByText(salesEn.OverviewFinancierOutstanding)).toBeTruthy();
     expect(fact("overview-dealer-contribution").getByText("1,650 JOD")).toBeTruthy();
     expect(fact("overview-dealer-contribution").getByText(salesEn.OverviewDealerContributionNote)).toBeTruthy();
     expect(fact("overview-costs").getByText("150 JOD")).toBeTruthy();
@@ -84,8 +85,39 @@ describe("DealFinancialOverview", () => {
         t={tEn}
       />
     );
-    const note = within(screen.getByTestId("overview-financier")).getByText(/expected to remit \(estimate\) 9,200 JOD/);
-    expect(note.textContent).toContain(salesEn.OverviewFinancierEstimatedBasis);
+    const row = within(screen.getByTestId("overview-financier-balance"));
+    expect(row.getByText("9,200 JOD")).toBeTruthy();
+    expect(row.getByText(new RegExp(salesEn.OverviewFinancierEstimatedBasis))).toBeTruthy();
+  });
+
+  test("the financier balance is shown on its own authority even when the funded portion is not recorded", () => {
+    render(
+      <DealFinancialOverview
+        summary={{
+          ...summary,
+          financier: {
+            fundedPortionMinor: null,
+            outstanding: { state: "OUTSTANDING", amountMinor: 4_000_000, basis: "RECEIVABLE" },
+          },
+        }}
+        money={money}
+        t={tEn}
+      />
+    );
+    expect(within(screen.getByTestId("overview-financier")).getByText(salesEn.NotRecorded)).toBeTruthy();
+    expect(within(screen.getByTestId("overview-financier-balance")).getByText("4,000 JOD")).toBeTruthy();
+    cleanup();
+    render(
+      <DealFinancialOverview
+        summary={{
+          ...summary,
+          financier: { fundedPortionMinor: null, outstanding: { state: "COLLECTED", amountMinor: 0, basis: "RECEIVABLE" } },
+        }}
+        money={money}
+        t={tEn}
+      />
+    );
+    expect(within(screen.getByTestId("overview-financier-balance")).getByText(salesEn.OverviewFinancierCollected)).toBeTruthy();
   });
 
   test("no fee policy: the expected side and the total read as unknown, never zero", () => {
@@ -134,7 +166,7 @@ describe("DealFinancialOverview", () => {
         totalExpectedMinor: null,
       },
       supplier: { consigned: null, direction: "UNKNOWN", amountMinor: null, route: "UNKNOWN" },
-      profit: { available: false, reason: "NoApprovedAmount" } as unknown as FinancialSummaryData["profit"],
+      profit: { available: false, reason: "NoApprovedPurchaseAmount" },
     };
     render(<DealFinancialOverview summary={empty} money={money} t={tEn} />);
     const fact = (id: string) => within(screen.getByTestId(id));
@@ -159,7 +191,7 @@ describe("DealFinancialOverview", () => {
         t={tEn}
       />
     );
-    expect(within(screen.getByTestId("overview-financier")).getByText(salesEn.OverviewFinancierDirectRoute)).toBeTruthy();
+    expect(within(screen.getByTestId("overview-financier-balance")).getByText(salesEn.OverviewFinancierDirectRoute)).toBeTruthy();
     expect(within(screen.getByTestId("overview-supplier")).getByText(salesEn.OverviewSupplierOwned)).toBeTruthy();
   });
 });

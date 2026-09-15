@@ -141,6 +141,26 @@ describe("deriveVehicleCostBasis", () => {
       });
       expect(basis({ ...sourced, sourceCost: undefined }, []).available).toBe(false);
     });
+    test("a ZERO or negative base is not a cost — zero is missing (as vehicleHasCostBasis reads it), negative is unreadable", () => {
+      expect(basis({ ...stock, purchasePrice: 0 }, [])).toMatchObject({ available: false, reason: "NO_COST_RECORDED" });
+      expect(basis({ ...sourced, sourceCost: 0 }, [])).toMatchObject({ available: false, reason: "NO_COST_RECORDED" });
+      expect(basis({ ...stock, purchasePrice: -9_500 }, [])).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
+      expect(basis({ ...sourced, sourceCost: -1 }, [])).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
+    });
+    test("a non-finite or unsafe base, landed cost or capitalized amount withholds the basis", () => {
+      expect(basis({ ...stock, purchasePrice: Number.NaN }, [])).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
+      expect(basis({ ...stock, purchasePrice: Number.POSITIVE_INFINITY }, [])).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
+      expect(basis({ ...stock, purchasePrice: Number.MAX_SAFE_INTEGER }, [])).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
+      expect(basis({ ...stock, landedCostTotal: -1 }, [])).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
+      expect(basis({ ...stock, landedCostTotal: Number.NaN }, [])).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
+      expect(basis(stock, [expense({ capitalizedAmount: -100 })])).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
+      expect(basis(stock, [expense({ capitalizedAmount: Number.POSITIVE_INFINITY })])).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
+    });
+    test("an aggregate that leaves the safe range is withheld, even when every operand is safe", () => {
+      const nearMax = Number.MAX_SAFE_INTEGER / 1000 - 1; // major units that convert to a safe minor amount
+      const rows = [expense({ capitalizedAmount: nearMax }), expense({ capitalizedAmount: nearMax })];
+      expect(basis(stock, rows)).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
+    });
     test("the deal is in a different currency from the org's expense records", () => {
       const b = basis(stock, [expense({})], { dealCurrency: "USD" });
       expect(b).toEqual({ available: false, reason: "MIXED_DENOMINATION", currency: "USD", consigned: false });

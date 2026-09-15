@@ -5,7 +5,7 @@ import { api } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import type * as applicationsModule from "./applications";
 import { getOrgCurrency } from "./accounting/workflowHooks";
-import { deriveExpectedFees, type ExpectedFeeRow } from "./financeDealCosts";
+import { deriveExpectedFees, summarizeFees, type ExpectedFeeRow } from "./financeDealCosts";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { loadActiveFees } from "./utils/settlementDeductions";
@@ -115,7 +115,12 @@ function routeSpecificProfit(args: {
   fullCostBasis: VehicleCostBasis | null;
   /** SOURCED: the dealership's pre-deal preparation spend, subtracted once. */
   preparation: DealerPreparationExpenses | null;
-  settlementComplete: boolean;
+  /**
+   * The cockpit's own "fully settled" — money settled AND every cost line
+   * carrying a CHECKED actual — as `buildCockpitMoney` classifies a
+   * consignment figure. A STOCK figure is called actual on the same terms.
+   */
+  fullySettled: boolean;
 }): DealProfit {
   const { app, money } = args;
   if (args.consigned === null) return money.profit;
@@ -142,7 +147,7 @@ function routeSpecificProfit(args: {
       (app.customerGapCashToDealerMinor ?? 0) + (app.customerGapInstallmentToDealerMinor ?? 0),
     actualExpensesMinor: money.expenses.actualTotalMinor,
     currency: money.currency,
-    fullySettled: args.settlementComplete && money.expenses.awaitingActuals === 0,
+    fullySettled: args.fullySettled,
   });
 }
 
@@ -230,8 +235,25 @@ export const financedDealOverview = query({
         actualTotalMinor: cockpit.money.expenses.actualTotalMinor,
       });
       const consigned = cockpit.vehicle?.consigned ?? null;
-      const settlementComplete =
+      /**
+       * "Fully settled" on the cockpit's own terms, so a STOCK headline is
+       * called ACTUAL exactly when a consignment one would be. Money settled
+       * is the SETTLEMENT stage, which the cockpit derives from
+       * `settlementFacts.moneySettled`; the expense half is the same
+       * `summarizeFees` predicate `summarizeCockpitExpenses` applies —
+       * every live line in the deal's currency, none awaiting an actual, none
+       * awaiting reconciliation. RECORDED and RECONCILED are different claims;
+       * only the second may call the figure actual.
+       */
+      const moneySettled =
         cockpit.stages.find((stage) => stage.key === "SETTLEMENT")?.state === "COMPLETE";
+      const sameCurrencyFees = fees.filter((fee) => fee.currency === cockpit.money.currency);
+      const feeSummary = summarizeFees(sameCurrencyFees);
+      const expensesFullyReconciled =
+        sameCurrencyFees.length === fees.length &&
+        feeSummary.linesAwaitingActual === 0 &&
+        feeSummary.linesAwaitingReconciliation === 0;
+      const fullySettled = moneySettled && expensesFullyReconciled;
       financialSummary = deriveDealFinancialSummary({
         currency: cockpit.money.currency,
         routeKnown: cockpit.money.routeKnown,
@@ -244,7 +266,7 @@ export const financedDealOverview = query({
           money: cockpit.money,
           fullCostBasis: costBasisFor(null),
           preparation,
-          settlementComplete,
+          fullySettled,
         }),
         vehicleConsigned: consigned,
         app,

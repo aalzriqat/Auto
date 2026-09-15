@@ -165,6 +165,14 @@ describe("withPreparationExpenses", () => {
       reason: "PreparationExpensesUnreadable",
     });
   });
+  test("a corrupt preparation total (negative, NaN, unsafe) refuses the headline", () => {
+    for (const totalMinor of [-1, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53, 0.5]) {
+      expect(withPreparationExpenses(profit, { available: true, totalMinor })).toEqual({
+        available: false,
+        reason: "CorruptInput",
+      });
+    }
+  });
   test("an unavailable cockpit figure passes through with its own reason", () => {
     expect(withPreparationExpenses({ available: false, reason: "NoSupplierSettlement" }, { available: true, totalMinor: 1 })).toEqual({
       available: false,

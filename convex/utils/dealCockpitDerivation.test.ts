@@ -287,6 +287,33 @@ describe("a live deal mid-flight", () => {
     expect(s.state("HANDOVER")).toBe("PENDING");
   });
 
+  test("whose move: an unsettled gap is the DEALERSHIP's, not the finance company's", () => {
+    const gapped = stages({
+      creditDecision: "APPROVED",
+      appraisalStatus: "COMPLETED",
+      rawAppraisalGapMinor: 1_000_000,
+      gapResolution: "PENDING_NEGOTIATION",
+      approvedDealerPurchaseAmountMinor: 11_500_000,
+    });
+    expect(gapped.blocker("APPROVED_PURCHASE")).toBe("GapUnresolved");
+    expect(gapped.authority("APPROVED_PURCHASE")).toBe("DEALER");
+    const failed = stages({
+      creditDecision: "APPROVED",
+      appraisalStatus: "COMPLETED",
+      rawAppraisalGapMinor: 1_000_000,
+      gapResolution: "FAILED",
+      approvedDealerPurchaseAmountMinor: 11_500_000,
+    });
+    expect(failed.authority("APPROVED_PURCHASE")).toBe("DEALER");
+    // No amount yet: still the finance company's move.
+    const noAmount = stages({ creditDecision: "APPROVED", appraisalStatus: "COMPLETED" });
+    expect(noAmount.blocker("APPROVED_PURCHASE")).toBe("NoApprovedPurchaseAmount");
+    expect(noAmount.authority("APPROVED_PURCHASE")).toBe("MIRROR");
+    // And once complete, the stage keeps its own authority.
+    const done = stages({ creditDecision: "APPROVED", appraisalStatus: "COMPLETED", approvedDealerPurchaseAmountMinor: 1 });
+    expect(done.authority("APPROVED_PURCHASE")).toBe("MIRROR");
+  });
+
   test("a failed negotiation is distinguished from one still running", () => {
     const s = stages({
       creditDecision: "APPROVED",

@@ -1193,11 +1193,20 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
   const firstIncomplete = order.find((key) => !complete[key] && reachable[key]);
 
   return order.map((key): DealStage => {
-    const authority = STAGE_AUTHORITY[key];
-    if (complete[key]) return { key, state: "COMPLETE", authority };
-    if (stopped) return { key, state: "STOPPED", authority };
-    if (key !== firstIncomplete) return { key, state: "PENDING", authority };
+    if (complete[key]) return { key, state: "COMPLETE", authority: STAGE_AUTHORITY[key] };
+    if (stopped) return { key, state: "STOPPED", authority: STAGE_AUTHORITY[key] };
+    if (key !== firstIncomplete) return { key, state: "PENDING", authority: STAGE_AUTHORITY[key] };
     const blocker = blockers[key];
+    // Whose move it is follows the ACTIVE blocker, not only the stage. The
+    // finance company names the approved amount, but an unsettled appraisal
+    // gap inside that stage is the dealership's to resolve — the cockpit
+    // offers the dealership's ResolveGapAction on exactly these blockers —
+    // so the rail must not say it is waiting on the finance company then.
+    const authority: DealStageAuthority =
+      key === "APPROVED_PURCHASE" &&
+      (blocker === "GapUnresolved" || blocker === "GapNegotiationFailed")
+        ? "DEALER"
+        : STAGE_AUTHORITY[key];
     return blocker
       ? { key, state: "BLOCKED", blocker, authority }
       : { key, state: "CURRENT", authority };
@@ -1752,12 +1761,18 @@ export function deriveStockManagementProfit(args: {
   if (args.vehicleCostMinor === undefined) return { available: false, reason: "NoVehicleCost" };
   if (args.dealerContributionMinor === undefined)
     return { available: false, reason: "NoDealerContribution" };
-  if (
-    args.vehicleCostMinor < 0 ||
-    args.dealerContributionMinor < 0 ||
-    (args.customerDirectToDealerMinor ?? 0) < 0 ||
-    args.actualExpensesMinor < 0
-  ) {
+  // FAIL CLOSED on every operand, the approved amount included. `v.number()`
+  // admits NaN, Infinity, fractions and unsafe integers, and a negative minor
+  // amount is not a smaller cost — it is a corrupt row. None of them may reach
+  // the subtraction below and come out looking like a profit.
+  const operands = [
+    args.approvedDealerPurchaseAmountMinor,
+    args.vehicleCostMinor,
+    args.dealerContributionMinor,
+    args.customerDirectToDealerMinor ?? 0,
+    args.actualExpensesMinor,
+  ];
+  if (!operands.every((amount) => Number.isSafeInteger(amount) && amount >= 0)) {
     return { available: false, reason: "CorruptInput" };
   }
   const lines: ManagementProfitLine[] = [
@@ -1767,10 +1782,14 @@ export function deriveStockManagementProfit(args: {
     { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: args.dealerContributionMinor },
     { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: args.actualExpensesMinor },
   ];
+  const amountMinor = lines.reduce((total, line) => total + line.sign * line.amountMinor, 0);
+  // Safe operands can still overflow between them; a result that is not a
+  // safe integer is not a figure.
+  if (!Number.isSafeInteger(amountMinor)) return { available: false, reason: "CorruptInput" };
   return {
     available: true,
     basis: "MANAGEMENT_ESTIMATE",
-    amountMinor: lines.reduce((total, line) => total + line.sign * line.amountMinor, 0),
+    amountMinor,
     currency: args.currency,
     classification: args.fullySettled ? "ACTUAL_UNPOSTABLE" : "ESTIMATED_AWAITING_SETTLEMENT",
     lines,
@@ -1792,13 +1811,13 @@ export function withPreparationExpenses(
 ): ManagementProfit {
   if (!profit.available) return profit;
   if (!preparation.available) return { available: false, reason: "PreparationExpensesUnreadable" };
-  if (preparation.totalMinor < 0) return { available: false, reason: "CorruptInput" };
+  if (!Number.isSafeInteger(preparation.totalMinor) || preparation.totalMinor < 0) {
+    return { available: false, reason: "CorruptInput" };
+  }
+  const amountMinor = profit.amountMinor - preparation.totalMinor;
+  if (!Number.isSafeInteger(amountMinor)) return { available: false, reason: "CorruptInput" };
   const line: ManagementProfitLine = { key: "PREPARATION_EXPENSES", sign: -1, amountMinor: preparation.totalMinor };
-  return {
-    ...profit,
-    amountMinor: profit.amountMinor - preparation.totalMinor,
-    lines: [...profit.lines, line],
-  };
+  return { ...profit, amountMinor, lines: [...profit.lines, line] };
 }
 
 /**

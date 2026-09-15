@@ -136,7 +136,7 @@ describe("dealOverview.financedDealOverview", () => {
     // Registered BEFORE the application: pre-deal. The cutoff is the row's
     // registration instant, not its business date.
     await insertExpense(s, {});
-    await insertExpense(s, { accountingTreatment: "PERIOD_EXPENSE", capitalizedAmount: undefined as unknown as number });
+    await insertExpense(s, { accountingTreatment: "PERIOD_EXPENSE", capitalizedAmount: undefined });
     const applicationId = await insertApplication(s);
     // Registered AFTER the application, back-dated: not pre-deal, counted as excluded.
     await insertExpense(s, { date: DEAL_CREATED_AT - 5_000 });
@@ -192,9 +192,37 @@ describe("dealOverview.financedDealOverview", () => {
     expect(cockpit!.money!.profit.available).toBe(false);
   });
 
+  test("STOCK: the figure is called ACTUAL only when the money is settled AND every cost line is RECONCILED — a recorded actual is not enough", async () => {
+    const s = await seed("17");
+    const applicationId = await insertApplication(s);
+    // Money settled on the cockpit's own terms; one dealer-borne line with a recorded, unchecked actual.
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { settlementStatus: "FULLY_SETTLED" }));
+    const feeId = await s.asOwner.mutation(api.financeDealCosts.recordDealFee, {
+      orgId: s.orgId,
+      applicationId,
+      feeType: "LICENSING",
+      paidBy: "DEALER",
+      paidTo: "GOVERNMENT",
+      accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+      actualAmountMinor: 90_000,
+      expectedCurrency: "JOD",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const classificationOf = async () => {
+      const view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      const profit = view!.financialSummary!.profit;
+      if (!profit.available || profit.basis !== "MANAGEMENT_ESTIMATE") throw new Error("expected a management estimate");
+      return profit.classification;
+    };
+    // Settlement stage complete, but the line is RECORDED, not RECONCILED: still an estimate.
+    expect(await classificationOf()).toBe("ESTIMATED_AWAITING_SETTLEMENT");
+    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "checked against the receipt" });
+    expect(await classificationOf()).toBe("ACTUAL_UNPOSTABLE");
+  });
+
   test("STOCK: an unreadable capitalized row refuses the profit rather than overstating it", async () => {
     const s = await seed("12");
-    await insertExpense(s, { capitalizedAmount: undefined as unknown as number });
+    await insertExpense(s, { capitalizedAmount: undefined });
     const applicationId = await insertApplication(s);
     const view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
     expect(view!.financialSummary!.profit).toEqual({ available: false, reason: "NoVehicleCost" });
@@ -204,10 +232,10 @@ describe("dealOverview.financedDealOverview", () => {
   test("SOURCED: the cockpit's consignment profit, less the dealership's pre-deal preparation spend, subtracted exactly once", async () => {
     const s = await seed("13", { sourceType: "SOURCED" });
     // Period expenses on the supplier's car: 100 net paid before the deal, one after, one pending.
-    await insertExpense(s, { accountingTreatment: "PERIOD_EXPENSE", capitalizedAmount: undefined as unknown as number });
-    await insertExpense(s, { accountingTreatment: "PERIOD_EXPENSE", capitalizedAmount: undefined as unknown as number, status: "PENDING" });
+    await insertExpense(s, { accountingTreatment: "PERIOD_EXPENSE", capitalizedAmount: undefined });
+    await insertExpense(s, { accountingTreatment: "PERIOD_EXPENSE", capitalizedAmount: undefined, status: "PENDING" });
     const applicationId = await insertApplication(s);
-    await insertExpense(s, { accountingTreatment: "PERIOD_EXPENSE", capitalizedAmount: undefined as unknown as number });
+    await insertExpense(s, { accountingTreatment: "PERIOD_EXPENSE", capitalizedAmount: undefined });
     const cockpit = await s.asOwner.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
     const view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
     const served = view!.financialSummary!.profit;

@@ -66,6 +66,33 @@ describe("management profit by ownership", () => {
     });
   });
 
+  test.each([
+    ["NaN approved amount", { approvedDealerPurchaseAmountMinor: Number.NaN, vehicleCostMinor: 1 }],
+    ["Infinite approved amount", { approvedDealerPurchaseAmountMinor: Number.POSITIVE_INFINITY, vehicleCostMinor: 1 }],
+    ["negative approved amount", { approvedDealerPurchaseAmountMinor: -1, vehicleCostMinor: 1 }],
+    ["fractional approved amount", { approvedDealerPurchaseAmountMinor: 12_500_000.5, vehicleCostMinor: 1 }],
+    ["unsafe approved amount", { approvedDealerPurchaseAmountMinor: Number.MAX_SAFE_INTEGER + 2, vehicleCostMinor: 1 }],
+    ["NaN vehicle cost", { vehicleCostMinor: Number.NaN }],
+    ["Infinite vehicle cost", { vehicleCostMinor: Number.NEGATIVE_INFINITY }],
+    ["unsafe vehicle cost", { vehicleCostMinor: 2 ** 53 }],
+    ["NaN contribution", { vehicleCostMinor: 1, dealerContributionMinor: Number.NaN }],
+    ["negative customer direct", { vehicleCostMinor: 1, customerDirectToDealerMinor: -5 }],
+    ["Infinite expenses", { vehicleCostMinor: 1, actualExpensesMinor: Number.POSITIVE_INFINITY }],
+    ["fractional expenses", { vehicleCostMinor: 1, actualExpensesMinor: 0.5 }],
+  ] as const)("fails CLOSED on %s — CorruptInput, never a figure", (_label, overrides) => {
+    expect(deriveStockManagementProfit({ ...common, ...overrides })).toEqual({ available: false, reason: "CorruptInput" });
+  });
+
+  test("safe operands whose SUM leaves the safe range are refused too", () => {
+    const p = deriveStockManagementProfit({
+      ...common,
+      approvedDealerPurchaseAmountMinor: Number.MAX_SAFE_INTEGER,
+      customerDirectToDealerMinor: Number.MAX_SAFE_INTEGER,
+      vehicleCostMinor: 1,
+    });
+    expect(p).toEqual({ available: false, reason: "CorruptInput" });
+  });
+
   test("STOCK reads ACTUAL_UNPOSTABLE once settled, and is still not postable", () => {
     const p = deriveStockManagementProfit({ ...common, vehicleCostMinor: 9_700_000, fullySettled: true });
     if (!p.available) throw new Error("expected available");

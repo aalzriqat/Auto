@@ -74,21 +74,31 @@ export function DealFinancialOverview({
   const cur = summary.currency;
   const m = (minor: number | null): string | null => (minor === null ? null : money(minor, cur));
 
-  const financierNote = ((): string => {
+  /**
+   * The financier's remaining balance as its own fact, on its own authority:
+   * the receivable's outstanding once one exists, the frozen economics'
+   * expected remittance before that, or the reason there is none. It does not
+   * depend on the funded portion being recorded — that is a different field
+   * and only THAT row says "not recorded" when it is missing.
+   */
+  const balance = ((): { value: string | null; note: string } => {
     const o = summary.financier.outstanding;
     switch (o.state) {
       case "OUTSTANDING":
-        return `${t("OverviewFinancierOutstanding")} ${money(o.amountMinor, cur)}`;
+        return { value: money(o.amountMinor, cur), note: t("OverviewFinancierOutstanding") };
       case "COLLECTED":
-        return t("OverviewFinancierCollected");
+        return { value: money(o.amountMinor, cur), note: t("OverviewFinancierCollected") };
       case "ESTIMATED_PRE_RECEIVABLE":
-        return `${t("OverviewFinancierEstimated")} ${money(o.amountMinor, cur)} · ${t("OverviewFinancierEstimatedBasis")}`;
+        return {
+          value: money(o.amountMinor, cur),
+          note: `${t("OverviewFinancierEstimated")} · ${t("OverviewFinancierEstimatedBasis")}`,
+        };
       case "NONE_DIRECT_ROUTE":
-        return t("OverviewFinancierDirectRoute");
+        return { value: null, note: t("OverviewFinancierDirectRoute") };
       case "NOT_YET_RECEIVABLE":
-        return t("OverviewFinancierNotYetReceivable");
+        return { value: null, note: t("OverviewFinancierNotYetReceivable") };
       case "UNKNOWN":
-        return t("OverviewFinancierUnknown");
+        return { value: null, note: t("OverviewFinancierUnknown") };
     }
   })();
 
@@ -151,7 +161,13 @@ export function DealFinancialOverview({
           testId="overview-financier"
           label={t("OverviewFinancierFunds")}
           value={m(summary.financier.fundedPortionMinor)}
-          note={summary.financier.fundedPortionMinor === null ? t("NotRecorded") : financierNote}
+          note={summary.financier.fundedPortionMinor === null ? t("NotRecorded") : undefined}
+        />
+        <Fact
+          testId="overview-financier-balance"
+          label={t("OverviewFinancierBalance")}
+          value={balance.value}
+          note={balance.note}
         />
         <Fact
           testId="overview-dealer-contribution"

@@ -2507,23 +2507,48 @@ function MoneyPanel({
   }> | null;
   t: (key: string) => string;
 }>) {
+  /**
+   * ONE profit authority per screen.
+   *
+   * On a financed deal the overview read model serves the route-aware
+   * headline (consignment economics less preparation spend on a SOURCED car;
+   * cost-basis economics on the dealership's own STOCK), derived on the
+   * server from the same snapshot as every other overview figure. The
+   * cockpit's own `money.profit` is the consignment-only derivation, which on
+   * a STOCK deal reads "no supplier settlement" — so painting it as the
+   * headline beside the overview's figure put two contradictory profits on one
+   * card. Here the overview's profit drives the headline, the fact tiles and
+   * the breakdown alike, and while the overview is still loading nothing is
+   * painted from the legacy figure in its place. A cash deal has no overview
+   * and keeps the accounting result the sale cockpit serves.
+   */
+  const canonicalProfit: DealMoney["profit"] | null = overview
+    ? overview.loading
+      ? null
+      : (overview.data?.financialSummary?.profit ?? profit)
+    : profit;
   return (
     <Card>
       <CardHeader className="pb-3">
         <CardTitle className="text-base">{t("FinancialSummaryHeading")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <ProfitHeadline profit={profit} money={money} t={t} />
-        {overview &&
-          (overview.loading ? (
-            <p className="text-xs text-muted-foreground" data-testid="deal-financial-overview-loading">
-              {t("OverviewLoading")}
-            </p>
-          ) : overview.data?.financialSummary ? (
-            <DealFinancialOverview summary={overview.data.financialSummary} money={overview.moneyIn} t={t} />
-          ) : null)}
+        {canonicalProfit === null ? (
+          <div className="space-y-2" data-testid="deal-financial-overview-loading">
+            <p className="text-sm text-muted-foreground">{t("NetDealershipProfit")}</p>
+            <Skeleton className="h-9 w-40" />
+            <p className="text-xs text-muted-foreground">{t("OverviewLoading")}</p>
+          </div>
+        ) : (
+          <ProfitHeadline profit={canonicalProfit} money={money} t={t} />
+        )}
+        {overview && !overview.loading && overview.data?.financialSummary && (
+          <DealFinancialOverview summary={overview.data.financialSummary} money={overview.moneyIn} t={t} />
+        )}
         {/* One fact per served line of the deal itself, then one per party the server names. */}
-        <DealSummaryFacts profit={profit} summary={summary} money={money} t={t} />
+        {canonicalProfit !== null && (
+          <DealSummaryFacts profit={canonicalProfit} summary={summary} money={money} t={t} />
+        )}
         {parties && (
           <div className="space-y-2">
             <h3 className="text-xs font-normal text-muted-foreground">{t("DealPartiesHeading")}</h3>
@@ -2539,7 +2564,7 @@ function MoneyPanel({
             )}
           </div>
         )}
-        <ProfitBreakdown profit={profit} money={money} t={t} />
+        {canonicalProfit !== null && <ProfitBreakdown profit={canonicalProfit} money={money} t={t} />}
         {overview?.data?.vehicleCostBasis && (
           <VehicleCostBasisSection
             basis={overview.data.vehicleCostBasis}
