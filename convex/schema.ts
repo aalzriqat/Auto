@@ -3194,13 +3194,20 @@ export default defineSchema({
      */
     ledgerPosting: v.optional(v.literal("CANONICAL")),
     /**
-     * What EMPLOYEE_REIMBURSEMENTS_PAYABLE (2320) carries for this record right
-     * now, and the last `CUSTODY_PAYABLE_RECLASSIFIED` version used. The
+     * What EMPLOYEE_REIMBURSEMENTS_PAYABLE (2320) is being driven TO for this
+     * record, and the last `CUSTODY_PAYABLE_RECLASSIFIED` version issued. The
      * payable is the record's out-of-pocket position `max(0, −position)`,
-     * kept there by a delta reclassification after every movement — see
+     * reached by a chain of delta reclassifications, one per movement — see
      * `syncCustodyPayable`. Absent means zero.
+     *
+     * ⚠️ A TARGET, NOT A LEDGER BALANCE. A delta dated into a closed month
+     * waits in the outbox, and every later delta is queued behind it
+     * (`utils/custodySourceLedger`), so the books may still carry an earlier
+     * version's figure. What is actually posted is read from the ledger
+     * (`custodyPayableReclassPosted`), never from this field — the read
+     * reports `payableAwaitingPost` for exactly that gap.
      */
-    payablePostedMinor: v.optional(v.number()),
+    payableTargetMinor: v.optional(v.number()),
     payableReclassVersion: v.optional(v.number()),
     /** The write-off on the books (`CUSTODY_WRITTEN_OFF`, versioned), absent once reopened. */
     writeOffPosted: v.optional(v.object({ version: v.number(), amountMinor: v.number() })),

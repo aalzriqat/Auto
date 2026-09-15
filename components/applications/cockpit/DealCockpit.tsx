@@ -1677,12 +1677,16 @@ export function DealCockpit({
               setFeeCustody({ orgId, feeId: feeId as Id<"financeDealFees">, custodyId: custodyId as Id<"financeDealCustody"> })
             ),
           onClose: (custodyId, values) =>
-            custodyPlain(() =>
+            // A closure is a command like a movement: it may post a write-off,
+            // and a lost response must replay rather than refuse on the
+            // closure it already made — so it carries a key the same way.
+            custodyCommand(`custody-close:${custodyId}`, (idempotencyKey) =>
               reconcileDealCustody({
                 orgId,
                 custodyId: custodyId as Id<"financeDealCustody">,
                 notes: values.notes,
                 writeOffReason: values.writeOffReason,
+                idempotencyKey,
               })
             ),
           onReopen: (custodyId, reason) =>

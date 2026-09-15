@@ -10,9 +10,11 @@ import {
 import {
   assertConfiguredFeesRecorded,
   loadActiveFees,
+  loadCustodyRecords,
   settlementDeductedActualMinor,
   settlementDeductedFees,
 } from "./settlementDeductions";
+import { assertCustodyLedgerFamilyComplete } from "./custodySourceLedger";
 import { heldDepositRowsForVehicle } from "./saleCompletion";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { toMinorUnits } from "./money";
@@ -133,6 +135,18 @@ export async function resolveFinancedSalePlan(
   // nothing — a cash sale, a manual financier, no company — passes through
   // untouched. Before the first write, like every other refusal here.
   assertConfiguredFeesRecorded(app.companyRuleSnapshot, liveFees, "finalizing");
+
+  // Every custody record and every custody-paid line on the deal must be on
+  // the books as a complete family before the sale is recognized on them —
+  // on EVERY route, like the configured-fee gate above, because cash an
+  // employee paid out is a fact of the deal whatever the settlement route.
+  // Judged on the rows, never on the `CLASSIFIED` stamp: a record migrated
+  // or raw-edited since classification carries the stamp just the same.
+  assertCustodyLedgerFamilyComplete(
+    await loadCustodyRecords(ctx, app._id, "finalizing this deal"),
+    liveFees,
+    "finalizing this deal"
+  );
 
   if (!financedSaleRecognitionApplies(app, opts)) return undefined;
 
@@ -376,7 +390,10 @@ function humanizeFeeType(feeType: string): string {
  * queues to the outbox for that period exactly as every other event dated
  * there does, and a closed month is never rewritten. `recordLegalInvoice`
  * refuses a future date and a date that is not a timestamp, so what reaches
- * here is a real past instant or nothing.
+ * here is a real past instant or nothing — and the same rule is applied
+ * again here, with NO tolerance window: an invoice date is a calendar date
+ * sent as UTC midnight (or the current instant for today), so a value past
+ * the moment of finalization is a day that has not happened.
  */
 export function financedSaleRecognitionDate(
   app: Pick<Doc<"financeApplications">, "legalInvoiceDate">,
@@ -395,7 +412,7 @@ export function financedSaleRecognitionDate(
       `This deal's legal invoice date is not a real timestamp (${invoiceDate}), so the sale cannot be dated for recognition. Re-record the legal invoice before finalizing.`
     );
   }
-  if (invoiceDate > finalizedAt + 24 * 60 * 60 * 1000) {
+  if (invoiceDate > finalizedAt) {
     throw new ConvexError(
       "This deal's legal invoice is dated in the future, so the sale cannot be recognized yet. Re-record the legal invoice with its real date before finalizing."
     );

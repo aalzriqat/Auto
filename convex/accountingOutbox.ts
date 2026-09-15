@@ -36,6 +36,7 @@ import {
 } from "./accounting/receiptOccurrence";
 import { prepaidPostingBlockedReason } from "./utils/prepaidSourceLedger";
 import { payrollPostingBlockedReason } from "./utils/payrollSourceLedger";
+import { custodyPostingBlockedReason } from "./utils/custodySourceLedger";
 import { commissionPostingBlockedReason } from "./utils/commissionSourceLedger";
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { scheduleAuthorityDispatch } from "./utils/authorityDispatchScheduler";
@@ -1636,7 +1637,8 @@ export const postOutboxRow = internalMutation({
       const blockedReason =
         (await prepaidPostingBlockedReason(ctx, row)) ??
         (await payrollPostingBlockedReason(ctx, row)) ??
-        (await commissionPostingBlockedReason(ctx, row));
+        (await commissionPostingBlockedReason(ctx, row)) ??
+        (await custodyPostingBlockedReason(ctx, row));
       if (blockedReason) return await holdOutboxRow(ctx, row, blockedReason);
     }
 

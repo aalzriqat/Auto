@@ -73,3 +73,21 @@ export function msToDateInput(ms: number): string {
   const d = new Date(ms);
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
+
+/**
+ * The instant an ECONOMIC calendar date is sent to the server as.
+ *
+ * The server refuses a date past its own clock with no tolerance window: a
+ * paid date, a custody movement date or an invoice date in the future is a
+ * period that has not happened. A backdated day arrives as its UTC midnight
+ * (`dateInputToUtcMs`), which is always in the past. Today is different:
+ * for a user ahead of UTC (Jordan, +3) the local calendar day begins up to
+ * three hours BEFORE its UTC midnight, so "today at UTC midnight" is a
+ * future instant in those hours and the server would rightly refuse it.
+ * Today is therefore sent as the current instant, which the server accepts
+ * and which still falls on today's calendar date in every zone that has
+ * reached it. NaN for an empty/invalid value, like `dateInputToUtcMs`.
+ */
+export function economicDateInputToMs(value: string): number {
+  return value === todayDateInput() ? Date.now() : dateInputToUtcMs(value);
+}

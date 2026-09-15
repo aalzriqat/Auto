@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { dateInputToUtcMs, todayDateInput } from "@/lib/dateInput";
+import { economicDateInputToMs, todayDateInput } from "@/lib/dateInput";
 import type { Doc } from "@/convex/_generated/dataModel";
 
 /** The fee-type union the server validates — the row carries it as such, so no cast is needed to send it back. */
@@ -1105,7 +1105,7 @@ function AddForm({
           actualAmountMinor: amountMinor,
           paidTo: payee,
           accountingTreatment: treatment,
-          paidAt: paidOn ? dateInputToUtcMs(paidOn) : undefined,
+          paidAt: paidOn ? economicDateInputToMs(paidOn) : undefined,
           receiptReference: reference.trim() || undefined,
         });
       }}
@@ -1382,7 +1382,7 @@ function TemplateActualForm({
             ? null
             : {
                 actualAmountMinor: amountMinor,
-                paidAt: paidOn ? dateInputToUtcMs(paidOn) : undefined,
+                paidAt: paidOn ? economicDateInputToMs(paidOn) : undefined,
                 receiptReference: reference.trim() || undefined,
                 currency,
               });
@@ -1516,7 +1516,7 @@ function ActualForm({
         try {
           await onSubmit({
             actualAmountMinor: amountMinor,
-            paidAt: paidOn ? dateInputToUtcMs(paidOn) : undefined,
+            paidAt: paidOn ? economicDateInputToMs(paidOn) : undefined,
             receiptReference: reference.trim() || undefined,
             currency: line.currency,
           });

@@ -194,9 +194,16 @@ describe("SCRUM-313 client identity lifetime", () => {
     // client caller (SCRUM-215); `financeDealCosts.openDealCustody` and
     // `financeDealCosts.recordCustodyMovement` left it when the Deal's custody
     // section gained its money actions (AF-80). Their lifetimes are measured
-    // above like the rest.
+    // above like the rest. `financeDealCosts.migrateLegacyCustodyToLedger`
+    // (AF-80 final round B) is an operator door for a custody family from
+    // before ledger posting and deliberately has no screen; it joins the
+    // list until one exists. `financeDealCosts.reconcileDealCustody` became
+    // identity-guarded in the same round and is called from the Deal's
+    // custody section through the retained `commandId`, so it is measured
+    // above, not listed here.
     expect(commandsWithNoClientCaller.sort((a, b) => a.localeCompare(b))).toEqual([
       "collections.applyRetainedCredit",
+      "financeDealCosts.migrateLegacyCustodyToLedger",
       "sourcingPayables.recordPartialPayment",
     ]);
   });

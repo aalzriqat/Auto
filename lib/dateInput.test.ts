@@ -4,10 +4,11 @@
  * `new Date(\`${value}T00:00:00\`)` would pass unnoticed. At +3 the two diverge
  * at every day boundary, which is exactly where the bug bit.
  */
-import { beforeAll, afterAll, describe, expect, it } from "vitest";
+import { beforeAll, afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   dateInputToUtcMs,
   dateInputEndToUtcMs,
+  economicDateInputToMs,
   todayDateInput,
   daysFromTodayDateInput,
   msToDateInput,
@@ -59,5 +60,35 @@ describe("dateInput UTC parsing", () => {
     week.setDate(week.getDate() + 7);
     const localWeek = `${week.getFullYear()}-${String(week.getMonth() + 1).padStart(2, "0")}-${String(week.getDate()).padStart(2, "0")}`;
     expect(daysFromTodayDateInput(7)).toBe(localWeek);
+  });
+});
+
+describe("economicDateInputToMs — what an economic calendar date is sent as", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("sends TODAY as the current instant, never a UTC midnight the server would read as the future", () => {
+    // 01:30 local in Amman on the 16th is 22:30Z on the 15th: the UTC midnight
+    // of the local calendar day has not happened yet, so the server (which
+    // refuses any instant past its clock, with no tolerance window) would
+    // refuse "today" picked in those hours. The current instant is what is sent.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(Date.UTC(2026, 8, 15, 22, 30)));
+    expect(todayDateInput()).toBe("2026-09-16");
+    expect(dateInputToUtcMs("2026-09-16")).toBeGreaterThan(Date.now());
+    expect(economicDateInputToMs("2026-09-16")).toBe(Date.now());
+  });
+
+  it("sends a backdated day as its UTC midnight, which is always in the past", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(Date.UTC(2026, 8, 15, 22, 30)));
+    expect(economicDateInputToMs("2026-09-15")).toBe(Date.UTC(2026, 8, 15));
+    expect(economicDateInputToMs("2026-09-15")).toBeLessThan(Date.now());
+  });
+
+  it("returns NaN for an empty or malformed value, as `dateInputToUtcMs` does", () => {
+    expect(Number.isNaN(economicDateInputToMs(""))).toBe(true);
+    expect(Number.isNaN(economicDateInputToMs("not-a-date"))).toBe(true);
   });
 });

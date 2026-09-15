@@ -89,7 +89,8 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "financeDealCosts.classifyDealAccounting": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "financeDealCosts.openDealCustody": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; the ISSUED entry it mints posts under `custody_entry_${entryId}` INSIDE the idempotent section, so a replay returns the stored custody id and never reaches the hook" },
   "financeDealCosts.planCustodyHandler": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic (a `plannedCustody` patch on financeApplications); names who will handle the handover before any cash moves, audited, and posts nothing" },
-  "financeDealCosts.reconcileDealCustody": { bucket: "STATE_GUARDED", mechanism: "the write-off branch posts CUSTODY_WRITTEN_OFF keyed on the PRE-EXISTING custody id plus a version stored on the row before the status flips; a retry finds status !== OPEN and is refused, and the same version can never post twice through the engine's idempotency key" },
+  "financeDealCosts.migrateLegacyCustodyToLedger": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted on the custody id; every posting it makes is keyed on PRE-EXISTING entry, fee and custody ids through the same hooks the product uses, and a fresh key against a record already CANONICAL is refused inside the section" },
+  "financeDealCosts.reconcileDealCustody": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted on custody id, normalised notes and write-off reason; the write-off branch additionally posts CUSTODY_WRITTEN_OFF keyed on the pre-existing custody id plus a stored version, and every mutable-state check is inside the section" },
   "financeDealCosts.reconcileDealFee": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "financeDealCosts.recordActualFeeAmount": { bucket: "STATE_GUARDED", mechanism: "sets a named field on one identified row; the custody posting it re-syncs (`syncCustodyFeePosting`) is keyed on the PRE-EXISTING fee id plus a version stored on the row, so a retry finds `custodyPosted` already matching and posts nothing" },
   "financeDealCosts.recordCustodyMovement": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
@@ -262,7 +263,8 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     expect(population.filter((p) => !CLASSIFICATION[p])).toEqual([]);
     expect(classified.filter((c) => !forward.has(c))).toEqual([]);
     // 116 → 118: `financeDealCosts.planCustodyHandler` and `financeDealCosts.setFeeCustody` (AF-80).
-    expect(population.length).toBe(118);
+    // 118 → 119: `financeDealCosts.migrateLegacyCustodyToLedger` (AF-80 final round B).
+    expect(population.length).toBe(119);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {

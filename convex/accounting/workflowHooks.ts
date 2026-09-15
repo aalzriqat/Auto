@@ -22,6 +22,7 @@ import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpe
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate, checkPostingAllowed } from "../accountingPeriods";
 import { SYSTEM_KEYS, type SystemKey } from "../utils/defaultChart";
+import { custodyPayableReclassKey, custodyPayableReclassPosted } from "../utils/custodySourceLedger";
 import { isChartInitialized, isSystemAccountMapped, ensureCommissionAccounts, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureConsignmentAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts, ensureFinancedSettlementAccounts, ensureDealCustodyAccounts } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
@@ -248,23 +249,38 @@ async function postDomainEvent(
     eventVersion?: number;
     /** Forwarded to `postOrEnqueue` — see the note there. */
     requiredSystemKeys?: readonly SystemKey[];
+    /**
+     * A CAUSAL predecessor this event must not overtake, as the reason it is
+     * waiting. When set the event is queued to the outbox outright — even
+     * into an open period with a ready chart — and the worker's own
+     * dependency guard (`accountingOutbox.postOutboxRow`) holds it until the
+     * predecessor is POSTED. The producer names the predecessor because only
+     * it knows the chain; the worker re-proves it because a queued row
+     * outlives the transaction that queued it.
+     */
+    queueBehind?: string;
   }
 ): Promise<void> {
+  const cmd: PostCommand = {
+    orgId: args.orgId,
+    eventType: args.eventType,
+    sourceType: args.sourceType,
+    sourceId: args.sourceId,
+    eventVersion: args.eventVersion ?? 1,
+    accountingDate: args.occurredAt,
+    occurredAt: args.occurredAt,
+    currency: args.currency,
+    idempotencyKey: args.idempotencyKey,
+    payload: args.payload,
+    actorId: args.actorId,
+  };
+  if (args.queueBehind !== undefined) {
+    await enqueuePendingPost(ctx, cmd, `Waiting on a predecessor: ${args.queueBehind}`);
+    return;
+  }
   await postOrEnqueue(
     ctx,
-    {
-      orgId: args.orgId,
-      eventType: args.eventType,
-      sourceType: args.sourceType,
-      sourceId: args.sourceId,
-      eventVersion: args.eventVersion ?? 1,
-      accountingDate: args.occurredAt,
-      occurredAt: args.occurredAt,
-      currency: args.currency,
-      idempotencyKey: args.idempotencyKey,
-      payload: args.payload,
-      actorId: args.actorId,
-    },
+    cmd,
     args.requiredSystemKeys ? { requiredSystemKeys: args.requiredSystemKeys } : undefined
   );
 }
@@ -3384,13 +3400,21 @@ export async function hookCustodyWrittenOff(
   });
 }
 
-export const custodyPayableReclassKey = (custodyId: Id<"financeDealCustody">, version: number): string =>
-  `custody_payable_reclass_${custodyId}_v${version}`;
+export { custodyPayableReclassKey };
 
 /**
  * One delta on the custody-payable split, versioned per record. Never
  * reversed: the next delta after a reversed movement restores the split, so
  * the primary journals keep their exact inverse and this one only follows.
+ *
+ * CAUSALLY CHAINED (final round A). Version N is the delta ON TOP of version
+ * N−1, so it may only reach the books after it. When the predecessor is not
+ * yet POSTED — queued for a month that is closed, held, or failed — this
+ * version is queued behind it instead of posting now, with the reason on the
+ * row; `custodyPostingBlockedReason` re-proves the same condition when the
+ * outbox worker picks it up. Without this an open-period release (v2, a
+ * debit) landed while the closed-period recognition (v1, the credit) was
+ * still waiting, and the liability read as a debit until the month reopened.
  */
 export async function hookCustodyPayableReclassified(
   ctx: MutationCtx,
@@ -3405,9 +3429,15 @@ export async function hookCustodyPayableReclassified(
   }
 ): Promise<void> {
   await ensureDealCustodyAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  const predecessorUnposted =
+    args.version > 1 &&
+    !(await custodyPayableReclassPosted(ctx, args.orgId, args.custody._id, args.version - 1));
   await postDomainEvent(ctx, {
     orgId: args.orgId,
     eventType: "CUSTODY_PAYABLE_RECLASSIFIED",
+    queueBehind: predecessorUnposted
+      ? `custody payable reclassification v${args.version - 1} has not posted yet`
+      : undefined,
     sourceType: "financeDealCustody",
     sourceId: args.custody._id.toString(),
     eventVersion: args.version,

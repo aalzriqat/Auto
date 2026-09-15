@@ -598,10 +598,17 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // same-deal check its siblings already carry. Skipped counts unchanged.
   // Re-measured FROM THE ANALYSER on this tree
   // ({"totalMutations":492,"analysed":320,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
+  //
+  // `financeDealCosts.migrateLegacyCustodyToLedger` (AF-80 final round B: the
+  // explicit door for a custody family from before ledger posting) — 492 → 493
+  // total, 320 → 321 analysed. `orgId` plus a caller-supplied `custodyId`
+  // read through `requireOwnedRow` after `requireTenantAuth`. Skipped counts
+  // unchanged. Re-measured FROM THE ANALYSER on this tree
+  // ({"totalMutations":493,"analysed":321,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 492,
-      analysed: 320,
+      totalMutations: 493,
+      analysed: 321,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 157,
     });

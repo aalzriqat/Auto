@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
-import { dateInputToUtcMs, todayDateInput } from "@/lib/dateInput";
+import { economicDateInputToMs, todayDateInput } from "@/lib/dateInput";
 import {
   Dialog,
   DialogContent,
@@ -226,7 +226,7 @@ export function CustodyMovementDialog({
                 reference: reference.trim() || undefined,
                 note: note.trim() || undefined,
                 // Today is the current instant; a backdated day arrives as entered.
-                occurredAt: date ? (date === todayDateInput() ? Date.now() : dateInputToUtcMs(date)) : undefined,
+                occurredAt: date ? economicDateInputToMs(date) : undefined,
                 userId: needsPerson ? userId : undefined,
               })
             }

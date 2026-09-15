@@ -151,10 +151,10 @@ describe("custody balances fail closed on an unreadable amount, end to end", () 
       expect(costs.summaryUnavailable?.reason).toBe("UNSAFE_AMOUNT");
 
       await expect(
-        seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { orgId: seed.orgId, custodyId, notes: "checked" })
+        seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, custodyId, notes: "checked" })
       ).rejects.toThrow(/not a readable figure/);
       await expect(
-        seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+        seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(),
           orgId: seed.orgId, custodyId, notes: "checked", writeOffReason: "cannot account for it",
         })
       ).rejects.toThrow(/not a readable figure/);
@@ -172,7 +172,7 @@ describe("custody balances fail closed on an unreadable amount, end to end", () 
       expect(record.summary).toBeNull();
       expect(record.summaryUnavailable?.reason).toBe("UNSAFE_AMOUNT");
       await expect(
-        seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { orgId: seed.orgId, custodyId, notes: "checked" })
+        seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, custodyId, notes: "checked" })
       ).rejects.toThrow(/not a readable figure/);
     }
   );
@@ -470,7 +470,7 @@ describe("custody balances fail closed on an unreadable amount, end to end", () 
     const record = (await readCosts(seed)).custody.find((row) => row._id === custodyId)!;
     expect(record.summaryUnavailable).toBeNull();
     expect(record.summary?.settled).toBe(true);
-    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { orgId: seed.orgId, custodyId, notes: "balanced" });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, custodyId, notes: "balanced" });
     expect((await custodyRow(seed, custodyId)).status).toBe("RECONCILED");
   });
 });

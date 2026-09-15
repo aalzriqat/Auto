@@ -391,7 +391,7 @@ describe("employee custody", () => {
     // The engine says the debt is DUE. Owed and paid are different facts, and
     // closing on the first would quietly write the second off.
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+      seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         custodyId,
         notes: "Receipts all present.",
@@ -401,7 +401,7 @@ describe("employee custody", () => {
     await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, custodyId, kind: "REIMBURSED", amountMinor: jod(50),
     });
-    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       custodyId,
       notes: "Receipts all present, reimbursement paid.",
@@ -449,12 +449,12 @@ describe("employee custody", () => {
     await addFee(seed, { actualAmountMinor: jod(600), paidBy: "EMPLOYEE", custodyId });
 
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+      seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId, custodyId, notes: "Closing this off.",
       })
     ).rejects.toThrow(/still unaccounted for/i);
 
-    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       custodyId,
       notes: "Employee left; balance not recovered.",
@@ -574,7 +574,7 @@ describe("a closed record cannot go quietly wrong afterwards", () => {
     const feeId = await addFee(seed, {
       actualAmountMinor: jod(700), paidBy: "EMPLOYEE", custodyId,
     });
-    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, custodyId, notes: "All receipts in.",
     });
     return { custodyId, feeId };
@@ -751,7 +751,7 @@ describe("money can only move in directions that are true", () => {
     const after = await readCosts(seed);
     expect(after.custody[0]?.summary!.reimbursementOverpaidMinor).toBe(jod(50));
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+      seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId, custodyId, notes: "Close it.",
       })
     ).rejects.toThrow(/more than they were owed/i);
@@ -785,7 +785,7 @@ describe("money can only move in directions that are true", () => {
     // owing a person — and closing it that way would let the deal classify as
     // settled.
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+      seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId, custodyId,
         notes: "Employee left.",
         writeOffReason: "Not paying this back.",
@@ -1121,7 +1121,7 @@ describe("reconciled work is not destroyable from below", () => {
       userId: seed.employeeId, issuedMinor: jod(700),
     });
     await addFee(seed, { actualAmountMinor: jod(600), paidBy: "EMPLOYEE", custodyId });
-    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, custodyId,
       notes: "Receipts 4471, 4472 checked against the till.",
       writeOffReason: "100 JOD shortfall absorbed per manager approval.",
@@ -1264,7 +1264,7 @@ describe("the legal invoice and accounting classification", () => {
     expect(costs.custody[0]?.summary?.actualExpensesMinor).toBe(jod(120));
     expect(costs.custody[0]?.summary?.settled).toBe(true);
 
-    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       custodyId,
       notes: "Only the live receipt belongs in the balance.",
