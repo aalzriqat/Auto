@@ -3384,6 +3384,49 @@ export async function hookCustodyWrittenOff(
   });
 }
 
+export const custodyPayableReclassKey = (custodyId: Id<"financeDealCustody">, version: number): string =>
+  `custody_payable_reclass_${custodyId}_v${version}`;
+
+/**
+ * One delta on the custody-payable split, versioned per record. Never
+ * reversed: the next delta after a reversed movement restores the split, so
+ * the primary journals keep their exact inverse and this one only follows.
+ */
+export async function hookCustodyPayableReclassified(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    custody: Doc<"financeDealCustody">;
+    version: number;
+    deltaMinor: number;
+    payableAfterMinor: number;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+): Promise<void> {
+  await ensureDealCustodyAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "CUSTODY_PAYABLE_RECLASSIFIED",
+    sourceType: "financeDealCustody",
+    sourceId: args.custody._id.toString(),
+    eventVersion: args.version,
+    idempotencyKey: custodyPayableReclassKey(args.custody._id, args.version),
+    currency: args.custody.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    requiredSystemKeys: [SYSTEM_KEYS.DEAL_CUSTODY_CLEARING, SYSTEM_KEYS.EMPLOYEE_REIMBURSEMENTS_PAYABLE],
+    payload: {
+      custodyId: args.custody._id.toString(),
+      applicationId: args.custody.applicationId.toString(),
+      userId: args.custody.userId.toString(),
+      deltaMinor: args.deltaMinor,
+      payableAfterMinor: args.payableAfterMinor,
+      currency: args.custody.currency,
+    },
+  });
+}
+
 /** Reopening a written-off record puts the shortage back on the employee's clearing balance. */
 export async function hookCustodyWriteOffReversed(
   ctx: MutationCtx,

@@ -3185,6 +3185,23 @@ export default defineSchema({
     reconciledBy: v.optional(v.id("users")),
     reconciliationNotes: v.optional(v.string()),
     writeOffReason: v.optional(v.string()),
+    /**
+     * Set by `openDealCustody` once custody posts to the ledger: every
+     * movement on this record has a journal (or a queued post) behind it. A
+     * record WITHOUT it predates the posting and refuses every money command
+     * (`assertCustodyOnLedger`) until an explicit migration settles it — a new
+     * leg posted onto an unposted record would be a partial ledger.
+     */
+    ledgerPosting: v.optional(v.literal("CANONICAL")),
+    /**
+     * What EMPLOYEE_REIMBURSEMENTS_PAYABLE (2320) carries for this record right
+     * now, and the last `CUSTODY_PAYABLE_RECLASSIFIED` version used. The
+     * payable is the record's out-of-pocket position `max(0, −position)`,
+     * kept there by a delta reclassification after every movement — see
+     * `syncCustodyPayable`. Absent means zero.
+     */
+    payablePostedMinor: v.optional(v.number()),
+    payableReclassVersion: v.optional(v.number()),
     /** The write-off on the books (`CUSTODY_WRITTEN_OFF`, versioned), absent once reopened. */
     writeOffPosted: v.optional(v.object({ version: v.number(), amountMinor: v.number() })),
     /** The highest write-off posting version ever used — never reused after a reversal. */

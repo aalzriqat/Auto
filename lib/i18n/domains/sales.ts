@@ -743,6 +743,11 @@ const dealOverviewMessages = defineBilingualMessages({
   CustodyQueuedNote: ["No accounting period is open for today; postings will queue until one is opened.", "لا توجد فترة محاسبية مفتوحة لليوم؛ ستُصفّ الترحيلات حتى تُفتح فترة."],
   CustodySaved: ["Custody updated", "تم تحديث العهدة"],
   CustodyNoPermission: ["You can view custody but not move money on it.", "يمكنك عرض العهدة دون تحريك المال فيها."],
+  CustodyPlanWithheld: ["Who handles the payments is visible to finance and disbursement roles.", "من يتولّى المدفوعات يظهر لأدوار المالية وصرف الدفعات فقط."],
+  CustodyLegacyNote: [
+    "This custody record predates ledger posting: its movements are not on the books, so no money can move on it from here until the custody cutover.",
+    "سجل العهدة هذا سابق لترحيل الدفاتر: حركاته غير مُرحَّلة، فلا يمكن تحريك مال عليه من هنا حتى تتم تسوية الانتقال.",
+  ],
   MethodCash: ["Cash", "نقدًا"],
   MethodBankTransfer: ["Bank transfer", "تحويل بنكي"],
   MethodCheque: ["Cheque", "شيك"],

@@ -383,8 +383,22 @@ export function financedSaleRecognitionDate(
   finalizedAt: number
 ): number {
   const invoiceDate = app.legalInvoiceDate;
-  if (invoiceDate !== undefined && Number.isSafeInteger(invoiceDate) && invoiceDate >= 0) {
-    return invoiceDate;
+  if (invoiceDate === undefined) return finalizedAt;
+  // A PRESENT date that is not usable is refused, never quietly replaced
+  // (Codex AF-CUST-08): `recordLegalInvoice` validates what it writes, but a
+  // row written before it did, or raw-edited since, carries whatever it
+  // carries — and substituting the wall clock would move revenue into a
+  // period nobody chose. A future date is equally refused: revenue is not
+  // recognized in a period that has not happened. Correct the invoice first.
+  if (!Number.isSafeInteger(invoiceDate) || invoiceDate < 0) {
+    throw new ConvexError(
+      `This deal's legal invoice date is not a real timestamp (${invoiceDate}), so the sale cannot be dated for recognition. Re-record the legal invoice before finalizing.`
+    );
   }
-  return finalizedAt;
+  if (invoiceDate > finalizedAt + 24 * 60 * 60 * 1000) {
+    throw new ConvexError(
+      "This deal's legal invoice is dated in the future, so the sale cannot be recognized yet. Re-record the legal invoice with its real date before finalizing."
+    );
+  }
+  return invoiceDate;
 }

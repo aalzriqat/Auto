@@ -315,6 +315,32 @@ describe("DealCustodyPanel", () => {
       const names = buttonNames();
       expect(names).toContain(salesEn.CustodyRecordReturn);
       expect(names).toContain(salesEn.CustodyClose);
+      // "Hand over more" is new cash too — gone with the deal's own issuance.
+      expect(names).not.toContain(salesEn.CustodyIssueMore);
+    });
+
+    test("a withheld plan says it is withheld — never 'nobody assigned' — and offers no plan control", () => {
+      renderPanel(wiring({ records: [], plannedCustody: null, plannedCustodyWithheld: true }));
+      expect(screen.getByTestId("custody-plan-withheld").textContent).toContain(salesEn.CustodyPlanWithheld);
+      expect(screen.queryByTestId("custody-unplanned")).toBeNull();
+      expect(screen.queryByTestId("custody-plan-button")).toBeNull();
+      cleanup();
+      renderPanel(wiring({ records: [], plannedCustody: null, plannedCustodyWithheld: true }), tAr);
+      expect(screen.getByTestId("custody-plan-withheld").textContent).toContain(salesAr.CustodyPlanWithheld);
+    });
+
+    test("a legacy record (opened before ledger posting) shows why and offers no money action, even to the disbursement tier", () => {
+      const a = actions();
+      const w = wiring({ actions: a, accounting: { ready: true }, records: [record({ legacy: true })] });
+      renderPanel(w);
+      expect(screen.getByTestId("custody-legacy-cust1").textContent).toBe(salesEn.CustodyLegacyNote);
+      expect(screen.queryByTestId("custody-actions-cust1")).toBeNull();
+      for (const name of [salesEn.CustodyIssueMore, salesEn.CustodyRecordReturn, salesEn.CustodyClose, salesEn.CustodyAttachCost]) {
+        expect(screen.queryByRole("button", { name })).toBeNull();
+      }
+      // The movement log is still readable, but carries no reversal handler.
+      fireEvent.click(screen.getByRole("button", { name: salesEn.CustodyShowMovements }));
+      expect((w.renderMovements as ReturnType<typeof vi.fn>).mock.calls[0][1]).toBeUndefined();
     });
 
     test("no open period today is stated, not hidden", () => {

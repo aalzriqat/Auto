@@ -531,9 +531,17 @@ export async function ensureDealCustodyAccounts(
   orgId: Id<"organizations">,
   actorId: Id<"users">
 ): Promise<void> {
-  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.DEAL_CUSTODY_CLEARING, "1250");
-  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.CASH_OVER_SHORT, "6200");
+  for (const [key, code] of DEAL_CUSTODY_ACCOUNT_CODES) {
+    await ensureSystemAccount(ctx, orgId, actorId, key, code);
+  }
 }
+
+/** The custody accounts the self-heal above inserts, with their reserved codes. */
+export const DEAL_CUSTODY_ACCOUNT_CODES = [
+  [SYSTEM_KEYS.DEAL_CUSTODY_CLEARING, "1250"],
+  [SYSTEM_KEYS.EMPLOYEE_REIMBURSEMENTS_PAYABLE, "2320"],
+  [SYSTEM_KEYS.CASH_OVER_SHORT, "6200"],
+] as const;
 
 /**
  * Whether a custody posting COULD resolve its accounts on this org — the
@@ -556,19 +564,23 @@ export async function dealCustodyAccountingReadiness(
   for (const key of [SYSTEM_KEYS.CASH_ON_HAND, SYSTEM_KEYS.BANK_ACCOUNT] as const) {
     if (!(await isSystemAccountMapped(ctx, orgId, key))) return { ready: false, reason: "ACCOUNT_UNMAPPED", systemKey: key };
   }
-  for (const [key, code] of [
-    [SYSTEM_KEYS.DEAL_CUSTODY_CLEARING, "1250"],
-    [SYSTEM_KEYS.CASH_OVER_SHORT, "6200"],
-  ] as const) {
+  for (const [key, code] of DEAL_CUSTODY_ACCOUNT_CODES) {
     if (await isSystemAccountMapped(ctx, orgId, key)) continue;
-    const byCode = await ctx.db
+    // Bounded, fail-closed: one row on the code is enough to know the
+    // self-heal could not insert there. Codes are unique per org by the
+    // `create` mutation, so a second row would itself be corruption — and a
+    // chart that corrupt is not one this probe should call ready.
+    const onCode = await ctx.db
       .query("chartOfAccounts")
       .withIndex("by_org_code", (q) => q.eq("orgId", orgId).eq("code", code))
-      .collect();
-    if (byCode.length === 0) continue;
-    // The key's own row exists but is INACTIVE: `resolveSystemAccount` would
-    // refuse it and the self-heal would not replace it.
-    if (byCode.some((a) => a.systemKey === key)) return { ready: false, reason: "ACCOUNT_UNMAPPED", systemKey: key };
+      .take(2);
+    if (onCode.length === 0) continue;
+    // The key's own row exists but is INACTIVE (or the code is duplicated):
+    // `resolveSystemAccount` would refuse it and the self-heal would not
+    // replace it.
+    if (onCode.length > 1 || onCode[0].systemKey === key) {
+      return { ready: false, reason: "ACCOUNT_UNMAPPED", systemKey: key };
+    }
     return { ready: false, reason: "ACCOUNT_CODE_CONFLICT", systemKey: key };
   }
   return { ready: true };

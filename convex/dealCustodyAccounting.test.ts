@@ -217,6 +217,8 @@ const clearing = (l: Record<string, number>) => l[SYSTEM_KEYS.DEAL_CUSTODY_CLEAR
 const cash = (l: Record<string, number>) => l[SYSTEM_KEYS.CASH_ON_HAND] ?? 0;
 const bank = (l: Record<string, number>) => l[SYSTEM_KEYS.BANK_ACCOUNT] ?? 0;
 const transferExpense = (l: Record<string, number>) => l[SYSTEM_KEYS.OWNERSHIP_TRANSFER_EXPENSE] ?? 0;
+/** Debit-positive, so a liability the dealership carries reads NEGATIVE here. */
+const payable = (l: Record<string, number>) => l[SYSTEM_KEYS.EMPLOYEE_REIMBURSEMENTS_PAYABLE] ?? 0;
 
 const readCosts = (seed: Seed) =>
   seed.asUser.query(api.financeDealCosts.listDealCosts, { orgId: seed.orgId, applicationId: seed.applicationId });
@@ -307,13 +309,16 @@ describe("what each movement posts", () => {
     const custodyId = await openCustody(seed, jod(700));
     await employeeFee(seed, custodyId, jod(750));
     let l = await ledger(seed);
-    // The employee laid out 50 of their own: a CREDIT on the clearing account.
-    expect(clearing(l)).toBe(-jod(50));
+    // The employee laid out 50 of their own: a LIABILITY, never a credit
+    // sitting on the clearing asset (Codex AF-CUST-01).
+    expect(clearing(l)).toBe(0);
+    expect(payable(l)).toBe(-jod(50));
     expect((await readCosts(seed)).custody[0].summary!.reimbursementOutstandingMinor).toBe(jod(50));
 
     await move(seed, custodyId, "REIMBURSED", jod(50), { method: "BANK_TRANSFER" });
     l = await ledger(seed);
     expect(clearing(l)).toBe(0);
+    expect(payable(l)).toBe(0);
     expect(bank(l)).toBe(-jod(50));
     expect(transferExpense(l)).toBe(jod(750));
     expect(await events(seed, "CUSTODY_REIMBURSED")).toHaveLength(1);
@@ -414,8 +419,10 @@ describe("the reversal matrix (ACC-3): every movement's inverse is the canonical
     await reverse(seed, custodyId, returned._id, jod(10));
     await reverse(seed, custodyId, reimbursed._id, jod(50));
     const l = await ledger(seed);
-    // Back to: issued 700, expense 750 → clearing −50; cash −700 net.
-    expect(clearing(l)).toBe(-jod(50));
+    // Back to: issued 700, expense 750 → the 50 shortfall is a payable again
+    // (the split follows the position the reversals left); cash −700 net.
+    expect(clearing(l)).toBe(0);
+    expect(payable(l)).toBe(-jod(50));
     expect(cash(l)).toBe(-jod(700));
     expect(await events(seed, "JOURNAL_REVERSAL")).toHaveLength(2);
     const s = (await readCosts(seed)).custody[0].summary!;
@@ -794,6 +801,11 @@ describe("un-happening the deal itself", () => {
     await expect(
       seed.asUser.mutation(api.financeDealCosts.planCustodyHandler, { orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.employeeId })
     ).rejects.toThrow(/closed or stopped/);
+    // More cash against the EXISTING open record is new cash too (Sonnet
+    // F1-CUSTODY-FREEZE-BYPASS): refused, and nothing posts.
+    await expect(move(seed, custodyId, "ISSUED", jod(500))).rejects.toThrow(frozen);
+    expect(await events(seed, "CUSTODY_CASH_ISSUED")).toHaveLength(1);
+    expect((await seed.t.run((ctx) => ctx.db.get(custodyId)))?.issuedMinor).toBe(jod(700));
     expect(await events(seed, "CUSTODY_FEE_PAID")).toHaveLength(1);
 
     // Settling what already exists is still possible: return the 50, reconcile.
@@ -801,6 +813,251 @@ describe("un-happening the deal itself", () => {
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { orgId: seed.orgId, custodyId, notes: "Settled after close." });
     expect((await seed.t.run((ctx) => ctx.db.get(custodyId)))?.status).toBe("RECONCILED");
     expect(clearing(await ledger(seed))).toBe(0);
+  });
+});
+
+describe("Codex round 1 (7c21d6008): the boundaries a direct caller could walk around", () => {
+  test("AF-CUST-02: a reimbursement pays exactly what is owed — nothing owed, or more than owed, is refused before any write", async () => {
+    const seed = await seedDeal("reimb-bound");
+    const custodyId = await openCustody(seed, jod(700));
+    await expect(move(seed, custodyId, "REIMBURSED", jod(10))).rejects.toThrow(/Nothing is owed/);
+    await employeeFee(seed, custodyId, jod(750));
+    await expect(move(seed, custodyId, "REIMBURSED", jod(51))).rejects.toThrow(/against 50000 owed/);
+    expect((await entries(seed, custodyId)).filter((e) => e.kind === "REIMBURSED")).toEqual([]);
+    expect(await events(seed, "CUSTODY_REIMBURSED")).toHaveLength(0);
+    // A partial, then the rest.
+    await move(seed, custodyId, "REIMBURSED", jod(20));
+    await move(seed, custodyId, "REIMBURSED", jod(30));
+    expect(clearing(await ledger(seed))).toBe(0);
+    await expect(move(seed, custodyId, "REIMBURSED", jod(1))).rejects.toThrow(/Nothing is owed/);
+  });
+
+  test("AF-CUST-04: cost-entry authority cannot post, re-post or reverse a custody journal; custody authority can", async () => {
+    const seed = await seedDeal("authority");
+    const custodyId = await openCustody(seed, jod(700));
+    await seed.t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: "cu_sales_authority", email: "s@x.com", name: "Sales" });
+      const roleId = await ctx.db.insert("roles", {
+        orgId: seed.orgId, name: "SALES",
+        permissions: [PERMISSIONS.VIEW_FINANCE_APPLICATIONS, PERMISSIONS.CREATE_FINANCE_APPLICATION],
+      });
+      await ctx.db.insert("memberships", { orgId: seed.orgId, userId, roleId });
+      return userId;
+    });
+    const asSales = seed.t.withIdentity({ subject: "cu_sales_authority" });
+    const line = (extra: Record<string, unknown>) => ({
+      expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId,
+      feeType: "LICENSING" as const, paidBy: "EMPLOYEE" as const, paidTo: "GOVERNMENT" as const,
+      accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE" as const, actualAmountMinor: jod(50), ...extra,
+    });
+    // Ordinary cost entry still works for SALES...
+    const plainFee = await asSales.mutation(api.financeDealCosts.recordDealFee, line({}));
+    expect(plainFee).toBeTruthy();
+    // ...but nothing that touches custody.
+    await expect(asSales.mutation(api.financeDealCosts.recordDealFee, line({ custodyId }))).rejects.toThrow(/confirm finance disbursements/);
+    await expect(
+      asSales.mutation(api.financeDealCosts.recordTemplateFeeActual, {
+        orgId: seed.orgId, applicationId: seed.applicationId, templateIndex: 0, feeType: "LICENSING",
+        actualAmountMinor: jod(90), expectedCurrency: "JOD", custodyId, idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(/confirm finance disbursements/);
+    await expect(
+      asSales.mutation(api.financeDealCosts.recordActualFeeAmount, { orgId: seed.orgId, feeId: plainFee, actualAmountMinor: jod(60), expectedCurrency: "JOD", custodyId })
+    ).rejects.toThrow(/confirm finance disbursements/);
+    const charged = await employeeFee(seed, custodyId, jod(100));
+    await expect(
+      asSales.mutation(api.financeDealCosts.recordActualFeeAmount, { orgId: seed.orgId, feeId: charged, actualAmountMinor: jod(120), expectedCurrency: "JOD" })
+    ).rejects.toThrow(/confirm finance disbursements/);
+    await expect(asSales.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId: charged, reason: "x" })).rejects.toThrow(/confirm finance disbursements/);
+    await expect(asSales.mutation(api.financeDealCosts.setFeeCustody, { orgId: seed.orgId, feeId: plainFee, custodyId })).rejects.toThrow();
+    expect(await events(seed, "CUSTODY_FEE_PAID")).toHaveLength(1);
+    expect((await events(seed, "CUSTODY_FEE_PAID"))[0].status).toBe("POSTED");
+    // SALES can still void its own plain line.
+    await asSales.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId: plainFee, reason: "typo" });
+  });
+
+  test("AF-CUST-05: the plan is served at the disbursement tier only; an application viewer is told it is withheld, not that there is none", async () => {
+    const seed = await seedDeal("plan-tier");
+    await seed.asUser.mutation(api.financeDealCosts.planCustodyHandler, {
+      orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.employeeId, amountMinor: jod(100), note: "Monday",
+    });
+    const viewer = await seed.asViewer.query(api.financeDealCosts.listDealCosts, { orgId: seed.orgId, applicationId: seed.applicationId });
+    expect(viewer.plannedCustody).toBeNull();
+    expect(viewer.plannedCustodyWithheld).toBe(true);
+    expect(JSON.stringify(viewer)).not.toContain("Monday");
+    expect(JSON.stringify(viewer)).not.toContain(String(seed.employeeId));
+    const owner = await readCosts(seed);
+    expect(owner.plannedCustodyWithheld).toBe(false);
+    expect(owner.plannedCustody?.amountMinor).toBe(jod(100));
+  });
+
+  test("AF-CUST-06: an issuance or a custody-charged line replays its stored success even after the recipient offboards or the deal freezes", async () => {
+    const seed = await seedDeal("replay-mutable");
+    const openKey = "open-mutable";
+    const custodyId = await openCustody(seed, jod(700), { idempotencyKey: openKey });
+    const feeKey = "fee-mutable";
+    const feeId = await employeeFee(seed, custodyId, jod(100), { idempotencyKey: feeKey });
+    // The world moves on: the recipient starts offboarding and the deal finalizes.
+    await seed.t.run(async (ctx) => {
+      const membership = (await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("orgId", seed.orgId)).collect()).find((m) => m.userId === seed.employeeId)!;
+      await ctx.db.patch(membership._id, { offboardingStatus: "PENDING_EXTERNAL_REMOVAL" });
+      const app = await ctx.db.get(seed.applicationId);
+      const saleId = await ctx.db.insert("sales", {
+        orgId: seed.orgId, vehicleId: seed.vehicleId, customerId: app!.customerId,
+        salespersonId: seed.userId, salePrice: 10_500, saleDate: Date.now(), status: "COMPLETED",
+      } as never);
+      await ctx.db.patch(seed.applicationId, { status: "CLOSED", finalizedSaleId: saleId });
+    });
+    await expect(openCustody(seed, jod(700), { idempotencyKey: openKey })).resolves.toBe(custodyId);
+    await expect(employeeFee(seed, custodyId, jod(100), { idempotencyKey: feeKey })).resolves.toBe(feeId);
+    expect(await events(seed, "CUSTODY_CASH_ISSUED")).toHaveLength(1);
+    expect(await events(seed, "CUSTODY_FEE_PAID")).toHaveLength(1);
+    // A NEW intent is still refused under the new state.
+    await expect(openCustody(seed, jod(700))).rejects.toThrow();
+    await expect(employeeFee(seed, custodyId, jod(100))).rejects.toThrow(/finalized/);
+  });
+
+  test("AF-CUST-07: a custody record from before ledger posting refuses every money command and is reported as legacy", async () => {
+    const seed = await seedDeal("legacy");
+    const legacyId = await seed.t.run(async (ctx) => {
+      const custodyId = await ctx.db.insert("financeDealCustody", {
+        orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.employeeId, currency: "JOD",
+        issuedMinor: jod(700), returnedMinor: 0, reimbursedMinor: 0, status: "OPEN",
+        createdBy: seed.userId, createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      await ctx.db.insert("financeDealCustodyEntries", {
+        orgId: seed.orgId, custodyId, kind: "ISSUED", amountMinor: jod(700), occurredAt: Date.now(), recordedBy: seed.userId, recordedAt: Date.now(),
+      });
+      return custodyId;
+    });
+    const costs = await readCosts(seed);
+    expect(costs.custody[0].legacy).toBe(true);
+    const legacyRefusal = /predates ledger posting/;
+    await expect(move(seed, legacyId, "RETURNED", jod(100))).rejects.toThrow(legacyRefusal);
+    await expect(move(seed, legacyId, "ISSUED", jod(100))).rejects.toThrow(legacyRefusal);
+    await expect(employeeFee(seed, legacyId, jod(50))).rejects.toThrow(legacyRefusal);
+    const plain = await employeeFee(seed, undefined, jod(50));
+    await expect(seed.asUser.mutation(api.financeDealCosts.setFeeCustody, { orgId: seed.orgId, feeId: plain, custodyId: legacyId })).rejects.toThrow(legacyRefusal);
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { orgId: seed.orgId, custodyId: legacyId, notes: "short", writeOffReason: "lost" })
+    ).rejects.toThrow(legacyRefusal);
+    expect(await events(seed)).toHaveLength(0);
+    expect(await pending(seed)).toHaveLength(0);
+    // A record opened by the product carries the marker and is not legacy
+    // (for another member — the legacy record already holds this one's).
+    const fresh = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+      idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.viewerId, issuedMinor: jod(10), method: "CASH",
+    });
+    expect((await seed.t.run((ctx) => ctx.db.get(fresh)))?.ledgerPosting).toBe("CANONICAL");
+    expect((await readCosts(seed)).custody.find((r) => r._id === fresh)?.legacy).toBe(false);
+  });
+});
+
+describe("the employee's shortfall is a liability, never a credit on the asset (Codex AF-CUST-01)", () => {
+  test("the split follows the position whatever order cash and receipts arrive, and reversals restore it", async () => {
+    // Order A: issue 50, then a 100 receipt.
+    const a = await seedDeal("payable-a");
+    const custodyA = await openCustody(a, jod(50));
+    const feeA = await employeeFee(a, custodyA, jod(100));
+    let l = await ledger(a);
+    expect(clearing(l)).toBe(0);
+    expect(payable(l)).toBe(-jod(50));
+    expect(transferExpense(l)).toBe(jod(100));
+    // The primary journals are untouched; the split is its own delta event.
+    expect(await events(a, "CUSTODY_PAYABLE_RECLASSIFIED")).toHaveLength(1);
+    // More cash than the shortfall: the liability is released, the asset carries the rest.
+    await move(a, custodyA, "ISSUED", jod(80));
+    l = await ledger(a);
+    expect(clearing(l)).toBe(jod(30));
+    expect(payable(l)).toBe(0);
+    // Reverse the top-up: back to a 50 payable — by a NEW delta, never by
+    // touching the reclass that came before.
+    const topUp = (await entries(a, custodyA)).find((e) => e.kind === "ISSUED" && e.amountMinor === jod(80))!;
+    await reverse(a, custodyA, topUp._id, jod(80));
+    l = await ledger(a);
+    expect(clearing(l)).toBe(0);
+    expect(payable(l)).toBe(-jod(50));
+    const reclass = await events(a, "CUSTODY_PAYABLE_RECLASSIFIED");
+    expect(reclass.map((e) => e.status)).toEqual(["POSTED", "POSTED", "POSTED"]);
+    // Void the receipt: no shortfall at all, the 50 is back in the employee's hands.
+    await a.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: a.orgId, feeId: feeA, reason: "wrong deal" });
+    l = await ledger(a);
+    expect(clearing(l)).toBe(jod(50));
+    expect(payable(l)).toBe(0);
+    expect(transferExpense(l)).toBe(0);
+
+    // Order B: issue 50, receipt 100, then a further 20 — a partial cover.
+    const b = await seedDeal("payable-b");
+    const custodyB = await openCustody(b, jod(50));
+    await employeeFee(b, custodyB, jod(100));
+    await move(b, custodyB, "ISSUED", jod(20));
+    l = await ledger(b);
+    expect(clearing(l)).toBe(0);
+    expect(payable(l)).toBe(-jod(30));
+    expect((await readCosts(b)).custody[0].summary!.reimbursementOutstandingMinor).toBe(jod(30));
+    await move(b, custodyB, "REIMBURSED", jod(30));
+    l = await ledger(b);
+    expect(payable(l)).toBe(0);
+    expect(clearing(l)).toBe(0);
+    await b.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { orgId: b.orgId, custodyId: custodyB, notes: "Receipts checked." });
+    expect((await b.t.run((ctx) => ctx.db.get(custodyB)))?.status).toBe("RECONCILED");
+  });
+
+  test("two employees never net against each other: one holds cash, the other is owed, both gross", async () => {
+    const seed = await seedDeal("payable-two");
+    const first = await openCustody(seed, jod(1000));
+    const second = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+      idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.viewerId, issuedMinor: jod(100), method: "CASH",
+    });
+    await employeeFee(seed, second, jod(1000));
+    const l = await ledger(seed);
+    expect(clearing(l)).toBe(jod(1000));
+    expect(payable(l)).toBe(-jod(900));
+    const rows = (await readCosts(seed)).custody;
+    expect(rows.find((r) => r._id === first)?.summary?.employeeOwesDealerMinor).toBe(jod(1000));
+    expect(rows.find((r) => r._id === second)?.summary?.reimbursementOutstandingMinor).toBe(jod(900));
+  });
+
+  test("a written-off record leaves zero in BOTH accounts", async () => {
+    const seed = await seedDeal("payable-zero");
+    const custodyId = await openCustody(seed, jod(700));
+    await employeeFee(seed, custodyId, jod(650));
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+      orgId: seed.orgId, custodyId, notes: "Short.", writeOffReason: "Untraceable 50",
+    });
+    const l = await ledger(seed);
+    expect(clearing(l)).toBe(0);
+    expect(payable(l)).toBe(0);
+    expect(l[SYSTEM_KEYS.CASH_OVER_SHORT]).toBe(jod(50));
+  });
+});
+
+describe("the custodian never moves or closes their own custody", () => {
+  test("the holder is refused on every movement kind and on closure; the issuer is refused as recipient", async () => {
+    const seed = await seedDeal("self");
+    const custodyId = await openCustody(seed, jod(700));
+    await employeeFee(seed, custodyId, jod(750));
+    // The employee holds the money AND the money permission (owner role in this seed).
+    const asHolder = seed.t.withIdentity({ subject: "cu_emp_self" });
+    const holderMove = (kind: "ISSUED" | "RETURNED" | "REIMBURSED") =>
+      asHolder.mutation(api.financeDealCosts.recordCustodyMovement, { orgId: seed.orgId, custodyId, kind, amountMinor: jod(10), idempotencyKey: crypto.randomUUID() });
+    const refusal = /somebody other than the person holding the cash/;
+    await expect(holderMove("ISSUED")).rejects.toThrow(refusal);
+    await expect(holderMove("REIMBURSED")).rejects.toThrow(refusal);
+    await expect(holderMove("RETURNED")).rejects.toThrow(refusal);
+    const [issued] = await entries(seed, custodyId);
+    await expect(
+      asHolder.mutation(api.financeDealCosts.recordCustodyMovement, { orgId: seed.orgId, custodyId, kind: "REVERSAL", reversesEntryId: issued._id, amountMinor: jod(700), idempotencyKey: crypto.randomUUID() })
+    ).rejects.toThrow(refusal);
+    await expect(
+      asHolder.mutation(api.financeDealCosts.reconcileDealCustody, { orgId: seed.orgId, custodyId, notes: "mine", writeOffReason: "mine" })
+    ).rejects.toThrow(refusal);
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+        idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.userId, issuedMinor: jod(1),
+      })
+    ).rejects.toThrow(/somebody other than the person receiving/);
+    expect(await entries(seed, custodyId)).toHaveLength(1);
   });
 });
 

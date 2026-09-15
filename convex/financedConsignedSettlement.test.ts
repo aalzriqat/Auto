@@ -24,6 +24,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { financedSaleRecognitionDate } from "./utils/financedSaleRecognition";
 // The notification a recipient actually reads, rendered by the same function
 // every channel uses — asserting the stored row alone would not catch a
 // template whose placeholders are never filled.
@@ -227,6 +228,8 @@ async function runDeal(
     beforeHandover?: (applicationId: Id<"financeApplications">) => Promise<void>;
     /** The legal invoice's date — THE recognition date (`financedSaleRecognitionDate`). Defaults to now. */
     legalInvoiceDate?: number;
+    /** Runs after every prerequisite is on the record and immediately before `finalizeDeal`. */
+    beforeFinalize?: (applicationId: Id<"financeApplications">) => Promise<void>;
   } = {}
 ) {
   const downPayment = opts.downPayment ?? 0;
@@ -414,6 +417,7 @@ async function runDeal(
     });
   }
 
+  await opts.beforeFinalize?.(applicationId);
   const saleId = await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
     orgId: s.orgId,
     applicationId,
@@ -8125,6 +8129,34 @@ describe("the legal invoice's date is THE recognition date", () => {
     ).rejects.toThrow(/real timestamp/);
     const app = await s.t.run((ctx) => ctx.db.get(applicationId));
     expect(app?.legalInvoiceDate).toBeUndefined();
+  });
+
+  test("a legacy invoice date that is not a usable timestamp REFUSES finalization rather than silently dating the sale today (Codex AF-CUST-08)", async () => {
+    for (const bad of [-1, 1.5, Number.NaN, Date.now() + 3 * DAY]) {
+      const s = await seedDealership(`recog-legacy-${String(bad).replace(/[^a-z0-9]/gi, "")}`, { sourceType: "STOCK" });
+      await expect(
+        runDeal(s, {
+          beforeFinalize: async (applicationId) => {
+            // Written around the validating writer, as a legacy or raw-edited row would be.
+            await s.t.run((ctx) => ctx.db.patch(applicationId, { legalInvoiceDate: bad }));
+          },
+        })
+      ).rejects.toThrow(/legal invoice (date is not a real timestamp|is dated in the future)/);
+      const sales = await s.t.run(async (ctx) => (await ctx.db.query("sales").collect()).filter((row) => row.orgId === s.orgId));
+      expect(sales).toEqual([]);
+      const ledger = await ledgerBySystemKey(s);
+      expect(ledger[SYSTEM_KEYS.SALES_REVENUE] ?? 0).toBe(0);
+    }
+  });
+
+  test("the pure rule: absent falls back to finalization, present must be a real non-future instant", () => {
+    const now = Date.now();
+    expect(financedSaleRecognitionDate({ legalInvoiceDate: undefined }, now)).toBe(now);
+    expect(financedSaleRecognitionDate({ legalInvoiceDate: now - DAY }, now)).toBe(now - DAY);
+    expect(financedSaleRecognitionDate({ legalInvoiceDate: 0 }, now)).toBe(0);
+    for (const bad of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, now + 3 * DAY]) {
+      expect(() => financedSaleRecognitionDate({ legalInvoiceDate: bad }, now)).toThrow();
+    }
   });
 
   test("after finalization the invoice — and so the recognition date — cannot be replaced", async () => {

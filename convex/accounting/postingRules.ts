@@ -1,6 +1,5 @@
 import { ConvexError } from "convex/values";
 import { SYSTEM_KEYS, SystemKey } from "../utils/defaultChart";
-import { scaleForCurrency } from "../utils/money";
 import { CUSTODY_CLEARING_KEY, custodyFeeExpenseKey } from "../utils/dealCustodyPosting";
 import type { FeeAccountingTreatment } from "../utils/financedSalePostingPlan";
 
@@ -64,6 +63,9 @@ export type EventType =
   | "CUSTODY_REIMBURSED"
   | "CUSTODY_FEE_PAID"
   | "CUSTODY_WRITTEN_OFF"
+  // The delta that keeps the employee's out-of-pocket position in the
+  // liability account rather than as a credit on the clearing asset.
+  | "CUSTODY_PAYABLE_RECLASSIFIED"
   | "JOURNAL_REVERSAL";
 
 export const ALL_EVENT_TYPES = new Set<string>([
@@ -89,6 +91,7 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "CONSIGNED_SALE_RECLASSIFIED",
   "EMPLOYEE_ADVANCE_PAID", "EMPLOYEE_ADVANCE_RECOVERED", "PAYROLL_ACCRUED", "PAYROLL_PAID",
   "CUSTODY_CASH_ISSUED", "CUSTODY_CASH_RETURNED", "CUSTODY_REIMBURSED", "CUSTODY_FEE_PAID", "CUSTODY_WRITTEN_OFF",
+  "CUSTODY_PAYABLE_RECLASSIFIED",
   // JOURNAL_REVERSAL is intentionally excluded: it is written directly by
   // reverseAccountingEvent() in reversals.ts and never goes through postAccountingEvent().
 ]);
@@ -2736,6 +2739,47 @@ export function ruleCustodyWrittenOff(p: CustodyWrittenOffPayload): RuleResult {
   };
 }
 
+export interface CustodyPayableReclassifiedPayload {
+  custodyId: string;
+  applicationId: string;
+  userId: string;
+  /** Signed: positive moves shortfall INTO the payable, negative takes it back out. */
+  deltaMinor: number;
+  /** What the payable carries for this record after the delta — for the reader, not the rule. */
+  payableAfterMinor: number;
+  currency: string;
+}
+
+/**
+ * Moves the employee's out-of-pocket shortfall between the clearing asset and
+ * the reimbursements payable (Codex AF-CUST-01). A positive delta: Dr Custody
+ * Clearing / Cr Employee Reimbursements Payable — the asset stops carrying a
+ * credit and the liability carries the debt. A negative delta is the same
+ * lines the other way, as the debt is repaid, reversed or the fee removed.
+ * Driven by the record's position after each movement, never split at fee
+ * time, so the outcome does not depend on the order cash and receipts arrive.
+ */
+export function ruleCustodyPayableReclassified(p: CustodyPayableReclassifiedPayload): RuleResult {
+  if (!Number.isSafeInteger(p.deltaMinor) || p.deltaMinor === 0) {
+    throw new Error(`CUSTODY_PAYABLE_RECLASSIFIED carries a delta that is not a non-zero integer (${p.deltaMinor}) — refusing to post.`);
+  }
+  const amount = Math.abs(p.deltaMinor);
+  return {
+    lines:
+      p.deltaMinor > 0
+        ? [
+            line(CUSTODY_CLEARING_KEY, amount, 0, "Out-of-pocket shortfall moved off custody clearing"),
+            line(SYSTEM_KEYS.EMPLOYEE_REIMBURSEMENTS_PAYABLE, 0, amount, "Owed to employee for deal costs paid out of pocket"),
+          ]
+        : [
+            line(SYSTEM_KEYS.EMPLOYEE_REIMBURSEMENTS_PAYABLE, amount, 0, "Employee reimbursement liability released"),
+            line(CUSTODY_CLEARING_KEY, 0, amount, "Shortfall returned to custody clearing"),
+          ],
+    memo: "Employee custody shortfall reclassified",
+    category: "SYSTEM",
+  };
+}
+
 export function applyPostingRule(eventType: string, payload: Record<string, unknown>): RuleResult {
   switch (eventType as EventType) {
     case "DEPOSIT_RECEIVED": return ruleDepositReceived(payload as unknown as DepositReceivedPayload);
@@ -2792,6 +2836,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "CUSTODY_REIMBURSED": return ruleCustodyReimbursed(payload as unknown as CustodyCashPayload);
     case "CUSTODY_FEE_PAID": return ruleCustodyFeePaid(payload as unknown as CustodyFeePaidPayload);
     case "CUSTODY_WRITTEN_OFF": return ruleCustodyWrittenOff(payload as unknown as CustodyWrittenOffPayload);
+    case "CUSTODY_PAYABLE_RECLASSIFIED": return ruleCustodyPayableReclassified(payload as unknown as CustodyPayableReclassifiedPayload);
     default:
       throw new Error(`No posting rule defined for event type: ${eventType}`);
   }

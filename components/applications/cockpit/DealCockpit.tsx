@@ -1699,6 +1699,7 @@ export function DealCockpit({
           expectedTotalMinor: dealCosts?.expected?.expectedTotalMinor ?? null,
           accounting: dealCosts?.custodyAccounting,
           plannedCustody: dealCosts?.plannedCustody ?? null,
+          plannedCustodyWithheld: dealCosts?.plannedCustodyWithheld ?? false,
           recommended: dealCosts?.recommendedCustody ?? null,
           openPeriodToday: dealCosts?.custodyPostsNow,
           dealStopped:

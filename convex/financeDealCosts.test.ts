@@ -717,7 +717,7 @@ describe("money can only move in directions that are true", () => {
     expect(costs.custody[0]?.summary!.employeeOwesDealerMinor).toBe(jod(700));
   });
 
-  test("a duplicate reimbursement is surfaced, not clamped away", async () => {
+  test("a duplicate reimbursement is refused before any write — a reimbursement pays a stated debt, never more", async () => {
     const seed = await seedDeal();
     const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, applicationId: seed.applicationId,
@@ -725,16 +725,31 @@ describe("money can only move in directions that are true", () => {
     });
     await addFee(seed, { actualAmountMinor: jod(750), paidBy: "EMPLOYEE", custodyId });
 
-    // Two people recording the same payment, or a retry after a timeout.
-    for (let i = 0; i < 2; i += 1) {
-      await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { idempotencyKey: crypto.randomUUID(),
+    // Two people recording the same payment under two keys: the second one
+    // is a payment nobody is owed, and it now moves real cash — refused.
+    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { idempotencyKey: crypto.randomUUID(),
+      orgId: seed.orgId, custodyId, kind: "REIMBURSED", amountMinor: jod(50),
+    });
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId, custodyId, kind: "REIMBURSED", amountMinor: jod(50),
-      });
-    }
+      })
+    ).rejects.toThrow(/Nothing is owed/i);
 
     const costs = await readCosts(seed);
-    expect(costs.custody[0]?.summary!.reimbursementOverpaidMinor).toBe(jod(50));
-    expect(costs.custody[0]?.summary!.settled).toBe(false);
+    expect(costs.custody[0]?.summary!.reimbursementOverpaidMinor).toBe(0);
+    expect(costs.custody[0]?.summary!.settled).toBe(true);
+    // A legacy overpayment (rows written before the bound) is still surfaced,
+    // not clamped away, and still blocks closure.
+    await seed.t.run(async (ctx) => {
+      await ctx.db.insert("financeDealCustodyEntries", {
+        orgId: seed.orgId, custodyId, kind: "REIMBURSED", amountMinor: jod(50),
+        occurredAt: Date.now(), recordedBy: seed.userId, recordedAt: Date.now(),
+      });
+      await ctx.db.patch(custodyId, { reimbursedMinor: jod(100) });
+    });
+    const after = await readCosts(seed);
+    expect(after.custody[0]?.summary!.reimbursementOverpaidMinor).toBe(jod(50));
     await expect(
       seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
         orgId: seed.orgId, custodyId, notes: "Close it.",

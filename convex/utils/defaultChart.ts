@@ -89,23 +89,34 @@ export const SYSTEM_KEYS = {
    * returned balance — posting it to 1230 would dock an employee's pay for
    * transfer fees they paid on the dealership's behalf.
    *
-   * A CLEARING account, so its balance is SIGNED per custody record and mirrors
-   * `reconcileEmployeeCustody` exactly:
+   * Every custody movement and custody-paid fee clears through it, so per
+   * record its RAW position mirrors `reconcileEmployeeCustody` exactly:
    *
-   *     issued − returned − custody-paid fees + reimbursed
+   *     position = issued − returned − custody-paid fees + reimbursed
    *
-   * A debit balance is cash the employee still holds (or owes back); a credit
-   * balance is out-of-pocket spend the dealership still owes the employee.
-   * `reconcileDealCustody` refuses to close a record while its balance is
-   * non-zero in either direction unless the debit residual is explicitly
-   * written off (to CASH_OVER_SHORT), so a CLOSED record contributes zero here
-   * and an OPEN one carries exactly its live position. No separate "employee
-   * payable" account is split off at fee time on purpose: a split taken
-   * against the running balance is order-dependent (a later issuance would
-   * leave a payable standing that the engine already nets), and the engine
-   * — which every screen reads — is the one truth the ledger has to mirror.
+   * The asset never carries a credit (Codex AF-CUST-01): whenever the position
+   * goes negative — the employee laid out more than they hold — the shortfall
+   * is reclassified into EMPLOYEE_REIMBURSEMENTS_PAYABLE below by a delta
+   * entry (`CUSTODY_PAYABLE_RECLASSIFIED`), so at every point this account
+   * carries `max(0, position)` and the payable carries `max(0, −position)`.
+   * The reclassification is order-independent because it follows the
+   * position after each movement rather than being split at fee time; the
+   * primary journals keep exact historical reversal semantics, and the delta
+   * that follows a reversal restores the split.
+   *
+   * `reconcileDealCustody` refuses to close a record while either side is
+   * non-zero unless the debit residual is explicitly written off (to
+   * CASH_OVER_SHORT), so a CLOSED record contributes zero to both accounts.
    */
   DEAL_CUSTODY_CLEARING: "DEAL_CUSTODY_CLEARING",
+  /**
+   * 2320 — what the dealership owes an employee who paid a financed deal's
+   * handover costs out of their own pocket: the negative side of the custody
+   * position (see DEAL_CUSTODY_CLEARING). A LIABILITY, settled by a
+   * CUSTODY_REIMBURSED cash movement. Not SALARIES_PAYABLE: a deal cost is
+   * not payroll, and payroll sweeps nothing from here.
+   */
+  EMPLOYEE_REIMBURSEMENTS_PAYABLE: "EMPLOYEE_REIMBURSEMENTS_PAYABLE",
   MARKETING_EXPENSE: "MARKETING_EXPENSE",
   OFFICE_EXPENSE: "OFFICE_EXPENSE",
   PROFESSIONAL_FEES_EXPENSE: "PROFESSIONAL_FEES_EXPENSE",
@@ -427,6 +438,16 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     systemKey: SYSTEM_KEYS.SALARIES_PAYABLE,
   },
 
+  {
+    code: "2320",
+    name: "Employee Reimbursements Payable",
+    nameAr: "تعويضات مستحقة للموظفين",
+    type: "LIABILITY",
+    normalBalance: "CREDIT",
+    isControlAccount: true,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.EMPLOYEE_REIMBURSEMENTS_PAYABLE,
+  },
   {
     code: "2400",
     name: "Accounts Payable — Vehicle Suppliers",

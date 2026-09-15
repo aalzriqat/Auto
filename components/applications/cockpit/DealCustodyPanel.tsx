@@ -63,6 +63,13 @@ export type CustodyRecordView = Readonly<{
    * readable figure. Absent on a payload that predates the second reason.
    */
   summaryUnavailable?: Readonly<{ reason: "MIXED_DENOMINATION" | "UNSAFE_AMOUNT" }> | null;
+  /**
+   * Opened before custody posted to the ledger: its movements are not on the
+   * books, so the server refuses every money command on it until the custody
+   * cutover. Absent on a payload that predates the flag — treated as not
+   * legacy, which is what such a payload's server would also have said.
+   */
+  legacy?: boolean;
 }>;
 
 /** The server's readiness verdict for a custody posting, verbatim. */
@@ -122,6 +129,8 @@ export type DealCustodyWiring = Readonly<{
   /** Absent on a payload that predates the money actions — treated as "not stated". */
   accounting?: CustodyAccountingState;
   plannedCustody?: CustodyPlanView | null;
+  /** The caller's tier may not read the plan: say so, never "nobody assigned". */
+  plannedCustodyWithheld?: boolean;
   recommended?: CustodyRecommendationView | null;
   /** Whether an accounting period covers today; false means postings queue. */
   openPeriodToday?: boolean;
@@ -221,6 +230,7 @@ function CustodyRecord({
   money,
   renderMovements,
   canAct,
+  canStart,
   blocked,
   hasEligibleFees,
   openDialog,
@@ -231,6 +241,8 @@ function CustodyRecord({
   renderMovements: DealCustodyWiring["renderMovements"];
   /** The caller holds the money permission. */
   canAct: boolean;
+  /** ...and the deal still takes NEW cash (not finalized or stopped). */
+  canStart: boolean;
   /** The ledger cannot take a posting right now — actions render disabled. */
   blocked: boolean;
   hasEligibleFees: boolean;
@@ -300,13 +312,23 @@ function CustodyRecord({
         </p>
       )}
 
-      {canAct && (
+      {record.legacy && (
+        <p className="text-xs text-amber-700 dark:text-amber-400" data-testid={`custody-legacy-${id}`}>
+          {t("CustodyLegacyNote")}
+        </p>
+      )}
+      {canAct && !record.legacy && (
         <div className="flex flex-wrap gap-2" data-testid={`custody-actions-${id}`}>
           {open ? (
             <>
-              <Button type="button" size="sm" variant="outline" disabled={!act} onClick={() => openDialog({ kind: "MOVE", custodyId: id, movement: "ISSUED" })}>
-                {t("CustodyIssueMore")}
-              </Button>
+              {/* New cash, so it goes with the deal's own door — withheld once
+                  the deal is finalized or stopped, exactly like the head's
+                  issuance; settling below stays. */}
+              {canStart && (
+                <Button type="button" size="sm" variant="outline" disabled={!act} onClick={() => openDialog({ kind: "MOVE", custodyId: id, movement: "ISSUED" })}>
+                  {t("CustodyIssueMore")}
+                </Button>
+              )}
               <Button type="button" size="sm" variant="outline" disabled={!act || record.issuedMinor <= record.returnedMinor} onClick={() => openDialog({ kind: "MOVE", custodyId: id, movement: "RETURNED" })}>
                 {t("CustodyRecordReturn")}
               </Button>
@@ -344,7 +366,7 @@ function CustodyRecord({
         {showMovements &&
           renderMovements(
             record._id,
-            act && open ? (movement) => openDialog({ kind: "REVERSE", custodyId: id, movement }) : undefined
+            act && open && !record.legacy ? (movement) => openDialog({ kind: "REVERSE", custodyId: id, movement }) : undefined
           )}
       </div>
     </article>
@@ -444,6 +466,11 @@ export function DealCustodyPanel({
                     <bdi>{openRecord.userName || t("CustodyHandlerNone")}</bdi>{" "}
                     <span className="text-xs font-normal text-muted-foreground">· {t("CustodyHandlerHolding")}</span>
                   </p>
+                ) : wiring.plannedCustodyWithheld ? (
+                  <p className="flex items-center gap-1.5 text-muted-foreground" data-testid="custody-plan-withheld">
+                    <Lock className="h-3.5 w-3.5" aria-hidden />
+                    {t("CustodyPlanWithheld")}
+                  </p>
                 ) : plan ? (
                   <p className="font-medium" data-testid="custody-planned">
                     <bdi>{plan.userName || t("CustodyHandlerNone")}</bdi>{" "}
@@ -515,6 +542,7 @@ export function DealCustodyPanel({
                   money={money}
                   renderMovements={wiring.renderMovements}
                   canAct={canAct}
+                  canStart={canStart}
                   blocked={blocked}
                   hasEligibleFees={(actions?.eligibleFees.length ?? 0) > 0}
                   openDialog={openDialog}
