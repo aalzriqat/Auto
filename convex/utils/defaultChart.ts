@@ -78,6 +78,34 @@ export const SYSTEM_KEYS = {
   SALARIES_EXPENSE: "SALARIES_EXPENSE",
   SALARIES_PAYABLE: "SALARIES_PAYABLE",
   EMPLOYEE_ADVANCES: "EMPLOYEE_ADVANCES",
+  /**
+   * 1250 — cash a dealership employee is HOLDING to pay a financed deal's
+   * handover costs (`financeDealCustody`), and the mirror of what the
+   * dealership owes that employee once they have laid out more than they hold.
+   *
+   * ⚠️ NOT `EMPLOYEE_ADVANCES`. That account is swept by payroll: every
+   * OUTSTANDING advance is deducted from the person's salary. Deal custody is
+   * the dealership's money in an employee's pocket, settled by receipts and a
+   * returned balance — posting it to 1230 would dock an employee's pay for
+   * transfer fees they paid on the dealership's behalf.
+   *
+   * A CLEARING account, so its balance is SIGNED per custody record and mirrors
+   * `reconcileEmployeeCustody` exactly:
+   *
+   *     issued − returned − custody-paid fees + reimbursed
+   *
+   * A debit balance is cash the employee still holds (or owes back); a credit
+   * balance is out-of-pocket spend the dealership still owes the employee.
+   * `reconcileDealCustody` refuses to close a record while its balance is
+   * non-zero in either direction unless the debit residual is explicitly
+   * written off (to CASH_OVER_SHORT), so a CLOSED record contributes zero here
+   * and an OPEN one carries exactly its live position. No separate "employee
+   * payable" account is split off at fee time on purpose: a split taken
+   * against the running balance is order-dependent (a later issuance would
+   * leave a payable standing that the engine already nets), and the engine
+   * — which every screen reads — is the one truth the ledger has to mirror.
+   */
+  DEAL_CUSTODY_CLEARING: "DEAL_CUSTODY_CLEARING",
   MARKETING_EXPENSE: "MARKETING_EXPENSE",
   OFFICE_EXPENSE: "OFFICE_EXPENSE",
   PROFESSIONAL_FEES_EXPENSE: "PROFESSIONAL_FEES_EXPENSE",
@@ -242,6 +270,16 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     isControlAccount: true,
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.EMPLOYEE_ADVANCES,
+  },
+  {
+    code: "1250",
+    name: "Employee Deal Custody Clearing",
+    nameAr: "تسوية عهدة الموظفين — صفقات التمويل",
+    type: "ASSET",
+    normalBalance: "DEBIT",
+    isControlAccount: true,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.DEAL_CUSTODY_CLEARING,
   },
   {
     code: "1300",

@@ -2598,6 +2598,24 @@ export default defineSchema({
     ),
 
     notes: v.optional(v.string()),
+    /**
+     * Who is PLANNED to handle this deal's finalization payments, before any
+     * cash is handed over. A plan, not money: nothing here is issued, posted
+     * or summed, and the actual custody record (`financeDealCustody`) is
+     * opened separately and may name someone else. `amountMinor` is the
+     * amount the planner agreed to hand over, optional — the server's own
+     * recommendation is derived from the deal's employee-paid fee templates
+     * and never stored.
+     */
+    plannedCustody: v.optional(
+      v.object({
+        userId: v.id("users"),
+        amountMinor: v.optional(v.number()),
+        note: v.optional(v.string()),
+        plannedBy: v.id("users"),
+        plannedAt: v.number(),
+      })
+    ),
     createdAt: v.number(),
     updatedAt: v.number(),
     quoteModeAtSubmission: v.optional(v.union(
@@ -3032,6 +3050,24 @@ export default defineSchema({
 
     /** Set when an employee holding deal custody laid this out. */
     custodyId: v.optional(v.id("financeDealCustody")),
+    /**
+     * What of this line is ON THE BOOKS as a custody-paid cost right now, or
+     * absent when nothing is. `CUSTODY_FEE_PAID` posts once per version
+     * against `financeDealFees/<id>`; every correction (amount, custody,
+     * unlink, void) reverses the live version and, if a live charge remains,
+     * posts the next. Stored so "is it posted, and at what?" is answered from
+     * the row rather than by scanning an event family whose reversals share
+     * its source key.
+     */
+    custodyPosted: v.optional(
+      v.object({
+        version: v.number(),
+        amountMinor: v.number(),
+        custodyId: v.id("financeDealCustody"),
+      })
+    ),
+    /** The highest custody posting version ever used on this line — never reused after a reversal. */
+    custodyPostingVersion: v.optional(v.number()),
     paidAt: v.optional(v.number()),
     receiptReference: v.optional(v.string()),
     documentStorageIds: v.optional(v.array(v.id("_storage"))),
@@ -3149,6 +3185,10 @@ export default defineSchema({
     reconciledBy: v.optional(v.id("users")),
     reconciliationNotes: v.optional(v.string()),
     writeOffReason: v.optional(v.string()),
+    /** The write-off on the books (`CUSTODY_WRITTEN_OFF`, versioned), absent once reopened. */
+    writeOffPosted: v.optional(v.object({ version: v.number(), amountMinor: v.number() })),
+    /** The highest write-off posting version ever used — never reused after a reversal. */
+    writeOffPostingVersion: v.optional(v.number()),
 
     createdBy: v.id("users"),
     createdAt: v.number(),

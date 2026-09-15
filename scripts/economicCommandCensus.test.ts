@@ -87,16 +87,18 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "expenses.update": { bucket: "STATE_GUARDED", mechanism: "reverses through hookPrepaidExpenseAmortizationsReversed, whose reversal key is derived from the original posted event, not from a fresh id" },
   "financeDealCosts.adoptCompanyFeeTemplates": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic (a rule-snapshot patch on financeApplications); adopts configured fee templates into an empty snapshot slot, owner-only and audited, and posts nothing" },
   "financeDealCosts.classifyDealAccounting": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
-  "financeDealCosts.openDealCustody": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
-  "financeDealCosts.reconcileDealCustody": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
+  "financeDealCosts.openDealCustody": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; the ISSUED entry it mints posts under `custody_entry_${entryId}` INSIDE the idempotent section, so a replay returns the stored custody id and never reaches the hook" },
+  "financeDealCosts.planCustodyHandler": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic (a `plannedCustody` patch on financeApplications); names who will handle the handover before any cash moves, audited, and posts nothing" },
+  "financeDealCosts.reconcileDealCustody": { bucket: "STATE_GUARDED", mechanism: "the write-off branch posts CUSTODY_WRITTEN_OFF keyed on the PRE-EXISTING custody id plus a version stored on the row before the status flips; a retry finds status !== OPEN and is refused, and the same version can never post twice through the engine's idempotency key" },
   "financeDealCosts.reconcileDealFee": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
-  "financeDealCosts.recordActualFeeAmount": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
+  "financeDealCosts.recordActualFeeAmount": { bucket: "STATE_GUARDED", mechanism: "sets a named field on one identified row; the custody posting it re-syncs (`syncCustodyFeePosting`) is keyed on the PRE-EXISTING fee id plus a version stored on the row, so a retry finds `custodyPosted` already matching and posts nothing" },
   "financeDealCosts.recordCustodyMovement": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "financeDealCosts.recordDealFee": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "financeDealCosts.recordTemplateFeeActual": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted (position included); one live line per (deal, position) refused inside the idempotent section" },
   "financeDealCosts.recordLegalInvoice": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
-  "financeDealCosts.reopenDealCustody": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
-  "financeDealCosts.voidDealFee": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
+  "financeDealCosts.reopenDealCustody": { bucket: "STATE_GUARDED", mechanism: "reverses the stored write-off posting version through reverseEventIfPosted, whose key derives from the pre-existing custody id and version; a retry finds status === OPEN and returns before any posting" },
+  "financeDealCosts.setFeeCustody": { bucket: "STATE_GUARDED", mechanism: "charges or releases an EXISTING fee line: the posting it syncs is keyed on the pre-existing fee id plus a version stored on the row (`custodyPosted`), so a retry after a lost response finds the target state already on the books and posts nothing; a second identical call returns early on `fee.custodyId === args.custodyId`" },
+  "financeDealCosts.voidDealFee": { bucket: "STATE_GUARDED", mechanism: "voids one identified row and reverses its stored custody posting version through reverseEventIfPosted; a retry finds `voidedAt` set and returns before any posting" },
   "financialAudit.approveManualJournal": { bucket: "STATE_GUARDED", mechanism: "refuses unless status === PENDING_APPROVAL; a second approval cannot produce a second journal (rehearsal R10)" },
   "financialAudit.createManualJournal": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "financialAudit.rejectManualJournal": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
@@ -259,7 +261,8 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // that no longer exists fails too rather than rotting.
     expect(population.filter((p) => !CLASSIFICATION[p])).toEqual([]);
     expect(classified.filter((c) => !forward.has(c))).toEqual([]);
-    expect(population.length).toBe(116);
+    // 116 → 118: `financeDealCosts.planCustodyHandler` and `financeDealCosts.setFeeCustody` (AF-80).
+    expect(population.length).toBe(118);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {

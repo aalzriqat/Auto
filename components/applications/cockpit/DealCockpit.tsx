@@ -96,9 +96,10 @@ import {
   VehicleCostBasisSection,
   type FinancedDealOverviewData,
 } from "./DealFinancialOverview";
-import { DealCustodyPanel, type DealCustodyWiring } from "./DealCustodyPanel";
+import { DealCustodyPanel, type DealCustodyActions, type DealCustodyWiring } from "./DealCustodyPanel";
 import { CustodyMovementsList } from "./CustodyMovementsList";
 import {
+  FEE_TYPE_LABEL,
   HandoverCostAttemptError,
   HandoverCostsPanel,
   type ExpectedHandoverRow,
@@ -629,6 +630,15 @@ export function DealCockpit({
     api.financeDealCosts.listDealCosts,
     canViewApplications && deal ? { orgId, applicationId } : "skip"
   );
+  // The custody picker's own read, shaped for the money permission — see
+  // `listCustodyCandidates`. Skipped for everyone else, so the cockpit never
+  // mounts a query its caller cannot pass.
+  const custodyCandidates = useQuery(
+    api.financeDealCosts.listCustodyCandidates,
+    !permissionsLoading && hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT) && deal?.dealKind === "FINANCED"
+      ? { orgId }
+      : "skip"
+  );
   /**
    * The financial overview — a sibling read model composed on the server from
    * the cockpit's own money payload plus the vehicle's pre-deal cost basis.
@@ -642,6 +652,12 @@ export function DealCockpit({
   const recordTemplateFeeActual = useMutation(api.financeDealCosts.recordTemplateFeeActual);
   const recordActualFeeAmount = useMutation(api.financeDealCosts.recordActualFeeAmount);
   const voidDealFee = useMutation(api.financeDealCosts.voidDealFee);
+  const planCustodyHandler = useMutation(api.financeDealCosts.planCustodyHandler);
+  const openDealCustody = useMutation(api.financeDealCosts.openDealCustody);
+  const recordCustodyMovement = useMutation(api.financeDealCosts.recordCustodyMovement);
+  const setFeeCustody = useMutation(api.financeDealCosts.setFeeCustody);
+  const reconcileDealCustody = useMutation(api.financeDealCosts.reconcileDealCustody);
+  const reopenDealCustody = useMutation(api.financeDealCosts.reopenDealCustody);
   const updateStatus = useMutation(api.applications.updateStatus);
   const cancelApplication = useMutation(api.applications.cancelApplication);
   const confirmDisbursement = useMutation(api.applications.confirmDisbursement);
@@ -826,8 +842,11 @@ export function DealCockpit({
             `${(minor / Math.pow(10, scaleForCurrency(currency))).toLocaleString()} ${
               currency === orgCurrency.code ? orgCurrency.displayLabel : currency
             }`,
-          canManage: canCreateApplication,
-          dealClosed: app.status === "CLOSED",
+          // Frozen once the sale is recognized (`economicsFrozen`): the server
+          // refuses every posting-bearing edit, so none is offered, and the
+          // panel says why at its head.
+          canManage: canCreateApplication && !(dealCosts?.economicsFrozen?.frozen ?? app.status === "CLOSED"),
+          dealClosed: dealCosts?.economicsFrozen?.frozen ?? app.status === "CLOSED",
           // Owner-only on the server (the authority that edits the company's
           // fees); the notice still renders for everyone, the action does not.
           onAdoptCompanyFees: isOwner
@@ -1553,16 +1572,123 @@ export function DealCockpit({
       : undefined;
 
   /**
-   * عهدة الموظف — READ-ONLY on this screen (see `DealCustodyPanel` for why:
-   * the custody module is off-ledger, so its commands are not offered here as
-   * money actions until canonical posting exists). The summary comes off the
-   * bounded `listDealCosts` read; each record's movement log is a separate
-   * paginated query, mounted only when the operator opens it.
+   * عهدة الموظف — read AND acted on from this screen. The summary comes off
+   * the bounded `listDealCosts` read; each record's movement log is a separate
+   * paginated query, mounted only when the operator opens it. The commands
+   * post through the custody clearing account and are offered only to a
+   * caller holding CONFIRM_FINANCE_DISBURSEMENT; the server's readiness
+   * verdict travels with the read so a dead button says why.
+   *
+   * Identity discipline, same as the handover costs: an issuance and a
+   * movement each mint one command identity per dialog attempt and retire it
+   * on success or on the server's own refusal; a lost response keeps it so
+   * the operator's retry replays rather than pays twice.
    */
   const custodyMoney = (minor: number, currency: string) =>
     `${(minor / Math.pow(10, scaleForCurrency(currency))).toLocaleString()} ${
       currency === orgCurrency.code ? orgCurrency.displayLabel : currency
     }`;
+  const custodyCommand = async (intent: string, work: (idempotencyKey: string) => Promise<unknown>) => {
+    try {
+      await work(commandId.for(intent));
+      commandId.retire(intent);
+      toast.success(t("CustodySaved"));
+    } catch (error) {
+      // The server's own refusal rolled back and nothing committed: the next
+      // attempt is a new command. Anything else may have landed; keep the key.
+      if (isConvexError(error)) commandId.retire(intent);
+      throw new Error(getErrorMessage(error));
+    }
+  };
+  const custodyPlain = async (work: () => Promise<unknown>) => {
+    try {
+      await work();
+      toast.success(t("CustodySaved"));
+    } catch (error) {
+      throw new Error(getErrorMessage(error));
+    }
+  };
+  const custodyActions: DealCustodyActions | undefined =
+    app && canConfirmFinanceDisbursement
+      ? {
+          members: custodyCandidates?.candidates,
+          eligibleFees: (dealCosts?.fees ?? [])
+            .filter((fee) => fee.custodyEligible && fee.custodyId === undefined && fee.actualAmountMinor !== undefined && fee.actualAmountMinor > 0)
+            .map((fee) => ({
+              _id: fee._id,
+              label: fee.description?.trim() || t(FEE_TYPE_LABEL[fee.feeType] ?? fee.feeType),
+              actualAmountMinor: fee.actualAmountMinor as number,
+              currency: fee.currency,
+            })),
+          scaleOf: scaleForCurrency,
+          onPlan: (values) =>
+            custodyPlain(() =>
+              planCustodyHandler({
+                orgId,
+                applicationId,
+                userId: values.userId as Id<"users">,
+                amountMinor: values.amountMinor,
+                note: values.note,
+              })
+            ),
+          onClearPlan: () => custodyPlain(() => planCustodyHandler({ orgId, applicationId })),
+          onOpen: (values) =>
+            custodyCommand(`open-custody:${applicationId}:${values.userId}`, (idempotencyKey) =>
+              openDealCustody({
+                orgId,
+                applicationId,
+                userId: values.userId as Id<"users">,
+                issuedMinor: values.amountMinor,
+                method: values.method,
+                reference: values.reference,
+                note: values.note,
+                occurredAt: values.occurredAt,
+                idempotencyKey,
+              })
+            ),
+          onMove: (custodyId, kind, values) =>
+            custodyCommand(`custody-move:${custodyId}:${kind}:${values.amountMinor}`, (idempotencyKey) =>
+              recordCustodyMovement({
+                orgId,
+                custodyId: custodyId as Id<"financeDealCustody">,
+                kind,
+                amountMinor: values.amountMinor,
+                method: values.method,
+                reference: values.reference,
+                note: values.note,
+                occurredAt: values.occurredAt,
+                idempotencyKey,
+              })
+            ),
+          onReverse: (custodyId, movement, reason) =>
+            custodyCommand(`custody-reverse:${custodyId}:${movement.entryId}`, (idempotencyKey) =>
+              recordCustodyMovement({
+                orgId,
+                custodyId: custodyId as Id<"financeDealCustody">,
+                kind: "REVERSAL",
+                reversesEntryId: movement.entryId as Id<"financeDealCustodyEntries">,
+                amountMinor: movement.amountMinor,
+                note: reason,
+                idempotencyKey,
+              })
+            ),
+          onAttach: (custodyId, feeId) =>
+            custodyPlain(() =>
+              setFeeCustody({ orgId, feeId: feeId as Id<"financeDealFees">, custodyId: custodyId as Id<"financeDealCustody"> })
+            ),
+          onClose: (custodyId, values) =>
+            custodyPlain(() =>
+              reconcileDealCustody({
+                orgId,
+                custodyId: custodyId as Id<"financeDealCustody">,
+                notes: values.notes,
+                writeOffReason: values.writeOffReason,
+              })
+            ),
+          onReopen: (custodyId, reason) =>
+            custodyPlain(() => reopenDealCustody({ orgId, custodyId: custodyId as Id<"financeDealCustody">, reason })),
+        }
+      : undefined;
   const custody: DealCustodyWiring | undefined =
     app && deal
       ? {
@@ -1571,7 +1697,17 @@ export function DealCockpit({
           truncated: dealCosts?.custodyTruncated ?? false,
           currency: dealCosts?.currency ?? economicsCurrencyCode,
           expectedTotalMinor: dealCosts?.expected?.expectedTotalMinor ?? null,
-          renderMovements: (custodyId: string) => {
+          accounting: dealCosts?.custodyAccounting,
+          plannedCustody: dealCosts?.plannedCustody ?? null,
+          recommended: dealCosts?.recommendedCustody ?? null,
+          openPeriodToday: dealCosts?.custodyPostsNow,
+          dealStopped:
+            (dealCosts?.economicsFrozen?.frozen ?? false) ||
+            app.status === "CLOSED" ||
+            app.status === "CANCELLED" ||
+            app.status === "REJECTED",
+          actions: custodyActions,
+          renderMovements: (custodyId: string, onReverse) => {
             const record = dealCosts?.custody.find((row) => row._id === custodyId);
             return (
               <CustodyMovementsList
@@ -1581,6 +1717,7 @@ export function DealCockpit({
                 money={custodyMoney}
                 formatDate={(ms: number) => renderMoment(ms, "d MMM yyyy")}
                 t={t}
+                onReverse={onReverse}
               />
             );
           },
@@ -3922,8 +4059,9 @@ export function DealCockpitView({
 
           {/* --- عهدة الموظف ------------------------------------------------ */}
           {/* Beside the costs it pays for, under the same permission to read.
-              READ-ONLY: the balances are the server's and no command is
-              offered until custody movements post to the books. */}
+              The balances are the server's; the money commands post through
+              the custody clearing account and are offered to the
+              disbursement tier only. */}
           {custody && custodyMoney && (
             <DealCustodyPanel wiring={custody} money={custodyMoney} t={t} />
           )}

@@ -515,6 +515,65 @@ export async function ensureFinancedSettlementAccounts(
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.SELLING_EXPENSE, "6900");
 }
 
+/**
+ * The accounts a financed deal's EMPLOYEE CASH CUSTODY posts to.
+ *
+ * 1250 is the clearing account every custody movement and custody-paid fee
+ * touches; 6200 is where an unaccountable shortage is written off. Same
+ * insert-if-missing self-heal as the other groups: a chart initialized
+ * before either account existed gets it on the first custody posting, and
+ * an org that already uses one of these codes for a custom account is
+ * refused rather than having it quietly repurposed. Called only by the
+ * custody hooks, so no other posting pays for the lookups.
+ */
+export async function ensureDealCustodyAccounts(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.DEAL_CUSTODY_CLEARING, "1250");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.CASH_OVER_SHORT, "6200");
+}
+
+/**
+ * Whether a custody posting COULD resolve its accounts on this org — the
+ * read-only twin of `ensureDealCustodyAccounts`, for a screen that has to
+ * say WHY a money button is disabled rather than let a mutation find out.
+ *
+ * Mirrors the self-heal's own decision: a mapped key resolves; an unmapped
+ * key resolves iff its default code is free (the self-heal will insert it)
+ * or already carries the key; any other occupant of the code is a conflict a
+ * human resolves. Never writes.
+ */
+export async function dealCustodyAccountingReadiness(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">
+): Promise<
+  | { ready: true }
+  | { ready: false; reason: "CHART_NOT_INITIALIZED" | "ACCOUNT_UNMAPPED" | "ACCOUNT_CODE_CONFLICT"; systemKey?: SystemKey }
+> {
+  if (!(await isChartInitialized(ctx, orgId))) return { ready: false, reason: "CHART_NOT_INITIALIZED" };
+  for (const key of [SYSTEM_KEYS.CASH_ON_HAND, SYSTEM_KEYS.BANK_ACCOUNT] as const) {
+    if (!(await isSystemAccountMapped(ctx, orgId, key))) return { ready: false, reason: "ACCOUNT_UNMAPPED", systemKey: key };
+  }
+  for (const [key, code] of [
+    [SYSTEM_KEYS.DEAL_CUSTODY_CLEARING, "1250"],
+    [SYSTEM_KEYS.CASH_OVER_SHORT, "6200"],
+  ] as const) {
+    if (await isSystemAccountMapped(ctx, orgId, key)) continue;
+    const byCode = await ctx.db
+      .query("chartOfAccounts")
+      .withIndex("by_org_code", (q) => q.eq("orgId", orgId).eq("code", code))
+      .collect();
+    if (byCode.length === 0) continue;
+    // The key's own row exists but is INACTIVE: `resolveSystemAccount` would
+    // refuse it and the self-heal would not replace it.
+    if (byCode.some((a) => a.systemKey === key)) return { ready: false, reason: "ACCOUNT_UNMAPPED", systemKey: key };
+    return { ready: false, reason: "ACCOUNT_CODE_CONFLICT", systemKey: key };
+  }
+  return { ready: true };
+}
+
 // ─── Queries ──────────────────────────────────────────────────────────────────
 
 export const list = query({

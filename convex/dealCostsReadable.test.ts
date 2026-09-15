@@ -68,7 +68,14 @@ async function seedDeal(suffix: string): Promise<Seed> {
       status: "APPROVED", createdAt: Date.now(), updatedAt: Date.now(),
     });
   });
-  return { t, orgId, userId, employeeId, applicationId, asUser: t.withIdentity({ subject: `ra_user_${suffix}` }) };
+  const asUser = t.withIdentity({ subject: `ra_user_${suffix}` });
+  // Custody money commands post to the ledger and refuse without a chart
+  // (`assertCustodyAccountingReady`); no period is opened, so postings queue.
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
+  );
+  await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+  return { t, orgId, userId, employeeId, applicationId, asUser };
 }
 
 async function openCustody(seed: Seed, issued = jod(700)) {

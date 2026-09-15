@@ -529,6 +529,14 @@ export function HandoverCostsPanel({
         <div className="space-y-1">
           <CardTitle className="text-base">{t("HandoverCostsHeading")}</CardTitle>
           <p className="text-xs text-muted-foreground">{t("HandoverCostsNote")}</p>
+          {/* Said at panel level, because the controls it explains are absent:
+              once the sale is recognized the server refuses every edit that
+              would move what was posted, so none is offered. */}
+          {dealClosed && (
+            <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="deal-handover-costs-frozen">
+              {t("HandoverCostAfterCloseNote")}
+            </p>
+          )}
         </div>
         {canAdd && costs && !adding && (
           <Button type="button" size="sm" variant="outline" disabled={submittingAny} onClick={openAdd}>

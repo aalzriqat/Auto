@@ -286,10 +286,46 @@ describe("protected source content pins", () => {
        * and bare-CR rejection. Both constants were recomputed FROM THE FILE
        * with this test's own normalization. `convex/dealWorkspace.ts` is
        * untouched.
+       *
+       * -- RENEWAL 2026-09-15 (3) - open custody blocks cancellation (AF-80) --
+       *
+       * Previous reviewed postimage, superseded by this entry:
+       *
+       *   bytes:  222110
+       *   sha256: 2f0a3a2ae5e762105c305153719398a029a8b82cf5e14022ab4f52ff843d8251
+       *
+       * Renewed because employee cash custody now POSTS to the ledger
+       * (DEAL_CUSTODY_CLEARING), and ACC-3 requires every un-happen path of
+       * that spend to be handled or refused: `cancelApplication` refused
+       * nothing about custody, so a cancelled deal could strand cash in an
+       * employee's pocket on a record nothing offers actions on. The delta is
+       * exactly three hunks, 22 insertions and 2 deletions: (1) two imports
+       * (`loadCustodyRecords` from `./utils/settlementDeductions`, the
+       * bounded custody loader every custody writer already uses, and
+       * `financedSaleRecognitionDate` beside `resolveFinancedSalePlan`);
+       * (2) one guard inside `cancelApplication`'s idempotent section, after
+       * the already-CANCELLED early return and before the APPROVED permission
+       * escalation, that loads the deal's custody records and throws while
+       * any is OPEN — a CLOSED custody record is deliberately untouched, the
+       * costs the employee really paid stay posted; (3) `finalizeDeal`'s
+       * `completeSale` call dates the sale from
+       * `financedSaleRecognitionDate(app, Date.now())` — the legal invoice's
+       * date where one is recorded — instead of the bare wall clock, so the
+       * period the sale's journal lands in is the one the invoice names
+       * (owner-proxy finding on f1cca: `legalInvoiceDate` was documented to
+       * decide the revenue period while the sale was dated at finalization).
+       * No new query shape beyond the shared loader, no new export, no other
+       * workflow behavior changed. Read the three hunks; do not take this
+       * note's word for their scope.
+       *
+       * Same governance as the entries above: the pin is not weakened,
+       * bypassed, deleted, generalized or made vacuous. Both constants were
+       * recomputed FROM THE FILE with this test's own normalization.
+       * `convex/dealWorkspace.ts` is untouched.
        */
       file: "convex/applications.ts",
-      bytes: 222110,
-      sha256: "2f0a3a2ae5e762105c305153719398a029a8b82cf5e14022ab4f52ff843d8251",
+      bytes: 223387,
+      sha256: "e8a219548f91c03e153336fe9ee156eb9e92ca9cfb0e2f6ed4e3706e28af50fc",
     },
     {
       /**

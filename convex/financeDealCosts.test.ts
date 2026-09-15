@@ -66,10 +66,14 @@ async function seedDeal(suffix = "1"): Promise<Seed> {
     });
   });
 
-  return {
-    t, orgId, userId, clerkId: userId, employeeId, applicationId,
-    asUser: t.withIdentity({ subject: `costs_user_${suffix}` }),
-  };
+  const asUser = t.withIdentity({ subject: `costs_user_${suffix}` });
+  // Custody money commands post to the ledger and refuse without a chart
+  // (`assertCustodyAccountingReady`); no period is opened, so postings queue.
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
+  );
+  await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+  return { t, orgId, userId, clerkId: userId, employeeId, applicationId, asUser };
 }
 
 /** The common case: a licensing fee the dealership pays. */

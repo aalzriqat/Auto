@@ -40,6 +40,7 @@ export function CustodyMovementsList({
   money,
   formatDate,
   t,
+  onReverse,
 }: Readonly<{
   orgId: Id<"organizations">;
   custodyId: Id<"financeDealCustody">;
@@ -48,6 +49,11 @@ export function CustodyMovementsList({
   money: (minor: number, currency: string) => string;
   formatDate: (ms: number) => string;
   t: (key: string) => string;
+  /**
+   * Offered per cash row (never on a reversal, never on a row already
+   * reversed) when the caller may correct the record; absent otherwise.
+   */
+  onReverse?: (movement: { entryId: string; kind: "ISSUED" | "RETURNED" | "REIMBURSED"; amountMinor: number }) => void;
 }>) {
   const { results, status, loadMore } = usePaginatedQuery(
     api.financeDealCosts.listCustodyMovements,
@@ -94,9 +100,23 @@ export function CustodyMovementsList({
                 </Badge>
               )}
             </span>
-            <bdi dir="ltr" className={`shrink-0 tabular-nums ${entry.reversed ? "line-through text-muted-foreground" : ""}`}>
-              {money(entry.amountMinor, currency)}
-            </bdi>
+            <span className="flex shrink-0 items-center gap-2">
+              <bdi dir="ltr" className={`tabular-nums ${entry.reversed ? "line-through text-muted-foreground" : ""}`}>
+                {money(entry.amountMinor, currency)}
+              </bdi>
+              {onReverse && entry.kind !== "REVERSAL" && !entry.reversed && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 px-2 text-xs"
+                  data-testid={`custody-reverse-${entry._id}`}
+                  onClick={() => entry.kind !== "REVERSAL" && onReverse({ entryId: entry._id, kind: entry.kind, amountMinor: entry.amountMinor })}
+                >
+                  {t("CustodyReverse")}
+                </Button>
+              )}
+            </span>
           </li>
         ))}
       </ul>

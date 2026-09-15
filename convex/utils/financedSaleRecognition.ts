@@ -358,3 +358,33 @@ function humanizeFeeType(feeType: string): string {
   const words = feeType.toLowerCase().replace(/_/g, " ");
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
+
+/**
+ * THE date a financed sale is recognized on — and therefore the period its
+ * revenue, its finance receivable, its deductions and its commission land in.
+ *
+ * The legal invoice's date, when one is recorded: the schema note on
+ * `legalInvoiceDate` has always said it "decides the period revenue lands in",
+ * and `recordLegalInvoice` audits a date-only change for exactly that reason —
+ * yet `finalizeDeal` dated the sale at the wall clock, so an invoice issued in
+ * March and finalized in April recognized March's sale in April while the
+ * record said otherwise. One rule now, and one home for it: the invoice date
+ * where there is one, the moment of finalization where there is not (a deal
+ * this model does not cover — no invoice is required of it).
+ *
+ * A date inside a CLOSED period is not moved to an open one: the sale posting
+ * queues to the outbox for that period exactly as every other event dated
+ * there does, and a closed month is never rewritten. `recordLegalInvoice`
+ * refuses a future date and a date that is not a timestamp, so what reaches
+ * here is a real past instant or nothing.
+ */
+export function financedSaleRecognitionDate(
+  app: Pick<Doc<"financeApplications">, "legalInvoiceDate">,
+  finalizedAt: number
+): number {
+  const invoiceDate = app.legalInvoiceDate;
+  if (invoiceDate !== undefined && Number.isSafeInteger(invoiceDate) && invoiceDate >= 0) {
+    return invoiceDate;
+  }
+  return finalizedAt;
+}

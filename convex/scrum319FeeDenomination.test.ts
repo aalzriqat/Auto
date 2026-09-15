@@ -83,6 +83,9 @@ async function seedOrg(tag: string) {
     ctx.db.insert("users", { clerkId: `${tag}_emp`, email: `${tag}.emp@example.com`, name: "Runner" })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: employeeId, roleId }));
+  // Custody money commands post to the ledger and refuse without a chart
+  // (`assertCustodyAccountingReady`); no period is opened, so postings queue.
+  await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
   return { t, orgId, userId, employeeId, asUser };
 }
 
