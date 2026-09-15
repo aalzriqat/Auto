@@ -105,18 +105,18 @@ export function ClosePeriodReviewDialog({
         </DialogHeader>
 
         {checklist === undefined ? (
-          <p className="text-sm text-slate-500 py-4">{t("Loading")}</p>
+          <p className="text-sm text-muted-foreground py-4">{t("Loading")}</p>
         ) : (
           <div className="space-y-4">
             {blockers.length > 0 && (
-              <div className="rounded-md border border-red-200 bg-red-50 p-3 space-y-2">
-                <div className="flex items-center gap-2 text-sm font-semibold text-red-800">
+              <div className="space-y-2 rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-950/40">
+                <div className="flex items-center gap-2 text-sm font-semibold text-red-800 dark:text-red-200">
                   <ShieldAlert className="h-4 w-4 shrink-0" />
                   {t("ClosePeriodBlockersLabel")}
                 </div>
                 <ul className="space-y-1.5">
                   {blockers.map((blocker) => (
-                    <li key={blocker} className="text-sm text-red-800 leading-snug">
+                    <li key={blocker} className="text-sm leading-snug text-red-800 dark:text-red-200">
                       {blocker}
                     </li>
                   ))}
@@ -125,8 +125,8 @@ export function ClosePeriodReviewDialog({
             )}
 
             {warnings.length > 0 && (
-              <div className="rounded-md border border-amber-200 bg-amber-50 p-3 space-y-2">
-                <div className="flex items-center gap-2 text-sm font-semibold text-amber-800">
+              <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/40">
+                <div className="flex items-center gap-2 text-sm font-semibold text-amber-800 dark:text-amber-200">
                   <AlertTriangle className="h-4 w-4 shrink-0" />
                   {t("ClosePeriodWarningsLabel")}
                 </div>
@@ -145,7 +145,7 @@ export function ClosePeriodReviewDialog({
                         }}
                         className="mt-0.5"
                       />
-                      <span className="text-sm text-amber-900 leading-snug">{warning}</span>
+                      <span className="text-sm leading-snug text-amber-900 dark:text-amber-200">{warning}</span>
                     </li>
                   ))}
                 </ul>
@@ -153,7 +153,7 @@ export function ClosePeriodReviewDialog({
             )}
 
             {blockers.length === 0 && warnings.length === 0 && (
-              <p className="text-sm text-emerald-700">{t("ClosePeriodNoIssues")}</p>
+              <p className="text-sm text-emerald-700 dark:text-emerald-300">{t("ClosePeriodNoIssues")}</p>
             )}
 
             {!checklist.canClose && isOwner && (

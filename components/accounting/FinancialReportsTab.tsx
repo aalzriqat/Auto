@@ -76,12 +76,14 @@ export function FinancialReportsTab() {
       </div>
 
       <Tabs defaultValue="trialBalance" className="space-y-4">
-        <TabsList className="bg-slate-50">
-          <TabsTrigger value="trialBalance">{t("TrialBalance")}</TabsTrigger>
-          <TabsTrigger value="incomeStatement">{t("IncomeStatement")}</TabsTrigger>
-          <TabsTrigger value="balanceSheet">{t("BalanceSheet")}</TabsTrigger>
-          <TabsTrigger value="vatReturn">{t("VatReturn")}</TabsTrigger>
-        </TabsList>
+        <div className="overflow-x-auto">
+          <TabsList className="w-max bg-muted">
+            <TabsTrigger value="trialBalance">{t("TrialBalance")}</TabsTrigger>
+            <TabsTrigger value="incomeStatement">{t("IncomeStatement")}</TabsTrigger>
+            <TabsTrigger value="balanceSheet">{t("BalanceSheet")}</TabsTrigger>
+            <TabsTrigger value="vatReturn">{t("VatReturn")}</TabsTrigger>
+          </TabsList>
+        </div>
         <TabsContent value="trialBalance" className="m-0">
           <TrialBalanceReport report={trialBalance} locale={locale} t={t} formatMoney={formatMoney} />
         </TabsContent>

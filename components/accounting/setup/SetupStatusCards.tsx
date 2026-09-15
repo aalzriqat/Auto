@@ -5,7 +5,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import type { PeriodSummary, Translate } from "./types";
 import { periodLabel } from "./types";
 
+export type SetupStatusCardsVariant = "all" | "chart" | "operations";
+
 type SetupStatusCardsProps = {
+  variant?: SetupStatusCardsVariant;
   chartInitialized: boolean;
   chartReady: boolean;
   missingSystemAccountKeys: readonly string[];
@@ -33,7 +36,7 @@ function SetupCard({
   action,
 }: Readonly<{
   title: string;
-  description: string;
+  description: ReactNode;
   isReady: boolean;
   action?: ReactNode;
 }>) {
@@ -70,7 +73,7 @@ function ChartAction({
 }>) {
   if (chartInitialized) {
     return (
-      <p className="text-sm text-slate-500">
+      <p className="text-sm text-muted-foreground">
         {missingSystemAccountKeys.length > 0
           ? `${t("MissingSystemAccounts")}: ${missingSystemAccountKeys.join(", ")}`
           : t("SystemAccountsComplete")}
@@ -87,6 +90,7 @@ function ChartAction({
 }
 
 export function SetupStatusCards({
+  variant = "all",
   chartInitialized,
   chartReady,
   missingSystemAccountKeys,
@@ -101,8 +105,14 @@ export function SetupStatusCards({
   onInitializeChart,
   onRedrive,
 }: Readonly<SetupStatusCardsProps>) {
+  const showChart = variant !== "operations";
+  const showOperations = variant !== "chart";
+  const gridClassName =
+    variant === "all" ? "md:grid-cols-3" : variant === "operations" ? "md:grid-cols-2" : "";
+
   return (
-    <div className="grid gap-4 md:grid-cols-3">
+    <div className={`grid gap-4 ${gridClassName}`}>
+      {showChart && (
       <SetupCard
         title={t("ChartOfAccounts")}
         description={chartReady ? t("ChartOfAccountsReady") : t("ChartOfAccountsNeedsSetup")}
@@ -118,18 +128,28 @@ export function SetupStatusCards({
           />
         }
       />
+      )}
 
+      {showOperations && (
       <SetupCard
         title={t("AccountingPeriod")}
         description={
-          currentOpenPeriod
-            ? `${t("OpenPeriod")}: ${periodLabel(currentOpenPeriod)}`
-            : t("NoCurrentOpenPeriod")
+          currentOpenPeriod ? (
+            // The label is Latin digits inside Arabic prose; isolated so the
+            // bidi algorithm does not read "2026-09" as "09-2026".
+            <>
+              {t("OpenPeriod")}: <bdi dir="ltr">{periodLabel(currentOpenPeriod)}</bdi>
+            </>
+          ) : (
+            t("NoCurrentOpenPeriod")
+          )
         }
         isReady={currentOpenPeriod !== null}
         action={periodDialog}
       />
+      )}
 
+      {showOperations && (
       <SetupCard
         title={t("PendingAccountingEvents")}
         description={
@@ -145,6 +165,7 @@ export function SetupStatusCards({
           </Button>
         }
       />
+      )}
     </div>
   );
 }

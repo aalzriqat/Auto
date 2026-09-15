@@ -56,15 +56,15 @@ type FixedAsset = Doc<"fixedAssets">;
 
 function AssetStatusBadge({ t, asset }: Readonly<{ t: (key: any) => string; asset: FixedAsset }>) {
   if (asset.costMinor == null) {
-    return <Badge variant="outline" className="text-slate-500">{t("AssetStatusLegacy")}</Badge>;
+    return <Badge variant="outline" className="text-muted-foreground">{t("AssetStatusLegacy")}</Badge>;
   }
   if (asset.status === "IMPAIRED") {
-    return <Badge variant="outline" className="bg-amber-500/10 text-amber-600 border-amber-500/20">{t("AssetStatus_IMPAIRED")}</Badge>;
+    return <Badge variant="outline" className="border-amber-500/20 bg-amber-500/10 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">{t("AssetStatus_IMPAIRED")}</Badge>;
   }
   if (asset.status === "DISPOSED") {
-    return <Badge variant="outline" className="bg-slate-500/10 text-slate-500 border-slate-500/20">{t("AssetStatus_DISPOSED")}</Badge>;
+    return <Badge variant="outline" className="border-border bg-muted text-muted-foreground">{t("AssetStatus_DISPOSED")}</Badge>;
   }
-  return <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20">{t("AssetStatus_ACTIVE")}</Badge>;
+  return <Badge variant="outline" className="border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">{t("AssetStatus_ACTIVE")}</Badge>;
 }
 
 export function FixedAssetsTab() {
@@ -95,7 +95,7 @@ export function FixedAssetsTab() {
   return (
     <div className="p-6 space-y-6">
       <div className="mb-2 flex justify-between items-center gap-4 flex-wrap">
-        <h2 className="text-lg font-semibold text-slate-900">{t("FixedAssets" as any)}</h2>
+        <h2 className="text-lg font-semibold text-foreground">{t("FixedAssets" as any)}</h2>
         {canManage && (
           <Button size="sm" className="gap-2" onClick={() => setCapitalizeOpen(true)}>
             <Plus className="w-4 h-4" />
@@ -106,7 +106,7 @@ export function FixedAssetsTab() {
 
       <AccountingTableFrame>
         <Table>
-          <TableHeader className="bg-slate-50">
+          <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead>{t("AssetName" as any)}</TableHead>
               <TableHead>{t("PurchaseDateLabel" as any)}</TableHead>
@@ -132,13 +132,13 @@ export function FixedAssetsTab() {
                   <TableRow key={asset._id}>
                     <TableCell className="font-medium">{asset.name}</TableCell>
                     <TableCell>{format(new Date(asset.purchaseDate), "MMM d, yyyy")}</TableCell>
-                    <TableCell className="text-right font-semibold text-slate-900">
+                    <TableCell className="text-right font-semibold text-foreground">
                       {formatCurrency(costMinor / factor, scale)}
                     </TableCell>
-                    <TableCell className="text-right text-slate-500">
+                    <TableCell className="text-right text-muted-foreground">
                       {isLegacy ? "—" : formatCurrency(accumMinor / factor, scale)}
                     </TableCell>
-                    <TableCell className="text-right font-semibold text-slate-900">
+                    <TableCell className="text-right font-semibold text-foreground">
                       {isLegacy ? "—" : formatCurrency(netBookMinor / factor, scale)}
                     </TableCell>
                     <TableCell>
@@ -152,7 +152,7 @@ export function FixedAssetsTab() {
                           title={t("ViewEvents" as any)}
                           onClick={() => setEventsAsset(asset)}
                         >
-                          <History className="w-4 h-4 text-slate-500" />
+                          <History className="w-4 h-4 text-muted-foreground" />
                         </Button>
                         {canImpair && (
                           <Button
@@ -357,7 +357,7 @@ function CapitalizeAssetDialog({
                     </FormItem>
                   )}
                 />
-                <p className="text-xs text-slate-500">{t("SalvageValueHint" as any)}</p>
+                <p className="text-xs text-muted-foreground">{t("SalvageValueHint" as any)}</p>
               </div>
               <div className="space-y-1.5">
                 <FormField
@@ -373,7 +373,7 @@ function CapitalizeAssetDialog({
                     </FormItem>
                   )}
                 />
-                <p className="text-xs text-slate-500">{t("UsefulLifeMonthsHint" as any)}</p>
+                <p className="text-xs text-muted-foreground">{t("UsefulLifeMonthsHint" as any)}</p>
               </div>
             </div>
 

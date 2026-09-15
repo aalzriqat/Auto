@@ -149,17 +149,17 @@ export function GeneralLedgerTab() {
   return (
     <div className="p-6 space-y-4">
       <div>
-        <h2 className="text-lg font-semibold text-slate-900">{t("TransactionRegister" as any)}</h2>
-        <p className="text-sm text-slate-500">{t("TransactionRegisterDesc" as any)}</p>
+        <h2 className="text-lg font-semibold text-foreground">{t("TransactionRegister" as any)}</h2>
+        <p className="text-sm text-muted-foreground">{t("TransactionRegisterDesc" as any)}</p>
       </div>
 
       <div className="flex flex-wrap items-end gap-3">
         <div className="space-y-1">
-          <label className="text-xs font-medium text-slate-500">{t("StartDate" as any)}</label>
+          <label className="text-xs font-medium text-muted-foreground">{t("StartDate" as any)}</label>
           <Input type="date" value={startDateStr} onChange={(e) => setStartDateStr(e.target.value)} className="h-8 text-sm" />
         </div>
         <div className="space-y-1">
-          <label className="text-xs font-medium text-slate-500">{t("EndDate" as any)}</label>
+          <label className="text-xs font-medium text-muted-foreground">{t("EndDate" as any)}</label>
           <Input type="date" value={endDateStr} onChange={(e) => setEndDateStr(e.target.value)} className="h-8 text-sm" />
         </div>
         <Button size="sm" variant={filterActive ? "default" : "outline"} onClick={() => setFilterActive(!filterActive)}>
@@ -168,14 +168,14 @@ export function GeneralLedgerTab() {
       </div>
 
       <div className="flex gap-4 text-sm">
-        <span className="text-emerald-600 font-semibold">{t("TxIn" as any)}: {formatCurrency(totalIn)}</span>
-        <span className="text-rose-600 font-semibold">{t("TxOut" as any)}: {formatCurrency(totalOut)}</span>
-        <span className="text-slate-600 font-semibold">{t("TxNet" as any)}: {formatCurrency(totalIn - totalOut)}</span>
+        <span className="font-semibold text-emerald-600 dark:text-emerald-400">{t("TxIn" as any)}: {formatCurrency(totalIn)}</span>
+        <span className="font-semibold text-rose-600 dark:text-rose-400">{t("TxOut" as any)}: {formatCurrency(totalOut)}</span>
+        <span className="text-muted-foreground font-semibold">{t("TxNet" as any)}: {formatCurrency(totalIn - totalOut)}</span>
       </div>
 
-      <div className="rounded-md border border-slate-200 overflow-x-auto">
+      <div className="rounded-md border border-border overflow-x-auto">
         <Table>
-          <TableHeader className="bg-slate-50">
+          <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead>{t("Date" as any)}</TableHead>
               <TableHead>{t("TypeLabel" as any)}</TableHead>
@@ -187,11 +187,11 @@ export function GeneralLedgerTab() {
           <TableBody>
             {!transactions ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center text-slate-500 py-8">{t("Loading" as any)}</TableCell>
+                <TableCell colSpan={5} className="text-center text-muted-foreground py-8">{t("Loading" as any)}</TableCell>
               </TableRow>
             ) : transactions.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center text-slate-500 py-8">{t("NoTransactionsFound" as any)}</TableCell>
+                <TableCell colSpan={5} className="text-center text-muted-foreground py-8">{t("NoTransactionsFound" as any)}</TableCell>
               </TableRow>
             ) : (
               transactions.map((tx) => {
@@ -202,20 +202,20 @@ export function GeneralLedgerTab() {
                     <TableCell>
                       <Badge
                         variant={tx.type === "IN" ? "default" : "destructive"}
-                        className={tx.type === "IN" ? "bg-green-100 text-green-800 hover:bg-green-100" : ""}
+                        className={tx.type === "IN" ? "bg-green-100 text-green-800 hover:bg-green-100 dark:bg-green-950/50 dark:text-green-200 dark:hover:bg-green-950/50" : ""}
                       >
                         {transactionTypeLabel(tx.type)}
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      <Badge variant="outline" className="bg-slate-50 text-slate-600">
+                      <Badge variant="outline" className="bg-muted/50 text-muted-foreground">
                         {transactionCategoryLabel(tx.category)}
                       </Badge>
                     </TableCell>
                     <TableCell className="max-w-[300px] truncate" title={description}>
                       {description}
                     </TableCell>
-                    <TableCell className={`text-right font-semibold ${tx.type === "IN" ? "text-emerald-600" : "text-rose-600"}`}>
+                    <TableCell className={`text-right font-semibold ${tx.type === "IN" ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
                       {tx.type === "IN" ? "+" : "-"}{formatCurrency(tx.amount)}
                     </TableCell>
                   </TableRow>

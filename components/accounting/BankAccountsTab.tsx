@@ -81,8 +81,8 @@ export function BankAccountsTab() {
     <div className="p-6 space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-lg font-semibold text-slate-900">{t("BankAccounts" as any)}</h2>
-          <p className="text-sm text-slate-500">{t("BankAccountsDesc" as any)}</p>
+          <h2 className="text-lg font-semibold text-foreground">{t("BankAccounts" as any)}</h2>
+          <p className="text-sm text-muted-foreground">{t("BankAccountsDesc" as any)}</p>
         </div>
         <CreateBankAccountDialog
           open={createOpen}
@@ -97,9 +97,9 @@ export function BankAccountsTab() {
       </div>
 
       {bookBalance && (
-        <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
-          <p className="text-sm text-slate-500">{t("BookBalanceFor" as any)}: <strong>{bookBalance.name}</strong></p>
-          <p className="text-2xl font-semibold text-slate-900">
+        <div className="rounded-md border border-border bg-muted/50 p-4">
+          <p className="text-sm text-muted-foreground">{t("BookBalanceFor" as any)}: <strong>{bookBalance.name}</strong></p>
+          <p className="text-2xl font-semibold text-foreground">
             {formatCurrency(bookBalance.balanceMinor / Math.pow(10, scaleForCurrency(bookBalance.currency)))}
           </p>
         </div>

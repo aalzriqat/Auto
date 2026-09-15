@@ -20,10 +20,10 @@ export function PendingAccountingEventsTable({
 }: Readonly<PendingAccountingEventsTableProps>) {
   return (
     <div className="space-y-3">
-      <h3 className="text-base font-semibold text-slate-900">{t("PendingAccountingEvents")}</h3>
+      <h3 className="text-base font-semibold text-foreground">{t("PendingAccountingEvents")}</h3>
       <AccountingTableFrame>
-        <Table>
-          <TableHeader className="bg-slate-50">
+        <Table className="min-w-[48rem]">
+          <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead>{t("Event")}</TableHead>
               <TableHead>{t("Source")}</TableHead>
@@ -53,7 +53,7 @@ export function PendingAccountingEventsTable({
           </TableBody>
         </Table>
       </AccountingTableFrame>
-      {hasMore && <p className="text-xs text-slate-500">{t("MorePendingAccountingEvents")}</p>}
+      {hasMore && <p className="text-xs text-muted-foreground">{t("MorePendingAccountingEvents")}</p>}
     </div>
   );
 }

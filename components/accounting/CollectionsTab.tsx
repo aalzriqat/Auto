@@ -80,10 +80,10 @@ function formatDate(value: number) {
 }
 
 function statusBadgeClass(status: string) {
-  if (["PAID", "CLEARED", "APPROVED", "SENT"].includes(status)) return "bg-emerald-100 text-emerald-800 hover:bg-emerald-100";
-  if (["OVERDUE", "RETURNED", "REJECTED", "FAILED"].includes(status)) return "bg-rose-100 text-rose-800 hover:bg-rose-100";
-  if (["PARTIALLY_PAID", "DEPOSITED", "RESCHEDULED", "SUBMITTED"].includes(status)) return "bg-amber-100 text-amber-800 hover:bg-amber-100";
-  return "bg-slate-100 text-slate-700 hover:bg-slate-100";
+  if (["PAID", "CLEARED", "APPROVED", "SENT"].includes(status)) return "bg-emerald-100 text-emerald-800 hover:bg-emerald-100 dark:bg-emerald-950/50 dark:text-emerald-200 dark:hover:bg-emerald-950/50";
+  if (["OVERDUE", "RETURNED", "REJECTED", "FAILED"].includes(status)) return "bg-rose-100 text-rose-800 hover:bg-rose-100 dark:bg-rose-950/50 dark:text-rose-200 dark:hover:bg-rose-950/50";
+  if (["PARTIALLY_PAID", "DEPOSITED", "RESCHEDULED", "SUBMITTED"].includes(status)) return "bg-amber-100 text-amber-800 hover:bg-amber-100 dark:bg-amber-950/50 dark:text-amber-200 dark:hover:bg-amber-950/50";
+  return "bg-muted text-foreground hover:bg-muted";
 }
 
 function sourceLabel(value: string) {
@@ -227,8 +227,8 @@ export function CollectionsTab() {
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-slate-900">{t("CollectionsTitle" as any)}</h2>
-          <p className="text-sm text-slate-500">{t("CollectionsDesc" as any)}</p>
+          <h2 className="text-lg font-semibold text-foreground">{t("CollectionsTitle" as any)}</h2>
+          <p className="text-sm text-muted-foreground">{t("CollectionsDesc" as any)}</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => setReconcileOpen(true)}>
@@ -243,7 +243,7 @@ export function CollectionsTab() {
       </div>
 
       <Tabs defaultValue="receivables" className="space-y-4">
-        <TabsList className="bg-slate-50 border border-slate-200">
+        <TabsList className="bg-muted/50 border border-border">
           <TabsTrigger value="receivables">{t("Receivables" as any)}</TabsTrigger>
           <TabsTrigger value="cheques">{t("Cheques" as any)}</TabsTrigger>
           <TabsTrigger value="paymentLinks">{t("PaymentLinks" as any)}</TabsTrigger>
@@ -265,7 +265,7 @@ export function CollectionsTab() {
                 ))}
               </SelectContent>
             </Select>
-            <div className="flex gap-1 rounded-md border border-slate-200 p-1">
+            <div className="flex gap-1 rounded-md border border-border p-1">
               <Button
                 size="sm"
                 variant={receivablesView === "list" ? "secondary" : "ghost"}
@@ -288,9 +288,9 @@ export function CollectionsTab() {
           {receivablesView === "calendar" ? (
             <InstallmentCalendar />
           ) : (
-          <div className="rounded-md border border-slate-200 overflow-x-auto">
+          <div className="rounded-md border border-border overflow-x-auto">
             <Table>
-              <TableHeader className="bg-slate-50">
+              <TableHeader className="bg-muted/50">
                 <TableRow>
                   <TableHead>{t("Due" as any)}</TableHead>
                   <TableHead>{t("Customer" as any)}</TableHead>
@@ -312,7 +312,7 @@ export function CollectionsTab() {
                       <TableCell className="font-medium">{formatDate(row.dueDate)}</TableCell>
                       <TableCell>
                         <div className="font-medium">{row.customerName}</div>
-                        <div className="text-xs text-slate-500">{row.vehicleLabel || row.title}</div>
+                        <div className="text-xs text-muted-foreground">{row.vehicleLabel || row.title}</div>
                       </TableCell>
                       <TableCell>{collectionLabel(t, row.sourceType)}</TableCell>
                       <TableCell><StatusBadge status={row.status} /></TableCell>
@@ -355,9 +355,9 @@ export function CollectionsTab() {
               ))}
             </SelectContent>
           </Select>
-          <div className="rounded-md border border-slate-200 overflow-x-auto">
+          <div className="rounded-md border border-border overflow-x-auto">
             <Table>
-              <TableHeader className="bg-slate-50">
+              <TableHeader className="bg-muted/50">
                 <TableRow>
                   <TableHead>{t("ChequeDate" as any)}</TableHead>
                   <TableHead>{t("Customer" as any)}</TableHead>
@@ -379,7 +379,7 @@ export function CollectionsTab() {
                       <TableCell className="font-medium">{formatDate(cheque.chequeDate)}</TableCell>
                       <TableCell>
                         <div className="font-medium">{cheque.customerName}</div>
-                        <div className="text-xs text-slate-500">{cheque.receivableTitle || cheque.vehicleLabel || "-"}</div>
+                        <div className="text-xs text-muted-foreground">{cheque.receivableTitle || cheque.vehicleLabel || "-"}</div>
                       </TableCell>
                       <TableCell>{cheque.bank}</TableCell>
                       <TableCell>{cheque.chequeNumber}</TableCell>
@@ -411,9 +411,9 @@ export function CollectionsTab() {
         </TabsContent>
 
         <TabsContent value="payments" className="space-y-3">
-          <div className="rounded-md border border-slate-200 overflow-x-auto">
+          <div className="rounded-md border border-border overflow-x-auto">
             <Table>
-              <TableHeader className="bg-slate-50">
+              <TableHeader className="bg-muted/50">
                 <TableRow>
                   <TableHead>{t("Date" as any)}</TableHead>
                   <TableHead>{t("Customer" as any)}</TableHead>
@@ -434,12 +434,12 @@ export function CollectionsTab() {
                       <TableCell className="font-medium">{formatDate(payment.paymentDate)}</TableCell>
                       <TableCell>
                         <div className="font-medium">{payment.customerName}</div>
-                        <div className="text-xs text-slate-500">{payment.receivableTitle || payment.vehicleLabel || "-"}</div>
+                        <div className="text-xs text-muted-foreground">{payment.receivableTitle || payment.vehicleLabel || "-"}</div>
                       </TableCell>
                       <TableCell>{collectionLabel(t, payment.method)}</TableCell>
                       <TableCell><StatusBadge status={payment.status} /></TableCell>
-                      <TableCell className="text-slate-500">{payment.reference || "-"}</TableCell>
-                      <TableCell className={`text-right font-semibold ${payment.direction === "IN" ? "text-emerald-600" : "text-rose-600"}`}>
+                      <TableCell className="text-muted-foreground">{payment.reference || "-"}</TableCell>
+                      <TableCell className={`text-right font-semibold ${payment.direction === "IN" ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
                         {payment.direction === "IN" ? "+" : "-"}{formatCurrency(payment.amount)}
                       </TableCell>
                     </TableRow>
@@ -456,7 +456,7 @@ export function CollectionsTab() {
             <ReportPanel title={t("DailyCollectionList" as any)}>
               <div className="flex items-end gap-2">
                 <Input type="date" value={reportDate} onChange={(event) => setReportDate(event.target.value)} className="max-w-[180px]" />
-                <div className="text-sm font-semibold text-slate-700">{formatCurrency(dailyReport?.total ?? 0)}</div>
+                <div className="text-sm font-semibold text-foreground">{formatCurrency(dailyReport?.total ?? 0)}</div>
               </div>
               <MethodTotals totals={dailyReport?.totalsByMethod ?? {}} />
             </ReportPanel>
@@ -465,11 +465,11 @@ export function CollectionsTab() {
               <div className="flex flex-wrap items-end gap-2">
                 <Input type="date" value={chequeStart} onChange={(event) => setChequeStart(event.target.value)} className="max-w-[180px]" />
                 <Input type="date" value={chequeEnd} onChange={(event) => setChequeEnd(event.target.value)} className="max-w-[180px]" />
-                <div className="text-sm font-semibold text-slate-700">{formatCurrency(chequeReport?.total ?? 0)}</div>
+                <div className="text-sm font-semibold text-foreground">{formatCurrency(chequeReport?.total ?? 0)}</div>
               </div>
               <div className="max-h-48 overflow-y-auto text-sm">
                 {(chequeReport?.rows ?? []).slice(0, 8).map((cheque: { _id: string; customerName: string; bank: string; chequeNumber: string; amount: number }) => (
-                  <div key={cheque._id} className="flex justify-between border-b border-slate-100 py-2">
+                  <div key={cheque._id} className="flex justify-between border-b border-border py-2">
                     <span>{cheque.customerName} · {cheque.bank} #{cheque.chequeNumber}</span>
                     <span className="font-medium">{formatCurrency(cheque.amount)}</span>
                   </div>
@@ -487,19 +487,19 @@ export function CollectionsTab() {
                 ["61-90", aging?.days61To90],
                 ["90+", aging?.over90],
               ].map(([label, bucket]) => (
-                <div key={label as string} className="rounded-md border border-slate-200 p-3">
-                  <p className="text-xs text-slate-500">{label as string}</p>
+                <div key={label as string} className="rounded-md border border-border p-3">
+                  <p className="text-xs text-muted-foreground">{label as string}</p>
                   <p className="text-lg font-semibold">{formatCurrency((bucket as { amount: number } | undefined)?.amount ?? 0)}</p>
-                  <p className="text-xs text-slate-500">{t("CollectionItemCount" as any).replace("{count}", String((bucket as { count: number } | undefined)?.count ?? 0))}</p>
+                  <p className="text-xs text-muted-foreground">{t("CollectionItemCount" as any).replace("{count}", String((bucket as { count: number } | undefined)?.count ?? 0))}</p>
                 </div>
               ))}
             </div>
           </ReportPanel>
 
           <ReportPanel title={t("CashierReconciliations" as any)}>
-            <div className="rounded-md border border-slate-200 overflow-x-auto">
+            <div className="rounded-md border border-border overflow-x-auto">
               <Table>
-                <TableHeader className="bg-slate-50">
+                <TableHeader className="bg-muted/50">
                   <TableRow>
                     <TableHead>{t("Date" as any)}</TableHead>
                     <TableHead>{t("Cashier" as any)}</TableHead>
@@ -541,9 +541,9 @@ export function CollectionsTab() {
 
         {canApprove && (
           <TabsContent value="approvals">
-            <div className="rounded-md border border-slate-200 overflow-x-auto">
+            <div className="rounded-md border border-border overflow-x-auto">
               <Table>
-                <TableHeader className="bg-slate-50">
+                <TableHeader className="bg-muted/50">
                   <TableRow>
                     <TableHead>{t("Customer" as any)}</TableHead>
                     <TableHead>{t("Receivable" as any)}</TableHead>
@@ -594,10 +594,10 @@ export function CollectionsTab() {
 }
 
 function Metric({ icon: Icon, label, value, tone }: { icon: React.ComponentType<{ className?: string }>; label: string; value: string; tone?: "success" | "danger" }) {
-  const color = tone === "success" ? "text-emerald-600" : tone === "danger" ? "text-rose-600" : "text-slate-700";
+  const color = tone === "success" ? "text-emerald-600 dark:text-emerald-400" : tone === "danger" ? "text-rose-600 dark:text-rose-400" : "text-foreground";
   return (
-    <div className="rounded-md border border-slate-200 bg-white p-3">
-      <div className="flex items-center gap-2 text-xs text-slate-500">
+    <div className="rounded-md border border-border bg-card p-3">
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <Icon className="h-4 w-4" />
         {label}
       </div>
@@ -614,15 +614,15 @@ function StatusBadge({ status }: { status: string }) {
 function EmptyRow({ colSpan, label }: { colSpan: number; label: string }) {
   return (
     <TableRow>
-      <TableCell colSpan={colSpan} className="py-8 text-center text-slate-500">{label}</TableCell>
+      <TableCell colSpan={colSpan} className="py-8 text-center text-muted-foreground">{label}</TableCell>
     </TableRow>
   );
 }
 
 function ReportPanel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-md border border-slate-200 bg-white p-4 space-y-3">
-      <h3 className="font-semibold text-slate-900">{title}</h3>
+    <div className="rounded-md border border-border bg-card p-4 space-y-3">
+      <h3 className="font-semibold text-foreground">{title}</h3>
       {children}
     </div>
   );
@@ -632,11 +632,11 @@ function MethodTotals({ totals }: { totals: Record<string, number> }) {
   const formatCurrency = useCurrencyFormatter();
   const { t } = useLanguage();
   const entries = Object.entries(totals);
-  if (entries.length === 0) return <p className="text-sm text-slate-500">{t("NoCollectionsForDate" as any)}</p>;
+  if (entries.length === 0) return <p className="text-sm text-muted-foreground">{t("NoCollectionsForDate" as any)}</p>;
   return (
     <div className="grid gap-2 sm:grid-cols-2">
       {entries.map(([method, amount]) => (
-        <div key={method} className="flex justify-between rounded-md bg-slate-50 px-3 py-2 text-sm">
+        <div key={method} className="flex justify-between rounded-md bg-muted/50 px-3 py-2 text-sm">
           <span>{collectionLabel(t, method)}</span>
           <span className="font-medium">{formatCurrency(amount)}</span>
         </div>
@@ -1063,7 +1063,7 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
           <DialogDescription>{cheque?.bank} #{cheque?.chequeNumber}</DialogDescription>
         </DialogHeader>
         {cheque?.status === "CLEARED" && (
-          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
             {t("ReturnClearedChequeWarning" as any)}
           </div>
         )}

@@ -110,7 +110,7 @@ export function ReconciliationPanel({
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="text-base font-semibold text-slate-900">{t("Reconciliation" as any)}</h3>
+        <h3 className="text-base font-semibold text-foreground">{t("Reconciliation" as any)}</h3>
         {canManageFinance && (
           <BankStatementUploadDialog t={t as any} currencyScaleFactor={factor} onImport={handleImport} importing={importing} />
         )}
@@ -118,7 +118,7 @@ export function ReconciliationPanel({
 
       <AccountingTableFrame>
         <Table>
-          <TableHeader className="bg-slate-50">
+          <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead>{t("Date" as any)}</TableHead>
               <TableHead>{t("Description" as any)}</TableHead>
@@ -139,7 +139,7 @@ export function ReconciliationPanel({
                 const ignoringThisLine = busyActions.has(`ignore_${s.statementLineId}`);
                 return (
                   <TableRow key={s.statementLineId}>
-                    <TableCell className="text-slate-500">
+                    <TableCell className="text-muted-foreground">
                       {new Date(s.statementDate).toLocaleDateString()}
                     </TableCell>
                     <TableCell>{s.description}</TableCell>
@@ -148,14 +148,14 @@ export function ReconciliationPanel({
                     </TableCell>
                     <TableCell>
                       {suggested ? (
-                        <span className="text-sm text-slate-600">
+                        <span className="text-sm text-muted-foreground">
                           {suggested.memo || t("Untitled" as any)} —{" "}
                           {new Date(suggested.accountingDate).toLocaleDateString()}
                         </span>
                       ) : s.candidates.length > 0 ? (
-                        <span className="text-sm text-amber-600">{t("MultipleCandidates" as any)}</span>
+                        <span className="text-sm text-amber-600 dark:text-amber-400">{t("MultipleCandidates" as any)}</span>
                       ) : (
-                        <span className="text-sm text-slate-400">{t("NoCandidates" as any)}</span>
+                        <span className="text-sm text-muted-foreground/60">{t("NoCandidates" as any)}</span>
                       )}
                     </TableCell>
                     <TableCell className="text-right space-x-2">
@@ -174,7 +174,7 @@ export function ReconciliationPanel({
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="text-rose-600 hover:text-rose-700"
+                          className="text-rose-600 hover:text-rose-700 dark:text-rose-400 dark:hover:text-rose-300"
                           disabled={ignoringThisLine}
                           onClick={() => setIgnoring({ id: s.statementLineId, reason: "" })}
                         >

@@ -71,7 +71,9 @@ export function FinancialReportBadge({
   return (
     <Badge
       variant="outline"
-      className={isBalanced ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-rose-50 text-rose-700 border-rose-200"}
+      className={isBalanced
+        ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+        : "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300"}
     >
       {isBalanced ? balancedLabel : unbalancedLabel}
     </Badge>
@@ -88,13 +90,13 @@ export function ReportMetric({
   tone?: "default" | "success" | "danger";
 }>) {
   const toneClass = tone === "success"
-    ? "text-emerald-700"
+    ? "text-emerald-700 dark:text-emerald-300"
     : tone === "danger"
-      ? "text-rose-700"
-      : "text-slate-900";
+      ? "text-rose-700 dark:text-rose-300"
+      : "text-foreground";
   return (
-    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-      <p className="text-xs text-slate-500">{label}</p>
+    <div className="rounded-md border border-border bg-muted/50 p-3">
+      <p className="text-xs text-muted-foreground">{label}</p>
       <p className={`mt-1 text-base font-semibold ${toneClass}`}>{value}</p>
     </div>
   );
@@ -116,7 +118,7 @@ export function TrialBalanceRowsTable({
   return (
     <AccountingTableFrame>
       <Table>
-        <TableHeader className="bg-slate-50">
+        <TableHeader className="bg-muted/50">
           <TableRow>
             <TableHead>{t("Account")}</TableHead>
             <TableHead className="text-right">{t("Debit")}</TableHead>
@@ -132,7 +134,7 @@ export function TrialBalanceRowsTable({
               <TableRow key={`${row.accountId}-${row.currency}`}>
                 <TableCell>
                   <div className="font-medium">{row.code} - {accountDisplayName(row, locale)}</div>
-                  <div className="text-xs text-slate-500">{row.currency}</div>
+                  <div className="text-xs text-muted-foreground">{row.currency}</div>
                 </TableCell>
                 <TableCell className="text-right">{formatMoney(row.debitMinor, row.currency)}</TableCell>
                 <TableCell className="text-right">{formatMoney(row.creditMinor, row.currency)}</TableCell>
@@ -162,7 +164,7 @@ export function NetRowsTable({
   return (
     <AccountingTableFrame>
       <Table>
-        <TableHeader className="bg-slate-50">
+        <TableHeader className="bg-muted/50">
           <TableRow>
             <TableHead>{t("Account")}</TableHead>
             <TableHead className="text-right">{t("Amount")}</TableHead>
@@ -176,7 +178,7 @@ export function NetRowsTable({
               <TableRow key={`${row.accountId}-${row.currency}`}>
                 <TableCell>
                   <div className="font-medium">{row.code} - {accountDisplayName(row, locale)}</div>
-                  <div className="text-xs text-slate-500">{row.currency}</div>
+                  <div className="text-xs text-muted-foreground">{row.currency}</div>
                 </TableCell>
                 <TableCell className="text-right font-semibold">{formatMoney(row.netMinor, row.currency)}</TableCell>
               </TableRow>

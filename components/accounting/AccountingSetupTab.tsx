@@ -29,7 +29,9 @@ import {
 
 type SetupActionMessage<T> = (outcome: T) => string;
 
-export function AccountingSetupTab() {
+export type AccountingSetupView = "all" | "settings" | "close";
+
+export function AccountingSetupTab({ view = "all" }: Readonly<{ view?: AccountingSetupView }> = {}) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const { hasPermission, isOwner, isLoading: permissionsLoading } = usePermissions();
@@ -105,15 +107,21 @@ export function AccountingSetupTab() {
   const chartReady = setupStatus.chartInitialized && setupStatus.systemAccountsValid;
   const postingReady = chartReady && setupStatus.currentOpenPeriod !== null;
   const redriveDisabled = !canManageFinance || !postingReady || setupStatus.pendingEvents.length === 0;
+  const showSettings = view !== "close";
+  const showClose = view !== "settings";
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold text-slate-900">{t("AccountingSetup")}</h2>
-        <p className="text-sm text-slate-500">{t("AccountingSetupDesc")}</p>
-      </div>
+      {view === "all" && (
+        <div>
+          <h2 className="text-lg font-semibold text-foreground">{t("AccountingSetup")}</h2>
+          <p className="text-sm text-muted-foreground">{t("AccountingSetupDesc")}</p>
+        </div>
+      )}
 
+      <div className={view === "settings" ? "grid gap-6 lg:items-start lg:[grid-template-columns:repeat(auto-fit,minmax(22rem,1fr))]" : "contents"}>
       <SetupStatusCards
+        variant={view === "all" ? "all" : view === "settings" ? "chart" : "operations"}
         chartInitialized={setupStatus.chartInitialized}
         chartReady={chartReady}
         missingSystemAccountKeys={setupStatus.missingSystemAccountKeys}
@@ -173,24 +181,34 @@ export function AccountingSetupTab() {
 
       {/* After the chart and periods, because an opening balance needs both:
           accounts to post into, and an open period covering its date. */}
-      <OpeningBalanceCard />
+      {showSettings && <OpeningBalanceCard />}
+      </div>
 
       {/* Directly beneath the card, because when a draft is pending the card
           deliberately hides its own button (it must not create a second draft)
           — so this panel is the only thing on screen that can move the
           organization's opening balance forward. It renders nothing when
           nothing is pending. */}
-      <OpeningBalanceApprovalPanel orgId={activeOrgId} canManageFinance={canManageFinance} />
+      {showSettings && (
+        <OpeningBalanceApprovalPanel orgId={activeOrgId} canManageFinance={canManageFinance} />
+      )}
 
       {!canManageFinance && (
-        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>{t("AccountingSetupManageFinanceRequired")}</span>
         </div>
       )}
 
-      <SystemAccountConflictsPanel orgId={activeOrgId} canManageFinance={canManageFinance} t={t} />
+      {showSettings && (
+        <SystemAccountConflictsPanel orgId={activeOrgId} canManageFinance={canManageFinance} t={t} />
+      )}
 
+      {showSettings && view === "settings" && (
+        <p className="text-sm text-muted-foreground">{t("AccountingPeriodsElsewhere")}</p>
+      )}
+
+      {showClose && (
       <AccountingPeriodsTable
         periods={setupStatus.recentPeriods}
         canManageFinance={canManageFinance}
@@ -218,13 +236,17 @@ export function AccountingSetupTab() {
           )
         }
       />
+      )}
 
+      {showClose && (
       <PendingAccountingEventsTable
         events={setupStatus.pendingEvents}
         hasMore={setupStatus.hasMorePendingEvents}
         t={t}
       />
+      )}
 
+      {showClose && (
       <ClosePeriodReviewDialog
         orgId={activeOrgId}
         period={closeReviewPeriod}
@@ -236,6 +258,7 @@ export function AccountingSetupTab() {
         onClosed={() => setCloseReviewPeriod(null)}
         t={t}
       />
+      )}
     </div>
   );
 }

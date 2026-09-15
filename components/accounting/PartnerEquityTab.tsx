@@ -81,7 +81,7 @@ export function PartnerEquityTab() {
   return (
     <div className="p-6 space-y-6">
       <div className="mb-2 flex justify-between items-center gap-4 flex-wrap">
-        <h2 className="text-lg font-semibold text-slate-900">{t("PartnerEquity" as any)}</h2>
+        <h2 className="text-lg font-semibold text-foreground">{t("PartnerEquity" as any)}</h2>
         {canManage && (
           <Button size="sm" className="gap-2" onClick={() => setAddOpen(true)}>
             <Plus className="w-4 h-4" />
@@ -92,7 +92,7 @@ export function PartnerEquityTab() {
 
       <AccountingTableFrame>
         <Table>
-          <TableHeader className="bg-slate-50">
+          <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead>{t("PartnerName" as any)}</TableHead>
               <TableHead className="text-right">{t("CurrentBalance" as any)}</TableHead>
@@ -110,16 +110,16 @@ export function PartnerEquityTab() {
                   <TableRow key={partner._id}>
                     <TableCell className="font-medium">{partner.partnerName}</TableCell>
                     <TableCell className="text-right">
-                      <span className="font-semibold text-slate-900">
+                      <span className="font-semibold text-foreground">
                         {formatCurrency(partner.balanceMinor / factor, scale)}
                       </span>
                       {hasLegacyBase && (
-                        <Badge variant="outline" className="ms-2 text-slate-500" title={t("LegacyBalanceNotice" as any)}>
+                        <Badge variant="outline" className="ms-2 text-muted-foreground" title={t("LegacyBalanceNotice" as any)}>
                           {t("AssetStatusLegacy" as any)}
                         </Badge>
                       )}
                     </TableCell>
-                    <TableCell className="text-slate-500">{partner.notes || "-"}</TableCell>
+                    <TableCell className="text-muted-foreground">{partner.notes || "-"}</TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
                         <Button
@@ -128,7 +128,7 @@ export function PartnerEquityTab() {
                           title={t("PartnerHistory" as any)}
                           onClick={() => setHistoryPartner(partner)}
                         >
-                          <History className="w-4 h-4 text-slate-500" />
+                          <History className="w-4 h-4 text-muted-foreground" />
                         </Button>
                         {canManage && (
                           <>
@@ -492,7 +492,7 @@ function PartnerHistoryDialog({
       getDate={(tx) => tx.occurredAt}
       getAmountMinor={(tx) => tx.amountMinor}
       getAmountPrefix={(tx) => (tx.type === "DRAW" ? "-" : "+")}
-      getAmountClassName={(tx) => (tx.type === "DRAW" ? "text-rose-600" : "text-emerald-700")}
+      getAmountClassName={(tx) => (tx.type === "DRAW" ? "text-rose-600 dark:text-rose-400" : "text-emerald-700 dark:text-emerald-300")}
       factor={factor}
       scale={scale}
       formatCurrency={formatCurrency}

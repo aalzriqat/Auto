@@ -17,12 +17,12 @@ export function TrialBalanceReport({
   t: (key: string) => string;
   formatMoney: ReportMoneyFormatter;
 }>) {
-  if (report === undefined) return <p className="p-8 text-center text-slate-500">{t("Loading")}</p>;
+  if (report === undefined) return <p className="p-8 text-center text-muted-foreground">{t("Loading")}</p>;
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h3 className="text-base font-semibold text-slate-900">{t("TrialBalance")}</h3>
+        <h3 className="text-base font-semibold text-foreground">{t("TrialBalance")}</h3>
         <FinancialReportBadge
           isBalanced={report.isBalanced}
           balancedLabel={t("JournalBalanced")}

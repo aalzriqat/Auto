@@ -40,7 +40,7 @@ export function VatReturnReport({
 }>) {
   const orgSettings = useOrgSettings();
 
-  if (report === undefined) return <p className="p-8 text-center text-slate-500">{t("Loading")}</p>;
+  if (report === undefined) return <p className="p-8 text-center text-muted-foreground">{t("Loading")}</p>;
 
   function exportCSV() {
     downloadCSV(
@@ -89,7 +89,7 @@ export function VatReturnReport({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h3 className="text-base font-semibold text-slate-900">{t("VatReturn")}</h3>
+        <h3 className="text-base font-semibold text-foreground">{t("VatReturn")}</h3>
         <div className="flex gap-2">
           <Button size="sm" variant="outline" onClick={exportCSV} disabled={report.lines.length === 0}>
             <Download className="h-4 w-4" />
@@ -102,7 +102,7 @@ export function VatReturnReport({
         </div>
       </div>
 
-      <p className="text-xs text-slate-500">{t("VatReturnDisclaimer")}</p>
+      <p className="text-xs text-muted-foreground">{t("VatReturnDisclaimer")}</p>
 
       <div className="grid gap-3 md:grid-cols-3">
         <ReportMetric label={t("OutputVat")} value={formatMoney(report.outputVatMinor, report.currency)} />
@@ -116,7 +116,7 @@ export function VatReturnReport({
 
       <AccountingTableFrame>
         <Table>
-          <TableHeader className="bg-slate-50">
+          <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead>{t("Currency")}</TableHead>
               <TableHead className="text-right">{t("OutputVat")}</TableHead>

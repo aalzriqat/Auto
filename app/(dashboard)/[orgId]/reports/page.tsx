@@ -105,11 +105,11 @@ function ReportsDateFilter({
 }
 
 const GL_STATE_STYLES: Record<GlState, string> = {
-  POSTED: "bg-emerald-500/10 text-emerald-700 border-emerald-500/20",
-  CAPITALIZED: "bg-sky-500/10 text-sky-700 border-sky-500/20",
-  PENDING: "bg-amber-500/10 text-amber-700 border-amber-500/20",
-  FAILED: "bg-red-500/10 text-red-700 border-red-500/20",
-  MIXED: "bg-amber-500/10 text-amber-700 border-amber-500/20",
+  POSTED: "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300",
+  CAPITALIZED: "border-sky-500/20 bg-sky-500/10 text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300",
+  PENDING: "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300",
+  FAILED: "border-red-500/20 bg-red-500/10 text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300",
+  MIXED: "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300",
 };
 
 /** Whether this row's amount actually reached the ledger. */
@@ -138,8 +138,8 @@ function GlStateBadge({ state, t }: Readonly<{ state?: GlState; t: (k: string) =
  *  - Everything posted to the P&L and nothing capitalized → they genuinely
  *    agree, and only then does the notice say so.
  *
- * The Setup tab (the accounting page's default) is where queued and failed
- * entries get redriven.
+ * The Reconcile & Close section is where queued and failed entries get
+ * redriven.
  */
 function OperationalReportNotice({
   orgId,
@@ -161,10 +161,10 @@ function OperationalReportNotice({
   if (!loaded) return null;
   if (hasUnpostedEntries) {
     return (
-      <div className="mb-4 text-xs text-amber-700 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+      <div className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
         <span>{t("OperationalReportNotice").replace("{count}", String(unpostedEntryCount))}</span>
         {orgId && (
-          <Link href={`/${orgId}/accounting`} className="font-medium underline underline-offset-2 no-print">
+          <Link href={`/${orgId}/accounting?section=reconcile`} className="font-medium underline underline-offset-2 no-print">
             {t("ResolveUnpostedEntries")}
           </Link>
         )}
@@ -173,13 +173,13 @@ function OperationalReportNotice({
   }
   if (capitalizedAmount !== 0) {
     return (
-      <p className="mb-4 text-xs text-sky-700 bg-sky-500/10 border border-sky-500/20 rounded-md px-3 py-2">
+      <p className="mb-4 rounded-md border border-sky-500/20 bg-sky-500/10 px-3 py-2 text-xs text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
         {t("OperationalReportCapitalizedNote").replace("{capitalized}", format(capitalizedAmount))}
       </p>
     );
   }
   return (
-    <p className="mb-4 text-xs text-emerald-700 bg-emerald-500/10 border border-emerald-500/20 rounded-md px-3 py-2">
+    <p className="mb-4 rounded-md border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
       {t("OperationalReportAllPosted")}
     </p>
   );
@@ -316,7 +316,7 @@ export default function ReportsPage() {
                   <BadgeDollarSign className="h-4 w-4 text-green-500 no-print" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold text-green-600">{format(filteredProfit)}</div>
+                  <div className="text-2xl font-bold text-green-600 dark:text-green-400">{format(filteredProfit)}</div>
                 </CardContent>
               </Card>
             </div>
@@ -358,7 +358,7 @@ export default function ReportsPage() {
                           is shown as a dash and excluded from the totals above,
                           because formatting it as 0 would read as "this sale
                           made nothing", which is a different and false claim. */}
-                      <TableCell className="text-right text-green-600 font-medium">
+                      <TableCell className="text-right font-medium text-green-600 dark:text-green-400">
                         {sale.netProfit === null ? (
                           <span className="text-muted-foreground" title={t("ProfitUnknownForSale")}>
                             —
@@ -546,7 +546,7 @@ export default function ReportsPage() {
                   <Receipt className="h-4 w-4 text-muted-foreground no-print" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold text-red-600">{format(expensesReport?.totalExpenses ?? 0)}</div>
+                  <div className="text-2xl font-bold text-red-600 dark:text-red-400">{format(expensesReport?.totalExpenses ?? 0)}</div>
                 </CardContent>
               </Card>
               <Card className="print-shadow-none border print:border-gray-200">
@@ -564,7 +564,7 @@ export default function ReportsPage() {
                   <Boxes className="h-4 w-4 text-muted-foreground no-print" />
                 </CardHeader>
                 <CardContent>
-                  <div className={`text-2xl font-bold ${(expensesReport?.totalCapitalized ?? 0) !== 0 ? "text-sky-600" : ""}`}>
+                  <div className={`text-2xl font-bold ${(expensesReport?.totalCapitalized ?? 0) !== 0 ? "text-sky-600 dark:text-sky-400" : ""}`}>
                     {format(expensesReport?.totalCapitalized ?? 0)}
                   </div>
                 </CardContent>
@@ -575,7 +575,7 @@ export default function ReportsPage() {
                   <Clock className="h-4 w-4 text-muted-foreground no-print" />
                 </CardHeader>
                 <CardContent>
-                  <div className={`text-2xl font-bold ${(expensesReport?.totalPending ?? 0) !== 0 ? "text-amber-600" : ""}`}>
+                  <div className={`text-2xl font-bold ${(expensesReport?.totalPending ?? 0) !== 0 ? "text-amber-600 dark:text-amber-400" : ""}`}>
                     {format(expensesReport?.totalPending ?? 0)}
                   </div>
                 </CardContent>
@@ -586,7 +586,7 @@ export default function ReportsPage() {
                   <TriangleAlert className="h-4 w-4 text-muted-foreground no-print" />
                 </CardHeader>
                 <CardContent>
-                  <div className={`text-2xl font-bold ${(expensesReport?.totalFailed ?? 0) !== 0 ? "text-red-600" : ""}`}>
+                  <div className={`text-2xl font-bold ${(expensesReport?.totalFailed ?? 0) !== 0 ? "text-red-600 dark:text-red-400" : ""}`}>
                     {format(expensesReport?.totalFailed ?? 0)}
                   </div>
                 </CardContent>
@@ -717,7 +717,7 @@ export default function ReportsPage() {
                       <TableCell className="text-right font-medium">
                         <span
                           className={
-                            performanceMarginIsIncomplete(perf) ? undefined : "text-green-600"
+                            performanceMarginIsIncomplete(perf) ? undefined : "text-green-600 dark:text-green-400"
                           }
                         >
                           {format(perf.totalProfit)}
@@ -785,7 +785,7 @@ export default function ReportsPage() {
                   <LineChart className="h-4 w-4 text-green-500 no-print" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold text-green-600">
+                  <div className="text-2xl font-bold text-green-600 dark:text-green-400">
                     {leadsReport?.overallConversionRate?.toFixed(1) ?? 0}%
                   </div>
                 </CardContent>
