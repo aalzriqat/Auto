@@ -60,6 +60,7 @@ function inputs(overrides: Partial<DealFinancialSummaryInputs> = {}): DealFinanc
       expectedDealerRemittanceMinor: 9_200_000,
     },
     expectedDealerBorne: { totalMinor: 400_000, remainingMinor: 250_000, reason: null },
+    feeEvidence: { reason: null },
     ...overrides,
   };
 }
@@ -179,6 +180,29 @@ describe("deriveDealFinancialSummary", () => {
       );
       expect(s.financier.outstanding).toEqual({ state: "NONE_DIRECT_ROUTE", amountMinor: null, basis: null });
     });
+    test.each(["UNSAFE_AMOUNT", "MIXED_DENOMINATION"] as const)(
+      "before a receivable exists, unusable fee evidence (%s) WITHHOLDS the frozen estimate with the reason — no amount, no NaN",
+      (reason) => {
+        const s = deriveDealFinancialSummary(
+          inputs({ parties: [party("FINANCIER", "NOT_INVOLVED", 0)], feeEvidence: { reason } })
+        );
+        expect(s.financier.outstanding).toEqual({ state: "ESTIMATE_WITHHELD", amountMinor: null, basis: null, reason });
+        expect(JSON.stringify(s.financier)).not.toContain("9200000");
+      }
+    );
+
+    test.each(["UNSAFE_AMOUNT", "MIXED_DENOMINATION"] as const)(
+      "an actual receivable row is served on its own authority even when fee evidence is %s",
+      (reason) => {
+        const outstanding = deriveDealFinancialSummary(inputs({ feeEvidence: { reason } })).financier.outstanding;
+        expect(outstanding).toEqual({ state: "OUTSTANDING", amountMinor: 4_000_000, basis: "RECEIVABLE" });
+        const collected = deriveDealFinancialSummary(
+          inputs({ parties: [party("FINANCIER", "SETTLED", 0)], feeEvidence: { reason } })
+        ).financier.outstanding;
+        expect(collected).toEqual({ state: "COLLECTED", amountMinor: 0, basis: "RECEIVABLE" });
+      }
+    );
+
     test("UNKNOWN when the route is unknown or the balance cannot be stated", () => {
       expect(deriveDealFinancialSummary(inputs({ routeKnown: false })).financier.outstanding.state).toBe("UNKNOWN");
       expect(

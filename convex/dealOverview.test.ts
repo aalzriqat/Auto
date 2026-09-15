@@ -397,6 +397,66 @@ describe("dealOverview.financedDealOverview", () => {
     });
   });
 
+  describe("the pre-receivable estimate stands only on usable fee evidence", () => {
+    async function estimateDeal(suffix: string) {
+      const s = await seed(suffix);
+      const applicationId = await insertApplication(s);
+      await s.t.run((ctx) => ctx.db.patch(applicationId, { expectedDealerRemittanceMinor: 9_200_000 }));
+      const outstanding = async () =>
+        (await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId }))!.financialSummary!.financier.outstanding;
+      return { s, applicationId, outstanding };
+    }
+    async function deductedFee(s: Seed, applicationId: Id<"financeApplications">, actualAmountMinor: number, currency = "JOD") {
+      return await s.t.run((ctx) =>
+        ctx.db.insert("financeDealFees", {
+          orgId: s.orgId, applicationId, feeType: "FINANCE_COMPANY_FEE", currency, actualAmountMinor,
+          paidBy: "FINANCE_COMPANY", paidTo: "FINANCE_COMPANY", accountingTreatment: "SELLING_EXPENSE",
+          includedInQuotation: false, deductedFromSettlement: true, refundable: false, source: "MANUAL",
+          createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+        })
+      );
+    }
+    async function receivable(s: Seed, applicationId: Id<"financeApplications">) {
+      await s.t.run((ctx) =>
+        ctx.db.insert("receivableDocuments", {
+          orgId: s.orgId, documentType: "INVOICE", documentNumber: "FIN-1", payerType: "FINANCE_COMPANY",
+          sourceType: "finance_application", sourceId: applicationId, originalAmountMinor: 9_150_000, currency: "JOD", scale: 3,
+          issueDate: Date.now(), dueDate: Date.now(), status: "OPEN", createdAt: Date.now(), createdBy: s.userId,
+        })
+      );
+    }
+
+    test.each([
+      ["NaN", Number.NaN],
+      ["a fraction", 50_000.5],
+      ["a negative", -50_000],
+      ["an unsafe integer", Number.MAX_SAFE_INTEGER + 2],
+    ])("a settlement-deducted actual carrying %s (raw) withholds the estimate as UNSAFE_AMOUNT; a receivable then overrides", async (label, corrupt) => {
+      const { s, applicationId, outstanding } = await estimateDeal(`est-${label}`);
+      await deductedFee(s, applicationId, 50_000);
+      expect(await outstanding()).toEqual({ state: "ESTIMATED_PRE_RECEIVABLE", amountMinor: 9_200_000, basis: "EXPECTED_DEALER_REMITTANCE" });
+      await deductedFee(s, applicationId, corrupt);
+      expect(await outstanding()).toEqual({ state: "ESTIMATE_WITHHELD", amountMinor: null, basis: null, reason: "UNSAFE_AMOUNT" });
+      await receivable(s, applicationId);
+      expect(await outstanding()).toEqual({ state: "OUTSTANDING", amountMinor: 9_150_000, basis: "RECEIVABLE" });
+    });
+
+    test("two safe deducted actuals that overflow between them withhold the estimate as UNSAFE_AMOUNT", async () => {
+      const { s, applicationId, outstanding } = await estimateDeal("est-overflow");
+      await deductedFee(s, applicationId, Number.MAX_SAFE_INTEGER - 1);
+      await deductedFee(s, applicationId, 2);
+      expect(await outstanding()).toEqual({ state: "ESTIMATE_WITHHELD", amountMinor: null, basis: null, reason: "UNSAFE_AMOUNT" });
+    });
+
+    test("a live line in another currency — even one the dealership does not bear — withholds the estimate as MIXED_DENOMINATION; a receivable then overrides", async () => {
+      const { s, applicationId, outstanding } = await estimateDeal("est-mixed");
+      await deductedFee(s, applicationId, 40_000, "USD");
+      expect(await outstanding()).toEqual({ state: "ESTIMATE_WITHHELD", amountMinor: null, basis: null, reason: "MIXED_DENOMINATION" });
+      await receivable(s, applicationId);
+      expect(await outstanding()).toEqual({ state: "OUTSTANDING", amountMinor: 9_150_000, basis: "RECEIVABLE" });
+    });
+  });
+
   test("a SOURCED vehicle's basis is the supplier's cost, flagged consigned, with no landed cost", async () => {
     const s = await seed("2", { sourceType: "SOURCED" });
     const applicationId = await insertApplication(s);

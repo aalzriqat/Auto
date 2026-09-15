@@ -103,6 +103,12 @@ export function DealFinancialOverview({
         return { value: null, note: t("OverviewFinancierDirectRoute") };
       case "NOT_YET_RECEIVABLE":
         return { value: null, note: t("OverviewFinancierNotYetReceivable") };
+      case "ESTIMATE_WITHHELD":
+        // The frozen estimate exists but its evidence does not: says which.
+        return {
+          value: null,
+          note: t(o.reason === "UNSAFE_AMOUNT" ? "OverviewFinancierEstimateWithheldUnreadable" : "OverviewFinancierEstimateWithheldMixed"),
+        };
       case "UNKNOWN":
         return {
           value: null,

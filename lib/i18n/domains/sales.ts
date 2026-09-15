@@ -520,6 +520,8 @@ const dealOverviewMessages = defineBilingualMessages({
   OverviewFinancierEstimated: ["estimate", "تقدير"],
   OverviewFinancierEstimatedBasis: ["no receivable yet — from the frozen economics", "لا ذمة بعد — من الاقتصاديات المثبّتة"],
   OverviewFinancierDirectRoute: ["pays the supplier directly — nothing owed to the dealership", "تدفع للمورد مباشرة — لا مستحق للمعرض"],
+  OverviewFinancierEstimateWithheldUnreadable: ["estimate withheld — a recorded cost amount could not be read, so what the financier withholds is unknown", "حُجب التقدير — تعذّرت قراءة أحد مبالغ المصاريف المسجَّلة، فما تقتطعه شركة التمويل غير معلوم"],
+  OverviewFinancierEstimateWithheldMixed: ["estimate withheld — the deal's costs are not all in one currency, so what the financier withholds cannot be summed", "حُجب التقدير — مصاريف الصفقة ليست كلها بعملة واحدة، فلا يمكن جمع ما تقتطعه شركة التمويل"],
   OverviewFinancierNotYetReceivable: ["no receivable yet — opens at finalization", "لا ذمة بعد — تُفتح عند إنهاء الصفقة"],
   OverviewFinancierUnknown: ["balance cannot be stated", "تعذّر تحديد الرصيد"],
   OverviewDealerContribution: ["Planned dealership contribution", "مساهمة المعرض المخطَّطة"],

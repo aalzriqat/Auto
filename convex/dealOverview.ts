@@ -411,6 +411,17 @@ export const financedDealOverview = query({
         : expensesUnreadable
           ? "UNSAFE_AMOUNT"
           : null;
+      // The estimate's evidence is EVERY live line, whoever pays it: the
+      // financier's withholdings are settlement-deducted fees of any payer.
+      // The same two verdicts, unreadable first (a corrupt amount is not a
+      // figure in any currency), then denomination across all live lines.
+      const feeEvidence: DealFinancialSummaryInputs["feeEvidence"] = {
+        reason: expensesUnreadable
+          ? "UNSAFE_AMOUNT"
+          : sameCurrencyFees.length !== fees.length
+            ? "MIXED_DENOMINATION"
+            : null,
+      };
       financialSummary = deriveDealFinancialSummary({
         currency: cockpit.money.currency,
         routeKnown: cockpit.money.routeKnown,
@@ -433,6 +444,7 @@ export const financedDealOverview = query({
         vehicleConsigned: consigned,
         app,
         expectedDealerBorne: dealerBorneExpected(expected.source, expected.rows, cockpit.money.currency, expensesMixed),
+        feeEvidence,
       });
     }
 

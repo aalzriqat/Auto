@@ -96,6 +96,30 @@ describe("DealFinancialOverview", () => {
     expect(row.getByText(new RegExp(salesEn.OverviewFinancierEstimatedBasis))).toBeTruthy();
   });
 
+  test.each([
+    [tEn, "UNSAFE_AMOUNT", () => salesEn.OverviewFinancierEstimateWithheldUnreadable],
+    [tEn, "MIXED_DENOMINATION", () => salesEn.OverviewFinancierEstimateWithheldMixed],
+    [tAr, "UNSAFE_AMOUNT", () => salesAr.OverviewFinancierEstimateWithheldUnreadable],
+    [tAr, "MIXED_DENOMINATION", () => salesAr.OverviewFinancierEstimateWithheldMixed],
+  ] as const)("a withheld estimate renders no amount and names its reason — %#", (t, reason, sentence) => {
+    render(
+      <DealFinancialOverview
+        summary={{
+          ...summary,
+          financier: { fundedPortionMinor: 9_350_000, outstanding: { state: "ESTIMATE_WITHHELD", amountMinor: null, basis: null, reason } },
+        }}
+        money={money}
+        t={t}
+      />
+    );
+    const row = within(screen.getByTestId("overview-financier-balance"));
+    expect(row.getByText("—")).toBeTruthy();
+    expect(row.getByText(sentence())).toBeTruthy();
+    expect(row.queryByText(/9,200|NaN/)).toBeNull();
+    expect(screen.queryByText(salesEn.OverviewFinancierEstimated)).toBeNull();
+    expect(screen.queryByText(salesAr.OverviewFinancierEstimated)).toBeNull();
+  });
+
   test("the financier balance is shown on its own authority even when the funded portion is not recorded", () => {
     render(
       <DealFinancialOverview

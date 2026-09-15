@@ -85,6 +85,16 @@ export type DealFinancialSummaryInputs = Readonly<{
     awaitingActuals: number;
     reason: RecordedCostsReason | null;
   }>;
+  /**
+   * Whether the deal's LIVE cost lines — every payer, not only the
+   * dealership's — are usable evidence: `null` when every active amount is a
+   * readable figure in the deal's currency, otherwise why not. The frozen
+   * `expectedDealerRemittanceMinor` is the economics engine's answer to
+   * "gross less what the financier withholds", and the withholdings are
+   * settlement-deducted fee lines; an estimate standing on lines nobody can
+   * read, or in a currency nobody can sum, is not an estimate.
+   */
+  feeEvidence: Readonly<{ reason: RecordedCostsReason | null }>;
   /** Route-specific, already derived — see the module header. */
   profit: DealProfit;
   /** Whose car this is — SOURCED (consignment) or the dealership's own. */
@@ -135,6 +145,13 @@ export type FinancierOutstanding =
    * remittance the frozen economics EXPECT — an estimate, labelled as one.
    */
   | Readonly<{ state: "ESTIMATED_PRE_RECEIVABLE"; amountMinor: number; basis: "EXPECTED_DEALER_REMITTANCE" }>
+  /**
+   * No receivable yet AND the estimate's own evidence — the live cost lines it
+   * was derived against — is unusable, so the frozen figure is withheld with
+   * the reason. A receivable, once it exists, is served on its own authority
+   * regardless.
+   */
+  | Readonly<{ state: "ESTIMATE_WITHHELD"; amountMinor: null; basis: null; reason: RecordedCostsReason }>
   | Readonly<{ state: "NONE_DIRECT_ROUTE" | "NOT_YET_RECEIVABLE" | "UNKNOWN"; amountMinor: null; basis: null }>;
 
 export type DealFinancialSummary = Readonly<{
@@ -277,6 +294,7 @@ function financierOutstandingFor(
     settlesDirect: boolean;
     financier: ServedParty | undefined;
     expectedDealerRemittanceMinor: number | undefined;
+    feeEvidence: RecordedCostsReason | null;
   },
   boundary: ReadBoundary
 ): FinancierOutstanding {
@@ -285,9 +303,13 @@ function financierOutstandingFor(
   const row = args.financier;
   if (row === undefined || row.position === "NOT_INVOLVED") {
     // Nothing canonical yet. The frozen economics say what the financier is
-    // expected to remit; that is served as an ESTIMATE, never as a balance.
+    // expected to remit; that is served as an ESTIMATE, never as a balance —
+    // and only while the cost lines it was derived against are usable.
     if (args.expectedDealerRemittanceMinor === undefined) {
       return { state: "NOT_YET_RECEIVABLE", amountMinor: null, basis: null };
+    }
+    if (args.feeEvidence !== null) {
+      return { state: "ESTIMATE_WITHHELD", amountMinor: null, basis: null, reason: args.feeEvidence };
     }
     const amountMinor = boundary.serve("financierOutstanding", args.expectedDealerRemittanceMinor);
     return amountMinor === null
@@ -377,6 +399,7 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
           settlesDirect: input.settlesDirectToSupplier,
           financier,
           expectedDealerRemittanceMinor: app.expectedDealerRemittanceMinor,
+          feeEvidence: input.feeEvidence.reason,
         },
         boundary
       ),
