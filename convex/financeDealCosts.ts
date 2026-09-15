@@ -15,10 +15,16 @@ import {
   assertRoomForAnotherLine,
   exactTemplateLine,
   loadActiveFees,
+  loadCustodyRecords,
   resolveDealCurrency,
 } from "./utils/settlementDeductions";
 import { assertSupportedDenomination } from "./utils/money";
-import { assertFeeTemplatesWithinLimit, feeTemplatesExceedConfigurationLimit } from "./utils/dealCostLimits";
+import {
+  assertFeeTemplatesWithinLimit,
+  feeTemplatesExceedConfigurationLimit,
+  MAX_DEAL_CUSTODY_DECISION_RECORDS,
+} from "./utils/dealCostLimits";
+export { MAX_DEAL_CUSTODY_DECISION_RECORDS };
 import { reconcileEmployeeCustody } from "../lib/financingEconomics";
 import { recomputeEconomicsForApplication } from "./financingEconomics";
 import {
@@ -191,35 +197,17 @@ async function custodyEntriesFor(
 }
 
 /**
- * How many custody records one deal's DECISION reads may carry.
- *
- * The one-open-per-person rule and the classification gate decide on EVERY
- * custody record of the deal, so their read is not the screen's bounded
- * prefix (`MAX_DEAL_CUSTODY_RECORDS`, which reports truncation) — a prefix
- * would let a second open record hide past the cap. Nor is it unbounded: a
- * `.collect()` grows until the platform's read limits fail the mutation
- * opaquely. So the read takes ONE past this cap and, past it, REFUSES with a
- * named reason; nothing is sampled. A deal has one custodian, occasionally
- * two; a hundred records is not a deal, it is a record that needs a person.
+ * Every custody record of a deal, or a refusal — the WRITERS' read, never a
+ * prefix. The ONE bounded loader (`loadCustodyRecords`, beside
+ * `loadActiveFees`) serves the one-open-per-person rule, the classification
+ * gate and the denomination proof alike; see `MAX_DEAL_CUSTODY_DECISION_RECORDS`.
  */
-export const MAX_DEAL_CUSTODY_DECISION_RECORDS = 100;
-
-/** Every custody record of a deal, or a refusal — the WRITERS' read, never a prefix. */
 async function custodyFor(
   ctx: QueryCtx | MutationCtx,
   applicationId: Id<"financeApplications">,
   action: string
 ): Promise<Array<Doc<"financeDealCustody">>> {
-  const rows = await ctx.db
-    .query("financeDealCustody")
-    .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
-    .take(MAX_DEAL_CUSTODY_DECISION_RECORDS + 1);
-  if (rows.length > MAX_DEAL_CUSTODY_DECISION_RECORDS) {
-    throw new ConvexError(
-      `This deal carries more than ${MAX_DEAL_CUSTODY_DECISION_RECORDS} custody records, which is past what ${action} can decide on completely; nothing has been changed. Have the deal's custody reviewed.`
-    );
-  }
-  return rows;
+  return await loadCustodyRecords(ctx, applicationId, action);
 }
 
 /** The screen's bounded read: one row past the cap, so truncation is detectable. */

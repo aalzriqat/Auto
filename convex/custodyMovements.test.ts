@@ -174,6 +174,21 @@ describe("writer decision reads are bounded at MAX_DEAL_CUSTODY_DECISION_RECORDS
     expect(entries).toEqual([]);
   });
 
+  test("PAST the cap: the deal's denomination proof (every cost writer) is refused with the same reason and writes no line", async () => {
+    const seed = await seedDeal("cap-currency");
+    await closedRecords(seed, MAX_DEAL_CUSTODY_DECISION_RECORDS + 1);
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
+        expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId,
+        feeType: "LICENSING", paidBy: "DEALER", paidTo: "GOVERNMENT", accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE", actualAmountMinor: jod(90),
+      })
+    ).rejects.toThrow(new RegExp(`more than ${MAX_DEAL_CUSTODY_DECISION_RECORDS} custody records`));
+    const fees = await seed.t.run((ctx) =>
+      ctx.db.query("financeDealFees").withIndex("by_application", (q) => q.eq("applicationId", seed.applicationId)).collect()
+    );
+    expect(fees).toEqual([]);
+  });
+
   test("PAST the cap: classification is refused with the same reason before any stamp", async () => {
     const seed = await seedDeal("cap-classify");
     await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {

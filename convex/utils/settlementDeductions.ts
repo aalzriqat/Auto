@@ -3,7 +3,11 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { getOrgCurrency } from "../accounting/workflowHooks";
 import { assertSupportedDenomination, supportedCurrencyScale } from "./money";
-import { MAX_LIVE_DEAL_FEE_LINES, frozenPolicyExceedsLiveCapacity } from "./dealCostLimits";
+import {
+  MAX_DEAL_CUSTODY_DECISION_RECORDS,
+  MAX_LIVE_DEAL_FEE_LINES,
+  frozenPolicyExceedsLiveCapacity,
+} from "./dealCostLimits";
 
 /**
  * A caller-stated denomination, validated against server authority BEFORE any
@@ -70,17 +74,40 @@ export function assertRoomForAnotherLine(
   }
 }
 
+/**
+ * Every custody record of a deal, or a refusal — the WRITERS' read, never a
+ * prefix. The same shape as `loadActiveFees`: one bounded read, one past the
+ * cap, refused past it with nothing written. The invariant every decision
+ * below relies on is `rows.length <= MAX_DEAL_CUSTODY_DECISION_RECORDS`.
+ */
+export async function loadCustodyRecords(
+  ctx: QueryCtx | MutationCtx,
+  applicationId: Id<"financeApplications">,
+  action: string
+): Promise<Array<Doc<"financeDealCustody">>> {
+  const rows = await ctx.db
+    .query("financeDealCustody")
+    .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+    .take(MAX_DEAL_CUSTODY_DECISION_RECORDS + 1);
+  if (rows.length > MAX_DEAL_CUSTODY_DECISION_RECORDS) {
+    throw new ConvexError(
+      `This deal carries more than ${MAX_DEAL_CUSTODY_DECISION_RECORDS} custody records, which is past what ${action} can decide on completely; nothing has been changed. Have the deal's custody reviewed.`
+    );
+  }
+  return rows;
+}
+
 /** The denominations carried by a deal's live money facts: cost lines and custody records. */
 export async function dealMoneyFactCurrencies(
   ctx: QueryCtx | MutationCtx,
   applicationId: Id<"financeApplications">
 ): Promise<Set<string>> {
+  // Both bounded, both refusing past their cap: a denomination proved on a
+  // prefix of the deal's money facts would let a foreign-currency record
+  // past the cap contradict the pin it just established.
   const [fees, custody] = await Promise.all([
     loadActiveFees(ctx, applicationId),
-    ctx.db
-      .query("financeDealCustody")
-      .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
-      .collect(),
+    loadCustodyRecords(ctx, applicationId, "proving this deal's currency"),
   ]);
   const currencies = new Set<string>();
   for (const fee of fees) currencies.add(fee.currency);
