@@ -275,7 +275,22 @@ describe("applications.createFromQuote validation", () => {
 
 describe("applications receivable transfer guards", () => {
   test("transferFinancedAmountFromCustomerReceivable rejects missing or corrupt customer receivables", async () => {
-    const { t, orgId, userId, customerId, vehicleId } = await setup();
+    const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
+    // A real application, because the transfer now takes one: it is the
+    // idempotency identity, so a retry can tell the financier's portion has
+    // already moved rather than deducting it from an already-reduced balance.
+    const guardQuoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 20000,
+      downPayment: 3000,
+      termMonths: 48,
+    });
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, {
+      orgId,
+      quoteId: guardQuoteId,
+    });
     const saleWithoutReceivableId = await t.run((ctx) =>
       ctx.db.insert("sales", {
         orgId,
@@ -293,7 +308,7 @@ describe("applications receivable transfer guards", () => {
         transferFinancedAmountFromCustomerReceivable(ctx, {
           orgId,
           saleId: saleWithoutReceivableId,
-          saleAmountMinor: 20_000_000,
+          applicationId,
           financedAmountMinor: 17_000_000,
         })
       )
@@ -336,7 +351,7 @@ describe("applications receivable transfer guards", () => {
         transferFinancedAmountFromCustomerReceivable(ctx, {
           orgId,
           saleId: saleWithWrongReceivableId,
-          saleAmountMinor: 20_000_000,
+          applicationId,
           financedAmountMinor: 17_000_000,
         })
       )
@@ -403,7 +418,7 @@ describe("applications receivable transfer guards", () => {
         transferFinancedAmountFromCustomerReceivable(ctx, {
           orgId,
           saleId: overAllocatedSaleId,
-          saleAmountMinor: 20_000_000,
+          applicationId,
           financedAmountMinor: 17_000_000,
         })
       )
