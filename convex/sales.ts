@@ -26,7 +26,9 @@ import {
   deriveCashDealStages,
   obligationFromRow,
   positionForObligation,
+  supplierReceiptActionability,
   type ObligationState,
+  type SupplierClaimStatus,
 } from "./utils/financingEconomics";
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
@@ -2348,6 +2350,7 @@ export const dealCockpit = query({
     let supplierOutstandingMinor: number | undefined;
     let supplierReference: string | undefined;
     let supplierReceivableId: Id<"vehicleSupplierReceivables"> | undefined;
+    let supplierClaimStatus: SupplierClaimStatus | undefined;
 
     if (consigned && collectsGross) {
       // THROUGH_DEALERSHIP: the gross landed here, so his share is a payable.
@@ -2407,6 +2410,7 @@ export const dealCockpit = query({
         : undefined;
       supplierReference = claim?.receiptReference;
       supplierReceivableId = claim?._id;
+      supplierClaimStatus = claim?.status;
     }
 
     // A cancelled sale's obligations were cancelled with it, so the rail must not
@@ -2731,6 +2735,21 @@ export const dealCockpit = query({
           awaitingActuals: 0,
         },
         parties,
+        /**
+         * Same authority as the financed screen: the row says what is owed,
+         * this says whether a receipt may be recorded against it NOW. A
+         * DISPUTED claim is still OWED_TO_DEALERSHIP and `recordReceipt`
+         * refuses it; the screen must not offer what the server will refuse.
+         */
+        supplierReceipt: supplierReceiptActionability({
+          routeKnown: true,
+          settlesDirect: consigned && !collectsGross,
+          claim:
+            supplierReceivableId && supplierClaimStatus
+              ? { id: supplierReceivableId, status: supplierClaimStatus }
+              : undefined,
+          obligation: supplierObligation,
+        }),
         appraisalGapMinor: undefined as number | undefined,
       },
     };

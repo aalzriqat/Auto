@@ -1,6 +1,7 @@
 "use client";
 
 import { Check } from "lucide-react";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import { cn } from "@/lib/utils";
 
 /**
@@ -20,6 +21,10 @@ import { cn } from "@/lib/utils";
  *    nothing is selected yet (roving `tabIndex`);
  *  - arrow keys move the selection and the focus together, wrapping at the
  *    ends, which is how `role="radio"` is specified to behave;
+ *  - in the INLINE layout the horizontal arrows follow the VISUAL direction:
+ *    under Arabic the options run right-to-left, so ArrowRight moves to the
+ *    option painted on the right — the previous one in DOM order. The stacked
+ *    layout is a column and reads the same in both directions;
  *  - Home/End jump to the first and last option.
  *
  * Rendered as one shared component rather than copied into both dialogs,
@@ -49,6 +54,11 @@ export function RadioCardGroup<Value extends string>({
   idPrefix: string;
   layout?: "stacked" | "inline";
 }>) {
+  const { isRtl } = useLanguage();
+  // What one step "to the right" means in DOM order. Only the inline row is
+  // mirrored by `dir="rtl"`; a stacked column's DOM order IS its visual order.
+  const rightward = layout === "inline" && isRtl ? -1 : 1;
+
   const move = (from: number, delta: number) => {
     if (options.length === 0) return;
     // Wrapping, per the radio-group pattern: the ends are not dead stops.
@@ -60,14 +70,20 @@ export function RadioCardGroup<Value extends string>({
   const onKeyDown = (event: React.KeyboardEvent, index: number) => {
     switch (event.key) {
       case "ArrowDown":
-      case "ArrowRight":
         event.preventDefault();
         move(index, 1);
         break;
       case "ArrowUp":
-      case "ArrowLeft":
         event.preventDefault();
         move(index, -1);
+        break;
+      case "ArrowRight":
+        event.preventDefault();
+        move(index, rightward);
+        break;
+      case "ArrowLeft":
+        event.preventDefault();
+        move(index, -rightward);
         break;
       case "Home":
         event.preventDefault();

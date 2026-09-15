@@ -8,7 +8,7 @@
  * plainly visible the moment the page was looked at.
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { DealCockpitData } from "./DealCockpit";
 
 const language = vi.hoisted(() => ({ locale: "ar" as "ar" | "en" }));
@@ -42,6 +42,45 @@ vi.mock("@/components/accounting/AccountingTabShared", () => ({
 }));
 
 import { DealCockpitView } from "./DealCockpit";
+
+/**
+ * A `toBeVisible` with jest-dom's semantics, defined here because this repo's
+ * `vitest.setup.ts` deliberately installs no jest-dom (see
+ * `OpeningBalanceApprovalPanel.test.tsx`). Visible means: attached, and neither
+ * the element nor any ancestor is `display: none`, `visibility: hidden`,
+ * `opacity: 0`, carries the `hidden` attribute, or is a closed `<details>`
+ * body — plus `.sr-only`, which is this codebase's screen-reader-only class
+ * and is visually hidden by its stylesheet, which jsdom never loads.
+ */
+function isVisible(el: Element): boolean {
+  if (!el.isConnected) return false;
+  for (let node: Element | null = el; node; node = node.parentElement) {
+    if (node.hasAttribute("hidden") || node.classList.contains("sr-only")) return false;
+    const style = getComputedStyle(node);
+    if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
+    if (node.tagName === "DETAILS" && !node.hasAttribute("open") && !el.closest("summary")) return false;
+  }
+  return true;
+}
+
+expect.extend({
+  toBeVisible(received: unknown) {
+    const pass = received instanceof Element && isVisible(received);
+    return {
+      pass,
+      message: () =>
+        `expected element ${pass ? "not " : ""}to be visible: ${
+          received instanceof Element ? received.outerHTML.slice(0, 200) : String(received)
+        }`,
+    };
+  },
+});
+
+declare module "vitest" {
+  interface Assertion {
+    toBeVisible(): void;
+  }
+}
 
 const SCALE = 1_000;
 
@@ -179,6 +218,41 @@ describe("the currency marker", () => {
   });
 });
 
+/**
+ * A corrupt stored moment loses ONE cell, never the screen.
+ *
+ * `z.number()` and `v.number()` both accept every finite double, and date-fns
+ * `format` throws `RangeError: Invalid time value` on `NaN`, `±Infinity` and
+ * any finite value outside the ±8.64e15 ms Date domain. The timeline was
+ * already guarded; the header's "last updated" and the essentials' "opened on"
+ * went straight to `format()` and would have taken the whole cockpit down.
+ */
+describe("a corrupt moment in the header or essentials never loses the screen", () => {
+  test.each([
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["-Infinity", Number.NEGATIVE_INFINITY],
+    ["one past the Date domain", 8_640_000_000_000_001],
+    ["Number.MAX_VALUE", Number.MAX_VALUE],
+  ])("createdAt = %s renders the deal with a calm dash where the date would be", (_label, moment) => {
+    // `updatedAt` undefined so the header falls through to `createdAt`, and
+    // the essentials cell reads `createdAt` directly — both guarded paths hit.
+    renderCockpit(dealFixture({ createdAt: moment, updatedAt: undefined }));
+    const header = screen.getByTestId("deal-header");
+    expect(header.textContent).toContain("DealCockpitTitle");
+    expect(header.textContent).toContain("LastUpdated: —");
+    expect(screen.getByText("DealOwner").parentElement?.textContent).toContain("—");
+    // The rest of the screen is intact, not a blank error boundary.
+    expect(screen.getByText(/2,410/)).toBeTruthy();
+  });
+
+  test("a corrupt updatedAt alone is guarded too, without touching a valid createdAt", () => {
+    renderCockpit(dealFixture({ updatedAt: Number.NaN }));
+    expect(screen.getByTestId("deal-header").textContent).toContain("LastUpdated: —");
+    expect(screen.getByText("DealOwner").parentElement?.textContent).toMatch(/Jul 2026/);
+  });
+});
+
 describe("the headline figure", () => {
   test("always renders its qualifier alongside the amount", () => {
     renderCockpit();
@@ -243,8 +317,14 @@ function cashDealFixture(overrides: Record<string, unknown> = {}): DealCockpitDa
         amountMinor: 3_000 * SCALE,
         currency: "JOD",
         reconcilesToLedger: true,
+        // The shape `accountingProfit` actually emits for a SOURCED vehicle:
+        // VEHICLE_COST is ALWAYS present and is a real zero on consignment,
+        // with the supplier's entitlement beside it. An earlier fixture
+        // carried the entitlement WITHOUT the cost line — a shape the server
+        // never produces — and let a tile reading "vehicle cost: 0" pass.
         lines: [
           { key: "SALE_PRICE", sign: 1, amountMinor: 20_000 * SCALE },
+          { key: "VEHICLE_COST", sign: -1, amountMinor: 0 },
           { key: "SUPPLIER_ENTITLEMENT", sign: -1, amountMinor: 17_000 * SCALE },
         ],
       },
@@ -304,6 +384,418 @@ describe("a cash headline and a financed headline cannot be confused", () => {
     // scoped deliberately, because a zero elsewhere on the screen (an expense
     // total that really is nil) is honest and must not fail this test.
     expect(container.querySelector(".text-3xl")).toBeNull();
+  });
+});
+
+/**
+ * The six-fact summary reads the SERVER's own facts and labels them for what
+ * they are. Three ways it could lie, each pinned:
+ *
+ * 1. Selecting the lines by `dealKind`. An applicationless FINANCED/LEASE sale
+ *    is `dealKind: "FINANCED"` (`sales.dealCockpit`) and its profit is an
+ *    ACCOUNTING_RESULT built on `SALE_PRICE` — reading it as a management
+ *    estimate found no `APPROVED_PURCHASE` line and reported the recorded sale
+ *    price as "not recorded". The basis the server puts on the profit is the
+ *    only thing that says which lines exist.
+ * 2. Reporting "not recorded" for figures the server already serves. When the
+ *    management profit is unavailable ONLY for want of the supplier settlement,
+ *    the approved amount and the contribution are on the record and travel in
+ *    `handoverEvidence`, already redacted and already denominated.
+ * 3. Calling the approved purchase amount "deal value". The quote's vehicle
+ *    price can differ from what the finance company approved; the tile has to
+ *    say which one it is.
+ */
+describe("the six-fact summary reads server facts, never dealKind", () => {
+  test("an applicationless FINANCED sale shows its recorded sale price under the sale-price label", () => {
+    renderCockpit(
+      cashDealFixture({
+        // What `sales.dealCockpit` emits for `financingType: "FINANCED"` with
+        // no application: FINANCED, still no applicationId, accounting basis.
+        dealKind: "FINANCED",
+        applicationId: null,
+      })
+    );
+    // `getAllByText`: the same line labels also head the collapsed breakdown.
+    expect(screen.getAllByText("LineSalePrice").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("LineSupplierEntitlement").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/20,000/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/17,000/).length).toBeGreaterThan(0);
+    expect(screen.queryByText("NotRecorded")).toBeNull();
+    expect(screen.queryByText("LineApprovedPurchase")).toBeNull();
+  });
+
+  /**
+   * The summary TILES, as distinct from the collapsed breakdown. The same
+   * label keys head both, so a global `getAllByText` cannot tell "the tile
+   * says entitlement" from "the breakdown lists it" — which is exactly how a
+   * tile reading "vehicle cost: 0" on every consignment stayed green.
+   */
+  function summaryTile(labelKey: string): string | null {
+    const label = screen
+      .queryAllByText(labelKey)
+      .find((el) => el.tagName === "P" && el.closest("details") === null);
+    return label?.parentElement?.textContent ?? null;
+  }
+
+  /**
+   * The screen renders the lines the server named and classifies NOTHING from
+   * their combination. An earlier build substituted the entitlement for a zero
+   * cost and hid the entitlement beside a non-zero cost — deciding, on the
+   * client, which figure "explains" the margin. Whether a zero VEHICLE_COST on
+   * a SOURCED vehicle is meaningful is the server's economics, not this tile's.
+   */
+  test("the real SOURCED shape renders BOTH its zero vehicle cost AND its supplier entitlement", () => {
+    // What `accountingProfit` emits for a SOURCED vehicle: SALE_PRICE 20,000,
+    // VEHICLE_COST 0 AND SUPPLIER_ENTITLEMENT 17,000.
+    renderCockpit(cashDealFixture());
+    // The served SIGN travels with each figure: the inflow is unsigned, both
+    // deductions carry the minus — a "17,000" tile with no sign would read
+    // as money the dealership receives.
+    expect(summaryTile("LineSalePrice")).toMatch(/LineSalePrice20,000 د\.أ/);
+    expect(summaryTile("LineVehicleCost")).toMatch(/LineVehicleCost− 0 د\.أ/);
+    expect(summaryTile("LineSupplierEntitlement")).toMatch(/LineSupplierEntitlement− 17,000 د\.أ/);
+  });
+
+  test("a DIRECT purchase whose recognized cost is zero keeps its zero — no entitlement, no substitution", () => {
+    renderCockpit(
+      cashDealFixture({
+        money: {
+          ...cashDealFixture().money,
+          profit: {
+            ...cashDealFixture().money!.profit,
+            amountMinor: 20_000 * SCALE,
+            lines: [
+              { key: "SALE_PRICE", sign: 1, amountMinor: 20_000 * SCALE },
+              { key: "VEHICLE_COST", sign: -1, amountMinor: 0 },
+            ],
+          },
+        },
+      })
+    );
+    expect(summaryTile("LineVehicleCost")).toMatch(/LineVehicleCost− 0 د\.أ/);
+    expect(screen.queryByText("LineSupplierEntitlement")).toBeNull();
+  });
+
+  test("a non-zero vehicle cost served BESIDE an entitlement renders both, suppressing neither", () => {
+    renderCockpit(
+      cashDealFixture({
+        money: {
+          ...cashDealFixture().money,
+          profit: {
+            ...cashDealFixture().money!.profit,
+            lines: [
+              { key: "SALE_PRICE", sign: 1, amountMinor: 20_000 * SCALE },
+              { key: "VEHICLE_COST", sign: -1, amountMinor: 16_000 * SCALE },
+              { key: "SUPPLIER_ENTITLEMENT", sign: -1, amountMinor: 1_000 * SCALE },
+            ],
+          },
+        },
+      })
+    );
+    expect(summaryTile("LineVehicleCost")).toMatch(/− 16,000 د\.أ/);
+    expect(summaryTile("LineSupplierEntitlement")).toMatch(/− 1,000 د\.أ/);
+  });
+
+  test("a financed estimate renders every line the server served, in the server's order", () => {
+    renderCockpit(
+      dealFixture({
+        money: {
+          ...dealFixture().money,
+          profit: {
+            ...dealFixture().money!.profit,
+            lines: [
+              { key: "APPROVED_PURCHASE", sign: 1, amountMinor: 12_500 * SCALE },
+              { key: "SUPPLIER_SETTLEMENT", sign: -1, amountMinor: 9_500 * SCALE },
+              { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: 500 * SCALE },
+              { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: 90 * SCALE },
+            ],
+          },
+        },
+      })
+    );
+    const tiles = screen
+      .getAllByText(/^Line/)
+      .filter((el) => el.tagName === "P" && el.closest("details") === null)
+      .map((el) => el.textContent);
+    expect(tiles).toEqual([
+      "LineApprovedPurchase",
+      "LineSupplierSettlement",
+      "LineDealerContribution",
+      "LineActualExpenses",
+    ]);
+    expect(summaryTile("LineApprovedPurchase")).toMatch(/LineApprovedPurchase12,500 د\.أ/);
+    expect(summaryTile("LineSupplierSettlement")).toMatch(/− 9,500 د\.أ/);
+    // No tile stands in for a line the server did not send.
+    expect(screen.queryByText("NotRecorded")).toBeNull();
+  });
+
+  /**
+   * Every served line is visible in BOTH places — the tiles and the collapsed
+   * working — zeros included and in server order. An earlier breakdown kept an
+   * allowlist of keys and dropped a zero on any other line, so a zero
+   * customer-direct amount, a zero contribution on a fully funded deal, and any
+   * key the server adds later vanished from the working while still being in
+   * the sum it explains.
+   */
+  test("zero-valued and unfamiliar lines stay visible in the tiles AND the breakdown, in server order", () => {
+    const { container } = renderCockpit(
+      dealFixture({
+        money: {
+          ...dealFixture().money,
+          profit: {
+            ...dealFixture().money!.profit,
+            lines: [
+              { key: "APPROVED_PURCHASE", sign: 1, amountMinor: 12_500 * SCALE },
+              { key: "CUSTOMER_DIRECT_TO_DEALER", sign: 1, amountMinor: 0 },
+              { key: "SUPPLIER_SETTLEMENT", sign: -1, amountMinor: 9_500 * SCALE },
+              { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: 0 },
+              { key: "FUTURE_SERVER_LINE", sign: -1, amountMinor: 0 },
+              { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: 90 * SCALE },
+            ],
+          },
+        },
+      })
+    );
+    const served = [
+      "LineApprovedPurchase",
+      "LineCustomerDirectToDealer",
+      "LineSupplierSettlement",
+      "LineDealerContribution",
+      "FUTURE_SERVER_LINE",
+      "LineActualExpenses",
+    ];
+    // Tiles: one per line, server order, zeros spelled with their sign.
+    const tiles = Array.from(container.querySelectorAll("p"))
+      .filter((el) => served.includes(el.textContent ?? "") && el.closest("details") === null)
+      .map((el) => el.textContent);
+    expect(tiles).toEqual(served);
+    expect(summaryTile("LineCustomerDirectToDealer")).toMatch(/LineCustomerDirectToDealer0 د\.أ/);
+    expect(summaryTile("LineDealerContribution")).toMatch(/LineDealerContribution− 0 د\.أ/);
+    expect(summaryTile("FUTURE_SERVER_LINE")).toMatch(/FUTURE_SERVER_LINE− 0 د\.أ/);
+    // Breakdown: the same six terms, same order, nothing filtered.
+    const breakdown = Array.from(container.querySelectorAll("details dt")).map((el) => el.textContent);
+    expect(breakdown).toEqual(served);
+    const breakdownValues = Array.from(container.querySelectorAll("details dd")).map((el) => el.textContent);
+    expect(breakdownValues).toEqual([
+      "12,500 د.أ",
+      "0 د.أ",
+      "− 9,500 د.أ",
+      "− 0 د.أ",
+      "− 0 د.أ",
+      "− 90 د.أ",
+    ]);
+  });
+
+  test("a management profit awaiting the supplier settlement still shows the served approved amount and contribution", () => {
+    renderCockpit(
+      dealFixture({
+        money: {
+          ...dealFixture().money,
+          profit: { available: false, reason: "NoSupplierSettlement" },
+        },
+        handoverEvidence: {
+          approvedPurchaseAmountMinor: 12_500 * SCALE,
+          financeCompanyFundedPortionMinor: 11_500 * SCALE,
+          dealerContributionMinor: 500 * SCALE,
+          approvedAmountIsFarFromEvidence: false,
+          currency: { code: "JOD", scale: 3 },
+        },
+      })
+    );
+    expect(screen.getByText("ProfitNotCalculable")).toBeTruthy();
+    expect(screen.getByText("LineApprovedPurchase")).toBeTruthy();
+    expect(screen.getByText(/12,500 د\.أ/)).toBeTruthy();
+    expect(screen.getByText("LineDealerContribution")).toBeTruthy();
+    expect(screen.getByText(/^500 د\.أ/)).toBeTruthy();
+    expect(screen.queryByText("NotRecorded")).toBeNull();
+  });
+
+  test("a served figure is spelled at the SERVED scale, never the deal's", () => {
+    // The evidence carries its own denomination. A two-decimal pin read at the
+    // deal's three-decimal scale would print 1,250,000 as 1,250.
+    language.locale = "en";
+    renderCockpit(
+      dealFixture({
+        money: {
+          ...dealFixture().money,
+          profit: { available: false, reason: "NoSupplierSettlement" },
+        },
+        handoverEvidence: {
+          approvedPurchaseAmountMinor: 1_250_000,
+          financeCompanyFundedPortionMinor: null,
+          dealerContributionMinor: null,
+          approvedAmountIsFarFromEvidence: false,
+          currency: { code: "USD", scale: 2 },
+        },
+      })
+    );
+    expect(screen.getByText(/12,500 USD/)).toBeTruthy();
+    expect(screen.queryByText(/1,250 USD/)).toBeNull();
+  });
+
+  test("evidence the server withheld or cannot denominate is 'not recorded', never a guessed figure", () => {
+    renderCockpit(
+      dealFixture({
+        money: {
+          ...dealFixture().money,
+          profit: { available: false, reason: "NoSupplierSettlement" },
+        },
+        handoverEvidence: {
+          approvedPurchaseAmountMinor: 12_500 * SCALE,
+          financeCompanyFundedPortionMinor: null,
+          dealerContributionMinor: null,
+          approvedAmountIsFarFromEvidence: false,
+          currency: null,
+        },
+      })
+    );
+    expect(screen.queryByText(/12,500/)).toBeNull();
+    expect(screen.getAllByText("NotRecorded").length).toBeGreaterThan(0);
+  });
+
+  test("the approved purchase amount is labelled as such, not as the deal value", () => {
+    renderCockpit(
+      dealFixture({
+        money: {
+          ...dealFixture().money,
+          profit: {
+            ...dealFixture().money!.profit,
+            lines: [
+              { key: "APPROVED_PURCHASE", sign: 1, amountMinor: 12_500 * SCALE },
+              { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: 500 * SCALE },
+            ],
+          },
+        },
+      })
+    );
+    // `getAllByText`: both lines also head the collapsed breakdown.
+    expect(screen.getAllByText("LineApprovedPurchase").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("LineDealerContribution").length).toBeGreaterThan(0);
+    expect(screen.queryByText("FactDealValue")).toBeNull();
+  });
+
+  test("the parties row carries a real heading", () => {
+    renderCockpit();
+    expect(screen.getByRole("heading", { name: "DealPartiesHeading" })).toBeTruthy();
+  });
+
+  test("an available accounting result with NO lines says the breakdown is unavailable, never 'not recorded'", () => {
+    // The headline is real and served; only its working is absent. "Not
+    // recorded" would claim the sale price was never entered.
+    renderCockpit(
+      cashDealFixture({
+        money: {
+          ...cashDealFixture().money,
+          profit: { ...cashDealFixture().money!.profit, lines: [] },
+        },
+      })
+    );
+    expect(screen.getAllByText(/3,000/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("ProfitBreakdownUnavailable").length).toBeGreaterThan(0);
+    expect(screen.queryByText("NotRecorded")).toBeNull();
+  });
+
+  test.each([
+    ["a cash sale", { dealKind: "CASH" }],
+    ["an applicationless FINANCED sale", { dealKind: "FINANCED" }],
+  ])("%s whose margin is unavailable asserts NO sale figures — and never approved-purchase ones", (_label, shape) => {
+    // Server-identified by `applicationId: null` — the ONLY discriminator the
+    // unavailable case may use, because an unavailable profit has no basis.
+    renderCockpit(
+      cashDealFixture({
+        ...shape,
+        applicationId: null,
+        money: {
+          ...cashDealFixture().money,
+          profit: { available: false, reason: "UnknownMargin" },
+        },
+      })
+    );
+    expect(screen.queryByText("LineSalePrice")).toBeNull();
+    expect(screen.queryByText("LineVehicleCost")).toBeNull();
+    expect(screen.queryByText("LineApprovedPurchase")).toBeNull();
+    expect(screen.queryByText("LineDealerContribution")).toBeNull();
+    expect(screen.getByText("ProfitBreakdownUnavailable")).toBeTruthy();
+  });
+
+  /**
+   * FINANCIAL. The sale read model serves a price and a cost ONLY inside an
+   * available profit. When the server withholds the profit — a PENDING draft
+   * that already has its sale price on the row, a legacy financed-direct row
+   * it refuses to vouch for, an unreadable margin, a cancelled deal — the
+   * screen used to paint "Sale price: Not recorded" and "Vehicle cost: Not
+   * recorded". Both are false: the figures were not served, not absent. The
+   * screen must state the profit is unavailable and why, and claim nothing
+   * about the figures it was not given — no tile, no "not recorded", no zero.
+   */
+  describe("an unavailable sale profit is stated as unavailable, never as missing figures", () => {
+    const REASONS = [
+      "SaleNotCompleted",
+      "FinancedDirectUnverified",
+      "UnknownMargin",
+      "DealCancelled",
+    ] as const;
+
+    /** Every MoneyFact tile's text, wherever it sits in the money card. */
+    function moneyTiles(container: HTMLElement): string[] {
+      return Array.from(container.querySelectorAll(".rounded-md.border.p-3")).map(
+        (el) => el.textContent ?? ""
+      );
+    }
+
+    test.each(REASONS)("%s: the reason is shown; no sale-price or cost tile, no 'not recorded', no figure", (reason) => {
+      const { container } = renderCockpit(
+        cashDealFixture({
+          // A PENDING draft: its row carries the agreed price (20,000 on the
+          // fixture's completed twin), but the server serves no profit for it
+          // and therefore no price. The screen may not claim otherwise.
+          status: reason === "SaleNotCompleted" ? "PENDING" : "COMPLETED",
+          stages: [
+            { key: "SALE_AGREED", state: "COMPLETE" },
+            { key: "HANDOVER", state: "PENDING" },
+            { key: "SETTLEMENT", state: "PENDING" },
+          ],
+          money: {
+            ...cashDealFixture().money,
+            profit: { available: false, reason },
+            parties: [],
+          },
+        })
+      );
+      // The honest state, with the server's own reason.
+      expect(screen.getByText("ProfitNotCalculable")).toBeTruthy();
+      expect(screen.getByText(`Profit${reason}`)).toBeTruthy();
+      expect(screen.getByText("ProfitBreakdownUnavailable")).toBeTruthy();
+      // No claim about figures the server did not serve.
+      expect(screen.queryByText("LineSalePrice")).toBeNull();
+      expect(screen.queryByText("LineVehicleCost")).toBeNull();
+      expect(screen.queryByText("LineSupplierEntitlement")).toBeNull();
+      expect(screen.queryByText("NotRecorded")).toBeNull();
+      expect(container.querySelector(".text-3xl")).toBeNull();
+      // Not one money tile on the whole card — no value, no placeholder.
+      expect(moneyTiles(container)).toEqual([]);
+      // And no formatted amount anywhere in the financial summary, so a zero
+      // or a stale 20,000 cannot leak in under another label.
+      const card = screen.getByText("FinancialSummaryHeading").closest("[class*='rounded']")!;
+      expect(card.textContent).not.toMatch(/\d[\d,]* د\.أ/);
+    });
+
+    test("a completed sale with a real 20,000 sale price still shows it once the server serves the profit", () => {
+      // The control: same fixture, profit available. This is the ONLY route
+      // by which a sale price reaches the screen, and it must still work.
+      const { container } = renderCockpit(cashDealFixture());
+      expect(summaryTile("LineSalePrice")).toMatch(/LineSalePrice20,000 د\.أ/);
+      expect(screen.queryByText("ProfitBreakdownUnavailable")).toBeNull();
+      // The tile selector the unavailable cases assert EMPTY does find tiles
+      // when there are some: three line tiles and the supplier's party tile.
+      expect(moneyTiles(container)).toHaveLength(4);
+    });
+  });
+
+  test("an applicationless FINANCED sale is titled as a sale, not as a finance application", () => {
+    renderCockpit(cashDealFixture({ dealKind: "FINANCED", applicationId: null }));
+    expect(screen.getByText(/DealCockpitTitleCash/)).toBeTruthy();
+    expect(screen.queryByText(/DealCockpitTitle$/)).toBeNull();
   });
 });
 
@@ -1102,16 +1594,19 @@ describe("two surfaces describing one step must not name different parties", () 
 });
 
 /**
- * The live stage exists ONCE on the screen.
+ * The live stage has ONE working surface on the screen.
  *
  * The rail used to name the current stage and a separate "next step" card
  * beneath it named the same stage again and held its button — two
- * representations of one fact, free to disagree. The stage the deal is on now
- * opens IN PLACE inside the rail, and the block carrying the action keeps the
- * `deal-next-step` id so the specs anchored to it still find the action.
+ * representations of one fact, free to disagree. The compact rail now marks
+ * the live node (`aria-current="step"`) as a progress readout only, and the
+ * focus panel directly beneath it is the one block that carries the action;
+ * both are rendered from the same `live` stage. The name therefore appears
+ * exactly twice — rail node and panel heading — and the action exactly once,
+ * on the block that keeps the `deal-next-step` id the specs anchor to.
  */
-describe("the current stage is represented exactly once, inside the rail", () => {
-  test("the live stage's name appears once and the action lives on it", () => {
+describe("the current stage has exactly one working surface, beneath the rail", () => {
+  test("the rail marks the live stage, the panel names it, and the action lives on the panel", () => {
     render(
       <DealCockpitView
         deal={dealFixture({
@@ -1126,13 +1621,130 @@ describe("the current stage is represented exactly once, inside the rail", () =>
       />
     );
 
-    expect(screen.getAllByText("StageHandover")).toHaveLength(1);
+    // Rail node + panel heading, and nothing else names the stage.
+    expect(screen.getAllByText("StageHandover")).toHaveLength(2);
     expect(screen.queryByText("NextStepHeading")).toBeNull();
+    // The rail marks exactly the stage the panel is working.
+    const rail = screen.getByTestId("deal-stage-rail");
+    const current = rail.querySelectorAll('[aria-current="step"]');
+    expect(current).toHaveLength(1);
+    expect(current[0].textContent).toContain("StageHandover");
     const focus = screen.getByTestId("deal-next-step");
     expect(focus.textContent).toContain("StageHandover");
     expect(focus.textContent).toContain("RegisterHandoverAction");
+    // The rail is a readout: no button lives on it.
+    expect(rail.querySelector("button")).toBeNull();
     // Exactly one recommended CTA on the whole screen.
     expect(screen.getAllByRole("button", { name: "RegisterHandoverAction" })).toHaveLength(1);
+  });
+
+  test("a finished deal shows one calm completion state, with the rail one click away", () => {
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          status: "CLOSED",
+          stages: [
+            { key: "APPLICATION", state: "COMPLETE", authority: "DEALER" },
+            { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+            { key: "SETTLEMENT", state: "COMPLETE", authority: "DEALER" },
+          ],
+        })}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    expect(screen.getByText("DealAllStagesComplete")).toBeTruthy();
+    // No stage is being worked, so no working surface and no stopped notice.
+    expect(screen.queryByTestId("deal-next-step")).toBeNull();
+    expect(screen.queryByText("DealStopped")).toBeNull();
+    // The rail is not painted by default; the operator can still ask for it.
+    expect(screen.queryByTestId("deal-stage-rail")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "ShowStages" }));
+    expect(screen.getByTestId("deal-stage-rail")).toBeTruthy();
+    expect(screen.getByText("StageSettlement")).toBeTruthy();
+  });
+
+  test("every rail node states its state and its owner to assistive technology, not only by colour", () => {
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          stages: [
+            { key: "APPLICATION", state: "COMPLETE", authority: "DEALER" },
+            { key: "CREDIT_DECISION", state: "BLOCKED", blocker: "AwaitingCreditDecision", authority: "MIRROR" },
+            { key: "HANDOVER", state: "PENDING", authority: "DEALER" },
+            { key: "SETTLEMENT", state: "STOPPED", authority: "DEALER" },
+          ],
+        })}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    // The ACCESSIBLE NAME of each node carries label, state, owner and
+    // blocker — asserted through the role, not by scraping text content.
+    const items = within(screen.getByTestId("deal-stage-rail")).getAllByRole("listitem");
+    expect(items).toHaveLength(4);
+    expect(
+      within(screen.getByTestId("deal-stage-rail")).getByRole("listitem", {
+        name: /StageApplication.*StageStateComplete.*StageOwnerDealership/,
+      })
+    ).toBeTruthy();
+    expect(
+      within(screen.getByTestId("deal-stage-rail")).getByRole("listitem", {
+        name: /StageCreditDecision.*StageStateBlocked.*StageOwnerFinanceCompany.*BlockerAwaitingCreditDecision/,
+      })
+    ).toBeTruthy();
+    expect(
+      within(screen.getByTestId("deal-stage-rail")).getByRole("listitem", {
+        name: /StageHandover.*StageStatePending.*StageOwnerDealership/,
+      })
+    ).toBeTruthy();
+    expect(
+      within(screen.getByTestId("deal-stage-rail")).getByRole("listitem", {
+        name: /StageSettlement.*StageStateStopped/,
+      })
+    ).toBeTruthy();
+    // Ownership of the non-live nodes is also VISIBLE, as muted text under
+    // the label, for mouse, keyboard and touch users alike. Queried by the
+    // text the operator reads and asserted visible — not scraped from
+    // `span:not(.sr-only)`, which passed for text in any element that merely
+    // lacked that one class.
+    expect(within(items[0]).getByText("StageOwnerDealership")).toBeVisible();
+    expect(within(items[2]).getByText("StageOwnerDealership")).toBeVisible();
+  });
+
+  test("in Arabic, inside an RTL container, the header and rail render the same identity, status and live stage", () => {
+    language.locale = "ar";
+    // Rendered inside a `dir="rtl"` wrapper so the bidi context matches what
+    // the Arabic operator gets. What this CAN assert is content and the
+    // direction attribute; what it CANNOT is paint — jsdom applies no
+    // stylesheet, so `.dark` tokens, logical-property mirroring and layout
+    // are unobservable here. Those are asserted in a real engine by
+    // `playwright/visual/deal-cockpit.visual.spec.ts`.
+    render(
+      <div dir="rtl">
+        <DealCockpitView
+          deal={dealFixture({
+            stages: [
+              { key: "APPLICATION", state: "COMPLETE", authority: "DEALER" },
+              { key: "HANDOVER", state: "CURRENT", authority: "DEALER" },
+            ],
+          })}
+          backHref="/org_1/deals"
+          onRecordSupplierReceipt={async () => {}}
+        />
+      </div>
+    );
+    expect(screen.getByTestId("deal-header").closest("[dir='rtl']")).toBeTruthy();
+    const header = screen.getByTestId("deal-header");
+    expect(header.textContent).toContain("DealCockpitTitle");
+    expect(header.textContent).toContain("#2048");
+    expect(header.textContent).toContain("Approved");
+    expect(header.textContent).toContain("StageOwnerDealership");
+    expect(screen.getByRole("link", { name: "BackToDeals" }).getAttribute("href")).toBe("/org_1/deals");
+    const rail = screen.getByTestId("deal-stage-rail");
+    expect(rail.querySelectorAll("li")).toHaveLength(2);
+    expect(rail.querySelector('[aria-current="step"]')?.textContent).toContain("StageHandover");
+    // The Arabic currency marker sits beside the figure on the same screen.
+    expect(screen.getByText(/2,410 د\.أ/)).toBeTruthy();
   });
 
   test("a stage with nothing outstanding says so in the focus row, and a blocker replaces it", () => {

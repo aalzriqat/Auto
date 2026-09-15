@@ -242,6 +242,28 @@ const dealRailMessages = defineBilingualMessages({
   DealTabDocuments: ["Documents", "المستندات"],
   DealTabActivity: ["Activity", "السجل"],
 
+  /** The compact deal header, stage rail and six-fact money summary. */
+  BackToDeals: ["Deals", "الصفقات"],
+  /** "Stage 3 / 8" — the numbers are rendered beside it as their own LTR run. */
+  StageOfLabel: ["Stage", "المرحلة"],
+  DealAllStagesComplete: ["All stages complete", "اكتملت جميع المراحل"],
+  ShowStages: ["Show stages", "عرض المراحل"],
+  HideStages: ["Hide stages", "إخفاء المراحل"],
+  FinancialSummaryHeading: ["Financial summary", "الملخص المالي"],
+  FactCustomer: ["Customer", "العميل"],
+  FactFinancier: ["Finance company", "شركة التمويل"],
+  FactSupplier: ["Supplier", "المورد"],
+  /** Read to assistive technology on every rail node; colour alone is not state. */
+  StageStateComplete: ["Complete", "مكتملة"],
+  StageStateCurrent: ["Current stage", "المرحلة الحالية"],
+  StageStateBlocked: ["Blocked", "متوقفة"],
+  StageStatePending: ["Not started", "لم تبدأ"],
+  StageStateStopped: ["Will not continue", "لن تستكمل"],
+  ProfitBreakdownToggle: ["How this is calculated", "طريقة الاحتساب"],
+  /** The headline is served but its working is not — distinct from "never recorded". */
+  ProfitBreakdownUnavailable: ["Breakdown unavailable", "التفصيل غير متاح"],
+  DealEssentialsHeading: ["Deal essentials", "أساسيات الصفقة"],
+
   /** رسوم ومصاريف تسليم السيارة — the handover-cost section on the Deal. */
   HandoverCostsHeading: ["Vehicle handover fees and costs", "رسوم ومصاريف تسليم السيارة"],
   HandoverCostsNote: [
@@ -1182,6 +1204,8 @@ export const salesEn = {
   DocumentsComplete: "complete",
   MoneyPanelHidden: "You do not have permission to view this deal's figures.",
   SettleSupplierAction: "Settle supplier",
+  SupplierClaimDisputedGuidance:
+    "This claim is under dispute. Resolve the dispute before recording any money against it.",
   SettleSupplierTitle: "Record what the supplier paid back",
   SettleSupplierDesc:
     "The finance company paid {supplier} directly, so what remains is the dealership's margin on the deal. Record what {supplier} has actually paid back — not what is owed.",
@@ -2147,6 +2171,8 @@ export const salesAr = {
   DocumentsComplete: "مكتملة",
   MoneyPanelHidden: "لا تملك صلاحية عرض أرقام هذه الصفقة.",
   SettleSupplierAction: "تسوية المورد",
+  SupplierClaimDisputedGuidance:
+    "هذه المطالبة قيد النزاع. سوِّ النزاع أولاً قبل تسجيل أي مبلغ عليها.",
   SettleSupplierTitle: "تسجيل ما سدَّده المورد",
   SettleSupplierDesc:
     "شركة التمويل دفعت إلى {supplier} مباشرة، والمتبقي هو هامش المعرض على الصفقة. سجِّل ما سدَّده {supplier} فعلياً، لا ما هو مستحق عليه.",

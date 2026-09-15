@@ -622,6 +622,57 @@ describe("a consigned cash deal's supplier row, and UNKNOWN never reading as set
     // The collection action is keyed to the claim the SERVER resolved, so the
     // client never names a receivable of its own choosing.
     expect(supplier!.receivableId).toBeTruthy();
+    // And the server says the receipt may be recorded — the positive control
+    // for the disputed case below.
+    expect(deal!.money!.supplierReceipt).toEqual({ actionable: true });
+  });
+
+  test("a DISPUTED claim is still owed in full, but the receipt is NOT actionable", async () => {
+    const s = await seed("disputedclaim");
+    const vehicleId = await consignedVehicle(s, "DISPUTEDCLAIM001");
+    const saleId = await insertSale(s, vehicleId, {
+      salePrice: CONSIGNED_PRICE,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      consignedMarginMinor: MARGIN * SCALE,
+      consignedSupplierEntitlementMinor: ENTITLEMENT * SCALE,
+      consignedMarginCurrency: "JOD",
+    });
+    const receivableId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierReceivables", {
+        orgId: s.orgId, vehicleId, saleId,
+        sourcedFromName: "Amman Importer Co",
+        amountDue: MARGIN, currency: "JOD", status: "OPEN",
+        createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
+    // Through the product's own door, not a status patch: the same transition
+    // an operator makes while the cockpit is open.
+    await s.asUser.mutation(api.supplierReceivables.setDisputed, {
+      orgId: s.orgId,
+      receivableId,
+      disputed: true,
+      reason: "Supplier disputes the margin",
+    });
+
+    const deal = await s.asUser.query(api.sales.dealCockpit, { orgId: s.orgId, saleId });
+    const supplier = deal!.money!.parties.find((party) => party.party === "SUPPLIER");
+    const settlement = deal!.stages.find((stage) => stage.key === "SETTLEMENT");
+
+    // The obligation is unchanged: he still holds the margin and still owes it.
+    expect(supplier!.position).toBe("OWED_TO_DEALERSHIP");
+    expect(supplier!.amountMinor).toBe(MARGIN * SCALE);
+    expect(supplier!.receivableId).toBe(receivableId);
+    expect(settlement!.state).not.toBe("COMPLETE");
+    // What changed is whether anything may be recorded against it.
+    expect(deal!.money!.supplierReceipt).toEqual({ actionable: false, reason: "CLAIM_DISPUTED" });
+    await expect(
+      s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId: s.orgId,
+        receivableId,
+        amount: MARGIN,
+      })
+    ).rejects.toThrow(/under dispute/);
   });
 
   test("a fully collected claim reads SETTLED and finishes the rail", async () => {

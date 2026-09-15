@@ -21,6 +21,7 @@
     "mobile:typecheck": "pnpm --filter @autoflow/mobile typecheck",
     "mobile:test": "pnpm --filter @autoflow/mobile test",
     "e2e:playwright": "playwright test",
+    "test:visual:deal-cockpit": "playwright test -c playwright.visual.config.ts",
     "convex:codegen": "convex codegen --typecheck enable",
     "dealer-worker:typecheck": "tsc -p dealer-worker/tsconfig.json --noEmit",
     "dealer-worker:build": "npm run --prefix dealer-worker build",

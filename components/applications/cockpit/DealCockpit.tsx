@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -25,14 +26,20 @@ import { getErrorMessage, isConvexError } from "@/lib/errors";
 import { format, isValid } from "date-fns";
 import {
   AlertTriangle,
-  Check,
+  ArrowLeft,
   ChevronDown,
-  CircleDot,
   Clock,
   Lock,
   Minus,
   Ban,
 } from "lucide-react";
+import { DealStageRail, DealStagesComplete } from "./DealStageRail";
+import {
+  isLiveStageState,
+  STAGE_ICON,
+  type DealCockpitData,
+  type DealStageState,
+} from "./DealStagePresentation";
 import { SupplierSettlementDialog } from "./SupplierSettlementDialog";
 import { SettlementAdviceCorrectionDialog } from "./SettlementAdviceCorrectionDialog";
 import {
@@ -132,7 +139,21 @@ function isRenderableMoment(value: number | undefined): value is number {
   return typeof value === "number" && isValid(new Date(value));
 }
 
-type StageState = "COMPLETE" | "CURRENT" | "BLOCKED" | "PENDING" | "STOPPED";
+/**
+ * A stored moment as display text, or a calm dash when it cannot be one.
+ *
+ * The header's "last updated" and the essentials' "opened on" went straight to
+ * `format()`, so the same `NaN` / `Infinity` / out-of-range row that the
+ * timeline was already guarded against would still have lost the whole screen
+ * through either of them. One helper for both, so neither can drift back.
+ * The dash is language-neutral on purpose: it is the absence of a date, not a
+ * status the operator has to act on, and the row it sits in is still readable.
+ */
+const MOMENT_UNAVAILABLE = "—";
+
+function renderMoment(value: number | undefined, pattern: string): string {
+  return isRenderableMoment(value) ? format(value, pattern) : MOMENT_UNAVAILABLE;
+}
 
 const STAGE_LABEL: Record<string, string> = {
   /** CASH only — the cash rail's anchor stage. */
@@ -293,19 +314,6 @@ const PROFIT_BLOCKED_REASON: Record<
 };
 
 /**
- * Keyed by state rather than tested with a ternary chain. The chain drew three
- * SonarCloud findings, and its final `else` silently absorbed any state it did
- * not name — so a new one rendered as PENDING's dash instead of failing.
- */
-const STAGE_ICON: Record<StageState, React.ReactNode> = {
-  COMPLETE: <Check className="h-4 w-4 text-emerald-600" />,
-  STOPPED: <Ban className="h-4 w-4 text-muted-foreground" />,
-  BLOCKED: <AlertTriangle className="h-4 w-4 text-amber-600" />,
-  CURRENT: <CircleDot className="h-4 w-4 text-primary" />,
-  PENDING: <Minus className="h-4 w-4 text-muted-foreground/60" />,
-};
-
-/**
  * Why the close cannot be taken — and it takes BOTH conditions, because the
  * two interact rather than merely coexisting.
  *
@@ -391,9 +399,7 @@ function Money({ children }: Readonly<{ children: React.ReactNode }>) {
  * the timeline — is common to both and rendered by the same code below. The one
  * thing that must not be shared is the headline: see `MoneyPanel`.
  */
-export type DealCockpitData =
-  | NonNullable<(typeof api.dealWorkspace.financedDealCockpit)["_returnType"]>
-  | NonNullable<(typeof api.sales.dealCockpit)["_returnType"]>;
+export type { DealCockpitData } from "./DealStagePresentation";
 
 /**
  * The data half: one query, one mutation, no presentation.
@@ -570,6 +576,10 @@ export function DealCockpit({
   // an action that appears and then vanishes reads as a bug, and the server is
   // the authority either way.
   const canCorrectAdvice = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
+  // `supplierReceivables.recordReceipt` requires the same permission. Fails
+  // closed while loading, and is never inferred from a role name or from
+  // VIEW_FINANCE — a custom role that can read the money block cannot settle.
+  const canSettleSupplier = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
 
   /**
    * ---- The facts and commands the Review dialog used to own ----------------
@@ -1498,6 +1508,7 @@ export function DealCockpit({
   return (
     <DealCockpitView
       deal={deal}
+      backHref={`/${orgId}/deals`}
       financeDecision={financeDecision}
       financingPlan={financingPlan ? { facts: financingPlan, formatMajor: formatPlanMajor } : undefined}
       handoverCosts={handoverCosts}
@@ -1863,6 +1874,7 @@ export function DealCockpit({
         },
       }}
       canCorrectAdvice={canCorrectAdvice}
+      canSettleSupplier={canSettleSupplier}
       onCorrectSettlementAdvice={async (correction) => {
         correctionKeyRef.current ??= `amend-supplier-advice:${crypto.randomUUID()}`;
         await amendAdvice({
@@ -1940,6 +1952,11 @@ export function SaleDealCockpit({
 }: Readonly<{ orgId: Id<"organizations">; saleId: Id<"sales"> }>) {
   const deal = useQuery(api.sales.dealCockpit, { orgId, saleId });
   const recordReceipt = useMutation(api.supplierReceivables.recordReceipt);
+  const { hasPermission, isLoading: permissionsLoading } = usePermissions();
+  // The cash path settles a supplier through the SAME mutation, gated by the
+  // SAME permission (MANAGE_FINANCE), so it carries the same caller capability
+  // — closed while the membership loads, never inferred from a role name.
+  const canSettleSupplier = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
 
   /**
    * A financed sale is rendered here, not sent elsewhere.
@@ -1965,6 +1982,8 @@ export function SaleDealCockpit({
   return (
     <DealCockpitView
       deal={deal}
+      backHref={`/${orgId}/deals`}
+      canSettleSupplier={canSettleSupplier}
       onRecordSupplierReceipt={async (receivableId, receipt) => {
         await recordReceipt({
           orgId,
@@ -1987,116 +2006,446 @@ export function SaleDealCockpit({
  * computes money. The headline cannot be rendered without its qualifier,
  * because amount and classification travel in one object.
  */
+type DealMoney = NonNullable<DealCockpitData["money"]>;
+
+/**
+ * One fact of the six-fact summary. `value` is already formatted; `null`
+ * renders the unavailable state rather than a zero, because every figure here
+ * is either on the server's record or it is not.
+ */
+function MoneyFact({
+  label,
+  value,
+  unavailableKey = "NotRecorded",
+  note,
+  action,
+  t,
+}: Readonly<{
+  label: string;
+  value: string | null;
+  /** What a `null` value means here — "never recorded" by default. */
+  unavailableKey?: string;
+  note?: React.ReactNode;
+  action?: React.ReactNode;
+  t: (key: string) => string;
+}>) {
+  return (
+    <div className="flex min-w-0 flex-col gap-0.5 rounded-md border p-3">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      {value === null ? (
+        <p className="text-sm text-muted-foreground">{t(unavailableKey)}</p>
+      ) : (
+        <p className="text-base font-semibold leading-snug">
+          <Money>{value}</Money>
+        </p>
+      )}
+      {note && <p className="min-w-0 break-words text-xs text-muted-foreground">{note}</p>}
+      {action && <div className="pt-1">{action}</div>}
+    </div>
+  );
+}
+
+/** A recorded figure as the server projects it, with the denomination it served. */
+type ServedEvidence = {
+  approvedPurchaseAmountMinor: number | null;
+  dealerContributionMinor: number | null;
+  currency: { code: string; scale: number } | null;
+};
+
+type SummaryFact = {
+  labelKey: string;
+  value: string | null;
+  /** What a null value means — only ever "never recorded" here. */
+  unavailableKey: "NotRecorded";
+};
+
+/**
+ * The non-party facts of the summary, each labelled for exactly what it is.
+ * Pure: reads served facts, formats them, and never sums, re-scales, selects
+ * between or substitutes them.
+ *
+ * AVAILABLE profit — ONE tile per line the server served, in the server's
+ * order, labelled through `PROFIT_LINE_LABEL`. Nothing is chosen by basis, by
+ * `dealKind`, or by what the other lines hold: a SOURCED vehicle's zero
+ * VEHICLE_COST and its SUPPLIER_ENTITLEMENT both stand, because deciding that
+ * one of them "explains" the margin is an economic classification, and this
+ * screen is not the authority on any. An available profit whose `lines` are
+ * EMPTY is a headline served without its working, which the caller says as
+ * "breakdown unavailable" rather than inventing tiles reading "not recorded".
+ *
+ * UNAVAILABLE profit — there is no basis and no lines to read, so the fact-set
+ * follows the server's own identity of the deal: `applicationId: null` is a
+ * sale (cash or applicationless financed) and gets NO tiles at all, because the
+ * sale read model serves no price or cost outside the profit and a "not
+ * recorded" tile would contradict a row that has one; an application gets the
+ * approved-purchase labels, filled ONLY from the two explicitly named
+ * `handoverEvidence` fields the server already serves redacted and denominated
+ * (a management figure withheld for want of the supplier settlement still has
+ * them on record).
+ */
+function selectSummaryFacts({
+  profit,
+  applicationId,
+  evidence,
+  money,
+  moneyIn,
+}: Readonly<{
+  profit: DealMoney["profit"];
+  applicationId: string | null;
+  evidence: ServedEvidence | undefined;
+  money: (minor: number) => string;
+  moneyIn: (minor: number, currency: ServedEvidence["currency"]) => string | null;
+}>): ReadonlyArray<SummaryFact> {
+  if (!profit.available) {
+    // A SALE whose profit the server withheld (a draft not yet completed, a
+    // cancelled deal, an unreadable margin, a legacy financed-direct row it
+    // refuses to vouch for). The read model serves no sale price or vehicle
+    // cost OUTSIDE the profit, so there is nothing authoritative to put in a
+    // tile — and a tile reading "Sale price: not recorded" over a pending sale
+    // that has a price on its row is a false statement, not a cautious one.
+    // No facts: the caller states that the breakdown is unavailable, and the
+    // headline above already says why.
+    if (applicationId === null) return [];
+    const served = (minor: number | null | undefined) =>
+      minor != null && evidence ? moneyIn(minor, evidence.currency) : null;
+    return [
+      {
+        labelKey: "LineApprovedPurchase",
+        value: served(evidence?.approvedPurchaseAmountMinor),
+        unavailableKey: "NotRecorded",
+      },
+      {
+        labelKey: "LineDealerContribution",
+        value: served(evidence?.dealerContributionMinor),
+        unavailableKey: "NotRecorded",
+      },
+    ];
+  }
+
+  // The served sign travels with the figure: a deduction reads as one in the
+  // tile exactly as it does in the breakdown, so the tiles never show the
+  // magnitude of a cost as if it were an inflow.
+  return profit.lines.map((line) => ({
+    labelKey: PROFIT_LINE_LABEL[line.key] ?? line.key,
+    value: signedMoney(line, money),
+    unavailableKey: "NotRecorded",
+  }));
+}
+
+/** One served line, spelled with the sign the server put on it. */
+function signedMoney(
+  line: Readonly<{ sign: number; amountMinor: number }>,
+  money: (minor: number) => string
+): string {
+  return `${line.sign < 0 ? "− " : ""}${money(line.amountMinor)}`;
+}
+
+/**
+ * The headline figure and its qualifier — the ONE branch this screen is not
+ * allowed to get wrong.
+ *
+ * A financed deal's headline is a MANAGEMENT figure built on a spread that
+ * appears on no invoice: it is `postable: false` and must never be shown
+ * without its qualifier. A cash deal's is an ordinary accounting result that
+ * reconciles to the GL, and stamping an "estimated / never postable" badge on
+ * it would be just as false in the other direction.
+ *
+ * Read off `basis` rather than from the presence of a `classification` field,
+ * so the distinction is one the type system enforces: `AccountingProfit` has
+ * no `classification` to read, and TypeScript refuses the access outside this
+ * branch. That is what makes the two impossible to confuse rather than merely
+ * unlikely to be.
+ */
+function ProfitHeadline({
+  profit,
+  money,
+  t,
+}: Readonly<{
+  profit: DealMoney["profit"];
+  money: (minor: number) => string;
+  t: (key: string) => string;
+}>) {
+  const isManagementEstimate = profit.available && profit.basis === "MANAGEMENT_ESTIMATE";
+  return (
+    <div className="space-y-1">
+      <p className="text-sm text-muted-foreground">{t("NetDealershipProfit")}</p>
+      {profit.available ? (
+        <>
+          <div className="flex flex-wrap items-baseline gap-3">
+            <p className="text-3xl font-semibold">
+              <Money>{money(profit.amountMinor)}</Money>
+            </p>
+            {/* The qualifier is not decoration. It renders from the same
+                object as the amount, so there is no code path that shows one
+                without the other.
+                A cash deal gets NO badge here — not a green one saying
+                "postable". The absence of a caveat is the normal case, and
+                labelling it would train the eye to skip the badge that
+                actually matters. */}
+            {profit.basis === "MANAGEMENT_ESTIMATE" && (
+              <Badge variant="outline" className="border-amber-500/60 text-amber-700 dark:text-amber-400">
+                {profit.classification === "ACTUAL_UNPOSTABLE"
+                  ? t("ProfitActualUnpostable")
+                  : t("ProfitEstimatedAwaitingSettlement")}
+              </Badge>
+            )}
+          </div>
+          {isManagementEstimate && (
+            <p className="text-xs text-muted-foreground">{t("ManagementFigureNote")}</p>
+          )}
+        </>
+      ) : (
+        <>
+          <p className="text-2xl font-semibold text-muted-foreground">{t("ProfitNotCalculable")}</p>
+          <p className="text-xs text-muted-foreground">{t(PROFIT_BLOCKED_REASON[profit.reason])}</p>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** What `DealSummaryFacts` needs beyond the profit — the served evidence and its formatter. */
+type SummaryEvidence = Readonly<{
+  /** The server's own identity of the deal: `null` is a sale, cash or applicationless financed. */
+  applicationId: string | null;
+  /**
+   * The recorded approved amount and contribution as the SERVER projects them
+   * (`handoverEvidence`): already redacted per caller, already denominated.
+   * Read only when the profit is unavailable — a management figure withheld
+   * for want of the supplier settlement still has these on record. Financed
+   * cockpit payloads only; absent elsewhere.
+   */
+  evidence: ServedEvidence | undefined;
+  /** Spells a served figure at the SERVED scale, or withholds it. */
+  moneyIn: (minor: number, currency: ServedEvidence["currency"]) => string | null;
+}>;
+
+/**
+ * The facts of the deal itself. Each figure is served, not derived, and each
+ * label names the line it shows — see `selectSummaryFacts` for what is (and is
+ * not) done to them, so "approved purchase amount" is never "deal value".
+ */
+function DealSummaryFacts({
+  profit,
+  summary,
+  money,
+  t,
+}: Readonly<{
+  profit: DealMoney["profit"];
+  summary: SummaryEvidence;
+  money: (minor: number) => string;
+  t: (key: string) => string;
+}>) {
+  const facts = selectSummaryFacts({ profit, money, ...summary });
+  if (facts.length === 0) {
+    // A headline served without its working. Said once, here, rather than as
+    // tiles claiming figures were never recorded.
+    return <p className="text-sm text-muted-foreground">{t("ProfitBreakdownUnavailable")}</p>;
+  }
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {facts.map((fact) => (
+        <MoneyFact
+          key={fact.labelKey}
+          label={t(fact.labelKey)}
+          value={fact.value}
+          unavailableKey={fact.unavailableKey}
+          t={t}
+        />
+      ))}
+    </div>
+  );
+}
+
+const PARTY_FACT_LABEL: Record<string, string> = {
+  CUSTOMER: "FactCustomer",
+  FINANCIER: "FactFinancier",
+  SUPPLIER: "FactSupplier",
+};
+
+/**
+ * One tile per party the server names, with the supplier's settlement action
+ * beside the claim it settles. `onSettleSupplier` is present only when the
+ * SERVER would accept the command from this caller. `supplierGuidance` takes
+ * the action's place when the server has said WHY it would not — a disputed
+ * claim is still owed, and the tile must say what to do about it rather than
+ * offer a button whose submit is refused.
+ */
+function DealPartyFacts({
+  parties,
+  onSettleSupplier,
+  supplierGuidance,
+  money,
+  t,
+}: Readonly<{
+  parties: DealMoney["parties"];
+  onSettleSupplier: (() => void) | undefined;
+  supplierGuidance: string | undefined;
+  money: (minor: number) => string;
+  t: (key: string) => string;
+}>) {
+  return (
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-2">
+      {parties.map((party) => {
+        const positioned = party.position !== "NOT_INVOLVED" && party.position !== "UNKNOWN";
+        return (
+          <MoneyFact
+            key={party.party}
+            label={t(PARTY_FACT_LABEL[party.party] ?? PARTY_LABEL[party.party] ?? party.party)}
+            value={positioned ? money(party.amountMinor) : null}
+            note={
+              <>
+                <span>{t(POSITION_LABEL[party.position] ?? party.position)}</span>
+                {party.name && (
+                  <>
+                    {" · "}
+                    <bdi>{party.name}</bdi>
+                  </>
+                )}
+                {party.reference && (
+                  <>
+                    {" · "}
+                    <bdi>{party.reference}</bdi>
+                  </>
+                )}
+              </>
+            }
+            action={
+              party.party === "SUPPLIER" && onSettleSupplier ? (
+                <Button size="sm" className="h-9" onClick={onSettleSupplier}>
+                  {t("SettleSupplierAction")}
+                </Button>
+              ) : party.party === "SUPPLIER" && supplierGuidance ? (
+                <p role="status" className="text-xs text-muted-foreground">
+                  {supplierGuidance}
+                </p>
+              ) : undefined
+            }
+            t={t}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Only where an APPLICATION exists. `فرق تخمين` is the difference between the
+ * finance company's appraisal and the price — a cash deal has no appraisal, so
+ * "no appraisal gap" would be answering a question nobody asked. The caller
+ * decides presence; this only spells the served figure.
+ */
+function AppraisalGapNote({
+  amountMinor,
+  money,
+  t,
+}: Readonly<{
+  amountMinor: number | undefined;
+  money: (minor: number) => string;
+  t: (key: string) => string;
+}>) {
+  return (
+    <p className="text-xs text-muted-foreground">
+      {t("AppraisalGapLabel")}: {amountMinor ? <Money>{money(amountMinor)}</Money> : t("NoAppraisalGap")}
+    </p>
+  );
+}
+
+/**
+ * The working of the headline figure, collapsed. No disclosure over an empty
+ * working: the tiles already say the breakdown is unavailable.
+ */
+function ProfitBreakdown({
+  profit,
+  money,
+  t,
+}: Readonly<{
+  profit: DealMoney["profit"];
+  money: (minor: number) => string;
+  t: (key: string) => string;
+}>) {
+  if (!profit.available || profit.lines.length === 0) return null;
+  return (
+    <details className="group">
+      <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 text-sm text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+        <ChevronDown className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180" aria-hidden />
+        <span>{t("ProfitBreakdownToggle")}</span>
+      </summary>
+      {/* A working of one figure, kept as a single column — these lines are a
+          SUM, and the order they are read in is part of the meaning. EVERY
+          served line is listed, zeros included: a zero term is a fact the
+          server chose to state, and dropping it would make the working look
+          like it hides a term — which an earlier allowlist did, silently, for
+          any key it had not heard of. */}
+      <dl className="max-w-xl space-y-1.5 pt-2 text-sm">
+        {profit.lines.map((line) => (
+          <div key={line.key} className="flex items-center justify-between gap-4">
+            <dt className="text-muted-foreground">{t(PROFIT_LINE_LABEL[line.key] ?? line.key)}</dt>
+            <dd>
+              <Money>{signedMoney(line, money)}</Money>
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </details>
+  );
+}
+
+/**
+ * The money card: headline, the served deal facts, the parties and the working,
+ * each its own component above. This only composes them in reading order.
+ */
 function MoneyPanel({
   money,
   profit,
+  summary,
+  parties,
   t,
 }: Readonly<{
   money: (minor: number) => string;
-  profit: NonNullable<DealCockpitData["money"]>["profit"];
+  profit: DealMoney["profit"];
+  summary: SummaryEvidence;
+  /**
+   * The party row, or `null` when there is nobody to list — an OWNED cash sale
+   * has no third party at all, so the row would be a heading over nothing.
+   * `appraisalGap` is `null` on a deal with no application, which has no
+   * appraisal to have a gap in.
+   */
+  parties: Readonly<{
+    items: DealMoney["parties"];
+    appraisalGap: Readonly<{ amountMinor: number | undefined }> | null;
+    onSettleSupplier: (() => void) | undefined;
+    supplierGuidance: string | undefined;
+  }> | null;
   t: (key: string) => string;
 }>) {
-  // The ONE branch this screen is not allowed to get wrong.
-  //
-  // A financed deal's headline is a MANAGEMENT figure built on a spread that
-  // appears on no invoice: it is `postable: false` and must never be shown
-  // without its qualifier. A cash deal's is an ordinary accounting result that
-  // reconciles to the GL, and stamping an "estimated / never postable" badge on
-  // it would be just as false in the other direction.
-  //
-  // Read off `basis` rather than from the presence of a `classification` field,
-  // so the distinction is one the type system enforces: `AccountingProfit` has
-  // no `classification` to read, and TypeScript refuses the access outside this
-  // branch. That is what makes the two impossible to confuse rather than merely
-  // unlikely to be.
-  const isManagementEstimate = profit.available && profit.basis === "MANAGEMENT_ESTIMATE";
-
   return (
-  <Card>
-    <CardContent className="space-y-4 pt-6">
-      <div className="space-y-1">
-        <p className="text-sm text-muted-foreground">{t("NetDealershipProfit")}</p>
-        {profit.available ? (
-          <>
-            <div className="flex flex-wrap items-baseline gap-3">
-              <p className="text-3xl font-semibold">
-                <Money>{money(profit.amountMinor)}</Money>
-              </p>
-              {/* The qualifier is not decoration. It renders from
-                  the same object as the amount, so there is no code
-                  path that shows one without the other.
-                  A cash deal gets NO badge here — not a green one
-                  saying "postable". The absence of a caveat is the
-                  normal case, and labelling it would train the eye to
-                  skip the badge that actually matters. */}
-              {profit.basis === "MANAGEMENT_ESTIMATE" && (
-                <Badge variant="outline" className="border-amber-500/60 text-amber-700 dark:text-amber-400">
-                  {profit.classification === "ACTUAL_UNPOSTABLE"
-                    ? t("ProfitActualUnpostable")
-                    : t("ProfitEstimatedAwaitingSettlement")}
-                </Badge>
-              )}
-            </div>
-            {isManagementEstimate && (
-              <p className="text-xs text-muted-foreground">{t("ManagementFigureNote")}</p>
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">{t("FinancialSummaryHeading")}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <ProfitHeadline profit={profit} money={money} t={t} />
+        {/* One fact per served line of the deal itself, then one per party the server names. */}
+        <DealSummaryFacts profit={profit} summary={summary} money={money} t={t} />
+        {parties && (
+          <div className="space-y-2">
+            <h3 className="text-xs font-normal text-muted-foreground">{t("DealPartiesHeading")}</h3>
+            <DealPartyFacts
+              parties={parties.items}
+              onSettleSupplier={parties.onSettleSupplier}
+              supplierGuidance={parties.supplierGuidance}
+              money={money}
+              t={t}
+            />
+            {parties.appraisalGap && (
+              <AppraisalGapNote amountMinor={parties.appraisalGap.amountMinor} money={money} t={t} />
             )}
-          </>
-        ) : (
-          <>
-            <p className="text-2xl font-semibold text-muted-foreground">
-              {t("ProfitNotCalculable")}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {t(PROFIT_BLOCKED_REASON[profit.reason])}
-            </p>
-          </>
+          </div>
         )}
-      </div>
-
-      {profit.available && (
-        <>
-          <Separator />
-          {/* Capped for the same reason as the decision card's rows: this is a
-              working of one figure, and a term separated from its label by the
-              full width of the panel has to be re-associated by eye on every
-              line. Left as a single column — these lines are a SUM, and the
-              order they are read in is part of the meaning. */}
-          <dl className="max-w-xl space-y-1.5 text-sm">
-            {profit.lines
-              // A zero on an OPTIONAL line is noise, not information:
-              // the customer-direct amount has no writer yet, so it
-              // would read "0.000" on every deal forever, and the
-              // dealer contribution is zero on any fully funded deal.
-              // The lines the mockup always shows stay, so the
-              // derivation never looks like it is hiding a term.
-              // The cash lines are all always-shown: three terms, and
-              // a zero cost on an agent sale is a fact worth stating.
-              .filter(
-                (line) =>
-                  line.amountMinor !== 0 ||
-                  line.key === "APPROVED_PURCHASE" ||
-                  line.key === "SUPPLIER_SETTLEMENT" ||
-                  line.key === "ACTUAL_EXPENSES" ||
-                  line.key === "SALE_PRICE" ||
-                  line.key === "VEHICLE_COST" ||
-                  line.key === "SUPPLIER_ENTITLEMENT"
-              )
-              .map((line) => (
-              <div key={line.key} className="flex items-center justify-between gap-4">
-                <dt className="text-muted-foreground">{t(PROFIT_LINE_LABEL[line.key] ?? line.key)}</dt>
-                <dd>
-                  <Money>
-                    {line.sign < 0 ? "− " : ""}
-                    {money(line.amountMinor)}
-                  </Money>
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </>
-      )}
-    </CardContent>
-  </Card>
+        <ProfitBreakdown profit={profit} money={money} t={t} />
+      </CardContent>
+    </Card>
   );
 }
 
@@ -2160,6 +2509,7 @@ export type FinanceDecisionWiring = {
 
 export function DealCockpitView({
   deal,
+  backHref,
   financeDecision,
   financingPlan,
   handoverCosts,
@@ -2169,6 +2519,7 @@ export function DealCockpitView({
   expectedPayment,
   finalize,
   canCorrectAdvice = false,
+  canSettleSupplier: callerMaySettleSupplier = false,
   onCorrectSettlementAdvice,
   onRecordSupplierReceipt,
   activeAppraisalProvider = null,
@@ -2182,6 +2533,8 @@ export function DealCockpitView({
 }: Readonly<{
   /** `undefined` while loading, `null` when the deal is not readable. */
   deal: DealCockpitData | null | undefined;
+  /** Where the header's back link goes — the deals list. Absent, no link. */
+  backHref?: string;
   /** The credit-decision dialog's own state. Financed only. */
   creditDecision?: {
     deciding: boolean;
@@ -2374,6 +2727,16 @@ export function DealCockpitView({
    * action rather than offering one the server will refuse.
    */
   canCorrectAdvice?: boolean;
+  /**
+   * Whether this caller may record a supplier receipt (MANAGE_FINANCE — the
+   * permission `supplierReceivables.recordReceipt` requires). The route and
+   * the supplier's position say whether there is a claim to settle; only this
+   * says whether THIS operator may settle it. Same contract as
+   * `canCorrectAdvice`: passed in, never read from a hook in presentation, and
+   * defaulting to `false` so a container that forgets it hides the action
+   * rather than offering one the server will refuse.
+   */
+  canSettleSupplier?: boolean;
   onCorrectSettlementAdvice?: (correction: {
     amountMajor: number;
     reference?: string;
@@ -2430,6 +2793,40 @@ export function DealCockpitView({
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [reopenSubmitting, setReopenSubmitting] = useState(false);
   const [reopenError, setReopenError] = useState<string | null>(null);
+
+  // A claim to settle AND a caller the server would accept the receipt from.
+  // The first four terms are the deal's state; the last is the operator's
+  // authority, decided by the container from MANAGE_FINANCE and never here.
+  //
+  // `supplierReceipt` is the SERVER's own verdict on whether `recordReceipt`
+  // would take the command, formed from the claim's status. The position alone
+  // was not enough: a DISPUTED claim reads OWED_TO_DEALERSHIP — the money IS
+  // still owed — and the screen offered a settlement the mutation refuses on
+  // sight. The position stays truthful; the action follows the verdict.
+  const supplierRow = deal?.money?.parties.find((p) => p.party === "SUPPLIER");
+  const supplierReceipt = deal?.money?.supplierReceipt;
+  const canSettleSupplier =
+    callerMaySettleSupplier &&
+    deal?.money?.settlesDirectToSupplier === true &&
+    deal.money.routeKnown &&
+    supplierRow?.position === "OWED_TO_DEALERSHIP" &&
+    supplierReceipt?.actionable === true;
+  // Named guidance for the one refusal the operator can act on. Every other
+  // reason simply withholds the button, as before.
+  const supplierGuidance =
+    supplierReceipt?.actionable === false && supplierReceipt.reason === "CLAIM_DISPUTED"
+      ? t("SupplierClaimDisputedGuidance")
+      : undefined;
+
+  // Authority is LIVE, not a snapshot taken when the dialog opened. If the
+  // membership finishes loading without MANAGE_FINANCE, is revoked mid-entry,
+  // or the deal's state stops allowing a settlement, the open dialog closes
+  // itself IN THE SAME RENDER (React's adjust-state-during-render pattern, so
+  // no frame ever paints the form under a lost grant, and regaining the grant
+  // later does not re-open a form nobody asked for). The dialog is also
+  // mounted only while the action is offered, and the submit path re-checks,
+  // so a stale form cannot send the command.
+  if (!canSettleSupplier && settlingSupplier) setSettlingSupplier(false);
 
   // Never a hardcoded ÷1000. JOD, KWD, BHD and OMR are three-decimal; most
   // currencies are two. Baking one scale in would be a 100x error everywhere
@@ -2576,6 +2973,18 @@ export function DealCockpitView({
    */
   const handoverEvidence =
     deal && "handoverEvidence" in deal ? deal.handoverEvidence : undefined;
+  /**
+   * A figure at the denomination the SERVER served with it (`{code, scale}`),
+   * for the summary's evidence facts. No guessing scaler: a served figure
+   * without a served denomination is withheld, and the marker follows the
+   * same locale rule as every other amount on the screen.
+   */
+  const servedMoney = (minor: number, served: { code: string; scale: number } | null) => {
+    if (denominationUnusable || served === null) return null;
+    const servedMarker =
+      locale === "ar" && served.code === currency.code ? currency.symbol : served.code;
+    return `${(minor / Math.pow(10, served.scale)).toLocaleString()} ${servedMarker}`;
+  };
   // Withheld outright rather than approximated: a figure the operator cannot
   // tell is wrong is worse than a visible blank beside the restatement notice.
   const decisionMoney = (minor: number) =>
@@ -2616,13 +3025,22 @@ export function DealCockpitView({
   }
 
   const stages = deal.stages;
-  const completed = stages.filter((s) => s.state === "COMPLETE");
-  const live = stages.find((s) => s.state === "CURRENT" || s.state === "BLOCKED");
-  // Completed stages collapse behind a disclosure so the eye lands on the one
-  // stage that needs a decision. On a dead deal there is no such stage, so the
-  // rail opens rather than hiding everything behind a control nobody would
-  // think to press.
-  const remaining = stages.filter((s) => s.state !== "COMPLETE");
+  const live = stages.find((s) => isLiveStageState(s.state));
+  // A finished deal gets one calm completion line instead of a rail of ticks;
+  // the rail itself stays one click away. Every other deal — live, or stopped
+  // with nothing left to do — shows the rail as-is, because on a stopped deal
+  // WHERE it stopped is the information.
+  const allComplete = stages.length > 0 && stages.every((s) => s.state === "COMPLETE");
+  const liveIndex = live ? stages.findIndex((s) => s.key === live.key) : -1;
+  const railStages = stages.map((stage) => ({
+    key: stage.key,
+    state: stage.state,
+    label: t(STAGE_LABEL[stage.key] ?? stage.key),
+    // The same provenance-gated resolution the focus panel uses, so a node
+    // and the panel can never name different parties for one step.
+    owner: stageOwnerLabel(stage, activeAppraisalProvider, t),
+    blocker: stage.blocker ? t(`Blocker${stage.blocker}`) : undefined,
+  }));
   // Whether the close is being refused for want of the settlement route — the
   // one case where the route control belongs on the live step itself.
   const routeBlocksClose =
@@ -2630,25 +3048,26 @@ export function DealCockpitView({
     workflowAction?.stageKey === "SETTLEMENT" &&
     (workflowAction.unavailableReasonKey === "FinalizeNeedsSettlementRoute" ||
       workflowAction.unavailableReasonKey === "FinalizeNeedsRouteAndPermission");
-  const supplierRow = deal.money?.parties.find((p) => p.party === "SUPPLIER");
-  const canSettleSupplier =
-    deal.money?.settlesDirectToSupplier === true &&
-    deal.money.routeKnown &&
-    supplierRow?.position === "OWED_TO_DEALERSHIP";
-
   const handleSupplierReceipt = async (receipt: {
     amount: number;
     receiptMethod?: PaymentMethod;
     receiptReference?: string;
     receivedAt?: number;
   }) => {
+    // Fail closed on the authority as it stands NOW, not as it stood when the
+    // form was opened. The server would refuse anyway; this stops the screen
+    // from issuing a command it already knows will be refused.
+    if (!canSettleSupplier || !supplierRow?.receivableId) {
+      setSettlingSupplier(false);
+      return;
+    }
     setSubmitting(true);
     try {
       // Keyed to THIS claim, whose id the server resolved. The screen never
       // lets a client name a receivable of its own choosing.
       receiptKeyRef.current ??= crypto.randomUUID();
       await onRecordSupplierReceipt(
-        supplierRow!.receivableId as Id<"vehicleSupplierReceivables">,
+        supplierRow.receivableId as Id<"vehicleSupplierReceivables">,
         { ...receipt, idempotencyKey: receiptKeyRef.current }
       );
       // Only now: a failed attempt keeps its key so retrying is the same
@@ -2799,55 +3218,145 @@ export function DealCockpitView({
           in view while the operator works down the rail and the money —
           the owner's workspace shell. Negative margins let the bar span the
           page padding; the backdrop keeps it legible over scrolled content. */}
+      {/* The negative HORIZONTAL margins mirror the workspace `main` padding
+          exactly (p-3 / sm:p-4 / md:p-6 / lg:p-8): one step wider than the
+          padding and the bar is the page's only horizontal overflow.
+          No negative TOP margin, deliberately. `main` is the scroll container
+          and a sticky box is clamped inside its containing block, so Chromium
+          shifts a `-mt-*` header straight back down by the same amount: the
+          bar never moved up, only the essentials row under it did — and at
+          `lg` the 32px shift ate the 24px gap and put the row's labels under
+          the bar. `playwright/visual/deal-cockpit.visual.spec.ts` measures
+          this in a real engine. */}
       <div
-        className="sticky top-0 z-20 -mx-4 -mt-6 flex flex-wrap items-start justify-between gap-4 border-b bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 md:-mx-8 md:px-8"
+        className="sticky top-0 z-20 -mx-3 flex flex-wrap items-center gap-x-4 gap-y-2 border-b bg-background/95 px-3 py-2.5 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:-mx-4 sm:px-4 md:-mx-6 md:px-6 lg:-mx-8 lg:px-8"
         data-testid="deal-header"
       >
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-semibold tracking-tight">
-              {/* The TITLE is polymorphic too, and this was only visible by
-                  rendering: a cash deal headed `طلب تمويل` ("finance
-                  application") names a record that does not exist for it.
-                  `dealRef` rather than the application id, for the same reason —
-                  a cash deal has no application. Both queries supply it. */}
-              {t(deal.dealKind === "CASH" ? "DealCockpitTitleCash" : "DealCockpitTitle")}{" "}
-              <bdi className="text-muted-foreground">#{String(deal.dealRef).slice(-4)}</bdi>
-            </h1>
-            <Badge variant={deal.status === "APPROVED" || deal.status === "CLOSED" ? "default" : "secondary"}>
-              {t(STATUS_LABEL[deal.status] ?? deal.status)}
-            </Badge>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            <bdi>{deal.financeCompanyName}</bdi>
-            {deal.financeCompanyName && " · "}
-            <bdi>{format(deal.createdAt, "d MMM yyyy")}</bdi>
-            {" · "}
-            {t("DealOwner")}: <bdi>{deal.salespersonName}</bdi>
-          </p>
-        </div>
-        <div className="flex flex-col items-end gap-2">
-          <p className="text-xs text-muted-foreground">
-            {t("LastUpdated")}: <bdi>{format(deal.updatedAt ?? deal.createdAt, "d MMM yyyy HH:mm")}</bdi>
-          </p>
-          {/* The exceptional action, in the header and quiet on purpose: it is
-              never the recommended next step, so it must not compete with the
-              one CTA the rail carries. Present only when the SERVER would
-              accept it from this caller. */}
-          {cancel && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="text-destructive hover:text-destructive"
-              data-testid="deal-cancel-application"
-              onClick={() => cancel.onOpenChange(true)}
-            >
-              <Ban className="h-4 w-4 me-2" />
-              {t("CancelApplication")}
-            </Button>
+        {backHref && (
+          <Link
+            href={backHref}
+            className="inline-flex min-h-9 items-center gap-1 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <ArrowLeft className="h-4 w-4 rtl:rotate-180" aria-hidden />
+            {t("BackToDeals")}
+          </Link>
+        )}
+        {/* Full-width on a phone, so the back link and the cancel share the
+            first row and the identity gets a clean row of its own. */}
+        <div className="order-last flex min-w-0 basis-full flex-wrap items-center gap-x-3 gap-y-1 sm:order-none sm:flex-1 sm:basis-0">
+          <h1 className="whitespace-nowrap text-xl font-semibold tracking-tight">
+            {/* The TITLE names the RECORD, so it follows the server's own
+                identity of the deal (`applicationId`), not `dealKind`: an
+                applicationless FINANCED/LEASE sale is `dealKind: "FINANCED"`
+                and still has no finance application to be titled after —
+                headed `طلب تمويل` it named a record that does not exist for
+                it. `dealRef` rather than the application id for the same
+                reason. Both queries supply both. */}
+            {t(deal.applicationId === null ? "DealCockpitTitleCash" : "DealCockpitTitle")}{" "}
+            <bdi className="font-normal text-muted-foreground">#{String(deal.dealRef).slice(-4)}</bdi>
+          </h1>
+          <Badge variant={deal.status === "APPROVED" || deal.status === "CLOSED" ? "default" : "secondary"}>
+            {t(STATUS_LABEL[deal.status] ?? deal.status)}
+          </Badge>
+          {/* Whose move the deal is on, from the same source the rail uses —
+              one owner per screen, never two. */}
+          {live && stageOwnerLabel(live, activeAppraisalProvider, t) && (
+            <span className="text-sm text-muted-foreground">
+              <bdi>{stageOwnerLabel(live, activeAppraisalProvider, t)}</bdi>
+            </span>
           )}
+          <span className="text-xs text-muted-foreground">
+            {t("LastUpdated")}: <bdi>{renderMoment(deal.updatedAt ?? deal.createdAt, "d MMM yyyy HH:mm")}</bdi>
+          </span>
         </div>
+        {/* The exceptional action, in the header and quiet on purpose: it is
+            never the recommended next step, so it must not compete with the
+            one CTA the focus panel carries. Present only when the SERVER would
+            accept it from this caller. Kept visible rather than folded into a
+            menu: it would be the menu's only item, and a destructive action
+            behind a one-item menu is hidden, not tidied. */}
+        {cancel && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="ms-auto h-9 text-destructive hover:text-destructive"
+            data-testid="deal-cancel-application"
+            onClick={() => cancel.onOpenChange(true)}
+          >
+            <Ban className="h-4 w-4" aria-hidden />
+            {t("CancelApplication")}
+          </Button>
+        )}
       </div>
+
+      {/* --- essentials --------------------------------------------------- */}
+      {/* Customer, vehicle, finance company, salesperson: the four facts that
+          identify the deal, in one quiet row under the header. Each cell is
+          absent rather than empty — a cash deal has no finance company. */}
+      <dl
+        className="grid grid-cols-1 gap-x-6 gap-y-2 border-b pb-4 text-sm sm:grid-cols-2 lg:grid-cols-4"
+        aria-label={t("DealEssentialsHeading")}
+      >
+        {deal.customer && (
+          <div className="min-w-0">
+            <dt className="text-xs text-muted-foreground">{t("Customer")}</dt>
+            <dd className="min-w-0 break-words font-medium">
+              <bdi>{deal.customer.name}</bdi>
+              {deal.customer.phone && (
+                <>
+                  {" "}
+                  <bdi className="font-normal text-muted-foreground">{deal.customer.phone}</bdi>
+                </>
+              )}
+            </dd>
+          </div>
+        )}
+        {deal.vehicle && (
+          <div className="min-w-0 space-y-1">
+            <dt className="text-xs text-muted-foreground">{t("Vehicle")}</dt>
+            <dd className="min-w-0 break-words font-medium">
+              <bdi>{deal.vehicle.label}</bdi>{" "}
+              <bdi className="font-normal text-muted-foreground">{deal.vehicle.vin}</bdi>
+            </dd>
+            <dd>
+              <Badge variant="outline" className="font-normal">
+                {deal.vehicle.consigned ? t("OwnershipWithSupplier") : t("OwnershipWithDealership")}
+              </Badge>
+            </dd>
+            {/* Beside the ownership badge that makes it a question: the car
+                is the supplier's, so who the finance company pays has to be
+                recorded here before the deal can close. Rendered on the live
+                step INSTEAD whenever it is what the close waits on. */}
+            {settlementRoute && !routeBlocksClose && (
+              <dd className="pt-1">
+                <SettlementRouteControl
+                  route={settlementRoute.route}
+                  canSettleDirectToSupplier={settlementRoute.canSettleDirectToSupplier}
+                  directRouteRefusal={settlementRoute.directRouteRefusal}
+                  supplierName={settlementRoute.supplierName}
+                  t={t}
+                  onChoose={settlementRoute.onChoose}
+                />
+              </dd>
+            )}
+          </div>
+        )}
+        {deal.financeCompanyName && (
+          <div className="min-w-0">
+            <dt className="text-xs text-muted-foreground">{t("PartyFinancier")}</dt>
+            <dd className="min-w-0 break-words font-medium">
+              <bdi>{deal.financeCompanyName}</bdi>
+            </dd>
+          </div>
+        )}
+        <div className="min-w-0">
+          <dt className="text-xs text-muted-foreground">{t("DealOwner")}</dt>
+          <dd className="min-w-0 break-words font-medium">
+            <bdi>{deal.salespersonName}</bdi>{" "}
+            <bdi className="font-normal text-muted-foreground">{renderMoment(deal.createdAt, "d MMM yyyy")}</bdi>
+          </dd>
+        </div>
+      </dl>
 
       {/* --- the two records that disagree -------------------------------- */}
       {/* Above the stage rail, not inside the money column. The rail tells the
@@ -2979,120 +3488,80 @@ export function DealCockpitView({
       )}
 
       {/* --- stage rail: the signature element ---------------------------- */}
-      <Card>
-        <CardContent className="space-y-3 pt-6">
-          {completed.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setShowCompleted((open) => !open)}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted/60"
-              aria-expanded={showCompleted}
-            >
-              <Check className="h-4 w-4 text-emerald-600" />
-              <span>
-                <bdi>{completed.length}</bdi>{" "}
-                {t(completed.length === 1 ? "StageCompletedOne" : "StagesCompleted")}
-              </span>
-              <ChevronDown
-                className={`h-4 w-4 ms-auto transition-transform ${showCompleted ? "rotate-180" : ""}`}
-              />
-            </button>
-          )}
+      {/* Compact: one node per stage, the current one emphasised, the rest
+          quiet. A finished deal gets a single completion line with the rail
+          one click away. The rail is a PROGRESS readout only; the live stage
+          is worked from the focus panel directly beneath it, and both read the
+          same `live` so they cannot name different stages. */}
+      {allComplete ? (
+        <div className="space-y-3">
+          <DealStagesComplete
+            count={stages.length}
+            expanded={showCompleted}
+            onToggle={() => setShowCompleted((open) => !open)}
+            t={t}
+          />
+          {showCompleted && <DealStageRail stages={railStages} t={t} />}
+        </div>
+      ) : (
+        <DealStageRail stages={railStages} t={t} />
+      )}
 
-          {(showCompleted ? stages : remaining).map((stage) =>
-            live?.key === stage.key ? (
-              /* The stage the deal is actually on, opened in place. It carries
-                 the action, so the rail is the working panel rather than a
-                 progress ornament sitting above one. */
-              <StageFocusRow
-                key={stage.key}
-                state={stage.state as StageState}
-                label={t(STAGE_LABEL[stage.key] ?? stage.key)}
-                owner={stageOwnerLabel(stage, activeAppraisalProvider, t)}
-                mirrorNote={stageShowsMirrorNote(stage, activeAppraisalProvider)}
-                blocker={stage.blocker ? t(`Blocker${stage.blocker}`) : undefined}
-                action={workflowAction?.stageKey === stage.key ? workflowAction : undefined}
-                outstandingDocuments={
-                  stage.blocker === "DocumentsIncomplete"
-                    ? deal.documents.filter(
-                        (doc) =>
-                          doc.required && doc.status !== "VERIFIED" && doc.status !== "WAIVED"
-                      )
-                    : []
-                }
-                t={t}
-              >
-                {/* The route IS the blocker on this step, so the control is on
-                    the step — an operator told "record who the finance company
-                    pays" must not have to hunt for where. Rendered here INSTEAD
-                    of beside the vehicle, never in both places. */}
-                {routeBlocksClose && settlementRoute && (
-                  <SettlementRouteControl
-                    route={settlementRoute.route}
-                    canSettleDirectToSupplier={settlementRoute.canSettleDirectToSupplier}
-                    directRouteRefusal={settlementRoute.directRouteRefusal}
-                    supplierName={settlementRoute.supplierName}
-                    t={t}
-                    onChoose={settlementRoute.onChoose}
-                  />
-                )}
-              </StageFocusRow>
-            ) : (
-              <StageRow
-                key={stage.key}
-                state={stage.state as StageState}
-                label={t(STAGE_LABEL[stage.key] ?? stage.key)}
-                owner={stageOwnerLabel(stage, activeAppraisalProvider, t)}
-                blocker={stage.blocker ? t(`Blocker${stage.blocker}`) : undefined}
-              />
-            )
-          )}
-        </CardContent>
-      </Card>
-
-      {/* The next-step card that used to stand here is gone. It restated the
-          stage the rail was already naming, so the current step existed twice
-          on one screen and the two could disagree — the rail said one thing
-          and the card carried the button for it. The rail IS the working panel
-          now: `StageFocusRow` above holds the name, the owner, the blocker and
-          the action in one place, and keeps the `deal-next-step` test id so the
-          specs still anchor to the block that carries the action. */}
-
-      {/* --- what the finance company told us ----------------------------- */}
-      {/* Under the next step, not inside the money column: this is the ACTION
-          on the stage the rail reports as blocked, and the money column is
-          withheld entirely from the role that performs it. */}
-      {financeDecision && (
-        <FinanceCompanyDecisionCard
-          facts={financeDecision.facts}
-          canRecordQuotation={financeDecision.canRecordQuotation}
-          canRecordApproval={financeDecision.canRecordApproval}
-          canEstablishLtvPercent={financeDecision.canEstablishLtvPercent}
-          canRecordAppraisal={financeDecision.canRecordAppraisal}
-          isOwnDeal={financeDecision.isOwnDeal}
-          money={decisionMoney}
+      {/* --- the current stage: the primary surface ----------------------- */}
+      {/* Everything the operator needs for the step the deal is on — what it
+          is, whose move it is, what is being waited on, and the ONE action —
+          in one place. It keeps `data-testid="deal-next-step"`: the id names
+          the block that carries the action, and that is exactly this. */}
+      {live ? (
+        <StageFocusRow
+          state={live.state}
+          label={t(STAGE_LABEL[live.key] ?? live.key)}
+          position={liveIndex + 1}
+          total={stages.length}
+          owner={stageOwnerLabel(live, activeAppraisalProvider, t)}
+          mirrorNote={stageShowsMirrorNote(live, activeAppraisalProvider)}
+          blocker={live.blocker ? t(`Blocker${live.blocker}`) : undefined}
+          action={workflowAction?.stageKey === live.key ? workflowAction : undefined}
+          outstandingDocuments={
+            live.blocker === "DocumentsIncomplete"
+              ? deal.documents.filter(
+                  (doc) => doc.required && doc.status !== "VERIFIED" && doc.status !== "WAIVED"
+                )
+              : []
+          }
           t={t}
-          onRecordQuotation={() => {
-            setQuotationError(null);
-            setRecordingQuotation(true);
-          }}
-          onRecordAppraisal={() => {
-            setAppraisalError(null);
-            setRecordingAppraisal(true);
-          }}
-          onRecordApproved={() => {
-            setApprovalError(null);
-            setRecordingApproval(true);
-          }}
-          onCorrectApproved={() => {
-            setReopenError(null);
-            setReopeningApproval(true);
-          }}
-        />
+        >
+          {/* The route IS the blocker on this step, so the control is on the
+              step — an operator told "record who the finance company pays"
+              must not have to hunt for where. Rendered here INSTEAD of beside
+              the vehicle, never in both places. */}
+          {routeBlocksClose && settlementRoute && (
+            <SettlementRouteControl
+              route={settlementRoute.route}
+              canSettleDirectToSupplier={settlementRoute.canSettleDirectToSupplier}
+              directRouteRefusal={settlementRoute.directRouteRefusal}
+              supplierName={settlementRoute.supplierName}
+              t={t}
+              onChoose={settlementRoute.onChoose}
+            />
+          )}
+        </StageFocusRow>
+      ) : (
+        !allComplete && (
+          /* No live stage and not finished: the deal stopped. Said in the
+             muted register — a stopped deal is a fact, not an alarm; the
+             held-deposit strip above carries the alarm when there is one. */
+          <p className="text-sm text-muted-foreground" data-testid="deal-stopped">
+            {t("DealStopped")}
+          </p>
+        )
       )}
 
       <div className="grid gap-6 lg:grid-cols-3">
-        <div className="space-y-6 lg:col-span-2">
+        {/* --- side column: the money ------------------------------------ */}
+        {/* First in source so a phone reads the figures right after the
+            step; last on a wide screen so the working column keeps the eye. */}
+        <div className="min-w-0 space-y-6 lg:order-last">
           {/* --- money ---------------------------------------------------- */}
           {/* Withheld before anything is spelled, because a figure in an
               unverifiable denomination is worse than no figure: the operator
@@ -3125,84 +3594,36 @@ export function DealCockpitView({
                 </div>
               )}
 
+              {/* The six facts and, under them, the parties — ABSENT when
+                  there is nobody to list. An OWNED cash sale has no third
+                  party at all, so the row would be a heading over nothing.
+                  The appraisal gap is gated on the DATA rather than on
+                  `dealKind`, because a financed SALE opened on the sale-keyed
+                  route is `dealKind: "FINANCED"` and still has no appraisal
+                  payload. */}
               <MoneyPanel
                 money={money}
                 profit={deal.money.profit}
+                summary={{
+                  applicationId: deal.applicationId,
+                  evidence: handoverEvidence ?? undefined,
+                  moneyIn: servedMoney,
+                }}
+                parties={
+                  deal.money.parties.length > 0 || deal.applicationId !== null
+                    ? {
+                        items: deal.money.parties,
+                        appraisalGap:
+                          deal.applicationId !== null
+                            ? { amountMinor: deal.money.appraisalGapMinor }
+                            : null,
+                        onSettleSupplier: canSettleSupplier ? () => setSettlingSupplier(true) : undefined,
+                        supplierGuidance,
+                      }
+                    : null
+                }
                 t={t}
               />
-
-              {/* --- أطراف الصفقة ------------------------------------------ */}
-              {/* ABSENT when there is nobody to list. An OWNED cash sale has no
-                  third party at all — no supplier, no financier — so the card
-                  would render a heading over nothing, which is the "empty
-                  rather than absent" pattern this screen removes everywhere
-                  else. The financed path always has rows, so it is unaffected. */}
-              {(deal.money.parties.length > 0 || deal.applicationId !== null) && (
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-base">{t("DealPartiesHeading")}</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {deal.money.parties.map((party) => (
-                    <div
-                      key={party.party}
-                      className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3"
-                    >
-                      <div className="min-w-0 space-y-0.5">
-                        <p className="font-medium">
-                          {t(PARTY_LABEL[party.party] ?? party.party)}
-                          {party.name && (
-                            <>
-                              {" — "}
-                              <bdi className="text-muted-foreground">{party.name}</bdi>
-                            </>
-                          )}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {t(POSITION_LABEL[party.position] ?? party.position)}
-                          {party.reference && (
-                            <>
-                              {" · "}
-                              <bdi>{party.reference}</bdi>
-                            </>
-                          )}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        {party.position !== "NOT_INVOLVED" && party.position !== "UNKNOWN" && (
-                          <p className="font-semibold">
-                            <Money>{money(party.amountMinor)}</Money>
-                          </p>
-                        )}
-                        {party.party === "SUPPLIER" && canSettleSupplier && (
-                          <Button size="sm" onClick={() => setSettlingSupplier(true)}>
-                            {t("SettleSupplierAction")}
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                  {/* Only where an APPLICATION exists. `فرق تخمين` is the
-                      difference between the finance company's appraisal and the
-                      price — a cash deal has no appraisal, so "no appraisal gap"
-                      would not be reassuring, it would be answering a question
-                      nobody asked.
-                      Gated on the data rather than on `dealKind`, because a
-                      financed SALE opened on the sale-keyed route is
-                      `dealKind: "FINANCED"` and still has no appraisal payload. */}
-                  {deal.applicationId !== null && (
-                    <p className="text-xs text-muted-foreground">
-                      {t("AppraisalGapLabel")}:{" "}
-                      {deal.money.appraisalGapMinor ? (
-                        <Money>{money(deal.money.appraisalGapMinor)}</Money>
-                      ) : (
-                        t("NoAppraisalGap")
-                      )}
-                    </p>
-                  )}
-                </CardContent>
-              </Card>
-              )}
 
               {/* --- actual expenses -------------------------------------- */}
               {/* ABSENT on a CASH deal with no fee records, rather than a card
@@ -3258,6 +3679,54 @@ export function DealCockpitView({
               </Card>
               )}
             </>
+          )}
+
+          {/* What the CUSTOMER agreed to pay, beside the dealer's money and
+              before the documents — the reading surface Review used to be for
+              this, and the one fact set the money panel deliberately does not
+              carry. */}
+          {financingPlan && (
+            <FinancingPlanPanel
+              plan={financingPlan.facts}
+              formatMajor={financingPlan.formatMajor}
+              t={t}
+            />
+          )}
+        </div>
+
+        {/* --- working column ------------------------------------------- */}
+        <div className="min-w-0 space-y-6 lg:col-span-2">
+          {/* --- what the finance company told us ----------------------------- */}
+          {/* Under the next step, not inside the money column: this is the ACTION
+              on the stage the rail reports as blocked, and the money column is
+              withheld entirely from the role that performs it. */}
+          {financeDecision && (
+            <FinanceCompanyDecisionCard
+              facts={financeDecision.facts}
+              canRecordQuotation={financeDecision.canRecordQuotation}
+              canRecordApproval={financeDecision.canRecordApproval}
+              canEstablishLtvPercent={financeDecision.canEstablishLtvPercent}
+              canRecordAppraisal={financeDecision.canRecordAppraisal}
+              isOwnDeal={financeDecision.isOwnDeal}
+              money={decisionMoney}
+              t={t}
+              onRecordQuotation={() => {
+                setQuotationError(null);
+                setRecordingQuotation(true);
+              }}
+              onRecordAppraisal={() => {
+                setAppraisalError(null);
+                setRecordingAppraisal(true);
+              }}
+              onRecordApproved={() => {
+                setApprovalError(null);
+                setRecordingApproval(true);
+              }}
+              onCorrectApproved={() => {
+                setReopenError(null);
+                setReopeningApproval(true);
+              }}
+            />
           )}
 
           {/* --- رسوم ومصاريف تسليم السيارة -------------------------------- */}
@@ -3349,69 +3818,12 @@ export function DealCockpitView({
             );
           })()}
         </div>
-
-        {/* --- side rail ------------------------------------------------- */}
-        <div className="space-y-6">
-          {deal.vehicle && (
-            <Card>
-              <CardContent className="space-y-2 pt-6 text-sm">
-                <p className="font-medium">
-                  <bdi>{deal.vehicle.label}</bdi>
-                </p>
-                <p className="text-muted-foreground">
-                  <bdi>{deal.vehicle.vin}</bdi>
-                </p>
-                <Badge variant="outline">
-                  {deal.vehicle.consigned ? t("OwnershipWithSupplier") : t("OwnershipWithDealership")}
-                </Badge>
-                {deal.customer && (
-                  <p className="pt-2 text-muted-foreground">
-                    <bdi>{deal.customer.name}</bdi>
-                    {deal.customer.phone && (
-                      <>
-                        {" · "}
-                        <bdi>{deal.customer.phone}</bdi>
-                      </>
-                    )}
-                  </p>
-                )}
-                {/* Beside the ownership badge that makes it a question: the car
-                    is the supplier's, so who the finance company pays has to
-                    be recorded here before the deal can close. Placed with the
-                    vehicle rather than with the close, because it is a fact
-                    about this car's ownership, and asked as soon as it can be
-                    answered rather than discovered as a refusal at finalize. */}
-                {settlementRoute && !routeBlocksClose && (
-                  <div className="pt-2">
-                    <SettlementRouteControl
-                      route={settlementRoute.route}
-                      canSettleDirectToSupplier={settlementRoute.canSettleDirectToSupplier}
-                      directRouteRefusal={settlementRoute.directRouteRefusal}
-                      supplierName={settlementRoute.supplierName}
-                      t={t}
-                      onChoose={settlementRoute.onChoose}
-                    />
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )}
-
-          {/* What the CUSTOMER agreed to pay, beside the car and before the
-              documents — the reading surface Review used to be for this, and
-              the one fact set the money panel deliberately does not carry. */}
-          {financingPlan && (
-            <FinancingPlanPanel
-              plan={financingPlan.facts}
-              formatMajor={financingPlan.formatMajor}
-              t={t}
-            />
-          )}
-
-        </div>
       </div>
 
-      {supplierRow && (
+      {/* Mounted only while the action is offered: losing authority or the
+          settle-able state UNMOUNTS an open dialog rather than leaving a form
+          whose submit the server will refuse. */}
+      {supplierRow && canSettleSupplier && (
         <SupplierSettlementDialog
           open={settlingSupplier}
           submitting={submitting}
@@ -3641,14 +4053,13 @@ export function DealCockpitView({
 }
 
 /**
- * The stage the deal is on, opened inside the rail.
+ * The stage the deal is on — the primary surface of the screen.
  *
- * The rail used to be a read-only progress list with a separate "next step"
- * card underneath repeating whichever stage was current and holding its
- * button. Two representations of one fact, which is how the rail came to
- * announce a step the card could not perform. Everything the operator needs
- * for the current step now lives on the step itself — what it is, whose move
- * it is, what is being waited on, and the action.
+ * Everything the operator needs for the current step lives here: what it is,
+ * whose move it is, the one thing being waited on, and the ONE action. The
+ * compact rail above it is a progress readout, never a second working panel;
+ * both are rendered from the same `live` stage, so the two cannot announce
+ * different steps — the defect the previous "next step" card had.
  *
  * It keeps `data-testid="deal-next-step"` deliberately. The id names the block
  * that carries the action, which is exactly what this is; a spec scoped to this
@@ -3657,6 +4068,8 @@ export function DealCockpitView({
 function StageFocusRow({
   state,
   label,
+  position,
+  total,
   owner,
   mirrorNote,
   blocker,
@@ -3665,8 +4078,11 @@ function StageFocusRow({
   t,
   children,
 }: Readonly<{
-  state: StageState;
+  state: DealStageState;
   label: string;
+  /** 1-based place on the rail, for the "Stage 3 / 8" kicker. */
+  position: number;
+  total: number;
   /** Whose move it is, resolved from server authority AND recorded provenance. */
   owner?: string;
   /** A control that belongs ON this step because it is what the step waits on. */
@@ -3683,63 +4099,71 @@ function StageFocusRow({
   outstandingDocuments: ReadonlyArray<{ ruleId: string; name: string }>;
   t: (key: string) => string;
 }>) {
-  const icon = STAGE_ICON[state] ?? STAGE_ICON.PENDING;
+  const icon = STAGE_ICON[state];
 
   return (
-    <div
-      className="rounded-md border border-primary/30 bg-primary/[0.04] p-3"
+    <Card
+      className={state === "BLOCKED" ? "border-amber-500/50" : "border-primary/40"}
       data-testid="deal-next-step"
     >
-      <div className="flex items-start gap-3">
-        <span className="mt-0.5 shrink-0">{icon}</span>
-        <div className="min-w-0 flex-1 space-y-2">
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <p className="font-medium">{label}</p>
-              {/* Whose move it is, said before anything else on the step. An
-                  operator who reads "finance company" stops looking for a
-                  button that must never exist. `bdi` because the owner can be
-                  an Arabic party name beside Latin text. */}
-              {owner && (
-                <Badge variant="outline" className="font-normal">
-                  <bdi>{owner}</bdi>
-                </Badge>
-              )}
+      <CardContent className="space-y-3 p-4 sm:p-5">
+        <div className="flex items-start gap-3">
+          <span className="mt-1 shrink-0">{icon}</span>
+          <div className="min-w-0 flex-1 space-y-3">
+            <div className="min-w-0 space-y-1">
+              <p className="text-xs text-muted-foreground">
+                {t("StageOfLabel")}{" "}
+                <bdi dir="ltr">
+                  {position} / {total}
+                </bdi>
+              </p>
+              <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                <h2 className="text-lg font-semibold leading-tight">{label}</h2>
+                {/* Whose move it is, said before anything else on the step. An
+                    operator who reads "finance company" stops looking for a
+                    button that must never exist. `bdi` because the owner can
+                    be an Arabic party name beside Latin text. */}
+                {owner && (
+                  <Badge variant="outline" className="font-normal">
+                    <bdi>{owner}</bdi>
+                  </Badge>
+                )}
+              </div>
             </div>
+
+            {/* What is being waited on — the one genuine blocker on this
+                step, with the documents it names under it. A stage with
+                nothing outstanding says so rather than going silent, but in
+                the MUTED colour: amber on "nothing is outstanding" painted a
+                warning over the absence of a problem. */}
+            {blocker ? (
+              <div className="rounded-md border-s-2 border-amber-600 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:border-amber-500 dark:text-amber-200">
+                <p>{blocker}</p>
+                {outstandingDocuments.length > 0 && (
+                  <ul className="mt-1 space-y-0.5">
+                    {outstandingDocuments.map((doc) => (
+                      <li key={doc.ruleId} className="flex items-center gap-2">
+                        <Minus className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                        <bdi className="min-w-0">{doc.name}</bdi>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">{t("StageReadyToProceed")}</p>
+            )}
+
             {/* The action for the step this block NAMES. A step worth naming
                 is a step worth doing here — the one recommended action, and
                 exactly one. */}
             {action && action.unavailableReasonKey === undefined && (
-              <Button size="sm" onClick={action.onStart}>
-                {t(action.actionKey)}
-              </Button>
+              <div className="flex flex-wrap pt-1">
+                <Button size="lg" className="w-full sm:w-auto" onClick={action.onStart}>
+                  {t(action.actionKey)}
+                </Button>
+              </div>
             )}
-          </div>
-
-          {/* What is being waited on. A stage with nothing outstanding says so
-              rather than going silent — but in the MUTED colour. Amber on
-              "nothing is outstanding" painted a warning over the absence of a
-              problem. */}
-          <p
-            className={
-              blocker
-                ? "text-sm text-amber-700 dark:text-amber-400"
-                : "text-sm text-muted-foreground"
-            }
-          >
-            {blocker ?? t("StageReadyToProceed")}
-          </p>
-
-          {outstandingDocuments.length > 0 && (
-            <ul className="space-y-1">
-              {outstandingDocuments.map((doc) => (
-                <li key={doc.ruleId} className="flex items-center gap-2 text-sm">
-                  <Minus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <bdi className="min-w-0">{doc.name}</bdi>
-                </li>
-              ))}
-            </ul>
-          )}
 
           {/* Why the named step is not actionable BY THIS CALLER. Silence here
               is the dead end this screen exists to remove. */}
@@ -3761,46 +4185,9 @@ function StageFocusRow({
               said whose move it is; a second line restating it would push the
               real content down. */}
           {mirrorNote && <p className="text-xs text-muted-foreground">{t("StageMirrorNote")}</p>}
+          </div>
         </div>
-      </div>
-    </div>
-  );
-}
-
-function StageRow({
-  state,
-  label,
-  owner,
-  blocker,
-}: Readonly<{
-  state: StageState;
-  label: string;
-  /**
-   * Whose move this step is, already resolved to display text.
-   *
-   * Typography and alignment rather than a pill: this is an operator console
-   * at high density, where a box around every row's owner would spend the
-   * space the rail needs. The trailing edge comes from the SIBLING
-   * `min-w-0 flex-1` label column absorbing the free space, so this reads
-   * correctly in Arabic and English without a directional utility.
-   */
-  owner?: string;
-  blocker?: string;
-}>) {
-  const icon = STAGE_ICON[state] ?? STAGE_ICON.PENDING;
-
-  return (
-    <div className="flex items-start gap-3 rounded-md px-2 py-1.5">
-      <span className="mt-0.5 shrink-0">{icon}</span>
-      <div className="min-w-0 flex-1">
-        <p className={`text-sm ${state === "COMPLETE" ? "text-muted-foreground" : ""}`}>{label}</p>
-        {blocker && <p className="text-xs text-amber-700 dark:text-amber-400">{blocker}</p>}
-      </div>
-      {owner && (
-        <span className="mt-0.5 shrink-0 text-xs text-muted-foreground">
-          <bdi>{owner}</bdi>
-        </span>
-      )}
-    </div>
+      </CardContent>
+    </Card>
   );
 }

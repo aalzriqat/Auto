@@ -53,6 +53,39 @@ jobs:
       - name: Install Playwright browsers
         run: pnpm exec playwright install --with-deps chromium
 
+      - name: Deal cockpit visual gate (static, no credentials)
+        # `playwright.visual.config.ts` renders the cockpit's own markup under
+        # the app's compiled stylesheet in real Chromium: EN/AR × light/dark ×
+        # 390/1280. It needs the installed browser and nothing else — no Clerk
+        # session, no Convex deployment — so it runs BEFORE the preview is
+        # provisioned and cannot be skipped by a credential that is absent on a
+        # fork. A red here fails the job like any other step.
+        #
+        # The gate writes into a FRESH per-run directory and rejects fixtures
+        # that predate the run, so a stale artifact cannot make a broken bridge
+        # look green. The check after it is the belt to that brace: it refuses
+        # a run that produced no screenshots, which is what "the suite matched
+        # zero specs" or "the bridge wrote nothing" would look like from here.
+        run: |
+          set -euo pipefail
+          pnpm run test:visual:deal-cockpit
+          SHOTS="$(find test-results/deal-cockpit-visual -mindepth 2 -maxdepth 2 -name 'deal-cockpit-*.png' | wc -l)"
+          echo "visual gate screenshots: $SHOTS"
+          if [ "$SHOTS" -ne 16 ]; then
+            echo "expected 16 screenshots (2 locales x 2 themes x 2 viewports x top/bottom), found $SHOTS" >&2
+            exit 1
+          fi
+        env:
+          CI: true
+
+      - name: Upload deal cockpit visual screenshots
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: deal-cockpit-visual
+          path: test-results/deal-cockpit-visual/
+          retention-days: 14
+
       - name: Name the preview deployment
         # An EXPLICIT name, derived deterministically from the ref, because
         # every command after this one has to be able to say which deployment

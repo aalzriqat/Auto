@@ -1363,6 +1363,60 @@ export function positionForObligation(
   }
 }
 
+/** The stored status of a supplier margin claim, as the schema spells it. */
+export type SupplierClaimStatus = "OPEN" | "PARTIALLY_PAID" | "PAID" | "DISPUTED" | "CANCELLED";
+
+/**
+ * Whether a receipt may be recorded against the supplier's claim right now —
+ * decided by the SERVER, from the same facts `recordReceipt` refuses on.
+ *
+ * The position says what is OWED; this says what may be DONE about it. They
+ * used to be one thing: the screen offered "Settle supplier" whenever the row
+ * read OWED_TO_DEALERSHIP, and a DISPUTED claim reads exactly that — the money
+ * is still owed, the two sides just disagree about it. So the button was shown
+ * on a claim the mutation refuses on sight, and the operator learned of the
+ * refusal only after typing the amount. Keeping the position truthful and
+ * carrying the actionability beside it lets the screen say both things.
+ *
+ * The reasons are a closed set so a renderer can name the one it explains
+ * (`CLAIM_DISPUTED` gets guidance) and stay silent on the rest. Every gap
+ * fails CLOSED: no route, no claim, a claim whose status is not one the
+ * mutation accepts, or an obligation that cannot be read all answer "no".
+ */
+export type SupplierReceiptActionability =
+  | { actionable: true }
+  | {
+      actionable: false;
+      reason:
+        | "ROUTE_UNKNOWN"
+        | "NOT_DIRECT_ROUTE"
+        | "NO_CLAIM"
+        | "CLAIM_DISPUTED"
+        | "CLAIM_NOT_OPEN"
+        | "OBLIGATION_NOT_OPEN";
+    };
+
+export function supplierReceiptActionability(args: {
+  routeKnown: boolean;
+  settlesDirect: boolean;
+  /** The claim the projection resolved, or nothing — never an id the client chose. */
+  claim: { id: string; status: SupplierClaimStatus } | undefined;
+  obligation: ObligationState;
+}): SupplierReceiptActionability {
+  if (!args.routeKnown) return { actionable: false, reason: "ROUTE_UNKNOWN" };
+  if (!args.settlesDirect) return { actionable: false, reason: "NOT_DIRECT_ROUTE" };
+  if (!args.claim?.id) return { actionable: false, reason: "NO_CLAIM" };
+  if (args.claim.status === "DISPUTED") return { actionable: false, reason: "CLAIM_DISPUTED" };
+  // An allowlist of what `recordReceipt` accepts, not a denylist of what it
+  // refuses: a status added to the schema tomorrow is refused here until
+  // somebody decides otherwise, rather than offered by omission.
+  if (args.claim.status !== "OPEN" && args.claim.status !== "PARTIALLY_PAID") {
+    return { actionable: false, reason: "CLAIM_NOT_OPEN" };
+  }
+  if (args.obligation !== "OPEN") return { actionable: false, reason: "OBLIGATION_NOT_OPEN" };
+  return { actionable: true };
+}
+
 /**
  * How settled the headline figure's inputs are.
  *
