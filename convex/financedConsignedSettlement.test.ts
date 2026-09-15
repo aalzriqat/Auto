@@ -1478,7 +1478,7 @@ describe("the deal cockpit query", () => {
     const line = (key: string) => profit.lines.find((l) => l.key === key)?.amountMinor;
     expect(line("SUPPLIER_SETTLEMENT")).toBe(SUPPLIER_ENTITLEMENT * SCALE);
     expect(line("APPROVED_PURCHASE")).toBe(APPROVED * SCALE);
-    expect(line("CUSTOMER_DIRECT_TO_DEALER")).toBe(0);
+    expect(line("CUSTOMER_PLANNED_TO_DEALER")).toBe(0);
     expect(line("ACTUAL_EXPENSES")).toBe(0);
     // 90% of the 18,000 approval is 16,200; the dealership funds the rest.
     expect(line("DEALER_CONTRIBUTION")).toBe(1_800 * SCALE);
@@ -3033,7 +3033,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
     const profit = (await cockpit(s, applicationId))!.money!.managementProfit;
     expect(profit.available).toBe(true);
     if (!profit.available) return;
-    expect(profit.lines.find((l) => l.key === "CUSTOMER_DIRECT_TO_DEALER")?.amountMinor).toBe(
+    expect(profit.lines.find((l) => l.key === "CUSTOMER_PLANNED_TO_DEALER")?.amountMinor).toBe(
       2_000 * SCALE
     );
     expect(profit.lines.find((l) => l.key === "SUPPLIER_SETTLEMENT")?.amountMinor).toBe(

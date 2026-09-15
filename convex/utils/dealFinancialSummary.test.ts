@@ -198,6 +198,7 @@ describe("deriveDealFinancialSummary", () => {
         expectedCostsRemainingMinor: 250_000,
         expectedCostsReason: null,
         totalExpectedMinor: 2_050_000,
+        aggregateReason: null,
       });
     });
     test("no contribution on record: nothing is totalled", () => {
@@ -275,6 +276,76 @@ describe("deriveDealFinancialSummary", () => {
       expectedCostsRemainingMinor: null,
       expectedCostsReason: "MIXED_DENOMINATION",
       totalExpectedMinor: null,
+      aggregateReason: null,
+    });
+  });
+
+  describe("the readable-total contract — a served total that is not a figure is withheld, never published", () => {
+    test.each([
+      ["NaN", Number.NaN],
+      ["Infinity", Number.POSITIVE_INFINITY],
+      ["a fraction of a minor unit", 150_000.5],
+      ["a negative total", -150_000],
+      ["an unsafe integer", Number.MAX_SAFE_INTEGER + 2],
+    ])("a recorded total of %s is served null as UNSAFE_AMOUNT, and every total built on it is withheld", (_label, total) => {
+      const s = deriveDealFinancialSummary(inputs({ expenses: { actualTotalMinor: total, awaitingActuals: 0, reason: null } }));
+      expect(s.dealerOutlay).toMatchObject({
+        plannedContributionMinor: 1_650_000,
+        recordedCostsMinor: null,
+        recordedCostsReason: "UNSAFE_AMOUNT",
+        knownCommittedMinor: null,
+        expectedCostsRemainingMinor: 250_000,
+        totalExpectedMinor: null,
+        aggregateReason: null,
+      });
+    });
+
+    test("the caller's own UNSAFE_AMOUNT reason travels through with a null total", () => {
+      const s = deriveDealFinancialSummary(inputs({ expenses: { actualTotalMinor: null, awaitingActuals: 1, reason: "UNSAFE_AMOUNT" } }));
+      expect(s.dealerOutlay.recordedCostsMinor).toBeNull();
+      expect(s.dealerOutlay.recordedCostsReason).toBe("UNSAFE_AMOUNT");
+      expect(s.dealerOutlay.knownCommittedMinor).toBeNull();
+      expect(s.dealerOutlay.totalExpectedMinor).toBeNull();
+    });
+
+    test("planned contribution + recorded costs that leave the safe range: both operands stand, the sums are withheld with the reason", () => {
+      const nearMax = Number.MAX_SAFE_INTEGER - 1;
+      const s = deriveDealFinancialSummary(
+        inputs({
+          app: { ...inputs().app, dealerContributionMinor: nearMax },
+          expenses: { actualTotalMinor: 2, awaitingActuals: 0, reason: null },
+        })
+      );
+      expect(s.dealerOutlay).toMatchObject({
+        plannedContributionMinor: nearMax,
+        recordedCostsMinor: 2,
+        recordedCostsReason: null,
+        knownCommittedMinor: null,
+        expectedCostsRemainingMinor: 250_000,
+        totalExpectedMinor: null,
+        aggregateReason: "UNSAFE_AMOUNT",
+      });
+    });
+
+    test("known outlay + expected remaining that leave the safe range: the known subtotal stands, the expected total is withheld with the reason", () => {
+      const s = deriveDealFinancialSummary(
+        inputs({
+          app: { ...inputs().app, dealerContributionMinor: Number.MAX_SAFE_INTEGER - 150_001 },
+          expectedDealerBorne: { totalMinor: 2, remainingMinor: 2, reason: null },
+        })
+      );
+      expect(s.dealerOutlay.knownCommittedMinor).toBe(Number.MAX_SAFE_INTEGER - 1);
+      expect(s.dealerOutlay.expectedCostsRemainingMinor).toBe(2);
+      expect(s.dealerOutlay.totalExpectedMinor).toBeNull();
+      expect(s.dealerOutlay.aggregateReason).toBe("UNSAFE_AMOUNT");
+    });
+
+    test("a valid same-currency deal is untouched by the contract: totals stand and no reason is served", () => {
+      const s = deriveDealFinancialSummary(inputs());
+      expect(s.dealerOutlay.recordedCostsReason).toBeNull();
+      expect(s.dealerOutlay.aggregateReason).toBeNull();
+      expect(s.dealerOutlay.knownCommittedMinor).toBe(1_800_000);
+      expect(s.dealerOutlay.totalExpectedMinor).toBe(2_050_000);
     });
   });
 
@@ -305,6 +376,7 @@ describe("deriveDealFinancialSummary", () => {
       expectedCostsRemainingMinor: null,
       expectedCostsReason: "NO_POLICY",
       totalExpectedMinor: null,
+      aggregateReason: null,
     });
     expect(s.supplier).toEqual({ consigned: null, direction: "UNKNOWN", amountMinor: null, route: "THROUGH_DEALERSHIP" });
     expect(s.profit.available).toBe(false);

@@ -1469,7 +1469,16 @@ export type ManagementProfitClassification =
 
 export type ManagementProfitLine =
   | { key: "APPROVED_PURCHASE"; sign: 1; amountMinor: number }
-  | { key: "CUSTOMER_DIRECT_TO_DEALER"; sign: 1; amountMinor: number }
+  /**
+   * The appraisal-gap share the customer AGREED to pay the dealership
+   * (`customerGapCashToDealerMinor + customerGapInstallmentToDealerMinor`) —
+   * `resolveAppraisalGap`'s allocation, a negotiated PLAN with no receipt,
+   * cashbook entry or journal behind it. It belongs in the management
+   * economics because the dealership is entitled to it, but it is PLANNED,
+   * never paid or received, and its label must say so; the receipt-backed
+   * figure lives in the overview's `customerPaidToDealer`.
+   */
+  | { key: "CUSTOMER_PLANNED_TO_DEALER"; sign: 1; amountMinor: number }
   | { key: "SUPPLIER_SETTLEMENT"; sign: -1; amountMinor: number }
   /**
    * The dealership's OWN car (STOCK): what it cost to hold, from the same
@@ -1530,6 +1539,8 @@ export type ManagementProfit =
         | "PreparationExpensesUnreadable"
         /** A dealer-borne cost line is denominated in another currency: the expense operand would be a partial sum, so the figure is withheld. */
         | "ExpensesMixedDenomination"
+        /** A live cost line carries an amount that is not a safe non-negative integer, or the lines overflow: the expense operand is not a figure. */
+        | "ExpensesUnreadable"
         | "CorruptInput"
         | "DealCancelled";
     };
@@ -1671,7 +1682,11 @@ export function deriveManagementProfit(args: {
   approvedDealerPurchaseAmountMinor?: number;
   supplierSettlementMinor?: number;
   dealerContributionMinor?: number;
-  /** `customerGapCashToDealerMinor + customerGapInstallmentToDealerMinor`. */
+  /**
+   * `customerGapCashToDealerMinor + customerGapInstallmentToDealerMinor` — the
+   * customer's PLANNED gap contribution to the dealership, served as
+   * `CUSTOMER_PLANNED_TO_DEALER`. An allocation, not a receipt.
+   */
   customerDirectToDealerMinor?: number;
   actualExpensesMinor: number;
   currency: string;
@@ -1712,7 +1727,7 @@ export function deriveManagementProfit(args: {
   const lines: ManagementProfitLine[] = [
     { key: "APPROVED_PURCHASE", sign: 1, amountMinor: args.approvedDealerPurchaseAmountMinor },
     {
-      key: "CUSTOMER_DIRECT_TO_DEALER",
+      key: "CUSTOMER_PLANNED_TO_DEALER",
       sign: 1,
       amountMinor: args.customerDirectToDealerMinor ?? 0,
     },
@@ -1757,6 +1772,7 @@ export function deriveStockManagementProfit(args: {
   /** The capitalized cost basis, in the deal's minor units; undefined when the vehicle has none. */
   vehicleCostMinor?: number;
   dealerContributionMinor?: number;
+  /** The customer's PLANNED gap contribution to the dealership — see `deriveManagementProfit`. */
   customerDirectToDealerMinor?: number;
   actualExpensesMinor: number;
   currency: string;
@@ -1784,7 +1800,7 @@ export function deriveStockManagementProfit(args: {
   }
   const lines: ManagementProfitLine[] = [
     { key: "APPROVED_PURCHASE", sign: 1, amountMinor: args.approvedDealerPurchaseAmountMinor },
-    { key: "CUSTOMER_DIRECT_TO_DEALER", sign: 1, amountMinor: args.customerDirectToDealerMinor ?? 0 },
+    { key: "CUSTOMER_PLANNED_TO_DEALER", sign: 1, amountMinor: args.customerDirectToDealerMinor ?? 0 },
     { key: "VEHICLE_COST", sign: -1, amountMinor: args.vehicleCostMinor },
     { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: args.dealerContributionMinor },
     { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: args.actualExpensesMinor },

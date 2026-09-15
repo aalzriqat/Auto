@@ -103,6 +103,7 @@ function overview(): FinancedDealOverviewData {
         expectedCostsRemainingMinor: null,
         expectedCostsReason: "NO_POLICY",
         totalExpectedMinor: null,
+        aggregateReason: null,
       },
       supplier: { consigned: false, direction: "NOT_INVOLVED", amountMinor: 0, route: "THROUGH_DEALERSHIP" },
       profit: {
@@ -114,7 +115,7 @@ function overview(): FinancedDealOverviewData {
         postable: false,
         lines: [
           { key: "APPROVED_PURCHASE", sign: 1, amountMinor: 12_500 * SCALE },
-          { key: "CUSTOMER_DIRECT_TO_DEALER", sign: 1, amountMinor: 0 },
+          { key: "CUSTOMER_PLANNED_TO_DEALER", sign: 1, amountMinor: 0 },
           { key: "VEHICLE_COST", sign: -1, amountMinor: 9_800 * SCALE },
           { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: 500 * SCALE },
           { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: 90 * SCALE },
@@ -230,6 +231,53 @@ describe("one canonical profit on the financed cockpit", () => {
       expect(screen.queryByTestId("deal-financial-overview")).toBeNull();
       cleanup();
     }
+  });
+
+  test("a NONZERO planned appraisal-gap contribution renders as planned/allocated — never as paid or received — and stays out of the receipt-backed tile", () => {
+    const data = overview();
+    const summary = data.financialSummary!;
+    const withPlannedGap: FinancedDealOverviewData = {
+      ...data,
+      financialSummary: {
+        ...summary,
+        customerGapCashPlannedMinor: 700 * SCALE,
+        profit: {
+          ...(summary.profit as Extract<typeof summary.profit, { available: true; basis: "MANAGEMENT_ESTIMATE" }>),
+          amountMinor: 2_810 * SCALE,
+          lines: [
+            { key: "APPROVED_PURCHASE", sign: 1, amountMinor: 12_500 * SCALE },
+            { key: "CUSTOMER_PLANNED_TO_DEALER", sign: 1, amountMinor: 700 * SCALE },
+            { key: "VEHICLE_COST", sign: -1, amountMinor: 9_800 * SCALE },
+            { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: 500 * SCALE },
+            { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: 90 * SCALE },
+          ],
+        },
+      },
+    };
+    const { container } = render(
+      <DealCockpitView
+        deal={stockDeal()}
+        onRecordSupplierReceipt={async () => {}}
+        financialOverview={{ data: withPlannedGap, loading: false }}
+        custodyMoney={money}
+      />
+    );
+    // The line's label says PLANNED and NOT RECEIVED, in the tiles and the breakdown.
+    const labels = screen.getAllByText(salesEn.LineCustomerPlannedToDealer);
+    expect(labels.length).toBeGreaterThanOrEqual(1);
+    expect(salesEn.LineCustomerPlannedToDealer).toMatch(/planned/i);
+    expect(salesEn.LineCustomerPlannedToDealer).toMatch(/not yet received/i);
+    expect(screen.getAllByText("700 JOD").length).toBeGreaterThanOrEqual(1);
+    // The retired wording paints nowhere on the screen.
+    expect(container.textContent).not.toContain("Paid by the customer to the dealership");
+    // The receipt-backed tile still reads the held deposits (zero here), not the plan.
+    const paidTile = within(screen.getByTestId("overview-customer-paid"));
+    expect(paidTile.queryByText("700 JOD")).toBeNull();
+    expect(paidTile.getByText("0 JOD")).toBeTruthy();
+    // ...and the overview's own planned-gap row carries the plan, labelled as allocated.
+    const plannedTile = within(screen.getByTestId("overview-gap-cash-planned"));
+    expect(plannedTile.getByText("700 JOD")).toBeTruthy();
+    expect(plannedTile.getByText(salesEn.OverviewGapCashPlannedNote)).toBeTruthy();
   });
 
   test("a genuine CASH deal has no overview and keeps the accounting result the sale cockpit serves", () => {

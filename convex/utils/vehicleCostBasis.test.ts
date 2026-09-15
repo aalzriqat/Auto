@@ -185,6 +185,23 @@ describe("deriveVehicleCostBasis", () => {
       const b = basis(stock, [expense({})], { dealCurrency: "USD" });
       expect(b).toEqual({ available: false, reason: "MIXED_DENOMINATION", currency: "USD", consigned: false });
     });
+    test.each(["JD", "jod", "", "XXX"])(
+      "a denomination AutoFlow cannot vouch for (%j) — even when deal and org agree on it — withholds the basis rather than scaling by the guessed fallback",
+      (code) => {
+        // Same code on both sides, so the mixed-denomination check does not
+        // fire; the only thing standing between 9,500 "JD" and a basis scaled
+        // by 100 instead of 1,000 is the denomination check itself.
+        for (const vehicle of [stock, sourced]) {
+          const b = basis(vehicle, [expense({})], { dealCurrency: code, orgCurrency: code });
+          expect(b).toEqual({
+            available: false,
+            reason: "UNREADABLE_AMOUNT",
+            currency: code,
+            consigned: vehicle.sourceType === "SOURCED",
+          });
+        }
+      }
+    );
     test("an unreadable amount (NaN reaches v.number()) withholds the whole basis", () => {
       const b = basis(stock, [expense({ capitalizedAmount: Number.NaN })]);
       expect(b).toEqual({ available: false, reason: "UNREADABLE_AMOUNT", currency: "JOD", consigned: false });

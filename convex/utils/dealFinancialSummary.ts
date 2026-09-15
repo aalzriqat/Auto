@@ -45,6 +45,14 @@ import type { DealProfit } from "./financingEconomics";
  * Pure so the formulas are testable without a database.
  */
 
+/**
+ * Why the recorded dealer-borne costs are unknown: a dealer-borne line in
+ * another currency (a same-currency sum would be partial), or a live line
+ * whose amount is not a safe non-negative integer, or lines that overflow
+ * between them (the sum would be corrupt).
+ */
+export type RecordedCostsReason = "MIXED_DENOMINATION" | "UNSAFE_AMOUNT";
+
 /** A party row exactly as `applications.dealCockpit` serves it. */
 export type ServedParty = Readonly<{
   party: "CUSTOMER" | "SUPPLIER" | "FINANCIER";
@@ -66,14 +74,16 @@ export type DealFinancialSummaryInputs = Readonly<{
    *
    * The cockpit sums only lines in the deal's currency and silently leaves a
    * foreign-denominated one out, so its total is a PARTIAL figure whenever a
-   * dealer-borne line is denominated otherwise. The caller inspects every
-   * live line and says so here: `actualTotalMinor` is `null` with the reason,
-   * and every aggregate built on it is withheld rather than understated.
+   * dealer-borne line is denominated otherwise; and it sums unchecked, so a
+   * line carrying NaN or an unsafe value makes it a NON-figure. The caller
+   * inspects every live line and says so here: `actualTotalMinor` is `null`
+   * with the reason, and every aggregate built on it is withheld rather than
+   * understated or corrupt.
    */
   expenses: Readonly<{
     actualTotalMinor: number | null;
     awaitingActuals: number;
-    reason: "MIXED_DENOMINATION" | null;
+    reason: RecordedCostsReason | null;
   }>;
   /** Route-specific, already derived — see the module header. */
   profit: DealProfit;
@@ -164,19 +174,22 @@ export type DealFinancialSummary = Readonly<{
    * cash that has left. `recordedCosts` is what has actually been recorded as
    * dealer-borne, and null with `recordedCostsReason` when a dealer-borne
    * line is denominated in another currency — the same-currency sum would be
-   * a partial figure wearing a total's name. `knownCommitted` is those two
+   * a partial figure wearing a total's name — or when a line's amount cannot
+   * be read, where the sum would be corrupt. `knownCommitted` is those two
    * added, and null while either is unknown — "0 + costs" would report the
    * outlay of a deal whose split has not been computed as if it were known.
    * `expectedCostsRemaining` is the dealer-borne policy not yet recorded, and
    * null when NO policy is configured. `totalExpected` adds it to the known
    * figure and is null whenever either side is unknown: a missing policy is
-   * unknown, not zero, and a total over an unknown is not a total.
+   * unknown, not zero, and a total over an unknown is not a total. Either
+   * addition that leaves the safe range is withheld too, with
+   * `aggregateReason` saying so — safe operands do not guarantee a safe sum.
    */
   dealerOutlay: Readonly<{
     plannedContributionMinor: number | null;
     recordedCostsMinor: number | null;
     /** Why the recorded figure is unknown, when it is. */
-    recordedCostsReason: "MIXED_DENOMINATION" | null;
+    recordedCostsReason: RecordedCostsReason | null;
     /** Live lines still without an actual — the recorded figure is not the whole cost yet. */
     awaitingActuals: number;
     knownCommittedMinor: number | null;
@@ -184,6 +197,8 @@ export type DealFinancialSummary = Readonly<{
     /** Why the expected side is unknown, when it is. */
     expectedCostsReason: "NO_POLICY" | "MIXED_DENOMINATION" | "UNSAFE_AMOUNT" | null;
     totalExpectedMinor: number | null;
+    /** Why `knownCommitted`/`totalExpected` are withheld although their operands are known: the sum is not a safe integer. */
+    aggregateReason: "UNSAFE_AMOUNT" | null;
   }>;
   supplier: Readonly<{
     consigned: boolean | null;
@@ -257,16 +272,34 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
       : null;
 
   const plannedContributionMinor = app.dealerContributionMinor ?? null;
-  const recordedCostsMinor = input.expenses.actualTotalMinor;
+  // The readable-total contract, enforced here as well as by the caller: a
+  // served total that is not a safe non-negative integer is not a figure,
+  // whatever reason (or none) travelled with it. Checked positively — NaN
+  // passes every negative comparison.
+  const safe = (amount: number): boolean => Number.isSafeInteger(amount) && amount >= 0;
+  const recordedUnreadable =
+    input.expenses.actualTotalMinor !== null && !safe(input.expenses.actualTotalMinor);
+  const recordedCostsMinor = recordedUnreadable ? null : input.expenses.actualTotalMinor;
+  const recordedCostsReason: RecordedCostsReason | null = recordedUnreadable
+    ? "UNSAFE_AMOUNT"
+    : input.expenses.reason;
   const expectedCostsRemainingMinor = input.expectedDealerBorne.remainingMinor;
-  const knownCommittedMinor =
+  // Two safe operands can still add to an unsafe sum; a sum that is not a
+  // safe integer is withheld rather than published, with its own reason —
+  // the operands themselves are known and are still served.
+  const knownCommittedSum =
     plannedContributionMinor === null || recordedCostsMinor === null
       ? null
       : plannedContributionMinor + recordedCostsMinor;
-  const totalExpectedMinor =
+  const knownCommittedOverflow = knownCommittedSum !== null && !Number.isSafeInteger(knownCommittedSum);
+  const knownCommittedMinor = knownCommittedOverflow ? null : knownCommittedSum;
+  const totalExpectedSum =
     knownCommittedMinor === null || expectedCostsRemainingMinor === null
       ? null
       : knownCommittedMinor + expectedCostsRemainingMinor;
+  const totalExpectedOverflow = totalExpectedSum !== null && !Number.isSafeInteger(totalExpectedSum);
+  const totalExpectedMinor = totalExpectedOverflow ? null : totalExpectedSum;
+  const aggregateReason = knownCommittedOverflow || totalExpectedOverflow ? ("UNSAFE_AMOUNT" as const) : null;
 
   const route: DealFinancialSummary["supplier"]["route"] = !input.routeKnown
     ? "UNKNOWN"
@@ -293,12 +326,13 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
     dealerOutlay: {
       plannedContributionMinor,
       recordedCostsMinor,
-      recordedCostsReason: input.expenses.reason,
+      recordedCostsReason,
       awaitingActuals: input.expenses.awaitingActuals,
       knownCommittedMinor,
       expectedCostsRemainingMinor,
       expectedCostsReason: input.expectedDealerBorne.reason,
       totalExpectedMinor,
+      aggregateReason,
     },
     supplier: {
       consigned: input.vehicleConsigned,

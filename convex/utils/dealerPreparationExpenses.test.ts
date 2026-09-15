@@ -97,6 +97,19 @@ describe("deriveDealerPreparationExpenses", () => {
     expect(prep([expense({ amount: Number.NaN })])).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
     expect(prep([expense({ amount: 10, taxAmount: 20 })])).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
   });
+
+  test.each(["JD", "jod", "", "XXX"])(
+    "a denomination AutoFlow cannot vouch for (%j), shared by deal and org, withholds the preparation spend — never a total scaled by the guessed fallback",
+    (code) => {
+      const p = deriveDealerPreparationExpenses({
+        expenses: [expense({})],
+        cutoffCreationTime: CUTOFF,
+        dealCurrency: code,
+        orgCurrency: code,
+      });
+      expect(p).toEqual({ available: false, reason: "UNREADABLE_AMOUNT", currency: code });
+    }
+  );
 });
 
 describe("the consigned cost basis never absorbs a capitalized row into the supplier's entitlement", () => {

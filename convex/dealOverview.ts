@@ -5,7 +5,7 @@ import { api } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import type * as applicationsModule from "./applications";
 import { getOrgCurrency } from "./accounting/workflowHooks";
-import { deriveExpectedFees, summarizeFees, type ExpectedFeeRow } from "./financeDealCosts";
+import { deriveExpectedFees, summarizeFees, unreadableFeeAmounts, type ExpectedFeeRow } from "./financeDealCosts";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { loadActiveFees, unrecordedConfiguredFeePositions } from "./utils/settlementDeductions";
@@ -18,6 +18,7 @@ import {
   deriveDealFinancialSummary,
   type DealFinancialSummary,
   type DealFinancialSummaryInputs,
+  type RecordedCostsReason,
 } from "./utils/dealFinancialSummary";
 import {
   deriveDealerPreparationExpenses,
@@ -230,13 +231,18 @@ function routeSpecificProfit(args: {
   fullySettled: boolean;
   /** A dealer-borne line in another currency: the expense operand is partial, so no figure is stated. */
   expensesMixed: boolean;
+  /** A live line's amount is not a safe non-negative integer, or the lines overflow: the expense operand is corrupt. */
+  expensesUnreadable: boolean;
 }): DealProfit {
   const { app, money } = args;
   // Refused before either route: both derive against `actualExpensesMinor`,
   // and on a mixed deal that figure is missing a cost the dealership bore.
   // A profit computed over a partial cost is an overstatement with a reason
-  // nobody would see; this one names it.
+  // nobody would see; this one names it. An unreadable line is the same
+  // refusal for the other failure: the cockpit's total was accumulated
+  // unchecked, and NaN slips past the consignment builder's `< 0` guard.
   if (args.expensesMixed) return { available: false, reason: "ExpensesMixedDenomination" };
+  if (args.expensesUnreadable) return { available: false, reason: "ExpensesUnreadable" };
   if (args.consigned === null) return money.profit;
   if (args.consigned) {
     // Consignment economics, the cockpit's own, less what the dealership
@@ -342,11 +348,16 @@ export const financedDealOverview = query({
       // The configured-fee checklist, as the handover-cost panel derives it —
       // the same function, the same snapshot, the same live lines.
       const fees = await loadActiveFees(ctx, app._id);
+      // The readable-total contract over EVERY live line: a NaN, fractional,
+      // negative or unsafe amount, or lines that overflow, make the cockpit's
+      // unchecked total a non-figure. It is then served nowhere — not as the
+      // checklist's actual, not as the recorded outlay, not inside a profit.
+      const expensesUnreadable = unreadableFeeAmounts(fees) !== null;
       const expected = deriveExpectedFees({
         snapshot: app.companyRuleSnapshot,
         fees,
         currency: cockpit.money.currency,
-        actualTotalMinor: cockpit.money.expenses.actualTotalMinor,
+        actualTotalMinor: expensesUnreadable ? null : cockpit.money.expenses.actualTotalMinor,
       });
       const consigned = cockpit.vehicle?.consigned ?? null;
       /**
@@ -375,14 +386,20 @@ export const financedDealOverview = query({
       // currency withholds the recorded, committed and expected outlay and the
       // profit built on them, with the reason — never a partial JOD total.
       const expensesMixed = dealerBorneLinesMixed(fees, cockpit.money.currency);
+      const expensesReason: RecordedCostsReason | null = expensesMixed
+        ? "MIXED_DENOMINATION"
+        : expensesUnreadable
+          ? "UNSAFE_AMOUNT"
+          : null;
       financialSummary = deriveDealFinancialSummary({
         currency: cockpit.money.currency,
         routeKnown: cockpit.money.routeKnown,
         settlesDirectToSupplier: cockpit.money.settlesDirectToSupplier,
         parties: cockpit.money.parties,
-        expenses: expensesMixed
-          ? { actualTotalMinor: null, awaitingActuals: cockpit.money.expenses.awaitingActuals, reason: "MIXED_DENOMINATION" }
-          : { ...cockpit.money.expenses, reason: null },
+        expenses:
+          expensesReason !== null
+            ? { actualTotalMinor: null, awaitingActuals: cockpit.money.expenses.awaitingActuals, reason: expensesReason }
+            : { ...cockpit.money.expenses, reason: null },
         profit: routeSpecificProfit({
           app,
           consigned,
@@ -391,6 +408,7 @@ export const financedDealOverview = query({
           preparation,
           fullySettled,
           expensesMixed,
+          expensesUnreadable,
         }),
         vehicleConsigned: consigned,
         app,

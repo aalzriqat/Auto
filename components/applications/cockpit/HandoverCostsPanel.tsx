@@ -164,10 +164,11 @@ export type HandoverCostsSummary = {
  * Why the server withheld the totals. `listDealCosts` serves `summary: null`
  * together with this whenever the lines do not all share the deal's currency
  * — a sum across denominations is not a number, so none is served, and this
- * section says why instead of showing one.
+ * section says why instead of showing one. `UNSAFE_AMOUNT` is the other way a
+ * total is not a number: a line carrying an amount nobody can read.
  */
 export type HandoverCostsSummaryUnavailable = {
-  reason: "MIXED_DENOMINATION";
+  reason: "MIXED_DENOMINATION" | "UNSAFE_AMOUNT";
   dealCurrency: string;
   lineCurrencies: ReadonlyArray<string>;
 };
@@ -597,8 +598,8 @@ export function HandoverCostsPanel({
                 the server serves no summary over mixed rows, only the reason. */}
             {costs.summary === null ? (
               <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="deal-handover-costs-mixed">
-                {t("HandoverCostsMixedCurrency")}
-                {costs.summaryUnavailable && (
+                {t(costs.summaryUnavailable?.reason === "UNSAFE_AMOUNT" ? "HandoverCostsUnreadableAmount" : "HandoverCostsMixedCurrency")}
+                {costs.summaryUnavailable && costs.summaryUnavailable.reason === "MIXED_DENOMINATION" && (
                   <>
                     {" "}
                     (<bdi dir="ltr">{costs.summaryUnavailable.lineCurrencies.join(", ")}</bdi>

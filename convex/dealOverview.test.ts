@@ -533,6 +533,80 @@ describe("dealOverview.financedDealOverview", () => {
     expect(JSON.stringify(outlay)).not.toContain("90000");
   });
 
+  test.each([
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["a fraction of a fils", 90_000.5],
+    ["a negative amount", -90_000],
+    ["an unsafe integer", Number.MAX_SAFE_INTEGER + 2],
+  ])(
+    "a SAME-currency dealer-borne line carrying %s (raw, as `v.number()` admits it) withholds the recorded, committed and expected outlay, the checklist's actual and the profit — never a corrupt total",
+    async (_label, corrupt) => {
+      const s = await seed(`u-${_label}`);
+      const applicationId = await insertApplication(s);
+      await s.t.run((ctx) =>
+        ctx.db.patch(applicationId, {
+          companyRuleSnapshot: {
+            ruleVersion: 1,
+            companyName: "Policy Co",
+            feeTemplates: [
+              {
+                feeType: "LICENSING",
+                description: "Plates",
+                estimatedAmountMinor: 250_000,
+                paidBy: "DEALER",
+                paidTo: "GOVERNMENT",
+                includedInQuotation: false,
+                deductedFromSettlement: false,
+                refundable: false,
+                accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+              },
+            ],
+          },
+        })
+      );
+      await insertFee(s, applicationId, { paidBy: "DEALER", currency: "JOD", actualAmountMinor: 90_000 });
+      // Bypasses `recordDealFee`, which asserts the amount — the row carries
+      // exactly what a legacy write or an admin raw edit would leave in it.
+      await insertFee(s, applicationId, { paidBy: "EMPLOYEE", currency: "JOD", actualAmountMinor: corrupt });
+      const view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      const outlay = view!.financialSummary!.dealerOutlay;
+      expect(outlay).toMatchObject({
+        plannedContributionMinor: 1_650_000,
+        recordedCostsMinor: null,
+        recordedCostsReason: "UNSAFE_AMOUNT",
+        knownCommittedMinor: null,
+        totalExpectedMinor: null,
+      });
+      expect(view!.financialSummary!.profit).toEqual({ available: false, reason: "ExpensesUnreadable" });
+      // The readable line's partial figure is published nowhere in the outlay.
+      expect(JSON.stringify(outlay)).not.toContain("90000");
+
+      // The cost list's totals are withheld on the same contract, with the
+      // reason, and the checklist compares against no actual.
+      const costs = await s.asOwner.query(api.financeDealCosts.listDealCosts, { orgId: s.orgId, applicationId });
+      expect(costs.summary).toBeNull();
+      expect(costs.summaryUnavailable).toMatchObject({ reason: "UNSAFE_AMOUNT", dealCurrency: "JOD" });
+      expect(costs.expected.actualTotalMinor).toBeNull();
+      expect(costs.expected.differenceMinor).toBeNull();
+    }
+  );
+
+  test("two safe same-currency actuals that overflow between them are withheld as UNSAFE_AMOUNT, never summed", async () => {
+    const s = await seed("u-overflow");
+    const applicationId = await insertApplication(s);
+    await insertFee(s, applicationId, { paidBy: "DEALER", currency: "JOD", actualAmountMinor: Number.MAX_SAFE_INTEGER - 1 });
+    await insertFee(s, applicationId, { paidBy: "DEALER", currency: "JOD", actualAmountMinor: 2 });
+    const view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+    expect(view!.financialSummary!.dealerOutlay).toMatchObject({
+      recordedCostsMinor: null,
+      recordedCostsReason: "UNSAFE_AMOUNT",
+      knownCommittedMinor: null,
+      totalExpectedMinor: null,
+    });
+    expect(view!.financialSummary!.profit).toEqual({ available: false, reason: "ExpensesUnreadable" });
+  });
+
   test("a CUSTOMER- or financier-borne line in another currency is not the dealership's outlay and withholds nothing", async () => {
     const s = await seed("22");
     const applicationId = await insertApplication(s);

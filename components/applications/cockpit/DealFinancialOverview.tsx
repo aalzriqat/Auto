@@ -124,14 +124,21 @@ export function DealFinancialOverview({
   })();
 
   const outlay = summary.dealerOutlay;
-  // A foreign-denominated dealer-borne line withholds the figure with its
-  // reason; otherwise the note counts lines still without an actual.
+  // A foreign-denominated dealer-borne line, or one whose amount cannot be
+  // read, withholds the figure with its reason; otherwise the note counts
+  // lines still without an actual.
+  const recordedUnknownNote =
+    outlay.recordedCostsReason === "UNSAFE_AMOUNT"
+      ? t("OverviewCostsUnreadable")
+      : t("OverviewCostsMixedDenomination");
   const recordedNote =
     outlay.recordedCostsMinor === null
-      ? t("OverviewCostsMixedDenomination")
+      ? recordedUnknownNote
       : outlay.awaitingActuals > 0
         ? `${outlay.awaitingActuals} ${t("OverviewCostsAwaiting")}`
         : undefined;
+  // Both operands known and still no sum: the addition left the safe range.
+  const aggregateNote = outlay.aggregateReason === "UNSAFE_AMOUNT" ? t("OverviewAggregateUnreadable") : null;
   // Why the expected side is unknown, when it is: no policy is the common
   // case, but a foreign-currency actual or an unsafe figure withholds it too,
   // and each is a different sentence.
@@ -211,8 +218,8 @@ export function DealFinancialOverview({
             outlay.knownCommittedMinor !== null
               ? t("OverviewKnownCommittedNote")
               : outlay.recordedCostsMinor === null
-                ? t("OverviewCostsMixedDenomination")
-                : t("OverviewDealerPaidUnknown")
+                ? recordedUnknownNote
+                : (aggregateNote ?? t("OverviewDealerPaidUnknown"))
           }
         />
         <Fact
@@ -229,10 +236,12 @@ export function DealFinancialOverview({
             outlay.totalExpectedMinor !== null
               ? t("OverviewDealerPaidNote")
               : outlay.recordedCostsMinor === null
-                ? t("OverviewCostsMixedDenomination")
+                ? recordedUnknownNote
                 : outlay.knownCommittedMinor === null
-                  ? t("OverviewDealerPaidUnknown")
-                  : expectedUnknownNote
+                  ? (aggregateNote ?? t("OverviewDealerPaidUnknown"))
+                  : outlay.expectedCostsRemainingMinor === null
+                    ? expectedUnknownNote
+                    : (aggregateNote ?? expectedUnknownNote)
           }
           emphasis
         />

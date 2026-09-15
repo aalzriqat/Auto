@@ -36,6 +36,7 @@ const summary: FinancialSummaryData = {
     expectedCostsRemainingMinor: 250_000,
     expectedCostsReason: null,
     totalExpectedMinor: 2_050_000,
+    aggregateReason: null,
   },
   supplier: { consigned: true, direction: "DEALERSHIP_OWES", amountMinor: 9_000_000, route: "THROUGH_DEALERSHIP" },
   profit: {
@@ -170,6 +171,7 @@ describe("DealFinancialOverview", () => {
         expectedCostsRemainingMinor: null,
         expectedCostsReason: "NO_POLICY",
         totalExpectedMinor: null,
+        aggregateReason: null,
       },
       supplier: { consigned: null, direction: "UNKNOWN", amountMinor: null, route: "UNKNOWN" },
       profit: { available: false, reason: "NoApprovedPurchaseAmount" },
@@ -230,6 +232,54 @@ describe("DealFinancialOverview", () => {
     expect(fact("overview-expected-remaining").getByText(salesEn.OverviewExpectedMixedDenomination)).toBeTruthy();
     expect(fact("overview-net-profit").getByText("—")).toBeTruthy();
     expect(screen.queryByText("150 JOD")).toBeNull();
+  });
+
+  test("an unreadable recorded amount withholds costs, committed and total with ITS reason — not the mixed-currency sentence, never a corrupt total", () => {
+    render(
+      <DealFinancialOverview
+        summary={{
+          ...summary,
+          dealerOutlay: {
+            ...summary.dealerOutlay,
+            recordedCostsMinor: null,
+            recordedCostsReason: "UNSAFE_AMOUNT",
+            knownCommittedMinor: null,
+            totalExpectedMinor: null,
+          },
+          profit: { available: false, reason: "ExpensesUnreadable" },
+        }}
+        money={money}
+        t={tEn}
+      />
+    );
+    const fact = (id: string) => within(screen.getByTestId(id));
+    for (const id of ["overview-costs", "overview-known-committed", "overview-dealer-paid"]) {
+      expect(fact(id).getByText("—")).toBeTruthy();
+      expect(fact(id).getByText(salesEn.OverviewCostsUnreadable)).toBeTruthy();
+    }
+    expect(screen.queryByText(salesEn.OverviewCostsMixedDenomination)).toBeNull();
+    expect(fact("overview-net-profit").getByText("—")).toBeTruthy();
+    expect(screen.queryByText("150 JOD")).toBeNull();
+  });
+
+  test("a sum outside the safe range: the operands stand, the totals are withheld with the aggregate reason", () => {
+    render(
+      <DealFinancialOverview
+        summary={{
+          ...summary,
+          dealerOutlay: { ...summary.dealerOutlay, knownCommittedMinor: null, totalExpectedMinor: null, aggregateReason: "UNSAFE_AMOUNT" },
+        }}
+        money={money}
+        t={tEn}
+      />
+    );
+    const fact = (id: string) => within(screen.getByTestId(id));
+    expect(fact("overview-costs").getByText("150 JOD")).toBeTruthy();
+    for (const id of ["overview-known-committed", "overview-dealer-paid"]) {
+      expect(fact(id).getByText("—")).toBeTruthy();
+      expect(fact(id).getByText(salesEn.OverviewAggregateUnreadable)).toBeTruthy();
+    }
+    expect(screen.queryByText(salesEn.OverviewDealerPaidUnknown)).toBeNull();
   });
 
   test("the direct route says the financier pays the supplier, and an owned vehicle has no supplier", () => {

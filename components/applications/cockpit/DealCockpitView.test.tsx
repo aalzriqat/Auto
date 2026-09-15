@@ -546,7 +546,7 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
             ...dealFixture().money!.profit,
             lines: [
               { key: "APPROVED_PURCHASE", sign: 1, amountMinor: 12_500 * SCALE },
-              { key: "CUSTOMER_DIRECT_TO_DEALER", sign: 1, amountMinor: 0 },
+              { key: "CUSTOMER_PLANNED_TO_DEALER", sign: 1, amountMinor: 0 },
               { key: "SUPPLIER_SETTLEMENT", sign: -1, amountMinor: 9_500 * SCALE },
               { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: 0 },
               { key: "FUTURE_SERVER_LINE", sign: -1, amountMinor: 0 },
@@ -558,7 +558,7 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
     );
     const served = [
       "LineApprovedPurchase",
-      "LineCustomerDirectToDealer",
+      "LineCustomerPlannedToDealer",
       "LineSupplierSettlement",
       "LineDealerContribution",
       "FUTURE_SERVER_LINE",
@@ -569,7 +569,7 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
       .filter((el) => served.includes(el.textContent ?? "") && el.closest("details") === null)
       .map((el) => el.textContent);
     expect(tiles).toEqual(served);
-    expect(summaryTile("LineCustomerDirectToDealer")).toMatch(/LineCustomerDirectToDealer0 د\.أ/);
+    expect(summaryTile("LineCustomerPlannedToDealer")).toMatch(/LineCustomerPlannedToDealer0 د\.أ/);
     expect(summaryTile("LineDealerContribution")).toMatch(/LineDealerContribution− 0 د\.أ/);
     expect(summaryTile("FUTURE_SERVER_LINE")).toMatch(/FUTURE_SERVER_LINE− 0 د\.أ/);
     // Breakdown: the same six terms, same order, nothing filtered.

@@ -340,6 +340,64 @@ describe("fee-template adoption", () => {
     expect((await costsOf(s, applicationId)).expected.source).toBe("NO_TEMPLATES");
   });
 
+  test.each([
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["a fraction of a fils", 250_000.5],
+    ["a negative amount", -250_000],
+    ["an unsafe integer", Number.MAX_SAFE_INTEGER + 2],
+  ])(
+    "a live template carrying %s (legacy or raw-edited) is refused before the audit row and the snapshot write",
+    async (_label, corrupt) => {
+      const s = await seedDealer(`c-${_label}`);
+      const { companyId, applicationId } = await dealFrozenBeforeFees(s);
+      // Not through `updateCompany`, which asserts the amount — the row is
+      // patched raw, exactly as a template written before that guard, or an
+      // admin raw edit, would leave it. `v.number()` admits every value here.
+      await s.t.run(async (ctx) => {
+        const company = await ctx.db.get(companyId);
+        const [first, second] = company!.feeTemplates!;
+        await ctx.db.patch(companyId, { feeTemplates: [first, { ...second, estimatedAmountMinor: corrupt }] });
+      });
+      expect((await costsOf(s, applicationId)).expected.adoption.state).toBe("AVAILABLE");
+
+      await expect(
+        s.asOwner.mutation(api.financeDealCosts.adoptCompanyFeeTemplates, { orgId: s.orgId, applicationId, reason: "late" })
+      ).rejects.toThrow(/Configured fee #2 \(STAMPS\) estimated amount must be a non-negative whole number/);
+
+      // Nothing moved: the slot is still empty, no adoption is recorded on the
+      // snapshot, and no override row claims one happened.
+      const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+      expect(app?.companyRuleSnapshot?.feeTemplates).toBeUndefined();
+      expect(app?.companyRuleSnapshot?.feeTemplatesAdoptedAt).toBeUndefined();
+      expect(app?.companyRuleSnapshot?.feeTemplatesAdoptedFromRuleVersion).toBeUndefined();
+      const overrides = await s.t.run(async (ctx) =>
+        (await ctx.db.query("financeApplicationOverrides").collect()).filter((row) => row.applicationId === applicationId)
+      );
+      expect(overrides).toEqual([]);
+      expect((await costsOf(s, applicationId)).expected.source).toBe("NO_TEMPLATES");
+    }
+  );
+
+  test("TEN-1: another organization's owner cannot adopt fees onto this deal, even naming their own org", async () => {
+    const s = await seedDealer("x1");
+    const { applicationId } = await dealFrozenBeforeFees(s);
+    const other = await seedDealer("x2");
+    // A foreign deal id under the caller's OWN orgId — the shape a forged
+    // request takes. The ownership proof, not the permission check, refuses it.
+    await expect(
+      other.asOwner.mutation(api.financeDealCosts.adoptCompanyFeeTemplates, {
+        orgId: other.orgId,
+        applicationId,
+        reason: "cross-org",
+      })
+    ).rejects.toThrow();
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(app?.companyRuleSnapshot?.feeTemplates).toBeUndefined();
+    expect(app?.companyRuleSnapshot?.feeTemplatesAdoptedBy).toBeUndefined();
+    expect((await costsOf(s, applicationId)).expected.source).toBe("NO_TEMPLATES");
+  });
+
   test("a reason is required", async () => {
     const s = await seedDealer("9");
     const { applicationId } = await dealFrozenBeforeFees(s);

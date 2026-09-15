@@ -519,7 +519,7 @@ describe("صافي ربح المعرض", () => {
     expect(both.available && both.amountMinor).toBe(neither.available && neither.amountMinor);
 
     if (!both.available) return;
-    const line = both.lines.find((l) => l.key === "CUSTOMER_DIRECT_TO_DEALER");
+    const line = both.lines.find((l) => l.key === "CUSTOMER_PLANNED_TO_DEALER");
     expect(line).toBeDefined();
     expect(line!.sign).toBe(1);
     expect(line!.amountMinor).toBe(1_000_000);

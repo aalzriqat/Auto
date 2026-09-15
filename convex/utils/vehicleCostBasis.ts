@@ -1,5 +1,5 @@
 import type { Doc } from "../_generated/dataModel";
-import { scaleForCurrency } from "./money";
+import { denominationOf, type CurrencyScale } from "./money";
 
 /**
  * A major-unit amount as minor units, ONLY when it is exactly representable
@@ -13,10 +13,15 @@ import { scaleForCurrency } from "./money";
  * 100000.5 fils) is a row nobody can post exactly, and rather than pick a
  * rounding that could drift from the GL by a fils it is refused here.
  * Non-finite, negative and unsafe values are refused the same way.
+ *
+ * The scale is the caller's, resolved through `denominationOf` — never
+ * `scaleForCurrency`, whose answer for an unrecognised code is a GUESS of 2.
+ * "JD" or "jod" on a legacy row would have scaled 9,500 JOD by 100 instead of
+ * 1,000 and published a basis an order of magnitude short.
  */
-function exactMinorOrUndefined(major: number, currency: string): number | undefined {
+function exactMinorOrUndefined(major: number, scale: CurrencyScale): number | undefined {
   if (!Number.isFinite(major) || major < 0) return undefined;
-  const scaled = major * Math.pow(10, scaleForCurrency(currency));
+  const scaled = major * Math.pow(10, scale);
   const rounded = Math.round(scaled);
   if (!Number.isSafeInteger(rounded)) return undefined;
   // Tolerance for binary floating point (0.1 + 0.2), not for a real fraction.
@@ -163,6 +168,12 @@ export function deriveDealerPreparationExpenses(args: {
 }): DealerPreparationExpenses {
   const currency = args.dealCurrency;
   if (args.orgCurrency !== currency) return { available: false, reason: "MIXED_DENOMINATION", currency };
+  // FAIL CLOSED on the denomination itself, before any amount is converted. A
+  // code AutoFlow cannot vouch for — unsupported, or a non-canonical spelling
+  // the writers would refuse — has no scale, so no amount in it is readable;
+  // the guessed fallback is exactly what must never reach a published figure.
+  const denomination = denominationOf(currency);
+  if (denomination === null) return { available: false, reason: "UNREADABLE_AMOUNT", currency };
   if (args.expenses.length > MAX_COST_BASIS_EXPENSES) return { available: false, reason: "TOO_MANY_ROWS", currency };
   const excluded = { pendingCount: 0, reversedCount: 0, otherCount: 0, afterCutoffCount: 0 };
   const rows: DealerPreparationExpense[] = [];
@@ -193,8 +204,8 @@ export function deriveDealerPreparationExpenses(args: {
     }
     // Both operands must be exact in the minor unit so that net = amount − tax
     // is exact too; a fractional-minor operand is refused, never rounded.
-    const amountMinor = exactMinorOrUndefined(row.amount, currency);
-    const taxMinor = exactMinorOrUndefined(row.taxAmount ?? 0, currency);
+    const amountMinor = exactMinorOrUndefined(row.amount, denomination.scale);
+    const taxMinor = exactMinorOrUndefined(row.taxAmount ?? 0, denomination.scale);
     if (amountMinor === undefined || taxMinor === undefined) {
       return { available: false, reason: "UNREADABLE_AMOUNT", currency };
     }
@@ -270,10 +281,16 @@ export function deriveVehicleCostBasis(args: {
   if (args.orgCurrency !== currency) {
     return { available: false, reason: "MIXED_DENOMINATION", currency, consigned };
   }
+  // Same rule as `deriveDealerPreparationExpenses`: no vouched-for scale, no
+  // readable amount — the guessed fallback never converts a cost here.
+  const denomination = denominationOf(currency);
+  if (denomination === null) {
+    return { available: false, reason: "UNREADABLE_AMOUNT", currency, consigned };
+  }
   if (args.expenses.length > MAX_COST_BASIS_EXPENSES) {
     return { available: false, reason: "TOO_MANY_ROWS", currency, consigned };
   }
-  const minor = (major: number): number | undefined => exactMinorOrUndefined(major, currency);
+  const minor = (major: number): number | undefined => exactMinorOrUndefined(major, denomination.scale);
 
   const baseMajor = consigned ? args.vehicle.sourceCost : args.vehicle.purchasePrice;
   // Zero is MISSING, not a real cost — the same rule `vehicleHasCostBasis`

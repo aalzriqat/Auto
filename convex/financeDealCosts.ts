@@ -242,6 +242,7 @@ export function summarizeFees(fees: Array<Doc<"financeDealFees">>) {
   }
 
   const liveCount = fees.filter((fee) => fee.voidedAt === undefined).length;
+  const amountsUnreadable = unreadableFeeAmounts(fees);
   return {
     lineCount: liveCount,
     estimatedTotalMinor,
@@ -250,10 +251,62 @@ export function summarizeFees(fees: Array<Doc<"financeDealFees">>) {
     dealerBorneActualMinor,
     linesAwaitingActual,
     linesAwaitingReconciliation,
-    /** True only when every line has a checked actual. Estimates never satisfy this. */
+    /**
+     * Why the three totals above are NOT figures, when they are not. The
+     * accumulation is unchecked — `v.number()` admits NaN, Infinity, fractions,
+     * negatives and unsafe values, and a stored row carries whatever it was
+     * given — so a caller that publishes a total reads this first and serves
+     * the reason instead. `null` is the readable case.
+     */
+    amountsUnreadable,
+    /**
+     * True only when every line has a checked actual. Estimates never satisfy
+     * this, and neither does an actual nobody can read: a corrupt amount is
+     * not a reconciled one.
+     */
     fullyReconciled:
-      liveCount > 0 && linesAwaitingActual === 0 && linesAwaitingReconciliation === 0,
+      liveCount > 0 &&
+      linesAwaitingActual === 0 &&
+      linesAwaitingReconciliation === 0 &&
+      amountsUnreadable === null,
   };
+}
+
+/** Why a deal's cost totals cannot be stated from its live lines. */
+export type FeeAmountsUnreadableReason = "UNSAFE_AMOUNT";
+
+/**
+ * The readable-total contract: every live line's recorded amounts are safe
+ * non-negative integers, and the totals built from them stay in the safe
+ * range. Anything else — NaN, Infinity, a fraction of a minor unit, a
+ * negative, an unsafe integer, or an overflow between safe operands — is
+ * reported here so a publisher serves `null` with this reason rather than a
+ * total that is not one. Checked positively, because NaN passes every
+ * negative comparison.
+ */
+export function unreadableFeeAmounts(
+  fees: ReadonlyArray<Pick<Doc<"financeDealFees">, "voidedAt" | "estimatedAmountMinor" | "actualAmountMinor">>
+): FeeAmountsUnreadableReason | null {
+  const safe = (amount: number): boolean => Number.isSafeInteger(amount) && amount >= 0;
+  let estimatedTotalMinor = 0;
+  let actualTotalMinor = 0;
+  for (const fee of fees) {
+    if (fee.voidedAt !== undefined) continue;
+    if (fee.estimatedAmountMinor !== undefined) {
+      if (!safe(fee.estimatedAmountMinor)) return "UNSAFE_AMOUNT";
+      estimatedTotalMinor += fee.estimatedAmountMinor;
+    }
+    if (fee.actualAmountMinor !== undefined) {
+      if (!safe(fee.actualAmountMinor)) return "UNSAFE_AMOUNT";
+      actualTotalMinor += fee.actualAmountMinor;
+    }
+  }
+  // Safe operands can still overflow between them. The dealer-borne subtotal
+  // is bounded by the actual total, so the two sums cover all three.
+  if (!Number.isSafeInteger(estimatedTotalMinor) || !Number.isSafeInteger(actualTotalMinor)) {
+    return "UNSAFE_AMOUNT";
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -886,6 +939,11 @@ export const listDealCosts = query({
     const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
     const lineCurrencies = [...new Set(fees.map((fee) => fee.currency))];
     const foreignLineCurrencies = lineCurrencies.filter((code) => code !== currency);
+    // The same contract for an amount nobody can read: a line carrying NaN, a
+    // fraction, a negative or an unsafe value (legacy or raw-edited — the
+    // writers refuse them, the rows do not) makes every total a non-figure,
+    // and the totals are withheld with the reason rather than served corrupt.
+    const amountsUnreadable = unreadableFeeAmounts(fees);
     const summaryUnavailable =
       foreignLineCurrencies.length > 0
         ? {
@@ -894,7 +952,15 @@ export const listDealCosts = query({
             lineCurrencies,
             message: `Costs on this deal are recorded in ${lineCurrencies.join(", ")} while the deal is in ${currency}; totals are unavailable until the records agree.`,
           }
-        : null;
+        : amountsUnreadable !== null
+          ? {
+              reason: amountsUnreadable,
+              dealCurrency: currency,
+              lineCurrencies,
+              message:
+                "A cost amount on this deal is not a readable minor-unit figure; totals are unavailable until the line is corrected.",
+            }
+          : null;
 
     // Bounded on purpose: the custody SUMMARY is served here, capped and
     // flagged; the movement log behind each record is served by
@@ -1038,6 +1104,18 @@ export const adoptCompanyFeeTemplates = mutation({
     const templates = company.feeTemplates ?? [];
     // Held to the same configuration policy a fresh snapshot is held to.
     assertFeeTemplatesWithinLimit(templates, `Adopting ${company.name}'s fees onto this deal`);
+    // And to the same amount rule the company WRITERS enforce — on the stored
+    // rows, not on what was once submitted. `v.number()` admits NaN, Infinity,
+    // fractions, negatives and unsafe values, and a template written before
+    // that guard existed, or raw-edited since, carries whatever it carries.
+    // Refused BEFORE the audit row and the snapshot patch: a corrupt policy is
+    // never frozen onto a deal as what its costs are expected to be.
+    templates.forEach((template, index) => {
+      assertMinorAmount(
+        template.estimatedAmountMinor,
+        `Configured fee #${index + 1} (${template.feeType}) estimated amount`
+      );
+    });
 
     const now = Date.now();
     const fromRuleVersion = company.ruleVersion ?? 1;

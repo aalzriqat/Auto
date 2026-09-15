@@ -280,7 +280,8 @@ const STATUS_LABEL: Record<string, string> = {
 
 const PROFIT_LINE_LABEL: Record<string, string> = {
   APPROVED_PURCHASE: "LineApprovedPurchase",
-  CUSTOMER_DIRECT_TO_DEALER: "LineCustomerDirectToDealer",
+  /** PLANNED — `resolveAppraisalGap`'s allocation, never a receipt. The label says so. */
+  CUSTOMER_PLANNED_TO_DEALER: "LineCustomerPlannedToDealer",
   SUPPLIER_SETTLEMENT: "LineSupplierSettlement",
   DEALER_CONTRIBUTION: "LineDealerContribution",
   ACTUAL_EXPENSES: "LineActualExpenses",
@@ -308,6 +309,8 @@ const PROFIT_BLOCKED_REASON: Record<
   | "PreparationExpensesUnreadable"
   /** A dealer-borne cost line is in another currency: the cost operand would be partial. */
   | "ExpensesMixedDenomination"
+  /** A cost line's amount is not a safe non-negative integer, or the lines overflow: the cost operand is not a figure. */
+  | "ExpensesUnreadable"
   | "CorruptInput"
   | "DealCancelled"
   /** CASH only: `dealershipMargin === null`, which is UNKNOWN and never zero. */
@@ -324,6 +327,7 @@ const PROFIT_BLOCKED_REASON: Record<
   NoVehicleCost: "ProfitNeedsVehicleCost",
   PreparationExpensesUnreadable: "ProfitPreparationUnreadable",
   ExpensesMixedDenomination: "ProfitExpensesMixedDenomination",
+  ExpensesUnreadable: "ProfitExpensesUnreadable",
   CorruptInput: "ProfitInputCorrupt",
   DealCancelled: "ProfitDealCancelled",
   UnknownMargin: "ProfitUnknownMargin",

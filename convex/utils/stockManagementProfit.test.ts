@@ -32,7 +32,7 @@ describe("management profit by ownership", () => {
     expect(p.amountMinor).toBe(12_500_000 + 300_000 - 9_700_000 - 500_000 - 90_000);
     expect(p.lines).toEqual([
       { key: "APPROVED_PURCHASE", sign: 1, amountMinor: 12_500_000 },
-      { key: "CUSTOMER_DIRECT_TO_DEALER", sign: 1, amountMinor: 300_000 },
+      { key: "CUSTOMER_PLANNED_TO_DEALER", sign: 1, amountMinor: 300_000 },
       { key: "VEHICLE_COST", sign: -1, amountMinor: 9_700_000 },
       { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: 500_000 },
       { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: 90_000 },
