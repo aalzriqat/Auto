@@ -221,10 +221,42 @@ describe("protected source content pins", () => {
        * byte + sha256 pin, same negative control, same normalization and
        * bare-CR rejection. Both constants were recomputed FROM THE FILE with
        * this test's own normalization. `convex/dealWorkspace.ts` is untouched.
+       *
+       * -- RENEWAL 2026-09-15 - supplier settlement on a DISPUTED claim (PR #310) --
+       *
+       * Previous reviewed postimage, superseded by this entry:
+       *
+       *   bytes:  221281
+       *   sha256: 62928d43246a13a21bf5877451a7ac3c3c897b76b98610505091ecd1fa9a0f92
+       *
+       * Renewed because the deal cockpit had to say whether "Settle supplier"
+       * may be recorded NOW from the same claim `recordReceipt` refuses on, so
+       * a DISPUTED claim is withheld by the server's own verdict rather than
+       * inferred by the client. The delta is exactly two hunks, 13 insertions
+       * and 0 deletions (`ac9e7acc4` vs `35e99a2ed`): one import name
+       * (`supplierReceiptActionability` from `./utils/financingEconomics`)
+       * and one additive `supplierReceipt` field on `buildCockpitMoney`'s
+       * payload, with its comment, computed by that helper from values the
+       * function already held (`routeKnown`, `settlesDirect`, the supplier
+       * claim's id and status, the supplier obligation). The decision itself
+       * lives in the unpinned utils module. No new query, control flow,
+       * predicate, permission check, export, workflow behavior or `ctx.db`
+       * access in this file. Read the two hunks; do not take this note's
+       * word for their scope.
+       *
+       * Made under the same owner-side instruction as the entries above ("if
+       * the byte pin must move, use the existing measured pin-renewal
+       * governance and disclose it; do not weaken #305 boundaries"), on the
+       * reviewed change PR #310 carries; its unit-and-integration run passed
+       * 5432 tests and failed only this pin. The pin is not weakened,
+       * bypassed, deleted, generalized or made vacuous: same exact byte +
+       * sha256 pin, same negative control, same normalization and bare-CR
+       * rejection. Both constants were recomputed FROM THE FILE with this
+       * test's own normalization. `convex/dealWorkspace.ts` is untouched.
        */
       file: "convex/applications.ts",
-      bytes: 221281,
-      sha256: "62928d43246a13a21bf5877451a7ac3c3c897b76b98610505091ecd1fa9a0f92",
+      bytes: 221884,
+      sha256: "6b1fe634ed1273704be0c6e050d3c7d47a6ccc8f228d826679c20497f9506c48",
     },
     {
       /**
