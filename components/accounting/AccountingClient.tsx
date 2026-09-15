@@ -11,6 +11,7 @@ import {
   ACCOUNTING_SECTIONS,
   DEFAULT_ACCOUNTING_SECTION,
   isAccountingSectionId,
+  type AccountingSection,
   type AccountingSectionId,
 } from "./accountingSections";
 import { AccountingOverview } from "./AccountingOverview";
@@ -64,9 +65,11 @@ function writeSectionToUrl(section: AccountingSectionId) {
 /**
  * Section navigation for `sm` and up. The eight labels wrap onto a second
  * row when the width needs it, so nothing is ever clipped; the Radix roving
- * tabindex gives arrow-key movement and mirrors it under RTL.
+ * tabindex gives arrow-key movement and mirrors it under RTL. The two admin
+ * sections sit at the far end, lighter, so the daily six read as one group.
  */
 function SectionNav({ t }: Readonly<{ t: (key: string) => string }>) {
+  const firstAdminId = ACCOUNTING_SECTIONS.find((item) => item.admin)?.id;
   return (
     <TabsList
       aria-label={t("AccountingSectionNav")}
@@ -78,7 +81,8 @@ function SectionNav({ t }: Readonly<{ t: (key: string) => string }>) {
           value={item.id}
           className={cn(
             "-mb-px rounded-none border-b-2 border-transparent bg-transparent px-2.5 py-2.5 text-sm font-medium text-muted-foreground shadow-none ring-offset-background hover:text-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-primary data-[state=active]:shadow-none",
-            item.admin && "font-normal"
+            item.admin && "text-[13px] font-normal",
+            item.id === firstAdminId && "sm:ms-auto"
           )}
         >
           {t(item.labelKey)}
@@ -86,6 +90,31 @@ function SectionNav({ t }: Readonly<{ t: (key: string) => string }>) {
       ))}
     </TabsList>
   );
+}
+
+/** Heading for the sections whose hosted component has no title of its own. */
+function SectionHeading({ item, t }: Readonly<{ item: AccountingSection; t: (key: string) => string }>) {
+  const Icon = item.icon;
+  return (
+    <div className="flex flex-wrap items-start gap-x-3 gap-y-1 border-b border-border px-4 py-3 sm:px-6">
+      <Icon aria-hidden className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+      <div className="min-w-0 flex-1">
+        <h2 className="flex flex-wrap items-center gap-x-2 text-lg font-semibold text-foreground">
+          {t(item.labelKey)}
+          {item.admin && (
+            <span className="rounded border border-border px-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              {t("AccountingAdminSections")}
+            </span>
+          )}
+        </h2>
+        <p className="text-sm text-muted-foreground">{t(item.descriptionKey)}</p>
+      </div>
+    </div>
+  );
+}
+
+function sectionById(id: AccountingSectionId): AccountingSection {
+  return ACCOUNTING_SECTIONS.find((item) => item.id === id) ?? ACCOUNTING_SECTIONS[0];
 }
 
 function SectionSelect({
@@ -201,17 +230,20 @@ export function AccountingClient() {
       journal: <SectionSubTabs key="journal" section="journal" t={t} />,
       reconcile: (
         <SectionFrame>
+          <SectionHeading item={sectionById("reconcile")} t={t} />
           <AccountingSetupTab view="close" />
         </SectionFrame>
       ),
       statements: (
         <SectionFrame>
+          <SectionHeading item={sectionById("statements")} t={t} />
           <FinancialReportsTab />
         </SectionFrame>
       ),
       assets: <SectionSubTabs key="assets" section="assets" t={t} />,
       settings: (
         <SectionFrame className="max-w-5xl">
+          <SectionHeading item={sectionById("settings")} t={t} />
           <AccountingSetupTab view="settings" />
         </SectionFrame>
       ),

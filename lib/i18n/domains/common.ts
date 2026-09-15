@@ -58,6 +58,12 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   AccountingSectionsHeading: ["Sections", "الأقسام"],
   AccountingCashDrawerElsewhere: ["Cash drawer and cashier reconciliation are under Receivables & Collections › Collections.", "صندوق النقد ومطابقة الصراف ضمن الذمم والتحصيلات › التحصيلات."],
   AccountingPeriodsElsewhere: ["Accounting periods, close review and pending posting events are under Reconcile & Close.", "الفترات المحاسبية ومراجعة الإقفال وأحداث الترحيل المعلقة ضمن التسوية والإقفال."],
+  AccountingNeedsAttention: ["Needs attention", "يتطلب انتباهاً"],
+  AccountingNeedsAttentionDesc: ["Setup blockers first, then pending posting events as the queue reports them.", "عوائق الإعداد أولاً، ثم أحداث الترحيل المعلقة كما تُبلغ عنها القائمة."],
+  AccountingNoAttentionItemsReported: ["No setup blockers or pending posting events reported here", "لا عوائق إعداد ولا أحداث ترحيل معلقة مُبلغ عنها هنا"],
+  AccountingNoAttentionItemsReportedDesc: ["This list covers the chart, the current open period and retryable pending events only. Failed postings and close review are under Reconcile & Close.", "تغطي هذه القائمة دليل الحسابات والفترة المفتوحة الحالية وأحداث الترحيل المعلقة القابلة لإعادة المحاولة فقط. الترحيلات الفاشلة ومراجعة الإقفال ضمن التسوية والإقفال."],
+  AccountingRecentPeriods: ["Recent periods", "الفترات الأخيرة"],
+  AccountingAdminSections: ["Admin", "الإدارة"],
 });
 
 export const commonEn = {
