@@ -290,6 +290,25 @@ describe("creation and update payload conversion", () => {
     expect(screen.getByText("FeeTemplatesCurrencyUnsupported")).toBeTruthy();
   });
 
+  test("a same-scale live currency change invalidates rather than relabels an in-progress draft", async () => {
+    const view = renderCreate();
+    fireEvent.click(screen.getByRole("button", { name: "FeeTemplateAdd" }));
+    fireEvent.change(within(feeRows()[0]).getByLabelText("FeeTemplateEstimatedAmount"), {
+      target: { value: "12.500" },
+    });
+
+    // JOD and BHD are both scale 3. A scale-only dependency used to keep this
+    // draft and submit its freshly reactive BHD label/authority.
+    orgSettings.current = { currency: "BHD" };
+    view.rerender(<FinanceCompanyDialog open onOpenChange={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText("FeeTemplatesCurrencyChanged")).toBeTruthy());
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "FeeTemplateAdd" }) as HTMLButtonElement).disabled).toBe(true);
+    save();
+    expect(mutations.create).not.toHaveBeenCalled();
+  });
+
   test("the advanced accounting fields are sent as chosen", async () => {
     renderCreate();
 

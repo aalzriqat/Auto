@@ -235,6 +235,8 @@ export const settingsEn = {
   FeeTemplatesCurrencyLoading: "Loading the organisation currency…",
   FeeTemplatesCurrencyUnsupported:
     'The organisation currency "{currency}" is not supported for fee amounts. Correct the currency before editing expected costs.',
+  FeeTemplatesCurrencyChanged:
+    "The organisation currency changed from {from} to {to} while this form was open. Close and reopen it before editing or saving expected costs.",
   FeeTemplateType: "Fee type",
   FeeTemplateDescription: "Description (optional)",
   FeeTemplateEstimatedAmount: "Estimated amount",
@@ -947,6 +949,8 @@ export const settingsAr = {
   FeeTemplatesCurrencyLoading: "جارٍ تحميل عملة المؤسسة…",
   FeeTemplatesCurrencyUnsupported:
     'عملة المؤسسة "{currency}" غير مدعومة لمبالغ الرسوم. صحّح العملة قبل تعديل المصاريف المتوقعة.',
+  FeeTemplatesCurrencyChanged:
+    "تغيّرت عملة المؤسسة من {from} إلى {to} أثناء فتح النموذج. أغلقه وافتحه مجددًا قبل تعديل مصاريف التسليم أو حفظها.",
   FeeTemplateType: "نوع الرسم",
   FeeTemplateDescription: "الوصف (اختياري)",
   FeeTemplateEstimatedAmount: "المبلغ التقديري",

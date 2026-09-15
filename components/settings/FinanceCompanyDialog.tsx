@@ -148,7 +148,32 @@ export function FinanceCompanyDialog({
       label: locale === "ar" && code === "JOD" ? "دينار اردني" : code,
     } as const;
   }, [locale, orgSettings]);
-  const currencyScale = feeCurrency.state === "ready" ? feeCurrency.scale : undefined;
+  // The denomination under which this particular draft was seeded/entered.
+  // It must not follow the live settings query: JOD -> BHD keeps scale 3, so
+  // following only the scale would silently relabel an in-progress amount.
+  const feeCompanyKey = company?._id ?? "new";
+  const [feeDraftCurrency, setFeeDraftCurrency] = useState<
+    { companyKey: string; code: string; scale: number } | undefined
+  >();
+  const activeFeeDraftCurrency =
+    feeDraftCurrency?.companyKey === feeCompanyKey ? feeDraftCurrency : undefined;
+  const feeEditorCurrency =
+    feeCurrency.state === "ready" &&
+    activeFeeDraftCurrency !== undefined &&
+    activeFeeDraftCurrency.code === feeCurrency.code
+      ? {
+          ...activeFeeDraftCurrency,
+          label:
+            locale === "ar" && activeFeeDraftCurrency.code === "JOD"
+              ? "دينار اردني"
+              : activeFeeDraftCurrency.code,
+        }
+      : undefined;
+  const feeCurrencyChanged =
+    feeCurrency.state === "ready" &&
+    activeFeeDraftCurrency !== undefined &&
+    activeFeeDraftCurrency.code !== feeCurrency.code;
+  const currencyScale = feeEditorCurrency?.scale;
 
   const createCompany = useMutation(api.finance.createCompany);
   const updateCompany = useMutation(api.finance.updateCompany);
@@ -217,24 +242,34 @@ export function FinanceCompanyDialog({
   const feeRowKeyCounter = useRef(0);
   const nextFeeRowKey = () => `fee-${++feeRowKeyCounter.current}`;
 
-  // Seeded once the currency is known — a row formatted at the wrong scale
-  // would show "2.5" for 2,500 fils. Re-seeded when the currency resolves; the
-  // section is disabled until then, so no edit can be lost to the re-seed.
+  // Seed once per dialog opening/company, and pin that exact denomination.
+  // A later settings update never re-seeds or relabels the draft; it blocks the
+  // editor below until the dialog is reopened under the new currency.
   useEffect(() => {
-    if (!open || currencyScale === undefined) return;
+    if (!open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setFeeDraftCurrency(undefined);
+      return;
+    }
+    if (feeCurrency.state !== "ready") return;
+    if (feeDraftCurrency?.companyKey === feeCompanyKey) return;
     // A reusable controlled dialog has to replace its draft when a different
     // company opens; this is prop-to-form synchronization, not derived state.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setFeeRows(
       (company?.feeTemplates ?? []).map((template) =>
-        feeTemplateToFormRow(template, currencyScale, nextFeeRowKey())
+        feeTemplateToFormRow(template, feeCurrency.scale, nextFeeRowKey())
       )
     );
+    setFeeDraftCurrency({
+      companyKey: feeCompanyKey,
+      code: feeCurrency.code,
+      scale: feeCurrency.scale,
+    });
     setFeeRowsTouched(false);
     setShowFeeProblems(false);
     setExpandedFeeKeys(new Set());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, company?._id, currencyScale]);
+  }, [open, company?._id, feeCompanyKey, feeCurrency, feeDraftCurrency]);
 
   const feeConversion = useMemo(
     () => (currencyScale === undefined ? null : feeFormRowsToTemplates(feeRows, currencyScale)),
@@ -303,7 +338,7 @@ export function FinanceCompanyDialog({
     // The fee list is all-or-nothing. A row that fails to convert is not
     // dropped from the payload — that would save the company's policy with
     // one expected cost silently missing — the save is refused instead.
-    if (feeCurrency.state !== "ready" || feeConversion === null) return;
+    if (feeEditorCurrency === undefined || feeConversion === null) return;
     if (feeProblemCount > 0) {
       setShowFeeProblems(true);
       toast.error(t("FeeTemplatesFixBeforeSave"));
@@ -345,7 +380,7 @@ export function FinanceCompanyDialog({
         // These are write preconditions, not persisted company fields. Convex
         // re-reads both authorities in the mutation transaction before any
         // amount can be committed under a stale denomination or policy.
-        expectedCurrency: feeRowsTouched ? feeCurrency.code : undefined,
+        expectedCurrency: feeRowsTouched ? feeEditorCurrency.code : undefined,
         expectedRuleVersion: feeRowsTouched && company ? company.ruleVersion ?? 1 : undefined,
       };
       if (company) {
@@ -547,11 +582,19 @@ export function FinanceCompanyDialog({
                 {interpolate(t("FeeTemplateCount"), { count: feeRows.length, max: MAX_FEE_TEMPLATES })}
               </span>
             </div>
-            {feeCurrency.state === "loading" ? (
+            {feeCurrency.state === "loading" ||
+            (feeCurrency.state === "ready" && activeFeeDraftCurrency === undefined) ? (
               <p className="text-xs text-muted-foreground">{t("FeeTemplatesCurrencyLoading")}</p>
             ) : feeCurrency.state === "unsupported" ? (
               <p role="alert" className="text-xs font-medium text-destructive">
                 {interpolate(t("FeeTemplatesCurrencyUnsupported"), { currency: feeCurrency.code })}
+              </p>
+            ) : feeCurrencyChanged ? (
+              <p role="alert" className="text-xs font-medium text-destructive">
+                {interpolate(t("FeeTemplatesCurrencyChanged"), {
+                  from: activeFeeDraftCurrency.code,
+                  to: feeCurrency.code,
+                })}
               </p>
             ) : feeRows.length === 0 ? (
               <p className="text-xs text-muted-foreground">{t("FeeTemplatesEmpty")}</p>
@@ -563,9 +606,9 @@ export function FinanceCompanyDialog({
                     row={row}
                     problem={showFeeProblems ? feeConversion?.problems[row.key] : undefined}
                     expanded={expandedFeeKeys.has(row.key)}
-                    currencyLabel={feeCurrency.label}
-                    currencyCode={feeCurrency.code}
-                    currencyScale={feeCurrency.scale}
+                    currencyLabel={feeEditorCurrency!.label}
+                    currencyCode={feeEditorCurrency!.code}
+                    currencyScale={feeEditorCurrency!.scale}
                     rowIndex={index}
                     t={t}
                     onChange={(patch) => updateFeeRow(row.key, patch)}
@@ -586,7 +629,7 @@ export function FinanceCompanyDialog({
                 variant="outline"
                 size="sm"
                 onClick={addFeeRow}
-                disabled={feeCurrency.state !== "ready" || feeRows.length >= MAX_FEE_TEMPLATES}
+                disabled={feeEditorCurrency === undefined || feeRows.length >= MAX_FEE_TEMPLATES}
               >
                 <Plus className="h-4 w-4" />
                 {t("FeeTemplateAdd")}
@@ -634,7 +677,7 @@ export function FinanceCompanyDialog({
                 still empty or a fee amount would be scaled by a guess. */}
             <Button
               type="submit"
-              disabled={isLoading || loadedCustomerStatuses === undefined || feeCurrency.state !== "ready"}
+              disabled={isLoading || loadedCustomerStatuses === undefined || feeEditorCurrency === undefined}
             >
               {isLoading ? t("Saving..." as any) : t("Save" as any)}
             </Button>
