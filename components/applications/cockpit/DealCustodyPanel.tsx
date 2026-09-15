@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { HandCoins, Loader2, Lock, UserRound } from "lucide-react";
+import type { Id } from "@/convex/_generated/dataModel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,8 +40,8 @@ import {
  */
 
 export type CustodyRecordView = Readonly<{
-  _id: string;
-  userId: string;
+  _id: Id<"financeDealCustody">;
+  userId: Id<"users">;
   userName: string;
   currency: string;
   status: "OPEN" | "RECONCILED" | "WRITTEN_OFF";
@@ -78,7 +79,7 @@ export type CustodyAccountingState =
   | Readonly<{ ready: false; reason: "CHART_NOT_INITIALIZED" | "ACCOUNT_UNMAPPED" | "ACCOUNT_CODE_CONFLICT"; systemKey?: string }>;
 
 export type CustodyPlanView = Readonly<{
-  userId: string;
+  userId: Id<"users">;
   userName: string;
   amountMinor: number | null;
   note: string | null;
@@ -92,26 +93,38 @@ export type CustodyRecommendationView = Readonly<{
 
 /** One movement row, as the container's list reports it back for a reversal. */
 export type CustodyMovementRef = Readonly<{
-  entryId: string;
+  entryId: Id<"financeDealCustodyEntries">;
   kind: "ISSUED" | "RETURNED" | "REIMBURSED";
   amountMinor: number;
 }>;
 
-/** The commands, present only for a caller who holds the money permission. */
+/**
+ * The commands, present only for a caller who holds the money permission.
+ *
+ * Every id crossing this boundary is the server's own `Id<...>` — the row
+ * ids come off `listDealCosts`, the member ids off `listCustodyCandidates`,
+ * the movement ids off `listCustodyMovements` — so the container hands them
+ * to the money mutations as they are, with no cast between a string and a
+ * document reference (consolidated round, item 4).
+ */
 export type DealCustodyActions = Readonly<{
-  /** Org members the plan or an issuance may name; `undefined` while loading. */
+  /**
+   * Org members the plan or an issuance may name; `undefined` while the
+   * candidate read is loading. The plan and issue doors stay shut until it
+   * has answered — an empty picker is a dead end, not a choice.
+   */
   members: ReadonlyArray<CustodyMember> | undefined;
   /** Live employee-paid lines with an actual, not yet charged to any record. */
   eligibleFees: ReadonlyArray<CustodyEligibleFee>;
   scaleOf: (currency: string) => number;
-  onPlan: (values: { userId: string; amountMinor?: number; note?: string }) => Promise<void>;
+  onPlan: (values: { userId: Id<"users">; amountMinor?: number; note?: string }) => Promise<void>;
   onClearPlan: () => Promise<void>;
-  onOpen: (values: CustodyMovementValues & { userId: string }) => Promise<void>;
-  onMove: (custodyId: string, kind: "ISSUED" | "RETURNED" | "REIMBURSED", values: CustodyMovementValues) => Promise<void>;
-  onReverse: (custodyId: string, movement: CustodyMovementRef, reason: string) => Promise<void>;
-  onAttach: (custodyId: string, feeId: string) => Promise<void>;
-  onClose: (custodyId: string, values: { notes: string; writeOffReason?: string }) => Promise<void>;
-  onReopen: (custodyId: string, reason: string) => Promise<void>;
+  onOpen: (values: CustodyMovementValues & { userId: Id<"users"> }) => Promise<void>;
+  onMove: (custodyId: Id<"financeDealCustody">, kind: "ISSUED" | "RETURNED" | "REIMBURSED", values: CustodyMovementValues) => Promise<void>;
+  onReverse: (custodyId: Id<"financeDealCustody">, movement: CustodyMovementRef, reason: string) => Promise<void>;
+  onAttach: (custodyId: Id<"financeDealCustody">, feeId: Id<"financeDealFees">) => Promise<void>;
+  onClose: (custodyId: Id<"financeDealCustody">, values: { notes: string; writeOffReason?: string }) => Promise<void>;
+  onReopen: (custodyId: Id<"financeDealCustody">, reason: string) => Promise<void>;
 }>;
 
 export type DealCustodyWiring = Readonly<{
@@ -125,7 +138,7 @@ export type DealCustodyWiring = Readonly<{
   /** The deal's denomination, for the expected total. */
   currency: string;
   /** Renders one record's paginated movement log; the container owns the query. */
-  renderMovements: (custodyId: string, onReverse?: (movement: CustodyMovementRef) => void) => React.ReactNode;
+  renderMovements: (custodyId: Id<"financeDealCustody">, onReverse?: (movement: CustodyMovementRef) => void) => React.ReactNode;
   /** Absent on a payload that predates the money actions — treated as "not stated". */
   accounting?: CustodyAccountingState;
   plannedCustody?: CustodyPlanView | null;
@@ -151,11 +164,11 @@ type Formatter = (minor: number, currency: string) => string;
 type DialogState =
   | { kind: "PLAN" }
   | { kind: "OPEN" }
-  | { kind: "MOVE"; custodyId: string; movement: "ISSUED" | "RETURNED" | "REIMBURSED" }
-  | { kind: "ATTACH"; custodyId: string }
-  | { kind: "CLOSE"; custodyId: string }
-  | { kind: "REOPEN"; custodyId: string }
-  | { kind: "REVERSE"; custodyId: string; movement: CustodyMovementRef }
+  | { kind: "MOVE"; custodyId: Id<"financeDealCustody">; movement: "ISSUED" | "RETURNED" | "REIMBURSED" }
+  | { kind: "ATTACH"; custodyId: Id<"financeDealCustody"> }
+  | { kind: "CLOSE"; custodyId: Id<"financeDealCustody"> }
+  | { kind: "REOPEN"; custodyId: Id<"financeDealCustody"> }
+  | { kind: "REVERSE"; custodyId: Id<"financeDealCustody">; movement: CustodyMovementRef }
   | null;
 
 /** The server's readiness reason, in the operator's language. */
@@ -395,6 +408,10 @@ export function DealCustodyPanel({
   // reopen) stays possible — the server draws the same line.
   const canAct = actions !== undefined;
   const canStart = canAct && !wiring.dealStopped;
+  // Naming a person needs the candidate list; until it has answered, the
+  // plan and issue doors are shut and say so, rather than opening onto an
+  // empty picker (consolidated round, item 5).
+  const membersLoading = canStart && actions?.members === undefined;
   const openRecord = records?.find((row) => row.status === "OPEN");
   const plan = wiring.plannedCustody ?? null;
   const recommended = wiring.recommended ?? null;
@@ -416,7 +433,7 @@ export function DealCustodyPanel({
       setBusy(false);
     }
   };
-  const recordFor = (custodyId: string) => records?.find((row) => row._id === custodyId);
+  const recordFor = (custodyId: Id<"financeDealCustody">) => records?.find((row) => row._id === custodyId);
   const scale = (currency: string) => actions?.scaleOf(currency) ?? 3;
 
   return (
@@ -505,10 +522,11 @@ export function DealCustodyPanel({
               </div>
               {canStart && !openRecord && (
                 <div className="flex shrink-0 flex-wrap gap-2">
-                  <Button type="button" size="sm" variant="outline" onClick={() => openDialog({ kind: "PLAN" })} data-testid="custody-plan-button">
+                  <Button type="button" size="sm" variant="outline" disabled={membersLoading} onClick={() => openDialog({ kind: "PLAN" })} data-testid="custody-plan-button">
+                    {membersLoading && <Loader2 className="h-4 w-4 animate-spin me-1.5" aria-hidden />}
                     {t(plan ? "CustodyChangeHandler" : "CustodyAssignHandler")}
                   </Button>
-                  <Button type="button" size="sm" disabled={blocked} onClick={() => openDialog({ kind: "OPEN" })} data-testid="custody-issue-button">
+                  <Button type="button" size="sm" disabled={blocked || membersLoading} onClick={() => openDialog({ kind: "OPEN" })} data-testid="custody-issue-button">
                     <HandCoins className="h-4 w-4 me-1.5" aria-hidden />
                     {t("CustodyIssueCash")}
                   </Button>
@@ -590,7 +608,12 @@ export function DealCustodyPanel({
             money={money}
             t={t}
             onOpenChange={(o) => !o && setDialog(null)}
-            onSubmit={(values) => run(() => actions.onOpen({ ...values, userId: values.userId ?? "" }))}
+            onSubmit={(values) => {
+              // The dialog only submits with a served member resolved; a
+              // value without one never reaches the money command.
+              const userId = values.userId;
+              if (userId !== undefined) void run(() => actions.onOpen({ ...values, userId }));
+            }}
           />
           {dialog?.kind === "MOVE" && (() => {
             const record = recordFor(dialog.custodyId);

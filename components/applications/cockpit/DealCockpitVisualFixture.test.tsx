@@ -287,8 +287,8 @@ function custodyWiring(): DealCustodyWiring {
   return {
     records: [
       {
-        _id: "cust_1",
-        userId: "u_rami",
+        _id: "cust_1" as Id<"financeDealCustody">,
+        userId: "u_rami" as Id<"users">,
         userName: "رامي حسن",
         currency: "JOD",
         status: "OPEN",
@@ -319,7 +319,7 @@ function custodyWiring(): DealCustodyWiring {
     plannedCustody: null,
     recommended: { recommendedMinor: 90 * SCALE, reason: null, outstandingCount: 1 },
     actions: {
-      members: [{ userId: "u_rami", name: "رامي حسن" }],
+      members: [{ userId: "u_rami" as Id<"users">, name: "رامي حسن" }],
       eligibleFees: [],
       scaleOf: () => 3,
       onPlan: async () => {},

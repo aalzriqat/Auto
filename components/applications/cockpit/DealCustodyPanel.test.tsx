@@ -8,6 +8,7 @@
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import type { Id } from "@/convex/_generated/dataModel";
 import { salesAr, salesEn } from "@/lib/i18n/domains/sales";
 import {
   DealCustodyPanel,
@@ -33,8 +34,8 @@ const money = (minor: number, currency: string) => `${(minor / 1000).toLocaleStr
 
 function record(overrides: Partial<CustodyRecordView> = {}): CustodyRecordView {
   return {
-    _id: "cust1",
-    userId: "u2",
+    _id: "cust1" as Id<"financeDealCustody">,
+    userId: "u2" as Id<"users">,
     userName: "Rami",
     currency: "JOD",
     status: "OPEN",
@@ -67,7 +68,7 @@ function wiring(overrides: Partial<DealCustodyWiring> = {}): DealCustodyWiring {
 
 function actions(overrides: Partial<DealCustodyActions> = {}): DealCustodyActions {
   return {
-    members: [{ userId: "u2", name: "Rami" }, { userId: "u3", name: "Lina" }],
+    members: [{ userId: "u2" as Id<"users">, name: "Rami" }, { userId: "u3" as Id<"users">, name: "Lina" }],
     eligibleFees: [],
     scaleOf: () => 3,
     onPlan: vi.fn(async () => {}),
@@ -264,7 +265,7 @@ describe("DealCustodyPanel", () => {
           actions: a,
           accounting: { ready: true },
           records: [],
-          plannedCustody: { userId: "u3", userName: "Lina", amountMinor: 120_000, note: null },
+          plannedCustody: { userId: "u3" as Id<"users">, userName: "Lina", amountMinor: 120_000, note: null },
           recommended: { recommendedMinor: 90_000, reason: null, outstandingCount: 1 },
         })
       );
@@ -278,6 +279,45 @@ describe("DealCustodyPanel", () => {
       expect((within(dialog).getByLabelText(/Amount/) as HTMLInputElement).value).toBe("120");
       fireEvent.click(within(dialog).getByTestId("custody-issued-submit"));
       expect(a.onOpen).toHaveBeenCalledWith(expect.objectContaining({ userId: "u3", amountMinor: 120_000 }));
+    });
+
+    test("while the candidate read has not answered, the plan and issue doors are shut — never an empty picker (item 5)", () => {
+      const a = actions({ members: undefined });
+      renderPanel(wiring({ actions: a, accounting: { ready: true }, records: [] }));
+      expect((screen.getByTestId("custody-plan-button") as HTMLButtonElement).disabled).toBe(true);
+      expect((screen.getByTestId("custody-issue-button") as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(screen.getByTestId("custody-issue-button"));
+      expect(screen.queryByTestId("custody-issued-dialog")).toBeNull();
+      cleanup();
+      // Answered (even with nobody eligible): the doors open; a dialog with no
+      // served member cannot submit, so no money command carries an empty id.
+      const answered = actions({ members: [] });
+      renderPanel(wiring({ actions: answered, accounting: { ready: true }, records: [] }));
+      expect((screen.getByTestId("custody-issue-button") as HTMLButtonElement).disabled).toBe(false);
+      fireEvent.click(screen.getByTestId("custody-issue-button"));
+      const dialog = screen.getByTestId("custody-issued-dialog");
+      fireEvent.change(within(dialog).getByLabelText(/Amount/), { target: { value: "100" } });
+      expect((within(dialog).getByTestId("custody-issued-submit") as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(within(dialog).getByTestId("custody-issued-submit"));
+      expect(answered.onOpen).not.toHaveBeenCalled();
+    });
+
+    test("a plan whose default names someone no longer in the candidate list cannot be submitted as that id (item 4)", () => {
+      const a = actions({ members: [{ userId: "u9" as Id<"users">, name: "Omar" }] });
+      renderPanel(
+        wiring({
+          actions: a,
+          accounting: { ready: true },
+          records: [],
+          plannedCustody: { userId: "u3" as Id<"users">, userName: "Lina", amountMinor: 120_000, note: null },
+        })
+      );
+      fireEvent.click(screen.getByTestId("custody-issue-button"));
+      const dialog = screen.getByTestId("custody-issued-dialog");
+      // The stale default "u3" is not a served member: the submit stays shut.
+      expect((within(dialog).getByTestId("custody-issued-submit") as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(within(dialog).getByTestId("custody-issued-submit"));
+      expect(a.onOpen).not.toHaveBeenCalled();
     });
 
     test("the recommendation is withheld with its reason, never shown as zero", () => {
@@ -375,7 +415,7 @@ describe("DealCustodyPanel", () => {
   });
 
   test("the company-policy expected total is shown ONCE at panel level, unallocated — never inside an employee's record", () => {
-    renderPanel(wiring({ records: [record(), record({ _id: "cust2", userName: "Lina" })] }));
+    renderPanel(wiring({ records: [record(), record({ _id: "cust2" as Id<"financeDealCustody">, userName: "Lina" })] }));
     const expected = screen.getAllByTestId("custody-expected");
     expect(expected).toHaveLength(1);
     expect(within(expected[0]).getByText("340 JOD")).toBeTruthy();

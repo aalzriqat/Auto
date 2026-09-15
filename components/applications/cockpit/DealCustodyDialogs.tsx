@@ -9,7 +9,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
-import { economicDateInputToMs, todayDateInput } from "@/lib/dateInput";
+import type { Id } from "@/convex/_generated/dataModel";
+import { economicDateInputToMs, economicTodayDateInput } from "@/lib/dateInput";
 import {
   Dialog,
   DialogContent,
@@ -32,7 +33,13 @@ import {
 
 type T = (key: string) => string;
 
-export type CustodyMember = Readonly<{ userId: string; name: string }>;
+/**
+ * Ids here are the server's own `Id<...>` types end to end: a dialog's
+ * `<Select>` holds a string, and the value it hands up is the matching
+ * entry from the list the server served — never that string re-labelled
+ * with a cast. A selection that matches nothing is not submittable.
+ */
+export type CustodyMember = Readonly<{ userId: Id<"users">; name: string }>;
 
 export type CustodyMovementValues = Readonly<{
   amountMinor: number;
@@ -41,7 +48,7 @@ export type CustodyMovementValues = Readonly<{
   occurredAt?: number;
   note?: string;
   /** Only on an issuance that OPENS a record: who receives the cash. */
-  userId?: string;
+  userId?: Id<"users">;
 }>;
 
 /** Major-unit text → minor integer, or null when it is not a positive finite figure. */
@@ -97,7 +104,7 @@ export function CustodyMovementDialog({
   error: string | null;
   /** Present only when this issuance opens a record and must name the recipient. */
   members?: ReadonlyArray<CustodyMember>;
-  defaultUserId?: string;
+  defaultUserId?: Id<"users">;
   /** Prefilled, editable: the recommendation (issue) or what is owed (reimburse). */
   suggestedMinor?: number | null;
   /** The server's own ceiling (a return cannot exceed what was issued); shown before the round trip. */
@@ -127,7 +134,10 @@ export function CustodyMovementDialog({
   const invalid = entered && minor === null;
   const exceeds = minor !== null && maxMinor !== undefined && minor > maxMinor;
   const needsPerson = members !== undefined;
-  const canSubmit = minor !== null && !exceeds && !busy && (!needsPerson || userId !== "");
+  // The recipient is the served row the selection names; an id that is not
+  // in the list (stale default, empty picker) is not one to move money to.
+  const recipient = needsPerson ? members.find((member) => member.userId === userId) : undefined;
+  const canSubmit = minor !== null && !exceeds && !busy && (!needsPerson || recipient !== undefined);
 
   const copy = {
     ISSUED: { title: "CustodyIssueTitle", desc: "CustodyIssueDesc", cta: "CustodyIssueCash", exceed: "CustodyAmountExceedsIssued" },
@@ -198,7 +208,7 @@ export function CustodyMovementDialog({
             </div>
             <div className="space-y-1.5">
               <Label htmlFor={`${id}-date`}>{t("CustodyDate")}</Label>
-              <Input id={`${id}-date`} type="date" value={date} max={todayDateInput()} onChange={(e) => setDate(e.target.value)} />
+              <Input id={`${id}-date`} type="date" value={date} max={economicTodayDateInput()} onChange={(e) => setDate(e.target.value)} />
             </div>
           </div>
 
@@ -225,9 +235,9 @@ export function CustodyMovementDialog({
                 method,
                 reference: reference.trim() || undefined,
                 note: note.trim() || undefined,
-                // Today is the current instant; a backdated day arrives as entered.
+                // The picked calendar day, exactly, as its UTC midnight; blank means "now".
                 occurredAt: date ? economicDateInputToMs(date) : undefined,
-                userId: needsPerson ? userId : undefined,
+                userId: recipient?.userId,
               })
             }
           >
@@ -258,15 +268,15 @@ export function CustodyPlanDialog({
   members: ReadonlyArray<CustodyMember>;
   currency: string;
   scale: number;
-  current: { userId: string; amountMinor: number | null; note: string | null } | null;
+  current: { userId: Id<"users">; amountMinor: number | null; note: string | null } | null;
   busy: boolean;
   error: string | null;
   t: T;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (values: { userId: string; amountMinor?: number; note?: string }) => void;
+  onSubmit: (values: { userId: Id<"users">; amountMinor?: number; note?: string }) => void;
   onClear: () => void;
 }>) {
-  const [userId, setUserId] = useState("");
+  const [userId, setUserId] = useState<string>("");
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
   useResetOnOpen(open, () => {
@@ -276,7 +286,8 @@ export function CustodyPlanDialog({
   });
   const minor = parseMajorToMinor(amount, scale);
   const invalid = amount.trim() !== "" && minor === null;
-  const canSubmit = userId !== "" && !invalid && !busy;
+  const handler = members.find((member) => member.userId === userId);
+  const canSubmit = handler !== undefined && !invalid && !busy;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -330,7 +341,7 @@ export function CustodyPlanDialog({
               type="button"
               disabled={!canSubmit}
               data-testid="custody-plan-submit"
-              onClick={() => onSubmit({ userId, amountMinor: minor ?? undefined, note: note.trim() || undefined })}
+              onClick={() => handler && onSubmit({ userId: handler.userId, amountMinor: minor ?? undefined, note: note.trim() || undefined })}
             >
               {busy && <Loader2 className="h-4 w-4 animate-spin me-2" aria-hidden />}
               {t("Save")}
@@ -343,7 +354,7 @@ export function CustodyPlanDialog({
 }
 
 export type CustodyEligibleFee = Readonly<{
-  _id: string;
+  _id: Id<"financeDealFees">;
   label: string;
   actualAmountMinor: number;
   currency: string;
@@ -367,10 +378,11 @@ export function CustodyAttachDialog({
   money: (minor: number, currency: string) => string;
   t: T;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (feeId: string) => void;
+  onSubmit: (feeId: Id<"financeDealFees">) => void;
 }>) {
-  const [feeId, setFeeId] = useState("");
+  const [feeId, setFeeId] = useState<string>("");
   useResetOnOpen(open, () => setFeeId(fees.length === 1 ? fees[0]._id : ""));
+  const picked = fees.find((fee) => fee._id === feeId);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md" data-testid="custody-attach-dialog">
@@ -404,7 +416,7 @@ export function CustodyAttachDialog({
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             {t("Cancel")}
           </Button>
-          <Button type="button" disabled={feeId === "" || busy} data-testid="custody-attach-submit" onClick={() => onSubmit(feeId)}>
+          <Button type="button" disabled={picked === undefined || busy} data-testid="custody-attach-submit" onClick={() => picked && onSubmit(picked._id)}>
             {busy && <Loader2 className="h-4 w-4 animate-spin me-2" aria-hidden />}
             {t("CustodyAttachCost")}
           </Button>

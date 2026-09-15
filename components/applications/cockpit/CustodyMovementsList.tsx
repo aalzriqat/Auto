@@ -53,7 +53,7 @@ export function CustodyMovementsList({
    * Offered per cash row (never on a reversal, never on a row already
    * reversed) when the caller may correct the record; absent otherwise.
    */
-  onReverse?: (movement: { entryId: string; kind: "ISSUED" | "RETURNED" | "REIMBURSED"; amountMinor: number }) => void;
+  onReverse?: (movement: { entryId: Id<"financeDealCustodyEntries">; kind: "ISSUED" | "RETURNED" | "REIMBURSED"; amountMinor: number }) => void;
 }>) {
   const { results, status, loadMore } = usePaginatedQuery(
     api.financeDealCosts.listCustodyMovements,

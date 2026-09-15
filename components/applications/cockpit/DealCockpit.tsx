@@ -631,13 +631,18 @@ export function DealCockpit({
     canViewApplications && deal ? { orgId, applicationId } : "skip"
   );
   // The custody picker's own read, shaped for the money permission — see
-  // `listCustodyCandidates`. Skipped for everyone else, so the cockpit never
-  // mounts a query its caller cannot pass.
+  // `listCustodyCandidates`. Mounted on EXACTLY the predicate that offers the
+  // custody commands below (`custodyCommandsOffered`), so the plan and issue
+  // dialogs can never render with a picker whose read was skipped
+  // (consolidated round, item 5); skipped for everyone else, so the cockpit
+  // never mounts a query its caller cannot pass. Custody is a fact of a
+  // FINANCE APPLICATION — the record is keyed on one — and this container
+  // is the financed cockpit, so `deal` here is always the financed kind.
+  const custodyCommandsOffered =
+    !permissionsLoading && hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT) && deal !== undefined && deal !== null;
   const custodyCandidates = useQuery(
     api.financeDealCosts.listCustodyCandidates,
-    !permissionsLoading && hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT) && deal?.dealKind === "FINANCED"
-      ? { orgId }
-      : "skip"
+    custodyCommandsOffered ? { orgId } : "skip"
   );
   /**
    * The financial overview — a sibling read model composed on the server from
@@ -1609,7 +1614,7 @@ export function DealCockpit({
     }
   };
   const custodyActions: DealCustodyActions | undefined =
-    app && canConfirmFinanceDisbursement
+    app && custodyCommandsOffered
       ? {
           members: custodyCandidates?.candidates,
           eligibleFees: (dealCosts?.fees ?? [])
@@ -1626,7 +1631,7 @@ export function DealCockpit({
               planCustodyHandler({
                 orgId,
                 applicationId,
-                userId: values.userId as Id<"users">,
+                userId: values.userId,
                 amountMinor: values.amountMinor,
                 note: values.note,
               })
@@ -1637,7 +1642,7 @@ export function DealCockpit({
               openDealCustody({
                 orgId,
                 applicationId,
-                userId: values.userId as Id<"users">,
+                userId: values.userId,
                 issuedMinor: values.amountMinor,
                 method: values.method,
                 reference: values.reference,
@@ -1650,7 +1655,7 @@ export function DealCockpit({
             custodyCommand(`custody-move:${custodyId}:${kind}:${values.amountMinor}`, (idempotencyKey) =>
               recordCustodyMovement({
                 orgId,
-                custodyId: custodyId as Id<"financeDealCustody">,
+                custodyId,
                 kind,
                 amountMinor: values.amountMinor,
                 method: values.method,
@@ -1664,9 +1669,9 @@ export function DealCockpit({
             custodyCommand(`custody-reverse:${custodyId}:${movement.entryId}`, (idempotencyKey) =>
               recordCustodyMovement({
                 orgId,
-                custodyId: custodyId as Id<"financeDealCustody">,
+                custodyId,
                 kind: "REVERSAL",
-                reversesEntryId: movement.entryId as Id<"financeDealCustodyEntries">,
+                reversesEntryId: movement.entryId,
                 amountMinor: movement.amountMinor,
                 note: reason,
                 idempotencyKey,
@@ -1674,7 +1679,7 @@ export function DealCockpit({
             ),
           onAttach: (custodyId, feeId) =>
             custodyPlain(() =>
-              setFeeCustody({ orgId, feeId: feeId as Id<"financeDealFees">, custodyId: custodyId as Id<"financeDealCustody"> })
+              setFeeCustody({ orgId, feeId, custodyId })
             ),
           onClose: (custodyId, values) =>
             // A closure is a command like a movement: it may post a write-off,
@@ -1683,14 +1688,14 @@ export function DealCockpit({
             custodyCommand(`custody-close:${custodyId}`, (idempotencyKey) =>
               reconcileDealCustody({
                 orgId,
-                custodyId: custodyId as Id<"financeDealCustody">,
+                custodyId,
                 notes: values.notes,
                 writeOffReason: values.writeOffReason,
                 idempotencyKey,
               })
             ),
           onReopen: (custodyId, reason) =>
-            custodyPlain(() => reopenDealCustody({ orgId, custodyId: custodyId as Id<"financeDealCustody">, reason })),
+            custodyPlain(() => reopenDealCustody({ orgId, custodyId, reason })),
         }
       : undefined;
   const custody: DealCustodyWiring | undefined =
@@ -1712,12 +1717,12 @@ export function DealCockpit({
             app.status === "CANCELLED" ||
             app.status === "REJECTED",
           actions: custodyActions,
-          renderMovements: (custodyId: string, onReverse) => {
+          renderMovements: (custodyId, onReverse) => {
             const record = dealCosts?.custody.find((row) => row._id === custodyId);
             return (
               <CustodyMovementsList
                 orgId={orgId}
-                custodyId={custodyId as Id<"financeDealCustody">}
+                custodyId={custodyId}
                 currency={record?.currency ?? dealCosts?.currency ?? economicsCurrencyCode}
                 money={custodyMoney}
                 formatDate={(ms: number) => renderMoment(ms, "d MMM yyyy")}

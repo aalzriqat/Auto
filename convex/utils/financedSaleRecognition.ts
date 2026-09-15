@@ -142,7 +142,11 @@ export async function resolveFinancedSalePlan(
   // employee paid out is a fact of the deal whatever the settlement route.
   // Judged on the rows, never on the `CLASSIFIED` stamp: a record migrated
   // or raw-edited since classification carries the stamp just the same.
-  assertCustodyLedgerFamilyComplete(
+  // Judged on the LEDGER as well as the rows: every posting the rows claim
+  // is proven POSTED (not queued, pending, failed or at a stale version).
+  await assertCustodyLedgerFamilyComplete(
+    ctx,
+    app.orgId,
     await loadCustodyRecords(ctx, app._id, "finalizing this deal"),
     liveFees,
     "finalizing this deal"

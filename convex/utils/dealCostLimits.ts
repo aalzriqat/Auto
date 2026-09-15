@@ -57,6 +57,28 @@ export const MAX_FEE_TEMPLATES = 100;
  */
 export const MAX_DEAL_CUSTODY_DECISION_RECORDS = 100;
 
+/**
+ * How many movements one custody record's DECISION reads may carry.
+ *
+ * `recomputeCustodyTotals` and `assertReversalAllowed` decide on the whole
+ * movement log — a total is the sum of every entry, and a reversal is
+ * refused if its target was already reversed. An unbounded `.collect()` there
+ * grows with the log until the mutation hits the platform's read limits and
+ * fails opaquely; a bounded read that silently took a prefix would decide on
+ * evidence it had not seen. So the read takes ONE past the cap and, past it,
+ * REFUSES with a named reason: the mutation that would cross the bound rolls
+ * back (its own insert included), nothing is sampled, and the record stays
+ * as it was. Two hundred movements is far beyond any real custody (an
+ * advance, a few receipts, a return, a reimbursement, the odd reversal); a
+ * log that long is evidence of something else and gets a person, not a sum.
+ * The paginated movement log (`listCustodyMovements`) is unaffected.
+ *
+ * Lives here, beside the other decision bounds, so the ledger-side proof
+ * (`utils/custodySourceLedger`) reads the log under the same cap the
+ * writers do without importing the writers' module.
+ */
+export const MAX_CUSTODY_ENTRIES = 200;
+
 /** Configuration policy: whether a list has more templates than one company may configure. */
 export function feeTemplatesExceedConfigurationLimit(
   feeTemplates: ReadonlyArray<unknown> | undefined

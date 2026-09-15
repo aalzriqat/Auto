@@ -68,11 +68,20 @@ async function seedDeal(suffix = "1"): Promise<Seed> {
 
   const asUser = t.withIdentity({ subject: `costs_user_${suffix}` });
   // Custody money commands post to the ledger and refuse without a chart
-  // (`assertCustodyAccountingReady`); no period is opened, so postings queue.
+  // (`assertCustodyAccountingReady`). A period covering today is open so the
+  // postings land: the classification gate now proves the custody family is
+  // POSTED (not merely queued), and these suites exercise the gates AFTER
+  // that proof — the queued case is `dealCustodyAccounting.test.ts` G1's.
   await t.run((ctx) =>
     ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
   );
   await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+  const year = new Date().getUTCFullYear();
+  await asUser.mutation(api.accountingPeriods.create, {
+    orgId, fiscalYear: year, periodNumber: 1,
+    startDate: Date.UTC(year - 1, 0, 1), endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+    openImmediately: true,
+  });
   return { t, orgId, userId, clerkId: userId, employeeId, applicationId, asUser };
 }
 

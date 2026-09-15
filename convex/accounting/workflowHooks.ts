@@ -22,7 +22,14 @@ import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpe
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate, checkPostingAllowed } from "../accountingPeriods";
 import { SYSTEM_KEYS, type SystemKey } from "../utils/defaultChart";
-import { custodyPayableReclassKey, custodyPayableReclassPosted } from "../utils/custodySourceLedger";
+import {
+  custodyEntryPostKey,
+  custodyFeePostKey,
+  custodyPayableReclassKey,
+  custodyPayableReclassPosted,
+  custodyWriteOffPostKey,
+  earlierVersionStillPosted,
+} from "../utils/custodySourceLedger";
 import { isChartInitialized, isSystemAccountMapped, ensureCommissionAccounts, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureConsignmentAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts, ensureFinancedSettlementAccounts, ensureDealCustodyAccounts } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
@@ -3219,12 +3226,9 @@ const CUSTODY_CASH_EVENT: Record<CustodyCashKind, EventType> = {
   REIMBURSED: "CUSTODY_REIMBURSED",
 };
 
-export const custodyEntryPostKey = (entryId: Id<"financeDealCustodyEntries">): string =>
-  `custody_entry_${entryId}`;
-export const custodyFeePostKey = (feeId: Id<"financeDealFees">, version: number): string =>
-  `custody_fee_paid_${feeId}_v${version}`;
-export const custodyWriteOffPostKey = (custodyId: Id<"financeDealCustody">, version: number): string =>
-  `custody_written_off_${custodyId}_v${version}`;
+// The family's keys live beside its ledger proof (`utils/custodySourceLedger`)
+// so the gate that proves a posting and the hook that mints it cannot drift.
+export { custodyEntryPostKey, custodyFeePostKey, custodyWriteOffPostKey };
 
 async function ensureDealCustodyAccountsIfChartReady(
   ctx: MutationCtx,
@@ -3296,6 +3300,42 @@ export async function hookCustodyCashReversed(
   });
 }
 
+/**
+ * Why a replacement version must wait, or `undefined` when it may post now.
+ *
+ * A fee's or a write-off's version N replaces version N−1 (or earlier),
+ * which the caller has just reversed. When that reversal was DEFERRED — no
+ * period open for its date — the earlier version is STILL POSTED, and a
+ * replacement posting now would carry the same charge twice until the outbox
+ * drains. Judged on the LEDGER (an earlier version still POSTED), with the
+ * caller's `ReversalOutcome` as a second witness: an outcome describes one
+ * branch's path, and the ledger is what the worker re-proves on the queued
+ * row (`custodyPostingBlockedReason`). Either alone queues the replacement.
+ */
+async function custodyReplacementQueueReason(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    eventType: "CUSTODY_FEE_PAID" | "CUSTODY_WRITTEN_OFF";
+    sourceType: "financeDealFees" | "financeDealCustody";
+    sourceId: string;
+    version: number;
+    replacesReversal?: ReversalOutcome;
+  }
+): Promise<string | undefined> {
+  const what = args.eventType === "CUSTODY_FEE_PAID" ? "custody fee posting" : "custody write-off";
+  const earlier = await earlierVersionStillPosted(
+    ctx, args.orgId, args.eventType, args.sourceType, args.sourceId, args.version
+  );
+  if (earlier !== null) {
+    return `${what} v${earlier} it replaces is still on the books; its reversal has not posted yet`;
+  }
+  if (args.replacesReversal === "DEFERRED") {
+    return `${what} v${args.version - 1} it replaces has a deferred reversal that has not posted yet`;
+  }
+  return undefined;
+}
+
 /** A handover cost paid out of custody, at version `version` of the fee's posting. */
 export async function hookCustodyFeePaid(
   ctx: MutationCtx,
@@ -3308,6 +3348,8 @@ export async function hookCustodyFeePaid(
     amountMinor: number;
     actorId: Id<"users">;
     occurredAt: number;
+    /** What became of the version this one replaces, when the caller reversed one. */
+    replacesReversal?: ReversalOutcome;
   }
 ): Promise<void> {
   await ensureDealCustodyAccountsIfChartReady(ctx, args.orgId, args.actorId);
@@ -3317,6 +3359,14 @@ export async function hookCustodyFeePaid(
   await postDomainEvent(ctx, {
     orgId: args.orgId,
     eventType: "CUSTODY_FEE_PAID",
+    queueBehind: await custodyReplacementQueueReason(ctx, {
+      orgId: args.orgId,
+      eventType: "CUSTODY_FEE_PAID",
+      sourceType: "financeDealFees",
+      sourceId: args.fee._id.toString(),
+      version: args.version,
+      replacesReversal: args.replacesReversal,
+    }),
     sourceType: "financeDealFees",
     sourceId: args.fee._id.toString(),
     eventVersion: args.version,
@@ -3375,12 +3425,22 @@ export async function hookCustodyWrittenOff(
     reason: string;
     actorId: Id<"users">;
     occurredAt: number;
+    /** What became of the write-off this one replaces, when the caller reversed one. */
+    replacesReversal?: ReversalOutcome;
   }
 ): Promise<void> {
   await ensureDealCustodyAccountsIfChartReady(ctx, args.orgId, args.actorId);
   await postDomainEvent(ctx, {
     orgId: args.orgId,
     eventType: "CUSTODY_WRITTEN_OFF",
+    queueBehind: await custodyReplacementQueueReason(ctx, {
+      orgId: args.orgId,
+      eventType: "CUSTODY_WRITTEN_OFF",
+      sourceType: "financeDealCustody",
+      sourceId: args.custody._id.toString(),
+      version: args.version,
+      replacesReversal: args.replacesReversal,
+    }),
     sourceType: "financeDealCustody",
     sourceId: args.custody._id.toString(),
     eventVersion: args.version,

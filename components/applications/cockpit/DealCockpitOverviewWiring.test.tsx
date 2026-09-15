@@ -230,6 +230,31 @@ describe("the custody section", () => {
     expect(typeof move.mock.calls[0][0].idempotencyKey).toBe("string");
   });
 
+  test("the candidate read is mounted on exactly the predicate that offers the custody commands, and the issue door waits for it (item 5)", () => {
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    const costs = { ...dealCosts([]), custodyAccounting: { ready: true }, custodyPostsNow: true, plannedCustody: null, recommendedCustody: null, economicsFrozen: { frozen: false } };
+    queryResults.set(COSTS_QUERY, costs);
+    // Before the cockpit has answered: no commands are offered and the read is skipped — together.
+    queryResults.set(APP_QUERY, { _id: APP, status: "APPROVED", salespersonId: "user_sales", economicsCurrency: "JOD", quote: null });
+    render(<DealCockpit orgId={ORG} applicationId={APP} />);
+    expect(queryArgs.get(CANDIDATES_QUERY)).toBe("skip");
+    expect(screen.queryByTestId("deal-custody")).toBeNull();
+    cleanup();
+    // The cockpit has answered, the read is in flight: the commands are
+    // offered, the read is MOUNTED (never skipped while a command renders),
+    // and the doors that need a person are shut until it answers.
+    renderCockpit();
+    expect(queryArgs.get(CANDIDATES_QUERY)).toEqual({ orgId: ORG });
+    const panel = screen.getByTestId("deal-custody");
+    expect((within(panel).getByTestId("custody-issue-button") as HTMLButtonElement).disabled).toBe(true);
+    expect((within(panel).getByTestId("custody-plan-button") as HTMLButtonElement).disabled).toBe(true);
+    cleanup();
+    queryResults.set(CANDIDATES_QUERY, { candidates: [{ userId: "u2", name: "Rami" }], truncated: false });
+    renderCockpit();
+    expect((within(screen.getByTestId("deal-custody")).getByTestId("custody-issue-button") as HTMLButtonElement).disabled).toBe(false);
+  });
+
   test("a frozen deal withholds every handover-cost edit and says why", () => {
     permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
     permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);

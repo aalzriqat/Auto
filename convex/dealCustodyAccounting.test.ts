@@ -8,7 +8,7 @@ import { ALL_PERMISSIONS, PERMISSIONS } from "./utils/permissions";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { deriveRecommendedCustody } from "./financeDealCosts";
 import { drainEntries } from "./accountingOutbox";
-import { custodyLedgerFamilyRefusal } from "./utils/custodySourceLedger";
+import { custodyLedgerFamilyRefusal, custodyLedgerFamilyRowRefusal, custodyPostingBlockedReason } from "./utils/custodySourceLedger";
 import { financedSaleRecognitionDate } from "./utils/financedSaleRecognition";
 
 /**
@@ -1493,24 +1493,24 @@ describe("B — a custody family is on the books completely, or the deal does no
       fees: (await ctx.db.query("financeDealFees").withIndex("by_application", (q) => q.eq("applicationId", seed.applicationId)).collect()),
     }));
     let { custody, fees } = await rows();
-    expect(custodyLedgerFamilyRefusal(custody, fees, "closing")).toBeNull();
+    expect(custodyLedgerFamilyRowRefusal(custody, fees, "closing")).toBeNull();
     // A line whose posting no longer matches its actual (raw-edited).
     await seed.t.run((ctx) => ctx.db.patch(feeId, { actualAmountMinor: jod(700) }));
     ({ custody, fees } = await rows());
-    expect(custodyLedgerFamilyRefusal(custody, fees, "closing")).toMatch(/not on the books at its recorded amount/);
+    expect(custodyLedgerFamilyRowRefusal(custody, fees, "closing")).toMatch(/not on the books at its recorded amount/);
     // A line charged to custody with no posting at all.
     await seed.t.run((ctx) => ctx.db.patch(feeId, { actualAmountMinor: jod(650), custodyPosted: undefined }));
     ({ custody, fees } = await rows());
-    expect(custodyLedgerFamilyRefusal(custody, fees, "closing")).toMatch(/not on the books/);
+    expect(custodyLedgerFamilyRowRefusal(custody, fees, "closing")).toMatch(/not on the books/);
     // A posting for an actual the line no longer records.
     await seed.t.run((ctx) => ctx.db.patch(feeId, { actualAmountMinor: undefined, custodyPosted: { version: 1, amountMinor: jod(650), custodyId } }));
     ({ custody, fees } = await rows());
-    expect(custodyLedgerFamilyRefusal(custody, fees, "closing")).toMatch(/actual it no longer records/);
+    expect(custodyLedgerFamilyRowRefusal(custody, fees, "closing")).toMatch(/actual it no longer records/);
     // The marker missing on the record itself.
     await seed.t.run((ctx) => ctx.db.patch(feeId, { actualAmountMinor: jod(650) }));
     await seed.t.run((ctx) => ctx.db.patch(custodyId, { ledgerPosting: undefined }));
     ({ custody, fees } = await rows());
-    expect(custodyLedgerFamilyRefusal(custody, fees, "closing")).toMatch(/predates ledger posting/);
+    expect(custodyLedgerFamilyRowRefusal(custody, fees, "closing")).toMatch(/predates ledger posting/);
   });
 });
 
@@ -1749,4 +1749,272 @@ describe("F — closing a custody record is an idempotent command", () => {
       asHolder.mutation(api.financeDealCosts.reconcileDealCustody, { orgId: seed.orgId, custodyId, notes: "short 50", writeOffReason: "lost", idempotencyKey: key })
     ).rejects.toThrow(/somebody other than the person holding the cash/);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Consolidated round on 2a6a15f1c: items 1 (POSTED-only family), 2 (a
+// replacement never overtakes a deferred reversal) and 3 (an economic date is
+// the exact calendar date the operator picked).
+// ---------------------------------------------------------------------------
+
+/** The gate's own predicate, asked over the same bounded rows the gates read. */
+async function familyRefusal(seed: Seed, action = "closing") {
+  return await seed.t.run(async (ctx) => {
+    const custody = await ctx.db.query("financeDealCustody").withIndex("by_application", (q) => q.eq("applicationId", seed.applicationId)).collect();
+    const fees = await ctx.db.query("financeDealFees").withIndex("by_application", (q) => q.eq("applicationId", seed.applicationId)).collect();
+    return await custodyLedgerFamilyRefusal(ctx, seed.orgId, custody, fees.filter((f) => f.voidedAt === undefined), action);
+  });
+}
+
+/** Drains the outbox until nothing is left PENDING or the rounds run out; returns the statuses. */
+async function drainUntilSettled(seed: Seed, rounds = 4) {
+  for (let round = 0; round < rounds; round += 1) {
+    await drainOnce(seed);
+    if ((await pending(seed)).every((r) => r.status === "POSTED")) break;
+  }
+  return (await pending(seed)).map((r) => r.status);
+}
+
+const closePeriod = (seed: Seed, periodId: Id<"accountingPeriods">) =>
+  seed.t.run((ctx) => ctx.db.patch(periodId, { status: "CLOSED", closedAt: Date.now(), closedBy: seed.userId }));
+const reopenPeriod = (seed: Seed, periodId: Id<"accountingPeriods">) =>
+  seed.t.run((ctx) => ctx.db.patch(periodId, { status: "OPEN", closedAt: undefined, closedBy: undefined }));
+
+describe("G1 — the family gate proves the LEDGER, not the rows: only the exact POSTED family passes", () => {
+  test("a CANONICAL record whose postings are queued for a closed month is refused; it passes once the outbox has posted them", async () => {
+    const seed = await seedDeal("posted-only", { templates: false });
+    const { earlierId, boundary } = await splitPeriods(seed);
+    await closePeriod(seed, earlierId);
+    const custodyId = await openCustody(seed, jod(700));
+    // Paid in the closed month: the fee posting queues (700 = the issued cash, so no payable delta).
+    const feeId = await employeeFee(seed, custodyId, jod(700), { paidAt: boundary - 5 * DAY });
+    // Every row says "posted": the marker is CANONICAL, the line carries its
+    // custodyPosted version. The row half of the predicate passes.
+    const rows = await seed.t.run(async (ctx) => ({
+      custody: await ctx.db.get(custodyId),
+      fee: await ctx.db.get(feeId),
+    }));
+    expect(rows.custody?.ledgerPosting).toBe("CANONICAL");
+    expect(rows.fee?.custodyPosted).toEqual({ version: 1, amountMinor: jod(700), custodyId });
+    expect(custodyLedgerFamilyRowRefusal([rows.custody!], [rows.fee!], "closing")).toBeNull();
+    // The ledger half does not.
+    expect(await familyRefusal(seed)).toMatch(/not on the books/);
+
+    // Wired into the classification door: closed, reconciled, invoiced — and still refused on the ledger.
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "receipt" });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, custodyId, notes: "balanced" });
+    await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+      orgId: seed.orgId, applicationId: seed.applicationId, legalInvoiceAmountMinor: jod(10_500), legalInvoiceNumber: "INV-G1", issuedTo: "FINANCE_COMPANY", legalInvoiceDate: Date.now() - DAY,
+    });
+    const classify = () =>
+      seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, { orgId: seed.orgId, applicationId: seed.applicationId, notes: "established" });
+    await expect(classify()).rejects.toThrow(/not on the books/);
+    expect((await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))?.accountingClassification).not.toBe("CLASSIFIED");
+
+    // The month reopens and the outbox posts the family; the same rows now pass.
+    await reopenPeriod(seed, earlierId);
+    expect(await drainUntilSettled(seed)).toEqual(["POSTED"]);
+    expect(await familyRefusal(seed)).toBeNull();
+    await classify();
+    expect((await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))?.accountingClassification).toBe("CLASSIFIED");
+  }, 30_000);
+
+  test("a posting that is PENDING, FAILED, absent, REVERSED, or at a version the row does not name is refused", async () => {
+    const seed = await seedDeal("posted-status");
+    const custodyId = await openCustody(seed, jod(700));
+    const feeId = await employeeFee(seed, custodyId, jod(650));
+    expect(await familyRefusal(seed)).toBeNull();
+    const feeEvent = (await events(seed, "CUSTODY_FEE_PAID"))[0];
+    const issuedEvent = (await events(seed, "CUSTODY_CASH_ISSUED"))[0];
+    const setStatus = (id: Id<"accountingEvents">, status: "PENDING" | "POSTED" | "FAILED" | "REVERSED") =>
+      seed.t.run((ctx) => ctx.db.patch(id, { status }));
+
+    for (const status of ["PENDING", "FAILED", "REVERSED"] as const) {
+      await setStatus(feeEvent._id, status);
+      expect(await familyRefusal(seed)).toMatch(/custody on this deal is not on the books/);
+      await setStatus(issuedEvent._id, status);
+      expect(await familyRefusal(seed)).toMatch(/custody movement on this deal is not on the books/);
+      await setStatus(issuedEvent._id, "POSTED");
+    }
+    await setStatus(feeEvent._id, "POSTED");
+    expect(await familyRefusal(seed)).toBeNull();
+
+    // A stale version: the row names v2, the ledger carries v1 (raw-edited row).
+    await seed.t.run((ctx) => ctx.db.patch(feeId, { custodyPosted: { version: 2, amountMinor: jod(650), custodyId } }));
+    expect(await familyRefusal(seed)).toMatch(/custody on this deal is not on the books/);
+    await seed.t.run((ctx) => ctx.db.patch(feeId, { custodyPosted: { version: 1, amountMinor: jod(650), custodyId } }));
+    expect(await familyRefusal(seed)).toBeNull();
+    // An absent event: the movement's ledger row is gone.
+    await seed.t.run((ctx) => ctx.db.delete(issuedEvent._id));
+    expect(await familyRefusal(seed)).toMatch(/custody movement on this deal is not on the books \(no ledger event exists/);
+  }, 30_000);
+
+  test("a reversed cash leg is off the books or the deal is refused; a payable delta the ledger does not carry refuses; a reopened record whose write-off is still posted refuses", async () => {
+    const seed = await seedDeal("posted-reversal");
+    const custodyId = await openCustody(seed, jod(700));
+    const issued = (await entries(seed, custodyId))[0];
+    await reverse(seed, custodyId, issued._id, jod(700));
+    // Reversed in an open period: the forward is REVERSED, the family passes.
+    expect((await events(seed, "CUSTODY_CASH_ISSUED"))[0].status).toBe("REVERSED");
+    expect(await familyRefusal(seed)).toBeNull();
+    // The same reversal DEFERRED would leave the forward POSTED: refused.
+    const issuedEventId = (await events(seed, "CUSTODY_CASH_ISSUED"))[0]._id;
+    await seed.t.run((ctx) => ctx.db.patch(issuedEventId, { status: "POSTED" }));
+    expect(await familyRefusal(seed)).toMatch(/cancelled custody movement on this deal is still on the books/);
+
+    // A payable delta the row says it issued but the ledger does not carry.
+    const chain = await seedDeal("posted-payable");
+    const chainCustody = await openCustody(chain, jod(700));
+    await employeeFee(chain, chainCustody, jod(900));
+    expect((await chain.t.run((ctx) => ctx.db.get(chainCustody)))?.payableReclassVersion).toBe(1);
+    expect(await familyRefusal(chain)).toBeNull();
+    const reclassEventId = (await events(chain, "CUSTODY_PAYABLE_RECLASSIFIED"))[0]._id;
+    await chain.t.run((ctx) => ctx.db.patch(reclassEventId, { status: "PENDING" }));
+    expect(await familyRefusal(chain)).toMatch(/payable reclassification \(v1\) that has not posted/);
+
+    // A written-off record whose write-off is on the books passes; reopened
+    // with the reversal deferred (write-off still POSTED) it is refused, and
+    // passes again once the outbox has posted the reversal.
+    const off = await seedDeal("posted-writeoff");
+    const offCustody = await openCustody(off, jod(700));
+    await employeeFee(off, offCustody, jod(600));
+    await off.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(), orgId: off.orgId, custodyId: offCustody, notes: "short", writeOffReason: "lost 100" });
+    expect(await familyRefusal(off)).toBeNull();
+    await closePeriod(off, off.periodId);
+    await off.asUser.mutation(api.financeDealCosts.reopenDealCustody, { orgId: off.orgId, custodyId: offCustody, reason: "receipt found" });
+    expect((await events(off, "CUSTODY_WRITTEN_OFF"))[0].status).toBe("POSTED");
+    expect(await familyRefusal(off)).toMatch(/reopened custody record on this deal still has its write-off on the books/);
+    await reopenPeriod(off, off.periodId);
+    expect(await drainUntilSettled(off)).toEqual(["POSTED"]);
+    expect((await events(off, "CUSTODY_WRITTEN_OFF"))[0].status).toBe("REVERSED");
+    expect(await familyRefusal(off)).toBeNull();
+  }, 30_000);
+});
+
+describe("G2 — a replacement version never overtakes a deferred reversal (fee posting and write-off)", () => {
+  test("no open period: the corrected fee's v2 is queued behind v1's deferred reversal, held by the worker until the reversal posts, and the books never carry both", async () => {
+    const seed = await seedDeal("replace-fee");
+    const custodyId = await openCustody(seed, jod(700));
+    const feeId = await employeeFee(seed, custodyId, jod(650));
+    expect(transferExpense(await ledger(seed))).toBe(jod(650));
+    // Every period closes; the correction's reversal has nowhere to post.
+    await closePeriod(seed, seed.periodId);
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, { orgId: seed.orgId, feeId, actualAmountMinor: jod(700), expectedCurrency: "JOD" });
+    // v1 is STILL POSTED; its reversal is queued; v2 is queued BEHIND it, not posted.
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+    const queued = await pending(seed);
+    const reversalRow = queued.find((r) => r.kind === "REVERSE" && r.idempotencyKey === `custody_fee_reversal_${feeId}_v1`);
+    const v2 = queued.find((r) => r.idempotencyKey === `custody_fee_paid_${feeId}_v2`);
+    expect(reversalRow?.status).toBe("PENDING");
+    expect(v2?.status).toBe("PENDING");
+    expect(v2?.reason).toMatch(/Waiting on a predecessor: custody fee posting v1/);
+    expect(transferExpense(await ledger(seed))).toBe(jod(650));
+    expect((await seed.t.run((ctx) => ctx.db.get(feeId)))?.custodyPosted).toEqual({ version: 2, amountMinor: jod(700), custodyId });
+    // The gate reads the ledger: two versions in play, only one on the books, refused.
+    expect(await familyRefusal(seed)).toMatch(/not on the books/);
+
+    // The worker re-proves the dependency on the row itself, independent of the hook's reason.
+    expect(await seed.t.run((ctx) => custodyPostingBlockedReason(ctx, v2!))).toMatch(/custody fee posting v1 it replaces is still on the books/);
+
+    // Period still closed: one real attempt; nothing posts, v2 is not consumed.
+    await drainOnce(seed);
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+    expect((await pending(seed)).find((r) => r.idempotencyKey === `custody_fee_paid_${feeId}_v2`)?.attempts).toBe(0);
+
+    // The period reopens: the reversal lands, then v2 — never v2 first.
+    await reopenPeriod(seed, seed.periodId);
+    await drainUntilSettled(seed);
+    expect((await pending(seed)).every((r) => r.status === "POSTED")).toBe(true);
+    const after = await events(seed, "CUSTODY_FEE_PAID");
+    expect(after.map((e) => [e.eventVersion, e.status]).sort()).toEqual([[1, "REVERSED"], [2, "POSTED"]]);
+    const l = await ledger(seed);
+    expect(transferExpense(l)).toBe(jod(700));
+    expect(clearing(l)).toBe(0);
+    expect(await familyRefusal(seed)).toBeNull();
+    expect(await seed.t.run((ctx) => custodyPostingBlockedReason(ctx, v2!))).toBeNull();
+  }, 30_000);
+
+  test("the worker holds a queued replacement on the LEDGER alone: with the reversal row removed, v2 stays held while v1 is POSTED and posts once v1 is REVERSED", async () => {
+    const seed = await seedDeal("replace-worker");
+    const custodyId = await openCustody(seed, jod(700));
+    const feeId = await employeeFee(seed, custodyId, jod(650));
+    await closePeriod(seed, seed.periodId);
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, { orgId: seed.orgId, feeId, actualAmountMinor: jod(700), expectedCurrency: "JOD" });
+    // Take the reversal row out of the queue, so nothing can post it for v2
+    // to wait on — only the ledger's own state can release v2.
+    const reversalRow = (await pending(seed)).find((r) => r.kind === "REVERSE")!;
+    await seed.t.run((ctx) => ctx.db.delete(reversalRow._id));
+    await reopenPeriod(seed, seed.periodId);
+    await drainOnce(seed);
+    const v2 = (await pending(seed)).find((r) => r.idempotencyKey === `custody_fee_paid_${feeId}_v2`)!;
+    expect(v2.status).toBe("PENDING");
+    expect(v2.attempts).toBe(0);
+    expect(v2.lastError).toMatch(/custody fee posting v1 it replaces is still on the books/);
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+    // The reversal reaches the books another way (here: the ledger says so); v2 is released.
+    const v1EventId = (await events(seed, "CUSTODY_FEE_PAID"))[0]._id;
+    await seed.t.run((ctx) => ctx.db.patch(v1EventId, { status: "REVERSED" }));
+    await drainUntilSettled(seed);
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.eventVersion, e.status]).sort()).toEqual([[1, "REVERSED"], [2, "POSTED"]]);
+  }, 30_000);
+
+  test("no open period: a reopened write-off's reversal defers, the re-closure's v2 queues behind it, and Cash Over/Short never doubles", async () => {
+    const seed = await seedDeal("replace-writeoff");
+    const custodyId = await openCustody(seed, jod(700));
+    await employeeFee(seed, custodyId, jod(600));
+    const close = (reason: string) =>
+      seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, custodyId, notes: "short", writeOffReason: reason });
+    await close("lost 100");
+    expect((await ledger(seed))[SYSTEM_KEYS.CASH_OVER_SHORT]).toBe(jod(100));
+    await closePeriod(seed, seed.periodId);
+    await seed.asUser.mutation(api.financeDealCosts.reopenDealCustody, { orgId: seed.orgId, custodyId, reason: "recount" });
+    // v1 still POSTED under a deferred reversal.
+    expect((await events(seed, "CUSTODY_WRITTEN_OFF")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+    await close("still lost 100");
+    const v2 = (await pending(seed)).find((r) => r.idempotencyKey === `custody_written_off_${custodyId}_v2`);
+    expect(v2?.status).toBe("PENDING");
+    expect(v2?.reason).toMatch(/Waiting on a predecessor: custody write-off v1/);
+    expect((await events(seed, "CUSTODY_WRITTEN_OFF")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+    expect((await ledger(seed))[SYSTEM_KEYS.CASH_OVER_SHORT]).toBe(jod(100));
+    expect(await seed.t.run((ctx) => custodyPostingBlockedReason(ctx, v2!))).toMatch(/custody write-off v1 it replaces is still on the books/);
+    expect(await familyRefusal(seed)).toMatch(/not on the books/);
+
+    await drainOnce(seed);
+    expect((await ledger(seed))[SYSTEM_KEYS.CASH_OVER_SHORT]).toBe(jod(100));
+    expect((await pending(seed)).find((r) => r.idempotencyKey === `custody_written_off_${custodyId}_v2`)?.attempts).toBe(0);
+
+    await reopenPeriod(seed, seed.periodId);
+    await drainUntilSettled(seed);
+    expect((await pending(seed)).every((r) => r.status === "POSTED")).toBe(true);
+    expect((await events(seed, "CUSTODY_WRITTEN_OFF")).map((e) => [e.eventVersion, e.status]).sort()).toEqual([[1, "REVERSED"], [2, "POSTED"]]);
+    expect((await ledger(seed))[SYSTEM_KEYS.CASH_OVER_SHORT]).toBe(jod(100));
+    expect(await familyRefusal(seed)).toBeNull();
+  }, 30_000);
+});
+
+describe("G3 — an economic date is the exact calendar date the operator picked, judged on the server's clock", () => {
+  test("the UTC calendar day's midnight is accepted and dated exactly there — across a month boundary, never shifted to the instant of recording", async () => {
+    const seed = await seedDeal("calendar-exact");
+    const custodyId = await openCustody(seed, jod(700));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      // 00:30Z on 1 October: the client's UTC today is 1 October and it sends
+      // that day's UTC midnight (`economicDateInputToMs`), never `Date.now()`.
+      vi.setSystemTime(new Date(Date.UTC(2026, 9, 1, 0, 30)));
+      const picked = Date.UTC(2026, 9, 1);
+      await move(seed, custodyId, "RETURNED", jod(1), { occurredAt: picked });
+      const returned = await events(seed, "CUSTODY_CASH_RETURNED");
+      expect(returned.map((e) => e.accountingDate)).toEqual([picked]);
+      expect(new Date(returned[0].accountingDate).getUTCMonth()).toBe(9);
+      // A user ahead of UTC at 22:30Z on 30 September has a LOCAL date of
+      // 1 October; its UTC midnight has not begun on the server's clock and
+      // is refused with no tolerance — the client offers the UTC today instead.
+      vi.setSystemTime(new Date(Date.UTC(2026, 8, 30, 22, 30)));
+      await expect(move(seed, custodyId, "RETURNED", jod(1), { occurredAt: Date.UTC(2026, 9, 1) })).rejects.toThrow(/cannot be in the future/);
+      await move(seed, custodyId, "RETURNED", jod(1), { occurredAt: Date.UTC(2026, 8, 30) });
+      expect((await events(seed, "CUSTODY_CASH_RETURNED")).map((e) => new Date(e.accountingDate).getUTCMonth()).sort()).toEqual([8, 9]);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 30_000);
 });

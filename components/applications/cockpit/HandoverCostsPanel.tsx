@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { economicDateInputToMs, todayDateInput } from "@/lib/dateInput";
+import { economicDateInputToMs, economicTodayDateInput } from "@/lib/dateInput";
 import type { Doc } from "@/convex/_generated/dataModel";
 
 /** The fee-type union the server validates — the row carries it as such, so no cast is needed to send it back. */
@@ -1181,7 +1181,7 @@ function AddForm({
           <Input
             id="handover-cost-paid-on"
             type="date"
-            max={todayDateInput()}
+            max={economicTodayDateInput()}
             value={paidOn}
             onChange={(event) => setPaidOn(event.target.value)}
           />
@@ -1445,7 +1445,7 @@ function TemplateActualForm({
           <Input
             id={`${fieldId}-paid-on`}
             type="date"
-            max={todayDateInput()}
+            max={economicTodayDateInput()}
             value={paidOn}
             onChange={(event) => setPaidOn(event.target.value)}
           />
@@ -1560,7 +1560,7 @@ function ActualForm({
           <Input
             id={`actual-paid-on-${line._id}`}
             type="date"
-            max={todayDateInput()}
+            max={economicTodayDateInput()}
             value={paidOn}
             onChange={(event) => setPaidOn(event.target.value)}
           />

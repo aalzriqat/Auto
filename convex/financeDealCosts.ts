@@ -17,6 +17,7 @@ import {
   hookCustodyWrittenOff,
   hookCustodyWriteOffReversed,
   hookCustodyPayableReclassified,
+  type ReversalOutcome,
 } from "./accounting/workflowHooks";
 import { dealCustodyAccountingReadiness } from "./chartOfAccounts";
 import { getOpenPeriodForDate } from "./accountingPeriods";
@@ -24,6 +25,7 @@ import { custodyFeeExpenseKey } from "./utils/dealCustodyPosting";
 import {
   assertCustodyLedgerFamilyComplete,
   custodyPayableReclassPosted,
+  loadCustodyEntries,
 } from "./utils/custodySourceLedger";
 import {
   assertConfiguredFeesRecorded,
@@ -38,9 +40,10 @@ import { assertSupportedDenomination } from "./utils/money";
 import {
   assertFeeTemplatesWithinLimit,
   feeTemplatesExceedConfigurationLimit,
+  MAX_CUSTODY_ENTRIES,
   MAX_DEAL_CUSTODY_DECISION_RECORDS,
 } from "./utils/dealCostLimits";
-export { MAX_DEAL_CUSTODY_DECISION_RECORDS };
+export { MAX_CUSTODY_ENTRIES, MAX_DEAL_CUSTODY_DECISION_RECORDS };
 import { reconcileEmployeeCustody } from "../lib/financingEconomics";
 import { recomputeEconomicsForApplication } from "./financingEconomics";
 import {
@@ -317,8 +320,12 @@ async function syncCustodyFeePosting(
   if (unchanged) return;
 
   const now = Date.now();
+  // What became of the live version: a DEFERRED reversal leaves it POSTED
+  // until the outbox drains, and the replacement below is queued behind it
+  // rather than posted beside it (consolidated round, item 2).
+  let reversal: ReversalOutcome | undefined;
   if (posted !== undefined) {
-    await hookCustodyFeeReversed(ctx, {
+    reversal = await hookCustodyFeeReversed(ctx, {
       orgId: fee.orgId,
       feeId: fee._id,
       version: posted.version,
@@ -350,6 +357,7 @@ async function syncCustodyFeePosting(
     // Dated when the employee paid it, where that is known and readable;
     // otherwise when it was recorded. A past date in a closed period queues.
     occurredAt: fee.paidAt !== undefined && isTimestamp(fee.paidAt) ? fee.paidAt : now,
+    replacesReversal: reversal,
   });
   await ctx.db.patch(fee._id, {
     custodyPosted: { version, amountMinor: target.amountMinor, custodyId: target.custodyId },
@@ -536,44 +544,14 @@ function assertCustodyOnLedger(custody: Doc<"financeDealCustody">, action: strin
 export const MAX_DEAL_CUSTODY_RECORDS = 20;
 
 /**
- * How many movements one custody record's DECISION reads may carry.
- *
- * `recomputeCustodyTotals` and `assertReversalAllowed` decide on the whole
- * movement log — a total is the sum of every entry, and a reversal is
- * refused if its target was already reversed. An unbounded `.collect()` there
- * grows with the log until the mutation hits the platform's read limits and
- * fails opaquely; a bounded read that silently took a prefix would decide on
- * evidence it had not seen. So the read takes ONE past the cap and, past it,
- * REFUSES with a named reason: the mutation that would cross the bound rolls
- * back (its own insert included), nothing is sampled, and the record stays
- * as it was. Two hundred movements is far beyond any real custody (an
- * advance, a few receipts, a return, a reimbursement, the odd reversal); a
- * log that long is evidence of something else and gets a person, not a sum.
- * The paginated movement log (`listCustodyMovements`) is unaffected.
- */
-export const MAX_CUSTODY_ENTRIES = 200;
-
-/**
  * Every movement of one custody record, or a refusal — never a prefix.
- * The invariant is `entries.length <= MAX_CUSTODY_ENTRIES` for any record a
- * writer decides on; it is established here at every decision read.
+ * The invariant is `entries.length <= MAX_CUSTODY_ENTRIES` (see
+ * `utils/dealCostLimits`) for any record a writer decides on; it is
+ * established at every decision read by the shared loader in
+ * `utils/custodySourceLedger`, which the ledger-side family proof reads
+ * the log through as well.
  */
-async function custodyEntriesFor(
-  ctx: QueryCtx | MutationCtx,
-  custodyId: Id<"financeDealCustody">,
-  action: string
-): Promise<Array<Doc<"financeDealCustodyEntries">>> {
-  const entries = await ctx.db
-    .query("financeDealCustodyEntries")
-    .withIndex("by_custody", (q) => q.eq("custodyId", custodyId))
-    .take(MAX_CUSTODY_ENTRIES + 1);
-  if (entries.length > MAX_CUSTODY_ENTRIES) {
-    throw new ConvexError(
-      `This custody record carries more than ${MAX_CUSTODY_ENTRIES} movements, which is past what ${action} can decide on completely; nothing has been changed. Have the record reviewed rather than extended.`
-    );
-  }
-  return entries;
-}
+const custodyEntriesFor = loadCustodyEntries;
 
 /**
  * Every custody record of a deal, or a refusal — the WRITERS' read, never a
@@ -3569,7 +3547,7 @@ export const classifyDealAccounting = mutation({
     // or a custody-paid line whose posting is missing or stale, is refused
     // whatever its status says. Same predicate finalization asks; settled
     // through `migrateLegacyCustodyToLedger`, never inferred here.
-    assertCustodyLedgerFamilyComplete(custodyRows, fees, "classifying this deal's accounting");
+    await assertCustodyLedgerFamilyComplete(ctx, args.orgId, custodyRows, fees, "classifying this deal's accounting");
     for (const row of custodyRows) {
       if (row.status === "OPEN") {
         throw new ConvexError(
