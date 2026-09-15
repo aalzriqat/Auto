@@ -536,7 +536,14 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
   "./vehicles": ["create", "createReservation"],
   "./workOrders": ["create"],
   "./expenses": ["create"],
-  "./financeDealCosts": ["recordDealFee", "recordTemplateFeeActual", "openDealCustody", "recordCustodyMovement"],
+  "./financeDealCosts": [
+    "recordDealFee",
+    "recordTemplateFeeActual",
+    "openDealCustody",
+    "recordCustodyMovement",
+    "migrateLegacyCustodyToLedger",
+    "reconcileDealCustody",
+  ],
   "./paymentIntents": ["create", "markSettled"],
   "./payroll": ["recordAdvance", "recoverAdvance"],
   "./prepaidExpenses": ["correctSchedule"],
@@ -599,7 +606,13 @@ describe("SCRUM-57 — classification ratchet", () => {
     // fee the finance company's frozen policy configures — runWithIdempotency
     // with economic: true, the template POSITION in its fingerprint. Found by
     // this ratchet on the full run at 6b98ada00, added here and to the census.
-    expect(checked).toBe(38);
+    //
+    // 38 -> 40 by SCRUM-117 custody accounting:
+    // +financeDealCosts.migrateLegacyCustodyToLedger and
+    // +financeDealCosts.reconcileDealCustody. Both are explicit economic
+    // commands, so the idempotency manifest must measure them rather than
+    // letting the source-to-manifest equality fail only in the full CI run.
+    expect(checked).toBe(40);
   });
 
   /**
@@ -660,9 +673,9 @@ describe("SCRUM-57 — classification ratchet", () => {
     expect(missingFromSource, "listed in the manifest but not economic in the source").toEqual([]);
 
     // The denominator, asserted rather than described.
-    expect(economicInSource.size).toBe(38);
+    expect(economicInSource.size).toBe(40);
     expect([...nonEconomicInSource].sort()).toEqual(["sales.createDraft"]);
-    expect(economicInSource.size + nonEconomicInSource.size).toBe(39);
+    expect(economicInSource.size + nonEconomicInSource.size).toBe(41);
   });
 
   /**
