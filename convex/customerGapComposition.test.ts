@@ -133,6 +133,14 @@ describe("the composition boundary at every real caller", () => {
     }
   });
 
+  test("STOCK: a CANCELLED deal reads DealCancelled even when its gap components are corrupt — cancellation outranks the composition", async () => {
+    const s = await seed("cancelled", "STOCK");
+    await setGap(s, { cash: -100_000, installment: 200_000 });
+    await s.t.run((ctx) => ctx.db.patch(s.applicationId, { status: "CANCELLED" }));
+    const view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId: s.applicationId });
+    expect(view!.financialSummary!.profit).toEqual({ available: false, reason: "DealCancelled" });
+  });
+
   test("SOURCED (ACC-1 consignment): the cockpit's own profit and the overview's both refuse a cancelling pair", async () => {
     const s = await seed("sourced", "SOURCED");
     await setGap(s, { cash: 100_000, installment: 0 });

@@ -6,6 +6,7 @@ import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 import { deriveExpectedFees, MAX_CUSTODY_ENTRIES, unreadableCustodyAmounts } from "./financeDealCosts";
+import { assertConfiguredFeesRecorded, loadActiveFees, unrecordedConfiguredFeePositions } from "./utils/settlementDeductions";
 
 /**
  * The readable-amount contract, end to end, on the deal's cost, custody and
@@ -492,6 +493,14 @@ describe("a frozen snapshot template whose estimate is not readable withholds it
       const app = (await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))!;
       expect(app.companyRuleSnapshot).toEqual(snapshot);
 
+      // The finalization door judges positions on the same live rows: the
+      // estimate-less line satisfies position 1, position 0 is still owed.
+      await seed.t.run(async (ctx) => {
+        const liveFees = await loadActiveFees(ctx, seed.applicationId);
+        expect(unrecordedConfiguredFeePositions(app.companyRuleSnapshot, liveFees)).toEqual([0]);
+        expect(() => assertConfiguredFeesRecorded(app.companyRuleSnapshot, liveFees, "finalizing")).toThrow();
+      });
+
       // And the configured-position gate is satisfied by the real actual:
       // once every other real requirement is met, classification proceeds.
       await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
@@ -505,6 +514,11 @@ describe("a frozen snapshot template whose estimate is not readable withholds it
       for (const feeId of [stampsFeeId, platesFeeId]) {
         await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "matched" });
       }
+      await seed.t.run(async (ctx) => {
+        const liveFees = await loadActiveFees(ctx, seed.applicationId);
+        expect(unrecordedConfiguredFeePositions(app.companyRuleSnapshot, liveFees)).toEqual([]);
+        expect(() => assertConfiguredFeesRecorded(app.companyRuleSnapshot, liveFees, "finalizing")).not.toThrow();
+      });
       await seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, {
         orgId: seed.orgId, applicationId: seed.applicationId, notes: "all on file",
       });

@@ -190,15 +190,36 @@ async function custodyEntriesFor(
   return entries;
 }
 
-/** Every custody record of a deal — the WRITERS' read, where the one-open-per-person rule must see all of them. */
+/**
+ * How many custody records one deal's DECISION reads may carry.
+ *
+ * The one-open-per-person rule and the classification gate decide on EVERY
+ * custody record of the deal, so their read is not the screen's bounded
+ * prefix (`MAX_DEAL_CUSTODY_RECORDS`, which reports truncation) — a prefix
+ * would let a second open record hide past the cap. Nor is it unbounded: a
+ * `.collect()` grows until the platform's read limits fail the mutation
+ * opaquely. So the read takes ONE past this cap and, past it, REFUSES with a
+ * named reason; nothing is sampled. A deal has one custodian, occasionally
+ * two; a hundred records is not a deal, it is a record that needs a person.
+ */
+export const MAX_DEAL_CUSTODY_DECISION_RECORDS = 100;
+
+/** Every custody record of a deal, or a refusal — the WRITERS' read, never a prefix. */
 async function custodyFor(
   ctx: QueryCtx | MutationCtx,
-  applicationId: Id<"financeApplications">
+  applicationId: Id<"financeApplications">,
+  action: string
 ): Promise<Array<Doc<"financeDealCustody">>> {
-  return await ctx.db
+  const rows = await ctx.db
     .query("financeDealCustody")
     .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
-    .collect();
+    .take(MAX_DEAL_CUSTODY_DECISION_RECORDS + 1);
+  if (rows.length > MAX_DEAL_CUSTODY_DECISION_RECORDS) {
+    throw new ConvexError(
+      `This deal carries more than ${MAX_DEAL_CUSTODY_DECISION_RECORDS} custody records, which is past what ${action} can decide on completely; nothing has been changed. Have the deal's custody reviewed.`
+    );
+  }
+  return rows;
 }
 
 /** The screen's bounded read: one row past the cap, so truncation is detectable. */
@@ -2027,7 +2048,7 @@ export const openDealCustody = mutation({
         }),
       },
       async () => {
-        const existing = (await custodyFor(ctx, args.applicationId)).find(
+        const existing = (await custodyFor(ctx, args.applicationId, "opening custody on this deal")).find(
           (row) => row.userId === args.userId && row.status === "OPEN"
         );
         if (existing) {
@@ -2538,7 +2559,7 @@ export const classifyDealAccounting = mutation({
     // still be unbalanced — a late receipt against a RECONCILED record is
     // exactly the case — and a gate that trusts the flag it is meant to be
     // guarding is not a gate.
-    const custodyRows = await custodyFor(ctx, args.applicationId);
+    const custodyRows = await custodyFor(ctx, args.applicationId, "classifying this deal's accounting");
     for (const row of custodyRows) {
       if (row.status === "OPEN") {
         throw new ConvexError(

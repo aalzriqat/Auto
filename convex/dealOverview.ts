@@ -270,12 +270,17 @@ function routeSpecificProfit(args: {
     args.fullCostBasis !== null && args.fullCostBasis.available && !args.fullCostBasis.consigned
       ? args.fullCostBasis.totalBeforeDealMinor
       : undefined;
-  // Composed at the shared boundary, each component validated BEFORE the
-  // addition — added inline, a corrupt pair cancelled into a safe operand.
+  // Cancellation first, as the derivers themselves order it: a cancelled
+  // deal has no profit whatever its inputs look like. Then the gap
+  // contribution, composed at the shared boundary with each component
+  // validated BEFORE the addition — added inline, a corrupt pair cancelled
+  // into a safe operand.
+  const dealCancelled = app.status === "CANCELLED";
+  if (dealCancelled) return { available: false, reason: "DealCancelled" };
   const customerGapToDealer = composeCustomerGapToDealer(app);
   if (!customerGapToDealer.readable) return { available: false, reason: "CorruptInput" };
   return deriveStockManagementProfit({
-    dealCancelled: app.status === "CANCELLED",
+    dealCancelled,
     approvedDealerPurchaseAmountMinor: app.approvedDealerPurchaseAmountMinor,
     vehicleCostMinor,
     dealerContributionMinor: app.dealerContributionMinor,

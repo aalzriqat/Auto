@@ -5,7 +5,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS, PERMISSIONS } from "./utils/permissions";
-import { MAX_DEAL_CUSTODY_RECORDS } from "./financeDealCosts";
+import { MAX_DEAL_CUSTODY_DECISION_RECORDS, MAX_DEAL_CUSTODY_RECORDS } from "./financeDealCosts";
 
 /**
  * The bounded custody read (`listDealCosts.custody`) and the paginated
@@ -137,6 +137,61 @@ describe("writer guards enumerate every custody record, never a bounded prefix",
     await expect(openCustody(seed)).rejects.toThrow(/already holds an open custody/);
     // And the adoption precondition sees the custody rows too.
     expect(costs.expected.adoption.state).not.toBe("AVAILABLE");
+  });
+});
+
+describe("writer decision reads are bounded at MAX_DEAL_CUSTODY_DECISION_RECORDS, and refuse rather than truncate past it", () => {
+  async function closedRecords(seed: Seed, count: number) {
+    await seed.t.run(async (ctx) => {
+      for (let i = 0; i < count; i += 1) {
+        await ctx.db.insert("financeDealCustody", {
+          orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.employeeId, currency: "JOD",
+          issuedMinor: 0, returnedMinor: 0, reimbursedMinor: 0, status: "RECONCILED",
+          createdBy: seed.userId, createdAt: Date.now() + i, updatedAt: Date.now() + i,
+        });
+      }
+    });
+  }
+  const countRecords = (seed: Seed) =>
+    seed.t.run(async (ctx) =>
+      (await ctx.db.query("financeDealCustody").withIndex("by_application", (q) => q.eq("applicationId", seed.applicationId)).collect()).length
+    );
+
+  test("AT the cap: opening custody still enumerates every record and works", async () => {
+    const seed = await seedDeal("cap");
+    await closedRecords(seed, MAX_DEAL_CUSTODY_DECISION_RECORDS);
+    const custodyId = await openCustody(seed);
+    expect(custodyId).toBeTruthy();
+    expect(await countRecords(seed)).toBe(MAX_DEAL_CUSTODY_DECISION_RECORDS + 1);
+  });
+
+  test("PAST the cap: opening custody is refused with the reason and writes nothing — not decided on a prefix", async () => {
+    const seed = await seedDeal("cap-plus");
+    await closedRecords(seed, MAX_DEAL_CUSTODY_DECISION_RECORDS + 1);
+    await expect(openCustody(seed)).rejects.toThrow(new RegExp(`more than ${MAX_DEAL_CUSTODY_DECISION_RECORDS} custody records`));
+    expect(await countRecords(seed)).toBe(MAX_DEAL_CUSTODY_DECISION_RECORDS + 1);
+    const entries = await seed.t.run((ctx) => ctx.db.query("financeDealCustodyEntries").withIndex("by_org", (q) => q.eq("orgId", seed.orgId)).collect());
+    expect(entries).toEqual([]);
+  });
+
+  test("PAST the cap: classification is refused with the same reason before any stamp", async () => {
+    const seed = await seedDeal("cap-classify");
+    await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+      legalInvoiceAmountMinor: jod(10_500), legalInvoiceNumber: "INV-1", legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
+    });
+    const feeId = await seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
+      expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId,
+      feeType: "LICENSING", paidBy: "DEALER", paidTo: "GOVERNMENT", accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE", actualAmountMinor: jod(90),
+    });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "matched" });
+    await closedRecords(seed, MAX_DEAL_CUSTODY_DECISION_RECORDS + 1);
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, { orgId: seed.orgId, applicationId: seed.applicationId, notes: "on file" })
+    ).rejects.toThrow(new RegExp(`more than ${MAX_DEAL_CUSTODY_DECISION_RECORDS} custody records`));
+    const app = (await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))!;
+    expect(app.accountingClassification).not.toBe("CLASSIFIED");
+    expect(app.accountingClassifiedAt).toBeUndefined();
   });
 });
 
