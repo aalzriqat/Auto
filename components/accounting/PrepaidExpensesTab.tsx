@@ -87,21 +87,21 @@ type RunAmortizationNowResult = {
 /** FAILED > PENDING > DUE > CANCELLED/COMPLETE > UP TO DATE — a correction's queued or dead-lettered posting is exactly as urgent as amortization's own, so it carries the same weight in this precedence. */
 function ScheduleStatusBadge({ t, schedule }: Readonly<{ t: (key: any) => string; schedule: ScheduleRow }>) {
   if (schedule.openFailureCount > 0 || schedule.failedMinor > 0 || schedule.failedCorrectionMinor > 0) {
-    return <Badge variant="outline" className="bg-rose-500/10 text-rose-600 border-rose-500/20">{t("PrepaidGlStatus_FAILED")}</Badge>;
+    return <Badge variant="outline" className="border-rose-500/20 bg-rose-500/10 text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300">{t("PrepaidGlStatus_FAILED")}</Badge>;
   }
   if (schedule.pendingMinor > 0 || schedule.pendingCorrectionMinor > 0) {
-    return <Badge variant="outline" className="bg-amber-500/10 text-amber-600 border-amber-500/20">{t("PrepaidGlStatus_PENDING")}</Badge>;
+    return <Badge variant="outline" className="border-amber-500/20 bg-amber-500/10 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">{t("PrepaidGlStatus_PENDING")}</Badge>;
   }
   if (schedule.status === "ACTIVE" && schedule.dueMinor > schedule.recognizedMinor) {
-    return <Badge variant="outline" className="bg-blue-500/10 text-blue-600 border-blue-500/20">{t("PrepaidGlStatus_DUE")}</Badge>;
+    return <Badge variant="outline" className="border-blue-500/20 bg-blue-500/10 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300">{t("PrepaidGlStatus_DUE")}</Badge>;
   }
   if (schedule.status === "CANCELLED") {
-    return <Badge variant="outline" className="bg-slate-500/10 text-slate-500 border-slate-500/20">{t("PrepaidGlStatus_CANCELLED")}</Badge>;
+    return <Badge variant="outline" className="border-border bg-muted text-muted-foreground">{t("PrepaidGlStatus_CANCELLED")}</Badge>;
   }
   if (schedule.status === "FULLY_AMORTIZED") {
-    return <Badge variant="outline" className="bg-slate-500/10 text-slate-500 border-slate-500/20">{t("PrepaidGlStatus_COMPLETE")}</Badge>;
+    return <Badge variant="outline" className="border-border bg-muted text-muted-foreground">{t("PrepaidGlStatus_COMPLETE")}</Badge>;
   }
-  return <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20">{t("PrepaidGlStatus_UPTODATE")}</Badge>;
+  return <Badge variant="outline" className="border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">{t("PrepaidGlStatus_UPTODATE")}</Badge>;
 }
 
 /** Click-to-open detail behind the badge: posted/pending/failed amortization, pending/failed corrections, and any unresolved failure messages — plus a redrive action when something's queued or dead-lettered. */
@@ -170,8 +170,8 @@ function ScheduleStatusPopover({
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-80 space-y-2 text-sm" align="start">
-        <p className="font-medium text-slate-900">{t("GlStatusDetails" as any)}</p>
-        <div className="space-y-1 text-slate-600">
+        <p className="font-medium text-foreground">{t("GlStatusDetails" as any)}</p>
+        <div className="space-y-1 text-muted-foreground">
           <div className="flex justify-between"><span>{t("PostedAmortizationLabel" as any)}</span><span>{fmt(schedule.postedMinor)}</span></div>
           <div className="flex justify-between"><span>{t("PendingAmortizationLabel" as any)}</span><span>{fmt(schedule.pendingMinor)}</span></div>
           <div className="flex justify-between"><span>{t("FailedAmortizationLabel" as any)}</span><span>{fmt(schedule.failedMinor)}</span></div>
@@ -181,12 +181,12 @@ function ScheduleStatusPopover({
 
         {schedule.openFailureCount > 0 && (
           <div className="border-t pt-2 space-y-1">
-            <p className="font-medium text-rose-600">{t("UnresolvedFailuresLabel" as any)}</p>
+            <p className="font-medium text-rose-600 dark:text-rose-400">{t("UnresolvedFailuresLabel" as any)}</p>
             {failures === undefined ? (
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
             ) : (
               failures.map((f) => (
-                <p key={f._id} className="text-xs text-slate-500">
+                <p key={f._id} className="text-xs text-muted-foreground">
                   {f.yearMonth}: {f.errorMessage}
                 </p>
               ))
@@ -222,9 +222,9 @@ function RunNowResultsDialog({
         <div className="space-y-4 text-sm">
           {result.posted.length > 0 && (
             <div className="space-y-1">
-              <p className="font-medium text-emerald-600">{t("RunNowPostedSection" as any)}</p>
+              <p className="font-medium text-emerald-600 dark:text-emerald-400">{t("RunNowPostedSection" as any)}</p>
               {result.posted.map((r) => (
-                <div key={r.scheduleId} className="flex justify-between text-slate-600">
+                <div key={r.scheduleId} className="flex justify-between text-muted-foreground">
                   <span>{r.title}</span>
                   <span>{t("RunNowMonthsPosted" as any).replace("{count}", String(r.monthsPosted))}</span>
                 </div>
@@ -233,9 +233,9 @@ function RunNowResultsDialog({
           )}
           {result.blocked.length > 0 && (
             <div className="space-y-1">
-              <p className="font-medium text-amber-600">{t("RunNowBlockedSection" as any)}</p>
+              <p className="font-medium text-amber-600 dark:text-amber-400">{t("RunNowBlockedSection" as any)}</p>
               {result.blocked.map((r) => (
-                <div key={r.scheduleId} className="text-slate-600">
+                <div key={r.scheduleId} className="text-muted-foreground">
                   <span className="font-medium">{r.title}</span>: {r.reason}
                 </div>
               ))}
@@ -243,16 +243,16 @@ function RunNowResultsDialog({
           )}
           {result.failed.length > 0 && (
             <div className="space-y-1">
-              <p className="font-medium text-rose-600">{t("RunNowFailedSection" as any)}</p>
+              <p className="font-medium text-rose-600 dark:text-rose-400">{t("RunNowFailedSection" as any)}</p>
               {result.failed.map((r) => (
-                <div key={r.scheduleId} className="text-slate-600">
+                <div key={r.scheduleId} className="text-muted-foreground">
                   <span className="font-medium">{r.title}</span>: {r.error}
                 </div>
               ))}
             </div>
           )}
           {result.upToDateCount > 0 && (
-            <p className="text-slate-500">{t("RunNowUpToDateCount" as any).replace("{count}", String(result.upToDateCount))}</p>
+            <p className="text-muted-foreground">{t("RunNowUpToDateCount" as any).replace("{count}", String(result.upToDateCount))}</p>
           )}
         </div>
         <DialogFooter>
@@ -285,8 +285,8 @@ function PrepaidReconciliationCard({ orgId }: Readonly<{ orgId: Id<"organization
   if (!recon || recon.currencies.length === 0) return null;
 
   return (
-    <div className="rounded-md border border-slate-200 p-4 space-y-2">
-      <h3 className="text-sm font-semibold text-slate-900">{t("PrepaidReconciliationTitle" as any)}</h3>
+    <div className="rounded-md border border-border p-4 space-y-2">
+      <h3 className="text-sm font-semibold text-foreground">{t("PrepaidReconciliationTitle" as any)}</h3>
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {recon.currencies.map((currency) => {
           const row = recon.byCurrency[currency];
@@ -300,24 +300,26 @@ function PrepaidReconciliationCard({ orgId }: Readonly<{ orgId: Id<"organization
               }`}
             >
               <div className="flex justify-between items-center">
-                <span className="font-medium text-slate-900">{currency}</span>
+                <span className="font-medium text-foreground">{currency}</span>
                 <Badge
                   variant="outline"
-                  className={row.isReconciled ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-rose-500/10 text-rose-600 border-rose-500/20"}
+                  className={row.isReconciled
+                    ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+                    : "border-rose-500/20 bg-rose-500/10 text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300"}
                 >
                   {t(row.isReconciled ? "PrepaidReconciliationOk" as any : "PrepaidReconciliationMismatch" as any)}
                 </Badge>
               </div>
-              <div className="flex justify-between text-slate-600">
+              <div className="flex justify-between text-muted-foreground">
                 <span>{t("PrepaidReconciliationGlLabel" as any)}</span>
                 <span>{formatCurrency(row.glBalanceMinor / factor, currency, scale)}</span>
               </div>
-              <div className="flex justify-between text-slate-600">
+              <div className="flex justify-between text-muted-foreground">
                 <span>{t("PrepaidReconciliationSubledgerLabel" as any)}</span>
                 <span>{formatCurrency(row.subledgerBalanceMinor / factor, currency, scale)}</span>
               </div>
               {!row.isReconciled && (
-                <div className="flex justify-between text-rose-600 font-medium">
+                <div className="flex justify-between font-medium text-rose-600 dark:text-rose-400">
                   <span>{t("PrepaidReconciliationDeltaLabel" as any)}</span>
                   <span>{formatCurrency(row.discrepancyMinor / factor, currency, scale)}</span>
                 </div>
@@ -379,16 +381,16 @@ function PendingCorrectionRequestsPanel({ orgId }: Readonly<{ orgId: Id<"organiz
 
   return (
     <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-4 space-y-3">
-      <h3 className="text-sm font-semibold text-amber-700">{t("PendingCorrectionRequestsTitle" as any)}</h3>
+      <h3 className="text-sm font-semibold text-amber-700 dark:text-amber-300">{t("PendingCorrectionRequestsTitle" as any)}</h3>
       {requests.map((request) => {
         const scale = scaleForCurrency(request.currency);
         const factor = Math.pow(10, scale);
         const isOwnRequest = membership?.userId === request.requestedBy;
         return (
-          <div key={request._id} className="rounded-md border border-slate-200 bg-white p-3 text-sm space-y-1">
+          <div key={request._id} className="rounded-md border border-border bg-card p-3 text-sm space-y-1">
             <div className="flex justify-between">
               <span className="font-medium">{request.expenseTitle}</span>
-              <span className="text-slate-500">{format(new Date(request.createdAt), "MMM d, yyyy")}</span>
+              <span className="text-muted-foreground">{format(new Date(request.createdAt), "MMM d, yyyy")}</span>
             </div>
             {request.refundMinor > 0 && (
               <p>
@@ -399,7 +401,7 @@ function PendingCorrectionRequestsPanel({ orgId }: Readonly<{ orgId: Id<"organiz
               </p>
             )}
             {request.reference && (
-              <p className="text-slate-500">
+              <p className="text-muted-foreground">
                 {t("RefundReferenceLabel" as any)}: {request.reference}
               </p>
             )}
@@ -411,11 +413,11 @@ function PendingCorrectionRequestsPanel({ orgId }: Readonly<{ orgId: Id<"organiz
             <p>
               {t("PrepaidTermLabel" as any)}: {request.newTermMonths} {t("Months" as any)}
             </p>
-            <p className="text-slate-500">
+            <p className="text-muted-foreground">
               {t("RequestedByLabel" as any)}: {request.requestedByName}
             </p>
-            <p className="text-slate-700">{request.reason}</p>
-            {isOwnRequest && <p className="text-xs text-amber-600">{t("PrepaidCorrectionOwnRequestNotice" as any)}</p>}
+            <p className="text-foreground">{request.reason}</p>
+            {isOwnRequest && <p className="text-xs text-amber-600 dark:text-amber-400">{t("PrepaidCorrectionOwnRequestNotice" as any)}</p>}
             <div className="flex justify-end gap-2 pt-1">
               <Button
                 size="sm"
@@ -497,8 +499,8 @@ export function PrepaidExpensesTab() {
     <div className="p-6 space-y-6">
       <div className="mb-2 flex justify-between items-center gap-4 flex-wrap">
         <div>
-          <h2 className="text-lg font-semibold text-slate-900">{t("PrepaidExpenses" as any)}</h2>
-          <p className="text-sm text-slate-500">{t("PrepaidExpensesDesc" as any)}</p>
+          <h2 className="text-lg font-semibold text-foreground">{t("PrepaidExpenses" as any)}</h2>
+          <p className="text-sm text-muted-foreground">{t("PrepaidExpensesDesc" as any)}</p>
         </div>
         {canManage && (
           <Button size="sm" className="gap-2" onClick={handleRunNow} disabled={runningNow}>
@@ -514,7 +516,7 @@ export function PrepaidExpensesTab() {
 
       <AccountingTableFrame>
         <Table>
-          <TableHeader className="bg-slate-50">
+          <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead>{t("Expense" as any)}</TableHead>
               <TableHead>{t("PrepaidTermLabel" as any)}</TableHead>
@@ -537,19 +539,19 @@ export function PrepaidExpensesTab() {
                   <TableCell className="font-medium">
                     {schedule.expenseTitle ?? t("GeneralExpense" as any)}
                     {schedule.expenseVendor && (
-                      <span className="block text-xs text-slate-500">{schedule.expenseVendor}</span>
+                      <span className="block text-xs text-muted-foreground">{schedule.expenseVendor}</span>
                     )}
                   </TableCell>
-                  <TableCell className="text-sm text-slate-600">
+                  <TableCell className="text-sm text-muted-foreground">
                     {schedule.startYearMonth} · {schedule.monthsRecognized}/{schedule.termMonths} {t("Months" as any)}
                   </TableCell>
-                  <TableCell className="text-right font-semibold text-slate-900">
+                  <TableCell className="text-right font-semibold text-foreground">
                     {formatCurrency(schedule.totalMinor / factor, schedule.currency, scale)}
                   </TableCell>
-                  <TableCell className="text-right text-slate-700">
+                  <TableCell className="text-right text-foreground">
                     {formatCurrency(schedule.recognizedMinor / factor, schedule.currency, scale)}
                   </TableCell>
-                  <TableCell className="text-right text-slate-500">
+                  <TableCell className="text-right text-muted-foreground">
                     {formatCurrency(schedule.remainingMinor / factor, schedule.currency, scale)}
                   </TableCell>
                   <TableCell>
@@ -586,7 +588,7 @@ export function PrepaidExpensesTab() {
                           title={t("CorrectSchedule" as any)}
                           onClick={() => setCorrectSchedule(schedule)}
                         >
-                          <Wrench className="w-4 h-4 text-slate-500" />
+                          <Wrench className="w-4 h-4 text-muted-foreground" />
                         </Button>
                       )}
                       <Button
@@ -595,7 +597,7 @@ export function PrepaidExpensesTab() {
                         title={t("ViewCorrections" as any)}
                         onClick={() => setHistorySchedule(schedule)}
                       >
-                        <History className="w-4 h-4 text-slate-500" />
+                        <History className="w-4 h-4 text-muted-foreground" />
                       </Button>
                     </div>
                   </TableCell>
@@ -773,7 +775,7 @@ function CorrectScheduleDialog({
             )}
 
             {needsApproval && (
-              <p className="text-xs text-amber-600 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2">
+              <p className="rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
                 {t("PrepaidCorrectionRequiresApprovalNotice" as any)}
               </p>
             )}
@@ -814,7 +816,7 @@ function CorrectScheduleDialog({
                         <Input type="number" min={0} step={1 / factor} {...field} />
                       </FormControl>
                       {remainingRefundableTaxMinor !== undefined && (
-                        <p className="text-xs text-slate-500">
+                        <p className="text-xs text-muted-foreground">
                           {t("RefundVatCapHint" as any).replace(
                             "{amount}",
                             formatCurrency(remainingRefundableTaxMinor / factor, schedule.currency, scale)
@@ -938,12 +940,12 @@ function ScheduleCorrectionsDialog({
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
         ) : corrections.length === 0 ? (
-          <p className="text-sm text-slate-500 text-center py-8">{t("NoCorrectionsFound" as any)}</p>
+          <p className="text-sm text-muted-foreground text-center py-8">{t("NoCorrectionsFound" as any)}</p>
         ) : (
           <div className="space-y-3">
             {corrections.map((correction) => (
-              <div key={correction._id} className="rounded-md border border-slate-200 p-3 text-sm space-y-1">
-                <div className="flex justify-between text-slate-500">
+              <div key={correction._id} className="rounded-md border border-border p-3 text-sm space-y-1">
+                <div className="flex justify-between text-muted-foreground">
                   <span>{format(new Date(correction.createdAt), "MMM d, yyyy")}</span>
                   {correction.previousTermMonths !== correction.newTermMonths && (
                     <span>
@@ -960,7 +962,7 @@ function ScheduleCorrectionsDialog({
                   </p>
                 )}
                 {correction.reference && (
-                  <p className="text-slate-500">
+                  <p className="text-muted-foreground">
                     {t("RefundReferenceLabel" as any)}: {correction.reference}
                   </p>
                 )}
@@ -969,7 +971,7 @@ function ScheduleCorrectionsDialog({
                     {t("WriteOffAmountLabel" as any)}: {formatCurrency(correction.writeOffMinor / factor, schedule.currency, scale)}
                   </p>
                 )}
-                <p className="text-slate-700">{correction.reason}</p>
+                <p className="text-foreground">{correction.reason}</p>
               </div>
             ))}
           </div>

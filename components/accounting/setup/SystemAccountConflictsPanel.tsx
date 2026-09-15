@@ -51,14 +51,14 @@ export function SystemAccountConflictsPanel({ orgId, canManageFinance, t }: Read
 
   return (
     <div className="space-y-3">
-      <h3 className="text-base font-semibold text-slate-900">{t("SystemAccountConflicts")}</h3>
+      <h3 className="text-base font-semibold text-foreground">{t("SystemAccountConflicts")}</h3>
       <div className="space-y-2">
         {conflicts.map((conflict) => (
           <div
             key={conflict.systemKey}
-            className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-3"
+            className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/40"
           >
-            <div className="flex items-start gap-2 text-sm text-amber-900">
+            <div className="flex items-start gap-2 text-sm text-amber-900 dark:text-amber-200">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
               <span>
                 {t("SystemAccountConflictDesc")

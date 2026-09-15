@@ -199,13 +199,13 @@ export function OpeningBalanceApprovalView({
   return (
     <section
       data-testid="opening-balance-approval"
-      className="rounded-md border border-amber-200 bg-amber-50/60 p-4 space-y-3"
+      className="space-y-3 rounded-md border border-amber-200 bg-amber-50/60 p-4 dark:border-amber-800 dark:bg-amber-950/40"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-2">
           <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
           <div>
-            <h3 className="text-base font-semibold text-slate-900">
+            <h3 className="text-base font-semibold text-foreground">
               {t("OpeningBalanceAwaitingApproval")}
             </h3>
             {/* The preparer's name and the date are each wrapped in their own
@@ -214,7 +214,7 @@ export function OpeningBalanceApprovalView({
                 and an un-isolated bidi run reorders visually — the reviewer
                 would read a mangled name on exactly the screen where knowing
                 who prepared it is the whole control. */}
-            <p data-testid="opening-balance-meta" className="text-sm text-amber-900">
+            <p data-testid="opening-balance-meta" className="text-sm text-amber-900 dark:text-amber-200">
               {t("OpeningBalancePreparedBy")}{" "}
               <bdi className="font-medium">
                 {draft.preparedByName ?? t("OpeningBalancePreparerUnknown")}
@@ -241,11 +241,11 @@ export function OpeningBalanceApprovalView({
               ) : null}
             </p>
             {draft.memo ? (
-              <p className="mt-1 text-sm text-slate-600">{draft.memo}</p>
+              <p className="mt-1 text-sm text-muted-foreground">{draft.memo}</p>
             ) : null}
           </div>
         </div>
-        <span className="shrink-0 rounded-full border border-amber-300 bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800">
+        <span className="shrink-0 rounded-full border border-amber-300 bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200">
           {t("Pending")}
         </span>
       </div>
@@ -286,7 +286,7 @@ export function OpeningBalanceApprovalView({
       >
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-amber-300 text-xs uppercase tracking-wide text-amber-900">
+            <tr className="border-b border-amber-300 text-xs uppercase tracking-wide text-amber-900 dark:border-amber-700 dark:text-amber-200">
               <th scope="col" className="py-1 text-start font-medium">
                 {t("Account")}
               </th>
@@ -310,7 +310,7 @@ export function OpeningBalanceApprovalView({
                     one field that is actually unique. Raised by Codex, and the
                     fourth instance on this panel of the reviewer being unable
                     to fully identify what they are approving. */}
-                <td className="py-1.5 text-slate-800">
+                <td className="py-1.5 text-foreground">
                   {line.accountCode ? (
                     <>
                       <bdi className="tabular-nums">{line.accountCode}</bdi>
@@ -322,25 +322,25 @@ export function OpeningBalanceApprovalView({
                     locale
                   )}
                 </td>
-                <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-slate-800">
+                <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-foreground">
                   {line.debitMinor > 0 ? formatMinor(line.debitMinor, draft.currency, draft.denominationKnown) : ""}
                 </td>
-                <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-slate-800">
+                <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-foreground">
                   {line.creditMinor > 0 ? formatMinor(line.creditMinor, draft.currency, draft.denominationKnown) : ""}
                 </td>
               </tr>
             ))}
             <tr className="border-t-2 border-amber-300 font-semibold">
-              <td className="py-1.5 text-slate-900">{t("Total")}</td>
+              <td className="py-1.5 text-foreground">{t("Total")}</td>
               {/* ps-3 + nowrap: the debit and credit totals rendered with a
                   MEASURED 0px gap at 390px, so the one pair of figures a reviewer
                   uses to check that the draft balances read as a single
                   22-character run. The columns are sized by content and sit flush
                   otherwise, so the padding is what guarantees the separation. */}
-              <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-slate-900">
+              <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-foreground">
                 {formatMinor(totalDebitMinor, draft.currency, draft.denominationKnown)}
               </td>
-              <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-slate-900">
+              <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-foreground">
                 {formatMinor(totalCreditMinor, draft.currency, draft.denominationKnown)}
               </td>
             </tr>
@@ -351,17 +351,17 @@ export function OpeningBalanceApprovalView({
       {/* Facts first, then the one instruction for this viewer. Never both a
           "reject it" and a "you cannot reject it" line — see computeApprovalGate. */}
       {gate.blockingFacts.map((fact) => (
-        <p key={fact.key} data-testid={fact.testId} className="text-sm font-medium text-red-700">
+        <p key={fact.key} data-testid={fact.testId} className="text-sm font-medium text-red-700 dark:text-red-300">
           {t(fact.key)}
         </p>
       ))}
 
       {!draft.denominationKnown && (
-        <p className="text-xs text-slate-600">{t("OpeningBalanceRawMinorUnitsNote")}</p>
+        <p className="text-xs text-muted-foreground">{t("OpeningBalanceRawMinorUnitsNote")}</p>
       )}
 
       {gate.recoveryKey && (
-        <p data-testid="opening-balance-recovery" className="text-sm text-amber-800">
+        <p data-testid="opening-balance-recovery" className="text-sm text-amber-800 dark:text-amber-200">
           {t(gate.recoveryKey)}
         </p>
       )}
@@ -375,11 +375,11 @@ export function OpeningBalanceApprovalView({
               if (reasonMissing) setReasonMissing(false);
             }}
             placeholder={t("OpeningBalanceRejectionReasonPlaceholder")}
-            className="bg-white"
+            className="bg-card"
             data-testid="opening-balance-reject-reason"
           />
           {reasonMissing && (
-            <p data-testid="opening-balance-reason-missing" className="text-sm font-medium text-red-700">
+            <p data-testid="opening-balance-reason-missing" className="text-sm font-medium text-red-700 dark:text-red-300">
               {t("OpeningBalanceRejectionReasonRequired")}
             </p>
           )}
@@ -400,7 +400,7 @@ export function OpeningBalanceApprovalView({
           data-testid="opening-balance-reject"
           variant="outline"
           disabled={!gate.canReject}
-          className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+          className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/40 dark:hover:text-red-300"
           onClick={() => {
             if (!rejecting) {
               setRejecting(true);

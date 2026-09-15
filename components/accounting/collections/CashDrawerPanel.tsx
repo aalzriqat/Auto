@@ -22,8 +22,8 @@ type CashDrawerSession = Doc<"cashDrawerSessions">;
 type RecordableCashMovementType = "SALE" | "PAYOUT" | "HANDOVER";
 
 function statusClass(status: CashDrawerSession["status"]) {
-  if (status === "APPROVED") return "text-emerald-700";
-  return "text-amber-700";
+  if (status === "APPROVED") return "text-emerald-700 dark:text-emerald-300";
+  return "text-amber-700 dark:text-amber-300";
 }
 
 export function CashDrawerPanel() {
@@ -73,9 +73,9 @@ export function CashDrawerPanel() {
           {t("OpenCashDrawer" as any)}
         </Button>
       </div>
-      <div className="rounded-md border border-slate-200 overflow-x-auto">
+      <div className="rounded-md border border-border overflow-x-auto">
         <Table>
-          <TableHeader className="bg-slate-50">
+          <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead>{t("OpenedAt" as any)}</TableHead>
               <TableHead>{t("Status" as any)}</TableHead>
@@ -131,7 +131,7 @@ export function CashDrawerPanel() {
 function CashDrawerEmptyRow({ label }: Readonly<{ label: string }>) {
   return (
     <TableRow>
-      <TableCell colSpan={6} className="text-center text-slate-500 py-8">
+      <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
         {label}
       </TableCell>
     </TableRow>
@@ -156,13 +156,13 @@ function MovementList({
   );
 
   return (
-    <div className="rounded-md border border-slate-200 p-3">
+    <div className="rounded-md border border-border p-3">
       <div className="mb-2 flex items-center justify-between">
         <h3 className="text-sm font-semibold">{t("Movements" as any)} - {session.status}</h3>
         <Button size="sm" variant="ghost" onClick={onClose}>{t("Close" as any)}</Button>
       </div>
       {sortedMovements.length === 0 ? (
-        <p className="py-4 text-center text-sm text-slate-500">{t("NoCashMovements" as any)}</p>
+        <p className="py-4 text-center text-sm text-muted-foreground">{t("NoCashMovements" as any)}</p>
       ) : (
         <div className="space-y-2">
           {sortedMovements.map((movement) => (

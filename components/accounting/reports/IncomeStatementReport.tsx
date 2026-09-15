@@ -32,7 +32,7 @@ function StatementSection({
 }>) {
   return (
     <div className="space-y-2">
-      <h4 className="text-sm font-semibold text-slate-700">{title}</h4>
+      <h4 className="text-sm font-semibold text-foreground">{title}</h4>
       <NetRowsTable
         rows={rows}
         locale={locale}
@@ -55,11 +55,11 @@ export function IncomeStatementReport({
   t: (key: string) => string;
   formatMoney: ReportMoneyFormatter;
 }>) {
-  if (report === undefined) return <p className="p-8 text-center text-slate-500">{t("Loading")}</p>;
+  if (report === undefined) return <p className="p-8 text-center text-muted-foreground">{t("Loading")}</p>;
 
   return (
     <div className="space-y-5">
-      <h3 className="text-base font-semibold text-slate-900">{t("IncomeStatement")}</h3>
+      <h3 className="text-base font-semibold text-foreground">{t("IncomeStatement")}</h3>
       <div className="grid gap-3 md:grid-cols-3">
         {report.totalsByCurrency.map((total) => (
           <ReportMetric

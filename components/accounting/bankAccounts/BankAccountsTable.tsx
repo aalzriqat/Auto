@@ -26,10 +26,10 @@ export function BankAccountsTable({
 }: Readonly<BankAccountsTableProps>) {
   return (
     <div className="space-y-3">
-      <h3 className="text-base font-semibold text-slate-900">{t("BankAccounts" as any)}</h3>
+      <h3 className="text-base font-semibold text-foreground">{t("BankAccounts" as any)}</h3>
       <AccountingTableFrame>
         <Table>
-          <TableHeader className="bg-slate-50">
+          <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead>{t("BankAccountName" as any)}</TableHead>
               <TableHead>{t("Iban" as any)}</TableHead>
@@ -49,18 +49,18 @@ export function BankAccountsTable({
                   <TableRow key={account._id}>
                     <TableCell className="font-medium">
                       {account.name}
-                      {account.bankName && <span className="text-slate-500 font-normal"> — {account.bankName}</span>}
+                      {account.bankName && <span className="text-muted-foreground font-normal"> — {account.bankName}</span>}
                     </TableCell>
-                    <TableCell className="text-slate-500">{account.iban || "—"}</TableCell>
+                    <TableCell className="text-muted-foreground">{account.iban || "—"}</TableCell>
                     <TableCell>{account.currency}</TableCell>
                     <TableCell>
                       {account.isReconciliationTarget ? (
-                        <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 gap-1">
+                        <Badge variant="outline" className="gap-1 border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
                           <Star className="h-3 w-3" />
                           {t("ReconciliationTarget" as any)}
                         </Badge>
                       ) : (
-                        <Badge variant="outline" className="bg-slate-50 text-slate-600 border-slate-200">
+                        <Badge variant="outline" className="bg-muted/50 text-muted-foreground border-border">
                           {t("ReferenceOnly" as any)}
                         </Badge>
                       )}
@@ -81,7 +81,7 @@ export function BankAccountsTable({
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="text-rose-600 hover:text-rose-700"
+                          className="text-rose-600 hover:text-rose-700 dark:text-rose-400 dark:hover:text-rose-300"
                           disabled={deactivating}
                           onClick={() => onDeactivate(account._id)}
                         >

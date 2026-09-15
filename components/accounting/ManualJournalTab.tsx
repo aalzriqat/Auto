@@ -160,8 +160,8 @@ export function ManualJournalTab() {
   } else if (pending.length === 0) {
     pendingSection = (
       <div className="flex flex-col items-center justify-center p-12 text-center border rounded-xl border-dashed bg-muted/20">
-        <ScrollText className="h-10 w-10 text-slate-400 mb-4 opacity-50" />
-        <p className="text-slate-500">{t("NoPendingManualJournals")}</p>
+        <ScrollText className="h-10 w-10 text-muted-foreground/60 mb-4 opacity-50" />
+        <p className="text-muted-foreground">{t("NoPendingManualJournals")}</p>
       </div>
     );
   } else {
@@ -181,7 +181,7 @@ export function ManualJournalTab() {
                       {t("SubmittedBy")}: {draft.creatorName}
                     </CardDescription>
                   </div>
-                  <Badge variant="outline" className="bg-yellow-500/10 text-yellow-600 border-yellow-500/20 shrink-0">
+                  <Badge variant="outline" className="shrink-0 border-yellow-500/20 bg-yellow-500/10 text-yellow-700 dark:border-yellow-800 dark:bg-yellow-950/40 dark:text-yellow-300">
                     {t("Pending")}
                   </Badge>
                 </div>
@@ -206,13 +206,13 @@ export function ManualJournalTab() {
                 </Table>
 
                 {isOwnDraft && (
-                  <p className="text-xs text-amber-600 mt-3">{t("SegregationOfDutiesNotice")}</p>
+                  <p className="mt-3 text-xs text-amber-600 dark:text-amber-400">{t("SegregationOfDutiesNotice")}</p>
                 )}
 
                 <div className="flex gap-2 w-full pt-4 mt-2 border-t">
                   <Button
                     variant="outline"
-                    className="flex-1 bg-red-50 hover:bg-red-100 hover:text-red-600 border-red-200 text-red-600"
+                    className="flex-1 border-red-200 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-600 dark:border-red-800 dark:bg-red-950/40 dark:text-red-400 dark:hover:bg-red-950/60 dark:hover:text-red-300"
                     disabled={isOwnDraft || busy}
                     onClick={() => setRejecting({ id: draft._id, reason: "" })}
                   >
@@ -244,8 +244,8 @@ export function ManualJournalTab() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h2 className="text-lg font-semibold text-slate-900">{t("PendingManualJournals")}</h2>
-          <p className="text-sm text-slate-500">{t("ManualJournalDesc")}</p>
+          <h2 className="text-lg font-semibold text-foreground">{t("PendingManualJournals")}</h2>
+          <p className="text-sm text-muted-foreground">{t("ManualJournalDesc")}</p>
         </div>
         <Dialog
           open={dialogOpen}
@@ -374,7 +374,7 @@ export function ManualJournalTab() {
                   ))}
                 </div>
 
-                <div className="flex items-center justify-between rounded-lg bg-slate-50 border border-slate-100 p-3 text-sm flex-wrap gap-2">
+                <div className="flex items-center justify-between rounded-lg bg-muted/50 border border-border p-3 text-sm flex-wrap gap-2">
                   <span>
                     {t("TotalDebits")}: <strong>{formatCurrency(totalDebits, scale)}</strong>
                   </span>
@@ -383,7 +383,7 @@ export function ManualJournalTab() {
                   </span>
                   <Badge
                     variant={balanced ? "default" : "destructive"}
-                    className={balanced ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100" : ""}
+                    className={balanced ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/50 dark:text-emerald-300 dark:hover:bg-emerald-950/50" : ""}
                   >
                     {balanced ? t("JournalBalanced") : t("JournalOutOfBalance")}
                   </Badge>

@@ -49,10 +49,10 @@ import { newClaimSchema, type NewClaimFormValues } from "./claim.schema";
 type Claim = Doc<"claims">;
 
 const STATUS_BADGE_CLASS: Record<Claim["status"], string> = {
-  PENDING: "bg-yellow-500/10 text-yellow-600 border-yellow-500/20",
-  PAID: "bg-emerald-500/10 text-emerald-600 border-emerald-500/20",
-  REJECTED: "bg-rose-500/10 text-rose-600 border-rose-500/20",
-  CANCELLED: "bg-slate-500/10 text-slate-500 border-slate-500/20",
+  PENDING: "border-yellow-500/20 bg-yellow-500/10 text-yellow-700 dark:border-yellow-800 dark:bg-yellow-950/40 dark:text-yellow-300",
+  PAID: "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300",
+  REJECTED: "border-rose-500/20 bg-rose-500/10 text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300",
+  CANCELLED: "border-border bg-muted text-muted-foreground",
 };
 
 export function ClaimsTab() {
@@ -82,7 +82,7 @@ export function ClaimsTab() {
   return (
     <div className="p-6 space-y-6">
       <div className="mb-2 flex justify-between items-center gap-4 flex-wrap">
-        <h2 className="text-lg font-semibold text-slate-900">{t("Claims" as any)}</h2>
+        <h2 className="text-lg font-semibold text-foreground">{t("Claims" as any)}</h2>
         {canManage && (
           <Button size="sm" className="gap-2" onClick={() => setNewOpen(true)}>
             <Plus className="w-4 h-4" />
@@ -93,7 +93,7 @@ export function ClaimsTab() {
 
       <AccountingTableFrame>
         <Table>
-          <TableHeader className="bg-slate-50">
+          <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead>{t("Date" as any)}</TableHead>
               <TableHead>{t("FinancingEntity" as any)}</TableHead>
@@ -125,7 +125,7 @@ export function ClaimsTab() {
                         {t(`ClaimStatus_${claim.status}` as any)}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-right font-semibold text-slate-900">
+                    <TableCell className="text-right font-semibold text-foreground">
                       {amountDisplay}
                     </TableCell>
                     <TableCell className="text-right">

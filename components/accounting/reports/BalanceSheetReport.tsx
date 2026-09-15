@@ -29,7 +29,7 @@ function BalanceSection({
 }>) {
   return (
     <div className="space-y-2">
-      <h4 className="text-sm font-semibold text-slate-700">{title}</h4>
+      <h4 className="text-sm font-semibold text-foreground">{title}</h4>
       <NetRowsTable rows={rows} locale={locale} emptyLabel={t("NoGLRowsFound")} t={t} formatMoney={formatMoney} />
     </div>
   );
@@ -46,12 +46,12 @@ export function BalanceSheetReport({
   t: (key: string) => string;
   formatMoney: ReportMoneyFormatter;
 }>) {
-  if (report === undefined) return <p className="p-8 text-center text-slate-500">{t("Loading")}</p>;
+  if (report === undefined) return <p className="p-8 text-center text-muted-foreground">{t("Loading")}</p>;
 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h3 className="text-base font-semibold text-slate-900">{t("BalanceSheet")}</h3>
+        <h3 className="text-base font-semibold text-foreground">{t("BalanceSheet")}</h3>
         <FinancialReportBadge
           isBalanced={report.isBalanced}
           balancedLabel={t("Balanced")}

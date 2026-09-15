@@ -171,7 +171,7 @@ export function BankStatementUploadDialog({
               {t("FirstRowIsHeader" as any)}
             </label>
 
-            <div className="rounded-md border border-slate-200 overflow-x-auto max-h-64">
+            <div className="rounded-md border border-border overflow-x-auto max-h-64">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -191,7 +191,7 @@ export function BankStatementUploadDialog({
                 </TableBody>
               </Table>
             </div>
-            <p className="text-xs text-slate-500">{t("StatementRowCount" as any).replace("{count}", String(dataRows.length))}</p>
+            <p className="text-xs text-muted-foreground">{t("StatementRowCount" as any).replace("{count}", String(dataRows.length))}</p>
           </div>
         )}
 

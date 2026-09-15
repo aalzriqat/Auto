@@ -187,28 +187,28 @@ export function OpeningBalanceCard() {
   const alreadyResolved = status.posted || status.pendingDraftId !== null;
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4">
+    <div className="rounded-lg border border-border bg-card p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-3">
-          <Wallet className="mt-0.5 h-5 w-5 shrink-0 text-slate-400" />
+          <Wallet className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground/60" />
           <div>
-            <h3 className="text-sm font-semibold text-slate-900">{t("OpeningBalance")}</h3>
-            <p className="text-sm text-slate-500">{t("OpeningBalanceDesc")}</p>
+            <h3 className="text-sm font-semibold text-foreground">{t("OpeningBalance")}</h3>
+            <p className="text-sm text-muted-foreground">{t("OpeningBalanceDesc")}</p>
 
             {status.posted && (
-              <p className="mt-2 flex items-center gap-1.5 text-sm text-emerald-700">
+              <p className="mt-2 flex items-center gap-1.5 text-sm text-emerald-700 dark:text-emerald-300">
                 <CheckCircle2 className="h-4 w-4" />
                 {t("OpeningBalancePosted")}
               </p>
             )}
             {!status.posted && status.pendingDraftId !== null && (
-              <p className="mt-2 flex items-center gap-1.5 text-sm text-amber-700">
+              <p className="mt-2 flex items-center gap-1.5 text-sm text-amber-700 dark:text-amber-300">
                 <Clock className="h-4 w-4" />
                 {t("OpeningBalancePending")}
               </p>
             )}
             {!alreadyResolved && (
-              <p className="mt-2 text-sm text-slate-500">{t("OpeningBalanceNotSet")}</p>
+              <p className="mt-2 text-sm text-muted-foreground">{t("OpeningBalanceNotSet")}</p>
             )}
           </div>
         </div>
@@ -285,7 +285,7 @@ export function OpeningBalanceCard() {
                                   balance them are credit-normal. Surfacing it
                                   here means nobody has to know the convention
                                   to fill the form in correctly. */}
-                              <span className="text-xs text-slate-500">
+                              <span className="text-xs text-muted-foreground">
                                 {acc.normalBalance === "DEBIT"
                                   ? t("OpeningBalanceDebit")
                                   : t("OpeningBalanceCredit")}
@@ -338,14 +338,14 @@ export function OpeningBalanceCard() {
                   </Button>
                 </div>
 
-                <div className="flex items-center justify-between rounded-md bg-slate-50 px-3 py-2 text-sm">
-                  <span className="text-slate-600">{t("OpeningBalanceTotals")}</span>
+                <div className="flex items-center justify-between rounded-md bg-muted/50 px-3 py-2 text-sm">
+                  <span className="text-muted-foreground">{t("OpeningBalanceTotals")}</span>
                   <span className="flex items-center gap-3">
-                    <span className="tabular-nums text-slate-900">
+                    <span className="tabular-nums text-foreground">
                       {fromMinorUnits(totals.debitMinor, currency).toFixed(scaleForCurrency(currency))}{" / "}
                       {fromMinorUnits(totals.creditMinor, currency).toFixed(scaleForCurrency(currency))}
                     </span>
-                    <span className={totals.balanced ? "text-emerald-700" : "text-amber-700"}>
+                    <span className={totals.balanced ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300"}>
                       {totals.balanced ? t("OpeningBalanceBalanced") : t("OpeningBalanceUnbalanced")}
                     </span>
                   </span>

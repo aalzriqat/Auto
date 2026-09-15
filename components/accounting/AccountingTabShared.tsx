@@ -66,17 +66,17 @@ export function useAccountingSubmit() {
 }
 
 export function LoadingAccountingState({ label }: Readonly<{ label: string }>) {
-  return <div className="p-8 text-center text-slate-500">{label}</div>;
+  return <div className="p-8 text-center text-muted-foreground">{label}</div>;
 }
 
 export function AccountingTableFrame({ children }: Readonly<{ children: ReactNode }>) {
-  return <div className="rounded-md border border-slate-200 overflow-x-auto">{children}</div>;
+  return <div className="overflow-x-auto rounded-md border border-border">{children}</div>;
 }
 
 export function AccountingEmptyRow({ colSpan, label }: Readonly<{ colSpan: number; label: string }>) {
   return (
     <TableRow>
-      <TableCell colSpan={colSpan} className="text-center text-slate-500 py-8">
+      <TableCell colSpan={colSpan} className="py-8 text-center text-muted-foreground">
         {label}
       </TableCell>
     </TableRow>
@@ -91,7 +91,7 @@ export function AmountSummary({
   value: string;
 }>) {
   return (
-    <p className="text-sm text-slate-500">
+    <p className="text-sm text-muted-foreground">
       {label}: <strong>{value}</strong>
     </p>
   );
@@ -185,7 +185,7 @@ export function AccountingHistoryTable<T extends { _id: string }>({
   formatCurrency: CurrencyFormatter;
 }>) {
   if (rows.length === 0) {
-    return <p className="text-sm text-slate-500 text-center py-8">{emptyLabel}</p>;
+    return <p className="py-8 text-center text-sm text-muted-foreground">{emptyLabel}</p>;
   }
 
   return (
@@ -194,7 +194,7 @@ export function AccountingHistoryTable<T extends { _id: string }>({
         {rows.map((row) => (
           <TableRow key={row._id}>
             <TableCell className="text-sm">{getLabel(row)}</TableCell>
-            <TableCell className="text-sm text-slate-500">
+            <TableCell className="text-sm text-muted-foreground">
               {format(new Date(getDate(row)), "MMM d, yyyy")}
             </TableCell>
             <TableCell className={`text-sm text-right font-medium ${getAmountClassName?.(row) ?? ""}`}>

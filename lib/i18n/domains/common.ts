@@ -33,6 +33,33 @@ const workspaceMessages = defineBilingualMessages({
   StatusPendingApproval: ["Pending approval", "بانتظار الموافقة"],
 });
 
+const accountingWorkspaceMessages = defineBilingualMessages({
+  AccountingWorkspaceDesc: ["Books, controls and statements in one place", "الدفاتر والضوابط والقوائم في مكان واحد"],
+  AccountingSectionNav: ["Accounting sections", "أقسام المحاسبة"],
+  AccountingGoToSection: ["Go to section", "الانتقال إلى القسم"],
+  AccountingOverview: ["Overview", "نظرة عامة"],
+  AccountingOverviewDesc: ["Posting readiness and where each control lives.", "جاهزية الترحيل وموقع كل أداة رقابية."],
+  AccountingReceivablesPayables: ["Receivables & Collections", "الذمم والتحصيلات"],
+  AccountingReceivablesPayablesDesc: ["Claims, receivables, cheques, cash drawer and collections. Supplier payables stay in Special Orders.", "المطالبات والذمم والشيكات وصندوق النقد والتحصيلات. تبقى ذمم الموردين ضمن الطلبيات الخاصة."],
+  AccountingCashBank: ["Cash & Bank", "النقد والبنوك"],
+  AccountingCashBankDesc: ["Bank accounts, book balances and statement reconciliation.", "الحسابات البنكية والأرصدة الدفترية ومطابقة كشوف الحساب."],
+  AccountingJournal: ["Journal", "اليومية"],
+  AccountingJournalDesc: ["Transaction register and two-person manual journals.", "سجل الحركات والقيود اليدوية بموافقة شخصين."],
+  AccountingReconcileClose: ["Reconcile & Close", "التسوية والإقفال"],
+  AccountingReconcileCloseDesc: ["Accounting periods, close review and pending posting events.", "الفترات المحاسبية ومراجعة الإقفال وأحداث الترحيل المعلقة."],
+  AccountingStatements: ["Financial Statements", "القوائم المالية"],
+  AccountingStatementsDesc: ["Trial balance, income statement, balance sheet and VAT return.", "ميزان المراجعة وقائمة الدخل والميزانية العمومية وإقرار الضريبة."],
+  AccountingAssetsAdjustments: ["Assets & Adjustments", "الأصول والتسويات"],
+  AccountingAssetsAdjustmentsDesc: ["Fixed assets, prepaid expenses and partner equity.", "الأصول الثابتة والمصروفات المدفوعة مقدماً وحقوق الشركاء."],
+  AccountingSettings: ["Accounting Settings", "إعدادات المحاسبة"],
+  AccountingSettingsDesc: ["Chart of accounts, opening balance and system account conflicts.", "دليل الحسابات والرصيد الافتتاحي وتعارض الحسابات النظامية."],
+  AccountingReadiness: ["Accounting health", "حالة المحاسبة"],
+  AccountingReadinessDesc: ["Setup and operational signals. Open a section to take action.", "مؤشرات الإعداد والتشغيل. افتح القسم المناسب لاتخاذ الإجراء."],
+  AccountingSectionsHeading: ["Sections", "الأقسام"],
+  AccountingCashDrawerElsewhere: ["Cash drawer and cashier reconciliation are under Receivables & Collections › Collections.", "صندوق النقد ومطابقة الصراف ضمن الذمم والتحصيلات › التحصيلات."],
+  AccountingPeriodsElsewhere: ["Accounting periods, close review and pending posting events are under Reconcile & Close.", "الفترات المحاسبية ومراجعة الإقفال وأحداث الترحيل المعلقة ضمن التسوية والإقفال."],
+});
+
 export const commonEn = {
   // Navigation & General
   Dashboard: "Dashboard",
@@ -97,6 +124,7 @@ export const commonEn = {
   Close: "Close",
   Submit: "Submit",
   ...workspaceMessages.en,
+  ...accountingWorkspaceMessages.en,
   Reject: "Reject",
   Approve: "Approve",
   On: "on",
@@ -1038,6 +1066,7 @@ export const commonAr = {
   Close: "إغلاق",
   Submit: "إرسال",
   ...workspaceMessages.ar,
+  ...accountingWorkspaceMessages.ar,
   Reject: "رفض",
   Approve: "موافقة",
   On: "في",

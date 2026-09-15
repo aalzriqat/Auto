@@ -55,12 +55,12 @@ export function InstallmentCalendar() {
 
   if (!activeOrgId) return null;
   if (receivables === undefined) {
-    return <p className="p-8 text-center text-slate-500">{t("Loading" as any)}</p>;
+    return <p className="p-8 text-center text-muted-foreground">{t("Loading" as any)}</p>;
   }
 
   return (
     <div className="grid gap-4 lg:grid-cols-[auto_1fr]">
-      <div className="rounded-md border border-slate-200 bg-white">
+      <div className="rounded-md border border-border bg-card">
         <Calendar
           mode="single"
           month={month}
@@ -69,25 +69,25 @@ export function InstallmentCalendar() {
           onSelect={setSelectedDay}
           modifiers={{ hasReceivables: daysWithReceivables, overdue: overdueDays }}
           modifiersClassNames={{
-            hasReceivables: "bg-amber-50 font-semibold",
-            overdue: "bg-rose-50 text-rose-700",
+            hasReceivables: "bg-amber-50 font-semibold dark:bg-amber-950/40",
+            overdue: "bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300",
           }}
         />
       </div>
 
-      <div className="rounded-md border border-slate-200 bg-white p-4 space-y-3">
-        <h3 className="font-semibold text-slate-900">
+      <div className="rounded-md border border-border bg-card p-4 space-y-3">
+        <h3 className="font-semibold text-foreground">
           {selectedDay ? format(selectedDay, "MMM d, yyyy") : t("SelectADay" as any)}
         </h3>
         {selectedRows.length === 0 ? (
-          <p className="text-sm text-slate-500">{t("NoInstallmentsDue" as any)}</p>
+          <p className="text-sm text-muted-foreground">{t("NoInstallmentsDue" as any)}</p>
         ) : (
           <div className="space-y-2">
             {selectedRows.map((row) => (
-              <div key={row._id} className="flex items-center justify-between rounded-md border border-slate-100 px-3 py-2 text-sm">
+              <div key={row._id} className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-sm">
                 <div>
                   <div className="font-medium">{row.customerName}</div>
-                  <div className="text-xs text-slate-500">{row.vehicleLabel || row.title}</div>
+                  <div className="text-xs text-muted-foreground">{row.vehicleLabel || row.title}</div>
                 </div>
                 <div className="text-right">
                   <div className="font-semibold">{formatCurrency(row.outstandingAmount)}</div>

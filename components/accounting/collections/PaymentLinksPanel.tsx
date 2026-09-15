@@ -27,9 +27,9 @@ type PaymentIntentRow = Doc<"paymentIntents"> & {
 };
 
 function intentStatusClass(status: PaymentIntentRow["status"]) {
-  if (status === "SETTLED") return "text-emerald-700";
-  if (status === "FAILED" || status === "EXPIRED") return "text-rose-700";
-  return "text-amber-700";
+  if (status === "SETTLED") return "text-emerald-700 dark:text-emerald-300";
+  if (status === "FAILED" || status === "EXPIRED") return "text-rose-700 dark:text-rose-300";
+  return "text-amber-700 dark:text-amber-300";
 }
 
 export function PaymentLinksPanel() {
@@ -55,9 +55,9 @@ export function PaymentLinksPanel() {
           {t("NewPaymentLink" as any)}
         </Button>
       </div>
-      <div className="rounded-md border border-slate-200 overflow-x-auto">
+      <div className="rounded-md border border-border overflow-x-auto">
         <Table>
-          <TableHeader className="bg-slate-50">
+          <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead>{t("Customer" as any)}</TableHead>
               <TableHead>{t("PaymentProvider" as any)}</TableHead>
@@ -78,7 +78,7 @@ export function PaymentLinksPanel() {
                   <TableCell>{intent.customerName ?? "-"}</TableCell>
                   <TableCell className="uppercase">{intent.provider}</TableCell>
                   <TableCell className={intentStatusClass(intent.status)}>{intent.status}</TableCell>
-                  <TableCell className="text-slate-500">{intent.externalId ?? "-"}</TableCell>
+                  <TableCell className="text-muted-foreground">{intent.externalId ?? "-"}</TableCell>
                   <TableCell className="text-right font-semibold">
                     {formatCurrency(intent.amountMinor / Math.pow(10, scaleForCurrency(intent.currency)))}
                   </TableCell>
@@ -114,7 +114,7 @@ export function PaymentLinksPanel() {
 function PaymentLinkEmptyRow({ label }: Readonly<{ label: string }>) {
   return (
     <TableRow>
-      <TableCell colSpan={6} className="text-center text-slate-500 py-8">
+      <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
         {label}
       </TableCell>
     </TableRow>
