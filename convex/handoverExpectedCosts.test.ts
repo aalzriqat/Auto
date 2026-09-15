@@ -168,6 +168,7 @@ async function createCompany(seed: Seed, name: string, feeTemplates: Template[])
     gracePeriodMonths: 0,
     defaultLtvPercent: 80,
     isActive: true,
+    expectedCurrency: "JOD",
     feeTemplates,
   });
 }
@@ -276,6 +277,8 @@ describe("the expected checklist comes from the application's frozen snapshot", 
       maxTermMonths: company.maxTermMonths,
       gracePeriodMonths: company.gracePeriodMonths,
       isActive: true,
+      expectedCurrency: "JOD",
+      expectedRuleVersion: company.ruleVersion ?? 1,
       feeTemplates: COMPANY_B_TEMPLATES,
     });
     // The live row moved (control), the deal did not.
@@ -754,6 +757,7 @@ describe("finalization re-checks configured fees, whichever rule the deal was cl
       gracePeriodMonths: 0,
       defaultLtvPercent: 100,
       isActive: true,
+      expectedCurrency: "JOD",
       feeTemplates: COMPANY_B_TEMPLATES,
     });
     return { t, orgId, userId, approverId, customerId, vehicleId, companyId, asUser, asApprover };
@@ -1069,6 +1073,8 @@ describe("the fee-template cap", () => {
       id: companyId,
       name: "At the cap",
       ...companyFields,
+      expectedCurrency: "JOD",
+      expectedRuleVersion: 1,
       feeTemplates: templates(MAX_FEE_TEMPLATES),
     });
     const before = await policyTables(seed);
@@ -1081,6 +1087,8 @@ describe("the fee-template cap", () => {
         id: companyId,
         name: "At the cap",
         ...companyFields,
+        expectedCurrency: "JOD",
+        expectedRuleVersion: 1,
         feeTemplates: templates(MAX_FEE_TEMPLATES + 1),
       })
     ).rejects.toThrow(tooMany);
@@ -1113,7 +1121,15 @@ describe("the fee-template cap", () => {
     await expect(seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId })).rejects.toThrow(tooMany);
     expect((await policyTables(seed)).applications).toEqual([]);
 
-    await seed.asUser.mutation(api.finance.updateCompany, { orgId: seed.orgId, id: companyId, name: "Legacy, renamed", ...companyFields, feeTemplates: templates(2) });
+    await seed.asUser.mutation(api.finance.updateCompany, {
+      orgId: seed.orgId,
+      id: companyId,
+      name: "Legacy, renamed",
+      ...companyFields,
+      expectedCurrency: "JOD",
+      expectedRuleVersion: 1,
+      feeTemplates: templates(2),
+    });
     const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId });
     expect((await seed.t.run((ctx) => ctx.db.get(applicationId)))?.companyRuleSnapshot?.feeTemplates).toHaveLength(2);
   });

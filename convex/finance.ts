@@ -15,6 +15,8 @@ import {
   ltvBasisValidator,
 } from "./utils/financingEconomics";
 import { PERCENT_DECIMAL_PLACES, percentRoundsToZero } from "../lib/financingEconomics";
+import { getOrgCurrency } from "./accounting/workflowHooks";
+import { denominationOf } from "./utils/money";
 
 /**
  * The dealer-side purchase rules, as create/update accept them.
@@ -201,6 +203,34 @@ async function sanitizeAcceptedStatuses(
   return live;
 }
 
+/**
+ * Binds client-side major-to-minor conversion to the denomination read in the
+ * same Convex transaction as the company write. The read participates in OCC,
+ * so a concurrent org-currency change conflicts instead of reinterpreting an
+ * already converted integer under a different scale.
+ */
+async function assertFeeTemplateCurrency(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  feeTemplates: Array<{ estimatedAmountMinor: number }> | undefined,
+  expectedCurrency: string | undefined
+): Promise<void> {
+  if (!feeTemplates || feeTemplates.length === 0) return;
+  const expected = denominationOf(expectedCurrency);
+  if (!expected) {
+    throw new ConvexError("A supported expected currency is required when saving fee templates.");
+  }
+  const currentCurrency = await getOrgCurrency(ctx, orgId);
+  if (!denominationOf(currentCurrency)) {
+    throw new ConvexError("The organization currency is not supported for fee-template amounts.");
+  }
+  if (currentCurrency !== expected.code) {
+    throw new ConvexError(
+      `The organization currency changed from ${expected.code} to ${currentCurrency}. Reload before saving fee templates.`
+    );
+  }
+}
+
 // --- Finance Companies ---
 
 export const listCompanies = query({
@@ -228,15 +258,18 @@ export const createCompany = mutation({
     maxFinancingLTV: v.optional(v.number()),
     isActive: v.boolean(),
     acceptedStatuses: v.optional(v.array(v.id("orgCustomerStatuses"))),
+    expectedCurrency: v.optional(v.string()),
     ...dealerRuleArgs,
   },
   handler: async (ctx, args) => {
     const { user } = await requireOwner(ctx, args.orgId);
-    assertDealerRulesValid(args);
-    assertFeeTemplatesWithinLimit(args.feeTemplates, "Creating this finance company");
+    const { expectedCurrency, ...company } = args;
+    assertDealerRulesValid(company);
+    assertFeeTemplatesWithinLimit(company.feeTemplates, "Creating this finance company");
+    await assertFeeTemplateCurrency(ctx, args.orgId, company.feeTemplates, expectedCurrency);
     const acceptedStatuses = await sanitizeAcceptedStatuses(ctx, args.orgId, args.acceptedStatuses);
     const companyId = await ctx.db.insert("financeCompanies", {
-      ...args,
+      ...company,
       acceptedStatuses,
       ruleVersion: 1,
     });
@@ -260,20 +293,31 @@ export const updateCompany = mutation({
     maxFinancingLTV: v.optional(v.number()),
     isActive: v.boolean(),
     acceptedStatuses: v.optional(v.array(v.id("orgCustomerStatuses"))),
+    expectedCurrency: v.optional(v.string()),
+    expectedRuleVersion: v.optional(v.number()),
     ...dealerRuleArgs,
   },
   handler: async (ctx, args) => {
     const { user } = await requireOwner(ctx, args.orgId);
-    const { id, orgId, ...updates } = args;
+    const { id, orgId, expectedCurrency, expectedRuleVersion, ...updates } = args;
 
     const existing = await ctx.db.get(id);
     if (!existing || existing.orgId !== orgId) throw new ConvexError("Not found");
+    if (args.feeTemplates !== undefined) {
+      const currentRuleVersion = existing.ruleVersion ?? 1;
+      if (!Number.isSafeInteger(expectedRuleVersion) || expectedRuleVersion !== currentRuleVersion) {
+        throw new ConvexError(
+          "This finance company's fee policy changed while you were editing it. Reload before saving."
+        );
+      }
+    }
     // Only a list the caller SENDS is held to the template cap. A company
     // already past it (frozen before the cap existed) still takes an edit
     // that leaves the list alone — carried verbatim by the merge below, never
     // truncated — and is repaired by the first edit that sends a compliant
     // list. Refused before any write, like the rest of the validation.
     assertFeeTemplatesWithinLimit(args.feeTemplates, "Saving these fee templates");
+    await assertFeeTemplateCurrency(ctx, orgId, args.feeTemplates, expectedCurrency);
     // Writes back the sanitized list, so a company carrying ids of
     // since-deleted statuses is repaired the first time it is saved.
     const acceptedStatuses = await sanitizeAcceptedStatuses(ctx, orgId, updates.acceptedStatuses);

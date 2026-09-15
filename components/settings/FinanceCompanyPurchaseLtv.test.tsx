@@ -17,8 +17,14 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const mutations = vi.hoisted(() => ({
-  create: vi.fn(async (_args: Record<string, unknown>) => "company_1"),
-  update: vi.fn(async (_args: Record<string, unknown>) => null),
+  create: vi.fn(async (args: Record<string, unknown>) => {
+    void args;
+    return "company_1";
+  }),
+  update: vi.fn(async (args: Record<string, unknown>) => {
+    void args;
+    return null;
+  }),
 }));
 
 vi.mock("convex/react", () => ({
@@ -31,6 +37,9 @@ vi.mock("@/convex/_generated/api", () => ({
   api: {
     finance: { createCompany: "finance:createCompany", updateCompany: "finance:updateCompany" },
     orgCustomerStatuses: { list: "orgCustomerStatuses:list" },
+    // The dialog now reads the org currency to scale fee-template amounts;
+    // the shared `useQuery` mock answers `[]`, which resolves to the JOD default.
+    orgSettings: { get: "orgSettings:get" },
   },
 }));
 

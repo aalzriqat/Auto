@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import { ChevronDown, Plus, Trash2 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -15,17 +17,88 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { toast } from "@/components/ui/sonner";
 import { Doc, Id } from "@/convex/_generated/dataModel";
+import { MAX_FEE_TEMPLATES } from "@/convex/utils/dealCostLimits";
+import { denominationOf } from "@/convex/utils/money";
 import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
+import { interpolate } from "@/lib/i18n/interpolate";
 import { getErrorMessage } from "@/lib/errors";
+import { cn } from "@/lib/utils";
+import {
+  FEE_ACCOUNTING_TREATMENTS,
+  FEE_PARTIES,
+  FINANCE_FEE_TYPES,
+  defaultsForFeeType,
+  feeFormRowsToTemplates,
+  feeTemplateToFormRow,
+  newFeeTemplateFormRow,
+  type FeeAccountingTreatment,
+  type FeeAmountProblem,
+  type FeeParty,
+  type FeeTemplateFormRow,
+  type FinanceFeeTemplate,
+  type FinanceFeeType,
+} from "@/lib/financeFeeTemplateForm";
+
+/**
+ * Labels for every literal the validators admit. Typed as exhaustive records
+ * over the validator-derived unions, so a literal added to the backend is a
+ * compile error here rather than an option rendered as its raw enum name.
+ * The fee-type and the shared party/treatment keys already exist for the deal
+ * cockpit's handover-cost checklist; the rest live in the settings domain.
+ */
+const FEE_TYPE_LABEL: Record<FinanceFeeType, string> = {
+  FINANCE_COMPANY_FEE: "FeeTypeFinanceCompany",
+  APPRAISAL_FEE: "FeeTypeAppraisal",
+  INSURANCE: "FeeTypeInsurance",
+  STAMPS: "FeeTypeStamps",
+  LICENSING: "FeeTypeLicensing",
+  OWNERSHIP_TRANSFER: "FeeTypeOwnershipTransfer",
+  LIEN_REGISTRATION: "FeeTypeLienRegistration",
+  LIEN_RELEASE: "FeeTypeLienRelease",
+  INSPECTION: "FeeTypeInspection",
+  ADMINISTRATIVE_FEE: "FeeTypeAdministrative",
+  COMMISSION: "FeeTypeCommission",
+  OTHER_CLOSING_EXPENSE: "FeeTypeOtherClosing",
+};
+
+const FEE_PARTY_LABEL: Record<FeeParty, string> = {
+  DEALER: "PayeeDealer",
+  CUSTOMER: "PayeeCustomer",
+  FINANCE_COMPANY: "PayeeFinanceCompany",
+  EMPLOYEE: "PayeeEmployee",
+  APPRAISER: "PayeeAppraiser",
+  INSURER: "PayeeInsurer",
+  GOVERNMENT: "PayeeGovernment",
+  OTHER: "PayeeOther",
+};
+
+const FEE_TREATMENT_LABEL: Record<FeeAccountingTreatment, string> = {
+  SALE_CONSIDERATION_REDUCTION: "TreatmentSaleConsiderationReduction",
+  APPRAISAL_EXPENSE: "TreatmentAppraisalExpense",
+  INSURANCE_EXPENSE: "TreatmentInsuranceExpense",
+  OWNERSHIP_TRANSFER_EXPENSE: "TreatmentOwnershipTransferExpense",
+  FINANCE_COMPANY_COMMISSION: "TreatmentFinanceCompanyCommission",
+  SELLING_EXPENSE: "TreatmentSellingExpense",
+  CUSTOMER_RECEIVABLE: "TreatmentCustomerReceivable",
+  EMPLOYEE_RECEIVABLE: "TreatmentEmployeeReceivable",
+  EMPLOYEE_PAYABLE: "TreatmentEmployeePayable",
+  REFUNDABLE_DEPOSIT: "TreatmentRefundableDeposit",
+  DEALER_CONCESSION: "TreatmentDealerConcession",
+  CAPITALIZED_TO_VEHICLE: "TreatmentCapitalizedToVehicle",
+};
+
+const FEE_AMOUNT_PROBLEM_LABEL: Record<FeeAmountProblem, string> = {
+  EMPTY: "FeeTemplateAmountEmpty",
+  NOT_A_NUMBER: "FeeTemplateAmountInvalid",
+  TOO_PRECISE: "FeeTemplateAmountTooPrecise",
+  TOO_LARGE: "FeeTemplateAmountTooLarge",
+};
+
+/** Native selects, styled like the deal cockpit's cost forms — keyboard- and RTL-safe without a portal. */
+const selectClass =
+  "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50";
 
 export function FinanceCompanyDialog({
   open,
@@ -49,10 +122,58 @@ export function FinanceCompanyDialog({
     defaultLtvPercent?: number;
     isActive: boolean;
     acceptedStatuses?: string[];
+    /** The company's expected handover costs; each new deal freezes a copy. */
+    feeTemplates?: FinanceFeeTemplate[];
+    /** Optimistic-concurrency token for dealer rules, including fee templates. */
+    ruleVersion?: number;
   };
 }) {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
+  // The fee amounts are typed in major units and stored in minor units at the
+  // ORG currency's scale. `undefined` settings means the currency has not
+  // arrived — and a JOD fallback there would scale a USD company's fees by
+  // 1,000 instead of 100 — so the fee section waits for it, like the status
+  // list below waits for its query.
+  const orgSettings = useOrgSettings();
+  const feeCurrency = useMemo(() => {
+    if (orgSettings === undefined) return { state: "loading" } as const;
+    const code = orgSettings?.currency ?? "JOD";
+    const denomination = denominationOf(code);
+    if (!denomination) return { state: "unsupported", code } as const;
+    return {
+      state: "ready",
+      code: denomination.code,
+      scale: denomination.scale,
+      label: locale === "ar" && code === "JOD" ? "دينار اردني" : code,
+    } as const;
+  }, [locale, orgSettings]);
+  // The denomination under which this particular draft was seeded/entered.
+  // It must not follow the live settings query: JOD -> BHD keeps scale 3, so
+  // following only the scale would silently relabel an in-progress amount.
+  const feeCompanyKey = company?._id ?? "new";
+  const [feeDraftCurrency, setFeeDraftCurrency] = useState<
+    { companyKey: string; code: string; scale: number } | undefined
+  >();
+  const activeFeeDraftCurrency =
+    feeDraftCurrency?.companyKey === feeCompanyKey ? feeDraftCurrency : undefined;
+  const feeEditorCurrency =
+    feeCurrency.state === "ready" &&
+    activeFeeDraftCurrency !== undefined &&
+    activeFeeDraftCurrency.code === feeCurrency.code
+      ? {
+          ...activeFeeDraftCurrency,
+          label:
+            locale === "ar" && activeFeeDraftCurrency.code === "JOD"
+              ? "دينار اردني"
+              : activeFeeDraftCurrency.code,
+        }
+      : undefined;
+  const feeCurrencyChanged =
+    feeCurrency.state === "ready" &&
+    activeFeeDraftCurrency !== undefined &&
+    activeFeeDraftCurrency.code !== feeCurrency.code;
+  const currencyScale = feeEditorCurrency?.scale;
 
   const createCompany = useMutation(api.finance.createCompany);
   const updateCompany = useMutation(api.finance.updateCompany);
@@ -106,6 +227,81 @@ export function FinanceCompanyDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, company?._id]);
 
+  /**
+   * The fee templates as rows. `feeRowsTouched` is the whole "no silent loss"
+   * story: `updateCompany` treats an omitted `feeTemplates` as "leave it
+   * alone", so an untouched list is NOT sent — the stored templates survive
+   * verbatim, including on a company saved by an operator who never opened
+   * this section. Only a list the operator actually edited is sent, in full.
+   */
+  const [feeRows, setFeeRows] = useState<FeeTemplateFormRow[]>([]);
+  const [feeRowsTouched, setFeeRowsTouched] = useState(false);
+  /** Amount problems stay quiet until a save is attempted; a half-typed row is not an error. */
+  const [showFeeProblems, setShowFeeProblems] = useState(false);
+  const [expandedFeeKeys, setExpandedFeeKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const feeRowKeyCounter = useRef(0);
+  const nextFeeRowKey = () => `fee-${++feeRowKeyCounter.current}`;
+
+  // Seed once per dialog opening/company, and pin that exact denomination.
+  // A later settings update never re-seeds or relabels the draft; it blocks the
+  // editor below until the dialog is reopened under the new currency.
+  useEffect(() => {
+    if (!open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setFeeDraftCurrency(undefined);
+      return;
+    }
+    if (feeCurrency.state !== "ready") return;
+    if (feeDraftCurrency?.companyKey === feeCompanyKey) return;
+    // A reusable controlled dialog has to replace its draft when a different
+    // company opens; this is prop-to-form synchronization, not derived state.
+    setFeeRows(
+      (company?.feeTemplates ?? []).map((template) =>
+        feeTemplateToFormRow(template, feeCurrency.scale, nextFeeRowKey())
+      )
+    );
+    setFeeDraftCurrency({
+      companyKey: feeCompanyKey,
+      code: feeCurrency.code,
+      scale: feeCurrency.scale,
+    });
+    setFeeRowsTouched(false);
+    setShowFeeProblems(false);
+    setExpandedFeeKeys(new Set());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, company?._id, feeCompanyKey, feeCurrency, feeDraftCurrency]);
+
+  const feeConversion = useMemo(
+    () => (currencyScale === undefined ? null : feeFormRowsToTemplates(feeRows, currencyScale)),
+    [feeRows, currencyScale]
+  );
+  const feeProblemCount = feeConversion ? Object.keys(feeConversion.problems).length : 0;
+  // Always surface legacy over-limit policy because new applications cannot
+  // snapshot it. Submission is blocked only after the operator touches the
+  // list; unrelated company details can still be repaired/saved unchanged.
+  const feeRowsOverLimit = feeRows.length > MAX_FEE_TEMPLATES;
+
+  const updateFeeRow = (key: string, patch: Partial<FeeTemplateFormRow>) => {
+    setFeeRowsTouched(true);
+    setFeeRows((rows) => rows.map((row) => (row.key === key ? { ...row, ...patch } : row)));
+  };
+  const addFeeRow = () => {
+    setFeeRowsTouched(true);
+    setFeeRows((rows) => [...rows, newFeeTemplateFormRow(nextFeeRowKey())]);
+  };
+  const removeFeeRow = (key: string) => {
+    setFeeRowsTouched(true);
+    setFeeRows((rows) => rows.filter((row) => row.key !== key));
+  };
+  const toggleFeeRowExpanded = (key: string) => {
+    setExpandedFeeKeys((keys) => {
+      const next = new Set(keys);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
   /** Blanking a stored rate is not a way to delete it — see `onSubmit`. */
   const clearingExistingLtv =
     company?.defaultLtvPercent !== undefined && formData.defaultLtvPercent.trim() === "";
@@ -139,6 +335,20 @@ export function FinanceCompanyDialog({
       return;
     }
 
+    // The fee list is all-or-nothing. A row that fails to convert is not
+    // dropped from the payload — that would save the company's policy with
+    // one expected cost silently missing — the save is refused instead.
+    if (feeEditorCurrency === undefined || feeConversion === null) return;
+    if (feeProblemCount > 0) {
+      setShowFeeProblems(true);
+      toast.error(t("FeeTemplatesFixBeforeSave"));
+      return;
+    }
+    if (feeRowsTouched && feeRowsOverLimit) {
+      toast.error(interpolate(t("FeeTemplatesOverLimit"), { max: MAX_FEE_TEMPLATES }));
+      return;
+    }
+
     setIsLoading(true);
     try {
       // Only send statuses that still exist. A company keeps the ids it was
@@ -163,6 +373,15 @@ export function FinanceCompanyDialog({
           defaultLtvInput.trim() !== "" && Number.isFinite(parsedDefaultLtv)
             ? parsedDefaultLtv
             : undefined,
+        // Omitted unless edited — see `feeRowsTouched`. An edited list is sent
+        // whole, an emptied one as `[]`, which the server applies as "no
+        // expected costs" rather than reading as "leave it alone".
+        feeTemplates: feeRowsTouched ? feeConversion.templates : undefined,
+        // These are write preconditions, not persisted company fields. Convex
+        // re-reads both authorities in the mutation transaction before any
+        // amount can be committed under a stale denomination or policy.
+        expectedCurrency: feeRowsTouched ? feeEditorCurrency.code : undefined,
+        expectedRuleVersion: feeRowsTouched && company ? company.ruleVersion ?? 1 : undefined,
       };
       if (company) {
         await updateCompany({
@@ -188,7 +407,10 @@ export function FinanceCompanyDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[425px]">
+      {/* Wider than the legacy 425px so a fee row's type, amount and remove
+          action sit on one line; scrolls inside the viewport now that the form
+          has a variable-height list. */}
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[560px]">
         <DialogHeader>
           <DialogTitle>
             {company ? t("Edit Company" as any) : t("Add Company" as any)}
@@ -333,6 +555,92 @@ export function FinanceCompanyDialog({
               </div>
             )}
           </div>
+          {/* The company's expected handover costs. Separate from the legacy
+              "Execution Fees" / "Execution Commission" amounts above: those are
+              single figures the quotation engine uses, these are the itemised
+              fees each new deal freezes as its handover-cost checklist. Nothing
+              is inferred from one into the other. */}
+          <section
+            aria-labelledby="fee-templates-heading"
+            className="grid gap-3 rounded-md border border-border/70 p-3"
+            data-testid="fee-templates-section"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="grid gap-1">
+                <h3 id="fee-templates-heading" className="text-sm font-semibold">
+                  {t("FeeTemplatesHeading")}
+                </h3>
+                <p className="text-xs text-muted-foreground">{t("FeeTemplatesHint")}</p>
+              </div>
+              <span
+                className={cn(
+                  "shrink-0 text-xs tabular-nums",
+                  feeRowsOverLimit ? "font-medium text-destructive" : "text-muted-foreground"
+                )}
+                data-testid="fee-templates-count"
+              >
+                {interpolate(t("FeeTemplateCount"), { count: feeRows.length, max: MAX_FEE_TEMPLATES })}
+              </span>
+            </div>
+            {feeCurrency.state === "loading" ||
+            (feeCurrency.state === "ready" && activeFeeDraftCurrency === undefined) ? (
+              <p className="text-xs text-muted-foreground">{t("FeeTemplatesCurrencyLoading")}</p>
+            ) : feeCurrency.state === "unsupported" ? (
+              <p role="alert" className="text-xs font-medium text-destructive">
+                {interpolate(t("FeeTemplatesCurrencyUnsupported"), { currency: feeCurrency.code })}
+              </p>
+            ) : feeCurrencyChanged ? (
+              <p role="alert" className="text-xs font-medium text-destructive">
+                {interpolate(t("FeeTemplatesCurrencyChanged"), {
+                  from: activeFeeDraftCurrency.code,
+                  to: feeCurrency.code,
+                })}
+              </p>
+            ) : feeRows.length === 0 ? (
+              <p className="text-xs text-muted-foreground">{t("FeeTemplatesEmpty")}</p>
+            ) : (
+              <ul className="grid gap-2">
+                {feeRows.map((row, index) => (
+                  <FeeTemplateRowEditor
+                    key={row.key}
+                    row={row}
+                    problem={showFeeProblems ? feeConversion?.problems[row.key] : undefined}
+                    expanded={expandedFeeKeys.has(row.key)}
+                    currencyLabel={feeEditorCurrency!.label}
+                    currencyCode={feeEditorCurrency!.code}
+                    currencyScale={feeEditorCurrency!.scale}
+                    rowIndex={index}
+                    t={t}
+                    onChange={(patch) => updateFeeRow(row.key, patch)}
+                    onRemove={() => removeFeeRow(row.key)}
+                    onToggleExpanded={() => toggleFeeRowExpanded(row.key)}
+                  />
+                ))}
+              </ul>
+            )}
+            {feeRowsOverLimit && (
+              <p role="alert" className="text-xs font-medium text-destructive">
+                {interpolate(t("FeeTemplatesOverLimit"), { max: MAX_FEE_TEMPLATES })}
+              </p>
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={addFeeRow}
+                disabled={feeEditorCurrency === undefined || feeRows.length >= MAX_FEE_TEMPLATES}
+              >
+                <Plus className="h-4 w-4" />
+                {t("FeeTemplateAdd")}
+              </Button>
+              {feeRows.length >= MAX_FEE_TEMPLATES && (
+                <span className="text-xs text-muted-foreground">
+                  {interpolate(t("FeeTemplatesLimitReached"), { max: MAX_FEE_TEMPLATES })}
+                </span>
+              )}
+            </div>
+          </section>
           <div className="flex flex-col gap-3 pt-2">
             <div>
               <div className="flex items-center gap-2">
@@ -364,14 +672,230 @@ export function FinanceCompanyDialog({
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               {t("Cancel" as any)}
             </Button>
-            {/* Also disabled until the customer statuses arrive, so the button
-                cannot be pressed while the tick-list below is still empty. */}
-            <Button type="submit" disabled={isLoading || loadedCustomerStatuses === undefined}>
+            {/* Also disabled until the customer statuses and the org currency
+                arrive, so the button cannot be pressed while the tick-list is
+                still empty or a fee amount would be scaled by a guess. */}
+            <Button
+              type="submit"
+              disabled={isLoading || loadedCustomerStatuses === undefined || feeEditorCurrency === undefined}
+            >
               {isLoading ? t("Saving..." as any) : t("Save" as any)}
             </Button>
           </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * One expected cost. The main line is what an operator configures daily —
+ * type, amount, an optional description. Who pays whom and how it posts are
+ * behind a per-row disclosure: every value is stated explicitly (the server
+ * infers none of them) and pre-filled per type, but shown only on request so
+ * a company with six fees is not thirty controls tall.
+ */
+function FeeTemplateRowEditor({
+  row,
+  problem,
+  expanded,
+  currencyLabel,
+  currencyCode,
+  currencyScale,
+  rowIndex,
+  t,
+  onChange,
+  onRemove,
+  onToggleExpanded,
+}: Readonly<{
+  row: FeeTemplateFormRow;
+  /** Set only once a save was attempted; `undefined` renders no error. */
+  problem: FeeAmountProblem | undefined;
+  expanded: boolean;
+  currencyLabel: string;
+  currencyCode: string;
+  currencyScale: number;
+  rowIndex: number;
+  t: (key: string) => string;
+  onChange: (patch: Partial<FeeTemplateFormRow>) => void;
+  onRemove: () => void;
+  onToggleExpanded: () => void;
+}>) {
+  const id = (field: string) => `fee-template-${row.key}-${field}`;
+  const problemMessage =
+    problem === undefined
+      ? null
+      : interpolate(t(FEE_AMOUNT_PROBLEM_LABEL[problem]), { currency: currencyCode, scale: currencyScale });
+
+  return (
+    <li className="grid gap-2 rounded-md bg-muted/40 p-2" data-testid={`fee-template-row-${row.key}`}>
+      {/* `items-start`: when the amount cell grows by an error line, the type
+          select and the remove button stay on the input line, not the bottom. */}
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2 sm:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_auto]">
+        <div className="grid gap-1">
+          <Label htmlFor={id("type")} className="text-xs">
+            {t("FeeTemplateType")}
+          </Label>
+          <select
+            id={id("type")}
+            className={selectClass}
+            value={row.feeType}
+            onChange={(e) => {
+              const feeType = e.target.value as FinanceFeeType;
+              // Re-derive the counterparty and treatment for the new type;
+              // both stay visible and editable under "Accounting details".
+              onChange({ feeType, ...defaultsForFeeType(feeType) });
+            }}
+          >
+            {FINANCE_FEE_TYPES.map((feeType) => (
+              <option key={feeType} value={feeType}>
+                {t(FEE_TYPE_LABEL[feeType])}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="grid gap-1 sm:col-start-2">
+          <Label htmlFor={id("amount")} className="text-xs">
+            {t("FeeTemplateEstimatedAmount")}
+          </Label>
+          <div className="flex items-center gap-2">
+            {/* Text, not number: the value is parsed as a decimal STRING so the
+                stored fils are exactly what was typed. Numbers stay LTR in
+                Arabic; the currency label follows the reading direction. */}
+            <Input
+              id={id("amount")}
+              type="text"
+              inputMode="decimal"
+              dir="ltr"
+              className="text-end"
+              placeholder="0"
+              value={row.estimatedAmount}
+              aria-invalid={problem !== undefined}
+              aria-describedby={problem !== undefined ? id("amount-problem") : undefined}
+              onChange={(e) => onChange({ estimatedAmount: e.target.value })}
+            />
+            <span className="shrink-0 text-xs text-muted-foreground">{currencyLabel}</span>
+          </div>
+          {problemMessage && (
+            <p id={id("amount-problem")} role="alert" className="text-xs font-medium text-destructive">
+              {problemMessage}
+            </p>
+          )}
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          // `mt-5` = the label line (text-xs) plus the gap, so the icon sits beside the input.
+          className="row-start-1 col-start-2 mt-5 text-destructive hover:text-destructive sm:col-start-3"
+          aria-label={`${t("FeeTemplateRemove")} ${rowIndex + 1}: ${t(FEE_TYPE_LABEL[row.feeType])}`}
+          onClick={onRemove}
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      </div>
+      <div className="grid gap-1">
+        <Label htmlFor={id("description")} className="text-xs">
+          {t("FeeTemplateDescription")}
+        </Label>
+        <Input
+          id={id("description")}
+          value={row.description}
+          onChange={(e) => onChange({ description: e.target.value })}
+        />
+      </div>
+      <button
+        type="button"
+        className="flex w-fit items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+        aria-expanded={expanded}
+        aria-controls={id("accounting")}
+        onClick={onToggleExpanded}
+      >
+        <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-180")} />
+        {t("FeeTemplateAccountingDetails")}
+      </button>
+      {expanded && (
+        <div id={id("accounting")} className="grid gap-2">
+          {/* Two parties side by side; the treatment gets the full width — its
+              labels are sentences ("Recoverable from the customer") and were
+              clipped at a third of the dialog. */}
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="grid gap-1">
+              <Label htmlFor={id("paid-by")} className="text-xs">
+                {t("FeeTemplatePaidBy")}
+              </Label>
+              <select
+                id={id("paid-by")}
+                className={selectClass}
+                value={row.paidBy}
+                onChange={(e) => onChange({ paidBy: e.target.value as FeeParty })}
+              >
+                {FEE_PARTIES.map((party) => (
+                  <option key={party} value={party}>
+                    {t(FEE_PARTY_LABEL[party])}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="grid gap-1">
+              <Label htmlFor={id("paid-to")} className="text-xs">
+                {t("FeeTemplatePaidTo")}
+              </Label>
+              <select
+                id={id("paid-to")}
+                className={selectClass}
+                value={row.paidTo}
+                onChange={(e) => onChange({ paidTo: e.target.value as FeeParty })}
+              >
+                {FEE_PARTIES.map((party) => (
+                  <option key={party} value={party}>
+                    {t(FEE_PARTY_LABEL[party])}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="grid gap-1 sm:col-span-2">
+              <Label htmlFor={id("treatment")} className="text-xs">
+                {t("CostTreatmentLabel")}
+              </Label>
+              <select
+                id={id("treatment")}
+                className={selectClass}
+                value={row.accountingTreatment}
+                onChange={(e) => onChange({ accountingTreatment: e.target.value as FeeAccountingTreatment })}
+              >
+                {FEE_ACCOUNTING_TREATMENTS.map((treatment) => (
+                  <option key={treatment} value={treatment}>
+                    {t(FEE_TREATMENT_LABEL[treatment])}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {(
+              [
+                ["includedInQuotation", "FeeTemplateIncludedInQuotation"],
+                ["deductedFromSettlement", "FeeTemplateDeductedFromSettlement"],
+                ["refundable", "FeeTemplateRefundable"],
+              ] as const
+            ).map(([field, label]) => (
+              <div key={field} className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id={id(field)}
+                  className="w-4 h-4"
+                  checked={row[field]}
+                  onChange={(e) => onChange({ [field]: e.target.checked } as Partial<FeeTemplateFormRow>)}
+                />
+                <Label htmlFor={id(field)} className="text-xs font-normal">
+                  {t(label)}
+                </Label>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </li>
   );
 }
