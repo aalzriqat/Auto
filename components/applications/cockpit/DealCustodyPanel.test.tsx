@@ -54,10 +54,9 @@ function renderPanel(w: DealCustodyWiring, t = tEn) {
 afterEach(cleanup);
 
 describe("DealCustodyPanel", () => {
-  test("shows the assignee, expected, advanced, expenses paid and what the employee must return", () => {
+  test("shows the assignee, advanced, expenses paid and what the employee must return", () => {
     renderPanel(wiring());
     expect(screen.getByText("Rami")).toBeTruthy();
-    expect(within(screen.getByTestId("custody-expected")).getByText("340 JOD")).toBeTruthy();
     expect(within(screen.getByTestId("custody-issued")).getByText("700 JOD")).toBeTruthy();
     expect(within(screen.getByTestId("custody-expenses")).getByText("340 JOD")).toBeTruthy();
     expect(within(screen.getByTestId("custody-employee-owes")).getByText("360 JOD")).toBeTruthy();
@@ -123,6 +122,23 @@ describe("DealCustodyPanel", () => {
     expect(w.renderMovements).toHaveBeenCalledWith("cust1");
     expect(screen.getByTestId("movements-slot")).toBeTruthy();
     expect(screen.getByRole("button", { name: salesEn.CustodyHideMovements })).toBeTruthy();
+  });
+
+  test("the company-policy expected total is shown ONCE at panel level, unallocated — never inside an employee's record", () => {
+    renderPanel(wiring({ records: [record(), record({ _id: "cust2", userName: "Lina" })] }));
+    const expected = screen.getAllByTestId("custody-expected");
+    expect(expected).toHaveLength(1);
+    expect(within(expected[0]).getByText("340 JOD")).toBeTruthy();
+    expect(within(expected[0]).getByText(salesEn.CustodyExpectedNote)).toBeTruthy();
+    // Neither employee record carries an expected/planned row.
+    for (const id of ["cust1", "cust2"]) {
+      const article = screen.getByTestId(`custody-record-${id}`);
+      expect(within(article).queryByText(salesEn.CustodyExpected)).toBeNull();
+      expect(within(article).queryByTestId("custody-expected")).toBeNull();
+    }
+    cleanup();
+    renderPanel(wiring({ expectedTotalMinor: null }));
+    expect(screen.queryByTestId("custody-expected")).toBeNull();
   });
 
   test("a mixed-denomination record withholds its balances with the reason", () => {

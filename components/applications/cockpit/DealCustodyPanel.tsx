@@ -94,13 +94,11 @@ function BalanceRow({
 
 function CustodyRecord({
   record,
-  expectedTotalMinor,
   money,
   renderMovements,
   t,
 }: Readonly<{
   record: CustodyRecordView;
-  expectedTotalMinor: number | null;
   money: Formatter;
   renderMovements: DealCustodyWiring["renderMovements"];
   t: T;
@@ -124,9 +122,6 @@ function CustodyRecord({
         <p className="text-sm text-muted-foreground">{t("CustodySummaryUnavailable")}</p>
       ) : (
         <dl className="divide-y divide-border text-sm">
-          {expectedTotalMinor !== null && (
-            <BalanceRow label={t("CustodyExpected")} value={m(expectedTotalMinor)} testId="custody-expected" />
-          )}
           <BalanceRow label={t("CustodyIssued")} value={m(record.issuedMinor)} testId="custody-issued" />
           <BalanceRow label={t("CustodyExpensesPaid")} value={m(s.actualExpensesMinor)} testId="custody-expenses" />
           <BalanceRow label={t("CustodyReturned")} value={m(record.returnedMinor)} testId="custody-returned" />
@@ -210,13 +205,30 @@ export function DealCustodyPanel({
           </p>
         ) : (
           <>
+            {/* The finance company's configured fee total for the DEAL — once,
+                at panel level. It is a policy figure with no assignment to any
+                person: nothing here says how much any one employee should be
+                handed, because no such allocation exists on record. */}
+            {wiring.expectedTotalMinor !== null && (
+              <div
+                className="flex items-baseline justify-between gap-4 rounded-md border border-dashed px-3 py-2 text-sm"
+                data-testid="custody-expected"
+              >
+                <span className="min-w-0 text-muted-foreground">
+                  {t("CustodyExpected")}
+                  <span className="block text-xs">{t("CustodyExpectedNote")}</span>
+                </span>
+                <bdi dir="ltr" className="shrink-0 whitespace-nowrap font-medium tabular-nums">
+                  {money(wiring.expectedTotalMinor, wiring.currency)}
+                </bdi>
+              </div>
+            )}
             {records.length === 0 && <p className="text-sm text-muted-foreground">{t("CustodyNone")}</p>}
             {records.map((record, index) => (
               <div key={record._id}>
                 {index > 0 && <Separator className="mb-4" />}
                 <CustodyRecord
                   record={record}
-                  expectedTotalMinor={wiring.expectedTotalMinor}
                   money={money}
                   renderMovements={wiring.renderMovements}
                   t={t}
