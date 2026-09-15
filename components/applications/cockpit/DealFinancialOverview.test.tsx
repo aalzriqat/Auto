@@ -39,6 +39,7 @@ const summary: FinancialSummaryData = {
     aggregateReason: null,
   },
   supplier: { consigned: true, direction: "DEALERSHIP_OWES", amountMinor: 9_000_000, route: "THROUGH_DEALERSHIP" },
+  unreadable: [],
   profit: {
     available: true,
     basis: "MANAGEMENT_ESTIMATE",
@@ -174,6 +175,7 @@ describe("DealFinancialOverview", () => {
         aggregateReason: null,
       },
       supplier: { consigned: null, direction: "UNKNOWN", amountMinor: null, route: "UNKNOWN" },
+      unreadable: [],
       profit: { available: false, reason: "NoApprovedPurchaseAmount" },
     };
     render(<DealFinancialOverview summary={empty} money={money} t={tEn} />);
@@ -280,6 +282,64 @@ describe("DealFinancialOverview", () => {
       expect(fact(id).getByText(salesEn.OverviewAggregateUnreadable)).toBeTruthy();
     }
     expect(screen.queryByText(salesEn.OverviewDealerPaidUnknown)).toBeNull();
+  });
+
+  test.each([tEn, tAr])("a figure the server withheld as UNREADABLE says so — never 'not recorded', never a number — %#", (t) => {
+    const dictionary = t === tEn ? salesEn : salesAr;
+    render(
+      <DealFinancialOverview
+        summary={{
+          ...summary,
+          customerSalePrice: null,
+          approvedPurchaseAmountMinor: null,
+          customerPaidToDealer: null,
+          customerGapCashPlannedMinor: null,
+          customerFirstPaymentMinor: null,
+          financier: { fundedPortionMinor: null, outstanding: { state: "UNKNOWN", amountMinor: null, basis: null } },
+          dealerOutlay: { ...summary.dealerOutlay, plannedContributionMinor: null, knownCommittedMinor: null, totalExpectedMinor: null },
+          supplier: { ...summary.supplier, amountMinor: null },
+          unreadable: [
+            { field: "customerSalePrice", reason: "UNSAFE_AMOUNT" },
+            { field: "approvedPurchaseAmount", reason: "UNSAFE_AMOUNT" },
+            { field: "customerPaidToDealer", reason: "UNSAFE_AMOUNT" },
+            { field: "customerGapCashPlanned", reason: "UNSAFE_AMOUNT" },
+            { field: "customerFirstPayment", reason: "UNSAFE_AMOUNT" },
+            { field: "financierFundedPortion", reason: "UNSAFE_AMOUNT" },
+            { field: "financierOutstanding", reason: "UNSAFE_AMOUNT" },
+            { field: "supplierAmount", reason: "UNSAFE_AMOUNT" },
+            { field: "plannedContribution", reason: "UNSAFE_AMOUNT" },
+          ],
+        }}
+        money={money}
+        t={t}
+      />
+    );
+    const fact = (id: string) => within(screen.getByTestId(id));
+    for (const id of [
+      "overview-sale-price", "overview-approved-purchase", "overview-customer-paid", "overview-gap-cash-planned",
+      "overview-first-payment", "overview-financier", "overview-financier-balance", "overview-dealer-contribution", "overview-supplier",
+    ]) {
+      expect(fact(id).getByText("—")).toBeTruthy();
+      expect(fact(id).getByText(dictionary.OverviewAmountUnreadable)).toBeTruthy();
+    }
+    expect(screen.queryByText(dictionary.NotRecorded)).toBeNull();
+    expect(screen.queryByText(dictionary.OverviewCustomerPaidUnknown)).toBeNull();
+    expect(screen.queryByText(dictionary.OverviewFinancierUnknown)).toBeNull();
+    expect(screen.getByTestId("overview-unreadable-alert").textContent).toBe(dictionary.OverviewUnreadableAlert);
+  });
+
+  test("a figure that is merely absent still reads 'not recorded' — absence and corruption are different facts", () => {
+    render(
+      <DealFinancialOverview
+        summary={{ ...summary, approvedPurchaseAmountMinor: null, customerFirstPaymentMinor: null, unreadable: [] }}
+        money={money}
+        t={tEn}
+      />
+    );
+    expect(within(screen.getByTestId("overview-approved-purchase")).getByText(salesEn.NotRecorded)).toBeTruthy();
+    expect(within(screen.getByTestId("overview-first-payment")).getByText(salesEn.NotRecorded)).toBeTruthy();
+    expect(screen.queryByText(salesEn.OverviewAmountUnreadable)).toBeNull();
+    expect(screen.queryByTestId("overview-unreadable-alert")).toBeNull();
   });
 
   test("the direct route says the financier pays the supplier, and an owned vehicle has no supplier", () => {

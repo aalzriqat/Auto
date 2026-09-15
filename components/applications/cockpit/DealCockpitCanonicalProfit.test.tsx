@@ -106,6 +106,7 @@ function overview(): FinancedDealOverviewData {
         aggregateReason: null,
       },
       supplier: { consigned: false, direction: "NOT_INVOLVED", amountMinor: 0, route: "THROUGH_DEALERSHIP" },
+      unreadable: [],
       profit: {
         available: true,
         basis: "MANAGEMENT_ESTIMATE",

@@ -73,6 +73,12 @@ export function DealFinancialOverview({
 }: Readonly<{ summary: FinancialSummaryData; money: Formatter; t: T }>) {
   const cur = summary.currency;
   const m = (minor: number | null): string | null => (minor === null ? null : money(minor, cur));
+  // A figure the server WITHHELD because the stored value could not be read
+  // is a different fact from one never recorded, and says so. Older payloads
+  // carry no list; nothing is then unreadable by this reading.
+  const unreadable = new Set((summary.unreadable ?? []).map((entry) => entry.field));
+  const absentNote = (field: (typeof summary.unreadable)[number]["field"]): string =>
+    unreadable.has(field) ? t("OverviewAmountUnreadable") : t("NotRecorded");
 
   /**
    * The financier's remaining balance as its own fact, on its own authority:
@@ -98,7 +104,10 @@ export function DealFinancialOverview({
       case "NOT_YET_RECEIVABLE":
         return { value: null, note: t("OverviewFinancierNotYetReceivable") };
       case "UNKNOWN":
-        return { value: null, note: t("OverviewFinancierUnknown") };
+        return {
+          value: null,
+          note: unreadable.has("financierOutstanding") ? t("OverviewAmountUnreadable") : t("OverviewFinancierUnknown"),
+        };
     }
   })();
 
@@ -120,6 +129,7 @@ export function DealFinancialOverview({
       NOT_INVOLVED: t("OverviewSupplierSettled"),
       UNKNOWN: t("OverviewSupplierUnknown"),
     }[supplier.direction];
+    if (supplier.amountMinor === null && unreadable.has("supplierAmount")) return t("OverviewAmountUnreadable");
     return route && supplier.direction !== "UNKNOWN" ? `${direction} · ${route}` : direction;
   })();
 
@@ -153,44 +163,55 @@ export function DealFinancialOverview({
       <h3 id="deal-overview-heading" className="text-xs font-normal text-muted-foreground">
         {t("OverviewHeading")}
       </h3>
+      {unreadable.size > 0 && (
+        <p role="alert" className="mt-1 text-xs text-amber-700 dark:text-amber-400" data-testid="overview-unreadable-alert">
+          {t("OverviewUnreadableAlert")}
+        </p>
+      )}
       <dl className="divide-y divide-border">
         <Fact
           testId="overview-sale-price"
           label={t("OverviewCustomerSalePrice")}
           value={m(summary.customerSalePrice?.amountMinor ?? null)}
-          note={summary.customerSalePrice ? t(BASIS_KEY[summary.customerSalePrice.basis]) : t("NotRecorded")}
+          note={summary.customerSalePrice ? t(BASIS_KEY[summary.customerSalePrice.basis]) : absentNote("customerSalePrice")}
         />
         <Fact
           testId="overview-approved-purchase"
           label={t("OverviewApprovedPurchase")}
           value={m(summary.approvedPurchaseAmountMinor)}
-          note={summary.approvedPurchaseAmountMinor === null ? t("NotRecorded") : undefined}
+          note={summary.approvedPurchaseAmountMinor === null ? absentNote("approvedPurchaseAmount") : undefined}
         />
         <Fact
           testId="overview-customer-paid"
           label={t("OverviewCustomerPaid")}
           value={m(summary.customerPaidToDealer?.totalMinor ?? null)}
-          note={summary.customerPaidToDealer ? t("OverviewCustomerPaidNote") : t("OverviewCustomerPaidUnknown")}
+          note={
+            summary.customerPaidToDealer
+              ? t("OverviewCustomerPaidNote")
+              : unreadable.has("customerPaidToDealer")
+                ? t("OverviewAmountUnreadable")
+                : t("OverviewCustomerPaidUnknown")
+          }
         />
-        {summary.customerGapCashPlannedMinor !== null && (
+        {(summary.customerGapCashPlannedMinor !== null || unreadable.has("customerGapCashPlanned")) && (
           <Fact
             testId="overview-gap-cash-planned"
             label={t("OverviewGapCashPlanned")}
             value={m(summary.customerGapCashPlannedMinor)}
-            note={t("OverviewGapCashPlannedNote")}
+            note={summary.customerGapCashPlannedMinor === null ? t("OverviewAmountUnreadable") : t("OverviewGapCashPlannedNote")}
           />
         )}
         <Fact
           testId="overview-first-payment"
           label={t("OverviewCustomerFirstPayment")}
           value={m(summary.customerFirstPaymentMinor)}
-          note={summary.customerFirstPaymentMinor === null ? t("NotRecorded") : undefined}
+          note={summary.customerFirstPaymentMinor === null ? absentNote("customerFirstPayment") : undefined}
         />
         <Fact
           testId="overview-financier"
           label={t("OverviewFinancierFunds")}
           value={m(summary.financier.fundedPortionMinor)}
-          note={summary.financier.fundedPortionMinor === null ? t("NotRecorded") : undefined}
+          note={summary.financier.fundedPortionMinor === null ? absentNote("financierFundedPortion") : undefined}
         />
         <Fact
           testId="overview-financier-balance"
@@ -202,7 +223,7 @@ export function DealFinancialOverview({
           testId="overview-dealer-contribution"
           label={t("OverviewDealerContribution")}
           value={m(outlay.plannedContributionMinor)}
-          note={outlay.plannedContributionMinor === null ? t("NotRecorded") : t("OverviewDealerContributionNote")}
+          note={outlay.plannedContributionMinor === null ? absentNote("plannedContribution") : t("OverviewDealerContributionNote")}
         />
         <Fact
           testId="overview-costs"

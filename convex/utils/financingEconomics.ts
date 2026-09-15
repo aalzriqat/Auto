@@ -514,11 +514,21 @@ export function resolveAppliedLtv(
 // Server-side invariants
 // ---------------------------------------------------------------------------
 
+/**
+ * Whether a value is a readable minor-unit amount: a safe, non-negative
+ * integer. The ONE predicate behind every "is this money a figure" decision —
+ * the writers assert it, and every reader that republishes a stored amount
+ * checks it, because `v.number()` admits NaN, Infinity, fractions, negatives
+ * and unsafe integers, and NaN passes every negative comparison (`NaN < 0`
+ * is false), so the test is positive for what is allowed.
+ */
+export function isMinorAmount(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
 /** Rejects a caller-supplied money amount that is not a sane minor-unit integer. */
 export function assertMinorAmount(value: number, label: string): void {
-  // v.number() accepts NaN and Infinity, and NaN passes every comparison guard
-  // (NaN < 0 is false), so test positively for what is allowed.
-  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0 || !Number.isSafeInteger(value)) {
+  if (!isMinorAmount(value)) {
     throw new ConvexError(
       `${label} must be a non-negative whole number of minor units (got ${value}).`
     );
@@ -1709,18 +1719,22 @@ export function deriveManagementProfit(args: {
   // the row in hand, and the failure mode of assuming it is an overstated profit.
   if (args.dealerContributionMinor === undefined)
     return { available: false, reason: "NoDealerContribution" };
-  // `computeDealerProceeds` asserts non-negativity on every input; this had no
-  // equivalent, so a negative value written through the admin raw-JSON editor
-  // would INFLATE the owner-facing figure with nothing to catch it. A negative
-  // amount on either line is not a smaller profit, it is a corrupt record.
-  if (
-    args.dealerContributionMinor < 0 ||
-    (args.customerDirectToDealerMinor ?? 0) < 0 ||
-    args.actualExpensesMinor < 0
-  ) {
-    // Its own reason rather than `NoDealerContribution`, which told the operator
-    // to record a contribution that is already there — a defensive branch that
-    // lies about which field is corrupt defeats its own purpose.
+  // FAIL CLOSED on EVERY operand, the same rule as the STOCK sibling below.
+  // `computeDealerProceeds` asserts each input; this once checked only for
+  // negatives, so NaN, Infinity, a fraction or an unsafe integer written
+  // through the admin raw-JSON editor — or arriving as an unchecked expense
+  // total — sailed through `< 0` and came out as a headline. A corrupt
+  // operand is not a smaller profit, it is a corrupt record, and gets its own
+  // reason rather than `NoDealerContribution`, which told the operator to
+  // record a contribution that is already there.
+  const operands = [
+    args.approvedDealerPurchaseAmountMinor,
+    args.supplierSettlementMinor,
+    args.dealerContributionMinor,
+    args.customerDirectToDealerMinor ?? 0,
+    args.actualExpensesMinor,
+  ];
+  if (!operands.every(isMinorAmount)) {
     return { available: false, reason: "CorruptInput" };
   }
 
@@ -1735,13 +1749,17 @@ export function deriveManagementProfit(args: {
     { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: args.dealerContributionMinor },
     { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: args.actualExpensesMinor },
   ];
+  // Summed from the same lines the screen renders, so the headline and its
+  // derivation cannot disagree — the arithmetic happens once, here. Safe
+  // operands can still overflow between them; a result that is not a safe
+  // integer is not a figure.
+  const amountMinor = lines.reduce((total, line) => total + line.sign * line.amountMinor, 0);
+  if (!Number.isSafeInteger(amountMinor)) return { available: false, reason: "CorruptInput" };
 
   return {
     available: true,
     basis: "MANAGEMENT_ESTIMATE",
-    // Summed from the same lines the screen renders, so the headline and its
-    // derivation cannot disagree — the arithmetic happens once, here.
-    amountMinor: lines.reduce((total, line) => total + line.sign * line.amountMinor, 0),
+    amountMinor,
     currency: args.currency,
     classification: args.fullySettled ? "ACTUAL_UNPOSTABLE" : "ESTIMATED_AWAITING_SETTLEMENT",
     lines,
@@ -1795,7 +1813,7 @@ export function deriveStockManagementProfit(args: {
     args.customerDirectToDealerMinor ?? 0,
     args.actualExpensesMinor,
   ];
-  if (!operands.every((amount) => Number.isSafeInteger(amount) && amount >= 0)) {
+  if (!operands.every(isMinorAmount)) {
     return { available: false, reason: "CorruptInput" };
   }
   const lines: ManagementProfitLine[] = [

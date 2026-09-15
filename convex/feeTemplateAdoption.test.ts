@@ -359,11 +359,11 @@ describe("fee-template adoption", () => {
         const [first, second] = company!.feeTemplates!;
         await ctx.db.patch(companyId, { feeTemplates: [first, { ...second, estimatedAmountMinor: corrupt }] });
       });
-      expect((await costsOf(s, applicationId)).expected.adoption.state).toBe("AVAILABLE");
+      expect((await costsOf(s, applicationId)).expected.adoption.state).toBe("COMPANY_TEMPLATES_UNREADABLE");
 
       await expect(
         s.asOwner.mutation(api.financeDealCosts.adoptCompanyFeeTemplates, { orgId: s.orgId, applicationId, reason: "late" })
-      ).rejects.toThrow(/Configured fee #2 \(STAMPS\) estimated amount must be a non-negative whole number/);
+      ).rejects.toThrow(/cannot be read as money/);
 
       // Nothing moved: the slot is still empty, no adoption is recorded on the
       // snapshot, and no override row claims one happened.
@@ -375,6 +375,36 @@ describe("fee-template adoption", () => {
         (await ctx.db.query("financeApplicationOverrides").collect()).filter((row) => row.applicationId === applicationId)
       );
       expect(overrides).toEqual([]);
+      expect((await costsOf(s, applicationId)).expected.source).toBe("NO_TEMPLATES");
+    }
+  );
+
+  test.each([
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["a fraction of a fils", 250_000.5],
+    ["a negative amount", -250_000],
+    ["an unsafe integer", Number.MAX_SAFE_INTEGER + 2],
+  ])(
+    "the READ never advertises AVAILABLE for a company template carrying %s — it reports COMPANY_TEMPLATES_UNREADABLE, and the mutation refuses with the same reason",
+    async (_label, corrupt) => {
+      const s = await seedDealer(`r-${_label}`);
+      const { companyId, applicationId } = await dealFrozenBeforeFees(s);
+      await s.t.run(async (ctx) => {
+        const company = await ctx.db.get(companyId);
+        const [first, second] = company!.feeTemplates!;
+        await ctx.db.patch(companyId, { feeTemplates: [first, { ...second, estimatedAmountMinor: corrupt }] });
+      });
+      const costs = await costsOf(s, applicationId);
+      expect(costs.expected.adoption).toEqual({
+        state: "COMPANY_TEMPLATES_UNREADABLE",
+        liveTemplateCount: 2,
+        liveRuleVersion: 2,
+        adopted: null,
+      });
+      await expect(
+        s.asOwner.mutation(api.financeDealCosts.adoptCompanyFeeTemplates, { orgId: s.orgId, applicationId, reason: "late" })
+      ).rejects.toThrow(/cannot be read as money/);
       expect((await costsOf(s, applicationId)).expected.source).toBe("NO_TEMPLATES");
     }
   );

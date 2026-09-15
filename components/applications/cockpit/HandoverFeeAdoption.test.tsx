@@ -26,6 +26,7 @@ function costs(adoption: HandoverFeeAdoption): HandoverCostsData {
       currency: "JOD",
       rows: [],
       expectedTotalMinor: null,
+      expectedTotalReason: null,
       actualTotalMinor: 0,
       differenceMinor: null,
       unplannedLineIds: [],
@@ -83,6 +84,16 @@ describe("fee-template adoption on the handover-cost checklist", () => {
     cleanup();
     renderPanel({ state: "BLOCKED_DEAL_PROGRESSED", liveTemplateCount: 3, liveRuleVersion: 2, adopted: null }, onAdopt);
     expect(screen.getByTestId("deal-handover-fee-adoption").textContent).toContain(salesEn.HandoverExpectedAdoptBlockedProgressed);
+  });
+
+  test("COMPANY_TEMPLATES_UNREADABLE: the notice says the company's configuration must be corrected and offers nothing, even to the owner", () => {
+    const onAdopt = vi.fn(async () => {});
+    renderPanel({ state: "COMPANY_TEMPLATES_UNREADABLE", liveTemplateCount: 2, liveRuleVersion: 3, adopted: null }, onAdopt);
+    const notice = screen.getByTestId("deal-handover-fee-adoption");
+    expect(notice.textContent).toContain(salesEn.HandoverExpectedAdoptCompanyUnreadable);
+    expect(notice.textContent).not.toContain(salesEn.HandoverExpectedAdoptable);
+    expect(screen.queryByRole("button", { name: salesEn.AdoptCompanyFees })).toBeNull();
+    expect(onAdopt).not.toHaveBeenCalled();
   });
 
   test("a company with no fees, or no snapshot, shows the plain not-configured sentence and no notice", () => {

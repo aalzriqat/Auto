@@ -11,6 +11,7 @@ import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { loadActiveFees, unrecordedConfiguredFeePositions } from "./utils/settlementDeductions";
 import {
   deriveStockManagementProfit,
+  isMinorAmount,
   withPreparationExpenses,
   type DealProfit,
 } from "./utils/financingEconomics";
@@ -156,18 +157,28 @@ export function dealerBorneExpected(
   if (source !== "COMPANY_RULE_SNAPSHOT") return { totalMinor: null, remainingMinor: null, reason: "NO_POLICY" };
   const dealerRows = rows.filter((row) => row.paidBy === "DEALER" || row.paidBy === "EMPLOYEE");
   // FAIL CLOSED: an actual recorded in another currency cannot be subtracted
-  // from an expectation in this one, and a template or actual amount that is
-  // not a safe non-negative integer is not a figure.
-  const safe = (n: number) => Number.isSafeInteger(n) && n >= 0;
+  // from an expectation in this one, and a template estimate the checklist
+  // already withheld (`expectedAmountMinor === null`), or one that reaches
+  // here unreadable anyway, or an actual that is not a readable figure, is
+  // not an operand.
   if (dealerBorneLineForeign || dealerRows.some((row) => row.actual !== null && row.actual.currency !== dealCurrency)) {
     return { totalMinor: null, remainingMinor: null, reason: "MIXED_DENOMINATION" };
   }
-  if (dealerRows.some((row) => !safe(row.expectedAmountMinor) || (row.actual?.actualAmountMinor !== undefined && !safe(row.actual.actualAmountMinor)))) {
-    return { totalMinor: null, remainingMinor: null, reason: "UNSAFE_AMOUNT" };
+  const readable: Array<{ expectedAmountMinor: number; actualAmountMinor: number | undefined }> = [];
+  for (const row of dealerRows) {
+    const actualAmountMinor = row.actual?.actualAmountMinor;
+    if (
+      row.expectedAmountMinor === null ||
+      !isMinorAmount(row.expectedAmountMinor) ||
+      (actualAmountMinor !== undefined && !isMinorAmount(actualAmountMinor))
+    ) {
+      return { totalMinor: null, remainingMinor: null, reason: "UNSAFE_AMOUNT" };
+    }
+    readable.push({ expectedAmountMinor: row.expectedAmountMinor, actualAmountMinor });
   }
-  const totalMinor = dealerRows.reduce((sum, row) => sum + row.expectedAmountMinor, 0);
-  const remainingMinor = dealerRows.reduce(
-    (sum, row) => sum + Math.max(0, row.expectedAmountMinor - (row.actual?.actualAmountMinor ?? 0)),
+  const totalMinor = readable.reduce((sum, row) => sum + row.expectedAmountMinor, 0);
+  const remainingMinor = readable.reduce(
+    (sum, row) => sum + Math.max(0, row.expectedAmountMinor - (row.actualAmountMinor ?? 0)),
     0
   );
   if (!Number.isSafeInteger(totalMinor) || !Number.isSafeInteger(remainingMinor)) {

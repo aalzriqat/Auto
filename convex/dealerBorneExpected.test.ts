@@ -17,6 +17,7 @@ function row(overrides: Partial<ExpectedFeeRow> & { paidBy: ExpectedFeeRow["paid
     deductedFromSettlement: false,
     refundable: false,
     accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+    expectedAmountReason: null,
     duplicateIdentity: false,
     actual: null,
     ...overrides,

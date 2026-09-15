@@ -49,6 +49,12 @@ export type CustodyRecordView = Readonly<{
     overReturnedMinor: number;
     settled: boolean;
   }> | null;
+  /**
+   * Why `summary` is null, as `listDealCosts` says it: the custody and its
+   * costs are not in one currency, or a stored total / linked cost is not a
+   * readable figure. Absent on a payload that predates the second reason.
+   */
+  summaryUnavailable?: Readonly<{ reason: "MIXED_DENOMINATION" | "UNSAFE_AMOUNT" }> | null;
 }>;
 
 export type DealCustodyWiring = Readonly<{
@@ -119,7 +125,14 @@ function CustodyRecord({
       </header>
 
       {s === null ? (
-        <p className="text-sm text-muted-foreground">{t("CustodySummaryUnavailable")}</p>
+        // No money paints at all — not the stored totals either, since a
+        // corrupt one is exactly what withheld the balance.
+        <p
+          className="text-sm text-amber-700 dark:text-amber-400"
+          data-testid={`custody-summary-unavailable-${record.summaryUnavailable?.reason ?? "MIXED_DENOMINATION"}`}
+        >
+          {t(record.summaryUnavailable?.reason === "UNSAFE_AMOUNT" ? "CustodySummaryUnreadable" : "CustodySummaryUnavailable")}
+        </p>
       ) : (
         <dl className="divide-y divide-border text-sm">
           <BalanceRow label={t("CustodyIssued")} value={m(record.issuedMinor)} testId="custody-issued" />

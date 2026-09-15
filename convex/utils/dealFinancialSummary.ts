@@ -1,4 +1,4 @@
-import type { DealProfit } from "./financingEconomics";
+import { isMinorAmount, type DealProfit } from "./financingEconomics";
 
 /**
  * The operator's financial overview of one FINANCED deal, derived once on the
@@ -209,53 +209,104 @@ export type DealFinancialSummary = Readonly<{
   }>;
   /** The headline, served through — see `DealProfit` for why it is a union. */
   profit: DealProfit;
+  /**
+   * Every served figure this summary WITHHELD because the stored value is not
+   * a readable minor-unit amount (NaN, Infinity, a fraction, a negative, an
+   * unsafe integer). The field is null in its place, and it is listed here
+   * so a screen says "could not be read" rather than "not recorded" — the
+   * two are different facts, and only the second is safe to act on.
+   */
+  unreadable: ReadonlyArray<Readonly<{ field: SummaryMoneyField; reason: "UNSAFE_AMOUNT" }>>;
 }>;
 
-function customerSalePriceFor(
-  app: DealFinancialSummaryInputs["app"]
-): DealFinancialSummary["customerSalePrice"] {
-  if (app.legalInvoiceAmountMinor !== undefined) {
-    return { amountMinor: app.legalInvoiceAmountMinor, basis: "LEGAL_INVOICE" };
+/** A served figure of the summary that can be withheld as unreadable. */
+export type SummaryMoneyField =
+  | "customerSalePrice"
+  | "approvedPurchaseAmount"
+  | "customerPaidToDealer"
+  | "customerGapCashPlanned"
+  | "customerFirstPayment"
+  | "financierFundedPortion"
+  | "financierOutstanding"
+  | "supplierAmount"
+  | "plannedContribution"
+  | "recordedCosts";
+
+/**
+ * The read boundary: a stored amount is republished only when it is a
+ * readable figure; otherwise it is withheld and NAMED. Absent (`undefined`)
+ * stays absent — that is "not recorded", a different fact from "recorded and
+ * corrupt", and the two are never merged into one null.
+ */
+class ReadBoundary {
+  readonly unreadable: Array<{ field: SummaryMoneyField; reason: "UNSAFE_AMOUNT" }> = [];
+
+  /** The amount, or null — recording the field when the value is present but not a figure. */
+  serve(field: SummaryMoneyField, value: number | undefined | null): number | null {
+    if (value === undefined || value === null) return null;
+    if (isMinorAmount(value)) return value;
+    this.unreadable.push({ field, reason: "UNSAFE_AMOUNT" });
+    return null;
   }
-  if (app.submittedQuotationMinor !== undefined) {
-    return { amountMinor: app.submittedQuotationMinor, basis: "SUBMITTED_QUOTATION" };
-  }
-  if (app.targetSellingAmountMinor !== undefined) {
-    return { amountMinor: app.targetSellingAmountMinor, basis: "TARGET_SELLING_AMOUNT" };
-  }
-  return null;
 }
 
-function financierOutstandingFor(args: {
-  routeKnown: boolean;
-  settlesDirect: boolean;
-  financier: ServedParty | undefined;
-  expectedDealerRemittanceMinor: number | undefined;
-}): FinancierOutstanding {
+function customerSalePriceFor(
+  app: DealFinancialSummaryInputs["app"],
+  boundary: ReadBoundary
+): DealFinancialSummary["customerSalePrice"] {
+  // The basis is chosen by which document EXISTS, strongest first; the value
+  // is then read through the boundary. A corrupt legal invoice does not fall
+  // through to the quotation — the strongest document is the one on record,
+  // and a figure from a weaker one would be served under the wrong claim.
+  const chosen: Readonly<{ amountMinor: number; basis: CustomerSalePriceBasis }> | null =
+    app.legalInvoiceAmountMinor !== undefined
+      ? { amountMinor: app.legalInvoiceAmountMinor, basis: "LEGAL_INVOICE" }
+      : app.submittedQuotationMinor !== undefined
+        ? { amountMinor: app.submittedQuotationMinor, basis: "SUBMITTED_QUOTATION" }
+        : app.targetSellingAmountMinor !== undefined
+          ? { amountMinor: app.targetSellingAmountMinor, basis: "TARGET_SELLING_AMOUNT" }
+          : null;
+  if (chosen === null) return null;
+  const amountMinor = boundary.serve("customerSalePrice", chosen.amountMinor);
+  return amountMinor === null ? null : { amountMinor, basis: chosen.basis };
+}
+
+function financierOutstandingFor(
+  args: {
+    routeKnown: boolean;
+    settlesDirect: boolean;
+    financier: ServedParty | undefined;
+    expectedDealerRemittanceMinor: number | undefined;
+  },
+  boundary: ReadBoundary
+): FinancierOutstanding {
   if (!args.routeKnown) return { state: "UNKNOWN", amountMinor: null, basis: null };
   if (args.settlesDirect) return { state: "NONE_DIRECT_ROUTE", amountMinor: null, basis: null };
   const row = args.financier;
   if (row === undefined || row.position === "NOT_INVOLVED") {
     // Nothing canonical yet. The frozen economics say what the financier is
     // expected to remit; that is served as an ESTIMATE, never as a balance.
-    return args.expectedDealerRemittanceMinor !== undefined
-      ? {
-          state: "ESTIMATED_PRE_RECEIVABLE",
-          amountMinor: args.expectedDealerRemittanceMinor,
-          basis: "EXPECTED_DEALER_REMITTANCE",
-        }
-      : { state: "NOT_YET_RECEIVABLE", amountMinor: null, basis: null };
+    if (args.expectedDealerRemittanceMinor === undefined) {
+      return { state: "NOT_YET_RECEIVABLE", amountMinor: null, basis: null };
+    }
+    const amountMinor = boundary.serve("financierOutstanding", args.expectedDealerRemittanceMinor);
+    return amountMinor === null
+      ? { state: "UNKNOWN", amountMinor: null, basis: null }
+      : { state: "ESTIMATED_PRE_RECEIVABLE", amountMinor, basis: "EXPECTED_DEALER_REMITTANCE" };
   }
   if (row.position === "UNKNOWN") return { state: "UNKNOWN", amountMinor: null, basis: null };
   // SETTLED serves a zero; OWED_TO_DEALERSHIP serves the balance. Both are the
   // party row's own figure — the receivable's outstanding — never re-derived.
+  const amountMinor = boundary.serve("financierOutstanding", row.amountMinor);
+  if (amountMinor === null) return { state: "UNKNOWN", amountMinor: null, basis: null };
   return row.position === "SETTLED"
-    ? { state: "COLLECTED", amountMinor: row.amountMinor, basis: "RECEIVABLE" }
-    : { state: "OUTSTANDING", amountMinor: row.amountMinor, basis: "RECEIVABLE" };
+    ? { state: "COLLECTED", amountMinor, basis: "RECEIVABLE" }
+    : { state: "OUTSTANDING", amountMinor, basis: "RECEIVABLE" };
 }
 
 export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): DealFinancialSummary {
   const { app, currency } = input;
+  const boundary = new ReadBoundary();
   const byParty = new Map(input.parties.map((row) => [row.party, row]));
   const customer = byParty.get("CUSTOMER");
   const supplier = byParty.get("SUPPLIER");
@@ -266,20 +317,19 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
   // partial figure, so the tile is withheld rather than understated. The
   // held deposit is the ONLY operand: it is the one figure here with a
   // receipt behind it.
-  const customerPaidToDealer =
+  const heldDepositMinor =
     customer !== undefined && customer.position !== "UNKNOWN" && customer.currency === currency
-      ? { heldDepositMinor: customer.amountMinor, totalMinor: customer.amountMinor }
+      ? boundary.serve("customerPaidToDealer", customer.amountMinor)
       : null;
+  const customerPaidToDealer =
+    heldDepositMinor === null ? null : { heldDepositMinor, totalMinor: heldDepositMinor };
 
-  const plannedContributionMinor = app.dealerContributionMinor ?? null;
+  const plannedContributionMinor = boundary.serve("plannedContribution", app.dealerContributionMinor);
   // The readable-total contract, enforced here as well as by the caller: a
-  // served total that is not a safe non-negative integer is not a figure,
-  // whatever reason (or none) travelled with it. Checked positively — NaN
-  // passes every negative comparison.
-  const safe = (amount: number): boolean => Number.isSafeInteger(amount) && amount >= 0;
-  const recordedUnreadable =
-    input.expenses.actualTotalMinor !== null && !safe(input.expenses.actualTotalMinor);
-  const recordedCostsMinor = recordedUnreadable ? null : input.expenses.actualTotalMinor;
+  // served total that is not a figure is withheld, whatever reason (or none)
+  // travelled with it.
+  const recordedCostsMinor = boundary.serve("recordedCosts", input.expenses.actualTotalMinor);
+  const recordedUnreadable = input.expenses.actualTotalMinor !== null && recordedCostsMinor === null;
   const recordedCostsReason: RecordedCostsReason | null = recordedUnreadable
     ? "UNSAFE_AMOUNT"
     : input.expenses.reason;
@@ -307,21 +357,29 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
       ? "DIRECT_TO_SUPPLIER"
       : "THROUGH_DEALERSHIP";
 
+  const supplierAmountMinor =
+    supplier === undefined || supplier.position === "UNKNOWN" || supplier.currency !== currency
+      ? null
+      : boundary.serve("supplierAmount", supplier.amountMinor);
+
   return {
     currency,
-    customerSalePrice: customerSalePriceFor(app),
-    approvedPurchaseAmountMinor: app.approvedDealerPurchaseAmountMinor ?? null,
+    customerSalePrice: customerSalePriceFor(app, boundary),
+    approvedPurchaseAmountMinor: boundary.serve("approvedPurchaseAmount", app.approvedDealerPurchaseAmountMinor),
     customerPaidToDealer,
-    customerGapCashPlannedMinor: app.customerGapCashToDealerMinor ?? null,
-    customerFirstPaymentMinor: app.customerFirstPaymentMinor ?? null,
+    customerGapCashPlannedMinor: boundary.serve("customerGapCashPlanned", app.customerGapCashToDealerMinor),
+    customerFirstPaymentMinor: boundary.serve("customerFirstPayment", app.customerFirstPaymentMinor),
     financier: {
-      fundedPortionMinor: app.financeCompanyFundedPortionMinor ?? null,
-      outstanding: financierOutstandingFor({
-        routeKnown: input.routeKnown,
-        settlesDirect: input.settlesDirectToSupplier,
-        financier,
-        expectedDealerRemittanceMinor: app.expectedDealerRemittanceMinor,
-      }),
+      fundedPortionMinor: boundary.serve("financierFundedPortion", app.financeCompanyFundedPortionMinor),
+      outstanding: financierOutstandingFor(
+        {
+          routeKnown: input.routeKnown,
+          settlesDirect: input.settlesDirectToSupplier,
+          financier,
+          expectedDealerRemittanceMinor: app.expectedDealerRemittanceMinor,
+        },
+        boundary
+      ),
     },
     dealerOutlay: {
       plannedContributionMinor,
@@ -343,12 +401,10 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
         supplier === undefined || supplier.position === "DEALERSHIP_HOLDS"
           ? "UNKNOWN"
           : supplier.position,
-      amountMinor:
-        supplier === undefined || supplier.position === "UNKNOWN" || supplier.currency !== currency
-          ? null
-          : supplier.amountMinor,
+      amountMinor: supplierAmountMinor,
       route,
     },
     profit: input.profit,
+    unreadable: boundary.unreadable,
   };
 }

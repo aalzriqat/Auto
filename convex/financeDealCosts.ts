@@ -23,6 +23,7 @@ import { reconcileEmployeeCustody } from "../lib/financingEconomics";
 import { recomputeEconomicsForApplication } from "./financingEconomics";
 import {
   assertMinorAmount,
+  isMinorAmount,
   feeAccountingTreatmentValidator,
   feePartyValidator,
   financeFeeTypeValidator,
@@ -287,17 +288,16 @@ export type FeeAmountsUnreadableReason = "UNSAFE_AMOUNT";
 export function unreadableFeeAmounts(
   fees: ReadonlyArray<Pick<Doc<"financeDealFees">, "voidedAt" | "estimatedAmountMinor" | "actualAmountMinor">>
 ): FeeAmountsUnreadableReason | null {
-  const safe = (amount: number): boolean => Number.isSafeInteger(amount) && amount >= 0;
   let estimatedTotalMinor = 0;
   let actualTotalMinor = 0;
   for (const fee of fees) {
     if (fee.voidedAt !== undefined) continue;
     if (fee.estimatedAmountMinor !== undefined) {
-      if (!safe(fee.estimatedAmountMinor)) return "UNSAFE_AMOUNT";
+      if (!isMinorAmount(fee.estimatedAmountMinor)) return "UNSAFE_AMOUNT";
       estimatedTotalMinor += fee.estimatedAmountMinor;
     }
     if (fee.actualAmountMinor !== undefined) {
-      if (!safe(fee.actualAmountMinor)) return "UNSAFE_AMOUNT";
+      if (!isMinorAmount(fee.actualAmountMinor)) return "UNSAFE_AMOUNT";
       actualTotalMinor += fee.actualAmountMinor;
     }
   }
@@ -328,7 +328,15 @@ export type ExpectedFeeRow = {
   templateIndex: number;
   feeType: FeeTemplate["feeType"];
   description: string | undefined;
-  expectedAmountMinor: number;
+  /**
+   * The template's frozen estimate — or `null` with `expectedAmountReason`
+   * when the stored value is not a readable minor-unit figure. The snapshot
+   * is never rewritten to repair it; the row keeps its identity (type,
+   * description, payer, treatment) so the position stays addressable, and
+   * only the money is withheld.
+   */
+  expectedAmountMinor: number | null;
+  expectedAmountReason: FeeAmountsUnreadableReason | null;
   paidBy: FeeTemplate["paidBy"];
   paidTo: FeeTemplate["paidTo"];
   includedInQuotation: boolean;
@@ -406,8 +414,13 @@ export function deriveExpectedFees(args: {
   source: "COMPANY_RULE_SNAPSHOT" | "NO_SNAPSHOT" | "NO_TEMPLATES";
   currency: string;
   rows: ExpectedFeeRow[];
-  /** Sum of the configured template estimates; null when nothing is configured. */
+  /**
+   * Sum of the configured template estimates; null when nothing is
+   * configured, and null with `expectedTotalReason` when any configured
+   * estimate is unreadable or the sum leaves the safe range.
+   */
   expectedTotalMinor: number | null;
+  expectedTotalReason: FeeAmountsUnreadableReason | null;
   /** Sum of recorded actuals over every live line, template or unplanned; null over mixed denomination. */
   actualTotalMinor: number | null;
   /** expected − actual, a comparison only; null whenever either side is. */
@@ -440,11 +453,18 @@ export function deriveExpectedFees(args: {
     const matched = exactTemplateLine(args.fees, templateIndex);
     if (matched) claimed.add(matched._id);
 
+    // Validated positively on the way OUT of the frozen snapshot: the writers
+    // assert this rule, the schema does not, and a legacy or raw-edited
+    // template carries whatever it carries. The money is withheld per row
+    // with the reason; nothing about the snapshot is changed.
+    const expectedReadable = isMinorAmount(template.estimatedAmountMinor);
+
     return {
       templateIndex,
       feeType: template.feeType,
       description: template.description,
-      expectedAmountMinor: template.estimatedAmountMinor,
+      expectedAmountMinor: expectedReadable ? template.estimatedAmountMinor : null,
+      expectedAmountReason: expectedReadable ? null : "UNSAFE_AMOUNT",
       paidBy: template.paidBy,
       paidTo: template.paidTo,
       includedInQuotation: template.includedInQuotation,
@@ -463,10 +483,18 @@ export function deriveExpectedFees(args: {
     };
   });
 
-  const expectedTotalMinor =
-    source === "COMPANY_RULE_SNAPSHOT"
-      ? rows.reduce((total, row) => total + row.expectedAmountMinor, 0)
+  // One unreadable row, or a sum that leaves the safe range, withholds the
+  // total and everything compared against it — never a partial or corrupt
+  // figure wearing a total's name.
+  const expectedSum =
+    source === "COMPANY_RULE_SNAPSHOT" && rows.every((row) => row.expectedAmountMinor !== null)
+      ? rows.reduce((total, row) => total + (row.expectedAmountMinor ?? 0), 0)
       : null;
+  const expectedTotalReason: FeeAmountsUnreadableReason | null =
+    source === "COMPANY_RULE_SNAPSHOT" && (expectedSum === null || !Number.isSafeInteger(expectedSum))
+      ? "UNSAFE_AMOUNT"
+      : null;
+  const expectedTotalMinor = expectedTotalReason === null ? expectedSum : null;
   const differenceMinor =
     expectedTotalMinor !== null && args.actualTotalMinor !== null
       ? expectedTotalMinor - args.actualTotalMinor
@@ -477,6 +505,7 @@ export function deriveExpectedFees(args: {
     currency: args.currency,
     rows,
     expectedTotalMinor,
+    expectedTotalReason,
     actualTotalMinor: args.actualTotalMinor,
     differenceMinor,
     unplannedLineIds: args.fees.filter((fee) => !claimed.has(fee._id)).map((fee) => fee._id),
@@ -564,7 +593,13 @@ export type FeeTemplateAdoptionState =
   /** A cost or custody row already exists — the deal has been costed without a policy. */
   | "BLOCKED_COSTS_RECORDED"
   /** The vehicle was handed over or the deal is closed/stopped — its costs are history. */
-  | "BLOCKED_DEAL_PROGRESSED";
+  | "BLOCKED_DEAL_PROGRESSED"
+  /**
+   * A stored company template carries an amount that is not a readable
+   * minor-unit figure (legacy or raw-edited). The mutation refuses such a
+   * policy, so the read never advertises it as adoptable.
+   */
+  | "COMPANY_TEMPLATES_UNREADABLE";
 
 export type FeeTemplateAdoption = {
   state: FeeTemplateAdoptionState;
@@ -617,6 +652,11 @@ export function deriveFeeTemplateAdoption(args: {
     if (company === null || snapshot === undefined) return "NO_COMPANY_SNAPSHOT";
     if (company.isActive === false) return "COMPANY_INACTIVE";
     if (liveTemplates.length === 0) return "COMPANY_HAS_NO_TEMPLATES";
+    // The same amount rule `adoptCompanyFeeTemplates` asserts: a read that
+    // offered an action the mutation would refuse is a dead end on the screen.
+    if (!liveTemplates.every((template) => isMinorAmount(template.estimatedAmountMinor))) {
+      return "COMPANY_TEMPLATES_UNREADABLE";
+    }
     if (
       app.status === "CLOSED" ||
       app.status === "CANCELLED" ||
@@ -678,24 +718,67 @@ export function summarizeCustody(
 
 /**
  * Sum recorded actuals for one custody from the deal's already-bounded LIVE
- * fee set. Callers must pass the result of `loadActiveFees`: querying by
- * custody and filtering voids afterwards would read an unbounded add/void
- * history and could strand both reconciliation and classification at the
- * platform transaction limit even while the deal had fewer than 500 live
- * lines.
+ * fee set — or `null` when a linked actual is not a readable minor-unit
+ * figure, or the sum leaves the safe range. Callers must pass the result of
+ * `loadActiveFees`: querying by custody and filtering voids afterwards would
+ * read an unbounded add/void history and could strand both reconciliation and
+ * classification at the platform transaction limit even while the deal had
+ * fewer than 500 live lines.
  */
 function custodyActualExpensesMinor(
   liveFees: ReadonlyArray<Doc<"financeDealFees">>,
   custodyId: Id<"financeDealCustody">
-): number {
-  return liveFees
-    .filter(
-      (row) =>
-        row.voidedAt === undefined &&
-        row.custodyId === custodyId &&
-        row.actualAmountMinor !== undefined
-    )
-    .reduce((sum, row) => sum + (row.actualAmountMinor ?? 0), 0);
+): number | null {
+  let sum = 0;
+  for (const row of liveFees) {
+    if (row.voidedAt !== undefined || row.custodyId !== custodyId || row.actualAmountMinor === undefined) continue;
+    if (!isMinorAmount(row.actualAmountMinor)) return null;
+    sum += row.actualAmountMinor;
+  }
+  return Number.isSafeInteger(sum) ? sum : null;
+}
+
+/** Why a custody record's balance cannot be stated from its stored totals and linked costs. */
+export type CustodyAmountsUnreadableReason = "UNSAFE_AMOUNT";
+
+/**
+ * The readable-balance contract for one custody record: the three stored
+ * totals and the linked actuals are each a readable minor-unit figure, and
+ * the arithmetic the engine performs on them stays in the safe range. The
+ * engine (`reconcileEmployeeCustody`) throws on a corrupt operand and does
+ * not check its own results, and a NaN that reached a gate would compare as
+ * neither owed nor settled — so no caller reaches it without passing here.
+ */
+export function unreadableCustodyAmounts(
+  custody: Pick<Doc<"financeDealCustody">, "issuedMinor" | "returnedMinor" | "reimbursedMinor">,
+  actualExpensesMinor: number | null
+): CustodyAmountsUnreadableReason | null {
+  if (actualExpensesMinor === null) return "UNSAFE_AMOUNT";
+  const operands = [custody.issuedMinor, custody.returnedMinor, custody.reimbursedMinor, actualExpensesMinor];
+  if (!operands.every(isMinorAmount)) return "UNSAFE_AMOUNT";
+  // Every intermediate the engine forms is bounded in magnitude by the sum
+  // of the four operands, so one safe-range check covers them all.
+  return Number.isSafeInteger(operands.reduce((total, amount) => total + amount, 0)) ? null : "UNSAFE_AMOUNT";
+}
+
+/**
+ * The custody summary a WRITER may act on, or a refusal. A closure,
+ * reconciliation or classification gate that compared against a corrupt
+ * balance would be deciding on a number that is not one; every such gate
+ * calls this and fails closed with the reason instead.
+ */
+function summarizeReadableCustody(
+  custody: Doc<"financeDealCustody">,
+  liveFees: ReadonlyArray<Doc<"financeDealFees">>,
+  action: string
+): ReturnType<typeof summarizeCustody> {
+  const actualExpensesMinor = custodyActualExpensesMinor(liveFees, custody._id);
+  if (actualExpensesMinor === null || unreadableCustodyAmounts(custody, actualExpensesMinor) !== null) {
+    throw new ConvexError(
+      `A custody amount or a cost charged to this custody is not a readable figure, so ${action} is refused until the record is corrected.`
+    );
+  }
+  return summarizeCustody(custody, actualExpensesMinor);
 }
 
 /**
@@ -881,7 +964,24 @@ async function recomputeCustodyTotals(
     // Both rows stay in the table; only their effect on the totals is removed.
     if (entry.kind === "REVERSAL") continue;
     if (reversedIds.has(entry._id)) continue;
+    // Every HISTORICAL entry is re-validated, not only the one this mutation
+    // just inserted: the writers assert the amount, the schema does not, and
+    // a corrupt entry (legacy or raw-edited) would otherwise be folded into a
+    // total that the mutation then persists as fact. The throw rolls the
+    // caller's insert back with it — nothing commits.
+    if (!isMinorAmount(entry.amountMinor)) {
+      throw new ConvexError(
+        `A recorded movement on this custody record (${entry.kind}, ${entry.amountMinor}) is not a readable amount, so its totals cannot be recomputed. Correct that movement before recording more.`
+      );
+    }
     add(entry.kind, entry.amountMinor);
+  }
+  // Safe entries can still add to an unsafe total; a total that is not a
+  // safe integer is not persisted.
+  if (![issuedMinor, returnedMinor, reimbursedMinor].every((total) => Number.isSafeInteger(total))) {
+    throw new ConvexError(
+      "The movements on this custody record add up to an amount outside the readable range, so its totals cannot be recomputed."
+    );
   }
 
   // The invariant, enforced once where every path converges rather than per
@@ -978,6 +1078,11 @@ export const listDealCosts = query({
       const paidLines = fees.filter((fee) => fee.custodyId === row._id);
       const custodyMismatch =
         row.currency !== currency || paidLines.some((fee) => fee.currency !== row.currency);
+      // The same fail-closed contract as the deal totals: a stored total or a
+      // linked actual that is not a readable figure withholds the balance
+      // with its own reason. The screen stays up; the record shows no money.
+      const actualExpensesMinor = custodyActualExpensesMinor(fees, row._id);
+      const custodyUnreadable = custodyMismatch ? null : unreadableCustodyAmounts(row, actualExpensesMinor);
       const holder = await ctx.db.get(row.userId);
       custody.push({
         ...row,
@@ -985,12 +1090,15 @@ export const listDealCosts = query({
         userName: holder?.name ?? holder?.email ?? "",
         /** The live lines this custody paid for, by id. */
         paidFeeIds: paidLines.map((fee) => fee._id),
-        summary: custodyMismatch
-          ? null
-          : summarizeCustody(row, custodyActualExpensesMinor(fees, row._id)),
+        summary:
+          custodyMismatch || custodyUnreadable !== null || actualExpensesMinor === null
+            ? null
+            : summarizeCustody(row, actualExpensesMinor),
         summaryUnavailable: custodyMismatch
           ? { reason: "MIXED_DENOMINATION" as const, custodyCurrency: row.currency, dealCurrency: currency }
-          : null,
+          : custodyUnreadable !== null
+            ? { reason: custodyUnreadable, custodyCurrency: row.currency, dealCurrency: currency }
+            : null,
       });
     }
 
@@ -1098,6 +1206,8 @@ export const adoptCompanyFeeTemplates = mutation({
           "Costs or custody have already been recorded on this deal without a policy; adopting one now would rewrite what was expected of them.",
         BLOCKED_DEAL_PROGRESSED:
           "The vehicle has been handed over or the deal is closed; its expected costs are history and are not rewritten.",
+        COMPANY_TEMPLATES_UNREADABLE:
+          "One of the finance company's configured fees has an amount that cannot be read as money. Correct the company's fee configuration before adopting it onto this deal.",
       };
       throw new ConvexError(why[adoption.state] || "The company's fees cannot be adopted onto this deal.");
     }
@@ -1416,6 +1526,14 @@ export const recordTemplateFeeActual = mutation({
       );
     }
     assertMinorAmount(args.actualAmountMinor, "Actual amount");
+    // The template's estimate is COPIED onto the line below. A frozen snapshot
+    // is never rewritten, so a corrupt estimate (legacy or raw-edited; the
+    // schema admits it) is refused here rather than propagated into a live
+    // line, where it would make every total on the deal unreadable.
+    assertMinorAmount(
+      template.estimatedAmountMinor,
+      `The configured fee at position ${args.templateIndex} (${template.feeType}) has an estimated amount that`
+    );
     // A timestamp, not a number: `v.number()` admits NaN, Infinity and
     // negatives, and a stored NaN date is a row no report can order.
     if (
@@ -2051,12 +2169,10 @@ export const reconcileDealCustody = mutation({
       throw new ConvexError("Record what was checked before closing this custody record.");
     }
 
-    const summary = summarizeCustody(
+    const summary = summarizeReadableCustody(
       custody,
-      custodyActualExpensesMinor(
-        await loadActiveFees(ctx, custody.applicationId),
-        args.custodyId
-      )
+      await loadActiveFees(ctx, custody.applicationId),
+      "closing this custody record"
     );
     const writeOffReason = args.writeOffReason?.trim();
 
@@ -2338,6 +2454,22 @@ export const classifyDealAccounting = mutation({
         `${summary.linesAwaitingReconciliation} cost(s) on this deal have an amount but nobody has checked it. Reconcile them before closing.`
       );
     }
+    // The counts above are blind to WHAT was checked: a reconciled line whose
+    // amount is NaN, a fraction, a negative or an unsafe value (the writers
+    // refuse them, the rows do not) passes both, and the deal would classify
+    // clean on totals that are not figures. The summary's own verdict is the
+    // gate — it is false over any unreadable amount as well as over any
+    // unchecked line — and it is asked directly rather than reassembled.
+    if (summary.amountsUnreadable !== null) {
+      throw new ConvexError(
+        "A cost amount on this deal is not a readable figure, so its accounting cannot be classified until the line is corrected."
+      );
+    }
+    if (!summary.fullyReconciled) {
+      throw new ConvexError(
+        "This deal's costs are not fully reconciled, so its accounting cannot be classified."
+      );
+    }
     // Every fee the finance company's FROZEN policy configures needs an actual
     // on the record too — the counts above cannot see a configured fee nobody
     // recorded. One rule for this door and for finalization's, judged on the
@@ -2355,10 +2487,7 @@ export const classifyDealAccounting = mutation({
           "A custody record on this deal is still open. Settle what that person holds or is owed before classifying."
         );
       }
-      const custodySummary = summarizeCustody(
-        row,
-        custodyActualExpensesMinor(fees, row._id)
-      );
+      const custodySummary = summarizeReadableCustody(row, fees, "classifying this deal's accounting");
       if (!custodySummary.settled && row.status !== "WRITTEN_OFF") {
         throw new ConvexError(
           "A closed custody record on this deal no longer balances — its costs changed after it was reconciled. Reopen it and settle it before classifying."

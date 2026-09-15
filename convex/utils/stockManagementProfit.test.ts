@@ -83,6 +83,47 @@ describe("management profit by ownership", () => {
     expect(deriveStockManagementProfit({ ...common, ...overrides })).toEqual({ available: false, reason: "CorruptInput" });
   });
 
+  test.each([
+    ["NaN approved amount", { approvedDealerPurchaseAmountMinor: Number.NaN }],
+    ["Infinite approved amount", { approvedDealerPurchaseAmountMinor: Number.POSITIVE_INFINITY }],
+    ["fractional approved amount", { approvedDealerPurchaseAmountMinor: 12_500_000.5 }],
+    ["negative approved amount", { approvedDealerPurchaseAmountMinor: -1 }],
+    ["unsafe approved amount", { approvedDealerPurchaseAmountMinor: Number.MAX_SAFE_INTEGER + 2 }],
+    ["NaN supplier settlement", { supplierSettlementMinor: Number.NaN }],
+    ["Infinite supplier settlement", { supplierSettlementMinor: Number.NEGATIVE_INFINITY }],
+    ["fractional supplier settlement", { supplierSettlementMinor: 9_500_000.25 }],
+    ["negative supplier settlement", { supplierSettlementMinor: -9_500_000 }],
+    ["unsafe supplier settlement", { supplierSettlementMinor: 2 ** 53 }],
+    ["NaN contribution", { dealerContributionMinor: Number.NaN }],
+    ["fractional contribution", { dealerContributionMinor: 0.5 }],
+    ["NaN customer planned", { customerDirectToDealerMinor: Number.NaN }],
+    ["negative customer planned", { customerDirectToDealerMinor: -5 }],
+    ["NaN expenses", { actualExpensesMinor: Number.NaN }],
+    ["Infinite expenses", { actualExpensesMinor: Number.POSITIVE_INFINITY }],
+    ["fractional expenses", { actualExpensesMinor: 0.5 }],
+    ["unsafe expenses", { actualExpensesMinor: Number.MAX_SAFE_INTEGER + 2 }],
+  ] as const)("SOURCED (ACC-1 consignment) fails CLOSED on %s — CorruptInput, the same rule as STOCK", (_label, overrides) => {
+    expect(deriveManagementProfit({ ...common, supplierSettlementMinor: 9_500_000, ...overrides })).toEqual({
+      available: false,
+      reason: "CorruptInput",
+    });
+  });
+
+  test("SOURCED: safe operands whose SUM leaves the safe range are refused, and a missing operand keeps its own reason", () => {
+    expect(
+      deriveManagementProfit({
+        ...common,
+        approvedDealerPurchaseAmountMinor: Number.MAX_SAFE_INTEGER,
+        customerDirectToDealerMinor: Number.MAX_SAFE_INTEGER,
+        supplierSettlementMinor: 1,
+      })
+    ).toEqual({ available: false, reason: "CorruptInput" });
+    expect(deriveManagementProfit({ ...common, supplierSettlementMinor: undefined })).toEqual({
+      available: false,
+      reason: "NoSupplierSettlement",
+    });
+  });
+
   test("safe operands whose SUM leaves the safe range are refused too", () => {
     const p = deriveStockManagementProfit({
       ...common,

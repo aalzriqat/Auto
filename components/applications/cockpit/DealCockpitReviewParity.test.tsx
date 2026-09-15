@@ -1471,6 +1471,42 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     expect(screen.getByTestId("deal-handover-costs-difference").textContent).toContain("CostsDifferenceNote");
   });
 
+  test("a configured fee whose frozen estimate could not be read: its row keeps its identity, formats NO money, and the total and comparison are withheld with the reason", () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(
+      COSTS_QUERY,
+      withChecklist([], {
+        source: "COMPANY_RULE_SNAPSHOT",
+        currency: "JOD",
+        rows: [
+          { ...EXPECTED_ROWS[0], expectedAmountReason: null },
+          { ...EXPECTED_ROWS[1], expectedAmountMinor: null, expectedAmountReason: "UNSAFE_AMOUNT", actual: null },
+        ],
+        expectedTotalMinor: null,
+        expectedTotalReason: "UNSAFE_AMOUNT",
+        actualTotalMinor: 0,
+        differenceMinor: null,
+        unplannedLineIds: [],
+      })
+    );
+    renderCockpit();
+
+    const plates = screen.getByTestId("deal-handover-expected-0");
+    expect(plates.textContent).toContain("250");
+    expect(screen.queryByTestId("deal-handover-expected-0-unreadable")).toBeNull();
+    const stamps = screen.getByTestId("deal-handover-expected-1");
+    expect(stamps.textContent).toContain("Legal stamps");
+    expect(screen.getByTestId("deal-handover-expected-1-unreadable").textContent).toBe("CostExpectedUnreadable");
+    expect(stamps.textContent).not.toMatch(/NaN|null JOD/);
+    // The position is still addressable — recording its actual is the server's refusal to give, not the screen's to hide.
+    expect(within(stamps).getByRole("button", { name: "RecordTemplateActual" })).toBeTruthy();
+
+    expect(screen.getByTestId("deal-handover-expected-total-unreadable").textContent).toBe("CostsExpectedTotalUnreadable");
+    expect(screen.queryByTestId("deal-handover-costs-difference")).toBeNull();
+    expect(screen.getByTestId("deal-handover-costs-totals").textContent).not.toContain("FactUnavailable");
+  });
+
   test("recording a configured fee's actual sends its POSITION and the deal currency — and nothing about the policy", async () => {
     readableDeal();
     permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);

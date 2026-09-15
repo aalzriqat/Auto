@@ -795,6 +795,7 @@ export function DealCockpit({
                         feeType: row.feeType,
                         description: row.description,
                         expectedAmountMinor: row.expectedAmountMinor,
+                        expectedAmountReason: row.expectedAmountReason,
                         duplicateIdentity: row.duplicateIdentity,
                         actual: row.actual
                           ? {
@@ -806,6 +807,7 @@ export function DealCockpit({
                           : null,
                       })),
                       expectedTotalMinor: dealCosts.expected.expectedTotalMinor,
+                      expectedTotalReason: dealCosts.expected.expectedTotalReason,
                       actualTotalMinor: dealCosts.expected.actualTotalMinor,
                       differenceMinor: dealCosts.expected.differenceMinor,
                       unplannedLineIds: dealCosts.expected.unplannedLineIds,

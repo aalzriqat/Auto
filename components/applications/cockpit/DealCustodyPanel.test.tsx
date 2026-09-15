@@ -142,9 +142,30 @@ describe("DealCustodyPanel", () => {
   });
 
   test("a mixed-denomination record withholds its balances with the reason", () => {
-    renderPanel(wiring({ records: [record({ summary: null })] }));
+    renderPanel(wiring({ records: [record({ summary: null, summaryUnavailable: { reason: "MIXED_DENOMINATION" } })] }));
     expect(screen.getByText(salesEn.CustodySummaryUnavailable)).toBeTruthy();
     expect(screen.queryByTestId("custody-issued")).toBeNull();
+  });
+
+  test.each([tEn, tAr])("an UNSAFE_AMOUNT record renders its own unavailable sentence and NO money, balance, or stored total — %#", (t) => {
+    const dictionary = t === tEn ? salesEn : salesAr;
+    // The stored totals are exactly what may be corrupt, so they must not be
+    // formatted either — a NaN reaching `money` would paint "NaN JOD".
+    const { container } = renderPanel(
+      wiring({ records: [record({ summary: null, summaryUnavailable: { reason: "UNSAFE_AMOUNT" }, issuedMinor: Number.NaN, returnedMinor: 0 })] }),
+      t
+    );
+    expect(screen.getByTestId("custody-summary-unavailable-UNSAFE_AMOUNT").textContent).toBe(dictionary.CustodySummaryUnreadable);
+    expect(screen.queryByText(dictionary.CustodySummaryUnavailable)).toBeNull();
+    for (const id of ["custody-issued", "custody-expenses", "custody-returned", "custody-reimbursed", "custody-employee-owes", "custody-dealership-owes", "custody-balanced"]) {
+      expect(screen.queryByTestId(id)).toBeNull();
+    }
+    // Nothing inside the record formats money — the panel-level policy total
+    // above it is a different figure and is not what was withheld.
+    expect(screen.getByTestId("custody-record-cust1").textContent).not.toMatch(/NaN|JOD/);
+    expect(container.querySelectorAll("bdi[dir='ltr']").length).toBeLessThanOrEqual(1);
+    // Still no command of any kind; the movement log stays reachable.
+    expect(screen.getAllByRole("button")).toHaveLength(1);
   });
 
   test("a truncated list says so rather than reading as complete", () => {

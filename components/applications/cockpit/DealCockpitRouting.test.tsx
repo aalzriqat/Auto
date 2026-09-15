@@ -150,6 +150,7 @@ function financedOverview() {
         totalExpectedMinor: null,
       },
       supplier: { consigned: true, direction: "UNKNOWN", amountMinor: null, route: "THROUGH_DEALERSHIP" },
+      unreadable: [],
       profit: money.profit,
     },
     vehicleCostBasis: null,

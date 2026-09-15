@@ -237,6 +237,7 @@ function financedOverview(): FinancedDealOverviewData {
         aggregateReason: null,
       },
       supplier: { consigned: true, direction: "DEALERSHIP_OWES", amountMinor: 9_500 * SCALE, route: "THROUGH_DEALERSHIP" },
+      unreadable: [],
       profit: {
         available: true,
         basis: "MANAGEMENT_ESTIMATE",

@@ -349,6 +349,92 @@ describe("deriveDealFinancialSummary", () => {
     });
   });
 
+  describe("the read boundary — every republished amount is a readable figure, or withheld and NAMED", () => {
+    const CORRUPT: Array<[string, number]> = [
+      ["NaN", Number.NaN],
+      ["Infinity", Number.POSITIVE_INFINITY],
+      ["a fraction", 1_000_000.5],
+      ["a negative", -1_000_000],
+      ["an unsafe integer", Number.MAX_SAFE_INTEGER + 2],
+    ];
+
+    test.each(CORRUPT)("app fields carrying %s are withheld one by one, each named, nothing turned into zero", (_label, corrupt) => {
+      const s = deriveDealFinancialSummary(
+        inputs({
+          app: {
+            legalInvoiceAmountMinor: corrupt,
+            submittedQuotationMinor: 11_500_000,
+            targetSellingAmountMinor: 12_000_000,
+            approvedDealerPurchaseAmountMinor: corrupt,
+            financeCompanyFundedPortionMinor: corrupt,
+            dealerContributionMinor: corrupt,
+            customerFirstPaymentMinor: corrupt,
+            customerGapCashToDealerMinor: corrupt,
+            expectedDealerRemittanceMinor: 9_200_000,
+          },
+        })
+      );
+      // A corrupt legal invoice does NOT fall through to the quotation: the
+      // strongest document on record is the one that is withheld.
+      expect(s.customerSalePrice).toBeNull();
+      expect(s.approvedPurchaseAmountMinor).toBeNull();
+      expect(s.financier.fundedPortionMinor).toBeNull();
+      expect(s.customerFirstPaymentMinor).toBeNull();
+      expect(s.customerGapCashPlannedMinor).toBeNull();
+      expect(s.dealerOutlay.plannedContributionMinor).toBeNull();
+      expect(s.dealerOutlay.knownCommittedMinor).toBeNull();
+      expect(s.dealerOutlay.totalExpectedMinor).toBeNull();
+      expect(s.unreadable.map((entry) => entry.field).sort()).toEqual(
+        ["approvedPurchaseAmount", "customerFirstPayment", "customerGapCashPlanned", "customerSalePrice", "financierFundedPortion", "plannedContribution"].sort()
+      );
+      expect(s.unreadable.every((entry) => entry.reason === "UNSAFE_AMOUNT")).toBe(true);
+      expect(JSON.stringify(s)).not.toContain(String(corrupt));
+    });
+
+    test.each(CORRUPT)("party amounts carrying %s: customer, supplier and financier figures are withheld and named", (_label, corrupt) => {
+      const s = deriveDealFinancialSummary(
+        inputs({
+          parties: [
+            party("CUSTOMER", "DEALERSHIP_HOLDS", corrupt),
+            party("SUPPLIER", "DEALERSHIP_OWES", corrupt),
+            party("FINANCIER", "OWED_TO_DEALERSHIP", corrupt),
+          ],
+        })
+      );
+      expect(s.customerPaidToDealer).toBeNull();
+      expect(s.supplier.amountMinor).toBeNull();
+      expect(s.supplier.direction).toBe("DEALERSHIP_OWES");
+      expect(s.financier.outstanding).toEqual({ state: "UNKNOWN", amountMinor: null, basis: null });
+      expect(s.unreadable.map((entry) => entry.field).sort()).toEqual(["customerPaidToDealer", "financierOutstanding", "supplierAmount"]);
+    });
+
+    test.each(CORRUPT)("an expected remittance of %s before a receivable exists is UNKNOWN, never an estimate", (_label, corrupt) => {
+      const s = deriveDealFinancialSummary(
+        inputs({
+          parties: [party("FINANCIER", "NOT_INVOLVED", 0)],
+          app: { ...inputs().app, expectedDealerRemittanceMinor: corrupt },
+        })
+      );
+      expect(s.financier.outstanding).toEqual({ state: "UNKNOWN", amountMinor: null, basis: null });
+      expect(s.unreadable).toContainEqual({ field: "financierOutstanding", reason: "UNSAFE_AMOUNT" });
+    });
+
+    test("absent is absent, not unreadable: a deal with nothing recorded names no field", () => {
+      const s = deriveDealFinancialSummary(inputs({ parties: [], app: {} }));
+      expect(s.unreadable).toEqual([]);
+      expect(s.customerSalePrice).toBeNull();
+      expect(s.approvedPurchaseAmountMinor).toBeNull();
+    });
+
+    test("a fully readable deal names no field and serves every figure", () => {
+      const s = deriveDealFinancialSummary(inputs());
+      expect(s.unreadable).toEqual([]);
+      expect(s.customerPaidToDealer).toEqual({ heldDepositMinor: 500_000, totalMinor: 500_000 });
+      expect(s.supplier.amountMinor).toBe(9_000_000);
+      expect(s.financier.outstanding).toEqual({ state: "OUTSTANDING", amountMinor: 4_000_000, basis: "RECEIVABLE" });
+    });
+  });
+
   test("an empty deal — nothing recorded, no parties, no policy — is nulls with reasons and zero recorded costs", () => {
     const s = deriveDealFinancialSummary(
       inputs({

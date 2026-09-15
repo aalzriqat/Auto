@@ -185,7 +185,9 @@ export type ExpectedHandoverRow = {
   templateIndex: number;
   feeType: ServedFeeType;
   description: string | undefined;
-  expectedAmountMinor: number;
+  /** The frozen estimate, or null with `expectedAmountReason` when the stored value is not a readable figure. */
+  expectedAmountMinor: number | null;
+  expectedAmountReason: "UNSAFE_AMOUNT" | null;
   /** Another configured fee shares this one's type and description. */
   duplicateIdentity: boolean;
   actual: {
@@ -200,8 +202,9 @@ export type HandoverExpectedCosts = {
   source: "COMPANY_RULE_SNAPSHOT" | "NO_SNAPSHOT" | "NO_TEMPLATES";
   currency: string;
   rows: ReadonlyArray<ExpectedHandoverRow>;
-  /** Sum of the configured expectations; null when nothing is configured. */
+  /** Sum of the configured expectations; null when nothing is configured, or with `expectedTotalReason` when it cannot be read. */
   expectedTotalMinor: number | null;
+  expectedTotalReason: "UNSAFE_AMOUNT" | null;
   /** Recorded actuals over every live line; null over mixed denomination. */
   actualTotalMinor: number | null;
   /** expected − actual — a comparison, never an amount still payable. */
@@ -225,7 +228,9 @@ export type HandoverFeeAdoption = {
     | "NO_COMPANY_SNAPSHOT"
     | "COMPANY_INACTIVE"
     | "BLOCKED_COSTS_RECORDED"
-    | "BLOCKED_DEAL_PROGRESSED";
+    | "BLOCKED_DEAL_PROGRESSED"
+    /** A stored company template amount is not readable; the mutation would refuse, so nothing is offered. */
+    | "COMPANY_TEMPLATES_UNREADABLE";
   liveTemplateCount: number;
   liveRuleVersion: number | null;
   adopted: { at: number; fromRuleVersion: number } | null;
@@ -726,7 +731,13 @@ export function HandoverCostsPanel({
                               <dl className="grid grid-cols-[auto_auto] gap-x-3 text-end text-xs">
                                 <dt className="text-muted-foreground">{t("CostExpected")}</dt>
                                 <dd className="tabular-nums">
-                                  <bdi dir="ltr">{money(row.expectedAmountMinor, checklist.currency)}</bdi>
+                                  {row.expectedAmountMinor === null ? (
+                                    <span className="font-normal text-amber-700 dark:text-amber-400" data-testid={`deal-handover-expected-${row.templateIndex}-unreadable`}>
+                                      {t("CostExpectedUnreadable")}
+                                    </span>
+                                  ) : (
+                                    <bdi dir="ltr">{money(row.expectedAmountMinor, checklist.currency)}</bdi>
+                                  )}
                                 </dd>
                                 <dt className="text-muted-foreground">{t("CostActual")}</dt>
                                 <dd className="font-semibold tabular-nums">
@@ -984,7 +995,15 @@ function ExpectedTotal({
     );
   }
   if (expected.expectedTotalMinor === null) {
-    return <span className="font-normal text-muted-foreground">{t("FactUnavailable")}</span>;
+    // "Not configured" and "configured but unreadable" are different facts;
+    // only the second is a defect somebody has to fix.
+    return expected.expectedTotalReason === "UNSAFE_AMOUNT" ? (
+      <span className="font-normal text-amber-700 dark:text-amber-400" data-testid="deal-handover-expected-total-unreadable">
+        {t("CostsExpectedTotalUnreadable")}
+      </span>
+    ) : (
+      <span className="font-normal text-muted-foreground">{t("FactUnavailable")}</span>
+    );
   }
   return (
     <bdi className="tabular-nums" dir="ltr">
@@ -1232,7 +1251,9 @@ function FeeAdoptionNotice({
           ? "HandoverExpectedAdoptBlockedProgressed"
           : adoption.state === "COMPANY_INACTIVE"
             ? "HandoverExpectedAdoptCompanyInactive"
-            : null;
+            : adoption.state === "COMPANY_TEMPLATES_UNREADABLE"
+              ? "HandoverExpectedAdoptCompanyUnreadable"
+              : null;
   if (noticeKey === null) return null;
   return (
     <div className="space-y-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm" data-testid="deal-handover-fee-adoption">
@@ -1377,7 +1398,12 @@ function TemplateActualForm({
         )}
       </p>
       <p className="text-xs text-muted-foreground">
-        {t("CostExpected")}: <bdi dir="ltr">{row.expectedAmountMinor / Math.pow(10, scale)} {currency}</bdi>
+        {t("CostExpected")}:{" "}
+        {row.expectedAmountMinor === null ? (
+          <span className="text-amber-700 dark:text-amber-400">{t("CostExpectedUnreadable")}</span>
+        ) : (
+          <bdi dir="ltr">{row.expectedAmountMinor / Math.pow(10, scale)} {currency}</bdi>
+        )}
       </p>
       {frozen && (
         <p className="text-xs text-amber-700 dark:text-amber-400" data-testid={`deal-handover-expected-record-${row.templateIndex}-frozen`}>
