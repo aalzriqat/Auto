@@ -310,6 +310,149 @@ describe("custody balances fail closed on an unreadable amount, end to end", () 
     await expect(reverse()).rejects.toThrow(/already been reversed/);
   });
 
+  describe("every historical REVERSAL is proven against the custody row and its own bounded log before the totals are recomputed", () => {
+    /** An open custody of 700, one real RETURNED of 100 — the movements a corrupt reversal is aimed at. */
+    async function custodyWithReturn(suffix: string) {
+      const seed = await seedDeal(`rev-${suffix}`);
+      const custodyId = await openCustody(seed, jod(700));
+      await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+        orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: jod(100), idempotencyKey: crypto.randomUUID(),
+      });
+      const entries = await custodyEntries(seed, custodyId);
+      const issued = entries.find((entry) => entry.kind === "ISSUED")!;
+      const returned = entries.find((entry) => entry.kind === "RETURNED")!;
+      return { seed, custodyId, issued, returned };
+    }
+
+    /** A reversal row written RAW — the writers refuse every shape below; the schema does not. */
+    async function rawReversal(
+      seed: Seed,
+      custodyId: Id<"financeDealCustody">,
+      row: { amountMinor: number; reversesEntryId?: Id<"financeDealCustodyEntries">; orgId?: Id<"organizations"> }
+    ) {
+      return await seed.t.run((ctx) =>
+        ctx.db.insert("financeDealCustodyEntries", {
+          orgId: row.orgId ?? seed.orgId, custodyId, kind: "REVERSAL", amountMinor: row.amountMinor,
+          ...(row.reversesEntryId ? { reversesEntryId: row.reversesEntryId } : {}),
+          occurredAt: Date.now(), recordedBy: seed.userId, recordedAt: Date.now(),
+        })
+      );
+    }
+
+    /** The next legitimate movement must roll back: no new entry, totals exactly as before. */
+    async function expectNextMovementRollsBack(seed: Seed, custodyId: Id<"financeDealCustody">, reason: RegExp) {
+      const before = await custodyRow(seed, custodyId);
+      const count = (await custodyEntries(seed, custodyId)).length;
+      await expect(
+        seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+          orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: jod(50), idempotencyKey: crypto.randomUUID(),
+        })
+      ).rejects.toThrow(reason);
+      expect(await custodyEntries(seed, custodyId)).toHaveLength(count);
+      const after = await custodyRow(seed, custodyId);
+      expect([after.issuedMinor, after.returnedMinor, after.reimbursedMinor]).toEqual([before.issuedMinor, before.returnedMinor, before.reimbursedMinor]);
+      expect(after.issuedMinor).toBe(jod(700));
+      expect(after.returnedMinor).toBe(jod(100));
+    }
+
+    test("a reversal of 1 against the 700,000 issuance does not erase the advance", async () => {
+      const { seed, custodyId, issued } = await custodyWithReturn("mismatch");
+      await rawReversal(seed, custodyId, { amountMinor: 1, reversesEntryId: issued._id });
+      await expectNextMovementRollsBack(seed, custodyId, /cancels 1 against a movement of 700000/);
+    });
+
+    test.each([
+      ["NaN", Number.NaN],
+      ["Infinity", Number.POSITIVE_INFINITY],
+      ["a fraction", 100_000.5],
+      ["zero", 0],
+      ["a negative", -100_000],
+      ["an unsafe integer", Number.MAX_SAFE_INTEGER + 2],
+    ])("a reversal carrying %s is not a positive readable figure", async (_label, amountMinor) => {
+      const { seed, custodyId, returned } = await custodyWithReturn(`amount-${_label}`);
+      await rawReversal(seed, custodyId, { amountMinor, reversesEntryId: returned._id });
+      await expectNextMovementRollsBack(seed, custodyId, /not a positive readable figure/);
+    });
+
+    test("a reversal naming no movement, or a movement that does not exist, cancels nothing and refuses", async () => {
+      const a = await custodyWithReturn("no-target");
+      await rawReversal(a.seed, a.custodyId, { amountMinor: jod(100) });
+      await expectNextMovementRollsBack(a.seed, a.custodyId, /names no movement to cancel/);
+
+      const b = await custodyWithReturn("missing-target");
+      const ghost = await rawReversal(b.seed, b.custodyId, { amountMinor: jod(100), reversesEntryId: b.returned._id });
+      // Point the reversal at an id that is not on this log at all (a deleted row).
+      const foreign = await b.seed.t.run(async (ctx) => {
+        const id = await ctx.db.insert("financeDealCustodyEntries", {
+          orgId: b.seed.orgId, custodyId: b.custodyId, kind: "RETURNED", amountMinor: jod(100),
+          occurredAt: Date.now(), recordedBy: b.seed.userId, recordedAt: Date.now(),
+        });
+        await ctx.db.delete(id);
+        return id;
+      });
+      await b.seed.t.run((ctx) => ctx.db.patch(ghost, { reversesEntryId: foreign }));
+      await expectNextMovementRollsBack(b.seed, b.custodyId, /not on this custody record/);
+    });
+
+    test("a reversal naming a movement on ANOTHER custody record is refused — a foreign log is never cancelled from here", async () => {
+      const { seed, custodyId } = await custodyWithReturn("cross-custody");
+      // A second person's custody on the same deal, with its own RETURNED.
+      const otherUser = await seed.t.run((ctx) => ctx.db.insert("users", { clerkId: "rev_other", email: "rev.other@x.com", name: "Other" }));
+      const roleId = (await seed.t.run(async (ctx) => (await ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", seed.orgId)).first())!))._id;
+      await seed.t.run((ctx) => ctx.db.insert("memberships", { orgId: seed.orgId, userId: otherUser, roleId }));
+      const otherCustody = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+        idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId, userId: otherUser, issuedMinor: jod(300), method: "CASH",
+      });
+      await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+        orgId: seed.orgId, custodyId: otherCustody, kind: "RETURNED", amountMinor: jod(100), idempotencyKey: crypto.randomUUID(),
+      });
+      const otherReturned = (await custodyEntries(seed, otherCustody)).find((entry) => entry.kind === "RETURNED")!;
+      await rawReversal(seed, custodyId, { amountMinor: jod(100), reversesEntryId: otherReturned._id });
+      await expectNextMovementRollsBack(seed, custodyId, /not on this custody record/);
+      // The other record is untouched too.
+      expect((await custodyRow(seed, otherCustody)).returnedMinor).toBe(jod(100));
+    });
+
+    test("a reversal, or its target, carrying another organization's id is refused against the custody row's own org", async () => {
+      const { seed, custodyId, returned } = await custodyWithReturn("cross-org");
+      const otherOrg = await seed.t.run((ctx) => ctx.db.insert("organizations", { name: "Other Org", createdAt: Date.now() }));
+      await rawReversal(seed, custodyId, { amountMinor: jod(100), reversesEntryId: returned._id, orgId: otherOrg });
+      await expectNextMovementRollsBack(seed, custodyId, /belongs to another organization/);
+
+      // Both rows on the wrong org agree with each other — and still fail, because the anchor is the custody row.
+      const { seed: s2, custodyId: c2, returned: r2 } = await custodyWithReturn("cross-org-both");
+      const otherOrg2 = await s2.t.run((ctx) => ctx.db.insert("organizations", { name: "Other Org 2", createdAt: Date.now() }));
+      await s2.t.run((ctx) => ctx.db.patch(r2._id, { orgId: otherOrg2 }));
+      await rawReversal(s2, c2, { amountMinor: jod(100), reversesEntryId: r2._id, orgId: otherOrg2 });
+      await expectNextMovementRollsBack(s2, c2, /belongs to another organization/);
+    });
+
+    test("two reversals of one movement cancel it once as far as the product is concerned — the second is refused", async () => {
+      const { seed, custodyId, returned } = await custodyWithReturn("duplicate");
+      await rawReversal(seed, custodyId, { amountMinor: jod(100), reversesEntryId: returned._id });
+      await rawReversal(seed, custodyId, { amountMinor: jod(100), reversesEntryId: returned._id });
+      await expectNextMovementRollsBack(seed, custodyId, /already reversed/);
+    });
+
+    test("a reversal targeting a reversal is refused", async () => {
+      const { seed, custodyId, returned } = await custodyWithReturn("reversal-of-reversal");
+      const first = await rawReversal(seed, custodyId, { amountMinor: jod(100), reversesEntryId: returned._id });
+      await rawReversal(seed, custodyId, { amountMinor: jod(100), reversesEntryId: first });
+      await expectNextMovementRollsBack(seed, custodyId, /cannot itself be reversed/);
+    });
+
+    test("a well-formed historical reversal still cancels exactly its target, once", async () => {
+      const { seed, custodyId, returned } = await custodyWithReturn("well-formed");
+      await rawReversal(seed, custodyId, { amountMinor: jod(100), reversesEntryId: returned._id });
+      await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+        orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: jod(50), idempotencyKey: crypto.randomUUID(),
+      });
+      const row = await custodyRow(seed, custodyId);
+      expect(row.issuedMinor).toBe(jod(700));
+      expect(row.returnedMinor).toBe(jod(50));
+    });
+  });
+
   test("a readable custody is unchanged by the contract: balance served, closure and movements work", async () => {
     const seed = await seedDeal("ok");
     const custodyId = await openCustody(seed, jod(700));

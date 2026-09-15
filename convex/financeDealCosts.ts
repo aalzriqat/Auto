@@ -976,6 +976,59 @@ async function assertReversalAllowed(
   }
 }
 
+/**
+ * The entries a custody log's reversals cancel — after EVERY historical
+ * reversal has been proven well-formed against the same bounded log.
+ *
+ * A reversal is a claim that one earlier movement never counted. Taken on
+ * trust, a corrupt one (legacy or raw-edited; the schema admits it) removes
+ * money from the totals that was really moved: a reversal of 1 against an
+ * issuance of 700,000 erased the whole advance, a reversal naming an entry on
+ * another custody record erased a movement that was never on this log, and
+ * two reversals of one target cancelled it twice as far as the set was
+ * concerned. `assertReversalAllowed` proves all of this for the reversal
+ * being RECORDED; the totals are recomputed from the stored log, so the log
+ * is proven again here, in full, before a single amount is added. Any
+ * failure throws uncaught, and the caller's insert rolls back with it.
+ */
+function validatedReversalTargets(
+  entries: ReadonlyArray<Doc<"financeDealCustodyEntries">>,
+  custody: Pick<Doc<"financeDealCustody">, "_id" | "orgId">
+): Set<Id<"financeDealCustodyEntries">> {
+  const byId = new Map(entries.map((entry) => [entry._id, entry]));
+  const reversedIds = new Set<Id<"financeDealCustodyEntries">>();
+  // Annotated on the binding, which is what lets control flow treat a call
+  // as a throw and narrow `target` below it.
+  const refuse: (what: string) => never = (what) => {
+    throw new ConvexError(
+      `A reversal on this custody record ${what}, so its totals cannot be recomputed. Correct that movement before recording more.`
+    );
+  };
+  for (const reversal of entries) {
+    if (reversal.kind !== "REVERSAL") continue;
+    if (!isMinorAmount(reversal.amountMinor) || reversal.amountMinor <= 0) {
+      refuse(`carries an amount that is not a positive readable figure (${reversal.amountMinor})`);
+    }
+    if (reversal.reversesEntryId === undefined) refuse("names no movement to cancel");
+    // Both rows are anchored to the CUSTODY RECORD's org — never to each
+    // other, which would let two rows sharing the same wrong org pass.
+    if (reversal.orgId !== custody.orgId) refuse("belongs to another organization");
+    const target = byId.get(reversal.reversesEntryId);
+    // Same bounded log, so same custody by construction — the org and custody
+    // are still compared, because a row is what it says, not where it was read.
+    if (target === undefined || target.custodyId !== custody._id || target.orgId !== custody.orgId) {
+      refuse("names a movement that is not on this custody record");
+    }
+    if (target.kind === "REVERSAL") refuse("names another reversal, which cannot itself be reversed");
+    if (!isMinorAmount(target.amountMinor) || target.amountMinor !== reversal.amountMinor) {
+      refuse(`cancels ${reversal.amountMinor} against a movement of ${target.amountMinor}; a reversal must cancel the whole movement`);
+    }
+    if (reversedIds.has(target._id)) refuse("names a movement that is already reversed");
+    reversedIds.add(target._id);
+  }
+  return reversedIds;
+}
+
 async function recomputeCustodyTotals(
   ctx: MutationCtx,
   custodyId: Id<"financeDealCustody">
@@ -983,12 +1036,11 @@ async function recomputeCustodyTotals(
   // Bounded, and refused past the bound: a total decided on a prefix of the
   // log would be persisted as fact. The throw rolls the caller's insert back.
   const entries = await custodyEntriesFor(ctx, custodyId, "recomputing this custody record's totals");
-
-  const reversedIds = new Set(
-    entries
-      .filter((entry) => entry.kind === "REVERSAL" && entry.reversesEntryId)
-      .map((entry) => entry.reversesEntryId!)
-  );
+  // The custody row is the anchor every entry is proven against — its org and
+  // its id — not the entries' own claims about themselves.
+  const custody = await ctx.db.get(custodyId);
+  if (custody === null) throw new ConvexError(CUSTODY_NOT_FOUND);
+  const reversedIds = validatedReversalTargets(entries, custody);
 
   let issuedMinor = 0;
   let returnedMinor = 0;
