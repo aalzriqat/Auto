@@ -5,6 +5,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS, PERMISSIONS } from "./utils/permissions";
+import { MAX_FEE_TEMPLATES } from "./utils/dealCostLimits";
 
 /**
  * Adopting a finance company's configured fees onto a deal that was frozen
@@ -408,6 +409,38 @@ describe("fee-template adoption", () => {
       expect((await costsOf(s, applicationId)).expected.source).toBe("NO_TEMPLATES");
     }
   );
+
+  test(`the READ and the mutation agree on the template cap: ${MAX_FEE_TEMPLATES} adopt, ${MAX_FEE_TEMPLATES + 1} are COMPANY_TEMPLATES_OVER_LIMIT and refused with no write`, async () => {
+    const s = await seedDealer("cap");
+    const { companyId, applicationId } = await dealFrozenBeforeFees(s);
+    const templatesOf = (count: number) =>
+      Array.from({ length: count }, (_, i) => ({ ...TEMPLATES[0], description: `Fee ${i + 1}` }));
+    // Past the policy, written raw — `updateCompany` refuses such a list, so a
+    // company can only carry it from before the cap existed.
+    await s.t.run((ctx) => ctx.db.patch(companyId, { feeTemplates: templatesOf(MAX_FEE_TEMPLATES + 1) }));
+    expect((await costsOf(s, applicationId)).expected.adoption).toEqual({
+      state: "COMPANY_TEMPLATES_OVER_LIMIT",
+      liveTemplateCount: MAX_FEE_TEMPLATES + 1,
+      liveRuleVersion: 2,
+      adopted: null,
+    });
+    await expect(
+      s.asOwner.mutation(api.financeDealCosts.adoptCompanyFeeTemplates, { orgId: s.orgId, applicationId, reason: "late" })
+    ).rejects.toThrow(/more fees configured than one policy may carry/);
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(app?.companyRuleSnapshot?.feeTemplates).toBeUndefined();
+    expect(app?.companyRuleSnapshot?.feeTemplatesAdoptedAt).toBeUndefined();
+    const overrides = await s.t.run(async (ctx) =>
+      (await ctx.db.query("financeApplicationOverrides").collect()).filter((row) => row.applicationId === applicationId)
+    );
+    expect(overrides).toEqual([]);
+
+    // Exactly at the cap: advertised, and adopted.
+    await s.t.run((ctx) => ctx.db.patch(companyId, { feeTemplates: templatesOf(MAX_FEE_TEMPLATES) }));
+    expect((await costsOf(s, applicationId)).expected.adoption.state).toBe("AVAILABLE");
+    const result = await s.asOwner.mutation(api.financeDealCosts.adoptCompanyFeeTemplates, { orgId: s.orgId, applicationId, reason: "late" });
+    expect(result.adoptedCount).toBe(MAX_FEE_TEMPLATES);
+  });
 
   test("TEN-1: another organization's owner cannot adopt fees onto this deal, even naming their own org", async () => {
     const s = await seedDealer("x1");

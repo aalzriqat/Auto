@@ -10,6 +10,7 @@ import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { loadActiveFees, unrecordedConfiguredFeePositions } from "./utils/settlementDeductions";
 import {
+  composeCustomerGapToDealer,
   deriveStockManagementProfit,
   isMinorAmount,
   withPreparationExpenses,
@@ -269,13 +270,16 @@ function routeSpecificProfit(args: {
     args.fullCostBasis !== null && args.fullCostBasis.available && !args.fullCostBasis.consigned
       ? args.fullCostBasis.totalBeforeDealMinor
       : undefined;
+  // Composed at the shared boundary, each component validated BEFORE the
+  // addition — added inline, a corrupt pair cancelled into a safe operand.
+  const customerGapToDealer = composeCustomerGapToDealer(app);
+  if (!customerGapToDealer.readable) return { available: false, reason: "CorruptInput" };
   return deriveStockManagementProfit({
     dealCancelled: app.status === "CANCELLED",
     approvedDealerPurchaseAmountMinor: app.approvedDealerPurchaseAmountMinor,
     vehicleCostMinor,
     dealerContributionMinor: app.dealerContributionMinor,
-    customerDirectToDealerMinor:
-      (app.customerGapCashToDealerMinor ?? 0) + (app.customerGapInstallmentToDealerMinor ?? 0),
+    customerDirectToDealerMinor: customerGapToDealer.amountMinor,
     actualExpensesMinor: money.expenses.actualTotalMinor,
     currency: money.currency,
     fullySettled: args.fullySettled,

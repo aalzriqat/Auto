@@ -18,7 +18,7 @@ import {
   resolveDealCurrency,
 } from "./utils/settlementDeductions";
 import { assertSupportedDenomination } from "./utils/money";
-import { assertFeeTemplatesWithinLimit } from "./utils/dealCostLimits";
+import { assertFeeTemplatesWithinLimit, feeTemplatesExceedConfigurationLimit } from "./utils/dealCostLimits";
 import { reconcileEmployeeCustody } from "../lib/financingEconomics";
 import { recomputeEconomicsForApplication } from "./financingEconomics";
 import {
@@ -149,6 +149,46 @@ function assertMayUndoReconciliation(
  * like the whole.
  */
 export const MAX_DEAL_CUSTODY_RECORDS = 20;
+
+/**
+ * How many movements one custody record's DECISION reads may carry.
+ *
+ * `recomputeCustodyTotals` and `assertReversalAllowed` decide on the whole
+ * movement log — a total is the sum of every entry, and a reversal is
+ * refused if its target was already reversed. An unbounded `.collect()` there
+ * grows with the log until the mutation hits the platform's read limits and
+ * fails opaquely; a bounded read that silently took a prefix would decide on
+ * evidence it had not seen. So the read takes ONE past the cap and, past it,
+ * REFUSES with a named reason: the mutation that would cross the bound rolls
+ * back (its own insert included), nothing is sampled, and the record stays
+ * as it was. Two hundred movements is far beyond any real custody (an
+ * advance, a few receipts, a return, a reimbursement, the odd reversal); a
+ * log that long is evidence of something else and gets a person, not a sum.
+ * The paginated movement log (`listCustodyMovements`) is unaffected.
+ */
+export const MAX_CUSTODY_ENTRIES = 200;
+
+/**
+ * Every movement of one custody record, or a refusal — never a prefix.
+ * The invariant is `entries.length <= MAX_CUSTODY_ENTRIES` for any record a
+ * writer decides on; it is established here at every decision read.
+ */
+async function custodyEntriesFor(
+  ctx: QueryCtx | MutationCtx,
+  custodyId: Id<"financeDealCustody">,
+  action: string
+): Promise<Array<Doc<"financeDealCustodyEntries">>> {
+  const entries = await ctx.db
+    .query("financeDealCustodyEntries")
+    .withIndex("by_custody", (q) => q.eq("custodyId", custodyId))
+    .take(MAX_CUSTODY_ENTRIES + 1);
+  if (entries.length > MAX_CUSTODY_ENTRIES) {
+    throw new ConvexError(
+      `This custody record carries more than ${MAX_CUSTODY_ENTRIES} movements, which is past what ${action} can decide on completely; nothing has been changed. Have the record reviewed rather than extended.`
+    );
+  }
+  return entries;
+}
 
 /** Every custody record of a deal — the WRITERS' read, where the one-open-per-person rule must see all of them. */
 async function custodyFor(
@@ -599,7 +639,14 @@ export type FeeTemplateAdoptionState =
    * minor-unit figure (legacy or raw-edited). The mutation refuses such a
    * policy, so the read never advertises it as adoptable.
    */
-  | "COMPANY_TEMPLATES_UNREADABLE";
+  | "COMPANY_TEMPLATES_UNREADABLE"
+  /**
+   * The company has more templates configured than the configuration policy
+   * admits (`MAX_FEE_TEMPLATES`). The mutation refuses such a policy, so the
+   * read never advertises it as adoptable; the company is repaired by an
+   * explicit compliant list.
+   */
+  | "COMPANY_TEMPLATES_OVER_LIMIT";
 
 export type FeeTemplateAdoption = {
   state: FeeTemplateAdoptionState;
@@ -657,6 +704,8 @@ export function deriveFeeTemplateAdoption(args: {
     if (!liveTemplates.every((template) => isMinorAmount(template.estimatedAmountMinor))) {
       return "COMPANY_TEMPLATES_UNREADABLE";
     }
+    // The same count predicate `assertFeeTemplatesWithinLimit` refuses on.
+    if (feeTemplatesExceedConfigurationLimit(liveTemplates)) return "COMPANY_TEMPLATES_OVER_LIMIT";
     if (
       app.status === "CLOSED" ||
       app.status === "CANCELLED" ||
@@ -876,11 +925,13 @@ async function assertReversalAllowed(
       `A reversal must cancel the whole movement. That one was ${target.amountMinor} minor units.`
     );
   }
-  const already = await ctx.db
+  // "Already reversed?" is one indexed point read (`by_reverses`), the same
+  // read the movement log answers it with — not a scan of the whole log.
+  const priorReversal = await ctx.db
     .query("financeDealCustodyEntries")
-    .withIndex("by_custody", (q) => q.eq("custodyId", custodyId))
-    .collect();
-  if (already.some((row) => row.reversesEntryId === reversesEntryId)) {
+    .withIndex("by_reverses", (q) => q.eq("reversesEntryId", reversesEntryId))
+    .first();
+  if (priorReversal !== null) {
     throw new ConvexError("That movement has already been reversed.");
   }
 
@@ -897,6 +948,9 @@ async function assertReversalAllowed(
   // withdrawing the issuance the reimbursement was measured from, so the guard
   // belongs on that dependency.
   if (target.kind !== "ISSUED") return;
+  // The whole log, bounded, for the one check that needs it; refused past
+  // the cap rather than decided on a prefix.
+  const already = await custodyEntriesFor(ctx, custodyId, "reversing this issuance");
   const reversed = new Set(
     already
       .filter((row) => row.kind === "REVERSAL" && row.reversesEntryId)
@@ -917,10 +971,9 @@ async function recomputeCustodyTotals(
   ctx: MutationCtx,
   custodyId: Id<"financeDealCustody">
 ): Promise<void> {
-  const entries = await ctx.db
-    .query("financeDealCustodyEntries")
-    .withIndex("by_custody", (q) => q.eq("custodyId", custodyId))
-    .collect();
+  // Bounded, and refused past the bound: a total decided on a prefix of the
+  // log would be persisted as fact. The throw rolls the caller's insert back.
+  const entries = await custodyEntriesFor(ctx, custodyId, "recomputing this custody record's totals");
 
   const reversedIds = new Set(
     entries
@@ -1208,6 +1261,8 @@ export const adoptCompanyFeeTemplates = mutation({
           "The vehicle has been handed over or the deal is closed; its expected costs are history and are not rewritten.",
         COMPANY_TEMPLATES_UNREADABLE:
           "One of the finance company's configured fees has an amount that cannot be read as money. Correct the company's fee configuration before adopting it onto this deal.",
+        COMPANY_TEMPLATES_OVER_LIMIT:
+          "The finance company has more fees configured than one policy may carry. Save a compliant fee list on the company before adopting it onto this deal.",
       };
       throw new ConvexError(why[adoption.state] || "The company's fees cannot be adopted onto this deal.");
     }
@@ -1526,14 +1581,16 @@ export const recordTemplateFeeActual = mutation({
       );
     }
     assertMinorAmount(args.actualAmountMinor, "Actual amount");
-    // The template's estimate is COPIED onto the line below. A frozen snapshot
-    // is never rewritten, so a corrupt estimate (legacy or raw-edited; the
-    // schema admits it) is refused here rather than propagated into a live
-    // line, where it would make every total on the deal unreadable.
-    assertMinorAmount(
-      template.estimatedAmountMinor,
-      `The configured fee at position ${args.templateIndex} (${template.feeType}) has an estimated amount that`
-    );
+    // The template's estimate is COPIED onto the line below — only when it is
+    // a readable figure. A frozen snapshot is never rewritten, so a corrupt
+    // estimate (legacy or raw-edited; the schema admits it) is neither
+    // repaired nor propagated: the line is written WITHOUT an estimate, the
+    // checklist keeps reporting the expected amount as unreadable, and the
+    // real actual still satisfies the configured-position gate — the
+    // operator is not stranded on a position nobody can record against.
+    const estimatedAmountMinor = isMinorAmount(template.estimatedAmountMinor)
+      ? template.estimatedAmountMinor
+      : undefined;
     // A timestamp, not a number: `v.number()` admits NaN, Infinity and
     // negatives, and a stored NaN date is a row no report can order.
     if (
@@ -1621,8 +1678,9 @@ export const recordTemplateFeeActual = mutation({
           feeType: template.feeType,
           description: template.description?.trim() || undefined,
           currency,
-          // The template's expectation, copied — never the caller's.
-          estimatedAmountMinor: template.estimatedAmountMinor,
+          // The template's expectation, copied — never the caller's, and
+          // never a corrupt one (see above).
+          estimatedAmountMinor,
           actualAmountMinor: args.actualAmountMinor,
           paidBy: template.paidBy,
           paidTo: template.paidTo,

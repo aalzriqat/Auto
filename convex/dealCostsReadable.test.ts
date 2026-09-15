@@ -5,7 +5,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS } from "./utils/permissions";
-import { deriveExpectedFees, unreadableCustodyAmounts } from "./financeDealCosts";
+import { deriveExpectedFees, MAX_CUSTODY_ENTRIES, unreadableCustodyAmounts } from "./financeDealCosts";
 
 /**
  * The readable-amount contract, end to end, on the deal's cost, custody and
@@ -240,6 +240,75 @@ describe("custody balances fail closed on an unreadable amount, end to end", () 
     expect((await custodyRow(seed, custodyId)).issuedMinor).toBe(1);
   });
 
+  test(`decision reads are bounded at ${MAX_CUSTODY_ENTRIES} movements: the movement that would cross the bound rolls back, nothing is sampled, and the record at the bound still works`, async () => {
+    const seed = await seedDeal("bound");
+    const custodyId = await openCustody(seed, jod(700));
+    // Fill the log to EXACTLY the bound with tiny raw RETURNED entries (the
+    // product would refuse this many; the bound is about what a decision read
+    // can carry). Totals are recomputed by the next real movement.
+    await seed.t.run(async (ctx) => {
+      for (let n = 1; n < MAX_CUSTODY_ENTRIES; n += 1) {
+        await ctx.db.insert("financeDealCustodyEntries", {
+          orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: 1,
+          occurredAt: Date.now(), recordedBy: seed.userId, recordedAt: Date.now(),
+        });
+      }
+    });
+    expect(await custodyEntries(seed, custodyId)).toHaveLength(MAX_CUSTODY_ENTRIES);
+    const before = await custodyRow(seed, custodyId);
+
+    // The (MAX + 1)th movement is the one that would make the log undecidable.
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+        orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: 1, idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(new RegExp(`more than ${MAX_CUSTODY_ENTRIES} movements`));
+    expect(await custodyEntries(seed, custodyId)).toHaveLength(MAX_CUSTODY_ENTRIES);
+    const after = await custodyRow(seed, custodyId);
+    expect([after.issuedMinor, after.returnedMinor, after.reimbursedMinor]).toEqual([before.issuedMinor, before.returnedMinor, before.reimbursedMinor]);
+
+    // A reversal of the issuance is decided on the same bounded read and is
+    // refused the same way past the bound — never on a prefix.
+    const issued = (await custodyEntries(seed, custodyId)).find((entry) => entry.kind === "ISSUED")!;
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+        orgId: seed.orgId, custodyId, kind: "REVERSAL", reversesEntryId: issued._id, amountMinor: jod(700), idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(new RegExp(`more than ${MAX_CUSTODY_ENTRIES} movements`));
+    expect(await custodyEntries(seed, custodyId)).toHaveLength(MAX_CUSTODY_ENTRIES);
+  });
+
+  test("one movement BELOW the bound still records and recomputes; a movement already reversed is refused by the indexed point read", async () => {
+    const seed = await seedDeal("bound-ok");
+    const custodyId = await openCustody(seed, jod(700));
+    await seed.t.run(async (ctx) => {
+      for (let n = 2; n < MAX_CUSTODY_ENTRIES; n += 1) {
+        await ctx.db.insert("financeDealCustodyEntries", {
+          orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: 1,
+          occurredAt: Date.now(), recordedBy: seed.userId, recordedAt: Date.now(),
+        });
+      }
+    });
+    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+      orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: 2, idempotencyKey: crypto.randomUUID(),
+    });
+    expect(await custodyEntries(seed, custodyId)).toHaveLength(MAX_CUSTODY_ENTRIES);
+    expect((await custodyRow(seed, custodyId)).returnedMinor).toBe(MAX_CUSTODY_ENTRIES - 2 + 2);
+
+    const seed2 = await seedDeal("reversed-twice");
+    const custody2 = await openCustody(seed2, jod(700));
+    await seed2.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+      orgId: seed2.orgId, custodyId: custody2, kind: "RETURNED", amountMinor: jod(100), idempotencyKey: crypto.randomUUID(),
+    });
+    const returnedEntry = (await custodyEntries(seed2, custody2)).find((entry) => entry.kind === "RETURNED")!;
+    const reverse = () =>
+      seed2.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+        orgId: seed2.orgId, custodyId: custody2, kind: "REVERSAL", reversesEntryId: returnedEntry._id, amountMinor: jod(100), idempotencyKey: crypto.randomUUID(),
+      });
+    await reverse();
+    await expect(reverse()).rejects.toThrow(/already been reversed/);
+  });
+
   test("a readable custody is unchanged by the contract: balance served, closure and movements work", async () => {
     const seed = await seedDeal("ok");
     const custodyId = await openCustody(seed, jod(700));
@@ -378,7 +447,7 @@ describe("a frozen snapshot template whose estimate is not readable withholds it
   });
 
   test.each(CORRUPT)(
-    "on a real deal a %s estimate withholds the expected and dealer-borne totals, the snapshot is untouched, and recording an actual against that position is refused",
+    "on a real deal a %s estimate withholds the expected and dealer-borne totals, the snapshot is untouched, and a REAL actual can still be recorded against that position without carrying the corrupt estimate",
     async (label, corrupt) => {
       const seed = await seedDeal(`t-${label}`);
       const snapshot = { ruleVersion: 1, companyName: "Policy Co", feeTemplates: [template(jod(250)), template(corrupt, "STAMPS")] };
@@ -387,7 +456,7 @@ describe("a frozen snapshot template whose estimate is not readable withholds it
       const costs = await readCosts(seed);
       expect(costs.expected.expectedTotalMinor).toBeNull();
       expect(costs.expected.expectedTotalReason).toBe("UNSAFE_AMOUNT");
-      expect(costs.expected.rows[1]).toMatchObject({ feeType: "STAMPS", expectedAmountMinor: null, expectedAmountReason: "UNSAFE_AMOUNT" });
+      expect(costs.expected.rows[1]).toMatchObject({ feeType: "STAMPS", expectedAmountMinor: null, expectedAmountReason: "UNSAFE_AMOUNT", actual: null });
       expect(costs.expected.rows[0]).toMatchObject({ feeType: "LICENSING", expectedAmountMinor: jod(250), expectedAmountReason: null });
 
       const overview = await seed.asUser.query(api.dealOverview.financedDealOverview, { orgId: seed.orgId, applicationId: seed.applicationId });
@@ -397,16 +466,49 @@ describe("a frozen snapshot template whose estimate is not readable withholds it
         totalExpectedMinor: null,
       });
 
-      await expect(
-        seed.asUser.mutation(api.financeDealCosts.recordTemplateFeeActual, {
-          orgId: seed.orgId, applicationId: seed.applicationId, templateIndex: 1, feeType: "STAMPS",
-          expectedCurrency: "JOD", actualAmountMinor: jod(90), idempotencyKey: crypto.randomUUID(),
-        })
-      ).rejects.toThrow(/estimated amount that must be a non-negative whole number/);
-      expect(await seed.t.run(async (ctx) => (await ctx.db.query("financeDealFees").collect()).length)).toBe(0);
+      // The position is not a dead end: the operator records what was really
+      // paid. The line carries the REAL actual and NO estimate — the corrupt
+      // one is neither copied nor repaired — and the totals stay readable.
+      const stampsFeeId = await seed.asUser.mutation(api.financeDealCosts.recordTemplateFeeActual, {
+        orgId: seed.orgId, applicationId: seed.applicationId, templateIndex: 1, feeType: "STAMPS",
+        expectedCurrency: "JOD", actualAmountMinor: jod(90), idempotencyKey: crypto.randomUUID(),
+      });
+      const stampsLine = (await seed.t.run((ctx) => ctx.db.get(stampsFeeId)))!;
+      expect(stampsLine).toMatchObject({ source: "COMPANY_TEMPLATE", templateIndex: 1, actualAmountMinor: jod(90) });
+      expect(stampsLine.estimatedAmountMinor).toBeUndefined();
 
+      const after = await readCosts(seed);
+      expect(after.summary).not.toBeNull();
+      expect(after.summary!.actualTotalMinor).toBe(jod(90));
+      expect(after.summaryUnavailable).toBeNull();
+      // The checklist shows the actual against its position; the expected side stays withheld — never invented.
+      expect(after.expected.rows[1]).toMatchObject({ expectedAmountMinor: null, expectedAmountReason: "UNSAFE_AMOUNT" });
+      expect(after.expected.rows[1].actual).toMatchObject({ feeId: stampsFeeId, actualAmountMinor: jod(90), status: "ACTUAL_RECORDED" });
+      expect(after.expected.expectedTotalMinor).toBeNull();
+      expect(after.expected.differenceMinor).toBeNull();
+      expect(JSON.stringify(after)).not.toContain(String(corrupt));
+
+      // The frozen snapshot is exactly as it was.
       const app = (await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))!;
       expect(app.companyRuleSnapshot).toEqual(snapshot);
+
+      // And the configured-position gate is satisfied by the real actual:
+      // once every other real requirement is met, classification proceeds.
+      await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+        orgId: seed.orgId, applicationId: seed.applicationId,
+        legalInvoiceAmountMinor: jod(10_500), legalInvoiceNumber: "INV-1", legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
+      });
+      const platesFeeId = await seed.asUser.mutation(api.financeDealCosts.recordTemplateFeeActual, {
+        orgId: seed.orgId, applicationId: seed.applicationId, templateIndex: 0, feeType: "LICENSING",
+        expectedCurrency: "JOD", actualAmountMinor: jod(250), idempotencyKey: crypto.randomUUID(),
+      });
+      for (const feeId of [stampsFeeId, platesFeeId]) {
+        await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "matched" });
+      }
+      await seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, {
+        orgId: seed.orgId, applicationId: seed.applicationId, notes: "all on file",
+      });
+      expect((await readCosts(seed)).accountingClassification).toBe("CLASSIFIED");
     }
   );
 });

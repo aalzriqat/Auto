@@ -96,6 +96,17 @@ describe("fee-template adoption on the handover-cost checklist", () => {
     expect(onAdopt).not.toHaveBeenCalled();
   });
 
+  test("COMPANY_TEMPLATES_OVER_LIMIT: the notice says a compliant list must be saved on the company and offers nothing, even to the owner", () => {
+    const onAdopt = vi.fn(async () => {});
+    renderPanel({ state: "COMPANY_TEMPLATES_OVER_LIMIT", liveTemplateCount: 101, liveRuleVersion: 3, adopted: null }, onAdopt);
+    const notice = screen.getByTestId("deal-handover-fee-adoption");
+    expect(notice.textContent).toContain(salesEn.HandoverExpectedAdoptCompanyOverLimit);
+    expect(notice.textContent).toContain("101");
+    expect(notice.textContent).not.toContain(salesEn.HandoverExpectedAdoptable);
+    expect(screen.queryByRole("button", { name: salesEn.AdoptCompanyFees })).toBeNull();
+    expect(onAdopt).not.toHaveBeenCalled();
+  });
+
   test("a company with no fees, or no snapshot, shows the plain not-configured sentence and no notice", () => {
     renderPanel({ state: "COMPANY_HAS_NO_TEMPLATES", liveTemplateCount: 0, liveRuleVersion: 1, adopted: null });
     expect(screen.getByText(salesEn.HandoverExpectedNotConfigured)).toBeTruthy();

@@ -253,10 +253,43 @@ describe("protected source content pins", () => {
        * sha256 pin, same negative control, same normalization and bare-CR
        * rejection. Both constants were recomputed FROM THE FILE with this
        * test's own normalization. `convex/dealWorkspace.ts` is untouched.
+       *
+       * -- RENEWAL 2026-09-15 (2) - gap composition boundary (PR #314 R6) --
+       *
+       * Previous reviewed postimage, superseded by this entry:
+       *
+       *   bytes:  221884
+       *   sha256: 6b1fe634ed1273704be0c6e050d3c7d47a6ccc8f228d826679c20497f9506c48
+       *
+       * Renewed because `buildCockpitMoney` composed the customer's gap
+       * contribution inline — `(cash ?? 0) + (instalments ?? 0)` — so two
+       * individually corrupt components (−100 + 200) cancelled into a safe
+       * operand before any validation saw them (Codex gpt-5.6-sol HIGH on
+       * PR #314 at `21bfcb812`). The delta is exactly three hunks, 11
+       * insertions and 8 deletions: one import name
+       * (`composeCustomerGapToDealer` from `./utils/financingEconomics`), one
+       * local (`customerGapToDealer`) computed by that helper from the
+       * application row the function already held, with the management
+       * profit becoming `CorruptInput` when the composition is unreadable and
+       * the existing `deriveManagementProfit` call otherwise, and that call's
+       * `customerDirectToDealerMinor` reading the composed amount instead of
+       * the inline sum. The validation itself lives in the unpinned utils
+       * module. No new query, permission check, export, workflow behavior or
+       * `ctx.db` access in this file. Read the three hunks; do not take this
+       * note's word for their scope.
+       *
+       * Made under the same owner-side instruction as the entries above ("if
+       * the byte pin must move, use the existing measured pin-renewal
+       * governance and disclose it; do not weaken #305 boundaries"). The pin
+       * is not weakened, bypassed, deleted, generalized or made vacuous: same
+       * exact byte + sha256 pin, same negative control, same normalization
+       * and bare-CR rejection. Both constants were recomputed FROM THE FILE
+       * with this test's own normalization. `convex/dealWorkspace.ts` is
+       * untouched.
        */
       file: "convex/applications.ts",
-      bytes: 221884,
-      sha256: "6b1fe634ed1273704be0c6e050d3c7d47a6ccc8f228d826679c20497f9506c48",
+      bytes: 222110,
+      sha256: "2f0a3a2ae5e762105c305153719398a029a8b82cf5e14022ab4f52ff843d8251",
     },
     {
       /**

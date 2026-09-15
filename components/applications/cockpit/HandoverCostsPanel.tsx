@@ -230,7 +230,9 @@ export type HandoverFeeAdoption = {
     | "BLOCKED_COSTS_RECORDED"
     | "BLOCKED_DEAL_PROGRESSED"
     /** A stored company template amount is not readable; the mutation would refuse, so nothing is offered. */
-    | "COMPANY_TEMPLATES_UNREADABLE";
+    | "COMPANY_TEMPLATES_UNREADABLE"
+    /** More templates than one policy may carry; the mutation would refuse, so nothing is offered. */
+    | "COMPANY_TEMPLATES_OVER_LIMIT";
   liveTemplateCount: number;
   liveRuleVersion: number | null;
   adopted: { at: number; fromRuleVersion: number } | null;
@@ -714,7 +716,9 @@ export function HandoverCostsPanel({
                                   </span>
                                 )}
                               </p>
-                              <p className="text-xs text-muted-foreground">
+                              {/* A div, not a p: `Badge` renders a div, and a div inside a p is
+                                  invalid HTML that the browser re-parents on hydration. */}
+                              <div className="text-xs text-muted-foreground">
                                 <Badge variant="outline" className="me-1.5">
                                   {row.actual
                                     ? t(STATUS_LABEL[row.actual.status] ?? row.actual.status)
@@ -725,7 +729,7 @@ export function HandoverCostsPanel({
                                     {t("TemplateConfiguredTwice")}
                                   </Badge>
                                 )}
-                              </p>
+                              </div>
                             </div>
                             <div className="flex items-start gap-3">
                               <dl className="grid grid-cols-[auto_auto] gap-x-3 text-end text-xs">
@@ -880,7 +884,8 @@ export function HandoverCostsPanel({
                             </span>
                           )}
                         </p>
-                        <p className="text-xs text-muted-foreground">
+                        {/* A div, not a p — see the configured-fee row above. */}
+                        <div className="text-xs text-muted-foreground">
                           <Badge variant="outline" className="me-1.5">
                             {t(STATUS_LABEL[line.status] ?? line.status)}
                           </Badge>
@@ -889,7 +894,7 @@ export function HandoverCostsPanel({
                               {t("ReceiptReferenceLabel")}: <bdi dir="ltr">{line.receiptReference}</bdi>
                             </>
                           )}
-                        </p>
+                        </div>
                       </div>
                       <div className="flex items-start gap-3">
                         <dl className="grid grid-cols-[auto_auto] gap-x-3 text-end text-xs">
@@ -1253,7 +1258,9 @@ function FeeAdoptionNotice({
             ? "HandoverExpectedAdoptCompanyInactive"
             : adoption.state === "COMPANY_TEMPLATES_UNREADABLE"
               ? "HandoverExpectedAdoptCompanyUnreadable"
-              : null;
+              : adoption.state === "COMPANY_TEMPLATES_OVER_LIMIT"
+                ? "HandoverExpectedAdoptCompanyOverLimit"
+                : null;
   if (noticeKey === null) return null;
   return (
     <div className="space-y-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm" data-testid="deal-handover-fee-adoption">

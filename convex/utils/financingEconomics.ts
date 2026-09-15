@@ -526,6 +526,51 @@ export function isMinorAmount(value: number): boolean {
   return Number.isSafeInteger(value) && value >= 0;
 }
 
+/**
+ * The customer's PLANNED gap contribution to the dealership —
+ * `customerGapCashToDealerMinor + customerGapInstallmentToDealerMinor` —
+ * composed at ONE boundary, with each present component validated BEFORE the
+ * addition. Added first, a corrupt pair cancels: −100 + 200 is a perfectly
+ * safe 100, and every deriver downstream would certify it. An ABSENT
+ * component is zero: the writer (`resolveAppraisalGap`) records both
+ * destinations together, so absence means "nothing agreed yet", never
+ * "the customer pays nothing" — that is the domain's own reading and the
+ * only place zero is assumed. Safe components can still overflow between
+ * them; the sum is checked too.
+ */
+export type CustomerGapToDealer =
+  | Readonly<{ readable: true; amountMinor: number }>
+  | Readonly<{ readable: false; reason: "UNSAFE_AMOUNT" }>;
+
+export function composeCustomerGapToDealer(
+  app: Readonly<{ customerGapCashToDealerMinor?: number; customerGapInstallmentToDealerMinor?: number }>
+): CustomerGapToDealer {
+  const components = [app.customerGapCashToDealerMinor, app.customerGapInstallmentToDealerMinor];
+  let amountMinor = 0;
+  for (const component of components) {
+    if (component === undefined) continue;
+    if (!isMinorAmount(component)) return { readable: false, reason: "UNSAFE_AMOUNT" };
+    amountMinor += component;
+  }
+  return Number.isSafeInteger(amountMinor)
+    ? { readable: true, amountMinor }
+    : { readable: false, reason: "UNSAFE_AMOUNT" };
+}
+
+/** The composition for a WRITER or a posting plan: the amount, or a refusal thrown before any write. */
+export function requireCustomerGapToDealer(
+  app: Readonly<{ customerGapCashToDealerMinor?: number; customerGapInstallmentToDealerMinor?: number }>,
+  action: string
+): number {
+  const composed = composeCustomerGapToDealer(app);
+  if (!composed.readable) {
+    throw new ConvexError(
+      `The customer's gap contribution to the dealership is not a readable amount (cash ${app.customerGapCashToDealerMinor}, instalments ${app.customerGapInstallmentToDealerMinor}), so ${action} is refused until the gap resolution is corrected.`
+    );
+  }
+  return composed.amountMinor;
+}
+
 /** Rejects a caller-supplied money amount that is not a sane minor-unit integer. */
 export function assertMinorAmount(value: number, label: string): void {
   if (!isMinorAmount(value)) {

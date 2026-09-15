@@ -16,6 +16,7 @@ import {
 import { heldDepositRowsForVehicle } from "./saleCompletion";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { toMinorUnits } from "./money";
+import { requireCustomerGapToDealer } from "./financingEconomics";
 
 /**
  * Turns one finance application into the plan its sale will post from, or
@@ -160,9 +161,7 @@ export async function resolveFinancedSalePlan(
   // What the customer independently owes the dealership on this deal — the gap
   // they are paying directly, in cash or by instalment. It is NOT the vehicle
   // consideration, which the financing company owes as the legal buyer.
-  const customerReceivableMinor =
-    (app.customerGapCashToDealerMinor ?? 0) +
-    (app.customerGapInstallmentToDealerMinor ?? 0);
+  const customerReceivableMinor = requireCustomerGapToDealer(app, "building this sale's posting plan");
 
   // H — the deposit slice this sale actually consumes, read from the deposit
   // rows holding THIS car. Not `quote.downPayment`, which is an intention

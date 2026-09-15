@@ -604,6 +604,10 @@ const dealOverviewMessages = defineBilingualMessages({
     "The finance company has fees configured, but one of their amounts cannot be read as money; correct the company's fee configuration before it can be adopted.",
     "لدى شركة التمويل رسوم مضبوطة، لكن أحد مبالغها لا يُقرأ كمال؛ صحِّح ضبط رسوم الشركة قبل اعتمادها.",
   ],
+  HandoverExpectedAdoptCompanyOverLimit: [
+    "The finance company has more fees configured than one policy may carry; save a compliant fee list on the company before it can be adopted.",
+    "لدى شركة التمويل رسوم مضبوطة أكثر مما تحتمله سياسة واحدة؛ احفظ قائمة رسوم مطابقة على الشركة قبل اعتمادها.",
+  ],
   HandoverExpectedAdopted: ["Fees adopted from the company's rule version", "رسوم معتمدة من نسخة قواعد الشركة"],
   AdoptCompanyFees: ["Adopt the company's fees", "اعتماد رسوم الشركة"],
   AdoptCompanyFeesReason: ["Why are these fees being adopted?", "لماذا تُعتمد هذه الرسوم؟"],

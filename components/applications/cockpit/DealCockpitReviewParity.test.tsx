@@ -1429,6 +1429,9 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
   }
 
   test("the checklist shows each configured fee with its expected (read-only) and actual figures; the expected total is the policy's, not the lines'", () => {
+    // The status badges are divs; rendered inside a <p> they were invalid
+    // HTML that React reports and the browser re-parents on hydration.
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     readableDeal();
     permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
     queryResults.set(
@@ -1469,6 +1472,9 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     expect(totals.textContent).toContain("340");
     expect(totals.textContent).not.toContain("90 ");
     expect(screen.getByTestId("deal-handover-costs-difference").textContent).toContain("CostsDifferenceNote");
+    const nesting = consoleError.mock.calls.filter((call) => call.some((arg) => typeof arg === "string" && /cannot be a descendant|validateDOMNesting/.test(arg)));
+    consoleError.mockRestore();
+    expect(nesting).toEqual([]);
   });
 
   test("a configured fee whose frozen estimate could not be read: its row keeps its identity, formats NO money, and the total and comparison are withheld with the reason", () => {
