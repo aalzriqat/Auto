@@ -69,7 +69,6 @@ describe("who each stage is waiting on", () => {
   test("the steps the dealership itself takes are DEALER stages", () => {
     const rail = stages({ rawAppraisalGapMinor: 500_000 });
     expect(rail.authority("APPLICATION")).toBe("DEALER");
-    expect(rail.authority("GAP_RESOLUTION")).toBe("DEALER");
     expect(rail.authority("DELIVERY_ACTIONS")).toBe("DEALER");
     expect(rail.authority("HANDOVER")).toBe("DEALER");
   });
@@ -229,9 +228,9 @@ describe("a historical deal that answers none of the lifecycle dimensions", () =
   });
 
   test("does not invent an unresolved appraisal gap where no gap was recorded", () => {
-    // Previously this rendered as a permanently-green stage. Since SCRUM-215 P2
-    // the deal simply does not have the stage — absent, not ticked.
-    expect(stages(legacy).rail.map((s) => s.key)).not.toContain("GAP_RESOLUTION");
+    // The gap is a task inside the approved-purchase stage. With no gap ever
+    // recorded and an amount on file, that stage is simply complete.
+    expect(stages(legacy).state("APPROVED_PURCHASE")).toBe("COMPLETE");
   });
 
   test("shows the car as handed over, because a finalized sale is the evidence", () => {
@@ -274,15 +273,18 @@ describe("a deal that died", () => {
 });
 
 describe("a live deal mid-flight", () => {
-  test("a recorded but unresolved appraisal gap blocks on the gap", () => {
+  test("a recorded but unresolved appraisal gap blocks the approved-purchase stage on the gap", () => {
     const s = stages({
       creditDecision: "APPROVED",
       appraisalStatus: "COMPLETED",
       rawAppraisalGapMinor: 1_000_000,
       gapResolution: "PENDING_NEGOTIATION",
+      approvedDealerPurchaseAmountMinor: 11_500_000,
     });
-    expect(s.state("GAP_RESOLUTION")).toBe("BLOCKED");
-    expect(s.blocker("GAP_RESOLUTION")).toBe("GapUnresolved");
+    expect(s.state("APPROVED_PURCHASE")).toBe("BLOCKED");
+    expect(s.blocker("APPROVED_PURCHASE")).toBe("GapUnresolved");
+    // The tail is behind it, not offered.
+    expect(s.state("HANDOVER")).toBe("PENDING");
   });
 
   test("a failed negotiation is distinguished from one still running", () => {
@@ -291,8 +293,20 @@ describe("a live deal mid-flight", () => {
       appraisalStatus: "COMPLETED",
       rawAppraisalGapMinor: 1_000_000,
       gapResolution: "FAILED",
+      approvedDealerPurchaseAmountMinor: 11_500_000,
     });
-    expect(s.blocker("GAP_RESOLUTION")).toBe("GapNegotiationFailed");
+    expect(s.blocker("APPROVED_PURCHASE")).toBe("GapNegotiationFailed");
+  });
+
+  test("no amount yet is a different wait from an unsettled gap, and the blocker says which", () => {
+    const s = stages({
+      creditDecision: "APPROVED",
+      appraisalStatus: "COMPLETED",
+      rawAppraisalGapMinor: 1_000_000,
+      gapResolution: "PENDING_NEGOTIATION",
+    });
+    expect(s.state("APPROVED_PURCHASE")).toBe("BLOCKED");
+    expect(s.blocker("APPROVED_PURCHASE")).toBe("NoApprovedPurchaseAmount");
   });
 
   test("a zero gap is not a gap", () => {
@@ -303,7 +317,7 @@ describe("a live deal mid-flight", () => {
       approvedDealerPurchaseAmountMinor: 12_500_000,
       requiredDocumentsComplete: true,
     });
-    expect(s.rail.map((x) => x.key)).not.toContain("GAP_RESOLUTION");
+    expect(s.state("APPROVED_PURCHASE")).toBe("COMPLETE");
   });
 
   test("the mockup's deal is at إجراءات التسليم", () => {
@@ -500,44 +514,80 @@ describe("صافي ربح المعرض", () => {
  * means "this deal does not have this stage", COMPLETE means "it had it and it
  * is done".
  */
-describe("a rail that carries only the stages this deal has", () => {
-  const present = (overrides: Partial<DealStageFacts> = {}) =>
+/**
+ * The rail is EXACTLY the eight lifecycle stages, on every financed deal.
+ *
+ * Two things the rail used to do, and no longer does:
+ *
+ *  1. GAP_RESOLUTION was a ninth step shown only on deals that had a gap, and
+ *     DELIVERY_ACTIONS was hidden when no document rule applied — so the rail
+ *     counted 7, 8 or 9 depending on the deal, and "stage 5 of 7" on one deal
+ *     meant a different step from "stage 5 of 8" on the next. The gap is a
+ *     CONDITIONAL TASK inside APPROVED_PURCHASE now (a blocker, with the same
+ *     keys the resolution action is keyed on), and a deal with no paperwork
+ *     gate has its handover-procedures stage complete, not absent.
+ *  2. DISBURSEMENT was omitted until the deal could disburse. It is on the
+ *     rail as a quiet PENDING step instead — see the disbursement section.
+ */
+describe("the rail is always the same eight stages, in the same order", () => {
+  const EIGHT = [
+    "APPLICATION",
+    "CREDIT_DECISION",
+    "APPRAISAL",
+    "APPROVED_PURCHASE",
+    "DELIVERY_ACTIONS",
+    "DISBURSEMENT",
+    "HANDOVER",
+    "SETTLEMENT",
+  ];
+  const keys = (overrides: Partial<DealStageFacts> = {}) =>
     deriveDealStages({
       status: "APPROVED",
       requiredDocumentsComplete: false,
       ...overrides,
     }).map((s) => s.key);
 
-  test("omits gap resolution entirely when no gap was ever recorded", () => {
-    expect(present()).not.toContain("GAP_RESOLUTION");
+  test("no gap and no document rules: eight, not seven", () => {
+    expect(keys({ documentRulesApply: false, requiredDocumentsComplete: true })).toEqual(EIGHT);
   });
 
-  test("renders gap resolution as soon as a real gap exists", () => {
-    expect(
-      present({ rawAppraisalGapMinor: 1_000_000, gapResolution: "PENDING_NEGOTIATION" })
-    ).toContain("GAP_RESOLUTION");
+  test("a recorded gap: still eight — the gap is a task inside approved purchase, not a ninth step", () => {
+    expect(keys({ rawAppraisalGapMinor: 1_000_000, gapResolution: "PENDING_NEGOTIATION" })).toEqual(EIGHT);
+    expect(keys({ rawAppraisalGapMinor: 1_000_000, gapResolution: "DEALER_ABSORBS" })).toEqual(EIGHT);
   });
 
-  test("keeps gap resolution once it has been resolved, because it happened", () => {
-    // A resolved gap is history the deal really has. Dropping the stage the
-    // moment it completes would erase the record of a decision that moved money.
-    expect(
-      present({ rawAppraisalGapMinor: 1_000_000, gapResolution: "DEALER_ABSORBS" })
-    ).toContain("GAP_RESOLUTION");
+  test("document rules apply: eight, with the paperwork stage carrying the blocker", () => {
+    const rail = deriveDealStages({
+      status: "APPROVED",
+      creditDecision: "APPROVED",
+      appraisalStatus: "FINALIZED",
+      approvedDealerPurchaseAmountMinor: 12_500_000,
+      documentRulesApply: true,
+      requiredDocumentsComplete: false,
+    });
+    expect(rail.map((s) => s.key)).toEqual(EIGHT);
+    expect(rail.find((s) => s.key === "DELIVERY_ACTIONS")?.state).toBe("BLOCKED");
+    expect(rail.find((s) => s.key === "DELIVERY_ACTIONS")?.blocker).toBe("DocumentsIncomplete");
   });
 
-  test("omits the document stage when no document rules apply to this deal", () => {
-    // Cash deals and orgs without companyDocumentRules have no paperwork gate.
-    // The card is already absent rather than empty; the rail must agree.
-    expect(present({ documentRulesApply: false })).not.toContain("DELIVERY_ACTIONS");
+  test("no document rules: the paperwork stage is complete, not absent, and the tail is reachable", () => {
+    const rail = deriveDealStages({
+      status: "APPROVED",
+      creditDecision: "APPROVED",
+      appraisalStatus: "FINALIZED",
+      approvedDealerPurchaseAmountMinor: 12_500_000,
+      documentRulesApply: false,
+      requiredDocumentsComplete: true,
+    });
+    expect(rail.map((s) => s.key)).toEqual(EIGHT);
+    expect(rail.find((s) => s.key === "DELIVERY_ACTIONS")?.state).toBe("COMPLETE");
+    expect(rail.find((s) => s.key === "HANDOVER")?.state).toBe("CURRENT");
   });
 
-  test("renders the document stage when rules do apply", () => {
-    expect(present({ documentRulesApply: true })).toContain("DELIVERY_ACTIONS");
-  });
-
-  test("a zero gap is still not a gap, and now says so by absence", () => {
-    expect(present({ rawAppraisalGapMinor: 0 })).not.toContain("GAP_RESOLUTION");
+  test("a stopped deal keeps all eight, every unfinished one STOPPED", () => {
+    const rail = deriveDealStages({ status: "REJECTED", creditDecision: "REJECTED", requiredDocumentsComplete: false });
+    expect(rail.map((s) => s.key)).toEqual(EIGHT);
+    expect(rail.filter((s) => s.state === "STOPPED").map((s) => s.key)).toEqual(EIGHT.slice(1));
   });
 });
 
@@ -605,15 +655,39 @@ describe("the disbursement stage", () => {
     expect(s.state("DISBURSEMENT")).toBe("STOPPED");
   });
 
-  test("is not shown at all on a deal that cannot yet disburse", () => {
-    // Absent, not green: a stage that is ticked on every deal that never
-    // reached it teaches operators the ticks mean nothing.
+  test("is on the rail as PENDING, never live, on a deal that cannot yet disburse", () => {
+    // Present but quiet. The step is part of every financed deal's workflow,
+    // so a rail that omitted it reported "7 of 7" on a deal with a payment
+    // still to await. It must NOT be the live stage, though: disbursement is
+    // unreachable before closure, and the cockpit renders workflow actions
+    // only on the live stage — making it live hid the handover button.
     const s = rail({
       appraisalStatus: "FINALIZED",
       approvedDealerPurchaseAmountMinor: 12_500_000,
       requiredDocumentsComplete: true,
     });
-    expect(s.rail.map((stage) => stage.key)).not.toContain("DISBURSEMENT");
+    expect(s.rail.map((stage) => stage.key)).toContain("DISBURSEMENT");
+    expect(s.state("DISBURSEMENT")).toBe("PENDING");
+    expect(s.state("HANDOVER")).toBe("CURRENT");
+  });
+
+  test("renders eight stages on an ordinary approved deal with a paperwork gate and no gap", () => {
+    const s = rail({
+      appraisalStatus: "FINALIZED",
+      approvedDealerPurchaseAmountMinor: 12_500_000,
+      requiredDocumentsComplete: true,
+      documentRulesApply: true,
+    });
+    expect(s.rail.map((stage) => stage.key)).toEqual([
+      "APPLICATION",
+      "CREDIT_DECISION",
+      "APPRAISAL",
+      "APPROVED_PURCHASE",
+      "DELIVERY_ACTIONS",
+      "DISBURSEMENT",
+      "HANDOVER",
+      "SETTLEMENT",
+    ]);
   });
 
 

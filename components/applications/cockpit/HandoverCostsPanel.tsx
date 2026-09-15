@@ -207,7 +207,29 @@ export type HandoverExpectedCosts = {
   differenceMinor: number | null;
   /** Live lines outside the checklist: unplanned costs and position-less template lines. */
   unplannedLineIds: ReadonlyArray<string>;
+  /**
+   * Whether "not configured" is the whole story. Served by the same read that
+   * serves the checklist: the frozen snapshot is NEVER read live, but the
+   * screen says when the company has since configured fees an owner may
+   * adopt onto a deal that has not yet been costed. Absent on older payloads.
+   */
+  adoption?: HandoverFeeAdoption;
 };
+
+export type HandoverFeeAdoption = {
+  state:
+    | "NOT_NEEDED"
+    | "AVAILABLE"
+    | "COMPANY_HAS_NO_TEMPLATES"
+    | "NO_COMPANY_SNAPSHOT"
+    | "COMPANY_INACTIVE"
+    | "BLOCKED_COSTS_RECORDED"
+    | "BLOCKED_DEAL_PROGRESSED";
+  liveTemplateCount: number;
+  liveRuleVersion: number | null;
+  adopted: { at: number; fromRuleVersion: number } | null;
+};
+
 
 export type HandoverCostsData = {
   lines: ReadonlyArray<HandoverCostLine>;
@@ -333,6 +355,7 @@ export function HandoverCostsPanel({
   onVoid,
   onRecordTemplateActual,
   onAbandonTemplateActual,
+  onAdoptCompanyFees,
 }: Readonly<{
   /** `undefined` while loading or when this caller may not read the cost rows. */
   costs: HandoverCostsData | undefined;
@@ -374,6 +397,12 @@ export function HandoverCostsPanel({
    * identity is either the first to land, or refused because the lost one did.
    */
   onAbandonTemplateActual?: (row: ExpectedHandoverRow) => void;
+  /**
+   * Adopts the company's configured fees onto a deal frozen without any —
+   * owner-only, audited, refused by the server outside the AVAILABLE state.
+   * Absent for a caller who may not, so the notice renders without an action.
+   */
+  onAdoptCompanyFees?: (reason: string) => Promise<void>;
 }>) {
   /** The configured row whose record form is open, by position. */
   const [recordingTemplateIndex, setRecordingTemplateIndex] = useState<number | null>(null);
@@ -641,6 +670,9 @@ export function HandoverCostsPanel({
                     )}
                   </p>
                 </div>
+                {expected.adoption && (
+                  <FeeAdoptionNotice adoption={expected.adoption} t={t} onAdopt={onAdoptCompanyFees} />
+                )}
                 {checklist && (
                   <ul className="space-y-1.5">
                     {checklist.rows.map((row) => (
@@ -1162,6 +1194,92 @@ function AddForm({
         </Button>
       </div>
     </form>
+  );
+}
+
+/**
+ * What the server says about adopting the company's since-configured fees:
+ * a sentence for every non-trivial state, and the owner's action only in
+ * the one state the server would accept it.
+ */
+function FeeAdoptionNotice({
+  adoption,
+  t,
+  onAdopt,
+}: Readonly<{
+  adoption: HandoverFeeAdoption;
+  t: (key: string) => string;
+  onAdopt: ((reason: string) => Promise<void>) | undefined;
+}>) {
+  const [reason, setReason] = useState("");
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  if (adoption.state === "NOT_NEEDED") {
+    return adoption.adopted ? (
+      <p className="text-xs text-muted-foreground" data-testid="deal-handover-fees-adopted">
+        {t("HandoverExpectedAdopted")} <bdi dir="ltr">{adoption.adopted.fromRuleVersion}</bdi>
+      </p>
+    ) : null;
+  }
+  const noticeKey =
+    adoption.state === "AVAILABLE"
+      ? "HandoverExpectedAdoptable"
+      : adoption.state === "BLOCKED_COSTS_RECORDED"
+        ? "HandoverExpectedAdoptBlockedCosts"
+        : adoption.state === "BLOCKED_DEAL_PROGRESSED"
+          ? "HandoverExpectedAdoptBlockedProgressed"
+          : adoption.state === "COMPANY_INACTIVE"
+            ? "HandoverExpectedAdoptCompanyInactive"
+            : null;
+  if (noticeKey === null) return null;
+  return (
+    <div className="space-y-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm" data-testid="deal-handover-fee-adoption">
+      <p className="text-amber-800 dark:text-amber-300">
+        {t(noticeKey)} (<bdi dir="ltr">{adoption.liveTemplateCount}</bdi>)
+      </p>
+      {adoption.state === "AVAILABLE" && onAdopt && !open && (
+        <Button type="button" size="sm" variant="outline" onClick={() => setOpen(true)}>
+          {t("AdoptCompanyFees")}
+        </Button>
+      )}
+      {open && onAdopt && (
+        <form
+          className="space-y-2"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            if (!reason.trim()) return;
+            setSubmitting(true);
+            setError(null);
+            try {
+              await onAdopt(reason.trim());
+              setOpen(false);
+            } catch (err) {
+              setError(err instanceof Error ? err.message : String(err));
+            } finally {
+              setSubmitting(false);
+            }
+          }}
+        >
+          <Label htmlFor="handover-adopt-reason">{t("AdoptCompanyFeesReason")}</Label>
+          <Input id="handover-adopt-reason" value={reason} onChange={(e) => setReason(e.target.value)} required />
+          {error && (
+            <p role="alert" className="text-xs font-medium text-destructive">
+              {error}
+            </p>
+          )}
+          <div className="flex gap-2">
+            <Button type="submit" size="sm" disabled={submitting || !reason.trim()}>
+              {submitting && <Loader2 className="h-4 w-4 me-1.5 animate-spin" />}
+              {t("AdoptCompanyFeesConfirm")}
+            </Button>
+            <Button type="button" size="sm" variant="ghost" disabled={submitting} onClick={() => setOpen(false)}>
+              {t("Cancel")}
+            </Button>
+          </div>
+        </form>
+      )}
+    </div>
   );
 }
 

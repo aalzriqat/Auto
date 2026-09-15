@@ -1,9 +1,10 @@
 import { ConvexError, v } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
-import { requireOrgMember, requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
+import { requireOrgMember, requireOwnedRow, requireOwner, requireTenantAuth } from "./utils/tenancy";
 import { AppErrorCode } from "./utils/errors";
 import { runWithIdempotency } from "./utils/idempotency";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
@@ -17,6 +18,7 @@ import {
   resolveDealCurrency,
 } from "./utils/settlementDeductions";
 import { assertSupportedDenomination } from "./utils/money";
+import { assertFeeTemplatesWithinLimit } from "./utils/dealCostLimits";
 import { reconcileEmployeeCustody } from "../lib/financingEconomics";
 import { recomputeEconomicsForApplication } from "./financingEconomics";
 import {
@@ -137,6 +139,17 @@ function assertMayUndoReconciliation(
   );
 }
 
+/**
+ * How many custody records one deal read is allowed to hydrate.
+ *
+ * A deal has one custodian, occasionally two; the cap exists so a read can
+ * never grow past the platform's result limits and blank the screen. Past it
+ * the read reports `custodyTruncated: true` rather than a prefix that looks
+ * like the whole.
+ */
+export const MAX_DEAL_CUSTODY_RECORDS = 20;
+
+/** Every custody record of a deal — the WRITERS' read, where the one-open-per-person rule must see all of them. */
 async function custodyFor(
   ctx: QueryCtx | MutationCtx,
   applicationId: Id<"financeApplications">
@@ -145,6 +158,17 @@ async function custodyFor(
     .query("financeDealCustody")
     .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
     .collect();
+}
+
+/** The screen's bounded read: one row past the cap, so truncation is detectable. */
+async function custodyPageFor(
+  ctx: QueryCtx,
+  applicationId: Id<"financeApplications">
+): Promise<Array<Doc<"financeDealCustody">>> {
+  return await ctx.db
+    .query("financeDealCustody")
+    .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+    .take(MAX_DEAL_CUSTODY_RECORDS + 1);
 }
 
 /**
@@ -404,6 +428,168 @@ export function deriveExpectedFees(args: {
     differenceMinor,
     unplannedLineIds: args.fees.filter((fee) => !claimed.has(fee._id)).map((fee) => fee._id),
   };
+}
+
+/**
+ * The movement log of ONE custody record, paginated, oldest first.
+ *
+ * Kept out of `listDealCosts` so that read stays bounded whatever the log's
+ * length. Each page row says whether a later REVERSAL cancelled it, through
+ * one indexed point read per row (`by_reverses`) rather than a re-read of the
+ * whole log. The custody row itself is proven to belong to the caller's org.
+ */
+export const listCustodyMovements = query({
+  args: {
+    orgId: v.id("organizations"),
+    custodyId: v.id("financeDealCustody"),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
+    const custody = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeDealCustody",
+      args.custodyId,
+      CUSTODY_NOT_FOUND
+    );
+    const result = await ctx.db
+      .query("financeDealCustodyEntries")
+      .withIndex("by_custody", (q) => q.eq("custodyId", custody._id))
+      .order("asc")
+      .paginate(args.paginationOpts);
+
+    const names = new Map<Id<"users">, string>();
+    const page = [];
+    for (const entry of result.page) {
+      let recordedByName = names.get(entry.recordedBy);
+      if (recordedByName === undefined) {
+        const user = await ctx.db.get(entry.recordedBy);
+        recordedByName = user?.name ?? user?.email ?? "";
+        names.set(entry.recordedBy, recordedByName);
+      }
+      const reversal =
+        entry.kind === "REVERSAL"
+          ? null
+          : await ctx.db
+              .query("financeDealCustodyEntries")
+              .withIndex("by_reverses", (q) => q.eq("reversesEntryId", entry._id))
+              .first();
+      page.push({
+        _id: entry._id,
+        kind: entry.kind,
+        reversesEntryId: entry.reversesEntryId,
+        amountMinor: entry.amountMinor,
+        method: entry.method,
+        reference: entry.reference,
+        note: entry.note,
+        occurredAt: entry.occurredAt,
+        recordedAt: entry.recordedAt,
+        recordedByName,
+        reversed: reversal !== null,
+      });
+    }
+    return { ...result, page };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Adopting a company's configured fees onto a deal frozen without them
+// ---------------------------------------------------------------------------
+
+export type FeeTemplateAdoptionState =
+  /** The snapshot already carries templates — frozen at creation, or adopted. */
+  | "NOT_NEEDED"
+  /** No templates on the deal, the company has some, nothing blocks adoption. */
+  | "AVAILABLE"
+  /** No templates on the deal, and the company has none configured either. */
+  | "COMPANY_HAS_NO_TEMPLATES"
+  /** A manual-financier or legacy deal: no company row, or no rule snapshot to adopt into. */
+  | "NO_COMPANY_SNAPSHOT"
+  /** The company is deactivated: its policy is not adopted onto anything, whatever it says. */
+  | "COMPANY_INACTIVE"
+  /** A cost or custody row already exists — the deal has been costed without a policy. */
+  | "BLOCKED_COSTS_RECORDED"
+  /** The vehicle was handed over or the deal is closed/stopped — its costs are history. */
+  | "BLOCKED_DEAL_PROGRESSED";
+
+export type FeeTemplateAdoption = {
+  state: FeeTemplateAdoptionState;
+  /** How many fees the company has configured RIGHT NOW — informational, never used as an expectation. */
+  liveTemplateCount: number;
+  liveRuleVersion: number | null;
+  /** When and from which company revision templates were adopted, if they were. */
+  adopted: { at: number; fromRuleVersion: number } | null;
+};
+
+/**
+ * Whether the finance company's configured fees can be adopted onto this deal.
+ *
+ * The honest answer to "the company has fees configured but this deal says it
+ * expects none". The snapshot is frozen at creation (owner ruling, #scrum-215
+ * 2026-09-12) and a company configured AFTER that instant legitimately leaves
+ * the deal with no expected fees. Reading the live company as if the deal had
+ * always carried its fees would rewrite history; refusing to ever reconcile
+ * the two strands a deal created a day too early. So the live state is
+ * REPORTED here, and adoption is a separate, explicit, audited act with the
+ * preconditions below — never a silent fallback in a read.
+ *
+ * The boundary is "before the first cost is recorded and before handover":
+ * once a line, a custody record or a handover exists the deal has been costed
+ * on the basis that nothing was expected, and adopting a policy under it
+ * would retroactively make every closure gate demand actuals for fees nobody
+ * planned. That deal keeps its honest "not configured" state.
+ */
+export function deriveFeeTemplateAdoption(args: {
+  app: Doc<"financeApplications">;
+  company: Doc<"financeCompanies"> | null;
+  liveFeeCount: number;
+  custodyCount: number;
+}): FeeTemplateAdoption {
+  const { app, company } = args;
+  const snapshot = app.companyRuleSnapshot;
+  const liveTemplates = company?.feeTemplates ?? [];
+  const base = {
+    liveTemplateCount: liveTemplates.length,
+    liveRuleVersion: company ? (company.ruleVersion ?? 1) : null,
+    adopted:
+      snapshot?.feeTemplatesAdoptedAt !== undefined &&
+      snapshot.feeTemplatesAdoptedFromRuleVersion !== undefined
+        ? { at: snapshot.feeTemplatesAdoptedAt, fromRuleVersion: snapshot.feeTemplatesAdoptedFromRuleVersion }
+        : null,
+  };
+  const state = ((): FeeTemplateAdoptionState => {
+    if (snapshot !== undefined && (snapshot.feeTemplates?.length ?? 0) > 0) return "NOT_NEEDED";
+    if (company === null || snapshot === undefined) return "NO_COMPANY_SNAPSHOT";
+    if (company.isActive === false) return "COMPANY_INACTIVE";
+    if (liveTemplates.length === 0) return "COMPANY_HAS_NO_TEMPLATES";
+    if (
+      app.status === "CLOSED" ||
+      app.status === "CANCELLED" ||
+      app.status === "REJECTED" ||
+      app.handoverStatus === "HANDED_OVER" ||
+      app.vehicleHandoverAt !== undefined ||
+      app.finalizedSaleId !== undefined
+    ) {
+      return "BLOCKED_DEAL_PROGRESSED";
+    }
+    if (args.liveFeeCount > 0 || args.custodyCount > 0) return "BLOCKED_COSTS_RECORDED";
+    return "AVAILABLE";
+  })();
+  return { state, ...base };
+}
+
+/**
+ * The deal's finance company row, re-scoped to the org, or null when the deal
+ * has none (a manual financier) or the row is gone.
+ */
+async function companyFor(
+  ctx: QueryCtx | MutationCtx,
+  app: Doc<"financeApplications">
+): Promise<Doc<"financeCompanies"> | null> {
+  if (app.companyId === undefined) return null;
+  const company = await ctx.db.get(app.companyId);
+  return company !== null && company.orgId === app.orgId ? company : null;
 }
 
 /**
@@ -689,7 +875,7 @@ export const listDealCosts = query({
     // refuses on: past `MAX_LIVE_DEAL_FEE_LINES` the screen would be showing
     // a prefix of a deal's costs that reads like the whole of them.
     const fees = await loadActiveFees(ctx, args.applicationId);
-    const custodyRows = await custodyFor(ctx, args.applicationId);
+    const custodyRows = await custodyPageFor(ctx, args.applicationId);
 
     // The deal's denomination as the WRITERS would resolve it. Short of that
     // row cap a read does not refuse (a query that throws blanks the screen),
@@ -709,16 +895,29 @@ export const listDealCosts = query({
           }
         : null;
 
+    // Bounded on purpose: the custody SUMMARY is served here, capped and
+    // flagged; the movement log behind each record is served by
+    // `listCustodyMovements`, paginated, one record at a time. Hydrating
+    // every movement of every record inside this read is what could take a
+    // deal past the platform's read limits and blank the screen.
+    const custodyTruncated = custodyRows.length > MAX_DEAL_CUSTODY_RECORDS;
+    const boundedCustody = custodyRows.slice(0, MAX_DEAL_CUSTODY_RECORDS);
+
     const custody = [];
-    for (const row of custodyRows) {
+    for (const row of boundedCustody) {
       // A custody record is balanced against the actuals on the lines it paid
       // for. If any of those lines is in another currency the arithmetic is
       // meaningless, and the record is reported without a summary.
       const paidLines = fees.filter((fee) => fee.custodyId === row._id);
       const custodyMismatch =
         row.currency !== currency || paidLines.some((fee) => fee.currency !== row.currency);
+      const holder = await ctx.db.get(row.userId);
       custody.push({
         ...row,
+        /** Who holds the money — the assignee, by name. */
+        userName: holder?.name ?? holder?.email ?? "",
+        /** The live lines this custody paid for, by id. */
+        paidFeeIds: paidLines.map((fee) => fee._id),
         summary: custodyMismatch
           ? null
           : summarizeCustody(row, custodyActualExpensesMinor(fees, row._id)),
@@ -741,13 +940,25 @@ export const listDealCosts = query({
       // rows and total derived from the application's own rule snapshot, each
       // matched to the live line that records its actual. Read-only: nothing
       // here is a line, and nothing here is written.
-      expected: deriveExpectedFees({
-        snapshot: app.companyRuleSnapshot,
-        fees,
-        currency,
-        actualTotalMinor: summary ? summary.actualTotalMinor : null,
-      }),
+      expected: {
+        ...deriveExpectedFees({
+          snapshot: app.companyRuleSnapshot,
+          fees,
+          currency,
+          actualTotalMinor: summary ? summary.actualTotalMinor : null,
+        }),
+        // Whether "not configured" is the whole story, or the company has
+        // since configured fees an owner may adopt. Reported, never applied.
+        adoption: deriveFeeTemplateAdoption({
+          app,
+          company: await companyFor(ctx, app),
+          liveFeeCount: fees.length,
+          custodyCount: custodyRows.length,
+        }),
+      },
       custody,
+      /** More custody records exist than this read hydrates; the list above is a prefix. */
+      custodyTruncated,
       // Stated rather than derived: PENDING_CLASSIFICATION is what an unset
       // value means, and saying so beats every caller re-deriving it.
       accountingClassification: app.accountingClassification ?? "PENDING_CLASSIFICATION",
@@ -756,6 +967,98 @@ export const listDealCosts = query({
       legalInvoiceDate: app.legalInvoiceDate,
       legalInvoiceIssuedTo: app.legalInvoiceIssuedTo,
     };
+  },
+});
+
+/**
+ * Adopts the finance company's CURRENTLY configured fee templates onto a deal
+ * whose rule snapshot was frozen without any.
+ *
+ * Explicit and owner-only — the same authority that edits the company's fees
+ * (`finance.updateCompany` requires the owner). Audited with an override row
+ * naming what was adopted and from which company revision, and the snapshot
+ * itself records the adoption, so a later reader can tell "frozen with these
+ * fees at creation" from "adopted these fees on <date> from version N".
+ *
+ * Refuses exactly where `deriveFeeTemplateAdoption` says it is not AVAILABLE,
+ * from the same predicate, so the screen never offers an action the server
+ * would reject. A snapshot that already carries templates is NEVER rewritten
+ * here — this adopts INTO an empty slot, it does not replace.
+ */
+export const adoptCompanyFeeTemplates = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    reason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireOwner(ctx, args.orgId);
+    const app = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId,
+      APPLICATION_NOT_FOUND
+    );
+    const reason = args.reason.trim();
+    if (!reason) {
+      throw new ConvexError("Say why this deal is adopting the company's configured fees.");
+    }
+
+    const company = await companyFor(ctx, app);
+    const fees = await loadActiveFees(ctx, app._id);
+    const custodyRows = await custodyFor(ctx, app._id);
+    const adoption = deriveFeeTemplateAdoption({
+      app,
+      company,
+      liveFeeCount: fees.length,
+      custodyCount: custodyRows.length,
+    });
+    if (adoption.state !== "AVAILABLE" || company === null || app.companyRuleSnapshot === undefined) {
+      const why: Record<FeeTemplateAdoptionState, string> = {
+        NOT_NEEDED: "This deal already carries configured fees; they are never replaced.",
+        AVAILABLE: "",
+        COMPANY_HAS_NO_TEMPLATES: "The finance company has no fees configured to adopt.",
+        NO_COMPANY_SNAPSHOT: "This deal has no finance-company rule snapshot to adopt fees into.",
+        COMPANY_INACTIVE: "This finance company is deactivated; its fees are not adopted onto deals.",
+        BLOCKED_COSTS_RECORDED:
+          "Costs or custody have already been recorded on this deal without a policy; adopting one now would rewrite what was expected of them.",
+        BLOCKED_DEAL_PROGRESSED:
+          "The vehicle has been handed over or the deal is closed; its expected costs are history and are not rewritten.",
+      };
+      throw new ConvexError(why[adoption.state] || "The company's fees cannot be adopted onto this deal.");
+    }
+    const templates = company.feeTemplates ?? [];
+    // Held to the same configuration policy a fresh snapshot is held to.
+    assertFeeTemplatesWithinLimit(templates, `Adopting ${company.name}'s fees onto this deal`);
+
+    const now = Date.now();
+    const fromRuleVersion = company.ruleVersion ?? 1;
+    await ctx.db.insert("financeApplicationOverrides", {
+      orgId: args.orgId,
+      applicationId: app._id,
+      field: "companyRuleSnapshot.feeTemplates",
+      previousValue: "none (frozen without fee templates)",
+      newValue: `${templates.length} configured fee(s) adopted from ${company.name} rule version ${fromRuleVersion}`,
+      reason,
+      changedBy: user._id,
+      changedAt: now,
+    });
+    await invalidateClassification(
+      ctx, app, user._id,
+      "The finance company's configured fees were adopted onto the deal after its accounting was classified."
+    );
+    await ctx.db.patch(app._id, {
+      companyRuleSnapshot: {
+        ...app.companyRuleSnapshot,
+        feeTemplates: templates,
+        feeTemplatesAdoptedFromRuleVersion: fromRuleVersion,
+        feeTemplatesAdoptedAt: now,
+        feeTemplatesAdoptedBy: user._id,
+      },
+      updatedAt: now,
+    });
+    return { adoptedCount: templates.length, fromRuleVersion };
   },
 });
 

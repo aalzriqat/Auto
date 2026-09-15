@@ -4578,7 +4578,8 @@ describe("resolving the appraisal gap", () => {
       orgId: seed.orgId,
       applicationId,
     });
-    const stage = cockpit?.stages.find((s) => s.key === "GAP_RESOLUTION");
+    // The gap is a task inside the approved-purchase stage, not a rail step.
+    const stage = cockpit?.stages.find((s) => s.key === "APPROVED_PURCHASE");
     expect(stage?.state).toBe("BLOCKED");
     expect(stage?.blocker).toBe("GapUnresolved");
   });
@@ -4668,7 +4669,7 @@ describe("resolving the appraisal gap", () => {
       orgId: seed.orgId,
       applicationId,
     });
-    expect(cockpit?.stages.find((s) => s.key === "GAP_RESOLUTION")?.state).toBe("COMPLETE");
+    expect(cockpit?.stages.find((s) => s.key === "APPROVED_PURCHASE")?.state).toBe("COMPLETE");
   });
 
   test("the dealership absorbs all of it", async () => {

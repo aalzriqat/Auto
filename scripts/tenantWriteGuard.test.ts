@@ -580,10 +580,18 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // `requireTenantAuth`; the analyser found it and counted it in the analysed
   // set. Skipped counts unchanged. Re-measured FROM THE ANALYSER on this tree
   // ({"totalMutations":489,"analysed":317,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
+  //
+  // `financeDealCosts.adoptCompanyFeeTemplates` (Unified Deal completeness:
+  // adopting a company's since-configured fee templates onto a deal frozen
+  // without any) — 489 → 490 total, 317 → 318 analysed. Same shape again:
+  // `orgId` plus a caller-supplied `applicationId`, read through
+  // `requireOwnedRow` after `requireOwner`. Skipped counts unchanged.
+  // Re-measured FROM THE ANALYSER on this tree
+  // ({"totalMutations":490,"analysed":318,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 489,
-      analysed: 317,
+      totalMutations: 490,
+      analysed: 318,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 157,
     });

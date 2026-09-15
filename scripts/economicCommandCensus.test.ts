@@ -85,6 +85,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "expenses.remove": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "expenses.reverseExpense": { bucket: "STATE_GUARDED", mechanism: "posts only from pre-existing durable state, so its accounting idempotency key is stable across a retry and the posting engine dedupes it" },
   "expenses.update": { bucket: "STATE_GUARDED", mechanism: "reverses through hookPrepaidExpenseAmortizationsReversed, whose reversal key is derived from the original posted event, not from a fresh id" },
+  "financeDealCosts.adoptCompanyFeeTemplates": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic (a rule-snapshot patch on financeApplications); adopts configured fee templates into an empty snapshot slot, owner-only and audited, and posts nothing" },
   "financeDealCosts.classifyDealAccounting": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "financeDealCosts.openDealCustody": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "financeDealCosts.reconcileDealCustody": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
@@ -258,7 +259,7 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // that no longer exists fails too rather than rotting.
     expect(population.filter((p) => !CLASSIFICATION[p])).toEqual([]);
     expect(classified.filter((c) => !forward.has(c))).toEqual([]);
-    expect(population.length).toBe(115);
+    expect(population.length).toBe(116);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {

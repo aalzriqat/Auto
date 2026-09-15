@@ -312,6 +312,19 @@ export const financeCompanyRuleSnapshotValidator = v.object({
   // generalising one dealership's arrangement to every company.
   customerFirstPaymentOffsetsUnfinancedShare: v.optional(v.boolean()),
   feeTemplates: v.optional(v.array(financeFeeTemplateValidator)),
+  /**
+   * Set ONLY by `financeDealCosts.adoptCompanyFeeTemplates`: the snapshot was
+   * frozen with no fee templates and an owner later adopted the company's
+   * configured fees onto this deal, explicitly and audited, before any cost
+   * was recorded. Absent on every snapshot whose templates were frozen at
+   * creation. The rule version names WHICH company revision the templates
+   * came from, since `ruleVersion` above still names the revision the
+   * purchase rules were frozen at — the two need not agree, and saying so is
+   * what keeps the snapshot honest about its own history.
+   */
+  feeTemplatesAdoptedFromRuleVersion: v.optional(v.number()),
+  feeTemplatesAdoptedAt: v.optional(v.number()),
+  feeTemplatesAdoptedBy: v.optional(v.id("users")),
 });
 
 // ---------------------------------------------------------------------------
@@ -800,7 +813,15 @@ export type DealStageKey =
   | "APPLICATION"
   | "CREDIT_DECISION"
   | "APPRAISAL"
-  | "GAP_RESOLUTION"
+  /**
+   * The finance company's purchase decision — and, inside it, the appraisal
+   * gap. GAP_RESOLUTION used to be a ninth rail step of its own, shown only on
+   * deals that had a gap, so the rail counted 7, 8 or 9 depending on the deal
+   * and the lifecycle read differently from one deal to the next. The gap is a
+   * CONDITIONAL TASK inside this stage: the stage is BLOCKED with a gap
+   * blocker until the split is settled, and the same blocker keys still drive
+   * the resolution action.
+   */
   | "APPROVED_PURCHASE"
   | "DELIVERY_ACTIONS"
   /**
@@ -841,11 +862,27 @@ export type CashDealStageKey = Extract<
   "SALE_AGREED" | "HANDOVER" | "SETTLEMENT"
 >;
 
+/**
+ * The EIGHT lifecycle stages of every financed deal, in rail order — always
+ * all eight, on every deal. Nothing here is conditional: a deal with no
+ * document rules still has a "handover procedures" stage (complete, since
+ * nothing is required), and a deal with no appraisal gap still has an
+ * approved-purchase stage (the gap is a task inside it, not a step).
+ *
+ * ⚠️ NOT CHRONOLOGICAL AT ONE POINT, ON PURPOSE. DISBURSEMENT is ordered before
+ * HANDOVER because that is the sequence the dealer describes and the product's
+ * prototype fixes, while the real transitions run the other way: both
+ * disbursement mutations refuse a deal that is not CLOSED, `finalizeDeal` is
+ * what closes it, and finalization refuses until the vehicle handover is
+ * registered. `deriveDealStages` reconciles the two by never letting an
+ * unreachable stage be the live one — see `reachable` there — so the rail
+ * shows DISBURSEMENT as a quiet PENDING step ahead of a CURRENT handover.
+ * `dealCockpitDerivation.test.ts` pins this order and that behaviour.
+ */
 export const DEAL_STAGE_ORDER: FinancedDealStageKey[] = [
   "APPLICATION",
   "CREDIT_DECISION",
   "APPRAISAL",
-  "GAP_RESOLUTION",
   "APPROVED_PURCHASE",
   "DELIVERY_ACTIONS",
   "DISBURSEMENT",
@@ -919,10 +956,9 @@ const STAGE_AUTHORITY: Record<DealStageKey, DealStageAuthority> = {
   CREDIT_DECISION: "MIRROR",
   // Valued by the finance company or an independent appraiser; never by us.
   APPRAISAL: "MIRROR",
-  // Who absorbs the shortfall — customer, dealership, or split — is ours to
-  // settle, which is precisely why it is the one stage with no exit yet.
-  GAP_RESOLUTION: "DEALER",
   // They name the amount; the dealership only puts their decision on record.
+  // The gap inside it — who absorbs the shortfall — is the dealership's to
+  // settle, and the stage's blocker says so when that is what it waits on.
   APPROVED_PURCHASE: "MIRROR",
   DELIVERY_ACTIONS: "DEALER",
   // They pay. The dealership confirms it happened and cannot cause it.
@@ -1048,6 +1084,12 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
   const stopped = credit === "REJECTED" || credit === "CANCELLED" || facts.dealCancelled === true;
   // A gap of zero is not a gap, and `undefined` means none was ever recorded.
   const hasGap = (facts.rawAppraisalGapMinor ?? 0) !== 0;
+  const gapResolved =
+    gap === "NOT_REQUIRED" ||
+    gap === "CUSTOMER_ABSORBS" ||
+    gap === "DEALER_ABSORBS" ||
+    gap === "SPLIT" ||
+    (gap === undefined && !hasGap);
 
   const complete: Record<FinancedDealStageKey, boolean> = {
     APPLICATION: credit !== "DRAFT",
@@ -1071,13 +1113,14 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
       (facts.approvedPurchaseBasis === "MANUAL" &&
         facts.approvedDealerPurchaseAmountMinor !== undefined &&
         facts.fundingSplitComputed === true),
-    GAP_RESOLUTION:
-      gap === "NOT_REQUIRED" ||
-      gap === "CUSTOMER_ABSORBS" ||
-      gap === "DEALER_ABSORBS" ||
-      gap === "SPLIT" ||
-      (gap === undefined && !hasGap),
-    APPROVED_PURCHASE: facts.approvedDealerPurchaseAmountMinor !== undefined,
+    // The amount on record AND the appraisal gap inside it settled. A gap of
+    // zero is not a gap, and `undefined` means none was ever recorded.
+    APPROVED_PURCHASE: facts.approvedDealerPurchaseAmountMinor !== undefined && gapResolved,
+    // Every required document verified or waived. `every` over an empty
+    // checklist is true, so a deal with no document rules — no paperwork
+    // gate at all — has this stage complete rather than absent: the lifecycle
+    // keeps its eight steps, and the documents card is still absent on its
+    // own account.
     DELIVERY_ACTIONS: facts.requiredDocumentsComplete,
     // Either route's evidence closes it. Read as an OR rather than by route
     // because the route is not always recorded, and an unknown route must not
@@ -1093,8 +1136,15 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
   const blockers: Partial<Record<FinancedDealStageKey, DealStageBlocker>> = {
     CREDIT_DECISION: "AwaitingCreditDecision",
     APPRAISAL: "AwaitingAppraisal",
-    GAP_RESOLUTION: gap === "FAILED" ? "GapNegotiationFailed" : "GapUnresolved",
-    APPROVED_PURCHASE: "NoApprovedPurchaseAmount",
+    // Two different waits on one stage, and the blocker names which: no
+    // amount yet, or an amount whose gap nobody has settled. The gap keys are
+    // the ones the cockpit's resolution action is keyed on.
+    APPROVED_PURCHASE:
+      facts.approvedDealerPurchaseAmountMinor === undefined
+        ? "NoApprovedPurchaseAmount"
+        : gap === "FAILED"
+          ? "GapNegotiationFailed"
+          : "GapUnresolved",
     DELIVERY_ACTIONS: "DocumentsIncomplete",
     DISBURSEMENT: "AwaitingDisbursement",
     HANDOVER: handover === "BLOCKED" ? "HandoverBlocked" : undefined,
@@ -1102,61 +1152,35 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
   };
 
   /**
-   * Which stages this deal HAS — as opposed to which it has finished.
+   * Which incomplete stages can be worked on NOW — as opposed to which exist.
    *
-   * Absent and complete are different claims. A deal that never had an
-   * appraisal gap was previously shown a permanently-green GAP_RESOLUTION
-   * stage, and a stage that is ticked on every deal that never had the problem
-   * teaches operators that the ticks mean nothing — on the same rail that has
-   * to carry a real blocker.
+   * A disbursement is unreachable until the deal is CLOSED:
+   * `confirmDisbursement` and `confirmSupplierDisbursement` both refuse any
+   * other status, `finalizeDeal` is what closes the deal, and finalization
+   * itself refuses until the vehicle handover is registered. Disbursement is
+   * nevertheless ordered BEFORE handover on the rail, because that is the
+   * sequence a dealer describes.
    *
-   * Kept as a total `Record` over the financed keys, exactly like `complete`
-   * above, so adding a stage fails the build rather than silently defaulting to
-   * whichever branch happened to be the fallback.
+   * Treating it as merely "incomplete" therefore made it the first incomplete
+   * stage on every ordinary approved deal — the live stage — while the real
+   * next step, handover, sat behind it as PENDING. That is not a labelling
+   * problem: the cockpit renders a workflow action only when its stage is the
+   * live one, and every action it has belongs to HANDOVER or SETTLEMENT, so the
+   * handover button disappeared and the deal could not be progressed from the
+   * screen at all. An unreachable stage is skipped when choosing the live one
+   * and rendered PENDING, which is exactly what it is.
+   *
+   * `finalizedSaleId` is part of the test for the same reason it always was,
+   * and is not redundant with CLOSED: a closed deal can be cancelled before
+   * the money arrives, and that patch moves the status to CANCELLED while
+   * leaving the finalized sale in place.
    */
-  const applicable: Record<FinancedDealStageKey, boolean> = {
+  const reachable: Record<FinancedDealStageKey, boolean> = {
     APPLICATION: true,
     CREDIT_DECISION: true,
     APPRAISAL: true,
-    // A recorded gap, or a resolution that says something happened. Explicit
-    // NOT_REQUIRED is the finance company stating there is no shortfall, which
-    // is the very case that should not occupy a step on the rail.
-    GAP_RESOLUTION: hasGap || (gap !== undefined && gap !== "NOT_REQUIRED"),
     APPROVED_PURCHASE: true,
-    DELIVERY_ACTIONS: facts.documentRulesApply ?? true,
-    /**
-     * Only once the money can actually be awaited — never as a step standing
-     * ahead of the work that produces it.
-     *
-     * A disbursement is unreachable until the deal is CLOSED:
-     * `confirmDisbursement` refuses any other status, `finalizeDeal` is what
-     * closes the deal, and finalization itself refuses until the vehicle
-     * handover is registered. Disbursement is nevertheless ordered BEFORE
-     * handover here, because that is the sequence a dealer describes.
-     *
-     * Marking it applicable unconditionally therefore made it the first
-     * incomplete stage on every ordinary approved deal — the live stage — while
-     * the real next step, handover, sat behind it as merely PENDING. That is not
-     * a labelling problem. The cockpit shipped today renders a workflow action
-     * only when its stage is the live one, and every action it has belongs to
-     * HANDOVER or SETTLEMENT, so the handover button disappeared, and the
-     * expected-payment and finalize buttons behind it with it: the deal could
-     * not be progressed from the screen at all.
-     *
-     * Evidence keeps it visible on deals that already disbursed, including
-     * historical ones whose status has moved on, so this hides a future step
-     * rather than a finished one.
-     *
-     * `finalizedSaleId` is part of the test for the same reason, and not
-     * redundant with CLOSED. A closed deal can be cancelled before the money
-     * arrives — `cancelApplication` refuses only once a disbursement is
-     * confirmed — and that patch moves the status to CANCELLED while leaving
-     * the finalized sale in place. Testing the status alone therefore deleted
-     * the stage from the rail of a deal that genuinely reached it, while every
-     * other unresolved stage on a stopped deal still renders STOPPED. The rail
-     * is the record of what happened; a step that was reached and then
-     * abandoned belongs in it.
-     */
+    DELIVERY_ACTIONS: true,
     DISBURSEMENT:
       facts.status === "CLOSED" ||
       facts.finalizedSaleId !== undefined ||
@@ -1165,8 +1189,8 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
     SETTLEMENT: true,
   };
 
-  const order = DEAL_STAGE_ORDER.filter((key) => applicable[key]);
-  const firstIncomplete = order.find((key) => !complete[key]);
+  const order = DEAL_STAGE_ORDER;
+  const firstIncomplete = order.find((key) => !complete[key] && reachable[key]);
 
   return order.map((key): DealStage => {
     const authority = STAGE_AUTHORITY[key];
@@ -1433,6 +1457,18 @@ export type ManagementProfitLine =
   | { key: "APPROVED_PURCHASE"; sign: 1; amountMinor: number }
   | { key: "CUSTOMER_DIRECT_TO_DEALER"; sign: 1; amountMinor: number }
   | { key: "SUPPLIER_SETTLEMENT"; sign: -1; amountMinor: number }
+  /**
+   * The dealership's OWN car (STOCK): what it cost to hold, from the same
+   * authority the GL posts COGS from. Never present together with
+   * SUPPLIER_SETTLEMENT — a car has one owner, so a deal has one of the two.
+   */
+  | { key: "VEHICLE_COST"; sign: -1; amountMinor: number }
+  /**
+   * SOURCED only: what the dealership spent preparing the supplier's car
+   * before the deal (period expenses — never capitalized, never part of the
+   * supplier's entitlement). Subtracted exactly once, here.
+   */
+  | { key: "PREPARATION_EXPENSES"; sign: -1; amountMinor: number }
   | { key: "DEALER_CONTRIBUTION"; sign: -1; amountMinor: number }
   | { key: "ACTUAL_EXPENSES"; sign: -1; amountMinor: number };
 
@@ -1474,6 +1510,10 @@ export type ManagementProfit =
         | "NoApprovedPurchaseAmount"
         | "NoSupplierSettlement"
         | "NoDealerContribution"
+        /** STOCK only: the vehicle carries no cost basis to measure against. */
+        | "NoVehicleCost"
+        /** SOURCED only: the dealership's preparation spend cannot be stated (unreadable, too many rows, ambiguous history). */
+        | "PreparationExpensesUnreadable"
         | "CorruptInput"
         | "DealCancelled";
     };
@@ -1675,6 +1715,89 @@ export function deriveManagementProfit(args: {
     classification: args.fullySettled ? "ACTUAL_UNPOSTABLE" : "ESTIMATED_AWAITING_SETTLEMENT",
     lines,
     postable: false,
+  };
+}
+
+/**
+ * `صافي ربح المعرض` for a financed deal on the dealership's OWN car (STOCK) —
+ * the same management figure, measured against the vehicle's cost basis
+ * instead of a supplier's settlement.
+ *
+ * `deriveManagementProfit` is consignment economics (ACC-1): it subtracts what
+ * the SUPPLIER ends up with, and on a dealer-owned car there is no supplier,
+ * so the cockpit reports NoSupplierSettlement and the owner sees nothing. A
+ * STOCK deal has a cost instead, and it has ONE authority: the capitalized
+ * cost `computeVehicleCapitalizedCost` returns — the figure the GL posts as
+ * COGS at sale, which is frozen by construction once the car is SOLD because
+ * every later expense on it is PERIOD_EXPENSE. That is what is subtracted
+ * here; nothing is derived through a supplier settlement that does not exist.
+ *
+ * Same discipline as its sibling: every operand served, none inferred; a
+ * missing operand is an `available: false` with its reason, never a zero.
+ */
+export function deriveStockManagementProfit(args: {
+  dealCancelled?: boolean;
+  approvedDealerPurchaseAmountMinor?: number;
+  /** The capitalized cost basis, in the deal's minor units; undefined when the vehicle has none. */
+  vehicleCostMinor?: number;
+  dealerContributionMinor?: number;
+  customerDirectToDealerMinor?: number;
+  actualExpensesMinor: number;
+  currency: string;
+  fullySettled: boolean;
+}): ManagementProfit {
+  if (args.dealCancelled) return { available: false, reason: "DealCancelled" };
+  if (args.approvedDealerPurchaseAmountMinor === undefined)
+    return { available: false, reason: "NoApprovedPurchaseAmount" };
+  if (args.vehicleCostMinor === undefined) return { available: false, reason: "NoVehicleCost" };
+  if (args.dealerContributionMinor === undefined)
+    return { available: false, reason: "NoDealerContribution" };
+  if (
+    args.vehicleCostMinor < 0 ||
+    args.dealerContributionMinor < 0 ||
+    (args.customerDirectToDealerMinor ?? 0) < 0 ||
+    args.actualExpensesMinor < 0
+  ) {
+    return { available: false, reason: "CorruptInput" };
+  }
+  const lines: ManagementProfitLine[] = [
+    { key: "APPROVED_PURCHASE", sign: 1, amountMinor: args.approvedDealerPurchaseAmountMinor },
+    { key: "CUSTOMER_DIRECT_TO_DEALER", sign: 1, amountMinor: args.customerDirectToDealerMinor ?? 0 },
+    { key: "VEHICLE_COST", sign: -1, amountMinor: args.vehicleCostMinor },
+    { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: args.dealerContributionMinor },
+    { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: args.actualExpensesMinor },
+  ];
+  return {
+    available: true,
+    basis: "MANAGEMENT_ESTIMATE",
+    amountMinor: lines.reduce((total, line) => total + line.sign * line.amountMinor, 0),
+    currency: args.currency,
+    classification: args.fullySettled ? "ACTUAL_UNPOSTABLE" : "ESTIMATED_AWAITING_SETTLEMENT",
+    lines,
+    postable: false,
+  };
+}
+
+/**
+ * The consignment management profit with the dealership's pre-deal
+ * preparation spend on the supplier's car subtracted — exactly once, as its
+ * own line, leaving every other operand (and the supplier's entitlement)
+ * exactly as the cockpit served it. An unavailable cockpit figure passes
+ * through untouched; an unstatable preparation figure makes the whole
+ * headline unavailable rather than silently omitting a cost.
+ */
+export function withPreparationExpenses(
+  profit: ManagementProfit,
+  preparation: { available: true; totalMinor: number } | { available: false }
+): ManagementProfit {
+  if (!profit.available) return profit;
+  if (!preparation.available) return { available: false, reason: "PreparationExpensesUnreadable" };
+  if (preparation.totalMinor < 0) return { available: false, reason: "CorruptInput" };
+  const line: ManagementProfitLine = { key: "PREPARATION_EXPENSES", sign: -1, amountMinor: preparation.totalMinor };
+  return {
+    ...profit,
+    amountMinor: profit.amountMinor - preparation.totalMinor,
+    lines: [...profit.lines, line],
   };
 }
 
