@@ -250,6 +250,22 @@ describe("fee-template adoption", () => {
     ).rejects.toThrow(/already been recorded/);
   });
 
+  test("blocked once a custody record exists — one indexed row is all the mutation needs to know", async () => {
+    const s = await seedDealer("11");
+    const { applicationId } = await dealFrozenBeforeFees(s);
+    await s.t.run((ctx) =>
+      ctx.db.insert("financeDealCustody", {
+        orgId: s.orgId, applicationId, userId: s.userId, currency: "JOD",
+        issuedMinor: 100_000, returnedMinor: 0, reimbursedMinor: 0, status: "OPEN",
+        createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
+    expect((await costsOf(s, applicationId)).expected.adoption.state).toBe("BLOCKED_COSTS_RECORDED");
+    await expect(
+      s.asOwner.mutation(api.financeDealCosts.adoptCompanyFeeTemplates, { orgId: s.orgId, applicationId, reason: "x" })
+    ).rejects.toThrow(/already been recorded/);
+  });
+
   test("blocked once the vehicle is handed over or the deal is closed", async () => {
     const s = await seedDealer("6");
     const { applicationId } = await dealFrozenBeforeFees(s);

@@ -124,8 +124,14 @@ export function DealFinancialOverview({
   })();
 
   const outlay = summary.dealerOutlay;
+  // A foreign-denominated dealer-borne line withholds the figure with its
+  // reason; otherwise the note counts lines still without an actual.
   const recordedNote =
-    outlay.awaitingActuals > 0 ? `${outlay.awaitingActuals} ${t("OverviewCostsAwaiting")}` : undefined;
+    outlay.recordedCostsMinor === null
+      ? t("OverviewCostsMixedDenomination")
+      : outlay.awaitingActuals > 0
+        ? `${outlay.awaitingActuals} ${t("OverviewCostsAwaiting")}`
+        : undefined;
   // Why the expected side is unknown, when it is: no policy is the common
   // case, but a foreign-currency actual or an unsafe figure withholds it too,
   // and each is a different sentence.
@@ -159,6 +165,14 @@ export function DealFinancialOverview({
           value={m(summary.customerPaidToDealer?.totalMinor ?? null)}
           note={summary.customerPaidToDealer ? t("OverviewCustomerPaidNote") : t("OverviewCustomerPaidUnknown")}
         />
+        {summary.customerGapCashPlannedMinor !== null && (
+          <Fact
+            testId="overview-gap-cash-planned"
+            label={t("OverviewGapCashPlanned")}
+            value={m(summary.customerGapCashPlannedMinor)}
+            note={t("OverviewGapCashPlannedNote")}
+          />
+        )}
         <Fact
           testId="overview-first-payment"
           label={t("OverviewCustomerFirstPayment")}
@@ -186,14 +200,20 @@ export function DealFinancialOverview({
         <Fact
           testId="overview-costs"
           label={t("OverviewCostsToDate")}
-          value={money(outlay.recordedCostsMinor, cur)}
+          value={m(outlay.recordedCostsMinor)}
           note={recordedNote}
         />
         <Fact
           testId="overview-known-committed"
           label={t("OverviewKnownCommitted")}
           value={m(outlay.knownCommittedMinor)}
-          note={outlay.knownCommittedMinor === null ? t("OverviewDealerPaidUnknown") : t("OverviewKnownCommittedNote")}
+          note={
+            outlay.knownCommittedMinor !== null
+              ? t("OverviewKnownCommittedNote")
+              : outlay.recordedCostsMinor === null
+                ? t("OverviewCostsMixedDenomination")
+                : t("OverviewDealerPaidUnknown")
+          }
         />
         <Fact
           testId="overview-expected-remaining"
@@ -206,11 +226,13 @@ export function DealFinancialOverview({
           label={t("OverviewDealerPaidTotal")}
           value={m(outlay.totalExpectedMinor)}
           note={
-            outlay.totalExpectedMinor === null
-              ? outlay.knownCommittedMinor === null
-                ? t("OverviewDealerPaidUnknown")
-                : expectedUnknownNote
-              : t("OverviewDealerPaidNote")
+            outlay.totalExpectedMinor !== null
+              ? t("OverviewDealerPaidNote")
+              : outlay.recordedCostsMinor === null
+                ? t("OverviewCostsMixedDenomination")
+                : outlay.knownCommittedMinor === null
+                  ? t("OverviewDealerPaidUnknown")
+                  : expectedUnknownNote
           }
           emphasis
         />
@@ -296,7 +318,11 @@ export function VehicleCostBasisSection({
               <bdi dir="ltr" className="tabular-nums">{money(basis.eligibleExpensesMinor, cur)}</bdi>
             </dd>
           </div>
-          {basis.expenses.length === 0 ? (
+          {basis.lineDetail === "WITHHELD" ? (
+            <p className="text-xs text-muted-foreground" data-testid="deal-cost-basis-lines-withheld">
+              {t("CostBasisLinesWithheld")}
+            </p>
+          ) : basis.expenses.length === 0 ? (
             <p className="text-xs text-muted-foreground">{t("CostBasisNoExpenses")}</p>
           ) : (
             <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
@@ -367,7 +393,11 @@ export function DealerPreparationSection({
           {money(preparation.totalMinor, cur)}
         </bdi>
       </div>
-      {preparation.expenses.length === 0 ? (
+      {preparation.lineDetail === "WITHHELD" ? (
+        <p className="text-xs text-muted-foreground" data-testid="deal-preparation-lines-withheld">
+          {t("CostBasisLinesWithheld")}
+        </p>
+      ) : preparation.expenses.length === 0 ? (
         <p className="text-xs text-muted-foreground">{t("CostBasisPreparationNone")}</p>
       ) : (
         <ul className="space-y-0.5 text-xs text-muted-foreground">

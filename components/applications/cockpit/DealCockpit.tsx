@@ -306,6 +306,8 @@ const PROFIT_BLOCKED_REASON: Record<
   | "NoVehicleCost"
   /** SOURCED only: the dealership's preparation spend on the supplier's car cannot be stated. */
   | "PreparationExpensesUnreadable"
+  /** A dealer-borne cost line is in another currency: the cost operand would be partial. */
+  | "ExpensesMixedDenomination"
   | "CorruptInput"
   | "DealCancelled"
   /** CASH only: `dealershipMargin === null`, which is UNKNOWN and never zero. */
@@ -321,6 +323,7 @@ const PROFIT_BLOCKED_REASON: Record<
   NoDealerContribution: "ProfitNeedsDealerContribution",
   NoVehicleCost: "ProfitNeedsVehicleCost",
   PreparationExpensesUnreadable: "ProfitPreparationUnreadable",
+  ExpensesMixedDenomination: "ProfitExpensesMixedDenomination",
   CorruptInput: "ProfitInputCorrupt",
   DealCancelled: "ProfitDealCancelled",
   UnknownMargin: "ProfitUnknownMargin",

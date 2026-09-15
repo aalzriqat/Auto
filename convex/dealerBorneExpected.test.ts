@@ -78,6 +78,20 @@ describe("dealerBorneExpected", () => {
     expect(customerForeign).toEqual({ totalMinor: 90_000, remainingMinor: 90_000, reason: null });
   });
 
+  test("an UNPLANNED dealer-borne line in another currency withholds the expected side, though no configured row can see it", () => {
+    const rows = [row({ paidBy: "DEALER", expectedAmountMinor: 250_000, actual: actual(250_000) })];
+    expect(dealerBorneExpected("COMPANY_RULE_SNAPSHOT", rows, "JOD", false)).toEqual({
+      totalMinor: 250_000,
+      remainingMinor: 0,
+      reason: null,
+    });
+    expect(dealerBorneExpected("COMPANY_RULE_SNAPSHOT", rows, "JOD", true)).toEqual({
+      totalMinor: null,
+      remainingMinor: null,
+      reason: "MIXED_DENOMINATION",
+    });
+  });
+
   test("unsafe or corrupt amounts withhold the expected side", () => {
     expect(
       dealerBorneExpected("COMPANY_RULE_SNAPSHOT", [row({ paidBy: "DEALER", expectedAmountMinor: Number.NaN })], "JOD")

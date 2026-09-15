@@ -216,7 +216,9 @@ function financedOverview(): FinancedDealOverviewData {
       currency: "JOD",
       customerSalePrice: { amountMinor: 13_200 * SCALE, basis: "TARGET_SELLING_AMOUNT" },
       approvedPurchaseAmountMinor: 12_500 * SCALE,
-      customerPaidToDealer: { heldDepositMinor: 500 * SCALE, gapCashToDealerMinor: 0, totalMinor: 500 * SCALE },
+      customerPaidToDealer: { heldDepositMinor: 500 * SCALE, totalMinor: 500 * SCALE },
+      // Agreed under the gap resolution, not received: its own row, never inside "paid".
+      customerGapCashPlannedMinor: 200 * SCALE,
       customerFirstPaymentMinor: 1_200 * SCALE,
       financier: {
         fundedPortionMinor: 12_000 * SCALE,
@@ -226,6 +228,7 @@ function financedOverview(): FinancedDealOverviewData {
       dealerOutlay: {
         plannedContributionMinor: 500 * SCALE,
         recordedCostsMinor: 90 * SCALE,
+        recordedCostsReason: null,
         awaitingActuals: 1,
         knownCommittedMinor: 590 * SCALE,
         expectedCostsRemainingMinor: 250 * SCALE,
@@ -260,6 +263,7 @@ function financedOverview(): FinancedDealOverviewData {
       totalBeforeDealMinor: 9_500 * SCALE,
       excluded: { pendingCount: 0, reversedCount: 0, periodExpenseCount: 1, afterCutoffCount: 0 },
       cutoffCreationTime: Date.UTC(2026, 6, 28, 9, 30),
+      lineDetail: "SERVED",
     },
     // The dealership detailed the supplier's car before the deal: shown beside
     // the supplier's cost, subtracted once from the headline above.
@@ -271,6 +275,7 @@ function financedOverview(): FinancedDealOverviewData {
       ],
       totalMinor: 60 * SCALE,
       excluded: { pendingCount: 0, reversedCount: 0, otherCount: 1, afterCutoffCount: 0 },
+      lineDetail: "SERVED",
     },
   };
 }

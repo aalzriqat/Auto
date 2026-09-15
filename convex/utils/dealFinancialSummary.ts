@@ -36,7 +36,11 @@ import type { DealProfit } from "./financingEconomics";
  * The dealership's contribution to the financing is a PLANNED split frozen at
  * approval, not cash that has left. It is served as such, beside the costs
  * actually RECORDED and the configured costs still EXPECTED, and the only
- * total here is "total expected dealer outlay" — never "paid".
+ * total here is "total expected dealer outlay" — never "paid". The same rule
+ * holds on the customer's side: the appraisal-gap cash the customer agreed to
+ * pay the dealership is an allocation `resolveAppraisalGap` wrote, with no
+ * receipt behind it, and it is served as PLANNED beside the held deposits —
+ * never inside what the customer "paid".
  *
  * Pure so the formulas are testable without a database.
  */
@@ -59,8 +63,18 @@ export type DealFinancialSummaryInputs = Readonly<{
    * recorded actuals (lines paid by the dealership or an employee — the
    * cockpit sums exactly those), and `awaitingActuals` counts live lines with
    * no actual yet, whoever pays them.
+   *
+   * The cockpit sums only lines in the deal's currency and silently leaves a
+   * foreign-denominated one out, so its total is a PARTIAL figure whenever a
+   * dealer-borne line is denominated otherwise. The caller inspects every
+   * live line and says so here: `actualTotalMinor` is `null` with the reason,
+   * and every aggregate built on it is withheld rather than understated.
    */
-  expenses: Readonly<{ actualTotalMinor: number; awaitingActuals: number }>;
+  expenses: Readonly<{
+    actualTotalMinor: number | null;
+    awaitingActuals: number;
+    reason: "MIXED_DENOMINATION" | null;
+  }>;
   /** Route-specific, already derived — see the module header. */
   profit: DealProfit;
   /** Whose car this is — SOURCED (consignment) or the dealership's own. */
@@ -119,16 +133,24 @@ export type DealFinancialSummary = Readonly<{
   /** The approved purchase amount — the deal's value as the financier bought it. */
   approvedPurchaseAmountMinor: number | null;
   /**
-   * What the customer has put in with the DEALERSHIP: deposits it holds plus
-   * any appraisal-gap cash paid to it directly. `null` when the held deposits
-   * cannot be totalled (an unreadable row, or an unknown route), because a
-   * partial total reads as a complete one.
+   * What the customer has put in with the DEALERSHIP: the deposits it holds,
+   * as the cockpit's custody authority serves them — receipt-backed money and
+   * nothing else. `null` when the held deposits cannot be totalled (an
+   * unreadable row, or an unknown route), because a partial total reads as a
+   * complete one.
    */
   customerPaidToDealer: Readonly<{
     heldDepositMinor: number;
-    gapCashToDealerMinor: number;
     totalMinor: number;
   }> | null;
+  /**
+   * The appraisal-gap cash the customer AGREED to pay the dealership directly
+   * — `resolveAppraisalGap`'s allocation, a negotiated PLAN with no receipt,
+   * cashbook, payment or journal behind it. Served on its own, never inside
+   * a paid total: resolving a gap moves no money. `null` when no gap
+   * allocation has been recorded.
+   */
+  customerGapCashPlannedMinor: number | null;
   /** The customer's first payment as the economics froze it, whoever receives it. */
   customerFirstPaymentMinor: number | null;
   financier: Readonly<{
@@ -140,9 +162,11 @@ export type DealFinancialSummary = Readonly<{
    *
    * `plannedContribution` is the frozen financing split, a commitment, not
    * cash that has left. `recordedCosts` is what has actually been recorded as
-   * dealer-borne. `knownCommitted` is those two added, and null while the
-   * contribution is not on record — "0 + costs" would report the outlay of a
-   * deal whose split has not been computed as if it were known.
+   * dealer-borne, and null with `recordedCostsReason` when a dealer-borne
+   * line is denominated in another currency — the same-currency sum would be
+   * a partial figure wearing a total's name. `knownCommitted` is those two
+   * added, and null while either is unknown — "0 + costs" would report the
+   * outlay of a deal whose split has not been computed as if it were known.
    * `expectedCostsRemaining` is the dealer-borne policy not yet recorded, and
    * null when NO policy is configured. `totalExpected` adds it to the known
    * figure and is null whenever either side is unknown: a missing policy is
@@ -150,7 +174,9 @@ export type DealFinancialSummary = Readonly<{
    */
   dealerOutlay: Readonly<{
     plannedContributionMinor: number | null;
-    recordedCostsMinor: number;
+    recordedCostsMinor: number | null;
+    /** Why the recorded figure is unknown, when it is. */
+    recordedCostsReason: "MIXED_DENOMINATION" | null;
     /** Live lines still without an actual — the recorded figure is not the whole cost yet. */
     awaitingActuals: number;
     knownCommittedMinor: number | null;
@@ -222,22 +248,21 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
 
   // A CUSTOMER row in the query currency with a readable total. UNKNOWN is the
   // cockpit saying a deposit could not be read or the route is unknown — a
-  // partial figure, so the tile is withheld rather than understated.
-  const gapCashToDealerMinor = app.customerGapCashToDealerMinor ?? 0;
+  // partial figure, so the tile is withheld rather than understated. The
+  // held deposit is the ONLY operand: it is the one figure here with a
+  // receipt behind it.
   const customerPaidToDealer =
     customer !== undefined && customer.position !== "UNKNOWN" && customer.currency === currency
-      ? {
-          heldDepositMinor: customer.amountMinor,
-          gapCashToDealerMinor,
-          totalMinor: customer.amountMinor + gapCashToDealerMinor,
-        }
+      ? { heldDepositMinor: customer.amountMinor, totalMinor: customer.amountMinor }
       : null;
 
   const plannedContributionMinor = app.dealerContributionMinor ?? null;
   const recordedCostsMinor = input.expenses.actualTotalMinor;
   const expectedCostsRemainingMinor = input.expectedDealerBorne.remainingMinor;
   const knownCommittedMinor =
-    plannedContributionMinor === null ? null : plannedContributionMinor + recordedCostsMinor;
+    plannedContributionMinor === null || recordedCostsMinor === null
+      ? null
+      : plannedContributionMinor + recordedCostsMinor;
   const totalExpectedMinor =
     knownCommittedMinor === null || expectedCostsRemainingMinor === null
       ? null
@@ -254,6 +279,7 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
     customerSalePrice: customerSalePriceFor(app),
     approvedPurchaseAmountMinor: app.approvedDealerPurchaseAmountMinor ?? null,
     customerPaidToDealer,
+    customerGapCashPlannedMinor: app.customerGapCashToDealerMinor ?? null,
     customerFirstPaymentMinor: app.customerFirstPaymentMinor ?? null,
     financier: {
       fundedPortionMinor: app.financeCompanyFundedPortionMinor ?? null,
@@ -267,6 +293,7 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
     dealerOutlay: {
       plannedContributionMinor,
       recordedCostsMinor,
+      recordedCostsReason: input.expenses.reason,
       awaitingActuals: input.expenses.awaitingActuals,
       knownCommittedMinor,
       expectedCostsRemainingMinor,

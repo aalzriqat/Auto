@@ -336,6 +336,32 @@ describe("a live deal mid-flight", () => {
     expect(s.blocker("APPROVED_PURCHASE")).toBe("NoApprovedPurchaseAmount");
   });
 
+  test("a POSITIVE gap marked NOT_REQUIRED contradicts itself and stays unresolved — the rail agrees with the mutation gate", () => {
+    const s = stages({
+      creditDecision: "APPROVED",
+      appraisalStatus: "COMPLETED",
+      rawAppraisalGapMinor: 1_000_000,
+      gapResolution: "NOT_REQUIRED",
+      approvedDealerPurchaseAmountMinor: 11_500_000,
+      requiredDocumentsComplete: true,
+    });
+    expect(s.state("APPROVED_PURCHASE")).toBe("BLOCKED");
+    expect(s.blocker("APPROVED_PURCHASE")).toBe("GapUnresolved");
+    expect(s.state("HANDOVER")).toBe("PENDING");
+    // Each settling resolution the writers accept resolves it.
+    for (const gapResolution of ["CUSTOMER_ABSORBS", "DEALER_ABSORBS", "SPLIT"] as const) {
+      const settled = stages({
+        creditDecision: "APPROVED",
+        appraisalStatus: "COMPLETED",
+        rawAppraisalGapMinor: 1_000_000,
+        gapResolution,
+        approvedDealerPurchaseAmountMinor: 11_500_000,
+        requiredDocumentsComplete: true,
+      });
+      expect(settled.state("APPROVED_PURCHASE")).toBe("COMPLETE");
+    }
+  });
+
   test("a zero gap is not a gap", () => {
     const s = stages({
       creditDecision: "APPROVED",

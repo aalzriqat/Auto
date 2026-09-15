@@ -22,12 +22,15 @@ const summary: FinancialSummaryData = {
   currency: "JOD",
   customerSalePrice: { amountMinor: 12_000_000, basis: "TARGET_SELLING_AMOUNT" },
   approvedPurchaseAmountMinor: 11_000_000,
-  customerPaidToDealer: { heldDepositMinor: 500_000, gapCashToDealerMinor: 200_000, totalMinor: 700_000 },
+  customerPaidToDealer: { heldDepositMinor: 500_000, totalMinor: 500_000 },
+  // Agreed under the gap resolution, not received: served beside "paid", never inside it.
+  customerGapCashPlannedMinor: 200_000,
   customerFirstPaymentMinor: 1_000_000,
   financier: { fundedPortionMinor: 9_350_000, outstanding: { state: "OUTSTANDING", amountMinor: 4_000_000, basis: "RECEIVABLE" } },
   dealerOutlay: {
     plannedContributionMinor: 1_650_000,
     recordedCostsMinor: 150_000,
+    recordedCostsReason: null,
     awaitingActuals: 1,
     knownCommittedMinor: 1_800_000,
     expectedCostsRemainingMinor: 250_000,
@@ -54,7 +57,7 @@ describe("DealFinancialOverview", () => {
     const fact = (id: string) => within(screen.getByTestId(id));
     expect(fact("overview-sale-price").getByText("12,000 JOD")).toBeTruthy();
     expect(fact("overview-sale-price").getByText(salesEn.OverviewBasisTargetSelling)).toBeTruthy();
-    expect(fact("overview-customer-paid").getByText("700 JOD")).toBeTruthy();
+    expect(fact("overview-customer-paid").getByText("500 JOD")).toBeTruthy();
     expect(fact("overview-financier").getByText("9,350 JOD")).toBeTruthy();
     expect(fact("overview-financier-balance").getByText("4,000 JOD")).toBeTruthy();
     expect(fact("overview-financier-balance").getByText(salesEn.OverviewFinancierOutstanding)).toBeTruthy();
@@ -161,6 +164,7 @@ describe("DealFinancialOverview", () => {
       dealerOutlay: {
         plannedContributionMinor: null,
         recordedCostsMinor: 0,
+        recordedCostsReason: null,
         awaitingActuals: 0,
         knownCommittedMinor: null,
         expectedCostsRemainingMinor: null,
@@ -179,6 +183,53 @@ describe("DealFinancialOverview", () => {
     expect(fact("overview-net-profit").getByText(salesEn.ProfitNotCalculable)).toBeTruthy();
     // The only zero on the screen is the one the server served (costs to date).
     expect(screen.getAllByText("0 JOD")).toHaveLength(1);
+  });
+
+  test("negotiated gap cash is never labelled paid: it is its own row, planned, and the paid figure is the held deposit alone", () => {
+    render(<DealFinancialOverview summary={summary} money={money} t={tEn} />);
+    const fact = (id: string) => within(screen.getByTestId(id));
+    expect(fact("overview-customer-paid").getByText("500 JOD")).toBeTruthy();
+    expect(fact("overview-customer-paid").getByText(salesEn.OverviewCustomerPaidNote)).toBeTruthy();
+    expect(fact("overview-customer-paid").queryByText("700 JOD")).toBeNull();
+    expect(fact("overview-gap-cash-planned").getByText("200 JOD")).toBeTruthy();
+    expect(fact("overview-gap-cash-planned").getByText(salesEn.OverviewGapCashPlannedNote)).toBeTruthy();
+    expect(screen.queryByText("700 JOD")).toBeNull();
+  });
+
+  test("a deal with no gap allocation has no planned-gap-cash row at all, in Arabic", () => {
+    render(<DealFinancialOverview summary={{ ...summary, customerGapCashPlannedMinor: null }} money={money} t={tAr} />);
+    expect(screen.queryByTestId("overview-gap-cash-planned")).toBeNull();
+    expect(within(screen.getByTestId("overview-customer-paid")).getByText(salesAr.OverviewCustomerPaidNote)).toBeTruthy();
+  });
+
+  test("a dealer-borne line in another currency withholds costs, committed and total with the reason — never a partial total", () => {
+    render(
+      <DealFinancialOverview
+        summary={{
+          ...summary,
+          dealerOutlay: {
+            ...summary.dealerOutlay,
+            recordedCostsMinor: null,
+            recordedCostsReason: "MIXED_DENOMINATION",
+            knownCommittedMinor: null,
+            expectedCostsRemainingMinor: null,
+            expectedCostsReason: "MIXED_DENOMINATION",
+            totalExpectedMinor: null,
+          },
+          profit: { available: false, reason: "ExpensesMixedDenomination" },
+        }}
+        money={money}
+        t={tEn}
+      />
+    );
+    const fact = (id: string) => within(screen.getByTestId(id));
+    for (const id of ["overview-costs", "overview-known-committed", "overview-dealer-paid"]) {
+      expect(fact(id).getByText("—")).toBeTruthy();
+      expect(fact(id).getByText(salesEn.OverviewCostsMixedDenomination)).toBeTruthy();
+    }
+    expect(fact("overview-expected-remaining").getByText(salesEn.OverviewExpectedMixedDenomination)).toBeTruthy();
+    expect(fact("overview-net-profit").getByText("—")).toBeTruthy();
+    expect(screen.queryByText("150 JOD")).toBeNull();
   });
 
   test("the direct route says the financier pays the supplier, and an owned vehicle has no supplier", () => {
@@ -212,6 +263,7 @@ describe("VehicleCostBasisSection", () => {
     totalBeforeDealMinor: 9_700_000,
     excluded: { pendingCount: 1, reversedCount: 0, periodExpenseCount: 2, afterCutoffCount: 0 },
     cutoffCreationTime: Date.UTC(2026, 5, 15),
+    lineDetail: "SERVED",
   };
 
   test("itemizes the basis and says what was seen but not counted", () => {
@@ -227,7 +279,7 @@ describe("VehicleCostBasisSection", () => {
   test("a consigned vehicle labels the base as the supplier's cost, in Arabic", () => {
     render(
       <VehicleCostBasisSection
-        basis={{ ...basis, available: true, consigned: true, landedCostMinor: null, expenses: [], eligibleExpensesMinor: 0, totalBeforeDealMinor: 9_500_000 }}
+        basis={{ ...basis, consigned: true, landedCostMinor: null, expenses: [], eligibleExpensesMinor: 0, totalBeforeDealMinor: 9_500_000 }}
         money={money}
         formatDate={formatDate}
         t={tAr}
@@ -236,6 +288,20 @@ describe("VehicleCostBasisSection", () => {
     expect(screen.getByText(salesAr.CostBasisBaseConsigned)).toBeTruthy();
     expect(screen.getByText(salesAr.CostBasisNoExpenses)).toBeTruthy();
     expect(screen.queryByText(salesAr.CostBasisLanded)).toBeNull();
+  });
+
+  test("a cost-only caller sees the totals and a note in place of the lines — no titles, no dates, no amounts per line", () => {
+    const { expenses: _lines, ...totals } = basis;
+    void _lines;
+    render(
+      <VehicleCostBasisSection basis={{ ...totals, lineDetail: "WITHHELD" }} money={money} formatDate={formatDate} t={tEn} />
+    );
+    expect(within(screen.getByTestId("deal-cost-basis-total")).getByText("9,700 JOD")).toBeTruthy();
+    expect(screen.getAllByText("100 JOD").length).toBeGreaterThan(0); // the eligible-expenses AGGREGATE (and the landed cost)
+    expect(screen.getByTestId("deal-cost-basis-lines-withheld").textContent).toBe(salesEn.CostBasisLinesWithheld);
+    expect(screen.queryByText("Brake job")).toBeNull();
+    expect(screen.queryByText("2026-05-01")).toBeNull();
+    expect(screen.queryByText(salesEn.CostBasisNoExpenses)).toBeNull();
   });
 
   test("an unavailable basis states its reason", () => {

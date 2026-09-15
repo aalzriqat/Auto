@@ -38,6 +38,63 @@ type DealCockpitPayload = NonNullable<
 >;
 type CockpitMoney = NonNullable<DealCockpitPayload["money"]>;
 
+/**
+ * A cost figure as SERVED: the aggregate, with its line-level rows only when
+ * the caller may read expense lines.
+ *
+ * `view:cost_price` authorizes the vehicle's cost — the totals the margin is
+ * measured against. It does not authorize the expense LEDGER: which repair,
+ * on which date, for how much, is `view:expenses` (the rule
+ * `expenses.listExpenses` already applies). So the available arm is served in
+ * two explicit tiers, discriminated by `lineDetail`: SERVED carries the rows,
+ * WITHHELD carries no `expenses` key at all — the field does not exist in the
+ * payload rather than being emptied, so a screen cannot mistake "not allowed
+ * to see" for "there are none". The unavailable arm carries no line detail
+ * to redact and is served as is.
+ */
+type CostLinesTier<T extends VehicleCostBasis | DealerPreparationExpenses> =
+  | Exclude<T, { available: true }>
+  | (Extract<T, { available: true }> & Readonly<{ lineDetail: "SERVED" }>)
+  | (Omit<Extract<T, { available: true }>, "expenses"> & Readonly<{ lineDetail: "WITHHELD" }>);
+
+export type ServedVehicleCostBasis = CostLinesTier<VehicleCostBasis>;
+export type ServedDealerPreparation = CostLinesTier<DealerPreparationExpenses>;
+
+/** Each tier built field by field — nothing spread from the derivation, so a field added to it later cannot slip past the redaction. */
+function serveVehicleCostBasis(basis: VehicleCostBasis, mayReadLines: boolean): ServedVehicleCostBasis {
+  if (!basis.available) return basis;
+  const totals = {
+    available: true as const,
+    currency: basis.currency,
+    consigned: basis.consigned,
+    baseMinor: basis.baseMinor,
+    landedCostMinor: basis.landedCostMinor,
+    eligibleExpensesMinor: basis.eligibleExpensesMinor,
+    totalBeforeDealMinor: basis.totalBeforeDealMinor,
+    excluded: basis.excluded,
+    cutoffCreationTime: basis.cutoffCreationTime,
+  };
+  return mayReadLines
+    ? { ...totals, expenses: basis.expenses, lineDetail: "SERVED" }
+    : { ...totals, lineDetail: "WITHHELD" };
+}
+
+function serveDealerPreparation(
+  preparation: DealerPreparationExpenses,
+  mayReadLines: boolean
+): ServedDealerPreparation {
+  if (!preparation.available) return preparation;
+  const totals = {
+    available: true as const,
+    currency: preparation.currency,
+    totalMinor: preparation.totalMinor,
+    excluded: preparation.excluded,
+  };
+  return mayReadLines
+    ? { ...totals, expenses: preparation.expenses, lineDetail: "SERVED" }
+    : { ...totals, lineDetail: "WITHHELD" };
+}
+
 export type FinancedDealOverview = Readonly<{
   /**
    * The financial overview, or `null` for a caller without `view:finance`.
@@ -54,9 +111,10 @@ export type FinancedDealOverview = Readonly<{
   /**
    * The vehicle's pre-deal cost basis, or `null` for a caller without
    * `view:cost_price` — the rule the vehicle queries already apply to
-   * `purchasePrice`, and the class `vehiclePurchaseCostMinor` carries.
+   * `purchasePrice`, and the class `vehiclePurchaseCostMinor` carries. Its
+   * expense LINES need `view:expenses` as well (see `CostLinesTier`).
    */
-  vehicleCostBasis: VehicleCostBasis | null;
+  vehicleCostBasis: ServedVehicleCostBasis | null;
   /**
    * SOURCED only, under the same `view:cost_price` gate: what the dealership
    * spent preparing the supplier's car before the deal — shown beside the
@@ -64,7 +122,7 @@ export type FinancedDealOverview = Readonly<{
    * (those costs are capitalized into the basis above) and for a caller who
    * may not read costs.
    */
-  dealerPreparation: DealerPreparationExpenses | null;
+  dealerPreparation: ServedDealerPreparation | null;
 }>;
 
 /**
@@ -84,7 +142,15 @@ export function dealerBorneExpected(
   source: ReturnType<typeof deriveExpectedFees>["source"],
   rows: ReadonlyArray<ExpectedFeeRow>,
   /** The deal's denomination; a matched actual in any other is refused, never netted. */
-  dealCurrency: string
+  dealCurrency: string,
+  /**
+   * Whether ANY live dealer-borne line — matched to a template or not — is
+   * denominated otherwise (`dealerBorneLinesMixed`). The rows above see only
+   * the configured positions; an unplanned foreign line is invisible to them
+   * and would leave this figure standing beside a recorded total that had
+   * silently dropped it.
+   */
+  dealerBorneLineForeign = false
 ): DealFinancialSummaryInputs["expectedDealerBorne"] {
   if (source !== "COMPANY_RULE_SNAPSHOT") return { totalMinor: null, remainingMinor: null, reason: "NO_POLICY" };
   const dealerRows = rows.filter((row) => row.paidBy === "DEALER" || row.paidBy === "EMPLOYEE");
@@ -92,7 +158,7 @@ export function dealerBorneExpected(
   // from an expectation in this one, and a template or actual amount that is
   // not a safe non-negative integer is not a figure.
   const safe = (n: number) => Number.isSafeInteger(n) && n >= 0;
-  if (dealerRows.some((row) => row.actual !== null && row.actual.currency !== dealCurrency)) {
+  if (dealerBorneLineForeign || dealerRows.some((row) => row.actual !== null && row.actual.currency !== dealCurrency)) {
     return { totalMinor: null, remainingMinor: null, reason: "MIXED_DENOMINATION" };
   }
   if (dealerRows.some((row) => !safe(row.expectedAmountMinor) || (row.actual?.actualAmountMinor !== undefined && !safe(row.actual.actualAmountMinor)))) {
@@ -107,6 +173,31 @@ export function dealerBorneExpected(
     return { totalMinor: null, remainingMinor: null, reason: "UNSAFE_AMOUNT" };
   }
   return { totalMinor, remainingMinor, reason: null };
+}
+
+/**
+ * Whether any live line the DEALERSHIP bears (paid by it or by an employee)
+ * is denominated in a currency other than the deal's.
+ *
+ * The cockpit's expense total sums same-currency lines only and counts the
+ * rest as "awaiting" — right for the screen it serves, but as an operand of
+ * an outlay total or a profit it is a partial sum: a 200 USD licensing fee
+ * the dealership paid is a real cost that the JOD total does not carry. Every
+ * live line is inspected, not just the configured positions, because an
+ * UNPLANNED foreign line is exactly the one the checklist cannot see. A
+ * customer- or financier-borne foreign line is not the dealership's outlay
+ * and does not withhold it.
+ */
+export function dealerBorneLinesMixed(
+  fees: ReadonlyArray<Pick<Doc<"financeDealFees">, "paidBy" | "currency" | "voidedAt">>,
+  dealCurrency: string
+): boolean {
+  return fees.some(
+    (fee) =>
+      fee.voidedAt === undefined &&
+      (fee.paidBy === "DEALER" || fee.paidBy === "EMPLOYEE") &&
+      fee.currency !== dealCurrency
+  );
 }
 
 /**
@@ -137,8 +228,15 @@ function routeSpecificProfit(args: {
    * consignment figure. A STOCK figure is called actual on the same terms.
    */
   fullySettled: boolean;
+  /** A dealer-borne line in another currency: the expense operand is partial, so no figure is stated. */
+  expensesMixed: boolean;
 }): DealProfit {
   const { app, money } = args;
+  // Refused before either route: both derive against `actualExpensesMinor`,
+  // and on a mixed deal that figure is missing a cost the dealership bore.
+  // A profit computed over a partial cost is an overstatement with a reason
+  // nobody would see; this one names it.
+  if (args.expensesMixed) return { available: false, reason: "ExpensesMixedDenomination" };
   if (args.consigned === null) return money.profit;
   if (args.consigned) {
     // Consignment economics, the cockpit's own, less what the dealership
@@ -273,12 +371,18 @@ export const financedDealOverview = query({
         feeSummary.fullyReconciled &&
         unrecordedConfiguredFeePositions(app.companyRuleSnapshot, fees).length === 0;
       const fullySettled = moneySettled && expensesFullyReconciled;
+      // Every live line, template or unplanned: a dealer-borne one in another
+      // currency withholds the recorded, committed and expected outlay and the
+      // profit built on them, with the reason — never a partial JOD total.
+      const expensesMixed = dealerBorneLinesMixed(fees, cockpit.money.currency);
       financialSummary = deriveDealFinancialSummary({
         currency: cockpit.money.currency,
         routeKnown: cockpit.money.routeKnown,
         settlesDirectToSupplier: cockpit.money.settlesDirectToSupplier,
         parties: cockpit.money.parties,
-        expenses: cockpit.money.expenses,
+        expenses: expensesMixed
+          ? { actualTotalMinor: null, awaitingActuals: cockpit.money.expenses.awaitingActuals, reason: "MIXED_DENOMINATION" }
+          : { ...cockpit.money.expenses, reason: null },
         profit: routeSpecificProfit({
           app,
           consigned,
@@ -286,22 +390,26 @@ export const financedDealOverview = query({
           fullCostBasis: costBasisFor(null),
           preparation,
           fullySettled,
+          expensesMixed,
         }),
         vehicleConsigned: consigned,
         app,
-        expectedDealerBorne: dealerBorneExpected(expected.source, expected.rows, cockpit.money.currency),
+        expectedDealerBorne: dealerBorneExpected(expected.source, expected.rows, cockpit.money.currency, expensesMixed),
       });
     }
 
-    let vehicleCostBasis: VehicleCostBasis | null = null;
-    let dealerPreparation: DealerPreparationExpenses | null = null;
-    const mayReadCost =
-      isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
+    let vehicleCostBasis: ServedVehicleCostBasis | null = null;
+    let dealerPreparation: ServedDealerPreparation | null = null;
+    const owner = isSystemOwnerRole(role);
+    const mayReadCost = owner || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
+    // The LINES are the expense ledger, gated as `expenses.listExpenses` gates it.
+    const mayReadLines = owner || role.permissions.includes(PERMISSIONS.VIEW_EXPENSES);
     if (mayReadCost) {
       // The PRE-DEAL basis: the same rows, cut off at the application's own
       // registration instant.
-      vehicleCostBasis = costBasisFor(app._creationTime);
-      dealerPreparation = preparation;
+      const basis = costBasisFor(app._creationTime);
+      vehicleCostBasis = basis === null ? null : serveVehicleCostBasis(basis, mayReadLines);
+      dealerPreparation = preparation === null ? null : serveDealerPreparation(preparation, mayReadLines);
     }
 
     return { financialSummary, vehicleCostBasis, dealerPreparation };

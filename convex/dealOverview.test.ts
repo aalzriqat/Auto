@@ -436,6 +436,119 @@ describe("dealOverview.financedDealOverview", () => {
 
   // --- redaction, field family by field family -------------------------------
 
+  /** A live cost line inserted directly, so its denomination can be anything — the writers refuse a foreign one. */
+  async function insertFee(
+    s: Seed,
+    applicationId: Id<"financeApplications">,
+    fee: { paidBy: "DEALER" | "EMPLOYEE" | "CUSTOMER" | "FINANCE_COMPANY"; currency: string; actualAmountMinor: number }
+  ) {
+    return await s.t.run((ctx) =>
+      ctx.db.insert("financeDealFees", {
+        orgId: s.orgId,
+        applicationId,
+        feeType: "OTHER_CLOSING_EXPENSE",
+        currency: fee.currency,
+        actualAmountMinor: fee.actualAmountMinor,
+        paidBy: fee.paidBy,
+        paidTo: "OTHER",
+        accountingTreatment: "SELLING_EXPENSE",
+        includedInQuotation: false,
+        deductedFromSettlement: false,
+        refundable: false,
+        source: "MANUAL",
+        createdBy: s.userId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
+  }
+
+  test("resolving the appraisal gap alone does not increase what the customer PAID — the allocation is served as planned", async () => {
+    const s = await seed("20");
+    const applicationId = await insertApplication(s);
+    const paidBefore = (await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId }))!
+      .financialSummary!;
+    expect(paidBefore.customerPaidToDealer).toEqual({ heldDepositMinor: 0, totalMinor: 0 });
+    expect(paidBefore.customerGapCashPlannedMinor).toBeNull();
+    // A gap allocated to the customer, paid to the dealership in cash — exactly
+    // what `resolveAppraisalGap` writes, and nothing else: no receipt, no deposit.
+    await s.t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        rawAppraisalGapMinor: 500_000,
+        gapResolution: "CUSTOMER_ABSORBS",
+        customerGapShareMinor: 500_000,
+        customerGapCashToDealerMinor: 500_000,
+        customerGapInstallmentToDealerMinor: 0,
+        customerGapToFinanceCompanyMinor: 0,
+      })
+    );
+    const after = (await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId }))!
+      .financialSummary!;
+    expect(after.customerPaidToDealer).toEqual(paidBefore.customerPaidToDealer);
+    expect(after.customerGapCashPlannedMinor).toBe(500_000);
+    // Nothing served by the overview labels that allocation as received.
+    expect(JSON.stringify(after.customerPaidToDealer)).not.toContain("500000");
+  });
+
+  test("an UNPLANNED dealer-borne line in another currency withholds recorded, committed and expected outlay and the profit, with the reason", async () => {
+    const s = await seed("21");
+    const applicationId = await insertApplication(s);
+    await s.t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        companyRuleSnapshot: {
+          ruleVersion: 1,
+          companyName: "Policy Co",
+          feeTemplates: [
+            {
+              feeType: "LICENSING",
+              description: "Plates",
+              estimatedAmountMinor: 250_000,
+              paidBy: "DEALER",
+              paidTo: "GOVERNMENT",
+              includedInQuotation: false,
+              deductedFromSettlement: false,
+              refundable: false,
+              accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+            },
+          ],
+        },
+      })
+    );
+    // A JOD line the cockpit sums, and a USD line it silently leaves out.
+    await insertFee(s, applicationId, { paidBy: "DEALER", currency: "JOD", actualAmountMinor: 90_000 });
+    await insertFee(s, applicationId, { paidBy: "EMPLOYEE", currency: "USD", actualAmountMinor: 20_000 });
+    const view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+    const outlay = view!.financialSummary!.dealerOutlay;
+    expect(outlay).toMatchObject({
+      recordedCostsMinor: null,
+      recordedCostsReason: "MIXED_DENOMINATION",
+      knownCommittedMinor: null,
+      expectedCostsRemainingMinor: null,
+      expectedCostsReason: "MIXED_DENOMINATION",
+      totalExpectedMinor: null,
+    });
+    expect(outlay.plannedContributionMinor).toBe(1_650_000);
+    expect(view!.financialSummary!.profit).toEqual({ available: false, reason: "ExpensesMixedDenomination" });
+    // The partial JOD total the cockpit serves is nowhere in the overview's outlay.
+    expect(JSON.stringify(outlay)).not.toContain("90000");
+  });
+
+  test("a CUSTOMER- or financier-borne line in another currency is not the dealership's outlay and withholds nothing", async () => {
+    const s = await seed("22");
+    const applicationId = await insertApplication(s);
+    await insertFee(s, applicationId, { paidBy: "DEALER", currency: "JOD", actualAmountMinor: 90_000 });
+    await insertFee(s, applicationId, { paidBy: "CUSTOMER", currency: "USD", actualAmountMinor: 20_000 });
+    await insertFee(s, applicationId, { paidBy: "FINANCE_COMPANY", currency: "USD", actualAmountMinor: 30_000 });
+    const view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+    const outlay = view!.financialSummary!.dealerOutlay;
+    expect(outlay.recordedCostsMinor).toBe(90_000);
+    expect(outlay.recordedCostsReason).toBeNull();
+    expect(outlay.knownCommittedMinor).toBe(1_650_000 + 90_000);
+    const profit = view!.financialSummary!.profit;
+    if (!profit.available || profit.basis !== "MANAGEMENT_ESTIMATE") throw new Error("expected a management estimate");
+    expect(profit.lines).toContainEqual({ key: "ACTUAL_EXPENSES", sign: -1, amountMinor: 90_000 });
+  });
+
   test("view:sales alone reads neither the summary nor the cost basis", async () => {
     const s = await seed("4");
     const applicationId = await insertApplication(s);
@@ -465,6 +578,64 @@ describe("dealOverview.financedDealOverview", () => {
     expect(text).not.toContain("dealerContribution");
     expect(text).not.toContain("fundedPortion");
     expect(text).not.toContain("11000000");
+  });
+
+  describe("expense LINE detail is the expense ledger: view:cost_price serves the totals, view:expenses the rows", () => {
+    async function seedSourcedWithLines(suffix: string) {
+      const s = await seed(suffix, { sourceType: "SOURCED" });
+      // A pre-deal PERIOD_EXPENSE on the supplier's car: a preparation line (100 net).
+      await insertExpense(s, { accountingTreatment: "PERIOD_EXPENSE", capitalizedAmount: undefined });
+      const applicationId = await insertApplication(s);
+      return { s, applicationId };
+    }
+    const LINE_FIELDS = ["Brake job", "\"title\"", "\"category\"", "\"date\"", "\"netMinor\"", "\"capitalizedMinor\"", "\"expenses\""];
+
+    test("cost only: the totals, no `expenses` key, no title/category/date/amount anywhere in the payload", async () => {
+      const { s, applicationId } = await seedSourcedWithLines("30");
+      const cost = await callerWith(s, "cost30", [PERMISSIONS.VIEW_SALES, PERMISSIONS.VIEW_COST_PRICE]);
+      const view = await cost.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      const basis = view!.vehicleCostBasis!;
+      const prep = view!.dealerPreparation!;
+      if (!basis.available || !prep.available) throw new Error("expected available");
+      expect(basis.lineDetail).toBe("WITHHELD");
+      expect(prep.lineDetail).toBe("WITHHELD");
+      expect(basis.totalBeforeDealMinor).toBe(8_000_000);
+      expect(prep.totalMinor).toBe(100_000);
+      expect(prep.excluded).toEqual({ pendingCount: 0, reversedCount: 0, otherCount: 0, afterCutoffCount: 0 });
+      expect("expenses" in basis).toBe(false);
+      expect("expenses" in prep).toBe(false);
+      const text = JSON.stringify(view);
+      for (const field of LINE_FIELDS) expect(text).not.toContain(field);
+    });
+
+    test("cost + expenses: the rows are served, and only their own fields", async () => {
+      const { s, applicationId } = await seedSourcedWithLines("31");
+      const both = await callerWith(s, "both31", [PERMISSIONS.VIEW_SALES, PERMISSIONS.VIEW_COST_PRICE, PERMISSIONS.VIEW_EXPENSES]);
+      const view = await both.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      const prep = view!.dealerPreparation!;
+      if (!prep.available || prep.lineDetail !== "SERVED") throw new Error("expected served lines");
+      expect(prep.expenses).toHaveLength(1);
+      expect(prep.expenses[0]).toMatchObject({ title: "Brake job", category: "REPAIR", netMinor: 100_000 });
+      expect(Object.keys(prep.expenses[0]).sort()).toEqual(["category", "date", "id", "netMinor", "title"]);
+      const basis = view!.vehicleCostBasis!;
+      if (!basis.available || basis.lineDetail !== "SERVED") throw new Error("expected served lines");
+      expect(basis.expenses).toEqual([]);
+    });
+
+    test("view:expenses without view:cost_price reads no cost figure at all — lines are not a back door to the basis", async () => {
+      const { s, applicationId } = await seedSourcedWithLines("32");
+      const expensesOnly = await callerWith(s, "exp32", [PERMISSIONS.VIEW_SALES, PERMISSIONS.VIEW_EXPENSES]);
+      const view = await expensesOnly.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      expect(view!.vehicleCostBasis).toBeNull();
+      expect(view!.dealerPreparation).toBeNull();
+    });
+
+    test("the system owner reads the rows without either permission being enumerated", async () => {
+      const { s, applicationId } = await seedSourcedWithLines("33");
+      const view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      expect(view!.dealerPreparation).toMatchObject({ available: true, lineDetail: "SERVED" });
+      expect(view!.vehicleCostBasis).toMatchObject({ available: true, lineDetail: "SERVED" });
+    });
   });
 
   test("a caller without view:sales is refused outright", async () => {

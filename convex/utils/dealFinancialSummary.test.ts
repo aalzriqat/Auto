@@ -46,7 +46,7 @@ function inputs(overrides: Partial<DealFinancialSummaryInputs> = {}): DealFinanc
       party("SUPPLIER", "DEALERSHIP_OWES", 9_000_000),
       party("FINANCIER", "OWED_TO_DEALERSHIP", 4_000_000),
     ],
-    expenses: { actualTotalMinor: 150_000, awaitingActuals: 1 },
+    expenses: { actualTotalMinor: 150_000, awaitingActuals: 1, reason: null },
     profit: availableProfit,
     vehicleConsigned: true,
     app: {
@@ -99,12 +99,22 @@ describe("deriveDealFinancialSummary", () => {
   });
 
   describe("what the customer paid the dealership", () => {
-    test("held deposit + gap cash to the dealer", () => {
-      expect(deriveDealFinancialSummary(inputs()).customerPaidToDealer).toEqual({
-        heldDepositMinor: 500_000,
-        gapCashToDealerMinor: 200_000,
-        totalMinor: 700_000,
-      });
+    test("the held deposit alone — the negotiated gap cash is served beside it as PLANNED, never inside the paid total", () => {
+      const s = deriveDealFinancialSummary(inputs());
+      expect(s.customerPaidToDealer).toEqual({ heldDepositMinor: 500_000, totalMinor: 500_000 });
+      expect(s.customerGapCashPlannedMinor).toBe(200_000);
+    });
+    test("resolving a gap alone does not increase paid cash: the same deposits before and after the allocation", () => {
+      const before = deriveDealFinancialSummary(
+        inputs({ app: { ...inputs().app, customerGapCashToDealerMinor: undefined } })
+      );
+      const after = deriveDealFinancialSummary(
+        inputs({ app: { ...inputs().app, customerGapCashToDealerMinor: 750_000 } })
+      );
+      expect(before.customerPaidToDealer).toEqual(after.customerPaidToDealer);
+      expect(after.customerPaidToDealer?.totalMinor).toBe(500_000);
+      expect(before.customerGapCashPlannedMinor).toBeNull();
+      expect(after.customerGapCashPlannedMinor).toBe(750_000);
     });
     test("withheld when the customer row is UNKNOWN (unreadable deposit or unknown route)", () => {
       expect(
@@ -124,7 +134,7 @@ describe("deriveDealFinancialSummary", () => {
           app: { ...inputs().app, customerGapCashToDealerMinor: undefined },
         })
       );
-      expect(s.customerPaidToDealer).toEqual({ heldDepositMinor: 0, gapCashToDealerMinor: 0, totalMinor: 0 });
+      expect(s.customerPaidToDealer).toEqual({ heldDepositMinor: 0, totalMinor: 0 });
     });
   });
 
@@ -182,6 +192,7 @@ describe("deriveDealFinancialSummary", () => {
       expect(deriveDealFinancialSummary(inputs()).dealerOutlay).toEqual({
         plannedContributionMinor: 1_650_000,
         recordedCostsMinor: 150_000,
+        recordedCostsReason: null,
         awaitingActuals: 1,
         knownCommittedMinor: 1_800_000,
         expectedCostsRemainingMinor: 250_000,
@@ -248,12 +259,31 @@ describe("deriveDealFinancialSummary", () => {
     });
   });
 
+  test("recorded costs withheld for a foreign dealer-borne line: committed and total are withheld with it, the contribution stands alone", () => {
+    const s = deriveDealFinancialSummary(
+      inputs({
+        expenses: { actualTotalMinor: null, awaitingActuals: 2, reason: "MIXED_DENOMINATION" },
+        expectedDealerBorne: { totalMinor: null, remainingMinor: null, reason: "MIXED_DENOMINATION" },
+      })
+    );
+    expect(s.dealerOutlay).toEqual({
+      plannedContributionMinor: 1_650_000,
+      recordedCostsMinor: null,
+      recordedCostsReason: "MIXED_DENOMINATION",
+      awaitingActuals: 2,
+      knownCommittedMinor: null,
+      expectedCostsRemainingMinor: null,
+      expectedCostsReason: "MIXED_DENOMINATION",
+      totalExpectedMinor: null,
+    });
+  });
+
   test("an empty deal — nothing recorded, no parties, no policy — is nulls with reasons and zero recorded costs", () => {
     const s = deriveDealFinancialSummary(
       inputs({
         parties: [],
         app: {},
-        expenses: { actualTotalMinor: 0, awaitingActuals: 0 },
+        expenses: { actualTotalMinor: 0, awaitingActuals: 0, reason: null },
         expectedDealerBorne: { totalMinor: null, remainingMinor: null, reason: "NO_POLICY" },
         profit: { available: false, reason: "NoApprovedPurchaseAmount" },
         vehicleConsigned: null,
@@ -269,6 +299,7 @@ describe("deriveDealFinancialSummary", () => {
     expect(s.dealerOutlay).toEqual({
       plannedContributionMinor: null,
       recordedCostsMinor: 0,
+      recordedCostsReason: null,
       awaitingActuals: 0,
       knownCommittedMinor: null,
       expectedCostsRemainingMinor: null,

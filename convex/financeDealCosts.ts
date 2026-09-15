@@ -544,7 +544,8 @@ export function deriveFeeTemplateAdoption(args: {
   app: Doc<"financeApplications">;
   company: Doc<"financeCompanies"> | null;
   liveFeeCount: number;
-  custodyCount: number;
+  /** Whether ANY custody record exists — existence is all the boundary asks. */
+  custodyRecorded: boolean;
 }): FeeTemplateAdoption {
   const { app, company } = args;
   const snapshot = app.companyRuleSnapshot;
@@ -573,7 +574,7 @@ export function deriveFeeTemplateAdoption(args: {
     ) {
       return "BLOCKED_DEAL_PROGRESSED";
     }
-    if (args.liveFeeCount > 0 || args.custodyCount > 0) return "BLOCKED_COSTS_RECORDED";
+    if (args.liveFeeCount > 0 || args.custodyRecorded) return "BLOCKED_COSTS_RECORDED";
     return "AVAILABLE";
   })();
   return { state, ...base };
@@ -953,7 +954,7 @@ export const listDealCosts = query({
           app,
           company: await companyFor(ctx, app),
           liveFeeCount: fees.length,
-          custodyCount: custodyRows.length,
+          custodyRecorded: custodyRows.length > 0,
         }),
       },
       custody,
@@ -1007,12 +1008,18 @@ export const adoptCompanyFeeTemplates = mutation({
 
     const company = await companyFor(ctx, app);
     const fees = await loadActiveFees(ctx, app._id);
-    const custodyRows = await custodyFor(ctx, app._id);
+    // Existence is the whole question here, so the read is one indexed row —
+    // never the full custody set, which only the writers that balance every
+    // record need to hydrate.
+    const anyCustody = await ctx.db
+      .query("financeDealCustody")
+      .withIndex("by_application", (q) => q.eq("applicationId", app._id))
+      .first();
     const adoption = deriveFeeTemplateAdoption({
       app,
       company,
       liveFeeCount: fees.length,
-      custodyCount: custodyRows.length,
+      custodyRecorded: anyCustody !== null,
     });
     if (adoption.state !== "AVAILABLE" || company === null || app.companyRuleSnapshot === undefined) {
       const why: Record<FeeTemplateAdoptionState, string> = {

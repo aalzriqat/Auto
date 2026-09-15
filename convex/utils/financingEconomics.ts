@@ -1084,12 +1084,17 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
   const stopped = credit === "REJECTED" || credit === "CANCELLED" || facts.dealCancelled === true;
   // A gap of zero is not a gap, and `undefined` means none was ever recorded.
   const hasGap = (facts.rawAppraisalGapMinor ?? 0) !== 0;
-  const gapResolved =
-    gap === "NOT_REQUIRED" ||
-    gap === "CUSTOMER_ABSORBS" ||
-    gap === "DEALER_ABSORBS" ||
-    gap === "SPLIT" ||
-    (gap === undefined && !hasGap);
+  // A POSITIVE gap is settled by exactly the resolutions the mutation gate
+  // (`assertAppraisalGapSettledToAdvance`) accepts — `appraisalGapIsSettled`,
+  // shared so the rail cannot show a step complete that the writers refuse.
+  // `NOT_REQUIRED` is written only for a zero gap; on a positive one it is a
+  // row contradicting itself, and the rail reads a contradiction as unsettled.
+  // A non-positive gap keeps its recorded resolution, or none if there was
+  // never a gap to resolve.
+  const positiveGap = (facts.rawAppraisalGapMinor ?? 0) > 0;
+  const gapResolved = positiveGap
+    ? appraisalGapIsSettled(gap)
+    : gap === "NOT_REQUIRED" || appraisalGapIsSettled(gap) || (gap === undefined && !hasGap);
 
   const complete: Record<FinancedDealStageKey, boolean> = {
     APPLICATION: credit !== "DRAFT",
@@ -1523,6 +1528,8 @@ export type ManagementProfit =
         | "NoVehicleCost"
         /** SOURCED only: the dealership's preparation spend cannot be stated (unreadable, too many rows, ambiguous history). */
         | "PreparationExpensesUnreadable"
+        /** A dealer-borne cost line is denominated in another currency: the expense operand would be a partial sum, so the figure is withheld. */
+        | "ExpensesMixedDenomination"
         | "CorruptInput"
         | "DealCancelled";
     };
