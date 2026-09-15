@@ -4,8 +4,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AccountingEmptyRow, AccountingTableFrame } from "../AccountingTabShared";
-import type { PeriodStatus, PeriodSummary, Translate } from "./types";
-import { formatAccountingDate, periodLabel } from "./types";
+import type { PeriodSummary, Translate } from "./types";
+import { formatAccountingDate, periodLabel, periodStatusClassName } from "./types";
 
 type AccountingPeriodsTableProps = {
   periods: readonly PeriodSummary[];
@@ -23,14 +23,6 @@ type AccountingPeriodsTableProps = {
   onClose: (periodId: Id<"accountingPeriods">) => void;
   onLock: (periodId: Id<"accountingPeriods">) => void;
 };
-
-function periodStatusClassName(status: PeriodStatus): string {
-  if (status === "OPEN") return "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300";
-  if (status === "FUTURE") return "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300";
-  if (status === "CLOSED") return "border-border bg-muted text-muted-foreground";
-  if (status === "LOCKED") return "border-zinc-300 bg-zinc-100 text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300";
-  return "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300";
-}
 
 function periodBusyAction(periodId: Id<"accountingPeriods">, action: "open" | "close" | "lock") {
   return `${action}_${periodId}`;
