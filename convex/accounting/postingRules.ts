@@ -1,6 +1,7 @@
 import { ConvexError } from "convex/values";
 import { SYSTEM_KEYS, SystemKey } from "../utils/defaultChart";
-import { scaleForCurrency } from "../utils/money";
+import { CUSTODY_CLEARING_KEY, custodyFeeExpenseKey } from "../utils/dealCustodyPosting";
+import type { FeeAccountingTreatment } from "../utils/financedSalePostingPlan";
 
 export type EventType =
   | "DEPOSIT_RECEIVED"
@@ -54,6 +55,17 @@ export type EventType =
   | "EMPLOYEE_ADVANCE_RECOVERED"
   | "PAYROLL_ACCRUED"
   | "PAYROLL_PAID"
+  // Employee cash custody on a financed deal (`financeDealCustody`). One
+  // event per custody ENTRY for the cash legs, one per custody-paid FEE line
+  // (re-versioned on every correction), one per WRITE-OFF.
+  | "CUSTODY_CASH_ISSUED"
+  | "CUSTODY_CASH_RETURNED"
+  | "CUSTODY_REIMBURSED"
+  | "CUSTODY_FEE_PAID"
+  | "CUSTODY_WRITTEN_OFF"
+  // The delta that keeps the employee's out-of-pocket position in the
+  // liability account rather than as a credit on the clearing asset.
+  | "CUSTODY_PAYABLE_RECLASSIFIED"
   | "JOURNAL_REVERSAL";
 
 export const ALL_EVENT_TYPES = new Set<string>([
@@ -78,6 +90,8 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "RECEIVABLE_CREATED",
   "CONSIGNED_SALE_RECLASSIFIED",
   "EMPLOYEE_ADVANCE_PAID", "EMPLOYEE_ADVANCE_RECOVERED", "PAYROLL_ACCRUED", "PAYROLL_PAID",
+  "CUSTODY_CASH_ISSUED", "CUSTODY_CASH_RETURNED", "CUSTODY_REIMBURSED", "CUSTODY_FEE_PAID", "CUSTODY_WRITTEN_OFF",
+  "CUSTODY_PAYABLE_RECLASSIFIED",
   // JOURNAL_REVERSAL is intentionally excluded: it is written directly by
   // reverseAccountingEvent() in reversals.ts and never goes through postAccountingEvent().
 ]);
@@ -2606,6 +2620,166 @@ export function rulePayrollPaid(p: PayrollPaidPayload): RuleResult {
   return { lines, memo: "Payroll paid", category: "SYSTEM" };
 }
 
+// ─── Employee deal custody ────────────────────────────────────────────────────
+
+/** One cash leg on a custody record: the entry that moved it and how. */
+export interface CustodyCashPayload {
+  custodyId: string;
+  entryId: string;
+  applicationId: string;
+  userId: string;
+  amountMinor: number;
+  currency: string;
+  paymentMethod?: string;
+}
+
+function assertCustodyAmount(p: { amountMinor: number }, what: string): void {
+  // The writers validate before posting; the outbox replays what was stored.
+  if (!Number.isSafeInteger(p.amountMinor) || p.amountMinor <= 0) {
+    throw new Error(`${what} carries an amount that is not a positive integer (${p.amountMinor}) — refusing to post.`);
+  }
+}
+
+/** Cash handed to the employee: Dr Custody Clearing / Cr cash or bank (outbound). */
+export function ruleCustodyCashIssued(p: CustodyCashPayload): RuleResult {
+  assertCustodyAmount(p, "CUSTODY_CASH_ISSUED");
+  return {
+    lines: [
+      line(CUSTODY_CLEARING_KEY, p.amountMinor, 0, "Deal custody cash issued to employee"),
+      line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor, "Cash handed to employee for deal custody"),
+    ],
+    memo: "Deal custody cash issued",
+    category: "SYSTEM",
+  };
+}
+
+/** Unspent cash the employee gave back: Dr cash or bank (inbound) / Cr Custody Clearing. */
+export function ruleCustodyCashReturned(p: CustodyCashPayload): RuleResult {
+  assertCustodyAmount(p, "CUSTODY_CASH_RETURNED");
+  return {
+    lines: [
+      line(cashAccountKey(p.paymentMethod), p.amountMinor, 0, "Deal custody cash returned by employee"),
+      line(CUSTODY_CLEARING_KEY, 0, p.amountMinor, "Custody balance returned"),
+    ],
+    memo: "Deal custody cash returned",
+    category: "SYSTEM",
+  };
+}
+
+/**
+ * The dealership paying back what the employee laid out of their own pocket:
+ * Dr Custody Clearing / Cr cash or bank (outbound). It settles the CREDIT the
+ * custody-paid fees left on the clearing account — the employee payable — so
+ * after it the record's clearing position returns to zero.
+ */
+export function ruleCustodyReimbursed(p: CustodyCashPayload): RuleResult {
+  assertCustodyAmount(p, "CUSTODY_REIMBURSED");
+  return {
+    lines: [
+      line(CUSTODY_CLEARING_KEY, p.amountMinor, 0, "Employee reimbursed for deal costs paid out of pocket"),
+      line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor, "Reimbursement paid to employee"),
+    ],
+    memo: "Deal custody reimbursement paid",
+    category: "SYSTEM",
+  };
+}
+
+/** A handover cost the employee paid out of custody, at its recorded actual. */
+export interface CustodyFeePaidPayload {
+  feeId: string;
+  custodyId: string;
+  applicationId: string;
+  vehicleId?: string;
+  feeType: string;
+  accountingTreatment: FeeAccountingTreatment;
+  amountMinor: number;
+  currency: string;
+}
+
+/**
+ * Dr the fee's canonical expense account (the SAME one the financed-sale plan
+ * would debit for a settlement-deducted line of that treatment) / Cr Custody
+ * Clearing. Posted exactly once per live (fee, amount, custody) — a corrected
+ * amount or a re-charged custody is a reversal plus a new version, never a
+ * second forward entry beside the first.
+ */
+export function ruleCustodyFeePaid(p: CustodyFeePaidPayload): RuleResult {
+  assertCustodyAmount(p, "CUSTODY_FEE_PAID");
+  const expense = custodyFeeExpenseKey(p.accountingTreatment);
+  if (expense.systemKey === null) throw new Error(expense.refusal);
+  return {
+    lines: [
+      line(expense.systemKey, p.amountMinor, 0, `Handover cost (${p.feeType}) paid from employee custody`, { vehicleId: p.vehicleId }),
+      line(CUSTODY_CLEARING_KEY, 0, p.amountMinor, "Paid out of deal custody"),
+    ],
+    memo: "Handover cost paid from employee custody",
+    category: "SYSTEM",
+  };
+}
+
+export interface CustodyWrittenOffPayload {
+  custodyId: string;
+  applicationId: string;
+  userId: string;
+  amountMinor: number;
+  currency: string;
+  reason: string;
+}
+
+/** An unaccountable shortage absorbed as a loss: Dr Cash Over/Short / Cr Custody Clearing. */
+export function ruleCustodyWrittenOff(p: CustodyWrittenOffPayload): RuleResult {
+  assertCustodyAmount(p, "CUSTODY_WRITTEN_OFF");
+  return {
+    lines: [
+      line(SYSTEM_KEYS.CASH_OVER_SHORT, p.amountMinor, 0, "Deal custody shortage written off"),
+      line(CUSTODY_CLEARING_KEY, 0, p.amountMinor, "Custody balance written off"),
+    ],
+    memo: "Deal custody shortage written off",
+    category: "SYSTEM",
+  };
+}
+
+export interface CustodyPayableReclassifiedPayload {
+  custodyId: string;
+  applicationId: string;
+  userId: string;
+  /** Signed: positive moves shortfall INTO the payable, negative takes it back out. */
+  deltaMinor: number;
+  /** What the payable carries for this record after the delta — for the reader, not the rule. */
+  payableAfterMinor: number;
+  currency: string;
+}
+
+/**
+ * Moves the employee's out-of-pocket shortfall between the clearing asset and
+ * the reimbursements payable (Codex AF-CUST-01). A positive delta: Dr Custody
+ * Clearing / Cr Employee Reimbursements Payable — the asset stops carrying a
+ * credit and the liability carries the debt. A negative delta is the same
+ * lines the other way, as the debt is repaid, reversed or the fee removed.
+ * Driven by the record's position after each movement, never split at fee
+ * time, so the outcome does not depend on the order cash and receipts arrive.
+ */
+export function ruleCustodyPayableReclassified(p: CustodyPayableReclassifiedPayload): RuleResult {
+  if (!Number.isSafeInteger(p.deltaMinor) || p.deltaMinor === 0) {
+    throw new Error(`CUSTODY_PAYABLE_RECLASSIFIED carries a delta that is not a non-zero integer (${p.deltaMinor}) — refusing to post.`);
+  }
+  const amount = Math.abs(p.deltaMinor);
+  return {
+    lines:
+      p.deltaMinor > 0
+        ? [
+            line(CUSTODY_CLEARING_KEY, amount, 0, "Out-of-pocket shortfall moved off custody clearing"),
+            line(SYSTEM_KEYS.EMPLOYEE_REIMBURSEMENTS_PAYABLE, 0, amount, "Owed to employee for deal costs paid out of pocket"),
+          ]
+        : [
+            line(SYSTEM_KEYS.EMPLOYEE_REIMBURSEMENTS_PAYABLE, amount, 0, "Employee reimbursement liability released"),
+            line(CUSTODY_CLEARING_KEY, 0, amount, "Shortfall returned to custody clearing"),
+          ],
+    memo: "Employee custody shortfall reclassified",
+    category: "SYSTEM",
+  };
+}
+
 export function applyPostingRule(eventType: string, payload: Record<string, unknown>): RuleResult {
   switch (eventType as EventType) {
     case "DEPOSIT_RECEIVED": return ruleDepositReceived(payload as unknown as DepositReceivedPayload);
@@ -2657,6 +2831,12 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "VEHICLE_ACQUISITION_COST_CORRECTED": return ruleVehicleAcquisitionCostCorrected(payload as unknown as VehicleAcquisitionCostCorrectedPayload);
     case "VEHICLE_PREP_EXPENSE_RECLASSIFIED": return ruleVehiclePrepExpenseReclassified(payload as unknown as VehiclePrepExpenseReclassifiedPayload);
     case "RECEIVABLE_CREATED": return ruleReceivableCreated(payload as unknown as ReceivableCreatedPayload);
+    case "CUSTODY_CASH_ISSUED": return ruleCustodyCashIssued(payload as unknown as CustodyCashPayload);
+    case "CUSTODY_CASH_RETURNED": return ruleCustodyCashReturned(payload as unknown as CustodyCashPayload);
+    case "CUSTODY_REIMBURSED": return ruleCustodyReimbursed(payload as unknown as CustodyCashPayload);
+    case "CUSTODY_FEE_PAID": return ruleCustodyFeePaid(payload as unknown as CustodyFeePaidPayload);
+    case "CUSTODY_WRITTEN_OFF": return ruleCustodyWrittenOff(payload as unknown as CustodyWrittenOffPayload);
+    case "CUSTODY_PAYABLE_RECLASSIFIED": return ruleCustodyPayableReclassified(payload as unknown as CustodyPayableReclassifiedPayload);
     default:
       throw new Error(`No posting rule defined for event type: ${eventType}`);
   }

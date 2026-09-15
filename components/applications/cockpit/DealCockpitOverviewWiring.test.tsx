@@ -86,6 +86,7 @@ const OVERVIEW_QUERY = "dealOverview:financedDealOverview";
 const APP_QUERY = "applications:get";
 const COSTS_QUERY = "financeDealCosts:listDealCosts";
 const MEMBERS_QUERY = "memberships:list";
+const CANDIDATES_QUERY = "financeDealCosts:listCustodyCandidates";
 
 function cockpit() {
   return {
@@ -193,20 +194,49 @@ describe("the overview read model", () => {
 });
 
 describe("the custody section", () => {
-  test("renders the bounded summary read-only, and mounts no member picker", () => {
+  test("without the disbursement permission the summary is read-only: no command, no candidate read, no general member list", () => {
     permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
-    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     permissions.add(PERMISSIONS.VIEW_USERS);
     queryResults.set(COSTS_QUERY, dealCosts([openCustody()]));
     renderCockpit();
+    // The general member list (addresses, roles) is never this screen's read;
+    // the permission-shaped candidate list is skipped without the permission.
     expect(queryArgs.has(MEMBERS_QUERY)).toBe(false);
+    expect(queryArgs.get(CANDIDATES_QUERY)).toBe("skip");
     const panel = screen.getByTestId("deal-custody");
-    expect(within(panel).getByText("Rami")).toBeTruthy();
-    expect(within(panel).getByTestId("custody-read-only")).toBeTruthy();
-    // No custody mutation is even bound by this screen.
-    expect(mutations.has("financeDealCosts:openDealCustody")).toBe(false);
-    expect(mutations.has("financeDealCosts:recordCustodyMovement")).toBe(false);
-    expect(mutations.has("financeDealCosts:reconcileDealCustody")).toBe(false);
+    expect(within(panel).getByTestId("custody-record-cust1")).toBeTruthy();
+    expect(within(panel).getByTestId("custody-posted-note").textContent).toBe(salesEn.CustodyNoPermission);
+    expect(within(panel).queryByRole("button", { name: salesEn.CustodyRecordReturn })).toBeNull();
+    expect(within(panel).queryByTestId("custody-issue-button")).toBeNull();
+  });
+
+  test("with the disbursement permission the commands are wired through the posting mutations and the candidate read", async () => {
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    const costs = { ...dealCosts([openCustody()]), custodyAccounting: { ready: true }, custodyPostsNow: true, plannedCustody: null, recommendedCustody: null, economicsFrozen: { frozen: false } };
+    queryResults.set(COSTS_QUERY, costs);
+    queryResults.set(CANDIDATES_QUERY, { candidates: [{ userId: "u2", name: "Rami" }], truncated: false });
+    renderCockpit();
+    expect(queryArgs.has(MEMBERS_QUERY)).toBe(false);
+    expect(queryArgs.get(CANDIDATES_QUERY)).toEqual({ orgId: ORG });
+    const panel = screen.getByTestId("deal-custody");
+    fireEvent.click(within(panel).getByRole("button", { name: salesEn.CustodyRecordReturn }));
+    const dialog = screen.getByTestId("custody-returned-dialog");
+    fireEvent.change(within(dialog).getByLabelText(/Amount/), { target: { value: "100" } });
+    fireEvent.click(within(dialog).getByTestId("custody-returned-submit"));
+    const move = mutations.get("financeDealCosts:recordCustodyMovement")!;
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
+    expect(move.mock.calls[0][0]).toMatchObject({ orgId: ORG, custodyId: "cust1", kind: "RETURNED", amountMinor: 100_000, method: "CASH" });
+    expect(typeof move.mock.calls[0][0].idempotencyKey).toBe("string");
+  });
+
+  test("a frozen deal withholds every handover-cost edit and says why", () => {
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(COSTS_QUERY, { ...dealCosts(), economicsFrozen: { frozen: true, reason: "SALE_FINALIZED" } });
+    renderCockpit();
+    expect(screen.queryByRole("button", { name: salesEn.AddHandoverCost })).toBeNull();
+    expect(screen.getByTestId("deal-handover-costs-frozen").textContent).toBe(salesEn.HandoverCostAfterCloseNote);
   });
 
   test("an additional cost is always sent as paid by the DEALER — no custody link from this screen", async () => {

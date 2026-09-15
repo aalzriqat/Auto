@@ -22,7 +22,8 @@ import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpe
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate, checkPostingAllowed } from "../accountingPeriods";
 import { SYSTEM_KEYS, type SystemKey } from "../utils/defaultChart";
-import { isChartInitialized, isSystemAccountMapped, ensureCommissionAccounts, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureConsignmentAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts, ensureFinancedSettlementAccounts } from "../chartOfAccounts";
+import { custodyPayableReclassKey, custodyPayableReclassPosted } from "../utils/custodySourceLedger";
+import { isChartInitialized, isSystemAccountMapped, ensureCommissionAccounts, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureConsignmentAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts, ensureFinancedSettlementAccounts, ensureDealCustodyAccounts } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
   enqueuePendingReversal,
@@ -246,9 +247,21 @@ async function postDomainEvent(
      * that genuinely happen once per source.
      */
     eventVersion?: number;
+    /** Forwarded to `postOrEnqueue` — see the note there. */
+    requiredSystemKeys?: readonly SystemKey[];
+    /**
+     * A CAUSAL predecessor this event must not overtake, as the reason it is
+     * waiting. When set the event is queued to the outbox outright — even
+     * into an open period with a ready chart — and the worker's own
+     * dependency guard (`accountingOutbox.postOutboxRow`) holds it until the
+     * predecessor is POSTED. The producer names the predecessor because only
+     * it knows the chain; the worker re-proves it because a queued row
+     * outlives the transaction that queued it.
+     */
+    queueBehind?: string;
   }
 ): Promise<void> {
-  await postOrEnqueue(ctx, {
+  const cmd: PostCommand = {
     orgId: args.orgId,
     eventType: args.eventType,
     sourceType: args.sourceType,
@@ -260,7 +273,16 @@ async function postDomainEvent(
     idempotencyKey: args.idempotencyKey,
     payload: args.payload,
     actorId: args.actorId,
-  });
+  };
+  if (args.queueBehind !== undefined) {
+    await enqueuePendingPost(ctx, cmd, `Waiting on a predecessor: ${args.queueBehind}`);
+    return;
+  }
+  await postOrEnqueue(
+    ctx,
+    cmd,
+    args.requiredSystemKeys ? { requiredSystemKeys: args.requiredSystemKeys } : undefined
+  );
 }
 
 /**
@@ -3167,3 +3189,296 @@ export async function hookAssetDisposed(
   });
 }
 
+// ─── Employee deal custody (financeDealCustody) ──────────────────────────────
+//
+// One event per CASH ENTRY (issued / returned / reimbursed), keyed on the
+// entry's own id, so a reversal entry that names it reverses exactly that
+// journal and nothing else. A REVERSAL entry itself posts nothing forward: its
+// whole accounting effect is the JOURNAL_REVERSAL of its target.
+//
+// One event per custody-paid FEE line, versioned on the fee row: correcting
+// the amount, re-charging another custody, unlinking or voiding the line
+// reverses the version on the books and (where a live charge remains) posts
+// the next version. Never a second forward entry beside the first — the fee
+// is on the books exactly once at its current actual, or not at all.
+//
+// One event per WRITE-OFF, versioned on the custody row, reversed by reopen.
+//
+// Every forward hook names DEAL_CUSTODY_CLEARING as a required account: an
+// org whose chart cannot resolve it queues the event to the outbox instead
+// of throwing inside the operator's transaction. The mutations additionally
+// refuse the movement outright before reaching here when the chart is not
+// initialised (`dealCustodyAccountingReadiness`), so a queued row here only
+// ever means "no open period yet", never "no ledger at all".
+
+export type CustodyCashKind = "ISSUED" | "RETURNED" | "REIMBURSED";
+
+const CUSTODY_CASH_EVENT: Record<CustodyCashKind, EventType> = {
+  ISSUED: "CUSTODY_CASH_ISSUED",
+  RETURNED: "CUSTODY_CASH_RETURNED",
+  REIMBURSED: "CUSTODY_REIMBURSED",
+};
+
+export const custodyEntryPostKey = (entryId: Id<"financeDealCustodyEntries">): string =>
+  `custody_entry_${entryId}`;
+export const custodyFeePostKey = (feeId: Id<"financeDealFees">, version: number): string =>
+  `custody_fee_paid_${feeId}_v${version}`;
+export const custodyWriteOffPostKey = (custodyId: Id<"financeDealCustody">, version: number): string =>
+  `custody_written_off_${custodyId}_v${version}`;
+
+async function ensureDealCustodyAccountsIfChartReady(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  if (await isChartInitialized(ctx, orgId)) {
+    await ensureDealCustodyAccounts(ctx, orgId, actorId);
+  }
+}
+
+/** A cash leg on a custody record, dated when the cash moved. */
+export async function hookCustodyCashMoved(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    entry: Doc<"financeDealCustodyEntries">;
+    custody: Doc<"financeDealCustody">;
+    kind: CustodyCashKind;
+    actorId: Id<"users">;
+  }
+): Promise<void> {
+  await ensureDealCustodyAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: CUSTODY_CASH_EVENT[args.kind],
+    sourceType: "financeDealCustodyEntries",
+    sourceId: args.entry._id.toString(),
+    idempotencyKey: custodyEntryPostKey(args.entry._id),
+    currency: args.custody.currency,
+    occurredAt: args.entry.occurredAt,
+    actorId: args.actorId,
+    requiredSystemKeys: [SYSTEM_KEYS.DEAL_CUSTODY_CLEARING],
+    payload: {
+      custodyId: args.custody._id.toString(),
+      entryId: args.entry._id.toString(),
+      applicationId: args.custody.applicationId.toString(),
+      userId: args.custody.userId.toString(),
+      amountMinor: args.entry.amountMinor,
+      currency: args.custody.currency,
+      paymentMethod: args.entry.method,
+    },
+  });
+}
+
+/** The canonical inverse of one cash leg — reversal entry `reversalEntryId` cancels `entryId`. */
+export async function hookCustodyCashReversed(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    entryId: Id<"financeDealCustodyEntries">;
+    kind: CustodyCashKind;
+    reversalEntryId: Id<"financeDealCustodyEntries">;
+    reason: string;
+    actorId: Id<"users">;
+    reversalDate: number;
+  }
+): Promise<ReversalOutcome> {
+  return reverseEventIfPosted(ctx, {
+    orgId: args.orgId,
+    sourceType: "financeDealCustodyEntries",
+    sourceId: args.entryId.toString(),
+    eventType: CUSTODY_CASH_EVENT[args.kind],
+    reason: args.reason,
+    actorId: args.actorId,
+    reversalDate: args.reversalDate,
+    reversalIdempotencyKey: `custody_entry_reversal_${args.reversalEntryId}`,
+    pendingPostIdempotencyKey: custodyEntryPostKey(args.entryId),
+  });
+}
+
+/** A handover cost paid out of custody, at version `version` of the fee's posting. */
+export async function hookCustodyFeePaid(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    fee: Doc<"financeDealFees">;
+    custodyId: Id<"financeDealCustody">;
+    vehicleId: Id<"vehicles"> | undefined;
+    version: number;
+    amountMinor: number;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+): Promise<void> {
+  await ensureDealCustodyAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  if (await isChartInitialized(ctx, args.orgId)) {
+    await ensureFinancedSettlementAccounts(ctx, args.orgId, args.actorId);
+  }
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "CUSTODY_FEE_PAID",
+    sourceType: "financeDealFees",
+    sourceId: args.fee._id.toString(),
+    eventVersion: args.version,
+    idempotencyKey: custodyFeePostKey(args.fee._id, args.version),
+    currency: args.fee.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    requiredSystemKeys: [SYSTEM_KEYS.DEAL_CUSTODY_CLEARING],
+    payload: {
+      feeId: args.fee._id.toString(),
+      custodyId: args.custodyId.toString(),
+      applicationId: args.fee.applicationId.toString(),
+      vehicleId: args.vehicleId?.toString(),
+      feeType: args.fee.feeType,
+      accountingTreatment: args.fee.accountingTreatment,
+      amountMinor: args.amountMinor,
+      currency: args.fee.currency,
+    },
+  });
+}
+
+/** Reverses version `version` of a fee's custody posting — pinned by version, never `.first()`. */
+export async function hookCustodyFeeReversed(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    feeId: Id<"financeDealFees">;
+    version: number;
+    reason: string;
+    actorId: Id<"users">;
+    reversalDate: number;
+  }
+): Promise<ReversalOutcome> {
+  return reverseEventIfPosted(ctx, {
+    orgId: args.orgId,
+    sourceType: "financeDealFees",
+    sourceId: args.feeId.toString(),
+    eventType: "CUSTODY_FEE_PAID",
+    eventVersion: args.version,
+    reason: args.reason,
+    actorId: args.actorId,
+    reversalDate: args.reversalDate,
+    reversalIdempotencyKey: `custody_fee_reversal_${args.feeId}_v${args.version}`,
+    pendingPostIdempotencyKey: custodyFeePostKey(args.feeId, args.version),
+  });
+}
+
+/** A debit residual nobody could account for, absorbed as Cash Over/Short. */
+export async function hookCustodyWrittenOff(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    custody: Doc<"financeDealCustody">;
+    version: number;
+    amountMinor: number;
+    reason: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+): Promise<void> {
+  await ensureDealCustodyAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "CUSTODY_WRITTEN_OFF",
+    sourceType: "financeDealCustody",
+    sourceId: args.custody._id.toString(),
+    eventVersion: args.version,
+    idempotencyKey: custodyWriteOffPostKey(args.custody._id, args.version),
+    currency: args.custody.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    requiredSystemKeys: [SYSTEM_KEYS.DEAL_CUSTODY_CLEARING, SYSTEM_KEYS.CASH_OVER_SHORT],
+    payload: {
+      custodyId: args.custody._id.toString(),
+      applicationId: args.custody.applicationId.toString(),
+      userId: args.custody.userId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.custody.currency,
+      reason: args.reason,
+    },
+  });
+}
+
+export { custodyPayableReclassKey };
+
+/**
+ * One delta on the custody-payable split, versioned per record. Never
+ * reversed: the next delta after a reversed movement restores the split, so
+ * the primary journals keep their exact inverse and this one only follows.
+ *
+ * CAUSALLY CHAINED (final round A). Version N is the delta ON TOP of version
+ * N−1, so it may only reach the books after it. When the predecessor is not
+ * yet POSTED — queued for a month that is closed, held, or failed — this
+ * version is queued behind it instead of posting now, with the reason on the
+ * row; `custodyPostingBlockedReason` re-proves the same condition when the
+ * outbox worker picks it up. Without this an open-period release (v2, a
+ * debit) landed while the closed-period recognition (v1, the credit) was
+ * still waiting, and the liability read as a debit until the month reopened.
+ */
+export async function hookCustodyPayableReclassified(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    custody: Doc<"financeDealCustody">;
+    version: number;
+    deltaMinor: number;
+    payableAfterMinor: number;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+): Promise<void> {
+  await ensureDealCustodyAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  const predecessorUnposted =
+    args.version > 1 &&
+    !(await custodyPayableReclassPosted(ctx, args.orgId, args.custody._id, args.version - 1));
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "CUSTODY_PAYABLE_RECLASSIFIED",
+    queueBehind: predecessorUnposted
+      ? `custody payable reclassification v${args.version - 1} has not posted yet`
+      : undefined,
+    sourceType: "financeDealCustody",
+    sourceId: args.custody._id.toString(),
+    eventVersion: args.version,
+    idempotencyKey: custodyPayableReclassKey(args.custody._id, args.version),
+    currency: args.custody.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    requiredSystemKeys: [SYSTEM_KEYS.DEAL_CUSTODY_CLEARING, SYSTEM_KEYS.EMPLOYEE_REIMBURSEMENTS_PAYABLE],
+    payload: {
+      custodyId: args.custody._id.toString(),
+      applicationId: args.custody.applicationId.toString(),
+      userId: args.custody.userId.toString(),
+      deltaMinor: args.deltaMinor,
+      payableAfterMinor: args.payableAfterMinor,
+      currency: args.custody.currency,
+    },
+  });
+}
+
+/** Reopening a written-off record puts the shortage back on the employee's clearing balance. */
+export async function hookCustodyWriteOffReversed(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    custodyId: Id<"financeDealCustody">;
+    version: number;
+    reason: string;
+    actorId: Id<"users">;
+    reversalDate: number;
+  }
+): Promise<ReversalOutcome> {
+  return reverseEventIfPosted(ctx, {
+    orgId: args.orgId,
+    sourceType: "financeDealCustody",
+    sourceId: args.custodyId.toString(),
+    eventType: "CUSTODY_WRITTEN_OFF",
+    eventVersion: args.version,
+    reason: args.reason,
+    actorId: args.actorId,
+    reversalDate: args.reversalDate,
+    reversalIdempotencyKey: `custody_write_off_reversal_${args.custodyId}_v${args.version}`,
+    pendingPostIdempotencyKey: custodyWriteOffPostKey(args.custodyId, args.version),
+  });
+}

@@ -115,6 +115,17 @@ const TREATMENT_POSTING = {
   { systemKey: SystemKey; side: ComponentSide } | null
 >;
 
+/**
+ * The plan's account for one treatment, or `null` where it has none. Exported
+ * so a custody-paid handover cost (`utils/dealCustodyPosting`) debits the
+ * SAME account a settlement-deducted one would — one mapping, not two.
+ */
+export function treatmentPosting(
+  treatment: FeeAccountingTreatment
+): { systemKey: SystemKey; side: ComponentSide } | null {
+  return TREATMENT_POSTING[treatment];
+}
+
 export type PlanRefusalCode =
   | "LEGAL_INVOICE_MISSING"
   | "LEGAL_INVOICE_WRONG_RECIPIENT"

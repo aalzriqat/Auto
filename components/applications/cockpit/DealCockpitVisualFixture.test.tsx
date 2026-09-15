@@ -311,6 +311,26 @@ function custodyWiring(): DealCustodyWiring {
     expectedTotalMinor: 340 * SCALE,
     // The log is a live paginated query in the app; the static fixture has none.
     renderMovements: () => null,
+    // The disbursement tier's view: the ledger can take a posting, a period
+    // covers today, and the policy recommends the employee-paid slice — so
+    // every money control paints, enabled, exactly as the operator sees it.
+    accounting: { ready: true },
+    openPeriodToday: true,
+    plannedCustody: null,
+    recommended: { recommendedMinor: 90 * SCALE, reason: null, outstandingCount: 1 },
+    actions: {
+      members: [{ userId: "u_rami", name: "رامي حسن" }],
+      eligibleFees: [],
+      scaleOf: () => 3,
+      onPlan: async () => {},
+      onClearPlan: async () => {},
+      onOpen: async () => {},
+      onMove: async () => {},
+      onReverse: async () => {},
+      onAttach: async () => {},
+      onClose: async () => {},
+      onReopen: async () => {},
+    },
   };
 }
 

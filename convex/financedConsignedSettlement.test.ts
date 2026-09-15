@@ -24,6 +24,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { financedSaleRecognitionDate } from "./utils/financedSaleRecognition";
 // The notification a recipient actually reads, rendered by the same function
 // every channel uses — asserting the stored row alone would not catch a
 // template whose placeholders are never filled.
@@ -225,6 +226,10 @@ async function runDeal(
     };
     /** Runs after the route is chosen and before the vehicle goes out. */
     beforeHandover?: (applicationId: Id<"financeApplications">) => Promise<void>;
+    /** The legal invoice's date — THE recognition date (`financedSaleRecognitionDate`). Defaults to now. */
+    legalInvoiceDate?: number;
+    /** Runs after every prerequisite is on the record and immediately before `finalizeDeal`. */
+    beforeFinalize?: (applicationId: Id<"financeApplications">) => Promise<void>;
   } = {}
 ) {
   const downPayment = opts.downPayment ?? 0;
@@ -357,7 +362,7 @@ async function runDeal(
       applicationId,
       legalInvoiceAmountMinor: VEHICLE_PRICE * SCALE,
       legalInvoiceNumber: `INV-${applicationId}`,
-      legalInvoiceDate: Date.now(),
+      legalInvoiceDate: opts.legalInvoiceDate ?? Date.now(),
       issuedTo: "FINANCE_COMPANY",
     });
     const feeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, { expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(),
@@ -412,6 +417,7 @@ async function runDeal(
     });
   }
 
+  await opts.beforeFinalize?.(applicationId);
   const saleId = await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
     orgId: s.orgId,
     applicationId,
@@ -8011,5 +8017,160 @@ describe("finalization judges the deal's costs as they are NOW, never the stored
     expect(app.status).toBe("CLOSED");
     expect(app.finalizedSaleId).toBe(saleId);
     expect(app.companyRuleSnapshot?.feeTemplates?.[0].estimatedAmountMinor).toBeNaN();
+  });
+});
+
+/**
+ * ONE recognition date (owner-proxy finding on f1cca, AF-80).
+ *
+ * `legalInvoiceDate` has always been documented as "the date, which decides the
+ * period revenue lands in", and `recordLegalInvoice` audits a date-only change
+ * for exactly that reason — while `finalizeDeal` dated the sale at the wall
+ * clock. `financedSaleRecognitionDate` is now the single rule, and these prove
+ * the sale, its journal and its period follow the invoice, not the click.
+ */
+describe("the legal invoice's date is THE recognition date", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  /**
+   * Two periods: P1 ends 30 days ago, P2 runs from there. The seed's single
+   * fiscal-year period is narrowed to P2 and P1 is written beside it, both
+   * OPEN unless the case closes one.
+   */
+  async function splitPeriods(s: Seeded, opts: { closeEarlier: boolean }) {
+    const boundary = Date.now() - 30 * DAY;
+    return await s.t.run(async (ctx) => {
+      const [seeded] = (await ctx.db.query("accountingPeriods").collect()).filter((p) => p.orgId === s.orgId);
+      if (!seeded) throw new Error("the seed opened no period");
+      await ctx.db.patch(seeded._id, { startDate: boundary, periodNumber: 2 });
+      const earlier = await ctx.db.insert("accountingPeriods", {
+        orgId: s.orgId,
+        startDate: boundary - 400 * DAY,
+        endDate: boundary - 1,
+        fiscalYear: seeded.fiscalYear,
+        periodNumber: 1,
+        status: opts.closeEarlier ? "CLOSED" : "OPEN",
+        ...(opts.closeEarlier ? { closedAt: Date.now(), closedBy: s.userId } : {}),
+        createdAt: Date.now(),
+      });
+      return { earlierPeriodId: earlier, currentPeriodId: seeded._id, invoiceDate: boundary - 5 * DAY };
+    });
+  }
+
+  test("an invoice dated in an earlier OPEN period recognizes the sale IN that period, on that date", async () => {
+    const s = await seedDealership("recog-open", { sourceType: "STOCK" });
+    const { earlierPeriodId, invoiceDate } = await splitPeriods(s, { closeEarlier: false });
+    const { saleId } = await runDeal(s, { legalInvoiceDate: invoiceDate });
+
+    const sale = await s.t.run((ctx) => ctx.db.get(saleId!));
+    expect(sale?.saleDate).toBe(invoiceDate);
+
+    const saleEntries = await s.t.run(async (ctx) =>
+      (await ctx.db.query("journalEntries").collect()).filter(
+        (e) => e.orgId === s.orgId && e.sourceType === "sales" && e.sourceId === String(saleId)
+      )
+    );
+    expect(saleEntries).toHaveLength(1);
+    expect(saleEntries[0]?.accountingDate).toBe(invoiceDate);
+    expect(saleEntries[0]?.periodId).toBe(earlierPeriodId);
+    expect(saleEntries[0]?.status).toBe("POSTED");
+    // Revenue really landed: the legal invoice, in the invoice's own period.
+    const ledger = await ledgerBySystemKey(s);
+    expect(ledger[SYSTEM_KEYS.SALES_REVENUE]).toBe(-VEHICLE_PRICE * SCALE);
+  });
+
+  test("an invoice dated in a CLOSED period queues the sale for THAT period rather than recognizing it today", async () => {
+    const s = await seedDealership("recog-closed", { sourceType: "STOCK" });
+    const { invoiceDate } = await splitPeriods(s, { closeEarlier: true });
+    const { saleId } = await runDeal(s, { legalInvoiceDate: invoiceDate });
+
+    const sale = await s.t.run((ctx) => ctx.db.get(saleId!));
+    expect(sale?.saleDate).toBe(invoiceDate);
+
+    // Nothing posted into the open period under the sale's name, and the
+    // closed month was not written into either: the event waits in the
+    // outbox, dated to the invoice, for a human to reopen the period.
+    const saleEntries = await s.t.run(async (ctx) =>
+      (await ctx.db.query("journalEntries").collect()).filter(
+        (e) => e.orgId === s.orgId && e.sourceType === "sales" && e.sourceId === String(saleId)
+      )
+    );
+    expect(saleEntries).toEqual([]);
+    const queued = await s.t.run(async (ctx) =>
+      (await ctx.db.query("pendingAccountingEvents").collect()).filter(
+        (r) => r.orgId === s.orgId && r.kind === "POST" && r.idempotencyKey === `sale_completed_${saleId}`
+      )
+    );
+    expect(queued).toHaveLength(1);
+    expect(queued[0]?.status).toBe("PENDING");
+    expect(queued[0]?.accountingDate).toBe(invoiceDate);
+    const ledger = await ledgerBySystemKey(s);
+    expect(ledger[SYSTEM_KEYS.SALES_REVENUE] ?? 0).toBe(0);
+  });
+
+  test("a future-dated or non-timestamp invoice date is refused before it is stored", async () => {
+    const s = await seedDealership("recog-future", { sourceType: "STOCK" });
+    const { applicationId } = await runDeal(s, { finalize: false });
+    const invoice = {
+      orgId: s.orgId,
+      applicationId,
+      legalInvoiceAmountMinor: VEHICLE_PRICE * SCALE,
+      legalInvoiceNumber: "INV-FUTURE",
+      issuedTo: "FINANCE_COMPANY" as const,
+    };
+    await expect(
+      s.asUser.mutation(api.financeDealCosts.recordLegalInvoice, { ...invoice, legalInvoiceDate: Date.now() + 3 * DAY })
+    ).rejects.toThrow(/cannot be in the future/);
+    await expect(
+      s.asUser.mutation(api.financeDealCosts.recordLegalInvoice, { ...invoice, legalInvoiceDate: Number.NaN })
+    ).rejects.toThrow(/real timestamp/);
+    await expect(
+      s.asUser.mutation(api.financeDealCosts.recordLegalInvoice, { ...invoice, legalInvoiceDate: 1.5 })
+    ).rejects.toThrow(/real timestamp/);
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(app?.legalInvoiceDate).toBeUndefined();
+  });
+
+  test("a legacy invoice date that is not a usable timestamp REFUSES finalization rather than silently dating the sale today (Codex AF-CUST-08)", async () => {
+    for (const bad of [-1, 1.5, Number.NaN, Date.now() + 3 * DAY]) {
+      const s = await seedDealership(`recog-legacy-${String(bad).replace(/[^a-z0-9]/gi, "")}`, { sourceType: "STOCK" });
+      await expect(
+        runDeal(s, {
+          beforeFinalize: async (applicationId) => {
+            // Written around the validating writer, as a legacy or raw-edited row would be.
+            await s.t.run((ctx) => ctx.db.patch(applicationId, { legalInvoiceDate: bad }));
+          },
+        })
+      ).rejects.toThrow(/legal invoice (date is not a real timestamp|is dated in the future)/);
+      const sales = await s.t.run(async (ctx) => (await ctx.db.query("sales").collect()).filter((row) => row.orgId === s.orgId));
+      expect(sales).toEqual([]);
+      const ledger = await ledgerBySystemKey(s);
+      expect(ledger[SYSTEM_KEYS.SALES_REVENUE] ?? 0).toBe(0);
+    }
+  });
+
+  test("the pure rule: absent falls back to finalization, present must be a real non-future instant", () => {
+    const now = Date.now();
+    expect(financedSaleRecognitionDate({ legalInvoiceDate: undefined }, now)).toBe(now);
+    expect(financedSaleRecognitionDate({ legalInvoiceDate: now - DAY }, now)).toBe(now - DAY);
+    expect(financedSaleRecognitionDate({ legalInvoiceDate: 0 }, now)).toBe(0);
+    for (const bad of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, now + 3 * DAY]) {
+      expect(() => financedSaleRecognitionDate({ legalInvoiceDate: bad }, now)).toThrow();
+    }
+  });
+
+  test("after finalization the invoice — and so the recognition date — cannot be replaced", async () => {
+    const s = await seedDealership("recog-frozen", { sourceType: "STOCK" });
+    const { applicationId } = await runDeal(s);
+    await expect(
+      s.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+        orgId: s.orgId,
+        applicationId,
+        legalInvoiceAmountMinor: VEHICLE_PRICE * SCALE,
+        legalInvoiceNumber: "INV-LATER",
+        legalInvoiceDate: Date.now() - DAY,
+        issuedTo: "FINANCE_COMPANY",
+      })
+    ).rejects.toThrow(/finalized/);
   });
 });

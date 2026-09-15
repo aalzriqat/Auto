@@ -2598,6 +2598,24 @@ export default defineSchema({
     ),
 
     notes: v.optional(v.string()),
+    /**
+     * Who is PLANNED to handle this deal's finalization payments, before any
+     * cash is handed over. A plan, not money: nothing here is issued, posted
+     * or summed, and the actual custody record (`financeDealCustody`) is
+     * opened separately and may name someone else. `amountMinor` is the
+     * amount the planner agreed to hand over, optional — the server's own
+     * recommendation is derived from the deal's employee-paid fee templates
+     * and never stored.
+     */
+    plannedCustody: v.optional(
+      v.object({
+        userId: v.id("users"),
+        amountMinor: v.optional(v.number()),
+        note: v.optional(v.string()),
+        plannedBy: v.id("users"),
+        plannedAt: v.number(),
+      })
+    ),
     createdAt: v.number(),
     updatedAt: v.number(),
     quoteModeAtSubmission: v.optional(v.union(
@@ -3032,6 +3050,24 @@ export default defineSchema({
 
     /** Set when an employee holding deal custody laid this out. */
     custodyId: v.optional(v.id("financeDealCustody")),
+    /**
+     * What of this line is ON THE BOOKS as a custody-paid cost right now, or
+     * absent when nothing is. `CUSTODY_FEE_PAID` posts once per version
+     * against `financeDealFees/<id>`; every correction (amount, custody,
+     * unlink, void) reverses the live version and, if a live charge remains,
+     * posts the next. Stored so "is it posted, and at what?" is answered from
+     * the row rather than by scanning an event family whose reversals share
+     * its source key.
+     */
+    custodyPosted: v.optional(
+      v.object({
+        version: v.number(),
+        amountMinor: v.number(),
+        custodyId: v.id("financeDealCustody"),
+      })
+    ),
+    /** The highest custody posting version ever used on this line — never reused after a reversal. */
+    custodyPostingVersion: v.optional(v.number()),
     paidAt: v.optional(v.number()),
     receiptReference: v.optional(v.string()),
     documentStorageIds: v.optional(v.array(v.id("_storage"))),
@@ -3149,6 +3185,34 @@ export default defineSchema({
     reconciledBy: v.optional(v.id("users")),
     reconciliationNotes: v.optional(v.string()),
     writeOffReason: v.optional(v.string()),
+    /**
+     * Set by `openDealCustody` once custody posts to the ledger: every
+     * movement on this record has a journal (or a queued post) behind it. A
+     * record WITHOUT it predates the posting and refuses every money command
+     * (`assertCustodyOnLedger`) until an explicit migration settles it — a new
+     * leg posted onto an unposted record would be a partial ledger.
+     */
+    ledgerPosting: v.optional(v.literal("CANONICAL")),
+    /**
+     * What EMPLOYEE_REIMBURSEMENTS_PAYABLE (2320) is being driven TO for this
+     * record, and the last `CUSTODY_PAYABLE_RECLASSIFIED` version issued. The
+     * payable is the record's out-of-pocket position `max(0, −position)`,
+     * reached by a chain of delta reclassifications, one per movement — see
+     * `syncCustodyPayable`. Absent means zero.
+     *
+     * ⚠️ A TARGET, NOT A LEDGER BALANCE. A delta dated into a closed month
+     * waits in the outbox, and every later delta is queued behind it
+     * (`utils/custodySourceLedger`), so the books may still carry an earlier
+     * version's figure. What is actually posted is read from the ledger
+     * (`custodyPayableReclassPosted`), never from this field — the read
+     * reports `payableAwaitingPost` for exactly that gap.
+     */
+    payableTargetMinor: v.optional(v.number()),
+    payableReclassVersion: v.optional(v.number()),
+    /** The write-off on the books (`CUSTODY_WRITTEN_OFF`, versioned), absent once reopened. */
+    writeOffPosted: v.optional(v.object({ version: v.number(), amountMinor: v.number() })),
+    /** The highest write-off posting version ever used — never reused after a reversal. */
+    writeOffPostingVersion: v.optional(v.number()),
 
     createdBy: v.id("users"),
     createdAt: v.number(),

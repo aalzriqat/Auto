@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { dateInputToUtcMs, todayDateInput } from "@/lib/dateInput";
+import { economicDateInputToMs, todayDateInput } from "@/lib/dateInput";
 import type { Doc } from "@/convex/_generated/dataModel";
 
 /** The fee-type union the server validates — the row carries it as such, so no cast is needed to send it back. */
@@ -529,6 +529,14 @@ export function HandoverCostsPanel({
         <div className="space-y-1">
           <CardTitle className="text-base">{t("HandoverCostsHeading")}</CardTitle>
           <p className="text-xs text-muted-foreground">{t("HandoverCostsNote")}</p>
+          {/* Said at panel level, because the controls it explains are absent:
+              once the sale is recognized the server refuses every edit that
+              would move what was posted, so none is offered. */}
+          {dealClosed && (
+            <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="deal-handover-costs-frozen">
+              {t("HandoverCostAfterCloseNote")}
+            </p>
+          )}
         </div>
         {canAdd && costs && !adding && (
           <Button type="button" size="sm" variant="outline" disabled={submittingAny} onClick={openAdd}>
@@ -1097,7 +1105,7 @@ function AddForm({
           actualAmountMinor: amountMinor,
           paidTo: payee,
           accountingTreatment: treatment,
-          paidAt: paidOn ? dateInputToUtcMs(paidOn) : undefined,
+          paidAt: paidOn ? economicDateInputToMs(paidOn) : undefined,
           receiptReference: reference.trim() || undefined,
         });
       }}
@@ -1374,7 +1382,7 @@ function TemplateActualForm({
             ? null
             : {
                 actualAmountMinor: amountMinor,
-                paidAt: paidOn ? dateInputToUtcMs(paidOn) : undefined,
+                paidAt: paidOn ? economicDateInputToMs(paidOn) : undefined,
                 receiptReference: reference.trim() || undefined,
                 currency,
               });
@@ -1508,7 +1516,7 @@ function ActualForm({
         try {
           await onSubmit({
             actualAmountMinor: amountMinor,
-            paidAt: paidOn ? dateInputToUtcMs(paidOn) : undefined,
+            paidAt: paidOn ? economicDateInputToMs(paidOn) : undefined,
             receiptReference: reference.trim() || undefined,
             currency: line.currency,
           });
