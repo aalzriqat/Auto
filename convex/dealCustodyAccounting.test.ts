@@ -3937,6 +3937,29 @@ describe("R7-F2 — the family proof requires EXACTLY ONE canonical POSTED forwa
     expect(await familyRefusal(seed)).toMatch(/custody movement on this deal is on the books more than once/);
     await seed.t.run((ctx) => ctx.db.delete(stray));
     expect(await familyRefusal(seed)).toBeNull();
+    // A full key batch is never judged: the canonical row plus seven dead
+    // ones fill the batch, and a ninth LIVE duplicate sits beyond it where
+    // a prefix judgement would never see it — refused as unverifiable.
+    const filler: Id<"accountingEvents">[] = [];
+    for (let n = 0; n < MAX_CUSTODY_READ_BATCH - 2; n += 1) {
+      filler.push(await duplicateEvent(seed, { ...issued, status: "FAILED" }));
+      await seed.t.run((ctx) => ctx.db.patch(filler[n], { status: "FAILED" }));
+    }
+    // Seven rows under the key (under the batch): still judged exactly, and exact.
+    expect(await familyRefusal(seed)).toBeNull();
+    filler.push(await duplicateEvent(seed, { ...issued, status: "FAILED" }));
+    await seed.t.run((ctx) => ctx.db.patch(filler[filler.length - 1], { status: "FAILED" }));
+    const hidden = await duplicateEvent(seed, issued);
+    expect((await familyOf(seed, issued.sourceId)).length).toBe(MAX_CUSTODY_READ_BATCH + 1);
+    await expect(familyRefusal(seed)).rejects.toThrow(new RegExp(`has ${MAX_CUSTODY_READ_BATCH} or more ledger rows under its key, which is more than one posting can have`));
+    await seed.t.run((ctx) => ctx.db.delete(hidden));
+    // Exactly a full batch with nothing beyond: still unverifiable, still refused.
+    await expect(familyRefusal(seed)).rejects.toThrow(/or more ledger rows under its key/);
+    await seed.t.run(async (ctx) => {
+      for (const id of filler) await ctx.db.delete(id);
+    });
+    expect(await familyRefusal(seed)).toBeNull();
+
     // The module's table is what the hook actually posts, kind by kind, at
     // the version it posts at — the two cannot drift apart unnoticed.
     const legs = await entries(seed, custodyId);

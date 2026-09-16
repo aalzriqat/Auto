@@ -281,6 +281,11 @@ export class CustodyLedgerReadBudget {
   get bytesRead(): number {
     return this.bytes;
   }
+
+  /** The door this proof speaks for, for refusals raised by reads it funds. */
+  get forAction(): string {
+    return this.action;
+  }
 }
 
 /**
@@ -314,6 +319,57 @@ async function readBatched<T extends { _creationTime: number }>(
     after = batch[batch.length - 1]._creationTime;
   }
   return rows;
+}
+
+/**
+ * Every row under ONE idempotency key — the ledger's or the outbox's — or
+ * a refusal. A key names one forward posting (its reversal has its own
+ * key), so a well-formed family is at most a handful of rows and never a
+ * full batch: a batch that comes back FULL is a family this read did not
+ * finish, and a judgement made on that prefix — "no POSTED row", "exactly
+ * one POSTED row" — would certify whatever sits beyond it. So a full
+ * batch is refused as unverifiable rather than judged; nothing is
+ * decided on a prefix. Charged as one point-read. `keyedEvents` and
+ * `keyedOutboxRows` are the two typed readers over this one rule.
+ */
+function keyedFamily<T>(rows: T[], idempotencyKey: string, budget: CustodyLedgerReadBudget | undefined): T[] {
+  budget?.chargeRead(rows);
+  if (rows.length >= MAX_CUSTODY_READ_BATCH) {
+    throw new ConvexError(
+      `A custody posting (${idempotencyKey}) has ${MAX_CUSTODY_READ_BATCH} or more ledger rows under its key, which is more than one posting can have and past what ${budget?.forAction ?? "this check"} can verify completely; nothing has been changed. Have the record reviewed.`
+    );
+  }
+  return rows;
+}
+
+/** The ledger's rows under one key — see `keyedFamily`. */
+async function keyedEvents(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  idempotencyKey: string,
+  budget?: CustodyLedgerReadBudget
+): Promise<Array<Doc<"accountingEvents">>> {
+  await budget?.assertHeadroom(ctx);
+  const rows = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
+    .take(MAX_CUSTODY_READ_BATCH);
+  return keyedFamily(rows, idempotencyKey, budget);
+}
+
+/** The outbox's rows under one key — see `keyedFamily`. */
+async function keyedOutboxRows(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  idempotencyKey: string,
+  budget?: CustodyLedgerReadBudget
+): Promise<Array<Doc<"pendingAccountingEvents">>> {
+  await budget?.assertHeadroom(ctx);
+  const rows = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
+    .take(MAX_CUSTODY_READ_BATCH);
+  return keyedFamily(rows, idempotencyKey, budget);
 }
 
 /**
@@ -507,12 +563,7 @@ async function eventPosted(
   idempotencyKey: string,
   budget?: CustodyLedgerReadBudget
 ): Promise<boolean> {
-  await budget?.assertHeadroom(ctx);
-  const rows = await ctx.db
-    .query("accountingEvents")
-    .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
-    .take(MAX_CUSTODY_READ_BATCH);
-  budget?.chargeRead(rows);
+  const rows = await keyedEvents(ctx, orgId, idempotencyKey, budget);
   return rows.some((row) => row.status === "POSTED");
 }
 
@@ -624,12 +675,7 @@ async function forwardStillQueued(
   idempotencyKey: string,
   budget?: CustodyLedgerReadBudget
 ): Promise<boolean> {
-  await budget?.assertHeadroom(ctx);
-  const rows = await ctx.db
-    .query("pendingAccountingEvents")
-    .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
-    .take(4);
-  budget?.chargeRead(rows);
+  const rows = await keyedOutboxRows(ctx, orgId, idempotencyKey, budget);
   return rows.some((row) => row.kind === "POST" && row.status !== "POSTED");
 }
 
@@ -954,12 +1000,7 @@ async function pendingForwardByKey(
   idempotencyKey: string,
   budget?: CustodyLedgerReadBudget
 ): Promise<Doc<"pendingAccountingEvents"> | null> {
-  await budget?.assertHeadroom(ctx);
-  const rows = await ctx.db
-    .query("pendingAccountingEvents")
-    .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
-    .take(4);
-  budget?.chargeRead(rows);
+  const rows = await keyedOutboxRows(ctx, orgId, idempotencyKey, budget);
   return rows.find((row) => row.kind === "POST" && row.status !== "POSTED") ?? null;
 }
 
@@ -1361,12 +1402,9 @@ export async function custodyLedgerFamilyRefusal(
     for (const entry of entries) {
       if (entry.kind === "REVERSAL") continue;
       const kind = entry.kind;
-      await budget.assertHeadroom(ctx);
-      const rows = await ctx.db
-        .query("accountingEvents")
-        .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", custodyEntryPostKey(entry._id)))
-        .take(Math.min(MAX_CUSTODY_READ_BATCH, budget.take(MAX_CUSTODY_READ_BATCH - 1)));
-      budget.charge(rows);
+      // The whole key family or a refusal (`keyedEvents`): a full batch is
+      // never judged, so a duplicate beyond it cannot hide.
+      const rows = await keyedEvents(ctx, orgId, custodyEntryPostKey(entry._id), budget);
       const forwards = rows.filter((event) => event.sourceType === "financeDealCustodyEntries" && event.sourceId === entry._id.toString());
       if (reversed.has(entry._id)) {
         if (forwards.some((event) => event.status !== "REVERSED")) {
