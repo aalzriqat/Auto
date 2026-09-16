@@ -14,6 +14,7 @@ import {
   CustodyPlanDialog,
   CustodyReasonDialog,
   type CustodyEligibleFee,
+  type CustodyCloseValues,
   type CustodyMember,
   type CustodyMovementValues,
 } from "./DealCustodyDialogs";
@@ -123,8 +124,19 @@ export type DealCustodyActions = Readonly<{
   onMove: (custodyId: Id<"financeDealCustody">, kind: "ISSUED" | "RETURNED" | "REIMBURSED", values: CustodyMovementValues) => Promise<void>;
   onReverse: (custodyId: Id<"financeDealCustody">, movement: CustodyMovementRef, reason: string) => Promise<void>;
   onAttach: (custodyId: Id<"financeDealCustody">, feeId: Id<"financeDealFees">) => Promise<void>;
-  onClose: (custodyId: Id<"financeDealCustody">, values: { notes: string; writeOffReason?: string }) => Promise<void>;
+  onClose: (custodyId: Id<"financeDealCustody">, values: CustodyCloseValues) => Promise<void>;
   onReopen: (custodyId: Id<"financeDealCustody">, reason: string) => Promise<void>;
+  /**
+   * The operator closed an issue / movement / closure dialog without its
+   * command succeeding (R8). The container retires the attempt's identity so
+   * it cannot be reused by a later, genuine command with the same figures —
+   * a lost response replayed under a key it never minted reports a second
+   * success for cash that moved once. Same lifecycle as `onAbandonAdd` on
+   * the handover costs.
+   */
+  onAbandonOpen: (intentId: string) => void;
+  onAbandonMove: (custodyId: Id<"financeDealCustody">, kind: "ISSUED" | "RETURNED" | "REIMBURSED", intentId: string) => void;
+  onAbandonClose: (custodyId: Id<"financeDealCustody">, intentId: string) => void;
 }>;
 
 export type DealCustodyWiring = Readonly<{
@@ -161,12 +173,30 @@ const STATUS_KEY: Record<CustodyRecordView["status"], string> = {
 type T = (key: string) => string;
 type Formatter = (minor: number, currency: string) => string;
 
-type DialogState =
+/** What a button asks to open. The commands that carry identity get theirs when the dialog opens. */
+type DialogRequest =
   | { kind: "PLAN" }
   | { kind: "OPEN" }
   | { kind: "MOVE"; custodyId: Id<"financeDealCustody">; movement: "ISSUED" | "RETURNED" | "REIMBURSED" }
   | { kind: "ATTACH"; custodyId: Id<"financeDealCustody"> }
   | { kind: "CLOSE"; custodyId: Id<"financeDealCustody"> }
+  | { kind: "REOPEN"; custodyId: Id<"financeDealCustody"> }
+  | { kind: "REVERSE"; custodyId: Id<"financeDealCustody">; movement: CustodyMovementRef };
+
+/**
+ * The open dialog. An issue, movement or closure is an ATTEMPT with its own
+ * `intentId`, minted once when it opened (R8): every submit while it stays
+ * open is the same command, and the container's key is derived from the
+ * attempt, never from the figures — so a lost response replays, a corrected
+ * figure is refused by the server's fingerprint, and a dialog opened again
+ * later for the same figures is a new command.
+ */
+type DialogState =
+  | { kind: "PLAN" }
+  | { kind: "OPEN"; intentId: string }
+  | { kind: "MOVE"; custodyId: Id<"financeDealCustody">; movement: "ISSUED" | "RETURNED" | "REIMBURSED"; intentId: string }
+  | { kind: "ATTACH"; custodyId: Id<"financeDealCustody"> }
+  | { kind: "CLOSE"; custodyId: Id<"financeDealCustody">; intentId: string }
   | { kind: "REOPEN"; custodyId: Id<"financeDealCustody"> }
   | { kind: "REVERSE"; custodyId: Id<"financeDealCustody">; movement: CustodyMovementRef }
   | null;
@@ -259,7 +289,7 @@ function CustodyRecord({
   /** The ledger cannot take a posting right now — actions render disabled. */
   blocked: boolean;
   hasEligibleFees: boolean;
-  openDialog: (state: DialogState) => void;
+  openDialog: (request: DialogRequest) => void;
   t: T;
 }>) {
   const [showMovements, setShowMovements] = useState(false);
@@ -423,9 +453,27 @@ export function DealCustodyPanel({
   const recommended = wiring.recommended ?? null;
   const cur = wiring.currency;
 
-  const openDialog = (state: DialogState) => {
+  const openDialog = (request: DialogRequest) => {
     setError(null);
-    setDialog(state);
+    setDialog(
+      request.kind === "OPEN" || request.kind === "MOVE" || request.kind === "CLOSE"
+        ? { ...request, intentId: crypto.randomUUID() }
+        : request
+    );
+  };
+  /**
+   * The operator closed the dialog (Cancel, Escape, the overlay) with its
+   * command not having succeeded — success closes it through `run` below.
+   * An attempt that carries identity hands it back so the container retires
+   * it; a dialog in flight is not closable (its Cancel is disabled).
+   */
+  const dismiss = () => {
+    if (dialog && actions) {
+      if (dialog.kind === "OPEN") actions.onAbandonOpen(dialog.intentId);
+      else if (dialog.kind === "MOVE") actions.onAbandonMove(dialog.custodyId, dialog.movement, dialog.intentId);
+      else if (dialog.kind === "CLOSE") actions.onAbandonClose(dialog.custodyId, dialog.intentId);
+    }
+    setDialog(null);
   };
   const run = async (work: () => Promise<void>) => {
     setBusy(true);
@@ -625,6 +673,7 @@ export function DealCustodyPanel({
           />
           <CustodyMovementDialog
             open={dialog?.kind === "OPEN"}
+            intentId={dialog?.kind === "OPEN" ? dialog.intentId : ""}
             kind="ISSUED"
             currency={cur}
             scale={scale(cur)}
@@ -635,7 +684,7 @@ export function DealCustodyPanel({
             suggestedMinor={plan?.amountMinor ?? recommended?.recommendedMinor ?? null}
             money={money}
             t={t}
-            onOpenChange={(o) => !o && setDialog(null)}
+            onOpenChange={(o) => !o && dismiss()}
             onSubmit={(values) => {
               // The dialog only submits with a served member resolved; a
               // value without one never reaches the money command.
@@ -655,6 +704,7 @@ export function DealCustodyPanel({
             return (
               <CustodyMovementDialog
                 open
+                intentId={dialog.intentId}
                 kind={dialog.movement}
                 currency={record?.currency ?? cur}
                 scale={scale(record?.currency ?? cur)}
@@ -664,7 +714,7 @@ export function DealCustodyPanel({
                 maxMinor={maxMinor}
                 money={money}
                 t={t}
-                onOpenChange={(o) => !o && setDialog(null)}
+                onOpenChange={(o) => !o && dismiss()}
                 onSubmit={(values) => run(() => actions.onMove(dialog.custodyId, dialog.movement, values))}
               />
             );
@@ -686,6 +736,7 @@ export function DealCustodyPanel({
             return (
               <CustodyCloseDialog
                 open
+                intentId={dialog.intentId}
                 settled={record?.summary?.settled ?? false}
                 employeeOwesMinor={record?.summary?.employeeOwesDealerMinor ?? 0}
                 currency={record?.currency ?? cur}
@@ -693,7 +744,7 @@ export function DealCustodyPanel({
                 error={error}
                 money={money}
                 t={t}
-                onOpenChange={(o) => !o && setDialog(null)}
+                onOpenChange={(o) => !o && dismiss()}
                 onSubmit={(values) => run(() => actions.onClose(dialog.custodyId, values))}
               />
             );

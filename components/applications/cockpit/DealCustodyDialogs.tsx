@@ -51,6 +51,14 @@ export type CustodyMember = Readonly<{
 }>;
 
 export type CustodyMovementValues = Readonly<{
+  /**
+   * The dialog ATTEMPT these values belong to, minted once when the dialog
+   * opened (R8). The container's command identity is derived from it and
+   * nothing in the payload: a retry of the same open dialog — even with a
+   * corrected figure — is the same command, judged by the server's
+   * fingerprint; a dialog opened again for an identical figure is a new one.
+   */
+  intentId: string;
   amountMinor: number;
   method: PaymentMethod;
   reference?: string;
@@ -91,6 +99,7 @@ function SubmitError({ message }: Readonly<{ message: string | null }>) {
 /** Hand over / return / reimburse. `kind` decides the copy, the bounds and the default method. */
 export function CustodyMovementDialog({
   open,
+  intentId,
   kind,
   currency,
   scale,
@@ -106,6 +115,8 @@ export function CustodyMovementDialog({
   onSubmit,
 }: Readonly<{
   open: boolean;
+  /** This attempt's identity; every submit of this open dialog carries it. */
+  intentId: string;
   kind: "ISSUED" | "RETURNED" | "REIMBURSED";
   currency: string;
   scale: number;
@@ -240,6 +251,7 @@ export function CustodyMovementDialog({
             onClick={() =>
               minor !== null &&
               onSubmit({
+                intentId,
                 amountMinor: minor,
                 method,
                 reference: reference.trim() || undefined,
@@ -435,9 +447,17 @@ export function CustodyAttachDialog({
   );
 }
 
+/** What a closure submits; `intentId` is the attempt's, as on a movement. */
+export type CustodyCloseValues = Readonly<{
+  intentId: string;
+  notes: string;
+  writeOffReason?: string;
+}>;
+
 /** Reconcile & close, with the write-off path shown only when a debit residual exists. */
 export function CustodyCloseDialog({
   open,
+  intentId,
   settled,
   employeeOwesMinor,
   currency,
@@ -449,6 +469,8 @@ export function CustodyCloseDialog({
   onSubmit,
 }: Readonly<{
   open: boolean;
+  /** This attempt's identity; every submit of this open dialog carries it. */
+  intentId: string;
   settled: boolean;
   employeeOwesMinor: number;
   currency: string;
@@ -457,7 +479,7 @@ export function CustodyCloseDialog({
   money: (minor: number, currency: string) => string;
   t: T;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (values: { notes: string; writeOffReason?: string }) => void;
+  onSubmit: (values: CustodyCloseValues) => void;
 }>) {
   const [notes, setNotes] = useState("");
   const [writeOff, setWriteOff] = useState(false);
@@ -509,7 +531,7 @@ export function CustodyCloseDialog({
             type="button"
             disabled={!canSubmit}
             data-testid="custody-close-submit"
-            onClick={() => onSubmit({ notes: notes.trim(), writeOffReason: writeOff ? reason.trim() : undefined })}
+            onClick={() => onSubmit({ intentId, notes: notes.trim(), writeOffReason: writeOff ? reason.trim() : undefined })}
           >
             {busy && <Loader2 className="h-4 w-4 animate-spin me-2" aria-hidden />}
             {t("CustodyClose")}

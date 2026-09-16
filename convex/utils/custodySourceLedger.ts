@@ -730,9 +730,102 @@ export async function earlierVersionStillPosted(
   return earliest;
 }
 
+/** Every event type the custody family posts, keyed by the family it belongs to. */
+const CUSTODY_CASH_EVENT_TYPES: ReadonlySet<string> = new Set(Object.values(CUSTODY_CASH_EVENT_TYPE));
+const CUSTODY_EVENT_TYPES: ReadonlySet<string> = new Set([
+  ...CUSTODY_CASH_EVENT_TYPES,
+  "CUSTODY_FEE_PAID",
+  "CUSTODY_WRITTEN_OFF",
+  "CUSTODY_PAYABLE_RECLASSIFIED",
+]);
+const CUSTODY_KEY_PREFIX = /^custody_(entry|fee_paid|written_off|payable_reclass)_/;
+
+/**
+ * ## The canonical identity a queued custody row must carry BEFORE it posts (R8)
+ *
+ * The family gate holds every POSTED custody event to an exact identity —
+ * a cash leg is its kind's event type at version 1 under `custody_entry_`,
+ * a fee posting is `CUSTODY_FEE_PAID` on its line at the version its key
+ * names, a write-off and a payable delta likewise on their record — and
+ * refuses a deal whose ledger carries anything else under those keys
+ * (`custodyLedgerFamilyRefusal`, `provePayableChain`). The worker was the
+ * one door that did not: it re-proved ORDER (below) and then posted whatever
+ * identity the queued row carried. A row whose key, event type, source or
+ * version contradict one another — the shape a raw edit of the outbox
+ * writes — would therefore become a POSTED journal the gate refuses for
+ * ever, with no version to replace it and nothing to reverse it against.
+ *
+ * So the worker proves the row's identity first, from the row alone, and a
+ * contradiction holds the row with the contradiction named — before the
+ * period, dependency or predecessor checks, and before any write. Judged in
+ * BOTH directions: a custody key promises exactly one (event type, source,
+ * version), and a custody event type promises exactly one key. A row that
+ * is not custody's on either side is none of this guard's business.
+ *
+ * Pure over the row so the worker, a test and a future repair tool cannot
+ * disagree about what "canonical" means.
+ */
+export function custodyCanonicalIdentityRefusal(entry: {
+  idempotencyKey: string;
+  eventType?: string;
+  eventVersion?: number;
+  sourceType: string;
+  sourceId: string;
+  payload?: unknown;
+}): string | null {
+  const keyedAsCustody = CUSTODY_KEY_PREFIX.test(entry.idempotencyKey);
+  const typedAsCustody = entry.eventType !== undefined && CUSTODY_EVENT_TYPES.has(entry.eventType);
+  if (!keyedAsCustody && !typedAsCustody) return null;
+  if (!keyedAsCustody) {
+    return `it is a ${entry.eventType} event under a key that is not a custody posting's (${entry.idempotencyKey}), so the custody posting it would be cannot be traced`;
+  }
+  if (!typedAsCustody) {
+    return `it is keyed as a custody posting (${entry.idempotencyKey}) but carries ${entry.eventType === undefined ? "no event type" : `a ${entry.eventType} event`}, so it is not the posting its key promises`;
+  }
+  if (!isStoredVersion(entry.eventVersion)) {
+    return `it is keyed as a custody posting (${entry.idempotencyKey}) but carries a version that is not a positive whole number (${entry.eventVersion}), so it is not the posting its key promises`;
+  }
+  const eventType = entry.eventType as string;
+  // The one key this (event type, source, version) posts under.
+  let expected: { key: string; sourceType: string } | null = null;
+  if (CUSTODY_CASH_EVENT_TYPES.has(eventType)) {
+    expected =
+      entry.eventVersion === CUSTODY_CASH_EVENT_VERSION
+        ? { key: custodyEntryPostKey(entry.sourceId as Id<"financeDealCustodyEntries">), sourceType: "financeDealCustodyEntries" }
+        : null;
+    if (expected === null) {
+      return `it is a ${eventType} event at version ${entry.eventVersion}, but a custody cash leg posts once, at version ${CUSTODY_CASH_EVENT_VERSION}, so it is not the posting its key promises`;
+    }
+  } else if (eventType === "CUSTODY_FEE_PAID") {
+    expected = { key: custodyFeePostKey(entry.sourceId as Id<"financeDealFees">, entry.eventVersion), sourceType: "financeDealFees" };
+  } else if (eventType === "CUSTODY_WRITTEN_OFF") {
+    expected = { key: custodyWriteOffPostKey(entry.sourceId as Id<"financeDealCustody">, entry.eventVersion), sourceType: "financeDealCustody" };
+  } else {
+    expected = { key: custodyPayableReclassKey(entry.sourceId as Id<"financeDealCustody">, entry.eventVersion), sourceType: "financeDealCustody" };
+  }
+  if (entry.sourceType !== expected.sourceType) {
+    return `it is a ${eventType} event keyed on ${entry.sourceType} rather than ${expected.sourceType}, so it is not the posting its key promises`;
+  }
+  if (entry.idempotencyKey !== expected.key) {
+    return `it is a ${eventType} event for ${entry.sourceType} ${entry.sourceId} at version ${entry.eventVersion}, whose posting is keyed ${expected.key}, but it is queued under ${entry.idempotencyKey}, so it is not the posting its key promises`;
+  }
+  if (eventType === "CUSTODY_PAYABLE_RECLASSIFIED") {
+    // The chain the fold and the gate read follows the payload's record;
+    // a payload naming another record is a delta on the wrong chain.
+    const payload = (entry.payload ?? {}) as Record<string, unknown>;
+    if (payload.custodyId !== entry.sourceId) {
+      return `it is a payable reclassification of custody record ${entry.sourceId} whose payload names ${typeof payload.custodyId === "string" ? payload.custodyId : "no custody record"}, so it is not the delta its key promises`;
+    }
+  }
+  return null;
+}
+
 /**
  * Why a queued custody event must NOT post yet, or `null` when it may.
  *
+ *  - first, the row IS the posting its key promises
+ *    (`custodyCanonicalIdentityRefusal`, R8) — judged from the row alone,
+ *    before any read;
  *  - `CUSTODY_PAYABLE_RECLASSIFIED` version N waits for version N−1.
  *  - `CUSTODY_FEE_PAID` / `CUSTODY_WRITTEN_OFF` version N waits for the
  *    REVERSAL of every earlier version — a deferred reversal leaves the
@@ -750,6 +843,7 @@ export async function custodyPostingBlockedReason(
   ctx: MutationCtx,
   entry: {
     orgId: Id<"organizations">;
+    idempotencyKey: string;
     eventType?: string;
     eventVersion?: number;
     sourceType: string;
@@ -757,6 +851,8 @@ export async function custodyPostingBlockedReason(
     payload?: unknown;
   }
 ): Promise<string | null> {
+  const identity = custodyCanonicalIdentityRefusal(entry);
+  if (identity !== null) return identity;
   const version = entry.eventVersion ?? 1;
   if (entry.eventType === "CUSTODY_FEE_PAID" || entry.eventType === "CUSTODY_WRITTEN_OFF") {
     if (version > 1) {

@@ -79,6 +79,9 @@ function actions(overrides: Partial<DealCustodyActions> = {}): DealCustodyAction
     onAttach: vi.fn(async () => {}),
     onClose: vi.fn(async () => {}),
     onReopen: vi.fn(async () => {}),
+    onAbandonOpen: vi.fn(),
+    onAbandonMove: vi.fn(),
+    onAbandonClose: vi.fn(),
     ...overrides,
   };
 }
@@ -231,7 +234,7 @@ describe("DealCustodyPanel", () => {
       fireEvent.click(within(dialog).getByTestId("custody-write-off-toggle"));
       fireEvent.change(within(dialog).getByLabelText(salesEn.CustodyWriteOffReason), { target: { value: "Untraceable" } });
       fireEvent.click(within(dialog).getByTestId("custody-close-submit"));
-      expect(a.onClose).toHaveBeenCalledWith("cust1", { notes: "Counted.", writeOffReason: "Untraceable" });
+      expect(a.onClose).toHaveBeenCalledWith("cust1", { intentId: expect.any(String), notes: "Counted.", writeOffReason: "Untraceable" });
     });
 
     test("a closed record offers reopen only", () => {

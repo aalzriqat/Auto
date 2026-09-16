@@ -1584,15 +1584,25 @@ export function DealCockpit({
    * caller holding CONFIRM_FINANCE_DISBURSEMENT; the server's readiness
    * verdict travels with the read so a dead button says why.
    *
-   * Identity discipline, same as the handover costs: an issuance and a
-   * movement each mint one command identity per dialog attempt and retire it
-   * on success or on the server's own refusal; a lost response keeps it so
-   * the operator's retry replays rather than pays twice.
+   * Identity discipline, same as the handover costs: an issuance, a movement
+   * and a closure each mint one command identity per dialog ATTEMPT — the
+   * dialog's `intentId`, never the figures (R8) — and retire it on success,
+   * on the server's own refusal, or when the operator abandons the dialog. A
+   * lost response keeps it so the operator's retry replays rather than pays
+   * twice; and because the figures are not in the key, a corrected figure on
+   * that retry is refused by the server's fingerprint instead of becoming a
+   * second payment, while a dialog opened again later for the same figures
+   * is a new command rather than a silent replay of the first.
    */
   const custodyMoney = (minor: number, currency: string) =>
     `${(minor / Math.pow(10, scaleForCurrency(currency))).toLocaleString()} ${
       currency === orgCurrency.code ? orgCurrency.displayLabel : currency
     }`;
+  // One intent per dialog attempt. The deal, record and kind are named for
+  // legibility only; the attempt's `intentId` is what makes it one command.
+  const openCustodyIntent = (intentId: string) => `open-custody:${applicationId}:${intentId}`;
+  const custodyMoveIntent = (custodyId: string, kind: string, intentId: string) => `custody-move:${custodyId}:${kind}:${intentId}`;
+  const custodyCloseIntent = (custodyId: string, intentId: string) => `custody-close:${custodyId}:${intentId}`;
   const custodyCommand = async (intent: string, work: (idempotencyKey: string) => Promise<unknown>) => {
     try {
       await work(commandId.for(intent));
@@ -1638,7 +1648,7 @@ export function DealCockpit({
             ),
           onClearPlan: () => custodyPlain(() => planCustodyHandler({ orgId, applicationId })),
           onOpen: (values) =>
-            custodyCommand(`open-custody:${applicationId}:${values.userId}`, (idempotencyKey) =>
+            custodyCommand(openCustodyIntent(values.intentId), (idempotencyKey) =>
               openDealCustody({
                 orgId,
                 applicationId,
@@ -1652,7 +1662,7 @@ export function DealCockpit({
               })
             ),
           onMove: (custodyId, kind, values) =>
-            custodyCommand(`custody-move:${custodyId}:${kind}:${values.amountMinor}`, (idempotencyKey) =>
+            custodyCommand(custodyMoveIntent(custodyId, kind, values.intentId), (idempotencyKey) =>
               recordCustodyMovement({
                 orgId,
                 custodyId,
@@ -1685,7 +1695,7 @@ export function DealCockpit({
             // A closure is a command like a movement: it may post a write-off,
             // and a lost response must replay rather than refuse on the
             // closure it already made — so it carries a key the same way.
-            custodyCommand(`custody-close:${custodyId}`, (idempotencyKey) =>
+            custodyCommand(custodyCloseIntent(custodyId, values.intentId), (idempotencyKey) =>
               reconcileDealCustody({
                 orgId,
                 custodyId,
@@ -1696,6 +1706,12 @@ export function DealCockpit({
             ),
           onReopen: (custodyId, reason) =>
             custodyPlain(() => reopenDealCustody({ orgId, custodyId, reason })),
+          // The dialog was abandoned with its command not having succeeded:
+          // its identity is over, so a later genuine command with the same
+          // figures can never replay it.
+          onAbandonOpen: (intentId) => commandId.retire(openCustodyIntent(intentId)),
+          onAbandonMove: (custodyId, kind, intentId) => commandId.retire(custodyMoveIntent(custodyId, kind, intentId)),
+          onAbandonClose: (custodyId, intentId) => commandId.retire(custodyCloseIntent(custodyId, intentId)),
         }
       : undefined;
   const custody: DealCustodyWiring | undefined =

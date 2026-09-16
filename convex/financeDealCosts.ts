@@ -3385,6 +3385,13 @@ export const reopenDealCustody = mutation({
     if (custody.writeOffPosted) {
       assertStoredVersion(custody.writeOffPosted.version, "This custody record's write-off posting", "reopening this custody record");
     }
+    // The parent the stored row names is proven this org's BEFORE anything is
+    // written (R8, F2): an owned custody row whose `applicationId` was
+    // re-pointed at another tenant's deal would otherwise leave an audit row
+    // against that deal, reverse a posted write-off and withdraw the OTHER
+    // organization's classification. A missing or foreign parent refuses here,
+    // with the override, the reversal and the status patch all still unwritten.
+    const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", custody.applicationId, APPLICATION_NOT_FOUND);
 
     // Reopening undoes a reconciliation somebody signed off, so it leaves a row
     // — and it withdraws the deal's classification, which may have been granted
@@ -3402,13 +3409,10 @@ export const reopenDealCustody = mutation({
       changedBy: user._id,
       changedAt: Date.now(),
     });
-    const app = await ctx.db.get(custody.applicationId);
-    if (app) {
-      await invalidateClassification(
-        ctx, app, user._id,
-        "A custody record was reopened after the deal's accounting was classified."
-      );
-    }
+    await invalidateClassification(
+      ctx, app, user._id,
+      "A custody record was reopened after the deal's accounting was classified."
+    );
 
     // A written-off shortage goes back onto the employee's clearing balance:
     // the loss was booked on the strength of a closure that is now withdrawn.

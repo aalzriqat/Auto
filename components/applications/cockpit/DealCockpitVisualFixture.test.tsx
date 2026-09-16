@@ -330,6 +330,9 @@ function custodyWiring(): DealCustodyWiring {
       onAttach: async () => {},
       onClose: async () => {},
       onReopen: async () => {},
+      onAbandonOpen: () => {},
+      onAbandonMove: () => {},
+      onAbandonClose: () => {},
     },
   };
 }
