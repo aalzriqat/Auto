@@ -292,8 +292,8 @@ describe("protected source content pins", () => {
       // application now freezes the quote's denomination, selling target,
       // customer first payment and explicitly included dealer-borne fees.
       // Exact-SHA review is required again before merge.
-      bytes: 229240,
-      sha256: "330bdf0c5ecbd3023cedff8e9110ceaaf765f9f425b8f7e0ea7b9242682fbf85",
+      bytes: 230538,
+      sha256: "5676c06b6819412be646508e654d511c6802f4dba85967a7300b98c5d9143890",
     },
     {
       /**

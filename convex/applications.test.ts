@@ -846,6 +846,8 @@ describe("applications hold release and deposit resolution", () => {
         targetSellingAmountMinor: undefined,
         targetNetProceedsMinor: undefined,
         customerFirstPaymentMinor: undefined,
+        estimatedDealerBorneExpensesMinor: undefined,
+        estimatedClosingExpensesMinor: undefined,
       })
     );
 
@@ -873,6 +875,8 @@ describe("applications hold release and deposit resolution", () => {
       targetSellingAmountMinor: 14_200_000,
       targetNetProceedsMinor: 14_200_000,
       customerFirstPaymentMinor: 1_955_000,
+      estimatedDealerBorneExpensesMinor: 0,
+      estimatedClosingExpensesMinor: 0,
     });
 
     const rerun = await asUser.mutation(api.applications.repairQuoteEconomicsLineage, {

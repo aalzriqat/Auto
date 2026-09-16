@@ -92,6 +92,30 @@ import { assertFinancedDepositsSurviveParentReversal } from "./utils/depositAppl
 const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
 
 /**
+ * Quotation costs frozen by the finance-company policy. The application
+ * creator and the explicit legacy-lineage repair must use this same function;
+ * reading today's editable company policy would retroactively rewrite a deal.
+ */
+function includedDealerBorneExpensesMinor(
+  snapshot: FinanceCompanyRuleSnapshot | undefined
+): number {
+  return (
+    snapshot?.feeTemplates
+      ?.filter(
+        (template) =>
+          template.includedInQuotation &&
+          (template.paidBy === "DEALER" || template.paidBy === "EMPLOYEE")
+      )
+      .reduce((total, template) => {
+        assertValidMinorAmount(template.estimatedAmountMinor, "included fee estimate");
+        const next = total + template.estimatedAmountMinor;
+        assertValidMinorAmount(next, "included dealer-borne fee total");
+        return next;
+      }, 0) ?? 0
+  );
+}
+
+/**
  * Opens (or finds) the canonical receivable owed BY the finance company for a
  * finalized deal. Idempotent per application via the by_org_source index.
  */
@@ -2427,19 +2451,7 @@ export const createFromQuote = mutation({
     // the customer for a cost the policy explicitly excluded. EMPLOYEE means
     // the dealership advances/reimburses the money and is therefore
     // dealer-borne, matching the cockpit's financial summary classification.
-    const includedDealerBorneExpensesMinor =
-      companyRuleSnapshot?.feeTemplates
-        ?.filter(
-          (template) =>
-            template.includedInQuotation &&
-            (template.paidBy === "DEALER" || template.paidBy === "EMPLOYEE")
-        )
-        .reduce((total, template) => {
-          assertValidMinorAmount(template.estimatedAmountMinor, "included fee estimate");
-          const next = total + template.estimatedAmountMinor;
-          assertValidMinorAmount(next, "included dealer-borne fee total");
-          return next;
-        }, 0) ?? 0;
+    const dealerBorneExpensesMinor = includedDealerBorneExpensesMinor(companyRuleSnapshot);
 
     // SCRUM-195: a live finance application is per-vehicle commitment evidence
     // in its own right — no deposit required. So creating one is an
@@ -2477,8 +2489,8 @@ export const createFromQuote = mutation({
       targetSellingAmountMinor,
       targetNetProceedsMinor: targetSellingAmountMinor,
       customerFirstPaymentMinor,
-      estimatedDealerBorneExpensesMinor: includedDealerBorneExpensesMinor,
-      estimatedClosingExpensesMinor: includedDealerBorneExpensesMinor,
+      estimatedDealerBorneExpensesMinor: dealerBorneExpensesMinor,
+      estimatedClosingExpensesMinor: dealerBorneExpensesMinor,
       ...(companyRuleSnapshot ? { companyRuleSnapshot } : {}),
       ...(companyRuleVersionId ? { companyRuleVersionId } : {}),
       notes: args.notes,
@@ -2585,10 +2597,16 @@ export const repairQuoteEconomicsLineage = mutation({
         `The application is already denominated in ${app.economicsCurrency}; it cannot be repaired as ${expectedCurrency}.`
       );
     }
+    if (app.companyId && !app.companyRuleSnapshot) {
+      throw new ConvexError(
+        "The application's frozen finance-company policy is missing. Reconcile the policy snapshot before repairing quotation economics."
+      );
+    }
     assertSupportedDenomination(expectedCurrency, "repairing quote economics lineage");
 
     const targetSellingAmountMinor = toMinorUnits(quote.vehiclePrice, expectedCurrency);
     const customerFirstPaymentMinor = toMinorUnits(quote.downPayment, expectedCurrency);
+    const dealerBorneExpensesMinor = includedDealerBorneExpensesMinor(app.companyRuleSnapshot);
     assertValidMinorAmount(targetSellingAmountMinor, "quoted vehicle price");
     assertValidMinorAmount(customerFirstPaymentMinor, "quoted customer first payment");
     const expected = {
@@ -2596,12 +2614,16 @@ export const repairQuoteEconomicsLineage = mutation({
       targetSellingAmountMinor,
       targetNetProceedsMinor: targetSellingAmountMinor,
       customerFirstPaymentMinor,
+      estimatedDealerBorneExpensesMinor: dealerBorneExpensesMinor,
+      estimatedClosingExpensesMinor: dealerBorneExpensesMinor,
     };
     const existing = {
       economicsCurrency: app.economicsCurrency,
       targetSellingAmountMinor: app.targetSellingAmountMinor,
       targetNetProceedsMinor: app.targetNetProceedsMinor,
       customerFirstPaymentMinor: app.customerFirstPaymentMinor,
+      estimatedDealerBorneExpensesMinor: app.estimatedDealerBorneExpensesMinor,
+      estimatedClosingExpensesMinor: app.estimatedClosingExpensesMinor,
     };
     for (const field of Object.keys(expected) as Array<keyof typeof expected>) {
       if (existing[field] !== undefined && existing[field] !== expected[field]) {
@@ -2628,6 +2650,12 @@ export const repairQuoteEconomicsLineage = mutation({
         : {}),
       ...(app.customerFirstPaymentMinor === undefined
         ? { customerFirstPaymentMinor: expected.customerFirstPaymentMinor }
+        : {}),
+      ...(app.estimatedDealerBorneExpensesMinor === undefined
+        ? { estimatedDealerBorneExpensesMinor: expected.estimatedDealerBorneExpensesMinor }
+        : {}),
+      ...(app.estimatedClosingExpensesMinor === undefined
+        ? { estimatedClosingExpensesMinor: expected.estimatedClosingExpensesMinor }
         : {}),
       updatedAt: now,
     });

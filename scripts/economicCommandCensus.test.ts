@@ -1,5 +1,5 @@
 /**
- * The 115-entry economic-command classification ratchet (SCRUM-313; 113 at the
+ * The 117-entry economic-command classification ratchet (SCRUM-313; 113 at the
  * RC, +1 for SCRUM-83's `financingEconomics.resolveAppraisalGap`, +1 for
  * SCRUM-215's `financeDealCosts.recordTemplateFeeActual`).
  *

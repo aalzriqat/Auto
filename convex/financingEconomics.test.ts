@@ -426,6 +426,112 @@ describe("base approval — the confirmed deal", () => {
     expect(app.estimatedDealerBorneExpensesMinor).toBe(jod(100));
     expect(app.estimatedClosingExpensesMinor).toBe(jod(100));
   });
+
+  test("quote-lineage repair restores the same frozen included-fee estimate as creation", async () => {
+    const seed = await seedDealer();
+    await seed.asUser.mutation(api.finance.updateCompany, {
+      id: seed.companyId,
+      orgId: seed.orgId,
+      name: "Jordan Finance",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      isActive: true,
+      maxFinancingLTV: 85,
+      defaultLtvPercent: 85,
+      customerFirstPaymentOffsetsUnfinancedShare: true,
+      expectedCurrency: "JOD",
+      expectedRuleVersion: 1,
+      feeTemplates: [
+        {
+          feeType: "STAMPS",
+          estimatedAmountMinor: jod(100),
+          paidBy: "DEALER",
+          paidTo: "GOVERNMENT",
+          includedInQuotation: true,
+          deductedFromSettlement: false,
+          refundable: false,
+          accountingTreatment: "SELLING_EXPENSE",
+        },
+        {
+          feeType: "OWNERSHIP_TRANSFER",
+          estimatedAmountMinor: jod(40),
+          paidBy: "EMPLOYEE",
+          paidTo: "GOVERNMENT",
+          includedInQuotation: true,
+          deductedFromSettlement: false,
+          refundable: false,
+          accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+        },
+        {
+          feeType: "APPRAISAL_FEE",
+          estimatedAmountMinor: jod(20),
+          paidBy: "DEALER",
+          paidTo: "APPRAISER",
+          includedInQuotation: false,
+          deductedFromSettlement: false,
+          refundable: false,
+          accountingTreatment: "APPRAISAL_EXPENSE",
+        },
+        {
+          feeType: "INSURANCE",
+          estimatedAmountMinor: jod(300),
+          paidBy: "CUSTOMER",
+          paidTo: "INSURER",
+          includedInQuotation: true,
+          deductedFromSettlement: false,
+          refundable: false,
+          accountingTreatment: "INSURANCE_EXPENSE",
+        },
+      ],
+    });
+    const applicationId = await createApplication(seed);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        economicsCurrency: undefined,
+        targetSellingAmountMinor: undefined,
+        targetNetProceedsMinor: undefined,
+        customerFirstPaymentMinor: undefined,
+        estimatedDealerBorneExpensesMinor: undefined,
+        estimatedClosingExpensesMinor: undefined,
+      })
+    );
+
+    const dryRun = await seed.asUser.mutation(api.applications.repairQuoteEconomicsLineage, {
+      orgId: seed.orgId,
+      applicationId,
+      expectedCurrency: "JOD",
+      dryRun: true,
+    });
+    expect(dryRun.expected.estimatedDealerBorneExpensesMinor).toBe(jod(140));
+    expect(dryRun.expected.estimatedClosingExpensesMinor).toBe(jod(140));
+
+    await seed.asUser.mutation(api.applications.repairQuoteEconomicsLineage, {
+      orgId: seed.orgId,
+      applicationId,
+      expectedCurrency: "JOD",
+      dryRun: false,
+    });
+    const repaired = await readApp(seed, applicationId);
+    expect(repaired.estimatedDealerBorneExpensesMinor).toBe(jod(140));
+    expect(repaired.estimatedClosingExpensesMinor).toBe(jod(140));
+
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        estimatedDealerBorneExpensesMinor: jod(999),
+        estimatedClosingExpensesMinor: undefined,
+      })
+    );
+    await expect(
+      seed.asUser.mutation(api.applications.repairQuoteEconomicsLineage, {
+        orgId: seed.orgId,
+        applicationId,
+        expectedCurrency: "JOD",
+        dryRun: false,
+      })
+    ).rejects.toThrow(/estimatedDealerBorneExpensesMinor disagrees/i);
+    expect((await readApp(seed, applicationId)).estimatedClosingExpensesMinor).toBeUndefined();
+  });
 });
 
 describe("lower appraisal", () => {
