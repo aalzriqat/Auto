@@ -14,6 +14,7 @@ import {
   custodyLedgerFamilyRowRefusal,
   custodyPositionDependencies,
   custodyPostingBlockedReason,
+  foldAbandonedPayableDeltas,
   loadCustodyPostedLines,
   MAX_CUSTODY_LEDGER_PROOFS,
   MAX_CUSTODY_POSTED_LINES,
@@ -1904,8 +1905,10 @@ describe("G1 — the family gate proves the LEDGER, not the rows: only the exact
     expect((await chain.t.run((ctx) => ctx.db.get(chainCustody)))?.payableReclassVersion).toBe(1);
     expect(await familyRefusal(chain)).toBeNull();
     const reclassEventId = (await events(chain, "CUSTODY_PAYABLE_RECLASSIFIED"))[0]._id;
+    // Not POSTED and not in the outbox either: nothing will ever post it, so
+    // the exact chain reading (R6, F2) names it as missing rather than waiting.
     await chain.t.run((ctx) => ctx.db.patch(reclassEventId, { status: "PENDING" }));
-    expect(await familyRefusal(chain)).toMatch(/payable reclassification \(v1\) that has not posted/);
+    expect(await familyRefusal(chain)).toMatch(/payable reclassification v1 is neither on the ledger nor waiting in the outbox/);
 
     // A written-off record whose write-off is on the books passes; reopened
     // with the reversal deferred (write-off still POSTED) it is refused, and
@@ -3219,8 +3222,10 @@ describe("R5-F5 — the payable chain is proven link by link before it is extend
     void _creationTime;
     const restore = () => seed.t.run((ctx) => ctx.db.replace(_id, row));
 
+    // Re-versioned to 7: the exact chain reading (R6, F2) meets it as a link
+    // queued past the version the record issued, before the key is looked up.
     await seed.t.run((ctx) => ctx.db.patch(_id, { eventVersion: 7 }));
-    await expect(returned()).rejects.toThrow(/v1 is not the reclassification the chain expects/);
+    await expect(returned()).rejects.toThrow(/v7 is waiting in the outbox past the version the record says it issued/);
     await untouched();
     await restore();
 
@@ -3272,4 +3277,340 @@ describe("R5-F5 — the payable chain is proven link by link before it is extend
     expect(payable(await ledger(seed))).toBe(-jod(200));
     expect((await events(seed, "CUSTODY_PAYABLE_RECLASSIFIED")).map((e) => e.eventVersion)).toEqual([1]);
   }, 30_000);
+});
+
+// ---------------------------------------------------------------------------
+// R6 — the exact-SHA re-review of 6387a856a (Sonnet + Codex, CHANGES REQUESTED)
+// ---------------------------------------------------------------------------
+
+type RunCtx = Parameters<Parameters<TestConvex["run"]>[0]>[0];
+
+/** A ctx whose reads are COUNTED: every `db.query` call is one platform read, whatever it returns. */
+function countingCtx(ctx: RunCtx): { ctx: RunCtx; reads: () => number } {
+  type Db = RunCtx["db"];
+  let reads = 0;
+  const db = {
+    get: (...args: Parameters<Db["get"]>) => ctx.db.get(...args),
+    query: (...args: Parameters<Db["query"]>) => {
+      reads += 1;
+      return ctx.db.query(...args);
+    },
+    normalizeId: (...args: Parameters<Db["normalizeId"]>) => ctx.db.normalizeId(...args),
+    insert: (...args: Parameters<Db["insert"]>) => ctx.db.insert(...args),
+    patch: (...args: Parameters<Db["patch"]>) => ctx.db.patch(...args),
+    replace: (...args: Parameters<Db["replace"]>) => ctx.db.replace(...args),
+    delete: (...args: Parameters<Db["delete"]>) => ctx.db.delete(...args),
+    system: ctx.db.system,
+  };
+  return { ctx: { ...ctx, db } as unknown as RunCtx, reads: () => reads };
+}
+
+/**
+ * A payable chain with `versions` links, v1 real and PENDING (cash handed
+ * over in a closed month), v2.. cloned from it, each naming EVERY earlier
+ * link's primary as SETTLED — the accumulated shape a long-lived record
+ * legitimately reaches, and the one whose dependency reads grew as the
+ * square of the tail.
+ */
+async function accumulatedQueuedChain(seed: Seed, versions: number) {
+  const { earlierId, boundary } = await splitPeriods(seed);
+  await closePeriod(seed, earlierId);
+  const custodyId = await openCustody(seed, jod(700), { occurredAt: boundary - 3 * DAY });
+  await employeeFee(seed, custodyId, jod(900));
+  const v1 = (await pending(seed)).find((r) => r.idempotencyKey === `custody_payable_reclass_${custodyId}_v1`)!;
+  expect(v1.status).toBe("PENDING");
+  const leg = (await pending(seed)).find((r) => r.idempotencyKey.startsWith("custody_entry_"))!;
+  const { _id: _v1Id, _creationTime: _v1Ct, ...template } = v1;
+  const { _id: _legId, _creationTime: _legCt, ...legTemplate } = leg;
+  void _v1Id; void _v1Ct; void _legId; void _legCt;
+  const baseDeps = parseCustodyDependencies(v1.payload)!;
+  const perLink = jod(1);
+  let target = (v1.payload as { deltaMinor: number }).deltaMinor;
+  await seed.t.run(async (ctx) => {
+    for (let version = 2; version <= versions; version += 1) {
+      // The primary this link follows: a further leg, queued like the first.
+      await ctx.db.insert("pendingAccountingEvents", { ...legTemplate, idempotencyKey: `custody_entry_fake_${version}` });
+      const settled = Array.from({ length: version - 1 }, (_, n) => ({ must: "SETTLED" as const, idempotencyKey: `custody_entry_fake_${n + 2}` }));
+      target += perLink;
+      await ctx.db.insert("pendingAccountingEvents", {
+        ...template,
+        idempotencyKey: `custody_payable_reclass_${custodyId}_v${version}`,
+        eventVersion: version,
+        payload: { ...(template.payload as object), deltaMinor: perLink, payableAfterMinor: target, ledgerDependencies: [...baseDeps, ...settled] },
+      });
+    }
+    await ctx.db.patch(custodyId, { payableReclassVersion: versions, payableTargetMinor: target });
+  });
+  return { custodyId, target, earlierId };
+}
+
+describe("R6-F1 — re-basing a queued payable chain proves each primary ONCE, under one document budget, never once per link that names it", () => {
+  test("100 accumulated links (4,950 dependency mentions) are re-proven with reads linear in the unique primaries, and the chain is left intact", async () => {
+    const seed = await seedDeal("r6-fold-scale");
+    const versions = 100;
+    const { custodyId, target } = await accumulatedQueuedChain(seed, versions);
+    const mentions = (await pending(seed))
+      .filter((r) => r.idempotencyKey.startsWith(`custody_payable_reclass_${custodyId}_`))
+      .reduce((sum, r) => sum + (parseCustodyDependencies(r.payload)?.filter((d) => d.must === "SETTLED").length ?? 0), 0);
+    expect(mentions).toBeGreaterThan(4950);
+    const budget = new CustodyLedgerReadBudget(MAX_CUSTODY_LEDGER_PROOFS, "the test");
+    const { result, reads } = await seed.t.run(async (raw) => {
+      const counted = countingCtx(raw);
+      const custody = (await raw.db.get(custodyId))!;
+      const result = await foldAbandonedPayableDeltas(counted.ctx, custody, "the test", budget);
+      return { result, reads: counted.reads() };
+    });
+    // Nothing is abandoned: every primary is queued, so the chain stands as issued.
+    expect(result).toEqual({ nextVersion: versions + 1, baseTargetMinor: target });
+    // Two reads per UNIQUE primary (ledger, outbox) plus the family and the
+    // outbox enumeration — not two per mention. Before the fix this was ~10,400.
+    expect(reads).toBeLessThanOrEqual(3 * versions + 8);
+    expect(budget.documentsRead).toBeLessThanOrEqual(MAX_CUSTODY_LEDGER_PROOFS);
+    expect((await pending(seed)).filter((r) => r.idempotencyKey.startsWith(`custody_payable_reclass_${custodyId}_`))).toHaveLength(versions);
+    // The product path over the same record: one more movement extends the
+    // chain by one link and nothing is dropped.
+    await move(seed, custodyId, "RETURNED", jod(100));
+    expect((await pending(seed)).filter((r) => r.idempotencyKey.startsWith(`custody_payable_reclass_${custodyId}_`))).toHaveLength(versions + 1);
+    expect((await seed.t.run((ctx) => ctx.db.get(custodyId)))!.payableReclassVersion).toBe(versions + 1);
+  }, 90_000);
+
+  test("the re-proof refuses at its document budget with a named reason rather than reading on", async () => {
+    const seed = await seedDeal("r6-fold-budget");
+    const { custodyId } = await accumulatedQueuedChain(seed, 12);
+    await expect(
+      seed.t.run(async (ctx) => foldAbandonedPayableDeltas(ctx, (await ctx.db.get(custodyId))!, "the test", new CustodyLedgerReadBudget(20, "the test")))
+    ).rejects.toThrow(/more than 20 ledger postings, which is past what the test can verify completely/);
+    // A refusal drops nothing.
+    expect((await pending(seed)).filter((r) => r.idempotencyKey.startsWith(`custody_payable_reclass_${custodyId}_`))).toHaveLength(12);
+  }, 45_000);
+});
+
+describe("R6-F2 — the family gate certifies the EXACT payable chain, with the same validator the fold uses", () => {
+  test("posted side: a duplicate version, a version past what the row issued, an unreadable delta and a target the deltas do not reach are each refused; the intact chain passes", async () => {
+    const seed = await seedDeal("r6-family-posted");
+    const custodyId = await openCustody(seed, jod(700));
+    await employeeFee(seed, custodyId, jod(900));
+    expect(await familyRefusal(seed)).toBeNull();
+    const v1 = (await events(seed, "CUSTODY_PAYABLE_RECLASSIFIED"))[0];
+    expect(v1.eventVersion).toBe(1);
+
+    // Two POSTED events at v1: a Set of versions saw one.
+    const { _id: _dropId, _creationTime: _dropCt, journalEntryId: _dropJournal, ...clone } = v1;
+    void _dropId; void _dropCt; void _dropJournal;
+    const duplicateId = await seed.t.run((ctx) => ctx.db.insert("accountingEvents", { ...clone, idempotencyKey: `${v1.idempotencyKey}_dup` }));
+    expect(await familyRefusal(seed)).toMatch(/payable reclassification v1 is on the ledger more than once, so closing is refused/);
+    await seed.t.run((ctx) => ctx.db.delete(duplicateId));
+    expect(await familyRefusal(seed)).toBeNull();
+
+    // A POSTED v1 on a row that says it issued nothing: a tail the row does not own.
+    await seed.t.run((ctx) => ctx.db.patch(custodyId, { payableReclassVersion: 0, payableTargetMinor: 0 }));
+    expect(await familyRefusal(seed)).toMatch(/payable reclassification v1 is on the ledger past the version the record says it issued/);
+    await seed.t.run((ctx) => ctx.db.patch(custodyId, { payableReclassVersion: 1, payableTargetMinor: jod(200) }));
+    expect(await familyRefusal(seed)).toBeNull();
+
+    // A posted delta nobody can read is not a payable anybody can certify.
+    await seed.t.run((ctx) => ctx.db.patch(v1._id, { payload: { ...(v1.payload as object), deltaMinor: "200" } }));
+    expect(await familyRefusal(seed)).toMatch(/payable reclassification v1 carries no readable delta/);
+    await seed.t.run((ctx) => ctx.db.patch(v1._id, { payload: v1.payload }));
+    expect(await familyRefusal(seed)).toBeNull();
+
+    // The row's target and the chain's arithmetic disagree.
+    await seed.t.run((ctx) => ctx.db.patch(custodyId, { payableTargetMinor: jod(250) }));
+    expect(await familyRefusal(seed)).toMatch(/\(200000 posted, 0 waiting\) does not add up to the target the row carries \(250000\)/);
+    await seed.t.run((ctx) => ctx.db.patch(custodyId, { payableTargetMinor: jod(200) }));
+    expect(await familyRefusal(seed)).toBeNull();
+
+    // Stored numbers that are not versions or amounts (CVX-4: `v.number()`
+    // admits NaN). A NaN issued count made every range comparison false and
+    // the tail empty, so the chain passed and the fold would have issued
+    // "version NaN"; a NaN or zero event version was neither counted as the
+    // prefix nor refused as a stray.
+    await seed.t.run((ctx) => ctx.db.patch(custodyId, { payableReclassVersion: NaN }));
+    expect(await familyRefusal(seed)).toMatch(/payable reclassification count \(NaN\) is not a whole number of versions/);
+    await expect(move(seed, custodyId, "REIMBURSED", jod(100))).rejects.toThrow(/payable reclassification count \(NaN\) is not a whole number of versions/);
+    expect((await entries(seed, custodyId)).filter((e) => e.kind === "REIMBURSED")).toHaveLength(0);
+    expect((await events(seed, "CUSTODY_PAYABLE_RECLASSIFIED")).map((e) => e.eventVersion)).toEqual([1]);
+    await seed.t.run((ctx) => ctx.db.patch(custodyId, { payableReclassVersion: 1 }));
+    await seed.t.run((ctx) => ctx.db.patch(custodyId, { payableTargetMinor: NaN }));
+    expect(await familyRefusal(seed)).toMatch(/payable target \(NaN\) is not a readable amount/);
+    await seed.t.run((ctx) => ctx.db.patch(custodyId, { payableTargetMinor: jod(200) }));
+    for (const bad of [NaN, 0, 1.5]) {
+      await seed.t.run((ctx) => ctx.db.patch(v1._id, { eventVersion: bad }));
+      expect(await familyRefusal(seed)).toMatch(new RegExp(`payable reclassification event carries a version that is not a positive whole number \\(${bad}\\)`));
+      await seed.t.run((ctx) => ctx.db.patch(v1._id, { eventVersion: 1 }));
+    }
+    expect(await familyRefusal(seed)).toBeNull();
+  }, 45_000);
+
+  test("queued side: a well-shaped waiting link is refused as waiting; unreadable dependencies, a duplicate queued version and a queued link past the issued version are refused by name — and the fold refuses to extend such a chain", async () => {
+    const seed = await seedDeal("r6-family-queued");
+    const { boundary } = await splitPeriods(seed);
+    const custodyId = await openCustody(seed, jod(700));
+    // Paid in the closed month: the fee's posting waits, and the record's v1 waits behind it.
+    await closePeriod(seed, seed.periodId);
+    await employeeFee(seed, custodyId, jod(900), { paidAt: boundary + 5 * DAY });
+    const v1 = (await pending(seed)).find((r) => r.idempotencyKey === `custody_payable_reclass_${custodyId}_v1`)!;
+    expect(v1.status).toBe("PENDING");
+    expect(await familyRefusal(seed)).toMatch(/payable reclassification \(v1\) that has not posted to the ledger yet/);
+
+    const { _id, _creationTime: _ct, ...row } = v1;
+    void _ct;
+    await seed.t.run((ctx) => ctx.db.patch(_id, { payload: { ...(row.payload as object), ledgerDependencies: "x" } }));
+    expect(await familyRefusal(seed)).toMatch(/payable reclassification v1 carries ledger dependencies that cannot be read/);
+    await seed.t.run((ctx) => ctx.db.replace(_id, row));
+
+    const duplicateId = await seed.t.run((ctx) => ctx.db.insert("pendingAccountingEvents", { ...row, idempotencyKey: `${row.idempotencyKey}_dup` }));
+    expect(await familyRefusal(seed)).toMatch(/payable reclassification v1 is waiting in the outbox more than once/);
+    await seed.t.run((ctx) => ctx.db.delete(duplicateId));
+
+    // v1 on the ledger (a POSTED event cloned from the open-period cash leg)
+    // while its outbox row still reads as waiting: two witnesses that
+    // disagree about one version.
+    const leg = (await events(seed, "CUSTODY_CASH_ISSUED"))[0];
+    const { _id: _legId, _creationTime: _legCt, journalEntryId: _legJournal, ...legClone } = leg;
+    void _legId; void _legCt; void _legJournal;
+    const postedTwinId = await seed.t.run((ctx) =>
+      ctx.db.insert("accountingEvents", {
+        ...legClone, eventType: "CUSTODY_PAYABLE_RECLASSIFIED", eventVersion: 1, sourceType: "financeDealCustody",
+        sourceId: custodyId.toString(), idempotencyKey: row.idempotencyKey, payload: { ...(row.payload as object), deltaMinor: jod(200) },
+      })
+    );
+    expect(await familyRefusal(seed)).toMatch(/payable reclassification v1 is waiting in the outbox although it is already on the ledger/);
+    await seed.t.run((ctx) => ctx.db.delete(postedTwinId));
+
+    // A queued row whose version is not one (CVX-4): refused for that, not
+    // mistaken for a stray under the chain's key.
+    for (const bad of [NaN, 0]) {
+      await seed.t.run((ctx) => ctx.db.patch(_id, { eventVersion: bad }));
+      expect(await familyRefusal(seed)).toMatch(new RegExp(`payable reclassification outbox row carries a version that is not a positive whole number \\(${bad}\\)`));
+    }
+    await seed.t.run((ctx) => ctx.db.replace(_id, row));
+
+    // The row says it issued nothing while v1 waits: refused at the gate,
+    // and the next movement refuses to build on it rather than re-issuing v1.
+    await seed.t.run((ctx) => ctx.db.patch(custodyId, { payableReclassVersion: 0, payableTargetMinor: 0 }));
+    expect(await familyRefusal(seed)).toMatch(/payable reclassification v1 is waiting in the outbox past the version the record says it issued/);
+    await expect(move(seed, custodyId, "RETURNED", jod(100))).rejects.toThrow(
+      /payable reclassification v1 is waiting in the outbox past the version the record says it issued, so reclassifying this custody record's balance cannot be chained behind it/
+    );
+    expect((await entries(seed, custodyId)).filter((e) => e.kind === "RETURNED")).toHaveLength(0);
+    expect((await pending(seed)).filter((r) => r.idempotencyKey.startsWith(`custody_payable_reclass_${custodyId}_`))).toHaveLength(1);
+    await seed.t.run((ctx) => ctx.db.patch(custodyId, { payableReclassVersion: 1, payableTargetMinor: jod(200) }));
+    expect(await familyRefusal(seed)).toMatch(/payable reclassification \(v1\) that has not posted to the ledger yet/);
+  }, 45_000);
+});
+
+describe("R6-F3 — a cost whose parent application cannot be loaded for this org never changes, moves, voids or posts", () => {
+  const APPLICATION_MISSING = /Finance application not found in this organization/;
+
+  /** Every door a fee line's custody charge can move through, each against a fee whose parent is gone or foreign. */
+  async function everyDoorRefuses(seed: Seed, custodyId: Id<"financeDealCustody">, chargedFeeId: Id<"financeDealFees">, looseFeeId: Id<"financeDealFees">) {
+    const before = {
+      events: (await events(seed)).length,
+      pending: (await pending(seed)).length,
+      charged: (await seed.t.run((ctx) => ctx.db.get(chargedFeeId)))!,
+      loose: (await seed.t.run((ctx) => ctx.db.get(looseFeeId)))!,
+    };
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, { orgId: seed.orgId, feeId: chargedFeeId, actualAmountMinor: jod(350), expectedCurrency: "JOD" })
+    ).rejects.toThrow(APPLICATION_MISSING);
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId: chargedFeeId, reason: "gone" })
+    ).rejects.toThrow(APPLICATION_MISSING);
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.setFeeCustody, { orgId: seed.orgId, feeId: chargedFeeId })
+    ).rejects.toThrow(APPLICATION_MISSING);
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.setFeeCustody, { orgId: seed.orgId, feeId: looseFeeId, custodyId })
+    ).rejects.toThrow(APPLICATION_MISSING);
+    // Nothing moved: no journal, no queued row, both rows exactly as they were.
+    expect((await events(seed)).length).toBe(before.events);
+    expect((await pending(seed)).length).toBe(before.pending);
+    expect(await seed.t.run((ctx) => ctx.db.get(chargedFeeId))).toEqual(before.charged);
+    expect(await seed.t.run((ctx) => ctx.db.get(looseFeeId))).toEqual(before.loose);
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+  }
+
+  test("orphaned: the deal was deleted under a charged line and an uncharged one", async () => {
+    const seed = await seedDeal("r6-orphan-fees");
+    const custodyId = await openCustody(seed, jod(700));
+    const chargedFeeId = await employeeFee(seed, custodyId, jod(300));
+    const looseFeeId = await employeeFee(seed, undefined, jod(100));
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+    await seed.t.run((ctx) => ctx.db.delete(seed.applicationId));
+    await everyDoorRefuses(seed, custodyId, chargedFeeId, looseFeeId);
+  }, 45_000);
+
+  test("foreign: the lines were re-pointed at another organization's deal", async () => {
+    const seed = await seedDeal("r6-foreign-fees");
+    const custodyId = await openCustody(seed, jod(700));
+    const chargedFeeId = await employeeFee(seed, custodyId, jod(300));
+    const looseFeeId = await employeeFee(seed, undefined, jod(100));
+    const foreignAppId = await foreignApplication(seed);
+    await seed.t.run(async (ctx) => {
+      await ctx.db.patch(chargedFeeId, { applicationId: foreignAppId });
+      await ctx.db.patch(looseFeeId, { applicationId: foreignAppId });
+    });
+    await everyDoorRefuses(seed, custodyId, chargedFeeId, looseFeeId);
+  }, 45_000);
+
+  /** Another organization's deal, as a raw-edited row could point at it. */
+  async function foreignApplication(seed: Seed): Promise<Id<"financeApplications">> {
+    const ours = (await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))!;
+    return await seed.t.run((ctx) =>
+      ctx.db.insert("financeApplications", {
+        orgId: seed.otherOrgId, quoteId: ours.quoteId, customerId: ours.customerId, vehicleId: ours.vehicleId,
+        salespersonId: seed.userId, status: "APPROVED", createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
+  }
+
+  /** A record from before ledger posting, with one leg and one linked line — the migration's input. */
+  async function legacyRecord(seed: Seed) {
+    const t0 = Date.now() - 10 * DAY;
+    return await seed.t.run(async (ctx) => {
+      const custodyId = await ctx.db.insert("financeDealCustody", {
+        orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.employeeId, currency: "JOD",
+        issuedMinor: jod(700), returnedMinor: 0, reimbursedMinor: 0, status: "OPEN",
+        createdBy: seed.userId, createdAt: t0, updatedAt: t0,
+      });
+      await ctx.db.insert("financeDealCustodyEntries", {
+        orgId: seed.orgId, custodyId, kind: "ISSUED", amountMinor: jod(700), method: "CASH", occurredAt: t0, recordedBy: seed.userId, recordedAt: t0,
+      });
+      const feeId = await ctx.db.insert("financeDealFees", {
+        orgId: seed.orgId, applicationId: seed.applicationId, feeType: "LICENSING", currency: "JOD",
+        actualAmountMinor: jod(650), paidBy: "EMPLOYEE", paidTo: "GOVERNMENT", accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+        includedInQuotation: false, deductedFromSettlement: false, refundable: false, custodyId, paidAt: t0 + DAY,
+        source: "MANUAL", createdBy: seed.userId, createdAt: t0 + DAY, updatedAt: t0 + DAY,
+      });
+      return { custodyId, feeId };
+    });
+  }
+
+  async function migrationRefusesEntirely(seed: Seed, custodyId: Id<"financeDealCustody">, feeId: Id<"financeDealFees">) {
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.migrateLegacyCustodyToLedger, { orgId: seed.orgId, custodyId, idempotencyKey: "migrate-1" })
+    ).rejects.toThrow(APPLICATION_MISSING);
+    // Nothing posted, nothing queued, no marker, no line posting, no stored command.
+    expect(await events(seed)).toHaveLength(0);
+    expect(await pending(seed)).toHaveLength(0);
+    expect((await seed.t.run((ctx) => ctx.db.get(custodyId)))!.ledgerPosting).toBeUndefined();
+    expect((await seed.t.run((ctx) => ctx.db.get(feeId)))!.custodyPosted).toBeUndefined();
+    expect(await commandRows(seed, "financeDealCosts.migrateLegacyCustodyToLedger")).toHaveLength(0);
+  }
+
+  test("the legacy migration posts nothing for a record whose deal is gone", async () => {
+    const seed = await seedDeal("r6-legacy-orphan", { templates: false });
+    const { custodyId, feeId } = await legacyRecord(seed);
+    await seed.t.run((ctx) => ctx.db.delete(seed.applicationId));
+    await migrationRefusesEntirely(seed, custodyId, feeId);
+  }, 45_000);
+
+  test("the legacy migration posts nothing for a record re-pointed at another organization's deal", async () => {
+    const seed = await seedDeal("r6-legacy-foreign", { templates: false });
+    const { custodyId, feeId } = await legacyRecord(seed);
+    const foreignAppId = await foreignApplication(seed);
+    await seed.t.run((ctx) => ctx.db.patch(custodyId, { applicationId: foreignAppId }));
+    await migrationRefusesEntirely(seed, custodyId, feeId);
+  }, 45_000);
 });

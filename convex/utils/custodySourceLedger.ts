@@ -106,6 +106,16 @@ export class CustodyLedgerReadBudget {
     }
   }
 
+  /**
+   * Charges one POINT-READ: a keyed lookup that costs the platform one query
+   * whether or not it returns a row, so it costs this budget at least one
+   * unit. `charge` alone would let a proof made of empty lookups read
+   * without limit.
+   */
+  chargeRead(rows: number): void {
+    this.charge(Math.max(1, rows));
+  }
+
   /** Documents read so far — for tests that pin the bound. */
   get documentsRead(): number {
     return this.spent;
@@ -172,6 +182,28 @@ async function sourceEvents(
   return rows;
 }
 
+/** The outbox rows of one source — queued, dead-lettered or posted — in full or refused; the outbox half of `sourceEvents`. */
+async function sourceOutboxRows(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  sourceType: string,
+  sourceId: string,
+  action: string,
+  budget?: CustodyLedgerReadBudget
+): Promise<Array<Doc<"pendingAccountingEvents">>> {
+  const rows = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType).eq("sourceId", sourceId))
+    .take(budget?.take(MAX_SOURCE_EVENTS) ?? MAX_SOURCE_EVENTS + 1);
+  budget?.charge(rows.length);
+  if (rows.length > MAX_SOURCE_EVENTS) {
+    throw new ConvexError(
+      `A custody posting on this deal has more than ${MAX_SOURCE_EVENTS} outbox rows, which is past what ${action} can verify completely; nothing has been changed. Have the record reviewed.`
+    );
+  }
+  return rows;
+}
+
 /**
  * Whether a domain event with this idempotency key is actually on the books.
  * POSTED only: `accountingEvents.status` also admits PENDING and FAILED, and
@@ -182,12 +214,14 @@ async function sourceEvents(
 async function eventPosted(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
-  idempotencyKey: string
+  idempotencyKey: string,
+  budget?: CustodyLedgerReadBudget
 ): Promise<boolean> {
   const rows = await ctx.db
     .query("accountingEvents")
     .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
     .take(8);
+  budget?.chargeRead(rows.length);
   return rows.some((row) => row.status === "POSTED");
 }
 
@@ -296,12 +330,14 @@ export function parseCustodyDependencies(payload: unknown): ReadonlyArray<Custod
 async function forwardStillQueued(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
-  idempotencyKey: string
+  idempotencyKey: string,
+  budget?: CustodyLedgerReadBudget
 ): Promise<boolean> {
   const rows = await ctx.db
     .query("pendingAccountingEvents")
     .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
     .take(4);
+  budget?.chargeRead(rows.length);
   return rows.some((row) => row.kind === "POST" && row.status !== "POSTED");
 }
 
@@ -607,13 +643,155 @@ export async function custodyPositionDependencies(
 async function pendingForwardByKey(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
-  idempotencyKey: string
+  idempotencyKey: string,
+  budget?: CustodyLedgerReadBudget
 ): Promise<Doc<"pendingAccountingEvents"> | null> {
   const rows = await ctx.db
     .query("pendingAccountingEvents")
     .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
     .take(4);
+  budget?.chargeRead(rows.length);
   return rows.find((row) => row.kind === "POST" && row.status !== "POSTED") ?? null;
+}
+
+/** One queued link of a record's payable chain, proven to be the row the chain expects at that version. */
+type PayableChainLink = Readonly<{
+  version: number;
+  row: Doc<"pendingAccountingEvents">;
+  deltaMinor: number;
+}>;
+
+/**
+ * What one exact reading of a record's payable chain establishes, or why it
+ * cannot be read as a chain at all. `what` is the defect in the record's own
+ * terms ("payable reclassification v2 is on the ledger more than once"); the
+ * caller wraps it in the sentence its door speaks.
+ */
+type PayableChainProof =
+  | Readonly<{ ok: true; tail: ReadonlyArray<PayableChainLink> }>
+  | Readonly<{ ok: false; what: string }>;
+
+/**
+ * ## The one exact reading of a payable chain (R5 F5, R6 F2)
+ *
+ * The chain a record carries is EXACTLY: one POSTED `CUSTODY_PAYABLE_RECLASSIFIED`
+ * event of this record at each of versions 1..P, then one queued `POST` row
+ * of this record at each of P+1..N where N is the version the row says it
+ * issued — and NOTHING else: no second event or row at any version, no
+ * event or row above N, every delta a safe integer, every queued row's
+ * dependencies readable, and the deltas summing to the target the row
+ * carries. "The highest POSTED version" said nothing about the versions
+ * below it; "every version 1..N appears in a Set" said nothing about
+ * duplicates, about what lies above N, or about whether any of it can be
+ * read. Both doors that judge the chain — the fold that re-bases it before
+ * a movement, the family gate that certifies it before a deal classifies
+ * or finalizes — read it through THIS function, so they cannot disagree.
+ *
+ * Reads: the record's event family (or the one the caller already read),
+ * ONE bounded enumeration of the record's outbox rows, and a keyed lookup
+ * only for a version the enumeration did not carry — to say whether it is
+ * missing or merely mis-shaped. Every read is charged to `budget`.
+ */
+async function provePayableChain(
+  ctx: QueryCtx | MutationCtx,
+  custody: Doc<"financeDealCustody">,
+  action: string,
+  budget: CustodyLedgerReadBudget,
+  family?: ReadonlyArray<Doc<"accountingEvents">>
+): Promise<PayableChainProof> {
+  const issued = custody.payableReclassVersion ?? 0;
+  const targetMinor = custody.payableTargetMinor ?? 0;
+  const orgId = custody.orgId;
+  const sourceId = custody._id.toString();
+  const refused = (version: number, what: string): PayableChainProof => ({
+    ok: false,
+    what: `payable reclassification v${version} ${what}`,
+  });
+  const readDelta = (payload: unknown): number | null => {
+    const deltaMinor = (payload as Record<string, unknown> | null | undefined)?.deltaMinor;
+    return typeof deltaMinor === "number" && Number.isSafeInteger(deltaMinor) ? deltaMinor : null;
+  };
+  // `v.number()` admits NaN and fractions (CVX-4). A NaN issued count makes
+  // every range comparison below false and the tail empty — an "intact"
+  // chain nobody issued — and a NaN or zero version is a Map key the prefix
+  // walk never reaches and the stray check never flags. Each stored number
+  // is proven to be what the chain treats it as before it is compared.
+  if (!Number.isSafeInteger(issued) || issued < 0) {
+    return { ok: false, what: `payable reclassification count (${issued}) is not a whole number of versions` };
+  }
+  if (!Number.isSafeInteger(targetMinor)) {
+    return { ok: false, what: `payable target (${targetMinor}) is not a readable amount` };
+  }
+  const isVersion = (value: number | undefined): value is number => value !== undefined && Number.isSafeInteger(value) && value >= 1;
+
+  const events = family ?? (await sourceEvents(ctx, orgId, "financeDealCustody", sourceId, action, budget));
+  const postedByVersion = new Map<number, Doc<"accountingEvents">>();
+  for (const event of events) {
+    if (event.eventType !== "CUSTODY_PAYABLE_RECLASSIFIED" || event.status !== "POSTED") continue;
+    if (!isVersion(event.eventVersion)) {
+      return { ok: false, what: `payable reclassification event carries a version that is not a positive whole number (${event.eventVersion})` };
+    }
+    if (postedByVersion.has(event.eventVersion)) return refused(event.eventVersion, "is on the ledger more than once");
+    postedByVersion.set(event.eventVersion, event);
+  }
+  // The contiguous POSTED prefix 1..posted, and its arithmetic.
+  let posted = 0;
+  let postedSum = 0;
+  while (postedByVersion.has(posted + 1)) {
+    posted += 1;
+    const deltaMinor = readDelta(postedByVersion.get(posted)!.payload);
+    if (deltaMinor === null) return refused(posted, "carries no readable delta");
+    postedSum += deltaMinor;
+  }
+  if (posted > issued) return refused(posted, "is on the ledger past the version the record says it issued");
+  for (const version of postedByVersion.keys()) {
+    if (version > posted) return refused(posted + 1, "is neither on the ledger nor waiting in the outbox");
+  }
+
+  // Every unposted POST row of this record, by version — the tail, and
+  // anything queued where the chain says nothing should be.
+  const outbox = await sourceOutboxRows(ctx, orgId, "financeDealCustody", sourceId, action, budget);
+  const queuedByVersion = new Map<number, Doc<"pendingAccountingEvents">>();
+  for (const row of outbox) {
+    if (row.kind !== "POST" || row.status === "POSTED" || row.eventType !== "CUSTODY_PAYABLE_RECLASSIFIED") continue;
+    if (!isVersion(row.eventVersion)) {
+      return { ok: false, what: `payable reclassification outbox row carries a version that is not a positive whole number (${row.eventVersion})` };
+    }
+    if (queuedByVersion.has(row.eventVersion)) return refused(row.eventVersion, "is waiting in the outbox more than once");
+    queuedByVersion.set(row.eventVersion, row);
+  }
+  for (const version of queuedByVersion.keys()) {
+    if (version <= posted) return refused(version, "is waiting in the outbox although it is already on the ledger");
+    if (version > issued) return refused(version, "is waiting in the outbox past the version the record says it issued");
+  }
+
+  const tail: PayableChainLink[] = [];
+  let queuedSum = 0;
+  for (let version = posted + 1; version <= issued; version += 1) {
+    const link = queuedByVersion.get(version) ?? null;
+    if (link === null) {
+      // Under the chain's key but not this record's row — or nowhere at all.
+      const underKey = await pendingForwardByKey(ctx, orgId, custodyPayableReclassKey(custody._id, version), budget);
+      return underKey === null
+        ? refused(version, "is neither on the ledger nor waiting in the outbox")
+        : refused(version, "is not the reclassification the chain expects (its queued row names another event, source or version)");
+    }
+    if (link.idempotencyKey !== custodyPayableReclassKey(custody._id, version)) {
+      return refused(version, "is not the reclassification the chain expects (its queued row names another event, source or version)");
+    }
+    const deltaMinor = readDelta(link.payload);
+    if (deltaMinor === null) return refused(version, "carries no readable delta");
+    if (parseCustodyDependencies(link.payload) === null) return refused(version, "carries ledger dependencies that cannot be read");
+    queuedSum += deltaMinor;
+    tail.push({ version, row: link, deltaMinor });
+  }
+  if (postedSum + queuedSum !== targetMinor) {
+    return {
+      ok: false,
+      what: `payable reclassification chain (${postedSum} posted, ${queuedSum} waiting) does not add up to the target the row carries (${targetMinor})`,
+    };
+  }
+  return { ok: true, tail };
 }
 
 /**
@@ -651,99 +829,69 @@ async function pendingForwardByKey(
  * "The highest POSTED version" said nothing about the versions below it:
  * v2 POSTED over a v1 that exists nowhere read as an intact chain, and the
  * next delta was issued on top of a payable no journal ever credited. So
- * the POSTED prefix is exactly the contiguous set 1..P, each version ONE
- * `CUSTODY_PAYABLE_RECLASSIFIED` event of this record; a POSTED version
- * above a gap, or two POSTED events at one version, is a chain nobody can
- * re-base and the mutation REFUSES. Every queued link P+1..N is the exact
- * row the chain expects — a `POST` of this event type, this source, this
- * version — with a readable integer delta and readable dependencies; a row
- * that is any of these things wrongly is refused too, never folded: folding
- * deletes the row, and a row nobody can read is not one to delete. And the
- * arithmetic is checked: the POSTED deltas plus the queued deltas must add
- * up to the target the row carries, or the row and the chain disagree
- * about what the payable is, and nothing is issued on either.
+ * the chain is read through `provePayableChain` — the contiguous POSTED
+ * prefix, the exact queued tail, nothing above the issued version, every
+ * delta and dependency readable, the arithmetic against the row's target —
+ * and a chain that reads as anything else REFUSES the mutation, never
+ * folds: folding deletes rows, and a row nobody can read is not one to
+ * delete.
  *
  * The one compatibility rule: a queued row with NO dependency field at all
  * (from before dependencies existed) names none. It is left standing and
  * posts by the chain rule alone; it is neither folded nor refused.
+ *
+ * ### Each primary is proven ONCE (R6, F1)
+ *
+ * Every queued link names the whole position it was computed from, so a
+ * tail of N links over a record with K primaries names on the order of
+ * N × K dependencies — and proving each mention afresh read the ledger and
+ * the outbox N × K times: past the platform's per-transaction read limit on
+ * a record that was merely long-lived. A primary's fate does not depend on
+ * which link asks, so it is proven once per idempotency key and remembered
+ * for every later mention, and every read the fold makes — the family, the
+ * outbox enumeration, each proof — is charged to ONE document budget that
+ * refuses with a named reason before the platform would.
  */
 export async function foldAbandonedPayableDeltas(
   ctx: MutationCtx,
   custody: Doc<"financeDealCustody">,
-  action: string
+  action: string,
+  budget: CustodyLedgerReadBudget = new CustodyLedgerReadBudget(MAX_CUSTODY_LEDGER_PROOFS, action)
 ): Promise<{ nextVersion: number; baseTargetMinor: number }> {
   const issued = custody.payableReclassVersion ?? 0;
   const targetMinor = custody.payableTargetMinor ?? 0;
   const intact = { nextVersion: issued + 1, baseTargetMinor: targetMinor };
-  if (issued === 0) return intact;
-  const refuse = (version: number, what: string): never => {
+  if (issued > MAX_SOURCE_EVENTS) {
     throw new ConvexError(
-      `This custody record's payable reclassification v${version} ${what}, so ${action} cannot be chained behind it; nothing has been changed. Have the record reviewed.`
+      `This custody record has more than ${MAX_SOURCE_EVENTS} payable reclassifications, which is past what ${action} can re-base completely; nothing has been changed. Have the record reviewed.`
     );
+  }
+  const chain = await provePayableChain(ctx, custody, action, budget);
+  if (!chain.ok) {
+    throw new ConvexError(
+      `This custody record's ${chain.what}, so ${action} cannot be chained behind it; nothing has been changed. Have the record reviewed.`
+    );
+  }
+  if (chain.tail.length === 0) return intact;
+
+  // A primary the ledger will never carry as a link stated it: its SETTLED
+  // key is neither POSTED nor on its way. Proven once per key.
+  const abandonedByKey = new Map<string, boolean>();
+  const abandoned = async (idempotencyKey: string): Promise<boolean> => {
+    const known = abandonedByKey.get(idempotencyKey);
+    if (known !== undefined) return known;
+    const result =
+      !(await eventPosted(ctx, custody.orgId, idempotencyKey, budget)) &&
+      !(await forwardStillQueued(ctx, custody.orgId, idempotencyKey, budget));
+    abandonedByKey.set(idempotencyKey, result);
+    return result;
   };
-  const readDelta = (version: number, payload: unknown): number => {
-    const deltaMinor = (payload as Record<string, unknown> | null | undefined)?.deltaMinor;
-    if (typeof deltaMinor !== "number" || !Number.isSafeInteger(deltaMinor)) refuse(version, "carries no readable delta");
-    return deltaMinor as number;
-  };
-  const family = await sourceEvents(ctx, custody.orgId, "financeDealCustody", custody._id.toString(), action);
-  const postedByVersion = new Map<number, Doc<"accountingEvents">>();
-  for (const event of family) {
-    if (event.eventType !== "CUSTODY_PAYABLE_RECLASSIFIED" || event.status !== "POSTED") continue;
-    if (postedByVersion.has(event.eventVersion)) refuse(event.eventVersion, "is on the ledger more than once");
-    postedByVersion.set(event.eventVersion, event);
-  }
-  // The contiguous POSTED prefix 1..posted, and its arithmetic.
-  let posted = 0;
-  let postedSum = 0;
-  while (postedByVersion.has(posted + 1)) {
-    posted += 1;
-    postedSum += readDelta(posted, postedByVersion.get(posted)!.payload);
-  }
-  for (const version of postedByVersion.keys()) {
-    if (version > posted) refuse(posted + 1, "is neither on the ledger nor waiting in the outbox");
-  }
-  if (posted > issued) refuse(posted, "is on the ledger past the version the record says it issued");
-  if (issued - posted > MAX_SOURCE_EVENTS) {
-    throw new ConvexError(
-      `This custody record has more than ${MAX_SOURCE_EVENTS} payable reclassifications waiting to post, which is past what ${action} can re-base completely; nothing has been changed. Have the record reviewed.`
-    );
-  }
-  const tail: Array<{ version: number; row: Doc<"pendingAccountingEvents">; deltaMinor: number }> = [];
-  let queuedSum = 0;
-  for (let version = posted + 1; version <= issued; version += 1) {
-    const row = await pendingForwardByKey(ctx, custody.orgId, custodyPayableReclassKey(custody._id, version));
-    if (row === null) refuse(version, "is neither on the ledger nor waiting in the outbox");
-    const link = row as Doc<"pendingAccountingEvents">;
-    if (
-      link.eventType !== "CUSTODY_PAYABLE_RECLASSIFIED" ||
-      link.sourceType !== "financeDealCustody" ||
-      link.sourceId !== custody._id.toString() ||
-      link.eventVersion !== version
-    ) {
-      refuse(version, "is not the reclassification the chain expects (its queued row names another event, source or version)");
-    }
-    const deltaMinor = readDelta(version, link.payload);
-    if (parseCustodyDependencies(link.payload) === null) refuse(version, "carries ledger dependencies that cannot be read");
-    queuedSum += deltaMinor;
-    tail.push({ version, row: link, deltaMinor });
-  }
-  if (postedSum + queuedSum !== targetMinor) {
-    throw new ConvexError(
-      `This custody record's payable reclassification chain (${postedSum} posted, ${queuedSum} waiting) does not add up to the target the row carries (${targetMinor}), so ${action} cannot be chained behind it; nothing has been changed. Have the record reviewed.`
-    );
-  }
-  if (posted >= issued) return intact;
   let foldFrom: number | null = null;
-  for (const link of tail) {
-    // Proven readable above; a row that names none is left standing.
+  for (const link of chain.tail) {
+    // Proven readable by the chain proof; a row that names none is left standing.
     const dependencies = parseCustodyDependencies(link.row.payload) ?? [];
     for (const dependency of dependencies) {
-      if (dependency.must !== "SETTLED") continue;
-      if (
-        !(await eventPosted(ctx, custody.orgId, dependency.idempotencyKey)) &&
-        !(await forwardStillQueued(ctx, custody.orgId, dependency.idempotencyKey))
-      ) {
+      if (dependency.must === "SETTLED" && (await abandoned(dependency.idempotencyKey))) {
         foldFrom = link.version;
         break;
       }
@@ -752,7 +900,7 @@ export async function foldAbandonedPayableDeltas(
   }
   if (foldFrom === null) return intact;
   let baseTargetMinor = targetMinor;
-  for (const link of tail) {
+  for (const link of chain.tail) {
     if (link.version < foldFrom) continue;
     baseTargetMinor -= link.deltaMinor;
     await ctx.db.delete(link.row._id);
@@ -839,9 +987,11 @@ export function custodyLedgerFamilyRowRefusal(
  *    and the ledger still carries;
  *  - a written-off record has its write-off POSTED at the version the row
  *    names and no other; any other record has NO write-off on the books;
- *  - the payable chain is posted to the version the row says it issued — a
- *    delta still waiting in the outbox is a payable the ledger does not yet
- *    carry.
+ *  - the payable chain is EXACTLY the one the row says it issued
+ *    (`provePayableChain`): one POSTED delta at each version 1..N, no
+ *    duplicate, nothing posted or queued above N, every delta readable and
+ *    the deltas summing to the row's target — a delta still waiting in the
+ *    outbox is a payable the ledger does not yet carry.
  *
  * Bounded like every decision read: the rows come from the bounded loaders,
  * each movement log is read under `MAX_CUSTODY_ENTRIES`, the ever-posted
@@ -921,18 +1071,15 @@ export async function custodyLedgerFamilyRefusal(
       return `A reopened custody record on this deal still has its write-off on the books (the reversal has not posted yet), so ${action} is refused until the outbox has posted it.`;
     }
 
-    const issued = row.payableReclassVersion ?? 0;
-    if (issued > 0) {
-      const postedReclass = new Set(
-        family
-          .filter((event) => event.eventType === "CUSTODY_PAYABLE_RECLASSIFIED" && event.status === "POSTED")
-          .map((event) => event.eventVersion)
-      );
-      for (let version = 1; version <= issued; version += 1) {
-        if (!postedReclass.has(version)) {
-          return `A custody record on this deal has a payable reclassification (v${version}) that has not posted to the ledger yet, so ${action} is refused until the outbox has posted it.`;
-        }
-      }
+    // The payable chain, read exactly as the fold reads it (R6, F2): a
+    // chain that does not read as one at all is refused for what it is; a
+    // chain that reads but is not yet all on the books is refused as waiting.
+    const chain = await provePayableChain(ctx, row, action, budget, family);
+    if (!chain.ok) {
+      return `A custody record on this deal has a ${chain.what}, so ${action} is refused until the record has been reviewed.`;
+    }
+    if (chain.tail.length > 0) {
+      return `A custody record on this deal has a payable reclassification (v${chain.tail[0].version}) that has not posted to the ledger yet, so ${action} is refused until the outbox has posted it.`;
     }
   }
 

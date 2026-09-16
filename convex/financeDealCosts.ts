@@ -429,12 +429,16 @@ async function syncCustodyFeePosting(
   const expense = custodyFeeExpenseKey(fee.accountingTreatment);
   if (expense.systemKey === null) throw new ConvexError(expense.refusal);
   const version = (fee.custodyPostingVersion ?? 0) + 1;
-  const app = await ctx.db.get(fee.applicationId);
+  // A fresh charge is posted against a deal that EXISTS in this org (R6,
+  // F3): a line whose parent is gone or another tenant's is never put on
+  // the books, whatever door led here. Thrown before the forward posts, so
+  // the mutation rolls back — the reversal above with it — and nothing moves.
+  const app = await requireOwnedRow(ctx, fee.orgId, "financeApplications", fee.applicationId, APPLICATION_NOT_FOUND);
   await hookCustodyFeePaid(ctx, {
     orgId: fee.orgId,
     fee,
     custodyId: target.custodyId,
-    vehicleId: app?.vehicleId,
+    vehicleId: app.vehicleId,
     version,
     amountMinor: target.amountMinor,
     actorId,
@@ -2290,10 +2294,10 @@ export const recordActualFeeAmount = mutation({
     if (fee.custodyId) {
       await assertActorNotCustodianOf(ctx, fee.custodyId, user._id, "Changing a cost charged to a custody record");
     }
-    {
-      const parentApp = await ctx.db.get(fee.applicationId);
-      if (parentApp) assertDealEconomicsOpen(parentApp, "changing a recorded cost");
-    }
+    // The parent must exist in this org (R6, F3): a line whose deal is gone or
+    // another tenant's has no freeze to judge and is refused, never let through.
+    const parent = await requireOwnedRow(ctx, args.orgId, "financeApplications", fee.applicationId, APPLICATION_NOT_FOUND);
+    assertDealEconomicsOpen(parent, "changing a recorded cost");
     // The more destructive of the two siblings: voiding preserves the amount
     // and records a reason, while this replaces the figure, the checker's
     // identity and their notes outright. Escalating only `voidDealFee` left the
@@ -2339,13 +2343,10 @@ export const recordActualFeeAmount = mutation({
     const nextStorageIds = args.documentStorageIds ?? fee.documentStorageIds;
     await deleteDroppedAttachments(ctx, fee.documentStorageIds, args.documentStorageIds);
 
-    const parent = await ctx.db.get(fee.applicationId);
-    if (parent) {
-      await invalidateClassification(
-        ctx, parent, user._id,
-        "A recorded cost was changed after the deal's accounting was classified."
-      );
-    }
+    await invalidateClassification(
+      ctx, parent, user._id,
+      "A recorded cost was changed after the deal's accounting was classified."
+    );
 
     await ctx.db.patch(args.feeId, {
       actualAmountMinor: args.actualAmountMinor,
@@ -2459,10 +2460,9 @@ export const voidDealFee = mutation({
       throw new ConvexError("Say why this cost is being removed.");
     }
     if (fee.voidedAt !== undefined) return args.feeId;
-    {
-      const parentApp = await ctx.db.get(fee.applicationId);
-      if (parentApp) assertDealEconomicsOpen(parentApp, "removing a cost");
-    }
+    // The parent must exist in this org (R6, F3); see recordActualFeeAmount.
+    const parent = await requireOwnedRow(ctx, args.orgId, "financeApplications", fee.applicationId, APPLICATION_NOT_FOUND);
+    assertDealEconomicsOpen(parent, "removing a cost");
     if (fee.reconciledAt !== undefined) {
       assertMayUndoReconciliation(auth, "Removing a cost that has been reconciled");
     }
@@ -2476,13 +2476,10 @@ export const voidDealFee = mutation({
       }
     }
 
-    const voidParent = await ctx.db.get(fee.applicationId);
-    if (voidParent) {
-      await invalidateClassification(
-        ctx, voidParent, user._id,
-        "A cost was removed from the deal after its accounting was classified."
-      );
-    }
+    await invalidateClassification(
+      ctx, parent, user._id,
+      "A cost was removed from the deal after its accounting was classified."
+    );
 
     await ctx.db.patch(args.feeId, {
       voidedAt: Date.now(),
@@ -2530,10 +2527,9 @@ export const setFeeCustody = mutation({
       throw new ConvexError("This cost has been voided and cannot be charged to custody.");
     }
     if (fee.custodyId === args.custodyId) return args.feeId;
-    {
-      const parentApp = await ctx.db.get(fee.applicationId);
-      if (parentApp) assertDealEconomicsOpen(parentApp, "moving a cost onto or off custody");
-    }
+    // The parent must exist in this org (R6, F3); see recordActualFeeAmount.
+    const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", fee.applicationId, APPLICATION_NOT_FOUND);
+    assertDealEconomicsOpen(app, "moving a cost onto or off custody");
     if (fee.custodyId) {
       const current = await ctx.db.get(fee.custodyId);
       if (current) {
@@ -2544,13 +2540,10 @@ export const setFeeCustody = mutation({
     const custodyId = args.custodyId
       ? await resolveFeeCustody(ctx, args.orgId, fee.applicationId, args.custodyId, fee, user._id)
       : undefined;
-    const app = await ctx.db.get(fee.applicationId);
-    if (app) {
-      await invalidateClassification(
-        ctx, app, user._id,
-        "A cost was moved onto or off an employee's custody after the deal's accounting was classified."
-      );
-    }
+    await invalidateClassification(
+      ctx, app, user._id,
+      "A cost was moved onto or off an employee's custody after the deal's accounting was classified."
+    );
     const now = Date.now();
     await ctx.db.patch(args.feeId, { custodyId, updatedAt: now });
     await syncCustodyFeePosting(
@@ -3150,6 +3143,10 @@ export const migrateLegacyCustodyToLedger = mutation({
           throw new ConvexError("This custody record is already on the ledger; there is nothing to migrate.");
         }
         await assertCustodyAccountingReady(ctx, args.orgId, "migrating this custody record to the ledger");
+        // The deal the family is posted against must exist in this org (R6,
+        // F3) — proven before the first leg posts, so an orphaned or
+        // re-pointed record is refused whole and nothing reaches the books.
+        const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", custody.applicationId, APPLICATION_NOT_FOUND);
 
         // The log, proven in full, must project to exactly the totals the
         // row claims — a disagreement is a record somebody has to look at.
@@ -3241,7 +3238,6 @@ export const migrateLegacyCustodyToLedger = mutation({
         }
 
         // The custody-paid lines, at their recorded actuals.
-        const app = await ctx.db.get(custody.applicationId);
         let feesPosted = 0;
         let latestFact = entries.reduce((latest, entry) => Math.max(latest, entry.occurredAt), 0);
         for (const fee of linked) {
@@ -3253,7 +3249,7 @@ export const migrateLegacyCustodyToLedger = mutation({
             orgId: args.orgId,
             fee,
             custodyId: custody._id,
-            vehicleId: app?.vehicleId,
+            vehicleId: app.vehicleId,
             version,
             amountMinor: fee.actualAmountMinor,
             actorId: user._id,
