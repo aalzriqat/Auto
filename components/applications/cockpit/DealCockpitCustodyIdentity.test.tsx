@@ -285,7 +285,7 @@ async function attemptEveryCloseRoute(dialog: HTMLElement) {
   fireEvent.click(document.body);
 }
 
-describe("a custody dialog whose command is in flight cannot be closed by any route (R9)", () => {
+describe("a MOUNTED custody dialog whose command is in flight cannot be closed by any route it exposes (R9)", () => {
   test("movement: Escape, the X and an outside click are all refused while busy; the lost response keeps the SAME key for the retry; once settled the routes reopen and the next attempt is a NEW command", async () => {
     const move = deferred(MOVE);
     renderCockpit([openRecord()]);
@@ -366,6 +366,76 @@ describe("a custody dialog whose command is in flight cannot be closed by any ro
     fireEvent.click(within(issueDialog).getByTestId("custody-issued-submit"));
     await waitFor(() => expect(open).toHaveBeenCalledTimes(2));
     expect(keyOf(open, 1)).toBe(keyOf(open, 0));
+  });
+});
+
+/**
+ * AF-R10-01 (Sonnet MAX, R10 on 039e5e88d) — CHARACTERIZATION, not a fix.
+ *
+ * `busyCloseGuard` refuses every dismissal a mounted dialog exposes. An
+ * UNMOUNT is not a dismissal: a same-tab route change while the request is
+ * on the wire tears the cockpit down, no guard runs, and the attempt's
+ * identity (the panel's per-dialog `intentId` + the mount-scoped map in
+ * `useCommandIdentity`) dies with the tree.
+ *
+ * Which unmount matters: if the answer still ARRIVES, `custodyCommand`'s
+ * continuation outlives the tree and retires the key on success — the next
+ * issuance is then a genuinely new command and nothing is owed a replay.
+ * The gap is the LOST answer: the server committed, the transport failed,
+ * no screen is left to keep the key for the retry, and the next issuance on
+ * return is a NEW command that `recordCustodyMovement` ISSUED has no
+ * server-side ceiling to refuse.
+ *
+ * This test PASSES on the current code and pins that gap exactly, including
+ * the one fact that bounds its severity: the live `listDealCosts` query
+ * shows the first issuance before the operator can resubmit. The day the
+ * identity survives an unmount (the deferred Option A — a session-scoped
+ * pending marker that resumes the same key), the `not.toBe` below FAILS;
+ * that is the signal to rewrite this as the positive property, not to
+ * delete it.
+ */
+describe("the in-flight guard does not survive an unmount (AF-R10-01, characterization of the gap)", () => {
+  test("a route change while an issuance is on the wire unmounts the panel; the answer is lost though the server committed, the remounted panel shows the new balance, and a resubmit is a NEW command", async () => {
+    const move = deferred(MOVE);
+    const view = renderCockpit([openRecord()]);
+    fireEvent.click(within(panel()).getByRole("button", { name: salesEn.CustodyIssueMore }));
+    const dialog = screen.getByTestId("custody-issued-dialog");
+    fireEvent.change(within(dialog).getByLabelText(/Amount/), { target: { value: "100" } });
+    fireEvent.click(within(dialog).getByTestId("custody-issued-submit"));
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
+    expect(argOf(move, 0)).toMatchObject({ orgId: ORG, custodyId: "cust1", kind: "ISSUED", amountMinor: 100_000 });
+    const firstKey = keyOf(move, 0);
+    expect(firstKey).toMatch(/^custody-move:cust1:ISSUED:/);
+
+    // The route changes under the request. There is no dialog left to refuse
+    // anything, and no abandon runs either — the identity simply ceases.
+    view.unmount();
+    expect(screen.queryByTestId("custody-issued-dialog")).toBeNull();
+    // ...and the ANSWER is lost after the screen is gone. The server side of
+    // this test is modelled below as having committed; the client only knows
+    // the transport failed, so nothing retires the key — and nothing holds it.
+    move.lose(0);
+    await Promise.resolve();
+    expect(move).toHaveBeenCalledTimes(1);
+
+    // Back on the deal. The live query already carries the issuance, so the
+    // operator sees 800 issued — the first movement is not invisible.
+    const landed = { ...openRecord(), issuedMinor: 800_000, summary: { ...openRecord().summary, employeeOwesDealerMinor: 800_000 } };
+    queryResults.set(COSTS_QUERY, costs([landed]));
+    render(<DealCockpit orgId={ORG} applicationId={APP} />);
+    expect(within(panel()).getByTestId("custody-issued").textContent).toContain("800");
+
+    // A second "hand over more" of the same figure is minted as a NEW command:
+    // nothing on this screen can tell it is the operator re-authorizing the
+    // request that just landed, and the server has no ceiling to refuse it.
+    fireEvent.click(within(panel()).getByRole("button", { name: salesEn.CustodyIssueMore }));
+    const again = screen.getByTestId("custody-issued-dialog");
+    fireEvent.change(within(again).getByLabelText(/Amount/), { target: { value: "100" } });
+    fireEvent.click(within(again).getByTestId("custody-issued-submit"));
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(2));
+    expect(argOf(move, 1)).toMatchObject({ custodyId: "cust1", kind: "ISSUED", amountMinor: 100_000 });
+    expect(keyOf(move, 1)).toMatch(/^custody-move:cust1:ISSUED:/);
+    expect(keyOf(move, 1)).not.toBe(firstKey);
   });
 });
 

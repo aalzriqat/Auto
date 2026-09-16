@@ -88,7 +88,7 @@ function useResetOnOpen(open: boolean, reset: () => void): void {
 }
 
 /**
- * ## A dialog whose command is in flight is not closable by ANY route (R9)
+ * ## A MOUNTED dialog whose command is in flight is not closable by any route it exposes (R9)
  *
  * Every submit of an open dialog carries the attempt's `intentId`; closing
  * the dialog ABANDONS the attempt and the container retires that identity
@@ -107,6 +107,19 @@ function useResetOnOpen(open: boolean, reset: () => void): void {
  * the retry, and a definitive refusal is the container's to retire.
  *
  * One rule for every custody dialog, so no door is guarded differently.
+ *
+ * ⚠️ WHAT THIS DOES NOT COVER (AF-R10-01). The guard only exists while the
+ * dialog is mounted. A same-tab route change while the request is on the
+ * wire unmounts the whole cockpit: no dismissal event fires, nothing here
+ * runs, and the attempt's identity — the panel's per-dialog `intentId` and
+ * the mount-scoped map in `useCommandIdentity` — dies with the tree. If the
+ * request then lands, cash moved under a key no screen remembers, and the
+ * next attempt on return is a NEW command. The operator does see the first
+ * movement (the panel is fed by a live query) before they can resubmit, so
+ * this is the ordinary re-submit exposure every economic command in the app
+ * carries through the same hook — not the silent "lost" signal R8 fixed —
+ * but it is a gap in this guard, not a route it refuses. Pinned by the
+ * unmount characterization in `DealCockpitCustodyIdentity.test.tsx`.
  */
 function busyCloseGuard(busy: boolean, onOpenChange: (open: boolean) => void) {
   const refuse = (event: { preventDefault: () => void }) => {

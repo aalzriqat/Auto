@@ -465,10 +465,12 @@ export function DealCustodyPanel({
    * The operator closed the dialog (Cancel, Escape, the overlay, the X) with
    * its command not having succeeded — success closes it through `run`
    * below. An attempt that carries identity hands it back so the container
-   * retires it. A dialog in flight is not closable by any route: the dialogs
-   * refuse every close while `busy` (`busyCloseGuard`), and this refuses
-   * too, so an in-flight attempt can never be retired — its identity must
-   * survive for the retry of a lost response (R9).
+   * retires it. A mounted dialog in flight is not closable by any route it
+   * exposes: the dialogs refuse every close while `busy` (`busyCloseGuard`),
+   * and this refuses too, so an in-flight attempt can never be retired by
+   * the operator — its identity must survive for the retry of a lost
+   * response (R9). An UNMOUNT (route change) is not a close: nothing here
+   * runs and the identity dies with the tree — see `busyCloseGuard`.
    */
   const dismiss = () => {
     if (busy) return;
