@@ -323,8 +323,108 @@ describe("base approval — the confirmed deal", () => {
     expect(app.handoverStatus).toBe("BLOCKED");
     expect(app.companyRuleSnapshot?.defaultLtvPercent).toBe(85);
     expect(app.companyRuleVersionId).toBeDefined();
+    // Quote economics cross the lineage boundary at application creation.
+    // Without these fields the application-scoped solver had no target, and
+    // the same screen showed the quote's 500 first payment in one card and 0
+    // in its authoritative financial summary.
+    expect(app.economicsCurrency).toBe("JOD");
+    expect(app.targetSellingAmountMinor).toBe(jod(DEAL.targetSelling));
+    expect(app.targetNetProceedsMinor).toBe(jod(DEAL.targetSelling));
+    expect(app.customerFirstPaymentMinor).toBe(jod(DEAL.customerFirstPayment));
+    expect(app.estimatedDealerBorneExpensesMinor).toBe(0);
+    expect(app.estimatedClosingExpensesMinor).toBe(0);
+
+    const suggestion = await seed.asUser.query(
+      api.financingEconomics.suggestQuotationForApplication,
+      { orgId: seed.orgId, applicationId }
+    );
+    expect(suggestion.available).toBe(true);
+    if (!suggestion.available) throw new Error("expected the fresh application's quotation to be solvable");
+    expect(suggestion.submittedQuotationMinor).toBe(jod(11_764.706));
+    expect(suggestion.currency).toBe("JOD");
     // The legacy status is untouched, so every existing reader keeps working.
     expect(app.status).toBe("PENDING_DOCS");
+  });
+
+  test("recording the fresh server suggestion preserves the quote's first payment", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    const suggestion = await seed.asUser.query(
+      api.financingEconomics.suggestQuotationForApplication,
+      { orgId: seed.orgId, applicationId }
+    );
+    if (!suggestion.available) throw new Error("expected a server suggestion");
+
+    // This is the exact cockpit call shape: it sends the selected quotation,
+    // not a second copy of the calculation inputs. The mutation must retain
+    // the quote-derived first payment already stored on the application.
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: suggestion.submittedQuotationMinor,
+      source: "SYSTEM_CALCULATED",
+    });
+
+    const app = await readApp(seed, applicationId);
+    expect(app.customerFirstPaymentMinor).toBe(jod(DEAL.customerFirstPayment));
+    expect(app.quotationCalculationSnapshot?.customerFirstPaymentMinor).toBe(
+      jod(DEAL.customerFirstPayment)
+    );
+  });
+
+  test("only included dealer-borne policy fees seed the quotation expense estimate", async () => {
+    const seed = await seedDealer();
+    await seed.asUser.mutation(api.finance.updateCompany, {
+      id: seed.companyId,
+      orgId: seed.orgId,
+      name: "Jordan Finance",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      isActive: true,
+      maxFinancingLTV: 85,
+      defaultLtvPercent: 85,
+      customerFirstPaymentOffsetsUnfinancedShare: true,
+      expectedCurrency: "JOD",
+      expectedRuleVersion: 1,
+      feeTemplates: [
+        {
+          feeType: "STAMPS",
+          estimatedAmountMinor: jod(100),
+          paidBy: "DEALER",
+          paidTo: "GOVERNMENT",
+          includedInQuotation: true,
+          deductedFromSettlement: false,
+          refundable: false,
+          accountingTreatment: "SELLING_EXPENSE",
+        },
+        {
+          feeType: "OWNERSHIP_TRANSFER",
+          estimatedAmountMinor: jod(200),
+          paidBy: "EMPLOYEE",
+          paidTo: "GOVERNMENT",
+          includedInQuotation: false,
+          deductedFromSettlement: false,
+          refundable: false,
+          accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+        },
+        {
+          feeType: "INSURANCE",
+          estimatedAmountMinor: jod(300),
+          paidBy: "CUSTOMER",
+          paidTo: "INSURER",
+          includedInQuotation: true,
+          deductedFromSettlement: false,
+          refundable: false,
+          accountingTreatment: "INSURANCE_EXPENSE",
+        },
+      ],
+    });
+
+    const applicationId = await createApplication(seed);
+    const app = await readApp(seed, applicationId);
+    expect(app.estimatedDealerBorneExpensesMinor).toBe(jod(100));
+    expect(app.estimatedClosingExpensesMinor).toBe(jod(100));
   });
 });
 
@@ -1921,8 +2021,10 @@ describe("overrides and audit", () => {
     const app = await readApp(seed, applicationId);
     expect(app.submittedQuotationMinor).toBe(jod(13_000));
     expect(app.quotationCalculationSnapshot?.mode).toBe("MANUAL_ENTRY");
-    // Nothing was back-solved to fill the blanks.
-    expect(app.estimatedDealerBorneExpensesMinor).toBeUndefined();
+    // Nothing was back-solved from the negotiated figure: zero is the explicit
+    // creation-time snapshot because this company's policy has no included
+    // dealer-borne fee templates.
+    expect(app.estimatedDealerBorneExpensesMinor).toBe(0);
     expect(app.quotationBufferMinor).toBeUndefined();
   });
 
@@ -2224,6 +2326,13 @@ describe("overrides and audit", () => {
     const seed = await seedDealer();
     const applicationId = await createApplication(seed);
 
+    // Simulate an application created before quote economics were carried
+    // across at creation. New applications have an authoritative target and
+    // are deliberately solvable; legacy absence must still fail closed.
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { targetNetProceedsMinor: undefined })
+    );
+
     // No target selling amount anywhere, so there was no calculation to be the
     // source of. Recording it as the system's own figure would put a provenance
     // claim on a number a person typed.
@@ -2240,6 +2349,10 @@ describe("overrides and audit", () => {
   test("CALCULATED_WITH_OVERRIDE cannot claim a departure from a calculation that never ran", async () => {
     const seed = await seedDealer();
     const applicationId = await createApplication(seed);
+
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { targetNetProceedsMinor: undefined })
+    );
 
     // Guarding only SYSTEM_CALCULATED left this door open: supply any reason
     // and the snapshot records a calculated departure with no calculated

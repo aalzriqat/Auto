@@ -34,6 +34,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { manualJournalSchema, ManualJournalFormValues } from "./manualJournal.schema";
 import { scaleForCurrency } from "./AccountingTabShared";
 import { getErrorMessage } from "@/lib/errors";
+import { dateInputToUtcMs, todayDateInput } from "@/lib/dateInput";
 
 function emptyLine() {
   return { id: crypto.randomUUID(), accountId: "", side: "DEBIT" as const, amount: 0 };
@@ -46,6 +47,7 @@ export function ManualJournalTab() {
   const formatCurrency = useCurrencyFormatter();
   const scale = scaleForCurrency(currencyCode);
   const factor = Math.pow(10, scale);
+  const today = todayDateInput();
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [rejecting, setRejecting] = useState<{ id: Id<"manualJournalDrafts">; reason: string } | null>(null);
@@ -76,7 +78,7 @@ export function ManualJournalTab() {
 
   const form = useForm<ManualJournalFormValues>({
     resolver: zodResolver(manualJournalSchema),
-    defaultValues: { memo: "", lines: [emptyLine(), emptyLine()] },
+    defaultValues: { memo: "", accountingDate: today, lines: [emptyLine(), emptyLine()] },
   });
 
   const { fields, append, remove } = useFieldArray({ control: form.control, name: "lines" });
@@ -86,7 +88,7 @@ export function ManualJournalTab() {
   const balanced = totalDebits > 0 && Math.abs(totalDebits - totalCredits) < 1e-9;
 
   function resetForm() {
-    form.reset({ memo: "", lines: [emptyLine(), emptyLine()] });
+    form.reset({ memo: "", accountingDate: todayDateInput(), lines: [emptyLine(), emptyLine()] });
   }
 
   async function onSubmit(values: ManualJournalFormValues) {
@@ -100,6 +102,7 @@ export function ManualJournalTab() {
       await createDraft({
         orgId: activeOrgId,
         memo: values.memo,
+        accountingDate: dateInputToUtcMs(values.accountingDate),
         lines: values.lines.map((l) => ({
           accountId: l.accountId as Id<"chartOfAccounts">,
           debitMinor: l.side === "DEBIT" ? Math.round(l.amount * factor) : 0,
@@ -276,6 +279,20 @@ export function ManualJournalTab() {
                       <FormLabel>{t("ManualJournalMemo")}</FormLabel>
                       <FormControl>
                         <Textarea placeholder={t("ManualJournalMemoPlaceholder")} {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="accountingDate"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("AccountingDate")}</FormLabel>
+                      <FormControl>
+                        <Input type="date" max={today} {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>

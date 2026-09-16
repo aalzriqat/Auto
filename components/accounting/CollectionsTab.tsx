@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 import { dateInputToUtcMs, todayDateInput, daysFromTodayDateInput } from "@/lib/dateInput";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -101,7 +102,8 @@ export function CollectionsTab() {
   const { t } = useLanguage();
   const formatCurrency = useCurrencyFormatter();
   const { hasPermission } = usePermissions();
-  const canApprove = hasPermission("approve:requests");
+  const canApprove = hasPermission(PERMISSIONS.APPROVE_REQUESTS);
+  const canManage = hasPermission(PERMISSIONS.MANAGE_FINANCE);
 
   const [receivableStatus, setReceivableStatus] = useState<string>("ALL");
   const [chequeStatus, setChequeStatus] = useState<string>("ALL");
@@ -167,6 +169,12 @@ export function CollectionsTab() {
   if (!activeOrgId) return null;
 
   async function runChequeAction(action: "deposit" | "clear", cheque: ChequeRow) {
+    const confirmed = window.confirm(
+      action === "deposit"
+        ? t("ConfirmChequeDeposit" as any)
+        : t("ConfirmChequeClear" as any)
+    );
+    if (!confirmed) return;
     try {
       if (action === "deposit") {
         await depositCheque({ orgId: activeOrgId!, chequeId: cheque._id });
@@ -230,7 +238,7 @@ export function CollectionsTab() {
           <h2 className="text-lg font-semibold text-foreground">{t("CollectionsTitle" as any)}</h2>
           <p className="text-sm text-muted-foreground">{t("CollectionsDesc" as any)}</p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        {canManage && <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => setReconcileOpen(true)}>
             <ShieldCheck className="me-2 h-4 w-4" />
             {t("ReconcileCashier" as any)}
@@ -239,7 +247,7 @@ export function CollectionsTab() {
             <Plus className="me-2 h-4 w-4" />
             {t("NewReceivable" as any)}
           </Button>
-        </div>
+        </div>}
       </div>
 
       <Tabs defaultValue="receivables" className="space-y-4">
@@ -319,20 +327,20 @@ export function CollectionsTab() {
                       <TableCell className="text-right">{formatCurrency(row.originalAmount)}</TableCell>
                       <TableCell className="text-right font-semibold">{formatCurrency(row.outstandingAmount)}</TableCell>
                       <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button size="sm" variant="outline" onClick={() => setPaymentTarget(row)} disabled={row.outstandingAmount <= 0}>
+                        {canManage && <div className="flex justify-end gap-1">
+                          <Button aria-label={t("RecordPayment" as any)} title={t("RecordPayment" as any)} size="sm" variant="outline" onClick={() => setPaymentTarget(row)} disabled={row.outstandingAmount <= 0}>
                             <Banknote className="h-3.5 w-3.5" />
                           </Button>
-                          <Button size="sm" variant="outline" onClick={() => setChequeTarget(row)} disabled={row.outstandingAmount <= 0}>
+                          <Button aria-label={t("RegisterCheque" as any)} title={t("RegisterCheque" as any)} size="sm" variant="outline" onClick={() => setChequeTarget(row)} disabled={row.outstandingAmount <= 0}>
                             <FileCheck2 className="h-3.5 w-3.5" />
                           </Button>
-                          <Button size="sm" variant="outline" onClick={() => setApprovalTarget({ receivable: row, type: "RESCHEDULE" })}>
+                          <Button aria-label={t("Reschedule" as any)} title={t("Reschedule" as any)} size="sm" variant="outline" onClick={() => setApprovalTarget({ receivable: row, type: "RESCHEDULE" })}>
                             <CalendarClock className="h-3.5 w-3.5" />
                           </Button>
-                          <Button size="sm" variant="outline" onClick={() => setApprovalTarget({ receivable: row, type: "REFUND" })}>
+                          <Button aria-label={t("Refund" as any)} title={t("Refund" as any)} size="sm" variant="outline" onClick={() => setApprovalTarget({ receivable: row, type: "REFUND" })}>
                             <RotateCcw className="h-3.5 w-3.5" />
                           </Button>
-                        </div>
+                        </div>}
                       </TableCell>
                     </TableRow>
                   ))
@@ -386,12 +394,12 @@ export function CollectionsTab() {
                       <TableCell><StatusBadge status={cheque.status} /></TableCell>
                       <TableCell className="text-right font-semibold">{formatCurrency(cheque.amount)}</TableCell>
                       <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
+                        {canManage && <div className="flex justify-end gap-1">
                           <Button size="sm" variant="outline" disabled={cheque.status !== "HELD"} onClick={() => runChequeAction("deposit", cheque)}>{t("Deposit" as any)}</Button>
                           <Button size="sm" variant="outline" disabled={cheque.status !== "HELD" && cheque.status !== "DEPOSITED"} onClick={() => runChequeAction("clear", cheque)}>{t("Clear" as any)}</Button>
                           <Button size="sm" variant="outline" disabled={["REPLACED", "CANCELLED"].includes(cheque.status)} onClick={() => setReturnTarget(cheque)}>{t("Return" as any)}</Button>
                           <Button size="sm" variant="outline" disabled={["CLEARED", "CANCELLED"].includes(cheque.status)} onClick={() => setReplaceTarget(cheque)}>{t("Replace" as any)}</Button>
-                        </div>
+                        </div>}
                       </TableCell>
                     </TableRow>
                   ))
@@ -582,13 +590,15 @@ export function CollectionsTab() {
         )}
       </Tabs>
 
-      <ReceivableDialog open={receivableDialog} onOpenChange={setReceivableDialog} />
-      <PaymentDialog receivable={paymentTarget} onOpenChange={(open) => !open && setPaymentTarget(null)} />
-      <ChequeDialog receivable={chequeTarget} onOpenChange={(open) => !open && setChequeTarget(null)} />
-      <ApprovalRequestDialog target={approvalTarget} onOpenChange={(open) => !open && setApprovalTarget(null)} />
-      <ReplaceChequeDialog cheque={replaceTarget} onOpenChange={(open) => !open && setReplaceTarget(null)} />
-      <ReturnChequeDialog cheque={returnTarget} onOpenChange={(open) => !open && setReturnTarget(null)} />
-      <ReconciliationDialog open={reconcileOpen} onOpenChange={setReconcileOpen} />
+      {canManage && <>
+        <ReceivableDialog open={receivableDialog} onOpenChange={setReceivableDialog} />
+        <PaymentDialog receivable={paymentTarget} onOpenChange={(open) => !open && setPaymentTarget(null)} />
+        <ChequeDialog receivable={chequeTarget} onOpenChange={(open) => !open && setChequeTarget(null)} />
+        <ApprovalRequestDialog target={approvalTarget} onOpenChange={(open) => !open && setApprovalTarget(null)} />
+        <ReplaceChequeDialog cheque={replaceTarget} onOpenChange={(open) => !open && setReplaceTarget(null)} />
+        <ReturnChequeDialog cheque={returnTarget} onOpenChange={(open) => !open && setReturnTarget(null)} />
+        <ReconciliationDialog open={reconcileOpen} onOpenChange={setReconcileOpen} />
+      </>}
     </div>
   );
 }

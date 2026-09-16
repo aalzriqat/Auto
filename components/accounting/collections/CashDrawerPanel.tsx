@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "convex/react";
 import { Plus } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Doc } from "@/convex/_generated/dataModel";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/sonner";
 import { useCurrency } from "@/hooks/useCurrency";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
+import { usePermissions } from "@/hooks/use-permissions";
 import { scaleForCurrency } from "../AccountingTabShared";
 
 type CashDrawerSession = Doc<"cashDrawerSessions">;
@@ -31,6 +33,9 @@ export function CashDrawerPanel() {
   const { t } = useLanguage();
   const { code: currencyCode } = useCurrency();
   const formatCurrency = useCurrencyFormatter();
+  const { hasPermission } = usePermissions();
+  const canManage = hasPermission(PERMISSIONS.MANAGE_FINANCE);
+  const canApprove = hasPermission(PERMISSIONS.APPROVE_REQUESTS);
   const factor = Math.pow(10, scaleForCurrency(currencyCode));
   const [openDialog, setOpenDialog] = useState(false);
   const [movementSession, setMovementSession] = useState<CashDrawerSession | null>(null);
@@ -48,6 +53,7 @@ export function CashDrawerPanel() {
   if (!activeOrgId) return null;
 
   async function begin(session: CashDrawerSession) {
+    if (!window.confirm(t("ConfirmBeginCashCount" as any))) return;
     try {
       await beginCount({ orgId: activeOrgId!, sessionId: session._id });
       toast.success(t("CashDrawerCountingStarted" as any));
@@ -57,6 +63,7 @@ export function CashDrawerPanel() {
   }
 
   async function approve(session: CashDrawerSession) {
+    if (!window.confirm(t("ConfirmCashDrawerApproval" as any))) return;
     try {
       await approveVariance({ orgId: activeOrgId!, sessionId: session._id });
       toast.success(t("CashDrawerApproved" as any));
@@ -67,12 +74,12 @@ export function CashDrawerPanel() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      {canManage && <div className="flex justify-end">
         <Button onClick={() => setOpenDialog(true)}>
           <Plus className="me-2 h-4 w-4" />
           {t("OpenCashDrawer" as any)}
         </Button>
-      </div>
+      </div>}
       <div className="rounded-md border border-border overflow-x-auto">
         <Table>
           <TableHeader className="bg-muted/50">
@@ -101,10 +108,10 @@ export function CashDrawerPanel() {
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button size="sm" variant="outline" onClick={() => setSelectedSession(session)}>{t("Movements" as any)}</Button>
-                      <Button size="sm" variant="outline" disabled={session.status !== "OPEN"} onClick={() => setMovementSession(session)}>{t("Record" as any)}</Button>
-                      <Button size="sm" variant="outline" disabled={session.status !== "OPEN"} onClick={() => begin(session)}>{t("BeginCount" as any)}</Button>
-                      <Button size="sm" variant="outline" disabled={session.status !== "COUNTING"} onClick={() => setCloseSession(session)}>{t("Close" as any)}</Button>
-                      <Button size="sm" variant="outline" disabled={session.status !== "CLOSED"} onClick={() => approve(session)}>{t("Approve" as any)}</Button>
+                      {canManage && <Button size="sm" variant="outline" disabled={session.status !== "OPEN"} onClick={() => setMovementSession(session)}>{t("Record" as any)}</Button>}
+                      {canManage && <Button size="sm" variant="outline" disabled={session.status !== "OPEN"} onClick={() => begin(session)}>{t("BeginCount" as any)}</Button>}
+                      {canManage && <Button size="sm" variant="outline" disabled={session.status !== "COUNTING"} onClick={() => setCloseSession(session)}>{t("Close" as any)}</Button>}
+                      {canApprove && <Button size="sm" variant="outline" disabled={session.status !== "CLOSED"} onClick={() => approve(session)}>{t("Approve" as any)}</Button>}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -121,9 +128,11 @@ export function CashDrawerPanel() {
           onClose={() => setSelectedSession(null)}
         />
       )}
-      <OpenDrawerDialog open={openDialog} onOpenChange={setOpenDialog} factor={factor} />
-      <RecordMovementDialog session={movementSession} onOpenChange={(open) => !open && setMovementSession(null)} factor={factor} />
-      <CloseDrawerDialog session={closeSession} onOpenChange={(open) => !open && setCloseSession(null)} factor={factor} />
+      {canManage && <>
+        <OpenDrawerDialog open={openDialog} onOpenChange={setOpenDialog} factor={factor} />
+        <RecordMovementDialog session={movementSession} onOpenChange={(open) => !open && setMovementSession(null)} factor={factor} />
+        <CloseDrawerDialog session={closeSession} onOpenChange={(open) => !open && setCloseSession(null)} factor={factor} />
+      </>}
     </div>
   );
 }

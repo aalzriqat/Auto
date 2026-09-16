@@ -889,6 +889,7 @@ export default defineSchema({
       v.literal("APPROVE_PREPAID_CORRECTION"),
       v.literal("REJECT_PREPAID_CORRECTION"),
       v.literal("RESOLVE_SYSTEM_ACCOUNT_ADOPTION"),
+      v.literal("REPAIR_MISSING_SYSTEM_ACCOUNTS"),
       v.literal("ACKNOWLEDGE_CLOSE_WARNINGS"),
       v.literal("SET_COMMISSION_AMOUNT"),
       // Multi-vehicle reservation-deposit allocation — see depositAllocation.ts.

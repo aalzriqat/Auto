@@ -37,6 +37,7 @@ type AuditActionType =
   | "APPROVE_PREPAID_CORRECTION"
   | "REJECT_PREPAID_CORRECTION"
   | "RESOLVE_SYSTEM_ACCOUNT_ADOPTION"
+  | "REPAIR_MISSING_SYSTEM_ACCOUNTS"
   | "ACKNOWLEDGE_CLOSE_WARNINGS"
   | "SET_COMMISSION_AMOUNT"
   // Who decided which car on a multi-vehicle quote carries which share of the

@@ -588,10 +588,15 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // `requireOwnedRow` after `requireOwner`. Skipped counts unchanged.
   // Re-measured FROM THE ANALYSER on this tree
   // ({"totalMutations":490,"analysed":318,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
+  //
+  // `chartOfAccounts.repairMissingSystemAccounts` — 490 → 491 total,
+  // 318 → 319 analysed. It accepts orgId, authenticates MANAGE_FINANCE and
+  // writes only rows whose orgId is that authenticated org. Skipped counts
+  // remain unchanged; values below are the analyser's output on this tree.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 490,
-      analysed: 318,
+      totalMutations: 491,
+      analysed: 319,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 157,
     });

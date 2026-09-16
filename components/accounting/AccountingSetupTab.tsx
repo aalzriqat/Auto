@@ -45,6 +45,7 @@ export function AccountingSetupTab({ view = "all" }: Readonly<{ view?: Accountin
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
   const initializeChart = useMutation(api.chartOfAccounts.initialize);
+  const repairChart = useMutation(api.chartOfAccounts.repairMissingSystemAccounts);
   const createPeriod = useMutation(api.accountingPeriods.create);
   const openPeriod = useMutation(api.accountingPeriods.open);
   const lockPeriod = useMutation(api.accountingPeriods.lock);
@@ -137,6 +138,14 @@ export function AccountingSetupTab({ view = "all" }: Readonly<{ view?: Accountin
             "initializeChart",
             () => initializeChart({ orgId: activeOrgId }),
             () => t("ChartOfAccountsInitialized")
+          );
+        }}
+        onRepairChart={() => {
+          void runSetupAction(
+            "initializeChart",
+            () => repairChart({ orgId: activeOrgId }),
+            (outcome) =>
+              t("SystemAccountsRepaired").replace("{count}", String(outcome.repaired.length))
           );
         }}
         onRedrive={() => {

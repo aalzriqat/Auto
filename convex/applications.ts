@@ -2401,6 +2401,45 @@ export const createFromQuote = mutation({
       if (versionRow) companyRuleVersionId = versionRow._id;
     }
 
+    // Carry the commercial facts the operator already stated on the quote
+    // into the application that owns the dealer-side economics. Leaving these
+    // behind made a fresh application look as though no target or customer
+    // first payment had ever been recorded: the quotation solver returned
+    // NO_TARGET_RECORDED, its dialog opened blank, and the financial summary
+    // contradicted the financing-plan card by showing a zero first payment.
+    //
+    // The quote stores major units; application economics are always minor
+    // units in an explicit denomination. Resolve and validate that
+    // denomination before any write, then convert once at this lineage
+    // boundary. A corrupt NaN/negative legacy quote must fail closed rather
+    // than seed unusable economics (Convex's v.number() accepts NaN).
+    const economicsCurrency = await getOrgCurrency(ctx, args.orgId);
+    assertSupportedDenomination(economicsCurrency, "creating the finance application");
+    const targetSellingAmountMinor = toMinorUnits(quote.vehiclePrice, economicsCurrency);
+    const customerFirstPaymentMinor = toMinorUnits(quote.downPayment, economicsCurrency);
+    assertValidMinorAmount(targetSellingAmountMinor, "quoted vehicle price");
+    assertValidMinorAmount(customerFirstPaymentMinor, "quoted customer first payment");
+
+    // Only costs the frozen policy explicitly says are included in the
+    // quotation belong in the solver input. Other expected handover costs
+    // remain visible in the deal checklist, but adding them here would charge
+    // the customer for a cost the policy explicitly excluded. EMPLOYEE means
+    // the dealership advances/reimburses the money and is therefore
+    // dealer-borne, matching the cockpit's financial summary classification.
+    const includedDealerBorneExpensesMinor =
+      companyRuleSnapshot?.feeTemplates
+        ?.filter(
+          (template) =>
+            template.includedInQuotation &&
+            (template.paidBy === "DEALER" || template.paidBy === "EMPLOYEE")
+        )
+        .reduce((total, template) => {
+          assertValidMinorAmount(template.estimatedAmountMinor, "included fee estimate");
+          const next = total + template.estimatedAmountMinor;
+          assertValidMinorAmount(next, "included dealer-borne fee total");
+          return next;
+        }, 0) ?? 0;
+
     // SCRUM-195: a live finance application is per-vehicle commitment evidence
     // in its own right — no deposit required. So creating one is an
     // ACQUISITION and goes through the same authority boundary as a deposit or
@@ -2433,6 +2472,12 @@ export const createFromQuote = mutation({
       appraisalStatus: "NOT_REQUESTED",
       settlementStatus: "NOT_READY",
       handoverStatus: "BLOCKED",
+      economicsCurrency,
+      targetSellingAmountMinor,
+      targetNetProceedsMinor: targetSellingAmountMinor,
+      customerFirstPaymentMinor,
+      estimatedDealerBorneExpensesMinor: includedDealerBorneExpensesMinor,
+      estimatedClosingExpensesMinor: includedDealerBorneExpensesMinor,
       ...(companyRuleSnapshot ? { companyRuleSnapshot } : {}),
       ...(companyRuleVersionId ? { companyRuleVersionId } : {}),
       notes: args.notes,

@@ -610,6 +610,56 @@ export const initialize = mutation({
   },
 });
 
+/**
+ * Explicit repair for an EXISTING chart that predates one or more required
+ * system accounts.
+ *
+ * This is intentionally an operator action, not a posting-path self-heal. A
+ * receipt must never invent an account while accepting money. The finance
+ * manager reviews the reported missing keys and invokes this repair from
+ * Accounting Settings; compatible occupied codes still stop here and are
+ * resolved through the separate adoption panel instead of being silently
+ * reclassified.
+ */
+export const repairMissingSystemAccounts = mutation({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+
+    if (!(await isChartInitialized(ctx, args.orgId))) {
+      throw new ConvexError("Initialize the chart of accounts before repairing missing system accounts.");
+    }
+
+    const repaired: SystemKey[] = [];
+    for (const systemKey of REQUIRED_SYSTEM_KEYS) {
+      if (await isSystemAccountMapped(ctx, args.orgId, systemKey)) continue;
+      const def = DEFAULT_CHART.find((candidate) => candidate.systemKey === systemKey);
+      if (!def) {
+        throw new ConvexError(`No default chart definition exists for required system account "${systemKey}".`);
+      }
+      await ensureSystemAccount(ctx, args.orgId, user._id, systemKey, def.code);
+      repaired.push(systemKey);
+    }
+
+    if (repaired.length > 0) {
+      await auditLog(ctx, {
+        orgId: args.orgId,
+        actorId: user._id,
+        actionType: "REPAIR_MISSING_SYSTEM_ACCOUNTS",
+        resourceType: "chartOfAccounts",
+        resourceId: args.orgId,
+        description: `Created missing required system accounts: ${repaired.join(", ")}.`,
+      });
+      await ctx.scheduler.runAfter(0, internal.accountingOutbox.drainPendingAccountingEvents, {
+        orgId: args.orgId,
+      });
+    }
+
+    return { repaired };
+  },
+});
+
 export const create = mutation({
   args: {
     orgId: v.id("organizations"),

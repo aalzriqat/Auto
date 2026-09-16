@@ -288,8 +288,12 @@ describe("protected source content pins", () => {
        * untouched.
        */
       file: "convex/applications.ts",
-      bytes: 222110,
-      sha256: "2f0a3a2ae5e762105c305153719398a029a8b82cf5e14022ab4f52ff843d8251",
+      // Renewed for the owner-requested quote→application lineage fix: the
+      // application now freezes the quote's denomination, selling target,
+      // customer first payment and explicitly included dealer-borne fees.
+      // Exact-SHA review is required again before merge.
+      bytes: 224756,
+      sha256: "4ad3183398261ed6a3a839efb2c6caf26361b2fef32b0397cb2d16380762fc7c",
     },
     {
       /**

@@ -248,6 +248,39 @@ describe("RC-FRESH-CHART-2110 §1 — a fresh org receives 2110 at bootstrap", (
   });
 });
 
+describe("an existing chart can be repaired only by an explicit finance-manager action", () => {
+  test("creates the missing retained-credit liability idempotently", async () => {
+    const { t, asAdmin, orgId } = await freshOrg("repair2110");
+    await removeRetainedCreditAccount(t, orgId);
+
+    const before = await asAdmin.query(api.chartOfAccounts.validateSystemAccounts, { orgId });
+    expect(before.missing).toContain(SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY);
+
+    const first = await asAdmin.mutation(api.chartOfAccounts.repairMissingSystemAccounts, { orgId });
+    expect(first.repaired).toContain(SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY);
+    const repaired = await accountBySystemKey(
+      t,
+      orgId,
+      SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY
+    );
+    expect(repaired?.code).toBe("2110");
+    expect(repaired?.type).toBe("LIABILITY");
+    expect(repaired?.normalBalance).toBe("CREDIT");
+
+    const second = await asAdmin.mutation(api.chartOfAccounts.repairMissingSystemAccounts, { orgId });
+    expect(second.repaired).toEqual([]);
+    const rows = await t.run((ctx) =>
+      ctx.db
+        .query("chartOfAccounts")
+        .withIndex("by_org_systemKey", (q) =>
+          q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY)
+        )
+        .collect()
+    );
+    expect(rows).toHaveLength(1);
+  });
+});
+
 describe("RC-FRESH-CHART-2110 §2 — the exact classification, field by field", () => {
   test("2110 is LIABILITY / CREDIT, a control account, and manual posting is refused", async () => {
     const { t, orgId } = await freshOrg("f2");
