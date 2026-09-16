@@ -462,12 +462,16 @@ export function DealCustodyPanel({
     );
   };
   /**
-   * The operator closed the dialog (Cancel, Escape, the overlay) with its
-   * command not having succeeded — success closes it through `run` below.
-   * An attempt that carries identity hands it back so the container retires
-   * it; a dialog in flight is not closable (its Cancel is disabled).
+   * The operator closed the dialog (Cancel, Escape, the overlay, the X) with
+   * its command not having succeeded — success closes it through `run`
+   * below. An attempt that carries identity hands it back so the container
+   * retires it. A dialog in flight is not closable by any route: the dialogs
+   * refuse every close while `busy` (`busyCloseGuard`), and this refuses
+   * too, so an in-flight attempt can never be retired — its identity must
+   * survive for the retry of a lost response (R9).
    */
   const dismiss = () => {
+    if (busy) return;
     if (dialog && actions) {
       if (dialog.kind === "OPEN") actions.onAbandonOpen(dialog.intentId);
       else if (dialog.kind === "MOVE") actions.onAbandonMove(dialog.custodyId, dialog.movement, dialog.intentId);

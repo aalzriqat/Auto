@@ -864,6 +864,43 @@ function payloadRecord(payload: unknown): Record<string, unknown> | null {
  * a figure, not equal to the row's current one: a queued v1 legitimately
  * carries the actual that v2 has since replaced.
  *
+ * ### The envelope: currency and dates, against the version's own stamp (R9)
+ *
+ * The payload is not all the journal is built from. The worker posts the
+ * row's TOP-LEVEL `currency`, `accountingDate` and `occurredAt`
+ * (`postPendingEntry`), and the period check judges the row's
+ * `accountingDate` — none of which the payload proof above looked at. A raw
+ * edit that moved a queued row's date into an open month, or re-denominated
+ * it, would post the version into a period it was never dated for, in a
+ * currency its source does not carry, and the family gate — which proves
+ * the ledger by key and version, not by date — would certify it. So the
+ * envelope is proven against the one immutable record of what the version
+ * was minted AT: a cash leg's `occurredAt` on its movement (never patched),
+ * a fee version's `custodyPosted.occurredAt`, a write-off's
+ * `writeOffPosted.occurredAt`, a payable delta's stamp in
+ * `payableReclassIssued` — each written in the transaction that queued the
+ * row, and each cleared, replaced or truncated in the transaction that
+ * cancels it. A queued row whose version the source no longer records
+ * (replaced, withdrawn, folded) is a row its cancellation missed, and one
+ * standing on a version with no stamp (from before the stamp existed) can
+ * prove nothing about its period — both PERMANENT, since no operator action
+ * on the outbox makes them true. The custody hooks date `accountingDate` and
+ * `occurredAt` at the same instant, so both are held to the stamp.
+ *
+ * ### The lineage: the deal and, for a fee, the vehicle (R9)
+ *
+ * Every custody family stands on a deal: the record's `applicationId`, and
+ * the line's, which the payload names and the fee rule dimensions its
+ * expense line by (`vehicleId`, from the deal). A source whose deal is gone
+ * or another organization's would post a journal nothing in this org can
+ * classify or finalize against, so the deal is loaded — org-owned, by the
+ * source's own typed id — for every family, and a fee's deal, its record's
+ * deal and its payload's deal are proven ONE deal; its vehicle is the deal's,
+ * loaded org-owned, and the payload names exactly it. A fee's
+ * `accountingTreatment` picks the expense account the rule debits, so it is
+ * held to the line's too — a payload naming a treatment the line does not
+ * carry would expense the cost to an account the deal never chose.
+ *
  * Returns the reason, or `null` when the row stands on its source.
  */
 export async function custodyPostingRefusal(
@@ -876,6 +913,9 @@ export async function custodyPostingRefusal(
     sourceType: string;
     sourceId: string;
     payload?: unknown;
+    currency?: string;
+    accountingDate: number;
+    occurredAt?: number;
   }
 ): Promise<string | null> {
   const identity = custodyCanonicalIdentityRefusal(entry);
@@ -886,6 +926,8 @@ export async function custodyPostingRefusal(
   if (payload === null) {
     return `it is a ${eventType} event carrying no readable payload, so the posting cannot be built from it`;
   }
+  // Proven a version by `custodyCanonicalIdentityRefusal` above.
+  const version = entry.eventVersion as number;
   const names = (field: string, expected: unknown, what: string): string | null =>
     payload[field] === expected ? null : `its payload names ${what} (${String(payload[field])}) that is not the source's (${String(expected)})`;
   const figure = (field: string, what: string, positive: boolean): string | null => {
@@ -902,6 +944,30 @@ export async function custodyPostingRefusal(
     if (custody.orgId !== entry.orgId) return `${what} (${raw}) is not a custody record in this organization`;
     return custody;
   };
+  // The deal a source stands on, by the source's own typed id — org-owned,
+  // or the reason it is not. A missing and a foreign deal read the same to
+  // the outbox, exactly as `requireOwnedRow` reports them.
+  const loadApplication = async (applicationId: Id<"financeApplications">, what: string): Promise<Doc<"financeApplications"> | string> => {
+    const app = await ctx.db.get(applicationId);
+    if (app === null || app.orgId !== entry.orgId) return `${what} (${applicationId}) is not a deal in this organization`;
+    return app;
+  };
+  // The row's envelope against the instant its version was minted at.
+  const envelope = (stamp: number | undefined, currency: string, what: string): string | null => {
+    if (stamp === undefined || !Number.isSafeInteger(stamp) || stamp < 0) {
+      return `${what} records no date for version ${version}, so the period this posting belongs in cannot be proven`;
+    }
+    if (entry.currency !== currency) {
+      return `it is denominated in ${entry.currency === undefined ? "no currency" : entry.currency} rather than the source's ${currency}`;
+    }
+    if (entry.occurredAt !== stamp) {
+      return `it is dated ${String(entry.occurredAt)} rather than ${stamp}, the instant ${what} was dated version ${version} at`;
+    }
+    if (entry.accountingDate !== stamp) {
+      return `its accounting date (${entry.accountingDate}) is not ${stamp}, the instant ${what} was dated version ${version} at`;
+    }
+    return null;
+  };
 
   if (CUSTODY_CASH_EVENT_TYPES.has(eventType)) {
     const entryId = ctx.db.normalizeId("financeDealCustodyEntries", entry.sourceId);
@@ -916,14 +982,17 @@ export async function custodyPostingRefusal(
     }
     const custody = await loadCustody(movement.custodyId, "the movement's custody record");
     if (typeof custody === "string") return custody;
+    const app = await loadApplication(custody.applicationId, "the movement's deal");
+    if (typeof app === "string") return app;
     return (
       names("entryId", movement._id, "a movement") ??
       names("custodyId", custody._id, "a custody record") ??
-      names("applicationId", custody.applicationId, "a deal") ??
+      names("applicationId", app._id, "a deal") ??
       names("userId", custody.userId, "a holder") ??
       names("amountMinor", movement.amountMinor, "an amount") ??
       names("currency", custody.currency, "a currency") ??
-      names("paymentMethod", movement.method, "a payment method")
+      names("paymentMethod", movement.method, "a payment method") ??
+      envelope(movement.occurredAt, custody.currency, "the movement")
     );
   }
 
@@ -932,31 +1001,50 @@ export async function custodyPostingRefusal(
     const fee = feeId === null ? null : await ctx.db.get(feeId);
     if (fee === null) return `its source (${entry.sourceId}) is not a cost line`;
     if (fee.orgId !== entry.orgId) return `its source (${entry.sourceId}) is not a cost line in this organization`;
+    // The version the line records as its posting — the one record of which
+    // custody the version was charged to and when it was dated. A queued
+    // row at any other version is one the line's correction, unlinking or
+    // voiding should have cancelled and did not.
+    const posted = fee.custodyPosted;
+    if (posted === undefined || posted.version !== version) {
+      return `its source (${entry.sourceId}) ${posted === undefined ? "no longer records a custody posting" : `records its custody posting at version ${posted.version}`}, so version ${version} is not a charge the line carries`;
+    }
     const own =
       names("feeId", fee._id, "a cost line") ??
       names("applicationId", fee.applicationId, "a deal") ??
       names("currency", fee.currency, "a currency") ??
       names("feeType", fee.feeType, "a fee type") ??
+      names("accountingTreatment", fee.accountingTreatment, "an accounting treatment") ??
+      names("custodyId", posted.custodyId, "a custody record") ??
       figure("amountMinor", "an amount", true);
     if (own !== null) return own;
-    if (typeof payload.custodyId !== "string") return `its payload names no custody record the cost was paid out of`;
-    const custody = await loadCustody(payload.custodyId, "the custody record the cost was paid out of");
+    const custody = await loadCustody(posted.custodyId, "the custody record the cost was paid out of");
     if (typeof custody === "string") return custody;
-    if (custody.applicationId !== fee.applicationId) {
+    const app = await loadApplication(fee.applicationId, "the cost line's deal");
+    if (typeof app === "string") return app;
+    if (custody.applicationId !== app._id) {
       return `the custody record the cost was paid out of (${custody._id}) is on another deal than the cost line`;
     }
     if (custody.currency !== fee.currency) {
       return `the custody record the cost was paid out of (${custody._id}) is held in ${custody.currency}, not the cost line's ${fee.currency}`;
     }
-    return null;
+    // The vehicle the expense line is dimensioned by: the deal's, in this
+    // organization, and exactly the one the payload names.
+    const vehicle = await ctx.db.get(app.vehicleId);
+    if (vehicle === null || vehicle.orgId !== entry.orgId) {
+      return `the cost line's deal names a vehicle (${app.vehicleId}) that is not a vehicle in this organization`;
+    }
+    return names("vehicleId", vehicle._id, "a vehicle") ?? envelope(posted.occurredAt, fee.currency, "the cost line");
   }
 
   // CUSTODY_WRITTEN_OFF and CUSTODY_PAYABLE_RECLASSIFIED: both on the record.
   const custody = await loadCustody(entry.sourceId, "its source");
   if (typeof custody === "string") return custody;
+  const app = await loadApplication(custody.applicationId, "the record's deal");
+  if (typeof app === "string") return app;
   const own =
     names("custodyId", custody._id, "a custody record") ??
-    names("applicationId", custody.applicationId, "a deal") ??
+    names("applicationId", app._id, "a deal") ??
     names("userId", custody.userId, "a holder") ??
     names("currency", custody.currency, "a currency") ??
     (eventType === "CUSTODY_WRITTEN_OFF"
@@ -966,7 +1054,23 @@ export async function custodyPostingRefusal(
   if (parseCustodyDependencies(payload) === null) {
     return "it carries ledger dependencies that cannot be read, so the postings it is chained behind cannot be named";
   }
-  return null;
+  if (eventType === "CUSTODY_WRITTEN_OFF") {
+    // The one write-off a record records; a reopen clears it and cancels
+    // the queued row with it.
+    const claimed = custody.writeOffPosted;
+    if (claimed === undefined || claimed.version !== version) {
+      return `its source (${entry.sourceId}) ${claimed === undefined ? "records no write-off posting" : `records its write-off at version ${claimed.version}`}, so version ${version} is not a write-off the record carries`;
+    }
+    return envelope(claimed.occurredAt, custody.currency, "the record");
+  }
+  // A payable delta's stamp is its own version's, from the chain the record
+  // says it issued — one stamp per version, truncated when the fold drops
+  // the queued tail above a re-based version.
+  const stamp = (custody.payableReclassIssued ?? []).find((issued) => issued.version === version);
+  if (stamp === undefined) {
+    return `its source (${entry.sourceId}) records no payable reclassification issued at version ${version}, so it is not a delta the record's chain carries`;
+  }
+  return envelope(stamp.occurredAt, custody.currency, "the record");
 }
 
 /**
@@ -1665,7 +1769,8 @@ export async function custodyLedgerFamilyRefusal(
       );
       const exact = exactlyOnePosted(canonical);
       if (exact === "NONE") {
-        return `A custody movement on this deal is not on the books (${describeStatus(canonical[0] ?? forwards[0])}), so ${action} is refused until it has posted.`;
+        const unposted = await describeUnposted(ctx, orgId, custodyEntryPostKey(entry._id), budget, canonical[0] ?? forwards[0]);
+        return `A custody movement on this deal is not on the books (${unposted.what}), so ${action} is refused ${unposted.until}.`;
       }
       if (exact === "MORE_THAN_ONCE" || forwards.filter(isLive).length > 1) {
         return `A custody movement on this deal is on the books more than once, so ${action} is refused until the record has been reviewed.`;
@@ -1688,7 +1793,11 @@ export async function custodyLedgerFamilyRefusal(
       );
       const exact = exactlyOnePosted(canonical);
       if (exact === "NONE") {
-        return `A custody write-off on this deal is not on the books (${describeStatus(canonical[0] ?? writeOffs.find((event) => event.eventVersion === claimed.version))}), so ${action} is refused until it has posted.`;
+        const unposted = await describeUnposted(
+          ctx, orgId, custodyWriteOffPostKey(row._id, claimed.version), budget,
+          canonical[0] ?? writeOffs.find((event) => event.eventVersion === claimed.version)
+        );
+        return `A custody write-off on this deal is not on the books (${unposted.what}), so ${action} is refused ${unposted.until}.`;
       }
       if (postedWriteOffVersions.some((version) => version !== claimed.version)) {
         return `A custody write-off on this deal is on the books at more than one version (an earlier version's reversal has not posted yet), so ${action} is refused until the outbox has posted it.`;
@@ -1728,7 +1837,11 @@ export async function custodyLedgerFamilyRefusal(
       );
       const exact = exactlyOnePosted(canonical);
       if (exact === "NONE") {
-        return `A cost paid out of an employee's custody on this deal is not on the books (${describeStatus(canonical[0] ?? postings.find((event) => event.eventVersion === claimed.version))}), so ${action} is refused until it has posted.`;
+        const unposted = await describeUnposted(
+          ctx, orgId, custodyFeePostKey(fee._id, claimed.version), budget,
+          canonical[0] ?? postings.find((event) => event.eventVersion === claimed.version)
+        );
+        return `A cost paid out of an employee's custody on this deal is not on the books (${unposted.what}), so ${action} is refused ${unposted.until}.`;
       }
       if (postings.some((event) => event.status === "POSTED" && event.eventVersion !== claimed.version)) {
         return `A cost paid out of an employee's custody on this deal is on the books at more than one version (an earlier version's reversal has not posted yet), so ${action} is refused until the outbox has posted it.`;
@@ -1770,18 +1883,69 @@ function exactlyOnePosted(candidates: ReadonlyArray<Doc<"accountingEvents">>): "
   return "ONE";
 }
 
-function describeStatus(event: Doc<"accountingEvents"> | undefined): string {
-  if (event === undefined) return "no ledger event exists for it, or it is still queued for a closed period";
-  switch (event.status) {
-    case "PENDING":
-      return "its ledger event is still pending";
-    case "FAILED":
-      return "its ledger event failed";
-    case "REVERSED":
-      return "its ledger event has been reversed";
-    default:
-      return `its ledger event is ${event.status}`;
+/** Why a family member is not on the books, and what its refusal waits for — the two halves of one gate sentence. */
+type UnpostedDescription = Readonly<{ what: string; until: string }>;
+
+const UNTIL_POSTED = "until the outbox has posted it";
+const UNTIL_REVIEWED = "until the record has been reviewed";
+
+/**
+ * ## What "not on the books" is, read from the outbox row itself (R9)
+ *
+ * A member with no POSTED canonical event used to be described as "no
+ * ledger event exists for it, or it is still queued for a closed period" —
+ * a guess between two states that need opposite operator actions. The
+ * canonical row under the member's own key says which: a PENDING row is
+ * WAITING (held for its period, a predecessor or a dependency, or with an
+ * attempt in flight) and posts on its own once the wait ends; a FAILED row
+ * is DEAD-LETTERED — it burned every attempt on a refusal the worker
+ * classified as permanent — and nothing posts it until the cause is repaired
+ * and it is retried from the accounting outbox (`retryFailed`); no row at
+ * all is a posting nobody queued, which only the migration or a review
+ * can put on the books. Each gets its own reason and its own "until", so
+ * an operator reading the refusal knows whether to wait, to repair and
+ * retry, or to escalate. Read under the same budget as the rest of the
+ * proof; a key with a full batch of rows is refused as unverifiable like
+ * any other keyed read.
+ */
+async function describeUnposted(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  idempotencyKey: string,
+  budget: CustodyLedgerReadBudget,
+  event: Doc<"accountingEvents"> | undefined
+): Promise<UnpostedDescription> {
+  if (event !== undefined) {
+    switch (event.status) {
+      case "PENDING":
+        return { what: "its ledger event is still pending", until: UNTIL_POSTED };
+      case "FAILED":
+        return { what: "its ledger event failed", until: UNTIL_REVIEWED };
+      case "REVERSED":
+        return { what: "its ledger event has been reversed", until: UNTIL_REVIEWED };
+      default:
+        return {
+          what: `the ledger event under its key is a ${event.eventType} at version ${event.eventVersion}, not its posting`,
+          until: UNTIL_REVIEWED,
+        };
+    }
   }
+  const rows = await keyedOutboxRows(ctx, orgId, idempotencyKey, budget);
+  const row = rows.find((candidate) => candidate.kind === "POST" && candidate.status !== "POSTED");
+  if (row === undefined) {
+    return {
+      what: "no ledger event and no outbox row exists for it",
+      until: "until the custody accounting migration has posted it or the record has been reviewed",
+    };
+  }
+  if (row.status === "FAILED") {
+    return {
+      what: `its accounting outbox row (${idempotencyKey}) failed permanently after ${row.attempts} attempts${row.lastError ? `: ${row.lastError}` : ""}`,
+      until: "until that failure has been repaired and the row retried from the accounting outbox, or the record has been reviewed",
+    };
+  }
+  const holding = row.dispatchState === "DISPATCHED" ? "an attempt is in flight" : row.lastError ?? "queued";
+  return { what: `it is still waiting in the accounting outbox (${holding})`, until: UNTIL_POSTED };
 }
 
 /** Throws the family refusal, if any — the mutation-boundary form of the predicate above. */

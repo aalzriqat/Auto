@@ -258,10 +258,19 @@ async function syncCustodyPayable(
   // queued version that followed a primary the ledger will never carry,
   // which is dropped here and re-based into this one.
   const { nextVersion, baseTargetMinor } = await foldAbandonedPayableDeltas(ctx, custody, action);
+  // The chain's date stamps, one per issued version, from which the worker
+  // proves a queued delta's envelope. A fold that re-bases at a lower
+  // version drops the stamps of the versions it dropped with it.
+  const stamps = (custody.payableReclassIssued ?? []).filter((stamp) => stamp.version < nextVersion);
   const delta = target - baseTargetMinor;
   if (delta === 0) {
     if (nextVersion !== (custody.payableReclassVersion ?? 0) + 1) {
-      await ctx.db.patch(custodyId, { payableTargetMinor: target, payableReclassVersion: nextVersion - 1, updatedAt: Date.now() });
+      await ctx.db.patch(custodyId, {
+        payableTargetMinor: target,
+        payableReclassVersion: nextVersion - 1,
+        payableReclassIssued: stamps,
+        updatedAt: Date.now(),
+      });
     }
     return;
   }
@@ -287,6 +296,7 @@ async function syncCustodyPayable(
   await ctx.db.patch(custodyId, {
     payableTargetMinor: target,
     payableReclassVersion: nextVersion,
+    payableReclassIssued: [...stamps, { version: nextVersion, occurredAt }],
     updatedAt: Date.now(),
   });
 }
@@ -481,6 +491,11 @@ async function syncCustodyFeePosting(
   // the books, whatever door led here. Thrown before the forward posts, so
   // the mutation rolls back — the reversal above with it — and nothing moves.
   const app = await requireOwnedRow(ctx, fee.orgId, "financeApplications", fee.applicationId, APPLICATION_NOT_FOUND);
+  // Dated when the employee paid it, where that is known and readable;
+  // otherwise when it was recorded. A past date in a closed period queues.
+  // The same instant is stamped on the version (`custodyPosted.occurredAt`)
+  // so the worker can prove a queued row's envelope against it.
+  const occurredAt = fee.paidAt !== undefined && isTimestamp(fee.paidAt) ? fee.paidAt : now;
   await hookCustodyFeePaid(ctx, {
     orgId: fee.orgId,
     fee,
@@ -489,13 +504,11 @@ async function syncCustodyFeePosting(
     version,
     amountMinor: target.amountMinor,
     actorId,
-    // Dated when the employee paid it, where that is known and readable;
-    // otherwise when it was recorded. A past date in a closed period queues.
-    occurredAt: fee.paidAt !== undefined && isTimestamp(fee.paidAt) ? fee.paidAt : now,
+    occurredAt,
     replacesReversal: reversal,
   });
   await ctx.db.patch(fee._id, {
-    custodyPosted: { version, amountMinor: target.amountMinor, custodyId: target.custodyId },
+    custodyPosted: { version, amountMinor: target.amountMinor, custodyId: target.custodyId, occurredAt },
     custodyPostingVersion: version,
     updatedAt: now,
   });
@@ -510,7 +523,7 @@ async function syncCustodyFeePosting(
   };
   await syncCustodyPayable(
     ctx, target.custodyId, actorId,
-    fee.paidAt !== undefined && isTimestamp(fee.paidAt) ? fee.paidAt : now,
+    occurredAt,
     posted !== undefined && posted.custodyId === target.custodyId
       ? [...replacedOffBooks, replacementPosted]
       : [replacementPosted]
@@ -3111,7 +3124,7 @@ export const reconcileDealCustody = mutation({
             dependencies: await custodyPositionDependencies(ctx, custody, "writing off a custody shortage"),
           });
           await ctx.db.patch(args.custodyId, {
-            writeOffPosted: { version, amountMinor: summary.employeeOwesDealerMinor },
+            writeOffPosted: { version, amountMinor: summary.employeeOwesDealerMinor, occurredAt: now },
             writeOffPostingVersion: version,
           });
         }
@@ -3302,7 +3315,7 @@ export const migrateLegacyCustodyToLedger = mutation({
             occurredAt,
           });
           await ctx.db.patch(fee._id, {
-            custodyPosted: { version, amountMinor: fee.actualAmountMinor, custodyId: custody._id },
+            custodyPosted: { version, amountMinor: fee.actualAmountMinor, custodyId: custody._id, occurredAt },
             custodyPostingVersion: version,
             updatedAt: Date.now(),
           });
@@ -3328,7 +3341,7 @@ export const migrateLegacyCustodyToLedger = mutation({
             dependencies: [...payableDependencies],
           });
           await ctx.db.patch(args.custodyId, {
-            writeOffPosted: { version, amountMinor: summary.employeeOwesDealerMinor },
+            writeOffPosted: { version, amountMinor: summary.employeeOwesDealerMinor, occurredAt },
             writeOffPostingVersion: version,
           });
           writeOffPosted = true;

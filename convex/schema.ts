@@ -3058,12 +3058,22 @@ export default defineSchema({
      * posts the next. Stored so "is it posted, and at what?" is answered from
      * the row rather than by scanning an event family whose reversals share
      * its source key.
+     *
+     * `occurredAt` is the date the version was minted AT — the one the outbox
+     * row carries as its `occurredAt` and `accountingDate`. The worker proves
+     * a queued row's envelope against it (`custodyPostingRefusal`): a row
+     * whose date was moved after it was queued would post into another
+     * period than the version was dated for, and nothing else records what
+     * that date was. Optional only for rows written before the stamp
+     * existed; a queued row standing on such a version is refused, never
+     * trusted.
      */
     custodyPosted: v.optional(
       v.object({
         version: v.number(),
         amountMinor: v.number(),
         custodyId: v.id("financeDealCustody"),
+        occurredAt: v.optional(v.number()),
       })
     ),
     /** The highest custody posting version ever used on this line — never reused after a reversal. */
@@ -3218,8 +3228,21 @@ export default defineSchema({
      */
     payableTargetMinor: v.optional(v.number()),
     payableReclassVersion: v.optional(v.number()),
-    /** The write-off on the books (`CUSTODY_WRITTEN_OFF`, versioned), absent once reopened. */
-    writeOffPosted: v.optional(v.object({ version: v.number(), amountMinor: v.number() })),
+    /**
+     * The date each issued `CUSTODY_PAYABLE_RECLASSIFIED` version was minted
+     * AT — one stamp per version, the chain's own record of the envelope its
+     * queued rows must carry. Several versions can wait in the outbox at once
+     * (each queued behind the one before it), so the latest version's date
+     * alone would say nothing about v1's; the worker proves a queued delta's
+     * `occurredAt` / `accountingDate` against ITS version's stamp
+     * (`custodyPostingRefusal`). Rewritten by `syncCustodyPayable` alone:
+     * a fold that drops the queued tail and re-issues at a lower version
+     * drops the stamps above it too. Bounded by the chain itself
+     * (`MAX_SOURCE_EVENTS`, which the fold refuses past).
+     */
+    payableReclassIssued: v.optional(v.array(v.object({ version: v.number(), occurredAt: v.number() }))),
+    /** The write-off on the books (`CUSTODY_WRITTEN_OFF`, versioned), absent once reopened; `occurredAt` as on `custodyPosted`. */
+    writeOffPosted: v.optional(v.object({ version: v.number(), amountMinor: v.number(), occurredAt: v.optional(v.number()) })),
     /** The highest write-off posting version ever used — never reused after a reversal. */
     writeOffPostingVersion: v.optional(v.number()),
 

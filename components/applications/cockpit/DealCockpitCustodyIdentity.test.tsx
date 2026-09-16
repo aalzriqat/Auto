@@ -254,6 +254,121 @@ describe("a custody movement's command identity is one nonce per opened dialog a
   });
 });
 
+/** A mutation whose calls settle only when the test says so — the request on the wire. */
+function deferred(name: string) {
+  const settlers: Array<{ resolve: (value: unknown) => void; reject: (error: unknown) => void }> = [];
+  const fn = vi.fn(
+    () =>
+      new Promise((resolve, reject) => {
+        settlers.push({ resolve, reject });
+      })
+  );
+  mutations.set(name, fn);
+  return Object.assign(fn, {
+    /** Settles the `call`-th request as a transport failure (no server answer). */
+    lose: (call: number) => settlers[call].reject(new Error("Failed to fetch")),
+    /** Settles the `call`-th request as a success. */
+    land: (call: number) => settlers[call].resolve("ok"),
+  });
+}
+
+/** Every route the dialog primitive would dismiss on, driven while the request is on the wire. */
+async function attemptEveryCloseRoute(dialog: HTMLElement) {
+  // Escape: the primitive listens on the document; the key bubbles there.
+  fireEvent.keyDown(dialog, { key: "Escape", code: "Escape" });
+  // The corner X: a Radix Close, which asks the root to close.
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+  // Outside: the dismissable layer registers its pointer listener a tick after mounting.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  fireEvent.pointerDown(document.body);
+  fireEvent.pointerUp(document.body);
+  fireEvent.click(document.body);
+}
+
+describe("a custody dialog whose command is in flight cannot be closed by any route (R9)", () => {
+  test("movement: Escape, the X and an outside click are all refused while busy; the lost response keeps the SAME key for the retry; once settled the routes reopen and the next attempt is a NEW command", async () => {
+    const move = deferred(MOVE);
+    renderCockpit([openRecord()]);
+    const dialog = openReturnDialog();
+    submitReturn(dialog, "100");
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
+    // In flight: every route refused, nothing retired, nothing re-sent.
+    await attemptEveryCloseRoute(dialog);
+    expect(screen.getByTestId("custody-returned-dialog")).toBe(dialog);
+    expect(within(dialog).getByRole("button", { name: salesEn.Cancel })).toHaveProperty("disabled", true);
+    expect(within(dialog).getByTestId("custody-returned-submit")).toHaveProperty("disabled", true);
+    expect(move).toHaveBeenCalledTimes(1);
+    // The response is lost: the dialog stays open with the failure, the
+    // identity survives, and the retry replays under it.
+    move.lose(0);
+    await failureShown(dialog);
+    submitReturn(dialog, "100");
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(2));
+    expect(keyOf(move, 1)).toBe(keyOf(move, 0));
+    // In flight again: still not closable.
+    await attemptEveryCloseRoute(dialog);
+    expect(screen.getByTestId("custody-returned-dialog")).toBe(dialog);
+    expect(move).toHaveBeenCalledTimes(2);
+    // Landed: the container closes it. A dialog opened afterwards is a new
+    // attempt, so its command cannot replay the one that just moved cash.
+    move.land(1);
+    await waitFor(() => expect(screen.queryByTestId("custody-returned-dialog")).toBeNull());
+    submitReturn(openReturnDialog(), "100");
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(3));
+    expect(keyOf(move, 2)).not.toBe(keyOf(move, 0));
+  });
+
+  test("the guard is scoped to the flight: once a lost response has settled, Escape closes the dialog and abandons the attempt, so the next identical movement is a new command", async () => {
+    const move = deferred(MOVE);
+    renderCockpit([openRecord()]);
+    const dialog = openReturnDialog();
+    submitReturn(dialog, "100");
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
+    move.lose(0);
+    await failureShown(dialog);
+    fireEvent.keyDown(dialog, { key: "Escape", code: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("custody-returned-dialog")).toBeNull());
+    submitReturn(openReturnDialog(), "100");
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(2));
+    expect(keyOf(move, 1)).not.toBe(keyOf(move, 0));
+  });
+
+  test("closure and issuance: the same routes are refused in flight, and the identity survives a lost response", async () => {
+    const close = deferred(CLOSE);
+    renderCockpit([openRecord(true)]);
+    fireEvent.click(within(panel()).getByRole("button", { name: salesEn.CustodyClose }));
+    const closeDialog = screen.getByTestId("custody-close-dialog");
+    fireEvent.change(within(closeDialog).getByLabelText(salesEn.CustodyCloseNotes), { target: { value: "matched" } });
+    fireEvent.click(within(closeDialog).getByTestId("custody-close-submit"));
+    await waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+    await attemptEveryCloseRoute(closeDialog);
+    expect(screen.getByTestId("custody-close-dialog")).toBe(closeDialog);
+    close.lose(0);
+    await failureShown(closeDialog);
+    fireEvent.click(within(closeDialog).getByTestId("custody-close-submit"));
+    await waitFor(() => expect(close).toHaveBeenCalledTimes(2));
+    expect(keyOf(close, 1)).toBe(keyOf(close, 0));
+    close.land(1);
+    await waitFor(() => expect(screen.queryByTestId("custody-close-dialog")).toBeNull());
+    cleanup();
+    queryResults.clear();
+
+    const open = deferred(OPEN);
+    renderCockpit([], { userId: "u2", userName: "Rami", amountMinor: 500_000, note: null });
+    fireEvent.click(within(panel()).getByTestId("custody-issue-button"));
+    const issueDialog = screen.getByTestId("custody-issued-dialog");
+    fireEvent.click(within(issueDialog).getByTestId("custody-issued-submit"));
+    await waitFor(() => expect(open).toHaveBeenCalledTimes(1));
+    await attemptEveryCloseRoute(issueDialog);
+    expect(screen.getByTestId("custody-issued-dialog")).toBe(issueDialog);
+    open.lose(0);
+    await failureShown(issueDialog);
+    fireEvent.click(within(issueDialog).getByTestId("custody-issued-submit"));
+    await waitFor(() => expect(open).toHaveBeenCalledTimes(2));
+    expect(keyOf(open, 1)).toBe(keyOf(open, 0));
+  });
+});
+
 describe("closing a custody record carries the same per-attempt identity", () => {
   function openCloseDialog() {
     fireEvent.click(within(panel()).getByRole("button", { name: salesEn.CustodyClose }));
