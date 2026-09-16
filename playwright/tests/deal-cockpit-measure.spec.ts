@@ -129,10 +129,6 @@ test.describe("the deal cockpit's reading measure", () => {
    *
    * Tracked with the redesign: SCRUM-63 (Unified Deal Workspace).
    */
-  test.skip(
-    true,
-    "The deal screen is being redesigned (SCRUM-63). These assertions measure the CURRENT cockpit's layout, so they would fail on markup that is being replaced. Re-enable against the new screen — the reading-measure defect they guard is real and a redesign can reintroduce it.",
-  );
 
   /**
    * Gated on the CREDENTIALS, for the reason the sibling spec documents at

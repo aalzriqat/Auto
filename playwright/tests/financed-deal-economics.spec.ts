@@ -68,10 +68,6 @@ test.describe("recording a financed deal's economics through the interface", () 
    *
    * Tracked with the redesign: SCRUM-63 (Unified Deal Workspace).
    */
-  test.skip(
-    true,
-    "The deal screen is being redesigned (SCRUM-63). This spec drives that screen's controls end to end, so it would fail on an interface being replaced. Re-enable against the new screen — it is the only end-to-end proof that an operator can reach the economics writers, which is the defect SCRUM-68 was filed for.",
-  );
 
   /**
    * Gated on the CREDENTIALS, not on the session file they produce.
