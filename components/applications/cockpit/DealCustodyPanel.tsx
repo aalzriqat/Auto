@@ -446,6 +446,11 @@ export function DealCustodyPanel({
   // The plan keeps the whole list; a plan moves no money and may name anyone.
   const recipients = (actions?.members ?? []).filter((member) => !member.isActor);
   const plannedRecipient = plan && recipients.some((member) => member.userId === plan.userId) ? plan.userId : undefined;
+  // The list has answered and offers nobody the server would accept — the
+  // operator is the only member, say — so the issue door is shut with the
+  // reason rather than opening onto an empty picker (follow-up audit, 4).
+  // The plan door stays open: a plan moves no money and may name the operator.
+  const noRecipient = canStart && actions?.members !== undefined && recipients.length === 0;
 
   return (
     <Card data-testid="deal-custody">
@@ -537,13 +542,25 @@ export function DealCustodyPanel({
                     {membersLoading && <Loader2 className="h-4 w-4 animate-spin me-1.5" aria-hidden />}
                     {t(plan ? "CustodyChangeHandler" : "CustodyAssignHandler")}
                   </Button>
-                  <Button type="button" size="sm" disabled={blocked || membersLoading} onClick={() => openDialog({ kind: "OPEN" })} data-testid="custody-issue-button">
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={blocked || membersLoading || noRecipient}
+                    aria-describedby={noRecipient ? "custody-no-recipient" : undefined}
+                    onClick={() => openDialog({ kind: "OPEN" })}
+                    data-testid="custody-issue-button"
+                  >
                     <HandCoins className="h-4 w-4 me-1.5" aria-hidden />
                     {t("CustodyIssueCash")}
                   </Button>
                 </div>
               )}
             </div>
+            {noRecipient && !openRecord && (
+              <p id="custody-no-recipient" className="text-xs text-muted-foreground" data-testid="custody-no-recipient">
+                {t("CustodyNoRecipient")}
+              </p>
+            )}
 
             {/* The finance company's configured fee total for the DEAL — once,
                 at panel level. A policy figure with no assignment to any

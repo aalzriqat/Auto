@@ -695,6 +695,10 @@ const dealOverviewMessages = defineBilingualMessages({
   CustodyRecommendedNoEmployeeFees: ["The company's configured fees are not paid by an employee.", "رسوم الشركة المضبوطة لا يدفعها موظف."],
   CustodyRecommendedUnreadable: ["Withheld: a configured fee amount could not be read.", "محجوب: تعذّرت قراءة مبلغ رسم مضبوط."],
   CustodyIssueCash: ["Hand over cash", "تسليم نقد"],
+  CustodyNoRecipient: [
+    "Nobody else can be handed this deal's cash: you cannot issue custody to yourself, and no other active member is served.",
+    "لا يمكن تسليم نقد هذه الصفقة لأحد غيرك: لا يمكنك إصدار عهدة لنفسك، ولا يوجد عضو نشط آخر متاح.",
+  ],
   CustodyIssueMore: ["Hand over more", "تسليم المزيد"],
   CustodyRecordReturn: ["Record return", "تسجيل إعادة"],
   CustodyReimburse: ["Reimburse", "تعويض"],

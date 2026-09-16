@@ -289,17 +289,39 @@ describe("DealCustodyPanel", () => {
       fireEvent.click(screen.getByTestId("custody-issue-button"));
       expect(screen.queryByTestId("custody-issued-dialog")).toBeNull();
       cleanup();
-      // Answered (even with nobody eligible): the doors open; a dialog with no
-      // served member cannot submit, so no money command carries an empty id.
+      // Answered with nobody eligible: the issue door stays SHUT with the
+      // reason, never an enabled control onto an empty picker (follow-up
+      // audit, 4); the plan door — no money — opens.
       const answered = actions({ members: [] });
       renderPanel(wiring({ actions: answered, accounting: { ready: true }, records: [] }));
-      expect((screen.getByTestId("custody-issue-button") as HTMLButtonElement).disabled).toBe(false);
-      fireEvent.click(screen.getByTestId("custody-issue-button"));
-      const dialog = screen.getByTestId("custody-issued-dialog");
-      fireEvent.change(within(dialog).getByLabelText(/Amount/), { target: { value: "100" } });
-      expect((within(dialog).getByTestId("custody-issued-submit") as HTMLButtonElement).disabled).toBe(true);
-      fireEvent.click(within(dialog).getByTestId("custody-issued-submit"));
+      const issue = screen.getByTestId("custody-issue-button") as HTMLButtonElement;
+      expect(issue.disabled).toBe(true);
+      expect(issue.getAttribute("aria-describedby")).toBe("custody-no-recipient");
+      expect(screen.getByTestId("custody-no-recipient").textContent).toBe(salesEn.CustodyNoRecipient);
+      expect((screen.getByTestId("custody-plan-button") as HTMLButtonElement).disabled).toBe(false);
+      fireEvent.click(issue);
+      expect(screen.queryByTestId("custody-issued-dialog")).toBeNull();
       expect(answered.onOpen).not.toHaveBeenCalled();
+    });
+
+    test("the operator as the ONLY served member is the same dead end: issue shut with the reason in either language, plan open, and the reason is gone once someone else is served or a record is open", () => {
+      const me = { userId: "u1" as Id<"users">, name: "Me", isActor: true };
+      renderPanel(wiring({ actions: actions({ members: [me] }), accounting: { ready: true }, records: [] }));
+      expect((screen.getByTestId("custody-issue-button") as HTMLButtonElement).disabled).toBe(true);
+      expect(screen.getByTestId("custody-no-recipient").textContent).toBe(salesEn.CustodyNoRecipient);
+      expect((screen.getByTestId("custody-plan-button") as HTMLButtonElement).disabled).toBe(false);
+      cleanup();
+      renderPanel(wiring({ actions: actions({ members: [me] }), accounting: { ready: true }, records: [] }), tAr);
+      expect(screen.getByTestId("custody-no-recipient").textContent).toBe(salesAr.CustodyNoRecipient);
+      cleanup();
+      renderPanel(wiring({ actions: actions({ members: [me, { userId: "u3" as Id<"users">, name: "Lina" }] }), accounting: { ready: true }, records: [] }));
+      expect((screen.getByTestId("custody-issue-button") as HTMLButtonElement).disabled).toBe(false);
+      expect(screen.queryByTestId("custody-no-recipient")).toBeNull();
+      cleanup();
+      // An open record: cash goes to its holder, no picker, no reason shown.
+      renderPanel(wiring({ actions: actions({ members: [me] }), accounting: { ready: true } }));
+      expect(screen.queryByTestId("custody-no-recipient")).toBeNull();
+      expect(screen.queryByTestId("custody-issue-button")).toBeNull();
     });
 
     test("a plan whose default names someone no longer in the candidate list cannot be submitted as that id (item 4)", () => {

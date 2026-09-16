@@ -27,6 +27,8 @@ import {
   custodyEntryPostKey,
   custodyFeePostKey,
   custodyPayableReclassPosted,
+  custodyPositionDependencies,
+  foldAbandonedPayableDeltas,
   loadCustodyEntries,
   type CustodyLedgerDependency,
 } from "./utils/custodySourceLedger";
@@ -181,15 +183,23 @@ async function assertActorNotCustodianOf(
  * The row therefore carries the chain's target (`payableTargetMinor`), and
  * what the ledger holds right now is asked of the ledger.
  *
- * And each version is chained behind the PRIMARY POSTINGS it reflects
- * (`dependencies`): the delta is computed from the rows, so it is only true
- * of the books once the fee replacement, fee reversal or cash leg that
- * changed the position is itself where the ledger must show it. Every
- * caller names them — the forward key that must be POSTED, the replaced key
- * that must be OFF the books — and the hook queues the delta behind an unmet
+ * And each version is chained behind the PRIMARY POSTINGS it reflects: the
+ * delta is computed from the rows, so it is only true of the books once
+ * every leg and line the position is made of is where the ledger must show
+ * it — `custodyPositionDependencies` names the WHOLE position (every leg
+ * SETTLED or OFF the books, every ever-posted line at its current version
+ * and off it at every other), and the caller adds the postings this very
+ * correction changed (the forward key that must be POSTED, the replaced key
+ * that must be OFF the books). The hook queues the delta behind an unmet
  * one, the worker re-proving the same off the queued row. A payable that
  * moved to the corrected position while the clearing account still carried
- * the old charge is exactly what a snapshot between the two would report.
+ * the old charge — or that credited an issuance still queued for a closed
+ * month — is exactly what a snapshot between the two would report.
+ *
+ * And a queued version whose primary was CANCELLED before it posted is not
+ * awaited and not posted: `foldAbandonedPayableDeltas` drops it, with the
+ * queued tail above it, and this version is issued in its place from the
+ * target the POSTED chain reached (follow-up audit, H3).
  */
 async function syncCustodyPayable(
   ctx: MutationCtx,
@@ -201,66 +211,48 @@ async function syncCustodyPayable(
   const custody = await ctx.db.get(custodyId);
   if (custody === null) throw new ConvexError(CUSTODY_NOT_FOUND);
   if (custody.ledgerPosting !== "CANONICAL") return;
-  const summary = summarizeReadableCustody(
-    custody,
-    await loadActiveFees(ctx, custody.applicationId),
-    "reclassifying this custody record's balance"
-  );
+  const action = "reclassifying this custody record's balance";
+  const summary = summarizeReadableCustody(custody, await loadActiveFees(ctx, custody.applicationId), action);
   const position = summary.remainingEmployeeBalanceMinor + custody.reimbursedMinor;
   const target = Math.max(0, -position);
   // The delta is against the chain's TARGET, not the ledger's balance: a
   // version still waiting in the outbox is part of the chain and will post
   // in order (the hook queues each version behind an unposted predecessor),
-  // so the next delta is measured from where the chain will land.
-  const previousTarget = custody.payableTargetMinor ?? 0;
-  const delta = target - previousTarget;
-  if (delta === 0) return;
-  const version = (custody.payableReclassVersion ?? 0) + 1;
+  // so the next delta is measured from where the chain will land — less any
+  // queued version that followed a primary the ledger will never carry,
+  // which is dropped here and re-based into this one.
+  const { nextVersion, baseTargetMinor } = await foldAbandonedPayableDeltas(ctx, custody, action);
+  const delta = target - baseTargetMinor;
+  if (delta === 0) {
+    if (nextVersion !== (custody.payableReclassVersion ?? 0) + 1) {
+      await ctx.db.patch(custodyId, { payableTargetMinor: target, payableReclassVersion: nextVersion - 1, updatedAt: Date.now() });
+    }
+    return;
+  }
+  const positionDependencies = await custodyPositionDependencies(ctx, custody, action);
+  const seen = new Set(positionDependencies.map((d) => `${d.must}:${d.idempotencyKey}`));
+  const merged = [...positionDependencies];
+  for (const dependency of dependencies) {
+    const key = `${dependency.must}:${dependency.idempotencyKey}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(dependency);
+  }
   await hookCustodyPayableReclassified(ctx, {
     orgId: custody.orgId,
     custody,
-    version,
+    version: nextVersion,
     deltaMinor: delta,
     payableAfterMinor: target,
     actorId,
     occurredAt,
-    dependencies,
+    dependencies: merged,
   });
   await ctx.db.patch(custodyId, {
     payableTargetMinor: target,
-    payableReclassVersion: version,
+    payableReclassVersion: nextVersion,
     updatedAt: Date.now(),
   });
-}
-
-/**
- * The primary postings a custody record's POSITION is made of, as the
- * dependencies a derived posting (a write-off) is chained behind: every
- * standing cash leg POSTED, every reversed leg OFF the books, every live
- * line charged to the record POSTED at the version its row names. Read
- * under the same bounded log the writers decide on.
- */
-async function custodyPositionDependencies(
-  ctx: MutationCtx,
-  custody: Doc<"financeDealCustody">,
-  fees: ReadonlyArray<Doc<"financeDealFees">>,
-  action: string
-): Promise<CustodyLedgerDependency[]> {
-  const entries = await loadCustodyEntries(ctx, custody._id, action);
-  const reversed = new Set(entries.filter((entry) => entry.kind === "REVERSAL").map((entry) => entry.reversesEntryId));
-  const dependencies: CustodyLedgerDependency[] = [];
-  for (const entry of entries) {
-    if (entry.kind === "REVERSAL") continue;
-    dependencies.push({
-      must: reversed.has(entry._id) ? "OFF_BOOKS" : "SETTLED",
-      idempotencyKey: custodyEntryPostKey(entry._id),
-    });
-  }
-  for (const fee of fees) {
-    if (fee.voidedAt !== undefined || fee.custodyId !== custody._id || fee.custodyPosted === undefined) continue;
-    dependencies.push({ must: "SETTLED", idempotencyKey: custodyFeePostKey(fee._id, fee.custodyPosted.version) });
-  }
-  return dependencies;
 }
 
 /** A timestamp the ledger can date an event at: a safe non-negative integer. */
@@ -2974,7 +2966,7 @@ export const reconcileDealCustody = mutation({
             actorId: user._id,
             occurredAt: now,
             // The residual is what these leave; the write-off follows them.
-            dependencies: await custodyPositionDependencies(ctx, custody, fees, "writing off a custody shortage"),
+            dependencies: await custodyPositionDependencies(ctx, custody, "writing off a custody shortage"),
           });
           await ctx.db.patch(args.custodyId, {
             writeOffPosted: { version, amountMinor: summary.employeeOwesDealerMinor },
