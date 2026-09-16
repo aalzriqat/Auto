@@ -3073,6 +3073,37 @@ describe("R5-F3 — a stopped deal takes no NEW custody cash, judged inside the 
   );
 });
 
+describe("R5-F3 follow-up — an ISSUED movement whose parent application cannot be loaded is refused, never let through", () => {
+  test("a custody record orphaned of its deal takes no NEW cash: nothing is written; an exact replay of the earlier issuance still returns its stored result", async () => {
+    const seed = await seedDeal("r5-orphan");
+    const custodyId = await openCustody(seed, jod(700), { idempotencyKey: "open-1" });
+    await move(seed, custodyId, "ISSUED", jod(100), { idempotencyKey: "issue-1" });
+    expect(clearing(await ledger(seed))).toBe(jod(800));
+
+    // Only the parent application goes; the custody record, its entries and
+    // its journals stay exactly as they were.
+    await seed.t.run((ctx) => ctx.db.delete(seed.applicationId));
+
+    // The lifecycle gate has no application to judge. A missing anchor is a
+    // refusal, not a pass — before this fix the `if (parentApp)` branch let
+    // fresh cash post against the orphaned record.
+    await expect(move(seed, custodyId, "ISSUED", jod(50), { idempotencyKey: "issue-2" })).rejects.toThrow(
+      /Finance application not found in this organization/
+    );
+    // Two issuances (the opening one and issue-1), two journals, one movement command.
+    expect((await entries(seed, custodyId)).filter((e) => e.kind === "ISSUED")).toHaveLength(2);
+    expect(await events(seed, "CUSTODY_CASH_ISSUED")).toHaveLength(2);
+    expect(await commandRows(seed, "financeDealCosts.recordCustodyMovement")).toHaveLength(1);
+    expect(clearing(await ledger(seed))).toBe(jod(800));
+
+    // Replay ordering is unchanged: the stored result answers before the gate runs.
+    expect(await move(seed, custodyId, "ISSUED", jod(100), { idempotencyKey: "issue-1" })).toBe(custodyId);
+    expect(await events(seed, "CUSTODY_CASH_ISSUED")).toHaveLength(2);
+    expect(await commandRows(seed, "financeDealCosts.recordCustodyMovement")).toHaveLength(1);
+    expect(clearing(await ledger(seed))).toBe(jod(800));
+  }, 45_000);
+});
+
 describe("R5-F4 — a cost and the custody record it is charged to share one currency, or the charge is refused before any write", () => {
   test("a legacy USD line on a JOD deal: it is ineligible, attaching it, re-recording it onto a record and charging a line at creation to a foreign-currency record all refuse, and nothing posts or moves", async () => {
     const seed = await seedDeal("r5-currency-attach");

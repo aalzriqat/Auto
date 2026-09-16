@@ -1173,14 +1173,6 @@ function summarizeReadableCustody(
 }
 
 /**
- * Recomputes a custody record's totals from its entries.
- *
- * The totals are a projection of the movement log, never a number a caller
- * hands in — so correcting a mistyped issuance means adding a correcting entry
- * that stays visible, rather than overwriting a figure and losing the fact that
- * it ever differed.
- */
-/**
  * A cost line and the custody record it is charged to share ONE currency
  * (R5, F4). The record's balance is `issued − returned − custody-paid
  * lines + reimbursed`, summed in minor units — and minor units are not one
@@ -1490,6 +1482,14 @@ function custodyTotalsFromLog(
   return { issuedMinor, returnedMinor, reimbursedMinor };
 }
 
+/**
+ * Recomputes a custody record's totals from its entries.
+ *
+ * The totals are a projection of the movement log, never a number a caller
+ * hands in — so correcting a mistyped issuance means adding a correcting entry
+ * that stays visible, rather than overwriting a figure and losing the fact that
+ * it ever differed.
+ */
 async function recomputeCustodyTotals(
   ctx: MutationCtx,
   custodyId: Id<"financeDealCustody">
@@ -2882,10 +2882,19 @@ export const recordCustodyMovement = mutation({
         // what the employee already holds (return, reimburse, reverse) stays
         // open; only ISSUED is new. Inside the section, like every other
         // state check here, so a replay of an issuance that succeeded before
-        // the deal froze still returns its stored result.
+        // the deal froze still returns its stored result. The parent is
+        // loaded through the owned-row check, never optionally: an anchor
+        // that is missing or in another organization has no lifecycle to
+        // judge, and "nothing to judge" is a refusal, not a pass.
         if (args.kind === "ISSUED") {
-          const parentApp = await ctx.db.get(current.applicationId);
-          if (parentApp) assertDealAcceptsNewCustodyCash(parentApp, "handing more cash to an employee");
+          const parentApp = await requireOwnedRow(
+            ctx,
+            args.orgId,
+            "financeApplications",
+            current.applicationId,
+            APPLICATION_NOT_FOUND
+          );
+          assertDealAcceptsNewCustodyCash(parentApp, "handing more cash to an employee");
         }
         if (args.kind === "REVERSAL") {
           await assertReversalAllowed(ctx, args.orgId, args.custodyId, args.reversesEntryId, args.amountMinor);
