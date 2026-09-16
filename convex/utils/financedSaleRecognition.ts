@@ -147,6 +147,7 @@ export async function resolveFinancedSalePlan(
   await assertCustodyLedgerFamilyComplete(
     ctx,
     app.orgId,
+    app._id,
     await loadCustodyRecords(ctx, app._id, "finalizing this deal"),
     liveFees,
     "finalizing this deal"

@@ -3547,7 +3547,7 @@ export const classifyDealAccounting = mutation({
     // or a custody-paid line whose posting is missing or stale, is refused
     // whatever its status says. Same predicate finalization asks; settled
     // through `migrateLegacyCustodyToLedger`, never inferred here.
-    await assertCustodyLedgerFamilyComplete(ctx, args.orgId, custodyRows, fees, "classifying this deal's accounting");
+    await assertCustodyLedgerFamilyComplete(ctx, args.orgId, args.applicationId, custodyRows, fees, "classifying this deal's accounting");
     for (const row of custodyRows) {
       if (row.status === "OPEN") {
         throw new ConvexError(

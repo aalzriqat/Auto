@@ -8,7 +8,7 @@ import { ALL_PERMISSIONS, PERMISSIONS } from "./utils/permissions";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { deriveRecommendedCustody } from "./financeDealCosts";
 import { drainEntries } from "./accountingOutbox";
-import { custodyLedgerFamilyRefusal, custodyLedgerFamilyRowRefusal, custodyPostingBlockedReason } from "./utils/custodySourceLedger";
+import { custodyLedgerFamilyRefusal, custodyLedgerFamilyRowRefusal, custodyPostingBlockedReason, MAX_CUSTODY_POSTED_LINES } from "./utils/custodySourceLedger";
 import { financedSaleRecognitionDate } from "./utils/financedSaleRecognition";
 
 /**
@@ -1762,7 +1762,7 @@ async function familyRefusal(seed: Seed, action = "closing") {
   return await seed.t.run(async (ctx) => {
     const custody = await ctx.db.query("financeDealCustody").withIndex("by_application", (q) => q.eq("applicationId", seed.applicationId)).collect();
     const fees = await ctx.db.query("financeDealFees").withIndex("by_application", (q) => q.eq("applicationId", seed.applicationId)).collect();
-    return await custodyLedgerFamilyRefusal(ctx, seed.orgId, custody, fees.filter((f) => f.voidedAt === undefined), action);
+    return await custodyLedgerFamilyRefusal(ctx, seed.orgId, seed.applicationId, custody, fees.filter((f) => f.voidedAt === undefined), action);
   });
 }
 
@@ -2016,5 +2016,84 @@ describe("G3 — an economic date is the exact calendar date the operator picked
     } finally {
       vi.useRealTimers();
     }
+  }, 30_000);
+});
+
+describe("G4 — a line that no longer carries a custody charge must be OFF the books: a voided line's deferred reversal refuses until it posts", () => {
+  test("posted custody fee → no open period → void defers the reversal → classification (same predicate as finalization) refused → reopen + drain → proceeds", async () => {
+    const seed = await seedDeal("void-deferred", { templates: false });
+    const custodyId = await openCustody(seed, jod(700));
+    const feeId = await employeeFee(seed, custodyId, jod(700));
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "receipt" });
+    // A dealer-paid line stays live so classification reaches the custody
+    // family gate rather than refusing on "no costs itemized".
+    const dealerFee = await employeeFee(seed, undefined, jod(40), { paidBy: "DEALER" });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId: dealerFee, notes: "receipt" });
+    await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+      orgId: seed.orgId, applicationId: seed.applicationId, legalInvoiceAmountMinor: jod(10_500), legalInvoiceNumber: "INV-G4", issuedTo: "FINANCE_COMPANY", legalInvoiceDate: Date.now() - DAY,
+    });
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => e.status)).toEqual(["POSTED"]);
+    expect(await familyRefusal(seed)).toBeNull();
+
+    // Every period closes, then the line is removed: the reversal has nowhere
+    // to post and is DEFERRED; the forward CUSTODY_FEE_PAID stays POSTED.
+    await closePeriod(seed, seed.periodId);
+    await seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "wrong line" });
+    const voided = await seed.t.run((ctx) => ctx.db.get(feeId));
+    expect(voided?.voidedAt).toBeDefined();
+    expect(voided?.custodyPosted).toBeUndefined();
+    expect(voided?.custodyPostingVersion).toBe(1);
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => e.status)).toEqual(["POSTED"]);
+    expect((await pending(seed)).map((r) => [r.kind, r.status])).toEqual([["REVERSE", "PENDING"]]);
+    expect(transferExpense(await ledger(seed))).toBe(jod(700));
+    // The live rows say nothing is charged; the ledger still carries the
+    // charge. The gate reads the ledger through the ever-posted index.
+    expect(await familyRefusal(seed)).toMatch(/no longer charged to an employee's custody on this deal .* still on the books/);
+    const classify = () =>
+      seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, { orgId: seed.orgId, applicationId: seed.applicationId, notes: "established" });
+    await expect(classify()).rejects.toThrow(/no longer charged to an employee's custody on this deal .* still on the books/);
+    expect((await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))?.accountingClassification).not.toBe("CLASSIFIED");
+    // One real worker attempt with the period still closed changes nothing.
+    await drainOnce(seed);
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => e.status)).toEqual(["POSTED"]);
+    expect(await familyRefusal(seed)).toMatch(/still on the books/);
+
+    // The period reopens and the outbox posts the reversal: the forward is
+    // REVERSED, the charge is off the books, and the deal may proceed.
+    await reopenPeriod(seed, seed.periodId);
+    expect(await drainUntilSettled(seed)).toEqual(["POSTED"]);
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => e.status)).toEqual(["REVERSED"]);
+    expect(transferExpense(await ledger(seed))).toBe(0);
+    expect(await familyRefusal(seed)).toBeNull();
+    await move(seed, custodyId, "RETURNED", jod(700));
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, custodyId, notes: "all back" });
+    await classify();
+    expect((await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))?.accountingClassification).toBe("CLASSIFIED");
+  }, 30_000);
+
+  test("an unlinked line is held to the same proof; the ever-posted read is bounded and refuses past its cap, never a prefix", async () => {
+    const seed = await seedDeal("unlink-deferred");
+    const custodyId = await openCustody(seed, jod(700));
+    const feeId = await employeeFee(seed, custodyId, jod(650));
+    await closePeriod(seed, seed.periodId);
+    // Unlinked from custody (kept live as a dealer-paid line): its reversal defers.
+    await seed.asUser.mutation(api.financeDealCosts.setFeeCustody, { orgId: seed.orgId, feeId, custodyId: undefined });
+    expect((await seed.t.run((ctx) => ctx.db.get(feeId)))?.custodyId).toBeUndefined();
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+    expect(await familyRefusal(seed)).toMatch(/no longer charged to an employee's custody on this deal .* still on the books/);
+    await reopenPeriod(seed, seed.periodId);
+    await drainUntilSettled(seed);
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "REVERSED"]]);
+    expect(await familyRefusal(seed)).toBeNull();
+
+    // The bound: past MAX_CUSTODY_POSTED_LINES ever-posted lines the proof refuses, never a prefix.
+    await seed.t.run(async (ctx) => {
+      const fee = (await ctx.db.get(feeId))!;
+      for (let n = 0; n < MAX_CUSTODY_POSTED_LINES; n += 1) {
+        const { _id: _drop, _creationTime: _ct, ...rest } = fee;
+        await ctx.db.insert("financeDealFees", { ...rest, voidedAt: Date.now(), custodyPostingVersion: 1 });
+      }
+    });
+    await expect(familyRefusal(seed)).rejects.toThrow(new RegExp(`more than ${MAX_CUSTODY_POSTED_LINES} cost lines that have posted a custody charge`));
   }, 30_000);
 });

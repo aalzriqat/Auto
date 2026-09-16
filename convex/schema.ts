@@ -3113,6 +3113,15 @@ export default defineSchema({
     // the bound counts what is live — a removed line stays as a row for its
     // trace and never moves a deal toward the cap.
     .index("by_application_voidedAt", ["applicationId", "voidedAt"])
+    // Every line of a deal that has EVER posted a custody charge, live or
+    // removed: `custodyPostingVersion` is set by the two writers that post
+    // one (`syncCustodyFeePosting`, the custody migration) and never unset,
+    // so `.gt("custodyPostingVersion", 0)` after the application equality
+    // enumerates exactly the lines whose `CUSTODY_FEE_PAID` family the
+    // ledger gate must prove OFF the books (a voided, unlinked or re-charged
+    // line whose reversal was deferred) — without the unbounded read of
+    // every removed row the deal ever had.
+    .index("by_application_custodyPostingVersion", ["applicationId", "custodyPostingVersion"])
     // The one LIVE line per configured position. `recordTemplateFeeActual`
     // proves uniqueness against this index with every field an equality —
     // `voidedAt` last, so `undefined` (live) is the one value asked for — and

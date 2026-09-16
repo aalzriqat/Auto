@@ -1,7 +1,7 @@
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
-import { MAX_CUSTODY_ENTRIES } from "./dealCostLimits";
+import { MAX_CUSTODY_ENTRIES, MAX_LIVE_DEAL_FEE_LINES } from "./dealCostLimits";
 
 /**
  * The custody family's ledger identity and its causal guards.
@@ -65,6 +65,42 @@ const MAX_SOURCE_EVENTS = 2 * MAX_CUSTODY_ENTRIES + 16;
  * bounded row loaders do.
  */
 export const MAX_CUSTODY_LEDGER_PROOFS = 1500;
+
+/**
+ * How many of a deal's lines that have EVER posted a custody charge one
+ * proof may read. Live or removed: a line that posted once has a
+ * `CUSTODY_FEE_PAID` family the ledger must be proven to have finished
+ * with, whatever became of the row. Same order as the live-line cap; past
+ * it the proof refuses rather than judges a prefix.
+ */
+export const MAX_CUSTODY_POSTED_LINES = MAX_LIVE_DEAL_FEE_LINES;
+
+/**
+ * Every line of a deal that has ever posted a custody charge — live,
+ * voided, unlinked or re-charged — from ONE bounded indexed read, or a
+ * refusal. `custodyPostingVersion` is set by every writer that posts a
+ * charge and never unset, so the range `> 0` is exactly the population the
+ * ledger gate must prove; a removed line stays in it, which is the point:
+ * its reversal may still be queued.
+ */
+export async function loadCustodyPostedLines(
+  ctx: QueryCtx | MutationCtx,
+  applicationId: Id<"financeApplications">,
+  action: string
+): Promise<Array<Doc<"financeDealFees">>> {
+  const rows = await ctx.db
+    .query("financeDealFees")
+    .withIndex("by_application_custodyPostingVersion", (q) =>
+      q.eq("applicationId", applicationId).gt("custodyPostingVersion", 0)
+    )
+    .take(MAX_CUSTODY_POSTED_LINES + 1);
+  if (rows.length > MAX_CUSTODY_POSTED_LINES) {
+    throw new ConvexError(
+      `This deal has more than ${MAX_CUSTODY_POSTED_LINES} cost lines that have posted a custody charge, which is past what ${action} can verify completely; nothing has been changed. Have the deal's custody reviewed.`
+    );
+  }
+  return rows;
+}
 
 /** The events of one source, in full or refused — never a prefix. */
 async function sourceEvents(
@@ -285,9 +321,14 @@ export function custodyLedgerFamilyRowRefusal(
  *    by the reversal, so both net to nothing on both sides). A forward event
  *    still POSTED under a deferred reversal is a movement the record calls
  *    cancelled and the ledger still carries;
- *  - every live custody-paid line is POSTED at EXACTLY the version the row
- *    names, and no OTHER version of it is still POSTED — a replacement that
- *    landed while an earlier version's reversal is deferred is two charges;
+ *  - every line that has EVER posted a custody charge (live, voided,
+ *    unlinked or re-charged — enumerated through
+ *    `by_application_custodyPostingVersion`, never inferred from the live
+ *    rows) is on the books EXACTLY as its row says: a live charged line
+ *    POSTED at the version `custodyPosted` names and at no other; a line
+ *    that no longer carries a charge with NO version POSTED at all. A voided
+ *    line whose reversal was deferred is a charge the deal calls removed
+ *    and the ledger still carries;
  *  - a written-off record has its write-off POSTED at the version the row
  *    names and no other; any other record has NO write-off on the books;
  *  - the payable chain is posted to the version the row says it issued — a
@@ -295,15 +336,17 @@ export function custodyLedgerFamilyRowRefusal(
  *    carry.
  *
  * Bounded like every decision read: the rows come from the bounded loaders,
- * each movement log is read under `MAX_CUSTODY_ENTRIES`, and the proof
- * refuses past `MAX_CUSTODY_LEDGER_PROOFS` point-reads rather than judging a
- * prefix. The lines a deal has VOIDED are not read here: they are unbounded
- * (a row count never falls) and their reversal, deferred or not, is the
- * `syncCustodyFeePosting` path's to finish through the outbox.
+ * each movement log is read under `MAX_CUSTODY_ENTRIES`, the ever-posted
+ * lines under `MAX_CUSTODY_POSTED_LINES`, and the proof refuses past
+ * `MAX_CUSTODY_LEDGER_PROOFS` point-reads rather than judging a prefix.
+ * Nothing here trusts a marker as proof of success: `custodyPostingVersion`
+ * only ENUMERATES the lines to prove, and `custodyPosted` only states what
+ * the ledger is expected to carry; the ledger answers.
  */
 export async function custodyLedgerFamilyRefusal(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
+  applicationId: Id<"financeApplications">,
   custodyRows: ReadonlyArray<Doc<"financeDealCustody">>,
   liveFees: ReadonlyArray<Doc<"financeDealFees">>,
   action: string
@@ -311,11 +354,9 @@ export async function custodyLedgerFamilyRefusal(
   const rowRefusal = custodyLedgerFamilyRowRefusal(custodyRows, liveFees, action);
   if (rowRefusal !== null) return rowRefusal;
 
-  const chargedLines = liveFees.filter(
-    (fee) => fee.voidedAt === undefined && fee.custodyId !== undefined && fee.custodyPosted !== undefined
-  );
+  const postedLines = await loadCustodyPostedLines(ctx, applicationId, action);
   const logs = new Map<Id<"financeDealCustody">, Array<Doc<"financeDealCustodyEntries">>>();
-  let budget = chargedLines.length + custodyRows.length;
+  let budget = postedLines.length + custodyRows.length;
   for (const row of custodyRows) {
     const entries = await loadCustodyEntries(ctx, row._id, action);
     logs.set(row._id, entries);
@@ -385,16 +426,25 @@ export async function custodyLedgerFamilyRefusal(
     }
   }
 
-  for (const fee of chargedLines) {
-    const claimed = fee.custodyPosted!;
+  for (const fee of postedLines) {
     const family = await sourceEvents(ctx, orgId, "financeDealFees", fee._id.toString(), action);
     const postings = family.filter((event) => event.eventType === "CUSTODY_FEE_PAID");
-    const exact = postings.find((event) => event.eventVersion === claimed.version);
-    if (exact === undefined || exact.status !== "POSTED") {
-      return `A cost paid out of an employee's custody on this deal is not on the books (${describeStatus(exact)}), so ${action} is refused until it has posted.`;
+    // What the row says the ledger carries: one version for a live charged
+    // line, nothing for a line that was voided, unlinked or re-charged away
+    // (its `custodyPosted` was cleared when its reversal was issued).
+    const claimed = fee.voidedAt === undefined && fee.custodyId !== undefined ? fee.custodyPosted : undefined;
+    if (claimed !== undefined) {
+      const exact = postings.find((event) => event.eventVersion === claimed.version);
+      if (exact === undefined || exact.status !== "POSTED") {
+        return `A cost paid out of an employee's custody on this deal is not on the books (${describeStatus(exact)}), so ${action} is refused until it has posted.`;
+      }
+      if (postings.some((event) => event.status === "POSTED" && event.eventVersion !== claimed.version)) {
+        return `A cost paid out of an employee's custody on this deal is on the books at more than one version (an earlier version's reversal has not posted yet), so ${action} is refused until the outbox has posted it.`;
+      }
+      continue;
     }
-    if (postings.some((event) => event.status === "POSTED" && event.eventVersion !== claimed.version)) {
-      return `A cost paid out of an employee's custody on this deal is on the books at more than one version (an earlier version's reversal has not posted yet), so ${action} is refused until the outbox has posted it.`;
+    if (postings.some((event) => event.status === "POSTED")) {
+      return `A cost that is no longer charged to an employee's custody on this deal (removed, unlinked or re-charged) is still on the books as a custody charge — its reversal has not posted yet — so ${action} is refused until the outbox has posted it.`;
     }
   }
   return null;
@@ -418,10 +468,11 @@ function describeStatus(event: Doc<"accountingEvents"> | undefined): string {
 export async function assertCustodyLedgerFamilyComplete(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
+  applicationId: Id<"financeApplications">,
   custodyRows: ReadonlyArray<Doc<"financeDealCustody">>,
   liveFees: ReadonlyArray<Doc<"financeDealFees">>,
   action: string
 ): Promise<void> {
-  const refusal = await custodyLedgerFamilyRefusal(ctx, orgId, custodyRows, liveFees, action);
+  const refusal = await custodyLedgerFamilyRefusal(ctx, orgId, applicationId, custodyRows, liveFees, action);
   if (refusal !== null) throw new ConvexError(refusal);
 }
