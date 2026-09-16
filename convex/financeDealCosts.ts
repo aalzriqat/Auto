@@ -24,8 +24,11 @@ import { getOpenPeriodForDate } from "./accountingPeriods";
 import { custodyFeeExpenseKey } from "./utils/dealCustodyPosting";
 import {
   assertCustodyLedgerFamilyComplete,
+  custodyEntryPostKey,
+  custodyFeePostKey,
   custodyPayableReclassPosted,
   loadCustodyEntries,
+  type CustodyLedgerDependency,
 } from "./utils/custodySourceLedger";
 import {
   assertConfiguredFeesRecorded,
@@ -177,12 +180,23 @@ async function assertActorNotCustodianOf(
  * queued behind it rather than posted, and the outbox posts them in order.
  * The row therefore carries the chain's target (`payableTargetMinor`), and
  * what the ledger holds right now is asked of the ledger.
+ *
+ * And each version is chained behind the PRIMARY POSTINGS it reflects
+ * (`dependencies`): the delta is computed from the rows, so it is only true
+ * of the books once the fee replacement, fee reversal or cash leg that
+ * changed the position is itself where the ledger must show it. Every
+ * caller names them — the forward key that must be POSTED, the replaced key
+ * that must be OFF the books — and the hook queues the delta behind an unmet
+ * one, the worker re-proving the same off the queued row. A payable that
+ * moved to the corrected position while the clearing account still carried
+ * the old charge is exactly what a snapshot between the two would report.
  */
 async function syncCustodyPayable(
   ctx: MutationCtx,
   custodyId: Id<"financeDealCustody">,
   actorId: Id<"users">,
-  occurredAt: number
+  occurredAt: number,
+  dependencies: ReadonlyArray<CustodyLedgerDependency>
 ): Promise<void> {
   const custody = await ctx.db.get(custodyId);
   if (custody === null) throw new ConvexError(CUSTODY_NOT_FOUND);
@@ -210,12 +224,43 @@ async function syncCustodyPayable(
     payableAfterMinor: target,
     actorId,
     occurredAt,
+    dependencies,
   });
   await ctx.db.patch(custodyId, {
     payableTargetMinor: target,
     payableReclassVersion: version,
     updatedAt: Date.now(),
   });
+}
+
+/**
+ * The primary postings a custody record's POSITION is made of, as the
+ * dependencies a derived posting (a write-off) is chained behind: every
+ * standing cash leg POSTED, every reversed leg OFF the books, every live
+ * line charged to the record POSTED at the version its row names. Read
+ * under the same bounded log the writers decide on.
+ */
+async function custodyPositionDependencies(
+  ctx: MutationCtx,
+  custody: Doc<"financeDealCustody">,
+  fees: ReadonlyArray<Doc<"financeDealFees">>,
+  action: string
+): Promise<CustodyLedgerDependency[]> {
+  const entries = await loadCustodyEntries(ctx, custody._id, action);
+  const reversed = new Set(entries.filter((entry) => entry.kind === "REVERSAL").map((entry) => entry.reversesEntryId));
+  const dependencies: CustodyLedgerDependency[] = [];
+  for (const entry of entries) {
+    if (entry.kind === "REVERSAL") continue;
+    dependencies.push({
+      must: reversed.has(entry._id) ? "OFF_BOOKS" : "SETTLED",
+      idempotencyKey: custodyEntryPostKey(entry._id),
+    });
+  }
+  for (const fee of fees) {
+    if (fee.voidedAt !== undefined || fee.custodyId !== custody._id || fee.custodyPosted === undefined) continue;
+    dependencies.push({ must: "SETTLED", idempotencyKey: custodyFeePostKey(fee._id, fee.custodyPosted.version) });
+  }
+  return dependencies;
 }
 
 /** A timestamp the ledger can date an event at: a safe non-negative integer. */
@@ -335,10 +380,15 @@ async function syncCustodyFeePosting(
     });
     await ctx.db.patch(fee._id, { custodyPosted: undefined, updatedAt: now });
   }
+  // The postings the payable deltas below are consequences of: the version
+  // that was on the books must be OFF it, the replacement (if any) ON it.
+  const replacedOffBooks: CustodyLedgerDependency[] =
+    posted !== undefined ? [{ must: "OFF_BOOKS", idempotencyKey: custodyFeePostKey(fee._id, posted.version) }] : [];
   if (target === null) {
     // The record the line left (or was voided on) may have owed the employee
-    // for it; its payable follows the position, dated with the correction.
-    if (posted !== undefined) await syncCustodyPayable(ctx, posted.custodyId, actorId, now);
+    // for it; its payable follows the position, dated with the correction —
+    // and held behind the reversal of the charge it no longer carries.
+    if (posted !== undefined) await syncCustodyPayable(ctx, posted.custodyId, actorId, now, replacedOffBooks);
     return;
   }
 
@@ -364,14 +414,24 @@ async function syncCustodyFeePosting(
     custodyPostingVersion: version,
     updatedAt: now,
   });
-  // The receiving record's payable, dated with the fee; and the record the
-  // line moved off, if any, dated with the correction.
+  // The receiving record's payable, dated with the fee and held behind the
+  // replacement version (which is itself queued behind the deferred reversal
+  // of the version it replaces) and, on the same record, behind that
+  // reversal too; and the record the line moved off, if any, dated with the
+  // correction and held behind the reversal alone.
+  const replacementPosted: CustodyLedgerDependency = {
+    must: "SETTLED",
+    idempotencyKey: custodyFeePostKey(fee._id, version),
+  };
   await syncCustodyPayable(
     ctx, target.custodyId, actorId,
-    fee.paidAt !== undefined && isTimestamp(fee.paidAt) ? fee.paidAt : now
+    fee.paidAt !== undefined && isTimestamp(fee.paidAt) ? fee.paidAt : now,
+    posted !== undefined && posted.custodyId === target.custodyId
+      ? [...replacedOffBooks, replacementPosted]
+      : [replacementPosted]
   );
   if (posted !== undefined && posted.custodyId !== target.custodyId) {
-    await syncCustodyPayable(ctx, posted.custodyId, actorId, now);
+    await syncCustodyPayable(ctx, posted.custodyId, actorId, now, replacedOffBooks);
   }
 }
 
@@ -2432,7 +2492,10 @@ async function postCustodyEntry(
     throw new ConvexError(CUSTODY_NOT_FOUND);
   }
   await hookCustodyCashMoved(ctx, { orgId: custody.orgId, entry, custody, kind: entry.kind, actorId });
-  await syncCustodyPayable(ctx, custodyId, actorId, entry.occurredAt);
+  // The split follows the leg, so it is held behind the leg's own posting.
+  await syncCustodyPayable(ctx, custodyId, actorId, entry.occurredAt, [
+    { must: "SETTLED", idempotencyKey: custodyEntryPostKey(entry._id) },
+  ]);
 }
 
 /**
@@ -2785,8 +2848,13 @@ export const recordCustodyMovement = mutation({
             actorId: user._id,
             reversalDate: now,
           });
-          // The split follows the position the reversal left, dated with it.
-          await syncCustodyPayable(ctx, args.custodyId, user._id, now);
+          // The split follows the position the reversal left, dated with it
+          // — and held behind the reversal itself: a DEFERRED one leaves the
+          // leg on the books, and the delta must not move the payable while
+          // the clearing account still carries the cash.
+          await syncCustodyPayable(ctx, args.custodyId, user._id, now, [
+            { must: "OFF_BOOKS", idempotencyKey: custodyEntryPostKey(target._id) },
+          ]);
         } else {
           await postCustodyEntry(ctx, args.custodyId, entryId, user._id);
         }
@@ -2859,11 +2927,8 @@ export const reconcileDealCustody = mutation({
           throw new ConvexError("This custody record is already closed.");
         }
 
-        const summary = summarizeReadableCustody(
-          custody,
-          await loadActiveFees(ctx, custody.applicationId),
-          "closing this custody record"
-        );
+        const fees = await loadActiveFees(ctx, custody.applicationId);
+        const summary = summarizeReadableCustody(custody, fees, "closing this custody record");
 
         // A write-off is the dealership absorbing a loss. It is NOT a way to stop
         // owing somebody: money the dealership owes an employee, closed unpaid, is
@@ -2908,6 +2973,8 @@ export const reconcileDealCustody = mutation({
             reason: writeOffReason!,
             actorId: user._id,
             occurredAt: now,
+            // The residual is what these leave; the write-off follows them.
+            dependencies: await custodyPositionDependencies(ctx, custody, fees, "writing off a custody shortage"),
           });
           await ctx.db.patch(args.custodyId, {
             writeOffPosted: { version, amountMinor: summary.employeeOwesDealerMinor },
@@ -3043,11 +3110,22 @@ export const migrateLegacyCustodyToLedger = mutation({
         // then the reversals, each cancelling its target's journal (or its
         // still-queued post) the way the product's own reversal does.
         const byId = new Map(entries.map((entry) => [entry._id, entry]));
+        // Every posting the family's payable position is a consequence of;
+        // the delta at the end is chained behind all of them, so a leg or a
+        // line dated into a closed month holds the payable with it.
+        const payableDependencies: CustodyLedgerDependency[] = [];
+        const reversedEntryIds = new Set(
+          entries.filter((entry) => entry.kind === "REVERSAL").map((entry) => entry.reversesEntryId)
+        );
         let cashLegs = 0;
         let reversals = 0;
         for (const entry of entries) {
           if (entry.kind === "REVERSAL") continue;
           await hookCustodyCashMoved(ctx, { orgId: args.orgId, entry, custody, kind: entry.kind, actorId: user._id });
+          payableDependencies.push({
+            must: reversedEntryIds.has(entry._id) ? "OFF_BOOKS" : "SETTLED",
+            idempotencyKey: custodyEntryPostKey(entry._id),
+          });
           cashLegs += 1;
         }
         for (const entry of entries) {
@@ -3091,6 +3169,7 @@ export const migrateLegacyCustodyToLedger = mutation({
             custodyPostingVersion: version,
             updatedAt: Date.now(),
           });
+          payableDependencies.push({ must: "SETTLED", idempotencyKey: custodyFeePostKey(fee._id, version) });
           feesPosted += 1;
         }
 
@@ -3108,6 +3187,8 @@ export const migrateLegacyCustodyToLedger = mutation({
             reason: custody.writeOffReason?.trim() || "Custody shortage written off (posted by the custody accounting migration).",
             actorId: user._id,
             occurredAt,
+            // Every leg and line posted above: the shortage is what they leave.
+            dependencies: [...payableDependencies],
           });
           await ctx.db.patch(args.custodyId, {
             writeOffPosted: { version, amountMinor: summary.employeeOwesDealerMinor },
@@ -3121,7 +3202,7 @@ export const migrateLegacyCustodyToLedger = mutation({
         // fact it is made of. `syncCustodyPayable` posts only for a CANONICAL
         // record, which is exactly what this record has just become.
         await ctx.db.patch(args.custodyId, { ledgerPosting: "CANONICAL", updatedAt: Date.now() });
-        await syncCustodyPayable(ctx, args.custodyId, user._id, latestFact > 0 ? latestFact : Date.now());
+        await syncCustodyPayable(ctx, args.custodyId, user._id, latestFact > 0 ? latestFact : Date.now(), payableDependencies);
         return { custodyId: args.custodyId, cashLegs, reversals, feesPosted, writeOffPosted };
       }
     );
@@ -3220,24 +3301,31 @@ export const reopenDealCustody = mutation({
  * disbursement confirmer without VIEW_USERS would otherwise have a picker
  * with nobody in it. Bounded; a dealership past the cap gets a prefix and
  * the flag, never a refusal on the deal screen.
+ *
+ * The caller is in the list, MARKED (`isActor`), because the two doors this
+ * feeds draw different lines: a plan may name anyone, the actor included
+ * (`planCustodyHandler` has no self rule — a plan moves no money), while an
+ * issuance is refused to the person issuing it (`openDealCustody`). The
+ * issuance picker withholds the marked row so it never offers a choice the
+ * server refuses; the plan picker serves the whole list.
  */
 export const MAX_CUSTODY_CANDIDATES = 200;
 export const listCustodyCandidates = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
+    const { user: actor } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
     const memberships = await ctx.db
       .query("memberships")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .take(MAX_CUSTODY_CANDIDATES + 1);
-    const candidates: Array<{ userId: Id<"users">; name: string }> = [];
+    const candidates: Array<{ userId: Id<"users">; name: string; isActor: boolean }> = [];
     for (const membership of memberships.slice(0, MAX_CUSTODY_CANDIDATES)) {
       // The same rule `requireOrgMember` applies to the recipient: a
       // membership mid-offboarding cannot be handed cash.
       if (membership.offboardingStatus) continue;
       const user = await ctx.db.get(membership.userId);
       if (user === null) continue;
-      candidates.push({ userId: membership.userId, name: user.name ?? "" });
+      candidates.push({ userId: membership.userId, name: user.name ?? "", isActor: membership.userId === actor._id });
     }
     return { candidates, truncated: memberships.length > MAX_CUSTODY_CANDIDATES };
   },

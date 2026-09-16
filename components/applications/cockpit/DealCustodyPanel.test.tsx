@@ -359,6 +359,52 @@ describe("DealCustodyPanel", () => {
       expect(names).not.toContain(salesEn.CustodyIssueMore);
     });
 
+    test("a stopped or finalized deal withholds 'charge a cost' too — the server refuses to move a cost onto custody once the economics are frozen — while settling stays", () => {
+      const a = actions({ eligibleFees: [{ _id: "fee1" as Id<"financeDealFees">, label: "Plates", actualAmountMinor: 90_000, currency: "JOD" }] });
+      renderPanel(wiring({ actions: a, accounting: { ready: true }, dealStopped: true }));
+      expect(buttonNames()).not.toContain(salesEn.CustodyAttachCost);
+      expect(screen.queryByTestId("custody-attach-cust1")).toBeNull();
+      expect(buttonNames()).toContain(salesEn.CustodyRecordReturn);
+      expect(buttonNames()).toContain(salesEn.CustodyClose);
+      cleanup();
+      // Economics open: the same record offers it, live.
+      renderPanel(wiring({ actions: a, accounting: { ready: true }, dealStopped: false }));
+      expect((screen.getByTestId("custody-attach-cust1") as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    test("the operator is never offered as the recipient of their own issuance — the server refuses self-issuance — while the plan may still name them", () => {
+      const me = { userId: "u1" as Id<"users">, name: "Me", isActor: true };
+      const a = actions({ members: [me, { userId: "u3" as Id<"users">, name: "Lina" }] });
+      const plannedSelf = { userId: "u1" as Id<"users">, userName: "Me", amountMinor: 120_000, note: null };
+      renderPanel(wiring({ actions: a, accounting: { ready: true }, records: [], plannedCustody: plannedSelf }));
+      fireEvent.click(screen.getByTestId("custody-issue-button"));
+      const issue = screen.getByTestId("custody-issued-dialog");
+      // The plan's person is the operator: not a served recipient, so the
+      // picker is unset and the money command cannot be submitted as them.
+      expect(within(issue).getByTestId("custody-issued-person").textContent).toContain(salesEn.CustodyAssignPersonPlaceholder);
+      expect((within(issue).getByLabelText(/Amount/) as HTMLInputElement).value).toBe("120");
+      expect((within(issue).getByTestId("custody-issued-submit") as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(within(issue).getByTestId("custody-issued-submit"));
+      expect(a.onOpen).not.toHaveBeenCalled();
+      fireEvent.keyDown(issue, { key: "Escape" });
+      cleanup();
+      // Planning is not money: the same operator may be planned as the handler.
+      renderPanel(wiring({ actions: a, accounting: { ready: true }, records: [], plannedCustody: plannedSelf }));
+      fireEvent.click(screen.getByTestId("custody-plan-button"));
+      const plan = screen.getByTestId("custody-plan-dialog");
+      expect((within(plan).getByTestId("custody-plan-submit") as HTMLButtonElement).disabled).toBe(false);
+      fireEvent.click(within(plan).getByTestId("custody-plan-submit"));
+      expect(a.onPlan).toHaveBeenCalledWith(expect.objectContaining({ userId: "u1", amountMinor: 120_000 }));
+      cleanup();
+      // A plan naming somebody else still feeds the issuance as before.
+      const b = actions({ members: [me, { userId: "u3" as Id<"users">, name: "Lina" }] });
+      renderPanel(wiring({ actions: b, accounting: { ready: true }, records: [], plannedCustody: { userId: "u3" as Id<"users">, userName: "Lina", amountMinor: 120_000, note: null } }));
+      fireEvent.click(screen.getByTestId("custody-issue-button"));
+      const issueOther = screen.getByTestId("custody-issued-dialog");
+      fireEvent.click(within(issueOther).getByTestId("custody-issued-submit"));
+      expect(b.onOpen).toHaveBeenCalledWith(expect.objectContaining({ userId: "u3", amountMinor: 120_000 }));
+    });
+
     test("a withheld plan says it is withheld — never 'nobody assigned' — and offers no plan control", () => {
       renderPanel(wiring({ records: [], plannedCustody: null, plannedCustodyWithheld: true }));
       expect(screen.getByTestId("custody-plan-withheld").textContent).toContain(salesEn.CustodyPlanWithheld);

@@ -23,12 +23,15 @@ import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate, checkPostingAllowed } from "../accountingPeriods";
 import { SYSTEM_KEYS, type SystemKey } from "../utils/defaultChart";
 import {
+  custodyDependenciesPayload,
+  custodyDependencyBlockedReason,
   custodyEntryPostKey,
   custodyFeePostKey,
   custodyPayableReclassKey,
   custodyPayableReclassPosted,
   custodyWriteOffPostKey,
   earlierVersionStillPosted,
+  type CustodyLedgerDependency,
 } from "../utils/custodySourceLedger";
 import { isChartInitialized, isSystemAccountMapped, ensureCommissionAccounts, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureConsignmentAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts, ensureFinancedSettlementAccounts, ensureDealCustodyAccounts } from "../chartOfAccounts";
 import {
@@ -3414,7 +3417,16 @@ export async function hookCustodyFeeReversed(
   });
 }
 
-/** A debit residual nobody could account for, absorbed as Cash Over/Short. */
+/**
+ * A debit residual nobody could account for, absorbed as Cash Over/Short.
+ *
+ * A DERIVED posting, like the payable delta: the residual is what the
+ * record's legs and lines leave, so it is chained behind those postings
+ * (`dependencies`) as well as behind the reversal of the write-off it
+ * replaces. A write-off dated today otherwise overtook a receipt queued
+ * into a closed month and absorbed a shortage the clearing account did not
+ * yet show. The worker re-proves both off the queued row.
+ */
 export async function hookCustodyWrittenOff(
   ctx: MutationCtx,
   args: {
@@ -3427,20 +3439,25 @@ export async function hookCustodyWrittenOff(
     occurredAt: number;
     /** What became of the write-off this one replaces, when the caller reversed one. */
     replacesReversal?: ReversalOutcome;
+    /** The legs and lines whose residual this absorbs — see the note above. */
+    dependencies: ReadonlyArray<CustodyLedgerDependency>;
   }
 ): Promise<void> {
   await ensureDealCustodyAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  const replacementBlock = await custodyReplacementQueueReason(ctx, {
+    orgId: args.orgId,
+    eventType: "CUSTODY_WRITTEN_OFF",
+    sourceType: "financeDealCustody",
+    sourceId: args.custody._id.toString(),
+    version: args.version,
+    replacesReversal: args.replacesReversal,
+  });
+  const dependencyBlock =
+    replacementBlock !== undefined ? null : await custodyDependencyBlockedReason(ctx, args.orgId, args.dependencies);
   await postDomainEvent(ctx, {
     orgId: args.orgId,
     eventType: "CUSTODY_WRITTEN_OFF",
-    queueBehind: await custodyReplacementQueueReason(ctx, {
-      orgId: args.orgId,
-      eventType: "CUSTODY_WRITTEN_OFF",
-      sourceType: "financeDealCustody",
-      sourceId: args.custody._id.toString(),
-      version: args.version,
-      replacesReversal: args.replacesReversal,
-    }),
+    queueBehind: replacementBlock ?? dependencyBlock ?? undefined,
     sourceType: "financeDealCustody",
     sourceId: args.custody._id.toString(),
     eventVersion: args.version,
@@ -3456,6 +3473,7 @@ export async function hookCustodyWrittenOff(
       amountMinor: args.amountMinor,
       currency: args.custody.currency,
       reason: args.reason,
+      ...custodyDependenciesPayload(args.dependencies),
     },
   });
 }
@@ -3475,6 +3493,17 @@ export { custodyPayableReclassKey };
  * outbox worker picks it up. Without this an open-period release (v2, a
  * debit) landed while the closed-period recognition (v1, the credit) was
  * still waiting, and the liability read as a debit until the month reopened.
+ *
+ * ALSO CHAINED BEHIND THE POSTINGS IT REFLECTS (`dependencies`). The chain
+ * orders the deltas among themselves; it does not hold a delta behind the
+ * fee replacement, fee reversal or cash leg whose consequence it is. A
+ * corrected fee whose old version's reversal was deferred (no period open
+ * today) while its paid date sits in an open month produced a delta that
+ * posted at once — the payable moved to the corrected position while the
+ * clearing account still carried the old charge. The caller names the
+ * postings the delta follows; each is proven on the ledger here, and the
+ * unmet one queues the delta with the reason. The worker re-proves them off
+ * the payload (`custodyDependencyBlockedReason`).
  */
 export async function hookCustodyPayableReclassified(
   ctx: MutationCtx,
@@ -3486,18 +3515,23 @@ export async function hookCustodyPayableReclassified(
     payableAfterMinor: number;
     actorId: Id<"users">;
     occurredAt: number;
+    /** The primary postings this delta is a consequence of — see the note above. */
+    dependencies: ReadonlyArray<CustodyLedgerDependency>;
   }
 ): Promise<void> {
   await ensureDealCustodyAccountsIfChartReady(ctx, args.orgId, args.actorId);
   const predecessorUnposted =
     args.version > 1 &&
     !(await custodyPayableReclassPosted(ctx, args.orgId, args.custody._id, args.version - 1));
+  const dependencyBlock = predecessorUnposted
+    ? null
+    : await custodyDependencyBlockedReason(ctx, args.orgId, args.dependencies);
   await postDomainEvent(ctx, {
     orgId: args.orgId,
     eventType: "CUSTODY_PAYABLE_RECLASSIFIED",
     queueBehind: predecessorUnposted
       ? `custody payable reclassification v${args.version - 1} has not posted yet`
-      : undefined,
+      : dependencyBlock ?? undefined,
     sourceType: "financeDealCustody",
     sourceId: args.custody._id.toString(),
     eventVersion: args.version,
@@ -3513,6 +3547,7 @@ export async function hookCustodyPayableReclassified(
       deltaMinor: args.deltaMinor,
       payableAfterMinor: args.payableAfterMinor,
       currency: args.custody.currency,
+      ...custodyDependenciesPayload(args.dependencies),
     },
   });
 }

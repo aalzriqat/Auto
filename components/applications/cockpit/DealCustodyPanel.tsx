@@ -350,9 +350,15 @@ function CustodyRecord({
                   {t("CustodyReimburse")}
                 </Button>
               )}
-              <Button type="button" size="sm" variant="outline" disabled={!act || !hasEligibleFees} onClick={() => openDialog({ kind: "ATTACH", custodyId: id })}>
-                {t("CustodyAttachCost")}
-              </Button>
+              {/* Moving a cost onto the record re-posts the deal's economics,
+                  which `setFeeCustody` refuses once the deal is finalized or
+                  stopped — so the door is withheld with the other
+                  posting-bearing edits, while settling stays. */}
+              {canStart && (
+                <Button type="button" size="sm" variant="outline" disabled={!act || !hasEligibleFees} onClick={() => openDialog({ kind: "ATTACH", custodyId: id })} data-testid={`custody-attach-${id}`}>
+                  {t("CustodyAttachCost")}
+                </Button>
+              )}
               <Button type="button" size="sm" disabled={!act || s === null} onClick={() => openDialog({ kind: "CLOSE", custodyId: id })}>
                 {t("CustodyClose")}
               </Button>
@@ -435,6 +441,11 @@ export function DealCustodyPanel({
   };
   const recordFor = (custodyId: Id<"financeDealCustody">) => records?.find((row) => row._id === custodyId);
   const scale = (currency: string) => actions?.scaleOf(currency) ?? 3;
+  // Who an ISSUANCE may name: everyone served except the operator issuing
+  // it — the server refuses self-issuance, so the picker never offers it.
+  // The plan keeps the whole list; a plan moves no money and may name anyone.
+  const recipients = (actions?.members ?? []).filter((member) => !member.isActor);
+  const plannedRecipient = plan && recipients.some((member) => member.userId === plan.userId) ? plan.userId : undefined;
 
   return (
     <Card data-testid="deal-custody">
@@ -602,8 +613,8 @@ export function DealCustodyPanel({
             scale={scale(cur)}
             busy={busy}
             error={error}
-            members={actions.members ?? []}
-            defaultUserId={plan?.userId}
+            members={recipients}
+            defaultUserId={plannedRecipient}
             suggestedMinor={plan?.amountMinor ?? recommended?.recommendedMinor ?? null}
             money={money}
             t={t}

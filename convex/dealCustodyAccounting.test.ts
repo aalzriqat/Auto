@@ -8,7 +8,16 @@ import { ALL_PERMISSIONS, PERMISSIONS } from "./utils/permissions";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { deriveRecommendedCustody } from "./financeDealCosts";
 import { drainEntries } from "./accountingOutbox";
-import { custodyLedgerFamilyRefusal, custodyLedgerFamilyRowRefusal, custodyPostingBlockedReason, MAX_CUSTODY_POSTED_LINES } from "./utils/custodySourceLedger";
+import {
+  CustodyLedgerReadBudget,
+  custodyLedgerFamilyRefusal,
+  custodyLedgerFamilyRowRefusal,
+  custodyPostingBlockedReason,
+  loadCustodyPostedLines,
+  MAX_CUSTODY_LEDGER_PROOFS,
+  MAX_CUSTODY_POSTED_LINES,
+  parseCustodyDependencies,
+} from "./utils/custodySourceLedger";
 import { financedSaleRecognitionDate } from "./utils/financedSaleRecognition";
 
 /**
@@ -1110,6 +1119,31 @@ describe("tenancy and permission-shaped reads (TEN-1, ACC-10)", () => {
   });
 });
 
+describe("who may be handed the cash (frozen-candidate finding 3)", () => {
+  test("the candidate list marks the caller, so the issuance picker can withhold the one recipient the server refuses; the plan may still name them", async () => {
+    const seed = await seedDeal("candidates-actor");
+    const { candidates } = await seed.asUser.query(api.financeDealCosts.listCustodyCandidates, { orgId: seed.orgId });
+    const byId = new Map(candidates.map((c) => [c.userId, c]));
+    expect(byId.get(seed.userId)?.isActor).toBe(true);
+    expect(byId.get(seed.employeeId)?.isActor).toBe(false);
+    expect(byId.get(seed.viewerId)?.isActor).toBe(false);
+    // The server's own line, which the marker mirrors: self-issuance refused; self-planning allowed.
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+        idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId,
+        userId: seed.userId, issuedMinor: jod(100), method: "CASH",
+      })
+    ).rejects.toThrow(/somebody other than the person receiving it/);
+    await seed.asUser.mutation(api.financeDealCosts.planCustodyHandler, { orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.userId, amountMinor: jod(100) });
+    expect((await readCosts(seed)).plannedCustody?.userId).toBe(seed.userId);
+    // Another operator asking sees the marker move with them.
+    const asEmployee = seed.t.withIdentity({ subject: `cu_emp_candidates-actor` });
+    const theirs = await asEmployee.query(api.financeDealCosts.listCustodyCandidates, { orgId: seed.orgId });
+    expect(theirs.candidates.find((c) => c.userId === seed.employeeId)?.isActor).toBe(true);
+    expect(theirs.candidates.find((c) => c.userId === seed.userId)?.isActor).toBe(false);
+  });
+});
+
 describe("planned versus actual", () => {
   test("the plan names a person before any cash moves, the recommendation follows the employee-paid policy, and the plan is frozen once custody is open", async () => {
     const seed = await seedDeal("plan");
@@ -2096,4 +2130,458 @@ describe("G4 — a line that no longer carries a custody charge must be OFF the 
     });
     await expect(familyRefusal(seed)).rejects.toThrow(new RegExp(`more than ${MAX_CUSTODY_POSTED_LINES} cost lines that have posted a custody charge`));
   }, 30_000);
+});
+
+// ---------------------------------------------------------------------------
+// Frozen-candidate review on 4b32dd50e: findings 1 (a payable delta never
+// overtakes the fee reversal or replacement it is a consequence of) and 2 (the
+// family proof bounds the DOCUMENTS it reads, not the sources it names).
+// ---------------------------------------------------------------------------
+
+describe("G5 — a payable reclassification is chained behind the fee reversal and replacement it reflects", () => {
+  test("payable v1 on the books, no open current period, paid date in an open earlier month: the correction's fee v2 AND payable v2 wait behind v1's deferred reversal, and neither balance nor snapshot moves until it posts", async () => {
+    const seed = await seedDeal("payable-behind-fee");
+    const { earlierId, boundary } = await splitPeriods(seed);
+    const custodyId = await openCustody(seed, jod(700));
+    const paidAt = boundary - 5 * DAY;
+    // 900 paid out of 700 handed over: the employee is 200 out of pocket, and
+    // payable v1 (a CREDIT of 200) is on the books, dated with the receipt.
+    const feeId = await employeeFee(seed, custodyId, jod(900), { paidAt });
+    let l = await ledger(seed);
+    expect(payable(l)).toBe(-jod(200));
+    expect(clearing(l)).toBe(0);
+    expect(transferExpense(l)).toBe(jod(900));
+    expect((await events(seed, "CUSTODY_PAYABLE_RECLASSIFIED")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+
+    // Today's month closes; the receipt's month stays open. The receipt is
+    // corrected to 950: v1's reversal (dated today) has nowhere to post and
+    // DEFERS, so v1 stays on the books.
+    await closePeriod(seed, seed.periodId);
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, { orgId: seed.orgId, feeId, actualAmountMinor: jod(950), expectedCurrency: "JOD" });
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+
+    // The finding: fee v2 (dated into the OPEN earlier month) is queued
+    // behind the reversal — and so is payable v2 (+50, also dated there),
+    // which used to post at once, moving the liability to the corrected
+    // position while the clearing account still carried the old charge.
+    const queued = await pending(seed);
+    const reversalRow = queued.find((r) => r.kind === "REVERSE" && r.idempotencyKey === `custody_fee_reversal_${feeId}_v1`);
+    const feeV2 = queued.find((r) => r.idempotencyKey === `custody_fee_paid_${feeId}_v2`);
+    const payableV2 = queued.find((r) => r.idempotencyKey === `custody_payable_reclass_${custodyId}_v2`);
+    expect(reversalRow?.status).toBe("PENDING");
+    expect(feeV2?.status).toBe("PENDING");
+    expect(feeV2?.reason).toMatch(/Waiting on a predecessor: custody fee posting v1/);
+    expect(payableV2?.status).toBe("PENDING");
+    expect(payableV2?.reason).toMatch(new RegExp(`Waiting on a predecessor: the custody posting it replaces \\(custody_fee_paid_${feeId}_v1\\) is still on the books`));
+    expect((await events(seed, "CUSTODY_PAYABLE_RECLASSIFIED")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+    l = await ledger(seed);
+    expect(payable(l)).toBe(-jod(200));
+    expect(clearing(l)).toBe(0);
+    expect(transferExpense(l)).toBe(jod(900));
+    // The row states the chain's target and that the ledger is behind it.
+    let row = (await readCosts(seed)).custody.find((r) => r._id === custodyId)!;
+    expect(row.payableTargetMinor).toBe(jod(250));
+    expect(row.payableAwaitingPost).toBe(true);
+    // The gate reads the ledger: refused until the family has settled.
+    expect(await familyRefusal(seed)).toMatch(/payable reclassification \(v2\) that has not posted to the ledger yet/);
+
+    // The worker re-proves the dependency off the queued row's own payload —
+    // both the fee v2 rule and the payable's, independent of the hook's reason.
+    expect(await seed.t.run((ctx) => custodyPostingBlockedReason(ctx, feeV2!))).toMatch(/custody fee posting v1 it replaces is still on the books/);
+    expect(await seed.t.run((ctx) => custodyPostingBlockedReason(ctx, payableV2!))).toMatch(
+      /custody_fee_paid_.*_v1\) is still on the books; its reversal has not posted yet, so this would move an Employee Reimbursements Payable balance ahead of the custody posting it reflects/
+    );
+
+    // One real attempt with today's month still closed: the reversal cannot
+    // post; fee v2 and payable v2 are HELD (no attempt consumed), never posted
+    // ahead of it. The earlier month's snapshot — the consumer's view — still
+    // carries exactly the position the primary journals support.
+    await drainOnce(seed);
+    const held = await pending(seed);
+    for (const key of [`custody_fee_paid_${feeId}_v2`, `custody_payable_reclass_${custodyId}_v2`]) {
+      const heldRow = held.find((r) => r.idempotencyKey === key)!;
+      expect(heldRow.status).toBe("PENDING");
+      expect(heldRow.attempts).toBe(0);
+      expect(heldRow.lastError).toMatch(/Waiting to post:/);
+    }
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+    expect((await events(seed, "CUSTODY_PAYABLE_RECLASSIFIED")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+    // (The 700 was handed over today, so the earlier month's clearing shows
+    // the receipt and the 200 recognised against it: −900 + 200.)
+    let earlier = await snapshotByKey(seed, earlierId);
+    expect(payable(earlier)).toBe(-jod(200));
+    expect(clearing(earlier)).toBe(-jod(700));
+    expect(transferExpense(earlier)).toBe(jod(900));
+
+    // Today's month reopens: the reversal lands, then fee v2, then payable v2
+    // — in that order, whatever order the worker picked them up in.
+    await reopenPeriod(seed, seed.periodId);
+    await drainUntilSettled(seed, 6);
+    expect((await pending(seed)).every((r) => r.status === "POSTED")).toBe(true);
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.eventVersion, e.status]).sort()).toEqual([[1, "REVERSED"], [2, "POSTED"]]);
+    const reclass = await events(seed, "CUSTODY_PAYABLE_RECLASSIFIED");
+    expect(reclass.map((e) => [e.eventVersion, e.status]).sort()).toEqual([[1, "POSTED"], [2, "POSTED"]]);
+    l = await ledger(seed);
+    expect(payable(l)).toBe(-jod(250));
+    expect(clearing(l)).toBe(0);
+    expect(transferExpense(l)).toBe(jod(950));
+    // Snapshot-safe: the earlier month carries the corrected receipt and both
+    // deltas (all dated there); today's month carries only v1's reversal; the
+    // two months sum to the ledger on every account.
+    earlier = await snapshotByKey(seed, earlierId);
+    const current = await snapshotByKey(seed, seed.periodId);
+    expect(payable(earlier)).toBe(-jod(250));
+    expect(payable(current)).toBe(0);
+    expect(transferExpense(earlier) + transferExpense(current)).toBe(jod(950));
+    expect(clearing(earlier) + clearing(current)).toBe(0);
+    row = (await readCosts(seed)).custody.find((r) => r._id === custodyId)!;
+    expect(row.payableTargetMinor).toBe(jod(250));
+    expect(row.payableAwaitingPost).toBe(false);
+    expect(await familyRefusal(seed)).toBeNull();
+  }, 45_000);
+
+  test("the worker holds a queued payable delta on the LEDGER alone: with the reversal row gone, v2 stays held while the replaced fee version is POSTED and posts once it is REVERSED and v2 of the fee is on the books", async () => {
+    const seed = await seedDeal("payable-worker");
+    const { boundary } = await splitPeriods(seed);
+    const custodyId = await openCustody(seed, jod(700));
+    const feeId = await employeeFee(seed, custodyId, jod(900), { paidAt: boundary - 5 * DAY });
+    await closePeriod(seed, seed.periodId);
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, { orgId: seed.orgId, feeId, actualAmountMinor: jod(950), expectedCurrency: "JOD" });
+    // Nothing can post the reversal for the deltas to wait on — only the
+    // ledger's own state can release them.
+    const reversalRow = (await pending(seed)).find((r) => r.kind === "REVERSE")!;
+    await seed.t.run((ctx) => ctx.db.delete(reversalRow._id));
+    await reopenPeriod(seed, seed.periodId);
+    await drainOnce(seed);
+    const payableV2 = (await pending(seed)).find((r) => r.idempotencyKey === `custody_payable_reclass_${custodyId}_v2`)!;
+    expect(payableV2.status).toBe("PENDING");
+    expect(payableV2.attempts).toBe(0);
+    expect(payableV2.lastError).toMatch(/is still on the books; its reversal has not posted yet/);
+    expect((await events(seed, "CUSTODY_PAYABLE_RECLASSIFIED")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+    // The reversal reaches the books another way; fee v2 is released, and
+    // payable v2 follows it — never before it.
+    const v1EventId = (await events(seed, "CUSTODY_FEE_PAID")).find((e) => e.eventVersion === 1)!._id;
+    await seed.t.run((ctx) => ctx.db.patch(v1EventId, { status: "REVERSED" }));
+    await drainUntilSettled(seed, 6);
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.eventVersion, e.status]).sort()).toEqual([[1, "REVERSED"], [2, "POSTED"]]);
+    expect((await events(seed, "CUSTODY_PAYABLE_RECLASSIFIED")).map((e) => [e.eventVersion, e.status]).sort()).toEqual([[1, "POSTED"], [2, "POSTED"]]);
+    expect(payable(await ledger(seed))).toBe(-jod(250));
+  }, 45_000);
+
+  test("a payable delta waits for the REPLACEMENT too: with fee v2's forward dead-lettered, payable v2 is held on that alone, and follows once it posts", async () => {
+    const seed = await seedDeal("payable-behind-replacement");
+    const { boundary } = await splitPeriods(seed);
+    const custodyId = await openCustody(seed, jod(700));
+    const feeId = await employeeFee(seed, custodyId, jod(900), { paidAt: boundary - 5 * DAY });
+    await closePeriod(seed, seed.periodId);
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, { orgId: seed.orgId, feeId, actualAmountMinor: jod(950), expectedCurrency: "JOD" });
+    // The reversal is on the books (patched as the worker would leave it);
+    // fee v2's forward row is dead-lettered, so the only thing the payable
+    // can be waiting on is the replacement it reflects — still on its way.
+    const v1EventId = (await events(seed, "CUSTODY_FEE_PAID")).find((e) => e.eventVersion === 1)!._id;
+    await seed.t.run((ctx) => ctx.db.patch(v1EventId, { status: "REVERSED" }));
+    const feeV2Row = (await pending(seed)).find((r) => r.idempotencyKey === `custody_fee_paid_${feeId}_v2`)!;
+    await seed.t.run((ctx) => ctx.db.patch(feeV2Row._id, { status: "FAILED" }));
+    const payableV2 = (await pending(seed)).find((r) => r.idempotencyKey === `custody_payable_reclass_${custodyId}_v2`)!;
+    expect(await seed.t.run((ctx) => custodyPostingBlockedReason(ctx, payableV2))).toMatch(
+      new RegExp(`the custody posting it follows \\(custody_fee_paid_${feeId}_v2\\) has not posted to the ledger yet`)
+    );
+    await reopenPeriod(seed, seed.periodId);
+    await drainUntilSettled(seed, 3);
+    expect((await pending(seed)).find((r) => r._id === payableV2._id)?.status).toBe("PENDING");
+    expect((await events(seed, "CUSTODY_PAYABLE_RECLASSIFIED")).map((e) => e.eventVersion)).toEqual([1]);
+    // The fee is redriven and posts; the payable follows it.
+    await seed.t.run((ctx) => ctx.db.patch(feeV2Row._id, { status: "PENDING", attempts: 0 }));
+    await drainUntilSettled(seed, 4);
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.eventVersion, e.status]).sort()).toEqual([[1, "REVERSED"], [2, "POSTED"]]);
+    expect((await events(seed, "CUSTODY_PAYABLE_RECLASSIFIED")).map((e) => e.eventVersion).sort()).toEqual([1, 2]);
+    expect(payable(await ledger(seed))).toBe(-jod(250));
+  }, 45_000);
+
+  test("a version a later correction CANCELS before it ever posted is SETTLED, not awaited forever: two corrections under a closed month converge once it reopens", async () => {
+    const seed = await seedDeal("payable-cancelled-version");
+    const { boundary } = await splitPeriods(seed);
+    const custodyId = await openCustody(seed, jod(700));
+    const feeId = await employeeFee(seed, custodyId, jod(900), { paidAt: boundary - 5 * DAY });
+    await closePeriod(seed, seed.periodId);
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, { orgId: seed.orgId, feeId, actualAmountMinor: jod(950), expectedCurrency: "JOD" });
+    // Corrected again: v2 never posted, so its queued forward is CANCELLED
+    // (the row is dropped) and v3 replaces it; payable v2 named v2 and must
+    // not wait for a posting that will never happen.
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, { orgId: seed.orgId, feeId, actualAmountMinor: jod(980), expectedCurrency: "JOD" });
+    const keys = (await pending(seed)).filter((r) => r.status === "PENDING").map((r) => r.idempotencyKey).sort();
+    expect(keys).toEqual([
+      `custody_fee_paid_${feeId}_v3`,
+      `custody_fee_reversal_${feeId}_v1`,
+      `custody_payable_reclass_${custodyId}_v2`,
+      `custody_payable_reclass_${custodyId}_v3`,
+    ].sort());
+    // Until v1 is off the books nothing derived moves; payable v2 is held on
+    // v1 alone (v2, cancelled, is settled).
+    const payableV2 = (await pending(seed)).find((r) => r.idempotencyKey === `custody_payable_reclass_${custodyId}_v2`)!;
+    expect(await seed.t.run((ctx) => custodyPostingBlockedReason(ctx, payableV2))).toMatch(new RegExp(`\\(custody_fee_paid_${feeId}_v1\\) is still on the books`));
+    await reopenPeriod(seed, seed.periodId);
+    await drainUntilSettled(seed, 8);
+    expect((await pending(seed)).every((r) => r.status === "POSTED")).toBe(true);
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.eventVersion, e.status]).sort()).toEqual([[1, "REVERSED"], [3, "POSTED"]]);
+    expect((await events(seed, "CUSTODY_PAYABLE_RECLASSIFIED")).map((e) => e.eventVersion).sort()).toEqual([1, 2, 3]);
+    const l = await ledger(seed);
+    expect(payable(l)).toBe(-jod(280));
+    expect(transferExpense(l)).toBe(jod(980));
+    expect(clearing(l)).toBe(0);
+    expect(await familyRefusal(seed)).toBeNull();
+  }, 45_000);
+
+  test("a voided or unlinked line's payable release waits for the charge to leave the books", async () => {
+    const seed = await seedDeal("payable-behind-void");
+    const { boundary } = await splitPeriods(seed);
+    const custodyId = await openCustody(seed, jod(700));
+    const feeId = await employeeFee(seed, custodyId, jod(900), { paidAt: boundary - 5 * DAY });
+    expect(payable(await ledger(seed))).toBe(-jod(200));
+    await closePeriod(seed, seed.periodId);
+    // Voided today: the reversal defers; the release of the 200 (v2, a
+    // DEBIT) is dated today too, so the period holds it — and the worker's
+    // own guard holds it on the ledger as well.
+    await seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "duplicate" });
+    const payableV2 = (await pending(seed)).find((r) => r.idempotencyKey === `custody_payable_reclass_${custodyId}_v2`)!;
+    expect(payableV2.reason).toMatch(/is still on the books/);
+    expect(await seed.t.run((ctx) => custodyPostingBlockedReason(ctx, payableV2))).toMatch(
+      new RegExp(`\\(custody_fee_paid_${feeId}_v1\\) is still on the books`)
+    );
+    // The reversal row is gone; the period reopens; the release is still held.
+    const reversalRow = (await pending(seed)).find((r) => r.kind === "REVERSE")!;
+    await seed.t.run((ctx) => ctx.db.delete(reversalRow._id));
+    await reopenPeriod(seed, seed.periodId);
+    await drainOnce(seed);
+    expect((await pending(seed)).find((r) => r._id === payableV2._id)?.status).toBe("PENDING");
+    expect(payable(await ledger(seed))).toBe(-jod(200));
+    // The charge leaves the books; the release follows.
+    const v1EventId = (await events(seed, "CUSTODY_FEE_PAID"))[0]._id;
+    await seed.t.run((ctx) => ctx.db.patch(v1EventId, { status: "REVERSED" }));
+    await drainUntilSettled(seed, 3);
+    expect(payable(await ledger(seed))).toBe(0);
+  }, 45_000);
+
+  test("same family, cash side: a reversed ISSUED leg's deferred reversal holds the payable delta that follows it", async () => {
+    const seed = await seedDeal("payable-behind-cash-reversal");
+    const custodyId = await openCustody(seed, jod(700));
+    await employeeFee(seed, custodyId, jod(900));
+    expect(payable(await ledger(seed))).toBe(-jod(200));
+    await closePeriod(seed, seed.periodId);
+    // Reversing the issuance puts the employee 900 out of pocket: delta +700.
+    const issued = (await entries(seed, custodyId)).find((e) => e.kind === "ISSUED")!;
+    await reverse(seed, custodyId, issued._id, jod(700));
+    const payableV2 = (await pending(seed)).find((r) => r.idempotencyKey === `custody_payable_reclass_${custodyId}_v2`)!;
+    expect(payableV2.reason).toMatch(new RegExp(`\\(custody_entry_${issued._id}\\) is still on the books`));
+    // Ledger alone: the reversal row is gone, the period reopens, and the
+    // delta stays held while the issuance is still POSTED.
+    const reversalRow = (await pending(seed)).find((r) => r.kind === "REVERSE")!;
+    await seed.t.run((ctx) => ctx.db.delete(reversalRow._id));
+    await reopenPeriod(seed, seed.periodId);
+    await drainOnce(seed);
+    const heldRow = (await pending(seed)).find((r) => r._id === payableV2._id)!;
+    expect(heldRow.status).toBe("PENDING");
+    expect(heldRow.attempts).toBe(0);
+    expect(heldRow.lastError).toMatch(/is still on the books; its reversal has not posted yet/);
+    expect(payable(await ledger(seed))).toBe(-jod(200));
+    const issuedEvent = (await events(seed, "CUSTODY_CASH_ISSUED"))[0];
+    await seed.t.run((ctx) => ctx.db.patch(issuedEvent._id, { status: "REVERSED" }));
+    await drainUntilSettled(seed, 3);
+    expect((await events(seed, "CUSTODY_PAYABLE_RECLASSIFIED")).map((e) => [e.eventVersion, e.status]).sort()).toEqual([[1, "POSTED"], [2, "POSTED"]]);
+  }, 45_000);
+
+  test("same family, first version: a fresh cash leg's payable v1 waits for the leg itself, so it can never lead it into a reopened month", async () => {
+    const seed = await seedDeal("payable-v1-behind-leg");
+    const { earlierId, boundary } = await splitPeriods(seed);
+    await closePeriod(seed, earlierId);
+    const custodyId = await openCustody(seed, jod(700));
+    // A receipt today puts the employee out of pocket; a reimbursement dated
+    // into the closed month follows. The leg and its delta (v2, a DEBIT)
+    // both queue on the period — and the delta ALSO names the leg.
+    await employeeFee(seed, custodyId, jod(900));
+    await move(seed, custodyId, "REIMBURSED", jod(200), { occurredAt: boundary - 3 * DAY });
+    const reimbursedEntry = (await entries(seed, custodyId)).find((e) => e.kind === "REIMBURSED")!;
+    const payableV2 = (await pending(seed)).find((r) => r.idempotencyKey === `custody_payable_reclass_${custodyId}_v2`)!;
+    expect(await seed.t.run((ctx) => custodyPostingBlockedReason(ctx, payableV2))).toMatch(
+      new RegExp(`the custody posting it follows \\(custody_entry_${reimbursedEntry._id}\\) has not posted to the ledger yet`)
+    );
+    // The leg's row is dead-lettered: the month reopens and the delta is still held on the ledger alone.
+    const legRow = (await pending(seed)).find((r) => r.idempotencyKey === `custody_entry_${reimbursedEntry._id}`)!;
+    await seed.t.run((ctx) => ctx.db.patch(legRow._id, { status: "FAILED" }));
+    await reopenPeriod(seed, earlierId);
+    await drainOnce(seed);
+    expect((await pending(seed)).find((r) => r._id === payableV2._id)?.status).toBe("PENDING");
+    expect(payable(await ledger(seed))).toBe(-jod(200));
+    // Redriven: the leg posts, the release follows, the liability clears.
+    await seed.t.run((ctx) => ctx.db.patch(legRow._id, { status: "PENDING", attempts: 0 }));
+    await drainUntilSettled(seed, 4);
+    expect((await pending(seed)).every((r) => r.status === "POSTED")).toBe(true);
+    expect(payable(await ledger(seed))).toBe(0);
+  }, 45_000);
+
+  test("a legacy family's migration chains its payable behind every leg and line it posted", async () => {
+    const seed = await seedDeal("legacy-payable-deps", { templates: false });
+    const t0 = Date.now() - 10 * DAY;
+    const custodyId = await seed.t.run(async (ctx) => {
+      const custodyId = await ctx.db.insert("financeDealCustody", {
+        orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.employeeId, currency: "JOD",
+        issuedMinor: jod(700), returnedMinor: 0, reimbursedMinor: 0, status: "OPEN",
+        createdBy: seed.userId, createdAt: t0, updatedAt: t0,
+      });
+      await ctx.db.insert("financeDealCustodyEntries", {
+        orgId: seed.orgId, custodyId, kind: "ISSUED", amountMinor: jod(700), method: "CASH", occurredAt: t0, recordedBy: seed.userId, recordedAt: t0,
+      });
+      await ctx.db.insert("financeDealFees", {
+        orgId: seed.orgId, applicationId: seed.applicationId, feeType: "LICENSING", currency: "JOD",
+        actualAmountMinor: jod(900), paidBy: "EMPLOYEE", paidTo: "GOVERNMENT", accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+        includedInQuotation: false, deductedFromSettlement: false, refundable: false, custodyId, paidAt: t0 + DAY,
+        source: "MANUAL", createdBy: seed.userId, createdAt: t0 + DAY, updatedAt: t0 + DAY,
+      });
+      return custodyId;
+    });
+    // Every period closed: the whole family queues, the payable with it.
+    await closePeriod(seed, seed.periodId);
+    await seed.asUser.mutation(api.financeDealCosts.migrateLegacyCustodyToLedger, { orgId: seed.orgId, custodyId, idempotencyKey: crypto.randomUUID() });
+    const payableV1 = (await pending(seed)).find((r) => r.idempotencyKey === `custody_payable_reclass_${custodyId}_v1`)!;
+    const deps = parseCustodyDependencies(payableV1.payload);
+    expect(deps?.map((d) => d.must)).toEqual(["SETTLED", "SETTLED"]);
+    expect(deps?.map((d) => d.idempotencyKey).sort()).toEqual(
+      (await pending(seed)).filter((r) => r.kind === "POST" && r._id !== payableV1._id).map((r) => r.idempotencyKey).sort()
+    );
+    expect(await seed.t.run((ctx) => custodyPostingBlockedReason(ctx, payableV1))).toMatch(/has not posted to the ledger yet/);
+    await reopenPeriod(seed, seed.periodId);
+    await drainUntilSettled(seed, 6);
+    expect((await pending(seed)).every((r) => r.status === "POSTED")).toBe(true);
+    expect(payable(await ledger(seed))).toBe(-jod(200));
+    expect(await familyRefusal(seed)).toBeNull();
+  }, 45_000);
+
+  test("dependencies the worker cannot read fail CLOSED, and a delta that names none is released by the chain rule alone", async () => {
+    const seed = await seedDeal("payable-deps-parse");
+    const custodyId = await openCustody(seed, jod(700));
+    const base = { orgId: seed.orgId, eventType: "CUSTODY_PAYABLE_RECLASSIFIED", eventVersion: 1, sourceType: "financeDealCustody", sourceId: custodyId.toString() };
+    const blocked = (payload: unknown) => seed.t.run((ctx) => custodyPostingBlockedReason(ctx, { ...base, payload }));
+    expect(await blocked({ custodyId })).toBeNull();
+    expect(await blocked({ custodyId, ledgerDependencies: [] })).toBeNull();
+    for (const bad of ["x", [{ must: "SETTLED" }], [{ must: "POSTED", idempotencyKey: "k" }], [{ must: "SETTLED", idempotencyKey: "" }], [null]]) {
+      expect(await blocked({ custodyId, ledgerDependencies: bad })).toMatch(/ledger dependencies that cannot be read/);
+    }
+    expect(parseCustodyDependencies({ ledgerDependencies: [{ must: "OFF_BOOKS", idempotencyKey: "k" }] })).toEqual([{ must: "OFF_BOOKS", idempotencyKey: "k" }]);
+    expect(parseCustodyDependencies(undefined)).toEqual([]);
+    expect(parseCustodyDependencies({ ledgerDependencies: 3 })).toBeNull();
+  });
+});
+
+describe("G6 — the family proof bounds the DOCUMENTS it reads, refusing before platform-scale reads", () => {
+  test("a handful of lines whose ledger families are event-heavy refuse at the document budget, not at a per-source count", async () => {
+    const seed = await seedDeal("event-heavy");
+    const custodyId = await openCustody(seed, jod(700));
+    const feeIds: Id<"financeDealFees">[] = [];
+    for (let n = 0; n < 5; n += 1) feeIds.push(await employeeFee(seed, custodyId, jod(100)));
+    expect(await familyRefusal(seed)).toBeNull();
+    // Each line's family grows by 350 FAILED attempts at later versions —
+    // rows the row-by-row judgement ignores (not POSTED), which is exactly
+    // why the previous budget (one unit per line) admitted all 1,750 of them.
+    const perLine = 350;
+    const template = (await events(seed, "CUSTODY_FEE_PAID"))[0];
+    await seed.t.run(async (ctx) => {
+      for (const feeId of feeIds) {
+        for (let version = 2; version < 2 + perLine; version += 1) {
+          const { _id: _drop, _creationTime: _ct, journalEntryId: _j, ...rest } = template;
+          await ctx.db.insert("accountingEvents", {
+            ...rest, sourceId: feeId.toString(), eventVersion: version, status: "FAILED",
+            idempotencyKey: `custody_fee_paid_${feeId}_v${version}`,
+          });
+        }
+      }
+    });
+    expect(5 * (perLine + 1)).toBeGreaterThan(MAX_CUSTODY_LEDGER_PROOFS);
+    await expect(familyRefusal(seed)).rejects.toThrow(new RegExp(`more than ${MAX_CUSTODY_LEDGER_PROOFS} ledger postings`));
+  }, 45_000);
+
+  test("the budget charges what each read returns and sizes the next read to one past what is left", () => {
+    const budget = new CustodyLedgerReadBudget(10, "the test");
+    expect(budget.take(500)).toBe(11);
+    budget.charge(4);
+    expect(budget.take(500)).toBe(7);
+    expect(budget.take(2)).toBe(3);
+    budget.charge(6);
+    expect(budget.documentsRead).toBe(10);
+    // Exhausted: the next read may fetch exactly one document, and that one refuses.
+    expect(budget.take(500)).toBe(1);
+    expect(() => budget.charge(1)).toThrow(/more than 10 ledger postings, which is past what the test can verify/);
+    expect(() => budget.charge(0)).toThrow();
+  });
+
+  test("a family under the budget still reads every document and passes; the count is the documents, not the sources", async () => {
+    const seed = await seedDeal("event-light");
+    const custodyId = await openCustody(seed, jod(700));
+    await employeeFee(seed, custodyId, jod(650));
+    // 1 custody row + 1 ever-posted line + 1 entry + the entry's forward event
+    // + the custody source family (payable v1... none here: 650 < 700) + the
+    // fee's family (1 event): a few documents, well under the bound.
+    const spent = await seed.t.run(async (ctx) => {
+      const budget = new CustodyLedgerReadBudget(MAX_CUSTODY_LEDGER_PROOFS, "counting");
+      const rows = await loadCustodyPostedLines(ctx, seed.applicationId, "counting", budget);
+      expect(rows).toHaveLength(1);
+      return budget.documentsRead;
+    });
+    expect(spent).toBe(1);
+    expect(await familyRefusal(seed)).toBeNull();
+  });
+});
+
+describe("G7 — a write-off is derived too: it never overtakes the receipt whose shortage it absorbs", () => {
+  test("a receipt queued into a closed month, then a write-off today: the write-off is queued behind the receipt, held by the worker, and Cash Over/Short only moves once the receipt is on the books", async () => {
+    const seed = await seedDeal("writeoff-behind-fee");
+    const { earlierId, boundary } = await splitPeriods(seed);
+    await closePeriod(seed, earlierId);
+    const custodyId = await openCustody(seed, jod(700));
+    // 600 paid in the closed month: the receipt waits; the clearing account
+    // still shows the full 700 as held.
+    const feeId = await employeeFee(seed, custodyId, jod(600), { paidAt: boundary - 5 * DAY });
+    expect((await events(seed, "CUSTODY_FEE_PAID"))).toHaveLength(0);
+    expect(clearing(await ledger(seed))).toBe(jod(700));
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+      idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, custodyId, notes: "short", writeOffReason: "lost 100",
+    });
+    // The write-off is dated today (open) — and still does not post: the
+    // shortage it absorbs is what a receipt the ledger does not carry leaves.
+    expect(await events(seed, "CUSTODY_WRITTEN_OFF")).toHaveLength(0);
+    expect((await ledger(seed))[SYSTEM_KEYS.CASH_OVER_SHORT] ?? 0).toBe(0);
+    const writeOff = (await pending(seed)).find((r) => r.idempotencyKey === `custody_written_off_${custodyId}_v1`)!;
+    expect(writeOff.status).toBe("PENDING");
+    expect(writeOff.reason).toMatch(new RegExp(`Waiting on a predecessor: the custody posting it follows \\(custody_fee_paid_${feeId}_v1\\) has not posted`));
+    expect(parseCustodyDependencies(writeOff.payload)?.map((d) => d.idempotencyKey)).toEqual(
+      expect.arrayContaining([`custody_fee_paid_${feeId}_v1`])
+    );
+    expect(await seed.t.run((ctx) => custodyPostingBlockedReason(ctx, writeOff))).toMatch(/so this would absorb a shortage the clearing account does not yet show/);
+    // One real attempt: the receipt cannot post (closed month); the write-off is held, no attempt consumed.
+    await drainOnce(seed);
+    const held = (await pending(seed)).find((r) => r._id === writeOff._id)!;
+    expect(held.status).toBe("PENDING");
+    expect(held.attempts).toBe(0);
+    expect(held.lastError).toMatch(/Waiting to post:/);
+    expect(await events(seed, "CUSTODY_WRITTEN_OFF")).toHaveLength(0);
+    // The month reopens: receipt, then write-off. The books close to zero.
+    await reopenPeriod(seed, earlierId);
+    await drainUntilSettled(seed, 6);
+    expect((await pending(seed)).every((r) => r.status === "POSTED")).toBe(true);
+    const l = await ledger(seed);
+    expect(clearing(l)).toBe(0);
+    expect(transferExpense(l)).toBe(jod(600));
+    expect(l[SYSTEM_KEYS.CASH_OVER_SHORT]).toBe(jod(100));
+    expect(await familyRefusal(seed)).toBeNull();
+  }, 45_000);
+
+  test("a write-off with every leg and line on the books posts at once, as before", async () => {
+    const seed = await seedDeal("writeoff-ready");
+    const custodyId = await openCustody(seed, jod(700));
+    await employeeFee(seed, custodyId, jod(600));
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+      idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, custodyId, notes: "short", writeOffReason: "lost 100",
+    });
+    expect((await events(seed, "CUSTODY_WRITTEN_OFF")).map((e) => e.status)).toEqual(["POSTED"]);
+    expect((await ledger(seed))[SYSTEM_KEYS.CASH_OVER_SHORT]).toBe(jod(100));
+  });
 });

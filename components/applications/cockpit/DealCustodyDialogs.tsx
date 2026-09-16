@@ -39,7 +39,16 @@ type T = (key: string) => string;
  * entry from the list the server served — never that string re-labelled
  * with a cast. A selection that matches nothing is not submittable.
  */
-export type CustodyMember = Readonly<{ userId: Id<"users">; name: string }>;
+export type CustodyMember = Readonly<{
+  userId: Id<"users">;
+  name: string;
+  /**
+   * The signed-in operator. A plan may name them; an issuance may not
+   * (`openDealCustody` refuses self-issuance), so the issue picker withholds
+   * this row rather than offer a choice the server will refuse.
+   */
+  isActor?: boolean;
+}>;
 
 export type CustodyMovementValues = Readonly<{
   amountMinor: number;

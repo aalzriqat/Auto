@@ -57,14 +57,60 @@ export const custodyPayableReclassKey = (custodyId: Id<"financeDealCustody">, ve
 const MAX_SOURCE_EVENTS = 2 * MAX_CUSTODY_ENTRIES + 16;
 
 /**
- * How many ledger point-reads one family proof may spend. A deal has one
- * custodian, occasionally two, each with a handful of movements and lines —
- * a few dozen reads. The bound keeps the proof under the platform's
- * per-transaction read limits whatever the rows say; past it the gate
- * REFUSES with a named reason rather than proving a prefix, exactly as the
- * bounded row loaders do.
+ * How many DOCUMENTS one family proof may read from the ledger and the
+ * custody rows together. A deal has one custodian, occasionally two, each
+ * with a handful of movements and lines — a few dozen documents. The bound
+ * keeps the proof well under the platform's per-transaction read limit
+ * whatever the rows say; past it the gate REFUSES with a named reason
+ * rather than proving a prefix, exactly as the bounded row loaders do.
+ *
+ * Counted in documents actually RETURNED, not in sources: a per-source read
+ * may return up to `MAX_SOURCE_EVENTS + 1` rows, so a budget that charged
+ * one per source (the previous design) admitted `MAX_CUSTODY_POSTED_LINES ×
+ * MAX_SOURCE_EVENTS` documents — platform scale — before it refused
+ * anything. `CustodyLedgerReadBudget` charges every read by its row count
+ * and sizes each read so it can never fetch more than one document past
+ * what is left.
  */
 export const MAX_CUSTODY_LEDGER_PROOFS = 1500;
+
+/**
+ * The document budget of one custody proof: every read inside the proof
+ * asks it how many rows it may take and charges what came back.
+ *
+ * `take(cap)` is the `.take()` argument for a read whose own bound is `cap`:
+ * one past the read's cap (so the read detects its own overflow) and never
+ * more than one past what is left of the budget (so the whole proof reads
+ * at most `limit + 1` documents before it refuses). `charge(rows)` throws
+ * the named refusal the moment the running total passes the limit; a proof
+ * that refused has decided nothing on a prefix.
+ */
+export class CustodyLedgerReadBudget {
+  private spent = 0;
+
+  constructor(
+    private readonly limit: number,
+    private readonly action: string
+  ) {}
+
+  take(cap: number): number {
+    return Math.max(1, Math.min(cap + 1, this.limit - this.spent + 1));
+  }
+
+  charge(rows: number): void {
+    this.spent += rows;
+    if (this.spent > this.limit) {
+      throw new ConvexError(
+        `This deal's custody carries more than ${this.limit} ledger postings, which is past what ${this.action} can verify completely; nothing has been changed. Have the deal's custody reviewed.`
+      );
+    }
+  }
+
+  /** Documents read so far — for tests that pin the bound. */
+  get documentsRead(): number {
+    return this.spent;
+  }
+}
 
 /**
  * How many of a deal's lines that have EVER posted a custody charge one
@@ -86,14 +132,16 @@ export const MAX_CUSTODY_POSTED_LINES = MAX_LIVE_DEAL_FEE_LINES;
 export async function loadCustodyPostedLines(
   ctx: QueryCtx | MutationCtx,
   applicationId: Id<"financeApplications">,
-  action: string
+  action: string,
+  budget?: CustodyLedgerReadBudget
 ): Promise<Array<Doc<"financeDealFees">>> {
   const rows = await ctx.db
     .query("financeDealFees")
     .withIndex("by_application_custodyPostingVersion", (q) =>
       q.eq("applicationId", applicationId).gt("custodyPostingVersion", 0)
     )
-    .take(MAX_CUSTODY_POSTED_LINES + 1);
+    .take(budget?.take(MAX_CUSTODY_POSTED_LINES) ?? MAX_CUSTODY_POSTED_LINES + 1);
+  budget?.charge(rows.length);
   if (rows.length > MAX_CUSTODY_POSTED_LINES) {
     throw new ConvexError(
       `This deal has more than ${MAX_CUSTODY_POSTED_LINES} cost lines that have posted a custody charge, which is past what ${action} can verify completely; nothing has been changed. Have the deal's custody reviewed.`
@@ -108,12 +156,14 @@ async function sourceEvents(
   orgId: Id<"organizations">,
   sourceType: string,
   sourceId: string,
-  action: string
+  action: string,
+  budget?: CustodyLedgerReadBudget
 ): Promise<Array<Doc<"accountingEvents">>> {
   const rows = await ctx.db
     .query("accountingEvents")
     .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType).eq("sourceId", sourceId))
-    .take(MAX_SOURCE_EVENTS + 1);
+    .take(budget?.take(MAX_SOURCE_EVENTS) ?? MAX_SOURCE_EVENTS + 1);
+  budget?.charge(rows.length);
   if (rows.length > MAX_SOURCE_EVENTS) {
     throw new ConvexError(
       `A custody posting on this deal carries more than ${MAX_SOURCE_EVENTS} ledger events, which is past what ${action} can verify completely; nothing has been changed. Have the record reviewed.`
@@ -152,6 +202,125 @@ export async function custodyPayableReclassPosted(
 }
 
 /**
+ * ## What a payable delta economically depends on
+ *
+ * A `CUSTODY_PAYABLE_RECLASSIFIED` delta is computed from the ROWS — the
+ * position the fee lines and cash legs now state — and is only true of the
+ * books once the primary postings it reflects are there: the corrected
+ * fee's replacement version POSTED, the version it replaced OFF the books,
+ * a reversed cash leg's forward event REVERSED, a fresh cash leg POSTED.
+ * The chain rule (version N behind N−1) orders the deltas among themselves;
+ * it says nothing about the postings a delta is a consequence of. So a delta
+ * dated into an open month posted AHEAD of a fee reversal deferred into a
+ * closed one: the payable moved to the corrected position while the
+ * clearing account still carried the old charge, and a snapshot taken in
+ * between reported a liability the primary journals did not yet support.
+ *
+ * The producer names the postings a delta follows (only it knows them),
+ * the hook queues the delta when any is not yet where it must be, and the
+ * worker re-proves every one on the queued row before it posts — the same
+ * two-ended guard as the chain and the replacement rule. Each dependency is
+ * ONE idempotency key and the state the ledger must show for it:
+ *
+ *  - `SETTLED`   — the forward posting under that key has reached its fate:
+ *                  POSTED on the books, or cancelled before it ever posted
+ *                  (no event, and no queued or dead-lettered outbox row —
+ *                  `cancelPendingPostByKey` deletes the row). A forward still
+ *                  waiting in the outbox holds. "Posted" alone would hold a
+ *                  delta forever behind a version a later correction
+ *                  cancelled, and the chain behind it with it.
+ *  - `OFF_BOOKS` — no forward event under that key is POSTED (it has been
+ *                  REVERSED, or its queued post was cancelled and it never
+ *                  reached the ledger).
+ *
+ * Carried on the event's payload, because a queued row outlives the
+ * transaction that queued it and the worker has nothing else to read.
+ * A payload whose dependencies cannot be parsed fails CLOSED.
+ */
+export type CustodyLedgerDependency = Readonly<{
+  must: "SETTLED" | "OFF_BOOKS";
+  idempotencyKey: string;
+}>;
+
+const CUSTODY_DEPENDENCIES_FIELD = "ledgerDependencies";
+
+/** How many postings one delta may be chained behind — a full legacy family at most. */
+const MAX_CUSTODY_DEPENDENCIES = MAX_CUSTODY_ENTRIES + MAX_LIVE_DEAL_FEE_LINES;
+
+/** The payload field a producer writes its dependencies into (`{}` when there are none). */
+export function custodyDependenciesPayload(
+  dependencies: ReadonlyArray<CustodyLedgerDependency>
+): Record<string, unknown> {
+  if (dependencies.length > MAX_CUSTODY_DEPENDENCIES) {
+    throw new ConvexError(
+      `A custody payable delta would depend on ${dependencies.length} ledger postings, which is past the ${MAX_CUSTODY_DEPENDENCIES} one delta can be chained behind; nothing has been changed. Have the record reviewed.`
+    );
+  }
+  return dependencies.length === 0 ? {} : { [CUSTODY_DEPENDENCIES_FIELD]: dependencies.map((d) => ({ ...d })) };
+}
+
+/**
+ * The dependencies a queued payload carries: `[]` when it names none (a
+ * delta from before dependencies existed, or one with nothing to wait for),
+ * or `null` when the field is present but not readable — which the caller
+ * treats as a hold, never as "no dependencies".
+ */
+export function parseCustodyDependencies(payload: unknown): ReadonlyArray<CustodyLedgerDependency> | null {
+  const record = (payload ?? {}) as Record<string, unknown>;
+  const raw = record[CUSTODY_DEPENDENCIES_FIELD];
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw) || raw.length > MAX_CUSTODY_DEPENDENCIES) return null;
+  const parsed: CustodyLedgerDependency[] = [];
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) return null;
+    const { must, idempotencyKey } = item as Record<string, unknown>;
+    if ((must !== "SETTLED" && must !== "OFF_BOOKS") || typeof idempotencyKey !== "string" || idempotencyKey === "") {
+      return null;
+    }
+    parsed.push({ must, idempotencyKey });
+  }
+  return parsed;
+}
+
+/** Whether a forward posting under this key is still waiting (or dead-lettered) in the outbox. */
+async function forwardStillQueued(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  idempotencyKey: string
+): Promise<boolean> {
+  const rows = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
+    .take(4);
+  return rows.some((row) => row.kind === "POST" && row.status !== "POSTED");
+}
+
+/**
+ * Why a delta chained behind `dependencies` may NOT post yet, or `null` when
+ * every one has reached the fate the ledger must show. Bounded point-reads
+ * per dependency, POSTED-only on the ledger side (ACC-4): a PENDING or
+ * FAILED event is not on the books, and only a POSTED one counts against
+ * `OFF_BOOKS`; `SETTLED` additionally asks the outbox whether the forward is
+ * still on its way.
+ */
+export async function custodyDependencyBlockedReason(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  dependencies: ReadonlyArray<CustodyLedgerDependency>
+): Promise<string | null> {
+  for (const dependency of dependencies) {
+    const posted = await eventPosted(ctx, orgId, dependency.idempotencyKey);
+    if (dependency.must === "SETTLED" && !posted && (await forwardStillQueued(ctx, orgId, dependency.idempotencyKey))) {
+      return `the custody posting it follows (${dependency.idempotencyKey}) has not posted to the ledger yet`;
+    }
+    if (dependency.must === "OFF_BOOKS" && posted) {
+      return `the custody posting it replaces (${dependency.idempotencyKey}) is still on the books; its reversal has not posted yet`;
+    }
+  }
+  return null;
+}
+
+/**
  * The lowest version of `eventType` against `sourceId` that is STILL POSTED
  * below `version`, or `null` when none is — i.e. whether a replacement at
  * `version` would put a second copy of the same charge on the books. Read
@@ -184,6 +353,9 @@ export async function earlierVersionStillPosted(
  *  - `CUSTODY_FEE_PAID` / `CUSTODY_WRITTEN_OFF` version N waits for the
  *    REVERSAL of every earlier version — a deferred reversal leaves the
  *    earlier version POSTED, and the replacement must not overtake it.
+ *  - `CUSTODY_PAYABLE_RECLASSIFIED` and `CUSTODY_WRITTEN_OFF` — the DERIVED
+ *    postings, computed from the rows — also wait for every primary posting
+ *    they are a consequence of, named on their payload (`ledgerDependencies`).
  *
  * Every other custody event carries its own complete journal and has no
  * predecessor to wait for. Fails closed on a payload it cannot read: a
@@ -203,29 +375,52 @@ export async function custodyPostingBlockedReason(
 ): Promise<string | null> {
   const version = entry.eventVersion ?? 1;
   if (entry.eventType === "CUSTODY_FEE_PAID" || entry.eventType === "CUSTODY_WRITTEN_OFF") {
-    if (version <= 1) return null;
-    const sourceType = entry.eventType === "CUSTODY_FEE_PAID" ? "financeDealFees" : "financeDealCustody";
-    if (entry.sourceType !== sourceType) {
-      return `it is a ${entry.eventType} event keyed on ${entry.sourceType} rather than ${sourceType}, so the earlier version it replaces cannot be traced`;
+    if (version > 1) {
+      const sourceType = entry.eventType === "CUSTODY_FEE_PAID" ? "financeDealFees" : "financeDealCustody";
+      if (entry.sourceType !== sourceType) {
+        return `it is a ${entry.eventType} event keyed on ${entry.sourceType} rather than ${sourceType}, so the earlier version it replaces cannot be traced`;
+      }
+      const earlier = await earlierVersionStillPosted(ctx, entry.orgId, entry.eventType, sourceType, entry.sourceId, version);
+      if (earlier !== null) {
+        return entry.eventType === "CUSTODY_FEE_PAID"
+          ? `custody fee posting v${earlier} it replaces is still on the books (its reversal has not posted yet), so this would charge the cost out of custody twice`
+          : `custody write-off v${earlier} it replaces is still on the books (its reversal has not posted yet), so this would absorb the shortage twice`;
+      }
     }
-    const earlier = await earlierVersionStillPosted(ctx, entry.orgId, entry.eventType, sourceType, entry.sourceId, version);
-    if (earlier !== null) {
-      return entry.eventType === "CUSTODY_FEE_PAID"
-        ? `custody fee posting v${earlier} it replaces is still on the books (its reversal has not posted yet), so this would charge the cost out of custody twice`
-        : `custody write-off v${earlier} it replaces is still on the books (its reversal has not posted yet), so this would absorb the shortage twice`;
+    if (entry.eventType === "CUSTODY_FEE_PAID") return null;
+    // A write-off absorbs the residual its legs and lines leave: derived, so
+    // it waits for them exactly as the payable delta does.
+    const writeOffDependencies = parseCustodyDependencies(entry.payload);
+    if (writeOffDependencies === null) {
+      return "it carries ledger dependencies that cannot be read, so the postings its shortage derives from cannot be proven on the books";
     }
-    return null;
+    const writeOffBlock = await custodyDependencyBlockedReason(ctx, entry.orgId, writeOffDependencies);
+    return writeOffBlock === null
+      ? null
+      : `${writeOffBlock}, so this would absorb a shortage the clearing account does not yet show`;
   }
   if (entry.eventType !== "CUSTODY_PAYABLE_RECLASSIFIED") return null;
-  if (version <= 1) return null;
   const payload = (entry.payload ?? {}) as Record<string, unknown>;
-  const raw = typeof payload.custodyId === "string" ? payload.custodyId : null;
-  const custodyId = raw ? ctx.db.normalizeId("financeDealCustody", raw) : null;
-  if (!custodyId) {
-    return "it carries no readable custody reference, so the payable reclassification it follows cannot be traced";
+  if (version > 1) {
+    const raw = typeof payload.custodyId === "string" ? payload.custodyId : null;
+    const custodyId = raw ? ctx.db.normalizeId("financeDealCustody", raw) : null;
+    if (!custodyId) {
+      return "it carries no readable custody reference, so the payable reclassification it follows cannot be traced";
+    }
+    if (!(await custodyPayableReclassPosted(ctx, entry.orgId, custodyId, version - 1))) {
+      return `custody payable reclassification v${version - 1} behind it has not posted to the ledger yet, so this would move an Employee Reimbursements Payable balance the ledger does not carry`;
+    }
   }
-  if (!(await custodyPayableReclassPosted(ctx, entry.orgId, custodyId, version - 1))) {
-    return `custody payable reclassification v${version - 1} behind it has not posted to the ledger yet, so this would move an Employee Reimbursements Payable balance the ledger does not carry`;
+  // Version 1 has no predecessor delta, but it still follows the postings it
+  // is a consequence of — a first out-of-pocket position exists because a
+  // fee posted, and that fee may be queued for a closed month.
+  const dependencies = parseCustodyDependencies(payload);
+  if (dependencies === null) {
+    return "it carries ledger dependencies that cannot be read, so the postings it follows cannot be proven on the books";
+  }
+  const dependencyBlock = await custodyDependencyBlockedReason(ctx, entry.orgId, dependencies);
+  if (dependencyBlock !== null) {
+    return `${dependencyBlock}, so this would move an Employee Reimbursements Payable balance ahead of the custody posting it reflects`;
   }
   return null;
 }
@@ -238,12 +433,14 @@ export async function custodyPostingBlockedReason(
 export async function loadCustodyEntries(
   ctx: QueryCtx | MutationCtx,
   custodyId: Id<"financeDealCustody">,
-  action: string
+  action: string,
+  budget?: CustodyLedgerReadBudget
 ): Promise<Array<Doc<"financeDealCustodyEntries">>> {
   const entries = await ctx.db
     .query("financeDealCustodyEntries")
     .withIndex("by_custody", (q) => q.eq("custodyId", custodyId))
-    .take(MAX_CUSTODY_ENTRIES + 1);
+    .take(budget?.take(MAX_CUSTODY_ENTRIES) ?? MAX_CUSTODY_ENTRIES + 1);
+  budget?.charge(entries.length);
   if (entries.length > MAX_CUSTODY_ENTRIES) {
     throw new ConvexError(
       `This custody record carries more than ${MAX_CUSTODY_ENTRIES} movements, which is past what ${action} can decide on completely; nothing has been changed. Have the record reviewed rather than extended.`
@@ -354,18 +551,17 @@ export async function custodyLedgerFamilyRefusal(
   const rowRefusal = custodyLedgerFamilyRowRefusal(custodyRows, liveFees, action);
   if (rowRefusal !== null) return rowRefusal;
 
-  const postedLines = await loadCustodyPostedLines(ctx, applicationId, action);
+  // Every document the proof reads — the rows it enumerates AND every ledger
+  // row each read returns — is charged to one budget, and every read is
+  // sized so it cannot fetch more than one document past what is left. The
+  // custody rows the caller passed were read under their own bound before
+  // this; they are charged here so the proof's total is what it reads.
+  const budget = new CustodyLedgerReadBudget(MAX_CUSTODY_LEDGER_PROOFS, action);
+  budget.charge(custodyRows.length);
+  const postedLines = await loadCustodyPostedLines(ctx, applicationId, action, budget);
   const logs = new Map<Id<"financeDealCustody">, Array<Doc<"financeDealCustodyEntries">>>();
-  let budget = postedLines.length + custodyRows.length;
   for (const row of custodyRows) {
-    const entries = await loadCustodyEntries(ctx, row._id, action);
-    logs.set(row._id, entries);
-    budget += entries.length;
-  }
-  if (budget > MAX_CUSTODY_LEDGER_PROOFS) {
-    throw new ConvexError(
-      `This deal's custody carries more than ${MAX_CUSTODY_LEDGER_PROOFS} ledger postings, which is past what ${action} can verify completely; nothing has been changed. Have the deal's custody reviewed.`
-    );
+    logs.set(row._id, await loadCustodyEntries(ctx, row._id, action, budget));
   }
 
   for (const row of custodyRows) {
@@ -379,7 +575,8 @@ export async function custodyLedgerFamilyRefusal(
       const rows = await ctx.db
         .query("accountingEvents")
         .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", custodyEntryPostKey(entry._id)))
-        .take(8);
+        .take(budget.take(7));
+      budget.charge(rows.length);
       const forward = rows.find((event) => event.sourceType === "financeDealCustodyEntries" && event.sourceId === entry._id.toString());
       if (reversed.has(entry._id)) {
         if (forward !== undefined && forward.status !== "REVERSED") {
@@ -392,7 +589,7 @@ export async function custodyLedgerFamilyRefusal(
       }
     }
 
-    const family = await sourceEvents(ctx, orgId, "financeDealCustody", row._id.toString(), action);
+    const family = await sourceEvents(ctx, orgId, "financeDealCustody", row._id.toString(), action, budget);
     const writeOffs = family.filter((event) => event.eventType === "CUSTODY_WRITTEN_OFF");
     const postedWriteOffVersions = writeOffs.filter((event) => event.status === "POSTED").map((event) => event.eventVersion);
     if (row.status === "WRITTEN_OFF") {
@@ -427,7 +624,7 @@ export async function custodyLedgerFamilyRefusal(
   }
 
   for (const fee of postedLines) {
-    const family = await sourceEvents(ctx, orgId, "financeDealFees", fee._id.toString(), action);
+    const family = await sourceEvents(ctx, orgId, "financeDealFees", fee._id.toString(), action, budget);
     const postings = family.filter((event) => event.eventType === "CUSTODY_FEE_PAID");
     // What the row says the ledger carries: one version for a live charged
     // line, nothing for a line that was voided, unlinked or re-charged away
