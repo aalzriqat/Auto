@@ -23,6 +23,7 @@ import {
   custodyLedgerFamilyRowRefusal,
   custodyPositionDependencies,
   custodyPostingBlockedReason,
+  custodyPostingRefusal,
   documentBytes,
   foldAbandonedPayableDeltas,
   isStoredVersion,
@@ -4321,9 +4322,10 @@ describe("R8-F2 — reopening a record whose parent application cannot be loaded
   }, 45_000);
 });
 
-describe("R8-F3 — the worker proves a queued custody row IS the posting its key promises before it posts; a contradiction is held with nothing written", () => {
+describe("R8-F3 — the worker proves a queued custody row IS the posting its key promises AND stands on its source before it posts; a contradiction is PERMANENTLY refused with nothing written", () => {
   type Queued = Doc<"pendingAccountingEvents">;
-  const NOT_PROMISED = /not the posting its key promises|cannot be traced|not the delta its key promises/;
+  const REFUSED = /^This custody posting can never post as queued: /;
+  const OUTBOX_MAX_ATTEMPTS = 10;
 
   /** One queued custody row, by key — the row as the worker will read it. */
   async function queuedRow(seed: Seed, idempotencyKey: string): Promise<Queued> {
@@ -4340,44 +4342,101 @@ describe("R8-F3 — the worker proves a queued custody row IS the posting its ke
     const entry = (await entries(seed, custodyId)).find((e) => e.kind === "ISSUED")!;
     const row = await queuedRow(seed, `custody_entry_${entry._id}`);
     expect([row.eventType, row.eventVersion, row.sourceType, row.sourceId]).toEqual(["CUSTODY_CASH_ISSUED", 1, "financeDealCustodyEntries", entry._id]);
-    return { earlierId, custodyId, entry, row };
+    return { earlierId, boundary, custodyId, entry, row };
   }
 
-  /** The worker's whole guard, asked over an EDITED copy of a real queued row. */
-  const guard = (seed: Seed, row: Queued, edit: Partial<Queued>) =>
-    seed.t.run((ctx) => custodyPostingBlockedReason(ctx, { ...row, ...edit }));
+  /** The worker's PERMANENT refusal, asked over an EDITED copy of a real queued row. */
+  const refusal = (seed: Seed, row: Queued, edit: Partial<Queued> = {}) =>
+    seed.t.run((ctx) => custodyPostingRefusal(ctx, { ...row, ...edit }));
+
+  /** Another organization's custody record with one ISSUED movement and one cost line charged to it — what a raw-edited source could point at. */
+  async function foreignFamily(seed: Seed) {
+    const ours = (await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))!;
+    return await seed.t.run(async (ctx) => {
+      const applicationId = await ctx.db.insert("financeApplications", {
+        orgId: seed.otherOrgId, quoteId: ours.quoteId, customerId: ours.customerId, vehicleId: ours.vehicleId,
+        salespersonId: seed.userId, status: "APPROVED", createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      const custodyId = await ctx.db.insert("financeDealCustody", {
+        orgId: seed.otherOrgId, applicationId, userId: seed.employeeId, currency: "JOD",
+        issuedMinor: jod(700), returnedMinor: 0, reimbursedMinor: 0, status: "OPEN", ledgerPosting: "CANONICAL",
+        createdBy: seed.userId, createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      const entryId = await ctx.db.insert("financeDealCustodyEntries", {
+        orgId: seed.otherOrgId, custodyId, kind: "ISSUED", amountMinor: jod(700), method: "CASH",
+        occurredAt: Date.now(), recordedBy: seed.userId, recordedAt: Date.now(),
+      });
+      const feeId = await ctx.db.insert("financeDealFees", {
+        orgId: seed.otherOrgId, applicationId, feeType: "LICENSING", currency: "JOD",
+        actualAmountMinor: jod(300), paidBy: "EMPLOYEE", paidTo: "GOVERNMENT", accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+        includedInQuotation: false, deductedFromSettlement: false, refundable: false, custodyId, paidAt: Date.now(),
+        source: "MANUAL", createdBy: seed.userId, createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      return { applicationId, custodyId, entryId, feeId };
+    });
+  }
+
+  /** Everything a posting could write, in this org AND the other one, plus every source row — the footprint that must not move. */
+  async function footprint(seed: Seed) {
+    return await seed.t.run(async (ctx) => {
+      const count = async (table: "accountingEvents" | "journalEntries" | "journalLines" | "accountBalanceSnapshots") =>
+        (await ctx.db.query(table).collect()).length;
+      const rows = async (table: "financeDealCustody" | "financeDealCustodyEntries" | "financeDealFees" | "financeApplications" | "financeApplicationOverrides") =>
+        await ctx.db.query(table).collect();
+      return {
+        events: await count("accountingEvents"),
+        journals: await count("journalEntries"),
+        lines: await count("journalLines"),
+        snapshots: await count("accountBalanceSnapshots"),
+        custody: await rows("financeDealCustody"),
+        entries: await rows("financeDealCustodyEntries"),
+        fees: await rows("financeDealFees"),
+        applications: await rows("financeApplications"),
+        overrides: await rows("financeApplicationOverrides"),
+      };
+    });
+  }
+
+  /** A queued row cloned from `template` with ONE contradiction applied, as a raw edit of the outbox would leave it. */
+  async function clone(seed: Seed, template: Queued, edit: Partial<Queued>): Promise<Id<"pendingAccountingEvents">> {
+    const { _id: _dropId, _creationTime: _dropCt, ...body } = template;
+    void _dropId; void _dropCt;
+    return await seed.t.run((ctx) => ctx.db.insert("pendingAccountingEvents", { ...body, ...edit, attempts: 0, status: "PENDING", lastError: undefined, dispatchState: undefined, nextActionAt: undefined }));
+  }
 
   /**
-   * ONE real worker attempt against the edited row, with the month open so
-   * only the identity check stands between the row and the ledger: the row
-   * must stay PENDING with no attempt burned and the contradiction named,
-   * and the ledger, the journal and every other row exactly as they were.
+   * The real worker, one attempt per due row per drain, driven to the
+   * outbox's attempt limit against clones whose month is CLOSED: every clone
+   * must end FAILED — an attempt burned per drain, never held at zero — with
+   * the REFUSAL named, never the closed-period error (the refusal is
+   * classified before the period is consulted); and nothing was written
+   * anywhere: no event, journal, line or snapshot in either organization,
+   * and every custody, movement, cost, deal and override row byte-identical.
    */
-  async function workerWritesNothing(seed: Seed, row: Queued, edit: Partial<Queued>) {
-    await seed.t.run((ctx) => ctx.db.patch(row._id, edit));
-    const before = {
-      events: await events(seed),
-      journals: await seed.t.run(async (ctx) =>
-        (await ctx.db.query("journalEntries").withIndex("by_org_period", (q) => q.eq("orgId", seed.orgId)).collect()).length
-      ),
-      pending: (await pending(seed)).map((r) => [r._id, r.status, r.attempts]),
-    };
-    await drainOnce(seed);
-    const after = (await pending(seed)).find((r) => r._id === row._id)!;
-    expect(after.status).toBe("PENDING");
-    expect(after.attempts).toBe(0);
-    expect(after.lastError).toMatch(NOT_PROMISED);
-    expect(await events(seed)).toEqual(before.events);
-    expect(
-      await seed.t.run(async (ctx) =>
-        (await ctx.db.query("journalEntries").withIndex("by_org_period", (q) => q.eq("orgId", seed.orgId)).collect()).length
-      )
-    ).toBe(before.journals);
-    expect((await pending(seed)).map((r) => [r._id, r.status, r.attempts])).toEqual(before.pending);
-    // Restored to the shape its key promises, the same row posts on the next attempt.
-    const { _id: _drop, _creationTime: _dropCt, ...original } = row;
-    void _drop; void _dropCt;
-    await seed.t.run((ctx) => ctx.db.replace(row._id, original));
+  async function refusedPermanently(seed: Seed, clones: ReadonlyArray<{ id: Id<"pendingAccountingEvents">; reason: RegExp }>) {
+    const before = await footprint(seed);
+    const others = (await pending(seed)).filter((r) => !clones.some((c) => c.id === r._id)).map((r) => [r._id, r.status, r.attempts]);
+    for (let attempt = 1; attempt <= OUTBOX_MAX_ATTEMPTS; attempt += 1) {
+      await drainOnce(seed);
+      const rows = await pending(seed);
+      for (const { id, reason } of clones) {
+        const row = rows.find((r) => r._id === id)!;
+        expect(row.attempts, `clone ${id} after attempt ${attempt}`).toBe(attempt);
+        expect(row.status).toBe(attempt < OUTBOX_MAX_ATTEMPTS ? "PENDING" : "FAILED");
+        expect(row.lastError).toMatch(REFUSED);
+        expect(row.lastError).toMatch(reason);
+        expect(row.lastError).not.toMatch(/CLOSED/);
+      }
+    }
+    expect(await footprint(seed)).toEqual(before);
+    expect((await pending(seed)).filter((r) => !clones.some((c) => c.id === r._id)).map((r) => [r._id, r.status, r.attempts])).toEqual(others);
+    // A dead-lettered row under a canonical key is exactly what the family
+    // gate refuses a deal on ("its queued row names another event…"), so the
+    // clones are removed — never restored or retried — before fresh rows are
+    // proven to post.
+    await seed.t.run(async (ctx) => {
+      for (const { id } of clones) await ctx.db.delete(id);
+    });
   }
 
   test("the identity predicate, from the row alone: every contradiction between key, event type, source and version is named, and every canonical row passes", async () => {
@@ -4411,58 +4470,181 @@ describe("R8-F3 — the worker proves a queued custody row IS the posting its ke
     // A payable delta whose payload follows another record's chain.
     expect(custodyCanonicalIdentityRefusal({ idempotencyKey: `custody_payable_reclass_${custodyId}_v1`, eventType: "CUSTODY_PAYABLE_RECLASSIFIED", eventVersion: 1, sourceType: "financeDealCustody", sourceId: custodyId as string, payload: { custodyId: entry._id } })).toMatch(/whose payload names/);
     expect(custodyCanonicalIdentityRefusal({ idempotencyKey: `custody_payable_reclass_${custodyId}_v1`, eventType: "CUSTODY_PAYABLE_RECLASSIFIED", eventVersion: 1, sourceType: "financeDealCustody", sourceId: custodyId as string, payload: {} })).toMatch(/names no custody record/);
-    // The worker's guard runs the same predicate FIRST: the contradiction is
-    // the reason, ahead of any period, predecessor or dependency reading.
-    expect(await guard(seed, row, { eventVersion: 2 })).toMatch(/posts once, at version 1/);
-    expect(await guard(seed, row, { eventType: "CUSTODY_PAYABLE_RECLASSIFIED", sourceType: "financeDealCustody", sourceId: custodyId as string, eventVersion: 1 })).toMatch(/queued under custody_entry_/);
-    expect(await guard(seed, row, {})).toBeNull();
+    // The worker's PERMANENT refusal runs the same predicate FIRST, then the
+    // source proof; the transient guard is never asked about identity.
+    expect(await refusal(seed, row, { eventVersion: 2 })).toMatch(/posts once, at version 1/);
+    expect(await refusal(seed, row, { eventType: "CUSTODY_PAYABLE_RECLASSIFIED", sourceType: "financeDealCustody", sourceId: custodyId as string, eventVersion: 1 })).toMatch(/queued under custody_entry_/);
+    expect(await refusal(seed, row, {})).toBeNull();
+    expect(await seed.t.run((ctx) => custodyPostingBlockedReason(ctx, row))).toBeNull();
   }, 45_000);
 
-  test("worker, cash leg: a queued leg whose version, type or key contradict one another is held, and posts unchanged once restored", async () => {
-    const seed = await seedDeal("r8-identity-leg");
-    const { earlierId, row } = await queuedCashLeg(seed);
-    await reopenPeriod(seed, earlierId);
-    await workerWritesNothing(seed, row, { eventVersion: 2 });
-    await workerWritesNothing(seed, row, { eventType: "CUSTODY_FEE_PAID" });
-    await workerWritesNothing(seed, row, { idempotencyKey: `custody_entry_${row.sourceId}x` });
-    await drainOnce(seed);
-    expect((await pending(seed)).find((r) => r._id === row._id)?.status).toBe("POSTED");
-    expect((await events(seed, "CUSTODY_CASH_ISSUED")).map((e) => [e.idempotencyKey, e.eventVersion, e.status])).toEqual([[row.idempotencyKey, 1, "POSTED"]]);
-    expect(await familyRefusal(seed)).toBeNull();
+  test("the source proof: a canonical-looking row whose source is not an id, is gone, is another organization's, or is another kind of movement — or whose payload disagrees with the source — is refused, and only a row standing on its source passes", async () => {
+    const seed = await seedDeal("r8-source-proof");
+    const { custodyId, entry, row, boundary } = await queuedCashLeg(seed);
+    const foreign = await foreignFamily(seed);
+    const payload = row.payload as Record<string, unknown>;
+    const withPayload = (edit: Record<string, unknown>) => ({ payload: { ...payload, ...edit } });
+    // A RETURNED movement of ours, dated into the same closed month: its own queued leg.
+    await move(seed, custodyId, "RETURNED", jod(100), { occurredAt: boundary - 2 * DAY });
+    const returned = (await entries(seed, custodyId)).find((e) => e.kind === "RETURNED")!;
+    // Cash: the source itself.
+    expect(await refusal(seed, row, { idempotencyKey: "custody_entry_garbage", sourceId: "garbage" })).toMatch(/its source \(garbage\) is not a custody movement$/);
+    expect(await refusal(seed, row, { idempotencyKey: `custody_entry_${custodyId}`, sourceId: custodyId })).toMatch(/is not a custody movement$/);
+    expect(await refusal(seed, row, { idempotencyKey: `custody_entry_${foreign.entryId}`, sourceId: foreign.entryId })).toMatch(/is not a custody movement in this organization/);
+    expect(await refusal(seed, row, { idempotencyKey: `custody_entry_${returned._id}`, sourceId: returned._id })).toMatch(/its source is a RETURNED movement, which posts as CUSTODY_CASH_RETURNED/);
+    // Cash: the payload against the source and its record.
+    expect(await refusal(seed, row, { payload: undefined })).toMatch(/carrying no readable payload/);
+    expect(await refusal(seed, row, { payload: "junk" })).toMatch(/carrying no readable payload/);
+    expect(await refusal(seed, row, withPayload({ entryId: returned._id }))).toMatch(/names a movement .* that is not the source's/);
+    expect(await refusal(seed, row, withPayload({ custodyId: foreign.custodyId }))).toMatch(/names a custody record .* that is not the source's/);
+    expect(await refusal(seed, row, withPayload({ applicationId: foreign.applicationId }))).toMatch(/names a deal .* that is not the source's/);
+    expect(await refusal(seed, row, withPayload({ userId: seed.userId }))).toMatch(/names a holder .* that is not the source's/);
+    expect(await refusal(seed, row, withPayload({ amountMinor: entry.amountMinor + 1 }))).toMatch(/names an amount .* that is not the source's/);
+    expect(await refusal(seed, row, withPayload({ currency: "USD" }))).toMatch(/names a currency .* that is not the source's/);
+    expect(await refusal(seed, row, withPayload({ paymentMethod: "BANK_TRANSFER" }))).toMatch(/names a payment method .* that is not the source's/);
+    expect(await refusal(seed, row, {})).toBeNull();
+    // Fee: the line, its payload, and the record the cost was paid out of.
+    const feeRow = (edit: Partial<Queued> = {}, payloadEdit: Record<string, unknown> = {}): Queued => ({
+      ...row, idempotencyKey: `custody_fee_paid_${foreign.feeId}_v1`, eventType: "CUSTODY_FEE_PAID", eventVersion: 1, sourceType: "financeDealFees", sourceId: foreign.feeId,
+      payload: { feeId: foreign.feeId, custodyId: foreign.custodyId, applicationId: foreign.applicationId, feeType: "LICENSING", accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE", amountMinor: jod(300), currency: "JOD", ...payloadEdit },
+      ...edit,
+    });
+    expect(await refusal(seed, feeRow())).toMatch(/is not a cost line in this organization/);
+    expect(await refusal(seed, feeRow({ idempotencyKey: "custody_fee_paid_nope_v1", sourceId: "nope" }))).toMatch(/its source \(nope\) is not a cost line$/);
+    // Our own line, dated today (posts now), then judged as a queued row with each contradiction.
+    const ourFeeId = await employeeFee(seed, custodyId, jod(300));
+    const ourFee = (await seed.t.run((ctx) => ctx.db.get(ourFeeId)))!;
+    const ours = (payloadEdit: Record<string, unknown> = {}) =>
+      feeRow({ idempotencyKey: `custody_fee_paid_${ourFeeId}_v1`, sourceId: ourFeeId }, { feeId: ourFeeId, custodyId, applicationId: ourFee.applicationId, ...payloadEdit });
+    expect(await refusal(seed, ours())).toBeNull();
+    expect(await refusal(seed, ours({ custodyId: foreign.custodyId }))).toMatch(/the custody record the cost was paid out of .* is not a custody record in this organization/);
+    expect(await refusal(seed, ours({ custodyId: "garbage" }))).toMatch(/is not a custody record$/);
+    expect(await refusal(seed, ours({ custodyId: undefined }))).toMatch(/names no custody record the cost was paid out of/);
+    expect(await refusal(seed, ours({ amountMinor: 0 }))).toMatch(/an amount that is not a positive whole amount/);
+    expect(await refusal(seed, ours({ amountMinor: 1.5 }))).toMatch(/an amount that is not a positive whole amount/);
+    expect(await refusal(seed, ours({ currency: "USD" }))).toMatch(/names a currency .* that is not the source's/);
+    expect(await refusal(seed, ours({ feeType: "INSURANCE" }))).toMatch(/names a fee type .* that is not the source's/);
+    expect(await refusal(seed, ours({ applicationId: foreign.applicationId }))).toMatch(/names a deal .* that is not the source's/);
+    // Write-off and payable delta: the record, its payload, and the dependency shape.
+    const derived = (eventType: "CUSTODY_WRITTEN_OFF" | "CUSTODY_PAYABLE_RECLASSIFIED", sourceId: string, payloadEdit: Record<string, unknown> = {}, edit: Partial<Queued> = {}): Queued => ({
+      ...row, eventType, eventVersion: 1, sourceType: "financeDealCustody", sourceId,
+      idempotencyKey: eventType === "CUSTODY_WRITTEN_OFF" ? `custody_written_off_${sourceId}_v1` : `custody_payable_reclass_${sourceId}_v1`,
+      payload: {
+        custodyId: sourceId, applicationId: seed.applicationId, userId: seed.employeeId, currency: "JOD",
+        ...(eventType === "CUSTODY_WRITTEN_OFF" ? { amountMinor: jod(50), reason: "lost" } : { deltaMinor: jod(200), payableAfterMinor: jod(200) }),
+        ...payloadEdit,
+      },
+      ...edit,
+    });
+    for (const eventType of ["CUSTODY_WRITTEN_OFF", "CUSTODY_PAYABLE_RECLASSIFIED"] as const) {
+      expect(await refusal(seed, derived(eventType, custodyId))).toBeNull();
+      expect(await refusal(seed, derived(eventType, "garbage"))).toMatch(/its source \(garbage\) is not a custody record$/);
+      expect(await refusal(seed, derived(eventType, foreign.custodyId))).toMatch(/its source .* is not a custody record in this organization/);
+      expect(await refusal(seed, derived(eventType, custodyId, { applicationId: foreign.applicationId }))).toMatch(/names a deal .* that is not the source's/);
+      expect(await refusal(seed, derived(eventType, custodyId, { userId: seed.userId }))).toMatch(/names a holder .* that is not the source's/);
+      expect(await refusal(seed, derived(eventType, custodyId, { currency: "USD" }))).toMatch(/names a currency .* that is not the source's/);
+      expect(await refusal(seed, derived(eventType, custodyId, { ledgerDependencies: "junk" }))).toMatch(/ledger dependencies that cannot be read/);
+      expect(await refusal(seed, derived(eventType, custodyId, { ledgerDependencies: [{ must: "SETTLED", idempotencyKey: "k" }] }))).toBeNull();
+    }
+    expect(await refusal(seed, derived("CUSTODY_WRITTEN_OFF", custodyId, { amountMinor: 0 }))).toMatch(/a written-off amount that is not a positive whole amount/);
+    expect(await refusal(seed, derived("CUSTODY_WRITTEN_OFF", custodyId, { amountMinor: -jod(50) }))).toMatch(/a written-off amount that is not a positive whole amount/);
+    expect(await refusal(seed, derived("CUSTODY_PAYABLE_RECLASSIFIED", custodyId, { deltaMinor: -jod(200) }))).toBeNull();
+    expect(await refusal(seed, derived("CUSTODY_PAYABLE_RECLASSIFIED", custodyId, { deltaMinor: 1.5 }))).toMatch(/a payable delta that is not a whole amount/);
+    expect(await refusal(seed, derived("CUSTODY_PAYABLE_RECLASSIFIED", custodyId, { payableAfterMinor: "200" }))).toMatch(/a payable position that is not a whole amount/);
   }, 60_000);
 
-  test("worker, fee posting and payable delta: a v1 keyed on the wrong source, a version the key does not name, a delta on another record's chain — each held, nothing written, and the family posts once restored", async () => {
-    const seed = await seedDeal("r8-identity-fee");
+  test("worker, cash leg: every contradiction — version, type, key, source, a missing, malformed, foreign or wrong-kind source, a payload off the source — dead-letters FAILED with nothing written in either organization; a fresh legitimate leg then posts", async () => {
+    const seed = await seedDeal("r8-worker-leg");
+    const { earlierId, boundary, custodyId, entry, row } = await queuedCashLeg(seed);
+    const foreign = await foreignFamily(seed);
+    const payload = row.payload as Record<string, unknown>;
+    await move(seed, custodyId, "RETURNED", jod(100), { occurredAt: boundary - 2 * DAY });
+    const returned = (await entries(seed, custodyId)).find((e) => e.kind === "RETURNED")!;
+    // The genuine legs post first (the month reopens for them), so the
+    // clones below are judged against a ledger that already carries the
+    // real postings under the keys they mimic — and the month closes again
+    // behind them, so a clone that reached the period check would be told
+    // the month is CLOSED rather than refused.
+    await reopenPeriod(seed, earlierId);
+    await drainUntilSettled(seed);
+    expect((await pending(seed)).map((r) => r.status)).toEqual(["POSTED", "POSTED"]);
+    await closePeriod(seed, earlierId);
+    const clones = [
+      { id: await clone(seed, row, { eventVersion: 2 }), reason: /posts once, at version 1/ },
+      { id: await clone(seed, row, { eventType: "CUSTODY_FEE_PAID" }), reason: /keyed on financeDealCustodyEntries rather than financeDealFees/ },
+      { id: await clone(seed, row, { idempotencyKey: `custody_entry_${custodyId}` }), reason: /queued under custody_entry_/ },
+      { id: await clone(seed, row, { sourceType: "financeDealCustody" }), reason: /keyed on financeDealCustody rather than/ },
+      { id: await clone(seed, row, { idempotencyKey: "custody_entry_garbage", sourceId: "garbage" }), reason: /is not a custody movement/ },
+      { id: await clone(seed, row, { idempotencyKey: `custody_entry_${custodyId}`, sourceId: custodyId }), reason: /is not a custody movement/ },
+      { id: await clone(seed, row, { idempotencyKey: `custody_entry_${foreign.entryId}`, sourceId: foreign.entryId }), reason: /not a custody movement in this organization/ },
+      { id: await clone(seed, row, { idempotencyKey: `custody_entry_${returned._id}`, sourceId: returned._id }), reason: /its source is a RETURNED movement/ },
+      { id: await clone(seed, row, { payload: { ...payload, amountMinor: entry.amountMinor + 1 } }), reason: /names an amount .* that is not the source's/ },
+      { id: await clone(seed, row, { payload: { ...payload, custodyId: foreign.custodyId } }), reason: /names a custody record .* that is not the source's/ },
+      { id: await clone(seed, row, { payload: undefined }), reason: /carrying no readable payload/ },
+    ];
+    await refusedPermanently(seed, clones);
+    // The real postings are exactly as they were, once each, and a FRESH
+    // legitimate leg — a return recorded today, in the open month — posts
+    // through the same worker path the clones were refused on.
+    expect((await events(seed, "CUSTODY_CASH_ISSUED")).map((e) => [e.idempotencyKey, e.eventVersion, e.status])).toEqual([[row.idempotencyKey, 1, "POSTED"]]);
+    expect((await events(seed, "CUSTODY_CASH_RETURNED")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+    await move(seed, custodyId, "RETURNED", jod(50));
+    const fresh = (await entries(seed, custodyId)).filter((e) => e.kind === "RETURNED").find((e) => e._id !== returned._id)!;
+    expect((await pending(seed)).filter((r) => r.status !== "POSTED")).toEqual([]);
+    expect((await events(seed, "CUSTODY_CASH_RETURNED")).map((e) => [e.idempotencyKey, e.status]).sort()).toEqual([[`custody_entry_${returned._id}`, "POSTED"], [`custody_entry_${fresh._id}`, "POSTED"]].sort());
+    expect(clearing(await ledger(seed))).toBe(jod(550));
+    expect(await familyRefusal(seed)).toBeNull();
+    expect(await seed.t.run(async (ctx) => (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", seed.otherOrgId)).collect()).length)).toBe(0);
+  }, 120_000);
+
+  test("worker, fee posting and payable delta: a wrong source at v1, a missing, foreign or malformed source, a foreign custody attribution, an amount or delta that is not a figure, unreadable dependencies — each dead-letters FAILED with nothing written; a fresh legitimate line then posts", async () => {
+    const seed = await seedDeal("r8-worker-fee");
     const { earlierId, boundary } = await splitPeriods(seed);
     await closePeriod(seed, earlierId);
     const custodyId = await openCustody(seed, jod(700));
     const feeId = await employeeFee(seed, custodyId, jod(900), { paidAt: boundary - 5 * DAY });
     const fee = await queuedRow(seed, `custody_fee_paid_${feeId}_v1`);
     const delta = await queuedRow(seed, `custody_payable_reclass_${custodyId}_v1`);
+    const foreign = await foreignFamily(seed);
+    // The genuine fee posting and payable delta post first; the month then
+    // closes again behind the clones (see the cash-leg test).
     await reopenPeriod(seed, earlierId);
-    // The delta is chained behind the fee (SETTLED), so while the fee is
-    // held for its identity the delta is held for its dependency: the
-    // fee's contradictions are what these attempts prove.
-    await workerWritesNothing(seed, fee, { sourceType: "financeDealCustody" });
-    await workerWritesNothing(seed, fee, { eventVersion: 2 });
-    await workerWritesNothing(seed, fee, { eventType: "CUSTODY_WRITTEN_OFF" });
-    // The fee posts and frees the delta in the same drain — so the delta's
-    // first contradiction is already in place when it does, and the delta's
-    // own identity is what stands between it and the ledger.
-    await seed.t.run((ctx) => ctx.db.patch(delta._id, { payload: { ...(delta.payload as object), custodyId: feeId } }));
-    await drainOnce(seed);
-    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
-    expect(await events(seed, "CUSTODY_PAYABLE_RECLASSIFIED")).toHaveLength(0);
-    const heldDelta = (await pending(seed)).find((r) => r._id === delta._id)!;
-    expect([heldDelta.status, heldDelta.attempts]).toEqual(["PENDING", 0]);
-    expect(heldDelta.lastError).toMatch(/whose payload names/);
-    await seed.t.run((ctx) => ctx.db.patch(delta._id, { payload: delta.payload }));
-    await workerWritesNothing(seed, delta, { eventType: "CUSTODY_CASH_ISSUED", sourceType: "financeDealCustodyEntries" });
-    await workerWritesNothing(seed, delta, { eventVersion: 2 });
     await drainUntilSettled(seed);
     expect((await pending(seed)).every((r) => r.status === "POSTED")).toBe(true);
-    expect((await events(seed, "CUSTODY_PAYABLE_RECLASSIFIED")).map((e) => [e.idempotencyKey, e.eventVersion, e.status])).toEqual([[delta.idempotencyKey, 1, "POSTED"]]);
     expect(payable(await ledger(seed))).toBe(-jod(200));
+    await closePeriod(seed, earlierId);
+    const feePayload = fee.payload as Record<string, unknown>;
+    const deltaPayload = delta.payload as Record<string, unknown>;
+    const clones = [
+      { id: await clone(seed, fee, { sourceType: "financeDealCustody" }), reason: /keyed on financeDealCustody rather than financeDealFees/ },
+      { id: await clone(seed, fee, { eventVersion: 2 }), reason: /whose posting is keyed custody_fee_paid_.*_v2, but it is queued under/ },
+      { id: await clone(seed, fee, { eventType: "CUSTODY_WRITTEN_OFF" }), reason: /keyed on financeDealFees rather than financeDealCustody/ },
+      { id: await clone(seed, fee, { idempotencyKey: "custody_fee_paid_garbage_v1", sourceId: "garbage" }), reason: /is not a cost line/ },
+      { id: await clone(seed, fee, { idempotencyKey: `custody_fee_paid_${foreign.feeId}_v1`, sourceId: foreign.feeId }), reason: /not a cost line in this organization/ },
+      { id: await clone(seed, fee, { payload: { ...feePayload, custodyId: foreign.custodyId } }), reason: /not a custody record in this organization/ },
+      { id: await clone(seed, fee, { payload: { ...feePayload, amountMinor: -1 } }), reason: /not a positive whole amount/ },
+      { id: await clone(seed, fee, { payload: { ...feePayload, currency: "USD" } }), reason: /names a currency .* that is not the source's/ },
+      { id: await clone(seed, delta, { idempotencyKey: "custody_payable_reclass_garbage_v1", sourceId: "garbage", payload: { ...deltaPayload, custodyId: "garbage" } }), reason: /is not a custody record/ },
+      { id: await clone(seed, delta, { idempotencyKey: `custody_payable_reclass_${foreign.custodyId}_v1`, sourceId: foreign.custodyId, payload: { ...deltaPayload, custodyId: foreign.custodyId } }), reason: /not a custody record in this organization/ },
+      { id: await clone(seed, delta, { payload: { ...deltaPayload, custodyId: feeId } }), reason: /whose payload names/ },
+      { id: await clone(seed, delta, { eventType: "CUSTODY_CASH_ISSUED", sourceType: "financeDealCustodyEntries" }), reason: /queued under custody_payable_reclass_/ },
+      { id: await clone(seed, delta, { eventVersion: 2 }), reason: /whose posting is keyed custody_payable_reclass_.*_v2, but it is queued under/ },
+      { id: await clone(seed, delta, { payload: { ...deltaPayload, deltaMinor: 1.5 } }), reason: /a payable delta that is not a whole amount/ },
+      { id: await clone(seed, delta, { payload: { ...deltaPayload, userId: seed.userId } }), reason: /names a holder .* that is not the source's/ },
+      { id: await clone(seed, delta, { payload: { ...deltaPayload, ledgerDependencies: "junk" } }), reason: /ledger dependencies that cannot be read/ },
+    ];
+    await refusedPermanently(seed, clones);
+    // The real postings are exactly as they were, and a FRESH legitimate
+    // line — a further cost recorded today, in the open month — posts its
+    // own fee posting and the next payable delta through the same path.
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.idempotencyKey, e.eventVersion, e.status])).toEqual([[fee.idempotencyKey, 1, "POSTED"]]);
+    expect((await events(seed, "CUSTODY_PAYABLE_RECLASSIFIED")).map((e) => [e.idempotencyKey, e.eventVersion, e.status])).toEqual([[delta.idempotencyKey, 1, "POSTED"]]);
+    const freshFeeId = await employeeFee(seed, custodyId, jod(100));
+    expect((await pending(seed)).filter((r) => r.status !== "POSTED")).toEqual([]);
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.idempotencyKey, e.status]).sort()).toEqual([[fee.idempotencyKey, "POSTED"], [`custody_fee_paid_${freshFeeId}_v1`, "POSTED"]].sort());
+    expect((await events(seed, "CUSTODY_PAYABLE_RECLASSIFIED")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"], [2, "POSTED"]]);
+    expect(payable(await ledger(seed))).toBe(-jod(300));
     expect(await familyRefusal(seed)).toBeNull();
-  }, 90_000);
+    expect(await seed.t.run(async (ctx) => (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", seed.otherOrgId)).collect()).length)).toBe(0);
+  }, 120_000);
 });

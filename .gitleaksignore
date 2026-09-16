@@ -14,9 +14,10 @@
 # the scanned range. A comment about a deployment name, not a credential.
 aa12d3c97d707fc8044123167f3dbe49e1ae01c2:.gitleaksignore:generic-api-key:5
 #
-# fd9b60038 convex/dealCustodyAccounting.test.ts:4172 — the R7-F5 test re-keys a
-# ledger event to `${v1.idempotencyKey}_other` to prove the family gate refuses
+# fd9b60038 convex/dealCustodyAccounting.test.ts:4172 — the R7-F5 test's
+# restore line, `ctx.db.patch(v1._id, { idempotencyKey: v1.idempotencyKey })`,
+# putting a ledger event's own key back after proving the family gate refuses
 # a posted link under a key that is not the chain's; generic-api-key matched
-# the template on entropy beside the word "idempotencyKey". A derived test
-# string, not a credential.
+# it on entropy beside the word "idempotencyKey". A field copied from the
+# event itself, not a credential.
 fd9b600387d145e607072200d7409e7af51027ac:convex/dealCustodyAccounting.test.ts:generic-api-key:4172

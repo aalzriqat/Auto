@@ -36,7 +36,7 @@ import {
 } from "./accounting/receiptOccurrence";
 import { prepaidPostingBlockedReason } from "./utils/prepaidSourceLedger";
 import { payrollPostingBlockedReason } from "./utils/payrollSourceLedger";
-import { custodyPostingBlockedReason } from "./utils/custodySourceLedger";
+import { custodyPostingBlockedReason, custodyPostingRefusal } from "./utils/custodySourceLedger";
 import { commissionPostingBlockedReason } from "./utils/commissionSourceLedger";
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { scheduleAuthorityDispatch } from "./utils/authorityDispatchScheduler";
@@ -1619,6 +1619,24 @@ export const postOutboxRow = internalMutation({
         sourceType: row.sourceType,
       });
       if (retired) return await failOutboxRow(ctx, row, retired);
+
+      // ⚠️ R8 (Sol) — A CUSTODY ROW THAT IS NOT THE POSTING ITS KEY PROMISES,
+      // OR DOES NOT STAND ON ITS SOURCE, IS PERMANENTLY REFUSED — HERE, WITH
+      // THE PERMANENT CLASSES, NOT AMONG THE HOLDS BELOW. The family gate
+      // holds every POSTED custody event to an exact identity, so a queued
+      // row whose key, type, source or version contradict one another, whose
+      // source is missing, malformed, another organization's or another
+      // kind of movement, or whose payload disagrees with that source, would
+      // post a journal the gate refuses for ever. Nothing transient ever
+      // makes such a row postable, so a hold would leave it PENDING for ever
+      // (the SCRUM-234 shape); a refusal burns the attempt and dead-letters.
+      // Routed BEFORE the period check and the transient custody guard, and
+      // before any write: the refusal is the only thing this transaction
+      // commits.
+      const custodyRefusal = await custodyPostingRefusal(ctx, row);
+      if (custodyRefusal) {
+        return await failOutboxRow(ctx, row, `This custody posting can never post as queued: ${custodyRefusal}.`);
+      }
     }
 
     const periodCheck = await checkPostingAllowed(ctx, row.orgId, row.accountingDate);

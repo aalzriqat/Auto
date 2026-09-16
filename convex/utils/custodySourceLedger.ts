@@ -786,7 +786,10 @@ export function custodyCanonicalIdentityRefusal(entry: {
     return `it is keyed as a custody posting (${entry.idempotencyKey}) but carries a version that is not a positive whole number (${entry.eventVersion}), so it is not the posting its key promises`;
   }
   const eventType = entry.eventType as string;
-  // The one key this (event type, source, version) posts under.
+  // The one key this (event type, source, version) posts under. The `as Id`
+  // below only FORMATS the expected key from the row's own source string so
+  // the builders' formats are not duplicated; it proves nothing about the
+  // source — that is `custodyPostingRefusal`, which normalizes and loads it.
   let expected: { key: string; sourceType: string } | null = null;
   if (CUSTODY_CASH_EVENT_TYPES.has(eventType)) {
     expected =
@@ -820,12 +823,160 @@ export function custodyCanonicalIdentityRefusal(entry: {
   return null;
 }
 
+/** The shape every custody posting's payload is read through: a plain object, or nothing readable. */
+function payloadRecord(payload: unknown): Record<string, unknown> | null {
+  return payload !== null && typeof payload === "object" && !Array.isArray(payload) ? (payload as Record<string, unknown>) : null;
+}
+
 /**
- * Why a queued custody event must NOT post yet, or `null` when it may.
+ * ## The canonical SOURCE a queued custody row must stand on before it posts (R8, Sol)
  *
- *  - first, the row IS the posting its key promises
- *    (`custodyCanonicalIdentityRefusal`, R8) — judged from the row alone,
- *    before any read;
+ * `custodyCanonicalIdentityRefusal` proves only what the row says about
+ * itself. A canonical-looking key can still name a source that does not
+ * exist, is not an id at all, belongs to another organization, or is a
+ * different kind of movement than the event type claims — and the payload
+ * the journal is built from can disagree with the source it names. None of
+ * that is transient: no period opening, no predecessor posting and no
+ * dependency settling ever makes such a row postable, so it is a PERMANENT
+ * refusal (`failOutboxRow`: an attempt burned, dead-lettered at the limit),
+ * never a hold that leaves it PENDING for ever.
+ *
+ * Per family, from the source rows the hooks minted the event from — every
+ * id normalized through `ctx.db.normalizeId`, never cast:
+ *
+ *  - a cash leg (`custody_entry_`): the entry exists, in this org; its
+ *    record exists, in this org, and is the entry's; the entry is a cash
+ *    kind whose event type is the row's; the payload names exactly that
+ *    entry, record, deal, holder, amount, currency and method;
+ *  - a fee posting: the line exists, in this org; the payload names that
+ *    line, its deal, its currency and fee type, a positive amount, and a
+ *    custody record that exists, in this org, on the line's deal, in the
+ *    line's currency (the record the version was charged to — not
+ *    necessarily the line's CURRENT link, which a later version may have
+ *    moved);
+ *  - a write-off / payable delta: the record exists, in this org; the
+ *    payload names that record, its deal, its holder and currency; the
+ *    amount (write-off) or delta and resulting position (payable) are safe
+ *    integers, the write-off positive; and the dependency list it is
+ *    chained behind reads (`parseCustodyDependencies`).
+ *
+ * The amount on a fee, write-off or delta is the VERSION's, so it is proven
+ * a figure, not equal to the row's current one: a queued v1 legitimately
+ * carries the actual that v2 has since replaced.
+ *
+ * Returns the reason, or `null` when the row stands on its source.
+ */
+export async function custodyPostingRefusal(
+  ctx: QueryCtx | MutationCtx,
+  entry: {
+    orgId: Id<"organizations">;
+    idempotencyKey: string;
+    eventType?: string;
+    eventVersion?: number;
+    sourceType: string;
+    sourceId: string;
+    payload?: unknown;
+  }
+): Promise<string | null> {
+  const identity = custodyCanonicalIdentityRefusal(entry);
+  if (identity !== null) return identity;
+  const eventType = entry.eventType;
+  if (eventType === undefined || !CUSTODY_EVENT_TYPES.has(eventType)) return null;
+  const payload = payloadRecord(entry.payload);
+  if (payload === null) {
+    return `it is a ${eventType} event carrying no readable payload, so the posting cannot be built from it`;
+  }
+  const names = (field: string, expected: unknown, what: string): string | null =>
+    payload[field] === expected ? null : `its payload names ${what} (${String(payload[field])}) that is not the source's (${String(expected)})`;
+  const figure = (field: string, what: string, positive: boolean): string | null => {
+    const value = payload[field];
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || (positive ? value <= 0 : false)) {
+      return `its payload carries ${what} that is not a ${positive ? "positive " : ""}whole amount (${String(value)})`;
+    }
+    return null;
+  };
+  const loadCustody = async (raw: string, what: string): Promise<Doc<"financeDealCustody"> | string> => {
+    const custodyId = ctx.db.normalizeId("financeDealCustody", raw);
+    const custody = custodyId === null ? null : await ctx.db.get(custodyId);
+    if (custody === null) return `${what} (${raw}) is not a custody record`;
+    if (custody.orgId !== entry.orgId) return `${what} (${raw}) is not a custody record in this organization`;
+    return custody;
+  };
+
+  if (CUSTODY_CASH_EVENT_TYPES.has(eventType)) {
+    const entryId = ctx.db.normalizeId("financeDealCustodyEntries", entry.sourceId);
+    const movement = entryId === null ? null : await ctx.db.get(entryId);
+    if (movement === null) return `its source (${entry.sourceId}) is not a custody movement`;
+    if (movement.orgId !== entry.orgId) return `its source (${entry.sourceId}) is not a custody movement in this organization`;
+    if (movement.kind === "REVERSAL") {
+      return `its source (${entry.sourceId}) is a reversal entry, which posts as the reversal of the movement it cancels, never as a cash leg of its own`;
+    }
+    if (CUSTODY_CASH_EVENT_TYPE[movement.kind] !== eventType) {
+      return `it is a ${eventType} event, but its source is a ${movement.kind} movement, which posts as ${CUSTODY_CASH_EVENT_TYPE[movement.kind]}`;
+    }
+    const custody = await loadCustody(movement.custodyId, "the movement's custody record");
+    if (typeof custody === "string") return custody;
+    return (
+      names("entryId", movement._id, "a movement") ??
+      names("custodyId", custody._id, "a custody record") ??
+      names("applicationId", custody.applicationId, "a deal") ??
+      names("userId", custody.userId, "a holder") ??
+      names("amountMinor", movement.amountMinor, "an amount") ??
+      names("currency", custody.currency, "a currency") ??
+      names("paymentMethod", movement.method, "a payment method")
+    );
+  }
+
+  if (eventType === "CUSTODY_FEE_PAID") {
+    const feeId = ctx.db.normalizeId("financeDealFees", entry.sourceId);
+    const fee = feeId === null ? null : await ctx.db.get(feeId);
+    if (fee === null) return `its source (${entry.sourceId}) is not a cost line`;
+    if (fee.orgId !== entry.orgId) return `its source (${entry.sourceId}) is not a cost line in this organization`;
+    const own =
+      names("feeId", fee._id, "a cost line") ??
+      names("applicationId", fee.applicationId, "a deal") ??
+      names("currency", fee.currency, "a currency") ??
+      names("feeType", fee.feeType, "a fee type") ??
+      figure("amountMinor", "an amount", true);
+    if (own !== null) return own;
+    if (typeof payload.custodyId !== "string") return `its payload names no custody record the cost was paid out of`;
+    const custody = await loadCustody(payload.custodyId, "the custody record the cost was paid out of");
+    if (typeof custody === "string") return custody;
+    if (custody.applicationId !== fee.applicationId) {
+      return `the custody record the cost was paid out of (${custody._id}) is on another deal than the cost line`;
+    }
+    if (custody.currency !== fee.currency) {
+      return `the custody record the cost was paid out of (${custody._id}) is held in ${custody.currency}, not the cost line's ${fee.currency}`;
+    }
+    return null;
+  }
+
+  // CUSTODY_WRITTEN_OFF and CUSTODY_PAYABLE_RECLASSIFIED: both on the record.
+  const custody = await loadCustody(entry.sourceId, "its source");
+  if (typeof custody === "string") return custody;
+  const own =
+    names("custodyId", custody._id, "a custody record") ??
+    names("applicationId", custody.applicationId, "a deal") ??
+    names("userId", custody.userId, "a holder") ??
+    names("currency", custody.currency, "a currency") ??
+    (eventType === "CUSTODY_WRITTEN_OFF"
+      ? figure("amountMinor", "a written-off amount", true)
+      : (figure("deltaMinor", "a payable delta", false) ?? figure("payableAfterMinor", "a payable position", false)));
+  if (own !== null) return own;
+  if (parseCustodyDependencies(payload) === null) {
+    return "it carries ledger dependencies that cannot be read, so the postings it is chained behind cannot be named";
+  }
+  return null;
+}
+
+/**
+ * Why a queued custody event must NOT post YET, or `null` when it may — the
+ * TRANSIENT half. The worker refuses a row that can never post
+ * (`custodyPostingRefusal`: identity, source and payload) permanently and
+ * BEFORE asking this, so everything here is a wait that some later posting
+ * ends. The fail-closed answers below on an unreadable payload remain for a
+ * direct caller; in the worker they are unreachable.
+ *
  *  - `CUSTODY_PAYABLE_RECLASSIFIED` version N waits for version N−1.
  *  - `CUSTODY_FEE_PAID` / `CUSTODY_WRITTEN_OFF` version N waits for the
  *    REVERSAL of every earlier version — a deferred reversal leaves the
@@ -851,8 +1002,6 @@ export async function custodyPostingBlockedReason(
     payload?: unknown;
   }
 ): Promise<string | null> {
-  const identity = custodyCanonicalIdentityRefusal(entry);
-  if (identity !== null) return identity;
   const version = entry.eventVersion ?? 1;
   if (entry.eventType === "CUSTODY_FEE_PAID" || entry.eventType === "CUSTODY_WRITTEN_OFF") {
     if (version > 1) {
