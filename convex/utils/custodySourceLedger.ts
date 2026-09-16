@@ -49,6 +49,22 @@ export const custodyPayableReclassKey = (custodyId: Id<"financeDealCustody">, ve
   `custody_payable_reclass_${custodyId}_v${version}`;
 
 /**
+ * The event type a cash leg of each kind posts under, and the version it
+ * posts at: a leg is posted once, at version 1, and never replaced — a
+ * correction is a REVERSAL entry, not a later version. Mirrors
+ * `CUSTODY_CASH_EVENT` in `accounting/workflowHooks` (the hook that mints
+ * the event); the family proof holds a leg to THIS identity, so a POSTED
+ * event under the leg's key but of another type or version is not its
+ * posting. A test pins the two tables against the events the hook posts.
+ */
+export const CUSTODY_CASH_EVENT_TYPE: Readonly<Record<"ISSUED" | "RETURNED" | "REIMBURSED", string>> = {
+  ISSUED: "CUSTODY_CASH_ISSUED",
+  RETURNED: "CUSTODY_CASH_RETURNED",
+  REIMBURSED: "CUSTODY_REIMBURSED",
+};
+export const CUSTODY_CASH_EVENT_VERSION = 1;
+
+/**
  * How many rows one source's event family may be read with. A fee's family
  * is one forward event per version plus a reversal per corrected version; a
  * custody record's is its write-offs, their reversals and its payable chain
@@ -1344,6 +1360,7 @@ export async function custodyLedgerFamilyRefusal(
     }
     for (const entry of entries) {
       if (entry.kind === "REVERSAL") continue;
+      const kind = entry.kind;
       await budget.assertHeadroom(ctx);
       const rows = await ctx.db
         .query("accountingEvents")
@@ -1357,11 +1374,17 @@ export async function custodyLedgerFamilyRefusal(
         }
         continue;
       }
-      const exact = exactlyOnePosted(forwards);
+      // The leg's canonical posting: its kind's event type, at the one
+      // version a leg is ever posted at. An event under the leg's key and
+      // source but of another type or version is not the leg on the books.
+      const canonical = forwards.filter(
+        (event) => event.eventType === CUSTODY_CASH_EVENT_TYPE[kind] && event.eventVersion === CUSTODY_CASH_EVENT_VERSION
+      );
+      const exact = exactlyOnePosted(canonical);
       if (exact === "NONE") {
-        return `A custody movement on this deal is not on the books (${describeStatus(forwards[0])}), so ${action} is refused until it has posted.`;
+        return `A custody movement on this deal is not on the books (${describeStatus(canonical[0] ?? forwards[0])}), so ${action} is refused until it has posted.`;
       }
-      if (exact === "MORE_THAN_ONCE") {
+      if (exact === "MORE_THAN_ONCE" || forwards.filter(isLive).length > 1) {
         return `A custody movement on this deal is on the books more than once, so ${action} is refused until the record has been reviewed.`;
       }
     }

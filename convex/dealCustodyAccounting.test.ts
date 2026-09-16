@@ -15,6 +15,8 @@ import {
   CUSTODY_PROOF_CALLER_RESERVE_BYTES,
   CUSTODY_PROOF_CALLER_RESERVE_DOCUMENTS,
   CUSTODY_PROOF_CALLER_RESERVE_QUERIES,
+  CUSTODY_CASH_EVENT_TYPE,
+  CUSTODY_CASH_EVENT_VERSION,
   CustodyLedgerReadBudget,
   custodyLedgerFamilyRefusal,
   custodyLedgerFamilyRowRefusal,
@@ -3907,6 +3909,42 @@ describe("R7-F2 — the family proof requires EXACTLY ONE canonical POSTED forwa
     expect(await familyRefusal(seed)).toMatch(/custody write-off on this deal is not on the books/);
     await seed.t.run((ctx) => ctx.db.patch(writeOffEvent._id, { idempotencyKey: writeOffEvent.idempotencyKey }));
     expect(await familyRefusal(seed)).toBeNull();
+  }, 45_000);
+
+  test("a cash leg's posting is its KIND's event type at version 1: a POSTED event under the leg's key and source but of another custody cash type, or another version, is not the leg on the books", async () => {
+    const seed = await seedDeal("r7-cash-identity");
+    const custodyId = await openCustody(seed, jod(700));
+    await employeeFee(seed, custodyId, jod(750));
+    await move(seed, custodyId, "REIMBURSED", jod(50));
+    await move(seed, custodyId, "RETURNED", jod(10));
+    expect(await familyRefusal(seed)).toBeNull();
+    const issued = (await events(seed, "CUSTODY_CASH_ISSUED"))[0];
+    expect([issued.eventVersion, issued.status]).toEqual([1, "POSTED"]);
+    // Wrong custody cash type under the right key, source, version and status.
+    await seed.t.run((ctx) => ctx.db.patch(issued._id, { eventType: "CUSTODY_CASH_RETURNED" }));
+    expect(await familyRefusal(seed)).toMatch(/custody movement on this deal is not on the books/);
+    await seed.t.run((ctx) => ctx.db.patch(issued._id, { eventType: issued.eventType }));
+    expect(await familyRefusal(seed)).toBeNull();
+    // Wrong version under the right key, source, type and status.
+    for (const version of [2, 0]) {
+      await seed.t.run((ctx) => ctx.db.patch(issued._id, { eventVersion: version }));
+      expect(await familyRefusal(seed)).toMatch(/custody movement on this deal is not on the books/);
+    }
+    await seed.t.run((ctx) => ctx.db.patch(issued._id, { eventVersion: issued.eventVersion }));
+    expect(await familyRefusal(seed)).toBeNull();
+    // A live wrong-type event BESIDE the canonical one is a second journal.
+    const stray = await duplicateEvent(seed, { ...issued, eventType: "CUSTODY_CASH_RETURNED" });
+    expect(await familyRefusal(seed)).toMatch(/custody movement on this deal is on the books more than once/);
+    await seed.t.run((ctx) => ctx.db.delete(stray));
+    expect(await familyRefusal(seed)).toBeNull();
+    // The module's table is what the hook actually posts, kind by kind, at
+    // the version it posts at — the two cannot drift apart unnoticed.
+    const legs = await entries(seed, custodyId);
+    for (const kind of ["ISSUED", "RETURNED", "REIMBURSED"] as const) {
+      const leg = legs.find((e) => e.kind === kind)!;
+      const event = (await events(seed)).find((e) => e.sourceId === leg._id.toString())!;
+      expect([event.eventType, event.eventVersion, event.status]).toEqual([CUSTODY_CASH_EVENT_TYPE[kind], CUSTODY_CASH_EVENT_VERSION, "POSTED"]);
+    }
   }, 45_000);
 });
 
