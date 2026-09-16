@@ -49,7 +49,9 @@ export function AccountingSetupTab({ view = "all" }: Readonly<{ view?: Accountin
   const createPeriod = useMutation(api.accountingPeriods.create);
   const openPeriod = useMutation(api.accountingPeriods.open);
   const lockPeriod = useMutation(api.accountingPeriods.lock);
+  const reopenPeriod = useMutation(api.accountingPeriods.reopen);
   const redriveOutbox = useMutation(api.accountingOutbox.redrive);
+  const retryFailed = useMutation(api.accountingOutbox.retryFailed);
 
   const canManageFinance = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
   // Locking a period can never be undone in-product, so it needs the same
@@ -95,7 +97,7 @@ export function AccountingSetupTab({ view = "all" }: Readonly<{ view?: Accountin
 
   function periodAction(
     periodId: Id<"accountingPeriods">,
-    action: "open" | "close" | "lock",
+    action: "open" | "close" | "lock" | "reopen",
     mutation: () => Promise<Id<"accountingPeriods">>,
     successKey: string
   ) {
@@ -244,6 +246,14 @@ export function AccountingSetupTab({ view = "all" }: Readonly<{ view?: Accountin
             "AccountingPeriodLocked"
           )
         }
+        onReopen={(periodId, reason) =>
+          periodAction(
+            periodId,
+            "reopen",
+            () => reopenPeriod({ orgId: activeOrgId, periodId, reason }),
+            "AccountingPeriodReopened"
+          )
+        }
       />
       )}
 
@@ -251,7 +261,16 @@ export function AccountingSetupTab({ view = "all" }: Readonly<{ view?: Accountin
       <PendingAccountingEventsTable
         events={setupStatus.pendingEvents}
         hasMore={setupStatus.hasMorePendingEvents}
+        canManageFinance={canManageFinance}
+        busyAction={busyAction}
         t={t}
+        onRetry={(eventId) => {
+          void runSetupAction(
+            `retry_${eventId}`,
+            () => retryFailed({ orgId: activeOrgId, pendingEventId: eventId }),
+            () => t("EventRetried" as any)
+          );
+        }}
       />
       )}
 

@@ -22,9 +22,10 @@ type AccountingPeriodsTableProps = {
   onOpen: (periodId: Id<"accountingPeriods">) => void;
   onClose: (periodId: Id<"accountingPeriods">) => void;
   onLock: (periodId: Id<"accountingPeriods">) => void;
+  onReopen?: (periodId: Id<"accountingPeriods">, reason: string) => void;
 };
 
-function periodBusyAction(periodId: Id<"accountingPeriods">, action: "open" | "close" | "lock") {
+function periodBusyAction(periodId: Id<"accountingPeriods">, action: "open" | "close" | "lock" | "reopen") {
   return `${action}_${periodId}`;
 }
 
@@ -36,6 +37,7 @@ function PeriodActionButton({
   onOpen,
   onClose,
   onLock,
+  onReopen,
 }: Readonly<{
   period: PeriodSummary;
   busy: boolean;
@@ -44,6 +46,7 @@ function PeriodActionButton({
   onOpen: () => void;
   onClose: () => void;
   onLock: () => void;
+  onReopen?: (reason: string) => void;
 }>) {
   if (period.status === "FUTURE" || period.status === "CLOSING") {
     return (
@@ -64,10 +67,37 @@ function PeriodActionButton({
   if (period.status === "CLOSED") {
     if (!canLockPeriod) return null;
     return (
-      <Button size="sm" variant="outline" disabled={busy} onClick={onLock}>
-        {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-        {t("LockPeriod")}
-      </Button>
+      <div className="flex items-center justify-end gap-2">
+        {onReopen && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => {
+              const reason = window.prompt(t("EnterReopenReason" as any));
+              if (reason && reason.trim()) {
+                onReopen(reason.trim());
+              }
+            }}
+          >
+            {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+            {t("ReopenPeriod" as any)}
+          </Button>
+        )}
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          onClick={() => {
+            if (window.confirm(t("ConfirmLockPeriod" as any))) {
+              onLock();
+            }
+          }}
+        >
+          {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+          {t("LockPeriod")}
+        </Button>
+      </div>
     );
   }
   return null;
@@ -77,11 +107,12 @@ function periodActionIsBusy(periodId: Id<"accountingPeriods">, busyAction: strin
   return (
     busyAction === periodBusyAction(periodId, "open") ||
     busyAction === periodBusyAction(periodId, "close") ||
-    busyAction === periodBusyAction(periodId, "lock")
+    busyAction === periodBusyAction(periodId, "lock") ||
+    busyAction === periodBusyAction(periodId, "reopen")
   );
 }
 
-export function accountingPeriodActionKey(periodId: Id<"accountingPeriods">, action: "open" | "close" | "lock") {
+export function accountingPeriodActionKey(periodId: Id<"accountingPeriods">, action: "open" | "close" | "lock" | "reopen") {
   return periodBusyAction(periodId, action);
 }
 
@@ -94,6 +125,7 @@ export function AccountingPeriodsTable({
   onOpen,
   onClose,
   onLock,
+  onReopen,
 }: Readonly<AccountingPeriodsTableProps>) {
   return (
     <div className="space-y-3">
@@ -133,6 +165,7 @@ export function AccountingPeriodsTable({
                         onOpen={() => onOpen(period._id)}
                         onClose={() => onClose(period._id)}
                         onLock={() => onLock(period._id)}
+                        onReopen={onReopen ? (reason) => onReopen(period._id, reason) : undefined}
                       />
                     )}
                   </TableCell>

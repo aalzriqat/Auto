@@ -32,6 +32,8 @@ import {
   Lock,
   Minus,
   Ban,
+  FileText,
+  CheckCircle2,
 } from "lucide-react";
 import { DealStageRail, DealStagesComplete } from "./DealStageRail";
 import {
@@ -75,7 +77,7 @@ import type { PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 // on the SAME mutations. Each is its own file so the container stays a wiring
 // layer and the view stays renderable against fixtures.
 import { CreditDecisionDialog, type CreditDecision } from "./CreditDecisionDialog";
-import { CancelApplicationDialog } from "./CancelApplicationDialog";
+import { CancelApplicationDialog, type CancelApplicationValues } from "./CancelApplicationDialog";
 import {
   SettlementRouteControl,
   type DirectRouteRefusal,
@@ -106,6 +108,8 @@ import {
   type HandoverCostsData,
   type NewHandoverCost,
 } from "./HandoverCostsPanel";
+import { RecordLegalInvoiceDialog, type RecordLegalInvoiceValues } from "./RecordLegalInvoiceDialog";
+import { ClassifyDealAccountingDialog } from "./ClassifyDealAccountingDialog";
 
 /**
  * The financed-deal cockpit.
@@ -642,6 +646,9 @@ export function DealCockpit({
   const recordTemplateFeeActual = useMutation(api.financeDealCosts.recordTemplateFeeActual);
   const recordActualFeeAmount = useMutation(api.financeDealCosts.recordActualFeeAmount);
   const voidDealFee = useMutation(api.financeDealCosts.voidDealFee);
+  const reconcileDealFee = useMutation(api.financeDealCosts.reconcileDealFee);
+  const recordLegalInvoice = useMutation(api.financeDealCosts.recordLegalInvoice);
+  const classifyDealAccounting = useMutation(api.financeDealCosts.classifyDealAccounting);
   const updateStatus = useMutation(api.applications.updateStatus);
   const cancelApplication = useMutation(api.applications.cancelApplication);
   const confirmDisbursement = useMutation(api.applications.confirmDisbursement);
@@ -661,6 +668,14 @@ export function DealCockpit({
   const canConfirmFinanceDisbursement =
     !permissionsLoading && hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
   const canResolveDeposits = !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_REQUESTS);
+
+  const [recordingLegalInvoice, setRecordingLegalInvoice] = useState(false);
+  const [legalInvoiceSubmitting, setLegalInvoiceSubmitting] = useState(false);
+  const [legalInvoiceError, setLegalInvoiceError] = useState<string | null>(null);
+
+  const [classifyingAccounting, setClassifyingAccounting] = useState(false);
+  const [classifyingSubmitting, setClassifyingSubmitting] = useState(false);
+  const [classifyingError, setClassifyingError] = useState<string | null>(null);
 
   const [decidingCredit, setDecidingCredit] = useState(false);
   const [creditSubmitting, setCreditSubmitting] = useState(false);
@@ -740,8 +755,14 @@ export function DealCockpit({
       ? {
           financierName: deal?.financeCompanyName || null,
           currency: economicsCurrencyCode,
-          vehiclePrice: app.quote.vehiclePrice,
-          downPayment: app.quote.downPayment,
+          vehiclePrice:
+            app.targetSellingAmountMinor !== undefined
+              ? app.targetSellingAmountMinor / 100
+              : app.quote.vehiclePrice,
+          downPayment:
+            app.customerFirstPaymentMinor !== undefined
+              ? app.customerFirstPaymentMinor / 100
+              : app.quote.downPayment,
           termMonths: app.quote.termMonths,
           monthlyInstallment: app.quote.monthlyInstallment,
           totalFinancedAmount: app.quote.totalFinancedAmount,
@@ -941,6 +962,18 @@ export function DealCockpit({
             try {
               await voidDealFee({ orgId, feeId: feeId as Id<"financeDealFees">, reason });
               toast.success(t("HandoverCostRemoved"));
+            } catch (error) {
+              throw new Error(getErrorMessage(error));
+            }
+          },
+          onReconcile: async (feeId: string, notes: string) => {
+            try {
+              await reconcileDealFee({
+                orgId,
+                feeId: feeId as Id<"financeDealFees">,
+                notes,
+              });
+              toast.success(t("HandoverCostReconciled"));
             } catch (error) {
               throw new Error(getErrorMessage(error));
             }
@@ -1588,7 +1621,8 @@ export function DealCockpit({
       : undefined;
 
   return (
-    <DealCockpitView
+    <>
+      <DealCockpitView
       deal={deal}
       backHref={`/${orgId}/deals`}
       financeDecision={financeDecision}
@@ -1621,7 +1655,7 @@ export function DealCockpit({
               submitting: cancelSubmitting,
               error: cancelError,
               onOpenChange: setCancelling,
-              onSubmit: async (reason) => {
+              onSubmit: async (values: CancelApplicationValues) => {
                 setCancelSubmitting(true);
                 setCancelError(null);
                 try {
@@ -1629,7 +1663,10 @@ export function DealCockpit({
                   await cancelApplication({
                     orgId,
                     applicationId,
-                    reason,
+                    reason: values.reason,
+                    failureReason: values.failureReason as any,
+                    appraisalFeeResponsibility: values.appraisalFeeResponsibility as any,
+                    appraisalFeeResponsibilityReason: values.appraisalFeeResponsibilityReason,
                     idempotencyKey: cancelKeyRef.current,
                   });
                   cancelKeyRef.current = null;
@@ -2000,7 +2037,95 @@ export function DealCockpit({
           idempotencyKey: receipt.idempotencyKey,
         });
       }}
+      closingChecklist={
+        dealCosts && canConfirmFinanceDisbursement
+          ? {
+              legalInvoiceAmountMinor: dealCosts.legalInvoiceAmountMinor,
+              legalInvoiceNumber: dealCosts.legalInvoiceNumber,
+              legalInvoiceDate: dealCosts.legalInvoiceDate,
+              legalInvoiceIssuedTo: dealCosts.legalInvoiceIssuedTo,
+              accountingClassification: dealCosts.accountingClassification,
+              onRecordLegalInvoice: () => {
+                setLegalInvoiceError(null);
+                setRecordingLegalInvoice(true);
+              },
+              onClassifyDealAccounting: () => {
+                setClassifyingError(null);
+                setClassifyingAccounting(true);
+              },
+            }
+          : undefined
+      }
     />
+      {recordingLegalInvoice && (
+        <RecordLegalInvoiceDialog
+          open={recordingLegalInvoice}
+          submitting={legalInvoiceSubmitting}
+          error={legalInvoiceError}
+          scale={scaleForCurrency(dealCosts?.currency ?? orgCurrency.code)}
+          currency={dealCosts?.currency ?? orgCurrency.code}
+          existing={
+            dealCosts?.legalInvoiceAmountMinor !== undefined
+              ? {
+                  amountMinor: dealCosts.legalInvoiceAmountMinor,
+                  number: dealCosts.legalInvoiceNumber,
+                  date: dealCosts.legalInvoiceDate,
+                  issuedTo: dealCosts.legalInvoiceIssuedTo,
+                }
+              : undefined
+          }
+          t={t}
+          onOpenChange={setRecordingLegalInvoice}
+          onSubmit={async (values) => {
+            setLegalInvoiceSubmitting(true);
+            setLegalInvoiceError(null);
+            try {
+              await recordLegalInvoice({
+                orgId,
+                applicationId,
+                legalInvoiceAmountMinor: values.legalInvoiceAmountMinor,
+                legalInvoiceNumber: values.legalInvoiceNumber,
+                legalInvoiceDate: values.legalInvoiceDate,
+                issuedTo: values.issuedTo,
+                issuedToOther: values.issuedToOther,
+              });
+              toast.success(t("LegalInvoiceRecorded"));
+              setRecordingLegalInvoice(false);
+            } catch (err) {
+              setLegalInvoiceError(getErrorMessage(err));
+            } finally {
+              setLegalInvoiceSubmitting(false);
+            }
+          }}
+        />
+      )}
+      {classifyingAccounting && (
+        <ClassifyDealAccountingDialog
+          open={classifyingAccounting}
+          submitting={classifyingSubmitting}
+          error={classifyingError}
+          t={t}
+          onOpenChange={setClassifyingAccounting}
+          onSubmit={async (notes) => {
+            setClassifyingSubmitting(true);
+            setClassifyingError(null);
+            try {
+              await classifyDealAccounting({
+                orgId,
+                applicationId,
+                notes,
+              });
+              toast.success(t("DealAccountingClassified"));
+              setClassifyingAccounting(false);
+            } catch (err) {
+              setClassifyingError(getErrorMessage(err));
+            } finally {
+              setClassifyingSubmitting(false);
+            }
+          }}
+        />
+      )}
+    </>
   );
 }
 
@@ -2689,6 +2814,7 @@ export function DealCockpitView({
   documents,
   deposits,
   disbursement,
+  closingChecklist,
 }: Readonly<{
   /** `undefined` while loading, `null` when the deal is not readable. */
   deal: DealCockpitData | null | undefined;
@@ -2712,7 +2838,7 @@ export function DealCockpitView({
     submitting: boolean;
     error: string | null;
     onOpenChange: (open: boolean) => void;
-    onSubmit: (reason: string | undefined) => void | Promise<void>;
+    onSubmit: (values: CancelApplicationValues) => void | Promise<void>;
   };
   /** Present only while the route may still be chosen (consigned, not closed, finalize permission). */
   settlementRoute?: {
@@ -2802,6 +2928,15 @@ export function DealCockpitView({
    * same canonical record, plus the controls.
    */
   handoverCosts?: Omit<React.ComponentProps<typeof HandoverCostsPanel>, "t">;
+  closingChecklist?: {
+    legalInvoiceAmountMinor?: number;
+    legalInvoiceNumber?: string;
+    legalInvoiceDate?: number;
+    legalInvoiceIssuedTo?: string;
+    accountingClassification?: string;
+    onRecordLegalInvoice: () => void;
+    onClassifyDealAccounting: () => void;
+  };
   /**
    * The server's financial overview and vehicle cost basis — financed deals
    * only. `data` is undefined while loading; each half is null when the
@@ -3919,6 +4054,77 @@ export function DealCockpitView({
               whenever this section is present so the same lines are not
               listed twice. */}
           {handoverCosts && <HandoverCostsPanel {...handoverCosts} t={t} />}
+
+          {/* --- الفاتورة القانونية وتصنيف محاسبة المعاملة ------------------ */}
+          {closingChecklist && (
+            <Card data-testid="deal-closing-checklist">
+              <CardHeader className="flex flex-row items-center justify-between pb-3">
+                <div>
+                  <CardTitle className="text-base">{t("ClosingChecklistHeading")}</CardTitle>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {closingChecklist.accountingClassification === "CLASSIFIED"
+                      ? t("AccountingStatusClassified")
+                      : t("AccountingStatusPending")}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={closingChecklist.onRecordLegalInvoice}
+                  >
+                    <FileText className="h-4 w-4 me-1.5" />
+                    {t("RecordLegalInvoice")}
+                  </Button>
+                  {closingChecklist.accountingClassification !== "CLASSIFIED" && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={closingChecklist.onClassifyDealAccounting}
+                    >
+                      <CheckCircle2 className="h-4 w-4 me-1.5" />
+                      {t("ClassifyDealAccounting")}
+                    </Button>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                {closingChecklist.legalInvoiceAmountMinor !== undefined ? (
+                  <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4 text-xs">
+                    <div>
+                      <dt className="text-muted-foreground">{t("LegalInvoiceAmount")}</dt>
+                      <dd className="font-semibold tabular-nums">
+                        <bdi dir="ltr">{money(closingChecklist.legalInvoiceAmountMinor)}</bdi>
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">{t("LegalInvoiceNumber")}</dt>
+                      <dd className="font-medium">{closingChecklist.legalInvoiceNumber ?? "-"}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">{t("LegalInvoiceDate")}</dt>
+                      <dd className="font-medium">
+                        {closingChecklist.legalInvoiceDate
+                          ? format(closingChecklist.legalInvoiceDate, "d MMM yyyy")
+                          : "-"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">{t("LegalInvoiceIssuedTo")}</dt>
+                      <dd className="font-medium">
+                        {closingChecklist.legalInvoiceIssuedTo ? t(closingChecklist.legalInvoiceIssuedTo) : "-"}
+                      </dd>
+                    </div>
+                  </dl>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    {t("LegalInvoiceNotRecorded")}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          )}
 
           {/* --- عهدة الموظف ------------------------------------------------ */}
           {/* Beside the costs it pays for, under the same permission to read.

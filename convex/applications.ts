@@ -49,8 +49,11 @@ import {
   buildRuleSnapshot,
   composeCustomerGapToDealer,
   creditDecisionForStatus,
+  defaultAppraisalFeeResponsibility,
   deriveDealStages,
   deriveManagementProfit,
+  feeResponsibilityValidator,
+  financingFailureReasonValidator,
   handoverStatusForFacts,
   obligationFromRow,
   positionForObligation,
@@ -2870,6 +2873,10 @@ export const cancelApplication = mutation({
     orgId: v.id("organizations"),
     applicationId: v.id("financeApplications"),
     reason: v.optional(v.string()),
+    failureReason: v.optional(financingFailureReasonValidator),
+    failureNotes: v.optional(v.string()),
+    appraisalFeeResponsibility: v.optional(feeResponsibilityValidator),
+    appraisalFeeResponsibilityReason: v.optional(v.string()),
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
@@ -2883,7 +2890,12 @@ export const cancelApplication = mutation({
         economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: auth.user._id,
-        fingerprint: JSON.stringify({ applicationId: args.applicationId, reason: args.reason }),
+        fingerprint: JSON.stringify({
+          applicationId: args.applicationId,
+          reason: args.reason,
+          failureReason: args.failureReason,
+          appraisalFeeResponsibility: args.appraisalFeeResponsibility,
+        }),
       },
       async () => {
         const app = await ctx.db.get(args.applicationId);
@@ -3166,6 +3178,18 @@ export const cancelApplication = mutation({
           // validator already carries for exactly this.
           ...(app.gapResolution === "PENDING_NEGOTIATION"
             ? { gapResolution: "FAILED" as const }
+            : {}),
+          ...(args.failureReason
+            ? {
+                failureReason: args.failureReason,
+                failureNotes: args.failureNotes ?? cancellationReason,
+                failedAt: now,
+                failedBy: auth.user._id,
+                appraisalFeeResponsibility:
+                  args.appraisalFeeResponsibility ??
+                  defaultAppraisalFeeResponsibility(args.failureReason),
+                appraisalFeeResponsibilityReason: args.appraisalFeeResponsibilityReason,
+              }
             : {}),
         });
 

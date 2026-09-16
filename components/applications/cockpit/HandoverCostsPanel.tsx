@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, Pencil, Plus, Trash2 } from "lucide-react";
+import { Loader2, Pencil, Plus, Trash2, CheckCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -361,6 +361,7 @@ export function HandoverCostsPanel({
   onAbandonAdd,
   onRecordActual,
   onVoid,
+  onReconcile,
   onRecordTemplateActual,
   onAbandonTemplateActual,
   onAdoptCompanyFees,
@@ -388,6 +389,7 @@ export function HandoverCostsPanel({
   onAbandonAdd: (intentId: string) => void;
   onRecordActual: (feeId: string, values: ActualHandoverCost) => Promise<void>;
   onVoid: (feeId: string, reason: string) => Promise<void>;
+  onReconcile?: (feeId: string, notes: string) => Promise<void>;
   /**
    * Records the ACTUAL for a configured fee, by its position in the deal's
    * frozen snapshot. Every other field is the server's. Absent when the
@@ -416,6 +418,7 @@ export function HandoverCostsPanel({
   const [recordingTemplateIndex, setRecordingTemplateIndex] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [voidingId, setVoidingId] = useState<string | null>(null);
+  const [reconcilingId, setReconcilingId] = useState<string | null>(null);
   /** The add form's intent while the form is open; null when it is not. */
   const [openIntent, setOpenIntent] = useState<AddIntent | null>(null);
   /** Every attempt that has gone out and is not yet resolved, by intentId. */
@@ -762,6 +765,7 @@ export function HandoverCostsPanel({
                                     if (!closeAddForm()) return;
                                     setEditingId(null);
                                     setVoidingId(null);
+                                    setReconcilingId(null);
                                     setRecordingTemplateIndex(row.templateIndex);
                                   }}
                                 >
@@ -770,6 +774,25 @@ export function HandoverCostsPanel({
                               )}
                               {canManage && row.actual !== null && row.actual.currency === denomination.code && lineFor(row) && (
                                 <div className="flex gap-1">
+                                  {row.actual.status !== "RECONCILED" && onReconcile && (
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-7 w-7 text-emerald-600 hover:text-emerald-700"
+                                      aria-label={t("ReconcileDealFee")}
+                                      disabled={submittingAny}
+                                      onClick={() => {
+                                        if (!closeAddForm()) return;
+                                        setRecordingTemplateIndex(null);
+                                        setEditingId(null);
+                                        setVoidingId(null);
+                                        setReconcilingId(row.actual?.feeId ?? null);
+                                      }}
+                                    >
+                                      <CheckCheck className="h-3.5 w-3.5" />
+                                    </Button>
+                                  )}
                                   <Button
                                     type="button"
                                     variant="ghost"
@@ -781,6 +804,7 @@ export function HandoverCostsPanel({
                                       if (!closeAddForm()) return;
                                       setRecordingTemplateIndex(null);
                                       setVoidingId(null);
+                                      setReconcilingId(null);
                                       setEditingId(row.actual?.feeId ?? null);
                                     }}
                                   >
@@ -797,6 +821,7 @@ export function HandoverCostsPanel({
                                       if (!closeAddForm()) return;
                                       setRecordingTemplateIndex(null);
                                       setEditingId(null);
+                                      setReconcilingId(null);
                                       setVoidingId(row.actual?.feeId ?? null);
                                     }}
                                   >
@@ -833,6 +858,20 @@ export function HandoverCostsPanel({
                             />
                           </div>
                         )}
+                        {row.actual !== null && reconcilingId === row.actual.feeId && lineFor(row) && (
+                          <div className="mt-3">
+                            <ReconcileForm
+                              t={t}
+                              onCancel={() => setReconcilingId(null)}
+                              onSubmit={async (notes) => {
+                                if (onReconcile) {
+                                  await onReconcile((lineFor(row) as HandoverCostLine)._id, notes);
+                                }
+                                setReconcilingId(null);
+                              }}
+                            />
+                          </div>
+                        )}
                       </li>
                     ))}
                   </ul>
@@ -852,7 +891,18 @@ export function HandoverCostsPanel({
                   className="rounded-md border p-3 text-sm"
                   data-testid={`deal-handover-cost-${line._id}`}
                 >
-                  {editingId === line._id ? (
+                  {reconcilingId === line._id ? (
+                    <ReconcileForm
+                      t={t}
+                      onCancel={() => setReconcilingId(null)}
+                      onSubmit={async (notes) => {
+                        if (onReconcile) {
+                          await onReconcile(line._id, notes);
+                        }
+                        setReconcilingId(null);
+                      }}
+                    />
+                  ) : editingId === line._id ? (
                     <ActualForm
                       line={line}
                       scale={scaleOf(line.currency)}
@@ -922,6 +972,24 @@ export function HandoverCostsPanel({
                         )}
                         {canManage && isHandoverType(line.feeType) && line.currency === denomination.code && (
                           <div className="flex gap-1">
+                            {line.actualAmountMinor !== undefined && line.status !== "RECONCILED" && onReconcile && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7 text-emerald-600 hover:text-emerald-700"
+                                aria-label={t("ReconcileDealFee")}
+                                disabled={submittingAny}
+                                onClick={() => {
+                                  if (!closeAddForm()) return;
+                                  setEditingId(null);
+                                  setVoidingId(null);
+                                  setReconcilingId(line._id);
+                                }}
+                              >
+                                <CheckCheck className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
                             <Button
                               type="button"
                               variant="ghost"
@@ -932,6 +1000,7 @@ export function HandoverCostsPanel({
                               onClick={() => {
                                 if (!closeAddForm()) return;
                                 setVoidingId(null);
+                                setReconcilingId(null);
                                 setEditingId(line._id);
                               }}
                             >
@@ -947,6 +1016,7 @@ export function HandoverCostsPanel({
                               onClick={() => {
                                 if (!closeAddForm()) return;
                                 setEditingId(null);
+                                setReconcilingId(null);
                                 setVoidingId(line._id);
                               }}
                             >
@@ -1639,3 +1709,67 @@ function VoidForm({
     </form>
   );
 }
+
+function ReconcileForm({
+  t,
+  onCancel,
+  onSubmit,
+}: Readonly<{
+  t: (key: string) => string;
+  onCancel: () => void;
+  onSubmit: (notes: string) => Promise<void>;
+}>) {
+  const [notes, setNotes] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <form
+      className="space-y-3"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        if (!notes.trim()) {
+          setError(t("ReconcileNotesRequired"));
+          return;
+        }
+        setSubmitting(true);
+        setError(null);
+        try {
+          await onSubmit(notes.trim());
+        } catch (caught) {
+          setError(caught instanceof Error ? caught.message : t("UnexpectedError"));
+        } finally {
+          setSubmitting(false);
+        }
+      }}
+    >
+      <p className="font-medium text-emerald-600">{t("ReconcileDealFee")}</p>
+      <p className="text-xs text-muted-foreground">{t("ReconcileFeeNote")}</p>
+      <div className="space-y-1.5">
+        <Label htmlFor="reconcile-notes">{t("ReconcileNotes")}</Label>
+        <Input
+          id="reconcile-notes"
+          value={notes}
+          onChange={(event) => setNotes(event.target.value)}
+          placeholder={t("ReconcileNotesPlaceholder")}
+          required
+        />
+      </div>
+      {error && (
+        <p role="alert" className="text-xs font-medium text-destructive">
+          {error}
+        </p>
+      )}
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" disabled={submitting} onClick={onCancel}>
+          {t("Cancel")}
+        </Button>
+        <Button type="submit" size="sm" disabled={submitting || !notes.trim()}>
+          {submitting && <Loader2 className="h-4 w-4 me-1.5 animate-spin" />}
+          {t("ConfirmReconcile")}
+        </Button>
+      </div>
+    </form>
+  );
+}
+

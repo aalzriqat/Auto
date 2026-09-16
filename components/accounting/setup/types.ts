@@ -18,6 +18,7 @@ export type PeriodSummary = {
 export type PendingEventSummary = {
   _id: Id<"pendingAccountingEvents">;
   kind: "POST" | "REVERSE";
+  status?: string;
   eventType?: string;
   sourceType: string;
   sourceId: string;

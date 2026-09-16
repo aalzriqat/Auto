@@ -150,6 +150,7 @@ export function FixedAssetsTab() {
                           variant="ghost"
                           size="icon"
                           title={t("ViewEvents" as any)}
+                          aria-label={t("ViewEvents" as any)}
                           onClick={() => setEventsAsset(asset)}
                         >
                           <History className="w-4 h-4 text-muted-foreground" />
@@ -159,6 +160,7 @@ export function FixedAssetsTab() {
                             variant="ghost"
                             size="icon"
                             title={t("ImpairAsset" as any)}
+                            aria-label={t("ImpairAsset" as any)}
                             onClick={() => setImpairAsset(asset)}
                           >
                             <TrendingDown className="w-4 h-4 text-amber-600" />
@@ -169,6 +171,7 @@ export function FixedAssetsTab() {
                             variant="ghost"
                             size="icon"
                             title={t("DisposeAsset" as any)}
+                            aria-label={t("DisposeAsset" as any)}
                             onClick={() => setDisposeAsset(asset)}
                           >
                             <XCircle className="w-4 h-4 text-rose-600" />

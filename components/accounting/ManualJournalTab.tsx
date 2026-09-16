@@ -381,6 +381,8 @@ export function ManualJournalTab() {
                           type="button"
                           variant="ghost"
                           size="icon"
+                          aria-label={t("Remove" as any)}
+                          title={t("Remove" as any)}
                           disabled={fields.length <= 2}
                           onClick={() => remove(index)}
                         >

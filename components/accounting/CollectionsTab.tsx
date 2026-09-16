@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { format } from "date-fns";
 import {
@@ -657,8 +657,32 @@ function MethodTotals({ totals }: { totals: Record<string, number> }) {
 
 function useCustomerVehicleOptions() {
   const { activeOrgId } = useOrg();
-  const { results: customers } = usePaginatedQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
-  const { results: vehicles } = usePaginatedQuery(api.vehicles.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
+  const {
+    results: customers,
+    status: customerStatus,
+    loadMore: loadMoreCustomers,
+  } = usePaginatedQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip", {
+    initialNumItems: 250,
+  });
+  const {
+    results: vehicles,
+    status: vehicleStatus,
+    loadMore: loadMoreVehicles,
+  } = usePaginatedQuery(api.vehicles.list, activeOrgId ? { orgId: activeOrgId } : "skip", {
+    initialNumItems: 250,
+  });
+
+  useEffect(() => {
+    if (customerStatus === "CanLoadMore") {
+      loadMoreCustomers(250);
+    }
+  }, [customerStatus, loadMoreCustomers]);
+
+  useEffect(() => {
+    if (vehicleStatus === "CanLoadMore") {
+      loadMoreVehicles(250);
+    }
+  }, [vehicleStatus, loadMoreVehicles]);
 
   const customerOptions = useMemo(
     () => (customers ?? []).map((customer) => ({

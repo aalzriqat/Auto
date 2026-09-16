@@ -126,6 +126,7 @@ export function PartnerEquityTab() {
                           variant="ghost"
                           size="icon"
                           title={t("PartnerHistory" as any)}
+                          aria-label={t("PartnerHistory" as any)}
                           onClick={() => setHistoryPartner(partner)}
                         >
                           <History className="w-4 h-4 text-muted-foreground" />
@@ -136,6 +137,7 @@ export function PartnerEquityTab() {
                               variant="ghost"
                               size="icon"
                               title={t("RecordContribution" as any)}
+                              aria-label={t("RecordContribution" as any)}
                               onClick={() => setMovement({ partner, type: "CONTRIBUTION" })}
                             >
                               <ArrowDownToLine className="w-4 h-4 text-emerald-600" />
@@ -144,6 +146,7 @@ export function PartnerEquityTab() {
                               variant="ghost"
                               size="icon"
                               title={t("RecordDraw" as any)}
+                              aria-label={t("RecordDraw" as any)}
                               onClick={() => setMovement({ partner, type: "DRAW" })}
                             >
                               <ArrowUpFromLine className="w-4 h-4 text-rose-600" />
@@ -152,6 +155,7 @@ export function PartnerEquityTab() {
                               variant="ghost"
                               size="icon"
                               title={t("RecordDistribution" as any)}
+                              aria-label={t("RecordDistribution" as any)}
                               onClick={() => setMovement({ partner, type: "PROFIT_DISTRIBUTION" })}
                             >
                               <PieChart className="w-4 h-4 text-violet-600" />

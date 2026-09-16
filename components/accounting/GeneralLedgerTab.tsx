@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { usePaginatedQuery } from "convex/react";
+import { usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
@@ -10,6 +11,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { dateInputToUtcMs, dateInputEndToUtcMs, todayDateInput, daysFromTodayDateInput } from "@/lib/dateInput";
 
 type LedgerTransaction = {
@@ -108,6 +117,9 @@ export function GeneralLedgerTab() {
   const { t, locale } = useLanguage();
   const formatCurrency = useCurrencyFormatter();
 
+  const [activeLedgerView, setActiveLedgerView] = useState<"gl" | "register">("gl");
+  const [selectedEntryId, setSelectedEntryId] = useState<Id<"journalEntries"> | null>(null);
+
   const [startDateStr, setStartDateStr] = useState(() => daysFromTodayDateInput(-30));
   const [endDateStr, setEndDateStr] = useState(() => todayDateInput());
   const [filterActive, setFilterActive] = useState(false);
@@ -116,9 +128,18 @@ export function GeneralLedgerTab() {
   const startDate = filterActive ? dateInputToUtcMs(startDateStr) : undefined;
   const endDate = filterActive ? dateInputEndToUtcMs(endDateStr) : undefined;
 
+  const journalEntries = useQuery(
+    api.accountingLedger.listJournalEntries,
+    activeOrgId && activeLedgerView === "gl" ? { orgId: activeOrgId, limit: 100 } : "skip"
+  );
+  const entryDetails = useQuery(
+    api.accountingLedger.getJournalEntry,
+    activeOrgId && selectedEntryId ? { orgId: activeOrgId, journalEntryId: selectedEntryId } : "skip"
+  );
+
   const { results: transactions, status, loadMore } = usePaginatedQuery(
     api.transactions.list,
-    activeOrgId
+    activeOrgId && activeLedgerView === "register"
       ? { orgId: activeOrgId, startDate, endDate }
       : "skip",
     { initialNumItems: 100 }
@@ -148,89 +169,224 @@ export function GeneralLedgerTab() {
 
   return (
     <div className="p-6 space-y-4">
-      <div>
-        <h2 className="text-lg font-semibold text-foreground">{t("TransactionRegister" as any)}</h2>
-        <p className="text-sm text-muted-foreground">{t("TransactionRegisterDesc" as any)}</p>
-      </div>
-
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-muted-foreground">{t("StartDate" as any)}</label>
-          <Input type="date" value={startDateStr} onChange={(e) => setStartDateStr(e.target.value)} className="h-8 text-sm" />
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-foreground">
+            {activeLedgerView === "gl" ? t("GeneralLedger" as any) : t("TransactionRegister" as any)}
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            {activeLedgerView === "gl" ? t("JournalEntries" as any) : t("TransactionRegisterDesc" as any)}
+          </p>
         </div>
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-muted-foreground">{t("EndDate" as any)}</label>
-          <Input type="date" value={endDateStr} onChange={(e) => setEndDateStr(e.target.value)} className="h-8 text-sm" />
+        <div className="flex items-center rounded-lg border bg-muted/30 p-1 self-start sm:self-auto">
+          <Button
+            size="sm"
+            variant={activeLedgerView === "gl" ? "secondary" : "ghost"}
+            className="h-7 text-xs"
+            onClick={() => setActiveLedgerView("gl")}
+          >
+            {t("GeneralLedger" as any)}
+          </Button>
+          <Button
+            size="sm"
+            variant={activeLedgerView === "register" ? "secondary" : "ghost"}
+            className="h-7 text-xs"
+            onClick={() => setActiveLedgerView("register")}
+          >
+            {t("TransactionRegister" as any)}
+          </Button>
         </div>
-        <Button size="sm" variant={filterActive ? "default" : "outline"} onClick={() => setFilterActive(!filterActive)}>
-          {filterActive ? t("ClearFilter" as any) : t("ApplyFilter" as any)}
-        </Button>
       </div>
 
-      <div className="flex gap-4 text-sm">
-        <span className="font-semibold text-emerald-600 dark:text-emerald-400">{t("TxIn" as any)}: {formatCurrency(totalIn)}</span>
-        <span className="font-semibold text-rose-600 dark:text-rose-400">{t("TxOut" as any)}: {formatCurrency(totalOut)}</span>
-        <span className="text-muted-foreground font-semibold">{t("TxNet" as any)}: {formatCurrency(totalIn - totalOut)}</span>
-      </div>
-
-      <div className="rounded-md border border-border overflow-x-auto">
-        <Table>
-          <TableHeader className="bg-muted/50">
-            <TableRow>
-              <TableHead>{t("Date" as any)}</TableHead>
-              <TableHead>{t("TypeLabel" as any)}</TableHead>
-              <TableHead>{t("Category" as any)}</TableHead>
-              <TableHead>{t("DescriptionLabel" as any)}</TableHead>
-              <TableHead className="text-right">{t("Amount" as any)}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {!transactions ? (
+      {activeLedgerView === "gl" ? (
+        <div className="rounded-md border border-border overflow-x-auto">
+          <Table>
+            <TableHeader className="bg-muted/50">
               <TableRow>
-                <TableCell colSpan={5} className="text-center text-muted-foreground py-8">{t("Loading" as any)}</TableCell>
+                <TableHead>{t("Date" as any)}</TableHead>
+                <TableHead>{t("TypeLabel" as any)}</TableHead>
+                <TableHead>{t("Memo" as any)}</TableHead>
+                <TableHead>{t("Source" as any)}</TableHead>
+                <TableHead>{t("Status" as any)}</TableHead>
+                <TableHead className="text-right">{t("Actions" as any)}</TableHead>
               </TableRow>
-            ) : transactions.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={5} className="text-center text-muted-foreground py-8">{t("NoTransactionsFound" as any)}</TableCell>
-              </TableRow>
-            ) : (
-              transactions.map((tx) => {
-                const description = transactionDescription(tx);
-                return (
-                  <TableRow key={tx._id}>
-                    <TableCell className="font-medium">{new Date(tx.date).toLocaleDateString(localeCode)}</TableCell>
+            </TableHeader>
+            <TableBody>
+              {journalEntries === undefined ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                    {t("Loading" as any)}
+                  </TableCell>
+                </TableRow>
+              ) : journalEntries.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                    {t("NoJournalEntriesFound" as any)}
+                  </TableCell>
+                </TableRow>
+              ) : (
+                journalEntries.map((entry) => (
+                  <TableRow key={entry._id}>
+                    <TableCell className="font-medium whitespace-nowrap">
+                      {new Date(entry.accountingDate).toLocaleDateString(localeCode)}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs font-semibold">
+                      {entry.journalNumber}
+                    </TableCell>
+                    <TableCell className="max-w-[320px] truncate" title={entry.memo}>
+                      {entry.memo || "-"}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                      {entry.sourceType}: {entry.sourceId}
+                    </TableCell>
                     <TableCell>
-                      <Badge
-                        variant={tx.type === "IN" ? "default" : "destructive"}
-                        className={tx.type === "IN" ? "bg-green-100 text-green-800 hover:bg-green-100 dark:bg-green-950/50 dark:text-green-200 dark:hover:bg-green-950/50" : ""}
+                      <Badge variant="outline">{entry.status}</Badge>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setSelectedEntryId(entry._id)}
                       >
-                        {transactionTypeLabel(tx.type)}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className="bg-muted/50 text-muted-foreground">
-                        {transactionCategoryLabel(tx.category)}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="max-w-[300px] truncate" title={description}>
-                      {description}
-                    </TableCell>
-                    <TableCell className={`text-right font-semibold ${tx.type === "IN" ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
-                      {tx.type === "IN" ? "+" : "-"}{formatCurrency(tx.amount)}
+                        {t("ViewLines" as any)}
+                      </Button>
                     </TableCell>
                   </TableRow>
-                );
-              })
-            )}
-          </TableBody>
-        </Table>
-      </div>
-
-      {status === "CanLoadMore" && (
-        <div className="flex justify-center">
-          <Button variant="outline" size="sm" onClick={() => loadMore(100)}>{t("LoadMore" as any)}</Button>
+                ))
+              )}
+            </TableBody>
+          </Table>
         </div>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">{t("StartDate" as any)}</label>
+              <Input type="date" value={startDateStr} onChange={(e) => setStartDateStr(e.target.value)} className="h-8 text-sm" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">{t("EndDate" as any)}</label>
+              <Input type="date" value={endDateStr} onChange={(e) => setEndDateStr(e.target.value)} className="h-8 text-sm" />
+            </div>
+            <Button size="sm" variant={filterActive ? "default" : "outline"} onClick={() => setFilterActive(!filterActive)}>
+              {filterActive ? t("ClearFilter" as any) : t("ApplyFilter" as any)}
+            </Button>
+          </div>
+
+          <div className="flex gap-4 text-sm">
+            <span className="font-semibold text-emerald-600 dark:text-emerald-400">{t("TxIn" as any)}: {formatCurrency(totalIn)}</span>
+            <span className="font-semibold text-rose-600 dark:text-rose-400">{t("TxOut" as any)}: {formatCurrency(totalOut)}</span>
+            <span className="text-muted-foreground font-semibold">{t("TxNet" as any)}: {formatCurrency(totalIn - totalOut)}</span>
+          </div>
+
+          <div className="rounded-md border border-border overflow-x-auto">
+            <Table>
+              <TableHeader className="bg-muted/50">
+                <TableRow>
+                  <TableHead>{t("Date" as any)}</TableHead>
+                  <TableHead>{t("TypeLabel" as any)}</TableHead>
+                  <TableHead>{t("Category" as any)}</TableHead>
+                  <TableHead>{t("DescriptionLabel" as any)}</TableHead>
+                  <TableHead className="text-right">{t("Amount" as any)}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {!transactions ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center text-muted-foreground py-8">{t("Loading" as any)}</TableCell>
+                  </TableRow>
+                ) : transactions.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center text-muted-foreground py-8">{t("NoTransactionsFound" as any)}</TableCell>
+                  </TableRow>
+                ) : (
+                  transactions.map((tx) => {
+                    const description = transactionDescription(tx);
+                    return (
+                      <TableRow key={tx._id}>
+                        <TableCell className="font-medium">{new Date(tx.date).toLocaleDateString(localeCode)}</TableCell>
+                        <TableCell>
+                          <Badge
+                            variant={tx.type === "IN" ? "default" : "destructive"}
+                            className={tx.type === "IN" ? "bg-green-100 text-green-800 hover:bg-green-100 dark:bg-green-950/50 dark:text-green-200 dark:hover:bg-green-950/50" : ""}
+                          >
+                            {transactionTypeLabel(tx.type)}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="bg-muted/50 text-muted-foreground">
+                            {transactionCategoryLabel(tx.category)}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="max-w-[300px] truncate" title={description}>
+                          {description}
+                        </TableCell>
+                        <TableCell className={`text-right font-semibold ${tx.type === "IN" ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
+                          {tx.type === "IN" ? "+" : "-"}{formatCurrency(tx.amount)}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                )}
+              </TableBody>
+            </Table>
+          </div>
+
+          {status === "CanLoadMore" && (
+            <div className="flex justify-center">
+              <Button variant="outline" size="sm" onClick={() => loadMore(100)}>{t("LoadMore" as any)}</Button>
+            </div>
+          )}
+        </>
       )}
+
+      <Dialog open={!!selectedEntryId} onOpenChange={(open) => !open && setSelectedEntryId(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {t("JournalLines" as any)} {entryDetails?.entry?.journalNumber ? `(${entryDetails.entry.journalNumber})` : ""}
+            </DialogTitle>
+            <DialogDescription>{entryDetails?.entry?.memo || ""}</DialogDescription>
+          </DialogHeader>
+          <div className="rounded-md border overflow-x-auto">
+            <Table>
+              <TableHeader className="bg-muted/50">
+                <TableRow>
+                  <TableHead>{t("DescriptionLabel" as any)}</TableHead>
+                  <TableHead className="text-right">{t("Debit" as any)}</TableHead>
+                  <TableHead className="text-right">{t("Credit" as any)}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {!entryDetails?.lines ? (
+                  <TableRow>
+                    <TableCell colSpan={3} className="py-4 text-center text-muted-foreground">
+                      {t("Loading" as any)}
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  entryDetails.lines.map((line) => (
+                    <TableRow key={line._id}>
+                      <TableCell>{line.description || "-"}</TableCell>
+                      <TableCell className="text-right font-medium text-emerald-600 dark:text-emerald-400">
+                        {line.debitMinor > 0 ? formatCurrency(line.debitMinor / 1000) : "-"}
+                      </TableCell>
+                      <TableCell className="text-right font-medium text-rose-600 dark:text-rose-400">
+                        {line.creditMinor > 0 ? formatCurrency(line.creditMinor / 1000) : "-"}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSelectedEntryId(null)}>
+              {t("Cancel" as any)}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
