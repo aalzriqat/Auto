@@ -73,3 +73,42 @@ export function msToDateInput(ms: number): string {
   const d = new Date(ms);
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
+
+/**
+ * The UTC calendar today as "YYYY-MM-DD" — the default and the ceiling of
+ * an ECONOMIC date input (a paid date, a custody movement date, an invoice
+ * date).
+ *
+ * The ledger's calendar is UTC: every accounting period is bounded with
+ * `Date.UTC` and every posting is bucketed by its UTC month, so "today" for
+ * a posting is the UTC day, not the browser's. For a user ahead of UTC
+ * (Jordan, +3) the two differ in the first hours of the local day, and it is
+ * the UTC day the server accepts and files under — the local day's midnight
+ * has not begun on the server's clock and is refused with no tolerance.
+ * `todayDateInput` stays LOCAL for non-economic pickers (a due date, a
+ * reminder), where the operator's own calendar is the right one.
+ */
+export function economicTodayDateInput(): string {
+  return msToDateInput(Date.now());
+}
+
+/**
+ * The instant an ECONOMIC calendar date is sent to the server as: the UTC
+ * midnight of EXACTLY the calendar date the operator picked, whether it is
+ * today or backdated — `dateInputToUtcMs`, nothing else.
+ *
+ * The trap this replaces: sending TODAY as `Date.now()`. The current instant
+ * is not on the picked calendar date in every zone. At 01:30 in Amman on
+ * 1 October the picker (defaulted to the local day) reads "2026-10-01" while
+ * `Date.now()` is 22:30Z on 30 SEPTEMBER, so the movement was filed a day
+ * early — into the previous UTC month, and at a year end into the previous
+ * fiscal year. The reverse shift hits a user behind UTC in their evening.
+ * Sending the picked day's UTC midnight keeps the accounting date the
+ * operator chose; the server derives the period from it and refuses a day
+ * its own clock has not reached, which is why economic pickers default to
+ * and are capped at `economicTodayDateInput`, never the local today.
+ * NaN for an empty/invalid value, like `dateInputToUtcMs`.
+ */
+export function economicDateInputToMs(value: string): number {
+  return dateInputToUtcMs(value);
+}

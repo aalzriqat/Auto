@@ -68,7 +68,14 @@ async function seedDeal(suffix: string): Promise<Seed> {
       status: "APPROVED", createdAt: Date.now(), updatedAt: Date.now(),
     });
   });
-  return { t, orgId, userId, employeeId, applicationId, asUser: t.withIdentity({ subject: `ra_user_${suffix}` }) };
+  const asUser = t.withIdentity({ subject: `ra_user_${suffix}` });
+  // Custody money commands post to the ledger and refuse without a chart
+  // (`assertCustodyAccountingReady`); no period is opened, so postings queue.
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
+  );
+  await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+  return { t, orgId, userId, employeeId, applicationId, asUser };
 }
 
 async function openCustody(seed: Seed, issued = jod(700)) {
@@ -144,10 +151,10 @@ describe("custody balances fail closed on an unreadable amount, end to end", () 
       expect(costs.summaryUnavailable?.reason).toBe("UNSAFE_AMOUNT");
 
       await expect(
-        seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { orgId: seed.orgId, custodyId, notes: "checked" })
+        seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, custodyId, notes: "checked" })
       ).rejects.toThrow(/not a readable figure/);
       await expect(
-        seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+        seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(),
           orgId: seed.orgId, custodyId, notes: "checked", writeOffReason: "cannot account for it",
         })
       ).rejects.toThrow(/not a readable figure/);
@@ -165,7 +172,7 @@ describe("custody balances fail closed on an unreadable amount, end to end", () 
       expect(record.summary).toBeNull();
       expect(record.summaryUnavailable?.reason).toBe("UNSAFE_AMOUNT");
       await expect(
-        seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { orgId: seed.orgId, custodyId, notes: "checked" })
+        seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, custodyId, notes: "checked" })
       ).rejects.toThrow(/not a readable figure/);
     }
   );
@@ -463,7 +470,7 @@ describe("custody balances fail closed on an unreadable amount, end to end", () 
     const record = (await readCosts(seed)).custody.find((row) => row._id === custodyId)!;
     expect(record.summaryUnavailable).toBeNull();
     expect(record.summary?.settled).toBe(true);
-    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { orgId: seed.orgId, custodyId, notes: "balanced" });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, custodyId, notes: "balanced" });
     expect((await custodyRow(seed, custodyId)).status).toBe("RECONCILED");
   });
 });

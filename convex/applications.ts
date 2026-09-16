@@ -22,8 +22,9 @@ import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifi
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
 import { depositMethodValidator, type DepositMethod } from "./utils/depositRecording";
 import { completeSale } from "./utils/saleCompletion";
-import { resolveFinancedSalePlan } from "./utils/financedSaleRecognition";
+import { resolveFinancedSalePlan, financedSaleRecognitionDate } from "./utils/financedSaleRecognition";
 import { assertFeeTemplatesWithinLimit } from "./utils/dealCostLimits";
+import { loadCustodyRecords } from "./utils/settlementDeductions";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
 import { registerChequeCore, markChequeClearedCore, assertNoActiveAllocations } from "./collections";
@@ -2914,6 +2915,22 @@ export const cancelApplication = mutation({
           return;
         }
 
+        // Cash in an employee's pocket does not stop being there because the
+        // deal did. An OPEN custody record is refused here rather than
+        // silently orphaned on a CANCELLED deal nothing offers actions on:
+        // settle it (return / reimburse / reconcile / write off) first. A
+        // CLOSED custody record is left exactly as it is — the costs the
+        // employee really paid stay posted; cancelling a deal erases nothing
+        // that was spent.
+        const openCustody = (
+          await loadCustodyRecords(ctx, args.applicationId, "cancelling this application")
+        ).find((row) => row.status === "OPEN");
+        if (openCustody) {
+          throw new ConvexError(
+            "An employee still holds cash custody on this deal. Settle that custody record (return the balance, reimburse what is owed, then reconcile or write it off) before cancelling the application."
+          );
+        }
+
         // Reversing an already-APPROVED decision is more sensitive than voiding
         // a draft/in-review one, so require the same permission used to approve.
         if (app.status === "APPROVED") {
@@ -3852,7 +3869,10 @@ export const finalizeDeal = mutation({
           customerId: app.customerId,
           salespersonId: app.salespersonId,
           salePrice: quote.vehiclePrice,
-          saleDate: Date.now(),
+          // The legal invoice's date where one is recorded — the ONE
+          // recognition date, shared with the period the plan's journal is
+          // dated into; see `financedSaleRecognitionDate`.
+          saleDate: financedSaleRecognitionDate(app, Date.now()),
           status: "COMPLETED",
           downPayment: quote.downPayment,
           financingType: quoteMode === undefined && app.companyId ? "FINANCED" : financingType,

@@ -2600,6 +2600,24 @@ export default defineSchema({
     ),
 
     notes: v.optional(v.string()),
+    /**
+     * Who is PLANNED to handle this deal's finalization payments, before any
+     * cash is handed over. A plan, not money: nothing here is issued, posted
+     * or summed, and the actual custody record (`financeDealCustody`) is
+     * opened separately and may name someone else. `amountMinor` is the
+     * amount the planner agreed to hand over, optional — the server's own
+     * recommendation is derived from the deal's employee-paid fee templates
+     * and never stored.
+     */
+    plannedCustody: v.optional(
+      v.object({
+        userId: v.id("users"),
+        amountMinor: v.optional(v.number()),
+        note: v.optional(v.string()),
+        plannedBy: v.id("users"),
+        plannedAt: v.number(),
+      })
+    ),
     createdAt: v.number(),
     updatedAt: v.number(),
     quoteModeAtSubmission: v.optional(v.union(
@@ -3034,6 +3052,34 @@ export default defineSchema({
 
     /** Set when an employee holding deal custody laid this out. */
     custodyId: v.optional(v.id("financeDealCustody")),
+    /**
+     * What of this line is ON THE BOOKS as a custody-paid cost right now, or
+     * absent when nothing is. `CUSTODY_FEE_PAID` posts once per version
+     * against `financeDealFees/<id>`; every correction (amount, custody,
+     * unlink, void) reverses the live version and, if a live charge remains,
+     * posts the next. Stored so "is it posted, and at what?" is answered from
+     * the row rather than by scanning an event family whose reversals share
+     * its source key.
+     *
+     * `occurredAt` is the date the version was minted AT — the one the outbox
+     * row carries as its `occurredAt` and `accountingDate`. The worker proves
+     * a queued row's envelope against it (`custodyPostingRefusal`): a row
+     * whose date was moved after it was queued would post into another
+     * period than the version was dated for, and nothing else records what
+     * that date was. Optional only for rows written before the stamp
+     * existed; a queued row standing on such a version is refused, never
+     * trusted.
+     */
+    custodyPosted: v.optional(
+      v.object({
+        version: v.number(),
+        amountMinor: v.number(),
+        custodyId: v.id("financeDealCustody"),
+        occurredAt: v.optional(v.number()),
+      })
+    ),
+    /** The highest custody posting version ever used on this line — never reused after a reversal. */
+    custodyPostingVersion: v.optional(v.number()),
     paidAt: v.optional(v.number()),
     receiptReference: v.optional(v.string()),
     documentStorageIds: v.optional(v.array(v.id("_storage"))),
@@ -3079,6 +3125,15 @@ export default defineSchema({
     // the bound counts what is live — a removed line stays as a row for its
     // trace and never moves a deal toward the cap.
     .index("by_application_voidedAt", ["applicationId", "voidedAt"])
+    // Every line of a deal that has EVER posted a custody charge, live or
+    // removed: `custodyPostingVersion` is set by the two writers that post
+    // one (`syncCustodyFeePosting`, the custody migration) and never unset,
+    // so `.gt("custodyPostingVersion", 0)` after the application equality
+    // enumerates exactly the lines whose `CUSTODY_FEE_PAID` family the
+    // ledger gate must prove OFF the books (a voided, unlinked or re-charged
+    // line whose reversal was deferred) — without the unbounded read of
+    // every removed row the deal ever had.
+    .index("by_application_custodyPostingVersion", ["applicationId", "custodyPostingVersion"])
     // The one LIVE line per configured position. `recordTemplateFeeActual`
     // proves uniqueness against this index with every field an equality —
     // `voidedAt` last, so `undefined` (live) is the one value asked for — and
@@ -3151,6 +3206,47 @@ export default defineSchema({
     reconciledBy: v.optional(v.id("users")),
     reconciliationNotes: v.optional(v.string()),
     writeOffReason: v.optional(v.string()),
+    /**
+     * Set by `openDealCustody` once custody posts to the ledger: every
+     * movement on this record has a journal (or a queued post) behind it. A
+     * record WITHOUT it predates the posting and refuses every money command
+     * (`assertCustodyOnLedger`) until an explicit migration settles it — a new
+     * leg posted onto an unposted record would be a partial ledger.
+     */
+    ledgerPosting: v.optional(v.literal("CANONICAL")),
+    /**
+     * What EMPLOYEE_REIMBURSEMENTS_PAYABLE (2320) is being driven TO for this
+     * record, and the last `CUSTODY_PAYABLE_RECLASSIFIED` version issued. The
+     * payable is the record's out-of-pocket position `max(0, −position)`,
+     * reached by a chain of delta reclassifications, one per movement — see
+     * `syncCustodyPayable`. Absent means zero.
+     *
+     * ⚠️ A TARGET, NOT A LEDGER BALANCE. A delta dated into a closed month
+     * waits in the outbox, and every later delta is queued behind it
+     * (`utils/custodySourceLedger`), so the books may still carry an earlier
+     * version's figure. What is actually posted is read from the ledger
+     * (`custodyPayableReclassPosted`), never from this field — the read
+     * reports `payableAwaitingPost` for exactly that gap.
+     */
+    payableTargetMinor: v.optional(v.number()),
+    payableReclassVersion: v.optional(v.number()),
+    /**
+     * The date each issued `CUSTODY_PAYABLE_RECLASSIFIED` version was minted
+     * AT — one stamp per version, the chain's own record of the envelope its
+     * queued rows must carry. Several versions can wait in the outbox at once
+     * (each queued behind the one before it), so the latest version's date
+     * alone would say nothing about v1's; the worker proves a queued delta's
+     * `occurredAt` / `accountingDate` against ITS version's stamp
+     * (`custodyPostingRefusal`). Rewritten by `syncCustodyPayable` alone:
+     * a fold that drops the queued tail and re-issues at a lower version
+     * drops the stamps above it too. Bounded by the chain itself
+     * (`MAX_SOURCE_EVENTS`, which the fold refuses past).
+     */
+    payableReclassIssued: v.optional(v.array(v.object({ version: v.number(), occurredAt: v.number() }))),
+    /** The write-off on the books (`CUSTODY_WRITTEN_OFF`, versioned), absent once reopened; `occurredAt` as on `custodyPosted`. */
+    writeOffPosted: v.optional(v.object({ version: v.number(), amountMinor: v.number(), occurredAt: v.optional(v.number()) })),
+    /** The highest write-off posting version ever used — never reused after a reversal. */
+    writeOffPostingVersion: v.optional(v.number()),
 
     createdBy: v.id("users"),
     createdAt: v.number(),

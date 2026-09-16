@@ -98,9 +98,10 @@ import {
   VehicleCostBasisSection,
   type FinancedDealOverviewData,
 } from "./DealFinancialOverview";
-import { DealCustodyPanel, type DealCustodyWiring } from "./DealCustodyPanel";
+import { DealCustodyPanel, type DealCustodyActions, type DealCustodyWiring } from "./DealCustodyPanel";
 import { CustodyMovementsList } from "./CustodyMovementsList";
 import {
+  FEE_TYPE_LABEL,
   HandoverCostAttemptError,
   HandoverCostsPanel,
   type ExpectedHandoverRow,
@@ -633,6 +634,20 @@ export function DealCockpit({
     api.financeDealCosts.listDealCosts,
     canViewApplications && deal ? { orgId, applicationId } : "skip"
   );
+  // The custody picker's own read, shaped for the money permission — see
+  // `listCustodyCandidates`. Mounted on EXACTLY the predicate that offers the
+  // custody commands below (`custodyCommandsOffered`), so the plan and issue
+  // dialogs can never render with a picker whose read was skipped
+  // (consolidated round, item 5); skipped for everyone else, so the cockpit
+  // never mounts a query its caller cannot pass. Custody is a fact of a
+  // FINANCE APPLICATION — the record is keyed on one — and this container
+  // is the financed cockpit, so `deal` here is always the financed kind.
+  const custodyCommandsOffered =
+    !permissionsLoading && hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT) && deal !== undefined && deal !== null;
+  const custodyCandidates = useQuery(
+    api.financeDealCosts.listCustodyCandidates,
+    custodyCommandsOffered ? { orgId } : "skip"
+  );
   /**
    * The financial overview — a sibling read model composed on the server from
    * the cockpit's own money payload plus the vehicle's pre-deal cost basis.
@@ -649,6 +664,12 @@ export function DealCockpit({
   const reconcileDealFee = useMutation(api.financeDealCosts.reconcileDealFee);
   const recordLegalInvoice = useMutation(api.financeDealCosts.recordLegalInvoice);
   const classifyDealAccounting = useMutation(api.financeDealCosts.classifyDealAccounting);
+  const planCustodyHandler = useMutation(api.financeDealCosts.planCustodyHandler);
+  const openDealCustody = useMutation(api.financeDealCosts.openDealCustody);
+  const recordCustodyMovement = useMutation(api.financeDealCosts.recordCustodyMovement);
+  const setFeeCustody = useMutation(api.financeDealCosts.setFeeCustody);
+  const reconcileDealCustody = useMutation(api.financeDealCosts.reconcileDealCustody);
+  const reopenDealCustody = useMutation(api.financeDealCosts.reopenDealCustody);
   const updateStatus = useMutation(api.applications.updateStatus);
   const cancelApplication = useMutation(api.applications.cancelApplication);
   const confirmDisbursement = useMutation(api.applications.confirmDisbursement);
@@ -847,8 +868,11 @@ export function DealCockpit({
             `${(minor / Math.pow(10, scaleForCurrency(currency))).toLocaleString()} ${
               currency === orgCurrency.code ? orgCurrency.displayLabel : currency
             }`,
-          canManage: canCreateApplication,
-          dealClosed: app.status === "CLOSED",
+          // Frozen once the sale is recognized (`economicsFrozen`): the server
+          // refuses every posting-bearing edit, so none is offered, and the
+          // panel says why at its head.
+          canManage: canCreateApplication && !(dealCosts?.economicsFrozen?.frozen ?? app.status === "CLOSED"),
+          dealClosed: dealCosts?.economicsFrozen?.frozen ?? app.status === "CLOSED",
           // Owner-only on the server (the authority that edits the company's
           // fees); the notice still renders for everyone, the action does not.
           onAdoptCompanyFees: isOwner
@@ -1586,16 +1610,143 @@ export function DealCockpit({
       : undefined;
 
   /**
-   * عهدة الموظف — READ-ONLY on this screen (see `DealCustodyPanel` for why:
-   * the custody module is off-ledger, so its commands are not offered here as
-   * money actions until canonical posting exists). The summary comes off the
-   * bounded `listDealCosts` read; each record's movement log is a separate
-   * paginated query, mounted only when the operator opens it.
+   * عهدة الموظف — read AND acted on from this screen. The summary comes off
+   * the bounded `listDealCosts` read; each record's movement log is a separate
+   * paginated query, mounted only when the operator opens it. The commands
+   * post through the custody clearing account and are offered only to a
+   * caller holding CONFIRM_FINANCE_DISBURSEMENT; the server's readiness
+   * verdict travels with the read so a dead button says why.
+   *
+   * Identity discipline, same as the handover costs: an issuance, a movement
+   * and a closure each mint one command identity per dialog ATTEMPT — the
+   * dialog's `intentId`, never the figures (R8) — and retire it on success,
+   * on the server's own refusal, or when the operator abandons the dialog. A
+   * lost response keeps it so the operator's retry replays rather than pays
+   * twice; and because the figures are not in the key, a corrected figure on
+   * that retry is refused by the server's fingerprint instead of becoming a
+   * second payment, while a dialog opened again later for the same figures
+   * is a new command rather than a silent replay of the first.
    */
   const custodyMoney = (minor: number, currency: string) =>
     `${(minor / Math.pow(10, scaleForCurrency(currency))).toLocaleString()} ${
       currency === orgCurrency.code ? orgCurrency.displayLabel : currency
     }`;
+  // One intent per dialog attempt. The deal, record and kind are named for
+  // legibility only; the attempt's `intentId` is what makes it one command.
+  const openCustodyIntent = (intentId: string) => `open-custody:${applicationId}:${intentId}`;
+  const custodyMoveIntent = (custodyId: string, kind: string, intentId: string) => `custody-move:${custodyId}:${kind}:${intentId}`;
+  const custodyCloseIntent = (custodyId: string, intentId: string) => `custody-close:${custodyId}:${intentId}`;
+  const custodyCommand = async (intent: string, work: (idempotencyKey: string) => Promise<unknown>) => {
+    try {
+      await work(commandId.for(intent));
+      commandId.retire(intent);
+      toast.success(t("CustodySaved"));
+    } catch (error) {
+      // The server's own refusal rolled back and nothing committed: the next
+      // attempt is a new command. Anything else may have landed; keep the key.
+      if (isConvexError(error)) commandId.retire(intent);
+      throw new Error(getErrorMessage(error));
+    }
+  };
+  const custodyPlain = async (work: () => Promise<unknown>) => {
+    try {
+      await work();
+      toast.success(t("CustodySaved"));
+    } catch (error) {
+      throw new Error(getErrorMessage(error));
+    }
+  };
+  const custodyActions: DealCustodyActions | undefined =
+    app && custodyCommandsOffered
+      ? {
+          members: custodyCandidates?.candidates,
+          eligibleFees: (dealCosts?.fees ?? [])
+            .filter((fee) => fee.custodyEligible && fee.custodyId === undefined && fee.actualAmountMinor !== undefined && fee.actualAmountMinor > 0)
+            .map((fee) => ({
+              _id: fee._id,
+              label: fee.description?.trim() || t(FEE_TYPE_LABEL[fee.feeType] ?? fee.feeType),
+              actualAmountMinor: fee.actualAmountMinor as number,
+              currency: fee.currency,
+            })),
+          scaleOf: scaleForCurrency,
+          onPlan: (values) =>
+            custodyPlain(() =>
+              planCustodyHandler({
+                orgId,
+                applicationId,
+                userId: values.userId,
+                amountMinor: values.amountMinor,
+                note: values.note,
+              })
+            ),
+          onClearPlan: () => custodyPlain(() => planCustodyHandler({ orgId, applicationId })),
+          onOpen: (values) =>
+            custodyCommand(openCustodyIntent(values.intentId), (idempotencyKey) =>
+              openDealCustody({
+                orgId,
+                applicationId,
+                userId: values.userId,
+                issuedMinor: values.amountMinor,
+                method: values.method,
+                reference: values.reference,
+                note: values.note,
+                occurredAt: values.occurredAt,
+                idempotencyKey,
+              })
+            ),
+          onMove: (custodyId, kind, values) =>
+            custodyCommand(custodyMoveIntent(custodyId, kind, values.intentId), (idempotencyKey) =>
+              recordCustodyMovement({
+                orgId,
+                custodyId,
+                kind,
+                amountMinor: values.amountMinor,
+                method: values.method,
+                reference: values.reference,
+                note: values.note,
+                occurredAt: values.occurredAt,
+                idempotencyKey,
+              })
+            ),
+          onReverse: (custodyId, movement, reason) =>
+            custodyCommand(`custody-reverse:${custodyId}:${movement.entryId}`, (idempotencyKey) =>
+              recordCustodyMovement({
+                orgId,
+                custodyId,
+                kind: "REVERSAL",
+                reversesEntryId: movement.entryId,
+                amountMinor: movement.amountMinor,
+                note: reason,
+                idempotencyKey,
+              })
+            ),
+          onAttach: (custodyId, feeId) =>
+            custodyPlain(() =>
+              setFeeCustody({ orgId, feeId, custodyId })
+            ),
+          onClose: (custodyId, values) =>
+            // A closure is a command like a movement: it may post a write-off,
+            // and a lost response must replay rather than refuse on the
+            // closure it already made — so it carries a key the same way.
+            custodyCommand(custodyCloseIntent(custodyId, values.intentId), (idempotencyKey) =>
+              reconcileDealCustody({
+                orgId,
+                custodyId,
+                notes: values.notes,
+                writeOffReason: values.writeOffReason,
+                idempotencyKey,
+              })
+            ),
+          onReopen: (custodyId, reason) =>
+            custodyPlain(() => reopenDealCustody({ orgId, custodyId, reason })),
+          // The dialog was abandoned with its command not having succeeded:
+          // its identity is over, so a later genuine command with the same
+          // figures can never replay it.
+          onAbandonOpen: (intentId) => commandId.retire(openCustodyIntent(intentId)),
+          onAbandonMove: (custodyId, kind, intentId) => commandId.retire(custodyMoveIntent(custodyId, kind, intentId)),
+          onAbandonClose: (custodyId, intentId) => commandId.retire(custodyCloseIntent(custodyId, intentId)),
+        }
+      : undefined;
   const custody: DealCustodyWiring | undefined =
     app && deal
       ? {
@@ -1604,16 +1755,31 @@ export function DealCockpit({
           truncated: dealCosts?.custodyTruncated ?? false,
           currency: dealCosts?.currency ?? economicsCurrencyCode,
           expectedTotalMinor: dealCosts?.expected?.expectedTotalMinor ?? null,
-          renderMovements: (custodyId: string) => {
+          accounting: dealCosts?.custodyAccounting,
+          plannedCustody: dealCosts?.plannedCustody ?? null,
+          plannedCustodyWithheld: dealCosts?.plannedCustodyWithheld ?? false,
+          recommended: dealCosts?.recommendedCustody ?? null,
+          openPeriodToday: dealCosts?.custodyPostsNow,
+          dealStopped:
+            // The issuing commands' own predicate, when the read has it;
+            // the local status check stays as the fallback while it loads.
+            (dealCosts?.acceptsNewCustodyCash?.accepts === false) ||
+            (dealCosts?.economicsFrozen?.frozen ?? false) ||
+            app.status === "CLOSED" ||
+            app.status === "CANCELLED" ||
+            app.status === "REJECTED",
+          actions: custodyActions,
+          renderMovements: (custodyId, onReverse) => {
             const record = dealCosts?.custody.find((row) => row._id === custodyId);
             return (
               <CustodyMovementsList
                 orgId={orgId}
-                custodyId={custodyId as Id<"financeDealCustody">}
+                custodyId={custodyId}
                 currency={record?.currency ?? dealCosts?.currency ?? economicsCurrencyCode}
                 money={custodyMoney}
                 formatDate={(ms: number) => renderMoment(ms, "d MMM yyyy")}
                 t={t}
+                onReverse={onReverse}
               />
             );
           },
@@ -4128,8 +4294,9 @@ export function DealCockpitView({
 
           {/* --- عهدة الموظف ------------------------------------------------ */}
           {/* Beside the costs it pays for, under the same permission to read.
-              READ-ONLY: the balances are the server's and no command is
-              offered until custody movements post to the books. */}
+              The balances are the server's; the money commands post through
+              the custody clearing account and are offered to the
+              disbursement tier only. */}
           {custody && custodyMoney && (
             <DealCustodyPanel wiring={custody} money={custodyMoney} t={t} />
           )}
