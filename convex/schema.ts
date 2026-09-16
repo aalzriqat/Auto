@@ -786,6 +786,7 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_org_source", ["orgId", "sourceType", "sourceId"])
+    .index("by_org_source_issueDate", ["orgId", "sourceType", "issueDate"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_dueDate", ["orgId", "dueDate"]),
 

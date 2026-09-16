@@ -232,7 +232,7 @@ async function ensureSystemAccount(
   actorId: Id<"users">,
   systemKey: SystemKey,
   code: string
-): Promise<void> {
+): Promise<"ALREADY_ACTIVE" | "CREATED"> {
   // .collect(), not .unique(): a legacy duplicate systemKey row (see
   // resolveSystemAccount above) must not crash the self-heal either — the
   // system account already exists in some form, so there's nothing to insert
@@ -241,7 +241,12 @@ async function ensureSystemAccount(
     .query("chartOfAccounts")
     .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", systemKey))
     .collect();
-  if (mapped.length > 0) return;
+  if (mapped.some((account) => account.active)) return "ALREADY_ACTIVE";
+  if (mapped.length > 0) {
+    throw new ConvexError(
+      `Required system account "${systemKey}" is mapped only to an inactive account. Reactivate or explicitly replace that account before retrying repair.`
+    );
+  }
 
   const now = Date.now();
   const def = DEFAULT_CHART.find((d) => d.code === code)!;
@@ -260,7 +265,7 @@ async function ensureSystemAccount(
 
   if (byCode.length > 0) {
     // Already the right system account under a slightly different lookup? done.
-    if (byCode.some((a) => a.systemKey === systemKey)) return;
+    if (byCode.some((a) => a.systemKey === systemKey && a.active)) return "ALREADY_ACTIVE";
     // Occupied by a *different* system account — cannot silently steal its code.
     const conflictingSystem = byCode.find((a) => a.systemKey && a.systemKey !== systemKey);
     if (conflictingSystem) {
@@ -307,6 +312,7 @@ async function ensureSystemAccount(
     updatedAt: now,
     updatedBy: actorId,
   });
+  return "CREATED";
 }
 
 /**
@@ -638,8 +644,8 @@ export const repairMissingSystemAccounts = mutation({
       if (!def) {
         throw new ConvexError(`No default chart definition exists for required system account "${systemKey}".`);
       }
-      await ensureSystemAccount(ctx, args.orgId, user._id, systemKey, def.code);
-      repaired.push(systemKey);
+      const outcome = await ensureSystemAccount(ctx, args.orgId, user._id, systemKey, def.code);
+      if (outcome === "CREATED") repaired.push(systemKey);
     }
 
     if (repaired.length > 0) {

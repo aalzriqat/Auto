@@ -824,6 +824,66 @@ describe("applications hold release and deposit resolution", () => {
     });
   });
 
+  test("explicitly repairs a pre-fix in-flight application's missing quote lineage", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 14_200,
+      downPayment: 1_955,
+      termMonths: 48,
+    });
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, {
+      orgId,
+      quoteId,
+    });
+    // Reproduce a row created by the prior production code while preserving its
+    // modern workflow/rule fields.
+    await t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        economicsCurrency: undefined,
+        targetSellingAmountMinor: undefined,
+        targetNetProceedsMinor: undefined,
+        customerFirstPaymentMinor: undefined,
+      })
+    );
+
+    const dryRun = await asUser.mutation(api.applications.repairQuoteEconomicsLineage, {
+      orgId,
+      applicationId,
+      expectedCurrency: "JOD",
+      dryRun: true,
+    });
+    expect(dryRun.applied).toBe(false);
+    expect(dryRun.expected.targetSellingAmountMinor).toBe(14_200_000);
+    expect(dryRun.expected.customerFirstPaymentMinor).toBe(1_955_000);
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.targetNetProceedsMinor).toBeUndefined();
+
+    const applied = await asUser.mutation(api.applications.repairQuoteEconomicsLineage, {
+      orgId,
+      applicationId,
+      expectedCurrency: "JOD",
+      dryRun: false,
+    });
+    expect(applied.applied).toBe(true);
+    const repaired = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(repaired).toMatchObject({
+      economicsCurrency: "JOD",
+      targetSellingAmountMinor: 14_200_000,
+      targetNetProceedsMinor: 14_200_000,
+      customerFirstPaymentMinor: 1_955_000,
+    });
+
+    const rerun = await asUser.mutation(api.applications.repairQuoteEconomicsLineage, {
+      orgId,
+      applicationId,
+      expectedCurrency: "JOD",
+      dryRun: false,
+    });
+    expect(rerun).toMatchObject({ applied: false, missing: [] });
+  });
+
   test("rerunning cancellation on an already-cancelled application releases stale reservations", async () => {
     const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
 

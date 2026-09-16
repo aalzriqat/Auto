@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useQuery } from "convex/react";
+import { usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   AccountingEmptyRow,
@@ -43,13 +45,16 @@ function formatMinor(amountMinor: number, currency: string, scale: number): stri
 export function ClaimsTab() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const receivables = useQuery(
-    api.claims.listFinanceCompanyReceivables,
-    activeOrgId ? { orgId: activeOrgId } : "skip"
+  const { hasPermission } = usePermissions();
+  const canViewDeals = hasPermission(PERMISSIONS.VIEW_SALES);
+  const { results: receivables, status, loadMore } = usePaginatedQuery(
+    api.claims.paginateFinanceCompanyReceivables,
+    activeOrgId ? { orgId: activeOrgId } : "skip",
+    { initialNumItems: 75 }
   );
 
   if (!activeOrgId) return null;
-  if (receivables === undefined) {
+  if (status === "LoadingFirstPage") {
     return <LoadingAccountingState label={t("LoadingClaims" as any)} />;
   }
 
@@ -100,11 +105,15 @@ export function ClaimsTab() {
                     {formatMinor(row.outstandingMinor, row.currency, row.scale)}
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button asChild size="sm" variant="outline">
-                      <Link href={`/${activeOrgId}/applications/${row.applicationId}/deal`}>
-                        {t("OpenDeal" as any)}
-                      </Link>
-                    </Button>
+                    {canViewDeals && row.applicationId ? (
+                      <Button asChild size="sm" variant="outline">
+                        <Link href={`/${activeOrgId}/applications/${row.applicationId}/deal`}>
+                          {t("OpenDeal" as any)}
+                        </Link>
+                      </Button>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </TableCell>
                 </TableRow>
               ))
@@ -112,6 +121,13 @@ export function ClaimsTab() {
           </TableBody>
         </Table>
       </AccountingTableFrame>
+      {status === "CanLoadMore" && (
+        <div className="flex justify-center">
+          <Button type="button" variant="outline" onClick={() => loadMore(75)}>
+            {t("LoadMore" as any)}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

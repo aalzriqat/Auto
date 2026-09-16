@@ -11,6 +11,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import {
   requireTenantAuth,
+  requireOwnedRow,
   // The finance-application read boundary (SCRUM-117): an exhaustive
   // allowlist, not a blocklist. Every door that returns one of these rows
   // goes through it.
@@ -2538,6 +2539,111 @@ export const createFromQuote = mutation({
     );
 
     return appId;
+  },
+});
+
+/**
+ * Repairs quote economics for an in-flight application created before those
+ * facts were snapshotted. Dry-run and apply share the same guarded path; the
+ * apply fills only absent values and records each field in the override audit.
+ */
+export const repairQuoteEconomicsLineage = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    expectedCurrency: v.string(),
+    dryRun: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId);
+    const quote = await requireOwnedRow(ctx, args.orgId, "quotes", app.quoteId);
+
+    if (!IN_FLIGHT_FINANCE_STATUSES.includes(app.status)) {
+      throw new ConvexError("Only an in-flight finance application can have quote lineage repaired.");
+    }
+    if (
+      app.submittedQuotationMinor !== undefined ||
+      app.approvedDealerPurchaseAmountMinor !== undefined ||
+      app.disbursedAt !== undefined ||
+      app.finalizedSaleId !== undefined
+    ) {
+      throw new ConvexError(
+        "Quotation, approval, disbursement, or finalization evidence already exists. Reconcile this application manually."
+      );
+    }
+
+    const orgCurrency = await getOrgCurrency(ctx, args.orgId);
+    const expectedCurrency = args.expectedCurrency.trim().toUpperCase();
+    if (!expectedCurrency || orgCurrency !== expectedCurrency) {
+      throw new ConvexError(
+        `Expected denomination ${expectedCurrency || "(blank)"} does not match the organization denomination ${orgCurrency}.`
+      );
+    }
+    if (app.economicsCurrency !== undefined && app.economicsCurrency !== expectedCurrency) {
+      throw new ConvexError(
+        `The application is already denominated in ${app.economicsCurrency}; it cannot be repaired as ${expectedCurrency}.`
+      );
+    }
+    assertSupportedDenomination(expectedCurrency, "repairing quote economics lineage");
+
+    const targetSellingAmountMinor = toMinorUnits(quote.vehiclePrice, expectedCurrency);
+    const customerFirstPaymentMinor = toMinorUnits(quote.downPayment, expectedCurrency);
+    assertValidMinorAmount(targetSellingAmountMinor, "quoted vehicle price");
+    assertValidMinorAmount(customerFirstPaymentMinor, "quoted customer first payment");
+    const expected = {
+      economicsCurrency: expectedCurrency,
+      targetSellingAmountMinor,
+      targetNetProceedsMinor: targetSellingAmountMinor,
+      customerFirstPaymentMinor,
+    };
+    const existing = {
+      economicsCurrency: app.economicsCurrency,
+      targetSellingAmountMinor: app.targetSellingAmountMinor,
+      targetNetProceedsMinor: app.targetNetProceedsMinor,
+      customerFirstPaymentMinor: app.customerFirstPaymentMinor,
+    };
+    for (const field of Object.keys(expected) as Array<keyof typeof expected>) {
+      if (existing[field] !== undefined && existing[field] !== expected[field]) {
+        throw new ConvexError(
+          `${field} disagrees with the originating quote. No repair was applied.`
+        );
+      }
+    }
+    const missing = (Object.keys(expected) as Array<keyof typeof expected>).filter(
+      (field) => existing[field] === undefined
+    );
+    if (args.dryRun || missing.length === 0) {
+      return { applied: false, missing, expected };
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(app._id, {
+      ...(app.economicsCurrency === undefined ? { economicsCurrency: expected.economicsCurrency } : {}),
+      ...(app.targetSellingAmountMinor === undefined
+        ? { targetSellingAmountMinor: expected.targetSellingAmountMinor }
+        : {}),
+      ...(app.targetNetProceedsMinor === undefined
+        ? { targetNetProceedsMinor: expected.targetNetProceedsMinor }
+        : {}),
+      ...(app.customerFirstPaymentMinor === undefined
+        ? { customerFirstPaymentMinor: expected.customerFirstPaymentMinor }
+        : {}),
+      updatedAt: now,
+    });
+    for (const field of missing) {
+      await ctx.db.insert("financeApplicationOverrides", {
+        orgId: args.orgId,
+        applicationId: app._id,
+        field,
+        previousValue: undefined,
+        newValue: String(expected[field]),
+        reason: `Backfilled from originating quote ${quote._id} by explicit quote-lineage repair.`,
+        changedBy: user._id,
+        changedAt: now,
+      });
+    }
+    return { applied: true, missing, expected };
   },
 });
 

@@ -279,6 +279,28 @@ describe("an existing chart can be repaired only by an explicit finance-manager 
     );
     expect(rows).toHaveLength(1);
   });
+
+  test("refuses an inactive mapping instead of claiming it was repaired", async () => {
+    const { t, asAdmin, orgId } = await freshOrg("repair2110inactive");
+    const account = await accountBySystemKey(
+      t,
+      orgId,
+      SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY
+    );
+    if (!account) throw new Error("Expected retained-credit account");
+    await t.run((ctx) => ctx.db.patch(account._id, { active: false }));
+
+    await expect(
+      asAdmin.mutation(api.chartOfAccounts.repairMissingSystemAccounts, { orgId })
+    ).rejects.toThrow(/inactive account/i);
+
+    const unchanged = await accountBySystemKey(
+      t,
+      orgId,
+      SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY
+    );
+    expect(unchanged?.active).toBe(false);
+  });
 });
 
 describe("RC-FRESH-CHART-2110 §2 — the exact classification, field by field", () => {
