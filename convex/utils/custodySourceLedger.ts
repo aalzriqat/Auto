@@ -1,4 +1,5 @@
-import { ConvexError } from "convex/values";
+import { ConvexError, getDocumentSize } from "convex/values";
+import type { TransactionMetrics } from "convex/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { MAX_CUSTODY_ENTRIES, MAX_DEAL_CUSTODY_DECISION_RECORDS, MAX_LIVE_DEAL_FEE_LINES } from "./dealCostLimits";
@@ -75,33 +76,162 @@ const MAX_SOURCE_EVENTS = 2 * MAX_CUSTODY_ENTRIES + 16;
 export const MAX_CUSTODY_LEDGER_PROOFS = 1500;
 
 /**
- * The document budget of one custody proof: every read inside the proof
- * asks it how many rows it may take and charges what came back.
+ * How many BYTES one custody proof may read (R7, F1). A document count
+ * bounds nothing by itself: the platform also caps the bytes one
+ * transaction reads, and a ledger event carries its whole payload — a
+ * queued payable delta names every primary of its position
+ * (`MAX_CUSTODY_DEPENDENCIES` entries), an outbox row keeps that payload
+ * after it posts — so a family well under `MAX_CUSTODY_LEDGER_PROOFS`
+ * documents could pass the platform's byte limit and fail as a platform
+ * error instead of the named refusal.
+ *
+ * Every document a proof reads is charged at its EXACT platform size —
+ * `getDocumentSize` from `convex/values`, the same formula the platform
+ * uses for its bandwidth and size limits — and the proof refuses by name
+ * once the total passes this. Set at a small fraction of the platform's
+ * per-transaction read limit (`PLATFORM_TRANSACTION_READ_BYTES`; the
+ * caller's own reads — the deal, its lines, its records — share that
+ * transaction), so the refusal is reached long before the platform would
+ * refuse for it. This is the proof's OWN budget; the transaction's actual
+ * headroom is checked beside it (`assertHeadroom`), off the platform's own
+ * metrics.
+ *
+ * ⚠️ `convex-test` tracks these metrics with the same size formula but
+ * does NOT enforce the limits unless asked to, so the tests here prove the
+ * budget's own accounting and the headroom check's arithmetic — never that
+ * a real transaction would have failed one document later. Only a
+ * real-platform run proves the runtime metrics.
+ */
+export const MAX_CUSTODY_LEDGER_READ_BYTES = 4 * 1024 * 1024;
+
+/**
+ * The platform limits the derivation below rests on, as documented at the
+ * time of writing (https://docs.convex.dev/production/state/limits): one
+ * document is at most 1 MiB, and one transaction reads at most 16 MiB.
+ * Stated as constants so the derivation is checkable and pinned by a
+ * test; if the platform changes them, the derivation is re-done here.
+ */
+export const PLATFORM_DOCUMENT_BYTES = 1024 * 1024;
+export const PLATFORM_TRANSACTION_READ_BYTES = 16 * 1024 * 1024;
+
+/**
+ * How many documents ONE query inside a custody proof may fetch (R7, F1
+ * correction). Charging bytes after a read returns bounds nothing on its
+ * own: a single `.take(MAX_SOURCE_EVENTS + 1)` over near-maximum documents
+ * would materialize hundreds of MiB before the charge ran, and the platform
+ * would fail the transaction where the proof meant to refuse by name. So
+ * every enumeration is read in batches of this many documents, each batch
+ * charged — count and exact bytes — and the transaction's real headroom
+ * re-checked, before the next is fetched, cursoring on the index's
+ * trailing `_creationTime` (`readBatched`). The worst case ONE batch can
+ * read is then bounded structurally at `MAX_CUSTODY_READ_BATCH ×
+ * PLATFORM_DOCUMENT_BYTES` = 8 MiB, and `assertHeadroom` refuses to fetch
+ * a batch unless the transaction still has that much plus the caller's
+ * reserve. Every keyed point-read in this module takes at most this many
+ * rows too, and a test pins that no query here asks for more.
+ */
+export const MAX_CUSTODY_READ_BATCH = 8;
+
+/**
+ * What the transaction must still be able to read AFTER the proof is done
+ * with it: the caller's remaining reads and the rows it will write back
+ * (a mutation that proves a family then patches the deal, its lines and
+ * its records). Reserved off the platform's own `bytesRead.remaining`, so
+ * the proof never spends the caller's share.
+ */
+export const CUSTODY_PROOF_CALLER_RESERVE_BYTES = 2 * 1024 * 1024;
+/** Documents and index ranges reserved for the caller the same way (limits: 32,000 documents, 4,096 queries). */
+export const CUSTODY_PROOF_CALLER_RESERVE_DOCUMENTS = 2_000;
+export const CUSTODY_PROOF_CALLER_RESERVE_QUERIES = 256;
+
+/**
+ * The context surface the headroom check needs: `ctx.meta` as every query
+ * and mutation context carries it. Optional at the type level only so a
+ * test's wrapped context can omit it; a context WITHOUT it is a context
+ * whose headroom cannot be read, and the check refuses rather than
+ * assumes — it never fails open.
+ */
+type HeadroomCtx = { meta?: { getTransactionMetrics?: () => Promise<TransactionMetrics> } };
+
+/**
+ * The exact platform size of one document — `getDocumentSize`, the
+ * formula the platform bills reads by. A value that is not a Convex
+ * document (nothing this module reads; guarded for the `null` a point-read
+ * charges) is charged one maximum document: unmeasurable is never free.
+ */
+export function documentBytes(doc: unknown): number {
+  if (typeof doc !== "object" || doc === null || Array.isArray(doc)) return PLATFORM_DOCUMENT_BYTES;
+  try {
+    return getDocumentSize(doc as Parameters<typeof getDocumentSize>[0]);
+  } catch {
+    return PLATFORM_DOCUMENT_BYTES;
+  }
+}
+
+/**
+ * The read budget of one custody proof: every read inside the proof asks
+ * it how many rows it may take and charges the DOCUMENTS that came back —
+ * their count against `limit`, their estimated bytes against `byteLimit`.
  *
  * `take(cap)` is the `.take()` argument for a read whose own bound is `cap`:
  * one past the read's cap (so the read detects its own overflow) and never
- * more than one past what is left of the budget (so the whole proof reads
- * at most `limit + 1` documents before it refuses). `charge(rows)` throws
- * the named refusal the moment the running total passes the limit; a proof
- * that refused has decided nothing on a prefix.
+ * more than one past what is left of the document budget (so the whole
+ * proof reads at most `limit + 1` documents before it refuses). `charge`
+ * throws the named refusal the moment either running total passes its
+ * limit; a proof that refused has decided nothing on a prefix. The byte
+ * bound is charged AFTER a batch returns — a `.take()` cannot be sized in
+ * bytes — which is why no query here fetches more than
+ * `MAX_CUSTODY_READ_BATCH` documents at once: the overshoot past the byte
+ * limit is at most one batch of maximum-size documents, by construction.
  */
 export class CustodyLedgerReadBudget {
   private spent = 0;
+  private bytes = 0;
 
   constructor(
     private readonly limit: number,
-    private readonly action: string
+    private readonly action: string,
+    private readonly byteLimit: number = MAX_CUSTODY_LEDGER_READ_BYTES
   ) {}
 
   take(cap: number): number {
     return Math.max(1, Math.min(cap + 1, this.limit - this.spent + 1));
   }
 
-  charge(rows: number): void {
-    this.spent += rows;
-    if (this.spent > this.limit) {
+  charge(docs: ReadonlyArray<unknown>): void {
+    this.chargeCount(docs.length);
+    for (const doc of docs) this.bytes += documentBytes(doc);
+    if (this.bytes > this.byteLimit) {
       throw new ConvexError(
-        `This deal's custody carries more than ${this.limit} ledger postings, which is past what ${this.action} can verify completely; nothing has been changed. Have the deal's custody reviewed.`
+        `This deal's custody carries more than ${this.byteLimit.toLocaleString("en-US")} bytes of ledger postings, which is past what ${this.action} can verify completely; nothing has been changed. Have the deal's custody reviewed.`
+      );
+    }
+  }
+
+  /**
+   * Refuses, by name, to read on when the TRANSACTION — not this budget —
+   * could not take one more worst-case batch and still leave the caller its
+   * reserve: the platform's own `bytesRead`, `documentsRead` and
+   * `databaseQueries` headroom, asked before every batch. This is what
+   * makes the platform's limit unreachable from here whatever the caller
+   * read before the proof started; the budget above bounds the proof's own
+   * spend. A context whose metrics cannot be read refuses too.
+   */
+  async assertHeadroom(ctx: HeadroomCtx): Promise<void> {
+    const read = ctx.meta?.getTransactionMetrics;
+    if (typeof read !== "function") {
+      throw new ConvexError(
+        `The transaction's read headroom cannot be measured, so ${this.action} cannot prove it would verify this deal's custody completely; nothing has been changed.`
+      );
+    }
+    const metrics = await read.call(ctx.meta);
+    const short =
+      metrics.bytesRead.remaining < MAX_CUSTODY_READ_BATCH * PLATFORM_DOCUMENT_BYTES + CUSTODY_PROOF_CALLER_RESERVE_BYTES ||
+      metrics.documentsRead.remaining < MAX_CUSTODY_READ_BATCH + CUSTODY_PROOF_CALLER_RESERVE_DOCUMENTS ||
+      metrics.databaseQueries.remaining < 1 + CUSTODY_PROOF_CALLER_RESERVE_QUERIES;
+    if (short) {
+      throw new ConvexError(
+        `This transaction has read too much for ${this.action} to verify this deal's custody completely (${metrics.bytesRead.used.toLocaleString("en-US")} bytes, ${metrics.documentsRead.used.toLocaleString("en-US")} documents, ${metrics.databaseQueries.used.toLocaleString("en-US")} queries so far); nothing has been changed. Have the deal's custody reviewed.`
       );
     }
   }
@@ -109,17 +239,109 @@ export class CustodyLedgerReadBudget {
   /**
    * Charges one POINT-READ: a keyed lookup that costs the platform one query
    * whether or not it returns a row, so it costs this budget at least one
-   * unit. `charge` alone would let a proof made of empty lookups read
-   * without limit.
+   * document (and no bytes when it returned none). `charge` alone would let
+   * a proof made of empty lookups read without limit.
    */
-  chargeRead(rows: number): void {
-    this.charge(Math.max(1, rows));
+  chargeRead(docs: ReadonlyArray<unknown>): void {
+    if (docs.length === 0) this.chargeCount(1);
+    else this.charge(docs);
+  }
+
+  private chargeCount(documents: number): void {
+    this.spent += documents;
+    if (this.spent > this.limit) {
+      throw new ConvexError(
+        `This deal's custody carries more than ${this.limit} ledger postings, which is past what ${this.action} can verify completely; nothing has been changed. Have the deal's custody reviewed.`
+      );
+    }
   }
 
   /** Documents read so far — for tests that pin the bound. */
   get documentsRead(): number {
     return this.spent;
   }
+
+  /** Exact bytes read so far, by the platform's size formula — for tests that pin the bound. */
+  get bytesRead(): number {
+    return this.bytes;
+  }
+}
+
+/**
+ * One bounded enumeration, read in batches of at most
+ * `MAX_CUSTODY_READ_BATCH` documents and charged batch by batch. `page`
+ * fetches the next `take` rows strictly after `after` (the last row's
+ * `_creationTime`, `undefined` for the first batch), in index order —
+ * creation times are unique within a table, on the platform and in the
+ * test harness alike, so the cursor never skips or repeats a row. Returns
+ * at most `cap + 1` rows, so the caller detects its own overflow exactly
+ * as a single `.take(cap + 1)` would have; with a budget, never more than
+ * one document past what is left of it — and, with a budget, no batch is
+ * fetched unless the transaction's own headroom can take a worst-case one.
+ */
+async function readBatched<T extends { _creationTime: number }>(
+  ctx: HeadroomCtx,
+  page: (after: number | undefined, take: number) => Promise<T[]>,
+  cap: number,
+  budget: CustodyLedgerReadBudget | undefined
+): Promise<T[]> {
+  const rows: T[] = [];
+  let after: number | undefined;
+  while (rows.length <= cap) {
+    const left = cap - rows.length;
+    const take = Math.min(MAX_CUSTODY_READ_BATCH, budget ? budget.take(left) : left + 1);
+    await budget?.assertHeadroom(ctx);
+    const batch = await page(after, take);
+    budget?.charge(batch);
+    for (const row of batch) rows.push(row);
+    if (batch.length < take) break;
+    after = batch[batch.length - 1]._creationTime;
+  }
+  return rows;
+}
+
+/**
+ * ## A stored posting version is proven, never trusted (CVX-4; R7, F4)
+ *
+ * Every version counter the custody family stores — a line's
+ * `custodyPostingVersion` and `custodyPosted.version`, a record's
+ * `writeOffPostingVersion`, `writeOffPosted.version` and
+ * `payableReclassVersion`, an event's `eventVersion` — is declared
+ * `v.number()`, which admits NaN, ±Infinity and fractions. `(NaN ?? 0) + 1`
+ * is NaN, `Infinity + 1` is Infinity, `1.5 + 1` is 2.5: a producer that
+ * counted from such a number posted "version NaN" under a key nothing will
+ * ever reverse, and a reversal pinned to it reversed nothing and reported
+ * the charge gone. So every door that reads a stored version proves it is
+ * a positive safe integer first — through these, so the rule is one rule.
+ */
+export function isStoredVersion(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
+/** Refuses, by name, a stored version that is not one. `what` names the row ("this cost line"); `action` names the door. */
+export function assertStoredVersion(value: unknown, what: string, action: string): asserts value is number {
+  if (!isStoredVersion(value)) {
+    throw new ConvexError(
+      `${what} carries a posting version that is not a positive whole number (${String(value)}), so ${action} cannot tell which posting it names; nothing has been changed. Have the record reviewed.`
+    );
+  }
+}
+
+/**
+ * The version a producer posts next: 1 for a row that never posted
+ * (`undefined` or 0), otherwise one past a counter proven to be a version.
+ * Refuses a counter at the safe-integer ceiling too — its successor would
+ * not be one.
+ */
+export function nextStoredVersion(previous: number | undefined, what: string, action: string): number {
+  if (previous === undefined || previous === 0) return 1;
+  assertStoredVersion(previous, what, action);
+  if (previous >= Number.MAX_SAFE_INTEGER) {
+    throw new ConvexError(
+      `${what} carries a posting version that is not a positive whole number (${previous + 1}), so ${action} cannot tell which posting it names; nothing has been changed. Have the record reviewed.`
+    );
+  }
+  return previous + 1;
 }
 
 /**
@@ -145,13 +367,49 @@ export async function loadCustodyPostedLines(
   action: string,
   budget?: CustodyLedgerReadBudget
 ): Promise<Array<Doc<"financeDealFees">>> {
-  const rows = await ctx.db
-    .query("financeDealFees")
-    .withIndex("by_application_custodyPostingVersion", (q) =>
-      q.eq("applicationId", applicationId).gt("custodyPostingVersion", 0)
-    )
-    .take(budget?.take(MAX_CUSTODY_POSTED_LINES) ?? MAX_CUSTODY_POSTED_LINES + 1);
-  budget?.charge(rows.length);
+  // The index ranges on `custodyPostingVersion`, so the batch cursor cannot
+  // also range on `_creationTime`: the lines are read one VERSION at a time
+  // (equality on the version, then the creation-time cursor within it), and
+  // the next version to read is the smallest one above the last — one
+  // point-read, index order — until there is none. Every batch is charged
+  // before the next is fetched, like every other enumeration here.
+  const rows: Array<Doc<"financeDealFees">> = [];
+  let version = 0;
+  while (rows.length <= MAX_CUSTODY_POSTED_LINES) {
+    await budget?.assertHeadroom(ctx);
+    const next = await ctx.db
+      .query("financeDealFees")
+      .withIndex("by_application_custodyPostingVersion", (q) =>
+        q.eq("applicationId", applicationId).gt("custodyPostingVersion", version)
+      )
+      .take(1);
+    budget?.chargeRead(next);
+    if (next.length === 0) break;
+    const at = next[0].custodyPostingVersion;
+    // A counter that is not a version (NaN, from `v.number()`) cannot be
+    // stepped past: where the index orders it decides which lines follow,
+    // so the enumeration refuses rather than stops short of them.
+    if (at === undefined || !(at > version) || !isStoredVersion(at)) {
+      throw new ConvexError(
+        `A cost line on this deal carries a custody posting version that is not a positive whole number (${at}), so ${action} cannot enumerate the lines it must verify; nothing has been changed. Have the deal's custody reviewed.`
+      );
+    }
+    version = at;
+    const atVersion = await readBatched(
+      ctx,
+      (after, take) =>
+        ctx.db
+          .query("financeDealFees")
+          .withIndex("by_application_custodyPostingVersion", (q) => {
+            const range = q.eq("applicationId", applicationId).eq("custodyPostingVersion", at);
+            return after === undefined ? range : range.gt("_creationTime", after);
+          })
+          .take(take),
+      MAX_CUSTODY_POSTED_LINES - rows.length,
+      budget
+    );
+    for (const row of atVersion) rows.push(row);
+  }
   if (rows.length > MAX_CUSTODY_POSTED_LINES) {
     throw new ConvexError(
       `This deal has more than ${MAX_CUSTODY_POSTED_LINES} cost lines that have posted a custody charge, which is past what ${action} can verify completely; nothing has been changed. Have the deal's custody reviewed.`
@@ -169,11 +427,19 @@ async function sourceEvents(
   action: string,
   budget?: CustodyLedgerReadBudget
 ): Promise<Array<Doc<"accountingEvents">>> {
-  const rows = await ctx.db
-    .query("accountingEvents")
-    .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType).eq("sourceId", sourceId))
-    .take(budget?.take(MAX_SOURCE_EVENTS) ?? MAX_SOURCE_EVENTS + 1);
-  budget?.charge(rows.length);
+  const rows = await readBatched(
+    ctx,
+    (after, take) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) => {
+          const range = q.eq("orgId", orgId).eq("sourceType", sourceType).eq("sourceId", sourceId);
+          return after === undefined ? range : range.gt("_creationTime", after);
+        })
+        .take(take),
+    MAX_SOURCE_EVENTS,
+    budget
+  );
   if (rows.length > MAX_SOURCE_EVENTS) {
     throw new ConvexError(
       `A custody posting on this deal carries more than ${MAX_SOURCE_EVENTS} ledger events, which is past what ${action} can verify completely; nothing has been changed. Have the record reviewed.`
@@ -191,11 +457,19 @@ async function sourceOutboxRows(
   action: string,
   budget?: CustodyLedgerReadBudget
 ): Promise<Array<Doc<"pendingAccountingEvents">>> {
-  const rows = await ctx.db
-    .query("pendingAccountingEvents")
-    .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType).eq("sourceId", sourceId))
-    .take(budget?.take(MAX_SOURCE_EVENTS) ?? MAX_SOURCE_EVENTS + 1);
-  budget?.charge(rows.length);
+  const rows = await readBatched(
+    ctx,
+    (after, take) =>
+      ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_source", (q) => {
+          const range = q.eq("orgId", orgId).eq("sourceType", sourceType).eq("sourceId", sourceId);
+          return after === undefined ? range : range.gt("_creationTime", after);
+        })
+        .take(take),
+    MAX_SOURCE_EVENTS,
+    budget
+  );
   if (rows.length > MAX_SOURCE_EVENTS) {
     throw new ConvexError(
       `A custody posting on this deal has more than ${MAX_SOURCE_EVENTS} outbox rows, which is past what ${action} can verify completely; nothing has been changed. Have the record reviewed.`
@@ -217,11 +491,12 @@ async function eventPosted(
   idempotencyKey: string,
   budget?: CustodyLedgerReadBudget
 ): Promise<boolean> {
+  await budget?.assertHeadroom(ctx);
   const rows = await ctx.db
     .query("accountingEvents")
     .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
-    .take(8);
-  budget?.chargeRead(rows.length);
+    .take(MAX_CUSTODY_READ_BATCH);
+  budget?.chargeRead(rows);
   return rows.some((row) => row.status === "POSTED");
 }
 
@@ -333,11 +608,12 @@ async function forwardStillQueued(
   idempotencyKey: string,
   budget?: CustodyLedgerReadBudget
 ): Promise<boolean> {
+  await budget?.assertHeadroom(ctx);
   const rows = await ctx.db
     .query("pendingAccountingEvents")
     .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
     .take(4);
-  budget?.chargeRead(rows.length);
+  budget?.chargeRead(rows);
   return rows.some((row) => row.kind === "POST" && row.status !== "POSTED");
 }
 
@@ -482,11 +758,19 @@ export async function loadCustodyEntries(
   action: string,
   budget?: CustodyLedgerReadBudget
 ): Promise<Array<Doc<"financeDealCustodyEntries">>> {
-  const entries = await ctx.db
-    .query("financeDealCustodyEntries")
-    .withIndex("by_custody", (q) => q.eq("custodyId", custodyId))
-    .take(budget?.take(MAX_CUSTODY_ENTRIES) ?? MAX_CUSTODY_ENTRIES + 1);
-  budget?.charge(entries.length);
+  const entries = await readBatched(
+    ctx,
+    (after, take) =>
+      ctx.db
+        .query("financeDealCustodyEntries")
+        .withIndex("by_custody", (q) => {
+          const range = q.eq("custodyId", custodyId);
+          return after === undefined ? range : range.gt("_creationTime", after);
+        })
+        .take(take),
+    MAX_CUSTODY_ENTRIES,
+    budget
+  );
   if (entries.length > MAX_CUSTODY_ENTRIES) {
     throw new ConvexError(
       `This custody record carries more than ${MAX_CUSTODY_ENTRIES} movements, which is past what ${action} can decide on completely; nothing has been changed. Have the record reviewed rather than extended.`
@@ -580,11 +864,19 @@ export async function custodyPositionDependencies(
 
   // The deal's custody records, so an attribution names a record of THIS
   // deal (and org) or is refused. Bounded like every decision read.
-  const dealCustody = await ctx.db
-    .query("financeDealCustody")
-    .withIndex("by_application", (q) => q.eq("applicationId", custody.applicationId))
-    .take(budget.take(MAX_DEAL_CUSTODY_DECISION_RECORDS));
-  budget.charge(dealCustody.length);
+  const dealCustody = await readBatched(
+    ctx,
+    (after, take) =>
+      ctx.db
+        .query("financeDealCustody")
+        .withIndex("by_application", (q) => {
+          const range = q.eq("applicationId", custody.applicationId);
+          return after === undefined ? range : range.gt("_creationTime", after);
+        })
+        .take(take),
+    MAX_DEAL_CUSTODY_DECISION_RECORDS,
+    budget
+  );
   if (dealCustody.length > MAX_DEAL_CUSTODY_DECISION_RECORDS) {
     throw new ConvexError(
       `This deal carries more than ${MAX_DEAL_CUSTODY_DECISION_RECORDS} custody records, which is past what ${action} can decide on completely; nothing has been changed. Have the deal's custody reviewed.`
@@ -646,19 +938,25 @@ async function pendingForwardByKey(
   idempotencyKey: string,
   budget?: CustodyLedgerReadBudget
 ): Promise<Doc<"pendingAccountingEvents"> | null> {
+  await budget?.assertHeadroom(ctx);
   const rows = await ctx.db
     .query("pendingAccountingEvents")
     .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
     .take(4);
-  budget?.chargeRead(rows.length);
+  budget?.chargeRead(rows);
   return rows.find((row) => row.kind === "POST" && row.status !== "POSTED") ?? null;
 }
 
-/** One queued link of a record's payable chain, proven to be the row the chain expects at that version. */
+/**
+ * One queued link of a record's payable chain, proven to be the row the
+ * chain expects at that version, with its dependencies parsed ONCE here —
+ * the fold reads them off the link rather than the payload again.
+ */
 type PayableChainLink = Readonly<{
   version: number;
   row: Doc<"pendingAccountingEvents">;
   deltaMinor: number;
+  dependencies: ReadonlyArray<CustodyLedgerDependency>;
 }>;
 
 /**
@@ -678,9 +976,13 @@ type PayableChainProof =
  * event of this record at each of versions 1..P, then one queued `POST` row
  * of this record at each of P+1..N where N is the version the row says it
  * issued — and NOTHING else: no second event or row at any version, no
- * event or row above N, every delta a safe integer, every queued row's
- * dependencies readable, and the deltas summing to the target the row
- * carries. "The highest POSTED version" said nothing about the versions
+ * event or row above N, every link under the chain's own key for its
+ * version, every delta a safe integer, every link's dependencies readable,
+ * and the deltas summing to the target the row carries. The POSTED half is
+ * held to the same identity and payload contract as the queued half (R7,
+ * F5): a posted event under another key is not the chain's link, and a
+ * posted payload whose dependencies cannot be read is not one the worker
+ * could have proven before it posted. "The highest POSTED version" said nothing about the versions
  * below it; "every version 1..N appears in a Set" said nothing about
  * duplicates, about what lies above N, or about whether any of it can be
  * read. Both doors that judge the chain — the fold that re-bases it before
@@ -722,25 +1024,29 @@ async function provePayableChain(
   if (!Number.isSafeInteger(targetMinor)) {
     return { ok: false, what: `payable target (${targetMinor}) is not a readable amount` };
   }
-  const isVersion = (value: number | undefined): value is number => value !== undefined && Number.isSafeInteger(value) && value >= 1;
-
   const events = family ?? (await sourceEvents(ctx, orgId, "financeDealCustody", sourceId, action, budget));
   const postedByVersion = new Map<number, Doc<"accountingEvents">>();
   for (const event of events) {
     if (event.eventType !== "CUSTODY_PAYABLE_RECLASSIFIED" || event.status !== "POSTED") continue;
-    if (!isVersion(event.eventVersion)) {
+    if (!isStoredVersion(event.eventVersion)) {
       return { ok: false, what: `payable reclassification event carries a version that is not a positive whole number (${event.eventVersion})` };
     }
     if (postedByVersion.has(event.eventVersion)) return refused(event.eventVersion, "is on the ledger more than once");
+    if (event.idempotencyKey !== custodyPayableReclassKey(custody._id, event.eventVersion)) {
+      return refused(event.eventVersion, "is not the reclassification the chain expects (its ledger event names another event, source or version)");
+    }
     postedByVersion.set(event.eventVersion, event);
   }
-  // The contiguous POSTED prefix 1..posted, and its arithmetic.
+  // The contiguous POSTED prefix 1..posted, and its arithmetic — each link
+  // held to the same payload contract as a queued one.
   let posted = 0;
   let postedSum = 0;
   while (postedByVersion.has(posted + 1)) {
     posted += 1;
-    const deltaMinor = readDelta(postedByVersion.get(posted)!.payload);
+    const link = postedByVersion.get(posted)!;
+    const deltaMinor = readDelta(link.payload);
     if (deltaMinor === null) return refused(posted, "carries no readable delta");
+    if (parseCustodyDependencies(link.payload) === null) return refused(posted, "carries ledger dependencies that cannot be read");
     postedSum += deltaMinor;
   }
   if (posted > issued) return refused(posted, "is on the ledger past the version the record says it issued");
@@ -754,7 +1060,7 @@ async function provePayableChain(
   const queuedByVersion = new Map<number, Doc<"pendingAccountingEvents">>();
   for (const row of outbox) {
     if (row.kind !== "POST" || row.status === "POSTED" || row.eventType !== "CUSTODY_PAYABLE_RECLASSIFIED") continue;
-    if (!isVersion(row.eventVersion)) {
+    if (!isStoredVersion(row.eventVersion)) {
       return { ok: false, what: `payable reclassification outbox row carries a version that is not a positive whole number (${row.eventVersion})` };
     }
     if (queuedByVersion.has(row.eventVersion)) return refused(row.eventVersion, "is waiting in the outbox more than once");
@@ -781,9 +1087,10 @@ async function provePayableChain(
     }
     const deltaMinor = readDelta(link.payload);
     if (deltaMinor === null) return refused(version, "carries no readable delta");
-    if (parseCustodyDependencies(link.payload) === null) return refused(version, "carries ledger dependencies that cannot be read");
+    const dependencies = parseCustodyDependencies(link.payload);
+    if (dependencies === null) return refused(version, "carries ledger dependencies that cannot be read");
     queuedSum += deltaMinor;
-    tail.push({ version, row: link, deltaMinor });
+    tail.push({ version, row: link, deltaMinor, dependencies });
   }
   if (postedSum + queuedSum !== targetMinor) {
     return {
@@ -888,9 +1195,8 @@ export async function foldAbandonedPayableDeltas(
   };
   let foldFrom: number | null = null;
   for (const link of chain.tail) {
-    // Proven readable by the chain proof; a row that names none is left standing.
-    const dependencies = parseCustodyDependencies(link.row.payload) ?? [];
-    for (const dependency of dependencies) {
+    // Parsed once by the chain proof; a row that names none is left standing.
+    for (const dependency of link.dependencies) {
       if (dependency.must === "SETTLED" && (await abandoned(dependency.idempotencyKey))) {
         foldFrom = link.version;
         break;
@@ -987,6 +1293,9 @@ export function custodyLedgerFamilyRowRefusal(
  *    and the ledger still carries;
  *  - a written-off record has its write-off POSTED at the version the row
  *    names and no other; any other record has NO write-off on the books;
+ *  - every one of those postings is on the books EXACTLY ONCE, under its
+ *    own idempotency key, with no other live event beside it
+ *    (`exactlyOnePosted`, R7 F2) — a duplicated forward is the amount twice;
  *  - the payable chain is EXACTLY the one the row says it issued
  *    (`provePayableChain`): one POSTED delta at each version 1..N, no
  *    duplicate, nothing posted or queued above N, every delta readable and
@@ -1020,7 +1329,7 @@ export async function custodyLedgerFamilyRefusal(
   // passed were read under their own bounds before this; both are charged
   // here so the proof's total is literally every document it judged.
   const budget = new CustodyLedgerReadBudget(MAX_CUSTODY_LEDGER_PROOFS, action);
-  budget.charge(custodyRows.length + liveFees.length);
+  budget.charge([...custodyRows, ...liveFees]);
   const postedLines = await loadCustodyPostedLines(ctx, applicationId, action, budget);
   const logs = new Map<Id<"financeDealCustody">, Array<Doc<"financeDealCustodyEntries">>>();
   for (const row of custodyRows) {
@@ -1035,20 +1344,25 @@ export async function custodyLedgerFamilyRefusal(
     }
     for (const entry of entries) {
       if (entry.kind === "REVERSAL") continue;
+      await budget.assertHeadroom(ctx);
       const rows = await ctx.db
         .query("accountingEvents")
         .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", custodyEntryPostKey(entry._id)))
-        .take(budget.take(7));
-      budget.charge(rows.length);
-      const forward = rows.find((event) => event.sourceType === "financeDealCustodyEntries" && event.sourceId === entry._id.toString());
+        .take(Math.min(MAX_CUSTODY_READ_BATCH, budget.take(MAX_CUSTODY_READ_BATCH - 1)));
+      budget.charge(rows);
+      const forwards = rows.filter((event) => event.sourceType === "financeDealCustodyEntries" && event.sourceId === entry._id.toString());
       if (reversed.has(entry._id)) {
-        if (forward !== undefined && forward.status !== "REVERSED") {
+        if (forwards.some((event) => event.status !== "REVERSED")) {
           return `A cancelled custody movement on this deal is still on the books (its reversal has not posted yet), so ${action} is refused until the outbox has posted it.`;
         }
         continue;
       }
-      if (forward === undefined || forward.status !== "POSTED") {
-        return `A custody movement on this deal is not on the books (${describeStatus(forward)}), so ${action} is refused until it has posted.`;
+      const exact = exactlyOnePosted(forwards);
+      if (exact === "NONE") {
+        return `A custody movement on this deal is not on the books (${describeStatus(forwards[0])}), so ${action} is refused until it has posted.`;
+      }
+      if (exact === "MORE_THAN_ONCE") {
+        return `A custody movement on this deal is on the books more than once, so ${action} is refused until the record has been reviewed.`;
       }
     }
 
@@ -1060,12 +1374,21 @@ export async function custodyLedgerFamilyRefusal(
       if (claimed === undefined) {
         return `A written-off custody record on this deal carries no write-off posting, so ${action} is refused until the custody accounting migration has posted it.`;
       }
-      const exact = writeOffs.find((event) => event.eventVersion === claimed.version);
-      if (exact === undefined || exact.status !== "POSTED") {
-        return `A custody write-off on this deal is not on the books (${describeStatus(exact)}), so ${action} is refused until it has posted.`;
+      if (!isStoredVersion(claimed.version)) {
+        return `A custody write-off on this deal names a posting version that is not a positive whole number (${claimed.version}), so ${action} is refused until the record has been reviewed.`;
+      }
+      const canonical = writeOffs.filter(
+        (event) => event.eventVersion === claimed.version && event.idempotencyKey === custodyWriteOffPostKey(row._id, claimed.version)
+      );
+      const exact = exactlyOnePosted(canonical);
+      if (exact === "NONE") {
+        return `A custody write-off on this deal is not on the books (${describeStatus(canonical[0] ?? writeOffs.find((event) => event.eventVersion === claimed.version))}), so ${action} is refused until it has posted.`;
       }
       if (postedWriteOffVersions.some((version) => version !== claimed.version)) {
         return `A custody write-off on this deal is on the books at more than one version (an earlier version's reversal has not posted yet), so ${action} is refused until the outbox has posted it.`;
+      }
+      if (exact === "MORE_THAN_ONCE" || writeOffs.filter(isLive).length > 1) {
+        return `A custody write-off on this deal is on the books more than once, so ${action} is refused until the record has been reviewed.`;
       }
     } else if (postedWriteOffVersions.length > 0) {
       return `A reopened custody record on this deal still has its write-off on the books (the reversal has not posted yet), so ${action} is refused until the outbox has posted it.`;
@@ -1091,12 +1414,21 @@ export async function custodyLedgerFamilyRefusal(
     // (its `custodyPosted` was cleared when its reversal was issued).
     const claimed = fee.voidedAt === undefined && fee.custodyId !== undefined ? fee.custodyPosted : undefined;
     if (claimed !== undefined) {
-      const exact = postings.find((event) => event.eventVersion === claimed.version);
-      if (exact === undefined || exact.status !== "POSTED") {
-        return `A cost paid out of an employee's custody on this deal is not on the books (${describeStatus(exact)}), so ${action} is refused until it has posted.`;
+      if (!isStoredVersion(claimed.version)) {
+        return `A cost paid out of an employee's custody on this deal names a posting version that is not a positive whole number (${claimed.version}), so ${action} is refused until the line has been reviewed.`;
+      }
+      const canonical = postings.filter(
+        (event) => event.eventVersion === claimed.version && event.idempotencyKey === custodyFeePostKey(fee._id, claimed.version)
+      );
+      const exact = exactlyOnePosted(canonical);
+      if (exact === "NONE") {
+        return `A cost paid out of an employee's custody on this deal is not on the books (${describeStatus(canonical[0] ?? postings.find((event) => event.eventVersion === claimed.version))}), so ${action} is refused until it has posted.`;
       }
       if (postings.some((event) => event.status === "POSTED" && event.eventVersion !== claimed.version)) {
         return `A cost paid out of an employee's custody on this deal is on the books at more than one version (an earlier version's reversal has not posted yet), so ${action} is refused until the outbox has posted it.`;
+      }
+      if (exact === "MORE_THAN_ONCE" || postings.filter(isLive).length > 1) {
+        return `A cost paid out of an employee's custody on this deal is on the books more than once, so ${action} is refused until the line has been reviewed.`;
       }
       continue;
     }
@@ -1105,6 +1437,31 @@ export async function custodyLedgerFamilyRefusal(
     }
   }
   return null;
+}
+
+/**
+ * ## Exactly one canonical POSTED forward event per family member (R7, F2)
+ *
+ * "The event at the claimed version is POSTED" — `find` — said nothing about
+ * a SECOND POSTED event at that version, or a second journal under another
+ * key beside the first: a duplicated forward is the charge on the books
+ * twice, and the proof certified it. So each member's canonical posting —
+ * its own event type, version AND idempotency key — must be POSTED exactly
+ * once, and no OTHER live event may stand beside it. Live is POSTED or
+ * PENDING: a PENDING event is one whose journal may already exist (the
+ * engine posts the journal before it marks the event), so it is not "not on
+ * the books"; FAILED and REVERSED are settled and never counted.
+ */
+function isLive(event: Doc<"accountingEvents">): boolean {
+  return event.status === "POSTED" || event.status === "PENDING";
+}
+
+/** Whether `candidates` (one member's canonical events) hold exactly one POSTED event and nothing else live. */
+function exactlyOnePosted(candidates: ReadonlyArray<Doc<"accountingEvents">>): "ONE" | "NONE" | "MORE_THAN_ONCE" {
+  const posted = candidates.filter((event) => event.status === "POSTED").length;
+  if (posted === 0) return "NONE";
+  if (posted > 1 || candidates.filter(isLive).length > 1) return "MORE_THAN_ONCE";
+  return "ONE";
 }
 
 function describeStatus(event: Doc<"accountingEvents"> | undefined): string {

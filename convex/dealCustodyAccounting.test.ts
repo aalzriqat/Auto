@@ -3,22 +3,35 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS, PERMISSIONS } from "./utils/permissions";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { deriveRecommendedCustody } from "./financeDealCosts";
 import { drainEntries } from "./accountingOutbox";
+import { hookCustodyFeePaid, hookCustodyFeeReversed } from "./accounting/workflowHooks";
+import { getDocumentSize } from "convex/values";
 import {
+  assertStoredVersion,
+  CUSTODY_PROOF_CALLER_RESERVE_BYTES,
+  CUSTODY_PROOF_CALLER_RESERVE_DOCUMENTS,
+  CUSTODY_PROOF_CALLER_RESERVE_QUERIES,
   CustodyLedgerReadBudget,
   custodyLedgerFamilyRefusal,
   custodyLedgerFamilyRowRefusal,
   custodyPositionDependencies,
   custodyPostingBlockedReason,
+  documentBytes,
   foldAbandonedPayableDeltas,
+  isStoredVersion,
   loadCustodyPostedLines,
   MAX_CUSTODY_LEDGER_PROOFS,
+  MAX_CUSTODY_LEDGER_READ_BYTES,
   MAX_CUSTODY_POSTED_LINES,
+  MAX_CUSTODY_READ_BATCH,
+  nextStoredVersion,
   parseCustodyDependencies,
+  PLATFORM_DOCUMENT_BYTES,
+  PLATFORM_TRANSACTION_READ_BYTES,
 } from "./utils/custodySourceLedger";
 import { financedSaleRecognitionDate } from "./utils/financedSaleRecognition";
 
@@ -2504,16 +2517,17 @@ describe("G6 — the family proof bounds the DOCUMENTS it reads, refusing before
 
   test("the budget charges what each read returns and sizes the next read to one past what is left", () => {
     const budget = new CustodyLedgerReadBudget(10, "the test");
+    const docs = (n: number) => Array.from({ length: n }, (_, i) => ({ i }));
     expect(budget.take(500)).toBe(11);
-    budget.charge(4);
+    budget.charge(docs(4));
     expect(budget.take(500)).toBe(7);
     expect(budget.take(2)).toBe(3);
-    budget.charge(6);
+    budget.charge(docs(6));
     expect(budget.documentsRead).toBe(10);
     // Exhausted: the next read may fetch exactly one document, and that one refuses.
     expect(budget.take(500)).toBe(1);
-    expect(() => budget.charge(1)).toThrow(/more than 10 ledger postings, which is past what the test can verify/);
-    expect(() => budget.charge(0)).toThrow();
+    expect(() => budget.charge(docs(1))).toThrow(/more than 10 ledger postings, which is past what the test can verify/);
+    expect(() => budget.charge(docs(0))).toThrow();
   });
 
   test("a family under the budget still reads every document and passes; the count is the documents, not the sources", async () => {
@@ -2529,7 +2543,10 @@ describe("G6 — the family proof bounds the DOCUMENTS it reads, refusing before
       expect(rows).toHaveLength(1);
       return budget.documentsRead;
     });
-    expect(spent).toBe(1);
+    // One line at one version: the probe that finds version 1, the batch
+    // that reads the line, and the empty probe past it (R7, F1 — the
+    // ever-posted lines are read version by version, in batches).
+    expect(spent).toBe(3);
     expect(await familyRefusal(seed)).toBeNull();
   });
 });
@@ -2604,12 +2621,14 @@ describe("H1 — the family proof charges the live lines it was handed, so its d
     const feeIds: Id<"financeDealFees">[] = [];
     for (let n = 0; n < custodyLines; n += 1) feeIds.push(await employeeFee(seed, custodyId, jod(100)));
     // Documents the proof reads besides the dealer lines below: 1 custody
-    // row, the 4 live custody lines, the 4 ever-posted lines, 1 movement, its
-    // forward event, the custody's own family (empty: 400 < 700 leaves no
-    // payable), and each fee's family — its POSTED v1 plus `perLine` FAILED
-    // attempts at later versions (under the per-source cap).
+    // row, the 4 live custody lines, the 4 ever-posted lines plus the two
+    // version probes that enumerate them (R7, F1: the probe that finds
+    // version 1 and the empty probe past it), 1 movement, its forward
+    // event, the custody's own family (empty: 400 < 700 leaves no payable),
+    // and each fee's family — its POSTED v1 plus `perLine` FAILED attempts
+    // at later versions (under the per-source cap).
     const dealerLines = 10;
-    const fixed = 1 + custodyLines + custodyLines + 1 + 1 + 0 + custodyLines;
+    const fixed = 1 + custodyLines + (custodyLines + 2) + 1 + 1 + 0 + custodyLines;
     const perLine = Math.floor((MAX_CUSTODY_LEDGER_PROOFS - fixed) / custodyLines);
     const remainder = MAX_CUSTODY_LEDGER_PROOFS - fixed - custodyLines * perLine;
     const template = (await events(seed, "CUSTODY_FEE_PAID"))[0];
@@ -3612,5 +3631,555 @@ describe("R6-F3 — a cost whose parent application cannot be loaded for this or
     const foreignAppId = await foreignApplication(seed);
     await seed.t.run((ctx) => ctx.db.patch(custodyId, { applicationId: foreignAppId }));
     await migrationRefusesEntirely(seed, custodyId, feeId);
+  }, 45_000);
+});
+
+// ---------------------------------------------------------------------------
+// R7 — the exact-SHA re-review of 9dc7f6c38 (Codex, CHANGES REQUESTED)
+// ---------------------------------------------------------------------------
+
+/** Every custody-family ledger event of one org whose `sourceId` is `sourceId`, in index order. */
+async function familyOf(seed: Seed, sourceId: string, eventType?: string) {
+  return (await events(seed, eventType)).filter((e) => e.sourceId === sourceId);
+}
+
+/** A second POSTED copy of `event`, under `idempotencyKey` (its own by default) — a raw duplicate. */
+async function duplicateEvent(seed: Seed, event: Doc<"accountingEvents">, idempotencyKey = event.idempotencyKey) {
+  const { _id: _dropId, _creationTime: _dropCt, journalEntryId: _dropJournal, ...clone } = event;
+  void _dropId; void _dropCt; void _dropJournal;
+  return await seed.t.run((ctx) => ctx.db.insert("accountingEvents", { ...clone, status: "POSTED", idempotencyKey }));
+}
+
+/**
+ * A ctx whose queries are STRUCTURALLY bounded: every `.take(n)` is recorded
+ * and `.collect()` / `.first()` / `.unique()` / `.paginate()` throw — so a
+ * proof that asked one query for a large or unbounded batch fails here, not
+ * on the platform. Everything else delegates to the real harness.
+ */
+function batchPinnedCtx(ctx: RunCtx): { ctx: RunCtx; maxTake: () => number; takes: () => number } {
+  let maxTake = 0;
+  let takes = 0;
+  const wrapQuery = (query: object): object =>
+    new Proxy(query, {
+      get(target, prop, receiver) {
+        if (prop === "take") {
+          return (n: number) => {
+            takes += 1;
+            maxTake = Math.max(maxTake, n);
+            return (target as { take: (n: number) => unknown }).take(n);
+          };
+        }
+        if (prop === "collect" || prop === "first" || prop === "unique" || prop === "paginate") {
+          return () => {
+            throw new Error(`a custody proof asked a query for an unbounded batch (${String(prop)})`);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        if (typeof value !== "function") return value;
+        return (...args: unknown[]) => {
+          const result = value.apply(target, args);
+          return result !== null && typeof result === "object" && typeof (result as { take?: unknown }).take === "function"
+            ? wrapQuery(result)
+            : result;
+        };
+      },
+    });
+  type Db = RunCtx["db"];
+  const db = {
+    ...ctx.db,
+    get: (...args: Parameters<Db["get"]>) => ctx.db.get(...args),
+    query: (...args: Parameters<Db["query"]>) => wrapQuery(ctx.db.query(...args)),
+    normalizeId: (...args: Parameters<Db["normalizeId"]>) => ctx.db.normalizeId(...args),
+    insert: (...args: Parameters<Db["insert"]>) => ctx.db.insert(...args),
+    patch: (...args: Parameters<Db["patch"]>) => ctx.db.patch(...args),
+    delete: (...args: Parameters<Db["delete"]>) => ctx.db.delete(...args),
+    system: ctx.db.system,
+  };
+  return { ctx: { ...ctx, db } as unknown as RunCtx, maxTake: () => maxTake, takes: () => takes };
+}
+
+describe("R7-F1 — the family proof bounds the BYTES it reads, exactly and per batch, against the transaction's real headroom", () => {
+  test("the derivation holds: the proof's own budget, one worst-case batch and the caller's reserve fit under the platform's transaction read limit", () => {
+    expect(MAX_CUSTODY_READ_BATCH * PLATFORM_DOCUMENT_BYTES + CUSTODY_PROOF_CALLER_RESERVE_BYTES + MAX_CUSTODY_LEDGER_READ_BYTES).toBeLessThanOrEqual(PLATFORM_TRANSACTION_READ_BYTES);
+    // Every keyed point-read in the module takes at most one batch.
+    expect(MAX_CUSTODY_READ_BATCH).toBeGreaterThanOrEqual(8);
+  });
+
+  test("the budget charges every document at its EXACT platform size (`getDocumentSize`) and refuses at its byte bound with a named reason, before its document bound", () => {
+    const budget = new CustodyLedgerReadBudget(100, "the test", 1_000);
+    const small = { _id: "a", n: 1 };
+    budget.charge([small, small]);
+    expect(budget.documentsRead).toBe(2);
+    expect(budget.bytesRead).toBe(2 * getDocumentSize(small));
+    expect(documentBytes(small)).toBe(getDocumentSize(small));
+    // An empty point-read costs a document and no bytes; a value that is not
+    // a document is charged one maximum document, never nothing.
+    budget.chargeRead([]);
+    expect(budget.documentsRead).toBe(3);
+    expect(budget.bytesRead).toBe(2 * getDocumentSize(small));
+    expect(documentBytes(null)).toBe(PLATFORM_DOCUMENT_BYTES);
+    // One 1,000-character document: well under 100 documents, past 1,000 bytes.
+    expect(() => budget.charge([{ text: "x".repeat(1_000) }])).toThrow(/more than 1,000 bytes of ledger postings, which is past what the test can verify completely/);
+    // A refusal is final: the budget does not read on after it.
+    expect(() => budget.charge([small])).toThrow(/more than 1,000 bytes/);
+  });
+
+  test("the headroom check refuses by name when the transaction could not take one worst-case batch plus the caller's reserve, or when its metrics cannot be read", async () => {
+    const budget = new CustodyLedgerReadBudget(100, "the test");
+    const metric = (remaining: number, used = 0) => ({ used, remaining });
+    const ample = {
+      bytesRead: metric(PLATFORM_TRANSACTION_READ_BYTES), bytesWritten: metric(1), databaseQueries: metric(4_096),
+      documentsRead: metric(32_000), documentsWritten: metric(1), functionsScheduled: metric(1), scheduledFunctionArgsBytes: metric(1),
+    };
+    const ctxWith = (metrics: typeof ample) => ({ meta: { getTransactionMetrics: async () => metrics } });
+    await expect(budget.assertHeadroom(ctxWith(ample))).resolves.toBeUndefined();
+    const exact = MAX_CUSTODY_READ_BATCH * PLATFORM_DOCUMENT_BYTES + CUSTODY_PROOF_CALLER_RESERVE_BYTES;
+    await expect(budget.assertHeadroom(ctxWith({ ...ample, bytesRead: metric(exact) }))).resolves.toBeUndefined();
+    await expect(budget.assertHeadroom(ctxWith({ ...ample, bytesRead: metric(exact - 1, 6_291_457) }))).rejects.toThrow(
+      /This transaction has read too much for the test to verify this deal's custody completely \(6,291,457 bytes/
+    );
+    await expect(budget.assertHeadroom(ctxWith({ ...ample, documentsRead: metric(MAX_CUSTODY_READ_BATCH + CUSTODY_PROOF_CALLER_RESERVE_DOCUMENTS - 1) }))).rejects.toThrow(/read too much/);
+    await expect(budget.assertHeadroom(ctxWith({ ...ample, databaseQueries: metric(CUSTODY_PROOF_CALLER_RESERVE_QUERIES) }))).rejects.toThrow(/read too much/);
+    await expect(budget.assertHeadroom({})).rejects.toThrow(/read headroom cannot be measured/);
+    await expect(budget.assertHeadroom({ meta: {} })).rejects.toThrow(/read headroom cannot be measured/);
+  });
+
+  test("no query inside any proof asks for more than one batch, none is unbounded, and a family larger than a batch is still read in full", async () => {
+    const seed = await seedDeal("r7-batches");
+    const custodyId = await openCustody(seed, jod(700));
+    for (let n = 0; n < 12; n += 1) await move(seed, custodyId, "ISSUED", jod(10));
+    const feeId = await employeeFee(seed, custodyId, jod(900));
+    // A fee family of 20 events (one live, the rest FAILED), a movement log
+    // of 13 legs, a payable chain: every enumeration exceeds one batch.
+    const template = (await events(seed, "CUSTODY_FEE_PAID"))[0];
+    const { _id: _drop, _creationTime: _ct, journalEntryId: _j, ...rest } = template;
+    void _drop; void _ct; void _j;
+    await seed.t.run(async (ctx) => {
+      for (let version = 2; version <= 20; version += 1) {
+        await ctx.db.insert("accountingEvents", { ...rest, eventVersion: version, status: "FAILED", idempotencyKey: `custody_fee_paid_${feeId}_v${version}` });
+      }
+    });
+    expect((await familyOf(seed, feeId.toString(), "CUSTODY_FEE_PAID")).length).toBe(20);
+    const pinned = await seed.t.run(async (raw) => {
+      const bounded = batchPinnedCtx(raw);
+      const custody = await raw.db.query("financeDealCustody").withIndex("by_application", (q) => q.eq("applicationId", seed.applicationId)).collect();
+      const fees = await raw.db.query("financeDealFees").withIndex("by_application", (q) => q.eq("applicationId", seed.applicationId)).collect();
+      const refusal = await custodyLedgerFamilyRefusal(bounded.ctx, seed.orgId, seed.applicationId, custody, fees, "closing");
+      const dependencies = await custodyPositionDependencies(bounded.ctx, custody[0], "the test");
+      const fold = await foldAbandonedPayableDeltas(bounded.ctx, custody[0], "the test");
+      const budget = new CustodyLedgerReadBudget(MAX_CUSTODY_LEDGER_PROOFS, "the test");
+      const lines = await loadCustodyPostedLines(bounded.ctx, seed.applicationId, "the test", budget);
+      return { refusal, dependencies: dependencies.length, fold, lines: lines.length, maxTake: bounded.maxTake(), takes: bounded.takes() };
+    });
+    expect(pinned.refusal).toBeNull();
+    // 13 legs SETTLED + the live charge SETTLED: the whole log was read, past one batch.
+    expect(pinned.dependencies).toBe(14);
+    expect(pinned.fold).toEqual({ nextVersion: 2, baseTargetMinor: jod(80) });
+    expect(pinned.lines).toBe(1);
+    expect(pinned.maxTake).toBeLessThanOrEqual(MAX_CUSTODY_READ_BATCH);
+    expect(pinned.takes).toBeGreaterThan(20 / MAX_CUSTODY_READ_BATCH);
+  }, 45_000);
+
+  test("a handful of near-maximum documents refuse at the byte bound, batch by batch, and the transaction's own metrics agree; a transaction that has already read too much refuses on headroom before the first batch; the same family with ordinary payloads passes", async () => {
+    // convex-test tracks bytesRead with the platform's size formula but does
+    // NOT enforce the limit here, so this proves the budget's accounting, the
+    // batching (one batch of overshoot at most) and the headroom arithmetic
+    // against the harness's metrics — never that a real transaction would
+    // have failed. Only a real-platform run proves the runtime metrics.
+    const seed = await seedDeal("r7-bytes");
+    const custodyId = await openCustody(seed, jod(700));
+    const feeIds: Id<"financeDealFees">[] = [];
+    for (let n = 0; n < 5; n += 1) feeIds.push(await employeeFee(seed, custodyId, jod(100)));
+    expect(await familyRefusal(seed)).toBeNull();
+    const template = (await events(seed, "CUSTODY_FEE_PAID"))[0];
+    const { _id: _drop, _creationTime: _ct, journalEntryId: _j, ...rest } = template;
+    void _drop; void _ct; void _j;
+    // Five FAILED attempts, each a document just under the platform's 1 MiB:
+    // ten documents in all, far under the document bound, 4.5 MiB in bytes.
+    const bulk = "x".repeat(900_000);
+    const bulkBytes = getDocumentSize({ ...rest, payload: { ...(rest.payload as object), bulk } });
+    expect(bulkBytes).toBeLessThan(PLATFORM_DOCUMENT_BYTES);
+    expect(5 * bulkBytes).toBeGreaterThan(MAX_CUSTODY_LEDGER_READ_BYTES);
+    const inserted = await seed.t.run(async (ctx) => {
+      const ids: Id<"accountingEvents">[] = [];
+      for (const feeId of feeIds) {
+        ids.push(
+          await ctx.db.insert("accountingEvents", {
+            ...rest, sourceId: feeId.toString(), eventVersion: 2, status: "FAILED",
+            idempotencyKey: `custody_fee_paid_${feeId}_v2`, payload: { ...(rest.payload as object), bulk },
+          })
+        );
+      }
+      return ids;
+    });
+    const outcome = await seed.t.run(async (ctx) => {
+      const custody = await ctx.db.query("financeDealCustody").withIndex("by_application", (q) => q.eq("applicationId", seed.applicationId)).collect();
+      const fees = await ctx.db.query("financeDealFees").withIndex("by_application", (q) => q.eq("applicationId", seed.applicationId)).collect();
+      const before = await ctx.meta.getTransactionMetrics();
+      let refusal: string | null = null;
+      try {
+        await custodyLedgerFamilyRefusal(ctx, seed.orgId, seed.applicationId, custody, fees, "closing");
+      } catch (error) {
+        refusal = error instanceof Error ? error.message : String(error);
+      }
+      const after = await ctx.meta.getTransactionMetrics();
+      return { refusal, readByProof: after.bytesRead.used - before.bytesRead.used };
+    });
+    expect(outcome.refusal).toMatch(/bytes of ledger postings, which is past what closing can verify completely/);
+    // The platform's own accounting of what the proof read: past the budget
+    // (it refused for that), and by no more than the two small families it
+    // read before the bulk ones plus one batch — never the whole family.
+    expect(outcome.readByProof).toBeGreaterThan(MAX_CUSTODY_LEDGER_READ_BYTES);
+    expect(outcome.readByProof).toBeLessThan(MAX_CUSTODY_LEDGER_READ_BYTES + MAX_CUSTODY_READ_BATCH * PLATFORM_DOCUMENT_BYTES);
+
+    // A transaction that has already spent its headroom: the proof refuses
+    // on the platform's metrics before it fetches anything of its own.
+    const headroom = await seed.t.run(async (ctx) => {
+      for (let pass = 0; pass < 3; pass += 1) {
+        await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", seed.orgId)).collect();
+      }
+      const used = (await ctx.meta.getTransactionMetrics()).bytesRead.used;
+      const custody = await ctx.db.query("financeDealCustody").withIndex("by_application", (q) => q.eq("applicationId", seed.applicationId)).collect();
+      const fees = await ctx.db.query("financeDealFees").withIndex("by_application", (q) => q.eq("applicationId", seed.applicationId)).collect();
+      try {
+        await custodyLedgerFamilyRefusal(ctx, seed.orgId, seed.applicationId, custody, fees, "closing");
+        return { used, refusal: null as string | null };
+      } catch (error) {
+        return { used, refusal: error instanceof Error ? error.message : String(error) };
+      }
+    });
+    expect(headroom.used).toBeGreaterThan(PLATFORM_TRANSACTION_READ_BYTES - MAX_CUSTODY_READ_BATCH * PLATFORM_DOCUMENT_BYTES - CUSTODY_PROOF_CALLER_RESERVE_BYTES);
+    expect(headroom.refusal).toMatch(/This transaction has read too much for closing to verify this deal's custody completely/);
+
+    await seed.t.run(async (ctx) => {
+      for (const id of inserted) await ctx.db.patch(id, { payload: rest.payload });
+    });
+    expect(await familyRefusal(seed)).toBeNull();
+  }, 60_000);
+});
+
+describe("R7-F2 — the family proof requires EXACTLY ONE canonical POSTED forward event per family member, and no other live one", () => {
+  test("a duplicate POSTED cash leg, custody-paid fee and write-off at the claimed version are each refused; a stray live event beside the posting is refused; the exact family passes", async () => {
+    const seed = await seedDeal("r7-duplicates");
+    const custodyId = await openCustody(seed, jod(700));
+    const feeId = await employeeFee(seed, custodyId, jod(600));
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+      idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, custodyId, notes: "short", writeOffReason: "lost 100",
+    });
+    expect(await familyRefusal(seed)).toBeNull();
+    const feeEvent = (await familyOf(seed, feeId.toString(), "CUSTODY_FEE_PAID"))[0];
+    const writeOffEvent = (await familyOf(seed, custodyId.toString(), "CUSTODY_WRITTEN_OFF"))[0];
+    const issuedEvent = (await events(seed, "CUSTODY_CASH_ISSUED"))[0];
+    expect([feeEvent.status, writeOffEvent.status, issuedEvent.status]).toEqual(["POSTED", "POSTED", "POSTED"]);
+
+    // Two POSTED copies at the claimed version: `find` saw one and passed.
+    let dup = await duplicateEvent(seed, feeEvent);
+    expect(await familyRefusal(seed)).toMatch(/custody on this deal is on the books more than once/);
+    await seed.t.run((ctx) => ctx.db.delete(dup));
+    dup = await duplicateEvent(seed, writeOffEvent);
+    expect(await familyRefusal(seed)).toMatch(/custody write-off on this deal is on the books more than once/);
+    await seed.t.run((ctx) => ctx.db.delete(dup));
+    dup = await duplicateEvent(seed, issuedEvent);
+    expect(await familyRefusal(seed)).toMatch(/custody movement on this deal is on the books more than once/);
+    await seed.t.run((ctx) => ctx.db.delete(dup));
+    expect(await familyRefusal(seed)).toBeNull();
+
+    // A live event beside the posting, at the same version but not under the
+    // posting's own key — a second journal the row cannot account for.
+    dup = await duplicateEvent(seed, feeEvent, `${feeEvent.idempotencyKey}_stray`);
+    expect(await familyRefusal(seed)).toMatch(/custody on this deal is on the books more than once/);
+    await seed.t.run((ctx) => ctx.db.patch(dup, { status: "PENDING" }));
+    expect(await familyRefusal(seed)).toMatch(/custody on this deal is on the books more than once/);
+    // FAILED and REVERSED copies are not live and never were.
+    await seed.t.run((ctx) => ctx.db.patch(dup, { status: "FAILED" }));
+    expect(await familyRefusal(seed)).toBeNull();
+    await seed.t.run((ctx) => ctx.db.patch(dup, { status: "REVERSED" }));
+    expect(await familyRefusal(seed)).toBeNull();
+    await seed.t.run((ctx) => ctx.db.delete(dup));
+
+    // The posting at the claimed version under a key that is not its own is
+    // not the canonical posting: refused as not on the books, never accepted
+    // because the version matched.
+    await seed.t.run((ctx) => ctx.db.patch(feeEvent._id, { idempotencyKey: `${feeEvent.idempotencyKey}_renamed` }));
+    expect(await familyRefusal(seed)).toMatch(/custody on this deal is not on the books/);
+    await seed.t.run((ctx) => ctx.db.patch(feeEvent._id, { idempotencyKey: feeEvent.idempotencyKey }));
+    await seed.t.run((ctx) => ctx.db.patch(writeOffEvent._id, { idempotencyKey: `${writeOffEvent.idempotencyKey}_renamed` }));
+    expect(await familyRefusal(seed)).toMatch(/custody write-off on this deal is not on the books/);
+    await seed.t.run((ctx) => ctx.db.patch(writeOffEvent._id, { idempotencyKey: writeOffEvent.idempotencyKey }));
+    expect(await familyRefusal(seed)).toBeNull();
+  }, 45_000);
+});
+
+describe("R7-F3 — a STORED custody link is proven this org's, on this deal, before anything reverses, re-posts or reclassifies against it", () => {
+  const LINK_MISSING = /linked to a custody record that is not in this organization/;
+  const LINK_OTHER_DEAL = /linked to a custody record on a different deal/;
+
+  /** A canonical custody record of another organization, as a raw-edited link could name it. */
+  async function foreignCustody(seed: Seed): Promise<Id<"financeDealCustody">> {
+    const ours = (await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))!;
+    return await seed.t.run(async (ctx) => {
+      const applicationId = await ctx.db.insert("financeApplications", {
+        orgId: seed.otherOrgId, quoteId: ours.quoteId, customerId: ours.customerId, vehicleId: ours.vehicleId,
+        salespersonId: seed.userId, status: "APPROVED", createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      return await ctx.db.insert("financeDealCustody", {
+        orgId: seed.otherOrgId, applicationId, userId: seed.employeeId, currency: "JOD",
+        issuedMinor: jod(700), returnedMinor: 0, reimbursedMinor: 0, status: "OPEN", ledgerPosting: "CANONICAL",
+        createdBy: seed.userId, createdAt: Date.now(), updatedAt: Date.now(),
+      });
+    });
+  }
+
+  /** A canonical custody record on ANOTHER deal of the same organization. */
+  async function siblingDealCustody(seed: Seed): Promise<Id<"financeDealCustody">> {
+    const ours = (await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))!;
+    return await seed.t.run(async (ctx) => {
+      const applicationId = await ctx.db.insert("financeApplications", {
+        orgId: seed.orgId, quoteId: ours.quoteId, customerId: ours.customerId, vehicleId: ours.vehicleId,
+        salespersonId: seed.userId, status: "APPROVED", createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      return await ctx.db.insert("financeDealCustody", {
+        orgId: seed.orgId, applicationId, userId: seed.employeeId, currency: "JOD",
+        issuedMinor: jod(700), returnedMinor: 0, reimbursedMinor: 0, status: "OPEN", ledgerPosting: "CANONICAL",
+        createdBy: seed.userId, createdAt: Date.now(), updatedAt: Date.now(),
+      });
+    });
+  }
+
+  /** Every door through which a line's STORED link is acted on, each refusing by name and changing nothing. */
+  async function everyDoorRefuses(seed: Seed, feeId: Id<"financeDealFees">, refusal: RegExp) {
+    const before = {
+      events: (await events(seed)).length,
+      pending: (await pending(seed)).length,
+      fee: (await seed.t.run((ctx) => ctx.db.get(feeId)))!,
+      custody: await seed.t.run((ctx) => ctx.db.query("financeDealCustody").collect()),
+    };
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, { orgId: seed.orgId, feeId, actualAmountMinor: jod(350), expectedCurrency: "JOD" })
+    ).rejects.toThrow(refusal);
+    await expect(seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "gone" })).rejects.toThrow(refusal);
+    await expect(seed.asUser.mutation(api.financeDealCosts.setFeeCustody, { orgId: seed.orgId, feeId })).rejects.toThrow(refusal);
+    await expect(seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "checked" })).rejects.toThrow(refusal);
+    expect((await events(seed)).length).toBe(before.events);
+    expect((await pending(seed)).length).toBe(before.pending);
+    expect(await seed.t.run((ctx) => ctx.db.get(feeId))).toEqual(before.fee);
+    expect(await seed.t.run((ctx) => ctx.db.query("financeDealCustody").collect())).toEqual(before.custody);
+  }
+
+  test("the current link (`custodyId`) names a record that is gone, another organization's, or another deal's", async () => {
+    const seed = await seedDeal("r7-current-link");
+    const custodyId = await openCustody(seed, jod(700));
+    const feeId = await employeeFee(seed, custodyId, jod(300));
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+
+    const foreign = await foreignCustody(seed);
+    await seed.t.run((ctx) => ctx.db.patch(feeId, { custodyId: foreign }));
+    await everyDoorRefuses(seed, feeId, LINK_MISSING);
+
+    const sibling = await siblingDealCustody(seed);
+    await seed.t.run((ctx) => ctx.db.patch(feeId, { custodyId: sibling }));
+    await everyDoorRefuses(seed, feeId, LINK_OTHER_DEAL);
+
+    await seed.t.run((ctx) => ctx.db.patch(feeId, { custodyId }));
+    await seed.t.run(async (ctx) => {
+      for (const entry of await ctx.db.query("financeDealCustodyEntries").withIndex("by_custody", (q) => q.eq("custodyId", custodyId)).collect()) await ctx.db.delete(entry._id);
+      await ctx.db.delete(custodyId);
+    });
+    await everyDoorRefuses(seed, feeId, LINK_MISSING);
+  }, 60_000);
+
+  test("the prior link (`custodyPosted.custodyId`) is proven before the reversal and the payable sync it drives: a foreign record's payable never moves", async () => {
+    const seed = await seedDeal("r7-prior-link");
+    const custodyId = await openCustody(seed, jod(700));
+    const feeId = await employeeFee(seed, custodyId, jod(300));
+    const foreign = await foreignCustody(seed);
+    const posted = (await seed.t.run((ctx) => ctx.db.get(feeId)))!.custodyPosted!;
+    await seed.t.run((ctx) => ctx.db.patch(feeId, { custodyPosted: { ...posted, custodyId: foreign } }));
+    const before = { events: (await events(seed)).length, foreign: (await seed.t.run((ctx) => ctx.db.get(foreign)))! };
+    // Re-recording the amount, voiding and releasing all reverse the prior
+    // version and reclassify the record it was charged to.
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, { orgId: seed.orgId, feeId, actualAmountMinor: jod(350), expectedCurrency: "JOD" })
+    ).rejects.toThrow(LINK_MISSING);
+    await expect(seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "gone" })).rejects.toThrow(LINK_MISSING);
+    await expect(seed.asUser.mutation(api.financeDealCosts.setFeeCustody, { orgId: seed.orgId, feeId })).rejects.toThrow(LINK_MISSING);
+    expect((await events(seed)).length).toBe(before.events);
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+    expect(await seed.t.run((ctx) => ctx.db.get(foreign))).toEqual(before.foreign);
+    expect((await seed.t.run((ctx) => ctx.db.get(feeId)))!.custodyPosted).toEqual({ ...posted, custodyId: foreign });
+    // Nothing of the other organization's was touched — no event, no outbox row.
+    expect(await seed.t.run(async (ctx) => (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", seed.otherOrgId)).collect()).length)).toBe(0);
+    expect((await seed.t.run((ctx) => ctx.db.query("pendingAccountingEvents").collect())).filter((r) => r.orgId === seed.otherOrgId)).toHaveLength(0);
+
+    const sibling = await siblingDealCustody(seed);
+    await seed.t.run((ctx) => ctx.db.patch(feeId, { custodyPosted: { ...posted, custodyId: sibling } }));
+    await expect(seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "gone" })).rejects.toThrow(LINK_OTHER_DEAL);
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+    expect((await seed.t.run((ctx) => ctx.db.get(feeId)))!.voidedAt).toBeUndefined();
+  }, 60_000);
+});
+
+describe("R7-F4 — a stored posting version is a positive whole number or the door refuses (CVX-4: `v.number()` admits NaN, Infinity and fractions)", () => {
+  const NOT_A_VERSION = /posting version that is not a positive whole number/;
+  const BAD_VERSIONS = [NaN, Infinity, -Infinity, 1.5, 0.5, -1] as const;
+
+  test("the shared validator names every non-version; `nextStoredVersion` counts from nothing or from a whole number only", () => {
+    expect(isStoredVersion(1)).toBe(true);
+    expect(isStoredVersion(Number.MAX_SAFE_INTEGER)).toBe(true);
+    for (const bad of [...BAD_VERSIONS, 0, Number.MAX_SAFE_INTEGER + 2, "1", null, undefined]) expect(isStoredVersion(bad)).toBe(false);
+    expect(nextStoredVersion(undefined, "the line", "the test")).toBe(1);
+    expect(nextStoredVersion(0, "the line", "the test")).toBe(1);
+    expect(nextStoredVersion(3, "the line", "the test")).toBe(4);
+    for (const bad of BAD_VERSIONS) {
+      expect(() => nextStoredVersion(bad, "the line", "the test")).toThrow(new RegExp(`the line carries a posting version that is not a positive whole number \\(${bad}\\), so the test`));
+      expect(() => assertStoredVersion(bad, "the line", "the test")).toThrow(NOT_A_VERSION);
+    }
+    expect(() => nextStoredVersion(Number.MAX_SAFE_INTEGER, "the line", "the test")).toThrow(NOT_A_VERSION);
+  });
+
+  test("producer: a line whose stored counter is not a version is never re-posted at 'version NaN'", async () => {
+    const seed = await seedDeal("r7-version-producer");
+    const custodyId = await openCustody(seed, jod(700));
+    const feeId = await employeeFee(seed, custodyId, jod(300));
+    for (const bad of [NaN, Infinity, 1.5]) {
+      await seed.t.run((ctx) => ctx.db.patch(feeId, { custodyPostingVersion: bad }));
+      const before = (await seed.t.run((ctx) => ctx.db.get(feeId)))!;
+      await expect(
+        seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, { orgId: seed.orgId, feeId, actualAmountMinor: jod(350), expectedCurrency: "JOD" })
+      ).rejects.toThrow(NOT_A_VERSION);
+      expect(await seed.t.run((ctx) => ctx.db.get(feeId))).toEqual(before);
+      expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+    }
+    // The hooks refuse the same number whichever door computed it.
+    await seed.t.run(async (ctx) => {
+      const fee = (await ctx.db.get(feeId))!;
+      for (const bad of BAD_VERSIONS) {
+        await expect(
+          hookCustodyFeePaid(ctx, { orgId: seed.orgId, fee, custodyId, vehicleId: seed.vehicleId, version: bad, amountMinor: jod(1), actorId: seed.userId, occurredAt: Date.now() })
+        ).rejects.toThrow(NOT_A_VERSION);
+        await expect(
+          hookCustodyFeeReversed(ctx, { orgId: seed.orgId, feeId, version: bad, reason: "r", actorId: seed.userId, reversalDate: Date.now() })
+        ).rejects.toThrow(NOT_A_VERSION);
+      }
+    });
+    expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+  }, 45_000);
+
+  test("reversal: a line or record whose CLAIMED version is not a version is neither voided over a charge left on the books nor reopened over a write-off left on them", async () => {
+    const seed = await seedDeal("r7-version-reversal");
+    const custodyId = await openCustody(seed, jod(700));
+    const feeId = await employeeFee(seed, custodyId, jod(300));
+    const posted = (await seed.t.run((ctx) => ctx.db.get(feeId)))!.custodyPosted!;
+    for (const bad of [NaN, Infinity, 1.5]) {
+      await seed.t.run((ctx) => ctx.db.patch(feeId, { custodyPosted: { ...posted, version: bad } }));
+      await expect(seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "gone" })).rejects.toThrow(NOT_A_VERSION);
+      await expect(seed.asUser.mutation(api.financeDealCosts.setFeeCustody, { orgId: seed.orgId, feeId })).rejects.toThrow(NOT_A_VERSION);
+      expect((await seed.t.run((ctx) => ctx.db.get(feeId)))!.voidedAt).toBeUndefined();
+      expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+    }
+    await seed.t.run((ctx) => ctx.db.patch(feeId, { custodyPosted: posted }));
+
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+      idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, custodyId, notes: "short", writeOffReason: "lost 400",
+    });
+    const writeOff = (await seed.t.run((ctx) => ctx.db.get(custodyId)))!.writeOffPosted!;
+    for (const bad of [NaN, Infinity, 1.5]) {
+      await seed.t.run((ctx) => ctx.db.patch(custodyId, { writeOffPosted: { ...writeOff, version: bad } }));
+      await expect(seed.asUser.mutation(api.financeDealCosts.reopenDealCustody, { orgId: seed.orgId, custodyId, reason: "found" })).rejects.toThrow(NOT_A_VERSION);
+      expect((await seed.t.run((ctx) => ctx.db.get(custodyId)))!.status).toBe("WRITTEN_OFF");
+      expect((await events(seed, "CUSTODY_WRITTEN_OFF")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"]]);
+    }
+    await seed.t.run((ctx) => ctx.db.patch(custodyId, { writeOffPosted: writeOff }));
+    // The write-off producer, over a counter that is not a version.
+    await seed.asUser.mutation(api.financeDealCosts.reopenDealCustody, { orgId: seed.orgId, custodyId, reason: "found" });
+    for (const bad of [NaN, Infinity, 1.5]) {
+      await seed.t.run((ctx) => ctx.db.patch(custodyId, { writeOffPostingVersion: bad }));
+      await expect(
+        seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, custodyId, notes: "short", writeOffReason: "lost 400" })
+      ).rejects.toThrow(NOT_A_VERSION);
+      expect((await seed.t.run((ctx) => ctx.db.get(custodyId)))!.status).toBe("OPEN");
+    }
+    expect((await events(seed, "CUSTODY_WRITTEN_OFF")).map((e) => [e.eventVersion, e.status])).toEqual([[1, "REVERSED"]]);
+  }, 60_000);
+
+  test("enumeration: a deal whose ever-posted lines include one at a counter that is not a version refuses the family proof rather than stopping short of the lines after it", async () => {
+    const seed = await seedDeal("r7-version-enumeration");
+    const custodyId = await openCustody(seed, jod(700));
+    const first = await employeeFee(seed, custodyId, jod(100));
+    await employeeFee(seed, custodyId, jod(100));
+    expect(await familyRefusal(seed)).toBeNull();
+    for (const bad of [NaN, Infinity, 1.5]) {
+      await seed.t.run((ctx) => ctx.db.patch(first, { custodyPostingVersion: bad }));
+      await expect(familyRefusal(seed)).rejects.toThrow(/custody posting version that is not a positive whole number/);
+      await expect(
+        seed.t.run((ctx) => loadCustodyPostedLines(ctx, seed.applicationId, "the test", new CustodyLedgerReadBudget(MAX_CUSTODY_LEDGER_PROOFS, "the test")))
+      ).rejects.toThrow(/custody posting version that is not a positive whole number/);
+    }
+    await seed.t.run((ctx) => ctx.db.patch(first, { custodyPostingVersion: 1 }));
+    expect(await familyRefusal(seed)).toBeNull();
+  }, 45_000);
+
+  test("migration: a legacy line whose counter is not a version refuses the whole record, and nothing posts", async () => {
+    const seed = await seedDeal("r7-version-migration", { templates: false });
+    const t0 = Date.now() - 10 * DAY;
+    for (const bad of [NaN, Infinity, 1.5]) {
+      const { custodyId, feeId } = await seed.t.run(async (ctx) => {
+        const custodyId = await ctx.db.insert("financeDealCustody", {
+          orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.employeeId, currency: "JOD",
+          issuedMinor: jod(700), returnedMinor: 0, reimbursedMinor: 0, status: "OPEN",
+          createdBy: seed.userId, createdAt: t0, updatedAt: t0,
+        });
+        await ctx.db.insert("financeDealCustodyEntries", {
+          orgId: seed.orgId, custodyId, kind: "ISSUED", amountMinor: jod(700), method: "CASH", occurredAt: t0, recordedBy: seed.userId, recordedAt: t0,
+        });
+        const feeId = await ctx.db.insert("financeDealFees", {
+          orgId: seed.orgId, applicationId: seed.applicationId, feeType: "LICENSING", currency: "JOD",
+          actualAmountMinor: jod(650), paidBy: "EMPLOYEE", paidTo: "GOVERNMENT", accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+          includedInQuotation: false, deductedFromSettlement: false, refundable: false, custodyId, paidAt: t0 + DAY,
+          custodyPostingVersion: bad, source: "MANUAL", createdBy: seed.userId, createdAt: t0 + DAY, updatedAt: t0 + DAY,
+        });
+        return { custodyId, feeId };
+      });
+      await expect(
+        seed.asUser.mutation(api.financeDealCosts.migrateLegacyCustodyToLedger, { orgId: seed.orgId, custodyId, idempotencyKey: crypto.randomUUID() })
+      ).rejects.toThrow(NOT_A_VERSION);
+      expect(await events(seed)).toHaveLength(0);
+      expect(await pending(seed)).toHaveLength(0);
+      expect((await seed.t.run((ctx) => ctx.db.get(custodyId)))!.ledgerPosting).toBeUndefined();
+      expect((await seed.t.run((ctx) => ctx.db.get(feeId)))!.custodyPosted).toBeUndefined();
+      await seed.t.run(async (ctx) => {
+        await ctx.db.delete(feeId);
+        for (const entry of await ctx.db.query("financeDealCustodyEntries").withIndex("by_custody", (q) => q.eq("custodyId", custodyId)).collect()) await ctx.db.delete(entry._id);
+        await ctx.db.delete(custodyId);
+      });
+    }
+  }, 60_000);
+});
+
+describe("R7-F5 — a POSTED payable link is held to the same identity and payload contract as a queued one", () => {
+  test("a posted link under a key that is not the chain's, or whose dependencies cannot be read, is refused by the family gate and by the fold alike", async () => {
+    const seed = await seedDeal("r7-posted-link");
+    const custodyId = await openCustody(seed, jod(700));
+    await employeeFee(seed, custodyId, jod(900));
+    expect(await familyRefusal(seed)).toBeNull();
+    const v1 = (await events(seed, "CUSTODY_PAYABLE_RECLASSIFIED"))[0];
+    expect([v1.eventVersion, v1.status]).toEqual([1, "POSTED"]);
+
+    await seed.t.run((ctx) => ctx.db.patch(v1._id, { idempotencyKey: `${v1.idempotencyKey}_other` }));
+    expect(await familyRefusal(seed)).toMatch(/payable reclassification v1 is not the reclassification the chain expects \(its ledger event names another event, source or version\)/);
+    await expect(move(seed, custodyId, "REIMBURSED", jod(100))).rejects.toThrow(/payable reclassification v1 is not the reclassification the chain expects/);
+    expect((await entries(seed, custodyId)).filter((e) => e.kind === "REIMBURSED")).toHaveLength(0);
+    await seed.t.run((ctx) => ctx.db.patch(v1._id, { idempotencyKey: v1.idempotencyKey }));
+    expect(await familyRefusal(seed)).toBeNull();
+
+    await seed.t.run((ctx) => ctx.db.patch(v1._id, { payload: { ...(v1.payload as object), ledgerDependencies: "junk" } }));
+    expect(await familyRefusal(seed)).toMatch(/payable reclassification v1 carries ledger dependencies that cannot be read/);
+    await expect(move(seed, custodyId, "REIMBURSED", jod(100))).rejects.toThrow(/payable reclassification v1 carries ledger dependencies that cannot be read/);
+    expect((await entries(seed, custodyId)).filter((e) => e.kind === "REIMBURSED")).toHaveLength(0);
+    expect((await events(seed, "CUSTODY_PAYABLE_RECLASSIFIED")).map((e) => e.eventVersion)).toEqual([1]);
+    await seed.t.run((ctx) => ctx.db.patch(v1._id, { payload: v1.payload }));
+    expect(await familyRefusal(seed)).toBeNull();
+    await move(seed, custodyId, "REIMBURSED", jod(100));
+    expect((await events(seed, "CUSTODY_PAYABLE_RECLASSIFIED")).map((e) => e.eventVersion)).toEqual([1, 2]);
   }, 45_000);
 });

@@ -24,12 +24,14 @@ import { getOpenPeriodForDate } from "./accountingPeriods";
 import { custodyFeeExpenseKey } from "./utils/dealCustodyPosting";
 import {
   assertCustodyLedgerFamilyComplete,
+  assertStoredVersion,
   custodyEntryPostKey,
   custodyFeePostKey,
   custodyPayableReclassPosted,
   custodyPositionDependencies,
   foldAbandonedPayableDeltas,
   loadCustodyEntries,
+  nextStoredVersion,
   type CustodyLedgerDependency,
 } from "./utils/custodySourceLedger";
 import {
@@ -150,13 +152,47 @@ function assertNotCustodian(
  */
 async function assertActorNotCustodianOf(
   ctx: MutationCtx,
+  line: Pick<Doc<"financeDealFees">, "orgId" | "applicationId">,
   custodyId: Id<"financeDealCustody">,
   actorId: Id<"users">,
   action: string
 ): Promise<void> {
-  const custody = await ctx.db.get(custodyId);
-  if (custody === null) throw new ConvexError(CUSTODY_NOT_FOUND);
+  const custody = await requireLinkedCustody(ctx, line, custodyId, action);
   assertNotCustodian(custody, actorId, action);
+}
+
+/**
+ * The custody record a cost line's STORED link names — `custodyId`, or the
+ * `custodyPosted.custodyId` its live charge sits on — loaded as the line's
+ * own organization's row on the line's own deal, or refused (R7, F3).
+ *
+ * A stored link is not a caller's argument: `resolveFeeCustody` vets the
+ * record a caller asks to charge, but nothing vetted what the row already
+ * carried, and a raw `get` on it reversed, re-posted and reclassified
+ * against whatever the id named — a record of another tenant, a record on
+ * another deal — or, when the record was gone, skipped the guards that
+ * needed it and went on to post. So every door that acts on a stored link
+ * (re-record, void, release, reconcile, and the posting sync behind them)
+ * loads it here first, and a link that is not this org's on this deal
+ * refuses before any write. Tenancy: `requireOwnedRow` on the line's
+ * `orgId`; identity: the record's `applicationId` must be the line's.
+ */
+async function requireLinkedCustody(
+  ctx: MutationCtx,
+  line: Pick<Doc<"financeDealFees">, "orgId" | "applicationId">,
+  custodyId: Id<"financeDealCustody">,
+  action: string
+): Promise<Doc<"financeDealCustody">> {
+  const custody = await requireOwnedRow(
+    ctx, line.orgId, "financeDealCustody", custodyId,
+    `This cost is linked to a custody record that is not in this organization, so ${action} is refused until the line is corrected; nothing has been changed.`
+  );
+  if (custody.applicationId !== line.applicationId) {
+    throw new ConvexError(
+      `This cost is linked to a custody record on a different deal, so ${action} is refused until the line is corrected; nothing has been changed.`
+    );
+  }
+  return custody;
 }
 
 /**
@@ -398,6 +434,17 @@ async function syncCustodyFeePosting(
     posted.amountMinor === target.amountMinor;
   if (unchanged) return;
 
+  // Both stored links are proven this org's, on this deal, and the claimed
+  // version proven a version, BEFORE the reversal, the re-post and the
+  // payable syncs they drive (R7, F3 + F4): nothing below acts on a link or
+  // a number the row merely carries.
+  const action = "syncing this cost's custody posting";
+  if (posted !== undefined) {
+    await requireLinkedCustody(ctx, fee, posted.custodyId, action);
+    assertStoredVersion(posted.version, "This cost line's custody posting", action);
+  }
+  if (target !== null) await requireLinkedCustody(ctx, fee, target.custodyId, action);
+
   const now = Date.now();
   // What became of the live version: a DEFERRED reversal leaves it POSTED
   // until the outbox drains, and the replacement below is queued behind it
@@ -428,7 +475,7 @@ async function syncCustodyFeePosting(
 
   const expense = custodyFeeExpenseKey(fee.accountingTreatment);
   if (expense.systemKey === null) throw new ConvexError(expense.refusal);
-  const version = (fee.custodyPostingVersion ?? 0) + 1;
+  const version = nextStoredVersion(fee.custodyPostingVersion, "This cost line", action);
   // A fresh charge is posted against a deal that EXISTS in this org (R6,
   // F3): a line whose parent is gone or another tenant's is never put on
   // the books, whatever door led here. Thrown before the forward posts, so
@@ -2289,15 +2336,17 @@ export const recordActualFeeAmount = mutation({
     assertMinorAmount(args.actualAmountMinor, "Actual amount");
     assertTimestamp(args.paidAt, "The paid date");
     assertNotFuture(args.paidAt, Date.now(), "The paid date");
-    // The holder of the record this line sits on never re-records it (final
-    // round E) — before the reconciliation override below is written.
-    if (fee.custodyId) {
-      await assertActorNotCustodianOf(ctx, fee.custodyId, user._id, "Changing a cost charged to a custody record");
-    }
     // The parent must exist in this org (R6, F3): a line whose deal is gone or
     // another tenant's has no freeze to judge and is refused, never let through.
     const parent = await requireOwnedRow(ctx, args.orgId, "financeApplications", fee.applicationId, APPLICATION_NOT_FOUND);
     assertDealEconomicsOpen(parent, "changing a recorded cost");
+    // The record the line already sits on, proven this org's on this deal
+    // (R7, F3), and its holder never re-records the line (final round E) —
+    // before the reconciliation override below is written.
+    const existing = fee.custodyId
+      ? await requireLinkedCustody(ctx, fee, fee.custodyId, "changing a cost charged to a custody record")
+      : null;
+    if (existing !== null) assertNotCustodian(existing, user._id, "Changing a cost charged to a custody record");
     // The more destructive of the two siblings: voiding preserves the amount
     // and records a reason, while this replaces the figure, the checker's
     // identity and their notes outright. Escalating only `voidDealFee` left the
@@ -2328,16 +2377,13 @@ export const recordActualFeeAmount = mutation({
     // against would leave that record permanently wrong with no way to correct
     // it — `recordCustodyMovement` refuses once it is closed. A legacy record
     // (no ledger behind it) refuses too: a new figure would post one leg.
-    if (fee.custodyId) {
-      const existing = await ctx.db.get(fee.custodyId);
-      if (existing) {
-        assertCustodyOpen(existing);
-        assertCustodyOnLedger(existing, "changing a cost charged to it");
-        // A re-record re-posts the charge at the new figure against the
-        // record's balance: a legacy link in another currency is refused
-        // before the row or the ledger moves (R5, F4).
-        assertFeeCustodyCurrency(fee, existing, "re-recording a cost charged to this custody record");
-      }
+    if (existing !== null) {
+      assertCustodyOpen(existing);
+      assertCustodyOnLedger(existing, "changing a cost charged to it");
+      // A re-record re-posts the charge at the new figure against the
+      // record's balance: a legacy link in another currency is refused
+      // before the row or the ledger moves (R5, F4).
+      assertFeeCustodyCurrency(fee, existing, "re-recording a cost charged to this custody record");
     }
 
     const nextStorageIds = args.documentStorageIds ?? fee.documentStorageIds;
@@ -2405,9 +2451,10 @@ export const reconcileDealFee = mutation({
       );
     }
     // A line charged to custody is the evidence its holder is reimbursed
-    // on; the holder does not certify it (final round E).
+    // on; the holder does not certify it (final round E) — and the link is
+    // proven this org's on this deal before it is trusted (R7, F3).
     if (fee.custodyId) {
-      await assertActorNotCustodianOf(ctx, fee.custodyId, user._id, "Reconciling a cost charged to a custody record");
+      await assertActorNotCustodianOf(ctx, fee, fee.custodyId, user._id, "Reconciling a cost charged to a custody record");
     }
     // Re-reconciling silently replaced the first checker's identity and notes.
     // Same privilege on both sides, so this is attribution loss rather than
@@ -2468,12 +2515,12 @@ export const voidDealFee = mutation({
     }
     // Voiding a custody-charged line reverses its journal (AF-CUST-04).
     if (fee.custodyId) assertMayPostCustody(auth, "Removing a cost charged to an employee's custody");
+    // The record the line sits on, proven this org's on this deal (R7, F3)
+    // — a link nobody can load is refused, never skipped past.
     if (fee.custodyId) {
-      const custody = await ctx.db.get(fee.custodyId);
-      if (custody) {
-        assertNotCustodian(custody, user._id, "Removing a cost charged to a custody record");
-        assertCustodyOpen(custody);
-      }
+      const custody = await requireLinkedCustody(ctx, fee, fee.custodyId, "removing a cost charged to a custody record");
+      assertNotCustodian(custody, user._id, "Removing a cost charged to a custody record");
+      assertCustodyOpen(custody);
     }
 
     await invalidateClassification(
@@ -2530,12 +2577,11 @@ export const setFeeCustody = mutation({
     // The parent must exist in this org (R6, F3); see recordActualFeeAmount.
     const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", fee.applicationId, APPLICATION_NOT_FOUND);
     assertDealEconomicsOpen(app, "moving a cost onto or off custody");
+    // The record the line leaves, proven this org's on this deal (R7, F3).
     if (fee.custodyId) {
-      const current = await ctx.db.get(fee.custodyId);
-      if (current) {
-        assertNotCustodian(current, user._id, "Releasing a cost from a custody record");
-        assertCustodyOpen(current);
-      }
+      const current = await requireLinkedCustody(ctx, fee, fee.custodyId, "releasing a cost from a custody record");
+      assertNotCustodian(current, user._id, "Releasing a cost from a custody record");
+      assertCustodyOpen(current);
     }
     const custodyId = args.custodyId
       ? await resolveFeeCustody(ctx, args.orgId, fee.applicationId, args.custodyId, fee, user._id)
@@ -3052,7 +3098,7 @@ export const reconcileDealCustody = mutation({
           }
           assertCustodyOnLedger(custody, "writing off its shortage");
           await assertCustodyAccountingReady(ctx, args.orgId, "writing off a custody shortage");
-          const version = (custody.writeOffPostingVersion ?? 0) + 1;
+          const version = nextStoredVersion(custody.writeOffPostingVersion, "This custody record", "writing off a custody shortage");
           await hookCustodyWrittenOff(ctx, {
             orgId: args.orgId,
             custody,
@@ -3242,7 +3288,7 @@ export const migrateLegacyCustodyToLedger = mutation({
         let latestFact = entries.reduce((latest, entry) => Math.max(latest, entry.occurredAt), 0);
         for (const fee of linked) {
           if (fee.actualAmountMinor === undefined || fee.actualAmountMinor <= 0) continue;
-          const version = (fee.custodyPostingVersion ?? 0) + 1;
+          const version = nextStoredVersion(fee.custodyPostingVersion, "A cost charged to this custody record", "migrating this custody record");
           const occurredAt = fee.paidAt !== undefined && isTimestamp(fee.paidAt) ? fee.paidAt : fee.createdAt;
           latestFact = Math.max(latestFact, occurredAt);
           await hookCustodyFeePaid(ctx, {
@@ -3267,7 +3313,7 @@ export const migrateLegacyCustodyToLedger = mutation({
         // The shortage a written-off record absorbed, dated at its closure.
         let writeOffPosted = false;
         if (custody.status === "WRITTEN_OFF") {
-          const version = (custody.writeOffPostingVersion ?? 0) + 1;
+          const version = nextStoredVersion(custody.writeOffPostingVersion, "This custody record", "migrating this custody record");
           const occurredAt = custody.reconciledAt ?? custody.updatedAt;
           latestFact = Math.max(latestFact, occurredAt);
           await hookCustodyWrittenOff(ctx, {
@@ -3332,6 +3378,12 @@ export const reopenDealCustody = mutation({
     const reason = args.reason.trim();
     if (!reason) {
       throw new ConvexError("Say why this custody record is being reopened.");
+    }
+    // The write-off version the row claims is proven a version before the
+    // reversal is pinned to it (R7, F4): a NaN pin reverses nothing and
+    // reports the loss withdrawn while Cash Over/Short still carries it.
+    if (custody.writeOffPosted) {
+      assertStoredVersion(custody.writeOffPosted.version, "This custody record's write-off posting", "reopening this custody record");
     }
 
     // Reopening undoes a reconciliation somebody signed off, so it leaves a row

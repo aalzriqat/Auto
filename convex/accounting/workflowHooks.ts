@@ -23,6 +23,7 @@ import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate, checkPostingAllowed } from "../accountingPeriods";
 import { SYSTEM_KEYS, type SystemKey } from "../utils/defaultChart";
 import {
+  assertStoredVersion,
   custodyDependenciesPayload,
   custodyDependencyBlockedReason,
   custodyEntryPostKey,
@@ -3355,6 +3356,7 @@ export async function hookCustodyFeePaid(
     replacesReversal?: ReversalOutcome;
   }
 ): Promise<void> {
+  assertStoredVersion(args.version, "This cost line's custody posting", "posting this custody-paid cost");
   await ensureDealCustodyAccountsIfChartReady(ctx, args.orgId, args.actorId);
   if (await isChartInitialized(ctx, args.orgId)) {
     await ensureFinancedSettlementAccounts(ctx, args.orgId, args.actorId);
@@ -3403,6 +3405,7 @@ export async function hookCustodyFeeReversed(
     reversalDate: number;
   }
 ): Promise<ReversalOutcome> {
+  assertStoredVersion(args.version, "This cost line's custody posting", "reversing this custody-paid cost");
   return reverseEventIfPosted(ctx, {
     orgId: args.orgId,
     sourceType: "financeDealFees",
@@ -3443,6 +3446,7 @@ export async function hookCustodyWrittenOff(
     dependencies: ReadonlyArray<CustodyLedgerDependency>;
   }
 ): Promise<void> {
+  assertStoredVersion(args.version, "This custody record's write-off posting", "posting this custody write-off");
   await ensureDealCustodyAccountsIfChartReady(ctx, args.orgId, args.actorId);
   const replacementBlock = await custodyReplacementQueueReason(ctx, {
     orgId: args.orgId,
@@ -3519,6 +3523,11 @@ export async function hookCustodyPayableReclassified(
     dependencies: ReadonlyArray<CustodyLedgerDependency>;
   }
 ): Promise<void> {
+  assertStoredVersion(
+    args.version,
+    "This custody record's payable reclassification",
+    "posting this custody payable reclassification"
+  );
   await ensureDealCustodyAccountsIfChartReady(ctx, args.orgId, args.actorId);
   const predecessorUnposted =
     args.version > 1 &&
@@ -3564,6 +3573,7 @@ export async function hookCustodyWriteOffReversed(
     reversalDate: number;
   }
 ): Promise<ReversalOutcome> {
+  assertStoredVersion(args.version, "This custody record's write-off posting", "reversing this custody write-off");
   return reverseEventIfPosted(ctx, {
     orgId: args.orgId,
     sourceType: "financeDealCustody",
