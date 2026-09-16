@@ -1,7 +1,7 @@
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
-import { MAX_CUSTODY_ENTRIES, MAX_LIVE_DEAL_FEE_LINES } from "./dealCostLimits";
+import { MAX_CUSTODY_ENTRIES, MAX_DEAL_CUSTODY_DECISION_RECORDS, MAX_LIVE_DEAL_FEE_LINES } from "./dealCostLimits";
 
 /**
  * The custody family's ledger identity and its causal guards.
@@ -485,6 +485,36 @@ export async function loadCustodyEntries(
  * by nobody: a SETTLED key must be the version the row still claims, and
  * an OFF_BOOKS key must be one the ledger showed POSTED. Tenant-bound by
  * the record's own `orgId` and `applicationId`.
+ *
+ * ### Whose charge a posted version is (R5, F2)
+ *
+ * A deal may have two custodians, and a line re-charged from one to the
+ * other has a version on each record's books: v1 charged to A (reversed,
+ * perhaps under a deferred reversal), v2 charged to B and LIVE. B's v2 is
+ * B's position, not a charge A's residual is waiting to see leave — naming
+ * it OFF the books for A held A's write-off and every later payable delta
+ * behind a posting that will legitimately never reverse. So a posted
+ * version is A's dependency only when it is ATTRIBUTED to A: the event's
+ * own `custodyId` (written by every producer of `CUSTODY_FEE_PAID`), never
+ * the row's current link, which says nothing about earlier versions. An
+ * attribution that cannot be read — absent, not an id, or a record that is
+ * not one of this deal's — is a version whose fate this record cannot
+ * judge, and the proof REFUSES rather than guesses (fail closed): every
+ * posted version of a line matters to SOME record of the deal. The version
+ * the row still claims is SETTLED only when the row AND the ledger agree it
+ * is this record's.
+ *
+ * ### The record's own write-offs (R5, F1)
+ *
+ * A written-off shortage is a credit on the clearing account; reopening
+ * reverses it, and a DEFERRED reversal leaves the write-off POSTED while
+ * the row (now OPEN, `writeOffPosted` cleared) no longer names it. Every
+ * derived posting after that — a payable delta for a receipt that turned
+ * up, a re-closure — is computed from a position the ledger does not yet
+ * show, so every POSTED write-off version other than the one the row still
+ * claims is named OFF the books here, read from the record's own event
+ * family. The row cannot carry it (reopen erases the claim on purpose:
+ * the loss is withdrawn); the ledger is the only witness.
  */
 export async function custodyPositionDependencies(
   ctx: QueryCtx | MutationCtx,
@@ -502,18 +532,68 @@ export async function custodyPositionDependencies(
       idempotencyKey: custodyEntryPostKey(entry._id),
     });
   }
+
+  // The record's own family: every write-off still on the books that the
+  // row no longer claims must leave them first.
+  const own = await sourceEvents(ctx, custody.orgId, "financeDealCustody", custody._id.toString(), action, budget);
+  const claimedWriteOff = custody.writeOffPosted?.version;
+  for (const event of own) {
+    if (event.eventType !== "CUSTODY_WRITTEN_OFF" || event.status !== "POSTED" || event.eventVersion === claimedWriteOff) continue;
+    dependencies.push({ must: "OFF_BOOKS", idempotencyKey: custodyWriteOffPostKey(custody._id, event.eventVersion) });
+  }
+
+  // The deal's custody records, so an attribution names a record of THIS
+  // deal (and org) or is refused. Bounded like every decision read.
+  const dealCustody = await ctx.db
+    .query("financeDealCustody")
+    .withIndex("by_application", (q) => q.eq("applicationId", custody.applicationId))
+    .take(budget.take(MAX_DEAL_CUSTODY_DECISION_RECORDS));
+  budget.charge(dealCustody.length);
+  if (dealCustody.length > MAX_DEAL_CUSTODY_DECISION_RECORDS) {
+    throw new ConvexError(
+      `This deal carries more than ${MAX_DEAL_CUSTODY_DECISION_RECORDS} custody records, which is past what ${action} can decide on completely; nothing has been changed. Have the deal's custody reviewed.`
+    );
+  }
+  const dealCustodyIds = new Set(dealCustody.filter((row) => row.orgId === custody.orgId).map((row) => row._id.toString()));
+  const attributedTo = (event: Doc<"accountingEvents">): string => {
+    const raw = (event.payload as Record<string, unknown> | null | undefined)?.custodyId;
+    const id = typeof raw === "string" ? ctx.db.normalizeId("financeDealCustody", raw) : null;
+    if (id === null || !dealCustodyIds.has(id.toString())) {
+      throw new ConvexError(
+        `A custody charge on this deal (custody fee posting v${event.eventVersion}) cannot be attributed to a custody record of the deal, so ${action} cannot prove whose books it is on; nothing has been changed. Have the deal's custody reviewed.`
+      );
+    }
+    return id.toString();
+  };
+
   const postedLines = await loadCustodyPostedLines(ctx, custody.applicationId, action, budget);
+  const self = custody._id.toString();
   for (const fee of postedLines) {
     const current =
-      fee.voidedAt === undefined && fee.custodyId === custody._id && fee.custodyPosted !== undefined
+      fee.voidedAt === undefined &&
+      fee.custodyId === custody._id &&
+      fee.custodyPosted !== undefined &&
+      fee.custodyPosted.custodyId === custody._id
         ? fee.custodyPosted.version
         : null;
     const family = await sourceEvents(ctx, custody.orgId, "financeDealFees", fee._id.toString(), action, budget);
     // The versions to leave first, then the one to arrive: the first unmet
     // dependency names the reason, and a replacement is held behind the
-    // reversal it follows before it is awaited itself.
+    // reversal it follows before it is awaited itself. Only the versions
+    // attributed to THIS record are its concern; the attribution of every
+    // posted version is proven, whichever record it names.
     for (const event of family) {
-      if (event.eventType !== "CUSTODY_FEE_PAID" || event.status !== "POSTED" || event.eventVersion === current) continue;
+      if (event.eventType !== "CUSTODY_FEE_PAID" || event.status !== "POSTED") continue;
+      const owner = attributedTo(event);
+      if (event.eventVersion === current) {
+        if (owner !== self) {
+          throw new ConvexError(
+            `A custody charge on this deal (custody fee posting v${event.eventVersion}) is on the books against a different custody record than the one its line names, so ${action} cannot prove this record's position; nothing has been changed. Have the deal's custody reviewed.`
+          );
+        }
+        continue;
+      }
+      if (owner !== self) continue;
       dependencies.push({ must: "OFF_BOOKS", idempotencyKey: custodyFeePostKey(fee._id, event.eventVersion) });
     }
     if (current !== null) {
@@ -565,6 +645,27 @@ async function pendingForwardByKey(
  * from; refuses when a version the row says it issued is neither on the
  * ledger nor in the outbox, or a queued row's delta cannot be read — the
  * chain cannot be re-based on a link nobody can see.
+ *
+ * ### The chain is proven link by link, never by its highest link (R5, F5)
+ *
+ * "The highest POSTED version" said nothing about the versions below it:
+ * v2 POSTED over a v1 that exists nowhere read as an intact chain, and the
+ * next delta was issued on top of a payable no journal ever credited. So
+ * the POSTED prefix is exactly the contiguous set 1..P, each version ONE
+ * `CUSTODY_PAYABLE_RECLASSIFIED` event of this record; a POSTED version
+ * above a gap, or two POSTED events at one version, is a chain nobody can
+ * re-base and the mutation REFUSES. Every queued link P+1..N is the exact
+ * row the chain expects — a `POST` of this event type, this source, this
+ * version — with a readable integer delta and readable dependencies; a row
+ * that is any of these things wrongly is refused too, never folded: folding
+ * deletes the row, and a row nobody can read is not one to delete. And the
+ * arithmetic is checked: the POSTED deltas plus the queued deltas must add
+ * up to the target the row carries, or the row and the chain disagree
+ * about what the payable is, and nothing is issued on either.
+ *
+ * The one compatibility rule: a queued row with NO dependency field at all
+ * (from before dependencies existed) names none. It is left standing and
+ * posts by the chain rule alone; it is neither folded nor refused.
  */
 export async function foldAbandonedPayableDeltas(
   ctx: MutationCtx,
@@ -575,44 +676,68 @@ export async function foldAbandonedPayableDeltas(
   const targetMinor = custody.payableTargetMinor ?? 0;
   const intact = { nextVersion: issued + 1, baseTargetMinor: targetMinor };
   if (issued === 0) return intact;
+  const refuse = (version: number, what: string): never => {
+    throw new ConvexError(
+      `This custody record's payable reclassification v${version} ${what}, so ${action} cannot be chained behind it; nothing has been changed. Have the record reviewed.`
+    );
+  };
+  const readDelta = (version: number, payload: unknown): number => {
+    const deltaMinor = (payload as Record<string, unknown> | null | undefined)?.deltaMinor;
+    if (typeof deltaMinor !== "number" || !Number.isSafeInteger(deltaMinor)) refuse(version, "carries no readable delta");
+    return deltaMinor as number;
+  };
   const family = await sourceEvents(ctx, custody.orgId, "financeDealCustody", custody._id.toString(), action);
-  let posted = 0;
+  const postedByVersion = new Map<number, Doc<"accountingEvents">>();
   for (const event of family) {
-    if (event.eventType === "CUSTODY_PAYABLE_RECLASSIFIED" && event.status === "POSTED" && event.eventVersion > posted) {
-      posted = event.eventVersion;
-    }
+    if (event.eventType !== "CUSTODY_PAYABLE_RECLASSIFIED" || event.status !== "POSTED") continue;
+    if (postedByVersion.has(event.eventVersion)) refuse(event.eventVersion, "is on the ledger more than once");
+    postedByVersion.set(event.eventVersion, event);
   }
-  if (posted >= issued) return intact;
+  // The contiguous POSTED prefix 1..posted, and its arithmetic.
+  let posted = 0;
+  let postedSum = 0;
+  while (postedByVersion.has(posted + 1)) {
+    posted += 1;
+    postedSum += readDelta(posted, postedByVersion.get(posted)!.payload);
+  }
+  for (const version of postedByVersion.keys()) {
+    if (version > posted) refuse(posted + 1, "is neither on the ledger nor waiting in the outbox");
+  }
+  if (posted > issued) refuse(posted, "is on the ledger past the version the record says it issued");
   if (issued - posted > MAX_SOURCE_EVENTS) {
     throw new ConvexError(
       `This custody record has more than ${MAX_SOURCE_EVENTS} payable reclassifications waiting to post, which is past what ${action} can re-base completely; nothing has been changed. Have the record reviewed.`
     );
   }
   const tail: Array<{ version: number; row: Doc<"pendingAccountingEvents">; deltaMinor: number }> = [];
+  let queuedSum = 0;
   for (let version = posted + 1; version <= issued; version += 1) {
     const row = await pendingForwardByKey(ctx, custody.orgId, custodyPayableReclassKey(custody._id, version));
-    if (row === null) {
-      throw new ConvexError(
-        `This custody record's payable reclassification v${version} is neither on the ledger nor waiting in the outbox, so ${action} cannot be chained behind it; nothing has been changed. Have the record reviewed.`
-      );
+    if (row === null) refuse(version, "is neither on the ledger nor waiting in the outbox");
+    const link = row as Doc<"pendingAccountingEvents">;
+    if (
+      link.eventType !== "CUSTODY_PAYABLE_RECLASSIFIED" ||
+      link.sourceType !== "financeDealCustody" ||
+      link.sourceId !== custody._id.toString() ||
+      link.eventVersion !== version
+    ) {
+      refuse(version, "is not the reclassification the chain expects (its queued row names another event, source or version)");
     }
-    const deltaMinor = (row.payload as Record<string, unknown> | undefined)?.deltaMinor;
-    if (typeof deltaMinor !== "number" || !Number.isSafeInteger(deltaMinor)) {
-      throw new ConvexError(
-        `This custody record's payable reclassification v${version} carries no readable delta, so ${action} cannot be chained behind it; nothing has been changed. Have the record reviewed.`
-      );
-    }
-    tail.push({ version, row, deltaMinor });
+    const deltaMinor = readDelta(version, link.payload);
+    if (parseCustodyDependencies(link.payload) === null) refuse(version, "carries ledger dependencies that cannot be read");
+    queuedSum += deltaMinor;
+    tail.push({ version, row: link, deltaMinor });
   }
+  if (postedSum + queuedSum !== targetMinor) {
+    throw new ConvexError(
+      `This custody record's payable reclassification chain (${postedSum} posted, ${queuedSum} waiting) does not add up to the target the row carries (${targetMinor}), so ${action} cannot be chained behind it; nothing has been changed. Have the record reviewed.`
+    );
+  }
+  if (posted >= issued) return intact;
   let foldFrom: number | null = null;
   for (const link of tail) {
-    const dependencies = parseCustodyDependencies(link.row.payload);
-    if (dependencies === null) {
-      // Unreadable dependencies hold a row forever at the worker; re-issuing
-      // it with readable ones is the only way the chain moves again.
-      foldFrom = link.version;
-      break;
-    }
+    // Proven readable above; a row that names none is left standing.
+    const dependencies = parseCustodyDependencies(link.row.payload) ?? [];
     for (const dependency of dependencies) {
       if (dependency.must !== "SETTLED") continue;
       if (

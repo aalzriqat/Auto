@@ -1712,6 +1712,9 @@ export function DealCockpit({
           recommended: dealCosts?.recommendedCustody ?? null,
           openPeriodToday: dealCosts?.custodyPostsNow,
           dealStopped:
+            // The issuing commands' own predicate, when the read has it;
+            // the local status check stays as the fallback while it loads.
+            (dealCosts?.acceptsNewCustodyCash?.accepts === false) ||
             (dealCosts?.economicsFrozen?.frozen ?? false) ||
             app.status === "CLOSED" ||
             app.status === "CANCELLED" ||
