@@ -760,10 +760,15 @@ export function DealCockpit({
   const settlesDirectToSupplier =
     isConsignedDeal && app?.supplierSettlementRoute === "DIRECT_TO_SUPPLIER";
   const supplierName = app?.vehicle?.sourcedFromName ?? undefined;
-  const formatEconomics = (minor: number) =>
-    `${(minor / economicsFactor).toLocaleString()} ${
+  const formatEconomics = (minor: number) => {
+    const scale = scaleForCurrency(economicsCurrencyCode);
+    return `${(minor / economicsFactor).toLocaleString(undefined, {
+      minimumFractionDigits: scale,
+      maximumFractionDigits: scale,
+    })} ${
       economicsCurrencyCode === orgCurrency.code ? orgCurrency.displayLabel : economicsCurrencyCode
     }`;
+  };
   /**
    * The customer's plan, read straight off the quote `applications.get`
    * already serves this caller. Nothing is computed from anything else: a
@@ -1004,10 +1009,15 @@ export function DealCockpit({
           },
         }
       : undefined;
-  const formatPlanMajor = (major: number, currency: string) =>
-    `${major.toLocaleString(undefined, { maximumFractionDigits: scaleForCurrency(currency) })} ${
+  const formatPlanMajor = (major: number, currency: string) => {
+    const scale = scaleForCurrency(currency);
+    return `${major.toLocaleString(undefined, {
+      minimumFractionDigits: scale,
+      maximumFractionDigits: scale,
+    })} ${
       currency === orgCurrency.code ? orgCurrency.displayLabel : currency
     }`;
+  };
   /**
    * The frozen net is built in the deal's PINNED currency
    * (`resolveFinancedSalePlan` runs in `app.economicsCurrency ?? org`), so it is

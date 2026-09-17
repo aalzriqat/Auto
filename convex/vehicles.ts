@@ -10,7 +10,7 @@ import { v, ConvexError } from "convex/values";
 import { MutationCtx, QueryCtx, query } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
 import { vehiclesByOrg, LIVE, OWN_STOCK, SOURCED, SUM_EPOCH } from "./aggregates";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth, requireOwnedRow } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
@@ -220,6 +220,115 @@ async function insertPriceHistory(
     changedAt: Date.now(),
   });
 }
+
+const VEHICLE_SELECTOR_LIMIT = 50;
+const RECENT_VEHICLE_SEARCH_WINDOW = 200;
+
+export type VehicleSelectorOption = {
+  _id: Id<"vehicles">;
+  year: number;
+  make: string;
+  model: string;
+  vin?: string;
+  status: string;
+};
+
+function vehicleMatchesSearch(vehicle: Doc<"vehicles">, searchTerm: string) {
+  const lowerSearchTerm = searchTerm.toLowerCase();
+  return (
+    vehicle.make.toLowerCase().includes(lowerSearchTerm) ||
+    vehicle.model.toLowerCase().includes(lowerSearchTerm) ||
+    String(vehicle.year).includes(lowerSearchTerm) ||
+    (vehicle.vin?.toLowerCase().includes(lowerSearchTerm) ?? false)
+  );
+}
+
+async function collectVehicleMatches(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  searchTerm: string,
+): Promise<Doc<"vehicles">[]> {
+  const matchesById = new Map<Id<"vehicles">, Doc<"vehicles">>();
+  const addMatch = (vehicle: Doc<"vehicles">) => {
+    if (vehicle.isDeleted || matchesById.has(vehicle._id)) return;
+    matchesById.set(vehicle._id, vehicle);
+  };
+
+  const recentVehicles = await ctx.db
+    .query("vehicles")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .filter((q) => q.neq(q.field("isDeleted"), true))
+    .order("desc")
+    .take(
+      searchTerm.length >= 2
+        ? RECENT_VEHICLE_SEARCH_WINDOW
+        : VEHICLE_SELECTOR_LIMIT,
+    );
+
+  for (const vehicle of recentVehicles) {
+    if (!searchTerm || vehicleMatchesSearch(vehicle, searchTerm)) {
+      addMatch(vehicle);
+    }
+    if (matchesById.size >= VEHICLE_SELECTOR_LIMIT) break;
+  }
+
+  if (searchTerm.length >= 2 && matchesById.size < VEHICLE_SELECTOR_LIMIT) {
+    const [makeMatches, modelMatches, vinMatches] = await Promise.all([
+      ctx.db
+        .query("vehicles")
+        .withSearchIndex("search_make", (q) =>
+          q.search("make", searchTerm).eq("orgId", orgId),
+        )
+        .filter((q) => q.neq(q.field("isDeleted"), true))
+        .take(VEHICLE_SELECTOR_LIMIT),
+      ctx.db
+        .query("vehicles")
+        .withSearchIndex("search_model", (q) =>
+          q.search("model", searchTerm).eq("orgId", orgId),
+        )
+        .filter((q) => q.neq(q.field("isDeleted"), true))
+        .take(VEHICLE_SELECTOR_LIMIT),
+      ctx.db
+        .query("vehicles")
+        .withSearchIndex("search_vin", (q) =>
+          q.search("vin", searchTerm).eq("orgId", orgId),
+        )
+        .filter((q) => q.neq(q.field("isDeleted"), true))
+        .take(VEHICLE_SELECTOR_LIMIT),
+    ]);
+
+    for (const vehicle of [...makeMatches, ...modelMatches, ...vinMatches]) {
+      addMatch(vehicle);
+      if (matchesById.size >= VEHICLE_SELECTOR_LIMIT) break;
+    }
+  }
+
+  return Array.from(matchesById.values());
+}
+
+/**
+ * Bounded vehicle options for workflow selectors. Recent-vehicle window keeps
+ * newly-added vehicles selectable immediately, while search indexes cover
+ * arbitrary tenant inventories once a user types.
+ */
+export const selectorOptions = query({
+  args: {
+    orgId: v.id("organizations"),
+    search: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    const matches = await collectVehicleMatches(ctx, args.orgId, args.search.trim());
+    return matches.map((v) => ({
+      _id: v._id,
+      year: v.year,
+      make: v.make,
+      model: v.model,
+      vin: v.vin,
+      status: v.status,
+    }));
+  },
+});
 
 /**
  * Lists all vehicles for an organization.

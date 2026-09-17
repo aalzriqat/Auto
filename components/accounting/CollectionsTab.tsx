@@ -697,56 +697,72 @@ function MethodTotals({ totals }: { totals: Record<string, number> }) {
   );
 }
 
-function useCustomerVehicleOptions({ enabled = true }: { enabled?: boolean } = {}) {
+function useCustomerVehicleOptions({
+  enabled = true,
+  customerSearch = "",
+  vehicleSearch = "",
+  selectedCustomerId,
+  selectedVehicleId,
+}: {
+  enabled?: boolean;
+  customerSearch?: string;
+  vehicleSearch?: string;
+  selectedCustomerId?: string;
+  selectedVehicleId?: string;
+} = {}) {
   const { activeOrgId } = useOrg();
-  const {
-    results: customers,
-    status: customerStatus,
-    loadMore: loadMoreCustomers,
-  } = usePaginatedQuery(
-    api.customers.list,
-    activeOrgId && enabled ? { orgId: activeOrgId } : "skip",
-    { initialNumItems: 250 }
+  const customers = useQuery(
+    api.customers.selectorOptions,
+    activeOrgId && enabled ? { orgId: activeOrgId, search: customerSearch } : "skip"
   );
-  const {
-    results: vehicles,
-    status: vehicleStatus,
-    loadMore: loadMoreVehicles,
-  } = usePaginatedQuery(
-    api.vehicles.list,
-    activeOrgId && enabled ? { orgId: activeOrgId } : "skip",
-    { initialNumItems: 250 }
+  const vehicles = useQuery(
+    api.vehicles.selectorOptions,
+    activeOrgId && enabled ? { orgId: activeOrgId, search: vehicleSearch } : "skip"
+  );
+  const selectedCustomer = useQuery(
+    api.customers.get,
+    activeOrgId && enabled && selectedCustomerId
+      ? { orgId: activeOrgId, customerId: selectedCustomerId as Id<"customers"> }
+      : "skip"
+  );
+  const selectedVehicle = useQuery(
+    api.vehicles.get,
+    activeOrgId && enabled && selectedVehicleId && selectedVehicleId !== "none"
+      ? { orgId: activeOrgId, vehicleId: selectedVehicleId as Id<"vehicles"> }
+      : "skip"
   );
 
-  useEffect(() => {
-    if (enabled && customerStatus === "CanLoadMore" && (customers?.length ?? 0) < 1000) {
-      loadMoreCustomers(250);
-    }
-  }, [enabled, customerStatus, loadMoreCustomers, customers?.length]);
-
-  useEffect(() => {
-    if (enabled && vehicleStatus === "CanLoadMore" && (vehicles?.length ?? 0) < 1000) {
-      loadMoreVehicles(250);
-    }
-  }, [enabled, vehicleStatus, loadMoreVehicles, vehicles?.length]);
-
-  const customerOptions = useMemo(
-    () => (customers ?? []).map((customer) => ({
+  const customerOptions = useMemo(() => {
+    const list = (customers ?? []).map((customer) => ({
       value: customer._id,
       label: `${customer.firstName} ${customer.lastName}`.trim(),
-      subLabel: customer.phone || customer.whatsapp || customer.email || undefined,
-    })),
-    [customers]
-  );
+      subLabel: customer.phone || customer.email || undefined,
+    }));
+    if (selectedCustomer && !list.some((o) => o.value === selectedCustomer._id)) {
+      list.unshift({
+        value: selectedCustomer._id,
+        label: `${selectedCustomer.firstName} ${selectedCustomer.lastName}`.trim(),
+        subLabel: selectedCustomer.phone || selectedCustomer.email || undefined,
+      });
+    }
+    return list;
+  }, [customers, selectedCustomer]);
 
-  const vehicleOptions = useMemo(
-    () => (vehicles ?? []).map((vehicle) => ({
+  const vehicleOptions = useMemo(() => {
+    const list = (vehicles ?? []).map((vehicle) => ({
       value: vehicle._id,
       label: `${vehicle.year} ${vehicle.make} ${vehicle.model}`,
       subLabel: vehicle.vin,
-    })),
-    [vehicles]
-  );
+    }));
+    if (selectedVehicle && !list.some((o) => o.value === selectedVehicle._id)) {
+      list.unshift({
+        value: selectedVehicle._id,
+        label: `${selectedVehicle.year} ${selectedVehicle.make} ${selectedVehicle.model}`,
+        subLabel: selectedVehicle.vin,
+      });
+    }
+    return list;
+  }, [vehicles, selectedVehicle]);
 
   return { customerOptions, vehicleOptions };
 }
@@ -761,10 +777,18 @@ function ReceivableDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   // dialogs in this file already use. A key minted per ATTEMPT would defeat the
   // guard entirely, since a lost response would retry under a new identity.
   const idempotencyKeyRef = useRef<string | null>(null);
-  const { customerOptions, vehicleOptions } = useCustomerVehicleOptions({ enabled: open });
-  const [mode, setMode] = useState<"single" | "plan">("single");
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [vehicleSearch, setVehicleSearch] = useState("");
   const [customerId, setCustomerId] = useState("");
   const [vehicleId, setVehicleId] = useState("");
+  const { customerOptions, vehicleOptions } = useCustomerVehicleOptions({
+    enabled: open,
+    customerSearch,
+    vehicleSearch,
+    selectedCustomerId: customerId,
+    selectedVehicleId: vehicleId,
+  });
+  const [mode, setMode] = useState<"single" | "plan">("single");
   const [title, setTitle] = useState("");
   const [sourceType, setSourceType] = useState("INTERNAL_INSTALLMENT");
   const [amount, setAmount] = useState("");
@@ -856,8 +880,25 @@ function ReceivableDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
               ))}
             </SelectContent>
           </Select>
-          <SearchableSelect value={customerId} onValueChange={setCustomerId} options={customerOptions} placeholder={t("Customer" as any)} searchPlaceholder={t("SearchCustomersPlaceholder" as any)} />
-          <SearchableSelect value={vehicleId} onValueChange={(value) => setVehicleId(value === "none" ? "" : value)} options={vehicleOptions} placeholder={t("Vehicle" as any)} noneLabel={t("NoVehicle" as any)} searchPlaceholder={t("SearchVehiclesPlaceholder" as any)} />
+          <SearchableSelect
+            value={customerId}
+            onValueChange={setCustomerId}
+            options={customerOptions}
+            placeholder={t("Customer" as any)}
+            searchPlaceholder={t("SearchCustomersPlaceholder" as any)}
+            onSearchChange={setCustomerSearch}
+            clientSideFilter={false}
+          />
+          <SearchableSelect
+            value={vehicleId}
+            onValueChange={(value) => setVehicleId(value === "none" ? "" : value)}
+            options={vehicleOptions}
+            placeholder={t("Vehicle" as any)}
+            noneLabel={t("NoVehicle" as any)}
+            searchPlaceholder={t("SearchVehiclesPlaceholder" as any)}
+            onSearchChange={setVehicleSearch}
+            clientSideFilter={false}
+          />
           <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={t("Title" as any)} />
           <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={mode === "single" ? t("Amount" as any) : t("TotalAmount" as any)} />
           <Input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />

@@ -1207,6 +1207,7 @@ export default defineSchema({
     .index("by_org_sourceType_status", ["orgId", "sourceType", "status"])
     .index("by_org_vin", ["orgId", "vin"])
     .searchIndex("search_make", { searchField: "make", filterFields: ["orgId", "isDeleted"] })
+    .searchIndex("search_model", { searchField: "model", filterFields: ["orgId", "isDeleted"] })
     .searchIndex("search_vin", { searchField: "vin", filterFields: ["orgId", "isDeleted"] }),
 
   vehicleLandedCosts: defineTable({

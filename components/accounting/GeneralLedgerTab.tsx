@@ -6,7 +6,8 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
+import { useCurrencyFormatter, useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
+import { scaleForCurrency } from "./AccountingTabShared";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -116,6 +117,7 @@ export function GeneralLedgerTab() {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
   const formatCurrency = useCurrencyFormatter();
+  const formatInCurrency = useCurrencyFormatterInCurrency();
 
   const [activeLedgerView, setActiveLedgerView] = useState<"gl" | "register">("gl");
   const [selectedEntryId, setSelectedEntryId] = useState<Id<"journalEntries"> | null>(null);
@@ -372,8 +374,24 @@ export function GeneralLedgerTab() {
                   </TableRow>
                 ) : (
                   entryDetails.lines.map((line) => {
-                    const lineFactor = Math.pow(10, line.scale ?? 2);
+                    const effectiveCurrency = line.currency || entryDetails.entry?.currency;
+                    const effectiveScale =
+                      line.scale !== undefined
+                        ? line.scale
+                        : effectiveCurrency
+                          ? scaleForCurrency(effectiveCurrency)
+                          : null;
+                    const lineFactor = effectiveScale !== null ? Math.pow(10, effectiveScale) : null;
                     const account = accountsById.get(line.accountId as string);
+
+                    const formatLineAmount = (minor: number) => {
+                      if (minor <= 0) return "-";
+                      if (effectiveCurrency && effectiveScale !== null && lineFactor !== null) {
+                        return formatInCurrency(minor / lineFactor, effectiveCurrency, effectiveScale);
+                      }
+                      return `[Unverified Scale: ${minor} minor]`;
+                    };
+
                     return (
                       <TableRow key={line._id}>
                         <TableCell className="text-xs">
@@ -388,10 +406,10 @@ export function GeneralLedgerTab() {
                         </TableCell>
                         <TableCell>{line.description || "-"}</TableCell>
                         <TableCell className="text-right font-medium text-emerald-600 dark:text-emerald-400">
-                          {line.debitMinor > 0 ? formatCurrency(line.debitMinor / lineFactor) : "-"}
+                          {formatLineAmount(line.debitMinor)}
                         </TableCell>
                         <TableCell className="text-right font-medium text-rose-600 dark:text-rose-400">
-                          {line.creditMinor > 0 ? formatCurrency(line.creditMinor / lineFactor) : "-"}
+                          {formatLineAmount(line.creditMinor)}
                         </TableCell>
                       </TableRow>
                     );

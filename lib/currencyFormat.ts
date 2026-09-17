@@ -10,8 +10,9 @@ export function formatInCurrency(locale: string, currency: string, amount: numbe
       style: "currency",
       currency,
       minimumFractionDigits: fractionDigits,
+      maximumFractionDigits: fractionDigits,
     }).format(amount);
   } catch {
-    return `${amount.toLocaleString(locale, { minimumFractionDigits: fractionDigits })} ${currency}`;
+    return `${amount.toLocaleString(locale, { minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits })} ${currency}`;
   }
 }
