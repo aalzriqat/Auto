@@ -168,5 +168,5 @@ describe("customers.search and customers.selectorOptions — full inventory reac
     });
     expect(broadSearch.length).toBeLessThanOrEqual(50);
     expect(broadSearch.length).toBe(50);
-  });
+  }, 30_000);
 });

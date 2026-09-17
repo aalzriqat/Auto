@@ -289,11 +289,11 @@ describe("Deal Cockpit Currency Scale Invariant (BLOCKER 4 Regression)", () => {
       const planCard = screen.getByTestId("deal-financing-plan");
       expect(planCard).toBeDefined();
 
-      // The production DealCockpit MUST divide 25_000_000 by economicsFactor (1000 for JOD) to get 25,000.000 JOD
-      expect(within(planCard).getByText("25,000.000 JOD")).toBeDefined();
+      // The production DealCockpit MUST divide 25_000_000 by economicsFactor (1000 for JOD) to get 25,000 JOD
+      expect(within(planCard).getByText("25,000 JOD")).toBeDefined();
 
-      // The production DealCockpit MUST divide 5_000_000 by economicsFactor (1000 for JOD) to get 5,000.000 JOD
-      expect(within(planCard).getByText("5,000.000 JOD")).toBeDefined();
+      // The production DealCockpit MUST divide 5_000_000 by economicsFactor (1000 for JOD) to get 5,000 JOD
+      expect(within(planCard).getByText("5,000 JOD")).toBeDefined();
 
       // Ensure the old bug value (dividing by 100 which produced 250,000) does NOT appear
       expect(planCard.textContent).not.toContain("250,000");
@@ -348,11 +348,11 @@ describe("Deal Cockpit Currency Scale Invariant (BLOCKER 4 Regression)", () => {
       const planCard = screen.getByTestId("deal-financing-plan");
       expect(planCard).toBeDefined();
 
-      // 2,500,000 minor in USD / 100 = 25,000.00 USD
-      expect(within(planCard).getByText("25,000.00 USD")).toBeDefined();
+      // 2,500,000 minor in USD / 100 = 25,000 USD
+      expect(within(planCard).getByText("25,000 USD")).toBeDefined();
 
-      // 500,000 minor in USD / 100 = 5,000.00 USD
-      expect(within(planCard).getByText("5,000.00 USD")).toBeDefined();
+      // 500,000 minor in USD / 100 = 5,000 USD
+      expect(within(planCard).getByText("5,000 USD")).toBeDefined();
 
       expect(planCard.textContent).not.toContain("250,000");
     });

@@ -89,6 +89,7 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ConfirmUnmatch: ["Unmatch this transaction line?", "فك مطابقة هذا السطر؟"],
   UnmatchedSuccess: ["Transaction unmatched", "تم فك المطابقة بنجاح"],
   EnterReopenReason: ["Enter reason for reopening this period:", "أدخل سبب إعادة فتح هذه الفترة:"],
+  Matched: ["Matched", "مطابق"],
   MatchedLines: ["Matched lines", "الأسطر المطابقة"],
   UnmatchedLines: ["Unmatched lines", "الأسطر غير المطابقة"],
   NoMatchedLines: ["No matched statement lines.", "لا توجد أسطر مطابقة."],

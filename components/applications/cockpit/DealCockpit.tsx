@@ -8,7 +8,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
-import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
+import { scaleForCurrency, supportedCurrencyScale } from "@/components/accounting/AccountingTabShared";
 import {
   DISBURSEMENT_DENOMINATION_REASON,
   FINALIZE_DENOMINATION_REASON,
@@ -734,9 +734,11 @@ export function DealCockpit({
   // currency, not the org's current one; the customer's principal is read at
   // the org scale, as the dialog reads it. Absent means the row predates the
   // field, and the org's currency is then the only reading available.
-  const orgFactor = Math.pow(10, scaleForCurrency(orgCurrency.code));
+  const orgScale = supportedCurrencyScale(orgCurrency.code) ?? 2;
+  const orgFactor = Math.pow(10, orgScale);
   const economicsCurrencyCode = app?.economicsCurrency ?? orgCurrency.code;
-  const economicsFactor = Math.pow(10, scaleForCurrency(economicsCurrencyCode));
+  const economicsScale = supportedCurrencyScale(economicsCurrencyCode);
+  const economicsFactor = Math.pow(10, economicsScale ?? 2);
   /**
    * What the finance company actually owes the dealership — the figure
    * `confirmDisbursement` compares against.
@@ -761,11 +763,8 @@ export function DealCockpit({
     isConsignedDeal && app?.supplierSettlementRoute === "DIRECT_TO_SUPPLIER";
   const supplierName = app?.vehicle?.sourcedFromName ?? undefined;
   const formatEconomics = (minor: number) => {
-    const scale = scaleForCurrency(economicsCurrencyCode);
-    return `${(minor / economicsFactor).toLocaleString(undefined, {
-      minimumFractionDigits: scale,
-      maximumFractionDigits: scale,
-    })} ${
+    if (economicsScale === null) return `[Unverified: ${minor} minor]`;
+    return `${(minor / economicsFactor).toLocaleString()} ${
       economicsCurrencyCode === orgCurrency.code ? orgCurrency.displayLabel : economicsCurrencyCode
     }`;
   };
@@ -868,9 +867,9 @@ export function DealCockpit({
           // for its own writers (pin, else the org's verified currency, which
           // the first cost fixes — SCRUM-319). Not derived client-side.
           denomination: { code: dealCosts?.currency ?? economicsCurrencyCode },
-          scaleOf: scaleForCurrency,
+          scaleOf: (cur: string) => supportedCurrencyScale(cur) ?? 2,
           money: (minor: number, currency: string) =>
-            `${(minor / Math.pow(10, scaleForCurrency(currency))).toLocaleString()} ${
+            `${(minor / Math.pow(10, supportedCurrencyScale(currency) ?? 2)).toLocaleString()} ${
               currency === orgCurrency.code ? orgCurrency.displayLabel : currency
             }`,
           // Frozen once the sale is recognized (`economicsFrozen`): the server
@@ -1010,10 +1009,9 @@ export function DealCockpit({
         }
       : undefined;
   const formatPlanMajor = (major: number, currency: string) => {
-    const scale = scaleForCurrency(currency);
+    const scale = supportedCurrencyScale(currency);
     return `${major.toLocaleString(undefined, {
-      minimumFractionDigits: scale,
-      maximumFractionDigits: scale,
+      maximumFractionDigits: scale ?? 2,
     })} ${
       currency === orgCurrency.code ? orgCurrency.displayLabel : currency
     }`;
@@ -1638,7 +1636,7 @@ export function DealCockpit({
    * is a new command rather than a silent replay of the first.
    */
   const custodyMoney = (minor: number, currency: string) =>
-    `${(minor / Math.pow(10, scaleForCurrency(currency))).toLocaleString()} ${
+    `${(minor / Math.pow(10, supportedCurrencyScale(currency) ?? 2)).toLocaleString()} ${
       currency === orgCurrency.code ? orgCurrency.displayLabel : currency
     }`;
   // One intent per dialog attempt. The deal, record and kind are named for
@@ -1678,7 +1676,7 @@ export function DealCockpit({
               actualAmountMinor: fee.actualAmountMinor as number,
               currency: fee.currency,
             })),
-          scaleOf: scaleForCurrency,
+          scaleOf: (cur: string) => supportedCurrencyScale(cur) ?? 3,
           onPlan: (values) =>
             custodyPlain(() =>
               planCustodyHandler({
@@ -3372,7 +3370,7 @@ export function DealCockpitView({
   const denominationUnusable = hasDenominationProjection && denomination === null && economicsRecorded;
   const dealCurrency = denomination?.code ?? deal?.money?.currency ?? currency.code;
   const factor = useMemo(
-    () => Math.pow(10, denomination?.scale ?? scaleForCurrency(dealCurrency)),
+    () => Math.pow(10, denomination?.scale ?? supportedCurrencyScale(dealCurrency) ?? 2),
     [denomination, dealCurrency]
   );
   // A SHORT currency marker, and a locale-appropriate one.
@@ -3420,7 +3418,7 @@ export function DealCockpitView({
   const discrepancy = deal?.settlementAdviceDiscrepancy ?? null;
   const discrepancyCurrency = discrepancy?.currency ?? dealCurrency;
   const discrepancyFactor = useMemo(
-    () => Math.pow(10, scaleForCurrency(discrepancyCurrency)),
+    () => Math.pow(10, supportedCurrencyScale(discrepancyCurrency) ?? 2),
     [discrepancyCurrency]
   );
   const discrepancyMarker =
@@ -3435,7 +3433,7 @@ export function DealCockpitView({
   // rescaling a JOD figure at a USD scale.
   const decisionCurrency = financeDecision?.currency ?? dealCurrency;
   const decisionFactor = useMemo(
-    () => Math.pow(10, scaleForCurrency(decisionCurrency)),
+    () => Math.pow(10, supportedCurrencyScale(decisionCurrency) ?? 2),
     [decisionCurrency]
   );
   const decisionMarker =
