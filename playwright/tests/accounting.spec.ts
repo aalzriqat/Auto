@@ -2,11 +2,6 @@ import { test, expect } from "@playwright/test";
 import { gotoOrgRoute, APPROVER_AUTH_FILE } from "../utils";
 
 test.describe("accounting workspace", () => {
-  test.skip(
-    !process.env.E2E_APPROVER_USER || !process.env.E2E_APPROVER_PASSWORD,
-    "No approver identity is provisioned (E2E_APPROVER_USER / E2E_APPROVER_PASSWORD), and AutoFlow refuses to let one person both create and approve a journal — so this path cannot be driven. Provision the second identity rather than weakening what this proves."
-  );
-
   test("enforces full 10-step manual journal lifecycle across creator and approver identities", async ({
     page,
     browser,
