@@ -355,11 +355,11 @@ export function GeneralLedgerTab() {
               {t("JournalLines" as any)} {entryDetails?.entry?.journalNumber ? `(${entryDetails.entry.journalNumber})` : ""}
             </DialogTitle>
             <DialogDescription className="space-y-1">
-              <div data-testid="dialog-entry-memo">{entryDetails?.entry?.memo || ""}</div>
+              <span className="block" data-testid="dialog-entry-memo">{entryDetails?.entry?.memo || ""}</span>
               {entryDetails?.period && (
-                <div className="text-xs font-mono text-muted-foreground" data-testid="dialog-entry-period">
+                <span className="block text-xs font-mono text-muted-foreground" data-testid="dialog-entry-period">
                   Period: {entryDetails.period.fiscalYear}-P{entryDetails.period.periodNumber} ({new Date(entryDetails.period.startDate).toLocaleDateString(localeCode)} – {new Date(entryDetails.period.endDate).toLocaleDateString(localeCode)})
-                </div>
+                </span>
               )}
             </DialogDescription>
           </DialogHeader>
