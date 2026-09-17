@@ -1489,6 +1489,23 @@ describe("Collections", () => {
       amount: 50,
     })).rejects.toThrow("already exists");
 
+    const deletedChequeId = await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", {
+        orgId,
+        customerId,
+        bank: "Deleted Bank",
+        chequeNumber: "DEL-1",
+        chequeDate: Date.now() + 86_400_000,
+        amount: 25,
+        status: "HELD",
+        isDeleted: true,
+        createdBy: userId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
+    await expect(asFinance.mutation(api.collections.depositCheque, { orgId, chequeId: deletedChequeId })).rejects.toThrow("Cheque not found");
+
     const depositedDate = Date.now() + 1_000;
     await asFinance.mutation(api.collections.depositCheque, { orgId, chequeId, depositedDate });
     await expect(asFinance.mutation(api.collections.depositCheque, { orgId, chequeId })).rejects.toThrow("Only held cheques can be deposited");

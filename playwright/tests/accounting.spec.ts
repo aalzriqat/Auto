@@ -14,11 +14,15 @@ test.describe("accounting workspace", () => {
 
     // Switch to Manual Journal sub-view
     const manualTab = page.getByRole("tab", { name: /manual journal/i }).first();
-    if (await manualTab.isVisible()) {
-      await manualTab.click();
-      // Assert that Accounting Date input exists (TASK-ACC-01)
-      await expect(page.getByLabel(/accounting date/i).first()).toBeVisible();
-    }
+    await expect(manualTab).toBeVisible();
+    await manualTab.click();
+
+    // Assert that New Manual Journal dialog renders the Accounting Date input (TASK-ACC-01)
+    const newJournalBtn = page.getByRole("button", { name: /new manual journal/i }).first();
+    await expect(newJournalBtn).toBeVisible();
+    await newJournalBtn.click();
+    await expect(page.getByLabel(/accounting date/i).first()).toBeVisible();
+    await page.keyboard.press("Escape");
 
     // 2. Navigate to Receivables & Payables section
     await page.getByRole("tab", { name: /receivables|claims/i }).first().click();

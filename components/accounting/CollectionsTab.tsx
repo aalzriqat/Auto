@@ -12,6 +12,7 @@ import {
   HandCoins,
   Landmark,
   List,
+  Loader2,
   Plus,
   RotateCcw,
   ShieldCheck,
@@ -165,6 +166,7 @@ export function CollectionsTab() {
   const respondApproval = useMutation(api.collections.respondToApproval);
   const reviewReconciliation = useMutation(api.collections.reviewCashierReconciliation);
   const commandId = useCommandIdentity();
+  const [busyChequeAction, setBusyChequeAction] = useState<{ id: string; action: "deposit" | "clear" } | null>(null);
 
   if (!activeOrgId) return null;
 
@@ -175,6 +177,7 @@ export function CollectionsTab() {
         : t("ConfirmChequeClear" as any)
     );
     if (!confirmed) return;
+    setBusyChequeAction({ id: cheque._id, action });
     try {
       if (action === "deposit") {
         await depositCheque({ orgId: activeOrgId!, chequeId: cheque._id });
@@ -193,6 +196,8 @@ export function CollectionsTab() {
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusyChequeAction(null);
     }
   }
 
@@ -394,12 +399,49 @@ export function CollectionsTab() {
                       <TableCell><StatusBadge status={cheque.status} /></TableCell>
                       <TableCell className="text-right font-semibold">{formatCurrency(cheque.amount)}</TableCell>
                       <TableCell className="text-right">
-                        {canManage && <div className="flex justify-end gap-1">
-                          <Button size="sm" variant="outline" disabled={cheque.status !== "HELD"} onClick={() => runChequeAction("deposit", cheque)}>{t("Deposit" as any)}</Button>
-                          <Button size="sm" variant="outline" disabled={cheque.status !== "HELD" && cheque.status !== "DEPOSITED"} onClick={() => runChequeAction("clear", cheque)}>{t("Clear" as any)}</Button>
-                          <Button size="sm" variant="outline" disabled={["REPLACED", "CANCELLED"].includes(cheque.status)} onClick={() => setReturnTarget(cheque)}>{t("Return" as any)}</Button>
-                          <Button size="sm" variant="outline" disabled={["CLEARED", "CANCELLED"].includes(cheque.status)} onClick={() => setReplaceTarget(cheque)}>{t("Replace" as any)}</Button>
-                        </div>}
+                        {canManage && (() => {
+                          const isDepositing = busyChequeAction?.id === cheque._id && busyChequeAction?.action === "deposit";
+                          const isClearing = busyChequeAction?.id === cheque._id && busyChequeAction?.action === "clear";
+                          const isChequeBusy = busyChequeAction?.id === cheque._id;
+                          return (
+                            <div className="flex justify-end gap-1">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={cheque.status !== "HELD" || isChequeBusy}
+                                onClick={() => runChequeAction("deposit", cheque)}
+                              >
+                                {isDepositing && <Loader2 className="me-1 h-3.5 w-3.5 animate-spin" />}
+                                {t("Deposit" as any)}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={(cheque.status !== "HELD" && cheque.status !== "DEPOSITED") || isChequeBusy}
+                                onClick={() => runChequeAction("clear", cheque)}
+                              >
+                                {isClearing && <Loader2 className="me-1 h-3.5 w-3.5 animate-spin" />}
+                                {t("Clear" as any)}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={["REPLACED", "CANCELLED"].includes(cheque.status) || isChequeBusy}
+                                onClick={() => setReturnTarget(cheque)}
+                              >
+                                {t("Return" as any)}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={["CLEARED", "CANCELLED"].includes(cheque.status) || isChequeBusy}
+                                onClick={() => setReplaceTarget(cheque)}
+                              >
+                                {t("Replace" as any)}
+                              </Button>
+                            </div>
+                          );
+                        })()}
                       </TableCell>
                     </TableRow>
                   ))
@@ -655,34 +697,38 @@ function MethodTotals({ totals }: { totals: Record<string, number> }) {
   );
 }
 
-function useCustomerVehicleOptions() {
+function useCustomerVehicleOptions({ enabled = true }: { enabled?: boolean } = {}) {
   const { activeOrgId } = useOrg();
   const {
     results: customers,
     status: customerStatus,
     loadMore: loadMoreCustomers,
-  } = usePaginatedQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip", {
-    initialNumItems: 250,
-  });
+  } = usePaginatedQuery(
+    api.customers.list,
+    activeOrgId && enabled ? { orgId: activeOrgId } : "skip",
+    { initialNumItems: 250 }
+  );
   const {
     results: vehicles,
     status: vehicleStatus,
     loadMore: loadMoreVehicles,
-  } = usePaginatedQuery(api.vehicles.list, activeOrgId ? { orgId: activeOrgId } : "skip", {
-    initialNumItems: 250,
-  });
+  } = usePaginatedQuery(
+    api.vehicles.list,
+    activeOrgId && enabled ? { orgId: activeOrgId } : "skip",
+    { initialNumItems: 250 }
+  );
 
   useEffect(() => {
-    if (customerStatus === "CanLoadMore") {
+    if (enabled && customerStatus === "CanLoadMore" && (customers?.length ?? 0) < 1000) {
       loadMoreCustomers(250);
     }
-  }, [customerStatus, loadMoreCustomers]);
+  }, [enabled, customerStatus, loadMoreCustomers, customers?.length]);
 
   useEffect(() => {
-    if (vehicleStatus === "CanLoadMore") {
+    if (enabled && vehicleStatus === "CanLoadMore" && (vehicles?.length ?? 0) < 1000) {
       loadMoreVehicles(250);
     }
-  }, [vehicleStatus, loadMoreVehicles]);
+  }, [enabled, vehicleStatus, loadMoreVehicles, vehicles?.length]);
 
   const customerOptions = useMemo(
     () => (customers ?? []).map((customer) => ({
@@ -715,7 +761,7 @@ function ReceivableDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   // dialogs in this file already use. A key minted per ATTEMPT would defeat the
   // guard entirely, since a lost response would retry under a new identity.
   const idempotencyKeyRef = useRef<string | null>(null);
-  const { customerOptions, vehicleOptions } = useCustomerVehicleOptions();
+  const { customerOptions, vehicleOptions } = useCustomerVehicleOptions({ enabled: open });
   const [mode, setMode] = useState<"single" | "plan">("single");
   const [customerId, setCustomerId] = useState("");
   const [vehicleId, setVehicleId] = useState("");

@@ -18,6 +18,7 @@ import { toast } from "@/components/ui/sonner";
 import { useCurrency } from "@/hooks/useCurrency";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { usePermissions } from "@/hooks/use-permissions";
+import { getErrorMessage } from "@/lib/errors";
 import { scaleForCurrency } from "../AccountingTabShared";
 
 type CashDrawerSession = Doc<"cashDrawerSessions">;
@@ -57,8 +58,8 @@ export function CashDrawerPanel() {
     try {
       await beginCount({ orgId: activeOrgId!, sessionId: session._id });
       toast.success(t("CashDrawerCountingStarted" as any));
-    } catch {
-      toast.error(t("UnexpectedError" as any));
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   }
 
@@ -67,8 +68,8 @@ export function CashDrawerPanel() {
     try {
       await approveVariance({ orgId: activeOrgId!, sessionId: session._id });
       toast.success(t("CashDrawerApproved" as any));
-    } catch {
-      toast.error(t("UnexpectedError" as any));
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   }
 

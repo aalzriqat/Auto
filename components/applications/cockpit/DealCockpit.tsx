@@ -778,11 +778,11 @@ export function DealCockpit({
           currency: economicsCurrencyCode,
           vehiclePrice:
             app.targetSellingAmountMinor !== undefined
-              ? app.targetSellingAmountMinor / 100
+              ? app.targetSellingAmountMinor / economicsFactor
               : app.quote.vehiclePrice,
           downPayment:
             app.customerFirstPaymentMinor !== undefined
-              ? app.customerFirstPaymentMinor / 100
+              ? app.customerFirstPaymentMinor / economicsFactor
               : app.quote.downPayment,
           termMonths: app.quote.termMonths,
           monthlyInstallment: app.quote.monthlyInstallment,

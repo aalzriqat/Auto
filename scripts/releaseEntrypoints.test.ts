@@ -77,13 +77,19 @@ function runDeployStep(options: { tip: string; expected: string; ghStatus?: numb
   writeFileSync(
     scriptPath,
     [
+      `export REPO="aalzriqat/Auto"`,
+      `export EXPECTED_SHA="${options.expected}"`,
+      `export FAKE_TIP="${options.tip}"`,
+      `export FAKE_GH_STATUS="${options.ghStatus ?? 0}"`,
+      `export MARKER="deployed"`,
       `gh() { if [ "$FAKE_GH_STATUS" != "0" ]; then return "$FAKE_GH_STATUS"; fi; printf '%s\\n' "$FAKE_TIP"; }`,
       `pnpm() { echo "$*" > "$MARKER"; }`,
       body,
     ].join("\n")
   );
 
-  const result = spawnSync("bash", [scriptPath], {
+  const result = spawnSync("bash", ["step.sh"], {
+    cwd: dir,
     encoding: "utf8",
     shell: false,
     timeout: 30_000,
@@ -91,7 +97,7 @@ function runDeployStep(options: { tip: string; expected: string; ghStatus?: numb
       ...process.env,
       FAKE_TIP: options.tip,
       FAKE_GH_STATUS: String(options.ghStatus ?? 0),
-      MARKER: marker,
+      MARKER: "deployed",
       EXPECTED_SHA: options.expected,
       REPO: "aalzriqat/Auto",
     },

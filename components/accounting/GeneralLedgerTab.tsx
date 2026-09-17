@@ -132,6 +132,11 @@ export function GeneralLedgerTab() {
     api.accountingLedger.listJournalEntries,
     activeOrgId && activeLedgerView === "gl" ? { orgId: activeOrgId, limit: 100 } : "skip"
   );
+  const accounts = useQuery(
+    api.chartOfAccounts.list,
+    activeOrgId && activeLedgerView === "gl" ? { orgId: activeOrgId } : "skip"
+  );
+  const accountsById = new Map((accounts ?? []).map((a) => [a._id as string, a]));
   const entryDetails = useQuery(
     api.accountingLedger.getJournalEntry,
     activeOrgId && selectedEntryId ? { orgId: activeOrgId, journalEntryId: selectedEntryId } : "skip"
@@ -352,6 +357,7 @@ export function GeneralLedgerTab() {
             <Table>
               <TableHeader className="bg-muted/50">
                 <TableRow>
+                  <TableHead>{t("Account" as any)}</TableHead>
                   <TableHead>{t("DescriptionLabel" as any)}</TableHead>
                   <TableHead className="text-right">{t("Debit" as any)}</TableHead>
                   <TableHead className="text-right">{t("Credit" as any)}</TableHead>
@@ -360,22 +366,36 @@ export function GeneralLedgerTab() {
               <TableBody>
                 {!entryDetails?.lines ? (
                   <TableRow>
-                    <TableCell colSpan={3} className="py-4 text-center text-muted-foreground">
+                    <TableCell colSpan={4} className="py-4 text-center text-muted-foreground">
                       {t("Loading" as any)}
                     </TableCell>
                   </TableRow>
                 ) : (
-                  entryDetails.lines.map((line) => (
-                    <TableRow key={line._id}>
-                      <TableCell>{line.description || "-"}</TableCell>
-                      <TableCell className="text-right font-medium text-emerald-600 dark:text-emerald-400">
-                        {line.debitMinor > 0 ? formatCurrency(line.debitMinor / 1000) : "-"}
-                      </TableCell>
-                      <TableCell className="text-right font-medium text-rose-600 dark:text-rose-400">
-                        {line.creditMinor > 0 ? formatCurrency(line.creditMinor / 1000) : "-"}
-                      </TableCell>
-                    </TableRow>
-                  ))
+                  entryDetails.lines.map((line) => {
+                    const lineFactor = Math.pow(10, line.scale ?? 2);
+                    const account = accountsById.get(line.accountId as string);
+                    return (
+                      <TableRow key={line._id}>
+                        <TableCell className="text-xs">
+                          {account ? (
+                            <span>
+                              <span className="font-mono font-medium">{account.code}</span>{" "}
+                              <span className="text-muted-foreground">({account.name})</span>
+                            </span>
+                          ) : (
+                            <span className="font-mono text-muted-foreground">{line.accountId}</span>
+                          )}
+                        </TableCell>
+                        <TableCell>{line.description || "-"}</TableCell>
+                        <TableCell className="text-right font-medium text-emerald-600 dark:text-emerald-400">
+                          {line.debitMinor > 0 ? formatCurrency(line.debitMinor / lineFactor) : "-"}
+                        </TableCell>
+                        <TableCell className="text-right font-medium text-rose-600 dark:text-rose-400">
+                          {line.creditMinor > 0 ? formatCurrency(line.creditMinor / lineFactor) : "-"}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
                 )}
               </TableBody>
             </Table>

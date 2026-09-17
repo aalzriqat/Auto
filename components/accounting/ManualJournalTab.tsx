@@ -33,8 +33,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { manualJournalSchema, ManualJournalFormValues } from "./manualJournal.schema";
 import { scaleForCurrency } from "./AccountingTabShared";
-import { getErrorMessage } from "@/lib/errors";
-import { dateInputToUtcMs, todayDateInput } from "@/lib/dateInput";
+import { dateInputToUtcMs, economicTodayDateInput, msToDateInput } from "@/lib/dateInput";
 
 function emptyLine() {
   return { id: crypto.randomUUID(), accountId: "", side: "DEBIT" as const, amount: 0 };
@@ -47,7 +46,7 @@ export function ManualJournalTab() {
   const formatCurrency = useCurrencyFormatter();
   const scale = scaleForCurrency(currencyCode);
   const factor = Math.pow(10, scale);
-  const today = todayDateInput();
+  const today = economicTodayDateInput();
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [rejecting, setRejecting] = useState<{ id: Id<"manualJournalDrafts">; reason: string } | null>(null);
@@ -88,7 +87,7 @@ export function ManualJournalTab() {
   const balanced = totalDebits > 0 && Math.abs(totalDebits - totalCredits) < 1e-9;
 
   function resetForm() {
-    form.reset({ memo: "", accountingDate: todayDateInput(), lines: [emptyLine(), emptyLine()] });
+    form.reset({ memo: "", accountingDate: economicTodayDateInput(), lines: [emptyLine(), emptyLine()] });
   }
 
   async function onSubmit(values: ManualJournalFormValues) {
@@ -114,7 +113,7 @@ export function ManualJournalTab() {
       setDialogOpen(false);
       resetForm();
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(error instanceof Error ? error.message : String(error));
     } finally {
       setIsSubmitting(false);
     }
@@ -127,7 +126,7 @@ export function ManualJournalTab() {
       await approveDraft({ orgId: activeOrgId, draftId });
       toast.success(t("ManualJournalApproved"));
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(error instanceof Error ? error.message : String(error));
     } finally {
       setActingOnId(null);
     }
@@ -145,7 +144,7 @@ export function ManualJournalTab() {
       toast.success(t("ManualJournalRejected"));
       setRejecting(null);
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(error instanceof Error ? error.message : String(error));
     } finally {
       setActingOnId(null);
     }
@@ -173,6 +172,7 @@ export function ManualJournalTab() {
         {pending.map((draft) => {
           const isOwnDraft = me?._id === draft.createdBy;
           const busy = actingOnId === draft._id;
+          const hasDate = draft.accountingDate !== undefined;
           return (
             <Card key={draft._id} className="relative overflow-hidden">
               <div className="absolute top-0 left-0 w-1 h-full bg-yellow-500" />
@@ -183,6 +183,20 @@ export function ManualJournalTab() {
                     <CardDescription>
                       {t("SubmittedBy")}: {draft.creatorName}
                     </CardDescription>
+                    <div className="mt-1 flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">
+                        {t("AccountingDate")}:{" "}
+                        {hasDate ? (
+                          <span className="font-medium text-foreground">
+                            {msToDateInput(draft.accountingDate!)}
+                          </span>
+                        ) : (
+                          <span className="text-rose-600 font-medium">
+                            {t("MissingAccountingDate" as any)}
+                          </span>
+                        )}
+                      </span>
+                    </div>
                   </div>
                   <Badge variant="outline" className="shrink-0 border-yellow-500/20 bg-yellow-500/10 text-yellow-700 dark:border-yellow-800 dark:bg-yellow-950/40 dark:text-yellow-300">
                     {t("Pending")}
@@ -212,6 +226,12 @@ export function ManualJournalTab() {
                   <p className="mt-3 text-xs text-amber-600 dark:text-amber-400">{t("SegregationOfDutiesNotice")}</p>
                 )}
 
+                {!hasDate && (
+                  <p className="mt-3 text-xs text-rose-600 dark:text-rose-400 font-medium">
+                    {t("LegacyDraftNoDate" as any)}
+                  </p>
+                )}
+
                 <div className="flex gap-2 w-full pt-4 mt-2 border-t">
                   <Button
                     variant="outline"
@@ -224,7 +244,7 @@ export function ManualJournalTab() {
                   </Button>
                   <Button
                     className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
-                    disabled={isOwnDraft || busy}
+                    disabled={isOwnDraft || busy || !hasDate}
                     onClick={() => handleApprove(draft._id)}
                   >
                     {busy ? (
