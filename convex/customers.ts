@@ -82,30 +82,139 @@ async function collectCustomerMatches(
   }
 
   if (searchTerm.length >= 2 && matchesById.size < CUSTOMER_SELECTOR_LIMIT) {
-    const [firstNameMatches, lastNameMatches] = await Promise.all([
-      // Same pre-`take` exclusion as the recent window above. Filtering only
-      // inside `addMatch` let soft-deleted name matches spend this budget and
-      // hide live customers behind them — the identical defect, on the path
-      // that actually serves a typed search.
-      ctx.db
-        .query("customers")
-        .withSearchIndex("search_firstName", (q) =>
-          q.search("firstName", searchTerm).eq("orgId", orgId),
-        )
-        .filter((q) => q.neq(q.field("isDeleted"), true))
-        .take(CUSTOMER_SELECTOR_LIMIT),
-      ctx.db
-        .query("customers")
-        .withSearchIndex("search_lastName", (q) =>
-          q.search("lastName", searchTerm).eq("orgId", orgId),
-        )
-        .filter((q) => q.neq(q.field("isDeleted"), true))
-        .take(CUSTOMER_SELECTOR_LIMIT),
-    ]);
+    const trimmed = searchTerm.trim();
+    const normalizedPhoneSearch = normalizePhone(searchTerm);
+    const lowerSearch = trimmed.toLowerCase();
 
-    for (const customer of [...firstNameMatches, ...lastNameMatches]) {
-      addMatch(customer);
+    // 1. Exact and normalized lookups on indexed fields (bounded, O(1) indexed queries)
+    const exactLookups: Promise<Doc<"customers">[]>[] = [];
+
+    // Email lookup via by_org_email index
+    if (trimmed.includes("@") || trimmed.includes(".")) {
+      exactLookups.push(
+        ctx.db
+          .query("customers")
+          .withIndex("by_org_email", (q) => q.eq("orgId", orgId).eq("email", trimmed))
+          .filter((q) => q.neq(q.field("isDeleted"), true))
+          .take(CUSTOMER_SELECTOR_LIMIT)
+      );
+      if (lowerSearch !== trimmed) {
+        exactLookups.push(
+          ctx.db
+            .query("customers")
+            .withIndex("by_org_email", (q) => q.eq("orgId", orgId).eq("email", lowerSearch))
+            .filter((q) => q.neq(q.field("isDeleted"), true))
+            .take(CUSTOMER_SELECTOR_LIMIT)
+        );
+      }
+    }
+
+    // National ID lookup via by_org_nationalId index
+    exactLookups.push(
+      ctx.db
+        .query("customers")
+        .withIndex("by_org_nationalId", (q) => q.eq("orgId", orgId).eq("nationalId", trimmed))
+        .filter((q) => q.neq(q.field("isDeleted"), true))
+        .take(CUSTOMER_SELECTOR_LIMIT)
+    );
+
+    // Phone lookup via by_org_phone index (raw and normalized)
+    exactLookups.push(
+      ctx.db
+        .query("customers")
+        .withIndex("by_org_phone", (q) => q.eq("orgId", orgId).eq("phone", trimmed))
+        .filter((q) => q.neq(q.field("isDeleted"), true))
+        .take(CUSTOMER_SELECTOR_LIMIT)
+    );
+    if (normalizedPhoneSearch && normalizedPhoneSearch !== trimmed) {
+      exactLookups.push(
+        ctx.db
+          .query("customers")
+          .withIndex("by_org_phone", (q) => q.eq("orgId", orgId).eq("phone", normalizedPhoneSearch))
+          .filter((q) => q.neq(q.field("isDeleted"), true))
+          .take(CUSTOMER_SELECTOR_LIMIT)
+      );
+    }
+    const digitsOnly = trimmed.replace(/\D/g, "");
+    if (digitsOnly.length >= 9) {
+      if (digitsOnly.startsWith("962") && digitsOnly.length === 12) {
+        const localFormat = `0${digitsOnly.slice(3)}`;
+        exactLookups.push(
+          ctx.db
+            .query("customers")
+            .withIndex("by_org_phone", (q) => q.eq("orgId", orgId).eq("phone", localFormat))
+            .filter((q) => q.neq(q.field("isDeleted"), true))
+            .take(CUSTOMER_SELECTOR_LIMIT)
+        );
+      } else if (digitsOnly.startsWith("07") && digitsOnly.length === 10) {
+        const intlFormat = `+962${digitsOnly.slice(1)}`;
+        exactLookups.push(
+          ctx.db
+            .query("customers")
+            .withIndex("by_org_phone", (q) => q.eq("orgId", orgId).eq("phone", intlFormat))
+            .filter((q) => q.neq(q.field("isDeleted"), true))
+            .take(CUSTOMER_SELECTOR_LIMIT)
+        );
+      }
+    }
+
+    const exactBatches = await Promise.all(exactLookups);
+    for (const batch of exactBatches) {
+      for (const customer of batch) {
+        addMatch(customer);
+        if (matchesById.size >= CUSTOMER_SELECTOR_LIMIT) break;
+      }
       if (matchesById.size >= CUSTOMER_SELECTOR_LIMIT) break;
+    }
+
+    // 2. Full-text search indexes across firstName, lastName, phone, email, and nationalId
+    if (matchesById.size < CUSTOMER_SELECTOR_LIMIT) {
+      const searchQueries: Promise<Doc<"customers">[]>[] = [
+        ctx.db
+          .query("customers")
+          .withSearchIndex("search_firstName", (q) =>
+            q.search("firstName", searchTerm).eq("orgId", orgId),
+          )
+          .filter((q) => q.neq(q.field("isDeleted"), true))
+          .take(CUSTOMER_SELECTOR_LIMIT),
+        ctx.db
+          .query("customers")
+          .withSearchIndex("search_lastName", (q) =>
+            q.search("lastName", searchTerm).eq("orgId", orgId),
+          )
+          .filter((q) => q.neq(q.field("isDeleted"), true))
+          .take(CUSTOMER_SELECTOR_LIMIT),
+        ctx.db
+          .query("customers")
+          .withSearchIndex("search_phone", (q) =>
+            q.search("phone", searchTerm).eq("orgId", orgId),
+          )
+          .filter((q) => q.neq(q.field("isDeleted"), true))
+          .take(CUSTOMER_SELECTOR_LIMIT),
+        ctx.db
+          .query("customers")
+          .withSearchIndex("search_email", (q) =>
+            q.search("email", searchTerm).eq("orgId", orgId),
+          )
+          .filter((q) => q.neq(q.field("isDeleted"), true))
+          .take(CUSTOMER_SELECTOR_LIMIT),
+        ctx.db
+          .query("customers")
+          .withSearchIndex("search_nationalId", (q) =>
+            q.search("nationalId", searchTerm).eq("orgId", orgId),
+          )
+          .filter((q) => q.neq(q.field("isDeleted"), true))
+          .take(CUSTOMER_SELECTOR_LIMIT),
+      ];
+
+      const searchBatches = await Promise.all(searchQueries);
+      for (const batch of searchBatches) {
+        for (const customer of batch) {
+          addMatch(customer);
+          if (matchesById.size >= CUSTOMER_SELECTOR_LIMIT) break;
+        }
+        if (matchesById.size >= CUSTOMER_SELECTOR_LIMIT) break;
+      }
     }
   }
 

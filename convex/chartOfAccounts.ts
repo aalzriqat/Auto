@@ -709,8 +709,54 @@ export const repairMissingSystemAccounts = mutation({
     }
 
     const repaired: SystemKey[] = [];
+    const reconciled: SystemKey[] = [];
+
     for (const systemKey of REQUIRED_SYSTEM_KEYS) {
-      if (await isSystemAccountMapped(ctx, args.orgId, systemKey)) continue;
+      const accounts = await ctx.db
+        .query("chartOfAccounts")
+        .withIndex("by_org_systemKey", (q) => q.eq("orgId", args.orgId).eq("systemKey", systemKey))
+        .collect();
+
+      const active = accounts.filter((a) => a.active);
+
+      if (active.length > 1) {
+        // Reconcile duplicate active mappings to converge to exactly one authoritative active mapping
+        const authoritative = active.reduce((oldest, a) =>
+          a._creationTime < oldest._creationTime ? a : oldest
+        );
+        for (const account of accounts) {
+          if (account._id !== authoritative._id && account.systemKey === systemKey) {
+            await ctx.db.patch(account._id, {
+              systemKey: undefined,
+              updatedAt: Date.now(),
+              updatedBy: user._id,
+            });
+          }
+        }
+        reconciled.push(systemKey);
+        continue;
+      }
+
+      if (active.length === 1) {
+        // Clean up any lingering inactive duplicate rows with the same systemKey
+        for (const account of accounts) {
+          if (!account.active && account.systemKey === systemKey) {
+            await ctx.db.patch(account._id, {
+              systemKey: undefined,
+              updatedAt: Date.now(),
+              updatedBy: user._id,
+            });
+          }
+        }
+        continue;
+      }
+
+      if (accounts.length > 0) {
+        throw new ConvexError(
+          `Required system account "${systemKey}" is mapped only to an inactive account. Reactivate or explicitly replace that account before retrying repair.`
+        );
+      }
+
       const def = DEFAULT_CHART.find((candidate) => candidate.systemKey === systemKey);
       if (!def) {
         throw new ConvexError(`No default chart definition exists for required system account "${systemKey}".`);
@@ -719,21 +765,25 @@ export const repairMissingSystemAccounts = mutation({
       if (outcome === "CREATED") repaired.push(systemKey);
     }
 
-    if (repaired.length > 0) {
+    if (repaired.length > 0 || reconciled.length > 0) {
+      const parts: string[] = [];
+      if (repaired.length > 0) parts.push(`created missing accounts: ${repaired.join(", ")}`);
+      if (reconciled.length > 0) parts.push(`reconciled duplicate active accounts: ${reconciled.join(", ")}`);
+
       await auditLog(ctx, {
         orgId: args.orgId,
         actorId: user._id,
         actionType: "REPAIR_MISSING_SYSTEM_ACCOUNTS",
         resourceType: "chartOfAccounts",
         resourceId: args.orgId,
-        description: `Created missing required system accounts: ${repaired.join(", ")}.`,
+        description: `Repaired system accounts: ${parts.join("; ")}.`,
       });
       await ctx.scheduler.runAfter(0, internal.accountingOutbox.drainPendingAccountingEvents, {
         orgId: args.orgId,
       });
     }
 
-    return { repaired };
+    return { repaired, reconciled };
   },
 });
 
@@ -835,11 +885,12 @@ export const validateSystemAccounts = query({
 
     const missing: string[] = [];
     for (const key of REQUIRED_SYSTEM_KEYS) {
-      const account = await ctx.db
+      const accounts = await ctx.db
         .query("chartOfAccounts")
         .withIndex("by_org_systemKey", (q) => q.eq("orgId", args.orgId).eq("systemKey", key))
-        .unique();
-      if (!account || !account.active) {
+        .collect();
+      const active = accounts.filter((a) => a.active);
+      if (active.length !== 1) {
         missing.push(key);
       }
     }

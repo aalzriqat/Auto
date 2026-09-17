@@ -50,7 +50,8 @@ export const getJournalEntry = query({
       .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", args.journalEntryId))
       .collect();
     const event = entry.accountingEventId ? await ctx.db.get(entry.accountingEventId) : null;
-    return { entry, lines, event };
+    const period = entry.periodId ? await ctx.db.get(entry.periodId) : null;
+    return { entry, lines, event, period };
   },
 });
 

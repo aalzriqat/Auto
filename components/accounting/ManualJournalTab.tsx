@@ -174,7 +174,12 @@ export function ManualJournalTab() {
           const busy = actingOnId === draft._id;
           const hasDate = draft.accountingDate !== undefined;
           return (
-            <Card key={draft._id} className="relative overflow-hidden">
+            <Card
+              key={draft._id}
+              data-testid="manual-journal-draft-card"
+              data-memo={draft.memo}
+              className="relative overflow-hidden"
+            >
               <div className="absolute top-0 left-0 w-1 h-full bg-yellow-500" />
               <CardHeader className="pb-3">
                 <div className="flex items-start justify-between gap-2">
@@ -235,6 +240,7 @@ export function ManualJournalTab() {
                 <div className="flex gap-2 w-full pt-4 mt-2 border-t">
                   <Button
                     variant="outline"
+                    data-testid="reject-draft-btn"
                     className="flex-1 border-red-200 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-600 dark:border-red-800 dark:bg-red-950/40 dark:text-red-400 dark:hover:bg-red-950/60 dark:hover:text-red-300"
                     disabled={isOwnDraft || busy}
                     onClick={() => setRejecting({ id: draft._id, reason: "" })}
@@ -243,6 +249,7 @@ export function ManualJournalTab() {
                     {t("Reject")}
                   </Button>
                   <Button
+                    data-testid="approve-draft-btn"
                     className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
                     disabled={isOwnDraft || busy || !hasDate}
                     onClick={() => handleApprove(draft._id)}
@@ -278,7 +285,7 @@ export function ManualJournalTab() {
           }}
         >
           <DialogTrigger asChild>
-            <Button size="sm" className="gap-2">
+            <Button data-testid="new-manual-journal-btn" size="sm" className="gap-2">
               <Plus className="w-4 h-4" />
               {t("NewManualJournal")}
             </Button>
@@ -298,7 +305,7 @@ export function ManualJournalTab() {
                     <FormItem>
                       <FormLabel>{t("ManualJournalMemo")}</FormLabel>
                       <FormControl>
-                        <Textarea placeholder={t("ManualJournalMemoPlaceholder")} {...field} />
+                        <Textarea data-testid="manual-journal-memo" placeholder={t("ManualJournalMemoPlaceholder")} {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -312,7 +319,7 @@ export function ManualJournalTab() {
                     <FormItem>
                       <FormLabel>{t("AccountingDate")}</FormLabel>
                       <FormControl>
-                        <Input type="date" max={today} {...field} />
+                        <Input data-testid="manual-journal-accounting-date" type="date" max={today} {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -323,6 +330,7 @@ export function ManualJournalTab() {
                   <div className="flex items-center justify-between">
                     <Label>{t("JournalLines")}</Label>
                     <Button
+                      data-testid="add-line-btn"
                       type="button"
                       variant="outline"
                       size="sm"
@@ -344,6 +352,7 @@ export function ManualJournalTab() {
                             <FormItem>
                               <FormControl>
                                 <SearchableSelect
+                                  dataTestId={`journal-line-account-${index}`}
                                   value={f.value}
                                   onValueChange={f.onChange}
                                   options={accountOptions}
@@ -363,7 +372,7 @@ export function ManualJournalTab() {
                             <FormItem>
                               <Select value={f.value} onValueChange={f.onChange}>
                                 <FormControl>
-                                  <SelectTrigger>
+                                  <SelectTrigger data-testid={`journal-line-side-${index}`}>
                                     <SelectValue />
                                   </SelectTrigger>
                                 </FormControl>
@@ -389,7 +398,7 @@ export function ManualJournalTab() {
                           render={({ field: f }) => (
                             <FormItem>
                               <FormControl>
-                                <Input type="number" step={String(1 / factor)} min={0} {...f} />
+                                <Input data-testid={`journal-line-amount-${index}`} type="number" step={String(1 / factor)} min={0} {...f} />
                               </FormControl>
                               <FormMessage />
                             </FormItem>
@@ -429,7 +438,7 @@ export function ManualJournalTab() {
                 </div>
 
                 <DialogFooter>
-                  <Button type="submit" disabled={isSubmitting || !balanced} className="gap-2">
+                  <Button data-testid="submit-manual-journal-btn" type="submit" disabled={isSubmitting || !balanced} className="gap-2">
                     {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
                     {t("SubmitForApproval")}
                   </Button>

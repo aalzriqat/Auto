@@ -1715,8 +1715,12 @@ export default defineSchema({
     .index("by_org_email", ["orgId", "email"])
     .index("by_org_phone", ["orgId", "phone"])
     .index("by_org_whatsapp", ["orgId", "whatsapp"])
+    .index("by_org_nationalId", ["orgId", "nationalId"])
     .searchIndex("search_firstName", { searchField: "firstName", filterFields: ["orgId", "isDeleted"] })
-    .searchIndex("search_lastName", { searchField: "lastName", filterFields: ["orgId", "isDeleted"] }),
+    .searchIndex("search_lastName", { searchField: "lastName", filterFields: ["orgId", "isDeleted"] })
+    .searchIndex("search_phone", { searchField: "phone", filterFields: ["orgId", "isDeleted"] })
+    .searchIndex("search_email", { searchField: "email", filterFields: ["orgId", "isDeleted"] })
+    .searchIndex("search_nationalId", { searchField: "nationalId", filterFields: ["orgId", "isDeleted"] }),
 
   leads: defineTable({
     orgId: v.id("organizations"),

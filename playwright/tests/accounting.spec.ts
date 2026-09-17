@@ -1,8 +1,16 @@
 import { test, expect } from "@playwright/test";
-import { gotoOrgRoute } from "../utils";
+import { gotoOrgRoute, APPROVER_AUTH_FILE } from "../utils";
 
 test.describe("accounting workspace", () => {
-  test("navigates accounting sections and renders sub-views", async ({ page }) => {
+  test.skip(
+    !process.env.E2E_APPROVER_USER || !process.env.E2E_APPROVER_PASSWORD,
+    "No approver identity is provisioned (E2E_APPROVER_USER / E2E_APPROVER_PASSWORD), and AutoFlow refuses to let one person both create and approve a journal — so this path cannot be driven. Provision the second identity rather than weakening what this proves."
+  );
+
+  test("enforces full 10-step manual journal lifecycle across creator and approver identities", async ({
+    page,
+    browser,
+  }) => {
     await gotoOrgRoute(page, "accounting");
 
     // Verify main page title / heading or container
@@ -17,79 +25,130 @@ test.describe("accounting workspace", () => {
     await expect(manualTab).toBeVisible();
     await manualTab.click();
 
-    // 10-STEP REAL E2E MANUAL JOURNAL FLOW (TASK-ACC-01 / BLOCKER 5):
-    // 1. Open New Manual Journal dialog
-    const newJournalBtn = page.getByRole("button", { name: /new manual journal/i }).first();
+    // 10-STEP REAL E2E MANUAL JOURNAL FLOW (TASK-ACC-01 / BLOCKER 1):
+    const uniqueMemo = `E2E Manual Journal ${Date.now()}`;
+    const declaredAccountingDate = "2026-08-15";
+
+    // Step 1: Open New Manual Journal dialog
+    const newJournalBtn = page.getByTestId("new-manual-journal-btn");
     await expect(newJournalBtn).toBeVisible();
     await newJournalBtn.click();
 
-    // 2. Select an explicit accounting date (e.g. 2026-08-15)
-    const dateInput = page.getByLabel(/accounting date/i).first();
+    // Step 2: Select an explicit accounting date (e.g. 2026-08-15)
+    const dateInput = page.getByTestId("manual-journal-accounting-date");
     await expect(dateInput).toBeVisible();
-    await dateInput.fill("2026-08-15");
+    await dateInput.fill(declaredAccountingDate);
 
-    // Enter memo
-    const memoInput = page.getByPlaceholder(/memo|description/i).first();
-    if (await memoInput.isVisible()) {
-      await memoInput.fill("E2E Prior Month Accrual");
-    }
+    // Step 3: Enter unique memo
+    const memoInput = page.getByTestId("manual-journal-memo");
+    await expect(memoInput).toBeVisible();
+    await memoInput.fill(uniqueMemo);
 
-    // 3. Enter balanced lines (Debit 100, Credit 100)
-    // Add debit line
-    const addLineBtn = page.getByRole("button", { name: /add line/i }).first();
-    if (await addLineBtn.isVisible()) {
-      // Line 1: Debit Cash on Hand
-      const accountSelects = page.locator("button[role='combobox']");
-      if ((await accountSelects.count()) > 0) {
-        await accountSelects.first().click();
-        await page.getByRole("option", { name: /1010|cash/i }).first().click();
-      }
-      const debitInput = page.getByPlaceholder(/debit/i).first();
-      if (await debitInput.isVisible()) {
-        await debitInput.fill("100");
-      }
+    // Step 4: Enter balanced lines (Debit 100, Credit 100)
+    // Line 0: Debit line
+    const account0 = page.getByTestId("journal-line-account-0");
+    await expect(account0).toBeVisible();
+    await account0.click();
+    const firstOption = page.locator("[data-testid^='searchable-option-']").first();
+    await expect(firstOption).toBeVisible();
+    await firstOption.click();
 
-      // Add second line: Credit Revenue
-      await addLineBtn.click();
-      const secondAccountSelect = accountSelects.nth(1);
-      if (await secondAccountSelect.isVisible()) {
-        await secondAccountSelect.click();
-        await page.getByRole("option", { name: /4000|revenue/i }).first().click();
-      }
-      const creditInput = page.getByPlaceholder(/credit/i).nth(1);
-      if (await creditInput.isVisible()) {
-        await creditInput.fill("100");
-      }
-    }
+    const debitInput = page.getByTestId("journal-line-amount-0");
+    await expect(debitInput).toBeVisible();
+    await debitInput.fill("100");
 
-    // 4. Create/submit draft journal
-    const submitBtn = page.getByRole("button", { name: /create draft|save|submit/i }).first();
-    if (await submitBtn.isVisible()) {
-      await submitBtn.click();
-    } else {
-      await page.keyboard.press("Escape");
-    }
+    // Line 1: Credit line
+    const account1 = page.getByTestId("journal-line-account-1");
+    await expect(account1).toBeVisible();
+    await account1.click();
+    const secondOption = page.locator("[data-testid^='searchable-option-']").nth(1);
+    await expect(secondOption).toBeVisible();
+    await secondOption.click();
 
-    // 5 & 6. Review and Approve as approver identity
-    const approveBtn = page.getByRole("button", { name: /approve/i }).first();
-    if (await approveBtn.isVisible()) {
+    const side1 = page.getByTestId("journal-line-side-1");
+    await expect(side1).toBeVisible();
+    await side1.click();
+    await page.getByRole("option", { name: /credit/i }).click();
+
+    const creditInput = page.getByTestId("journal-line-amount-1");
+    await expect(creditInput).toBeVisible();
+    await creditInput.fill("100");
+
+    // Step 5: Submit draft journal for approval
+    const submitBtn = page.getByTestId("submit-manual-journal-btn");
+    await expect(submitBtn).toBeVisible();
+    await expect(submitBtn).toBeEnabled();
+    await submitBtn.click();
+
+    // Verify draft appears in pending list
+    const draftCard = page.locator(
+      `[data-testid='manual-journal-draft-card'][data-memo='${uniqueMemo}']`
+    );
+    await expect(draftCard).toBeVisible();
+
+    // Step 6: Review and Approve as approver identity (Segregation of Duties)
+    const approverContext = await browser.newContext({
+      storageState: APPROVER_AUTH_FILE,
+    });
+    const approverPage = await approverContext.newPage();
+    try {
+      await gotoOrgRoute(approverPage, "accounting");
+      await approverPage.getByRole("tab", { name: /journal/i }).first().click();
+      const approverManualTab = approverPage.getByRole("tab", { name: /manual journal/i }).first();
+      await expect(approverManualTab).toBeVisible();
+      await approverManualTab.click();
+
+      const approverDraftCard = approverPage.locator(
+        `[data-testid='manual-journal-draft-card'][data-memo='${uniqueMemo}']`
+      );
+      await expect(approverDraftCard).toBeVisible();
+
+      const approveBtn = approverDraftCard.getByTestId("approve-draft-btn");
+      await expect(approveBtn).toBeVisible();
+      await expect(approveBtn).toBeEnabled();
       await approveBtn.click();
-      const confirmApproveBtn = page.getByRole("button", { name: /confirm|approve/i }).last();
-      if (await confirmApproveBtn.isVisible()) {
-        await confirmApproveBtn.click();
-      }
+
+      // Ensure draft is removed from pending list
+      await expect(approverDraftCard).not.toBeVisible();
+    } finally {
+      await approverContext.close();
     }
 
-    // 7, 8, 9, 10. Read resulting journal entry in GL and verify date, period, and amounts
-    const postedEntry = page.locator("[data-testid='journal-entry-row']").first();
-    if (await postedEntry.isVisible()) {
-      // 8. Prove accountingDate is 2026-08-15, NOT today
-      await expect(postedEntry).toContainText("Aug 15, 2026");
-      // 9. Prove period is August 2026
-      await expect(postedEntry).toContainText(/aug 2026|period/i);
-      // 10. Prove balanced amounts (100.00)
-      await expect(postedEntry).toContainText("100.00");
-    }
+    // Step 7: Switch to Transaction Register / General Ledger on creator's page
+    const registerTab = page.getByRole("tab", { name: /register|general ledger/i }).first();
+    await expect(registerTab).toBeVisible();
+    await registerTab.click();
+
+    // Step 8: Locate posted GL row matching the unique memo
+    const postedEntry = page.locator(
+      `[data-testid='journal-entry-row'][data-memo='${uniqueMemo}']`
+    );
+    await expect(postedEntry).toBeVisible();
+
+    // Step 9: Prove accountingDate is 2026-08-15
+    const entryDate = postedEntry.getByTestId("journal-entry-date");
+    await expect(entryDate).toBeVisible();
+    await expect(entryDate).toContainText("Aug 15, 2026");
+
+    // Step 10: Open entry detail dialog and assert exact period and balanced lines
+    const viewLinesBtn = postedEntry.getByTestId("view-entry-lines-btn");
+    await expect(viewLinesBtn).toBeVisible();
+    await viewLinesBtn.click();
+
+    const dialogMemo = page.getByTestId("dialog-entry-memo");
+    await expect(dialogMemo).toBeVisible();
+    await expect(dialogMemo).toContainText(uniqueMemo);
+
+    const dialogPeriod = page.getByTestId("dialog-entry-period");
+    await expect(dialogPeriod).toBeVisible();
+    await expect(dialogPeriod).toContainText(/2026-P8|2026-08/i);
+
+    const lineRows = page.getByTestId("journal-line-row");
+    await expect(lineRows).toHaveCount(2);
+    await expect(page.getByTestId("line-debit").first()).toContainText("100.00");
+    await expect(page.getByTestId("line-credit").last()).toContainText("100.00");
+
+    await page.keyboard.press("Escape");
 
     // 2. Navigate to Receivables & Payables section
     await page.getByRole("tab", { name: /receivables|claims/i }).first().click();
@@ -103,7 +162,7 @@ test.describe("accounting workspace", () => {
     await page.getByRole("tab", { name: /settings|setup/i }).first().click();
     await expect(page).toHaveURL(/section=settings/);
 
-    // Verify Setup tabs / Chart of Accounts status (TASK-ACC-02)
+    // Verify Setup tabs / Chart of Accounts status
     await expect(
       page.getByRole("heading", { name: /chart of accounts|accounting/i }).first()
     ).toBeVisible();

@@ -223,12 +223,12 @@ describe("System Account Repair Convergence & Invariant Proof (BLOCKER 6)", () =
     ).rejects.toThrow(/Chart of accounts conflict: code 2110 is already/i);
   });
 
-  test("7. Historical duplicate rows: .collect() prevents crash and does not insert extra duplicate", async () => {
+  test("7. Duplicate active systemKey reconciliation: converges to exactly one authoritative active mapping", async () => {
     const { t, orgId, asAdmin, userId } = await setupOrgWithChart("historical_duplicates");
 
-    // Insert a second historical row with the same systemKey (simulating pre-existing corrupted data)
-    await t.run(async (ctx) => {
-      await ctx.db.insert("chartOfAccounts", {
+    // Insert a duplicate active row with the same systemKey (simulating pre-existing corrupted data)
+    const dupId = await t.run(async (ctx) => {
+      return await ctx.db.insert("chartOfAccounts", {
         orgId,
         code: "2110-DUP",
         name: "Unapplied Receipts Duplicate",
@@ -246,18 +246,44 @@ describe("System Account Repair Convergence & Invariant Proof (BLOCKER 6)", () =
       });
     });
 
-    // Calling repair must not crash with Convex unique() error on by_org_systemKey
-    const result = await asAdmin.mutation(api.chartOfAccounts.repairMissingSystemAccounts, { orgId });
-    expect(result.repaired).not.toContain(SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY);
+    // Before repair: 2 active mappings exist, violating the single active mapping invariant
+    const beforeRows = await t.run((ctx) =>
+      ctx.db
+        .query("chartOfAccounts")
+        .withIndex("by_org_systemKey", (q) =>
+          q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY)
+        )
+        .collect()
+    );
+    expect(beforeRows).toHaveLength(2);
 
-    // Confirm no additional duplicate was inserted
+    // Calling repair executes explicit reconciliation:
+    // It identifies the duplicate active mapping, preserves the oldest authoritative account (code 2110),
+    // and clears systemKey from the duplicate row so exactly one active mapping remains.
+    const result = await asAdmin.mutation(api.chartOfAccounts.repairMissingSystemAccounts, { orgId });
+    expect(result.reconciled).toContain(SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY);
+
+    // Invariant holds: exactly ONE active mapping now exists for the systemKey
     const rows = await t.run((ctx) =>
       ctx.db
         .query("chartOfAccounts")
-        .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY))
+        .withIndex("by_org_systemKey", (q) =>
+          q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY)
+        )
         .collect()
     );
-    expect(rows).toHaveLength(2); // The 2 existing ones remain, no 3rd one created
+    expect(rows).toHaveLength(1);
+    expect(rows[0].code).toBe("2110");
+    expect(rows[0].active).toBe(true);
+
+    // The duplicate row was unmapped (systemKey cleared) rather than left as a second active system key
+    const dupRow = await t.run((ctx) => ctx.db.get(dupId));
+    expect(dupRow?.systemKey).toBeUndefined();
+
+    // Verification via validateSystemAccounts confirms the chart is fully valid with 0 missing accounts
+    const validation = await asAdmin.query(api.chartOfAccounts.validateSystemAccounts, { orgId });
+    expect(validation.valid).toBe(true);
+    expect(validation.missing).toEqual([]);
   });
 
   test("8. Rerunning repair after success: remains stable and idempotent across multiple runs", async () => {

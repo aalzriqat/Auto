@@ -31,8 +31,13 @@ const CURRENCY_SCALES: Record<string, CurrencyScale> = {
  * Callers that seal or display money irreversibly use THIS one and fail closed
  * on null.
  */
-export function supportedCurrencyScale(currency: string): CurrencyScale | null {
-  const scale = CURRENCY_SCALES[currency.toUpperCase()];
+export function supportedCurrencyScale(
+  currency: string | null | undefined
+): CurrencyScale | null {
+  if (!currency || typeof currency !== "string") return null;
+  const trimmed = currency.trim().toUpperCase();
+  if (!trimmed) return null;
+  const scale = CURRENCY_SCALES[trimmed];
   return scale === undefined ? null : scale;
 }
 
@@ -106,8 +111,12 @@ export function assertSupportedDenomination(
 }
 
 export function scaleForCurrency(currency: string): CurrencyScale {
-  const scale = CURRENCY_SCALES[currency.toUpperCase()];
-  if (scale === undefined) return 2;
+  const scale = supportedCurrencyScale(currency);
+  if (scale === null) {
+    throw new ConvexError(
+      `Unsupported or unrecognised currency code "${currency}". AutoFlow cannot determine financial scale.`
+    );
+  }
   return scale;
 }
 

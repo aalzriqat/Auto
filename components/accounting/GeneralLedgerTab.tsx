@@ -7,7 +7,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrencyFormatter, useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
-import { scaleForCurrency } from "./AccountingTabShared";
+import { scaleForCurrency, supportedCurrencyScale } from "./AccountingTabShared";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -233,26 +233,27 @@ export function GeneralLedgerTab() {
                 </TableRow>
               ) : (
                 journalEntries.map((entry) => (
-                  <TableRow key={entry._id}>
-                    <TableCell className="font-medium whitespace-nowrap">
+                  <TableRow key={entry._id} data-testid="journal-entry-row" data-entry-id={entry._id} data-memo={entry.memo}>
+                    <TableCell className="font-medium whitespace-nowrap" data-testid="journal-entry-date">
                       {new Date(entry.accountingDate).toLocaleDateString(localeCode)}
                     </TableCell>
-                    <TableCell className="font-mono text-xs font-semibold">
+                    <TableCell className="font-mono text-xs font-semibold" data-testid="journal-entry-number">
                       {entry.journalNumber}
                     </TableCell>
-                    <TableCell className="max-w-[320px] truncate" title={entry.memo}>
+                    <TableCell className="max-w-[320px] truncate" title={entry.memo} data-testid="journal-entry-memo">
                       {entry.memo || "-"}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                       {entry.sourceType}: {entry.sourceId}
                     </TableCell>
                     <TableCell>
-                      <Badge variant="outline">{entry.status}</Badge>
+                      <Badge variant="outline" data-testid="journal-entry-status">{entry.status}</Badge>
                     </TableCell>
                     <TableCell className="text-right">
                       <Button
                         size="sm"
                         variant="outline"
+                        data-testid="view-entry-lines-btn"
                         onClick={() => setSelectedEntryId(entry._id)}
                       >
                         {t("ViewLines" as any)}
@@ -353,7 +354,14 @@ export function GeneralLedgerTab() {
             <DialogTitle>
               {t("JournalLines" as any)} {entryDetails?.entry?.journalNumber ? `(${entryDetails.entry.journalNumber})` : ""}
             </DialogTitle>
-            <DialogDescription>{entryDetails?.entry?.memo || ""}</DialogDescription>
+            <DialogDescription className="space-y-1">
+              <div data-testid="dialog-entry-memo">{entryDetails?.entry?.memo || ""}</div>
+              {entryDetails?.period && (
+                <div className="text-xs font-mono text-muted-foreground" data-testid="dialog-entry-period">
+                  Period: {entryDetails.period.fiscalYear}-P{entryDetails.period.periodNumber} ({new Date(entryDetails.period.startDate).toLocaleDateString(localeCode)} – {new Date(entryDetails.period.endDate).toLocaleDateString(localeCode)})
+                </div>
+              )}
+            </DialogDescription>
           </DialogHeader>
           <div className="rounded-md border overflow-x-auto">
             <Table>
@@ -379,7 +387,7 @@ export function GeneralLedgerTab() {
                       line.scale !== undefined
                         ? line.scale
                         : effectiveCurrency
-                          ? scaleForCurrency(effectiveCurrency)
+                          ? supportedCurrencyScale(effectiveCurrency)
                           : null;
                     const lineFactor = effectiveScale !== null ? Math.pow(10, effectiveScale) : null;
                     const account = accountsById.get(line.accountId as string);
@@ -393,8 +401,8 @@ export function GeneralLedgerTab() {
                     };
 
                     return (
-                      <TableRow key={line._id}>
-                        <TableCell className="text-xs">
+                      <TableRow key={line._id} data-testid="journal-line-row">
+                        <TableCell className="text-xs" data-testid="line-account">
                           {account ? (
                             <span>
                               <span className="font-mono font-medium">{account.code}</span>{" "}
@@ -404,11 +412,11 @@ export function GeneralLedgerTab() {
                             <span className="font-mono text-muted-foreground">{line.accountId}</span>
                           )}
                         </TableCell>
-                        <TableCell>{line.description || "-"}</TableCell>
-                        <TableCell className="text-right font-medium text-emerald-600 dark:text-emerald-400">
+                        <TableCell data-testid="line-description">{line.description || "-"}</TableCell>
+                        <TableCell className="text-right font-medium text-emerald-600 dark:text-emerald-400" data-testid="line-debit">
                           {formatLineAmount(line.debitMinor)}
                         </TableCell>
-                        <TableCell className="text-right font-medium text-rose-600 dark:text-rose-400">
+                        <TableCell className="text-right font-medium text-rose-600 dark:text-rose-400" data-testid="line-credit">
                           {formatLineAmount(line.creditMinor)}
                         </TableCell>
                       </TableRow>
