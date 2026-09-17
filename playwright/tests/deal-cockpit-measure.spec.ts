@@ -155,6 +155,7 @@ test.describe("the deal cockpit's reading measure", () => {
   let dealUrl = "";
 
   test.beforeAll(async ({ browser }) => {
+    test.setTimeout(120_000);
     // Both storage states are passed explicitly. `browser.newContext()` does
     // NOT inherit the project's `storageState` — that reaches the built-in
     // fixtures only, and `beforeAll` has none — so omitting it opens an

@@ -184,27 +184,6 @@ async function collectCustomerMatches(
           )
           .filter((q) => q.neq(q.field("isDeleted"), true))
           .take(CUSTOMER_SELECTOR_LIMIT),
-        ctx.db
-          .query("customers")
-          .withSearchIndex("search_phone", (q) =>
-            q.search("phone", searchTerm).eq("orgId", orgId),
-          )
-          .filter((q) => q.neq(q.field("isDeleted"), true))
-          .take(CUSTOMER_SELECTOR_LIMIT),
-        ctx.db
-          .query("customers")
-          .withSearchIndex("search_email", (q) =>
-            q.search("email", searchTerm).eq("orgId", orgId),
-          )
-          .filter((q) => q.neq(q.field("isDeleted"), true))
-          .take(CUSTOMER_SELECTOR_LIMIT),
-        ctx.db
-          .query("customers")
-          .withSearchIndex("search_nationalId", (q) =>
-            q.search("nationalId", searchTerm).eq("orgId", orgId),
-          )
-          .filter((q) => q.neq(q.field("isDeleted"), true))
-          .take(CUSTOMER_SELECTOR_LIMIT),
       ];
 
       const searchBatches = await Promise.all(searchQueries);

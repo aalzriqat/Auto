@@ -364,6 +364,8 @@ describe("bootstrapE2EOrganization — seating both identities", () => {
     expect(permissions).toContain(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
     expect(permissions).toContain(PERMISSIONS.REVIEW_FINANCE_APPLICATION);
     expect(permissions).toContain(PERMISSIONS.APPROVE_REQUESTS);
+    expect(permissions).toContain(PERMISSIONS.VIEW_FINANCE);
+    expect(permissions).toContain(PERMISSIONS.MANAGE_FINANCE);
   });
 
   test("seeds the org baseline the suite's entry points depend on", async () => {
@@ -384,6 +386,14 @@ describe("bootstrapE2EOrganization — seating both identities", () => {
         .query("orgPipelineStages")
         .withIndex("by_org", (q) => q.eq("orgId", orgId))
         .collect(),
+      accounts: await ctx.db
+        .query("chartOfAccounts")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect(),
+      periods: await ctx.db
+        .query("accountingPeriods")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect(),
     }));
 
     // The financed-deal and profit-approval specs enter through the installment
@@ -391,6 +401,10 @@ describe("bootstrapE2EOrganization — seating both identities", () => {
     expect(baseline.settings!.enabledPaymentTypes).toContain("INSTALLMENT");
     expect(baseline.sources.length).toBeGreaterThan(0);
     expect(baseline.stages.length).toBeGreaterThan(0);
+    expect(baseline.accounts.length).toBeGreaterThan(0);
+    expect(baseline.accounts.some((a) => a.allowManualPosting)).toBe(true);
+    expect(baseline.periods).toHaveLength(12);
+    expect(baseline.periods.every((p) => p.status === "OPEN" && p.fiscalYear === 2026)).toBe(true);
   });
 
   /** Failing-first case 6: idempotency. */
