@@ -842,8 +842,12 @@ async function seedOrgBaseline(ctx: MutationCtx, orgId: Id<"organizations">): Pr
 
 /**
  * Seeds the accounting baseline needed by the accounting and finance E2E suites:
- * 1. Chart of Accounts: standard accounts from DEFAULT_CHART, with active status and manual posting flags.
- * 2. Accounting Periods: open periods for fiscal year 2026 (periods 1-12) covering declared test dates.
+ * Chart of Accounts: standard accounts from DEFAULT_CHART, with active status and manual posting flags.
+ *
+ * Accounting periods are intentionally NOT seeded here: Accounting Cloud Rehearsal
+ * (scripts/accountingRehearsalCases.mjs) relies on openTheBooks creating a single open
+ * period for the current month so that closing it in case P1 leaves zero open periods.
+ * E2E tests needing specific past/future periods create or open them in their test setups.
  */
 async function seedAccountingBaseline(
   ctx: MutationCtx,
@@ -875,28 +879,6 @@ async function seedAccountingBaseline(
         createdBy: ownerUserId,
         updatedAt: now,
         updatedBy: ownerUserId,
-      });
-    }
-  }
-
-  const existingPeriod = await ctx.db
-    .query("accountingPeriods")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .first();
-
-  if (!existingPeriod) {
-    for (let month = 1; month <= 12; month++) {
-      const startDate = Date.UTC(2026, month - 1, 1, 0, 0, 0, 0);
-      const endDate = Date.UTC(2026, month, 0, 23, 59, 59, 999);
-      await ctx.db.insert("accountingPeriods", {
-        orgId,
-        fiscalYear: 2026,
-        periodNumber: month,
-        startDate,
-        endDate,
-        status: "OPEN",
-        createdAt: now,
-        createdBy: ownerUserId,
       });
     }
   }
@@ -1171,16 +1153,6 @@ export const assertE2EBootstrap = internalQuery({
     if (!hasAccounts) {
       throw new ConvexError(
         `${ERR}: QA organization ${org._id} has no Chart of Accounts seeded. The accounting baseline did not run.`
-      );
-    }
-
-    const hasPeriods = await ctx.db
-      .query("accountingPeriods")
-      .withIndex("by_org", (q) => q.eq("orgId", org._id))
-      .first();
-    if (!hasPeriods) {
-      throw new ConvexError(
-        `${ERR}: QA organization ${org._id} has no accounting periods seeded. The accounting baseline did not run.`
       );
     }
 

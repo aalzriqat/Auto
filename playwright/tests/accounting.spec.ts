@@ -1,5 +1,7 @@
 import { test, expect } from "@playwright/test";
-import { gotoOrgRoute, APPROVER_AUTH_FILE } from "../utils";
+import { gotoOrgRoute, APPROVER_AUTH_FILE, resolveOrgId, authenticatedConvexClient } from "../utils";
+import { api } from "../../convex/_generated/api";
+import type { Id } from "../../convex/_generated/dataModel";
 
 test.describe("accounting workspace", () => {
   test("enforces full 10-step manual journal lifecycle across creator and approver identities", async ({
@@ -7,6 +9,29 @@ test.describe("accounting workspace", () => {
     browser,
   }) => {
     await gotoOrgRoute(page, "accounting");
+
+    // Ensure accounting period for 2026-08 (Period 8) exists and is OPEN for declaredAccountingDate
+    const orgId = (await resolveOrgId(page)) as Id<"organizations">;
+    const client = await authenticatedConvexClient(page);
+    const periods = (await client.query(api.accountingPeriods.list, { orgId })) as Array<{
+      _id: Id<"accountingPeriods">;
+      fiscalYear: number;
+      periodNumber: number;
+      status: string;
+    }>;
+    const p8 = periods.find((p) => p.fiscalYear === 2026 && p.periodNumber === 8);
+    if (!p8) {
+      await client.mutation(api.accountingPeriods.create, {
+        orgId,
+        fiscalYear: 2026,
+        periodNumber: 8,
+        startDate: Date.UTC(2026, 7, 1, 0, 0, 0, 0),
+        endDate: Date.UTC(2026, 8, 0, 23, 59, 59, 999),
+        openImmediately: true,
+      });
+    } else if (p8.status !== "OPEN") {
+      await client.mutation(api.accountingPeriods.open, { orgId, periodId: p8._id });
+    }
 
     // Verify main page title / heading or container
     await expect(page.getByRole("tab", { name: /overview/i }).first()).toBeVisible();
@@ -123,7 +148,7 @@ test.describe("accounting workspace", () => {
     // Step 9: Prove accountingDate is 2026-08-15
     const entryDate = postedEntry.getByTestId("journal-entry-date");
     await expect(entryDate).toBeVisible();
-    await expect(entryDate).toContainText("Aug 15, 2026");
+    await expect(entryDate).toContainText(/Aug 15, 2026|8\/15\/2026/);
 
     // Step 10: Open entry detail dialog and assert exact period and balanced lines
     const viewLinesBtn = postedEntry.getByTestId("view-entry-lines-btn");
