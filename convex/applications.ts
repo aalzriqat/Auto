@@ -11,6 +11,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import {
   requireTenantAuth,
+  requireOwnedRow,
   // The finance-application read boundary (SCRUM-117): an exhaustive
   // allowlist, not a blocklist. Every door that returns one of these rows
   // goes through it.
@@ -21,8 +22,9 @@ import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifi
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
 import { depositMethodValidator, type DepositMethod } from "./utils/depositRecording";
 import { completeSale } from "./utils/saleCompletion";
-import { resolveFinancedSalePlan } from "./utils/financedSaleRecognition";
+import { resolveFinancedSalePlan, financedSaleRecognitionDate } from "./utils/financedSaleRecognition";
 import { assertFeeTemplatesWithinLimit } from "./utils/dealCostLimits";
+import { loadCustodyRecords } from "./utils/settlementDeductions";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
 import { registerChequeCore, markChequeClearedCore, assertNoActiveAllocations } from "./collections";
@@ -48,8 +50,11 @@ import {
   buildRuleSnapshot,
   composeCustomerGapToDealer,
   creditDecisionForStatus,
+  defaultAppraisalFeeResponsibility,
   deriveDealStages,
   deriveManagementProfit,
+  feeResponsibilityValidator,
+  financingFailureReasonValidator,
   handoverStatusForFacts,
   obligationFromRow,
   positionForObligation,
@@ -89,6 +94,30 @@ import { assertFinancedDepositsSurviveParentReversal } from "./utils/depositAppl
 
 /** sourceType used for the canonical finance-company receivable opened at finalizeDeal. */
 const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
+
+/**
+ * Quotation costs frozen by the finance-company policy. The application
+ * creator and the explicit legacy-lineage repair must use this same function;
+ * reading today's editable company policy would retroactively rewrite a deal.
+ */
+function includedDealerBorneExpensesMinor(
+  snapshot: FinanceCompanyRuleSnapshot | undefined
+): number {
+  return (
+    snapshot?.feeTemplates
+      ?.filter(
+        (template) =>
+          template.includedInQuotation &&
+          (template.paidBy === "DEALER" || template.paidBy === "EMPLOYEE")
+      )
+      .reduce((total, template) => {
+        assertValidMinorAmount(template.estimatedAmountMinor, "included fee estimate");
+        const next = total + template.estimatedAmountMinor;
+        assertValidMinorAmount(next, "included dealer-borne fee total");
+        return next;
+      }, 0) ?? 0
+  );
+}
 
 /**
  * Opens (or finds) the canonical receivable owed BY the finance company for a
@@ -2401,6 +2430,33 @@ export const createFromQuote = mutation({
       if (versionRow) companyRuleVersionId = versionRow._id;
     }
 
+    // Carry the commercial facts the operator already stated on the quote
+    // into the application that owns the dealer-side economics. Leaving these
+    // behind made a fresh application look as though no target or customer
+    // first payment had ever been recorded: the quotation solver returned
+    // NO_TARGET_RECORDED, its dialog opened blank, and the financial summary
+    // contradicted the financing-plan card by showing a zero first payment.
+    //
+    // The quote stores major units; application economics are always minor
+    // units in an explicit denomination. Resolve and validate that
+    // denomination before any write, then convert once at this lineage
+    // boundary. A corrupt NaN/negative legacy quote must fail closed rather
+    // than seed unusable economics (Convex's v.number() accepts NaN).
+    const economicsCurrency = await getOrgCurrency(ctx, args.orgId);
+    assertSupportedDenomination(economicsCurrency, "creating the finance application");
+    const targetSellingAmountMinor = toMinorUnits(quote.vehiclePrice, economicsCurrency);
+    const customerFirstPaymentMinor = toMinorUnits(quote.downPayment, economicsCurrency);
+    assertValidMinorAmount(targetSellingAmountMinor, "quoted vehicle price");
+    assertValidMinorAmount(customerFirstPaymentMinor, "quoted customer first payment");
+
+    // Only costs the frozen policy explicitly says are included in the
+    // quotation belong in the solver input. Other expected handover costs
+    // remain visible in the deal checklist, but adding them here would charge
+    // the customer for a cost the policy explicitly excluded. EMPLOYEE means
+    // the dealership advances/reimburses the money and is therefore
+    // dealer-borne, matching the cockpit's financial summary classification.
+    const dealerBorneExpensesMinor = includedDealerBorneExpensesMinor(companyRuleSnapshot);
+
     // SCRUM-195: a live finance application is per-vehicle commitment evidence
     // in its own right — no deposit required. So creating one is an
     // ACQUISITION and goes through the same authority boundary as a deposit or
@@ -2433,6 +2489,12 @@ export const createFromQuote = mutation({
       appraisalStatus: "NOT_REQUESTED",
       settlementStatus: "NOT_READY",
       handoverStatus: "BLOCKED",
+      economicsCurrency,
+      targetSellingAmountMinor,
+      targetNetProceedsMinor: targetSellingAmountMinor,
+      customerFirstPaymentMinor,
+      estimatedDealerBorneExpensesMinor: dealerBorneExpensesMinor,
+      estimatedClosingExpensesMinor: dealerBorneExpensesMinor,
       ...(companyRuleSnapshot ? { companyRuleSnapshot } : {}),
       ...(companyRuleVersionId ? { companyRuleVersionId } : {}),
       notes: args.notes,
@@ -2493,6 +2555,127 @@ export const createFromQuote = mutation({
     );
 
     return appId;
+  },
+});
+
+/**
+ * Repairs quote economics for an in-flight application created before those
+ * facts were snapshotted. Dry-run and apply share the same guarded path; the
+ * apply fills only absent values and records each field in the override audit.
+ */
+export const repairQuoteEconomicsLineage = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    expectedCurrency: v.string(),
+    dryRun: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId);
+    const quote = await requireOwnedRow(ctx, args.orgId, "quotes", app.quoteId);
+
+    if (!IN_FLIGHT_FINANCE_STATUSES.includes(app.status)) {
+      throw new ConvexError("Only an in-flight finance application can have quote lineage repaired.");
+    }
+    if (
+      app.submittedQuotationMinor !== undefined ||
+      app.approvedDealerPurchaseAmountMinor !== undefined ||
+      app.disbursedAt !== undefined ||
+      app.finalizedSaleId !== undefined
+    ) {
+      throw new ConvexError(
+        "Quotation, approval, disbursement, or finalization evidence already exists. Reconcile this application manually."
+      );
+    }
+
+    const orgCurrency = await getOrgCurrency(ctx, args.orgId);
+    const expectedCurrency = args.expectedCurrency.trim().toUpperCase();
+    if (!expectedCurrency || orgCurrency !== expectedCurrency) {
+      throw new ConvexError(
+        `Expected denomination ${expectedCurrency || "(blank)"} does not match the organization denomination ${orgCurrency}.`
+      );
+    }
+    if (app.economicsCurrency !== undefined && app.economicsCurrency !== expectedCurrency) {
+      throw new ConvexError(
+        `The application is already denominated in ${app.economicsCurrency}; it cannot be repaired as ${expectedCurrency}.`
+      );
+    }
+    if (app.companyId && !app.companyRuleSnapshot) {
+      throw new ConvexError(
+        "The application's frozen finance-company policy is missing. Reconcile the policy snapshot before repairing quotation economics."
+      );
+    }
+    assertSupportedDenomination(expectedCurrency, "repairing quote economics lineage");
+
+    const targetSellingAmountMinor = toMinorUnits(quote.vehiclePrice, expectedCurrency);
+    const customerFirstPaymentMinor = toMinorUnits(quote.downPayment, expectedCurrency);
+    const dealerBorneExpensesMinor = includedDealerBorneExpensesMinor(app.companyRuleSnapshot);
+    assertValidMinorAmount(targetSellingAmountMinor, "quoted vehicle price");
+    assertValidMinorAmount(customerFirstPaymentMinor, "quoted customer first payment");
+    const expected = {
+      economicsCurrency: expectedCurrency,
+      targetSellingAmountMinor,
+      targetNetProceedsMinor: targetSellingAmountMinor,
+      customerFirstPaymentMinor,
+      estimatedDealerBorneExpensesMinor: dealerBorneExpensesMinor,
+      estimatedClosingExpensesMinor: dealerBorneExpensesMinor,
+    };
+    const existing = {
+      economicsCurrency: app.economicsCurrency,
+      targetSellingAmountMinor: app.targetSellingAmountMinor,
+      targetNetProceedsMinor: app.targetNetProceedsMinor,
+      customerFirstPaymentMinor: app.customerFirstPaymentMinor,
+      estimatedDealerBorneExpensesMinor: app.estimatedDealerBorneExpensesMinor,
+      estimatedClosingExpensesMinor: app.estimatedClosingExpensesMinor,
+    };
+    for (const field of Object.keys(expected) as Array<keyof typeof expected>) {
+      if (existing[field] !== undefined && existing[field] !== expected[field]) {
+        throw new ConvexError(
+          `${field} disagrees with the originating quote. No repair was applied.`
+        );
+      }
+    }
+    const missing = (Object.keys(expected) as Array<keyof typeof expected>).filter(
+      (field) => existing[field] === undefined
+    );
+    if (args.dryRun || missing.length === 0) {
+      return { applied: false, missing, expected };
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(app._id, {
+      ...(app.economicsCurrency === undefined ? { economicsCurrency: expected.economicsCurrency } : {}),
+      ...(app.targetSellingAmountMinor === undefined
+        ? { targetSellingAmountMinor: expected.targetSellingAmountMinor }
+        : {}),
+      ...(app.targetNetProceedsMinor === undefined
+        ? { targetNetProceedsMinor: expected.targetNetProceedsMinor }
+        : {}),
+      ...(app.customerFirstPaymentMinor === undefined
+        ? { customerFirstPaymentMinor: expected.customerFirstPaymentMinor }
+        : {}),
+      ...(app.estimatedDealerBorneExpensesMinor === undefined
+        ? { estimatedDealerBorneExpensesMinor: expected.estimatedDealerBorneExpensesMinor }
+        : {}),
+      ...(app.estimatedClosingExpensesMinor === undefined
+        ? { estimatedClosingExpensesMinor: expected.estimatedClosingExpensesMinor }
+        : {}),
+      updatedAt: now,
+    });
+    for (const field of missing) {
+      await ctx.db.insert("financeApplicationOverrides", {
+        orgId: args.orgId,
+        applicationId: app._id,
+        field,
+        previousValue: undefined,
+        newValue: String(expected[field]),
+        reason: `Backfilled from originating quote ${quote._id} by explicit quote-lineage repair.`,
+        changedBy: user._id,
+        changedAt: now,
+      });
+    }
+    return { applied: true, missing, expected };
   },
 });
 
@@ -2691,6 +2874,10 @@ export const cancelApplication = mutation({
     orgId: v.id("organizations"),
     applicationId: v.id("financeApplications"),
     reason: v.optional(v.string()),
+    failureReason: v.optional(financingFailureReasonValidator),
+    failureNotes: v.optional(v.string()),
+    appraisalFeeResponsibility: v.optional(feeResponsibilityValidator),
+    appraisalFeeResponsibilityReason: v.optional(v.string()),
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
@@ -2704,7 +2891,12 @@ export const cancelApplication = mutation({
         economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: auth.user._id,
-        fingerprint: JSON.stringify({ applicationId: args.applicationId, reason: args.reason }),
+        fingerprint: JSON.stringify({
+          applicationId: args.applicationId,
+          reason: args.reason,
+          failureReason: args.failureReason,
+          appraisalFeeResponsibility: args.appraisalFeeResponsibility,
+        }),
       },
       async () => {
         const app = await ctx.db.get(args.applicationId);
@@ -2721,6 +2913,22 @@ export const cancelApplication = mutation({
             reason: "finance application cancelled",
           });
           return;
+        }
+
+        // Cash in an employee's pocket does not stop being there because the
+        // deal did. An OPEN custody record is refused here rather than
+        // silently orphaned on a CANCELLED deal nothing offers actions on:
+        // settle it (return / reimburse / reconcile / write off) first. A
+        // CLOSED custody record is left exactly as it is — the costs the
+        // employee really paid stay posted; cancelling a deal erases nothing
+        // that was spent.
+        const openCustody = (
+          await loadCustodyRecords(ctx, args.applicationId, "cancelling this application")
+        ).find((row) => row.status === "OPEN");
+        if (openCustody) {
+          throw new ConvexError(
+            "An employee still holds cash custody on this deal. Settle that custody record (return the balance, reimburse what is owed, then reconcile or write it off) before cancelling the application."
+          );
         }
 
         // Reversing an already-APPROVED decision is more sensitive than voiding
@@ -2987,6 +3195,18 @@ export const cancelApplication = mutation({
           // validator already carries for exactly this.
           ...(app.gapResolution === "PENDING_NEGOTIATION"
             ? { gapResolution: "FAILED" as const }
+            : {}),
+          ...(args.failureReason
+            ? {
+                failureReason: args.failureReason,
+                failureNotes: args.failureNotes ?? cancellationReason,
+                failedAt: now,
+                failedBy: auth.user._id,
+                appraisalFeeResponsibility:
+                  args.appraisalFeeResponsibility ??
+                  defaultAppraisalFeeResponsibility(args.failureReason),
+                appraisalFeeResponsibilityReason: args.appraisalFeeResponsibilityReason,
+              }
             : {}),
         });
 
@@ -3649,7 +3869,10 @@ export const finalizeDeal = mutation({
           customerId: app.customerId,
           salespersonId: app.salespersonId,
           salePrice: quote.vehiclePrice,
-          saleDate: Date.now(),
+          // The legal invoice's date where one is recorded — the ONE
+          // recognition date, shared with the period the plan's journal is
+          // dated into; see `financedSaleRecognitionDate`.
+          saleDate: financedSaleRecognitionDate(app, Date.now()),
           status: "COMPLETED",
           downPayment: quote.downPayment,
           financingType: quoteMode === undefined && app.companyId ? "FINANCED" : financingType,

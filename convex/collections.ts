@@ -1761,7 +1761,7 @@ export const depositCheque = mutation({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const cheque = await ctx.db.get(args.chequeId);
-    if (!cheque || cheque.orgId !== args.orgId) throw new ConvexError("Cheque not found.");
+    if (!cheque || cheque.orgId !== args.orgId || cheque.isDeleted) throw new ConvexError("Cheque not found.");
     if (cheque.status !== "HELD") throw new ConvexError("Only held cheques can be deposited.");
     await ctx.db.patch(args.chequeId, {
       status: "DEPOSITED",

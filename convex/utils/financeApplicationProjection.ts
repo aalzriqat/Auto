@@ -56,9 +56,10 @@ import { PERMISSIONS, isSystemOwnerRole, type Permission } from "./permissions";
  *   approval workflow; not ordinary sales visibility, and nothing the
  *   disbursement tier must see to confirm a payment. Ruling #4.
  * - `DISBURSEMENT_WORKFLOW` - VIEW_FINANCE *or* CONFIRM_FINANCE_DISBURSEMENT.
- *   Exactly ONE field, `financedSaleNetReceivableMinor`: the narrow
- *   already-approved workflow exception ruling #3 allows. Load-bearing, not
- *   cosmetic - see the note on the field itself.
+ *   Two fields: `financedSaleNetReceivableMinor`, the narrow already-approved
+ *   workflow exception ruling #3 allows (load-bearing, not cosmetic - see the
+ *   note on the field itself), and `plannedCustody`, the handover cash plan
+ *   the same tier acts on when it opens the custody record.
  * - `FINANCE` - VIEW_FINANCE. The accounting economics, per ruling #3:
  *   `appliedLtvPercent`, the funding composition (funded / unfinanced / dealer
  *   contribution), the expected dealer remittance, the customer-to-finance-
@@ -237,6 +238,14 @@ const FIELD_VISIBILITY: Record<
   /** Free text that records the approved figure — the second recovery route. */
   approvedPurchaseNotes: "FINANCE",
   accountingClassificationNotes: "FINANCE",
+  /**
+   * The planned custody handler and the amount agreed to hand over. Carries a
+   * monetary quantity (the planned advance) and a person, so it sits with the
+   * money the disbursement tier acts on — the same tier that opens the actual
+   * custody record — and the projection for the deal screen resolves the
+   * holder's display name through `listDealCosts`, never here.
+   */
+  plannedCustody: "DISBURSEMENT_WORKFLOW",
   failureNotes: "FINANCE",
   appraisalFeeResponsibilityReason: "FINANCE",
   /** Rates and fee templates. The `requiresLtvPercent` flag below replaces the

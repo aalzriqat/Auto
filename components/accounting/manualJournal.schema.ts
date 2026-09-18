@@ -9,6 +9,7 @@ export const manualJournalLineSchema = z.object({
 
 export const manualJournalSchema = z.object({
   memo: z.string().min(1, "Memo is required"),
+  accountingDate: z.string().min(1, "Accounting date is required"),
   lines: z.array(manualJournalLineSchema).min(2, "Add at least two lines"),
 });
 

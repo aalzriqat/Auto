@@ -153,6 +153,7 @@ import { DEFAULT_LEAD_SOURCES } from "./orgLeadSources";
 import { DEFAULT_STAGES } from "./orgPipelineStages";
 import { DEFAULT_SETTINGS } from "./orgSettings";
 import { PERMISSIONS, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
+import { DEFAULT_CHART } from "./utils/defaultChart";
 
 /** Prefix on every error this module throws, so a CI log names the subsystem. */
 const ERR = "E2E_BOOTSTRAP";
@@ -186,6 +187,8 @@ export const E2E_APPROVER_REQUIRED_PERMISSIONS: string[] = [
   PERMISSIONS.REVIEW_FINANCE_APPLICATION,
   PERMISSIONS.APPROVE_REQUESTS,
   PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
+  PERMISSIONS.VIEW_FINANCE,
+  PERMISSIONS.MANAGE_FINANCE,
 ];
 
 type SeatKey = "primary" | "approver";
@@ -747,6 +750,19 @@ async function bindMembership(
     );
   }
 
+  if (seat === "approver") {
+    // Ensure the approver role in this dealership carries all permissions
+    // required by the E2E suite (deal approval, LTV visibility, and manual journal approval).
+    const missingPermissions = E2E_APPROVER_REQUIRED_PERMISSIONS.filter(
+      (p) => !role.permissions.includes(p as any)
+    );
+    if (missingPermissions.length > 0) {
+      const updated = [...role.permissions, ...missingPermissions] as any;
+      await ctx.db.patch(role._id, { permissions: updated });
+      role.permissions = updated;
+    }
+  }
+
   const existing = await membershipsOf(ctx, user._id);
   const foreign = existing.filter((m) => m.orgId !== orgId);
   if (foreign.length > 0) {
@@ -820,6 +836,50 @@ async function seedOrgBaseline(ctx: MutationCtx, orgId: Id<"organizations">): Pr
   for (const stage of DEFAULT_STAGES) {
     if (!existingKeys.has(stage.stageKey)) {
       await ctx.db.insert("orgPipelineStages", { orgId, ...stage, isActive: true });
+    }
+  }
+}
+
+/**
+ * Seeds the accounting baseline needed by the accounting and finance E2E suites:
+ * Chart of Accounts: standard accounts from DEFAULT_CHART, with active status and manual posting flags.
+ *
+ * Accounting periods are intentionally NOT seeded here: Accounting Cloud Rehearsal
+ * (scripts/accountingRehearsalCases.mjs) relies on openTheBooks creating a single open
+ * period for the current month so that closing it in case P1 leaves zero open periods.
+ * E2E tests needing specific past/future periods create or open them in their test setups.
+ */
+async function seedAccountingBaseline(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  ownerUserId: Id<"users">
+): Promise<void> {
+  const existingAccount = await ctx.db
+    .query("chartOfAccounts")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .first();
+
+  const now = Date.now();
+
+  if (!existingAccount) {
+    for (const def of DEFAULT_CHART) {
+      await ctx.db.insert("chartOfAccounts", {
+        orgId,
+        code: def.code,
+        name: def.name,
+        nameAr: def.nameAr,
+        type: def.type,
+        normalBalance: def.normalBalance,
+        isControlAccount: def.isControlAccount,
+        allowManualPosting: def.allowManualPosting,
+        active: true,
+        systemKey: def.systemKey,
+        subtype: def.subtype,
+        createdAt: now,
+        createdBy: ownerUserId,
+        updatedAt: now,
+        updatedBy: ownerUserId,
+      });
     }
   }
 }
@@ -923,6 +983,7 @@ export const bootstrapE2EOrganization = internalMutation({
     );
 
     await seedOrgBaseline(ctx, orgId);
+    await seedAccountingBaseline(ctx, orgId, primaryUser._id);
 
     await ctx.db.patch(marker._id, { orgId, bootstrappedAt: Date.now() });
 
@@ -1082,6 +1143,16 @@ export const assertE2EBootstrap = internalQuery({
       throw new ConvexError(
         `${ERR}: ${SEAT_LABEL.approver} holds role "${approver.roleName}", which is missing ${missing.join(", ")}. ` +
           `The approval E2E path cannot be driven without it.`
+      );
+    }
+
+    const hasAccounts = await ctx.db
+      .query("chartOfAccounts")
+      .withIndex("by_org", (q) => q.eq("orgId", org._id))
+      .first();
+    if (!hasAccounts) {
+      throw new ConvexError(
+        `${ERR}: QA organization ${org._id} has no Chart of Accounts seeded. The accounting baseline did not run.`
       );
     }
 

@@ -83,10 +83,13 @@ async function seedOrg(tag: string) {
     ctx.db.insert("users", { clerkId: `${tag}_emp`, email: `${tag}.emp@example.com`, name: "Runner" })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: employeeId, roleId }));
+  // Custody money commands post to the ledger and refuse without a chart
+  // (`assertCustodyAccountingReady`); no period is opened, so postings queue.
+  await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
   return { t, orgId, userId, employeeId, asUser };
 }
 
-/** An unpinned deal: created from a quote, no quotation/approval recorded. */
+/** A deal pinned by its quote-derived application economics, before approval. */
 async function seedDeal(tag: string) {
   const s = await seedOrg(tag);
   const customerId = await s.t.run((ctx) =>
@@ -113,7 +116,7 @@ async function seedDeal(tag: string) {
   });
   const applicationId = await s.asUser.mutation(api.applications.createFromQuote, { orgId: s.orgId, quoteId });
   const app0 = await s.t.run((ctx) => ctx.db.get(applicationId));
-  expect(app0?.economicsCurrency).toBeUndefined();
+  expect(app0?.economicsCurrency).toBe("JOD");
   return { ...s, applicationId };
 }
 
@@ -265,17 +268,18 @@ describe("SCRUM-319 — the reported sequence, fixed", () => {
     expect(await overrideRows(s)).toHaveLength(0);
   });
 
-  test("OUT-OF-CONTRACT DRIFT — a raw settings edit to USD after a JOD fee exists: the JOD row is neither re-scaled nor relabelled; a USD-entered actual is refused; the summary is withheld with a reason", async () => {
+  test("OUT-OF-CONTRACT DRIFT — a raw settings edit cannot move a quote-pinned JOD deal or relabel its fee", async () => {
     const s = await seedDeal("raw_drift");
     const feeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, addArgs(s, "i1"));
     await rawSwitchCurrency(s, "USD");
 
     const listed = await costs(s);
-    // The deal now resolves to USD (no pin, org says USD) but its only line is JOD.
-    expect(listed.currency).toBe("USD");
+    // Application creation froze JOD from the quote. A raw settings edit is
+    // not allowed to reinterpret either the deal or its already-recorded fee.
+    expect(listed.currency).toBe("JOD");
     expect(listed.fees[0]).toMatchObject({ currency: "JOD", estimatedAmountMinor: 150 * JOD_SCALE });
-    expect(listed.summary).toBeNull();
-    expect(listed.summaryUnavailable).toMatchObject({ reason: "MIXED_DENOMINATION", dealCurrency: "USD", lineCurrencies: ["JOD"] });
+    expect(listed.summary).not.toBeNull();
+    expect(listed.summaryUnavailable).toBeNull();
 
     // The USD-rendered form's integer is refused against the row's JOD.
     const refusal = await refusalOf(
@@ -293,13 +297,12 @@ describe("SCRUM-319 — the reported sequence, fixed", () => {
     });
     expect((await feeRows(s))[0]).toMatchObject({ currency: "JOD", actualAmountMinor: 150 * JOD_SCALE });
 
-    // A NEW line cannot be added in either currency: USD contradicts the JOD
-    // facts already on the deal, JOD contradicts the org's current resolution.
+    // A NEW USD line contradicts the pinned deal. A JOD line remains valid;
+    // the raw org-setting drift never becomes the deal's denomination.
     expect(await refusalOf(s.asUser.mutation(api.financeDealCosts.recordDealFee, addArgs(s, "i2", { expectedCurrency: "USD" }))))
-      .toMatch(/already has costs or custody recorded in JOD/);
-    expect(await refusalOf(s.asUser.mutation(api.financeDealCosts.recordDealFee, addArgs(s, "i3"))))
-      .toMatch(/already has costs or custody recorded in JOD/);
-    expect(await feeRows(s)).toHaveLength(1);
+      .toMatch(/entered in USD.*kept in JOD/);
+    await s.asUser.mutation(api.financeDealCosts.recordDealFee, addArgs(s, "i3"));
+    expect(await feeRows(s)).toHaveLength(2);
   });
 });
 
@@ -391,7 +394,7 @@ describe("SCRUM-319 — the lock keeps onboarding open and closes every ordering
     expect(await refusalOf(switchCurrencyViaProduct(s, "USD"))).toMatch(/cannot be changed/);
   });
 
-  test("LATER PIN — economics recorded after a JOD fee pin the deal in JOD; after an out-of-contract drift to USD they REFUSE rather than contradict the fee", async () => {
+  test("QUOTE PIN — later economics preserve the application denomination across an out-of-contract org drift", async () => {
     const s = await seedDeal("pin");
     await s.asUser.mutation(api.financeDealCosts.recordDealFee, addArgs(s, "i1"));
     await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
@@ -402,13 +405,12 @@ describe("SCRUM-319 — the lock keeps onboarding open and closes every ordering
     const s2 = await seedDeal("pin_drift");
     await s2.asUser.mutation(api.financeDealCosts.recordDealFee, addArgs(s2, "i1"));
     await rawSwitchCurrency(s2, "USD");
-    const refusal = await refusalOf(s2.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
-      orgId: s2.orgId, applicationId: s2.applicationId, submittedQuotationMinor: VEHICLE_PRICE * USD_SCALE, source: "MANUAL_ENTRY",
-    }));
-    expect(refusal).toMatch(/already has costs or custody recorded in JOD/);
+    await s2.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s2.orgId, applicationId: s2.applicationId, submittedQuotationMinor: VEHICLE_PRICE * JOD_SCALE, source: "MANUAL_ENTRY",
+    });
     const app = await s2.t.run((ctx) => ctx.db.get(s2.applicationId));
-    expect(app?.economicsCurrency).toBeUndefined();
-    expect(app?.submittedQuotationMinor).toBeUndefined();
+    expect(app?.economicsCurrency).toBe("JOD");
+    expect(app?.submittedQuotationMinor).toBe(VEHICLE_PRICE * JOD_SCALE);
   });
 });
 

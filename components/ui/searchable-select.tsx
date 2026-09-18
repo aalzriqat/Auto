@@ -21,6 +21,8 @@ interface SearchableSelectProps {
   disabled?: boolean;
   className?: string;
   onSearchChange?: (search: string) => void;
+  clientSideFilter?: boolean;
+  dataTestId?: string;
 }
 
 export function SearchableSelect({
@@ -33,6 +35,8 @@ export function SearchableSelect({
   disabled,
   className,
   onSearchChange,
+  clientSideFilter,
+  dataTestId,
 }: SearchableSelectProps) {
   const value = valueProp ?? "";
   const [open, setOpen] = useState(false);
@@ -42,7 +46,10 @@ export function SearchableSelect({
 
   const selected = value && value !== "none" ? options.find((o) => o.value === value) : null;
 
+  const shouldFilterClientSide = clientSideFilter ?? !onSearchChange;
+
   const filtered = useMemo(() => {
+    if (!shouldFilterClientSide) return options;
     const q = search.toLowerCase().trim();
     if (!q) return options;
     return options.filter(
@@ -50,7 +57,7 @@ export function SearchableSelect({
         o.label.toLowerCase().includes(q) ||
         (o.subLabel?.toLowerCase().includes(q) ?? false)
     );
-  }, [options, search]);
+  }, [options, search, shouldFilterClientSide]);
 
   // Close on outside click
   useEffect(() => {
@@ -98,6 +105,7 @@ export function SearchableSelect({
       {/* Trigger — matches shadcn SelectTrigger exactly */}
       <button
         type="button"
+        data-testid={dataTestId}
         disabled={disabled}
         onClick={() => !disabled && setOpen((o) => !o)}
         className={cn(
@@ -161,6 +169,7 @@ export function SearchableSelect({
                   <button
                     key={o.value}
                     type="button"
+                    data-testid={`searchable-option-${o.value}`}
                     onClick={() => handleSelect(o.value)}
                     className={cn(
                       "w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-start hover:bg-accent hover:text-accent-foreground transition-colors",

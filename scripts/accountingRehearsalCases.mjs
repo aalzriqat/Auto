@@ -629,7 +629,7 @@ export async function runRehearsalCases(ctx) {
         orgId, sourceType: "deposits", sourceId: String(fx.depositId), limit: 200,
       });
       const eventIds = new Set((depositEvents ?? []).map((e) => String(e._id)));
-      const allEntries = await ownerMust("query", "accountingLedger:listJournalEntries", { orgId, limit: 200 });
+      const allEntries = await allJournalEntries({ orgId, ownerMust });
       const forDeposit = (allEntries ?? []).filter(
         (e) => e.sourceType === "deposits" && String(e.sourceId) === String(fx.depositId)
       );
@@ -687,7 +687,7 @@ export async function runRehearsalCases(ctx) {
     "B2",
     "every journal entry balances per entry and no accounting event is stuck FAILED",
     async () => {
-      const entries = await ownerMust("query", "accountingLedger:listJournalEntries", { orgId, limit: 200 });
+      const entries = await allJournalEntries({ orgId, ownerMust });
       const unbalanced = [];
       let linesRead = 0;
       for (const entry of entries ?? []) {
@@ -1520,7 +1520,7 @@ export async function runRehearsalCases(ctx) {
       const me = await ownerMust("query", "users:getMe", {});
       if (!me?._id) fail("users:getMe returned no user for the OWNER token — the sale has no salesperson to name");
 
-      const entriesBefore = await ownerMust("query", "accountingLedger:listJournalEntries", { orgId, limit: 200 });
+      const entriesBefore = await allJournalEntries({ orgId, ownerMust });
       const saleId = await ownerMust("mutation", "sales:create", {
         orgId,
         vehicleId,
@@ -1544,7 +1544,7 @@ export async function runRehearsalCases(ctx) {
       const completed = (events ?? []).filter((e) => e.eventType === "SALE_COMPLETED");
       expectEqual(completed.length, 1, "SALE_COMPLETED accounting events for this sale");
 
-      const entriesAfter = await ownerMust("query", "accountingLedger:listJournalEntries", { orgId, limit: 200 });
+      const entriesAfter = await allJournalEntries({ orgId, ownerMust });
       const newEntries = (entriesAfter ?? []).filter(
         (e) => !(entriesBefore ?? []).some((b) => String(b._id) === String(e._id))
       );
@@ -2117,7 +2117,7 @@ export async function runRehearsalCases(ctx) {
       // missed one: it burns a real investigation and, repeated, it teaches
       // everyone to discount the case. The window has to contain the release
       // and nothing else.
-      const beforeEntries = await ownerMust("query", "accountingLedger:listJournalEntries", { orgId, limit: 200 });
+      const beforeEntries = await allJournalEntries({ orgId, ownerMust });
 
       const release = await resolverCall("mutation", "deposits:release", {
         orgId,
@@ -2127,7 +2127,7 @@ export async function runRehearsalCases(ctx) {
         idempotencyKey: `release-deposit:${fx.depositId}:REFUNDED:CASH:gen0`,
       });
 
-      const afterEntries = await ownerMust("query", "accountingLedger:listJournalEntries", { orgId, limit: 200 });
+      const afterEntries = await allJournalEntries({ orgId, ownerMust });
       const pending = await ownerMust("query", "accountingOutbox:listPending", {
         orgId,
         status: "PENDING",
@@ -2380,6 +2380,57 @@ export const CURRENCY_SCALES = {
  */
 export const DEFAULT_ORG_CURRENCY = "JOD";
 
+/**
+ * AF-318-01 — `accountingLedger:listJournalEntries` now takes real cursor
+ * pagination (`paginationOpts`) instead of a fixed `limit`, so a rehearsal
+ * case asking "every journal entry for this org" has to walk every page the
+ * same way the General Ledger UI does, not assume one bounded call already
+ * saw everything. Bounded to 200 pages (20,000 entries at the default page
+ * size) so a genuinely runaway org fails loudly instead of looping forever.
+ */
+async function allJournalEntries({ orgId, ownerMust, periodId, accountId }) {
+  const rows = [];
+  let cursor = null;
+  for (let page = 0; page < 200; page++) {
+    const result = await ownerMust("query", "accountingLedger:listJournalEntries", {
+      orgId,
+      ...(periodId ? { periodId } : {}),
+      ...(accountId ? { accountId } : {}),
+      paginationOpts: { numItems: 100, cursor },
+    });
+    rows.push(...(result?.page ?? []));
+    if (result?.isDone || !result?.continueCursor) break;
+    cursor = result.continueCursor;
+  }
+  return rows;
+}
+
+/**
+ * AF-318-01 — `accountingLedger:getAccountActivity` now paginates too; walk
+ * every page to answer "every line this account has ever posted" the way a
+ * rehearsal assertion needs, not just its first page.
+ */
+async function allAccountActivityLines({ orgId, ownerMust, accountId, fromDate, toDate }) {
+  const lines = [];
+  let cursor = null;
+  let account = null;
+  for (let page = 0; page < 200; page++) {
+    const result = await ownerMust("query", "accountingLedger:getAccountActivity", {
+      orgId,
+      accountId,
+      ...(fromDate !== undefined ? { fromDate } : {}),
+      ...(toDate !== undefined ? { toDate } : {}),
+      paginationOpts: { numItems: 100, cursor },
+    });
+    if (!result?.account) break;
+    account = result.account;
+    lines.push(...(result.lines ?? []));
+    if (result.isDone || !result.continueCursor) break;
+    cursor = result.continueCursor;
+  }
+  return { account, lines };
+}
+
 /** The organization's denomination, resolved the way the product resolves it. */
 async function orgDenomination({ orgId, ownerMust }) {
   const settings = await ownerMust("query", "orgSettings:get", { orgId });
@@ -2468,11 +2519,7 @@ function expectExactLines(lines, keyOf, expected, { currency, decimals, what, cu
 
 /** A customer's net position on one control account, from the GL itself. */
 async function customerNetOnAccount({ orgId, ownerMust, accountId, customerId }) {
-  const activity = await ownerMust("query", "accountingLedger:getAccountActivity", {
-    orgId,
-    accountId,
-    limit: 500,
-  });
+  const activity = await allAccountActivityLines({ orgId, ownerMust, accountId });
   if (!activity?.account) fail(`account ${accountId} could not be read back for its activity`);
   const mine = (activity.lines ?? []).filter((l) => String(l.customerId) === String(customerId));
   const debit = mine.reduce((s, l) => s + (l.debitMinor ?? 0), 0);

@@ -230,26 +230,34 @@ async function financeCompanyReceivableDocs(ctx: QueryCtx, orgId: Id<"organizati
  * Finance Application is the server's job. A client that had to guess how to
  * reach the authority would be a second authority in waiting.
  *
- * ⚠️ `applicationId` is the receivable's RAW `sourceId` and is not proven to
- * name a live application — `sourceType` is a free-form string on the document,
- * so this reader states provenance rather than certifying it.
+ * `applicationId` is nullable and returned only after the opaque sourceId has
+ * normalized to a live finance application owned by the requested tenant. A
+ * malformed, dangling, or foreign reference therefore never becomes a link.
  */
-export const listFinanceCompanyReceivables = query({
-  args: { orgId: v.id("organizations") },
+export const paginateFinanceCompanyReceivables = query({
+  args: {
+    orgId: v.id("organizations"),
+    paginationOpts: paginationOptsValidator,
+  },
   handler: async (ctx, args) => {
     // VIEW_FINANCE, matching `list` below — this replaces what the Claims tab
     // rendered, so it must not demand more than that tab already required.
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
-    const documents = await financeCompanyReceivableDocs(ctx, args.orgId);
-    documents.sort((a, b) => b.issueDate - a.issueDate);
+    const page = await ctx.db
+      .query("receivableDocuments")
+      .withIndex("by_org_source_issueDate", (q) =>
+        q.eq("orgId", args.orgId).eq("sourceType", FINANCE_APPLICATION_SOURCE)
+      )
+      .order("desc")
+      .paginate(args.paginationOpts);
 
     // Resolved together rather than one document after another. Each row needs
     // two point reads and a balance lookup, and awaiting them in sequence made
     // the handler as slow as the row count — a needless multiplier, since none
     // of the reads depends on another.
-    return await Promise.all(
-      documents.map(async (doc) => {
+    const resolvedPage = await Promise.all(
+      page.page.map(async (doc) => {
         // ⚠️ RE-CHECK THE TENANT ON EVERY RELATED READ. These ids come off the
         // document, not off the request, so a malformed or legacy row would
         // otherwise let this view print another dealership's finance company or
@@ -259,6 +267,53 @@ export const listFinanceCompanyReceivables = query({
         const sameOrgCompany = company && company.orgId === args.orgId ? company : null;
         const sameOrgCustomer = customer && customer.orgId === args.orgId ? customer : null;
 
+        const normalizedApplicationId = ctx.db.normalizeId("financeApplications", doc.sourceId);
+        const application = normalizedApplicationId
+          ? await ctx.db.get(normalizedApplicationId)
+          : null;
+        const verifiedApplicationId =
+          application?.orgId === args.orgId ? application._id : null;
+
+        return {
+          receivableDocumentId: doc._id,
+          documentNumber: doc.documentNumber,
+          applicationId: verifiedApplicationId,
+          financeCompanyId: doc.financeCompanyId,
+          financingEntity: sameOrgCompany ? sameOrgCompany.name : null,
+          customerId: doc.customerId,
+          buyerName: sameOrgCustomer
+            ? `${sameOrgCustomer.firstName ?? ""} ${sameOrgCustomer.lastName ?? ""}`.trim()
+            : null,
+          originalAmountMinor: doc.originalAmountMinor,
+          outstandingMinor: await collectibleBalanceMinor(ctx, doc),
+          currency: doc.currency,
+          scale: doc.scale,
+          status: doc.status,
+          issueDate: doc.issueDate,
+          dueDate: doc.dueDate,
+        };
+      })
+    );
+    return { ...page, page: resolvedPage };
+  },
+});
+
+/**
+ * Bounded compatibility reader retained for reports/tests that require a
+ * complete one-shot set. Interactive UI must use the paginated reader above.
+ */
+export const listFinanceCompanyReceivables = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const documents = await financeCompanyReceivableDocs(ctx, args.orgId);
+    documents.sort((a, b) => b.issueDate - a.issueDate);
+    return await Promise.all(
+      documents.map(async (doc) => {
+        const company = doc.financeCompanyId ? await ctx.db.get(doc.financeCompanyId) : null;
+        const customer = doc.customerId ? await ctx.db.get(doc.customerId) : null;
+        const sameOrgCompany = company && company.orgId === args.orgId ? company : null;
+        const sameOrgCustomer = customer && customer.orgId === args.orgId ? customer : null;
         return {
           receivableDocumentId: doc._id,
           documentNumber: doc.documentNumber,

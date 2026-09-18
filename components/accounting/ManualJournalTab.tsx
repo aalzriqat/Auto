@@ -33,7 +33,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { manualJournalSchema, ManualJournalFormValues } from "./manualJournal.schema";
 import { scaleForCurrency } from "./AccountingTabShared";
-import { getErrorMessage } from "@/lib/errors";
+import { dateInputToUtcMs, economicTodayDateInput, msToDateInput } from "@/lib/dateInput";
 
 function emptyLine() {
   return { id: crypto.randomUUID(), accountId: "", side: "DEBIT" as const, amount: 0 };
@@ -46,6 +46,7 @@ export function ManualJournalTab() {
   const formatCurrency = useCurrencyFormatter();
   const scale = scaleForCurrency(currencyCode);
   const factor = Math.pow(10, scale);
+  const today = economicTodayDateInput();
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [rejecting, setRejecting] = useState<{ id: Id<"manualJournalDrafts">; reason: string } | null>(null);
@@ -76,7 +77,7 @@ export function ManualJournalTab() {
 
   const form = useForm<ManualJournalFormValues>({
     resolver: zodResolver(manualJournalSchema),
-    defaultValues: { memo: "", lines: [emptyLine(), emptyLine()] },
+    defaultValues: { memo: "", accountingDate: today, lines: [emptyLine(), emptyLine()] },
   });
 
   const { fields, append, remove } = useFieldArray({ control: form.control, name: "lines" });
@@ -86,7 +87,7 @@ export function ManualJournalTab() {
   const balanced = totalDebits > 0 && Math.abs(totalDebits - totalCredits) < 1e-9;
 
   function resetForm() {
-    form.reset({ memo: "", lines: [emptyLine(), emptyLine()] });
+    form.reset({ memo: "", accountingDate: economicTodayDateInput(), lines: [emptyLine(), emptyLine()] });
   }
 
   async function onSubmit(values: ManualJournalFormValues) {
@@ -100,6 +101,7 @@ export function ManualJournalTab() {
       await createDraft({
         orgId: activeOrgId,
         memo: values.memo,
+        accountingDate: dateInputToUtcMs(values.accountingDate),
         lines: values.lines.map((l) => ({
           accountId: l.accountId as Id<"chartOfAccounts">,
           debitMinor: l.side === "DEBIT" ? Math.round(l.amount * factor) : 0,
@@ -111,7 +113,7 @@ export function ManualJournalTab() {
       setDialogOpen(false);
       resetForm();
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(error instanceof Error ? error.message : String(error));
     } finally {
       setIsSubmitting(false);
     }
@@ -124,7 +126,7 @@ export function ManualJournalTab() {
       await approveDraft({ orgId: activeOrgId, draftId });
       toast.success(t("ManualJournalApproved"));
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(error instanceof Error ? error.message : String(error));
     } finally {
       setActingOnId(null);
     }
@@ -142,7 +144,7 @@ export function ManualJournalTab() {
       toast.success(t("ManualJournalRejected"));
       setRejecting(null);
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(error instanceof Error ? error.message : String(error));
     } finally {
       setActingOnId(null);
     }
@@ -170,8 +172,14 @@ export function ManualJournalTab() {
         {pending.map((draft) => {
           const isOwnDraft = me?._id === draft.createdBy;
           const busy = actingOnId === draft._id;
+          const hasDate = draft.accountingDate !== undefined;
           return (
-            <Card key={draft._id} className="relative overflow-hidden">
+            <Card
+              key={draft._id}
+              data-testid="manual-journal-draft-card"
+              data-memo={draft.memo}
+              className="relative overflow-hidden"
+            >
               <div className="absolute top-0 left-0 w-1 h-full bg-yellow-500" />
               <CardHeader className="pb-3">
                 <div className="flex items-start justify-between gap-2">
@@ -180,6 +188,20 @@ export function ManualJournalTab() {
                     <CardDescription>
                       {t("SubmittedBy")}: {draft.creatorName}
                     </CardDescription>
+                    <div className="mt-1 flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">
+                        {t("AccountingDate")}:{" "}
+                        {hasDate ? (
+                          <span className="font-medium text-foreground">
+                            {msToDateInput(draft.accountingDate!)}
+                          </span>
+                        ) : (
+                          <span className="text-rose-600 font-medium">
+                            {t("MissingAccountingDate" as any)}
+                          </span>
+                        )}
+                      </span>
+                    </div>
                   </div>
                   <Badge variant="outline" className="shrink-0 border-yellow-500/20 bg-yellow-500/10 text-yellow-700 dark:border-yellow-800 dark:bg-yellow-950/40 dark:text-yellow-300">
                     {t("Pending")}
@@ -209,9 +231,16 @@ export function ManualJournalTab() {
                   <p className="mt-3 text-xs text-amber-600 dark:text-amber-400">{t("SegregationOfDutiesNotice")}</p>
                 )}
 
+                {!hasDate && (
+                  <p className="mt-3 text-xs text-rose-600 dark:text-rose-400 font-medium">
+                    {t("LegacyDraftNoDate" as any)}
+                  </p>
+                )}
+
                 <div className="flex gap-2 w-full pt-4 mt-2 border-t">
                   <Button
                     variant="outline"
+                    data-testid="reject-draft-btn"
                     className="flex-1 border-red-200 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-600 dark:border-red-800 dark:bg-red-950/40 dark:text-red-400 dark:hover:bg-red-950/60 dark:hover:text-red-300"
                     disabled={isOwnDraft || busy}
                     onClick={() => setRejecting({ id: draft._id, reason: "" })}
@@ -220,8 +249,9 @@ export function ManualJournalTab() {
                     {t("Reject")}
                   </Button>
                   <Button
+                    data-testid="approve-draft-btn"
                     className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
-                    disabled={isOwnDraft || busy}
+                    disabled={isOwnDraft || busy || !hasDate}
                     onClick={() => handleApprove(draft._id)}
                   >
                     {busy ? (
@@ -255,7 +285,7 @@ export function ManualJournalTab() {
           }}
         >
           <DialogTrigger asChild>
-            <Button size="sm" className="gap-2">
+            <Button data-testid="new-manual-journal-btn" size="sm" className="gap-2">
               <Plus className="w-4 h-4" />
               {t("NewManualJournal")}
             </Button>
@@ -275,7 +305,21 @@ export function ManualJournalTab() {
                     <FormItem>
                       <FormLabel>{t("ManualJournalMemo")}</FormLabel>
                       <FormControl>
-                        <Textarea placeholder={t("ManualJournalMemoPlaceholder")} {...field} />
+                        <Textarea data-testid="manual-journal-memo" placeholder={t("ManualJournalMemoPlaceholder")} {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="accountingDate"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("AccountingDate")}</FormLabel>
+                      <FormControl>
+                        <Input data-testid="manual-journal-accounting-date" type="date" max={today} {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -286,6 +330,7 @@ export function ManualJournalTab() {
                   <div className="flex items-center justify-between">
                     <Label>{t("JournalLines")}</Label>
                     <Button
+                      data-testid="add-line-btn"
                       type="button"
                       variant="outline"
                       size="sm"
@@ -307,6 +352,7 @@ export function ManualJournalTab() {
                             <FormItem>
                               <FormControl>
                                 <SearchableSelect
+                                  dataTestId={`journal-line-account-${index}`}
                                   value={f.value}
                                   onValueChange={f.onChange}
                                   options={accountOptions}
@@ -326,7 +372,7 @@ export function ManualJournalTab() {
                             <FormItem>
                               <Select value={f.value} onValueChange={f.onChange}>
                                 <FormControl>
-                                  <SelectTrigger>
+                                  <SelectTrigger data-testid={`journal-line-side-${index}`}>
                                     <SelectValue />
                                   </SelectTrigger>
                                 </FormControl>
@@ -352,7 +398,7 @@ export function ManualJournalTab() {
                           render={({ field: f }) => (
                             <FormItem>
                               <FormControl>
-                                <Input type="number" step={String(1 / factor)} min={0} {...f} />
+                                <Input data-testid={`journal-line-amount-${index}`} type="number" step={String(1 / factor)} min={0} {...f} />
                               </FormControl>
                               <FormMessage />
                             </FormItem>
@@ -364,6 +410,8 @@ export function ManualJournalTab() {
                           type="button"
                           variant="ghost"
                           size="icon"
+                          aria-label={t("Remove" as any)}
+                          title={t("Remove" as any)}
                           disabled={fields.length <= 2}
                           onClick={() => remove(index)}
                         >
@@ -390,7 +438,7 @@ export function ManualJournalTab() {
                 </div>
 
                 <DialogFooter>
-                  <Button type="submit" disabled={isSubmitting || !balanced} className="gap-2">
+                  <Button data-testid="submit-manual-journal-btn" type="submit" disabled={isSubmitting || !balanced} className="gap-2">
                     {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
                     {t("SubmitForApproval")}
                   </Button>

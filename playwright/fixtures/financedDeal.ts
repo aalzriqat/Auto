@@ -348,7 +348,7 @@ export async function buildDealWithRecordedEconomics(
   const customer = `${firstName} ${lastName}`;
 
   const dealUrl = await createFinancedApplication(page, { model, customer });
-  await approveCreditDecision(managerPage, lastName);
+  await approveCreditDecision(managerPage, dealUrl);
   await recordQuotation(page, dealUrl);
   await recordApprovedAmount(managerPage, dealUrl);
 

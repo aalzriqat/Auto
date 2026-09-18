@@ -21,6 +21,7 @@ type SetupStatusCardsProps = {
   periodDialog: ReactNode;
   t: Translate;
   onInitializeChart: () => void;
+  onRepairChart: () => void;
   onRedrive: () => void;
 };
 
@@ -63,6 +64,7 @@ function ChartAction({
   initializeBusy,
   t,
   onInitializeChart,
+  onRepairChart,
 }: Readonly<{
   chartInitialized: boolean;
   missingSystemAccountKeys: readonly string[];
@@ -70,14 +72,23 @@ function ChartAction({
   initializeBusy: boolean;
   t: Translate;
   onInitializeChart: () => void;
+  onRepairChart: () => void;
 }>) {
   if (chartInitialized) {
     return (
-      <p className="text-sm text-muted-foreground">
-        {missingSystemAccountKeys.length > 0
-          ? `${t("MissingSystemAccounts")}: ${missingSystemAccountKeys.join(", ")}`
-          : t("SystemAccountsComplete")}
-      </p>
+      <div className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          {missingSystemAccountKeys.length > 0
+            ? `${t("MissingSystemAccounts")}: ${missingSystemAccountKeys.join(", ")}`
+            : t("SystemAccountsComplete")}
+        </p>
+        {missingSystemAccountKeys.length > 0 && (
+          <Button size="sm" disabled={!canManageFinance || initializeBusy} onClick={onRepairChart}>
+            {initializeBusy && <Loader2 className="h-4 w-4 animate-spin" />}
+            {t("RepairMissingSystemAccounts")}
+          </Button>
+        )}
+      </div>
     );
   }
 
@@ -103,6 +114,7 @@ export function SetupStatusCards({
   periodDialog,
   t,
   onInitializeChart,
+  onRepairChart,
   onRedrive,
 }: Readonly<SetupStatusCardsProps>) {
   const showChart = variant !== "operations";
@@ -125,6 +137,7 @@ export function SetupStatusCards({
             initializeBusy={initializeBusy}
             t={t}
             onInitializeChart={onInitializeChart}
+            onRepairChart={onRepairChart}
           />
         }
       />

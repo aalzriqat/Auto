@@ -31,11 +31,17 @@ async function findChartAccountId(
   orgId: Id<"organizations">,
   systemKey: string
 ): Promise<Id<"chartOfAccounts"> | null> {
-  const account = await ctx.db
+  const accounts = await ctx.db
     .query("chartOfAccounts")
     .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", systemKey))
-    .unique();
-  return account?._id ?? null;
+    .collect();
+  const active = accounts.filter((a) => a.active);
+  if (active.length === 0) return null;
+  const account = active.reduce(
+    (oldest, a) => (a._creationTime < oldest._creationTime ? a : oldest),
+    active[0]
+  );
+  return account._id;
 }
 
 export const generateVatSummary = query({

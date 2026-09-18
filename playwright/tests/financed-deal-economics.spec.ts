@@ -68,10 +68,6 @@ test.describe("recording a financed deal's economics through the interface", () 
    *
    * Tracked with the redesign: SCRUM-63 (Unified Deal Workspace).
    */
-  test.skip(
-    true,
-    "The deal screen is being redesigned (SCRUM-63). This spec drives that screen's controls end to end, so it would fail on an interface being replaced. Re-enable against the new screen — it is the only end-to-end proof that an operator can reach the economics writers, which is the defect SCRUM-68 was filed for.",
-  );
 
   /**
    * Gated on the CREDENTIALS, not on the session file they produce.
@@ -143,11 +139,11 @@ test.describe("recording a financed deal's economics through the interface", () 
       });
 
       // --- the derived economics, worked out by the server -----------------
-      // 13,000 at 90% = 11,700 funded, leaving 1,300 unfinanced. Asserted as
-      // figures rather than as "a panel appeared": a split that renders but
-      // does not add up is the failure this is here to catch.
+      // 13,000 approved - 3,000 customer first payment = 10,000 funded (within 90% cap of 11,700),
+      // leaving 1,300 unfinanced. Asserted as figures rather than as "a panel appeared":
+      // a split that renders but does not add up is the failure this is here to catch.
       await expect(managerPage.getByText("What that leaves")).toBeVisible();
-      await expect(managerPage.getByText(/11,700/).first()).toBeVisible();
+      await expect(managerPage.getByText(/10,000/).first()).toBeVisible();
       await expect(managerPage.getByText(/1,300/).first()).toBeVisible();
       // --- handover, expected payment, and close — FROM THE COCKPIT ---------
       // SCRUM-78. This tail used to be driven through

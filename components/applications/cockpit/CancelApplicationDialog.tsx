@@ -10,7 +10,23 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+export type CancelApplicationValues = {
+  reason?: string;
+  failureReason?: string;
+  appraisalFeeResponsibility?: string;
+  appraisalFeeResponsibilityReason?: string;
+};
 
 /**
  * Voiding the application — the same `applications.cancelApplication` the
@@ -37,12 +53,12 @@ export function CancelApplicationDialog({
   isClosed: boolean;
   t: (key: string) => string;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (reason: string | undefined) => void | Promise<void>;
+  onSubmit: (values: CancelApplicationValues) => void | Promise<void>;
 }>) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
-        {/* The reason lives in a child Radix UNMOUNTS on close, so an abandoned
+        {/* The fields live in a child Radix UNMOUNTS on close, so an abandoned
             attempt's text never survives into the next one. */}
         <CancelApplicationBody
           submitting={submitting}
@@ -57,6 +73,25 @@ export function CancelApplicationDialog({
   );
 }
 
+const FAILURE_REASONS = [
+  { value: "APPRAISAL_TOO_LOW", labelKey: "FailureReasonAppraisalTooLow" },
+  { value: "CUSTOMER_WITHDREW", labelKey: "FailureReasonCustomerWithdrew" },
+  { value: "CREDIT_REJECTED", labelKey: "FailureReasonCreditRejected" },
+  { value: "DOCUMENTS_INCOMPLETE", labelKey: "FailureReasonDocsIncomplete" },
+  { value: "DEALER_REJECTED_ECONOMICS", labelKey: "FailureReasonDealerRejected" },
+  { value: "CUSTOMER_REJECTED_GAP", labelKey: "FailureReasonCustomerRejectedGap" },
+  { value: "GAP_NEGOTIATION_FAILED", labelKey: "FailureReasonGapFailed" },
+  { value: "OTHER", labelKey: "FailureReasonOther" },
+] as const;
+
+const FEE_RESPONSIBILITIES = [
+  { value: "DEALER", labelKey: "ResponsibilityDealer" },
+  { value: "CUSTOMER", labelKey: "ResponsibilityCustomer" },
+  { value: "FINANCE_COMPANY", labelKey: "ResponsibilityFinanceCompany" },
+  { value: "EMPLOYEE", labelKey: "ResponsibilityEmployee" },
+  { value: "UNRESOLVED", labelKey: "ResponsibilityUnresolved" },
+] as const;
+
 function CancelApplicationBody({
   submitting,
   error,
@@ -70,9 +105,13 @@ function CancelApplicationBody({
   isClosed: boolean;
   t: (key: string) => string;
   onClose: () => void;
-  onSubmit: (reason: string | undefined) => void | Promise<void>;
+  onSubmit: (values: CancelApplicationValues) => void | Promise<void>;
 }>) {
   const [reason, setReason] = useState("");
+  const [failureReason, setFailureReason] = useState<string>("");
+  const [appraisalFeeResponsibility, setAppraisalFeeResponsibility] = useState<string>("");
+  const [appraisalFeeResponsibilityReason, setAppraisalFeeResponsibilityReason] = useState("");
+
   return (
     <>
       <DialogHeader>
@@ -83,21 +122,88 @@ function CancelApplicationBody({
             : t("CancelApplicationWarning")}
         </DialogDescription>
       </DialogHeader>
-      <div className="space-y-2">
-        <label
-          htmlFor="cancel-application-reason"
-          className="text-sm font-medium"
-        >
-          {t("CancellationReasonLabel")}
-        </label>
-        <Textarea
-          id="cancel-application-reason"
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          placeholder={t("CancellationReasonPlaceholder")}
-          rows={3}
-        />
+
+      <div className="space-y-4">
+        {/* Failure reason selector */}
+        <div className="space-y-1.5">
+          <Label htmlFor="cancel-failure-reason" className="text-sm font-medium">
+            {t("FailureReasonLabel")}
+          </Label>
+          <Select
+            value={failureReason}
+            onValueChange={setFailureReason}
+            disabled={submitting}
+          >
+            <SelectTrigger id="cancel-failure-reason">
+              <SelectValue placeholder={t("FailureReasonOptional")} />
+            </SelectTrigger>
+            <SelectContent>
+              {FAILURE_REASONS.map((fr) => (
+                <SelectItem key={fr.value} value={fr.value}>
+                  {t(fr.labelKey)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* Appraisal fee responsibility */}
+        <div className="space-y-1.5">
+          <Label htmlFor="cancel-appraisal-fee-responsibility" className="text-sm font-medium">
+            {t("AppraisalFeeResponsibilityLabel")}
+          </Label>
+          <Select
+            value={appraisalFeeResponsibility}
+            onValueChange={setAppraisalFeeResponsibility}
+            disabled={submitting}
+          >
+            <SelectTrigger id="cancel-appraisal-fee-responsibility">
+              <SelectValue placeholder={t("AppraisalFeeResponsibilityOptional")} />
+            </SelectTrigger>
+            <SelectContent>
+              {FEE_RESPONSIBILITIES.map((resp) => (
+                <SelectItem key={resp.value} value={resp.value}>
+                  {t(resp.labelKey)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {appraisalFeeResponsibility && (
+          <div className="space-y-1.5">
+            <Label htmlFor="cancel-fee-responsibility-reason" className="text-sm font-medium">
+              {t("AppraisalFeeResponsibilityReasonLabel")}
+            </Label>
+            <Input
+              id="cancel-fee-responsibility-reason"
+              value={appraisalFeeResponsibilityReason}
+              onChange={(e) => setAppraisalFeeResponsibilityReason(e.target.value)}
+              placeholder={t("AppraisalFeeResponsibilityReasonPlaceholder")}
+              disabled={submitting}
+            />
+          </div>
+        )}
+
+        {/* Free-form notes / reason */}
+        <div className="space-y-1.5">
+          <Label
+            htmlFor="cancel-application-reason"
+            className="text-sm font-medium"
+          >
+            {t("CancellationReasonLabel")}
+          </Label>
+          <Textarea
+            id="cancel-application-reason"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder={t("CancellationReasonPlaceholder")}
+            rows={3}
+            disabled={submitting}
+          />
+        </div>
       </div>
+
       {error && (
         <p role="alert" className="text-sm text-destructive">
           {error}
@@ -110,7 +216,15 @@ function CancelApplicationBody({
         <Button
           variant="destructive"
           disabled={submitting}
-          onClick={() => void onSubmit(reason.trim() || undefined)}
+          onClick={() =>
+            void onSubmit({
+              reason: reason.trim() || undefined,
+              failureReason: failureReason || undefined,
+              appraisalFeeResponsibility: appraisalFeeResponsibility || undefined,
+              appraisalFeeResponsibilityReason:
+                appraisalFeeResponsibilityReason.trim() || undefined,
+            })
+          }
         >
           {t("CancelApplication")}
         </Button>

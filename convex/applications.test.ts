@@ -3,6 +3,7 @@ import { registerHandover } from "../test-utils/convexTest";
 import { expect, test, describe } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { transferFinancedAmountFromCustomerReceivable } from "./applications";
 
 const MODULES = import.meta.glob("./**/*.ts");
@@ -824,6 +825,159 @@ describe("applications hold release and deposit resolution", () => {
     });
   });
 
+  test("explicitly repairs a pre-fix in-flight application's missing quote lineage", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 14_200,
+      downPayment: 1_955,
+      termMonths: 48,
+    });
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, {
+      orgId,
+      quoteId,
+    });
+    // Reproduce a row created by the prior production code while preserving its
+    // modern workflow/rule fields.
+    await t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        economicsCurrency: undefined,
+        targetSellingAmountMinor: undefined,
+        targetNetProceedsMinor: undefined,
+        customerFirstPaymentMinor: undefined,
+        estimatedDealerBorneExpensesMinor: undefined,
+        estimatedClosingExpensesMinor: undefined,
+      })
+    );
+
+    const dryRun = await asUser.mutation(api.applications.repairQuoteEconomicsLineage, {
+      orgId,
+      applicationId,
+      expectedCurrency: "JOD",
+      dryRun: true,
+    });
+    expect(dryRun.applied).toBe(false);
+    expect(dryRun.expected.targetSellingAmountMinor).toBe(14_200_000);
+    expect(dryRun.expected.customerFirstPaymentMinor).toBe(1_955_000);
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.targetNetProceedsMinor).toBeUndefined();
+
+    const applied = await asUser.mutation(api.applications.repairQuoteEconomicsLineage, {
+      orgId,
+      applicationId,
+      expectedCurrency: "JOD",
+      dryRun: false,
+    });
+    expect(applied.applied).toBe(true);
+    const repaired = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(repaired).toMatchObject({
+      economicsCurrency: "JOD",
+      targetSellingAmountMinor: 14_200_000,
+      targetNetProceedsMinor: 14_200_000,
+      customerFirstPaymentMinor: 1_955_000,
+      estimatedDealerBorneExpensesMinor: 0,
+      estimatedClosingExpensesMinor: 0,
+    });
+
+    const rerun = await asUser.mutation(api.applications.repairQuoteEconomicsLineage, {
+      orgId,
+      applicationId,
+      expectedCurrency: "JOD",
+      dryRun: false,
+    });
+    expect(rerun).toMatchObject({ applied: false, missing: [] });
+  });
+
+  test.each([
+    {
+      name: "refuses repair when application status is terminal (not in-flight)",
+      patch: { status: "CANCELLED" as const },
+      expectedError: "Only an in-flight finance application can have quote lineage repaired.",
+    },
+    {
+      name: "refuses repair when downstream milestone evidence (submitted quotation) exists",
+      patch: { submittedQuotationMinor: 10_000_000 },
+      expectedError: "Quotation, approval, disbursement, or finalization evidence already exists. Reconcile this application manually.",
+    },
+    {
+      name: "refuses repair when downstream milestone evidence (approved purchase) exists",
+      patch: { approvedDealerPurchaseAmountMinor: 10_000_000 },
+      expectedError: "Quotation, approval, disbursement, or finalization evidence already exists. Reconcile this application manually.",
+    },
+    {
+      name: "refuses repair when requested currency does not match organization currency",
+      patch: {},
+      requestedCurrency: "USD",
+      expectedError: "Expected denomination USD does not match the organization denomination JOD.",
+    },
+    {
+      name: "refuses repair when application already denominated in a different currency",
+      patch: { economicsCurrency: "USD" },
+      requestedCurrency: "JOD",
+      expectedError: "The application is already denominated in USD; it cannot be repaired as JOD.",
+    },
+    {
+      name: "refuses repair when company-backed application is missing its frozen rule snapshot",
+      patch: { companyRuleSnapshot: undefined },
+      withCompany: true,
+      expectedError: "The application's frozen finance-company policy is missing. Reconcile the policy snapshot before repairing quotation economics.",
+    },
+  ])("repairQuoteEconomicsLineage fail-closed: $name", async ({ patch, expectedError, requestedCurrency, withCompany }) => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    let companyId: Id<"financeCompanies"> | undefined;
+    if (withCompany) {
+      companyId = await t.run((ctx) =>
+        ctx.db.insert("financeCompanies", {
+          orgId,
+          name: "Test Financier",
+          isActive: true,
+          profitRate: 5.5,
+          maxTermMonths: 72,
+          gracePeriodMonths: 3,
+        })
+      );
+    }
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 14_200,
+      downPayment: 1_955,
+      termMonths: 48,
+    });
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, {
+      orgId,
+      quoteId,
+    });
+
+    await t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        targetSellingAmountMinor: undefined,
+        targetNetProceedsMinor: undefined,
+        customerFirstPaymentMinor: undefined,
+        estimatedDealerBorneExpensesMinor: undefined,
+        estimatedClosingExpensesMinor: undefined,
+        ...(withCompany ? { companyId } : {}),
+        ...patch,
+      })
+    );
+
+    const snapshotBefore = await t.run((ctx) => ctx.db.get(applicationId));
+
+    await expect(
+      asUser.mutation(api.applications.repairQuoteEconomicsLineage, {
+        orgId,
+        applicationId,
+        expectedCurrency: requestedCurrency ?? "JOD",
+        dryRun: false,
+      })
+    ).rejects.toThrow(expectedError);
+
+    const snapshotAfter = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(snapshotAfter).toEqual(snapshotBefore);
+  });
+
   test("rerunning cancellation on an already-cancelled application releases stale reservations", async () => {
     const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
 
@@ -974,6 +1128,50 @@ describe("applications hold release and deposit resolution", () => {
       const app = await ctx.db.get(applicationId);
       const sale = app?.finalizedSaleId ? await ctx.db.get(app.finalizedSaleId) : null;
       expect(sale?.status).toBe("CANCELLED");
+    });
+  });
+
+  test("TASK-DEAL-05: cancelApplication persists failureReason and appraisalFeeResponsibility", async () => {
+    const { t, orgId, applicationId, asUser } = await setupFinalizedFinancedDeal();
+
+    await asUser.mutation(api.applications.cancelApplication, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId,
+      applicationId,
+      reason: "Customer withdrew after appraisal",
+      failureReason: "CUSTOMER_WITHDREW",
+      failureNotes: "Customer chose different vehicle elsewhere",
+      appraisalFeeResponsibility: "CUSTOMER",
+      appraisalFeeResponsibilityReason: "Customer cancelled post-approval without cause",
+    });
+
+    await t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      expect(app?.status).toBe("CANCELLED");
+      expect(app?.failureReason).toBe("CUSTOMER_WITHDREW");
+      expect(app?.failureNotes).toBe("Customer chose different vehicle elsewhere");
+      expect(app?.failedAt).toBeGreaterThan(0);
+      expect(app?.failedBy).toBeDefined();
+      expect(app?.appraisalFeeResponsibility).toBe("CUSTOMER");
+      expect(app?.appraisalFeeResponsibilityReason).toBe(
+        "Customer cancelled post-approval without cause"
+      );
+    });
+
+    // Also test default mapping when responsibility is omitted
+    const deal2 = await setupFinalizedFinancedDeal();
+    await deal2.asUser.mutation(api.applications.cancelApplication, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId: deal2.orgId,
+      applicationId: deal2.applicationId,
+      failureReason: "APPRAISAL_TOO_LOW",
+    });
+
+    await deal2.t.run(async (ctx) => {
+      const app = await ctx.db.get(deal2.applicationId);
+      expect(app?.status).toBe("CANCELLED");
+      expect(app?.failureReason).toBe("APPRAISAL_TOO_LOW");
+      expect(app?.appraisalFeeResponsibility).toBe("DEALER");
     });
   });
 });

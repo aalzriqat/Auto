@@ -571,11 +571,12 @@ export function PrepaidExpensesTab() {
                           variant="ghost"
                           size="icon"
                           title={t("RetryAmortization" as any)}
+                          aria-label={t("RetryAmortization" as any)}
                           disabled={retryingId === schedule._id}
                           onClick={() => handleRetry(schedule)}
                         >
                           {retryingId === schedule._id ? (
-                            <Loader2 className="w-4 h-4 animate-spin text-rose-600" />
+                             <Loader2 className="w-4 h-4 animate-spin text-rose-600" />
                           ) : (
                             <RotateCcw className="w-4 h-4 text-rose-600" />
                           )}
@@ -586,6 +587,7 @@ export function PrepaidExpensesTab() {
                           variant="ghost"
                           size="icon"
                           title={t("CorrectSchedule" as any)}
+                          aria-label={t("CorrectSchedule" as any)}
                           onClick={() => setCorrectSchedule(schedule)}
                         >
                           <Wrench className="w-4 h-4 text-muted-foreground" />
@@ -595,6 +597,7 @@ export function PrepaidExpensesTab() {
                         variant="ghost"
                         size="icon"
                         title={t("ViewCorrections" as any)}
+                        aria-label={t("ViewCorrections" as any)}
                         onClick={() => setHistorySchedule(schedule)}
                       >
                         <History className="w-4 h-4 text-muted-foreground" />

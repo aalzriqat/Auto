@@ -9,6 +9,15 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
+
+function safeScaleForCurrency(currency: string | null | undefined, fallback = 2): number {
+  if (!currency) return fallback;
+  try {
+    return scaleForCurrency(currency);
+  } catch {
+    return fallback;
+  }
+}
 import {
   DISBURSEMENT_DENOMINATION_REASON,
   FINALIZE_DENOMINATION_REASON,
@@ -32,6 +41,8 @@ import {
   Lock,
   Minus,
   Ban,
+  FileText,
+  CheckCircle2,
 } from "lucide-react";
 import { DealStageRail, DealStagesComplete } from "./DealStageRail";
 import {
@@ -75,7 +86,7 @@ import type { PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 // on the SAME mutations. Each is its own file so the container stays a wiring
 // layer and the view stays renderable against fixtures.
 import { CreditDecisionDialog, type CreditDecision } from "./CreditDecisionDialog";
-import { CancelApplicationDialog } from "./CancelApplicationDialog";
+import { CancelApplicationDialog, type CancelApplicationValues } from "./CancelApplicationDialog";
 import {
   SettlementRouteControl,
   type DirectRouteRefusal,
@@ -96,9 +107,10 @@ import {
   VehicleCostBasisSection,
   type FinancedDealOverviewData,
 } from "./DealFinancialOverview";
-import { DealCustodyPanel, type DealCustodyWiring } from "./DealCustodyPanel";
+import { DealCustodyPanel, type DealCustodyActions, type DealCustodyWiring } from "./DealCustodyPanel";
 import { CustodyMovementsList } from "./CustodyMovementsList";
 import {
+  FEE_TYPE_LABEL,
   HandoverCostAttemptError,
   HandoverCostsPanel,
   type ExpectedHandoverRow,
@@ -106,6 +118,8 @@ import {
   type HandoverCostsData,
   type NewHandoverCost,
 } from "./HandoverCostsPanel";
+import { RecordLegalInvoiceDialog, type RecordLegalInvoiceValues } from "./RecordLegalInvoiceDialog";
+import { ClassifyDealAccountingDialog } from "./ClassifyDealAccountingDialog";
 
 /**
  * The financed-deal cockpit.
@@ -629,6 +643,20 @@ export function DealCockpit({
     api.financeDealCosts.listDealCosts,
     canViewApplications && deal ? { orgId, applicationId } : "skip"
   );
+  // The custody picker's own read, shaped for the money permission — see
+  // `listCustodyCandidates`. Mounted on EXACTLY the predicate that offers the
+  // custody commands below (`custodyCommandsOffered`), so the plan and issue
+  // dialogs can never render with a picker whose read was skipped
+  // (consolidated round, item 5); skipped for everyone else, so the cockpit
+  // never mounts a query its caller cannot pass. Custody is a fact of a
+  // FINANCE APPLICATION — the record is keyed on one — and this container
+  // is the financed cockpit, so `deal` here is always the financed kind.
+  const custodyCommandsOffered =
+    !permissionsLoading && hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT) && deal !== undefined && deal !== null;
+  const custodyCandidates = useQuery(
+    api.financeDealCosts.listCustodyCandidates,
+    custodyCommandsOffered ? { orgId } : "skip"
+  );
   /**
    * The financial overview — a sibling read model composed on the server from
    * the cockpit's own money payload plus the vehicle's pre-deal cost basis.
@@ -642,6 +670,15 @@ export function DealCockpit({
   const recordTemplateFeeActual = useMutation(api.financeDealCosts.recordTemplateFeeActual);
   const recordActualFeeAmount = useMutation(api.financeDealCosts.recordActualFeeAmount);
   const voidDealFee = useMutation(api.financeDealCosts.voidDealFee);
+  const reconcileDealFee = useMutation(api.financeDealCosts.reconcileDealFee);
+  const recordLegalInvoice = useMutation(api.financeDealCosts.recordLegalInvoice);
+  const classifyDealAccounting = useMutation(api.financeDealCosts.classifyDealAccounting);
+  const planCustodyHandler = useMutation(api.financeDealCosts.planCustodyHandler);
+  const openDealCustody = useMutation(api.financeDealCosts.openDealCustody);
+  const recordCustodyMovement = useMutation(api.financeDealCosts.recordCustodyMovement);
+  const setFeeCustody = useMutation(api.financeDealCosts.setFeeCustody);
+  const reconcileDealCustody = useMutation(api.financeDealCosts.reconcileDealCustody);
+  const reopenDealCustody = useMutation(api.financeDealCosts.reopenDealCustody);
   const updateStatus = useMutation(api.applications.updateStatus);
   const cancelApplication = useMutation(api.applications.cancelApplication);
   const confirmDisbursement = useMutation(api.applications.confirmDisbursement);
@@ -661,6 +698,14 @@ export function DealCockpit({
   const canConfirmFinanceDisbursement =
     !permissionsLoading && hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
   const canResolveDeposits = !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_REQUESTS);
+
+  const [recordingLegalInvoice, setRecordingLegalInvoice] = useState(false);
+  const [legalInvoiceSubmitting, setLegalInvoiceSubmitting] = useState(false);
+  const [legalInvoiceError, setLegalInvoiceError] = useState<string | null>(null);
+
+  const [classifyingAccounting, setClassifyingAccounting] = useState(false);
+  const [classifyingSubmitting, setClassifyingSubmitting] = useState(false);
+  const [classifyingError, setClassifyingError] = useState<string | null>(null);
 
   const [decidingCredit, setDecidingCredit] = useState(false);
   const [creditSubmitting, setCreditSubmitting] = useState(false);
@@ -698,9 +743,11 @@ export function DealCockpit({
   // currency, not the org's current one; the customer's principal is read at
   // the org scale, as the dialog reads it. Absent means the row predates the
   // field, and the org's currency is then the only reading available.
-  const orgFactor = Math.pow(10, scaleForCurrency(orgCurrency.code));
+  const orgScale = safeScaleForCurrency(orgCurrency.code, 2);
+  const orgFactor = Math.pow(10, orgScale);
   const economicsCurrencyCode = app?.economicsCurrency ?? orgCurrency.code;
-  const economicsFactor = Math.pow(10, scaleForCurrency(economicsCurrencyCode));
+  const economicsScale = safeScaleForCurrency(economicsCurrencyCode, 2);
+  const economicsFactor = Math.pow(10, economicsScale);
   /**
    * What the finance company actually owes the dealership — the figure
    * `confirmDisbursement` compares against.
@@ -724,10 +771,11 @@ export function DealCockpit({
   const settlesDirectToSupplier =
     isConsignedDeal && app?.supplierSettlementRoute === "DIRECT_TO_SUPPLIER";
   const supplierName = app?.vehicle?.sourcedFromName ?? undefined;
-  const formatEconomics = (minor: number) =>
-    `${(minor / economicsFactor).toLocaleString()} ${
+  const formatEconomics = (minor: number) => {
+    return `${(minor / economicsFactor).toLocaleString()} ${
       economicsCurrencyCode === orgCurrency.code ? orgCurrency.displayLabel : economicsCurrencyCode
     }`;
+  };
   /**
    * The customer's plan, read straight off the quote `applications.get`
    * already serves this caller. Nothing is computed from anything else: a
@@ -740,8 +788,14 @@ export function DealCockpit({
       ? {
           financierName: deal?.financeCompanyName || null,
           currency: economicsCurrencyCode,
-          vehiclePrice: app.quote.vehiclePrice,
-          downPayment: app.quote.downPayment,
+          vehiclePrice:
+            app.targetSellingAmountMinor !== undefined
+              ? app.targetSellingAmountMinor / economicsFactor
+              : app.quote.vehiclePrice,
+          downPayment:
+            app.customerFirstPaymentMinor !== undefined
+              ? app.customerFirstPaymentMinor / economicsFactor
+              : app.quote.downPayment,
           termMonths: app.quote.termMonths,
           monthlyInstallment: app.quote.monthlyInstallment,
           totalFinancedAmount: app.quote.totalFinancedAmount,
@@ -821,13 +875,16 @@ export function DealCockpit({
           // for its own writers (pin, else the org's verified currency, which
           // the first cost fixes — SCRUM-319). Not derived client-side.
           denomination: { code: dealCosts?.currency ?? economicsCurrencyCode },
-          scaleOf: scaleForCurrency,
+          scaleOf: (cur: string) => safeScaleForCurrency(cur, 2),
           money: (minor: number, currency: string) =>
-            `${(minor / Math.pow(10, scaleForCurrency(currency))).toLocaleString()} ${
+            `${(minor / Math.pow(10, safeScaleForCurrency(currency, 2))).toLocaleString()} ${
               currency === orgCurrency.code ? orgCurrency.displayLabel : currency
             }`,
-          canManage: canCreateApplication,
-          dealClosed: app.status === "CLOSED",
+          // Frozen once the sale is recognized (`economicsFrozen`): the server
+          // refuses every posting-bearing edit, so none is offered, and the
+          // panel says why at its head.
+          canManage: canCreateApplication && !(dealCosts?.economicsFrozen?.frozen ?? app.status === "CLOSED"),
+          dealClosed: dealCosts?.economicsFrozen?.frozen ?? app.status === "CLOSED",
           // Owner-only on the server (the authority that edits the company's
           // fees); the notice still renders for everyone, the action does not.
           onAdoptCompanyFees: isOwner
@@ -945,12 +1002,28 @@ export function DealCockpit({
               throw new Error(getErrorMessage(error));
             }
           },
+          onReconcile: async (feeId: string, notes: string) => {
+            try {
+              await reconcileDealFee({
+                orgId,
+                feeId: feeId as Id<"financeDealFees">,
+                notes,
+              });
+              toast.success(t("HandoverCostReconciled"));
+            } catch (error) {
+              throw new Error(getErrorMessage(error));
+            }
+          },
         }
       : undefined;
-  const formatPlanMajor = (major: number, currency: string) =>
-    `${major.toLocaleString(undefined, { maximumFractionDigits: scaleForCurrency(currency) })} ${
+  const formatPlanMajor = (major: number, currency: string) => {
+    const scale = safeScaleForCurrency(currency, 2);
+    return `${major.toLocaleString(undefined, {
+      maximumFractionDigits: scale,
+    })} ${
       currency === orgCurrency.code ? orgCurrency.displayLabel : currency
     }`;
+  };
   /**
    * The frozen net is built in the deal's PINNED currency
    * (`resolveFinancedSalePlan` runs in `app.economicsCurrency ?? org`), so it is
@@ -1553,16 +1626,143 @@ export function DealCockpit({
       : undefined;
 
   /**
-   * عهدة الموظف — READ-ONLY on this screen (see `DealCustodyPanel` for why:
-   * the custody module is off-ledger, so its commands are not offered here as
-   * money actions until canonical posting exists). The summary comes off the
-   * bounded `listDealCosts` read; each record's movement log is a separate
-   * paginated query, mounted only when the operator opens it.
+   * عهدة الموظف — read AND acted on from this screen. The summary comes off
+   * the bounded `listDealCosts` read; each record's movement log is a separate
+   * paginated query, mounted only when the operator opens it. The commands
+   * post through the custody clearing account and are offered only to a
+   * caller holding CONFIRM_FINANCE_DISBURSEMENT; the server's readiness
+   * verdict travels with the read so a dead button says why.
+   *
+   * Identity discipline, same as the handover costs: an issuance, a movement
+   * and a closure each mint one command identity per dialog ATTEMPT — the
+   * dialog's `intentId`, never the figures (R8) — and retire it on success,
+   * on the server's own refusal, or when the operator abandons the dialog. A
+   * lost response keeps it so the operator's retry replays rather than pays
+   * twice; and because the figures are not in the key, a corrected figure on
+   * that retry is refused by the server's fingerprint instead of becoming a
+   * second payment, while a dialog opened again later for the same figures
+   * is a new command rather than a silent replay of the first.
    */
   const custodyMoney = (minor: number, currency: string) =>
-    `${(minor / Math.pow(10, scaleForCurrency(currency))).toLocaleString()} ${
+    `${(minor / Math.pow(10, safeScaleForCurrency(currency, 2))).toLocaleString()} ${
       currency === orgCurrency.code ? orgCurrency.displayLabel : currency
     }`;
+  // One intent per dialog attempt. The deal, record and kind are named for
+  // legibility only; the attempt's `intentId` is what makes it one command.
+  const openCustodyIntent = (intentId: string) => `open-custody:${applicationId}:${intentId}`;
+  const custodyMoveIntent = (custodyId: string, kind: string, intentId: string) => `custody-move:${custodyId}:${kind}:${intentId}`;
+  const custodyCloseIntent = (custodyId: string, intentId: string) => `custody-close:${custodyId}:${intentId}`;
+  const custodyCommand = async (intent: string, work: (idempotencyKey: string) => Promise<unknown>) => {
+    try {
+      await work(commandId.for(intent));
+      commandId.retire(intent);
+      toast.success(t("CustodySaved"));
+    } catch (error) {
+      // The server's own refusal rolled back and nothing committed: the next
+      // attempt is a new command. Anything else may have landed; keep the key.
+      if (isConvexError(error)) commandId.retire(intent);
+      throw new Error(getErrorMessage(error));
+    }
+  };
+  const custodyPlain = async (work: () => Promise<unknown>) => {
+    try {
+      await work();
+      toast.success(t("CustodySaved"));
+    } catch (error) {
+      throw new Error(getErrorMessage(error));
+    }
+  };
+  const custodyActions: DealCustodyActions | undefined =
+    app && custodyCommandsOffered
+      ? {
+          members: custodyCandidates?.candidates,
+          eligibleFees: (dealCosts?.fees ?? [])
+            .filter((fee) => fee.custodyEligible && fee.custodyId === undefined && fee.actualAmountMinor !== undefined && fee.actualAmountMinor > 0)
+            .map((fee) => ({
+              _id: fee._id,
+              label: fee.description?.trim() || t(FEE_TYPE_LABEL[fee.feeType] ?? fee.feeType),
+              actualAmountMinor: fee.actualAmountMinor as number,
+              currency: fee.currency,
+            })),
+          scaleOf: (cur: string) => safeScaleForCurrency(cur, 3),
+          onPlan: (values) =>
+            custodyPlain(() =>
+              planCustodyHandler({
+                orgId,
+                applicationId,
+                userId: values.userId,
+                amountMinor: values.amountMinor,
+                note: values.note,
+              })
+            ),
+          onClearPlan: () => custodyPlain(() => planCustodyHandler({ orgId, applicationId })),
+          onOpen: (values) =>
+            custodyCommand(openCustodyIntent(values.intentId), (idempotencyKey) =>
+              openDealCustody({
+                orgId,
+                applicationId,
+                userId: values.userId,
+                issuedMinor: values.amountMinor,
+                method: values.method,
+                reference: values.reference,
+                note: values.note,
+                occurredAt: values.occurredAt,
+                idempotencyKey,
+              })
+            ),
+          onMove: (custodyId, kind, values) =>
+            custodyCommand(custodyMoveIntent(custodyId, kind, values.intentId), (idempotencyKey) =>
+              recordCustodyMovement({
+                orgId,
+                custodyId,
+                kind,
+                amountMinor: values.amountMinor,
+                method: values.method,
+                reference: values.reference,
+                note: values.note,
+                occurredAt: values.occurredAt,
+                idempotencyKey,
+              })
+            ),
+          onReverse: (custodyId, movement, reason) =>
+            custodyCommand(`custody-reverse:${custodyId}:${movement.entryId}`, (idempotencyKey) =>
+              recordCustodyMovement({
+                orgId,
+                custodyId,
+                kind: "REVERSAL",
+                reversesEntryId: movement.entryId,
+                amountMinor: movement.amountMinor,
+                note: reason,
+                idempotencyKey,
+              })
+            ),
+          onAttach: (custodyId, feeId) =>
+            custodyPlain(() =>
+              setFeeCustody({ orgId, feeId, custodyId })
+            ),
+          onClose: (custodyId, values) =>
+            // A closure is a command like a movement: it may post a write-off,
+            // and a lost response must replay rather than refuse on the
+            // closure it already made — so it carries a key the same way.
+            custodyCommand(custodyCloseIntent(custodyId, values.intentId), (idempotencyKey) =>
+              reconcileDealCustody({
+                orgId,
+                custodyId,
+                notes: values.notes,
+                writeOffReason: values.writeOffReason,
+                idempotencyKey,
+              })
+            ),
+          onReopen: (custodyId, reason) =>
+            custodyPlain(() => reopenDealCustody({ orgId, custodyId, reason })),
+          // The dialog was abandoned with its command not having succeeded:
+          // its identity is over, so a later genuine command with the same
+          // figures can never replay it.
+          onAbandonOpen: (intentId) => commandId.retire(openCustodyIntent(intentId)),
+          onAbandonMove: (custodyId, kind, intentId) => commandId.retire(custodyMoveIntent(custodyId, kind, intentId)),
+          onAbandonClose: (custodyId, intentId) => commandId.retire(custodyCloseIntent(custodyId, intentId)),
+        }
+      : undefined;
   const custody: DealCustodyWiring | undefined =
     app && deal
       ? {
@@ -1571,16 +1771,31 @@ export function DealCockpit({
           truncated: dealCosts?.custodyTruncated ?? false,
           currency: dealCosts?.currency ?? economicsCurrencyCode,
           expectedTotalMinor: dealCosts?.expected?.expectedTotalMinor ?? null,
-          renderMovements: (custodyId: string) => {
+          accounting: dealCosts?.custodyAccounting,
+          plannedCustody: dealCosts?.plannedCustody ?? null,
+          plannedCustodyWithheld: dealCosts?.plannedCustodyWithheld ?? false,
+          recommended: dealCosts?.recommendedCustody ?? null,
+          openPeriodToday: dealCosts?.custodyPostsNow,
+          dealStopped:
+            // The issuing commands' own predicate, when the read has it;
+            // the local status check stays as the fallback while it loads.
+            (dealCosts?.acceptsNewCustodyCash?.accepts === false) ||
+            (dealCosts?.economicsFrozen?.frozen ?? false) ||
+            app.status === "CLOSED" ||
+            app.status === "CANCELLED" ||
+            app.status === "REJECTED",
+          actions: custodyActions,
+          renderMovements: (custodyId, onReverse) => {
             const record = dealCosts?.custody.find((row) => row._id === custodyId);
             return (
               <CustodyMovementsList
                 orgId={orgId}
-                custodyId={custodyId as Id<"financeDealCustody">}
+                custodyId={custodyId}
                 currency={record?.currency ?? dealCosts?.currency ?? economicsCurrencyCode}
                 money={custodyMoney}
                 formatDate={(ms: number) => renderMoment(ms, "d MMM yyyy")}
                 t={t}
+                onReverse={onReverse}
               />
             );
           },
@@ -1588,7 +1803,8 @@ export function DealCockpit({
       : undefined;
 
   return (
-    <DealCockpitView
+    <>
+      <DealCockpitView
       deal={deal}
       backHref={`/${orgId}/deals`}
       financeDecision={financeDecision}
@@ -1621,7 +1837,7 @@ export function DealCockpit({
               submitting: cancelSubmitting,
               error: cancelError,
               onOpenChange: setCancelling,
-              onSubmit: async (reason) => {
+              onSubmit: async (values: CancelApplicationValues) => {
                 setCancelSubmitting(true);
                 setCancelError(null);
                 try {
@@ -1629,7 +1845,10 @@ export function DealCockpit({
                   await cancelApplication({
                     orgId,
                     applicationId,
-                    reason,
+                    reason: values.reason,
+                    failureReason: values.failureReason as any,
+                    appraisalFeeResponsibility: values.appraisalFeeResponsibility as any,
+                    appraisalFeeResponsibilityReason: values.appraisalFeeResponsibilityReason,
                     idempotencyKey: cancelKeyRef.current,
                   });
                   cancelKeyRef.current = null;
@@ -2000,7 +2219,95 @@ export function DealCockpit({
           idempotencyKey: receipt.idempotencyKey,
         });
       }}
+      closingChecklist={
+        dealCosts && canConfirmFinanceDisbursement
+          ? {
+              legalInvoiceAmountMinor: dealCosts.legalInvoiceAmountMinor,
+              legalInvoiceNumber: dealCosts.legalInvoiceNumber,
+              legalInvoiceDate: dealCosts.legalInvoiceDate,
+              legalInvoiceIssuedTo: dealCosts.legalInvoiceIssuedTo,
+              accountingClassification: dealCosts.accountingClassification,
+              onRecordLegalInvoice: () => {
+                setLegalInvoiceError(null);
+                setRecordingLegalInvoice(true);
+              },
+              onClassifyDealAccounting: () => {
+                setClassifyingError(null);
+                setClassifyingAccounting(true);
+              },
+            }
+          : undefined
+      }
     />
+      {recordingLegalInvoice && (
+        <RecordLegalInvoiceDialog
+          open={recordingLegalInvoice}
+          submitting={legalInvoiceSubmitting}
+          error={legalInvoiceError}
+          scale={scaleForCurrency(dealCosts?.currency ?? orgCurrency.code)}
+          currency={dealCosts?.currency ?? orgCurrency.code}
+          existing={
+            dealCosts?.legalInvoiceAmountMinor !== undefined
+              ? {
+                  amountMinor: dealCosts.legalInvoiceAmountMinor,
+                  number: dealCosts.legalInvoiceNumber,
+                  date: dealCosts.legalInvoiceDate,
+                  issuedTo: dealCosts.legalInvoiceIssuedTo,
+                }
+              : undefined
+          }
+          t={t}
+          onOpenChange={setRecordingLegalInvoice}
+          onSubmit={async (values) => {
+            setLegalInvoiceSubmitting(true);
+            setLegalInvoiceError(null);
+            try {
+              await recordLegalInvoice({
+                orgId,
+                applicationId,
+                legalInvoiceAmountMinor: values.legalInvoiceAmountMinor,
+                legalInvoiceNumber: values.legalInvoiceNumber,
+                legalInvoiceDate: values.legalInvoiceDate,
+                issuedTo: values.issuedTo,
+                issuedToOther: values.issuedToOther,
+              });
+              toast.success(t("LegalInvoiceRecorded"));
+              setRecordingLegalInvoice(false);
+            } catch (err) {
+              setLegalInvoiceError(getErrorMessage(err));
+            } finally {
+              setLegalInvoiceSubmitting(false);
+            }
+          }}
+        />
+      )}
+      {classifyingAccounting && (
+        <ClassifyDealAccountingDialog
+          open={classifyingAccounting}
+          submitting={classifyingSubmitting}
+          error={classifyingError}
+          t={t}
+          onOpenChange={setClassifyingAccounting}
+          onSubmit={async (notes) => {
+            setClassifyingSubmitting(true);
+            setClassifyingError(null);
+            try {
+              await classifyDealAccounting({
+                orgId,
+                applicationId,
+                notes,
+              });
+              toast.success(t("DealAccountingClassified"));
+              setClassifyingAccounting(false);
+            } catch (err) {
+              setClassifyingError(getErrorMessage(err));
+            } finally {
+              setClassifyingSubmitting(false);
+            }
+          }}
+        />
+      )}
+    </>
   );
 }
 
@@ -2689,6 +2996,7 @@ export function DealCockpitView({
   documents,
   deposits,
   disbursement,
+  closingChecklist,
 }: Readonly<{
   /** `undefined` while loading, `null` when the deal is not readable. */
   deal: DealCockpitData | null | undefined;
@@ -2712,7 +3020,7 @@ export function DealCockpitView({
     submitting: boolean;
     error: string | null;
     onOpenChange: (open: boolean) => void;
-    onSubmit: (reason: string | undefined) => void | Promise<void>;
+    onSubmit: (values: CancelApplicationValues) => void | Promise<void>;
   };
   /** Present only while the route may still be chosen (consigned, not closed, finalize permission). */
   settlementRoute?: {
@@ -2802,6 +3110,15 @@ export function DealCockpitView({
    * same canonical record, plus the controls.
    */
   handoverCosts?: Omit<React.ComponentProps<typeof HandoverCostsPanel>, "t">;
+  closingChecklist?: {
+    legalInvoiceAmountMinor?: number;
+    legalInvoiceNumber?: string;
+    legalInvoiceDate?: number;
+    legalInvoiceIssuedTo?: string;
+    accountingClassification?: string;
+    onRecordLegalInvoice: () => void;
+    onClassifyDealAccounting: () => void;
+  };
   /**
    * The server's financial overview and vehicle cost basis — financed deals
    * only. `data` is undefined while loading; each half is null when the
@@ -3061,7 +3378,7 @@ export function DealCockpitView({
   const denominationUnusable = hasDenominationProjection && denomination === null && economicsRecorded;
   const dealCurrency = denomination?.code ?? deal?.money?.currency ?? currency.code;
   const factor = useMemo(
-    () => Math.pow(10, denomination?.scale ?? scaleForCurrency(dealCurrency)),
+    () => Math.pow(10, denomination?.scale ?? safeScaleForCurrency(dealCurrency, 2)),
     [denomination, dealCurrency]
   );
   // A SHORT currency marker, and a locale-appropriate one.
@@ -3109,7 +3426,7 @@ export function DealCockpitView({
   const discrepancy = deal?.settlementAdviceDiscrepancy ?? null;
   const discrepancyCurrency = discrepancy?.currency ?? dealCurrency;
   const discrepancyFactor = useMemo(
-    () => Math.pow(10, scaleForCurrency(discrepancyCurrency)),
+    () => Math.pow(10, safeScaleForCurrency(discrepancyCurrency, 2)),
     [discrepancyCurrency]
   );
   const discrepancyMarker =
@@ -3124,7 +3441,7 @@ export function DealCockpitView({
   // rescaling a JOD figure at a USD scale.
   const decisionCurrency = financeDecision?.currency ?? dealCurrency;
   const decisionFactor = useMemo(
-    () => Math.pow(10, scaleForCurrency(decisionCurrency)),
+    () => Math.pow(10, safeScaleForCurrency(decisionCurrency, 2)),
     [decisionCurrency]
   );
   const decisionMarker =
@@ -3920,10 +4237,82 @@ export function DealCockpitView({
               listed twice. */}
           {handoverCosts && <HandoverCostsPanel {...handoverCosts} t={t} />}
 
+          {/* --- الفاتورة القانونية وتصنيف محاسبة المعاملة ------------------ */}
+          {closingChecklist && (
+            <Card data-testid="deal-closing-checklist">
+              <CardHeader className="flex flex-row items-center justify-between pb-3">
+                <div>
+                  <CardTitle className="text-base">{t("ClosingChecklistHeading")}</CardTitle>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {closingChecklist.accountingClassification === "CLASSIFIED"
+                      ? t("AccountingStatusClassified")
+                      : t("AccountingStatusPending")}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={closingChecklist.onRecordLegalInvoice}
+                  >
+                    <FileText className="h-4 w-4 me-1.5" />
+                    {t("RecordLegalInvoice")}
+                  </Button>
+                  {closingChecklist.accountingClassification !== "CLASSIFIED" && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={closingChecklist.onClassifyDealAccounting}
+                    >
+                      <CheckCircle2 className="h-4 w-4 me-1.5" />
+                      {t("ClassifyDealAccounting")}
+                    </Button>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                {closingChecklist.legalInvoiceAmountMinor !== undefined ? (
+                  <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4 text-xs">
+                    <div>
+                      <dt className="text-muted-foreground">{t("LegalInvoiceAmount")}</dt>
+                      <dd className="font-semibold tabular-nums">
+                        <bdi dir="ltr">{money(closingChecklist.legalInvoiceAmountMinor)}</bdi>
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">{t("LegalInvoiceNumber")}</dt>
+                      <dd className="font-medium">{closingChecklist.legalInvoiceNumber ?? "-"}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">{t("LegalInvoiceDate")}</dt>
+                      <dd className="font-medium">
+                        {closingChecklist.legalInvoiceDate
+                          ? format(closingChecklist.legalInvoiceDate, "d MMM yyyy")
+                          : "-"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">{t("LegalInvoiceIssuedTo")}</dt>
+                      <dd className="font-medium">
+                        {closingChecklist.legalInvoiceIssuedTo ? t(closingChecklist.legalInvoiceIssuedTo) : "-"}
+                      </dd>
+                    </div>
+                  </dl>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    {t("LegalInvoiceNotRecorded")}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           {/* --- عهدة الموظف ------------------------------------------------ */}
           {/* Beside the costs it pays for, under the same permission to read.
-              READ-ONLY: the balances are the server's and no command is
-              offered until custody movements post to the books. */}
+              The balances are the server's; the money commands post through
+              the custody clearing account and are offered to the
+              disbursement tier only. */}
           {custody && custodyMoney && (
             <DealCustodyPanel wiring={custody} money={custodyMoney} t={t} />
           )}

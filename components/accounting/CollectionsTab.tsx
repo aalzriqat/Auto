@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { format } from "date-fns";
 import {
@@ -12,12 +12,14 @@ import {
   HandCoins,
   Landmark,
   List,
+  Loader2,
   Plus,
   RotateCcw,
   ShieldCheck,
 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 import { dateInputToUtcMs, todayDateInput, daysFromTodayDateInput } from "@/lib/dateInput";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -101,7 +103,8 @@ export function CollectionsTab() {
   const { t } = useLanguage();
   const formatCurrency = useCurrencyFormatter();
   const { hasPermission } = usePermissions();
-  const canApprove = hasPermission("approve:requests");
+  const canApprove = hasPermission(PERMISSIONS.APPROVE_REQUESTS);
+  const canManage = hasPermission(PERMISSIONS.MANAGE_FINANCE);
 
   const [receivableStatus, setReceivableStatus] = useState<string>("ALL");
   const [chequeStatus, setChequeStatus] = useState<string>("ALL");
@@ -163,10 +166,18 @@ export function CollectionsTab() {
   const respondApproval = useMutation(api.collections.respondToApproval);
   const reviewReconciliation = useMutation(api.collections.reviewCashierReconciliation);
   const commandId = useCommandIdentity();
+  const [busyChequeAction, setBusyChequeAction] = useState<{ id: string; action: "deposit" | "clear" } | null>(null);
 
   if (!activeOrgId) return null;
 
   async function runChequeAction(action: "deposit" | "clear", cheque: ChequeRow) {
+    const confirmed = window.confirm(
+      action === "deposit"
+        ? t("ConfirmChequeDeposit" as any)
+        : t("ConfirmChequeClear" as any)
+    );
+    if (!confirmed) return;
+    setBusyChequeAction({ id: cheque._id, action });
     try {
       if (action === "deposit") {
         await depositCheque({ orgId: activeOrgId!, chequeId: cheque._id });
@@ -185,6 +196,8 @@ export function CollectionsTab() {
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusyChequeAction(null);
     }
   }
 
@@ -230,7 +243,7 @@ export function CollectionsTab() {
           <h2 className="text-lg font-semibold text-foreground">{t("CollectionsTitle" as any)}</h2>
           <p className="text-sm text-muted-foreground">{t("CollectionsDesc" as any)}</p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        {canManage && <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => setReconcileOpen(true)}>
             <ShieldCheck className="me-2 h-4 w-4" />
             {t("ReconcileCashier" as any)}
@@ -239,7 +252,7 @@ export function CollectionsTab() {
             <Plus className="me-2 h-4 w-4" />
             {t("NewReceivable" as any)}
           </Button>
-        </div>
+        </div>}
       </div>
 
       <Tabs defaultValue="receivables" className="space-y-4">
@@ -319,20 +332,20 @@ export function CollectionsTab() {
                       <TableCell className="text-right">{formatCurrency(row.originalAmount)}</TableCell>
                       <TableCell className="text-right font-semibold">{formatCurrency(row.outstandingAmount)}</TableCell>
                       <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button size="sm" variant="outline" onClick={() => setPaymentTarget(row)} disabled={row.outstandingAmount <= 0}>
+                        {canManage && <div className="flex justify-end gap-1">
+                          <Button aria-label={t("RecordPayment" as any)} title={t("RecordPayment" as any)} size="sm" variant="outline" onClick={() => setPaymentTarget(row)} disabled={row.outstandingAmount <= 0}>
                             <Banknote className="h-3.5 w-3.5" />
                           </Button>
-                          <Button size="sm" variant="outline" onClick={() => setChequeTarget(row)} disabled={row.outstandingAmount <= 0}>
+                          <Button aria-label={t("RegisterCheque" as any)} title={t("RegisterCheque" as any)} size="sm" variant="outline" onClick={() => setChequeTarget(row)} disabled={row.outstandingAmount <= 0}>
                             <FileCheck2 className="h-3.5 w-3.5" />
                           </Button>
-                          <Button size="sm" variant="outline" onClick={() => setApprovalTarget({ receivable: row, type: "RESCHEDULE" })}>
+                          <Button aria-label={t("Reschedule" as any)} title={t("Reschedule" as any)} size="sm" variant="outline" onClick={() => setApprovalTarget({ receivable: row, type: "RESCHEDULE" })}>
                             <CalendarClock className="h-3.5 w-3.5" />
                           </Button>
-                          <Button size="sm" variant="outline" onClick={() => setApprovalTarget({ receivable: row, type: "REFUND" })}>
+                          <Button aria-label={t("Refund" as any)} title={t("Refund" as any)} size="sm" variant="outline" onClick={() => setApprovalTarget({ receivable: row, type: "REFUND" })}>
                             <RotateCcw className="h-3.5 w-3.5" />
                           </Button>
-                        </div>
+                        </div>}
                       </TableCell>
                     </TableRow>
                   ))
@@ -386,12 +399,49 @@ export function CollectionsTab() {
                       <TableCell><StatusBadge status={cheque.status} /></TableCell>
                       <TableCell className="text-right font-semibold">{formatCurrency(cheque.amount)}</TableCell>
                       <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button size="sm" variant="outline" disabled={cheque.status !== "HELD"} onClick={() => runChequeAction("deposit", cheque)}>{t("Deposit" as any)}</Button>
-                          <Button size="sm" variant="outline" disabled={cheque.status !== "HELD" && cheque.status !== "DEPOSITED"} onClick={() => runChequeAction("clear", cheque)}>{t("Clear" as any)}</Button>
-                          <Button size="sm" variant="outline" disabled={["REPLACED", "CANCELLED"].includes(cheque.status)} onClick={() => setReturnTarget(cheque)}>{t("Return" as any)}</Button>
-                          <Button size="sm" variant="outline" disabled={["CLEARED", "CANCELLED"].includes(cheque.status)} onClick={() => setReplaceTarget(cheque)}>{t("Replace" as any)}</Button>
-                        </div>
+                        {canManage && (() => {
+                          const isDepositing = busyChequeAction?.id === cheque._id && busyChequeAction?.action === "deposit";
+                          const isClearing = busyChequeAction?.id === cheque._id && busyChequeAction?.action === "clear";
+                          const isChequeBusy = busyChequeAction?.id === cheque._id;
+                          return (
+                            <div className="flex justify-end gap-1">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={cheque.status !== "HELD" || isChequeBusy}
+                                onClick={() => runChequeAction("deposit", cheque)}
+                              >
+                                {isDepositing && <Loader2 className="me-1 h-3.5 w-3.5 animate-spin" />}
+                                {t("Deposit" as any)}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={(cheque.status !== "HELD" && cheque.status !== "DEPOSITED") || isChequeBusy}
+                                onClick={() => runChequeAction("clear", cheque)}
+                              >
+                                {isClearing && <Loader2 className="me-1 h-3.5 w-3.5 animate-spin" />}
+                                {t("Clear" as any)}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={["REPLACED", "CANCELLED"].includes(cheque.status) || isChequeBusy}
+                                onClick={() => setReturnTarget(cheque)}
+                              >
+                                {t("Return" as any)}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={["CLEARED", "CANCELLED"].includes(cheque.status) || isChequeBusy}
+                                onClick={() => setReplaceTarget(cheque)}
+                              >
+                                {t("Replace" as any)}
+                              </Button>
+                            </div>
+                          );
+                        })()}
                       </TableCell>
                     </TableRow>
                   ))
@@ -582,13 +632,15 @@ export function CollectionsTab() {
         )}
       </Tabs>
 
-      <ReceivableDialog open={receivableDialog} onOpenChange={setReceivableDialog} />
-      <PaymentDialog receivable={paymentTarget} onOpenChange={(open) => !open && setPaymentTarget(null)} />
-      <ChequeDialog receivable={chequeTarget} onOpenChange={(open) => !open && setChequeTarget(null)} />
-      <ApprovalRequestDialog target={approvalTarget} onOpenChange={(open) => !open && setApprovalTarget(null)} />
-      <ReplaceChequeDialog cheque={replaceTarget} onOpenChange={(open) => !open && setReplaceTarget(null)} />
-      <ReturnChequeDialog cheque={returnTarget} onOpenChange={(open) => !open && setReturnTarget(null)} />
-      <ReconciliationDialog open={reconcileOpen} onOpenChange={setReconcileOpen} />
+      {canManage && <>
+        <ReceivableDialog open={receivableDialog} onOpenChange={setReceivableDialog} />
+        <PaymentDialog receivable={paymentTarget} onOpenChange={(open) => !open && setPaymentTarget(null)} />
+        <ChequeDialog receivable={chequeTarget} onOpenChange={(open) => !open && setChequeTarget(null)} />
+        <ApprovalRequestDialog target={approvalTarget} onOpenChange={(open) => !open && setApprovalTarget(null)} />
+        <ReplaceChequeDialog cheque={replaceTarget} onOpenChange={(open) => !open && setReplaceTarget(null)} />
+        <ReturnChequeDialog cheque={returnTarget} onOpenChange={(open) => !open && setReturnTarget(null)} />
+        <ReconciliationDialog open={reconcileOpen} onOpenChange={setReconcileOpen} />
+      </>}
     </div>
   );
 }
@@ -645,28 +697,72 @@ function MethodTotals({ totals }: { totals: Record<string, number> }) {
   );
 }
 
-function useCustomerVehicleOptions() {
+function useCustomerVehicleOptions({
+  enabled = true,
+  customerSearch = "",
+  vehicleSearch = "",
+  selectedCustomerId,
+  selectedVehicleId,
+}: {
+  enabled?: boolean;
+  customerSearch?: string;
+  vehicleSearch?: string;
+  selectedCustomerId?: string;
+  selectedVehicleId?: string;
+} = {}) {
   const { activeOrgId } = useOrg();
-  const { results: customers } = usePaginatedQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
-  const { results: vehicles } = usePaginatedQuery(api.vehicles.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
-
-  const customerOptions = useMemo(
-    () => (customers ?? []).map((customer) => ({
-      value: customer._id,
-      label: `${customer.firstName} ${customer.lastName}`.trim(),
-      subLabel: customer.phone || customer.whatsapp || customer.email || undefined,
-    })),
-    [customers]
+  const customers = useQuery(
+    api.customers.selectorOptions,
+    activeOrgId && enabled ? { orgId: activeOrgId, search: customerSearch } : "skip"
+  );
+  const vehicles = useQuery(
+    api.vehicles.selectorOptions,
+    activeOrgId && enabled ? { orgId: activeOrgId, search: vehicleSearch } : "skip"
+  );
+  const selectedCustomer = useQuery(
+    api.customers.get,
+    activeOrgId && enabled && selectedCustomerId
+      ? { orgId: activeOrgId, customerId: selectedCustomerId as Id<"customers"> }
+      : "skip"
+  );
+  const selectedVehicle = useQuery(
+    api.vehicles.get,
+    activeOrgId && enabled && selectedVehicleId && selectedVehicleId !== "none"
+      ? { orgId: activeOrgId, vehicleId: selectedVehicleId as Id<"vehicles"> }
+      : "skip"
   );
 
-  const vehicleOptions = useMemo(
-    () => (vehicles ?? []).map((vehicle) => ({
+  const customerOptions = useMemo(() => {
+    const list = (customers ?? []).map((customer) => ({
+      value: customer._id,
+      label: `${customer.firstName} ${customer.lastName}`.trim(),
+      subLabel: customer.phone || customer.email || undefined,
+    }));
+    if (selectedCustomer && !list.some((o) => o.value === selectedCustomer._id)) {
+      list.unshift({
+        value: selectedCustomer._id,
+        label: `${selectedCustomer.firstName} ${selectedCustomer.lastName}`.trim(),
+        subLabel: selectedCustomer.phone || selectedCustomer.email || undefined,
+      });
+    }
+    return list;
+  }, [customers, selectedCustomer]);
+
+  const vehicleOptions = useMemo(() => {
+    const list = (vehicles ?? []).map((vehicle) => ({
       value: vehicle._id,
       label: `${vehicle.year} ${vehicle.make} ${vehicle.model}`,
       subLabel: vehicle.vin,
-    })),
-    [vehicles]
-  );
+    }));
+    if (selectedVehicle && !list.some((o) => o.value === selectedVehicle._id)) {
+      list.unshift({
+        value: selectedVehicle._id,
+        label: `${selectedVehicle.year} ${selectedVehicle.make} ${selectedVehicle.model}`,
+        subLabel: selectedVehicle.vin,
+      });
+    }
+    return list;
+  }, [vehicles, selectedVehicle]);
 
   return { customerOptions, vehicleOptions };
 }
@@ -681,10 +777,18 @@ function ReceivableDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   // dialogs in this file already use. A key minted per ATTEMPT would defeat the
   // guard entirely, since a lost response would retry under a new identity.
   const idempotencyKeyRef = useRef<string | null>(null);
-  const { customerOptions, vehicleOptions } = useCustomerVehicleOptions();
-  const [mode, setMode] = useState<"single" | "plan">("single");
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [vehicleSearch, setVehicleSearch] = useState("");
   const [customerId, setCustomerId] = useState("");
   const [vehicleId, setVehicleId] = useState("");
+  const { customerOptions, vehicleOptions } = useCustomerVehicleOptions({
+    enabled: open,
+    customerSearch,
+    vehicleSearch,
+    selectedCustomerId: customerId,
+    selectedVehicleId: vehicleId,
+  });
+  const [mode, setMode] = useState<"single" | "plan">("single");
   const [title, setTitle] = useState("");
   const [sourceType, setSourceType] = useState("INTERNAL_INSTALLMENT");
   const [amount, setAmount] = useState("");
@@ -776,8 +880,25 @@ function ReceivableDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
               ))}
             </SelectContent>
           </Select>
-          <SearchableSelect value={customerId} onValueChange={setCustomerId} options={customerOptions} placeholder={t("Customer" as any)} searchPlaceholder={t("SearchCustomersPlaceholder" as any)} />
-          <SearchableSelect value={vehicleId} onValueChange={(value) => setVehicleId(value === "none" ? "" : value)} options={vehicleOptions} placeholder={t("Vehicle" as any)} noneLabel={t("NoVehicle" as any)} searchPlaceholder={t("SearchVehiclesPlaceholder" as any)} />
+          <SearchableSelect
+            value={customerId}
+            onValueChange={setCustomerId}
+            options={customerOptions}
+            placeholder={t("Customer" as any)}
+            searchPlaceholder={t("SearchCustomersPlaceholder" as any)}
+            onSearchChange={setCustomerSearch}
+            clientSideFilter={false}
+          />
+          <SearchableSelect
+            value={vehicleId}
+            onValueChange={(value) => setVehicleId(value === "none" ? "" : value)}
+            options={vehicleOptions}
+            placeholder={t("Vehicle" as any)}
+            noneLabel={t("NoVehicle" as any)}
+            searchPlaceholder={t("SearchVehiclesPlaceholder" as any)}
+            onSearchChange={setVehicleSearch}
+            clientSideFilter={false}
+          />
           <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={t("Title" as any)} />
           <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={mode === "single" ? t("Amount" as any) : t("TotalAmount" as any)} />
           <Input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />

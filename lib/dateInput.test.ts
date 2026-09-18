@@ -4,10 +4,12 @@
  * `new Date(\`${value}T00:00:00\`)` would pass unnoticed. At +3 the two diverge
  * at every day boundary, which is exactly where the bug bit.
  */
-import { beforeAll, afterAll, describe, expect, it } from "vitest";
+import { beforeAll, afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   dateInputToUtcMs,
   dateInputEndToUtcMs,
+  economicDateInputToMs,
+  economicTodayDateInput,
   todayDateInput,
   daysFromTodayDateInput,
   msToDateInput,
@@ -59,5 +61,59 @@ describe("dateInput UTC parsing", () => {
     week.setDate(week.getDate() + 7);
     const localWeek = `${week.getFullYear()}-${String(week.getMonth() + 1).padStart(2, "0")}-${String(week.getDate()).padStart(2, "0")}`;
     expect(daysFromTodayDateInput(7)).toBe(localWeek);
+  });
+});
+
+describe("economic dates — the picked calendar date, exactly, on the ledger's UTC calendar", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("sends TODAY as the picked day's UTC midnight — never `Date.now()`, which crosses the UTC month in the first hours of a local day", () => {
+    // 01:30 local in Amman on 1 October is 22:30Z on 30 SEPTEMBER. The old
+    // contract sent today as `Date.now()`, so a movement the operator dated
+    // "2026-10-01" was filed on 30 September — the previous UTC month (and,
+    // at a year end, the previous fiscal year).
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(Date.UTC(2026, 8, 30, 22, 30)));
+    expect(todayDateInput()).toBe("2026-10-01");
+    expect(economicDateInputToMs("2026-10-01")).toBe(Date.UTC(2026, 9, 1));
+    expect(economicDateInputToMs("2026-10-01")).not.toBe(Date.now());
+    expect(new Date(economicDateInputToMs("2026-10-01")).getUTCMonth()).toBe(9);
+    // And for a user BEHIND UTC in their evening (20:00 in Los Angeles on the
+    // 30th is 03:00Z on 1 October): the picked 30th stays the 30th.
+    vi.setSystemTime(new Date(Date.UTC(2026, 9, 1, 3, 0)));
+    expect(economicDateInputToMs("2026-09-30")).toBe(Date.UTC(2026, 8, 30));
+    expect(new Date(economicDateInputToMs("2026-09-30")).getUTCMonth()).toBe(8);
+  });
+
+  it("defaults and caps an economic picker at the UTC today, which the server always accepts", () => {
+    // In the hours where the local day is ahead of the UTC day, the UTC
+    // today is what the server's clock has reached: its midnight is in the
+    // past and passes the no-tolerance future refusal; the local today's
+    // midnight would be refused.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(Date.UTC(2026, 8, 30, 22, 30)));
+    expect(economicTodayDateInput()).toBe("2026-09-30");
+    expect(economicTodayDateInput()).not.toBe(todayDateInput());
+    expect(economicDateInputToMs(economicTodayDateInput())).toBeLessThanOrEqual(Date.now());
+    expect(economicDateInputToMs(todayDateInput())).toBeGreaterThan(Date.now());
+    // Once the UTC day has caught up, the two agree.
+    vi.setSystemTime(new Date(Date.UTC(2026, 9, 1, 5, 0)));
+    expect(economicTodayDateInput()).toBe("2026-10-01");
+    expect(economicTodayDateInput()).toBe(todayDateInput());
+    expect(economicDateInputToMs(economicTodayDateInput())).toBeLessThanOrEqual(Date.now());
+  });
+
+  it("sends a backdated day as its UTC midnight, which is always in the past", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(Date.UTC(2026, 8, 15, 22, 30)));
+    expect(economicDateInputToMs("2026-09-15")).toBe(Date.UTC(2026, 8, 15));
+    expect(economicDateInputToMs("2026-09-15")).toBeLessThan(Date.now());
+  });
+
+  it("returns NaN for an empty or malformed value, as `dateInputToUtcMs` does", () => {
+    expect(Number.isNaN(economicDateInputToMs(""))).toBe(true);
+    expect(Number.isNaN(economicDateInputToMs("not-a-date"))).toBe(true);
   });
 });

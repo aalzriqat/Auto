@@ -10,9 +10,11 @@ import {
 import {
   assertConfiguredFeesRecorded,
   loadActiveFees,
+  loadCustodyRecords,
   settlementDeductedActualMinor,
   settlementDeductedFees,
 } from "./settlementDeductions";
+import { assertCustodyLedgerFamilyComplete } from "./custodySourceLedger";
 import { heldDepositRowsForVehicle } from "./saleCompletion";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { toMinorUnits } from "./money";
@@ -133,6 +135,23 @@ export async function resolveFinancedSalePlan(
   // nothing — a cash sale, a manual financier, no company — passes through
   // untouched. Before the first write, like every other refusal here.
   assertConfiguredFeesRecorded(app.companyRuleSnapshot, liveFees, "finalizing");
+
+  // Every custody record and every custody-paid line on the deal must be on
+  // the books as a complete family before the sale is recognized on them —
+  // on EVERY route, like the configured-fee gate above, because cash an
+  // employee paid out is a fact of the deal whatever the settlement route.
+  // Judged on the rows, never on the `CLASSIFIED` stamp: a record migrated
+  // or raw-edited since classification carries the stamp just the same.
+  // Judged on the LEDGER as well as the rows: every posting the rows claim
+  // is proven POSTED (not queued, pending, failed or at a stale version).
+  await assertCustodyLedgerFamilyComplete(
+    ctx,
+    app.orgId,
+    app._id,
+    await loadCustodyRecords(ctx, app._id, "finalizing this deal"),
+    liveFees,
+    "finalizing this deal"
+  );
 
   if (!financedSaleRecognitionApplies(app, opts)) return undefined;
 
@@ -357,4 +376,51 @@ export async function resolveFinancedSalePlan(
 function humanizeFeeType(feeType: string): string {
   const words = feeType.toLowerCase().replace(/_/g, " ");
   return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/**
+ * THE date a financed sale is recognized on — and therefore the period its
+ * revenue, its finance receivable, its deductions and its commission land in.
+ *
+ * The legal invoice's date, when one is recorded: the schema note on
+ * `legalInvoiceDate` has always said it "decides the period revenue lands in",
+ * and `recordLegalInvoice` audits a date-only change for exactly that reason —
+ * yet `finalizeDeal` dated the sale at the wall clock, so an invoice issued in
+ * March and finalized in April recognized March's sale in April while the
+ * record said otherwise. One rule now, and one home for it: the invoice date
+ * where there is one, the moment of finalization where there is not (a deal
+ * this model does not cover — no invoice is required of it).
+ *
+ * A date inside a CLOSED period is not moved to an open one: the sale posting
+ * queues to the outbox for that period exactly as every other event dated
+ * there does, and a closed month is never rewritten. `recordLegalInvoice`
+ * refuses a future date and a date that is not a timestamp, so what reaches
+ * here is a real past instant or nothing — and the same rule is applied
+ * again here, with NO tolerance window: an invoice date is a calendar date
+ * sent as UTC midnight (or the current instant for today), so a value past
+ * the moment of finalization is a day that has not happened.
+ */
+export function financedSaleRecognitionDate(
+  app: Pick<Doc<"financeApplications">, "legalInvoiceDate">,
+  finalizedAt: number
+): number {
+  const invoiceDate = app.legalInvoiceDate;
+  if (invoiceDate === undefined) return finalizedAt;
+  // A PRESENT date that is not usable is refused, never quietly replaced
+  // (Codex AF-CUST-08): `recordLegalInvoice` validates what it writes, but a
+  // row written before it did, or raw-edited since, carries whatever it
+  // carries — and substituting the wall clock would move revenue into a
+  // period nobody chose. A future date is equally refused: revenue is not
+  // recognized in a period that has not happened. Correct the invoice first.
+  if (!Number.isSafeInteger(invoiceDate) || invoiceDate < 0) {
+    throw new ConvexError(
+      `This deal's legal invoice date is not a real timestamp (${invoiceDate}), so the sale cannot be dated for recognition. Re-record the legal invoice before finalizing.`
+    );
+  }
+  if (invoiceDate > finalizedAt) {
+    throw new ConvexError(
+      "This deal's legal invoice is dated in the future, so the sale cannot be recognized yet. Re-record the legal invoice with its real date before finalizing."
+    );
+  }
+  return invoiceDate;
 }

@@ -816,4 +816,44 @@ describe("SCRUM-51 — the authoritative projection Claims was retired in favour
       s.asOwner.query(api.claims.financeCompanyReceivableTotals, { orgId: s.orgId })
     ).rejects.toThrow(/more than this view can total/i);
   });
+
+  test("the interactive queue pages through 501 rows and never deep-links an unverified source id", async () => {
+    const s = await seedClaimsOrg("pagedqueue");
+    await s.t.run(async (ctx) => {
+      for (let i = 0; i < 501; i++) {
+        await ctx.db.insert("receivableDocuments", {
+          orgId: s.orgId,
+          documentType: "INVOICE" as const,
+          documentNumber: `AR-PAGE-${i}`,
+          payerType: "FINANCE_COMPANY" as const,
+          sourceType: FINANCE_APPLICATION_SOURCE,
+          sourceId: `not-an-application-${i}`,
+          originalAmountMinor: 1_000,
+          currency: "JOD",
+          scale: 3,
+          issueDate: i,
+          dueDate: i,
+          status: "PAID" as const,
+          createdAt: i,
+          createdBy: s.userId,
+        });
+      }
+    });
+
+    const first = await s.asOwner.query(api.claims.paginateFinanceCompanyReceivables, {
+      orgId: s.orgId,
+      paginationOpts: { cursor: null, numItems: 500 },
+    });
+    expect(first.page).toHaveLength(500);
+    expect(first.isDone).toBe(false);
+    expect(first.page.every((row) => row.applicationId === null)).toBe(true);
+
+    const second = await s.asOwner.query(api.claims.paginateFinanceCompanyReceivables, {
+      orgId: s.orgId,
+      paginationOpts: { cursor: first.continueCursor, numItems: 500 },
+    });
+    expect(second.page).toHaveLength(1);
+    expect(second.isDone).toBe(true);
+    expect(new Set([...first.page, ...second.page].map((row) => row.receivableDocumentId)).size).toBe(501);
+  });
 });

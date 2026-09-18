@@ -33,8 +33,21 @@ export type CurrencyFormatter = (amount: number, fractionDigits?: number) => str
 
 type ButtonVariant = ComponentProps<typeof Button>["variant"];
 
+export function supportedCurrencyScale(currency: string | null | undefined): number | null {
+  if (!currency || typeof currency !== "string") return null;
+  const trimmed = currency.trim().toUpperCase();
+  const scale = CURRENCY_SCALES[trimmed];
+  return scale === undefined ? null : scale;
+}
+
 export function scaleForCurrency(currency: string): number {
-  return CURRENCY_SCALES[currency.toUpperCase()] ?? 2;
+  const scale = supportedCurrencyScale(currency);
+  if (scale === null) {
+    throw new Error(
+      `Unsupported or unrecognised currency code "${currency}". AutoFlow cannot determine financial scale.`
+    );
+  }
+  return scale;
 }
 
 export function dateInputToMs(value: string): number {

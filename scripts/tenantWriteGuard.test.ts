@@ -588,10 +588,15 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // `requireOwnedRow` after `requireOwner`. Skipped counts unchanged.
   // Re-measured FROM THE ANALYSER on this tree
   // ({"totalMutations":490,"analysed":318,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
+  //
+  // `applications.repairQuoteEconomicsLineage` (TASK-DEAL-01) plus
+  // `financeDealCosts.planCustodyHandler`, `financeDealCosts.setFeeCustody`, and
+  // `financeDealCosts.migrateLegacyCustodyToLedger` (AF-80 employee cash custody accounting).
+  // Total: 494 totalMutations, 322 analysed.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 490,
-      analysed: 318,
+      totalMutations: 495,
+      analysed: 323,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 157,
     });
