@@ -13,6 +13,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -130,15 +137,45 @@ export function GeneralLedgerTab() {
   const startDate = filterActive ? dateInputToUtcMs(startDateStr) : undefined;
   const endDate = filterActive ? dateInputEndToUtcMs(endDateStr) : undefined;
 
-  const journalEntries = useQuery(
-    api.accountingLedger.listJournalEntries,
-    activeOrgId && activeLedgerView === "gl" ? { orgId: activeOrgId, limit: 100 } : "skip"
+  // AF-318-01 — accounting-period and account filters for the General
+  // Ledger, both narrowing the SAME server-side indexed query
+  // (accountingLedger.listJournalEntries) rather than fetching everything and
+  // filtering in the browser.
+  const [glPeriodId, setGlPeriodId] = useState<Id<"accountingPeriods"> | "ALL">("ALL");
+  const [glAccountId, setGlAccountId] = useState<Id<"chartOfAccounts"> | "ALL">("ALL");
+
+  const periods = useQuery(
+    api.accountingPeriods.list,
+    activeOrgId && activeLedgerView === "gl" ? { orgId: activeOrgId } : "skip"
   );
+  const sortedPeriods = [...(periods ?? [])].sort((a, b) => b.startDate - a.startDate);
+
   const accounts = useQuery(
     api.chartOfAccounts.list,
     activeOrgId && activeLedgerView === "gl" ? { orgId: activeOrgId } : "skip"
   );
   const accountsById = new Map((accounts ?? []).map((a) => [a._id as string, a]));
+  const sortedAccounts = [...(accounts ?? [])].sort((a, b) => a.code.localeCompare(b.code));
+
+  // AF-318-01 — real cursor pagination (`usePaginatedQuery`), not a fixed
+  // `limit: 100` that silently made every entry past the 100th unreachable.
+  // The first page stays bounded; "Load more" below reaches the rest.
+  const {
+    results: journalEntries,
+    status: journalStatus,
+    loadMore: loadMoreJournalEntries,
+  } = usePaginatedQuery(
+    api.accountingLedger.listJournalEntries,
+    activeOrgId && activeLedgerView === "gl"
+      ? {
+          orgId: activeOrgId,
+          ...(glPeriodId !== "ALL" ? { periodId: glPeriodId } : {}),
+          ...(glAccountId !== "ALL" ? { accountId: glAccountId } : {}),
+        }
+      : "skip",
+    { initialNumItems: 50 }
+  );
+
   const entryDetails = useQuery(
     api.accountingLedger.getJournalEntry,
     activeOrgId && selectedEntryId ? { orgId: activeOrgId, journalEntryId: selectedEntryId } : "skip"
@@ -206,65 +243,129 @@ export function GeneralLedgerTab() {
       </div>
 
       {activeLedgerView === "gl" ? (
-        <div className="rounded-md border border-border overflow-x-auto">
-          <Table>
-            <TableHeader className="bg-muted/50">
-              <TableRow>
-                <TableHead>{t("Date" as any)}</TableHead>
-                <TableHead>{t("TypeLabel" as any)}</TableHead>
-                <TableHead>{t("Memo" as any)}</TableHead>
-                <TableHead>{t("Source" as any)}</TableHead>
-                <TableHead>{t("Status" as any)}</TableHead>
-                <TableHead className="text-right">{t("Actions" as any)}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {journalEntries === undefined ? (
+        <>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">{t("FilterByPeriod" as any)}</label>
+              <Select
+                value={glPeriodId === "ALL" ? "ALL" : String(glPeriodId)}
+                onValueChange={(v) => setGlPeriodId(v === "ALL" ? "ALL" : (v as Id<"accountingPeriods">))}
+              >
+                <SelectTrigger className="h-8 w-56 text-sm" data-testid="gl-period-filter">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="max-h-72">
+                  <SelectItem value="ALL">{t("AllPeriods" as any)}</SelectItem>
+                  {sortedPeriods.map((p) => (
+                    <SelectItem key={p._id} value={p._id}>
+                      {p.fiscalYear}-P{p.periodNumber}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">{t("FilterByAccount" as any)}</label>
+              <Select
+                value={glAccountId === "ALL" ? "ALL" : String(glAccountId)}
+                onValueChange={(v) => setGlAccountId(v === "ALL" ? "ALL" : (v as Id<"chartOfAccounts">))}
+              >
+                <SelectTrigger className="h-8 w-64 text-sm" data-testid="gl-account-filter">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="max-h-72">
+                  <SelectItem value="ALL">{t("AllAccounts" as any)}</SelectItem>
+                  {sortedAccounts.map((a) => (
+                    <SelectItem key={a._id} value={a._id}>
+                      {a.code} — {a.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="rounded-md border border-border overflow-x-auto">
+            <Table>
+              <TableHeader className="bg-muted/50">
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                    {t("Loading" as any)}
-                  </TableCell>
+                  <TableHead>{t("Date" as any)}</TableHead>
+                  <TableHead>{t("TypeLabel" as any)}</TableHead>
+                  <TableHead>{t("Memo" as any)}</TableHead>
+                  <TableHead>{t("Source" as any)}</TableHead>
+                  <TableHead>{t("Status" as any)}</TableHead>
+                  <TableHead className="text-right">{t("Actions" as any)}</TableHead>
                 </TableRow>
-              ) : journalEntries.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                    {t("NoJournalEntriesFound" as any)}
-                  </TableCell>
-                </TableRow>
-              ) : (
-                journalEntries.map((entry) => (
-                  <TableRow key={entry._id} data-testid="journal-entry-row" data-entry-id={entry._id} data-memo={entry.memo}>
-                    <TableCell className="font-medium whitespace-nowrap" data-testid="journal-entry-date">
-                      {new Date(entry.accountingDate).toLocaleDateString(localeCode)}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs font-semibold" data-testid="journal-entry-number">
-                      {entry.journalNumber}
-                    </TableCell>
-                    <TableCell className="max-w-[320px] truncate" title={entry.memo} data-testid="journal-entry-memo">
-                      {entry.memo || "-"}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                      {entry.sourceType}: {entry.sourceId}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline" data-testid="journal-entry-status">{entry.status}</Badge>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        data-testid="view-entry-lines-btn"
-                        onClick={() => setSelectedEntryId(entry._id)}
-                      >
-                        {t("ViewLines" as any)}
-                      </Button>
+              </TableHeader>
+              <TableBody>
+                {journalStatus === "LoadingFirstPage" ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                      {t("Loading" as any)}
                     </TableCell>
                   </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
+                ) : journalEntries.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                      {t("NoJournalEntriesFound" as any)}
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  journalEntries.map((entry) => (
+                    <TableRow key={entry._id} data-testid="journal-entry-row" data-entry-id={entry._id} data-memo={entry.memo}>
+                      <TableCell className="font-medium whitespace-nowrap" data-testid="journal-entry-date">
+                        {new Date(entry.accountingDate).toLocaleDateString(localeCode)}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs font-semibold" data-testid="journal-entry-number">
+                        {entry.journalNumber}
+                      </TableCell>
+                      <TableCell className="max-w-[320px] truncate" title={entry.memo} data-testid="journal-entry-memo">
+                        {entry.memo || "-"}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                        {entry.sourceType}: {entry.sourceId}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" data-testid="journal-entry-status">{entry.status}</Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          data-testid="view-entry-lines-btn"
+                          onClick={() => setSelectedEntryId(entry._id)}
+                        >
+                          {t("ViewLines" as any)}
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+
+          {journalStatus === "CanLoadMore" && (
+            <div className="flex justify-center">
+              <Button
+                variant="outline"
+                size="sm"
+                data-testid="gl-load-more-btn"
+                onClick={() => loadMoreJournalEntries(50)}
+              >
+                {t("LoadMoreEntries" as any)}
+              </Button>
+            </div>
+          )}
+          {journalStatus === "LoadingMore" && (
+            <div className="flex justify-center text-xs text-muted-foreground py-1">{t("Loading" as any)}</div>
+          )}
+          {journalStatus === "Exhausted" && journalEntries.length > 0 && (
+            <p className="text-center text-xs text-muted-foreground" data-testid="gl-all-loaded">
+              {t("AllJournalEntriesLoaded" as any)}
+            </p>
+          )}
+        </>
       ) : (
         <>
           <div className="flex flex-wrap items-end gap-3">

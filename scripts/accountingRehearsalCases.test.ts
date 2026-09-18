@@ -941,12 +941,35 @@ function makeBackend(defects: Defects = {}) {
             ? events.filter((e) => e.sourceType === args.sourceType && String(e.sourceId) === String(args.sourceId))
             : [...events],
         };
-      case "accountingLedger:listJournalEntries":
-        // A COPY. Returning the live array handed P1 the same object twice, so
-        // its before/after lengths were necessarily equal and the partial-post
-        // defect walked straight past it. A real query returns a fresh result;
-        // a fake that shares state silently disables the assertions built on it.
-        return { ok: true as const, value: journalEntries.map((j) => ({ ...j })) };
+      case "accountingLedger:listJournalEntries": {
+        // AF-318-01 — the real query now takes `paginationOpts` (cursor-based)
+        // rather than a fixed `limit`, and this fake pages a COPY of the array
+        // the same way: returning the live array handed P1 the same object
+        // twice, so its before/after lengths were necessarily equal and the
+        // partial-post defect walked straight past it. A real query returns a
+        // fresh result; a fake that shares state silently disables the
+        // assertions built on it. The account-filter branch mirrors the real
+        // query's own journalLines-indirection (an entry carries no accountId
+        // of its own).
+        let all = journalEntries.map((j) => ({ ...j }));
+        if (args.periodId) all = all.filter((e) => String(e.periodId) === String(args.periodId));
+        if (args.accountId) {
+          const matchingIds = new Set(
+            [...journalLines.entries()]
+              .filter(([, lines]) => lines.some((l) => String(l.accountId) === String(args.accountId)))
+              .map(([entryId]) => entryId)
+          );
+          all = all.filter((e) => matchingIds.has(e._id));
+        }
+        const cursor = args.paginationOpts?.cursor ? Number(args.paginationOpts.cursor) : 0;
+        const numItems = args.paginationOpts?.numItems ?? 100;
+        const page = all.slice(cursor, cursor + numItems);
+        const nextCursor = cursor + page.length;
+        return {
+          ok: true as const,
+          value: { page, isDone: nextCursor >= all.length, continueCursor: String(nextCursor) },
+        };
+      }
       case "accountingLedger:getJournalEntry": {
         const entry = journalEntries.find((j) => j._id === String(args.journalEntryId));
         return {
@@ -955,10 +978,22 @@ function makeBackend(defects: Defects = {}) {
         };
       }
       case "accountingLedger:getAccountActivity": {
+        // AF-318-01 — real cursor pagination, same COPY-not-live-reference
+        // discipline as listJournalEntries above.
         const account = CHART.find((a) => a._id === String(args.accountId));
         if (!account) return { ok: true as const, value: null };
-        const lines = [...journalLines.values()].flat().filter((l) => l.accountId === account._id);
-        return { ok: true as const, value: { account, lines } };
+        let allLines = [...journalLines.values()].flat().filter((l) => l.accountId === account._id);
+        if (args.fromDate !== undefined) allLines = allLines.filter((l) => l.accountingDate >= args.fromDate);
+        if (args.toDate !== undefined) allLines = allLines.filter((l) => l.accountingDate <= args.toDate);
+        allLines = allLines.map((l) => ({ ...l }));
+        const cursor = args.paginationOpts?.cursor ? Number(args.paginationOpts.cursor) : 0;
+        const numItems = args.paginationOpts?.numItems ?? 100;
+        const page = allLines.slice(cursor, cursor + numItems);
+        const nextCursor = cursor + page.length;
+        return {
+          ok: true as const,
+          value: { account, lines: page, isDone: nextCursor >= allLines.length, continueCursor: String(nextCursor) },
+        };
       }
       case "accountingOutbox:listPending":
         return {

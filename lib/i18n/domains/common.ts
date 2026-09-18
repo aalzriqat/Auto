@@ -102,6 +102,15 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   NoJournalEntriesFound: ["No journal entries found.", "لا توجد قيود يومية."],
   ViewLines: ["View lines", "عرض البنود"],
   JournalLines: ["Journal lines", "بنود القيد"],
+  AllPeriods: ["All periods", "كل الفترات"],
+  AllAccounts: ["All accounts", "كل الحسابات"],
+  FilterByPeriod: ["Filter by period", "تصفية حسب الفترة"],
+  FilterByAccount: ["Filter by account", "تصفية حسب الحساب"],
+  RunningBalance: ["Running balance", "الرصيد الجاري"],
+  OpeningBalanceLabel: ["Opening balance", "الرصيد الافتتاحي"],
+  ClosingBalanceLabel: ["Closing balance", "الرصيد الختامي"],
+  LoadMoreEntries: ["Load more entries", "تحميل قيود إضافية"],
+  AllJournalEntriesLoaded: ["All journal entries for this filter are loaded.", "تم تحميل جميع قيود اليومية لهذا الفلتر."],
 });
 
 export const commonEn = {

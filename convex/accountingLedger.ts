@@ -1,4 +1,5 @@
 import { ConvexError, v } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
 import { query } from "./_generated/server";
 import { internalMutation } from "./functions";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -7,31 +8,75 @@ import { postAccountingEvent } from "./accounting/postingEngine";
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { RECEIPT_EVENT_TYPE, RECEIPT_SOURCE_TYPE } from "./accounting/receiptOccurrence";
 import { requireFeature } from "./subscriptions";
+import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 
 // ─── Queries ──────────────────────────────────────────────────────────────────
 
+// AF-318-01 — the General Ledger is read through real cursor pagination, not
+// a fixed `take(N)`. `by_org_date` and `by_org_period` are both sorted on
+// `accountingDate` — the financial truth date a manual journal can legitimately
+// backdate into an earlier period than its `_creationTime` — with Convex's
+// implicit `_creationTime` (then `_id`) tie-breaker giving every page a stable,
+// deterministic order with no possibility of a skipped or duplicated row
+// across pages as long as the client keeps requesting with the returned
+// cursor (see docs: "Convex automatically appends `_creationTime` to the end
+// of every index to break ties"). `periodId` narrows the SAME indexed range —
+// never a `.collect()` of the unfiltered table filtered in memory — so a
+// period filter costs no more than the entries it actually returns.
 export const listJournalEntries = query({
   args: {
     orgId: v.id("organizations"),
     periodId: v.optional(v.id("accountingPeriods")),
-    limit: v.optional(v.number()),
+    accountId: v.optional(v.id("chartOfAccounts")),
+    paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
 
-    const limit = Math.min(args.limit ?? 50, 200);
-    let q;
-    if (args.periodId) {
-      q = ctx.db
-        .query("journalEntries")
-        .withIndex("by_org_period", (q) => q.eq("orgId", args.orgId).eq("periodId", args.periodId!));
-    } else {
-      q = ctx.db
-        .query("journalEntries")
-        .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId));
+    // Account filtering on the entry-level list is answered through the
+    // journalLines index (an entry can touch many accounts; the entry itself
+    // carries no accountId), so it is handled as its own indexed pass below
+    // rather than bolted onto the by_org_date/by_org_period range as a
+    // post-hoc `.filter()` — a filter after `.paginate()` would silently
+    // shrink pages (or return empty pages) instead of the page size the
+    // client asked for, and would still have read every non-matching entry
+    // in the range to discard it.
+    if (args.accountId) {
+      const account = await ctx.db.get(args.accountId);
+      if (!account || account.orgId !== args.orgId) {
+        return { page: [], isDone: true, continueCursor: args.paginationOpts.cursor ?? "" };
+      }
+      const linePage = await ctx.db
+        .query("journalLines")
+        .withIndex("by_org_account_date", (q) => q.eq("orgId", args.orgId).eq("accountId", args.accountId!))
+        .order("desc")
+        .paginate(args.paginationOpts);
+
+      // Resolve to the owning journal entries, de-duplicated (one entry can
+      // carry several lines against the same account), then apply the period
+      // filter against the real stored value — never inferred from the line.
+      const seen = new Set<string>();
+      const entries = [];
+      for (const line of linePage.page) {
+        if (seen.has(line.journalEntryId)) continue;
+        seen.add(line.journalEntryId);
+        const entry = await ctx.db.get(line.journalEntryId);
+        if (!entry || entry.orgId !== args.orgId) continue;
+        if (args.periodId && entry.periodId !== args.periodId) continue;
+        entries.push(entry);
+      }
+      return { ...linePage, page: entries };
     }
-    return await q.order("desc").take(limit);
+
+    const q = args.periodId
+      ? ctx.db
+          .query("journalEntries")
+          .withIndex("by_org_period", (q) => q.eq("orgId", args.orgId).eq("periodId", args.periodId!))
+      : ctx.db
+          .query("journalEntries")
+          .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId));
+    return await q.order("desc").paginate(args.paginationOpts);
   },
 });
 
@@ -55,13 +100,34 @@ export const getJournalEntry = query({
   },
 });
 
+// AF-318-01 — account drill-down through real cursor pagination on the
+// `by_org_account_date` index (orgId, accountId, accountingDate — again with
+// Convex's implicit _creationTime/_id tie-breaker giving every page a stable
+// order), instead of the old `take(500)` that silently dropped every line
+// past the 500th. `fromDate` narrows the SAME indexed range server-side; a
+// caller who omits it gets the account's full history one page at a time,
+// never a truncated snapshot mistaken for the whole account.
+//
+// The running balance is computed from `getCumulativeBalancesAsOf` — the SAME
+// O(periods)+O(one open period) balance the Trial Balance and Balance Sheet
+// already trust (accountingReports.ts, vatReport.ts) — as of the moment just
+// before this page's first line, then walked FORWARD through the page in
+// chronological (ascending) order. It is kept PER CURRENCY throughout
+// (`getCumulativeBalancesAsOf` itself buckets by (accountId, currency), the
+// same way accountingReports.ts's Trial Balance never sums two currencies
+// into one number): an account can legitimately carry both a pre-conversion
+// historical currency and the org's current one (task domain #1), and
+// collapsing JOD minor units and USD minor units into a single running total
+// would silently fabricate a number with no real denomination. Each returned
+// line carries its OWN currency's running balance after it posted; totals are
+// grouped the same way.
 export const getAccountActivity = query({
   args: {
     orgId: v.id("organizations"),
     accountId: v.id("chartOfAccounts"),
     fromDate: v.optional(v.number()),
     toDate: v.optional(v.number()),
-    limit: v.optional(v.number()),
+    paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
@@ -70,38 +136,76 @@ export const getAccountActivity = query({
     const account = await ctx.db.get(args.accountId);
     if (!account || account.orgId !== args.orgId) return null;
 
-    const limit = Math.min(args.limit ?? 100, 500);
-    const lines = await (args.fromDate !== undefined
-      ? ctx.db
-          .query("journalLines")
-          .withIndex("by_org_account_date", (q) =>
-            q.eq("orgId", args.orgId).eq("accountId", args.accountId).gte("accountingDate", args.fromDate!)
-          )
-          .take(limit)
-      : ctx.db
-          .query("journalLines")
-          .withIndex("by_org_account_date", (q) =>
-            q.eq("orgId", args.orgId).eq("accountId", args.accountId)
-          )
-          .take(limit));
+    const linePage = await ctx.db
+      .query("journalLines")
+      .withIndex("by_org_account_date", (q) =>
+        args.fromDate !== undefined
+          ? q.eq("orgId", args.orgId).eq("accountId", args.accountId).gte("accountingDate", args.fromDate!)
+          : q.eq("orgId", args.orgId).eq("accountId", args.accountId)
+      )
+      .order("asc")
+      .paginate(args.paginationOpts);
 
-    const filtered = args.toDate
-      ? lines.filter((l) => l.accountingDate <= args.toDate!)
-      : lines;
+    const page = args.toDate !== undefined
+      ? linePage.page.filter((l) => l.accountingDate <= args.toDate!)
+      : linePage.page;
 
-    let totalDebits = 0;
-    let totalCredits = 0;
-    for (const l of filtered) {
-      totalDebits += l.debitMinor;
-      totalCredits += l.creditMinor;
+    const netOf = (debitMinor: number, creditMinor: number) =>
+      account.normalBalance === "DEBIT" ? debitMinor - creditMinor : creditMinor - debitMinor;
+
+    // Opening balance as of the moment just BEFORE this page's first line,
+    // real cumulative history rather than an assumed zero — so a page that
+    // does not start at the account's very first entry still reconciles.
+    // One lookup per distinct currency actually present on this page (never
+    // per line), each scoped to that currency's own cumulative balance.
+    const openingAsOf = page.length > 0 ? Math.min(...page.map((l) => l.accountingDate)) - 1 : (args.fromDate ?? 0) - 1;
+    const cumulative = openingAsOf >= 0 ? await getCumulativeBalancesAsOf(ctx, args.orgId, openingAsOf) : [];
+    const runningByCurrency = new Map<string, number>();
+    for (const currency of new Set(page.map((l) => l.currency))) {
+      const opening = cumulative.find((b) => b.accountId === args.accountId && b.currency === currency);
+      runningByCurrency.set(currency, opening ? netOf(opening.debitMinor, opening.creditMinor) : 0);
     }
+    const openingBalanceByCurrency = new Map(runningByCurrency);
+
+    const totalsByCurrency = new Map<string, { debitMinor: number; creditMinor: number }>();
+    const linesWithBalance = page.map((l) => {
+      const t = totalsByCurrency.get(l.currency) ?? { debitMinor: 0, creditMinor: 0 };
+      t.debitMinor += l.debitMinor;
+      t.creditMinor += l.creditMinor;
+      totalsByCurrency.set(l.currency, t);
+
+      const running = (runningByCurrency.get(l.currency) ?? 0) + netOf(l.debitMinor, l.creditMinor);
+      runningByCurrency.set(l.currency, running);
+      return { ...l, runningBalanceMinor: running };
+    });
+
+    const currencyBreakdown = Array.from(totalsByCurrency.entries()).map(([currency, t]) => ({
+      currency,
+      debitMinor: t.debitMinor,
+      creditMinor: t.creditMinor,
+      netMinor: netOf(t.debitMinor, t.creditMinor),
+      openingBalanceMinor: openingBalanceByCurrency.get(currency) ?? 0,
+      closingBalanceMinor: runningByCurrency.get(currency) ?? 0,
+    }));
+
+    // Legacy single-number fields kept for existing callers, scoped to the
+    // account's own restriction currency (or the first currency this page
+    // actually saw) when one currency dominates; a genuinely multi-currency
+    // account's real per-currency numbers live in `currencyBreakdown`.
+    const primaryCurrency = account.currencyRestriction ?? currencyBreakdown[0]?.currency;
+    const primary = currencyBreakdown.find((c) => c.currency === primaryCurrency) ?? currencyBreakdown[0];
 
     return {
       account,
-      lines: filtered,
-      totalDebits,
-      totalCredits,
-      netMinor: account.normalBalance === "DEBIT" ? totalDebits - totalCredits : totalCredits - totalDebits,
+      lines: linesWithBalance,
+      currencyBreakdown,
+      totalDebits: primary?.debitMinor ?? 0,
+      totalCredits: primary?.creditMinor ?? 0,
+      netMinor: primary?.netMinor ?? 0,
+      openingBalanceMinor: primary?.openingBalanceMinor ?? 0,
+      closingBalanceMinor: primary?.closingBalanceMinor ?? 0,
+      isDone: linePage.isDone,
+      continueCursor: linePage.continueCursor,
     };
   },
 });
