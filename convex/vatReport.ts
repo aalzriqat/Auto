@@ -37,7 +37,10 @@ async function findChartAccountId(
     .collect();
   const active = accounts.filter((a) => a.active);
   if (active.length === 0) return null;
-  const account = active.reduce((oldest, a) => (a._creationTime < oldest._creationTime ? a : oldest));
+  const account = active.reduce(
+    (oldest, a) => (a._creationTime < oldest._creationTime ? a : oldest),
+    active[0]
+  );
   return account._id;
 }
 

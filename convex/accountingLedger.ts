@@ -12,6 +12,24 @@ import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 
 // ─── Queries ──────────────────────────────────────────────────────────────────
 
+interface LedgerCursor {
+  lineCursor: string | null;
+  lastEmittedEntryId?: string;
+}
+
+function parseLedgerCursor(cursor: string | null | undefined): LedgerCursor {
+  if (!cursor) return { lineCursor: null };
+  try {
+    const parsed = JSON.parse(cursor);
+    if (typeof parsed === "object" && parsed !== null && "lineCursor" in parsed) {
+      return parsed as LedgerCursor;
+    }
+  } catch {
+    // fallback if raw convex cursor string
+  }
+  return { lineCursor: cursor };
+}
+
 // AF-318-01 — the General Ledger is read through real cursor pagination, not
 // a fixed `take(N)`. `by_org_date` and `by_org_period` are both sorted on
 // `accountingDate` — the financial truth date a manual journal can legitimately
@@ -47,26 +65,69 @@ export const listJournalEntries = query({
       if (!account || account.orgId !== args.orgId) {
         return { page: [], isDone: true, continueCursor: args.paginationOpts.cursor ?? "" };
       }
-      const linePage = await ctx.db
-        .query("journalLines")
-        .withIndex("by_org_account_date", (q) => q.eq("orgId", args.orgId).eq("accountId", args.accountId!))
-        .order("desc")
-        .paginate(args.paginationOpts);
 
-      // Resolve to the owning journal entries, de-duplicated (one entry can
-      // carry several lines against the same account), then apply the period
-      // filter against the real stored value — never inferred from the line.
-      const seen = new Set<string>();
-      const entries = [];
-      for (const line of linePage.page) {
-        if (seen.has(line.journalEntryId)) continue;
-        seen.add(line.journalEntryId);
-        const entry = await ctx.db.get(line.journalEntryId);
-        if (!entry || entry.orgId !== args.orgId) continue;
-        if (args.periodId && entry.periodId !== args.periodId) continue;
-        entries.push(entry);
+      const period = args.periodId ? await ctx.db.get(args.periodId) : null;
+      if (args.periodId && (!period || period.orgId !== args.orgId)) {
+        return { page: [], isDone: true, continueCursor: args.paginationOpts.cursor ?? "" };
       }
-      return { ...linePage, page: entries };
+
+      const { lineCursor: initialLineCursor, lastEmittedEntryId: initialLastEmitted } =
+        parseLedgerCursor(args.paginationOpts.cursor);
+
+      const targetItems = args.paginationOpts.numItems;
+      const seen = new Set<string>();
+      if (initialLastEmitted) {
+        seen.add(initialLastEmitted);
+      }
+
+      const entries = [];
+      let currentCursor = initialLineCursor;
+      let isDone = false;
+      let lastEmittedEntryId = initialLastEmitted;
+
+      // Bound fetch rounds to prevent runaway transaction execution
+      const MAX_FETCH_ROUNDS = 10;
+      let rounds = 0;
+
+      while (entries.length < targetItems && !isDone && rounds < MAX_FETCH_ROUNDS) {
+        rounds++;
+        const remaining = targetItems - entries.length;
+        const linePage = await ctx.db
+          .query("journalLines")
+          .withIndex("by_org_account_date", (q) => {
+            const base = q.eq("orgId", args.orgId).eq("accountId", args.accountId!);
+            return period
+              ? base.gte("accountingDate", period.startDate).lte("accountingDate", period.endDate)
+              : base;
+          })
+          .order("desc")
+          .paginate({ numItems: remaining, cursor: currentCursor });
+
+        for (const line of linePage.page) {
+          if (seen.has(line.journalEntryId)) continue;
+          seen.add(line.journalEntryId);
+
+          const entry = await ctx.db.get(line.journalEntryId);
+          if (!entry || entry.orgId !== args.orgId) continue;
+          if (args.periodId && entry.periodId !== args.periodId) continue;
+
+          entries.push(entry);
+          lastEmittedEntryId = entry._id;
+        }
+
+        currentCursor = linePage.continueCursor;
+        isDone = linePage.isDone;
+      }
+
+      const continueCursor = isDone || !currentCursor
+        ? ""
+        : JSON.stringify({ lineCursor: currentCursor, lastEmittedEntryId });
+
+      return {
+        page: entries,
+        isDone,
+        continueCursor,
+      };
     }
 
     const q = args.periodId
@@ -158,12 +219,58 @@ export const getAccountActivity = query({
     // does not start at the account's very first entry still reconciles.
     // One lookup per distinct currency actually present on this page (never
     // per line), each scoped to that currency's own cumulative balance.
-    const openingAsOf = page.length > 0 ? Math.min(...page.map((l) => l.accountingDate)) - 1 : (args.fromDate ?? 0) - 1;
+    const firstLine = page[0];
+    const openingAsOf = firstLine ? firstLine.accountingDate - 1 : (args.fromDate ?? 0) - 1;
     const cumulative = openingAsOf >= 0 ? await getCumulativeBalancesAsOf(ctx, args.orgId, openingAsOf) : [];
+
+    // Ties on accountingDate: if multiple journal lines share the exact same
+    // accountingDate as firstLine, lines that precede firstLine under Convex's
+    // index ordering (_creationTime asc, _id asc) belong to preceding pages and
+    // must be credited/debited into this page's opening balance.
+    const sameDatePrecedingBalances = new Map<string, { debitMinor: number; creditMinor: number }>();
+    if (firstLine) {
+      const sameDateLines = await ctx.db
+        .query("journalLines")
+        .withIndex("by_org_account_date", (q) =>
+          q.eq("orgId", args.orgId).eq("accountId", args.accountId).eq("accountingDate", firstLine.accountingDate)
+        )
+        .order("asc")
+        .collect();
+
+      for (const l of sameDateLines) {
+        if (
+          l._creationTime < firstLine._creationTime ||
+          (l._creationTime === firstLine._creationTime && l._id < firstLine._id)
+        ) {
+          const b = sameDatePrecedingBalances.get(l.currency) ?? { debitMinor: 0, creditMinor: 0 };
+          b.debitMinor += l.debitMinor;
+          b.creditMinor += l.creditMinor;
+          sameDatePrecedingBalances.set(l.currency, b);
+        }
+      }
+    }
+
+    const relevantCurrencies = new Set<string>([
+      ...page.map((l) => l.currency),
+      ...Array.from(sameDatePrecedingBalances.keys()),
+    ]);
+    if (account.currencyRestriction) {
+      relevantCurrencies.add(account.currencyRestriction);
+    }
+
     const runningByCurrency = new Map<string, number>();
-    for (const currency of new Set(page.map((l) => l.currency))) {
-      const opening = cumulative.find((b) => b.accountId === args.accountId && b.currency === currency);
-      runningByCurrency.set(currency, opening ? netOf(opening.debitMinor, opening.creditMinor) : 0);
+    for (const currency of relevantCurrencies) {
+      const baseOpening = cumulative.find((b) => b.accountId === args.accountId && b.currency === currency);
+      let debit = baseOpening?.debitMinor ?? 0;
+      let credit = baseOpening?.creditMinor ?? 0;
+
+      const sameDateB = sameDatePrecedingBalances.get(currency);
+      if (sameDateB) {
+        debit += sameDateB.debitMinor;
+        credit += sameDateB.creditMinor;
+      }
+
+      runningByCurrency.set(currency, netOf(debit, credit));
     }
     const openingBalanceByCurrency = new Map(runningByCurrency);
 
@@ -192,8 +299,9 @@ export const getAccountActivity = query({
     // account's own restriction currency (or the first currency this page
     // actually saw) when one currency dominates; a genuinely multi-currency
     // account's real per-currency numbers live in `currencyBreakdown`.
-    const primaryCurrency = account.currencyRestriction ?? currencyBreakdown[0]?.currency;
+    const primaryCurrency = account.currencyRestriction ?? (page[0]?.currency);
     const primary = currencyBreakdown.find((c) => c.currency === primaryCurrency) ?? currencyBreakdown[0];
+    const defaultOpening = primaryCurrency ? (openingBalanceByCurrency.get(primaryCurrency) ?? 0) : 0;
 
     return {
       account,
@@ -202,8 +310,8 @@ export const getAccountActivity = query({
       totalDebits: primary?.debitMinor ?? 0,
       totalCredits: primary?.creditMinor ?? 0,
       netMinor: primary?.netMinor ?? 0,
-      openingBalanceMinor: primary?.openingBalanceMinor ?? 0,
-      closingBalanceMinor: primary?.closingBalanceMinor ?? 0,
+      openingBalanceMinor: primary?.openingBalanceMinor ?? defaultOpening,
+      closingBalanceMinor: primary?.closingBalanceMinor ?? defaultOpening,
       isDone: linePage.isDone,
       continueCursor: linePage.continueCursor,
     };

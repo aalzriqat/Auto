@@ -721,8 +721,9 @@ export const repairMissingSystemAccounts = mutation({
 
       if (active.length > 1) {
         // Reconcile duplicate active mappings to converge to exactly one authoritative active mapping
-        const authoritative = active.reduce((oldest, a) =>
-          a._creationTime < oldest._creationTime ? a : oldest
+        const authoritative = active.reduce(
+          (oldest, a) => (a._creationTime < oldest._creationTime ? a : oldest),
+          active[0]
         );
         for (const account of accounts) {
           if (account._id !== authoritative._id && account.systemKey === systemKey) {

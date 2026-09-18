@@ -398,4 +398,213 @@ describe("General Ledger pagination — AF-318-01 regression (>100 entries reach
     const lastLine = allLines[allLines.length - 1];
     expect(lastLine.runningBalanceMinor).toBe(TOTAL * 1_000);
   }, 60_000);
+
+  test("Blocker A regression: getAccountActivity preserves running balance across same-accountingDate page boundary", async () => {
+    const ctx = await seedDealer("Same Date Activity Dealer", "glsamedate");
+
+    const sameDate = ctx.currentPeriod.startDate + 10 * 60_000;
+    // Insert two journal entries on the exact same accountingDate, each crediting revenue by 1,000 JOD
+    await insertJournalEntry(ctx, {
+      index: 1,
+      accountingDate: sameDate,
+      periodId: ctx.currentPeriod._id,
+      accountId: ctx.revenue._id,
+      memo: "line-1",
+    });
+    await insertJournalEntry(ctx, {
+      index: 2,
+      accountingDate: sameDate,
+      periodId: ctx.currentPeriod._id,
+      accountId: ctx.revenue._id,
+      memo: "line-2",
+    });
+
+    // Page 1 with pageSize = 1
+    const page1: any = await ctx.asOwner.query(api.accountingLedger.getAccountActivity, {
+      orgId: ctx.orgId,
+      accountId: ctx.revenue._id,
+      paginationOpts: { numItems: 1, cursor: null },
+    });
+
+    expect(page1.lines).toHaveLength(1);
+    expect(page1.lines[0].runningBalanceMinor).toBe(1_000);
+    expect(page1.continueCursor).toBeTruthy();
+
+    // Page 2 with pageSize = 1 using page 1's cursor
+    const page2: any = await ctx.asOwner.query(api.accountingLedger.getAccountActivity, {
+      orgId: ctx.orgId,
+      accountId: ctx.revenue._id,
+      paginationOpts: { numItems: 1, cursor: page1.continueCursor },
+    });
+
+    expect(page2.lines).toHaveLength(1);
+    // Page 2 must have running balance 2,000, NOT 1,000!
+    expect(page2.openingBalanceMinor).toBe(1_000);
+    expect(page2.lines[0].runningBalanceMinor).toBe(2_000);
+    expect(page2.closingBalanceMinor).toBe(2_000);
+  });
+
+  test("Blocker B regression: listJournalEntries with accountId does not duplicate entries with multiple lines for same account across pages", async () => {
+    const ctx = await seedDealer("Duplicate Line Entry Dealer", "gldupentry");
+
+    // Create entry with TWO lines for ctx.revenue._id
+    const entryId = await ctx.t.run(async (dbCtx) => {
+      const eId = await dbCtx.db.insert("journalEntries", {
+        orgId: ctx.orgId,
+        periodId: ctx.currentPeriod._id,
+        journalNumber: "GLTEST-SPLIT",
+        accountingDate: ctx.currentPeriod.startDate + 10_000,
+        sourceType: "test",
+        sourceId: "split",
+        category: "MANUAL",
+        memo: "split-entry",
+        status: "POSTED",
+        currency: "JOD",
+        postedBy: ctx.userId,
+        postedAt: Date.now(),
+        createdAt: Date.now(),
+      });
+      // Line 1: revenue credit 500
+      await dbCtx.db.insert("journalLines", {
+        orgId: ctx.orgId, journalEntryId: eId, lineNumber: 1, accountId: ctx.revenue._id,
+        debitMinor: 0, creditMinor: 500, currency: "JOD", scale: 3, accountingDate: ctx.currentPeriod.startDate + 10_000,
+      });
+      // Line 2: revenue credit 500 (same account!)
+      await dbCtx.db.insert("journalLines", {
+        orgId: ctx.orgId, journalEntryId: eId, lineNumber: 2, accountId: ctx.revenue._id,
+        debitMinor: 0, creditMinor: 500, currency: "JOD", scale: 3, accountingDate: ctx.currentPeriod.startDate + 10_000,
+      });
+      // Line 3: cash debit 1,000
+      await dbCtx.db.insert("journalLines", {
+        orgId: ctx.orgId, journalEntryId: eId, lineNumber: 3, accountId: ctx.cash._id,
+        debitMinor: 1_000, creditMinor: 0, currency: "JOD", scale: 3, accountingDate: ctx.currentPeriod.startDate + 10_000,
+      });
+      return eId;
+    });
+
+    // Also insert another entry before and after so we test cursor continuation
+    const otherEntryId = await insertJournalEntry(ctx, {
+      index: 10,
+      accountingDate: ctx.currentPeriod.startDate + 20_000,
+      periodId: ctx.currentPeriod._id,
+      accountId: ctx.revenue._id,
+      memo: "other-entry",
+    });
+
+    // Walk listJournalEntries with accountId = ctx.revenue._id and pageSize = 1
+    // to force split-entry's two lines to land on different pages!
+    const pages: any[] = [];
+    let cursor: string | null = null;
+    for (let i = 0; i < 10; i++) {
+      const result: any = await ctx.asOwner.query(api.accountingLedger.listJournalEntries, {
+        orgId: ctx.orgId,
+        accountId: ctx.revenue._id,
+        paginationOpts: { numItems: 1, cursor },
+      });
+      pages.push(result);
+      if (result.isDone || !result.continueCursor) break;
+      cursor = result.continueCursor;
+    }
+
+    const allEntries = pages.flatMap((p) => p.page);
+    const entryIds = allEntries.map((e: any) => String(e._id));
+    // Each qualifying entry must appear EXACTLY ONCE across the full cursor walk!
+    expect(entryIds.filter((id) => id === String(entryId))).toHaveLength(1);
+    expect(entryIds.filter((id) => id === String(otherEntryId))).toHaveLength(1);
+    expect(allEntries).toHaveLength(2);
+  });
+
+  test("Blocker B regression: listJournalEntries with combined periodId and accountId filters accurately without duplicates or skips", async () => {
+    const ctx = await seedDealer("Period and Account Filter Dealer", "glperiodacct");
+
+    // Insert 2 entries in oldPeriod for revenue
+    const old1 = await insertJournalEntry(ctx, {
+      index: 1,
+      accountingDate: ctx.oldPeriod.startDate + 10_000,
+      periodId: ctx.oldPeriod._id,
+      accountId: ctx.revenue._id,
+      memo: "old-1",
+    });
+    const old2 = await insertJournalEntry(ctx, {
+      index: 2,
+      accountingDate: ctx.oldPeriod.startDate + 20_000,
+      periodId: ctx.oldPeriod._id,
+      accountId: ctx.revenue._id,
+      memo: "old-2",
+    });
+
+    // Insert 2 entries in currentPeriod for revenue (one has multiple lines)
+    const cur1 = await ctx.t.run(async (dbCtx) => {
+      const eId = await dbCtx.db.insert("journalEntries", {
+        orgId: ctx.orgId,
+        periodId: ctx.currentPeriod._id,
+        journalNumber: "GLTEST-CUR-SPLIT",
+        accountingDate: ctx.currentPeriod.startDate + 10_000,
+        sourceType: "test",
+        sourceId: "cur-split",
+        category: "MANUAL",
+        memo: "cur-split",
+        status: "POSTED",
+        currency: "JOD",
+        postedBy: ctx.userId,
+        postedAt: Date.now(),
+        createdAt: Date.now(),
+      });
+      await dbCtx.db.insert("journalLines", {
+        orgId: ctx.orgId, journalEntryId: eId, lineNumber: 1, accountId: ctx.revenue._id,
+        debitMinor: 0, creditMinor: 400, currency: "JOD", scale: 3, accountingDate: ctx.currentPeriod.startDate + 10_000,
+      });
+      await dbCtx.db.insert("journalLines", {
+        orgId: ctx.orgId, journalEntryId: eId, lineNumber: 2, accountId: ctx.revenue._id,
+        debitMinor: 0, creditMinor: 600, currency: "JOD", scale: 3, accountingDate: ctx.currentPeriod.startDate + 10_000,
+      });
+      return eId;
+    });
+
+    const cur2 = await insertJournalEntry(ctx, {
+      index: 4,
+      accountingDate: ctx.currentPeriod.startDate + 30_000,
+      periodId: ctx.currentPeriod._id,
+      accountId: ctx.revenue._id,
+      memo: "cur-2",
+    });
+
+    // Walk with accountId + currentPeriod at pageSize = 1
+    const currentPages: any[] = [];
+    let curCursor: string | null = null;
+    for (let i = 0; i < 10; i++) {
+      const result: any = await ctx.asOwner.query(api.accountingLedger.listJournalEntries, {
+        orgId: ctx.orgId,
+        accountId: ctx.revenue._id,
+        periodId: ctx.currentPeriod._id,
+        paginationOpts: { numItems: 1, cursor: curCursor },
+      });
+      currentPages.push(result);
+      if (result.isDone || !result.continueCursor) break;
+      curCursor = result.continueCursor;
+    }
+
+    const currentEntries = currentPages.flatMap((p) => p.page);
+    expect(currentEntries).toHaveLength(2);
+    expect(currentEntries.map((e: any) => String(e._id))).toEqual([String(cur2), String(cur1)]);
+
+    // Walk with accountId + oldPeriod at pageSize = 1
+    const oldPages: any[] = [];
+    let oldCursor: string | null = null;
+    for (let i = 0; i < 10; i++) {
+      const result: any = await ctx.asOwner.query(api.accountingLedger.listJournalEntries, {
+        orgId: ctx.orgId,
+        accountId: ctx.revenue._id,
+        periodId: ctx.oldPeriod._id,
+        paginationOpts: { numItems: 1, cursor: oldCursor },
+      });
+      oldPages.push(result);
+      if (result.isDone || !result.continueCursor) break;
+      oldCursor = result.continueCursor;
+    }
+
+    const oldEntries = oldPages.flatMap((p) => p.page);
+    expect(oldEntries).toHaveLength(2);
+    expect(oldEntries.map((e: any) => String(e._id))).toEqual([String(old2), String(old1)]);
+  });
 });
