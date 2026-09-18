@@ -10,6 +10,8 @@ import { RECEIPT_EVENT_TYPE, RECEIPT_SOURCE_TYPE } from "./accounting/receiptOcc
 import { requireFeature } from "./subscriptions";
 import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 
+import { Doc, Id } from "./_generated/dataModel";
+
 // ─── Queries ──────────────────────────────────────────────────────────────────
 
 interface LedgerCursor {
@@ -28,6 +30,38 @@ function parseLedgerCursor(cursor: string | null | undefined): LedgerCursor {
     // fallback if raw convex cursor string
   }
   return { lineCursor: cursor };
+}
+
+/**
+ * Determines whether a journal line is the canonical representative line for its
+ * parent journal entry with respect to a specific account.
+ *
+ * An entry may contain multiple lines touching the same account (e.g. split
+ * allocations, multi-tax splits). In the `by_org_account_date` index sorted
+ * descending, Convex orders lines by:
+ *   (accountingDate desc, _creationTime desc, _id desc)
+ *
+ * Among all matching lines for that entry and account, exactly one line is the
+ * maximal line under this total order (i.e. the first one encountered during a
+ * descending scan). Designating that unique line as the canonical representative
+ * guarantees that the entry is emitted if and only if that representative line is
+ * visited, eliminating any reliance on same-entry lines being contiguous or adjacent.
+ */
+function isRepresentativeLineForAccount(
+  line: Doc<"journalLines">,
+  linesForEntry: Doc<"journalLines">[],
+  accountId: Id<"chartOfAccounts">
+): boolean {
+  const matching = linesForEntry.filter((l) => l.accountId === accountId);
+  if (matching.length === 0) return false;
+  const repLine = matching.reduce((max, l) => {
+    if (l.accountingDate > max.accountingDate) return l;
+    if (l.accountingDate < max.accountingDate) return max;
+    if (l._creationTime > max._creationTime) return l;
+    if (l._creationTime < max._creationTime) return max;
+    return l._id > max._id ? l : max;
+  }, matching[0]);
+  return line._id === repLine._id;
 }
 
 // AF-318-01 — the General Ledger is read through real cursor pagination, not
@@ -71,19 +105,15 @@ export const listJournalEntries = query({
         return { page: [], isDone: true, continueCursor: args.paginationOpts.cursor ?? "" };
       }
 
-      const { lineCursor: initialLineCursor, lastEmittedEntryId: initialLastEmitted } =
-        parseLedgerCursor(args.paginationOpts.cursor);
-
+      const { lineCursor: initialLineCursor } = parseLedgerCursor(args.paginationOpts.cursor);
       const targetItems = args.paginationOpts.numItems;
       const seen = new Set<string>();
-      if (initialLastEmitted) {
-        seen.add(initialLastEmitted);
-      }
-
       const entries = [];
       let currentCursor = initialLineCursor;
       let isDone = false;
-      let lastEmittedEntryId = initialLastEmitted;
+
+      // Cache journal lines by journalEntryId across fetch rounds in this query
+      const entryLinesCache = new Map<string, Doc<"journalLines">[]>();
 
       // Bound fetch rounds to prevent runaway transaction execution
       const MAX_FETCH_ROUNDS = 10;
@@ -104,6 +134,19 @@ export const listJournalEntries = query({
           .paginate({ numItems: remaining, cursor: currentCursor });
 
         for (const line of linePage.page) {
+          let lines = entryLinesCache.get(line.journalEntryId);
+          if (!lines) {
+            lines = await ctx.db
+              .query("journalLines")
+              .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", line.journalEntryId))
+              .collect();
+            entryLinesCache.set(line.journalEntryId, lines);
+          }
+
+          if (!isRepresentativeLineForAccount(line, lines, args.accountId)) {
+            continue;
+          }
+
           if (seen.has(line.journalEntryId)) continue;
           seen.add(line.journalEntryId);
 
@@ -112,16 +155,13 @@ export const listJournalEntries = query({
           if (args.periodId && entry.periodId !== args.periodId) continue;
 
           entries.push(entry);
-          lastEmittedEntryId = entry._id;
         }
 
         currentCursor = linePage.continueCursor;
         isDone = linePage.isDone;
       }
 
-      const continueCursor = isDone || !currentCursor
-        ? ""
-        : JSON.stringify({ lineCursor: currentCursor, lastEmittedEntryId });
+      const continueCursor = isDone || !currentCursor ? "" : currentCursor;
 
       return {
         page: entries,

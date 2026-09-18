@@ -607,4 +607,110 @@ describe("General Ledger pagination — AF-318-01 regression (>100 entries reach
     expect(oldEntries).toHaveLength(2);
     expect(oldEntries.map((e: any) => String(e._id))).toEqual([String(old2), String(old1)]);
   });
+
+  test("Blocker B regression: listJournalEntries returns each qualifying entry exactly once without duplicates or skips when lines are interleaved across entries", async () => {
+    const ctx = await seedDealer("Interleaved Dealer", "glinterleaved");
+
+    const sameDate = ctx.currentPeriod.startDate + 10_000;
+    const { entryA, entryB, entryC } = await ctx.t.run(async (dbCtx) => {
+      const eA = await dbCtx.db.insert("journalEntries", {
+        orgId: ctx.orgId,
+        periodId: ctx.currentPeriod._id,
+        journalNumber: "GLTEST-A",
+        accountingDate: sameDate,
+        sourceType: "test",
+        sourceId: "A",
+        category: "MANUAL",
+        memo: "entry-A",
+        status: "POSTED",
+        currency: "JOD",
+        postedBy: ctx.userId,
+        postedAt: Date.now(),
+        createdAt: Date.now(),
+      });
+      const eB = await dbCtx.db.insert("journalEntries", {
+        orgId: ctx.orgId,
+        periodId: ctx.currentPeriod._id,
+        journalNumber: "GLTEST-B",
+        accountingDate: sameDate,
+        sourceType: "test",
+        sourceId: "B",
+        category: "MANUAL",
+        memo: "entry-B",
+        status: "POSTED",
+        currency: "JOD",
+        postedBy: ctx.userId,
+        postedAt: Date.now(),
+        createdAt: Date.now(),
+      });
+      // Entry C does NOT touch ctx.revenue._id (non-qualifying entry)
+      const eC = await dbCtx.db.insert("journalEntries", {
+        orgId: ctx.orgId,
+        periodId: ctx.currentPeriod._id,
+        journalNumber: "GLTEST-C",
+        accountingDate: sameDate,
+        sourceType: "test",
+        sourceId: "C",
+        category: "MANUAL",
+        memo: "entry-C-non-qualifying",
+        status: "POSTED",
+        currency: "JOD",
+        postedBy: ctx.userId,
+        postedAt: Date.now(),
+        createdAt: Date.now(),
+      });
+      await dbCtx.db.insert("journalLines", {
+        orgId: ctx.orgId, journalEntryId: eC, lineNumber: 1, accountId: ctx.cash._id,
+        debitMinor: 500, creditMinor: 0, currency: "JOD", scale: 3, accountingDate: sameDate,
+      });
+      await dbCtx.db.insert("journalLines", {
+        orgId: ctx.orgId, journalEntryId: eC, lineNumber: 2, accountId: ctx.cash._id,
+        debitMinor: 0, creditMinor: 500, currency: "JOD", scale: 3, accountingDate: sameDate,
+      });
+
+      // Insert Line A1 for revenue
+      await dbCtx.db.insert("journalLines", {
+        orgId: ctx.orgId, journalEntryId: eA, lineNumber: 1, accountId: ctx.revenue._id,
+        debitMinor: 0, creditMinor: 100, currency: "JOD", scale: 3, accountingDate: sameDate,
+      });
+      // Insert Line B1 for revenue (interleaved between A1 and A2!)
+      await dbCtx.db.insert("journalLines", {
+        orgId: ctx.orgId, journalEntryId: eB, lineNumber: 1, accountId: ctx.revenue._id,
+        debitMinor: 0, creditMinor: 200, currency: "JOD", scale: 3, accountingDate: sameDate,
+      });
+      // Insert Line A2 for revenue (interleaved!)
+      await dbCtx.db.insert("journalLines", {
+        orgId: ctx.orgId, journalEntryId: eA, lineNumber: 2, accountId: ctx.revenue._id,
+        debitMinor: 0, creditMinor: 300, currency: "JOD", scale: 3, accountingDate: sameDate,
+      });
+
+      return { entryA: eA, entryB: eB, entryC: eC };
+    });
+
+    // Walk with pageSize = 1 to force every line to cross a page boundary
+    const pages: any[] = [];
+    let cursor: string | null = null;
+    for (let i = 0; i < 10; i++) {
+      const result: any = await ctx.asOwner.query(api.accountingLedger.listJournalEntries, {
+        orgId: ctx.orgId,
+        accountId: ctx.revenue._id,
+        paginationOpts: { numItems: 1, cursor },
+      });
+      pages.push(result);
+      if (result.isDone || !result.continueCursor) break;
+      cursor = result.continueCursor;
+    }
+
+    const allEntries = pages.flatMap((p) => p.page);
+    const entryIds = allEntries.map((e: any) => String(e._id));
+    // Qualifying entries returned exactly once
+    expect(entryIds.filter((id) => id === String(entryA))).toHaveLength(1);
+    expect(entryIds.filter((id) => id === String(entryB))).toHaveLength(1);
+    // Non-qualifying entry excluded
+    expect(entryIds.filter((id) => id === String(entryC))).toHaveLength(0);
+    // Total qualifying entries count
+    expect(allEntries).toHaveLength(2);
+    // Deterministic descending order
+    expect(entryIds).toEqual([String(entryA), String(entryB)]);
+  });
 });
