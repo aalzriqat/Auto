@@ -154,4 +154,14 @@ describe("fee templates retirement in FinanceCompanyDialog", () => {
     expect(payload.adminFees).toBe(600);
     expect(payload.feeTemplates).toBeUndefined();
   });
+
+  test("clearing an existing adminFees value is rejected with error toast and does not submit", async () => {
+    renderEdit(700);
+    fireEvent.change(screen.getByLabelText("ExecutionFees"), { target: { value: "" } });
+    expect(screen.getByText("ExecutionFeesCannotClear")).toBeTruthy();
+    save();
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("ExecutionFeesCannotClear"));
+    expect(mutations.update).not.toHaveBeenCalled();
+  });
 });

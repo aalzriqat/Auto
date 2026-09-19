@@ -29,7 +29,7 @@ import {
   unrecordedConfiguredFeePositions,
   assertConfiguredFeesRecorded,
 } from "./utils/settlementDeductions";
-import { convexTestWithComponents } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { ALL_PERMISSIONS } from "./utils/permissions";
@@ -372,7 +372,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
       accountingTreatment: "SELLING_EXPENSE" as const,
     };
 
-    test("buildRuleSnapshot excludes feeTemplates when adminFees is configured", () => {
+    test("buildRuleSnapshot excludes feeTemplates for newly created snapshots", () => {
       const companyWithAdminFees = {
         _id: "company_1" as never,
         _creationTime: Date.now(),
@@ -389,9 +389,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
       const snapshot = buildRuleSnapshot(companyWithAdminFees);
       expect(snapshot.adminFees).toBe(700);
       expect(snapshot.feeTemplates).toBeUndefined();
-    });
 
-    test("buildRuleSnapshot retains feeTemplates for legacy company where adminFees is unset", () => {
       const legacyCompany = {
         _id: "company_1" as never,
         _creationTime: Date.now(),
@@ -405,9 +403,9 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         feeTemplates: [dummyTemplate],
       } as unknown as Doc<"financeCompanies">;
 
-      const snapshot = buildRuleSnapshot(legacyCompany);
-      expect(snapshot.adminFees).toBeUndefined();
-      expect(snapshot.feeTemplates).toHaveLength(1);
+      const legacySnapshot = buildRuleSnapshot(legacyCompany);
+      expect(legacySnapshot.adminFees).toBeUndefined();
+      expect(legacySnapshot.feeTemplates).toBeUndefined();
     });
 
     test("unrecordedConfiguredFeePositions and assertConfiguredFeesRecorded bypass templates under single fee authority", () => {
@@ -435,10 +433,18 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
       );
     });
 
-    test("server-side validation rejects invalid adminFees and conflicting feeTemplates", async () => {
+    test("server-side validation rejects invalid adminFees, denomination scale mismatch, retired feeTemplates writes, and clears legacy templates upon adminFees update", async () => {
       const t = convexTestWithComponents(schema, MODULES);
       const orgId = await t.run((ctx) =>
         ctx.db.insert("organizations", { name: "Dealer K", createdAt: Date.now() })
+      );
+      await t.run((ctx) =>
+        ctx.db.insert("orgSettings", {
+          orgId,
+          currency: "USD",
+          currencySymbol: "$",
+          enabledPaymentTypes: ["CASH"],
+        })
       );
       const userId = await t.run((ctx) =>
         ctx.db.insert("users", { clerkId: "user_k", email: "k@dealer.com" })
@@ -462,7 +468,20 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         })
       ).rejects.toThrow(/Execution fees \(adminFees\) must be a non-negative finite number/);
 
-      // Conflicting feeTemplates when adminFees is set is rejected
+      // Denomination scale mismatch (USD scale is 2, 0.001 cannot be represented)
+      await expect(
+        asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Fractional USD Co",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          isActive: true,
+          adminFees: 0.001,
+        })
+      ).rejects.toThrow(/cannot be represented accurately at 2 decimal places/);
+
+      // feeTemplates write authority is retired on createCompany
       await expect(
         asOwner.mutation(api.finance.createCompany, {
           orgId,
@@ -472,13 +491,56 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           gracePeriodMonths: 0,
           isActive: true,
           adminFees: 700,
-          expectedCurrency: "JOD",
           feeTemplates: [dummyTemplate],
         })
-      ).rejects.toThrow(/Cannot configure fee templates when execution fees \(adminFees\) is set/);
+      ).rejects.toThrow(/Configuring company fee templates is retired/);
+
+      // Create a legacy company directly in DB with feeTemplates
+      const legacyCompanyId = await t.run((ctx) =>
+        ctx.db.insert("financeCompanies", {
+          orgId,
+          name: "Legacy Co",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          isActive: true,
+          ruleVersion: 1,
+          feeTemplates: [dummyTemplate],
+        })
+      );
+
+      // feeTemplates write authority is retired on updateCompany
+      await expect(
+        asOwner.mutation(api.finance.updateCompany, {
+          orgId,
+          id: legacyCompanyId,
+          name: "Legacy Co",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          isActive: true,
+          feeTemplates: [dummyTemplate],
+        })
+      ).rejects.toThrow(/Updating company fee templates is retired/i);
+
+      // Updating legacy company with adminFees explicitly clears legacy feeTemplates
+      await asOwner.mutation(api.finance.updateCompany, {
+        orgId,
+        id: legacyCompanyId,
+        name: "Legacy Co Migrated",
+        profitRate: 5,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        isActive: true,
+        adminFees: 700,
+      });
+      const migrated = (await t.run((ctx) => ctx.db.get(legacyCompanyId)))!;
+      expect(migrated.adminFees).toBe(700);
+      expect(migrated.feeTemplates).toBeUndefined();
+      expect(migrated.ruleVersion).toBe(2);
     });
 
-    test("end-to-end deal created from quote under adminFees authority has no feeTemplates snapshot and finalizes cleanly", async () => {
+    test("deal created from quote under adminFees authority has no feeTemplates in snapshot and passes configured fee gates", async () => {
       const t = convexTestWithComponents(schema, MODULES);
       const orgId = await t.run((ctx) =>
         ctx.db.insert("organizations", { name: "Dealer E2E", createdAt: Date.now() })
@@ -548,6 +610,191 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
       // Unrecorded positions are empty
       expect(unrecordedConfiguredFeePositions(app.companyRuleSnapshot, [])).toEqual([]);
       expect(() => assertConfiguredFeesRecorded(app.companyRuleSnapshot, [], "finalizing")).not.toThrow();
+    });
+
+    test("end-to-end deal created under adminFees authority finalizes cleanly through the entire finalization stack", async () => {
+      const t = convexTestWithComponents(schema, MODULES);
+      const orgId = await t.run((ctx) =>
+        ctx.db.insert("organizations", { name: "Dealer Full Finalize", createdAt: Date.now() })
+      );
+      await t.run((ctx) =>
+        ctx.db.insert("subscriptions", {
+          orgId,
+          plan: "professional",
+          status: "active",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        })
+      );
+      await t.run((ctx) =>
+        ctx.db.insert("orgSettings", {
+          orgId,
+          currency: "JOD",
+          currencySymbol: "JD",
+          enabledPaymentTypes: ["CASH", "BANK_TRANSFER"],
+        })
+      );
+      const userId = await t.run((ctx) =>
+        ctx.db.insert("users", { clerkId: "user_full_finalize", email: "ff@dealer.com", name: "Full Finalize" })
+      );
+      const approverId = await t.run((ctx) =>
+        ctx.db.insert("users", { clerkId: "user_full_approver", email: "appr@dealer.com", name: "Approver" })
+      );
+      const roleId = await t.run((ctx) =>
+        ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ALL_PERMISSIONS, isSystemOwnerRole: true })
+      );
+      await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+      await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: approverId, roleId }));
+      const asOwner = t.withIdentity({ subject: "user_full_finalize", clerkId: "user_full_finalize" });
+      const asApprover = t.withIdentity({ subject: "user_full_approver", clerkId: "user_full_approver" });
+
+      await asOwner.mutation(api.chartOfAccounts.initialize, { orgId });
+      const fiscalYear = new Date().getUTCFullYear();
+      await asOwner.mutation(api.accountingPeriods.create, {
+        orgId,
+        startDate: Date.UTC(fiscalYear, 0, 1),
+        endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+        fiscalYear,
+        periodNumber: 1,
+      });
+      const period = (await asOwner.query(api.accountingPeriods.list, { orgId }))[0];
+      await asOwner.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+
+      const customerId = await t.run((ctx) =>
+        ctx.db.insert("customers", { orgId, firstName: "Full", lastName: "Buyer" })
+      );
+      const vehicleId = await t.run((ctx) =>
+        ctx.db.insert("vehicles", {
+          orgId,
+          vin: "VIN_FULL_E2E_123",
+          make: "Kia",
+          model: "Sportage",
+          year: 2024,
+          mileage: 10,
+          color: "Blue",
+          fuelType: "Gasoline",
+          transmission: "Automatic",
+          sellingPrice: 20_000,
+          purchasePrice: 15_000,
+          status: "AVAILABLE",
+          sourceType: "STOCK",
+        })
+      );
+
+      const companyId = await asOwner.mutation(api.finance.createCompany, {
+        orgId,
+        name: "Single Fee Authority Finance",
+        profitRate: 5,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        defaultLtvPercent: 100,
+        isActive: true,
+        adminFees: 700,
+      });
+
+      const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+        orgId,
+        customerId,
+        vehicleId,
+        vehiclePrice: 20_000,
+        downPayment: 0,
+        termMonths: 48,
+        mode: "CONFIGURED_FINANCE_COMPANY",
+        companyId,
+        totalFinancedAmount: 20_000,
+      });
+
+      const applicationId = await asOwner.mutation(api.applications.createFromQuote, {
+        orgId,
+        quoteId,
+      });
+
+      await asOwner.mutation(api.applications.updateStatus, {
+        orgId,
+        applicationId,
+        status: "UNDER_REVIEW",
+      });
+      await asApprover.mutation(api.applications.updateStatus, {
+        orgId,
+        applicationId,
+        status: "APPROVED",
+      });
+
+      await asOwner.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId,
+        applicationId,
+        submittedQuotationMinor: 20_000 * 1000,
+        source: "MANUAL_ENTRY",
+      });
+      await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId,
+        applicationId,
+        approvedAmountMinor: 20_000 * 1000,
+        basis: "MANUAL",
+        notes: "Approved at quotation price.",
+      });
+
+      await registerHandover(asOwner, api, orgId, applicationId);
+
+      await asOwner.mutation(api.applications.registerExpectedPayment, {
+        orgId,
+        applicationId,
+        method: "BANK_TRANSFER",
+        expectedDate: Date.now(),
+      });
+
+      await asOwner.mutation(api.financeDealCosts.recordLegalInvoice, {
+        orgId,
+        applicationId,
+        legalInvoiceAmountMinor: 20_000 * 1000,
+        legalInvoiceNumber: `INV-AUTH-${applicationId}`,
+        legalInvoiceDate: Date.now(),
+        issuedTo: "FINANCE_COMPANY",
+      });
+
+      const feeId = await asOwner.mutation(api.financeDealCosts.recordDealFee, {
+        expectedCurrency: "JOD",
+        orgId,
+        applicationId,
+        feeType: "OTHER_CLOSING_EXPENSE",
+        paidBy: "DEALER",
+        paidTo: "OTHER",
+        accountingTreatment: "SELLING_EXPENSE",
+        deductedFromSettlement: false,
+        actualAmountMinor: 700 * 1000,
+        description: "Execution fees recorded.",
+        idempotencyKey: `fee-auth-${applicationId}`,
+      });
+      await asOwner.mutation(api.financeDealCosts.reconcileDealFee, {
+        orgId,
+        feeId,
+        notes: "Execution fees reconciled.",
+      });
+
+      await asOwner.mutation(api.financeDealCosts.classifyDealAccounting, {
+        orgId,
+        applicationId,
+        notes: "Invoice on file, deal classified without requiring fee template actuals.",
+      });
+
+      const saleId = await asOwner.mutation(api.applications.finalizeDeal, {
+        orgId,
+        applicationId,
+        idempotencyKey: `authority-finalize-${applicationId}`,
+      });
+
+      expect(saleId).toBeTruthy();
+
+      const closedApp = (await t.run((ctx) => ctx.db.get(applicationId)))!;
+      expect(closedApp.status).toBe("CLOSED");
+
+      const sale = (await t.run((ctx) => ctx.db.get(saleId)))!;
+      expect(sale).toBeDefined();
+      expect(sale.applicationId).toBe(applicationId);
+      expect(sale.vehicleId).toBe(vehicleId);
+
+      const vehicle = (await t.run((ctx) => ctx.db.get(vehicleId)))!;
+      expect(vehicle.status).toBe("SOLD");
     });
   });
 });

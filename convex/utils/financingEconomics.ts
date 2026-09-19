@@ -459,9 +459,9 @@ export function buildRuleSnapshot(
     customerFirstPaymentOffsetsUnfinancedShare:
       company.customerFirstPaymentOffsetsUnfinancedShare,
     adminFees: company.adminFees,
-    // When adminFees is set, Execution Fees is the single expected fee authority
-    // and feeTemplates is retired / omitted from new deal snapshots.
-    feeTemplates: company.adminFees !== undefined ? undefined : company.feeTemplates,
+    // feeTemplates is retired as a write authority and omitted from all new snapshots.
+    // Historical application snapshots frozen before retirement retain their stored templates.
+    feeTemplates: undefined,
   };
 }
 

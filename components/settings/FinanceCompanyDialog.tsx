@@ -105,6 +105,10 @@ export function FinanceCompanyDialog({
   const clearingExistingLtv =
     company?.defaultLtvPercent !== undefined && formData.defaultLtvPercent.trim() === "";
 
+  /** Blanking an existing execution fee is not a way to delete it — see `onSubmit`. */
+  const clearingExistingAdminFees =
+    company?.adminFees !== undefined && formData.adminFees.trim() === "";
+
   const toggleAcceptedStatus = (id: string) => {
     setFormData((prev) => ({
       ...prev,
@@ -131,6 +135,11 @@ export function FinanceCompanyDialog({
     // against a rule the operator believed they had removed.
     if (clearingExistingLtv) {
       toast.error(t("DefaultDealerLtvCannotClear" as any));
+      return;
+    }
+
+    if (clearingExistingAdminFees) {
+      toast.error(t("ExecutionFeesCannotClear" as any));
       return;
     }
 
@@ -260,6 +269,11 @@ export function FinanceCompanyDialog({
                 value={formData.adminFees}
                 onChange={(e) => setFormData({ ...formData, adminFees: e.target.value })}
               />
+              {clearingExistingAdminFees && (
+                <p role="alert" className="text-xs font-medium text-destructive">
+                  {t("ExecutionFeesCannotClear" as any)}
+                </p>
+              )}
             </div>
             <div className="grid gap-2">
               <Label>{t("MaxFinancingLTV" as any)}</Label>

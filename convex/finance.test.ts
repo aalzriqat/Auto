@@ -91,28 +91,20 @@ describe("finance companies", () => {
     accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE" as const,
   };
 
-  test("fee template amounts are transactionally bound to the expected org currency", async () => {
+  test("fee template configuration is rejected on createCompany as retired authority", async () => {
     const { t, orgId, asOwner } = await setupFinanceOrg();
-
-    // Reproduces the TOCTOU: the dialog may have converted 12.500 JOD to
-    // 12,500 fils, then a still-fresh organization switches to USD before the
-    // company mutation commits. With no expected-currency precondition the
-    // exact same integer is stored and later read as $125.00.
-    await asOwner.mutation(api.orgSettings.upsert, { orgId, currency: "JOD" });
-    await asOwner.mutation(api.orgSettings.upsert, { orgId, currency: "USD" });
 
     await expect(
       asOwner.mutation(api.finance.createCompany, {
         orgId,
-        name: "Currency Race Finance",
+        name: "Retired Templates Finance",
         profitRate: 5,
         maxTermMonths: 60,
         gracePeriodMonths: 0,
         isActive: true,
-        expectedCurrency: "JOD",
         feeTemplates: [expectedOwnershipTransfer],
       })
-    ).rejects.toThrow(/currency changed/i);
+    ).rejects.toThrow(/Configuring company fee templates is retired/i);
 
     expect(
       await t.run((ctx) =>
@@ -122,89 +114,34 @@ describe("finance companies", () => {
           .collect()
       )
     ).toHaveLength(0);
-
-    const companyId = await asOwner.mutation(api.finance.createCompany, {
-      orgId,
-      name: "USD Finance",
-      profitRate: 5,
-      maxTermMonths: 60,
-      gracePeriodMonths: 0,
-      isActive: true,
-      expectedCurrency: "USD",
-      feeTemplates: [expectedOwnershipTransfer],
-    });
-    const company = await t.run((ctx) => ctx.db.get(companyId));
-    expect(company?.feeTemplates).toEqual([expectedOwnershipTransfer]);
-    expect(company).not.toHaveProperty("expectedCurrency");
   });
 
-  test("fee template writes reject absent, noncanonical, and unsupported currency authority", async () => {
-    const { t, orgId, asOwner } = await setupFinanceOrg();
-    const base = {
-      orgId,
-      name: "Unsafe Currency Finance",
-      profitRate: 5,
-      maxTermMonths: 60,
-      gracePeriodMonths: 0,
-      isActive: true,
-      feeTemplates: [expectedOwnershipTransfer],
-    };
-
-    await expect(asOwner.mutation(api.finance.createCompany, base)).rejects.toThrow(/expected currency/i);
-    await expect(
-      asOwner.mutation(api.finance.createCompany, { ...base, expectedCurrency: "jod" })
-    ).rejects.toThrow(/expected currency/i);
-
-    await t.run(async (ctx) => {
-      await ctx.db.insert("orgSettings", {
-        orgId,
-        currency: "JD",
-        currencySymbol: "JD",
-        enabledPaymentTypes: [],
-      });
-    });
-    await expect(
-      asOwner.mutation(api.finance.createCompany, { ...base, expectedCurrency: "JOD" })
-    ).rejects.toThrow(/organization currency is not supported/i);
-  });
-
-  test("concurrent fee-policy edits require the exact current rule version", async () => {
+  test("fee template configuration is rejected on updateCompany as retired authority", async () => {
     const { t, orgId, asOwner } = await setupFinanceOrg();
     const companyId = await asOwner.mutation(api.finance.createCompany, {
       orgId,
-      name: "Versioned Finance",
+      name: "Standard Finance",
       profitRate: 5,
       maxTermMonths: 60,
       gracePeriodMonths: 0,
       isActive: true,
     });
 
-    const commonUpdate = {
-      id: companyId,
-      orgId,
-      name: "Versioned Finance",
-      profitRate: 5,
-      maxTermMonths: 60,
-      gracePeriodMonths: 0,
-      isActive: true,
-      expectedCurrency: "JOD",
-    };
-    await asOwner.mutation(api.finance.updateCompany, {
-      ...commonUpdate,
-      expectedRuleVersion: 1,
-      feeTemplates: [expectedOwnershipTransfer],
-    });
     await expect(
       asOwner.mutation(api.finance.updateCompany, {
-        ...commonUpdate,
-        expectedRuleVersion: 1,
-        feeTemplates: [{ ...expectedOwnershipTransfer, estimatedAmountMinor: 99_000 }],
+        id: companyId,
+        orgId,
+        name: "Standard Finance",
+        profitRate: 5,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        isActive: true,
+        feeTemplates: [expectedOwnershipTransfer],
       })
-    ).rejects.toThrow(/changed while you were editing/i);
+    ).rejects.toThrow(/Updating company fee templates is retired/i);
 
     const company = await t.run((ctx) => ctx.db.get(companyId));
-    expect(company?.ruleVersion).toBe(2);
-    expect(company?.feeTemplates).toEqual([expectedOwnershipTransfer]);
+    expect(company?.feeTemplates).toBeUndefined();
   });
 
   test("owner_manages_company_lifecycle_and_list_reflects_deactivation", async () => {
