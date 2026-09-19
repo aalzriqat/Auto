@@ -1255,6 +1255,7 @@ async function setupFinalizedFinancedDeal() {
       maxTermMonths: 60,
       gracePeriodMonths: 0,
       isActive: true,
+      adminFees: 0,
       // The quotation solver refuses a company with no LTV, and the application
       // freezes the company's rules at creation. At 100% the company funds the
       // whole approval, which keeps these tests about the receivable rather than
@@ -1589,6 +1590,7 @@ describe("applications logs, expected payment, and finalization guards", () => {
         maxTermMonths: 60,
         gracePeriodMonths: 0,
         isActive: true,
+        adminFees: 0,
       });
       const secondCompanyId = await ctx.db.insert("financeCompanies", {
         orgId,
@@ -1597,6 +1599,7 @@ describe("applications logs, expected payment, and finalization guards", () => {
         maxTermMonths: 60,
         gracePeriodMonths: 0,
         isActive: true,
+        adminFees: 0,
       });
       return { firstCompanyId, secondCompanyId };
     });
@@ -1647,6 +1650,7 @@ async function setupFinalizedFinancedDealWithCheque() {
       // whole approval, which keeps these tests about the receivable rather than
       // about the funding split.
       defaultLtvPercent: 100,
+      adminFees: 0,
     })
   );
 
@@ -1796,6 +1800,7 @@ describe("applications required document enforcement", () => {
       termMonths: 48,
       mode: "MANUAL_FINANCE_COMPANY",
       manualProviderName: "Manual Bank",
+      manualAdminFees: 0,
       totalFinancedAmount: 17000,
     });
 
@@ -1839,6 +1844,7 @@ describe("applications required document enforcement", () => {
       termMonths: 48,
       mode: "MANUAL_FINANCE_COMPANY",
       manualProviderName: "Manual Bank",
+      manualAdminFees: 0,
       totalFinancedAmount: 17000,
     });
 
@@ -1913,6 +1919,7 @@ describe("applications required document enforcement", () => {
       termMonths: 48,
       mode: "MANUAL_FINANCE_COMPANY",
       manualProviderName: "Manual Bank",
+      manualAdminFees: 0,
       totalFinancedAmount: 17000,
     });
 

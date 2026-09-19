@@ -96,33 +96,76 @@ import { assertFinancedDepositsSurviveParentReversal } from "./utils/depositAppl
 const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
 
 /**
- * Quotation costs frozen by the finance-company policy. The application
- * creator and the explicit legacy-lineage repair must use this same function;
- * reading today's editable company policy would retroactively rewrite a deal.
+ * Canonical resolver for a deal's expected execution-fee authority.
+ * Enforces the route-wide single-authority invariants across createFromQuote
+ * and repairQuoteEconomicsLineage:
+ * - CONFIGURED_FINANCE_COMPANY requires companyRuleSnapshot.adminFees (or legacy feeTemplates)
+ * - MANUAL_FINANCE_COMPANY requires quote.manualAdminFees
+ * - Ambiguous quotes (e.g. companyId with missing/invalid mode) fail closed
+ * - Explicit 0 is valid and resolves to 0
+ * - Absent authority rejects and NEVER silently converts to 0
  */
-function includedDealerBorneExpensesMinor(
-  snapshot: FinanceCompanyRuleSnapshot | undefined,
-  currency?: string
-): number {
-  if (snapshot?.adminFees !== undefined && currency) {
-    const minor = toMinorUnits(snapshot.adminFees, currency);
-    assertValidMinorAmount(minor, "frozen admin fee total");
+export function resolveExpectedExecutionFeesMinor(args: {
+  quote: {
+    mode?: string;
+    companyId?: Id<"financeCompanies">;
+    manualAdminFees?: number;
+  };
+  companyRuleSnapshot?: FinanceCompanyRuleSnapshot;
+  currency: string;
+}): number {
+  const { quote, companyRuleSnapshot, currency } = args;
+
+  // Ambiguous quote: company is attached but mode is not CONFIGURED_FINANCE_COMPANY
+  if (quote.companyId !== undefined && quote.mode !== "CONFIGURED_FINANCE_COMPANY") {
+    throw new ConvexError(
+      "Finance company can only be set for configured finance company quotes."
+    );
+  }
+
+  if (quote.mode === "CONFIGURED_FINANCE_COMPANY") {
+    if (!quote.companyId || !companyRuleSnapshot) {
+      throw new ConvexError(
+        "The application's frozen finance-company policy is missing. Reconcile the policy snapshot before repairing quotation economics."
+      );
+    }
+    if (companyRuleSnapshot.adminFees !== undefined) {
+      const minor = toMinorUnits(companyRuleSnapshot.adminFees, currency);
+      assertValidMinorAmount(minor, "frozen admin fee total");
+      return minor;
+    }
+    // Historical legacy fallback: snapshot preserved feeTemplates from before single fee authority
+    if (companyRuleSnapshot.feeTemplates && companyRuleSnapshot.feeTemplates.length > 0) {
+      return companyRuleSnapshot.feeTemplates
+        .filter(
+          (template) =>
+            template.includedInQuotation &&
+            (template.paidBy === "DEALER" || template.paidBy === "EMPLOYEE")
+        )
+        .reduce((total, template) => {
+          assertValidMinorAmount(template.estimatedAmountMinor, "included fee estimate");
+          const next = total + template.estimatedAmountMinor;
+          assertValidMinorAmount(next, "included dealer-borne fee total");
+          return next;
+        }, 0);
+    }
+    throw new ConvexError(
+      "Execution Fees are not configured for this finance company. Enter the expected execution fee amount, or enter 0 if none are charged."
+    );
+  }
+
+  if (quote.mode === "MANUAL_FINANCE_COMPANY") {
+    if (quote.manualAdminFees === undefined) {
+      throw new ConvexError(
+        "Execution Fees are not configured for this manual finance company quote. Enter the expected execution fee amount, or enter 0 if none are charged."
+      );
+    }
+    const minor = toMinorUnits(quote.manualAdminFees, currency);
+    assertValidMinorAmount(minor, "manual admin fee total");
     return minor;
   }
-  return (
-    snapshot?.feeTemplates
-      ?.filter(
-        (template) =>
-          template.includedInQuotation &&
-          (template.paidBy === "DEALER" || template.paidBy === "EMPLOYEE")
-      )
-      .reduce((total, template) => {
-        assertValidMinorAmount(template.estimatedAmountMinor, "included fee estimate");
-        const next = total + template.estimatedAmountMinor;
-        assertValidMinorAmount(next, "included dealer-borne fee total");
-        return next;
-      }, 0) ?? 0
-  );
+
+  return 0;
 }
 
 /**
@@ -2458,28 +2501,17 @@ export const createFromQuote = mutation({
     assertValidMinorAmount(targetSellingAmountMinor, "quoted vehicle price");
     assertValidMinorAmount(customerFirstPaymentMinor, "quoted customer first payment");
 
-    // S1-R3-H1: adminFees is the single expected-fee authority. If not configured
-    // (undefined), we must fail closed at the economic lineage boundary rather than
-    // silently collapsing undefined into 0 expenses. Explicit 0 represents zero fees.
-    if (
-      quote.mode === "CONFIGURED_FINANCE_COMPANY" &&
-      companyRuleSnapshot?.adminFees === undefined
-    ) {
-      throw new ConvexError(
-        "Execution Fees are not configured for this finance company. Enter the expected execution fee amount, or enter 0 if none are charged."
-      );
-    }
-
     // Only costs the frozen policy explicitly says are included in the
     // quotation belong in the solver input. Other expected handover costs
     // remain visible in the deal checklist, but adding them here would charge
     // the customer for a cost the policy explicitly excluded. EMPLOYEE means
     // the dealership advances/reimburses the money and is therefore
     // dealer-borne, matching the cockpit's financial summary classification.
-    const dealerBorneExpensesMinor =
-      quote.mode === "MANUAL_FINANCE_COMPANY" && quote.manualAdminFees !== undefined
-        ? toMinorUnits(quote.manualAdminFees, economicsCurrency)
-        : includedDealerBorneExpensesMinor(companyRuleSnapshot, economicsCurrency);
+    const dealerBorneExpensesMinor = resolveExpectedExecutionFeesMinor({
+      quote,
+      companyRuleSnapshot,
+      currency: economicsCurrency,
+    });
 
     // SCRUM-195: a live finance application is per-vehicle commitment evidence
     // in its own right — no deposit required. So creating one is an
@@ -2634,10 +2666,11 @@ export const repairQuoteEconomicsLineage = mutation({
 
     const targetSellingAmountMinor = toMinorUnits(quote.vehiclePrice, expectedCurrency);
     const customerFirstPaymentMinor = toMinorUnits(quote.downPayment, expectedCurrency);
-    const dealerBorneExpensesMinor =
-      quote.mode === "MANUAL_FINANCE_COMPANY" && quote.manualAdminFees !== undefined
-        ? toMinorUnits(quote.manualAdminFees, expectedCurrency)
-        : includedDealerBorneExpensesMinor(app.companyRuleSnapshot, expectedCurrency);
+    const dealerBorneExpensesMinor = resolveExpectedExecutionFeesMinor({
+      quote,
+      companyRuleSnapshot: app.companyRuleSnapshot,
+      currency: expectedCurrency,
+    });
     assertValidMinorAmount(targetSellingAmountMinor, "quoted vehicle price");
     assertValidMinorAmount(customerFirstPaymentMinor, "quoted customer first payment");
     const expected = {

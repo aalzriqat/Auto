@@ -121,7 +121,7 @@ export const saveQuote = mutation({
       throw new ConvexError("Configured finance company quotes require a finance company.");
     }
 
-    if (args.mode !== undefined && args.mode !== "CONFIGURED_FINANCE_COMPANY" && args.companyId) {
+    if (args.companyId !== undefined && args.mode !== "CONFIGURED_FINANCE_COMPANY") {
       throw new ConvexError("Finance company can only be set for configured finance company quotes.");
     }
 

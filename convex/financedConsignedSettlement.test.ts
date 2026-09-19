@@ -131,7 +131,7 @@ async function seedDealership(tag: string, opts: { sourceType?: "STOCK" | "SOURC
   const companyId = await t.run((ctx) =>
     ctx.db.insert("financeCompanies", {
       orgId, name: "Jordan Auto Finance", profitRate: 5, maxTermMonths: 60,
-      gracePeriodMonths: 0, isActive: true,
+      gracePeriodMonths: 0, isActive: true, adminFees: 0,
     })
   );
 
@@ -241,11 +241,12 @@ async function runDeal(
     vehiclePrice: VEHICLE_PRICE,
     downPayment,
     termMonths: 48,
-    ...(opts.omitMode ? {} : { mode }),
+    mode,
     ...(mode === "CONFIGURED_FINANCE_COMPANY" ? { companyId: s.companyId } : {}),
     ...(mode === "MANUAL_FINANCE_COMPANY" && opts.manualProviderName !== undefined
       ? { manualProviderName: opts.manualProviderName }
       : {}),
+    ...(mode === "MANUAL_FINANCE_COMPANY" ? { manualAdminFees: 0 } : {}),
     totalFinancedAmount: VEHICLE_PRICE - downPayment,
   });
 
@@ -274,6 +275,11 @@ async function runDeal(
     orgId: s.orgId,
     quoteId,
   });
+  if (opts.omitMode) {
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(quoteId, { mode: undefined });
+    });
+  }
   await s.asUser.mutation(api.applications.updateStatus, {
     orgId: s.orgId, applicationId, status: "UNDER_REVIEW",
   });
@@ -7794,7 +7800,17 @@ describe("DIRECT_TO_SUPPLIER: the finance company's configured fees gate finaliz
     await s.t.run((ctx) => ctx.db.patch(s.companyId, { feeTemplates: TEMPLATES }));
     const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: false });
     // What `runDeal` records for the direct route only when it finalizes itself.
-    await s.t.run((ctx) => ctx.db.patch(applicationId, { approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE }));
+    const app = (await s.t.run((ctx) => ctx.db.get(applicationId)))!;
+    await s.t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+        companyRuleSnapshot: {
+          ...app.companyRuleSnapshot!,
+          adminFees: undefined,
+          feeTemplates: TEMPLATES,
+        },
+      })
+    );
     return { s, applicationId };
   }
   const recordActual = (
@@ -7998,6 +8014,27 @@ describe("finalization judges the deal's costs as they are NOW, never the stored
       route: "THROUGH_DEALERSHIP",
       finalize: false,
       beforeHandover: async (id) => {
+        const app = (await s.t.run((ctx) => ctx.db.get(id)))!;
+        await s.t.run((ctx) =>
+          ctx.db.patch(id, {
+            companyRuleSnapshot: {
+              ...app.companyRuleSnapshot!,
+              feeTemplates: [
+                {
+                  feeType: "APPRAISAL_FEE",
+                  description: "Valuation",
+                  estimatedAmountMinor: Number.NaN,
+                  paidBy: "DEALER",
+                  paidTo: "APPRAISER",
+                  includedInQuotation: false,
+                  deductedFromSettlement: false,
+                  refundable: false,
+                  accountingTreatment: "APPRAISAL_EXPENSE",
+                },
+              ],
+            },
+          })
+        );
         await approveEconomics(s, id);
         const feeId = await s.asUser.mutation(api.financeDealCosts.recordTemplateFeeActual, {
           orgId: s.orgId, applicationId: id, templateIndex: 0, feeType: "APPRAISAL_FEE",
