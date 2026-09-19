@@ -97,20 +97,23 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
     const activeCompanies = financeCompanies.filter((c: Doc<"financeCompanies">) => c.isActive);
     for (const company of activeCompanies) {
 
-      const executionFees = company.adminFees || 0;
+      const feesConfigured = company.adminFees !== undefined;
+      const executionFees = company.adminFees ?? 0;
       const commission = company.commission || 0;
 
-      const result = calculateUnifiedMurabaha({
-        vehiclePrice: watchAll.vehiclePrice,
-        downPayment: watchAll.downPayment,
-        commission: commission,
-        processingFees: executionFees,
-        annualProfitRate: company.profitRate,
-        annualInsuranceRate: company.insuranceRate || 0,
-        termMonths: watchAll.termMonths,
-        gracePeriodMonths: company.gracePeriodMonths,
-        includesCommissionInDebt: company.includesCommissionInDebt,
-      });
+      const result = feesConfigured
+        ? calculateUnifiedMurabaha({
+            vehiclePrice: watchAll.vehiclePrice,
+            downPayment: watchAll.downPayment,
+            commission: commission,
+            processingFees: executionFees,
+            annualProfitRate: company.profitRate,
+            annualInsuranceRate: company.insuranceRate || 0,
+            termMonths: watchAll.termMonths,
+            gracePeriodMonths: company.gracePeriodMonths,
+            includesCommissionInDebt: company.includesCommissionInDebt,
+          })
+        : null;
 
       const actualValuation = valuations?.find((v: Doc<"vehicleValuations">) => v.companyId === company._id)?.valuationAmount || 0;
       const maxLTV = company.maxFinancingLTV || 0;
@@ -119,10 +122,10 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
         ? actualValuation * (maxLTV / 100)
         : Number.MAX_SAFE_INTEGER; // If no LTV/Valuation set, allow any amount
 
-      const exceedsValuation = result.financedAmount > maxFinancingAllowed && actualValuation > 0;
+      const exceedsValuation = result ? result.financedAmount > maxFinancingAllowed && actualValuation > 0 : false;
       const minimumDownPayment = watchAll.vehiclePrice - maxFinancingAllowed;
 
-      const requiredValuation = maxLTV > 0
+      const requiredValuation = maxLTV > 0 && result
         ? result.financedAmount / (maxLTV / 100)
         : 0;
 
@@ -132,12 +135,13 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
         companyId: company._id,
         companyName: company.name,
         isCash: false,
-        totalFinancedAmount: result.financedAmount,
-        monthlyInstallment: result.monthlyInstallment,
+        feesConfigured,
+        totalFinancedAmount: result?.financedAmount,
+        monthlyInstallment: result?.monthlyInstallment,
         profitRateApplied: company.profitRate,
-        totalProfit: result.totalProfit,
+        totalProfit: result?.totalProfit,
         requiredValuation,
-        takafulAmount: result.takafulAmount,
+        takafulAmount: result?.takafulAmount,
         actualValuation,
         maxFinancingAllowed,
         exceedsValuation,
@@ -152,6 +156,11 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
   const onSelectQuote = async (companyResult: any) => {
     const isValid = await form.trigger(["vehicleId", "customerId"]);
     if (!isValid) return;
+
+    if (!companyResult.isCash && !companyResult.feesConfigured) {
+      toast.error(t("ExecutionFeesNotConfigured" as any) || "Execution Fees are not configured for this finance company.");
+      return;
+    }
 
     if (companyResult.exceedsValuation) {
       toast.error(t("ExceedsFinancingLimit" as any));
@@ -352,19 +361,32 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                     {!result.isCash && (
                       <div className="bg-primary/5 p-3 rounded-md mb-4 text-center">
                         <div className="text-sm text-primary font-medium mb-1">{t("MonthlyInstallment" as any)}</div>
-                        <div className="text-2xl font-bold text-primary">{result.monthlyInstallment.toLocaleString(undefined, { minimumFractionDigits: 2 })} <span className="text-sm font-normal">JOD</span></div>
+                        <div className="text-2xl font-bold text-primary">
+                          {result.feesConfigured && result.monthlyInstallment !== undefined ? (
+                            <>
+                              {result.monthlyInstallment.toLocaleString(undefined, { minimumFractionDigits: 2 })}{" "}
+                              <span className="text-sm font-normal">JOD</span>
+                            </>
+                          ) : (
+                            <span className="text-amber-500 text-sm">{t("FeesNotConfigured" as any) || "Fees Not Configured"}</span>
+                          )}
+                        </div>
                       </div>
                     )}
 
                     <Button
                       type="button"
                       className="w-full mt-auto"
-                      variant={result.isCash ? "outline" : result.exceedsValuation ? "destructive" : "default"}
+                      variant={result.isCash ? "outline" : (!result.feesConfigured ? "secondary" : result.exceedsValuation ? "destructive" : "default")}
                       onClick={() => onSelectQuote(result)}
-                      disabled={isSubmitting || result.exceedsValuation}
+                      disabled={isSubmitting || (!result.isCash && !result.feesConfigured) || result.exceedsValuation}
                     >
                       <CheckCircle2 className="w-4 h-4 me-2" />
-                      {result.exceedsValuation ? (t("IncreaseDownPayment" as any)) : (t("SelectSave" as any))}
+                      {!result.isCash && !result.feesConfigured
+                        ? (t("FeesNotConfigured" as any) || "Fees Not Configured")
+                        : result.exceedsValuation
+                          ? (t("IncreaseDownPayment" as any))
+                          : (t("SelectSave" as any))}
                     </Button>
                   </CardContent>
                 </Card>

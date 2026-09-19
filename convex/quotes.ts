@@ -6,6 +6,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { advanceLeadStage } from "./utils/leadStageHelpers";
 import { notifyUser, getActorName } from "./utils/notifications";
 import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
+import { buildRuleSnapshot, type FinanceCompanyRuleSnapshot } from "./utils/financingEconomics";
 
 const quoteModeValidator = v.optional(v.union(
   v.literal("CASH"),
@@ -125,11 +126,29 @@ export const saveQuote = mutation({
       throw new ConvexError("Finance company can only be set for configured finance company quotes.");
     }
 
+    let companyRuleSnapshot: FinanceCompanyRuleSnapshot | undefined;
+    let companyRuleVersion: number | undefined;
+
     if (args.companyId) {
       const company = await ctx.db.get(args.companyId);
       if (!company || company.orgId !== args.orgId) {
         throw new ConvexError("Finance company not found in this organization.");
       }
+      if (args.mode === "CONFIGURED_FINANCE_COMPANY") {
+        if (company.adminFees === undefined) {
+          throw new ConvexError(
+            "Execution Fees are not configured for this finance company. Configure the expected execution fee amount, or enter 0 if none are charged, before generating a quotation."
+          );
+        }
+        companyRuleSnapshot = buildRuleSnapshot(company);
+        companyRuleVersion = companyRuleSnapshot.ruleVersion;
+      }
+    }
+
+    if (args.mode === "MANUAL_FINANCE_COMPANY" && args.manualAdminFees === undefined) {
+      throw new ConvexError(
+        "Execution Fees are not configured for this manual finance company quote. Enter the expected execution fee amount, or enter 0 if none are charged."
+      );
     }
 
     // The UI blocks a below-minimum financed quote unless a manager approved it;
@@ -178,6 +197,8 @@ export const saveQuote = mutation({
       ...(args.mode === "MANUAL_FINANCE_COMPANY" && manualAdminFees !== undefined ? { manualAdminFees } : {}),
       ...(args.mode === "MANUAL_FINANCE_COMPANY" && manualCommission !== undefined ? { manualCommission } : {}),
       ...(args.mode === "MANUAL_FINANCE_COMPANY" && manualIncludesCommissionInDebt !== undefined ? { manualIncludesCommissionInDebt } : {}),
+      ...(companyRuleSnapshot ? { companyRuleSnapshot } : {}),
+      ...(companyRuleVersion !== undefined ? { companyRuleVersion } : {}),
       status: "DRAFT",
       createdBy: user._id,
       createdAt: Date.now(),

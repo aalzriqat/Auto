@@ -2455,31 +2455,32 @@ export const createFromQuote = mutation({
 
     // Snapshot the finance company's dealer-purchase rules onto the
     // application, and point at the immutable version row they came from.
-    // Read live, these would let an edit to the company next month
-    // retroactively change the terms this deal was approved under.
+    // When the quote froze its rule snapshot at creation, that frozen authority
+    // is preserved so subsequent edits to the finance company cannot silently
+    // reinterpret the financial basis (installment, financed amount, DBR, LTV).
     let companyRuleSnapshot: FinanceCompanyRuleSnapshot | undefined;
     let companyRuleVersionId: Id<"financeCompanyRuleVersions"> | undefined;
-    if (quoteCompany) {
-      companyRuleSnapshot = buildRuleSnapshot(quoteCompany);
-      // New snapshots are held to the configuration policy before they are
-      // frozen. Its lower template limit reserves capacity under the deal's
-      // live-line ceiling for additional costs; an older snapshot above this
-      // policy but within live capacity remains closeable and is never
-      // rewritten here. The company is repaired by an explicit compliant
-      // list; the snapshot is never truncated to fit.
-      if (companyRuleSnapshot.feeTemplates && companyRuleSnapshot.adminFees === undefined) {
-        assertFeeTemplatesWithinLimit(
-          companyRuleSnapshot.feeTemplates,
-          `Creating an application under ${quoteCompany.name}`
-        );
+    if (quote.mode === "CONFIGURED_FINANCE_COMPANY") {
+      if (quote.companyRuleSnapshot) {
+        companyRuleSnapshot = quote.companyRuleSnapshot;
+      } else if (quoteCompany) {
+        companyRuleSnapshot = buildRuleSnapshot(quoteCompany);
       }
-      const versionRow = await ctx.db
-        .query("financeCompanyRuleVersions")
-        .withIndex("by_company_version", (q) =>
-          q.eq("companyId", quoteCompany!._id).eq("version", companyRuleSnapshot!.ruleVersion)
-        )
-        .first();
-      if (versionRow) companyRuleVersionId = versionRow._id;
+      if (companyRuleSnapshot) {
+        if (companyRuleSnapshot.feeTemplates && companyRuleSnapshot.adminFees === undefined) {
+          assertFeeTemplatesWithinLimit(
+            companyRuleSnapshot.feeTemplates,
+            `Creating an application under ${quoteCompany?.name ?? companyRuleSnapshot.companyName}`
+          );
+        }
+        const versionRow = await ctx.db
+          .query("financeCompanyRuleVersions")
+          .withIndex("by_company_version", (q) =>
+            q.eq("companyId", quote.companyId!).eq("version", companyRuleSnapshot!.ruleVersion)
+          )
+          .first();
+        if (versionRow) companyRuleVersionId = versionRow._id;
+      }
     }
 
     // Carry the commercial facts the operator already stated on the quote

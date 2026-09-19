@@ -10,7 +10,7 @@ import { toast } from "@/components/ui/sonner";
 import { api } from "@/convex/_generated/api";
 import { Id, Doc } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
-import { PaymentType, WizardData } from "../types";
+import { OTHER_COMPANY_ID, PaymentType, WizardData } from "../types";
 import { step1Schema } from "../schemas";
 
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -73,8 +73,8 @@ export default function Step1QuoteSetup({
   const [manualExecutionCommission, setManualExecutionCommission] = useState(
     initialData.manualExecutionCommission || 0
   );
-  const [manualExecutionFees, setManualExecutionFees] = useState(
-    initialData.manualExecutionFees || 0
+  const [manualExecutionFees, setManualExecutionFees] = useState<number | undefined>(
+    initialData.manualExecutionFees
   );
   const [manualIncludesCommissionInDebt, setManualIncludesCommissionInDebt] = useState(
     initialData.manualIncludesCommissionInDebt ?? true
@@ -219,11 +219,19 @@ export default function Step1QuoteSetup({
   };
 
   const onSubmit = (values: Step1Values) => {
-    if (paymentType === "INSTALLMENT" && !selectedCompanyId) {
-      form.setError("vehicleId", {
-        message: "Please select a financing company",
-      });
-      return;
+    if (paymentType === "INSTALLMENT") {
+      if (!selectedCompanyId) {
+        form.setError("vehicleId", {
+          message: "Please select a financing company",
+        });
+        return;
+      }
+      if (selectedCompanyId === OTHER_COMPANY_ID && manualExecutionFees === undefined) {
+        form.setError("vehicleId", {
+          message: t("ExecutionFeesRequired" as any) ?? "Execution Fees are required for manual finance. Enter the expected fee amount, or 0 if none are charged.",
+        });
+        return;
+      }
     }
 
     if (isBlockedByProfit) {

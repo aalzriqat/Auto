@@ -68,7 +68,7 @@ export function buildWizardQuotePayload({
           manualProviderName: providerName || "Other finance option",
           manualProfitRate: wizardData.manualProfitRate ?? 0,
           manualInsuranceRate: wizardData.manualInsuranceRate ?? 0,
-          manualAdminFees: wizardData.manualExecutionFees ?? 0,
+          manualAdminFees: wizardData.manualExecutionFees,
           manualCommission: wizardData.manualExecutionCommission ?? 0,
           manualIncludesCommissionInDebt: wizardData.manualIncludesCommissionInDebt ?? true,
         }

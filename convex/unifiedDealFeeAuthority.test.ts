@@ -587,23 +587,45 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         adminFees: undefined,
       });
 
-      const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
-        orgId,
-        customerId,
-        vehicleId,
-        vehiclePrice: 20_000,
-        downPayment: 0,
-        termMonths: 48,
-        mode: "CONFIGURED_FINANCE_COMPANY",
-        companyId,
-        totalFinancedAmount: 20_000,
-      });
+      // Fails closed at saveQuote boundary
+      await expect(
+        asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          vehiclePrice: 20_000,
+          downPayment: 0,
+          termMonths: 48,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          companyId,
+          totalFinancedAmount: 20_000,
+        })
+      ).rejects.toThrow(/Execution Fees are not configured for this finance company/);
 
-      // Fails closed before application is written
+      // Direct legacy quote in DB also fails closed at createFromQuote
+      const legacyQuoteId = await t.run((ctx) =>
+        ctx.db.insert("quotes", {
+          orgId,
+          customerId,
+          vehicleId,
+          vehiclePrice: 20_000,
+          downPayment: 0,
+          termMonths: 48,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          companyId,
+          totalFinancedAmount: 20_000,
+          monthlyInstallment: 450,
+          totalProfit: 1600,
+          status: "DRAFT",
+          createdBy: userId,
+          createdAt: Date.now(),
+        })
+      );
+
       await expect(
         asOwner.mutation(api.applications.createFromQuote, {
           orgId,
-          quoteId,
+          quoteId: legacyQuoteId,
         })
       ).rejects.toThrow(
         "Execution Fees are not configured for this finance company. Enter the expected execution fee amount, or enter 0 if none are charged."
@@ -942,6 +964,51 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
   });
 
   describe("S1-R4-H1: Canonical Fee Authority Resolution Regression Matrix", () => {
+    async function setupMatrixEnv() {
+      const t = convexTestWithComponents(schema, MODULES);
+      const orgId = await t.run((ctx) =>
+        ctx.db.insert("organizations", { name: "Dealer Matrix Test", createdAt: Date.now() })
+      );
+      await t.run((ctx) =>
+        ctx.db.insert("orgSettings", {
+          orgId,
+          currency: "JOD",
+          currencySymbol: "JD",
+          enabledPaymentTypes: ["CASH", "BANK_TRANSFER"],
+        })
+      );
+      const userId = await t.run((ctx) =>
+        ctx.db.insert("users", { clerkId: "user_matrix", email: "matrix@dealer.com" })
+      );
+      const roleId = await t.run((ctx) =>
+        ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ALL_PERMISSIONS, isSystemOwnerRole: true })
+      );
+      await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+      const asOwner = t.withIdentity({ subject: "user_matrix" });
+
+      const customerId = await t.run((ctx) =>
+        ctx.db.insert("customers", { orgId, firstName: "Matrix", lastName: "Customer" })
+      );
+      const vehicleId = await t.run((ctx) =>
+        ctx.db.insert("vehicles", {
+          orgId,
+          vin: `VIN_MATRIX_${Date.now()}_${Math.random()}`,
+          make: "Toyota",
+          model: "RAV4",
+          year: 2024,
+          mileage: 100,
+          color: "Silver",
+          fuelType: "Hybrid",
+          transmission: "Auto",
+          purchasePrice: 15_000,
+          sellingPrice: 20_000,
+          status: "AVAILABLE",
+        })
+      );
+
+      return { t, orgId, userId, asOwner, customerId, vehicleId };
+    }
+
     describe("resolveExpectedExecutionFeesMinor canonical resolver unit tests", () => {
       const dummyCompanyId = "dummy_company_id" as Id<"financeCompanies">;
 
@@ -1063,53 +1130,8 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
     });
 
     describe("End-to-end Convex mutation integration across the 8 matrix cases", () => {
-      async function setupMatrixEnv() {
-        const t = convexTestWithComponents(schema, MODULES);
-        const orgId = await t.run((ctx) =>
-          ctx.db.insert("organizations", { name: "Dealer Matrix Test", createdAt: Date.now() })
-        );
-        await t.run((ctx) =>
-          ctx.db.insert("orgSettings", {
-            orgId,
-            currency: "JOD",
-            currencySymbol: "JD",
-            enabledPaymentTypes: ["CASH", "BANK_TRANSFER"],
-          })
-        );
-        const userId = await t.run((ctx) =>
-          ctx.db.insert("users", { clerkId: "user_matrix", email: "matrix@dealer.com" })
-        );
-        const roleId = await t.run((ctx) =>
-          ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ALL_PERMISSIONS, isSystemOwnerRole: true })
-        );
-        await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
-        const asOwner = t.withIdentity({ subject: "user_matrix" });
-
-        const customerId = await t.run((ctx) =>
-          ctx.db.insert("customers", { orgId, firstName: "Matrix", lastName: "Customer" })
-        );
-        const vehicleId = await t.run((ctx) =>
-          ctx.db.insert("vehicles", {
-            orgId,
-            vin: `VIN_MATRIX_${Date.now()}_${Math.random()}`,
-            make: "Toyota",
-            model: "RAV4",
-            year: 2024,
-            mileage: 100,
-            color: "Silver",
-            fuelType: "Hybrid",
-            transmission: "Auto",
-            purchasePrice: 15_000,
-            sellingPrice: 20_000,
-            status: "AVAILABLE",
-          })
-        );
-
-        return { t, orgId, userId, asOwner, customerId, vehicleId };
-      }
-
-      test("Matrix Case 1: configured + adminFees: undefined rejects at createFromQuote", async () => {
-        const { asOwner, orgId, customerId, vehicleId } = await setupMatrixEnv();
+      test("Matrix Case 1: configured + adminFees: undefined rejects at saveQuote and createFromQuote", async () => {
+        const { asOwner, t, orgId, userId, customerId, vehicleId } = await setupMatrixEnv();
 
         const companyId = await asOwner.mutation(api.finance.createCompany, {
           orgId,
@@ -1122,20 +1144,43 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           adminFees: undefined,
         });
 
-        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
-          orgId,
-          customerId,
-          vehicleId,
-          vehiclePrice: 20_000,
-          downPayment: 0,
-          termMonths: 48,
-          mode: "CONFIGURED_FINANCE_COMPANY",
-          companyId,
-          totalFinancedAmount: 20_000,
-        });
+        // 1. Rejected at saveQuote boundary
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 0,
+            termMonths: 48,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            companyId,
+            totalFinancedAmount: 20_000,
+          })
+        ).rejects.toThrow(/Execution Fees are not configured for this finance company/);
+
+        // 2. Direct legacy DB insert rejects at createFromQuote boundary
+        const legacyQuoteId = await t.run((ctx) =>
+          ctx.db.insert("quotes", {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 0,
+            termMonths: 48,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            companyId,
+            totalFinancedAmount: 20_000,
+            monthlyInstallment: 450,
+            totalProfit: 1600,
+            status: "DRAFT",
+            createdBy: userId,
+            createdAt: Date.now(),
+          })
+        );
 
         await expect(
-          asOwner.mutation(api.applications.createFromQuote, { orgId, quoteId })
+          asOwner.mutation(api.applications.createFromQuote, { orgId, quoteId: legacyQuoteId })
         ).rejects.toThrow(/Execution Fees are not configured for this finance company/);
       });
 
@@ -1255,25 +1300,50 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         ).rejects.toThrow(/Finance company can only be set for configured finance company quotes/);
       });
 
-      test("Matrix Case 5: manual + manualAdminFees: undefined rejects at createFromQuote", async () => {
-        const { asOwner, orgId, customerId, vehicleId } = await setupMatrixEnv();
+      test("Matrix Case 5: manual + manualAdminFees: undefined rejects at saveQuote and createFromQuote", async () => {
+        const { asOwner, t, orgId, userId, customerId, vehicleId } = await setupMatrixEnv();
 
-        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
-          orgId,
-          customerId,
-          vehicleId,
-          vehiclePrice: 20_000,
-          downPayment: 0,
-          termMonths: 48,
-          mode: "MANUAL_FINANCE_COMPANY",
-          manualProviderName: "Custom Bank",
-          manualProfitRate: 5,
-          manualAdminFees: undefined,
-          totalFinancedAmount: 20_000,
-        });
+        // 1. Rejected at saveQuote boundary
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 0,
+            termMonths: 48,
+            mode: "MANUAL_FINANCE_COMPANY",
+            manualProviderName: "Custom Bank",
+            manualProfitRate: 5,
+            manualAdminFees: undefined,
+            totalFinancedAmount: 20_000,
+          })
+        ).rejects.toThrow(/Execution Fees are not configured for this manual finance company quote/);
+
+        // 2. Direct legacy DB insert rejects at createFromQuote boundary
+        const legacyQuoteId = await t.run((ctx) =>
+          ctx.db.insert("quotes", {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 0,
+            termMonths: 48,
+            mode: "MANUAL_FINANCE_COMPANY",
+            manualProviderName: "Custom Bank",
+            manualProfitRate: 5,
+            manualAdminFees: undefined,
+            totalFinancedAmount: 20_000,
+            monthlyInstallment: 450,
+            totalProfit: 1600,
+            status: "DRAFT",
+            createdBy: userId,
+            createdAt: Date.now(),
+          })
+        );
 
         await expect(
-          asOwner.mutation(api.applications.createFromQuote, { orgId, quoteId })
+          asOwner.mutation(api.applications.createFromQuote, { orgId, quoteId: legacyQuoteId })
         ).rejects.toThrow(/Execution Fees are not configured for this manual finance company quote/);
       });
 
@@ -1450,6 +1520,351 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
 
         const unRepairedB = (await t.run((ctx) => ctx.db.get(appIdB)))!;
         expect(unRepairedB.estimatedDealerBorneExpensesMinor).toBeUndefined();
+      });
+    });
+
+    describe("Adversarial Review Seat 1 Round 5: Bound Quote Economics Lineage & Frozen Fee Authority (S1-R5-H1)", () => {
+      test("Case 1: configured company adminFees undefined -> generate quote rejects / no economics", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Unconfigured Fees Bank",
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            // adminFees is undefined
+          })
+        );
+
+        // Attempting to generate/save quote with unconfigured company fees must reject
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            companyId,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            vehiclePrice: 25_000,
+            downPayment: 5_000,
+            termMonths: 60,
+            totalFinancedAmount: 20_000,
+            monthlyInstallment: 416.67,
+            totalProfit: 5000,
+          })
+        ).rejects.toThrow(/Execution Fees are not configured for this finance company/);
+      });
+
+      test("Case 2: configured company adminFees 0 -> valid zero-fee quote with frozen authority", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Zero Fee Bank",
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            adminFees: 0,
+            ruleVersion: 1,
+          })
+        );
+
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          companyId,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          vehiclePrice: 28_000,
+          downPayment: 5_000,
+          termMonths: 60,
+          totalFinancedAmount: 23_000,
+          monthlyInstallment: 479.17,
+          totalProfit: 5750,
+        });
+
+        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        expect(quote.companyRuleVersion).toBe(1);
+        expect(quote.companyRuleSnapshot).toBeDefined();
+        expect(quote.companyRuleSnapshot?.adminFees).toBe(0);
+      });
+
+      test("Case 3: configured company adminFees 700 -> quote calculated and frozen with 700", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "700 Fee Bank",
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            adminFees: 700,
+            ruleVersion: 1,
+          })
+        );
+
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          companyId,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          vehiclePrice: 38_000,
+          downPayment: 8_000,
+          termMonths: 60,
+          totalFinancedAmount: 30_700,
+          monthlyInstallment: 639.58,
+          totalProfit: 7675,
+        });
+
+        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        expect(quote.companyRuleSnapshot?.adminFees).toBe(700);
+      });
+
+      test("Case 4: quote made at 0, company later changed to 700 -> preserves frozen 0 fee authority in application", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Changing Bank A",
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            adminFees: 0,
+            ruleVersion: 1,
+          })
+        );
+
+        // Quote created at 0 fees
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          companyId,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          vehiclePrice: 22_000,
+          downPayment: 2_000,
+          termMonths: 48,
+          totalFinancedAmount: 20_000,
+          monthlyInstallment: 500,
+          totalProfit: 4000,
+        });
+
+        // Later, company is updated to 700 in settings
+        await t.run((ctx) =>
+          ctx.db.patch(companyId, {
+            adminFees: 700,
+            ruleVersion: 2,
+          })
+        );
+
+        // Application created from quote
+        const appId = await asOwner.mutation(api.applications.createFromQuote, {
+          orgId,
+          quoteId,
+        });
+
+        const app = (await t.run((ctx) => ctx.db.get(appId)))!;
+        // Application must preserve the quote's frozen 0 fee authority, NOT the current company's 700
+        expect(app.estimatedDealerBorneExpensesMinor).toBe(0);
+        expect(app.companyRuleSnapshot?.adminFees).toBe(0);
+      });
+
+      test("Case 5: quote made at 700, company later changed to 900 -> preserves frozen 700 fee authority in application", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Changing Bank B",
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            adminFees: 700,
+            ruleVersion: 1,
+          })
+        );
+
+        // Quote created at 700 fees
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          companyId,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          vehiclePrice: 26_000,
+          downPayment: 3_000,
+          termMonths: 48,
+          totalFinancedAmount: 23_700,
+          monthlyInstallment: 592.5,
+          totalProfit: 4740,
+        });
+
+        // Later, company is updated to 900 in settings
+        await t.run((ctx) =>
+          ctx.db.patch(companyId, {
+            adminFees: 900,
+            ruleVersion: 2,
+          })
+        );
+
+        // Application created from quote
+        const appId = await asOwner.mutation(api.applications.createFromQuote, {
+          orgId,
+          quoteId,
+        });
+
+        const app = (await t.run((ctx) => ctx.db.get(appId)))!;
+        // Application must preserve the quote's frozen 700 fee authority, NOT the current company's 900
+        expect(app.estimatedDealerBorneExpensesMinor).toBe(700_000);
+        expect(app.companyRuleSnapshot?.adminFees).toBe(700);
+      });
+
+      test("Case 6 & 7: blank manual fee in web/mobile remains undefined and blocks saveQuote", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+
+        // With manualAdminFees: undefined (blank in client), saveQuote must reject and not manufacture 0
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            mode: "MANUAL_FINANCE_COMPANY",
+            manualProviderName: "Custom Lender",
+            manualProfitRate: 5,
+            manualAdminFees: undefined, // blank
+            vehiclePrice: 24_000,
+            downPayment: 4_000,
+            termMonths: 48,
+            totalFinancedAmount: 20_000,
+            monthlyInstallment: 500,
+            totalProfit: 4000,
+          })
+        ).rejects.toThrow(/Execution Fees are not configured for this manual finance company quote/);
+      });
+
+      test("Case 8: explicit manual 0 is valid and creates application with 0 expenses", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          mode: "MANUAL_FINANCE_COMPANY",
+          manualProviderName: "Zero Fee Manual Bank",
+          manualProfitRate: 5,
+          manualAdminFees: 0, // explicit 0
+          vehiclePrice: 21_000,
+          downPayment: 3_000,
+          termMonths: 48,
+          totalFinancedAmount: 18_000,
+          monthlyInstallment: 450,
+          totalProfit: 3600,
+        });
+
+        const appId = await asOwner.mutation(api.applications.createFromQuote, {
+          orgId,
+          quoteId,
+        });
+
+        const app = (await t.run((ctx) => ctx.db.get(appId)))!;
+        expect(app.estimatedDealerBorneExpensesMinor).toBe(0);
+        expect(app.manualFinanceSnapshot?.adminFees).toBe(0);
+      });
+
+      test("Case 9: DBR and LTV derived from the identical frozen fee authority as application economics", async () => {
+        const { t, orgId, asOwner, vehicleId } = await setupMatrixEnv();
+
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Lineage Bank",
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            adminFees: 500, // 500 JOD fee
+            ruleVersion: 1,
+          })
+        );
+
+        const customerId = await t.run((ctx) =>
+          ctx.db.insert("customers", {
+            orgId,
+            firstName: "Kareem",
+            lastName: "Client",
+            phone: "+962798888888",
+            employment: {
+              employer: "Tech Corp",
+              salary: 1500,
+            },
+            createdAt: Date.now(),
+          })
+        );
+
+        // Vehicle valuation
+        await t.run((ctx) =>
+          ctx.db.insert("vehicleValuations", {
+            orgId,
+            vehicleId,
+            companyId,
+            valuationAmount: 25_000,
+          })
+        );
+
+        // Vehicle price 25,000 - down payment 5,000 + admin fees 500 = 20,500 financed
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          companyId,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          vehiclePrice: 25_000,
+          downPayment: 5_000,
+          termMonths: 48,
+          totalFinancedAmount: 20_500,
+          monthlyInstallment: 512.5,
+          totalProfit: 4100,
+        });
+
+        // Company fees are later changed to 1200 in settings
+        await t.run((ctx) =>
+          ctx.db.patch(companyId, {
+            adminFees: 1200,
+            ruleVersion: 2,
+          })
+        );
+
+        const appId = await asOwner.mutation(api.applications.createFromQuote, {
+          orgId,
+          quoteId,
+        });
+
+        const app = (await t.run((ctx) => ctx.db.get(appId)))!;
+        // 1. Application economics: matches frozen quote authority (500 JOD = 500,000 minor)
+        expect(app.estimatedDealerBorneExpensesMinor).toBe(500_000);
+
+        // 2. Underwriting snapshot: proposedMonthlyInstallment and DBR are derived from quote.monthlyInstallment (512.5)
+        expect(app.underwritingSnapshot?.proposedMonthlyInstallment).toBe(512.5);
+        expect(app.underwritingSnapshot?.dbrAtSubmission).toBeCloseTo(512.5 / 1500, 4);
+
+        // 3. Underwriting LTV: derived from quote.totalFinancedAmount (20,500 / 25,000 * 100 = 82)
+        expect(app.underwritingSnapshot?.ltvAtSubmission).toBeCloseTo((20_500 / 25_000) * 100, 4);
       });
     });
   });

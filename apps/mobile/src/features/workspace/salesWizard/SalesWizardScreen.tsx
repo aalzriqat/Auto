@@ -154,7 +154,7 @@ export function SalesWizardScreen({
   const [manualProfitRate, setManualProfitRate] = useState("0");
   const [manualInsuranceRate, setManualInsuranceRate] = useState("0");
   const [manualCommission, setManualCommission] = useState("0");
-  const [manualFees, setManualFees] = useState("0");
+  const [manualFees, setManualFees] = useState("");
   const [manualIncludesCommission, setManualIncludesCommission] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerSearch, setPickerSearch] = useState("");
@@ -242,17 +242,21 @@ export function SalesWizardScreen({
         return customerStatuses.some((status) => accepted.includes(status));
       })
       .map((company) => {
-        const result = calculateUnifiedMurabaha({
-          vehiclePrice: effectivePrice,
-          downPayment: down,
-          commission: company.commission || 0,
-          processingFees: company.adminFees || 0,
-          annualProfitRate: company.profitRate,
-          annualInsuranceRate: company.insuranceRate || 0,
-          termMonths: term,
-          gracePeriodMonths: company.gracePeriodMonths,
-          includesCommissionInDebt: company.includesCommissionInDebt,
-        });
+        const feesConfigured = company.adminFees !== undefined;
+        const executionFees = company.adminFees ?? 0;
+        const result = feesConfigured
+          ? calculateUnifiedMurabaha({
+              vehiclePrice: effectivePrice,
+              downPayment: down,
+              commission: company.commission || 0,
+              processingFees: executionFees,
+              annualProfitRate: company.profitRate,
+              annualInsuranceRate: company.insuranceRate || 0,
+              termMonths: term,
+              gracePeriodMonths: company.gracePeriodMonths,
+              includesCommissionInDebt: company.includesCommissionInDebt,
+            })
+          : null;
         const actualValuation =
           (valuations ?? []).find((valuation) => valuation.companyId === company._id)
             ?.valuationAmount || 0;
@@ -261,28 +265,35 @@ export function SalesWizardScreen({
           maxLTV > 0 && actualValuation > 0
             ? actualValuation * (maxLTV / 100)
             : Number.MAX_SAFE_INTEGER;
-        const exceedsValuation = result.financedAmount > maxFinancingAllowed && actualValuation > 0;
-        const minimumDownPayment = Math.max(
-          0,
-          effectivePrice + (company.commission || 0) + (company.adminFees || 0) - maxFinancingAllowed,
-        );
-        return { company, result, actualValuation, maxFinancingAllowed, exceedsValuation, minimumDownPayment };
+        const exceedsValuation = result ? result.financedAmount > maxFinancingAllowed && actualValuation > 0 : false;
+        const minimumDownPayment = feesConfigured
+          ? Math.max(
+              0,
+              effectivePrice + (company.commission || 0) + executionFees - maxFinancingAllowed,
+            )
+          : undefined;
+        return { company, result, feesConfigured, actualValuation, maxFinancingAllowed, exceedsValuation, minimumDownPayment };
       });
   }, [companies, customerStatuses, down, effectivePrice, isCash, price, term, valuations, vehicleId]);
 
+  const parsedManualFees = parseOptionalNumber(manualFees);
+  const manualFeesConfigured = parsedManualFees !== undefined;
+
   const manualResult = useMemo(
     () =>
-      calculateUnifiedMurabaha({
-        vehiclePrice: effectivePrice,
-        downPayment: down,
-        commission: parseOptionalNumber(manualCommission) ?? 0,
-        processingFees: parseOptionalNumber(manualFees) ?? 0,
-        annualProfitRate: parseOptionalNumber(manualProfitRate) ?? 0,
-        annualInsuranceRate: parseOptionalNumber(manualInsuranceRate) ?? 0,
-        termMonths: term,
-        includesCommissionInDebt: manualIncludesCommission,
-      }),
-    [down, effectivePrice, manualCommission, manualFees, manualInsuranceRate, manualProfitRate, manualIncludesCommission, term],
+      manualFeesConfigured
+        ? calculateUnifiedMurabaha({
+            vehiclePrice: effectivePrice,
+            downPayment: down,
+            commission: parseOptionalNumber(manualCommission) ?? 0,
+            processingFees: parsedManualFees,
+            annualProfitRate: parseOptionalNumber(manualProfitRate) ?? 0,
+            annualInsuranceRate: parseOptionalNumber(manualInsuranceRate) ?? 0,
+            termMonths: term,
+            includesCommissionInDebt: manualIncludesCommission,
+          })
+        : null,
+    [down, effectivePrice, manualCommission, parsedManualFees, manualFeesConfigured, manualInsuranceRate, manualProfitRate, manualIncludesCommission, term],
   );
 
   const selectedComparison = comparisons.find((row) => row.company._id === selectedCompanyId) ?? null;
@@ -297,11 +308,17 @@ export function SalesWizardScreen({
     return haystack.includes(customerSearch.trim().toLowerCase());
   });
 
+  const isFinanceSelectedValid =
+    isCash ||
+    (selectedCompanyId === OTHER_COMPANY_ID
+      ? manualFeesConfigured
+      : Boolean(selectedComparison?.feesConfigured));
+
   const canLeaveStep1 =
     Boolean(vehicleId) &&
     price > 0 &&
     !isBlockedByProfit &&
-    (isCash || Boolean(selectedCompanyId));
+    isFinanceSelectedValid;
 
   // Resume prompt: mirrors the web wizard DB-draft restore.
   useEffect(() => {
@@ -469,7 +486,7 @@ export function SalesWizardScreen({
         manualProviderName: manual ? (locale === "ar" ? "جهة أخرى" : "Other provider") : undefined,
         manualProfitRate: manual ? parseOptionalNumber(manualProfitRate) ?? 0 : undefined,
         manualInsuranceRate: manual ? parseOptionalNumber(manualInsuranceRate) ?? 0 : undefined,
-        manualAdminFees: manual ? parseOptionalNumber(manualFees) ?? 0 : undefined,
+        manualAdminFees: manual ? parseOptionalNumber(manualFees) : undefined,
         manualCommission: manual ? parseOptionalNumber(manualCommission) ?? 0 : undefined,
         manualIncludesCommissionInDebt: manual ? manualIncludesCommission : undefined,
       });
@@ -772,36 +789,59 @@ export function SalesWizardScreen({
                       : "Select the customer status first to see available offers."}
                   </Text>
                 ) : null}
-                {comparisons.map(({ company, exceedsValuation, minimumDownPayment, result }) => {
+                {comparisons.map(({ company, exceedsValuation, feesConfigured, minimumDownPayment, result }) => {
                   const selected = selectedCompanyId === company._id;
                   return (
                     <Pressable
                       key={company._id}
                       accessibilityRole="button"
-                      accessibilityState={{ selected }}
-                      style={[styles.companyCard, selected && { borderColor: accent, borderWidth: 2 }]}
-                      onPress={() => setSelectedCompanyId(company._id)}
+                      accessibilityState={{ selected, disabled: !feesConfigured }}
+                      disabled={!feesConfigured}
+                      style={[
+                        styles.companyCard,
+                        selected && { borderColor: accent, borderWidth: 2 },
+                        !feesConfigured && { opacity: 0.6 },
+                      ]}
+                      onPress={() => {
+                        if (feesConfigured) setSelectedCompanyId(company._id);
+                      }}
                     >
                       <View style={styles.companyHeader}>
                         <Text style={styles.companyName}>{company.name}</Text>
                         <Text style={[styles.companyRate, { color: accent }]}>{company.profitRate}%</Text>
                       </View>
                       <Text style={[styles.companyMonthly, { color: accent }]}>
-                        {money(result.monthlyInstallment, locale)}
-                        <Text style={styles.companyMonthlyUnit}> /{locale === "ar" ? "شهر" : "mo"}</Text>
+                        {result ? (
+                          <>
+                            {money(result.monthlyInstallment, locale)}
+                            <Text style={styles.companyMonthlyUnit}> /{locale === "ar" ? "شهر" : "mo"}</Text>
+                          </>
+                        ) : (
+                          <Text style={[styles.companyMonthlyUnit, { color: theme.colors.warning }]}>
+                            {locale === "ar" ? "الرسوم غير محددة" : "Fees not configured"}
+                          </Text>
+                        )}
                       </Text>
-                      <View style={styles.companyMetaRow}>
-                        <Text style={styles.companyMeta}>
-                          {locale === "ar" ? "التمويل" : "Financed"}: {money(result.financedAmount, locale)}
+                      {result ? (
+                        <View style={styles.companyMetaRow}>
+                          <Text style={styles.companyMeta}>
+                            {locale === "ar" ? "التمويل" : "Financed"}: {money(result.financedAmount, locale)}
+                          </Text>
+                          <Text style={styles.companyMeta}>
+                            {locale === "ar" ? "الربح" : "Profit"}: {money(result.totalProfit, locale)}
+                          </Text>
+                          <Text style={styles.companyMeta}>
+                            {locale === "ar" ? "التكافل" : "Takaful"}: {money(result.takafulAmount, locale)}
+                          </Text>
+                        </View>
+                      ) : null}
+                      {!feesConfigured ? (
+                        <Text style={styles.companyWarning}>
+                          {locale === "ar"
+                            ? "رسوم التنفيذ غير محددة لهذه الشركة في الإعدادات"
+                            : "Execution fees are not configured for this company"}
                         </Text>
-                        <Text style={styles.companyMeta}>
-                          {locale === "ar" ? "الربح" : "Profit"}: {money(result.totalProfit, locale)}
-                        </Text>
-                        <Text style={styles.companyMeta}>
-                          {locale === "ar" ? "التكافل" : "Takaful"}: {money(result.takafulAmount, locale)}
-                        </Text>
-                      </View>
-                      {exceedsValuation ? (
+                      ) : exceedsValuation && minimumDownPayment !== undefined ? (
                         <Text style={styles.companyWarning}>
                           {locale === "ar"
                             ? `يتجاوز حد التمويل — الحد الأدنى للدفعة ${money(minimumDownPayment, locale)}`
@@ -823,8 +863,16 @@ export function SalesWizardScreen({
                     <View style={styles.companyHeader}>
                       <Text style={styles.companyName}>{locale === "ar" ? "جهة أخرى (يدوي)" : "Others (manual)"}</Text>
                       <Text style={[styles.companyMonthly, { color: accent }]}>
-                        {money(manualResult.monthlyInstallment, locale)}
-                        <Text style={styles.companyMonthlyUnit}> /{locale === "ar" ? "شهر" : "mo"}</Text>
+                        {manualResult ? (
+                          <>
+                            {money(manualResult.monthlyInstallment, locale)}
+                            <Text style={styles.companyMonthlyUnit}> /{locale === "ar" ? "شهر" : "mo"}</Text>
+                          </>
+                        ) : (
+                          <Text style={[styles.companyMonthlyUnit, { color: theme.colors.warning }]}>
+                            {locale === "ar" ? "أدخل الرسوم" : "Enter fees"}
+                          </Text>
+                        )}
                       </Text>
                     </View>
                     {selectedCompanyId === OTHER_COMPANY_ID ? (

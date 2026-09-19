@@ -2531,6 +2531,12 @@ export default defineSchema({
     manualCommission: v.optional(v.number()),
     manualIncludesCommissionInDebt: v.optional(v.boolean()),
 
+    // Frozen finance company rule snapshot and version at the time the quotation was calculated.
+    // Bound to the quotation so createFromQuote and dealer-side economics remain anchored
+    // to the identical fee authority even if the finance company settings change later.
+    companyRuleVersion: v.optional(v.number()),
+    companyRuleSnapshot: v.optional(financeCompanyRuleSnapshotValidator),
+
     status: v.union(v.literal("DRAFT"), v.literal("SHARED"), v.literal("ACCEPTED"), v.literal("EXPIRED")),
     expiresAt: v.optional(v.number()),
     createdBy: v.id("users"),

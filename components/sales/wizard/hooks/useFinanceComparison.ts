@@ -18,17 +18,19 @@ export interface FinanceComparisonResult {
   companyId: string;
   companyName: string;
   profitRate: number;
+  feesConfigured: boolean;
+  adminFees?: number;
 
-  monthlyInstallment: number;
-  totalFinancedAmount: number;
-  totalProfit: number;
-  takafulAmount: number;
+  monthlyInstallment?: number;
+  totalFinancedAmount?: number;
+  totalProfit?: number;
+  takafulAmount?: number;
 
   actualValuation: number;
   maxFinancingAllowed: number;
 
   exceedsValuation: boolean;
-  minimumDownPayment: number;
+  minimumDownPayment?: number;
 
   companyDocs: any[];
 
@@ -47,46 +49,32 @@ export function useFinanceComparison({
 
   const financeCompanies = useQuery(
     api.finance.listCompanies,
-    activeOrgId
-      ? {
-        orgId: activeOrgId,
-      }
-      : "skip"
+    activeOrgId ? { orgId: activeOrgId } : "skip"
   );
 
   const documentRules = useQuery(
     api.documents.listRules,
-    activeOrgId
-      ? {
-        orgId: activeOrgId,
-      }
-      : "skip"
+    activeOrgId ? { orgId: activeOrgId } : "skip"
   );
 
   const valuations = useQuery(
     api.finance.listValuations,
-    activeOrgId && vehicleId
-      ? {
-        orgId: activeOrgId,
-        vehicleId: vehicleId as Id<"vehicles">,
-      }
-      : "skip"
+    activeOrgId && vehicleId ? { orgId: activeOrgId, vehicleId: vehicleId as Id<"vehicles"> } : "skip"
   );
 
-  const effectivePrice = vehiclePrice + desiredProfit;
+  const effectivePrice = vehiclePrice + (desiredProfit || 0);
 
-  const comparisons = useMemo<FinanceComparisonResult[]>(() => {
-    if (!financeCompanies) return [];
-
-    if (!vehicleId) return [];
-
-    if (vehiclePrice <= 0) return [];
+  const comparisons = useMemo((): FinanceComparisonResult[] => {
+    if (!financeCompanies || !vehicleId || vehiclePrice <= 0) {
+      return [];
+    }
 
     let activeCompanies = financeCompanies.filter(
-      (company: Doc<"financeCompanies">) => company.isActive
+      (c: Doc<"financeCompanies">) => c.isActive
     );
 
-    // Filter companies by customer statuses
+    // If customer statuses are provided, filter companies by acceptedStatuses.
+    // An empty selection means no requirements are known, so no companies match.
     if (customerStatuses.length === 0) {
       return [];
     }
@@ -101,18 +89,23 @@ export function useFinanceComparison({
     });
 
     return activeCompanies.map((company: Doc<"financeCompanies">) => {
-      const result = calculateUnifiedMurabaha({
-        vehiclePrice: effectivePrice,
-        downPayment,
-        commission: company.commission || 0,
-        processingFees: company.adminFees || 0,
-        annualProfitRate: company.profitRate,
-        annualInsuranceRate: company.insuranceRate || 0,
-        termMonths,
-        gracePeriodMonths: company.gracePeriodMonths,
-        includesCommissionInDebt:
-          company.includesCommissionInDebt,
-      });
+      const feesConfigured = company.adminFees !== undefined;
+      const executionFees = company.adminFees ?? 0;
+
+      const result = feesConfigured
+        ? calculateUnifiedMurabaha({
+            vehiclePrice: effectivePrice,
+            downPayment,
+            commission: company.commission || 0,
+            processingFees: executionFees,
+            annualProfitRate: company.profitRate,
+            annualInsuranceRate: company.insuranceRate || 0,
+            termMonths,
+            gracePeriodMonths: company.gracePeriodMonths,
+            includesCommissionInDebt:
+              company.includesCommissionInDebt,
+          })
+        : null;
 
       const actualValuation =
         valuations?.find(
@@ -127,13 +120,16 @@ export function useFinanceComparison({
           : Number.MAX_SAFE_INTEGER;
 
       const exceedsValuation =
+        result !== null &&
         result.financedAmount > maxFinancingAllowed &&
         actualValuation > 0;
 
-      const minimumDownPayment = Math.max(
-        0,
-        effectivePrice + (company.commission || 0) + (company.adminFees || 0) - maxFinancingAllowed
-      );
+      const minimumDownPayment = feesConfigured
+        ? Math.max(
+            0,
+            effectivePrice + (company.commission || 0) + executionFees - maxFinancingAllowed
+          )
+        : undefined;
 
       const companyDocs =
         documentRules?.filter(
@@ -146,18 +142,20 @@ export function useFinanceComparison({
         companyId: company._id as string,
         companyName: company.name,
         profitRate: company.profitRate,
+        feesConfigured,
+        adminFees: company.adminFees,
 
         monthlyInstallment:
-          result.monthlyInstallment,
+          result?.monthlyInstallment,
 
         totalFinancedAmount:
-          result.financedAmount,
+          result?.financedAmount,
 
         totalProfit:
-          result.totalProfit,
+          result?.totalProfit,
 
         takafulAmount:
-          result.takafulAmount,
+          result?.takafulAmount,
 
         actualValuation,
 

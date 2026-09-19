@@ -105,11 +105,14 @@ export function Step3Review({
     }
 
     if (isManualFinance) {
+      if (wizardData.manualExecutionFees === undefined) {
+        return null;
+      }
       const result = calculateUnifiedMurabaha({
         vehiclePrice: effectivePrice,
         downPayment: wizardData.downPayment,
         commission: wizardData.manualExecutionCommission || 0,
-        processingFees: wizardData.manualExecutionFees || 0,
+        processingFees: wizardData.manualExecutionFees,
         annualProfitRate: wizardData.manualProfitRate || 0,
         annualInsuranceRate: wizardData.manualInsuranceRate || 0,
         termMonths: wizardData.termMonths,
@@ -129,13 +132,13 @@ export function Step3Review({
       };
     }
 
-    if (!selectedCompany) return null;
+    if (!selectedCompany || selectedCompany.adminFees === undefined) return null;
 
     const result = calculateUnifiedMurabaha({
       vehiclePrice: effectivePrice,
       downPayment: wizardData.downPayment,
       commission: selectedCompany.commission || 0,
-      processingFees: selectedCompany.adminFees || 0,
+      processingFees: selectedCompany.adminFees,
       annualProfitRate: selectedCompany.profitRate,
       annualInsuranceRate: selectedCompany.insuranceRate || 0,
       termMonths: wizardData.termMonths,
