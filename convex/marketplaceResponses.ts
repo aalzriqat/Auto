@@ -10,7 +10,9 @@ import { calculateUnifiedMurabaha } from "../lib/financing";
 import { assertFiniteNumber } from "./utils/money";
 import {
   assertCustomerLoanTermsValid,
+  assertFinancedMurabahaResultValid,
   assertFinancedQuoteContributionValid,
+  assertRequestedFinancingTermValid,
   requireConfiguredExecutionFees,
 } from "./utils/financingEconomics";
 import { getOrgCurrency } from "./accounting/workflowHooks";
@@ -60,9 +62,11 @@ async function buildFinanceOffer(
   assertFiniteNumber(args.vehiclePrice, "vehicle price");
   assertFiniteNumber(args.downPayment, "down payment");
   assertFiniteNumber(args.termMonths, "term");
-  if (args.termMonths <= 0 || args.termMonths > company.maxTermMonths) {
-    throw new ConvexError(`Term must be between 1 and ${company.maxTermMonths} months for this finance company.`);
-  }
+  assertRequestedFinancingTermValid({
+    termMonths: args.termMonths,
+    gracePeriodMonths: company.gracePeriodMonths,
+    maxTermMonths: company.maxTermMonths,
+  });
   assertFinancedQuoteContributionValid({
     vehiclePrice: args.vehiclePrice,
     downPayment: args.downPayment,
@@ -80,6 +84,8 @@ async function buildFinanceOffer(
     gracePeriodMonths: company.gracePeriodMonths,
     includesCommissionInDebt: company.includesCommissionInDebt ?? false,
   });
+
+  assertFinancedMurabahaResultValid(result);
 
   return {
     vehiclePrice: args.vehiclePrice,

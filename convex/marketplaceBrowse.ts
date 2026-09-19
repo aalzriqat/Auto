@@ -6,6 +6,7 @@ import { listOptedInDealerProfiles } from "./marketplaceDealers";
 import { getPublishedSnapshotData, getSettingsByOrg, activePrimaryDomain } from "./websites";
 import { projectedVehicleRows, websiteSectionMap } from "./websiteProjection";
 import { calculateUnifiedMurabaha } from "../lib/financing";
+import { isRequestedFinancingTermValid } from "./utils/financingEconomics";
 
 const MAX_CANDIDATE_ORGS = 100;
 // Bounds the merged cross-org result set — founding-dealer scale, same
@@ -99,7 +100,16 @@ export function estimateMonthlyPayment(price: number, financeCompany: FinanceCom
   if (!financeCompany || financeCompany.adminFees === undefined) return null;
   const downPayment = price * (ESTIMATE_DOWN_PAYMENT_PCT / 100);
   const termMonths = Math.min(ESTIMATE_TERM_MONTHS, financeCompany.maxTermMonths);
-  const { monthlyInstallment } = calculateUnifiedMurabaha({
+  if (
+    !isRequestedFinancingTermValid({
+      termMonths,
+      maxTermMonths: financeCompany.maxTermMonths,
+      gracePeriodMonths: financeCompany.gracePeriodMonths,
+    })
+  ) {
+    return null;
+  }
+  const { monthlyInstallment, financedAmount, totalContractValue } = calculateUnifiedMurabaha({
     vehiclePrice: price,
     downPayment,
     commission: financeCompany.commission ?? 0,
@@ -110,6 +120,16 @@ export function estimateMonthlyPayment(price: number, financeCompany: FinanceCom
     gracePeriodMonths: financeCompany.gracePeriodMonths,
     includesCommissionInDebt: financeCompany.includesCommissionInDebt ?? false,
   });
+  if (
+    !Number.isFinite(monthlyInstallment) ||
+    monthlyInstallment <= 0 ||
+    !Number.isFinite(financedAmount) ||
+    financedAmount <= 0 ||
+    !Number.isFinite(totalContractValue) ||
+    totalContractValue <= 0
+  ) {
+    return null;
+  }
   return Math.round(monthlyInstallment);
 }
 

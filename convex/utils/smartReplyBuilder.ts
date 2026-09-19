@@ -1,4 +1,4 @@
-import { calculateUnifiedMurabaha } from "../../lib/financing";
+import { calculateUnifiedMurabaha, isRequestedFinancingTermValid } from "../../lib/financing";
 import { socialSmartReplyEn, socialSmartReplyAr } from "../../lib/i18n/domains/socialSmartReply";
 import type { SmartReplyIntent } from "./smartReplyIntent";
 import type { Doc } from "../_generated/dataModel";
@@ -104,6 +104,17 @@ export function buildSmartReplyText({ intent, vehicle, orgSettings, financeCompa
       return fill(tpl(custom, "financingGeneric", strings.SmartReplyFinancingGeneric), { model: vehicle.model, year: vehicle.year });
     }
 
+    const termMonths = financeCompany.maxTermMonths;
+    if (
+      !isRequestedFinancingTermValid({
+        termMonths,
+        maxTermMonths: financeCompany.maxTermMonths,
+        gracePeriodMonths: financeCompany.gracePeriodMonths,
+      })
+    ) {
+      return fill(tpl(custom, "financingGeneric", strings.SmartReplyFinancingGeneric), { model: vehicle.model, year: vehicle.year });
+    }
+
     const downPaymentPercent = orgSettings?.smartReplyDefaultDownPaymentPercent ?? 20;
     const downPayment = vehicle.sellingPrice * (downPaymentPercent / 100);
     const { monthlyInstallment } = calculateUnifiedMurabaha({
@@ -113,12 +124,12 @@ export function buildSmartReplyText({ intent, vehicle, orgSettings, financeCompa
       processingFees: financeCompany.adminFees!,
       annualProfitRate: financeCompany.profitRate,
       annualInsuranceRate: financeCompany.insuranceRate ?? 0,
-      termMonths: financeCompany.maxTermMonths,
+      termMonths,
       gracePeriodMonths: financeCompany.gracePeriodMonths,
       includesCommissionInDebt: financeCompany.includesCommissionInDebt,
     });
 
-    if (!monthlyInstallment) {
+    if (!monthlyInstallment || monthlyInstallment <= 0) {
       return fill(tpl(custom, "financingGeneric", strings.SmartReplyFinancingGeneric), { model: vehicle.model, year: vehicle.year });
     }
 

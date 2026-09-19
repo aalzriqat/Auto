@@ -10,7 +10,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { compareDealerRank, listOptedInDealerProfiles, checkMarketplaceQuota } from "./marketplaceDealers";
 import { hasPlanFeature } from "./subscriptions";
 import { scoreVehicleAgainstRequest } from "./utils/marketplaceMatching";
-import { calculateUnifiedMurabaha } from "../lib/financing";
+import { calculateUnifiedMurabaha, isRequestedFinancingTermValid } from "../lib/financing";
 
 const MAX_MATCHED_DEALERS = 5;
 const REQUEST_EXPIRES_AFTER_DAYS = 14;
@@ -193,8 +193,21 @@ export function computePersonalizedFinance(
   if (terms.adminFees === undefined) {
     return null;
   }
+  const preferredTerm = prefs?.preferredTermMonths ?? DEFAULT_TERM_MONTHS;
+  if (!Number.isFinite(preferredTerm) || !Number.isInteger(preferredTerm) || preferredTerm <= 0) {
+    return null;
+  }
+  const termMonths = Math.min(preferredTerm, terms.maxTermMonths);
+  if (
+    !isRequestedFinancingTermValid({
+      termMonths,
+      maxTermMonths: terms.maxTermMonths,
+      gracePeriodMonths: terms.gracePeriodMonths,
+    })
+  ) {
+    return null;
+  }
   const downPayment = prefs?.downPaymentAmount ?? Math.round(price * DEFAULT_DOWN_PAYMENT_PCT);
-  const termMonths = Math.min(prefs?.preferredTermMonths ?? DEFAULT_TERM_MONTHS, terms.maxTermMonths);
   const result = calculateUnifiedMurabaha({
     vehiclePrice: price,
     downPayment,
@@ -206,6 +219,16 @@ export function computePersonalizedFinance(
     gracePeriodMonths: terms.gracePeriodMonths,
     includesCommissionInDebt: terms.includesCommissionInDebt ?? false,
   });
+  if (
+    !Number.isFinite(result.monthlyInstallment) ||
+    result.monthlyInstallment <= 0 ||
+    !Number.isFinite(result.financedAmount) ||
+    result.financedAmount <= 0 ||
+    !Number.isFinite(result.totalContractValue) ||
+    result.totalContractValue <= 0
+  ) {
+    return null;
+  }
   return {
     monthly: Math.round(result.monthlyInstallment),
     snapshot: {

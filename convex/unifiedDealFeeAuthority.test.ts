@@ -4007,6 +4007,39 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           { statusId: statusA, label: "Legacy Status" },
         ]);
       });
+
+      test("Non-configured modes (CASH, MANUAL_FINANCE_COMPANY) do not require customerEligibilityStatusIds and leave snapshot undefined", async () => {
+        const { asOwner, t, orgId, customerId, vehicleId } = await setupMatrixEnv();
+
+        // 1. CASH quote without customerEligibilityStatusIds
+        const cashQuoteId = await asOwner.rawMutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          vehiclePrice: 20_000,
+          downPayment: 20_000,
+          termMonths: 0,
+          mode: "CASH",
+        });
+        const cashQuote = (await t.run((ctx) => ctx.db.get(cashQuoteId)))!;
+        expect(cashQuote.customerEligibilitySnapshot).toBeUndefined();
+
+        // 2. MANUAL_FINANCE_COMPANY quote without customerEligibilityStatusIds
+        const customQuoteId = await asOwner.rawMutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          vehiclePrice: 20_000,
+          downPayment: 5_000,
+          termMonths: 36,
+          mode: "MANUAL_FINANCE_COMPANY",
+          manualProfitRate: 6.5,
+          manualAdminFees: 300,
+          totalFinancedAmount: 15_300,
+        });
+        const customQuote = (await t.run((ctx) => ctx.db.get(customQuoteId)))!;
+        expect(customQuote.customerEligibilitySnapshot).toBeUndefined();
+      });
     });
 
     describe("Adversarial Review Seat 1 Round 12: Financed Quote Contribution Authority (S1-R12-H1)", () => {
@@ -5011,6 +5044,737 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         }
 
         expect(violations).toEqual([]);
+      });
+    });
+
+    describe("Adversarial Review Seat 1 Round 10: Customer Eligibility Authority (S1-R10-H1)", () => {
+      test("Case 1: Company accepts status A, customer submits status A -> quote accepted, snapshot frozen with matched status and human-readable label", async () => {
+        const { asOwner, t, orgId, customerId, vehicleId } = await setupMatrixEnv();
+
+        const statusA = await t.run((ctx) =>
+          ctx.db.insert("orgCustomerStatuses", {
+            orgId,
+            label: "Salaried Employee",
+            isActive: true,
+            order: 1,
+          })
+        );
+
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Alpha Bank",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+          acceptedStatuses: [statusA],
+        });
+
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          vehiclePrice: 20_000,
+          downPayment: 0,
+          termMonths: 48,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          companyId,
+          customerEligibilityStatusIds: [statusA],
+          totalFinancedAmount: 20_000,
+        });
+
+        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        expect(quote.customerEligibilitySnapshot).toBeDefined();
+        expect(quote.customerEligibilitySnapshot?.selectedStatuses?.map((s: { statusId: string }) => s.statusId)).toEqual([statusA]);
+        expect(quote.customerEligibilitySnapshot?.matchedStatusIds).toEqual([statusA]);
+        expect(quote.customerEligibilitySnapshot?.companyAcceptedStatusIds).toEqual([statusA]);
+        expect(quote.customerEligibilitySnapshot?.selectedStatuses).toEqual([
+          { statusId: statusA, label: "Salaried Employee" },
+        ]);
+        expect(typeof quote.customerEligibilitySnapshot?.evaluatedAt).toBe("number");
+      });
+
+      test("Case 2: Company accepts A or B, customer submits B -> accepted, snapshot reflects matched B", async () => {
+        const { asOwner, t, orgId, customerId, vehicleId } = await setupMatrixEnv();
+
+        const statusA = await t.run((ctx) =>
+          ctx.db.insert("orgCustomerStatuses", {
+            orgId,
+            label: "Salaried Employee",
+            isActive: true,
+            order: 1,
+          })
+        );
+        const statusB = await t.run((ctx) =>
+          ctx.db.insert("orgCustomerStatuses", {
+            orgId,
+            label: "Business Owner",
+            isActive: true,
+            order: 2,
+          })
+        );
+
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Beta Bank",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+          acceptedStatuses: [statusA, statusB],
+        });
+
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          vehiclePrice: 20_000,
+          downPayment: 0,
+          termMonths: 48,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          companyId,
+          customerEligibilityStatusIds: [statusB],
+          totalFinancedAmount: 20_000,
+        });
+
+        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        expect(quote.customerEligibilitySnapshot?.matchedStatusIds).toEqual([statusB]);
+        expect(quote.customerEligibilitySnapshot?.selectedStatuses).toEqual([
+          { statusId: statusB, label: "Business Owner" },
+        ]);
+      });
+
+      test("Case 3: Company accepts A, customer submits C -> rejected at saveQuote boundary", async () => {
+        const { asOwner, t, orgId, customerId, vehicleId } = await setupMatrixEnv();
+
+        const statusA = await t.run((ctx) =>
+          ctx.db.insert("orgCustomerStatuses", {
+            orgId,
+            label: "Salaried Employee",
+            isActive: true,
+            order: 1,
+          })
+        );
+        const statusC = await t.run((ctx) =>
+          ctx.db.insert("orgCustomerStatuses", {
+            orgId,
+            label: "Student",
+            isActive: true,
+            order: 3,
+          })
+        );
+
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Gamma Bank",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+          acceptedStatuses: [statusA],
+        });
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 0,
+            termMonths: 48,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            companyId,
+            customerEligibilityStatusIds: [statusC],
+            totalFinancedAmount: 20_000,
+          })
+        ).rejects.toThrow(/This finance company does not accept the selected customer eligibility status/);
+      });
+
+      test("Case 4: Company acceptedStatuses is undefined (accepts all) -> customer with any valid status accepted", async () => {
+        const { asOwner, t, orgId, customerId, vehicleId, customerStatusId } = await setupMatrixEnv();
+
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Universal Finance",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+          acceptedStatuses: undefined,
+        });
+
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          vehiclePrice: 20_000,
+          downPayment: 0,
+          termMonths: 48,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          companyId,
+          customerEligibilityStatusIds: [customerStatusId],
+          totalFinancedAmount: 20_000,
+        });
+
+        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        expect(quote.customerEligibilitySnapshot?.companyAcceptedStatusIds).toBeUndefined();
+        expect(quote.customerEligibilitySnapshot?.matchedStatusIds).toEqual([customerStatusId]);
+      });
+
+      test("Case 5: Company acceptedStatuses is empty array (accepts all) -> customer with any valid status accepted", async () => {
+        const { asOwner, t, orgId, customerId, vehicleId, customerStatusId } = await setupMatrixEnv();
+
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Open Finance",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+          acceptedStatuses: [],
+        });
+
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          vehiclePrice: 20_000,
+          downPayment: 0,
+          termMonths: 48,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          companyId,
+          customerEligibilityStatusIds: [customerStatusId],
+          totalFinancedAmount: 20_000,
+        });
+
+        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        // Empty array on the company is stored faithfully; the assertion function
+        // treats [] and undefined equivalently ("accepts all").
+        expect(
+          quote.customerEligibilitySnapshot?.companyAcceptedStatusIds === undefined ||
+          (Array.isArray(quote.customerEligibilitySnapshot?.companyAcceptedStatusIds) &&
+           quote.customerEligibilitySnapshot!.companyAcceptedStatusIds!.length === 0)
+        ).toBe(true);
+        expect(quote.customerEligibilitySnapshot?.matchedStatusIds).toEqual([customerStatusId]);
+      });
+
+      test("Case 6: No selected customer status (empty array or undefined) -> rejected for configured quote", async () => {
+        const { asOwner, orgId, customerId, vehicleId } = await setupMatrixEnv();
+
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Strict Finance",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+        });
+
+        // 1. Explicit empty array
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 0,
+            termMonths: 48,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            companyId,
+            customerEligibilityStatusIds: [],
+            totalFinancedAmount: 20_000,
+          })
+        ).rejects.toThrow(/Customer eligibility status is required for configured finance company quotes/);
+
+        // 2. Missing/undefined via rawMutation
+        await expect(
+          asOwner.rawMutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 0,
+            termMonths: 48,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            companyId,
+            totalFinancedAmount: 20_000,
+          })
+        ).rejects.toThrow(/Customer eligibility status is required for configured finance company quotes/);
+      });
+
+      test("Case 7: Selected status belongs to another organization -> rejected at saveQuote boundary", async () => {
+        const { asOwner, t, orgId, customerId, vehicleId } = await setupMatrixEnv();
+
+        const otherOrgId = await t.run((ctx) =>
+          ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() })
+        );
+        const foreignStatusId = await t.run((ctx) =>
+          ctx.db.insert("orgCustomerStatuses", {
+            orgId: otherOrgId,
+            label: "Foreign Status",
+            isActive: true,
+            order: 1,
+          })
+        );
+
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Tenant Guard Finance",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+        });
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 0,
+            termMonths: 48,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            companyId,
+            customerEligibilityStatusIds: [foreignStatusId],
+            totalFinancedAmount: 20_000,
+          })
+        ).rejects.toThrow(/Customer eligibility status not found in this organization/);
+      });
+
+      test("Case 8: Selected status does not exist -> rejected at saveQuote boundary", async () => {
+        const { asOwner, t, orgId, customerId, vehicleId } = await setupMatrixEnv();
+
+        const dummyStatusId = await t.run((ctx) =>
+          ctx.db.insert("orgCustomerStatuses", {
+            orgId,
+            label: "To Be Deleted",
+            isActive: true,
+            order: 1,
+          })
+        );
+        await t.run((ctx) => ctx.db.delete(dummyStatusId));
+
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Existence Guard Finance",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+        });
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 0,
+            termMonths: 48,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            companyId,
+            customerEligibilityStatusIds: [dummyStatusId],
+            totalFinancedAmount: 20_000,
+          })
+        ).rejects.toThrow(/Customer eligibility status not found in this organization/);
+      });
+
+      test("Case 9: Selected status is inactive -> rejected at saveQuote boundary", async () => {
+        const { asOwner, t, orgId, customerId, vehicleId } = await setupMatrixEnv();
+
+        const inactiveStatusId = await t.run((ctx) =>
+          ctx.db.insert("orgCustomerStatuses", {
+            orgId,
+            label: "Archived Status",
+            isActive: false,
+            order: 1,
+          })
+        );
+
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Active Status Finance",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+          acceptedStatuses: [inactiveStatusId],
+        });
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 0,
+            termMonths: 48,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            companyId,
+            customerEligibilityStatusIds: [inactiveStatusId],
+            totalFinancedAmount: 20_000,
+          })
+        ).rejects.toThrow(/Customer eligibility status is inactive or unavailable/);
+      });
+
+      test("Case 10: Duplicate submitted status IDs -> canonicalized deterministically in snapshot without duplicates", async () => {
+        const { asOwner, t, orgId, customerId, vehicleId } = await setupMatrixEnv();
+
+        const statusA = await t.run((ctx) =>
+          ctx.db.insert("orgCustomerStatuses", {
+            orgId,
+            label: "Status Alpha",
+            isActive: true,
+            order: 1,
+          })
+        );
+        const statusB = await t.run((ctx) =>
+          ctx.db.insert("orgCustomerStatuses", {
+            orgId,
+            label: "Status Beta",
+            isActive: true,
+            order: 2,
+          })
+        );
+
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "De-dup Finance",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+          acceptedStatuses: [statusA, statusB],
+        });
+
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          vehiclePrice: 20_000,
+          downPayment: 0,
+          termMonths: 48,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          companyId,
+          customerEligibilityStatusIds: [statusA, statusA, statusB, statusA],
+          totalFinancedAmount: 20_000,
+        });
+
+        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        expect(quote.customerEligibilitySnapshot?.selectedStatuses?.map((s: { statusId: string }) => s.statusId)).toEqual([statusA, statusB]);
+        expect(quote.customerEligibilitySnapshot?.matchedStatusIds).toEqual([statusA, statusB]);
+        expect(quote.customerEligibilitySnapshot?.selectedStatuses).toHaveLength(2);
+      });
+
+      test("Case 11: Direct API eligibility bypass (calling saveQuote directly with ineligible status) -> rejected", async () => {
+        const { asOwner, t, orgId, customerId, vehicleId } = await setupMatrixEnv();
+
+        const statusAccepted = await t.run((ctx) =>
+          ctx.db.insert("orgCustomerStatuses", {
+            orgId,
+            label: "Accepted Tier",
+            isActive: true,
+            order: 1,
+          })
+        );
+        const statusUnaccepted = await t.run((ctx) =>
+          ctx.db.insert("orgCustomerStatuses", {
+            orgId,
+            label: "Unaccepted Tier",
+            isActive: true,
+            order: 2,
+          })
+        );
+
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "API Protected Finance",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+          acceptedStatuses: [statusAccepted],
+        });
+
+        // Direct call bypassing client-side wizard filtering
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 0,
+            termMonths: 48,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            companyId,
+            customerEligibilityStatusIds: [statusUnaccepted],
+            totalFinancedAmount: 20_000,
+          })
+        ).rejects.toThrow(/This finance company does not accept the selected customer eligibility status/);
+      });
+
+      test("Case 12: TOCTOU / Stale UI: company acceptedStatuses changes from A to B before saveQuote -> rejected", async () => {
+        const { asOwner, t, orgId, customerId, vehicleId } = await setupMatrixEnv();
+
+        const statusA = await t.run((ctx) =>
+          ctx.db.insert("orgCustomerStatuses", {
+            orgId,
+            label: "Status A",
+            isActive: true,
+            order: 1,
+          })
+        );
+        const statusB = await t.run((ctx) =>
+          ctx.db.insert("orgCustomerStatuses", {
+            orgId,
+            label: "Status B",
+            isActive: true,
+            order: 2,
+          })
+        );
+
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "TOCTOU Finance",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+          acceptedStatuses: [statusA],
+        });
+
+        // Company updates to only accept B while client was sitting on wizard Step 1/2
+        await asOwner.mutation(api.finance.updateCompany, {
+          id: companyId,
+          orgId,
+          name: "TOCTOU Finance",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          isActive: true,
+          adminFees: 500,
+          acceptedStatuses: [statusB],
+        });
+
+        // Stale client submits quote with status A -> rejected by server-authoritative check
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 0,
+            termMonths: 48,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            companyId,
+            customerEligibilityStatusIds: [statusA],
+            totalFinancedAmount: 20_000,
+          })
+        ).rejects.toThrow(/This finance company does not accept the selected customer eligibility status/);
+      });
+
+      test("Case 13: Frozen quote lineage: quote created under A remains valid when company policy changes to B; createFromQuote succeeds from snapshot", async () => {
+        const { asOwner, t, orgId, customerId, vehicleId } = await setupMatrixEnv();
+
+        const statusA = await t.run((ctx) =>
+          ctx.db.insert("orgCustomerStatuses", {
+            orgId,
+            label: "Status A",
+            isActive: true,
+            order: 1,
+          })
+        );
+        const statusB = await t.run((ctx) =>
+          ctx.db.insert("orgCustomerStatuses", {
+            orgId,
+            label: "Status B",
+            isActive: true,
+            order: 2,
+          })
+        );
+
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Lineage Finance",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+          acceptedStatuses: [statusA],
+        });
+
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          vehiclePrice: 20_000,
+          downPayment: 0,
+          termMonths: 48,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          companyId,
+          customerEligibilityStatusIds: [statusA],
+          totalFinancedAmount: 20_000,
+        });
+
+        // Company updates to only accept B
+        await asOwner.mutation(api.finance.updateCompany, {
+          id: companyId,
+          orgId,
+          name: "Lineage Finance",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          isActive: true,
+          adminFees: 500,
+          acceptedStatuses: [statusB],
+        });
+
+        // createFromQuote succeeds because quote's eligibility was frozen at quotation time
+        const applicationId = await asOwner.mutation(api.applications.createFromQuote, { orgId, quoteId });
+        expect(applicationId).toBeDefined();
+
+        const app = (await t.run((ctx) => ctx.db.get(applicationId)))!;
+        expect(app.status).toBe("PENDING_DOCS");
+      });
+
+      test("Case 14: Frozen quote lineage: status document deleted/deactivated after quote creation -> createFromQuote still succeeds from snapshot", async () => {
+        const { asOwner, t, orgId, customerId, vehicleId } = await setupMatrixEnv();
+
+        const statusA = await t.run((ctx) =>
+          ctx.db.insert("orgCustomerStatuses", {
+            orgId,
+            label: "Status Temporary",
+            isActive: true,
+            order: 1,
+          })
+        );
+
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Doc Deletion Finance",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+          acceptedStatuses: [statusA],
+        });
+
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          vehiclePrice: 20_000,
+          downPayment: 0,
+          termMonths: 48,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          companyId,
+          customerEligibilityStatusIds: [statusA],
+          totalFinancedAmount: 20_000,
+        });
+
+        // Status row is hard deleted
+        await t.run((ctx) => ctx.db.delete(statusA));
+
+        // createFromQuote still succeeds because quote holds the frozen snapshot
+        const applicationId = await asOwner.mutation(api.applications.createFromQuote, { orgId, quoteId });
+        expect(applicationId).toBeDefined();
+
+        const savedQuote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        expect(savedQuote.customerEligibilitySnapshot?.selectedStatuses).toEqual([
+          { statusId: statusA, label: "Status Temporary" },
+        ]);
+      });
+
+      test("Case 15: Term validation at saveQuote boundary rejects invalid terms", async () => {
+        const { asOwner, t, orgId, customerId, vehicleId, customerStatusId } = await setupMatrixEnv();
+
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Term Guard Finance",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 6,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+        });
+
+        // 1. termMonths <= 0
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 0,
+            termMonths: 0,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            companyId,
+            customerEligibilityStatusIds: [customerStatusId],
+            totalFinancedAmount: 20_000,
+          })
+        ).rejects.toThrow(/Term months must be a positive integer/);
+
+        // 2. termMonths > company.maxTermMonths
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 0,
+            termMonths: 72,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            companyId,
+            customerEligibilityStatusIds: [customerStatusId],
+            totalFinancedAmount: 20_000,
+          })
+        ).rejects.toThrow(/exceeds maximum term allowed by finance company/);
+
+        // 3. gracePeriodMonths >= termMonths
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 0,
+            termMonths: 6,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            companyId,
+            customerEligibilityStatusIds: [customerStatusId],
+            totalFinancedAmount: 20_000,
+          })
+        ).rejects.toThrow(/Finance term must be strictly greater than the grace period/);
       });
     });
   });

@@ -11,7 +11,9 @@ import {
   assertCustomerEligibilityForCompany,
   assertCustomerLoanTermsValid,
   assertFinanceCompanyEligibleForNewQuote,
+  assertFinancedMurabahaResultValid,
   assertFinancedQuoteContributionValid,
+  assertRequestedFinancingTermValid,
   buildRuleSnapshot,
   requireConfiguredExecutionFees,
   type CustomerEligibilitySnapshot,
@@ -124,7 +126,16 @@ export const saveQuote = mutation({
     if (args.downPayment < 0) {
       throw new ConvexError("Down payment cannot be negative.");
     }
-    if (args.termMonths < 0 || !Number.isInteger(args.termMonths)) {
+    if (args.termMonths < 0) {
+      throw new ConvexError("Term months cannot be negative.");
+    }
+    if (
+      (args.mode === "CONFIGURED_FINANCE_COMPANY" || args.mode === "MANUAL_FINANCE_COMPANY") &&
+      (!Number.isInteger(args.termMonths) || args.termMonths <= 0)
+    ) {
+      throw new ConvexError("Term months must be a positive integer.");
+    }
+    if (!Number.isInteger(args.termMonths)) {
       throw new ConvexError("Term months must be a non-negative integer.");
     }
 
@@ -202,10 +213,6 @@ export const saveQuote = mutation({
     let totalProfit: number | undefined;
 
     if (args.mode === "CONFIGURED_FINANCE_COMPANY") {
-      if (args.termMonths <= 0) {
-        throw new ConvexError("Term months must be a positive integer.");
-      }
-
       const rawCompany = await ctx.db.get(args.companyId!);
       assertFinanceCompanyEligibleForNewQuote({
         company: rawCompany,
@@ -216,15 +223,13 @@ export const saveQuote = mutation({
       assertCustomerLoanTermsValid(company, orgCurrency);
 
       const configuredAdminFees = requireConfiguredExecutionFees(company, "quotation");
-      if (args.termMonths > company.maxTermMonths) {
-        throw new ConvexError(
-          `Term months (${args.termMonths}) exceeds maximum term allowed by finance company (${company.maxTermMonths}).`
-        );
-      }
+
+      assertRequestedFinancingTermValid({
+        termMonths: args.termMonths,
+        gracePeriodMonths: company.gracePeriodMonths,
+        maxTermMonths: company.maxTermMonths,
+      });
       const gracePeriodMonths = company.gracePeriodMonths ?? 0;
-      if (gracePeriodMonths >= args.termMonths) {
-        throw new ConvexError("Grace period months must be non-negative and strictly less than term months.");
-      }
 
       if (!args.customerEligibilityStatusIds || args.customerEligibilityStatusIds.length === 0) {
         throw new ConvexError("Customer eligibility status is required for configured finance company quotes.");
@@ -278,21 +283,7 @@ export const saveQuote = mutation({
         includesCommissionInDebt: company.includesCommissionInDebt ?? false,
       });
 
-      if (!Number.isFinite(calc.financedAmount) || calc.financedAmount <= 0) {
-        throw new ConvexError("Calculated financed amount must be positive and finite.");
-      }
-      if (!Number.isFinite(calc.monthlyInstallment) || calc.monthlyInstallment < 0) {
-        throw new ConvexError("Calculated monthly installment must be finite and non-negative.");
-      }
-      if (!Number.isFinite(calc.totalProfit) || calc.totalProfit < 0) {
-        throw new ConvexError("Calculated total profit must be finite and non-negative.");
-      }
-      if (!Number.isFinite(calc.totalContractValue) || calc.totalContractValue < 0) {
-        throw new ConvexError("Calculated total contract value must be finite and non-negative.");
-      }
-      if (!Number.isFinite(calc.takafulAmount) || calc.takafulAmount < 0) {
-        throw new ConvexError("Calculated takaful amount must be finite and non-negative.");
-      }
+      assertFinancedMurabahaResultValid(calc);
 
       totalFinancedAmount = calc.financedAmount;
       monthlyInstallment = calc.monthlyInstallment;
@@ -318,9 +309,10 @@ export const saveQuote = mutation({
         companyRuleVersion,
       };
     } else if (args.mode === "MANUAL_FINANCE_COMPANY") {
-      if (args.termMonths <= 0) {
-        throw new ConvexError("Term months must be a positive integer.");
-      }
+      assertRequestedFinancingTermValid({
+        termMonths: args.termMonths,
+        gracePeriodMonths: 0,
+      });
       if (args.manualAdminFees === undefined) {
         throw new ConvexError(
           "Execution Fees are not configured for this manual finance company quote. Enter the expected execution fee amount, or enter 0 if none are charged."
@@ -360,21 +352,7 @@ export const saveQuote = mutation({
         includesCommissionInDebt: manualIncludesCommissionInDebt,
       });
 
-      if (!Number.isFinite(calc.financedAmount) || calc.financedAmount <= 0) {
-        throw new ConvexError("Calculated financed amount must be positive and finite.");
-      }
-      if (!Number.isFinite(calc.monthlyInstallment) || calc.monthlyInstallment < 0) {
-        throw new ConvexError("Calculated monthly installment must be finite and non-negative.");
-      }
-      if (!Number.isFinite(calc.totalProfit) || calc.totalProfit < 0) {
-        throw new ConvexError("Calculated total profit must be finite and non-negative.");
-      }
-      if (!Number.isFinite(calc.totalContractValue) || calc.totalContractValue < 0) {
-        throw new ConvexError("Calculated total contract value must be finite and non-negative.");
-      }
-      if (!Number.isFinite(calc.takafulAmount) || calc.takafulAmount < 0) {
-        throw new ConvexError("Calculated takaful amount must be finite and non-negative.");
-      }
+      assertFinancedMurabahaResultValid(calc);
 
       totalFinancedAmount = calc.financedAmount;
       monthlyInstallment = calc.monthlyInstallment;

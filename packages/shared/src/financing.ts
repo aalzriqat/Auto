@@ -45,6 +45,21 @@ export interface UnifiedMurabahaResult {
   monthlyInstallment: number;
 }
 
+export function isRequestedFinancingTermValid(args: {
+  termMonths: number;
+  gracePeriodMonths?: number;
+  maxTermMonths?: number;
+}): boolean {
+  const grace = args.gracePeriodMonths ?? 0;
+  return (
+    Number.isFinite(args.termMonths) &&
+    Number.isInteger(args.termMonths) &&
+    args.termMonths > 0 &&
+    (args.maxTermMonths === undefined || args.termMonths <= args.maxTermMonths) &&
+    args.termMonths > grace
+  );
+}
+
 export function calculateUnifiedMurabaha({
   vehiclePrice,
   downPayment,

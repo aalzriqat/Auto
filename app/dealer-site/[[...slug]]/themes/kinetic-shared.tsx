@@ -1,4 +1,4 @@
-import { calculateUnifiedMurabaha, type UnifiedMurabahaResult } from "@/lib/financing";
+import { calculateUnifiedMurabaha, isRequestedFinancingTermValid, type UnifiedMurabahaResult } from "@/lib/financing";
 import type { Lang, PublicSite, PublicVehicle } from "./theme-props";
 
 /** Generic illustrative terms used when the seller hasn't picked one of their
@@ -31,6 +31,16 @@ export function estimateMonthlyInstallment({
     return null;
   }
 
+  if (
+    !isRequestedFinancingTermValid({
+      termMonths,
+      maxTermMonths: terms.maxTermMonths,
+      gracePeriodMonths: terms.gracePeriodMonths,
+    })
+  ) {
+    return null;
+  }
+
   const result = calculateUnifiedMurabaha({
     vehiclePrice,
     downPayment,
@@ -47,7 +57,10 @@ export function estimateMonthlyInstallment({
     !Number.isFinite(result.financedAmount) ||
     !Number.isFinite(result.monthlyInstallment) ||
     !Number.isFinite(result.totalContractValue) ||
-    !Number.isFinite(result.totalProfit)
+    !Number.isFinite(result.totalProfit) ||
+    result.monthlyInstallment <= 0 ||
+    result.financedAmount <= 0 ||
+    result.totalContractValue <= 0
   ) {
     return null;
   }

@@ -760,6 +760,82 @@ export function assertCustomerLoanTermsValid(
 }
 
 /**
+ * Asserts that a requested financing term is commercially and canonically valid.
+ *
+ * Invariant: Every financed calculation must operate on a finite positive integer term,
+ * within the provider's maximum term, and strictly greater than its grace period.
+ */
+export function assertRequestedFinancingTermValid(args: {
+  termMonths: number;
+  gracePeriodMonths?: number;
+  maxTermMonths?: number;
+}): void {
+  const grace = args.gracePeriodMonths ?? 0;
+
+  if (
+    !Number.isFinite(args.termMonths) ||
+    !Number.isInteger(args.termMonths) ||
+    args.termMonths <= 0
+  ) {
+    throw new ConvexError("Term months must be a positive integer.");
+  }
+
+  if (
+    args.maxTermMonths !== undefined &&
+    args.termMonths > args.maxTermMonths
+  ) {
+    throw new ConvexError(
+      `Term exceeds the finance company's maximum term (term months ${args.termMonths} exceeds maximum term allowed by finance company (${args.maxTermMonths})).`
+    );
+  }
+
+  if (grace >= args.termMonths) {
+    throw new ConvexError(
+      "Finance term must be strictly greater than the grace period."
+    );
+  }
+}
+
+export function isRequestedFinancingTermValid(args: {
+  termMonths: number;
+  gracePeriodMonths?: number;
+  maxTermMonths?: number;
+}): boolean {
+  const grace = args.gracePeriodMonths ?? 0;
+  return (
+    Number.isFinite(args.termMonths) &&
+    Number.isInteger(args.termMonths) &&
+    args.termMonths > 0 &&
+    (args.maxTermMonths === undefined || args.termMonths <= args.maxTermMonths) &&
+    args.termMonths > grace
+  );
+}
+
+export function assertFinancedMurabahaResultValid(result: {
+  financedAmount: number;
+  totalContractValue: number;
+  monthlyInstallment: number;
+  totalProfit?: number;
+  takafulAmount?: number;
+}): void {
+  if (!Number.isFinite(result.financedAmount) || result.financedAmount <= 0) {
+    throw new ConvexError("Calculated financed amount must be positive and finite.");
+  }
+  if (!Number.isFinite(result.totalContractValue) || result.totalContractValue <= 0) {
+    throw new ConvexError("Calculated total contract value must be positive and finite.");
+  }
+  if (!Number.isFinite(result.monthlyInstallment) || result.monthlyInstallment <= 0) {
+    throw new ConvexError("Calculated monthly installment must be positive and finite.");
+  }
+  if (result.totalProfit !== undefined && (!Number.isFinite(result.totalProfit) || result.totalProfit < 0)) {
+    throw new ConvexError("Calculated total profit must be finite and non-negative.");
+  }
+  if (result.takafulAmount !== undefined && (!Number.isFinite(result.takafulAmount) || result.takafulAmount < 0)) {
+    throw new ConvexError("Calculated takaful amount must be finite and non-negative.");
+  }
+}
+
+/**
  * Asserts that a finance company is eligible to originate a new customer quotation.
  *
  * Invariant: Only an active finance company belonging to the specified organization
