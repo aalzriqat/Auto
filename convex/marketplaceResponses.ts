@@ -8,6 +8,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { refreshDealerBadges, checkMarketplaceQuota, consumeMarketplaceLead, getOwnProfile } from "./marketplaceDealers";
 import { calculateUnifiedMurabaha } from "../lib/financing";
 import { assertFiniteNumber } from "./utils/money";
+import { assertFinancedQuoteContributionValid } from "./utils/financingEconomics";
 
 const MAX_NOTE_CHARS = 1000;
 const MAX_LISTED_REQUESTS = 100;
@@ -53,9 +54,10 @@ async function buildFinanceOffer(
   if (args.termMonths <= 0 || args.termMonths > company.maxTermMonths) {
     throw new ConvexError(`Term must be between 1 and ${company.maxTermMonths} months for this finance company.`);
   }
-  if (args.downPayment < 0 || args.downPayment >= args.vehiclePrice) {
-    throw new ConvexError("Down payment must be between zero and the vehicle price.");
-  }
+  assertFinancedQuoteContributionValid({
+    vehiclePrice: args.vehiclePrice,
+    downPayment: args.downPayment,
+  });
 
   const commission = company.commission ?? 0;
   const processingFees = company.adminFees ?? 0;

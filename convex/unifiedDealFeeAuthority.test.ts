@@ -23,6 +23,7 @@ import {
   deriveStockManagementProfit,
   composeCustomerGapToDealer,
   buildRuleSnapshot,
+  assertFinancedQuoteContributionValid,
 } from "./utils/financingEconomics";
 import { deriveDealFinancialSummary } from "./utils/dealFinancialSummary";
 import {
@@ -3997,6 +3998,449 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         expect(quote.customerEligibilitySnapshot?.selectedStatuses).toEqual([
           { statusId: statusA, label: "Legacy Status" },
         ]);
+      });
+    });
+
+    describe("Adversarial Review Seat 1 Round 12: Financed Quote Contribution Authority (S1-R12-H1)", () => {
+      test("configured finance: downPayment = vehiclePrice is rejected", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId, customerStatusId } = await setupMatrixEnv();
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Equal Down Payment Bank",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+          acceptedStatuses: [customerStatusId],
+        });
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 20_000,
+            termMonths: 48,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            companyId,
+            customerEligibilityStatusIds: [customerStatusId],
+            totalFinancedAmount: 500,
+          })
+        ).rejects.toThrow("Down payment must be less than the vehicle price for financed quotations.");
+      });
+
+      test("configured finance: downPayment > vehiclePrice is rejected", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId, customerStatusId } = await setupMatrixEnv();
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Exceeding Down Payment Bank",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+          acceptedStatuses: [customerStatusId],
+        });
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 21_000,
+            termMonths: 48,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            companyId,
+            customerEligibilityStatusIds: [customerStatusId],
+            totalFinancedAmount: 500,
+          })
+        ).rejects.toThrow("Down payment must be less than the vehicle price for financed quotations.");
+      });
+
+      test("configured finance: downPayment = vehiclePrice - smallest currency unit is accepted", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId, customerStatusId } = await setupMatrixEnv();
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Near Price Bank",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+          acceptedStatuses: [customerStatusId],
+        });
+
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          vehiclePrice: 20_000,
+          downPayment: 19_999.999,
+          termMonths: 48,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          companyId,
+          customerEligibilityStatusIds: [customerStatusId],
+          totalFinancedAmount: 500.001,
+        });
+        expect(quoteId).toBeDefined();
+      });
+
+      test("configured finance: downPayment = 0 is accepted", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId, customerStatusId } = await setupMatrixEnv();
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Zero Down Bank",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+          acceptedStatuses: [customerStatusId],
+        });
+
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          vehiclePrice: 20_000,
+          downPayment: 0,
+          termMonths: 48,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          companyId,
+          customerEligibilityStatusIds: [customerStatusId],
+          totalFinancedAmount: 20_500,
+        });
+        expect(quoteId).toBeDefined();
+      });
+
+      test("high fees must not rescue downPayment >= vehiclePrice", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId, customerStatusId } = await setupMatrixEnv();
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "High Fee Bank",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 2000,
+          acceptedStatuses: [customerStatusId],
+        });
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 20_000,
+            termMonths: 48,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            companyId,
+            customerEligibilityStatusIds: [customerStatusId],
+            totalFinancedAmount: 2000,
+          })
+        ).rejects.toThrow("Down payment must be less than the vehicle price for financed quotations.");
+      });
+
+      test("high commission must not rescue downPayment >= vehiclePrice", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId, customerStatusId } = await setupMatrixEnv();
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "High Commission Bank",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+          commission: 3000,
+          acceptedStatuses: [customerStatusId],
+        });
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 20_000,
+            termMonths: 48,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            companyId,
+            customerEligibilityStatusIds: [customerStatusId],
+            totalFinancedAmount: 3500,
+          })
+        ).rejects.toThrow("Down payment must be less than the vehicle price for financed quotations.");
+      });
+
+      test("includesCommissionInDebt = true same rejection on downPayment >= vehiclePrice", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId, customerStatusId } = await setupMatrixEnv();
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Debt Commission Bank",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+          commission: 3000,
+          includesCommissionInDebt: true,
+          acceptedStatuses: [customerStatusId],
+        });
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 20_000,
+            termMonths: 48,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            companyId,
+            customerEligibilityStatusIds: [customerStatusId],
+            totalFinancedAmount: 3500,
+          })
+        ).rejects.toThrow("Down payment must be less than the vehicle price for financed quotations.");
+      });
+
+      test("manual finance equality: downPayment = vehiclePrice is rejected", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 20_000,
+            termMonths: 48,
+            mode: "MANUAL_FINANCE_COMPANY",
+            manualAdminFees: 500,
+            manualProfitRate: 5,
+            manualProviderName: "Custom Bank",
+            totalFinancedAmount: 500,
+          })
+        ).rejects.toThrow("Down payment must be less than the vehicle price for financed quotations.");
+      });
+
+      test("manual finance greater-than: downPayment > vehiclePrice is rejected", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 22_000,
+            termMonths: 48,
+            mode: "MANUAL_FINANCE_COMPANY",
+            manualAdminFees: 500,
+            manualProfitRate: 5,
+            manualProviderName: "Custom Bank",
+            totalFinancedAmount: 500,
+          })
+        ).rejects.toThrow("Down payment must be less than the vehicle price for financed quotations.");
+      });
+
+      test("manual finance just below price: downPayment = vehiclePrice - 1 is accepted", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          vehiclePrice: 20_000,
+          downPayment: 19_999,
+          termMonths: 48,
+          mode: "MANUAL_FINANCE_COMPANY",
+          manualAdminFees: 500,
+          manualProfitRate: 5,
+          manualProviderName: "Custom Bank",
+          totalFinancedAmount: 501,
+        });
+        expect(quoteId).toBeDefined();
+      });
+
+      test("server-derived vehicleItems price is the comparison authority, not caller vehiclePrice", async () => {
+        const { t, orgId, asOwner, customerId, customerStatusId } = await setupMatrixEnv();
+
+        const v1 = await t.run((ctx) =>
+          ctx.db.insert("vehicles", {
+            orgId,
+            vin: "VIN_ITEM_1",
+            make: "Toyota",
+            model: "Camry",
+            year: 2024,
+            mileage: 100,
+            color: "White",
+            fuelType: "Gasoline",
+            transmission: "Auto",
+            purchasePrice: 10_000,
+            sellingPrice: 12_000,
+            status: "AVAILABLE",
+          })
+        );
+        const v2 = await t.run((ctx) =>
+          ctx.db.insert("vehicles", {
+            orgId,
+            vin: "VIN_ITEM_2",
+            make: "Toyota",
+            model: "Corolla",
+            year: 2024,
+            mileage: 100,
+            color: "Black",
+            fuelType: "Gasoline",
+            transmission: "Auto",
+            purchasePrice: 11_000,
+            sellingPrice: 13_000,
+            status: "AVAILABLE",
+          })
+        );
+
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Items Bank",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 100,
+          isActive: true,
+          adminFees: 500,
+          acceptedStatuses: [customerStatusId],
+        });
+
+        // Items sum to 12_000 + 13_000 = 25_000.
+        // Caller passes stale/tampered vehiclePrice: 10_000, but downPayment: 15_000.
+        // 15_000 > 10_000, but 15_000 < 25_000 (server-derived). This MUST be accepted!
+        const acceptedQuoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId: v1,
+          vehiclePrice: 10_000,
+          vehicleItems: [
+            { vehicleId: v1, unitPrice: 12_000 },
+            { vehicleId: v2, unitPrice: 13_000 },
+          ],
+          downPayment: 15_000,
+          termMonths: 48,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          companyId,
+          customerEligibilityStatusIds: [customerStatusId],
+          totalFinancedAmount: 10_500,
+        });
+        expect(acceptedQuoteId).toBeDefined();
+
+        // Conversely, caller passes vehiclePrice: 30_000, but items sum to 25_000.
+        // Caller supplies downPayment: 26_000.
+        // 26_000 < 30_000 (caller), but 26_000 >= 25_000 (server-derived). This MUST be rejected!
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId: v1,
+            vehiclePrice: 30_000,
+            vehicleItems: [
+              { vehicleId: v1, unitPrice: 12_000 },
+              { vehicleId: v2, unitPrice: 13_000 },
+            ],
+            downPayment: 26_000,
+            termMonths: 48,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            companyId,
+            customerEligibilityStatusIds: [customerStatusId],
+            totalFinancedAmount: 10_500,
+          })
+        ).rejects.toThrow("Down payment must be less than the vehicle price for financed quotations.");
+      });
+
+      test("direct API bypass attempt is rejected before quote insertion", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId, customerStatusId } = await setupMatrixEnv();
+
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Direct API Bank",
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            adminFees: 500,
+            ruleVersion: 1,
+            acceptedStatuses: [customerStatusId],
+          })
+        );
+
+        const beforeCount = (await t.run((ctx) => ctx.db.query("quotes").collect())).length;
+
+        await expect(
+          asOwner.rawMutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 20_000,
+            termMonths: 48,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            companyId,
+            customerEligibilityStatusIds: [customerStatusId],
+            totalFinancedAmount: 500,
+          })
+        ).rejects.toThrow("Down payment must be less than the vehicle price for financed quotations.");
+
+        const afterCount = (await t.run((ctx) => ctx.db.query("quotes").collect())).length;
+        expect(afterCount).toBe(beforeCount);
+      });
+
+      test("assertFinancedQuoteContributionValid enforces identical semantics for marketplace and quotes", () => {
+        // Valid ranges
+        expect(() =>
+          assertFinancedQuoteContributionValid({ vehiclePrice: 20_000, downPayment: 0 })
+        ).not.toThrow();
+        expect(() =>
+          assertFinancedQuoteContributionValid({ vehiclePrice: 20_000, downPayment: 19_999 })
+        ).not.toThrow();
+
+        // Negative down payment
+        expect(() =>
+          assertFinancedQuoteContributionValid({ vehiclePrice: 20_000, downPayment: -1 })
+        ).toThrow("Down payment cannot be negative.");
+
+        // Equal down payment
+        expect(() =>
+          assertFinancedQuoteContributionValid({ vehiclePrice: 20_000, downPayment: 20_000 })
+        ).toThrow("Down payment must be less than the vehicle price for financed quotations.");
+
+        // Exceeding down payment
+        expect(() =>
+          assertFinancedQuoteContributionValid({ vehiclePrice: 20_000, downPayment: 25_000 })
+        ).toThrow("Down payment must be less than the vehicle price for financed quotations.");
+      });
+
+      test("CASH mode allows downPayment = vehiclePrice without financed rejection", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          vehiclePrice: 20_000,
+          downPayment: 20_000,
+          termMonths: 0,
+          mode: "CASH",
+        });
+        expect(quoteId).toBeDefined();
       });
     });
   });

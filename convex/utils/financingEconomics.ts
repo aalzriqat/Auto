@@ -814,6 +814,28 @@ export function assertCustomerEligibilityForCompany<T extends string>(args: {
 }
 
 /**
+ * Asserts that a customer contribution (down payment) is structurally valid
+ * for a financed quotation.
+ *
+ * A financed quotation represents financing of an unpaid portion of the vehicle
+ * transaction. Therefore, down payment must be non-negative and strictly less
+ * than the authoritative quoted vehicle price, regardless of fees or commissions.
+ */
+export function assertFinancedQuoteContributionValid(args: {
+  vehiclePrice: number;
+  downPayment: number;
+}): void {
+  if (args.downPayment < 0) {
+    throw new ConvexError("Down payment cannot be negative.");
+  }
+  if (args.downPayment >= args.vehiclePrice) {
+    throw new ConvexError(
+      "Down payment must be less than the vehicle price for financed quotations."
+    );
+  }
+}
+
+/**
  * Recomputes every derived economics figure from the stored inputs.
  *
  * Called on every write that can move one of the inputs, so the stored

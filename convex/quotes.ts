@@ -11,6 +11,7 @@ import {
   assertCustomerEligibilityForCompany,
   assertCustomerLoanTermsValid,
   assertFinanceCompanyEligibleForNewQuote,
+  assertFinancedQuoteContributionValid,
   buildRuleSnapshot,
   type CustomerEligibilitySnapshot,
   type CustomerQuotePricingSnapshot,
@@ -173,6 +174,13 @@ export const saveQuote = mutation({
 
     if (vehiclePrice <= 0) {
       throw new ConvexError("Vehicle price must be positive.");
+    }
+
+    if (args.mode === "CONFIGURED_FINANCE_COMPANY" || args.mode === "MANUAL_FINANCE_COMPANY") {
+      assertFinancedQuoteContributionValid({
+        vehiclePrice,
+        downPayment: args.downPayment,
+      });
     }
 
     if (args.mode === "CONFIGURED_FINANCE_COMPANY" && !args.companyId) {
