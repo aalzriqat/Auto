@@ -120,6 +120,28 @@ describe("fee templates retirement in FinanceCompanyDialog", () => {
     expect(payload.feeTemplates).toBeUndefined();
   });
 
+  test("saving edit with unset adminFees preserves adminFees as undefined", async () => {
+    renderEdit(undefined);
+    fireEvent.change(screen.getByLabelText("Company Name"), { target: { value: "Updated Name" } });
+    save();
+
+    await waitFor(() => expect(mutations.update).toHaveBeenCalled());
+    const payload = mutations.update.mock.calls[0][0];
+    expect(payload.name).toBe("Updated Name");
+    expect(payload.adminFees).toBeUndefined();
+    expect(payload.feeTemplates).toBeUndefined();
+  });
+
+  test("saving edit with explicit 0 sends adminFees as 0", async () => {
+    renderEdit(undefined);
+    fireEvent.change(screen.getByLabelText("ExecutionFees"), { target: { value: "0" } });
+    save();
+
+    await waitFor(() => expect(mutations.update).toHaveBeenCalled());
+    const payload = mutations.update.mock.calls[0][0];
+    expect(payload.adminFees).toBe(0);
+  });
+
   test("saving new company sends adminFees and omits feeTemplates", async () => {
     renderCreate();
     fireEvent.change(screen.getByLabelText("Company Name"), { target: { value: "New Finance Co" } });

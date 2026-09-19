@@ -192,6 +192,9 @@ export function unrecordedConfiguredFeePositions(
   snapshot: Doc<"financeApplications">["companyRuleSnapshot"],
   liveFees: ReadonlyArray<Doc<"financeDealFees">>
 ): number[] {
+  // When the deal operates under the single fee authority (adminFees),
+  // configured fee templates do not govern deal finalization or closure.
+  if (snapshot?.adminFees !== undefined) return [];
   const templates = snapshot?.feeTemplates ?? [];
   const missing: number[] = [];
   templates.forEach((_template, templateIndex) => {
@@ -232,6 +235,10 @@ export function assertConfiguredFeesRecorded(
   liveFees: ReadonlyArray<Doc<"financeDealFees">>,
   action: string
 ): void {
+  // When the deal operates under single fee authority (adminFees),
+  // template positions do not govern finalization.
+  if (snapshot?.adminFees !== undefined) return;
+
   // Closure CAPACITY, not configuration policy: a frozen policy with more
   // fees than a deal can carry live can never be completed, and the count
   // below would describe that as "N fees have no actual" for as long as

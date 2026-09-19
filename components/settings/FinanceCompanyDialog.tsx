@@ -65,7 +65,8 @@ export function FinanceCompanyDialog({
     maxTermMonths: company?.maxTermMonths || 72,
     gracePeriodMonths: company?.gracePeriodMonths || 0,
     insuranceRate: company?.insuranceRate || 0,
-    adminFees: company?.adminFees || 0,
+    adminFees:
+      company?.adminFees !== undefined ? String(company.adminFees) : "",
     commission: company?.commission || 0,
     includesCommissionInDebt: company?.includesCommissionInDebt || false,
     maxFinancingLTV: company?.maxFinancingLTV || 100,
@@ -87,7 +88,8 @@ export function FinanceCompanyDialog({
       maxTermMonths: company?.maxTermMonths || 72,
       gracePeriodMonths: company?.gracePeriodMonths || 0,
       insuranceRate: company?.insuranceRate || 0,
-      adminFees: company?.adminFees || 0,
+      adminFees:
+        company?.adminFees !== undefined ? String(company.adminFees) : "",
       commission: company?.commission || 0,
       includesCommissionInDebt: company?.includesCommissionInDebt || false,
       maxFinancingLTV: company?.maxFinancingLTV || 100,
@@ -144,11 +146,18 @@ export function FinanceCompanyDialog({
         liveStatusIds.has(id as Id<"orgCustomerStatuses">)
       ) as Id<"orgCustomerStatuses">[];
 
-      const { defaultLtvPercent: defaultLtvInput, ...rest } = formData;
+      const { defaultLtvPercent: defaultLtvInput, adminFees: adminFeesInput, ...rest } = formData;
       const parsedDefaultLtv = Number(defaultLtvInput);
+      const parsedAdminFees = Number(adminFeesInput);
       const payload = {
         ...rest,
         acceptedStatuses,
+        // Omitted entirely when blank. Sending 0 would overwrite undefined with 0;
+        // sending undefined keeps the field unset when not configured.
+        adminFees:
+          adminFeesInput.trim() !== "" && Number.isFinite(parsedAdminFees)
+            ? parsedAdminFees
+            : undefined,
         // Omitted entirely when blank. Sending 0 would be a rate the dealer
         // rules reject; sending nothing keeps the field unset, which is what
         // "this company has not told us its purchase rate" means.
@@ -247,8 +256,9 @@ export function FinanceCompanyDialog({
               <Input
                 id="admin-fees"
                 type="number"
+                step="any"
                 value={formData.adminFees}
-                onChange={(e) => setFormData({ ...formData, adminFees: parseFloat(e.target.value) || 0 })}
+                onChange={(e) => setFormData({ ...formData, adminFees: e.target.value })}
               />
             </div>
             <div className="grid gap-2">

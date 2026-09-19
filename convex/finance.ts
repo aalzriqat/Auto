@@ -46,6 +46,7 @@ const dealerRuleArgs = {
 } as const;
 
 type DealerRuleArgs = {
+  adminFees?: number;
   defaultLtvPercent?: number;
   minimumLtvPercent?: number;
   maxFinancingLTV?: number;
@@ -63,6 +64,20 @@ type DealerRuleArgs = {
  * (NaN > 100 is false), so each check is written to reject rather than accept.
  */
 function assertDealerRulesValid(rules: DealerRuleArgs): void {
+  if (rules.adminFees !== undefined) {
+    if (!Number.isFinite(rules.adminFees) || rules.adminFees < 0) {
+      throw new ConvexError(
+        `Execution fees (adminFees) must be a non-negative finite number (got ${rules.adminFees}).`
+      );
+    }
+    const minor = Math.round(rules.adminFees * 1000);
+    if (!Number.isSafeInteger(minor)) {
+      throw new ConvexError(
+        `Execution fees (adminFees) amount is too large to represent safely.`
+      );
+    }
+  }
+
   for (const [value, label] of [
     [rules.defaultLtvPercent, "Default LTV"],
     [rules.minimumLtvPercent, "Minimum LTV"],
@@ -265,6 +280,15 @@ export const createCompany = mutation({
     const { user } = await requireOwner(ctx, args.orgId);
     const { expectedCurrency, ...company } = args;
     assertDealerRulesValid(company);
+    if (
+      company.adminFees !== undefined &&
+      company.feeTemplates !== undefined &&
+      company.feeTemplates.length > 0
+    ) {
+      throw new ConvexError(
+        "Cannot configure fee templates when execution fees (adminFees) is set. Execution fees is the single expected fee authority."
+      );
+    }
     assertFeeTemplatesWithinLimit(company.feeTemplates, "Creating this finance company");
     await assertFeeTemplateCurrency(ctx, args.orgId, company.feeTemplates, expectedCurrency);
     const acceptedStatuses = await sanitizeAcceptedStatuses(ctx, args.orgId, args.acceptedStatuses);
@@ -303,6 +327,15 @@ export const updateCompany = mutation({
 
     const existing = await ctx.db.get(id);
     if (!existing || existing.orgId !== orgId) throw new ConvexError("Not found");
+    if (
+      (args.adminFees !== undefined || existing.adminFees !== undefined) &&
+      args.feeTemplates !== undefined &&
+      args.feeTemplates.length > 0
+    ) {
+      throw new ConvexError(
+        "Cannot configure fee templates when execution fees (adminFees) is set. Execution fees is the single expected fee authority."
+      );
+    }
     if (args.feeTemplates !== undefined) {
       const currentRuleVersion = existing.ruleVersion ?? 1;
       if (!Number.isSafeInteger(expectedRuleVersion) || expectedRuleVersion !== currentRuleVersion) {
@@ -352,6 +385,7 @@ export const updateCompany = mutation({
     // Read from `args` rather than the erased `presentDealerRules` record so
     // each field keeps its own type instead of the union of all of them.
     const effectiveRules: DealerRuleArgs = {
+      adminFees: args.adminFees ?? existing.adminFees,
       defaultLtvPercent: args.defaultLtvPercent ?? existing.defaultLtvPercent,
       minimumLtvPercent: args.minimumLtvPercent ?? existing.minimumLtvPercent,
       maxFinancingLTV: args.maxFinancingLTV ?? existing.maxFinancingLTV,
@@ -372,11 +406,14 @@ export const updateCompany = mutation({
     // the audit chain the table exists to provide.
     const needsInitialVersion = existing.ruleVersion === undefined;
 
-    const rulesChanged = dealerRuleKeys.some(
-      (key) =>
-        presentDealerRules[key] !== undefined &&
-        JSON.stringify(presentDealerRules[key]) !== JSON.stringify(existing[key])
-    ) || (updates.maxFinancingLTV !== undefined && updates.maxFinancingLTV !== existing.maxFinancingLTV);
+    const rulesChanged =
+      dealerRuleKeys.some(
+        (key) =>
+          presentDealerRules[key] !== undefined &&
+          JSON.stringify(presentDealerRules[key]) !== JSON.stringify(existing[key])
+      ) ||
+      (updates.maxFinancingLTV !== undefined && updates.maxFinancingLTV !== existing.maxFinancingLTV) ||
+      (updates.adminFees !== undefined && updates.adminFees !== existing.adminFees);
 
     if (needsInitialVersion) {
       await ctx.db.patch(id, { ruleVersion: 1 });

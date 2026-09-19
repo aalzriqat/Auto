@@ -22,9 +22,20 @@ import { dealerBorneExpected } from "./dealOverview";
 import {
   deriveStockManagementProfit,
   composeCustomerGapToDealer,
+  buildRuleSnapshot,
 } from "./utils/financingEconomics";
 import { deriveDealFinancialSummary } from "./utils/dealFinancialSummary";
+import {
+  unrecordedConfiguredFeePositions,
+  assertConfiguredFeesRecorded,
+} from "./utils/settlementDeductions";
+import { convexTestWithComponents } from "../test-utils/convexTest";
+import schema from "./schema";
+import { api } from "./_generated/api";
+import { ALL_PERMISSIONS } from "./utils/permissions";
+import type { Doc } from "./_generated/dataModel";
 
+const MODULES = import.meta.glob("./**/*.*s");
 const jod = (major: number): number => Math.round(major * 1000);
 
 describe("Unified Deal Single Fee Authority & Economics Regression", () => {
@@ -345,6 +356,198 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
       const expectedFees = dealerBorneExpected("NO_TEMPLATES", [], "JOD", false, feeMinor, 150_000);
       expect(expectedFees.totalMinor).toBe(650_000);
       expect(expectedFees.remainingMinor).toBe(500_000);
+    });
+  });
+
+  describe("Requirement K: Single Fee Authority Enforcement & Template Retirement Invariants", () => {
+    const dummyTemplate = {
+      feeType: "LICENSING" as const,
+      description: "Plates",
+      estimatedAmountMinor: jod(250),
+      paidBy: "DEALER" as const,
+      paidTo: "GOVERNMENT" as const,
+      includedInQuotation: true,
+      deductedFromSettlement: false,
+      refundable: false,
+      accountingTreatment: "SELLING_EXPENSE" as const,
+    };
+
+    test("buildRuleSnapshot excludes feeTemplates when adminFees is configured", () => {
+      const companyWithAdminFees = {
+        _id: "company_1" as never,
+        _creationTime: Date.now(),
+        orgId: "org_1" as never,
+        name: "Test Finance",
+        profitRate: 5,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        isActive: true,
+        adminFees: 700,
+        feeTemplates: [dummyTemplate],
+      } as unknown as Doc<"financeCompanies">;
+
+      const snapshot = buildRuleSnapshot(companyWithAdminFees);
+      expect(snapshot.adminFees).toBe(700);
+      expect(snapshot.feeTemplates).toBeUndefined();
+    });
+
+    test("buildRuleSnapshot retains feeTemplates for legacy company where adminFees is unset", () => {
+      const legacyCompany = {
+        _id: "company_1" as never,
+        _creationTime: Date.now(),
+        orgId: "org_1" as never,
+        name: "Legacy Finance",
+        profitRate: 5,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        isActive: true,
+        adminFees: undefined,
+        feeTemplates: [dummyTemplate],
+      } as unknown as Doc<"financeCompanies">;
+
+      const snapshot = buildRuleSnapshot(legacyCompany);
+      expect(snapshot.adminFees).toBeUndefined();
+      expect(snapshot.feeTemplates).toHaveLength(1);
+    });
+
+    test("unrecordedConfiguredFeePositions and assertConfiguredFeesRecorded bypass templates under single fee authority", () => {
+      const snapshotUnderAdminFees = {
+        ruleVersion: 1,
+        companyName: "Test Finance",
+        adminFees: 700,
+        feeTemplates: [dummyTemplate],
+      };
+
+      // With adminFees set, fee template rows are NOT required
+      expect(unrecordedConfiguredFeePositions(snapshotUnderAdminFees, [])).toEqual([]);
+      expect(() => assertConfiguredFeesRecorded(snapshotUnderAdminFees, [], "finalizing")).not.toThrow();
+
+      // For legacy snapshot without adminFees, missing template positions are enforced
+      const legacySnapshot = {
+        ruleVersion: 1,
+        companyName: "Legacy Finance",
+        adminFees: undefined,
+        feeTemplates: [dummyTemplate],
+      };
+      expect(unrecordedConfiguredFeePositions(legacySnapshot, [])).toEqual([0]);
+      expect(() => assertConfiguredFeesRecorded(legacySnapshot, [], "finalizing")).toThrow(
+        /1 fee\(s\) configured by this deal's finance company have no actual recorded/
+      );
+    });
+
+    test("server-side validation rejects invalid adminFees and conflicting feeTemplates", async () => {
+      const t = convexTestWithComponents(schema, MODULES);
+      const orgId = await t.run((ctx) =>
+        ctx.db.insert("organizations", { name: "Dealer K", createdAt: Date.now() })
+      );
+      const userId = await t.run((ctx) =>
+        ctx.db.insert("users", { clerkId: "user_k", email: "k@dealer.com" })
+      );
+      const roleId = await t.run((ctx) =>
+        ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ALL_PERMISSIONS, isSystemOwnerRole: true })
+      );
+      await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+      const asOwner = t.withIdentity({ subject: "user_k" });
+
+      // Negative adminFees is rejected
+      await expect(
+        asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Invalid Fees Co",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          isActive: true,
+          adminFees: -100,
+        })
+      ).rejects.toThrow(/Execution fees \(adminFees\) must be a non-negative finite number/);
+
+      // Conflicting feeTemplates when adminFees is set is rejected
+      await expect(
+        asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Conflicting Co",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          isActive: true,
+          adminFees: 700,
+          expectedCurrency: "JOD",
+          feeTemplates: [dummyTemplate],
+        })
+      ).rejects.toThrow(/Cannot configure fee templates when execution fees \(adminFees\) is set/);
+    });
+
+    test("end-to-end deal created from quote under adminFees authority has no feeTemplates snapshot and finalizes cleanly", async () => {
+      const t = convexTestWithComponents(schema, MODULES);
+      const orgId = await t.run((ctx) =>
+        ctx.db.insert("organizations", { name: "Dealer E2E", createdAt: Date.now() })
+      );
+      const userId = await t.run((ctx) =>
+        ctx.db.insert("users", { clerkId: "user_e2e", email: "e2e@dealer.com" })
+      );
+      const roleId = await t.run((ctx) =>
+        ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ALL_PERMISSIONS, isSystemOwnerRole: true })
+      );
+      await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+      const asOwner = t.withIdentity({ subject: "user_e2e" });
+
+      const customerId = await t.run((ctx) =>
+        ctx.db.insert("customers", { orgId, firstName: "E2E", lastName: "Customer" })
+      );
+      const vehicleId = await t.run((ctx) =>
+        ctx.db.insert("vehicles", {
+          orgId,
+          vin: "VIN_E2E_12345",
+          make: "Toyota",
+          model: "RAV4",
+          year: 2024,
+          mileage: 100,
+          color: "Silver",
+          fuelType: "Hybrid",
+          transmission: "Auto",
+          purchasePrice: 15_000,
+          sellingPrice: 20_000,
+          status: "AVAILABLE",
+        })
+      );
+
+      const companyId = await asOwner.mutation(api.finance.createCompany, {
+        orgId,
+        name: "Authority Finance",
+        profitRate: 4.5,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        defaultLtvPercent: 80,
+        isActive: true,
+        adminFees: 700,
+      });
+
+      const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+        orgId,
+        customerId,
+        vehicleId,
+        vehiclePrice: 20_000,
+        downPayment: 0,
+        termMonths: 48,
+        mode: "CONFIGURED_FINANCE_COMPANY",
+        companyId,
+        totalFinancedAmount: 20_000,
+      });
+
+      const applicationId = await asOwner.mutation(api.applications.createFromQuote, {
+        orgId,
+        quoteId,
+      });
+
+      const app = (await t.run((ctx) => ctx.db.get(applicationId)))!;
+      expect(app.estimatedDealerBorneExpensesMinor).toBe(700_000);
+      expect(app.companyRuleSnapshot?.adminFees).toBe(700);
+      expect(app.companyRuleSnapshot?.feeTemplates).toBeUndefined();
+
+      // Unrecorded positions are empty
+      expect(unrecordedConfiguredFeePositions(app.companyRuleSnapshot, [])).toEqual([]);
+      expect(() => assertConfiguredFeesRecorded(app.companyRuleSnapshot, [], "finalizing")).not.toThrow();
     });
   });
 });

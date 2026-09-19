@@ -459,7 +459,9 @@ export function buildRuleSnapshot(
     customerFirstPaymentOffsetsUnfinancedShare:
       company.customerFirstPaymentOffsetsUnfinancedShare,
     adminFees: company.adminFees,
-    feeTemplates: company.feeTemplates,
+    // When adminFees is set, Execution Fees is the single expected fee authority
+    // and feeTemplates is retired / omitted from new deal snapshots.
+    feeTemplates: company.adminFees !== undefined ? undefined : company.feeTemplates,
   };
 }
 

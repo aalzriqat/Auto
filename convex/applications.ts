@@ -2424,10 +2424,12 @@ export const createFromQuote = mutation({
       // policy but within live capacity remains closeable and is never
       // rewritten here. The company is repaired by an explicit compliant
       // list; the snapshot is never truncated to fit.
-      assertFeeTemplatesWithinLimit(
-        companyRuleSnapshot.feeTemplates,
-        `Creating an application under ${quoteCompany.name}`
-      );
+      if (companyRuleSnapshot.feeTemplates && companyRuleSnapshot.adminFees === undefined) {
+        assertFeeTemplatesWithinLimit(
+          companyRuleSnapshot.feeTemplates,
+          `Creating an application under ${quoteCompany.name}`
+        );
+      }
       const versionRow = await ctx.db
         .query("financeCompanyRuleVersions")
         .withIndex("by_company_version", (q) =>

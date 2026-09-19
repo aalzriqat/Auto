@@ -49,7 +49,6 @@ const COMPANY_FIELDS = {
   maxTermMonths: 60,
   gracePeriodMonths: 0,
   insuranceRate: 3,
-  adminFees: 700,
   commission: 0,
   maxFinancingLTV: 90,
   isActive: true,

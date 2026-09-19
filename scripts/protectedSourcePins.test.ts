@@ -325,8 +325,8 @@ describe("protected source content pins", () => {
        */
       file: "convex/applications.ts",
       // Renewed for single fee authority: Execution Fees (financeCompanies.adminFees).
-      bytes: 233484,
-      sha256: "6d131632b2c6131ab353fd788145aef9fc7ba1dbf16c67fa261ff9f71e214730",
+      bytes: 233593,
+      sha256: "462452418dff70bdd00e2c1d7802c58c07341c130dffa56b55401be335670a4b",
     },
     {
       /**
