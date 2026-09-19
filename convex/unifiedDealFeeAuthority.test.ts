@@ -3026,5 +3026,252 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         ).rejects.toThrow(/Grace period months \(60\) must be strictly less than maximum term months \(60\)/);
       });
     });
+
+    describe("Adversarial Review Seat 1 Round 9: Active Finance Company Gating (S1-R9-H1)", () => {
+      test("isActive: false company + new saveQuote rejects and inserts no quote document", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const inactiveCompanyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Inactive Bank",
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            isActive: false,
+            adminFees: 100,
+            ruleVersion: 1,
+          })
+        );
+
+        const quotesBefore = await t.run((ctx) => ctx.db.query("quotes").collect());
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            companyId: inactiveCompanyId,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            vehiclePrice: 20_000,
+            downPayment: 5_000,
+            termMonths: 48,
+          })
+        ).rejects.toThrow("Finance company is inactive or unavailable for new quotations.");
+
+        const quotesAfter = await t.run((ctx) => ctx.db.query("quotes").collect());
+        expect(quotesAfter.length).toBe(quotesBefore.length);
+      });
+
+      test("active company + saveQuote accepts and persists valid quote", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const activeCompanyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Active Bank",
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            isActive: true,
+            adminFees: 100,
+            ruleVersion: 1,
+          })
+        );
+
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          companyId: activeCompanyId,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          vehiclePrice: 20_000,
+          downPayment: 5_000,
+          termMonths: 48,
+        });
+
+        expect(quoteId).toBeDefined();
+        const quote = await t.run((ctx) => ctx.db.get(quoteId));
+        expect(quote).not.toBeNull();
+        expect(quote?.companyId).toEqual(activeCompanyId);
+      });
+
+      test("finance.deleteCompany (soft deactivation) prevents subsequent new quotes", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Soon Deleted Bank",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          isActive: true,
+          adminFees: 150,
+        });
+
+        // Soft delete the company
+        await asOwner.mutation(api.finance.deleteCompany, {
+          id: companyId,
+          orgId,
+        });
+
+        const company = await t.run((ctx) => ctx.db.get(companyId));
+        expect(company?.isActive).toBe(false);
+
+        // Subsequent quote attempt must reject
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            companyId,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            vehiclePrice: 20_000,
+            downPayment: 5_000,
+            termMonths: 48,
+          })
+        ).rejects.toThrow("Finance company is inactive or unavailable for new quotations.");
+      });
+
+      test("imported/inert inactive company rejects quote origination", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        // Simulating vehicle-import path creating inert discovered company
+        const inertCompanyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Discovered Inert Bank",
+            isActive: false,
+            // even if it has terms populated
+            profitRate: 4.5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            adminFees: 200,
+            ruleVersion: 1,
+          })
+        );
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            companyId: inertCompanyId,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            vehiclePrice: 25_000,
+            downPayment: 5_000,
+            termMonths: 36,
+          })
+        ).rejects.toThrow("Finance company is inactive or unavailable for new quotations.");
+      });
+
+      test("direct API bypass / stale client referencing deactivated company is rejected", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const staleCompanyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Deactivated Stale Bank",
+            profitRate: 6,
+            maxTermMonths: 48,
+            gracePeriodMonths: 0,
+            isActive: false,
+            adminFees: 250,
+            ruleVersion: 1,
+            deactivatedAt: Date.now() - 10000,
+          })
+        );
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            companyId: staleCompanyId,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            vehiclePrice: 30_000,
+            downPayment: 6_000,
+            termMonths: 36,
+          })
+        ).rejects.toThrow("Finance company is inactive or unavailable for new quotations.");
+      });
+
+      test("active company → create quote → deactivate company → createFromQuote preserves frozen quote lineage", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Lifecycle Bank",
+          profitRate: 5.5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          isActive: true,
+          adminFees: 300,
+        });
+
+        // 1. Create quote while active at 10:00
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          companyId,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          vehiclePrice: 20_000,
+          downPayment: 4_000,
+          termMonths: 48,
+        });
+
+        const frozenQuote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        expect(frozenQuote.customerQuotePricingSnapshot).toBeDefined();
+        expect(frozenQuote.companyRuleSnapshot?.adminFees).toBe(300);
+
+        // 2. Company disabled at 10:05
+        await asOwner.mutation(api.finance.deleteCompany, {
+          id: companyId,
+          orgId,
+        });
+
+        const companyAfterDeactivation = (await t.run((ctx) => ctx.db.get(companyId)))!;
+        expect(companyAfterDeactivation.isActive).toBe(false);
+
+        // 3. Application attempted at 10:06 from previously frozen quote must succeed
+        const appId = await asOwner.mutation(api.applications.createFromQuote, {
+          orgId,
+          quoteId,
+        });
+
+        expect(appId).toBeDefined();
+        const app = (await t.run((ctx) => ctx.db.get(appId)))!;
+        expect(app.estimatedDealerBorneExpensesMinor).toBe(300_000);
+        expect(app.companyRuleSnapshot?.adminFees).toBe(300);
+        expect(app.quoteId).toEqual(quoteId);
+      });
+
+      test("another-org active company continues to reject with org mismatch", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const otherOrgId = await t.run((ctx) =>
+          ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() })
+        );
+        const otherOrgCompanyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId: otherOrgId,
+            name: "Other Org Bank",
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            isActive: true,
+            adminFees: 100,
+            ruleVersion: 1,
+          })
+        );
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            companyId: otherOrgCompanyId,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            vehiclePrice: 20_000,
+            downPayment: 5_000,
+            termMonths: 48,
+          })
+        ).rejects.toThrow("Finance company not found in this organization.");
+      });
+    });
   });
 });

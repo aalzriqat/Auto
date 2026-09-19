@@ -731,6 +731,30 @@ export function assertCustomerLoanTermsValid(
 }
 
 /**
+ * Asserts that a finance company is eligible to originate a new customer quotation.
+ *
+ * Invariant: Only an active finance company belonging to the specified organization
+ * may originate a new configured financing quote. Later deactivation of the company
+ * does NOT invalidate already-frozen quotes.
+ */
+export function assertFinanceCompanyEligibleForNewQuote<
+  T extends { orgId: string; isActive?: boolean; name?: string }
+>(args: {
+  company: T | null;
+  orgId: string;
+}): asserts args is { company: T; orgId: string } {
+  const { company, orgId } = args;
+  if (!company || company.orgId !== orgId) {
+    throw new ConvexError("Finance company not found in this organization.");
+  }
+  if (!company.isActive) {
+    throw new ConvexError(
+      "Finance company is inactive or unavailable for new quotations."
+    );
+  }
+}
+
+/**
  * Recomputes every derived economics figure from the stored inputs.
  *
  * Called on every write that can move one of the inputs, so the stored

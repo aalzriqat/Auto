@@ -8,6 +8,7 @@ import { notifyUser, getActorName } from "./utils/notifications";
 import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
 import {
   assertCustomerLoanTermsValid,
+  assertFinanceCompanyEligibleForNewQuote,
   buildRuleSnapshot,
   type CustomerQuotePricingSnapshot,
   type FinanceCompanyRuleSnapshot,
@@ -190,10 +191,12 @@ export const saveQuote = mutation({
       if (args.termMonths <= 0) {
         throw new ConvexError("Term months must be a positive integer.");
       }
-      const company = await ctx.db.get(args.companyId!);
-      if (!company || company.orgId !== args.orgId) {
-        throw new ConvexError("Finance company not found in this organization.");
-      }
+      const rawCompany = await ctx.db.get(args.companyId!);
+      assertFinanceCompanyEligibleForNewQuote({
+        company: rawCompany,
+        orgId: args.orgId,
+      });
+      const company = rawCompany!;
       // Defensive validation against corrupt or legacy company rows in DB
       assertCustomerLoanTermsValid(company, orgCurrency);
 
