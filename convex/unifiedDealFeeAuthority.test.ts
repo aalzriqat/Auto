@@ -4967,25 +4967,49 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         expect(reply).toContain("/month");
       });
 
-      // 15. repo regression ensuring no financing-authority code uses adminFees ?? 0 where undefined means unknown
-      test("source policy: no financing code in convex/ collapses adminFees ?? 0", () => {
-        const convexDir = path.join(process.cwd(), "convex");
+      // 15. repo regression ensuring no financing-authority code uses adminFees ?? 0 or manualExecutionFees ?? 0 where undefined means unknown
+      test("source policy: no financing code collapses adminFees/manualExecutionFees ?? 0 or || 0", () => {
+        const targetDirs = [
+          path.join(process.cwd(), "convex"),
+          path.join(process.cwd(), "components", "sales"),
+          path.join(process.cwd(), "apps", "mobile", "src", "features", "workspace", "salesWizard"),
+          path.join(process.cwd(), "app", "dealer-site"),
+        ];
+        const forbiddenPattern = /(?:adminFees|manualExecutionFees)\s*(?:\?\?|\|\|)\s*0/;
         const violations: string[] = [];
+
         function scan(dir: string) {
+          if (!fs.existsSync(dir)) return;
           for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
             const full = path.join(dir, entry.name);
             if (entry.isDirectory()) {
-              if (entry.name === "_generated" || entry.name === "node_modules") continue;
+              if (
+                entry.name === "_generated" ||
+                entry.name === "node_modules" ||
+                entry.name === ".git"
+              ) {
+                continue;
+              }
               scan(full);
-            } else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
+            } else if (
+              (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) &&
+              !entry.name.endsWith(".test.ts") &&
+              !entry.name.endsWith(".test.tsx") &&
+              !entry.name.endsWith(".spec.ts") &&
+              !entry.name.endsWith(".spec.tsx")
+            ) {
               const content = fs.readFileSync(full, "utf-8");
-              if (/adminFees\s*\?\?\s*0/.test(content)) {
+              if (forbiddenPattern.test(content)) {
                 violations.push(path.relative(process.cwd(), full));
               }
             }
           }
         }
-        scan(convexDir);
+
+        for (const dir of targetDirs) {
+          scan(dir);
+        }
+
         expect(violations).toEqual([]);
       });
     });

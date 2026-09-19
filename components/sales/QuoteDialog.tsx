@@ -97,8 +97,8 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
     const activeCompanies = financeCompanies.filter((c: Doc<"financeCompanies">) => c.isActive);
     for (const company of activeCompanies) {
 
-      const feesConfigured = company.adminFees !== undefined;
-      const executionFees = company.adminFees ?? 0;
+      const executionFees = company.adminFees;
+      const feesConfigured = executionFees !== undefined;
       const commission = company.commission || 0;
 
       const result = feesConfigured

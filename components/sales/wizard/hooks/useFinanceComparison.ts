@@ -89,8 +89,8 @@ export function useFinanceComparison({
     });
 
     return activeCompanies.map((company: Doc<"financeCompanies">) => {
-      const feesConfigured = company.adminFees !== undefined;
-      const executionFees = company.adminFees ?? 0;
+      const executionFees = company.adminFees;
+      const feesConfigured = executionFees !== undefined;
 
       const result = feesConfigured
         ? calculateUnifiedMurabaha({

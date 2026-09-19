@@ -29,6 +29,7 @@ import { useAppTheme, useThemedStyles } from "../../../providers/ThemeProvider";
 import { compactInitials } from "../nativeModules";
 import { useCommandIdentity, money, parseOptionalNumber, useGenericError, SearchInput } from "../modules/moduleShared";
 import { calculateUnifiedMurabaha, type UnifiedMurabahaResult } from "./murabaha";
+import { manualExecutionFeeInputValue } from "./salesWizardQuote";
 
 export type WizardPaymentType = "CASH" | "INSTALLMENT";
 
@@ -243,8 +244,8 @@ export function SalesWizardScreen({
         return customerStatuses.some((status) => accepted.includes(status));
       })
       .map((company) => {
-        const feesConfigured = company.adminFees !== undefined;
-        const executionFees = company.adminFees ?? 0;
+        const executionFees = company.adminFees;
+        const feesConfigured = executionFees !== undefined;
         const result = feesConfigured
           ? calculateUnifiedMurabaha({
               vehiclePrice: effectivePrice,
@@ -343,7 +344,7 @@ export function SalesWizardScreen({
     setManualProfitRate(String(data.manualProfitRate ?? 0));
     setManualInsuranceRate(String(data.manualInsuranceRate ?? 0));
     setManualCommission(String(data.manualExecutionCommission ?? 0));
-    setManualFees(String(data.manualExecutionFees ?? 0));
+    setManualFees(manualExecutionFeeInputValue(data.manualExecutionFees));
     setManualIncludesCommission(data.manualIncludesCommissionInDebt ?? true);
     setCustomerStatuses((data as any).customerStatuses || []);
     setStep(Math.min(dbDraft.currentStep, 3) as WizardStep);

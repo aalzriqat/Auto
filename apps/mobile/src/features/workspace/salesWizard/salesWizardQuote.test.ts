@@ -6,6 +6,7 @@
  * finance company quotes.
  */
 import { api, type QuoteSaveArgs } from "../../../convexApi";
+import { manualExecutionFeeInputValue } from "./salesWizardQuote";
 
 describe("Mobile Quote Contract & Wizard (S1-R11-H1)", () => {
   test("QuoteSaveArgs includes customerEligibilityStatusIds", () => {
@@ -74,4 +75,20 @@ describe("Mobile Quote Contract & Wizard (S1-R11-H1)", () => {
     };
     expect(manualQuote.customerEligibilityStatusIds).toBeUndefined();
   });
+
+  describe("manualExecutionFeeInputValue (S1-R14-M1)", () => {
+    test("preserves undefined as unconfigured empty string", () => {
+      expect(manualExecutionFeeInputValue(undefined)).toBe("");
+    });
+
+    test("preserves explicit zero as '0'", () => {
+      expect(manualExecutionFeeInputValue(0)).toBe("0");
+    });
+
+    test("formats positive fee number as string", () => {
+      expect(manualExecutionFeeInputValue(150)).toBe("150");
+      expect(manualExecutionFeeInputValue(25.5)).toBe("25.5");
+    });
+  });
 });
+
