@@ -15,7 +15,7 @@ import {
 } from "./utils/financingEconomics";
 import { PERCENT_DECIMAL_PLACES, percentRoundsToZero } from "../lib/financingEconomics";
 import { getOrgCurrency } from "./accounting/workflowHooks";
-import { scaleForCurrency, toMinorUnits, fromMinorUnits } from "./utils/money";
+import { scaleForCurrency, toMinorUnits, fromMinorUnits, assertMajorAmountRepresentable } from "./utils/money";
 
 /**
  * The dealer-side purchase rules, as create/update accept them.
@@ -68,14 +68,11 @@ function assertDealerRulesValid(rules: DealerRuleArgs, currency?: string): void 
       );
     }
     if (currency) {
-      const scale = scaleForCurrency(currency);
-      const minor = toMinorUnits(rules.adminFees, currency);
-      const roundtrip = fromMinorUnits(minor, currency);
-      if (Math.abs(rules.adminFees - roundtrip) > 1e-9) {
-        throw new ConvexError(
-          `Execution fees (adminFees) of ${rules.adminFees} ${currency} cannot be represented accurately at ${scale} decimal places.`
-        );
-      }
+      assertMajorAmountRepresentable(
+        rules.adminFees,
+        currency,
+        "Execution fees (adminFees)"
+      );
     } else {
       const minor = Math.round(rules.adminFees * 1000);
       if (!Number.isSafeInteger(minor)) {

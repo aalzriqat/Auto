@@ -13,6 +13,7 @@ import {
 } from "./utils/financingEconomics";
 import { calculateUnifiedMurabaha } from "../lib/financing";
 import { getOrgCurrency } from "./accounting/workflowHooks";
+import { assertMajorAmountRepresentable } from "./utils/money";
 
 function assertFiniteNumber(val: unknown, name: string): void {
   if (val !== undefined && (typeof val !== "number" || !Number.isFinite(val))) {
@@ -124,6 +125,15 @@ export const saveQuote = mutation({
       throw new ConvexError("Customer not found in this organization.");
     }
 
+    const orgCurrency = await getOrgCurrency(ctx, args.orgId);
+
+    // Exact denomination representability: every monetary major-unit input that becomes
+    // deal economics must be representable without loss in the organization's currency.
+    assertMajorAmountRepresentable(args.downPayment, orgCurrency, "Down payment");
+    if (args.desiredProfit !== undefined) {
+      assertMajorAmountRepresentable(args.desiredProfit, orgCurrency, "Desired profit");
+    }
+
     let vehicleId = args.vehicleId;
     let vehiclePrice = args.vehiclePrice;
 
@@ -134,6 +144,7 @@ export const saveQuote = mutation({
         if (item.unitPrice <= 0) {
           throw new ConvexError("Each vehicle in the quote must have a positive price.");
         }
+        assertMajorAmountRepresentable(item.unitPrice, orgCurrency, "Vehicle line item price");
         if (seen.has(item.vehicleId)) {
           throw new ConvexError("The same vehicle cannot be added twice to a quote.");
         }
@@ -152,6 +163,8 @@ export const saveQuote = mutation({
       }
     }
 
+    assertMajorAmountRepresentable(vehiclePrice, orgCurrency, "Vehicle price");
+
     if (vehiclePrice <= 0) {
       throw new ConvexError("Vehicle price must be positive.");
     }
@@ -163,8 +176,6 @@ export const saveQuote = mutation({
     if (args.companyId !== undefined && args.mode !== "CONFIGURED_FINANCE_COMPANY") {
       throw new ConvexError("Finance company can only be set for configured finance company quotes.");
     }
-
-    const orgCurrency = await getOrgCurrency(ctx, args.orgId);
 
     let companyRuleSnapshot: FinanceCompanyRuleSnapshot | undefined;
     let companyRuleVersion: number | undefined;
@@ -182,6 +193,11 @@ export const saveQuote = mutation({
       if (!company || company.orgId !== args.orgId) {
         throw new ConvexError("Finance company not found in this organization.");
       }
+      if (company.maxTermMonths !== undefined && args.termMonths > company.maxTermMonths) {
+        throw new ConvexError(
+          `Term months (${args.termMonths}) exceeds maximum term allowed by finance company (${company.maxTermMonths}).`
+        );
+      }
       if (company.adminFees === undefined) {
         throw new ConvexError(
           "Execution Fees are not configured for this finance company. Configure the expected execution fee amount, or enter 0 if none are charged, before generating a quotation."
@@ -192,6 +208,12 @@ export const saveQuote = mutation({
       assertFiniteNumber(company.insuranceRate, "Finance company insurance rate");
       assertFiniteNumber(company.commission, "Finance company commission");
       assertFiniteNumber(company.gracePeriodMonths, "Finance company grace period months");
+
+      // Defensive validation against corrupt or legacy company rows in DB
+      assertMajorAmountRepresentable(company.adminFees, orgCurrency, "Finance company execution fees");
+      if (company.commission !== undefined) {
+        assertMajorAmountRepresentable(company.commission, orgCurrency, "Finance company commission");
+      }
 
       if (company.adminFees < 0) {
         throw new ConvexError("Execution fees cannot be negative.");
@@ -275,6 +297,10 @@ export const saveQuote = mutation({
         throw new ConvexError(
           "Execution Fees are not configured for this manual finance company quote. Enter the expected execution fee amount, or enter 0 if none are charged."
         );
+      }
+      assertMajorAmountRepresentable(args.manualAdminFees, orgCurrency, "Manual execution fees");
+      if (args.manualCommission !== undefined) {
+        assertMajorAmountRepresentable(args.manualCommission, orgCurrency, "Manual commission");
       }
       if (args.manualAdminFees < 0) {
         throw new ConvexError("Execution fees cannot be negative.");

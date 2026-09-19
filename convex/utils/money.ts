@@ -222,6 +222,32 @@ export function assertFiniteNumber(value: number, label = "value"): void {
   }
 }
 
+/**
+ * Asserts that a major-unit amount can be represented exactly in the specified
+ * currency's denomination without loss of precision when converted to minor units
+ * and back.
+ *
+ * Rejects non-finite values (NaN, ±Infinity) and amounts with more decimal places
+ * than the currency supports (e.g. 0.0004 JOD where scale is 3, or 0.001 USD where
+ * scale is 2).
+ */
+export function assertMajorAmountRepresentable(
+  amount: number,
+  currency: string,
+  label = "Amount",
+  tolerance = 1e-9
+): void {
+  assertFiniteNumber(amount, label);
+  const scale = scaleForCurrency(currency);
+  const minor = toMinorUnits(amount, currency);
+  const roundtrip = fromMinorUnits(minor, currency);
+  if (Math.abs(amount - roundtrip) > tolerance) {
+    throw new ConvexError(
+      `${label} of ${amount} cannot be represented in ${currency} (cannot be represented accurately at ${scale} decimal places).`
+    );
+  }
+}
+
 export function assertSameCurrency(a: string, b: string, context = ""): void {
   if (a.toUpperCase() !== b.toUpperCase()) {
     throw new ConvexError(

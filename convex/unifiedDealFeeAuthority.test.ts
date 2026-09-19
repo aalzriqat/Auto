@@ -35,6 +35,7 @@ import { api } from "./_generated/api";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 import type { Doc, Id } from "./_generated/dataModel";
 import { resolveExpectedExecutionFeesMinor } from "./applications";
+import { toMinorUnits, fromMinorUnits } from "./utils/money";
 
 const MODULES = import.meta.glob("./**/*.*s");
 const jod = (major: number): number => Math.round(major * 1000);
@@ -2508,6 +2509,248 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           expect(quote.totalProfit).toBeUndefined();
           expect(quote.customerQuotePricingSnapshot).toBeUndefined();
         }
+      });
+    });
+
+    describe("Adversarial Review Seat 1 Round 7: Major-Unit Denomination Representability (S1-R7-H1)", () => {
+      test("JOD manual fee 0.0004 is rejected as unrepresentable at 3 decimal places", async () => {
+        const { orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            mode: "MANUAL_FINANCE_COMPANY",
+            vehiclePrice: 20_000,
+            downPayment: 5_000,
+            termMonths: 48,
+            manualAdminFees: 0.0004,
+          })
+        ).rejects.toThrow(/cannot be represented in JOD/);
+      });
+
+      test("JOD manual fee 0.001 is accepted as representable (1 fils)", async () => {
+        const { orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          mode: "MANUAL_FINANCE_COMPANY",
+          vehiclePrice: 20_000,
+          downPayment: 5_000,
+          termMonths: 48,
+          manualAdminFees: 0.001,
+        });
+        expect(quoteId).toBeDefined();
+      });
+
+      test("JOD vehicle price 20000.0004 is rejected as unrepresentable in JOD", async () => {
+        const { orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            mode: "MANUAL_FINANCE_COMPANY",
+            vehiclePrice: 20000.0004,
+            downPayment: 5_000,
+            termMonths: 48,
+            manualAdminFees: 100,
+          })
+        ).rejects.toThrow(/cannot be represented in JOD/);
+      });
+
+      test("JOD down payment 500.0004 is rejected as unrepresentable in JOD", async () => {
+        const { orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            mode: "MANUAL_FINANCE_COMPANY",
+            vehiclePrice: 20_000,
+            downPayment: 500.0004,
+            termMonths: 48,
+            manualAdminFees: 100,
+          })
+        ).rejects.toThrow(/cannot be represented in JOD/);
+      });
+
+      test("JOD commission with >3 decimals is rejected as unrepresentable in JOD", async () => {
+        const { orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            mode: "MANUAL_FINANCE_COMPANY",
+            vehiclePrice: 20_000,
+            downPayment: 5_000,
+            termMonths: 48,
+            manualAdminFees: 100,
+            manualCommission: 50.0004,
+          })
+        ).rejects.toThrow(/cannot be represented in JOD/);
+      });
+
+      test("explicit representable 0 is accepted for downPayment, adminFees, and commission", async () => {
+        const { orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          mode: "MANUAL_FINANCE_COMPANY",
+          vehiclePrice: 20_000,
+          downPayment: 0,
+          termMonths: 48,
+          manualAdminFees: 0,
+          manualCommission: 0,
+        });
+        expect(quoteId).toBeDefined();
+      });
+
+      test("2-decimal currency (USD) rejects values with a third decimal place", async () => {
+        const t = convexTestWithComponents(schema, MODULES);
+        const orgId = await t.run((ctx) =>
+          ctx.db.insert("organizations", { name: "Dealer USD", createdAt: Date.now() })
+        );
+        await t.run((ctx) =>
+          ctx.db.insert("orgSettings", {
+            orgId,
+            currency: "USD",
+            currencySymbol: "$",
+            enabledPaymentTypes: ["CASH", "BANK_TRANSFER"],
+          })
+        );
+        const userId = await t.run((ctx) =>
+          ctx.db.insert("users", { clerkId: "user_usd", email: "usd@dealer.com" })
+        );
+        const roleId = await t.run((ctx) =>
+          ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ALL_PERMISSIONS, isSystemOwnerRole: true })
+        );
+        await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+        const asOwner = t.withIdentity({ subject: "user_usd" });
+
+        const customerId = await t.run((ctx) =>
+          ctx.db.insert("customers", { orgId, firstName: "USD", lastName: "Customer" })
+        );
+        const vehicleId = await t.run((ctx) =>
+          ctx.db.insert("vehicles", {
+            orgId,
+            vin: `VIN_USD_${Date.now()}`,
+            make: "Ford",
+            model: "Mustang",
+            year: 2024,
+            mileage: 100,
+            color: "Black",
+            fuelType: "Gasoline",
+            transmission: "Auto",
+            purchasePrice: 25_000,
+            sellingPrice: 30_000,
+            status: "AVAILABLE",
+          })
+        );
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            mode: "MANUAL_FINANCE_COMPANY",
+            vehiclePrice: 30_000,
+            downPayment: 5_000,
+            termMonths: 48,
+            manualAdminFees: 100.001,
+          })
+        ).rejects.toThrow(/cannot be represented in USD/);
+      });
+
+      test("accepted quote preserves exact economic value when converting snapshot money to minor units and back", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          mode: "MANUAL_FINANCE_COMPANY",
+          vehiclePrice: 20000.125,
+          downPayment: 5000.250,
+          termMonths: 48,
+          manualAdminFees: 150.375,
+          manualCommission: 50.125,
+        });
+
+        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        expect(quote.customerQuotePricingSnapshot).toBeDefined();
+        const snap = quote.customerQuotePricingSnapshot!;
+
+        for (const [amount, label] of [
+          [snap.vehiclePrice, "vehiclePrice"],
+          [snap.downPayment, "downPayment"],
+          [snap.executionFees, "executionFees"],
+          [snap.commission, "commission"],
+        ] as const) {
+          const minor = toMinorUnits(amount, snap.currency);
+          const roundtrip = fromMinorUnits(minor, snap.currency);
+          expect(roundtrip, `${label} must roundtrip with exact equality`).toBe(amount);
+        }
+      });
+
+      test("saveQuote defensively rejects legacy/corrupt company row with unrepresentable adminFees from DB", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const corruptCompanyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Corrupt Fees Co",
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            isActive: true,
+            adminFees: 500.0004,
+            ruleVersion: 1,
+          })
+        );
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            companyId: corruptCompanyId,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            vehiclePrice: 20_000,
+            downPayment: 5_000,
+            termMonths: 48,
+          })
+        ).rejects.toThrow(/cannot be represented in JOD/);
+      });
+
+      test("saveQuote enforces args.termMonths <= company.maxTermMonths", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Capped Term Co",
+            profitRate: 5,
+            maxTermMonths: 48,
+            gracePeriodMonths: 0,
+            isActive: true,
+            adminFees: 100,
+            ruleVersion: 1,
+          })
+        );
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            companyId,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            vehiclePrice: 20_000,
+            downPayment: 5_000,
+            termMonths: 60,
+          })
+        ).rejects.toThrow(/exceeds maximum term allowed by finance company \(48\)/);
       });
     });
   });
