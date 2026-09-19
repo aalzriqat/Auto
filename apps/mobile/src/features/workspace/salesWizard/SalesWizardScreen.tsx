@@ -38,11 +38,12 @@ type WizardStep = 1 | 2 | 3 | 4;
 
 interface ComparisonRow {
   company: MobileFinanceCompany;
-  result: UnifiedMurabahaResult;
+  result: UnifiedMurabahaResult | null;
+  feesConfigured: boolean;
   actualValuation: number;
   maxFinancingAllowed: number;
   exceedsValuation: boolean;
-  minimumDownPayment: number;
+  minimumDownPayment?: number;
 }
 
 function accentColor(paymentType: WizardPaymentType, colors: AppTheme["colors"]): string {
@@ -475,7 +476,7 @@ export function SalesWizardScreen({
         vehicleId,
         companyId: !isCash && !manual ? selectedCompanyId : undefined,
         customerEligibilityStatusIds: !isCash && !manual && customerStatuses.length > 0
-          ? (customerStatuses as any)
+          ? customerStatuses
           : undefined,
         mode: isCash ? "CASH" : manual ? "MANUAL_FINANCE_COMPANY" : "CONFIGURED_FINANCE_COMPANY",
         vehiclePrice: price,

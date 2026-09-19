@@ -1400,6 +1400,7 @@ export interface MobileWizardDraftData {
   manualExecutionCommission?: number;
   manualExecutionFees?: number;
   manualIncludesCommissionInDebt?: boolean;
+  customerStatuses?: string[];
   recipientName?: string;
 }
 
@@ -1930,10 +1931,11 @@ type MemberCreateAccountArgs = OrgScopedArgs & {
   roleId: string;
 };
 
-type QuoteSaveArgs = OrgScopedArgs & {
+export type QuoteSaveArgs = OrgScopedArgs & {
   customerId: string;
   vehicleId: string;
   companyId?: string;
+  customerEligibilityStatusIds?: string[];
   mode?: MobileQuoteMode;
   leadId?: string;
   vehiclePrice: number;
