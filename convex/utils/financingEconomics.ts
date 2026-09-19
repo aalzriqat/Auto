@@ -327,6 +327,55 @@ export const financeCompanyRuleSnapshotValidator = v.object({
   feeTemplatesAdoptedBy: v.optional(v.id("users")),
 });
 
+/**
+ * Customer-facing quote pricing snapshot.
+ *
+ * Freezes the complete Murabaha calculation inputs and outputs at the moment
+ * the quotation is calculated, so that application underwriting (DBR, LTV)
+ * and dealer-borne expenses remain permanently anchored to the exact quotation
+ * terms rather than drifting if company settings or currency move later.
+ */
+export const customerQuotePricingSnapshotValidator = v.object({
+  currency: v.string(),
+  vehiclePrice: v.number(),
+  downPayment: v.number(),
+  termMonths: v.number(),
+
+  executionFees: v.number(),
+  commission: v.number(),
+  profitRate: v.number(),
+  insuranceRate: v.number(),
+  gracePeriodMonths: v.number(),
+  includesCommissionInDebt: v.boolean(),
+
+  totalFinancedAmount: v.number(),
+  totalContractValue: v.number(),
+  monthlyInstallment: v.number(),
+  totalProfit: v.number(),
+  takafulAmount: v.number(),
+
+  companyRuleVersion: v.optional(v.number()),
+});
+
+export type CustomerQuotePricingSnapshot = {
+  currency: string;
+  vehiclePrice: number;
+  downPayment: number;
+  termMonths: number;
+  executionFees: number;
+  commission: number;
+  profitRate: number;
+  insuranceRate: number;
+  gracePeriodMonths: number;
+  includesCommissionInDebt: boolean;
+  totalFinancedAmount: number;
+  totalContractValue: number;
+  monthlyInstallment: number;
+  totalProfit: number;
+  takafulAmount: number;
+  companyRuleVersion?: number;
+};
+
 // ---------------------------------------------------------------------------
 // Derived TypeScript types
 // ---------------------------------------------------------------------------

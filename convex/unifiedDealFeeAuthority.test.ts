@@ -1828,6 +1828,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         );
 
         // Vehicle price 25,000 - down payment 5,000 + admin fees 500 = 20,500 financed
+        // Caller sends intentionally fabricated 1 / 1 values to test server-side authority
         const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
           orgId,
           customerId,
@@ -1837,10 +1838,17 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           vehiclePrice: 25_000,
           downPayment: 5_000,
           termMonths: 48,
-          totalFinancedAmount: 20_500,
-          monthlyInstallment: 512.5,
-          totalProfit: 4100,
+          totalFinancedAmount: 1,
+          monthlyInstallment: 1,
+          totalProfit: 1,
         });
+
+        // Server independently produces the expected 20,500 financed amount and 512.5 monthly installment
+        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        expect(quote.totalFinancedAmount).toBe(20_500);
+        expect(quote.monthlyInstallment).toBe(512.5);
+        expect(quote.customerQuotePricingSnapshot?.totalFinancedAmount).toBe(20_500);
+        expect(quote.customerQuotePricingSnapshot?.monthlyInstallment).toBe(512.5);
 
         // Company fees are later changed to 1200 in settings
         await t.run((ctx) =>
@@ -1865,6 +1873,641 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
 
         // 3. Underwriting LTV: derived from quote.totalFinancedAmount (20,500 / 25,000 * 100 = 82)
         expect(app.underwritingSnapshot?.ltvAtSubmission).toBeCloseTo((20_500 / 25_000) * 100, 4);
+      });
+    });
+
+    describe("Adversarial Review Seat 1 Round 6: Server Authoritative Quote Economics & Customer Pricing Snapshot (S1-R6-H1)", () => {
+      // 1. adminFees=700, caller sends financed amount 1 -> overwritten with canonical calculation
+      test("1. adminFees=700, caller sends financed amount 1 -> overwritten with canonical calculation", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Canonical Engine Bank",
+            profitRate: 5,
+            maxTermMonths: 48,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            adminFees: 700,
+            ruleVersion: 1,
+          })
+        );
+
+        // Vehicle: 20,000, downPayment: 0, adminFees: 700 -> financedAmount = 20,700
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          companyId,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          vehiclePrice: 20_000,
+          downPayment: 0,
+          termMonths: 48,
+          totalFinancedAmount: 1, // Attacker sends fabricated 1
+          monthlyInstallment: 1,
+          totalProfit: 1,
+        });
+
+        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        expect(quote.totalFinancedAmount).toBe(20_700);
+        expect(quote.customerQuotePricingSnapshot?.totalFinancedAmount).toBe(20_700);
+        expect(quote.customerQuotePricingSnapshot?.executionFees).toBe(700);
+      });
+
+      // 2. adminFees=700, caller sends monthly installment 1 -> overwritten with canonical calculation
+      test("2. adminFees=700, caller sends monthly installment 1 -> overwritten with canonical calculation", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Canonical Installment Bank",
+            profitRate: 5,
+            maxTermMonths: 48,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            adminFees: 700,
+            ruleVersion: 1,
+          })
+        );
+
+        // 20,700 * 5% * 4 years = 4,140 profit. Total debt = 24,840. Monthly = 24,840 / 48 = 517.5
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          companyId,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          vehiclePrice: 20_000,
+          downPayment: 0,
+          termMonths: 48,
+          totalFinancedAmount: 1,
+          monthlyInstallment: 1, // Attacker sends fabricated 1
+          totalProfit: 1,
+        });
+
+        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        expect(quote.monthlyInstallment).toBe(517.5);
+        expect(quote.customerQuotePricingSnapshot?.monthlyInstallment).toBe(517.5);
+      });
+
+      // 3. caller sends correct fee but stale profit rate result -> backend wins
+      test("3. caller sends correct fee but stale profit rate result -> backend wins", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Rate Authority Bank",
+            profitRate: 6, // Current is 6%
+            maxTermMonths: 48,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            adminFees: 500,
+            ruleVersion: 1,
+          })
+        );
+
+        // Financed = 20,500. Profit at 6% = 20,500 * 0.06 * 4 = 4,920.
+        // Caller calculates with stale rate 3%: profit = 2,460.
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          companyId,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          vehiclePrice: 20_000,
+          downPayment: 0,
+          termMonths: 48,
+          totalFinancedAmount: 20_500,
+          monthlyInstallment: 478.33,
+          totalProfit: 2460, // Stale
+          profitRateApplied: 3,
+        });
+
+        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        expect(quote.profitRateApplied).toBe(6);
+        expect(quote.totalProfit).toBe(4920);
+        expect(quote.customerQuotePricingSnapshot?.profitRate).toBe(6);
+        expect(quote.customerQuotePricingSnapshot?.totalProfit).toBe(4920);
+      });
+
+      // 4. company changes after quote creation (adminFees and profitRate) -> application continues with entire frozen snapshot
+      test("4. company changes after quote creation (adminFees and profitRate) -> application continues with entire frozen snapshot", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Drifting Bank",
+            profitRate: 5,
+            maxTermMonths: 48,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            adminFees: 500,
+            ruleVersion: 1,
+          })
+        );
+
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          companyId,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          vehiclePrice: 25_000,
+          downPayment: 5_000,
+          termMonths: 48,
+        });
+
+        // Company changes both adminFees and profitRate later
+        await t.run((ctx) =>
+          ctx.db.patch(companyId, {
+            adminFees: 1200,
+            profitRate: 9,
+            ruleVersion: 2,
+          })
+        );
+
+        const appId = await asOwner.mutation(api.applications.createFromQuote, {
+          orgId,
+          quoteId,
+        });
+
+        const app = (await t.run((ctx) => ctx.db.get(appId)))!;
+        // Preserves frozen snapshot from quote creation
+        expect(app.customerQuotePricingSnapshot).toBeDefined();
+        expect(app.customerQuotePricingSnapshot?.profitRate).toBe(5);
+        expect(app.customerQuotePricingSnapshot?.executionFees).toBe(500);
+        expect(app.estimatedDealerBorneExpensesMinor).toBe(500_000);
+        expect(app.underwritingSnapshot?.proposedMonthlyInstallment).toBe(512.5);
+      });
+
+      // 5. manual quote sends arbitrary computed outputs -> overwritten with canonical calculation
+      test("5. manual quote sends arbitrary computed outputs -> overwritten with canonical calculation", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+
+        // Manual: vehiclePrice: 20,000, downPayment: 2,000, termMonths: 36, manualAdminFees: 300, manualProfitRate: 4
+        // manualIncludesCommissionInDebt: true (default)
+        // financedAmount = 20,000 - 2,000 + 300 = 18,300.
+        // totalProfit = 18,300 * 0.04 * 3 = 2,196.
+        // totalContractValue = 18,300 + 2,196 = 20,496.
+        // monthlyInstallment = 20,496 / 36 = 569.3333...
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          mode: "MANUAL_FINANCE_COMPANY",
+          manualProviderName: "Arbitrary Manual Bank",
+          vehiclePrice: 20_000,
+          downPayment: 2_000,
+          termMonths: 36,
+          manualAdminFees: 300,
+          manualProfitRate: 4,
+          totalFinancedAmount: 9999, // Fabricated
+          monthlyInstallment: 99,
+          totalProfit: 9,
+        });
+
+        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        expect(quote.totalFinancedAmount).toBe(18_300);
+        expect(quote.totalProfit).toBe(2196);
+        expect(quote.monthlyInstallment).toBeCloseTo(20496 / 36, 4);
+        expect(quote.customerQuotePricingSnapshot?.totalFinancedAmount).toBe(18_300);
+        expect(quote.customerQuotePricingSnapshot?.monthlyInstallment).toBeCloseTo(20496 / 36, 4);
+      });
+
+      // 6. web calculation differs from backend engine -> backend wins
+      test("6. web calculation differs from backend engine -> backend wins", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Web Drift Bank",
+            profitRate: 5,
+            maxTermMonths: 48,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            adminFees: 400,
+            ruleVersion: 1,
+          })
+        );
+
+        // Web sends rounded or slightly drifted outputs
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          companyId,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          vehiclePrice: 20_000,
+          downPayment: 0,
+          termMonths: 48,
+          totalFinancedAmount: 20_399, // 1 off
+          monthlyInstallment: 509.0, // drifted
+          totalProfit: 4000, // drifted
+        });
+
+        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        // Correct financed amount: 20,000 + 400 = 20,400
+        expect(quote.totalFinancedAmount).toBe(20_400);
+        expect(quote.totalProfit).toBe(20_400 * 0.05 * 4); // 4,080
+        expect(quote.monthlyInstallment).toBe((20_400 + 4080) / 48); // 510
+      });
+
+      // 7. mobile calculation differs from backend engine -> backend wins
+      test("7. mobile calculation differs from backend engine -> backend wins", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Mobile Drift Bank",
+            profitRate: 5,
+            maxTermMonths: 48,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            adminFees: 400,
+            ruleVersion: 1,
+          })
+        );
+
+        // Mobile sends old cached calculation
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          companyId,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          vehiclePrice: 20_000,
+          downPayment: 0,
+          termMonths: 48,
+          totalFinancedAmount: 20_000,
+          monthlyInstallment: 500,
+          totalProfit: 4000,
+        });
+
+        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        expect(quote.totalFinancedAmount).toBe(20_400);
+        expect(quote.monthlyInstallment).toBe(510);
+      });
+
+      // 8. direct API caller fabricates economics -> cannot influence stored quote economics or underwriting
+      test("8. direct API caller fabricates economics -> cannot influence stored quote economics or underwriting", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Adversarial API Bank",
+            profitRate: 5,
+            maxTermMonths: 48,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            adminFees: 600,
+            ruleVersion: 1,
+          })
+        );
+
+        await t.run((ctx) =>
+          ctx.db.patch(customerId, {
+            employment: {
+              employer: "Tech Corp",
+              salary: 2000,
+            },
+          })
+        );
+        await t.run((ctx) =>
+          ctx.db.insert("vehicleValuations", {
+            orgId,
+            vehicleId,
+            companyId,
+            valuationAmount: 20_000,
+          })
+        );
+
+        // Attacker calls API directly with 1 / 1
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          companyId,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          vehiclePrice: 20_000,
+          downPayment: 0,
+          termMonths: 48,
+          totalFinancedAmount: 1,
+          monthlyInstallment: 1,
+          totalProfit: 1,
+        });
+
+        const appId = await asOwner.mutation(api.applications.createFromQuote, {
+          orgId,
+          quoteId,
+        });
+
+        const app = (await t.run((ctx) => ctx.db.get(appId)))!;
+        // Financed: 20,600. Installment: (20,600 + 4,120) / 48 = 515.
+        expect(app.underwritingSnapshot?.proposedMonthlyInstallment).toBe(515);
+        expect(app.underwritingSnapshot?.dbrAtSubmission).toBeCloseTo(515 / 2000, 4);
+        expect(app.underwritingSnapshot?.ltvAtSubmission).toBeCloseTo((20_600 / 20_000) * 100, 4);
+      });
+
+      // 9. NaN / Infinity in calculated or input fields -> rejects before storage with ConvexError
+      test("9. NaN / Infinity in calculated or input fields -> rejects before storage with ConvexError", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Finite Guard Bank",
+            profitRate: 5,
+            maxTermMonths: 48,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            adminFees: 500,
+            ruleVersion: 1,
+          })
+        );
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            companyId,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            vehiclePrice: NaN,
+            downPayment: 0,
+            termMonths: 48,
+          })
+        ).rejects.toThrow(/Vehicle price must be a finite number/);
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            companyId,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            vehiclePrice: 20_000,
+            downPayment: Infinity,
+            termMonths: 48,
+          })
+        ).rejects.toThrow(/Down payment must be a finite number/);
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            companyId,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            vehiclePrice: 20_000,
+            downPayment: 0,
+            termMonths: 48,
+            totalFinancedAmount: NaN,
+          })
+        ).rejects.toThrow(/Total financed amount must be a finite number/);
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            companyId,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            vehiclePrice: 20_000,
+            downPayment: 0,
+            termMonths: 48,
+            monthlyInstallment: Infinity,
+          })
+        ).rejects.toThrow(/Monthly installment must be a finite number/);
+      });
+
+      // 10. vehicleItems changes effective price while caller sends different vehiclePrice -> calculation uses server-resolved price
+      test("10. vehicleItems changes effective price while caller sends different vehiclePrice -> calculation uses server-resolved price", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const vehicleId2 = await t.run((ctx) =>
+          ctx.db.insert("vehicles", {
+            orgId,
+            vin: `VIN_V2_${Date.now()}`,
+            make: "Toyota",
+            model: "Camry",
+            year: 2024,
+            mileage: 50,
+            color: "White",
+            fuelType: "Hybrid",
+            transmission: "Auto",
+            purchasePrice: 10_000,
+            sellingPrice: 12_000,
+            status: "AVAILABLE",
+          })
+        );
+
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Multi Item Bank",
+            profitRate: 5,
+            maxTermMonths: 48,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            adminFees: 500,
+            ruleVersion: 1,
+          })
+        );
+
+        // Caller passes vehiclePrice: 10,000, but vehicleItems has 15,000 + 10,000 = 25,000
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          vehicleItems: [
+            { vehicleId, unitPrice: 15_000 },
+            { vehicleId: vehicleId2, unitPrice: 10_000 },
+          ],
+          companyId,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          vehiclePrice: 10_000, // Fabricated / mismatched
+          downPayment: 5_000,
+          termMonths: 48,
+        });
+
+        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        // Resolved vehiclePrice = 25,000. Financed amount = 25,000 - 5,000 + 500 = 20,500.
+        expect(quote.vehiclePrice).toBe(25_000);
+        expect(quote.totalFinancedAmount).toBe(20_500);
+        expect(quote.customerQuotePricingSnapshot?.vehiclePrice).toBe(25_000);
+        expect(quote.customerQuotePricingSnapshot?.totalFinancedAmount).toBe(20_500);
+      });
+
+      // 11. manual includesCommissionInDebt omitted -> uses manual default true
+      test("11. manual includesCommissionInDebt omitted -> uses manual default true", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+
+        // manualIncludesCommissionInDebt is omitted -> defaults to TRUE
+        // Under true: commission is NOT included in financedAmount:
+        // financedAmount = 20,000 - 0 + 300 = 20,300 (not 20,300 + 500 = 20,800)
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          mode: "MANUAL_FINANCE_COMPANY",
+          manualProviderName: "Default Commission Bank",
+          vehiclePrice: 20_000,
+          downPayment: 0,
+          termMonths: 48,
+          manualAdminFees: 300,
+          manualCommission: 500,
+          manualProfitRate: 5,
+          // manualIncludesCommissionInDebt omitted
+        });
+
+        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        expect(quote.totalFinancedAmount).toBe(20_300);
+        expect(quote.customerQuotePricingSnapshot?.includesCommissionInDebt).toBe(true);
+        expect(quote.customerQuotePricingSnapshot?.totalFinancedAmount).toBe(20_300);
+        // Contract value includes commission on top: 20,300 + profit (4,060) + commission (500) = 24,860
+        expect(quote.customerQuotePricingSnapshot?.totalContractValue).toBe(24_860);
+      });
+
+      // 12. org currency changes after quote -> application fails closed on currency mismatch
+      test("12. org currency changes after quote -> application fails closed on currency mismatch", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Currency Guard Bank",
+            profitRate: 5,
+            maxTermMonths: 48,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            adminFees: 500,
+            ruleVersion: 1,
+          })
+        );
+
+        // Quote created under JOD
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          companyId,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          vehiclePrice: 20_000,
+          downPayment: 0,
+          termMonths: 48,
+        });
+
+        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        expect(quote.customerQuotePricingSnapshot?.currency).toBe("JOD");
+
+        // Org currency is changed to USD in orgSettings
+        await t.run(async (ctx) => {
+          const existing = await ctx.db
+            .query("orgSettings")
+            .withIndex("by_org", (q) => q.eq("orgId", orgId))
+            .first();
+          if (existing) {
+            await ctx.db.patch(existing._id, { currency: "USD", currencySymbol: "$" });
+          } else {
+            await ctx.db.insert("orgSettings", {
+              orgId,
+              currency: "USD",
+              currencySymbol: "$",
+              enabledPaymentTypes: ["CASH", "INSTALLMENT"],
+            });
+          }
+        });
+
+        // createFromQuote must fail closed rather than silently reinterpreting JOD amounts as USD
+        await expect(
+          asOwner.mutation(api.applications.createFromQuote, {
+            orgId,
+            quoteId,
+          })
+        ).rejects.toThrow(/Quote currency \(JOD\) does not match organization currency \(USD\)/);
+      });
+
+      // 13. quote mirror fields are tampered after creation but pricing snapshot remains intact -> application consumes snapshot authority or fails closed
+      test("13. quote mirror fields are tampered after creation but pricing snapshot remains intact -> application consumes snapshot authority or fails closed", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Tamper Guard Bank",
+            profitRate: 5,
+            maxTermMonths: 48,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            adminFees: 500,
+            ruleVersion: 1,
+          })
+        );
+
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          companyId,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          vehiclePrice: 20_000,
+          downPayment: 0,
+          termMonths: 48,
+        });
+
+        // Directly tamper with mirror fields in the DB
+        await t.run((ctx) =>
+          ctx.db.patch(quoteId, {
+            monthlyInstallment: 10,
+            totalFinancedAmount: 100,
+          })
+        );
+
+        // createFromQuote detects the discrepancy against customerQuotePricingSnapshot and fails closed
+        await expect(
+          asOwner.mutation(api.applications.createFromQuote, {
+            orgId,
+            quoteId,
+          })
+        ).rejects.toThrow(/Quotation monthly installment does not match its frozen customer pricing snapshot/);
+      });
+
+      // 14. all quote modes verified (CASH, INTERNAL_INSTALLMENT, LEASE, undefined) -> no mode preserves caller-fabricated Murabaha economics
+      test("14. all quote modes verified (CASH, INTERNAL_INSTALLMENT, LEASE, undefined) -> no mode preserves caller-fabricated Murabaha economics", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+
+        const unfinancedModes = ["CASH", "INTERNAL_INSTALLMENT", "LEASE", undefined] as const;
+
+        for (const mode of unfinancedModes) {
+          const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            mode,
+            vehiclePrice: 20_000,
+            downPayment: 5_000,
+            termMonths: 48,
+            totalFinancedAmount: 15_000, // Caller fabricates computed Murabaha outputs
+            monthlyInstallment: 350,
+            profitRateApplied: 8,
+            totalProfit: 1800,
+          });
+
+          const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+          // Stored Murabaha computed outputs must be completely cleared/undefined
+          expect(quote.totalFinancedAmount).toBeUndefined();
+          expect(quote.monthlyInstallment).toBeUndefined();
+          expect(quote.profitRateApplied).toBeUndefined();
+          expect(quote.totalProfit).toBeUndefined();
+          expect(quote.customerQuotePricingSnapshot).toBeUndefined();
+        }
       });
     });
   });

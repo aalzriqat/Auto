@@ -6,7 +6,19 @@ import { PERMISSIONS } from "./utils/permissions";
 import { advanceLeadStage } from "./utils/leadStageHelpers";
 import { notifyUser, getActorName } from "./utils/notifications";
 import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
-import { buildRuleSnapshot, type FinanceCompanyRuleSnapshot } from "./utils/financingEconomics";
+import {
+  buildRuleSnapshot,
+  type CustomerQuotePricingSnapshot,
+  type FinanceCompanyRuleSnapshot,
+} from "./utils/financingEconomics";
+import { calculateUnifiedMurabaha } from "../lib/financing";
+import { getOrgCurrency } from "./accounting/workflowHooks";
+
+function assertFiniteNumber(val: unknown, name: string): void {
+  if (val !== undefined && (typeof val !== "number" || !Number.isFinite(val))) {
+    throw new ConvexError(`${name} must be a finite number.`);
+  }
+}
 
 const quoteModeValidator = v.optional(v.union(
   v.literal("CASH"),
@@ -86,6 +98,27 @@ export const saveQuote = mutation({
     // than CREATE_SALES, which is reserved for finalizing an actual sale.
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
+    // Finite checks on all numeric inputs and caller-supplied outputs
+    assertFiniteNumber(args.vehiclePrice, "Vehicle price");
+    assertFiniteNumber(args.desiredProfit, "Desired profit");
+    assertFiniteNumber(args.downPayment, "Down payment");
+    assertFiniteNumber(args.termMonths, "Term months");
+    assertFiniteNumber(args.totalFinancedAmount, "Total financed amount");
+    assertFiniteNumber(args.monthlyInstallment, "Monthly installment");
+    assertFiniteNumber(args.profitRateApplied, "Profit rate applied");
+    assertFiniteNumber(args.totalProfit, "Total profit");
+    assertFiniteNumber(args.manualProfitRate, "Manual profit rate");
+    assertFiniteNumber(args.manualInsuranceRate, "Manual insurance rate");
+    assertFiniteNumber(args.manualAdminFees, "Manual admin fees");
+    assertFiniteNumber(args.manualCommission, "Manual commission");
+
+    if (args.downPayment < 0) {
+      throw new ConvexError("Down payment cannot be negative.");
+    }
+    if (args.termMonths < 0 || !Number.isInteger(args.termMonths)) {
+      throw new ConvexError("Term months must be a non-negative integer.");
+    }
+
     const customer = await ctx.db.get(args.customerId);
     if (!customer || customer.orgId !== args.orgId) {
       throw new ConvexError("Customer not found in this organization.");
@@ -97,6 +130,7 @@ export const saveQuote = mutation({
     if (args.vehicleItems && args.vehicleItems.length > 0) {
       const seen = new Set<string>();
       for (const item of args.vehicleItems) {
+        assertFiniteNumber(item.unitPrice, "Vehicle item unit price");
         if (item.unitPrice <= 0) {
           throw new ConvexError("Each vehicle in the quote must have a positive price.");
         }
@@ -118,6 +152,10 @@ export const saveQuote = mutation({
       }
     }
 
+    if (vehiclePrice <= 0) {
+      throw new ConvexError("Vehicle price must be positive.");
+    }
+
     if (args.mode === "CONFIGURED_FINANCE_COMPANY" && !args.companyId) {
       throw new ConvexError("Configured finance company quotes require a finance company.");
     }
@@ -126,29 +164,189 @@ export const saveQuote = mutation({
       throw new ConvexError("Finance company can only be set for configured finance company quotes.");
     }
 
+    const orgCurrency = await getOrgCurrency(ctx, args.orgId);
+
     let companyRuleSnapshot: FinanceCompanyRuleSnapshot | undefined;
     let companyRuleVersion: number | undefined;
+    let customerQuotePricingSnapshot: CustomerQuotePricingSnapshot | undefined;
+    let totalFinancedAmount: number | undefined;
+    let monthlyInstallment: number | undefined;
+    let profitRateApplied: number | undefined;
+    let totalProfit: number | undefined;
 
-    if (args.companyId) {
-      const company = await ctx.db.get(args.companyId);
+    if (args.mode === "CONFIGURED_FINANCE_COMPANY") {
+      if (args.termMonths <= 0) {
+        throw new ConvexError("Term months must be a positive integer.");
+      }
+      const company = await ctx.db.get(args.companyId!);
       if (!company || company.orgId !== args.orgId) {
         throw new ConvexError("Finance company not found in this organization.");
       }
-      if (args.mode === "CONFIGURED_FINANCE_COMPANY") {
-        if (company.adminFees === undefined) {
-          throw new ConvexError(
-            "Execution Fees are not configured for this finance company. Configure the expected execution fee amount, or enter 0 if none are charged, before generating a quotation."
-          );
-        }
-        companyRuleSnapshot = buildRuleSnapshot(company);
-        companyRuleVersion = companyRuleSnapshot.ruleVersion;
+      if (company.adminFees === undefined) {
+        throw new ConvexError(
+          "Execution Fees are not configured for this finance company. Configure the expected execution fee amount, or enter 0 if none are charged, before generating a quotation."
+        );
       }
-    }
+      assertFiniteNumber(company.adminFees, "Finance company execution fees");
+      assertFiniteNumber(company.profitRate, "Finance company profit rate");
+      assertFiniteNumber(company.insuranceRate, "Finance company insurance rate");
+      assertFiniteNumber(company.commission, "Finance company commission");
+      assertFiniteNumber(company.gracePeriodMonths, "Finance company grace period months");
 
-    if (args.mode === "MANUAL_FINANCE_COMPANY" && args.manualAdminFees === undefined) {
-      throw new ConvexError(
-        "Execution Fees are not configured for this manual finance company quote. Enter the expected execution fee amount, or enter 0 if none are charged."
-      );
+      if (company.adminFees < 0) {
+        throw new ConvexError("Execution fees cannot be negative.");
+      }
+      if (company.profitRate < 0) {
+        throw new ConvexError("Profit rate cannot be negative.");
+      }
+      if (company.insuranceRate !== undefined && company.insuranceRate < 0) {
+        throw new ConvexError("Insurance rate cannot be negative.");
+      }
+      if (company.commission !== undefined && company.commission < 0) {
+        throw new ConvexError("Commission cannot be negative.");
+      }
+      const gracePeriodMonths = company.gracePeriodMonths ?? 0;
+      if (gracePeriodMonths < 0 || gracePeriodMonths >= args.termMonths || !Number.isInteger(gracePeriodMonths)) {
+        throw new ConvexError("Grace period months must be non-negative and strictly less than term months.");
+      }
+
+      companyRuleSnapshot = buildRuleSnapshot(company);
+      // Note: companyRuleVersion is a dealer-rule cross-reference (governing dealer-purchase
+      // rules such as adminFees, LTV, and settlement), whereas customerQuotePricingSnapshot
+      // freezes the complete customer-facing Murabaha pricing terms.
+      companyRuleVersion = companyRuleSnapshot.ruleVersion;
+
+      const calc = calculateUnifiedMurabaha({
+        vehiclePrice,
+        downPayment: args.downPayment,
+        commission: company.commission ?? 0,
+        processingFees: company.adminFees,
+        annualProfitRate: company.profitRate,
+        annualInsuranceRate: company.insuranceRate ?? 0,
+        termMonths: args.termMonths,
+        gracePeriodMonths,
+        includesCommissionInDebt: company.includesCommissionInDebt ?? false,
+      });
+
+      if (!Number.isFinite(calc.financedAmount) || calc.financedAmount <= 0) {
+        throw new ConvexError("Calculated financed amount must be positive and finite.");
+      }
+      if (!Number.isFinite(calc.monthlyInstallment) || calc.monthlyInstallment < 0) {
+        throw new ConvexError("Calculated monthly installment must be finite and non-negative.");
+      }
+      if (!Number.isFinite(calc.totalProfit) || calc.totalProfit < 0) {
+        throw new ConvexError("Calculated total profit must be finite and non-negative.");
+      }
+      if (!Number.isFinite(calc.totalContractValue) || calc.totalContractValue < 0) {
+        throw new ConvexError("Calculated total contract value must be finite and non-negative.");
+      }
+      if (!Number.isFinite(calc.takafulAmount) || calc.takafulAmount < 0) {
+        throw new ConvexError("Calculated takaful amount must be finite and non-negative.");
+      }
+
+      totalFinancedAmount = calc.financedAmount;
+      monthlyInstallment = calc.monthlyInstallment;
+      profitRateApplied = company.profitRate;
+      totalProfit = calc.totalProfit;
+
+      customerQuotePricingSnapshot = {
+        currency: orgCurrency,
+        vehiclePrice,
+        downPayment: args.downPayment,
+        termMonths: args.termMonths,
+        executionFees: company.adminFees,
+        commission: company.commission ?? 0,
+        profitRate: company.profitRate,
+        insuranceRate: company.insuranceRate ?? 0,
+        gracePeriodMonths,
+        includesCommissionInDebt: company.includesCommissionInDebt ?? false,
+        totalFinancedAmount: calc.financedAmount,
+        totalContractValue: calc.totalContractValue,
+        monthlyInstallment: calc.monthlyInstallment,
+        totalProfit: calc.totalProfit,
+        takafulAmount: calc.takafulAmount,
+        companyRuleVersion,
+      };
+    } else if (args.mode === "MANUAL_FINANCE_COMPANY") {
+      if (args.termMonths <= 0) {
+        throw new ConvexError("Term months must be a positive integer.");
+      }
+      if (args.manualAdminFees === undefined) {
+        throw new ConvexError(
+          "Execution Fees are not configured for this manual finance company quote. Enter the expected execution fee amount, or enter 0 if none are charged."
+        );
+      }
+      if (args.manualAdminFees < 0) {
+        throw new ConvexError("Execution fees cannot be negative.");
+      }
+      if (args.manualProfitRate !== undefined && args.manualProfitRate < 0) {
+        throw new ConvexError("Manual profit rate cannot be negative.");
+      }
+      if (args.manualInsuranceRate !== undefined && args.manualInsuranceRate < 0) {
+        throw new ConvexError("Manual insurance rate cannot be negative.");
+      }
+      if (args.manualCommission !== undefined && args.manualCommission < 0) {
+        throw new ConvexError("Manual commission cannot be negative.");
+      }
+
+      const manualProfitRate = args.manualProfitRate ?? 0;
+      const manualInsuranceRate = args.manualInsuranceRate ?? 0;
+      const manualCommission = args.manualCommission ?? 0;
+      const manualIncludesCommissionInDebt = args.manualIncludesCommissionInDebt ?? true;
+
+      const calc = calculateUnifiedMurabaha({
+        vehiclePrice,
+        downPayment: args.downPayment,
+        commission: manualCommission,
+        processingFees: args.manualAdminFees,
+        annualProfitRate: manualProfitRate,
+        annualInsuranceRate: manualInsuranceRate,
+        termMonths: args.termMonths,
+        gracePeriodMonths: 0,
+        includesCommissionInDebt: manualIncludesCommissionInDebt,
+      });
+
+      if (!Number.isFinite(calc.financedAmount) || calc.financedAmount <= 0) {
+        throw new ConvexError("Calculated financed amount must be positive and finite.");
+      }
+      if (!Number.isFinite(calc.monthlyInstallment) || calc.monthlyInstallment < 0) {
+        throw new ConvexError("Calculated monthly installment must be finite and non-negative.");
+      }
+      if (!Number.isFinite(calc.totalProfit) || calc.totalProfit < 0) {
+        throw new ConvexError("Calculated total profit must be finite and non-negative.");
+      }
+      if (!Number.isFinite(calc.totalContractValue) || calc.totalContractValue < 0) {
+        throw new ConvexError("Calculated total contract value must be finite and non-negative.");
+      }
+      if (!Number.isFinite(calc.takafulAmount) || calc.takafulAmount < 0) {
+        throw new ConvexError("Calculated takaful amount must be finite and non-negative.");
+      }
+
+      totalFinancedAmount = calc.financedAmount;
+      monthlyInstallment = calc.monthlyInstallment;
+      profitRateApplied = manualProfitRate;
+      totalProfit = calc.totalProfit;
+
+      customerQuotePricingSnapshot = {
+        currency: orgCurrency,
+        vehiclePrice,
+        downPayment: args.downPayment,
+        termMonths: args.termMonths,
+        executionFees: args.manualAdminFees,
+        commission: manualCommission,
+        profitRate: manualProfitRate,
+        insuranceRate: manualInsuranceRate,
+        gracePeriodMonths: 0,
+        includesCommissionInDebt: manualIncludesCommissionInDebt,
+        totalFinancedAmount: calc.financedAmount,
+        totalContractValue: calc.totalContractValue,
+        monthlyInstallment: calc.monthlyInstallment,
+        totalProfit: calc.totalProfit,
+        takafulAmount: calc.takafulAmount,
+      };
+    } else {
+      // Non-financed or unsupported mode (CASH, INTERNAL_INSTALLMENT, LEASE, or undefined):
+      // Murabaha outputs remain undefined so no caller-fabricated values reach storage.
     }
 
     // The UI blocks a below-minimum financed quote unless a manager approved it;
@@ -175,6 +373,10 @@ export const saveQuote = mutation({
     }
 
     const {
+      totalFinancedAmount: _clientFinanced,
+      monthlyInstallment: _clientInstallment,
+      profitRateApplied: _clientRate,
+      totalProfit: _clientProfit,
       manualProviderName,
       manualProfitRate,
       manualInsuranceRate,
@@ -199,6 +401,11 @@ export const saveQuote = mutation({
       ...(args.mode === "MANUAL_FINANCE_COMPANY" && manualIncludesCommissionInDebt !== undefined ? { manualIncludesCommissionInDebt } : {}),
       ...(companyRuleSnapshot ? { companyRuleSnapshot } : {}),
       ...(companyRuleVersion !== undefined ? { companyRuleVersion } : {}),
+      ...(customerQuotePricingSnapshot ? { customerQuotePricingSnapshot } : {}),
+      ...(totalFinancedAmount !== undefined ? { totalFinancedAmount } : {}),
+      ...(monthlyInstallment !== undefined ? { monthlyInstallment } : {}),
+      ...(profitRateApplied !== undefined ? { profitRateApplied } : {}),
+      ...(totalProfit !== undefined ? { totalProfit } : {}),
       status: "DRAFT",
       createdBy: user._id,
       createdAt: Date.now(),

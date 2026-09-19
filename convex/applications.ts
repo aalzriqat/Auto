@@ -2378,6 +2378,41 @@ export const createFromQuote = mutation({
       }
     }
 
+    const economicsCurrency = await getOrgCurrency(ctx, args.orgId);
+    assertSupportedDenomination(economicsCurrency, "creating the finance application");
+
+    let proposedInstallment: number;
+    let totalFinancedAmount: number | undefined;
+
+    if (quote.customerQuotePricingSnapshot) {
+      if (quote.customerQuotePricingSnapshot.currency !== economicsCurrency) {
+        throw new ConvexError(
+          `Quote currency (${quote.customerQuotePricingSnapshot.currency}) does not match organization currency (${economicsCurrency}).`
+        );
+      }
+      if (
+        quote.monthlyInstallment !== undefined &&
+        Math.abs(quote.monthlyInstallment - quote.customerQuotePricingSnapshot.monthlyInstallment) > 1e-4
+      ) {
+        throw new ConvexError(
+          "Quotation monthly installment does not match its frozen customer pricing snapshot."
+        );
+      }
+      if (
+        quote.totalFinancedAmount !== undefined &&
+        Math.abs(quote.totalFinancedAmount - quote.customerQuotePricingSnapshot.totalFinancedAmount) > 1e-4
+      ) {
+        throw new ConvexError(
+          "Quotation total financed amount does not match its frozen customer pricing snapshot."
+        );
+      }
+      proposedInstallment = quote.customerQuotePricingSnapshot.monthlyInstallment;
+      totalFinancedAmount = quote.customerQuotePricingSnapshot.totalFinancedAmount;
+    } else {
+      proposedInstallment = quote.monthlyInstallment ?? 0;
+      totalFinancedAmount = quote.totalFinancedAmount;
+    }
+
     const guarantors = await ctx.db
       .query("guarantors")
       .withIndex("by_customer", (q) => q.eq("customerId", quote.customerId))
@@ -2386,7 +2421,6 @@ export const createFromQuote = mutation({
 
     const salary = customer.employment?.salary;
     const existingMonthlyDebt = customer.financials?.totalMonthlyDebt;
-    const proposedInstallment = quote.monthlyInstallment ?? 0;
     const dbr =
       salary && salary > 0
         ? ((existingMonthlyDebt ?? 0) + proposedInstallment) / salary
@@ -2410,8 +2444,8 @@ export const createFromQuote = mutation({
       vehicleValuation = allValued
         ? valuations.reduce((sum, v) => sum + (v?.valuationAmount ?? 0), 0)
         : undefined;
-      if (vehicleValuation && quote.totalFinancedAmount !== undefined) {
-        ltv = (quote.totalFinancedAmount / vehicleValuation) * 100;
+      if (vehicleValuation && totalFinancedAmount !== undefined) {
+        ltv = (totalFinancedAmount / vehicleValuation) * 100;
       }
     }
 
@@ -2447,8 +2481,8 @@ export const createFromQuote = mutation({
             ...(quote.manualIncludesCommissionInDebt !== undefined
               ? { includesCommissionInDebt: quote.manualIncludesCommissionInDebt }
               : {}),
-            ...(quote.totalFinancedAmount !== undefined ? { totalFinancedAmount: quote.totalFinancedAmount } : {}),
-            ...(quote.monthlyInstallment !== undefined ? { monthlyInstallment: quote.monthlyInstallment } : {}),
+            ...(totalFinancedAmount !== undefined ? { totalFinancedAmount } : {}),
+            ...(proposedInstallment !== undefined ? { monthlyInstallment: proposedInstallment } : {}),
             ...(quote.totalProfit !== undefined ? { totalProfit: quote.totalProfit } : {}),
           }
         : undefined;
@@ -2495,8 +2529,6 @@ export const createFromQuote = mutation({
     // denomination before any write, then convert once at this lineage
     // boundary. A corrupt NaN/negative legacy quote must fail closed rather
     // than seed unusable economics (Convex's v.number() accepts NaN).
-    const economicsCurrency = await getOrgCurrency(ctx, args.orgId);
-    assertSupportedDenomination(economicsCurrency, "creating the finance application");
     const targetSellingAmountMinor = toMinorUnits(quote.vehiclePrice, economicsCurrency);
     const customerFirstPaymentMinor = toMinorUnits(quote.downPayment, economicsCurrency);
     assertValidMinorAmount(targetSellingAmountMinor, "quoted vehicle price");
@@ -2554,6 +2586,7 @@ export const createFromQuote = mutation({
       estimatedClosingExpensesMinor: dealerBorneExpensesMinor,
       ...(companyRuleSnapshot ? { companyRuleSnapshot } : {}),
       ...(companyRuleVersionId ? { companyRuleVersionId } : {}),
+      ...(quote.customerQuotePricingSnapshot ? { customerQuotePricingSnapshot: quote.customerQuotePricingSnapshot } : {}),
       notes: args.notes,
       createdAt: now,
       updatedAt: now,

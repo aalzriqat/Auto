@@ -7,6 +7,7 @@ import {
   approvedPurchaseBasisValidator,
   creditDecisionValidator,
   customerContributionSettlementValidator,
+  customerQuotePricingSnapshotValidator,
   dealerContributionSettlementValidator,
   feeAccountingTreatmentValidator,
   feePartyValidator,
@@ -2536,6 +2537,7 @@ export default defineSchema({
     // to the identical fee authority even if the finance company settings change later.
     companyRuleVersion: v.optional(v.number()),
     companyRuleSnapshot: v.optional(financeCompanyRuleSnapshotValidator),
+    customerQuotePricingSnapshot: v.optional(customerQuotePricingSnapshotValidator),
 
     status: v.union(v.literal("DRAFT"), v.literal("SHARED"), v.literal("ACCEPTED"), v.literal("EXPIRED")),
     expiresAt: v.optional(v.number()),
@@ -2945,6 +2947,7 @@ export default defineSchema({
 
     companyRuleSnapshot: v.optional(financeCompanyRuleSnapshotValidator),
     companyRuleVersionId: v.optional(v.id("financeCompanyRuleVersions")),
+    customerQuotePricingSnapshot: v.optional(customerQuotePricingSnapshotValidator),
 
     // Set by the migration on rows whose pre-existing figures cannot be
     // reinterpreted safely. Reported on, never silently cleared.
