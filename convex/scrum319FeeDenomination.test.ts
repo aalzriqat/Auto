@@ -107,6 +107,7 @@ async function seedDeal(tag: string) {
     ctx.db.insert("financeCompanies", {
       orgId: s.orgId, name: "Jordan Auto Finance", profitRate: 5, maxTermMonths: 60,
       gracePeriodMonths: 0, isActive: true, defaultLtvPercent: 100,
+      adminFees: 0,
     })
   );
   const quoteId = await s.asUser.mutation(api.quotes.saveQuote, {

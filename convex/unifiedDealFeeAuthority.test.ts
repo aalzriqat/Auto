@@ -540,7 +540,149 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
       expect(migrated.ruleVersion).toBe(2);
     });
 
-    test("deal created from quote under adminFees authority has no feeTemplates in snapshot and passes configured fee gates", async () => {
+    test("S1-R3-H1 invariant: configured deal creation fails closed when finance company has undefined adminFees authority", async () => {
+      const t = convexTestWithComponents(schema, MODULES);
+      const orgId = await t.run((ctx) =>
+        ctx.db.insert("organizations", { name: "Dealer Incomplete Authority", createdAt: Date.now() })
+      );
+      const userId = await t.run((ctx) =>
+        ctx.db.insert("users", { clerkId: "user_incomplete", email: "incomplete@dealer.com" })
+      );
+      const roleId = await t.run((ctx) =>
+        ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ALL_PERMISSIONS, isSystemOwnerRole: true })
+      );
+      await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+      const asOwner = t.withIdentity({ subject: "user_incomplete" });
+
+      const customerId = await t.run((ctx) =>
+        ctx.db.insert("customers", { orgId, firstName: "Incomplete", lastName: "Customer" })
+      );
+      const vehicleId = await t.run((ctx) =>
+        ctx.db.insert("vehicles", {
+          orgId,
+          vin: "VIN_INCOMPLETE_1",
+          make: "Toyota",
+          model: "RAV4",
+          year: 2024,
+          mileage: 100,
+          color: "Silver",
+          fuelType: "Hybrid",
+          transmission: "Auto",
+          purchasePrice: 15_000,
+          sellingPrice: 20_000,
+          status: "AVAILABLE",
+        })
+      );
+
+      // Finance company created with adminFees left undefined (authority not yet configured)
+      const companyId = await asOwner.mutation(api.finance.createCompany, {
+        orgId,
+        name: "Incomplete Authority Finance",
+        profitRate: 4.5,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        defaultLtvPercent: 80,
+        isActive: true,
+        adminFees: undefined,
+      });
+
+      const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+        orgId,
+        customerId,
+        vehicleId,
+        vehiclePrice: 20_000,
+        downPayment: 0,
+        termMonths: 48,
+        mode: "CONFIGURED_FINANCE_COMPANY",
+        companyId,
+        totalFinancedAmount: 20_000,
+      });
+
+      // Fails closed before application is written
+      await expect(
+        asOwner.mutation(api.applications.createFromQuote, {
+          orgId,
+          quoteId,
+        })
+      ).rejects.toThrow(
+        "Execution Fees are not configured for this finance company. Enter the expected execution fee amount, or enter 0 if none are charged."
+      );
+    });
+
+    test("S1-R3-H1 invariant: configured deal creation succeeds with expected fees 0 when adminFees is explicitly 0", async () => {
+      const t = convexTestWithComponents(schema, MODULES);
+      const orgId = await t.run((ctx) =>
+        ctx.db.insert("organizations", { name: "Dealer Zero Authority", createdAt: Date.now() })
+      );
+      const userId = await t.run((ctx) =>
+        ctx.db.insert("users", { clerkId: "user_zero", email: "zero@dealer.com" })
+      );
+      const roleId = await t.run((ctx) =>
+        ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ALL_PERMISSIONS, isSystemOwnerRole: true })
+      );
+      await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+      const asOwner = t.withIdentity({ subject: "user_zero" });
+
+      const customerId = await t.run((ctx) =>
+        ctx.db.insert("customers", { orgId, firstName: "Zero", lastName: "Customer" })
+      );
+      const vehicleId = await t.run((ctx) =>
+        ctx.db.insert("vehicles", {
+          orgId,
+          vin: "VIN_ZERO_1",
+          make: "Toyota",
+          model: "RAV4",
+          year: 2024,
+          mileage: 100,
+          color: "Silver",
+          fuelType: "Hybrid",
+          transmission: "Auto",
+          purchasePrice: 15_000,
+          sellingPrice: 20_000,
+          status: "AVAILABLE",
+        })
+      );
+
+      // Finance company created with adminFees explicitly 0
+      const companyId = await asOwner.mutation(api.finance.createCompany, {
+        orgId,
+        name: "Zero Fees Finance",
+        profitRate: 4.5,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        defaultLtvPercent: 80,
+        isActive: true,
+        adminFees: 0,
+      });
+
+      const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+        orgId,
+        customerId,
+        vehicleId,
+        vehiclePrice: 20_000,
+        downPayment: 0,
+        termMonths: 48,
+        mode: "CONFIGURED_FINANCE_COMPANY",
+        companyId,
+        totalFinancedAmount: 20_000,
+      });
+
+      const applicationId = await asOwner.mutation(api.applications.createFromQuote, {
+        orgId,
+        quoteId,
+      });
+
+      const app = (await t.run((ctx) => ctx.db.get(applicationId)))!;
+      expect(app.estimatedDealerBorneExpensesMinor).toBe(0);
+      expect(app.companyRuleSnapshot?.adminFees).toBe(0);
+      expect(app.companyRuleSnapshot?.feeTemplates).toBeUndefined();
+
+      // Unrecorded positions are empty
+      expect(unrecordedConfiguredFeePositions(app.companyRuleSnapshot, [])).toEqual([]);
+      expect(() => assertConfiguredFeesRecorded(app.companyRuleSnapshot, [], "finalizing")).not.toThrow();
+    });
+
+    test("S1-R3-H1 invariant: configured deal creation succeeds with expected fees 700 when adminFees is 700", async () => {
       const t = convexTestWithComponents(schema, MODULES);
       const orgId = await t.run((ctx) =>
         ctx.db.insert("organizations", { name: "Dealer E2E", createdAt: Date.now() })

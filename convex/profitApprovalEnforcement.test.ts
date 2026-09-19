@@ -78,6 +78,7 @@ async function seedOrg(t: any, seed: string, minimumProfit: number | undefined) 
       // The quotation solver refuses a company with no LTV, and the application
       // freezes the company rules at creation.
       defaultLtvPercent: 100,
+      adminFees: 0,
     });
     return { orgId, userId, approverId, vehicleId, customerId, companyId };
   });

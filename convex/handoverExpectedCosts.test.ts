@@ -170,6 +170,7 @@ async function createCompany(seed: Seed, name: string, feeTemplates: Template[])
       defaultLtvPercent: 80,
       isActive: true,
       ruleVersion: 1,
+      adminFees: 0,
       feeTemplates: feeTemplates.length > 0 ? feeTemplates : undefined,
     });
   });
@@ -197,6 +198,7 @@ async function createApplicationFor(seed: Seed, companyId: Id<"financeCompanies"
         await ctx.db.patch(applicationId, {
           companyRuleSnapshot: {
             ...app.companyRuleSnapshot,
+            adminFees: undefined,
             feeTemplates: company.feeTemplates,
           },
         });
@@ -767,6 +769,7 @@ describe("finalization re-checks configured fees, whichever rule the deal was cl
         defaultLtvPercent: 100,
         isActive: true,
         ruleVersion: 1,
+        adminFees: 0,
         feeTemplates: COMPANY_B_TEMPLATES,
       })
     );
@@ -795,6 +798,7 @@ describe("finalization re-checks configured fees, whichever rule the deal was cl
         await ctx.db.patch(applicationId, {
           companyRuleSnapshot: {
             ...app.companyRuleSnapshot,
+            adminFees: undefined,
             feeTemplates: COMPANY_B_TEMPLATES,
           },
         });

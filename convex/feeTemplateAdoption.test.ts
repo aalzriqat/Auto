@@ -104,6 +104,7 @@ async function dealFrozenBeforeFees(s: Seed) {
     name: "Late Fees Finance",
     defaultLtvPercent: 80,
     ...COMPANY_FIELDS,
+    adminFees: 0,
   });
   const quoteId = await s.asOwner.mutation(api.quotes.saveQuote, {
     orgId: s.orgId,
@@ -124,7 +125,7 @@ async function dealFrozenBeforeFees(s: Seed) {
     ...COMPANY_FIELDS,
     expectedCurrency: "JOD",
     expectedRuleVersion: 1,
-    feeTemplates: TEMPLATES,
+    adminFees: 500,
   });
   return { companyId, applicationId };
 }

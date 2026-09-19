@@ -2458,6 +2458,18 @@ export const createFromQuote = mutation({
     assertValidMinorAmount(targetSellingAmountMinor, "quoted vehicle price");
     assertValidMinorAmount(customerFirstPaymentMinor, "quoted customer first payment");
 
+    // S1-R3-H1: adminFees is the single expected-fee authority. If not configured
+    // (undefined), we must fail closed at the economic lineage boundary rather than
+    // silently collapsing undefined into 0 expenses. Explicit 0 represents zero fees.
+    if (
+      quote.mode === "CONFIGURED_FINANCE_COMPANY" &&
+      companyRuleSnapshot?.adminFees === undefined
+    ) {
+      throw new ConvexError(
+        "Execution Fees are not configured for this finance company. Enter the expected execution fee amount, or enter 0 if none are charged."
+      );
+    }
+
     // Only costs the frozen policy explicitly says are included in the
     // quotation belong in the solver input. Other expected handover costs
     // remain visible in the deal checklist, but adding them here would charge

@@ -324,9 +324,9 @@ describe("protected source content pins", () => {
        * `convex/dealWorkspace.ts` is untouched.
        */
       file: "convex/applications.ts",
-      // Renewed for single fee authority: Execution Fees (financeCompanies.adminFees).
-      bytes: 233593,
-      sha256: "462452418dff70bdd00e2c1d7802c58c07341c130dffa56b55401be335670a4b",
+      // Renewed for single fee authority: Execution Fees (financeCompanies.adminFees fail-closed invariant S1-R3-H1).
+      bytes: 234157,
+      sha256: "f5562f0aded11fda64b6e630f94e8802c05decbe0f96d667670fbed45eeca8db",
     },
     {
       /**
