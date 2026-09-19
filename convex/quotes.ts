@@ -1,15 +1,18 @@
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
+import type { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { advanceLeadStage } from "./utils/leadStageHelpers";
 import { notifyUser, getActorName } from "./utils/notifications";
 import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
 import {
+  assertCustomerEligibilityForCompany,
   assertCustomerLoanTermsValid,
   assertFinanceCompanyEligibleForNewQuote,
   buildRuleSnapshot,
+  type CustomerEligibilitySnapshot,
   type CustomerQuotePricingSnapshot,
   type FinanceCompanyRuleSnapshot,
 } from "./utils/financingEconomics";
@@ -75,6 +78,7 @@ export const saveQuote = mutation({
       unitPrice: v.number(),
     }))),
     companyId: v.optional(v.id("financeCompanies")),
+    customerEligibilityStatusIds: v.optional(v.array(v.id("orgCustomerStatuses"))),
     mode: quoteModeValidator,
     leadId: v.optional(v.id("leads")),
     vehiclePrice: v.number(),
@@ -182,6 +186,7 @@ export const saveQuote = mutation({
     let companyRuleSnapshot: FinanceCompanyRuleSnapshot | undefined;
     let companyRuleVersion: number | undefined;
     let customerQuotePricingSnapshot: CustomerQuotePricingSnapshot | undefined;
+    let customerEligibilitySnapshot: CustomerEligibilitySnapshot | undefined;
     let totalFinancedAmount: number | undefined;
     let monthlyInstallment: number | undefined;
     let profitRateApplied: number | undefined;
@@ -191,6 +196,7 @@ export const saveQuote = mutation({
       if (args.termMonths <= 0) {
         throw new ConvexError("Term months must be a positive integer.");
       }
+
       const rawCompany = await ctx.db.get(args.companyId!);
       assertFinanceCompanyEligibleForNewQuote({
         company: rawCompany,
@@ -214,6 +220,40 @@ export const saveQuote = mutation({
       if (gracePeriodMonths >= args.termMonths) {
         throw new ConvexError("Grace period months must be non-negative and strictly less than term months.");
       }
+
+      if (!args.customerEligibilityStatusIds || args.customerEligibilityStatusIds.length === 0) {
+        throw new ConvexError("Customer eligibility status is required for configured finance company quotes.");
+      }
+
+      // Deduplicate deterministically preserving order
+      const deduplicatedStatusIds = Array.from(new Set(args.customerEligibilityStatusIds));
+      const selectedStatuses: Array<{ statusId: Id<"orgCustomerStatuses">; label: string }> = [];
+
+      for (const statusId of deduplicatedStatusIds) {
+        const statusDoc = await ctx.db.get(statusId);
+        if (!statusDoc || statusDoc.orgId !== args.orgId) {
+          throw new ConvexError("Customer eligibility status not found in this organization.");
+        }
+        if (!statusDoc.isActive) {
+          throw new ConvexError("Customer eligibility status is inactive or unavailable.");
+        }
+        selectedStatuses.push({
+          statusId,
+          label: statusDoc.label,
+        });
+      }
+
+      const matchedStatusIds = assertCustomerEligibilityForCompany({
+        selectedStatusIds: deduplicatedStatusIds,
+        companyAcceptedStatusIds: company.acceptedStatuses,
+      }) as Id<"orgCustomerStatuses">[];
+
+      customerEligibilitySnapshot = {
+        selectedStatuses,
+        companyAcceptedStatusIds: company.acceptedStatuses,
+        matchedStatusIds,
+        evaluatedAt: Date.now(),
+      };
 
       companyRuleSnapshot = buildRuleSnapshot(company);
       // Note: companyRuleVersion is a dealer-rule cross-reference (governing dealer-purchase
@@ -392,6 +432,7 @@ export const saveQuote = mutation({
       manualAdminFees,
       manualCommission,
       manualIncludesCommissionInDebt,
+      customerEligibilityStatusIds: _clientStatusIds,
       ...quoteArgs
     } = args;
 
@@ -411,6 +452,7 @@ export const saveQuote = mutation({
       ...(companyRuleSnapshot ? { companyRuleSnapshot } : {}),
       ...(companyRuleVersion !== undefined ? { companyRuleVersion } : {}),
       ...(customerQuotePricingSnapshot ? { customerQuotePricingSnapshot } : {}),
+      ...(customerEligibilitySnapshot ? { customerEligibilitySnapshot } : {}),
       ...(totalFinancedAmount !== undefined ? { totalFinancedAmount } : {}),
       ...(monthlyInstallment !== undefined ? { monthlyInstallment } : {}),
       ...(profitRateApplied !== undefined ? { profitRateApplied } : {}),

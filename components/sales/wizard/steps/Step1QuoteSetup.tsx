@@ -80,7 +80,9 @@ export default function Step1QuoteSetup({
     initialData.manualIncludesCommissionInDebt ?? true
   );
 
-  const [customerStatuses, setCustomerStatuses] = useState<string[]>([]);
+  const [customerStatuses, setCustomerStatuses] = useState<string[]>(
+    initialData.customerStatuses || []
+  );
 
   const toggleStatus = (id: string) => {
     setCustomerStatuses((prev) =>
@@ -254,6 +256,7 @@ export default function Step1QuoteSetup({
       manualExecutionCommission,
       manualExecutionFees,
       manualIncludesCommissionInDebt,
+      customerStatuses: isCash ? undefined : customerStatuses,
     });
   };
 

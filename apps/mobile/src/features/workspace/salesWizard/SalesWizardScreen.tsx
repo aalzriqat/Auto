@@ -344,6 +344,7 @@ export function SalesWizardScreen({
     setManualCommission(String(data.manualExecutionCommission ?? 0));
     setManualFees(String(data.manualExecutionFees ?? 0));
     setManualIncludesCommission(data.manualIncludesCommissionInDebt ?? true);
+    setCustomerStatuses((data as any).customerStatuses || []);
     setStep(Math.min(dbDraft.currentStep, 3) as WizardStep);
     setResumePromptVisible(false);
   }
@@ -375,6 +376,7 @@ export function SalesWizardScreen({
           manualExecutionCommission: parseOptionalNumber(manualCommission),
           manualExecutionFees: parseOptionalNumber(manualFees),
           manualIncludesCommissionInDebt: manualIncludesCommission,
+          customerStatuses,
         },
         selectedCustomerId: customer?._id,
       }).catch((error: unknown) => console.error(error));
@@ -383,7 +385,7 @@ export function SalesWizardScreen({
       if (draftTimer.current) clearTimeout(draftTimer.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, vehicleId, price, profit, down, term, selectedCompanyId, manualProfitRate, manualInsuranceRate, manualCommission, manualFees, manualIncludesCommission, customer, resumePromptVisible, resumeChecked]);
+  }, [step, vehicleId, price, profit, down, term, selectedCompanyId, manualProfitRate, manualInsuranceRate, manualCommission, manualFees, manualIncludesCommission, customerStatuses, customer, resumePromptVisible, resumeChecked]);
 
   async function handleDownloadVoucher() {
     if (!voucher) return;
@@ -472,6 +474,9 @@ export function SalesWizardScreen({
         customerId: customer._id,
         vehicleId,
         companyId: !isCash && !manual ? selectedCompanyId : undefined,
+        customerEligibilityStatusIds: !isCash && !manual && customerStatuses.length > 0
+          ? (customerStatuses as any)
+          : undefined,
         mode: isCash ? "CASH" : manual ? "MANUAL_FINANCE_COMPANY" : "CONFIGURED_FINANCE_COMPANY",
         vehiclePrice: price,
         desiredProfit: profit,

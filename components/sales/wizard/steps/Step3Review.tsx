@@ -199,6 +199,9 @@ export function Step3Review({
         customerId: quotePayload.customerId as Id<"customers">,
         leadId: quotePayload.leadId as Id<"leads"> | undefined,
         companyId: quotePayload.companyId as Id<"financeCompanies"> | undefined,
+        customerEligibilityStatusIds: quotePayload.customerEligibilityStatusIds as
+          | Id<"orgCustomerStatuses">[]
+          | undefined,
       });
 
       toast.success(t("QuoteSavedSuccess"));

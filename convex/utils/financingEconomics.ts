@@ -1,5 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import { Doc } from "../_generated/dataModel";
+import { Doc, Id } from "../_generated/dataModel";
 import { toMinorSameCurrencyOrUndefined, assertFiniteNumber, assertMajorAmountRepresentable } from "./money";
 import {
   PERCENT_DECIMAL_PLACES,
@@ -374,6 +374,35 @@ export type CustomerQuotePricingSnapshot = {
   totalProfit: number;
   takafulAmount: number;
   companyRuleVersion?: number;
+};
+
+/**
+ * Customer eligibility snapshot for financing quotations.
+ *
+ * Freezes the selected customer eligibility evidence (status IDs and labels),
+ * the company's accepted status IDs at the time of quotation, and the matched
+ * status IDs that justified eligibility.
+ */
+export const customerEligibilitySnapshotValidator = v.object({
+  selectedStatuses: v.array(
+    v.object({
+      statusId: v.id("orgCustomerStatuses"),
+      label: v.string(),
+    })
+  ),
+  companyAcceptedStatusIds: v.optional(v.array(v.id("orgCustomerStatuses"))),
+  matchedStatusIds: v.array(v.id("orgCustomerStatuses")),
+  evaluatedAt: v.number(),
+});
+
+export type CustomerEligibilitySnapshot = {
+  selectedStatuses: Array<{
+    statusId: Id<"orgCustomerStatuses">;
+    label: string;
+  }>;
+  companyAcceptedStatusIds?: Id<"orgCustomerStatuses">[];
+  matchedStatusIds: Id<"orgCustomerStatuses">[];
+  evaluatedAt: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -752,6 +781,36 @@ export function assertFinanceCompanyEligibleForNewQuote<
       "Finance company is inactive or unavailable for new quotations."
     );
   }
+}
+
+/**
+ * Asserts that the submitted customer eligibility statuses satisfy the company's
+ * acceptedStatuses policy.
+ *
+ * Invariant:
+ * - If companyAcceptedStatusIds is undefined or empty: company accepts all categories;
+ *   matchedStatusIds = selectedStatusIds.
+ * - If companyAcceptedStatusIds is populated: at least one selected status must be
+ *   in companyAcceptedStatusIds.
+ *   Throws ConvexError("This finance company does not accept the selected customer eligibility status.")
+ *   if no match is found.
+ */
+export function assertCustomerEligibilityForCompany<T extends string>(args: {
+  selectedStatusIds: T[];
+  companyAcceptedStatusIds?: T[];
+}): T[] {
+  const { selectedStatusIds, companyAcceptedStatusIds } = args;
+  if (!companyAcceptedStatusIds || companyAcceptedStatusIds.length === 0) {
+    return selectedStatusIds;
+  }
+  const acceptedSet = new Set(companyAcceptedStatusIds);
+  const matched = selectedStatusIds.filter((id) => acceptedSet.has(id));
+  if (matched.length === 0) {
+    throw new ConvexError(
+      "This finance company does not accept the selected customer eligibility status."
+    );
+  }
+  return matched;
 }
 
 /**

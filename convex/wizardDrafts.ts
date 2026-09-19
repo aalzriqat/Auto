@@ -16,6 +16,7 @@ const wizardDataValidator = v.object({
   manualExecutionFees: v.optional(v.number()),
   manualIncludesCommissionInDebt: v.optional(v.boolean()),
   recipientName: v.optional(v.string()),
+  customerStatuses: v.optional(v.array(v.string())),
 });
 
 export const getMyDraft = query({

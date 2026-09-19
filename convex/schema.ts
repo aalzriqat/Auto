@@ -7,6 +7,7 @@ import {
   approvedPurchaseBasisValidator,
   creditDecisionValidator,
   customerContributionSettlementValidator,
+  customerEligibilitySnapshotValidator,
   customerQuotePricingSnapshotValidator,
   dealerContributionSettlementValidator,
   feeAccountingTreatmentValidator,
@@ -2538,6 +2539,7 @@ export default defineSchema({
     companyRuleVersion: v.optional(v.number()),
     companyRuleSnapshot: v.optional(financeCompanyRuleSnapshotValidator),
     customerQuotePricingSnapshot: v.optional(customerQuotePricingSnapshotValidator),
+    customerEligibilitySnapshot: v.optional(customerEligibilitySnapshotValidator),
 
     status: v.union(v.literal("DRAFT"), v.literal("SHARED"), v.literal("ACCEPTED"), v.literal("EXPIRED")),
     expiresAt: v.optional(v.number()),
@@ -4995,6 +4997,7 @@ export default defineSchema({
       manualExecutionFees: v.optional(v.number()),
       manualIncludesCommissionInDebt: v.optional(v.boolean()),
       recipientName: v.optional(v.string()),
+      customerStatuses: v.optional(v.array(v.string())),
     }),
     selectedCustomerId: v.optional(v.string()),
     savedAt: v.number(),
