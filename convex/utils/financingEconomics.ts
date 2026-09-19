@@ -1,6 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { Doc } from "../_generated/dataModel";
-import { toMinorSameCurrencyOrUndefined } from "./money";
+import { toMinorSameCurrencyOrUndefined, assertFiniteNumber, assertMajorAmountRepresentable } from "./money";
 import {
   PERCENT_DECIMAL_PLACES,
   percentRoundsToZero,
@@ -635,6 +635,98 @@ export function assertMinorAmount(value: number, label: string): void {
 export function assertPercent(value: number, label: string): void {
   if (!Number.isFinite(value) || value < 0 || value > 100) {
     throw new ConvexError(`${label} must be a percentage between 0 and 100 (got ${value}).`);
+  }
+}
+
+export type CustomerLoanTerms = {
+  profitRate: number;
+  maxTermMonths: number;
+  gracePeriodMonths: number;
+  insuranceRate?: number;
+  commission?: number;
+  adminFees?: number;
+  includesCommissionInDebt?: boolean;
+};
+
+/**
+ * Asserts that customer-loan terms (profit rate, max term months, grace period,
+ * insurance rate, commission, and execution fees) are finite, within their valid
+ * domains, and representable in the specified currency.
+ *
+ * Enforces:
+ * - profitRate: finite and >= 0
+ * - maxTermMonths: finite, positive integer (> 0)
+ * - gracePeriodMonths: finite, non-negative integer (>= 0), strictly less than maxTermMonths
+ * - insuranceRate: finite and >= 0 (if present)
+ * - commission: finite and >= 0, exactly representable in currency (if present)
+ * - adminFees: finite and >= 0, exactly representable in currency (if present)
+ */
+export function assertCustomerLoanTermsValid(
+  terms: CustomerLoanTerms,
+  currency?: string
+): void {
+  assertFiniteNumber(terms.profitRate, "Profit rate");
+  if (terms.profitRate < 0) {
+    throw new ConvexError("Profit rate cannot be negative.");
+  }
+
+  assertFiniteNumber(terms.maxTermMonths, "Maximum term months");
+  if (!Number.isInteger(terms.maxTermMonths) || terms.maxTermMonths <= 0) {
+    throw new ConvexError(
+      `Maximum term months must be a positive integer (got ${terms.maxTermMonths}).`
+    );
+  }
+
+  assertFiniteNumber(terms.gracePeriodMonths, "Grace period months");
+  if (!Number.isInteger(terms.gracePeriodMonths) || terms.gracePeriodMonths < 0) {
+    throw new ConvexError(
+      `Grace period months must be a non-negative integer (got ${terms.gracePeriodMonths}).`
+    );
+  }
+  if (terms.gracePeriodMonths >= terms.maxTermMonths) {
+    throw new ConvexError(
+      `Grace period months (${terms.gracePeriodMonths}) must be strictly less than maximum term months (${terms.maxTermMonths}).`
+    );
+  }
+
+  if (terms.insuranceRate !== undefined) {
+    assertFiniteNumber(terms.insuranceRate, "Insurance rate");
+    if (terms.insuranceRate < 0) {
+      throw new ConvexError("Insurance rate cannot be negative.");
+    }
+  }
+
+  if (terms.commission !== undefined) {
+    assertFiniteNumber(terms.commission, "Commission");
+    if (terms.commission < 0) {
+      throw new ConvexError("Commission cannot be negative.");
+    }
+    if (currency) {
+      assertMajorAmountRepresentable(terms.commission, currency, "Commission");
+    }
+  }
+
+  if (terms.adminFees !== undefined) {
+    assertFiniteNumber(terms.adminFees, "Execution fees (adminFees)");
+    if (terms.adminFees < 0) {
+      throw new ConvexError(
+        `Execution fees (adminFees) must be a non-negative finite number (got ${terms.adminFees}).`
+      );
+    }
+    if (currency) {
+      assertMajorAmountRepresentable(
+        terms.adminFees,
+        currency,
+        "Execution fees (adminFees)"
+      );
+    } else {
+      const minor = Math.round(terms.adminFees * 1000);
+      if (!Number.isSafeInteger(minor)) {
+        throw new ConvexError(
+          `Execution fees (adminFees) amount is too large to represent safely.`
+        );
+      }
+    }
   }
 }
 

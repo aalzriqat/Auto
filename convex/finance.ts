@@ -5,6 +5,7 @@ import { Id } from "./_generated/dataModel";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import {
+  assertCustomerLoanTermsValid,
   assertMinorAmount,
   assertPercent,
   buildRuleSnapshot,
@@ -12,6 +13,7 @@ import {
   dealerContributionSettlementValidator,
   financeFeeTemplateValidator,
   ltvBasisValidator,
+  type CustomerLoanTerms,
 } from "./utils/financingEconomics";
 import { PERCENT_DECIMAL_PLACES, percentRoundsToZero } from "../lib/financingEconomics";
 import { getOrgCurrency } from "./accounting/workflowHooks";
@@ -260,6 +262,7 @@ export const createCompany = mutation({
     }
     const { expectedCurrency, feeTemplates: _retiredFeeTemplates, ...company } = args;
     const orgCurrency = await getOrgCurrency(ctx, args.orgId);
+    assertCustomerLoanTermsValid(company, orgCurrency);
     assertDealerRulesValid(company, orgCurrency);
     const acceptedStatuses = await sanitizeAcceptedStatuses(ctx, args.orgId, args.acceptedStatuses);
     const companyId = await ctx.db.insert("financeCompanies", {
@@ -348,6 +351,17 @@ export const updateCompany = mutation({
     }
 
     const orgCurrency = await getOrgCurrency(ctx, orgId);
+
+    const effectiveTerms: CustomerLoanTerms = {
+      profitRate: updates.profitRate,
+      maxTermMonths: updates.maxTermMonths,
+      gracePeriodMonths: updates.gracePeriodMonths,
+      insuranceRate: updates.insuranceRate ?? existing.insuranceRate,
+      commission: updates.commission ?? existing.commission,
+      adminFees: args.adminFees ?? existing.adminFees,
+      includesCommissionInDebt: updates.includesCommissionInDebt ?? existing.includesCommissionInDebt,
+    };
+    assertCustomerLoanTermsValid(effectiveTerms, orgCurrency);
     assertDealerRulesValid(effectiveRules, orgCurrency);
 
     const needsInitialVersion = existing.ruleVersion === undefined;

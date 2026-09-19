@@ -2753,5 +2753,278 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         ).rejects.toThrow(/exceeds maximum term allowed by finance company \(48\)/);
       });
     });
+
+    describe("Adversarial Review Seat 1 Round 8: Commercial-Term Authority (S1-R8-H1)", () => {
+      test("createCompany rejects maxTermMonths: NaN", async () => {
+        const { orgId, asOwner } = await setupMatrixEnv();
+        await expect(
+          asOwner.mutation(api.finance.createCompany, {
+            orgId,
+            name: "NaN Term Co",
+            profitRate: 5,
+            maxTermMonths: NaN,
+            gracePeriodMonths: 0,
+            isActive: true,
+            adminFees: 100,
+          })
+        ).rejects.toThrow(/Maximum term months.*Must be a finite number/);
+      });
+
+      test("createCompany rejects maxTermMonths: Infinity", async () => {
+        const { orgId, asOwner } = await setupMatrixEnv();
+        await expect(
+          asOwner.mutation(api.finance.createCompany, {
+            orgId,
+            name: "Infinity Term Co",
+            profitRate: 5,
+            maxTermMonths: Infinity,
+            gracePeriodMonths: 0,
+            isActive: true,
+            adminFees: 100,
+          })
+        ).rejects.toThrow(/Maximum term months.*Must be a finite number/);
+      });
+
+      test("createCompany rejects maxTermMonths: 0", async () => {
+        const { orgId, asOwner } = await setupMatrixEnv();
+        await expect(
+          asOwner.mutation(api.finance.createCompany, {
+            orgId,
+            name: "Zero Term Co",
+            profitRate: 5,
+            maxTermMonths: 0,
+            gracePeriodMonths: 0,
+            isActive: true,
+            adminFees: 100,
+          })
+        ).rejects.toThrow(/Maximum term months must be a positive integer/);
+      });
+
+      test("createCompany rejects maxTermMonths: -12", async () => {
+        const { orgId, asOwner } = await setupMatrixEnv();
+        await expect(
+          asOwner.mutation(api.finance.createCompany, {
+            orgId,
+            name: "Negative Term Co",
+            profitRate: 5,
+            maxTermMonths: -12,
+            gracePeriodMonths: 0,
+            isActive: true,
+            adminFees: 100,
+          })
+        ).rejects.toThrow(/Maximum term months must be a positive integer/);
+      });
+
+      test("createCompany rejects maxTermMonths: 48.5", async () => {
+        const { orgId, asOwner } = await setupMatrixEnv();
+        await expect(
+          asOwner.mutation(api.finance.createCompany, {
+            orgId,
+            name: "Fractional Term Co",
+            profitRate: 5,
+            maxTermMonths: 48.5,
+            gracePeriodMonths: 0,
+            isActive: true,
+            adminFees: 100,
+          })
+        ).rejects.toThrow(/Maximum term months must be a positive integer/);
+      });
+
+      test("updateCompany rejects updating to invalid maxTermMonths", async () => {
+        const { orgId, asOwner } = await setupMatrixEnv();
+        const companyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Valid Co",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          isActive: true,
+          adminFees: 100,
+        });
+
+        for (const invalidMax of [NaN, Infinity, 0, -12, 48.5]) {
+          await expect(
+            asOwner.mutation(api.finance.updateCompany, {
+              id: companyId,
+              orgId,
+              name: "Valid Co",
+              profitRate: 5,
+              maxTermMonths: invalidMax,
+              gracePeriodMonths: 0,
+              isActive: true,
+              adminFees: 100,
+            })
+          ).rejects.toThrow();
+        }
+      });
+
+      test("saveQuote defensively rejects corrupt company row with maxTermMonths: NaN", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const corruptCompanyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Corrupt NaN Co",
+            profitRate: 5,
+            maxTermMonths: NaN,
+            gracePeriodMonths: 0,
+            isActive: true,
+            adminFees: 100,
+            ruleVersion: 1,
+          })
+        );
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            companyId: corruptCompanyId,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            vehiclePrice: 20_000,
+            downPayment: 5_000,
+            termMonths: 48,
+          })
+        ).rejects.toThrow(/Maximum term months.*Must be a finite number/);
+      });
+
+      test("saveQuote defensively rejects corrupt company row with maxTermMonths: Infinity", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const corruptCompanyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Corrupt Infinity Co",
+            profitRate: 5,
+            maxTermMonths: Infinity,
+            gracePeriodMonths: 0,
+            isActive: true,
+            adminFees: 100,
+            ruleVersion: 1,
+          })
+        );
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            companyId: corruptCompanyId,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            vehiclePrice: 20_000,
+            downPayment: 5_000,
+            termMonths: 48,
+          })
+        ).rejects.toThrow(/Maximum term months.*Must be a finite number/);
+      });
+
+      test("saveQuote accepts termMonths === maxTermMonths", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Exact Term Co",
+            profitRate: 5,
+            maxTermMonths: 48,
+            gracePeriodMonths: 0,
+            isActive: true,
+            adminFees: 100,
+            ruleVersion: 1,
+          })
+        );
+
+        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
+          orgId,
+          customerId,
+          vehicleId,
+          companyId,
+          mode: "CONFIGURED_FINANCE_COMPANY",
+          vehiclePrice: 20_000,
+          downPayment: 5_000,
+          termMonths: 48,
+        });
+        expect(quoteId).toBeDefined();
+      });
+
+      test("saveQuote rejects termMonths === maxTermMonths + 1", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Exact Term Co",
+            profitRate: 5,
+            maxTermMonths: 48,
+            gracePeriodMonths: 0,
+            isActive: true,
+            adminFees: 100,
+            ruleVersion: 1,
+          })
+        );
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            companyId,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            vehiclePrice: 20_000,
+            downPayment: 5_000,
+            termMonths: 49,
+          })
+        ).rejects.toThrow(/exceeds maximum term allowed by finance company \(48\)/);
+      });
+
+      test("createCompany and updateCompany reject gracePeriodMonths >= maxTermMonths", async () => {
+        const { orgId, asOwner } = await setupMatrixEnv();
+        // Equal
+        await expect(
+          asOwner.mutation(api.finance.createCompany, {
+            orgId,
+            name: "Equal Grace Co",
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 60,
+            isActive: true,
+            adminFees: 100,
+          })
+        ).rejects.toThrow(/Grace period months \(60\) must be strictly less than maximum term months \(60\)/);
+
+        // Exceeds
+        await expect(
+          asOwner.mutation(api.finance.createCompany, {
+            orgId,
+            name: "Exceeding Grace Co",
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 72,
+            isActive: true,
+            adminFees: 100,
+          })
+        ).rejects.toThrow(/Grace period months \(72\) must be strictly less than maximum term months \(60\)/);
+
+        // Valid creation then invalid update
+        const validCompanyId = await asOwner.mutation(api.finance.createCompany, {
+          orgId,
+          name: "Valid Grace Co",
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 3,
+          isActive: true,
+          adminFees: 100,
+        });
+
+        await expect(
+          asOwner.mutation(api.finance.updateCompany, {
+            id: validCompanyId,
+            orgId,
+            name: "Valid Grace Co",
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 60,
+            isActive: true,
+            adminFees: 100,
+          })
+        ).rejects.toThrow(/Grace period months \(60\) must be strictly less than maximum term months \(60\)/);
+      });
+    });
   });
 });

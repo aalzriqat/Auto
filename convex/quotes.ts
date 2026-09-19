@@ -7,6 +7,7 @@ import { advanceLeadStage } from "./utils/leadStageHelpers";
 import { notifyUser, getActorName } from "./utils/notifications";
 import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
 import {
+  assertCustomerLoanTermsValid,
   buildRuleSnapshot,
   type CustomerQuotePricingSnapshot,
   type FinanceCompanyRuleSnapshot,
@@ -193,42 +194,21 @@ export const saveQuote = mutation({
       if (!company || company.orgId !== args.orgId) {
         throw new ConvexError("Finance company not found in this organization.");
       }
-      if (company.maxTermMonths !== undefined && args.termMonths > company.maxTermMonths) {
-        throw new ConvexError(
-          `Term months (${args.termMonths}) exceeds maximum term allowed by finance company (${company.maxTermMonths}).`
-        );
-      }
+      // Defensive validation against corrupt or legacy company rows in DB
+      assertCustomerLoanTermsValid(company, orgCurrency);
+
       if (company.adminFees === undefined) {
         throw new ConvexError(
           "Execution Fees are not configured for this finance company. Configure the expected execution fee amount, or enter 0 if none are charged, before generating a quotation."
         );
       }
-      assertFiniteNumber(company.adminFees, "Finance company execution fees");
-      assertFiniteNumber(company.profitRate, "Finance company profit rate");
-      assertFiniteNumber(company.insuranceRate, "Finance company insurance rate");
-      assertFiniteNumber(company.commission, "Finance company commission");
-      assertFiniteNumber(company.gracePeriodMonths, "Finance company grace period months");
-
-      // Defensive validation against corrupt or legacy company rows in DB
-      assertMajorAmountRepresentable(company.adminFees, orgCurrency, "Finance company execution fees");
-      if (company.commission !== undefined) {
-        assertMajorAmountRepresentable(company.commission, orgCurrency, "Finance company commission");
-      }
-
-      if (company.adminFees < 0) {
-        throw new ConvexError("Execution fees cannot be negative.");
-      }
-      if (company.profitRate < 0) {
-        throw new ConvexError("Profit rate cannot be negative.");
-      }
-      if (company.insuranceRate !== undefined && company.insuranceRate < 0) {
-        throw new ConvexError("Insurance rate cannot be negative.");
-      }
-      if (company.commission !== undefined && company.commission < 0) {
-        throw new ConvexError("Commission cannot be negative.");
+      if (args.termMonths > company.maxTermMonths) {
+        throw new ConvexError(
+          `Term months (${args.termMonths}) exceeds maximum term allowed by finance company (${company.maxTermMonths}).`
+        );
       }
       const gracePeriodMonths = company.gracePeriodMonths ?? 0;
-      if (gracePeriodMonths < 0 || gracePeriodMonths >= args.termMonths || !Number.isInteger(gracePeriodMonths)) {
+      if (gracePeriodMonths >= args.termMonths) {
         throw new ConvexError("Grace period months must be non-negative and strictly less than term months.");
       }
 
