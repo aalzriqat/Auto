@@ -13,6 +13,7 @@ import {
   assertFinanceCompanyEligibleForNewQuote,
   assertFinancedQuoteContributionValid,
   buildRuleSnapshot,
+  requireConfiguredExecutionFees,
   type CustomerEligibilitySnapshot,
   type CustomerQuotePricingSnapshot,
   type FinanceCompanyRuleSnapshot,
@@ -214,11 +215,7 @@ export const saveQuote = mutation({
       // Defensive validation against corrupt or legacy company rows in DB
       assertCustomerLoanTermsValid(company, orgCurrency);
 
-      if (company.adminFees === undefined) {
-        throw new ConvexError(
-          "Execution Fees are not configured for this finance company. Configure the expected execution fee amount, or enter 0 if none are charged, before generating a quotation."
-        );
-      }
+      const configuredAdminFees = requireConfiguredExecutionFees(company, "quotation");
       if (args.termMonths > company.maxTermMonths) {
         throw new ConvexError(
           `Term months (${args.termMonths}) exceeds maximum term allowed by finance company (${company.maxTermMonths}).`
@@ -264,7 +261,7 @@ export const saveQuote = mutation({
       };
 
       companyRuleSnapshot = buildRuleSnapshot(company);
-      // Note: companyRuleVersion is a dealer-rule cross-reference (governing dealer-purchase
+      // Align companyRuleVersion with snapshot ruleVersion (representing dealer-purchase
       // rules such as adminFees, LTV, and settlement), whereas customerQuotePricingSnapshot
       // freezes the complete customer-facing Murabaha pricing terms.
       companyRuleVersion = companyRuleSnapshot.ruleVersion;
@@ -273,7 +270,7 @@ export const saveQuote = mutation({
         vehiclePrice,
         downPayment: args.downPayment,
         commission: company.commission ?? 0,
-        processingFees: company.adminFees,
+        processingFees: configuredAdminFees,
         annualProfitRate: company.profitRate,
         annualInsuranceRate: company.insuranceRate ?? 0,
         termMonths: args.termMonths,
@@ -307,7 +304,7 @@ export const saveQuote = mutation({
         vehiclePrice,
         downPayment: args.downPayment,
         termMonths: args.termMonths,
-        executionFees: company.adminFees,
+        executionFees: configuredAdminFees,
         commission: company.commission ?? 0,
         profitRate: company.profitRate,
         insuranceRate: company.insuranceRate ?? 0,

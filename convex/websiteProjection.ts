@@ -43,7 +43,7 @@ async function publicFinanceCompany(ctx: QueryCtx | MutationCtx, websiteSettings
     maxTermMonths: company.maxTermMonths,
     gracePeriodMonths: company.gracePeriodMonths,
     insuranceRate: company.insuranceRate ?? 0,
-    adminFees: company.adminFees ?? 0,
+    adminFees: company.adminFees,
     commission: company.commission ?? 0,
     includesCommissionInDebt: company.includesCommissionInDebt ?? false,
   };

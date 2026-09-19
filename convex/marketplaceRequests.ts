@@ -185,18 +185,21 @@ type BuyerFinancePreferences = {
 };
 
 /** Computes the buyer-personalized installment + the term snapshot the estimate was built from, so the buyer keeps seeing the exact numbers even as rates drift. */
-function computePersonalizedFinance(
+export function computePersonalizedFinance(
   price: number,
   terms: SnapshotFinanceTerms,
   prefs: BuyerFinancePreferences | undefined
 ) {
+  if (terms.adminFees === undefined) {
+    return null;
+  }
   const downPayment = prefs?.downPaymentAmount ?? Math.round(price * DEFAULT_DOWN_PAYMENT_PCT);
   const termMonths = Math.min(prefs?.preferredTermMonths ?? DEFAULT_TERM_MONTHS, terms.maxTermMonths);
   const result = calculateUnifiedMurabaha({
     vehiclePrice: price,
     downPayment,
     commission: terms.commission ?? 0,
-    processingFees: terms.adminFees ?? 0,
+    processingFees: terms.adminFees,
     annualProfitRate: terms.profitRate,
     annualInsuranceRate: terms.insuranceRate ?? 0,
     termMonths,
@@ -212,7 +215,7 @@ function computePersonalizedFinance(
       annualProfitRate: terms.profitRate,
       annualInsuranceRate: terms.insuranceRate ?? 0,
       commission: terms.commission ?? 0,
-      processingFees: terms.adminFees ?? 0,
+      processingFees: terms.adminFees,
     },
   };
 }
@@ -224,7 +227,7 @@ type ScoredDealerMatch = {
   matchedVehicleRawId?: string;
   estimatedMonthlyPayment?: number;
   matchReasons?: string[];
-  calculationSnapshot?: ReturnType<typeof computePersonalizedFinance>["snapshot"];
+  calculationSnapshot?: NonNullable<ReturnType<typeof computePersonalizedFinance>>["snapshot"];
 };
 
 /**
@@ -277,7 +280,7 @@ async function matchDealersToRequest(
         const result = scoreVehicleAgainstRequest(
           params.criteria,
           { make: vehicle.make, model: vehicle.model, year: vehicle.year ?? null, price: vehicle.price ?? null },
-          { monthlyEstimate: finance?.monthly ?? null, financeAvailable: Boolean(financeTerms) }
+          { monthlyEstimate: finance?.monthly ?? null, financeAvailable: Boolean(financeTerms && financeTerms.adminFees !== undefined) }
         );
         if (!result) continue;
 

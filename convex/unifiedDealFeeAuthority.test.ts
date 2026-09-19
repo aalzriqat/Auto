@@ -24,7 +24,15 @@ import {
   composeCustomerGapToDealer,
   buildRuleSnapshot,
   assertFinancedQuoteContributionValid,
+  requireConfiguredExecutionFees,
 } from "./utils/financingEconomics";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { computeAffordabilityRange } from "./marketplaceAffordability";
+import { estimateMonthlyPayment } from "./marketplaceBrowse";
+import { computePersonalizedFinance } from "./marketplaceRequests";
+import { websitePublicProjection } from "./websiteProjection";
+import { buildSmartReplyText } from "./utils/smartReplyBuilder";
 import { deriveDealFinancialSummary } from "./utils/dealFinancialSummary";
 import {
   unrecordedConfiguredFeePositions,
@@ -4441,6 +4449,544 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           mode: "CASH",
         });
         expect(quoteId).toBeDefined();
+      });
+    });
+
+    describe("Adversarial Review Seat 1 Round 13: Single Fee Authority Marketplace & Public Financing (S1-R13-H1)", () => {
+      // 1. active company + adminFees: undefined + quotes.saveQuote -> reject
+      test("active company + adminFees: undefined + quotes.saveQuote rejects", async () => {
+        const { t, orgId, asOwner, customerId, vehicleId, customerStatusId } = await setupMatrixEnv();
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Unconfigured Fees Bank",
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            // adminFees: undefined,
+            ruleVersion: 1,
+            acceptedStatuses: [customerStatusId],
+          })
+        );
+
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehiclePrice: 20_000,
+            downPayment: 2_000,
+            termMonths: 48,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            companyId,
+            customerEligibilityStatusIds: [customerStatusId],
+            totalFinancedAmount: 18_000,
+          })
+        ).rejects.toThrow(
+          "Execution Fees are not configured for this finance company. Configure the expected execution fee amount, or enter 0 if none are charged, before generating a quotation."
+        );
+      });
+
+      // 2. active company + adminFees: undefined + marketplace concrete finance offer -> reject
+      // 3. marketplace rejection inserts no response/finance snapshot -> verify atomicity
+      test("active company + adminFees: undefined + marketplace concrete finance offer rejects and inserts no response", async () => {
+        const { t, orgId, asOwner, vehicleId } = await setupMatrixEnv();
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Unconfigured Marketplace Bank",
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            // adminFees: undefined,
+            ruleVersion: 1,
+          })
+        );
+
+        const requestId = await t.run((ctx) =>
+          ctx.db.insert("marketplaceRequests", {
+            status: "MATCHED",
+            buyerFirstName: "Ahmad",
+            buyerPhone: "+962791234567",
+            buyerCity: "Amman",
+            make: "Toyota",
+            model: "RAV4",
+            paymentType: "FINANCE",
+            buyerTimeframe: "ASAP",
+            buyerIntent: "HOT",
+            consentAcceptedAt: Date.now(),
+            clientFingerprint: "fp-round13",
+            expiresAt: Date.now() + 100000,
+            createdAt: Date.now(),
+          })
+        );
+        await t.run((ctx) =>
+          ctx.db.insert("marketplaceRequestMatches", {
+            requestId,
+            orgId,
+            matchedAt: Date.now(),
+          })
+        );
+        await t.run((ctx) =>
+          ctx.db.insert("marketplaceDealerProfiles", {
+            orgId,
+            isOptedIn: true,
+            areas: ["Amman"],
+            brandsCarried: ["Toyota"],
+            badges: [],
+            totalResponses: 0,
+            totalAccepted: 0,
+            tier: "FREE_FOUNDING",
+            leadsUsedThisPeriod: 0,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          })
+        );
+
+        const beforeCount = (await t.run((ctx) => ctx.db.query("marketplaceResponses").collect())).length;
+
+        await expect(
+          asOwner.mutation(api.marketplaceResponses.respond, {
+            orgId,
+            requestId,
+            kind: "HAVE_MATCH",
+            vehicleId,
+            offerPriceJod: 20_000,
+            downPayment: 4_000,
+            termMonths: 48,
+            financeCompanyId: companyId,
+          })
+        ).rejects.toThrow(
+          "Execution Fees are not configured for this finance company. Configure the expected execution fee amount, or enter 0 if none are charged, before generating a finance offer."
+        );
+
+        const afterCount = (await t.run((ctx) => ctx.db.query("marketplaceResponses").collect())).length;
+        expect(afterCount).toBe(beforeCount);
+      });
+
+      // 4. active company + adminFees: 0 + marketplace offer -> accept
+      // 5. marketplace processingFees snapshot with explicit 0 -> exactly 0
+      test("active company + adminFees: 0 + marketplace offer accepts with processingFees exactly 0", async () => {
+        const { t, orgId, asOwner, vehicleId } = await setupMatrixEnv();
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Zero Fee Bank",
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            adminFees: 0,
+            ruleVersion: 1,
+          })
+        );
+
+        const requestId = await t.run((ctx) =>
+          ctx.db.insert("marketplaceRequests", {
+            status: "MATCHED",
+            buyerFirstName: "Sami",
+            buyerPhone: "+962791234568",
+            buyerCity: "Amman",
+            make: "Toyota",
+            model: "RAV4",
+            paymentType: "FINANCE",
+            buyerTimeframe: "ASAP",
+            buyerIntent: "HOT",
+            consentAcceptedAt: Date.now(),
+            clientFingerprint: "fp-round13-zero",
+            expiresAt: Date.now() + 100000,
+            createdAt: Date.now(),
+          })
+        );
+        await t.run((ctx) =>
+          ctx.db.insert("marketplaceRequestMatches", {
+            requestId,
+            orgId,
+            matchedAt: Date.now(),
+          })
+        );
+        await t.run((ctx) =>
+          ctx.db.insert("marketplaceDealerProfiles", {
+            orgId,
+            isOptedIn: true,
+            areas: ["Amman"],
+            brandsCarried: ["Toyota"],
+            badges: [],
+            totalResponses: 0,
+            totalAccepted: 0,
+            tier: "FREE_FOUNDING",
+            leadsUsedThisPeriod: 0,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          })
+        );
+
+        const result = await asOwner.mutation(api.marketplaceResponses.respond, {
+          orgId,
+          requestId,
+          kind: "HAVE_MATCH",
+          vehicleId,
+          offerPriceJod: 20_000,
+          downPayment: 4_000,
+          termMonths: 48,
+          financeCompanyId: companyId,
+        });
+        expect(result.responseId).toBeDefined();
+
+        const responseDoc = await t.run((ctx) => ctx.db.get(result.responseId));
+        expect(responseDoc?.financeOffer).toBeDefined();
+        expect(responseDoc?.financeOffer?.processingFees).toBe(0);
+        expect(responseDoc?.financeOffer?.totalContractValue).toBeGreaterThan(0);
+      });
+
+      // 6. active company + positive adminFees -> normal calculation
+      test("active company + positive adminFees normal calculation and snapshot with exact fees", async () => {
+        const { t, orgId, asOwner, vehicleId } = await setupMatrixEnv();
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Standard Fee Bank",
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            adminFees: 350,
+            ruleVersion: 1,
+          })
+        );
+
+        const requestId = await t.run((ctx) =>
+          ctx.db.insert("marketplaceRequests", {
+            status: "MATCHED",
+            buyerFirstName: "Rami",
+            buyerPhone: "+962791234569",
+            buyerCity: "Amman",
+            make: "Toyota",
+            model: "RAV4",
+            paymentType: "FINANCE",
+            buyerTimeframe: "ASAP",
+            buyerIntent: "HOT",
+            consentAcceptedAt: Date.now(),
+            clientFingerprint: "fp-round13-positive",
+            expiresAt: Date.now() + 100000,
+            createdAt: Date.now(),
+          })
+        );
+        await t.run((ctx) =>
+          ctx.db.insert("marketplaceRequestMatches", {
+            requestId,
+            orgId,
+            matchedAt: Date.now(),
+          })
+        );
+        await t.run((ctx) =>
+          ctx.db.insert("marketplaceDealerProfiles", {
+            orgId,
+            isOptedIn: true,
+            areas: ["Amman"],
+            brandsCarried: ["Toyota"],
+            badges: [],
+            totalResponses: 0,
+            totalAccepted: 0,
+            tier: "FREE_FOUNDING",
+            leadsUsedThisPeriod: 0,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          })
+        );
+
+        const result = await asOwner.mutation(api.marketplaceResponses.respond, {
+          orgId,
+          requestId,
+          kind: "HAVE_MATCH",
+          vehicleId,
+          offerPriceJod: 20_000,
+          downPayment: 4_000,
+          termMonths: 48,
+          financeCompanyId: companyId,
+        });
+
+        const responseDoc = await t.run((ctx) => ctx.db.get(result.responseId));
+        expect(responseDoc?.financeOffer?.processingFees).toBe(350);
+        expect(responseDoc?.financeOffer?.totalContractValue).toBeGreaterThan(0);
+      });
+
+      // 7. public website projection + adminFees: undefined -> must preserve undefined / not emit fake 0
+      test("public website projection + adminFees: undefined preserves undefined and does not emit fake 0", async () => {
+        const { t, orgId } = await setupMatrixEnv();
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Unconfigured Projection Bank",
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            // adminFees: undefined,
+            ruleVersion: 1,
+          })
+        );
+        const websiteSettingsId = await t.run((ctx) =>
+          ctx.db.insert("websiteSettings", {
+            orgId,
+            enabled: true,
+            status: "active",
+            defaultLanguage: "ar",
+            supportedLanguages: ["ar"],
+            activeFinanceCompanyId: companyId,
+            defaultSubdomain: "test-dealer",
+            templateId: "classic",
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          })
+        );
+
+        const projection = await t.run((ctx) => {
+          return websitePublicProjection(ctx, orgId, {
+            _id: websiteSettingsId,
+            _creationTime: Date.now(),
+            orgId,
+            enabled: true,
+            status: "active",
+            defaultLanguage: "ar",
+            supportedLanguages: ["ar"],
+            activeFinanceCompanyId: companyId,
+            defaultSubdomain: "test-dealer",
+            templateId: "classic",
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          } as any);
+        });
+
+        expect(projection.financeCompany).toBeDefined();
+        expect(projection.financeCompany!.adminFees).toBeUndefined();
+      });
+
+      // 8. projection + explicit adminFees: 0 -> emit 0
+      test("public website projection + explicit adminFees: 0 emits 0", async () => {
+        const { t, orgId } = await setupMatrixEnv();
+        const companyId = await t.run((ctx) =>
+          ctx.db.insert("financeCompanies", {
+            orgId,
+            name: "Zero Fee Projection Bank",
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            defaultLtvPercent: 100,
+            isActive: true,
+            adminFees: 0,
+            ruleVersion: 1,
+          })
+        );
+        const websiteSettingsId = await t.run((ctx) =>
+          ctx.db.insert("websiteSettings", {
+            orgId,
+            enabled: true,
+            status: "active",
+            defaultLanguage: "ar",
+            supportedLanguages: ["ar"],
+            activeFinanceCompanyId: companyId,
+            defaultSubdomain: "zero-dealer",
+            templateId: "classic",
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          })
+        );
+
+        const projection = await t.run((ctx) => {
+          return websitePublicProjection(ctx, orgId, {
+            _id: websiteSettingsId,
+            _creationTime: Date.now(),
+            orgId,
+            enabled: true,
+            status: "active",
+            defaultLanguage: "ar",
+            supportedLanguages: ["ar"],
+            activeFinanceCompanyId: companyId,
+            defaultSubdomain: "zero-dealer",
+            templateId: "classic",
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          } as any);
+        });
+
+        expect(projection.financeCompany).toBeDefined();
+        expect(projection.financeCompany!.adminFees).toBe(0);
+      });
+
+      // 9. personalized marketplace matching + unknown fees -> no calculated estimate/snapshot
+      test("personalized marketplace matching + unknown fees returns null", () => {
+        const result = computePersonalizedFinance(
+          20_000,
+          {
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            adminFees: undefined,
+          },
+          undefined
+        );
+        expect(result).toBeNull();
+      });
+
+      // 10. personalized matching + explicit zero -> calculate
+      test("personalized marketplace matching + explicit zero calculates with processingFees: 0", () => {
+        const result = computePersonalizedFinance(
+          20_000,
+          {
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            adminFees: 0,
+          },
+          undefined
+        );
+        expect(result).not.toBeNull();
+        expect(result!.snapshot.processingFees).toBe(0);
+        expect(result!.monthly).toBeGreaterThan(0);
+      });
+
+      // 11. marketplace browse + unknown fees -> no monthly estimate
+      test("marketplace browse + unknown fees returns null (no monthly estimate)", () => {
+        const estimate = estimateMonthlyPayment(20_000, {
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          adminFees: undefined,
+        });
+        expect(estimate).toBeNull();
+      });
+
+      test("marketplace browse + explicit zero calculates monthly estimate", () => {
+        const estimate = estimateMonthlyPayment(20_000, {
+          profitRate: 5,
+          maxTermMonths: 60,
+          gracePeriodMonths: 0,
+          adminFees: 0,
+        });
+        expect(estimate).not.toBeNull();
+        expect(estimate).toBeGreaterThan(0);
+      });
+
+      // 12. affordability + unknown fees -> company excluded from calculated range
+      test("affordability + unknown fees excludes company from calculated range", () => {
+        const range = computeAffordabilityRange(
+          [
+            {
+              profitRate: 5,
+              maxTermMonths: 60,
+              gracePeriodMonths: 0,
+              adminFees: undefined,
+            },
+          ],
+          { maximumMonthlyPayment: 400, downPayment: 3000, termMonths: 60 }
+        );
+        expect(range).toBeNull();
+      });
+
+      test("affordability + explicit zero includes company in calculated range", () => {
+        const range = computeAffordabilityRange(
+          [
+            {
+              profitRate: 5,
+              maxTermMonths: 60,
+              gracePeriodMonths: 0,
+              adminFees: 0,
+            },
+          ],
+          { maximumMonthlyPayment: 400, downPayment: 3000, termMonths: 60 }
+        );
+        expect(range).not.toBeNull();
+        expect(range!.companiesConsidered).toBe(1);
+        expect(range!.maxPriceJod).toBeGreaterThan(0);
+      });
+
+      // 13. smart reply calculated mode + unknown fees -> generic financing reply, not calculated amount
+      test("smart reply calculated mode + unknown fees falls back to generic financing reply", () => {
+        const reply = buildSmartReplyText({
+          intent: "financing",
+          vehicle: {
+            model: "Camry",
+            year: 2024,
+            sellingPrice: 25_000,
+            status: "AVAILABLE",
+          },
+          orgSettings: {
+            smartReplyFinancingMode: "calculated",
+            smartReplyDefaultDownPaymentPercent: 20,
+          },
+          financeCompany: {
+            name: "Unconfigured Bank",
+            isActive: true,
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            adminFees: undefined,
+          },
+          locale: "en",
+        });
+        expect(reply).not.toBeNull();
+        // Falls back to generic financing text which does not include a calculated monthly installment
+        expect(reply).toContain("personalized monthly rate");
+        expect(reply).not.toContain("/month");
+      });
+
+      // 14. smart reply + explicit zero -> calculated reply permitted
+      test("smart reply calculated mode + explicit zero produces calculated reply with monthly installment", () => {
+        const reply = buildSmartReplyText({
+          intent: "financing",
+          vehicle: {
+            model: "Camry",
+            year: 2024,
+            sellingPrice: 25_000,
+            status: "AVAILABLE",
+          },
+          orgSettings: {
+            smartReplyFinancingMode: "calculated",
+            smartReplyDefaultDownPaymentPercent: 20,
+          },
+          financeCompany: {
+            name: "Zero Fee Bank",
+            isActive: true,
+            profitRate: 5,
+            maxTermMonths: 60,
+            gracePeriodMonths: 0,
+            adminFees: 0,
+          },
+          locale: "en",
+        });
+        expect(reply).not.toBeNull();
+        expect(reply).toContain("estimated monthly payments start from");
+        expect(reply).toContain("/month");
+      });
+
+      // 15. repo regression ensuring no financing-authority code uses adminFees ?? 0 where undefined means unknown
+      test("source policy: no financing code in convex/ collapses adminFees ?? 0", () => {
+        const convexDir = path.join(process.cwd(), "convex");
+        const violations: string[] = [];
+        function scan(dir: string) {
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+              if (entry.name === "_generated" || entry.name === "node_modules") continue;
+              scan(full);
+            } else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
+              const content = fs.readFileSync(full, "utf-8");
+              if (/adminFees\s*\?\?\s*0/.test(content)) {
+                violations.push(path.relative(process.cwd(), full));
+              }
+            }
+          }
+        }
+        scan(convexDir);
+        expect(violations).toEqual([]);
       });
     });
   });

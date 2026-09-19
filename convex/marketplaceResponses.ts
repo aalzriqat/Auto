@@ -8,7 +8,12 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { refreshDealerBadges, checkMarketplaceQuota, consumeMarketplaceLead, getOwnProfile } from "./marketplaceDealers";
 import { calculateUnifiedMurabaha } from "../lib/financing";
 import { assertFiniteNumber } from "./utils/money";
-import { assertFinancedQuoteContributionValid } from "./utils/financingEconomics";
+import {
+  assertCustomerLoanTermsValid,
+  assertFinancedQuoteContributionValid,
+  requireConfiguredExecutionFees,
+} from "./utils/financingEconomics";
+import { getOrgCurrency } from "./accounting/workflowHooks";
 
 const MAX_NOTE_CHARS = 1000;
 const MAX_LISTED_REQUESTS = 100;
@@ -44,6 +49,10 @@ async function buildFinanceOffer(
   if (!company || company.orgId !== orgId || !company.isActive) {
     throw new ConvexError("Finance company not found.");
   }
+  const orgCurrency = await getOrgCurrency(ctx, orgId);
+  assertCustomerLoanTermsValid(company, orgCurrency);
+  const processingFees = requireConfiguredExecutionFees(company, "finance offer");
+
   // Guard before the range checks below: comparisons against NaN are all false,
   // so a non-finite term or down payment would pass every one of them and reach
   // calculateUnifiedMurabaha, which then returns NaN for the whole offer —
@@ -60,7 +69,6 @@ async function buildFinanceOffer(
   });
 
   const commission = company.commission ?? 0;
-  const processingFees = company.adminFees ?? 0;
   const result = calculateUnifiedMurabaha({
     vehiclePrice: args.vehiclePrice,
     downPayment: args.downPayment,

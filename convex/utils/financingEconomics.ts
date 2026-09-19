@@ -836,6 +836,26 @@ export function assertFinancedQuoteContributionValid(args: {
 }
 
 /**
+ * Asserts that execution fees (adminFees) are explicitly configured on a finance company.
+ *
+ * In AutoFlow, financeCompanies.adminFees is the single expected execution-fee authority.
+ * An adminFees value of 0 indicates explicitly zero fees, whereas undefined indicates
+ * unconfigured/unknown fees. No financing calculation may substitute zero for an unconfigured
+ * adminFees.
+ */
+export function requireConfiguredExecutionFees(
+  company: { adminFees?: number },
+  context: "quotation" | "finance offer" = "quotation"
+): number {
+  if (company.adminFees === undefined) {
+    throw new ConvexError(
+      `Execution Fees are not configured for this finance company. Configure the expected execution fee amount, or enter 0 if none are charged, before generating a ${context}.`
+    );
+  }
+  return company.adminFees;
+}
+
+/**
  * Recomputes every derived economics figure from the stored inputs.
  *
  * Called on every write that can move one of the inputs, so the stored

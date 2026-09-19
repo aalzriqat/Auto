@@ -51,7 +51,7 @@ function termsSignature(terms: FinanceTerms): string {
     terms.maxTermMonths,
     terms.gracePeriodMonths ?? 0,
     terms.insuranceRate ?? 0,
-    terms.adminFees ?? 0,
+    terms.adminFees ?? "undefined",
     terms.commission ?? 0,
     terms.includesCommissionInDebt ?? false,
   ].join("|");
@@ -74,6 +74,7 @@ export function computeAffordabilityRange(
   const prices: number[] = [];
   const seen = new Set<string>();
   for (const terms of termsList) {
+    if (terms.adminFees === undefined) continue;
     const signature = termsSignature(terms);
     if (seen.has(signature)) continue;
     seen.add(signature);
@@ -89,7 +90,7 @@ export function computeAffordabilityRange(
         annualProfitRate: terms.profitRate,
         annualInsuranceRate: terms.insuranceRate ?? 0,
         commission: terms.commission ?? 0,
-        processingFees: terms.adminFees ?? 0,
+        processingFees: terms.adminFees,
         gracePeriodMonths: terms.gracePeriodMonths ?? 0,
         includesCommissionInDebt: terms.includesCommissionInDebt ?? false,
       },

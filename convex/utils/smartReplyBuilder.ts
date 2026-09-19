@@ -97,6 +97,7 @@ export function buildSmartReplyText({ intent, vehicle, orgSettings, financeCompa
       orgSettings?.smartReplyFinancingMode === "calculated" &&
       financeCompany &&
       financeCompany.isActive &&
+      financeCompany.adminFees !== undefined &&
       vehicle.status === "AVAILABLE";
 
     if (!canCalculate) {
@@ -109,7 +110,7 @@ export function buildSmartReplyText({ intent, vehicle, orgSettings, financeCompa
       vehiclePrice: vehicle.sellingPrice,
       downPayment,
       commission: financeCompany.commission ?? 0,
-      processingFees: financeCompany.adminFees ?? 0,
+      processingFees: financeCompany.adminFees!,
       annualProfitRate: financeCompany.profitRate,
       annualInsuranceRate: financeCompany.insuranceRate ?? 0,
       termMonths: financeCompany.maxTermMonths,

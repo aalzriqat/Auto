@@ -95,15 +95,15 @@ type FinanceCompanyTerms = {
 };
 
 /** Illustrative only — buyer hasn't picked their own down payment/term yet, so this uses the same default assumptions as the public dealer-site calculator. Returns null when the dealer has no active finance company to estimate against. */
-function estimateMonthlyPayment(price: number, financeCompany: FinanceCompanyTerms | null): number | null {
-  if (!financeCompany) return null;
+export function estimateMonthlyPayment(price: number, financeCompany: FinanceCompanyTerms | null): number | null {
+  if (!financeCompany || financeCompany.adminFees === undefined) return null;
   const downPayment = price * (ESTIMATE_DOWN_PAYMENT_PCT / 100);
   const termMonths = Math.min(ESTIMATE_TERM_MONTHS, financeCompany.maxTermMonths);
   const { monthlyInstallment } = calculateUnifiedMurabaha({
     vehiclePrice: price,
     downPayment,
     commission: financeCompany.commission ?? 0,
-    processingFees: financeCompany.adminFees ?? 0,
+    processingFees: financeCompany.adminFees,
     annualProfitRate: financeCompany.profitRate,
     annualInsuranceRate: financeCompany.insuranceRate ?? 0,
     termMonths,
