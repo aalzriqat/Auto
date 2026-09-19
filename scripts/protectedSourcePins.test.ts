@@ -324,9 +324,9 @@ describe("protected source content pins", () => {
        * `convex/dealWorkspace.ts` is untouched.
        */
       file: "convex/applications.ts",
-      // Renewed for TASK-DEAL-01, TASK-DEAL-05, and AF-80 deal custody accounting.
-      bytes: 232839,
-      sha256: "ac96b718970d9654a8b6e4dba6fe17ac6d58c0cf16107029490f72e8da5e11b8",
+      // Renewed for single fee authority: Execution Fees (financeCompanies.adminFees).
+      bytes: 233484,
+      sha256: "6d131632b2c6131ab353fd788145aef9fc7ba1dbf16c67fa261ff9f71e214730",
     },
     {
       /**

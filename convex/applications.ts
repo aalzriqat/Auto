@@ -101,8 +101,14 @@ const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
  * reading today's editable company policy would retroactively rewrite a deal.
  */
 function includedDealerBorneExpensesMinor(
-  snapshot: FinanceCompanyRuleSnapshot | undefined
+  snapshot: FinanceCompanyRuleSnapshot | undefined,
+  currency?: string
 ): number {
+  if (snapshot?.adminFees !== undefined && currency) {
+    const minor = toMinorUnits(snapshot.adminFees, currency);
+    assertValidMinorAmount(minor, "frozen admin fee total");
+    return minor;
+  }
   return (
     snapshot?.feeTemplates
       ?.filter(
@@ -1381,6 +1387,7 @@ async function buildCockpitMoney(
       // engine uses, so the cockpit and the engine cannot disagree about it.
       customerDirectToDealerMinor: customerGapToDealer.amountMinor,
       actualExpensesMinor,
+      expectedExpensesMinor: app.estimatedDealerBorneExpensesMinor,
       currency,
       fullySettled,
     });
@@ -2455,7 +2462,10 @@ export const createFromQuote = mutation({
     // the customer for a cost the policy explicitly excluded. EMPLOYEE means
     // the dealership advances/reimburses the money and is therefore
     // dealer-borne, matching the cockpit's financial summary classification.
-    const dealerBorneExpensesMinor = includedDealerBorneExpensesMinor(companyRuleSnapshot);
+    const dealerBorneExpensesMinor =
+      quote.mode === "MANUAL_FINANCE_COMPANY" && quote.manualAdminFees !== undefined
+        ? toMinorUnits(quote.manualAdminFees, economicsCurrency)
+        : includedDealerBorneExpensesMinor(companyRuleSnapshot, economicsCurrency);
 
     // SCRUM-195: a live finance application is per-vehicle commitment evidence
     // in its own right — no deposit required. So creating one is an
@@ -2610,7 +2620,10 @@ export const repairQuoteEconomicsLineage = mutation({
 
     const targetSellingAmountMinor = toMinorUnits(quote.vehiclePrice, expectedCurrency);
     const customerFirstPaymentMinor = toMinorUnits(quote.downPayment, expectedCurrency);
-    const dealerBorneExpensesMinor = includedDealerBorneExpensesMinor(app.companyRuleSnapshot);
+    const dealerBorneExpensesMinor =
+      quote.mode === "MANUAL_FINANCE_COMPANY" && quote.manualAdminFees !== undefined
+        ? toMinorUnits(quote.manualAdminFees, expectedCurrency)
+        : includedDealerBorneExpensesMinor(app.companyRuleSnapshot, expectedCurrency);
     assertValidMinorAmount(targetSellingAmountMinor, "quoted vehicle price");
     assertValidMinorAmount(customerFirstPaymentMinor, "quoted customer first payment");
     const expected = {

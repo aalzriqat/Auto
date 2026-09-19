@@ -8,7 +8,6 @@ import {
   computeDealerProceeds,
   computeExpectedRemittance,
   computeFundingComposition,
-  evaluateQuotationException,
   resolveLtvBaseMinor,
   validateGapShares,
   type CustomerContributionSettlement,
@@ -311,6 +310,7 @@ export const financeCompanyRuleSnapshotValidator = v.object({
   // recorded per company and the solver declines when it is unset rather than
   // generalising one dealership's arrangement to every company.
   customerFirstPaymentOffsetsUnfinancedShare: v.optional(v.boolean()),
+  adminFees: v.optional(v.number()),
   feeTemplates: v.optional(v.array(financeFeeTemplateValidator)),
   /**
    * Set ONLY by `financeDealCosts.adoptCompanyFeeTemplates`: the snapshot was
@@ -458,6 +458,7 @@ export function buildRuleSnapshot(
     // invents a commercial arrangement.
     customerFirstPaymentOffsetsUnfinancedShare:
       company.customerFirstPaymentOffsetsUnfinancedShare,
+    adminFees: company.adminFees,
     feeTemplates: company.feeTemplates,
   };
 }
@@ -1548,7 +1549,8 @@ export type ManagementProfitLine =
    */
   | { key: "PREPARATION_EXPENSES"; sign: -1; amountMinor: number }
   | { key: "DEALER_CONTRIBUTION"; sign: -1; amountMinor: number }
-  | { key: "ACTUAL_EXPENSES"; sign: -1; amountMinor: number };
+  | { key: "ACTUAL_EXPENSES"; sign: -1; amountMinor: number }
+  | { key: "FORECAST_EXPENSES"; sign: -1; amountMinor: number };
 
 /**
  * `صافي ربح المعرض` — a MANAGEMENT figure, never an accounting result.
@@ -1744,6 +1746,7 @@ export function deriveManagementProfit(args: {
    */
   customerDirectToDealerMinor?: number;
   actualExpensesMinor: number;
+  expectedExpensesMinor?: number;
   currency: string;
   fullySettled: boolean;
 }): ManagementProfit {
@@ -1764,6 +1767,12 @@ export function deriveManagementProfit(args: {
   // the row in hand, and the failure mode of assuming it is an overstated profit.
   if (args.dealerContributionMinor === undefined)
     return { available: false, reason: "NoDealerContribution" };
+  if (args.expectedExpensesMinor !== undefined && !isMinorAmount(args.expectedExpensesMinor)) {
+    return { available: false, reason: "CorruptInput" };
+  }
+  const expenseBasisMinor = !args.fullySettled
+    ? Math.max(args.expectedExpensesMinor ?? 0, args.actualExpensesMinor)
+    : args.actualExpensesMinor;
   // FAIL CLOSED on EVERY operand, the same rule as the STOCK sibling below.
   // `computeDealerProceeds` asserts each input; this once checked only for
   // negatives, so NaN, Infinity, a fraction or an unsafe integer written
@@ -1777,7 +1786,7 @@ export function deriveManagementProfit(args: {
     args.supplierSettlementMinor,
     args.dealerContributionMinor,
     args.customerDirectToDealerMinor ?? 0,
-    args.actualExpensesMinor,
+    expenseBasisMinor,
   ];
   if (!operands.every(isMinorAmount)) {
     return { available: false, reason: "CorruptInput" };
@@ -1792,7 +1801,14 @@ export function deriveManagementProfit(args: {
     },
     { key: "SUPPLIER_SETTLEMENT", sign: -1, amountMinor: args.supplierSettlementMinor },
     { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: args.dealerContributionMinor },
-    { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: args.actualExpensesMinor },
+    {
+      key:
+        !args.fullySettled && (args.expectedExpensesMinor ?? 0) > args.actualExpensesMinor
+          ? "FORECAST_EXPENSES"
+          : "ACTUAL_EXPENSES",
+      sign: -1,
+      amountMinor: expenseBasisMinor,
+    },
   ];
   // Summed from the same lines the screen renders, so the headline and its
   // derivation cannot disagree — the arithmetic happens once, here. Safe
@@ -1838,6 +1854,7 @@ export function deriveStockManagementProfit(args: {
   /** The customer's PLANNED gap contribution to the dealership — see `deriveManagementProfit`. */
   customerDirectToDealerMinor?: number;
   actualExpensesMinor: number;
+  expectedExpensesMinor?: number;
   currency: string;
   fullySettled: boolean;
 }): ManagementProfit {
@@ -1847,6 +1864,12 @@ export function deriveStockManagementProfit(args: {
   if (args.vehicleCostMinor === undefined) return { available: false, reason: "NoVehicleCost" };
   if (args.dealerContributionMinor === undefined)
     return { available: false, reason: "NoDealerContribution" };
+  if (args.expectedExpensesMinor !== undefined && !isMinorAmount(args.expectedExpensesMinor)) {
+    return { available: false, reason: "CorruptInput" };
+  }
+  const expenseBasisMinor = !args.fullySettled
+    ? Math.max(args.expectedExpensesMinor ?? 0, args.actualExpensesMinor)
+    : args.actualExpensesMinor;
   // FAIL CLOSED on every operand, the approved amount included. `v.number()`
   // admits NaN, Infinity, fractions and unsafe integers, and a negative minor
   // amount is not a smaller cost — it is a corrupt row. None of them may reach
@@ -1856,7 +1879,7 @@ export function deriveStockManagementProfit(args: {
     args.vehicleCostMinor,
     args.dealerContributionMinor,
     args.customerDirectToDealerMinor ?? 0,
-    args.actualExpensesMinor,
+    expenseBasisMinor,
   ];
   if (!operands.every(isMinorAmount)) {
     return { available: false, reason: "CorruptInput" };
@@ -1866,7 +1889,14 @@ export function deriveStockManagementProfit(args: {
     { key: "CUSTOMER_PLANNED_TO_DEALER", sign: 1, amountMinor: args.customerDirectToDealerMinor ?? 0 },
     { key: "VEHICLE_COST", sign: -1, amountMinor: args.vehicleCostMinor },
     { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: args.dealerContributionMinor },
-    { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: args.actualExpensesMinor },
+    {
+      key:
+        !args.fullySettled && (args.expectedExpensesMinor ?? 0) > args.actualExpensesMinor
+          ? "FORECAST_EXPENSES"
+          : "ACTUAL_EXPENSES",
+      sign: -1,
+      amountMinor: expenseBasisMinor,
+    },
   ];
   const amountMinor = lines.reduce((total, line) => total + line.sign * line.amountMinor, 0);
   // Safe operands can still overflow between them; a result that is not a
