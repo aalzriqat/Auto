@@ -3,7 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   AUTOFLOW_INVARIANTS,
   isActiveInvariant,
-  structuralProofHasNegativeControlSource,
+  structuralProofHasExecutableNegativeControl,
   validateInvariantCatalog,
   type InvariantDefinition,
   type ProofObligation,
@@ -185,12 +185,14 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
       (proof) => proof.mechanism === "STRUCTURAL"
     );
     broken[index].proofs = broken[index].proofs.map((proof, currentIndex) =>
-      currentIndex === proofIndex ? { ...proof, negativeControl: false } : proof
+      currentIndex === proofIndex
+        ? { ...proof, negativeControlMarker: undefined }
+        : proof
     );
 
     expect(validateInvariantCatalog(ROOT, broken)).toContain(
       broken[index].id +
-        " structural proof is not declared negative-controlled: " +
+        " structural proof has no executable negative-control marker: " +
         broken[index].proofs[proofIndex].path
     );
   });
@@ -364,6 +366,114 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
     );
   });
 
+  test("NEGATIVE CONTROL: a keyword in a comment is not an executable structural control", () => {
+    const source = `
+      // test("NEGATIVE CONTROL — comment only", () => { throw new Error("never"); });
+      const note = "NEGATIVE CONTROL — comment only";
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — comment only"
+      )
+    ).toBe(false);
+  });
+
+  test("an actual test declaration is accepted as executable structural control", () => {
+    const source = `
+      test("NEGATIVE CONTROL — executable", () => {
+        expect(true).toBe(true);
+      });
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — executable"
+      )
+    ).toBe(true);
+  });
+
+  test("NEGATIVE CONTROL: PLATFORM_SERIALIZED_PROVEN requires PREVIEW concurrency proof", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex(
+      (invariant) => invariant.profile.concurrency === "REQUIRED"
+    );
+    broken[index] = {
+      ...broken[index],
+      profile: {
+        ...broken[index].profile,
+        concurrency: "PLATFORM_SERIALIZED_PROVEN",
+      },
+      proofs: broken[index].proofs.filter((proof) => proof.mechanism !== "PREVIEW"),
+    };
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id +
+        " claims PLATFORM_SERIALIZED_PROVEN without required PREVIEW CONCURRENCY proof"
+    );
+  });
+
+  test("NEGATIVE CONTROL: IRREVERSIBLE_BY_DESIGN requires an explicit reversal N/A", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex(
+      (invariant) => invariant.profile.reversal === "REQUIRED"
+    );
+    broken[index] = {
+      ...broken[index],
+      profile: {
+        ...broken[index].profile,
+        reversal: "IRREVERSIBLE_BY_DESIGN",
+      },
+    };
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id +
+        " is IRREVERSIBLE_BY_DESIGN without REVERSAL marked NOT_APPLICABLE"
+    );
+  });
+
+  test("NEGATIVE CONTROL: external-input-sensitive invariants must assess FUZZ", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex((invariant) => invariant.state === "PARTIAL");
+    broken[index] = {
+      ...broken[index],
+      profile: {
+        ...broken[index].profile,
+        externalInputSensitive: true,
+      },
+    };
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id +
+        " is external-input-sensitive without an applicable FUZZ assessment"
+    );
+  });
+
+  test("NEGATIVE CONTROL: scheduled-work-sensitive invariants must assess fault boundaries", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex((invariant) => invariant.id === "TEN-1");
+    broken[index] = {
+      ...broken[index],
+      profile: {
+        ...broken[index].profile,
+        scheduledWorkSensitive: true,
+      },
+    };
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id +
+        " is scheduled-work-sensitive without explicit REPLAY assessment"
+    );
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id +
+        " is scheduled-work-sensitive without explicit CONCURRENCY assessment"
+    );
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id +
+        " is scheduled-work-sensitive without explicit FAULT_INJECTION assessment"
+    );
+  });
+
   test("NEGATIVE CONTROL: retirement cannot be silent deletion-by-label", () => {
     const broken = copyCatalog();
     broken[0] = { ...broken[0], state: "RETIRED", retirement: undefined };
@@ -389,12 +499,38 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
     );
   });
 
-  test("the structural marker detector has positive and negative controls", () => {
-    expect(
-      structuralProofHasNegativeControlSource("NEGATIVE CONTROL — remove the writer")
-    ).toBe(true);
-    expect(structuralProofHasNegativeControlSource("FAULT 3: hidden caller")).toBe(true);
-    expect(structuralProofHasNegativeControlSource("the self-tests come first")).toBe(true);
-    expect(structuralProofHasNegativeControlSource("everything is green")).toBe(false);
+  test("NEGATIVE CONTROL: SUPERSEDED replacement IDs must exist and be active", () => {
+    const broken = copyCatalog();
+    broken[0] = {
+      ...broken[0],
+      state: "SUPERSEDED",
+      retirement: {
+        reason: "Synthetic supersession with an unknown replacement for the validator.",
+        tracking: "SCRUM-342",
+        supersededBy: ["NOPE-999"],
+      },
+    };
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[0].id + " supersedes to unknown invariant ID NOPE-999"
+    );
   });
+
+  test("NEGATIVE CONTROL: an invariant cannot supersede itself", () => {
+    const broken = copyCatalog();
+    broken[0] = {
+      ...broken[0],
+      state: "SUPERSEDED",
+      retirement: {
+        reason: "Synthetic self-supersession for the validator negative control.",
+        tracking: "SCRUM-342",
+        supersededBy: [broken[0].id],
+      },
+    };
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[0].id + " cannot supersede itself"
+    );
+  });
+
 });
