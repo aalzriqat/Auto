@@ -31,6 +31,7 @@ import { useCommandIdentity, money, parseOptionalNumber, useGenericError, Search
 import {
   calculateUnifiedMurabaha,
   minimumDownPaymentForFinancingLimit,
+  matchingCustomerEligibilityStatusIds,
   type UnifiedMurabahaResult,
 } from "./murabaha";
 import { manualExecutionFeeInputValue } from "./salesWizardQuote";
@@ -473,15 +474,52 @@ export function SalesWizardScreen({
 
   async function handleCreateQuote() {
     if (!customer || !vehicleId) return;
+
+    const manual = selectedCompanyId === OTHER_COMPANY_ID;
+    const configuredFinance = !isCash && !manual;
+    if (configuredFinance) {
+      if (!selectedCompanyId || customerStatuses.length === 0) {
+        reportError(
+          "Mobile wizard quote eligibility is incomplete",
+          new Error(
+            locale === "ar"
+              ? "اختر حالة عميل واحدة على الأقل قبل إنشاء عرض التمويل."
+              : "Select at least one customer status before creating a finance quote."
+          )
+        );
+        return;
+      }
+
+      const company = (companies ?? []).find(
+        (candidate) => candidate._id === selectedCompanyId
+      );
+      if (
+        !company ||
+        matchingCustomerEligibilityStatusIds(
+          customerStatuses,
+          company.acceptedStatuses
+        ).length === 0
+      ) {
+        reportError(
+          "Mobile wizard finance company eligibility mismatch",
+          new Error(
+            locale === "ar"
+              ? "شركة التمويل المحددة لا تقبل حالات العميل المختارة."
+              : "The selected finance company does not accept the selected customer status."
+          )
+        );
+        return;
+      }
+    }
+
     setSaving(true);
     try {
-      const manual = selectedCompanyId === OTHER_COMPANY_ID;
       const id = await saveQuote({
         orgId,
         customerId: customer._id,
         vehicleId,
         companyId: !isCash && !manual ? selectedCompanyId : undefined,
-        customerEligibilityStatusIds: !isCash && !manual && customerStatuses.length > 0
+        customerEligibilityStatusIds: configuredFinance
           ? customerStatuses
           : undefined,
         mode: isCash ? "CASH" : manual ? "MANUAL_FINANCE_COMPANY" : "CONFIGURED_FINANCE_COMPANY",
