@@ -299,6 +299,7 @@ const PROFIT_LINE_LABEL: Record<string, string> = {
   SUPPLIER_SETTLEMENT: "LineSupplierSettlement",
   DEALER_CONTRIBUTION: "LineDealerContribution",
   ACTUAL_EXPENSES: "LineActualExpenses",
+  FORECAST_EXPENSES: "LineForecastExpenses",
   PREPARATION_EXPENSES: "LinePreparationExpenses",
   /** CASH only. A different derivation, so deliberately different keys. */
   SALE_PRICE: "LineSalePrice",
