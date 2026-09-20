@@ -82,6 +82,24 @@ describe("SCRUM-342 invariant catalog — current repository", () => {
     );
   });
 
+  test("NEGATIVE CONTROL: a required family cannot retire every active member", () => {
+    const broken = copyCatalog();
+    for (const invariant of broken) {
+      if (invariant.id.startsWith("ACC-")) {
+        invariant.state = "RETIRED";
+        invariant.retirement = {
+          reason:
+            "Synthetic retirement used to prove the required-family anti-vacuity ratchet.",
+          tracking: "SCRUM-342",
+        };
+      }
+    }
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      "Required invariant family has no active invariant: ACC"
+    );
+  });
+
   test("every PARTIAL invariant declares an explicit Jira owner", () => {
     const unowned = AUTOFLOW_INVARIANTS.filter(
       (invariant) =>
