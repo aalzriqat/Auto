@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
+import { parse as parseYaml } from "yaml";
 
 export type InvariantSeverity = "CRITICAL" | "HIGH";
 export type InvariantState =
@@ -157,6 +158,15 @@ const STRUCTURAL_CONTROL_REQUIRED_IDENTIFIERS: Readonly<
   ],
 };
 
+const STRUCTURAL_CONTROL_REQUIRED_CALLS: Readonly<
+  Record<string, readonly string[]>
+> = {
+  "scripts/tenantWriteGuard.test.ts": ["findUnguardedTenantWrites"],
+  "scripts/economicCommandCensus.test.ts": ["buildGraph", "censusForward"],
+  "scripts/clientIdentityLifetime.test.ts": ["auditClientCallers"],
+  "scripts/reviewActionParity.test.ts": ["cockpitSources", "wiredMutations"],
+};
+
 function structuralControlMarkerFor(pathName: string): string | undefined {
   return STRUCTURAL_CONTROL_MARKERS[pathName];
 }
@@ -167,101 +177,119 @@ function structuralControlRequiredIdentifiersFor(
   return STRUCTURAL_CONTROL_REQUIRED_IDENTIFIERS[pathName];
 }
 
+function structuralControlRequiredCallsFor(
+  pathName: string
+): readonly string[] | undefined {
+  return STRUCTURAL_CONTROL_REQUIRED_CALLS[pathName];
+}
+
 export const AUTOFLOW_PROOF_MARKERS: Readonly<Record<string, string>> = {
-  "scripts/tenantWriteGuard.test.ts::MUTATION":
+  "TEN-1::scripts/tenantWriteGuard.test.ts::MUTATION":
     "every mutation that takes an orgId proves ownership before writing a caller-supplied id",
-  "convex/saleCompletionTenancyGuards.test.ts::NEGATIVE,TENANCY":
+  "TEN-1::convex/saleCompletionTenancyGuards.test.ts::NEGATIVE,TENANCY":
     "a vehicle owned by another dealership is refused",
-  "convex/accountingPhase10.test.ts::NEGATIVE,AUTHORIZATION":
+  "AUTH-1::convex/accountingPhase10.test.ts::NEGATIVE,AUTHORIZATION":
     "the poster cannot approve their own draft",
-  "convex/financeLifecyclePhase4.test.ts::NEGATIVE,AUTHORIZATION":
+  "AUTH-1::convex/financeLifecyclePhase4.test.ts::NEGATIVE,AUTHORIZATION":
     "user without APPROVE_FINANCE_APPLICATION cannot approve",
-  "scripts/economicCommandCensus.test.ts::MUTATION":
+  "ECON-1::scripts/economicCommandCensus.test.ts::MUTATION":
     "the population is exactly the classified set",
-  "convex/idempotencyEconomicCommands.test.ts::REPLAY":
+  "ECON-1::convex/idempotencyEconomicCommands.test.ts::REPLAY":
     "a sequential retry of the SAME intent creates exactly one economic event",
-  "scripts/clientIdentityLifetime.test.ts::NEGATIVE,MUTATION":
+  "ECON-2::scripts/clientIdentityLifetime.test.ts::NEGATIVE,MUTATION":
     "no client caller mints its identity per ATTEMPT",
-  "hooks/useCommandIdentity.test.tsx::REPLAY,NEGATIVE":
+  "ECON-2::hooks/useCommandIdentity.test.tsx::REPLAY,NEGATIVE":
     "a FAILED attempt keeps its identity, so the retry is the same command",
-  "convex/accounting/ownedSaleTaxPosting.test.ts::POSITIVE,NEGATIVE":
+  "ACC-1::convex/accounting/ownedSaleTaxPosting.test.ts::POSITIVE,NEGATIVE":
     "recognizes the whole price as revenue instead of carving the tax out of it",
-  "convex/accounting/consignedSalePosting.test.ts::POSITIVE,NEGATIVE":
+  "ACC-1::convex/accounting/consignedSalePosting.test.ts::POSITIVE,NEGATIVE":
     "recognizes the margin as commission and no vehicle revenue at all",
-  "convex/dealCustodyAccounting.test.ts::POSITIVE,NEGATIVE":
+  "ACC-1::convex/dealCustodyAccounting.test.ts::POSITIVE,NEGATIVE":
     "issuing cash: Dr custody clearing / Cr cash on hand (CASH) or bank (BANK_TRANSFER)",
-  "convex/accountingPhase2.test.ts::NEGATIVE,REPLAY":
+  "ACC-1::convex/accountingPhase2.test.ts::NEGATIVE,REPLAY":
     "duplicate idempotency key returns existing result without double-posting",
-  "convex/accountingGenericReversalAuthority.test.ts::REVERSAL,NEGATIVE,TENANCY,AUTHORIZATION":
+  "ACC-2::convex/accountingGenericReversalAuthority.test.ts::REVERSAL,NEGATIVE,TENANCY,AUTHORIZATION":
     "GR6 — foreign receipt, foreign non-receipt and missing id are one indistinguishable answer",
-  "convex/dealCustodyAccounting.test.ts::REVERSAL,NEGATIVE":
+  "ACC-2::convex/dealCustodyAccounting.test.ts::REVERSAL,NEGATIVE":
     "reversing an ISSUED entry",
-  "convex/accountingPhase2.test.ts::REVERSAL,REPLAY":
+  "ACC-2::convex/accountingPhase2.test.ts::REVERSAL,REPLAY":
     "reversing an already-reversed event is idempotent on second call",
-  "convex/manualJournalAccountingDate.test.ts::POSITIVE,BOUNDARY":
+  "ACC-3::convex/manualJournalAccountingDate.test.ts::POSITIVE,BOUNDARY":
     "the exact maximum JavaScript date is still accepted — the guard is a boundary, not a mood",
-  "convex/accountingPhase2.test.ts::NEGATIVE,BOUNDARY":
+  "ACC-3::convex/accountingPhase2.test.ts::NEGATIVE,BOUNDARY":
     "posting into closed period is rejected",
-  "convex/consignedOwnership.test.ts::POSITIVE,NEGATIVE":
+  "CONS-1::convex/consignedOwnership.test.ts::POSITIVE,NEGATIVE":
     "a sourced vehicle is the supplier's and the dealership is its agent",
-  "convex/consignmentEconomics.test.ts::POSITIVE,NEGATIVE":
+  "CONS-1::convex/consignmentEconomics.test.ts::POSITIVE,NEGATIVE":
     "the whole ticket is not published as profit",
-  "convex/cashDealCockpit.test.ts::STATE_TRANSITION,REVERSAL,NEGATIVE":
+  "CONS-1::convex/accounting/consignedSalePosting.test.ts::POSITIVE,NEGATIVE":
+    "recognizes the margin as commission and no vehicle revenue at all",
+  "LIFE-1::convex/cashDealCockpit.test.ts::STATE_TRANSITION,REVERSAL,NEGATIVE":
     "a cancelled sale reports no profit rather than the figure its reversed journal once had",
-  "convex/chequeReturnLifecycle.test.ts::STATE_TRANSITION,REVERSAL,NEGATIVE":
+  "LIFE-1::convex/chequeReturnLifecycle.test.ts::STATE_TRANSITION,REVERSAL,NEGATIVE":
     "A1 — the canonical pending obligation is cancelled even though a posted sibling was reversed",
-  "convex/dealCustodyAccounting.test.ts::STATE_TRANSITION,REVERSAL,NEGATIVE":
+  "LIFE-1::convex/dealCustodyAccounting.test.ts::STATE_TRANSITION,REVERSAL,NEGATIVE":
     "a write-off: Dr cash over/short / Cr clearing for exactly the unaccounted residual; reopening reverses it",
-  "convex/generalLedgerPagination.test.ts::NEGATIVE,BOUNDARY":
+  "PERF-1::convex/generalLedgerPagination.test.ts::NEGATIVE,BOUNDARY":
     "125 seeded entries: bounded first page, a planted OLD entry is off page 1, pagination reaches it, no duplicates, deterministic order",
-  "convex/accountingPhase18.test.ts::BOUNDARY":
+  "PERF-1::convex/accountingPhase18.test.ts::BOUNDARY":
     "snapshots accumulate per (account, currency, period) and reports sum them correctly",
-  ".github/workflows/accounting-rehearsal.yml::BOUNDARY":
+  "PERF-1::.github/workflows/accounting-rehearsal.yml::BOUNDARY":
     "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
-  "convex/idempotencyEconomicCommands.test.ts::REPLAY,STATE_TRANSITION":
+  "CONC-1::convex/idempotencyEconomicCommands.test.ts::REPLAY,STATE_TRANSITION":
     "a concurrent retry of the same intent still creates exactly one economic event",
-  "scripts/accountingRehearsalCases.test.ts::STATE_TRANSITION":
+  "CONC-1::scripts/accountingRehearsalCases.test.ts::STATE_TRANSITION":
     "C1/C2 do not PASS when the two workers ran one after the other (RG-01)",
-  ".github/workflows/accounting-rehearsal.yml::CONCURRENCY,REPLAY":
+  "CONC-1::.github/workflows/accounting-rehearsal.yml::CONCURRENCY,REPLAY":
     "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
-  "scripts/reviewActionParity.test.ts::NEGATIVE,MUTATION":
+  "UI-1::scripts/reviewActionParity.test.ts::NEGATIVE,MUTATION":
     "the Deal wires every command on the frozen list",
-  "components/applications/cockpit/DealCockpitReviewParity.test.tsx::POSITIVE,NEGATIVE":
+  "UI-1::components/applications/cockpit/DealCockpitReviewParity.test.tsx::POSITIVE,NEGATIVE":
     "cancelling sends the reason and ONE retained idempotency key",
 };
 
 function proofMarkerKey(
+  invariantId: string,
   pathName: string,
   obligations: readonly ProofObligation[]
 ): string {
-  return pathName + "::" + obligations.join(",");
+  return invariantId + "::" + pathName + "::" + obligations.join(",");
 }
 
 function markerFor(
+  invariantId: string,
   pathName: string,
   obligations: readonly ProofObligation[]
 ): string | undefined {
-  return AUTOFLOW_PROOF_MARKERS[proofMarkerKey(pathName, obligations)];
+  return AUTOFLOW_PROOF_MARKERS[
+    proofMarkerKey(invariantId, pathName, obligations)
+  ];
 }
 
-const WORKFLOW_EVIDENCE_REQUIRED_ACTIVE_LINES: Readonly<
-  Record<string, readonly string[]>
+interface WorkflowEvidenceContract {
+  workflowName: string;
+  trigger: string;
+  jobId: string;
+  runsOn: string;
+  stepName: string;
+}
+
+const WORKFLOW_EVIDENCE_CONTRACTS: Readonly<
+  Record<string, WorkflowEvidenceContract>
 > = {
-  ".github/workflows/accounting-rehearsal.yml": [
-    "name: Accounting Cloud Rehearsal",
-    "on:",
-    "jobs:",
-    "rehearsal:",
-    "runs-on: ubuntu-latest",
-    "- name: Run the Accounting rehearsal",
-    "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
-  ],
+  ".github/workflows/accounting-rehearsal.yml": {
+    workflowName: "Accounting Cloud Rehearsal",
+    trigger: "pull_request",
+    jobId: "rehearsal",
+    runsOn: "ubuntu-latest",
+    stepName: "Run the Accounting rehearsal",
+  },
 };
 
-function workflowEvidenceRequiredLinesFor(
+function workflowEvidenceContractFor(
   pathName: string
-): readonly string[] | undefined {
-  return WORKFLOW_EVIDENCE_REQUIRED_ACTIVE_LINES[pathName];
+): WorkflowEvidenceContract | undefined {
+  return WORKFLOW_EVIDENCE_CONTRACTS[pathName];
 }
 
 const required = (
@@ -282,7 +310,7 @@ const notApplicable = (obligation: ProofObligation, reason: string): ProofRequir
   reason,
 });
 
-type UnboundInvariantProof = Omit<InvariantProof, "invariantId">;
+type UnboundInvariantProof = Omit<InvariantProof, "invariantId" | "marker">;
 
 const execution = (
   pathName: string,
@@ -293,7 +321,6 @@ const execution = (
   mechanism: "EXECUTION",
   obligations,
   note,
-  marker: markerFor(pathName, obligations),
 });
 
 const structural = (
@@ -305,7 +332,6 @@ const structural = (
   mechanism: "STRUCTURAL",
   obligations,
   note,
-  marker: markerFor(pathName, obligations),
   negativeControlMarker: structuralControlMarkerFor(pathName),
 });
 
@@ -318,14 +344,17 @@ const preview = (
   mechanism: "PREVIEW",
   obligations,
   note,
-  marker: markerFor(pathName, obligations),
 });
 
 const proofSet = (
   invariantId: string,
   proofs: readonly UnboundInvariantProof[]
 ): readonly InvariantProof[] =>
-  proofs.map((proof) => ({ ...proof, invariantId }));
+  proofs.map((proof) => ({
+    ...proof,
+    invariantId,
+    marker: markerFor(invariantId, proof.path, proof.obligations),
+  }));
 
 const profile = (
   overrides: Partial<InvariantAssuranceProfile> = {}
@@ -411,7 +440,7 @@ const MANDATORY_OBLIGATION_FLOORS: Readonly<
     "FAULT_INJECTION",
     "RECONCILIATION",
   ],
-  "PERF-1": ["BOUNDARY", "NEGATIVE", "MUTATION"],
+  "PERF-1": ["BOUNDARY", "NEGATIVE", "MUTATION", "REPLAY", "CONCURRENCY", "REVERSAL", "RECONCILIATION"],
   "CONC-1": [
     "REPLAY",
     "STATE_TRANSITION",
@@ -457,7 +486,7 @@ const MANDATORY_APPLICABLE_OBLIGATIONS: Readonly<
   "ACC-2": ["CONCURRENCY", "RECONCILIATION"],
   "CONS-1": ["REVERSAL", "RECONCILIATION"],
   "LIFE-1": ["REPLAY", "CONCURRENCY", "FAULT_INJECTION", "RECONCILIATION"],
-  "PERF-1": ["MUTATION"],
+  "PERF-1": ["MUTATION", "RECONCILIATION"],
   "CONC-1": ["FAULT_INJECTION", "RECONCILIATION"],
 };
 
@@ -879,13 +908,29 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
     statement:
       "An authoritative financial value, safety decision, or reconciliation result must not silently infer completeness from a bounded, truncated, or first-page-only read.",
     sourceAreas: ["convex/**", "scripts/accountingRehearsalCases.mjs", "components/accounting/**"],
-    profile: profile(),
+    profile: profile({ economicImpact: "INDIRECT" }),
     requirements: [
       required("BOUNDARY", ANY_EXECUTABLE_EVIDENCE),
       required("NEGATIVE"),
       deferred(
         "MUTATION",
         "A repository-wide analyzer proving every authoritative read distinguishes bounded probes from complete totals is not yet present."
+      ),
+      notApplicable(
+        "REPLAY",
+        "This invariant governs completeness of authoritative reads, not duplicate execution of an economic command."
+      ),
+      notApplicable(
+        "CONCURRENCY",
+        "This invariant governs bounded-read completeness; runtime collision semantics are owned by CONC-1."
+      ),
+      notApplicable(
+        "REVERSAL",
+        "This invariant does not define lifecycle inverse semantics; reversal correctness is owned by lifecycle/accounting invariants."
+      ),
+      deferred(
+        "RECONCILIATION",
+        "Selected reconciliation surfaces are exercised, but repository-wide completeness of every reconciliation read is not yet proven."
       ),
     ],
     proofs: proofSet("PERF-1", [
@@ -1171,44 +1216,183 @@ export function sourceHasActiveTestMarker(
   return matches.length === 1;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function workflowHasTrigger(root: Record<string, unknown>, trigger: string): boolean {
+  const value = root.on;
+  if (typeof value === "string") return value === trigger;
+  if (Array.isArray(value)) return value.includes(trigger);
+  const triggerMap = asRecord(value);
+  return Boolean(triggerMap && Object.prototype.hasOwnProperty.call(triggerMap, trigger));
+}
+
 export function sourceHasActiveWorkflowMarker(
   source: string,
   marker: string,
-  requiredActiveLines: readonly string[] = []
+  contract?: WorkflowEvidenceContract
 ): boolean {
-  const activeLines = source
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !line.startsWith("#"));
+  if (!contract) return false;
 
-  if (activeLines.filter((line) => line === marker).length !== 1) {
+  try {
+    const root = asRecord(parseYaml(source));
+    if (!root || root.name !== contract.workflowName || !workflowHasTrigger(root, contract.trigger)) {
+      return false;
+    }
+
+    const jobs = asRecord(root.jobs);
+    const job = jobs ? asRecord(jobs[contract.jobId]) : undefined;
+    if (!job || job["runs-on"] !== contract.runsOn || !Array.isArray(job.steps)) {
+      return false;
+    }
+
+    const matchingSteps = job.steps
+      .map((step) => asRecord(step))
+      .filter((step): step is Record<string, unknown> => Boolean(step?.name === contract.stepName));
+
+    if (matchingSteps.length !== 1 || typeof matchingSteps[0].run !== "string") {
+      return false;
+    }
+
+    const activeRunLines = matchingSteps[0].run
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && !line.startsWith("#"));
+
+    return activeRunLines.filter((line) => line === marker).length === 1;
+  } catch {
     return false;
   }
+}
 
-  return requiredActiveLines.every((requiredLine) =>
-    activeLines.includes(requiredLine)
-  );
+function callIdentifier(call: ts.CallExpression): string | undefined {
+  return ts.isIdentifier(call.expression) ? call.expression.text : undefined;
+}
+
+function nodeContainsCallTo(node: ts.Node, names: ReadonlySet<string>): boolean {
+  let found = false;
+  const visit = (current: ts.Node): void => {
+    if (found) return;
+    if (ts.isCallExpression(current)) {
+      const name = callIdentifier(current);
+      if (name && names.has(name)) {
+        found = true;
+        return;
+      }
+    }
+    ts.forEachChild(current, visit);
+  };
+  visit(node);
+  return found;
+}
+
+function identifiersInNode(node: ts.Node): ReadonlySet<string> {
+  const identifiers = new Set<string>();
+  const visit = (current: ts.Node): void => {
+    if (ts.isIdentifier(current)) identifiers.add(current.text);
+    ts.forEachChild(current, visit);
+  };
+  visit(node);
+  return identifiers;
+}
+
+function expectationArgumentFromMatcher(
+  call: ts.CallExpression
+): ts.Expression | undefined {
+  if (!ts.isPropertyAccessExpression(call.expression)) return undefined;
+
+  let receiver: ts.Expression = call.expression.expression;
+  while (ts.isPropertyAccessExpression(receiver)) {
+    receiver = receiver.expression;
+  }
+
+  if (
+    !ts.isCallExpression(receiver) ||
+    !ts.isIdentifier(receiver.expression) ||
+    receiver.expression.text !== "expect" ||
+    receiver.arguments.length === 0
+  ) {
+    return undefined;
+  }
+
+  return receiver.arguments[0];
 }
 
 export function structuralProofHasExecutableNegativeControl(
   source: string,
   marker: string,
-  requiredIdentifiers: readonly string[] = []
+  requiredIdentifiers: readonly string[] = [],
+  requiredAnalyzerCalls: readonly string[] = []
 ): boolean {
   const matches = collectActiveTestRegistrations(source, ts.ScriptKind.TS).filter(
     (registration) =>
       registration.kind !== "describe" && registration.title.includes(marker)
   );
-  if (matches.length !== 1) {
+  if (matches.length !== 1 || !matches[0].callback) return false;
+
+  const identifiers = registrationIdentifiers(matches[0]);
+  if (!requiredIdentifiers.every((identifier) => identifiers.has(identifier))) {
+    return false;
+  }
+  if (requiredAnalyzerCalls.length === 0) {
+    return requiredIdentifiers.length === 0;
+  }
+
+  const analyzerNames = new Set(requiredAnalyzerCalls);
+  const calledAnalyzers = new Set<string>();
+  const declarations: Array<{ name: string; initializer: ts.Expression }> = [];
+  const matcherArguments: ts.Expression[] = [];
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const name = callIdentifier(node);
+      if (name && analyzerNames.has(name)) calledAnalyzers.add(name);
+      const matcherArgument = expectationArgumentFromMatcher(node);
+      if (matcherArgument) matcherArguments.push(matcherArgument);
+    }
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer
+    ) {
+      declarations.push({ name: node.name.text, initializer: node.initializer });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(matches[0].callback.body);
+
+  if (!requiredAnalyzerCalls.every((name) => calledAnalyzers.has(name))) {
     return false;
   }
 
-  if (requiredIdentifiers.length === 0) {
-    return true;
+  const tainted = new Set<string>();
+  for (const declaration of declarations) {
+    if (nodeContainsCallTo(declaration.initializer, analyzerNames)) {
+      tainted.add(declaration.name);
+    }
   }
 
-  const identifiers = registrationIdentifiers(matches[0]);
-  return requiredIdentifiers.every((identifier) => identifiers.has(identifier));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const declaration of declarations) {
+      if (tainted.has(declaration.name)) continue;
+      const refs = identifiersInNode(declaration.initializer);
+      if ([...refs].some((identifier) => tainted.has(identifier))) {
+        tainted.add(declaration.name);
+        changed = true;
+      }
+    }
+  }
+
+  return matcherArguments.some((argument) => {
+    if (nodeContainsCallTo(argument, analyzerNames)) return true;
+    const refs = identifiersInNode(argument);
+    return [...refs].some((identifier) => tainted.has(identifier));
+  });
 }
 
 export function isActiveInvariant(invariant: InvariantDefinition): boolean {
@@ -1241,6 +1425,7 @@ export function validateInvariantCatalog(
   const catalogIds = new Set(catalog.map((invariant) => invariant.id));
   const active = catalog.filter(isActiveInvariant);
   const activeProofMarkerKeys = new Set<string>();
+  const activeProofPaths = new Set<string>();
 
   if (active.length === 0) {
     errors.push("Invariant catalog has no active invariants");
@@ -1448,9 +1633,10 @@ export function validateInvariantCatalog(
     }
     if (invariant.profile.scheduledWorkSensitive) {
       for (const obligation of ["REPLAY", "CONCURRENCY", "FAULT_INJECTION"] as const) {
-        if (!requirements.has(obligation)) {
+        const status = requirements.get(obligation)?.status;
+        if (!status || status === "NOT_APPLICABLE") {
           errors.push(
-            invariant.id + " is scheduled-work-sensitive without explicit " + obligation + " assessment"
+            invariant.id + " is scheduled-work-sensitive without an applicable " + obligation + " assessment"
           );
         }
       }
@@ -1536,8 +1722,13 @@ export function validateInvariantCatalog(
     }
 
     for (const proof of invariant.proofs) {
-      const markerKey = proofMarkerKey(proof.path, proof.obligations);
+      const markerKey = proofMarkerKey(
+        proof.invariantId,
+        proof.path,
+        proof.obligations
+      );
       activeProofMarkerKeys.add(markerKey);
+      activeProofPaths.add(proof.path);
       const registeredMarker = proofMarkers[markerKey];
       if (!registeredMarker) {
         errors.push(
@@ -1605,17 +1796,14 @@ export function validateInvariantCatalog(
         const scriptKind = proof.path.endsWith(".tsx")
           ? ts.ScriptKind.TSX
           : ts.ScriptKind.TS;
-        const workflowRequiredLines = isWorkflowSource
-          ? workflowEvidenceRequiredLinesFor(proof.path)
+        const workflowContract = isWorkflowSource
+          ? workflowEvidenceContractFor(proof.path)
           : undefined;
 
-        if (
-          isWorkflowSource &&
-          (!workflowRequiredLines || workflowRequiredLines.length === 0)
-        ) {
+        if (isWorkflowSource && !workflowContract) {
           errors.push(
             invariant.id +
-              " workflow proof has no pinned active-line contract: " +
+              " workflow proof has no pinned job/step contract: " +
               proof.path
           );
         }
@@ -1628,14 +1816,14 @@ export function validateInvariantCatalog(
           : isWorkflowSource
             ? Boolean(
                 source &&
-                  workflowRequiredLines &&
+                  workflowContract &&
                   sourceHasActiveWorkflowMarker(
                     source,
                     proof.marker,
-                    workflowRequiredLines
+                    workflowContract
                   )
               )
-            : Boolean(source?.includes(proof.marker));
+            : false;
         if (!markerExists) {
           errors.push(
             invariant.id +
@@ -1650,14 +1838,21 @@ export function validateInvariantCatalog(
       if (proof.mechanism === "STRUCTURAL") {
         const requiredIdentifiers =
           structuralControlRequiredIdentifiersFor(proof.path);
+        const requiredAnalyzerCalls =
+          structuralControlRequiredCallsFor(proof.path);
         if (!proof.negativeControlMarker) {
           errors.push(
             invariant.id + " structural proof has no executable negative-control marker: " + proof.path
           );
-        } else if (!requiredIdentifiers || requiredIdentifiers.length === 0) {
+        } else if (
+          !requiredIdentifiers ||
+          requiredIdentifiers.length === 0 ||
+          !requiredAnalyzerCalls ||
+          requiredAnalyzerCalls.length === 0
+        ) {
           errors.push(
             invariant.id +
-              " structural proof has no pinned analyzer/assertion contract: " +
+              " structural proof has no pinned analyzer/assertion call contract: " +
               proof.path
           );
         } else if (
@@ -1665,12 +1860,13 @@ export function validateInvariantCatalog(
           !structuralProofHasExecutableNegativeControl(
             source,
             proof.negativeControlMarker,
-            requiredIdentifiers
+            requiredIdentifiers,
+            requiredAnalyzerCalls
           )
         ) {
           errors.push(
             invariant.id +
-              " structural proof negative-control marker is not a unique active test with the required analyzer/assertion references: " +
+              " structural proof negative-control marker is not a unique active test that executes the required analyzer calls and asserts their result: " +
               proof.path +
               " :: " +
               proof.negativeControlMarker
@@ -1685,6 +1881,21 @@ export function validateInvariantCatalog(
       errors.push(
         "Orphan proof marker binding has no active catalog proof: " + markerKey
       );
+    }
+  }
+
+  for (const [registryName, registry] of [
+    ["STRUCTURAL_CONTROL_MARKERS", STRUCTURAL_CONTROL_MARKERS],
+    ["STRUCTURAL_CONTROL_REQUIRED_IDENTIFIERS", STRUCTURAL_CONTROL_REQUIRED_IDENTIFIERS],
+    ["STRUCTURAL_CONTROL_REQUIRED_CALLS", STRUCTURAL_CONTROL_REQUIRED_CALLS],
+    ["WORKFLOW_EVIDENCE_CONTRACTS", WORKFLOW_EVIDENCE_CONTRACTS],
+  ] as const) {
+    for (const proofPath of Object.keys(registry)) {
+      if (!activeProofPaths.has(proofPath)) {
+        errors.push(
+          "Orphan " + registryName + " binding has no active catalog proof path: " + proofPath
+        );
+      }
     }
   }
 
