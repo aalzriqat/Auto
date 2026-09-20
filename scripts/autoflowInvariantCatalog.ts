@@ -102,6 +102,53 @@ const ANY_EXECUTABLE_EVIDENCE: readonly EvidenceMechanism[] = [
   "PRODUCTION_MONITOR",
 ];
 
+const EVIDENCE_MARKERS: Readonly<Record<string, string>> = {
+  "scripts/tenantWriteGuard.test.ts": "flags the shape that shipped as a Critical",
+  "convex/saleCompletionTenancyGuards.test.ts":
+    "a vehicle owned by another dealership is refused",
+  "convex/commitmentFinalization.test.ts":
+    "G.6f D7 applications.cancelApplication runs and creates no sale",
+  "convex/sales.test.ts":
+    "cancelling a completed sale removes its revenue from the profit and loss report",
+  "scripts/economicCommandCensus.test.ts":
+    "SCRUM-313 economic command classification ratchet",
+  "convex/idempotencyEconomicCommands.test.ts":
+    "a concurrent retry of the same intent still creates exactly one economic event",
+  "scripts/clientIdentityLifetime.test.ts": "SCRUM-313 client identity lifetime",
+  "hooks/useCommandIdentity.test.tsx":
+    "the same intent yields the SAME identity across retries",
+  "convex/accounting/ownedSaleTaxPosting.test.ts":
+    "the entry balances — which the broken version also did",
+  "convex/accounting/consignedSalePosting.test.ts":
+    "recognizes the margin as commission and no vehicle revenue at all",
+  "convex/dealCustodyAccounting.test.ts": "what each movement posts",
+  "convex/accountingPhase2.test.ts": "Phase 2 — posting engine",
+  "convex/accountingGenericReversalAuthority.test.ts":
+    "SCRUM-254 §2 — key spelling does not create authority",
+  "convex/manualJournalAccountingDate.test.ts":
+    "SCRUM-50 — a manual journal posts to its declared accounting date",
+  "convex/consignedOwnership.test.ts": "what a SOURCED vehicle is, by construction",
+  "convex/consignmentEconomics.test.ts":
+    "SCRUM-33 — a sale with no basis on the row and no vehicle to ask",
+  "convex/cashDealCockpit.test.ts":
+    "the cash headline is an ACCOUNTING result, and says so",
+  "convex/chequeReturnLifecycle.test.ts":
+    "SCRUM-130 §A — a returned tender cannot have its receipt resurrected",
+  "scripts/accountingRehearsalCases.test.ts":
+    "the rehearsal FAILS when the backend misbehaves — one defect per case",
+  "convex/accountingPhase18.test.ts":
+    "Phase 18 — snapshot correctness across a period boundary",
+  ".github/workflows/accounting-rehearsal.yml": "name: Accounting Cloud Rehearsal",
+  "scripts/reviewActionParity.test.ts":
+    "NEGATIVE CONTROL — removing a required Deal caller fails the ratchet",
+  "components/applications/cockpit/DealCockpitReviewParity.test.tsx":
+    "cancel — applications.cancelApplication, from the header",
+};
+
+function markerFor(pathName: string): string | undefined {
+  return EVIDENCE_MARKERS[pathName];
+}
+
 const required = (
   obligation: ProofObligation,
   acceptedEvidence: readonly EvidenceMechanism[] = RUNTIME_EVIDENCE
@@ -129,6 +176,7 @@ const execution = (
   mechanism: "EXECUTION",
   obligations,
   note,
+  marker: markerFor(pathName),
 });
 
 const structural = (
@@ -140,6 +188,7 @@ const structural = (
   mechanism: "STRUCTURAL",
   obligations,
   note,
+  marker: markerFor(pathName),
   negativeControl: true,
 });
 
@@ -152,6 +201,7 @@ const preview = (
   mechanism: "PREVIEW",
   obligations,
   note,
+  marker: markerFor(pathName),
 });
 
 const profile = (
@@ -848,6 +898,9 @@ export function validateInvariantCatalog(
       }
       if (proof.obligations.length === 0) {
         errors.push(invariant.id + " proof declares no proof obligations: " + proof.path);
+      }
+      if (!proof.marker) {
+        errors.push(invariant.id + " proof has no stable marker: " + proof.path);
       }
 
       for (const obligation of proof.obligations) {
