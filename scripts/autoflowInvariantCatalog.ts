@@ -445,6 +445,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
       required("REVERSAL"),
       required("NEGATIVE"),
       required("TENANCY"),
+      required("AUTHORIZATION"),
       required("REPLAY"),
       deferred(
         "CONCURRENCY",
@@ -458,7 +459,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
     proofs: [
       execution(
         "convex/accountingGenericReversalAuthority.test.ts",
-        ["REVERSAL", "NEGATIVE", "TENANCY"],
+        ["REVERSAL", "NEGATIVE", "TENANCY", "AUTHORIZATION"],
         "Execution proof around generic reversal authority and cross-tenant reversal safety."
       ),
       execution(
