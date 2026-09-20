@@ -63,7 +63,15 @@ export function MessagesModule({ orgId }: { orgId: string }) {
   const { locale, textDirection } = useLocale();
   const reportError = useGenericError();
   const me = useQuery(api.users.getMe, {});
-  const conversations = useQuery(api.directMessages.listConversations, { orgId });
+  const {
+    loadMore: loadMoreConversations,
+    results: conversations,
+    status: conversationStatus,
+  } = usePaginatedQuery(
+    api.directMessages.listConversationsPage,
+    { orgId },
+    { initialNumItems: 25 },
+  );
   const members = useQuery(api.directMessages.getOrgMembers, { orgId });
   const getOrCreateDm = useMutation(api.directMessages.getOrCreateDm);
   const createGroup = useMutation(api.directMessages.createGroup);
@@ -95,7 +103,7 @@ export function MessagesModule({ orgId }: { orgId: string }) {
     selectedId ? { conversationId: selectedId } : "skip",
     { initialNumItems: 40 },
   );
-  const safeConversations = conversations ?? [];
+  const safeConversations = conversations;
   const filteredConversations = safeConversations.filter((conversation) => {
     const title = directConversationTitle(conversation, me?._id, locale === "ar" ? "محادثة" : "Conversation");
     const preview = conversation.lastMessageBody ?? "";
@@ -120,7 +128,7 @@ export function MessagesModule({ orgId }: { orgId: string }) {
   }, [safeConversations, selectedId]);
 
   useEffect(() => {
-    if (!me || !conversations) return;
+    if (!me) return;
     for (const conversation of conversations) {
       if (
         conversation.lastMessageSenderId &&
@@ -247,7 +255,7 @@ export function MessagesModule({ orgId }: { orgId: string }) {
     );
   }
 
-  if (me === undefined || conversations === undefined || members === undefined) {
+  if (me === undefined || members === undefined || conversationStatus === "LoadingFirstPage") {
     return <RouteLoadingState label={locale === "ar" ? "جاري التحميل" : "Loading"} />;
   }
 
@@ -295,9 +303,19 @@ export function MessagesModule({ orgId }: { orgId: string }) {
                 </View>
               </Pressable>
             );
-          }) : (
+          }) : conversationStatus === "Exhausted" ? (
             <EmptyList label={locale === "ar" ? "لا توجد محادثات بعد." : "No conversations yet."} />
-          )}
+          ) : null}
+          {canLoadMore(conversationStatus) ? (
+            <PrimaryButton
+              label={locale === "ar" ? "تحميل المزيد" : "Load more"}
+              tone="muted"
+              onPress={() => loadMoreConversations(25)}
+            />
+          ) : null}
+          {conversationStatus === "LoadingMore" ? (
+            <Text style={styles.mutedText}>{locale === "ar" ? "جاري التحميل..." : "Loading..."}</Text>
+          ) : null}
         </ScrollView>
 
         <View style={styles.threadPanel}>

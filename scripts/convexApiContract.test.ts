@@ -39,7 +39,11 @@ const CONTRACT = path.join(REPO_ROOT, "apps", "mobile", "src", "convexApi.ts");
 // badge is exact and does not derive unread state from a capped conversation
 // window. The backend function already exists; this deliberately extends the
 // checked mobile contract by one reference.
-const EXPECTED_REFERENCE_COUNT = 196;
+//
+// Moved 196→197 by `directMessages:listConversationsPage` so the full mobile
+// messages module can reach conversations beyond the compatibility recent-list
+// window instead of silently stopping at 100.
+const EXPECTED_REFERENCE_COUNT = 197;
 
 describe("mobile convexApi contract extraction", () => {
   test("reads the reference out of a multi-line declaration with nested generics", () => {

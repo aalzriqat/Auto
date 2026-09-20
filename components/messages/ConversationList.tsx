@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -36,11 +36,18 @@ export function ConversationList({ orgId, currentUserId, activeId, onSelect }: P
   const [search, setSearch] = useState("");
   const [dialogMode, setDialogMode] = useState<"dm" | "group" | null>(null);
 
-  const conversations = useQuery(api.directMessages.listConversations, { orgId });
+  const {
+    results: conversations,
+    status: conversationStatus,
+    loadMore: loadMoreConversations,
+  } = usePaginatedQuery(
+    api.directMessages.listConversationsPage,
+    { orgId },
+    { initialNumItems: 50 },
+  );
   const markDelivered = useMutation(api.directMessages.markDelivered);
 
   useEffect(() => {
-    if (!conversations) return;
     for (const conv of conversations) {
       if (
         conv.lastMessageSenderId !== undefined &&
@@ -98,7 +105,7 @@ export function ConversationList({ orgId, currentUserId, activeId, onSelect }: P
 
       {/* List */}
       <div className="flex-1 overflow-y-auto py-2">
-        {filtered.length === 0 && (
+        {conversationStatus === "Exhausted" && filtered.length === 0 && (
           <div className="px-4 py-8 text-center text-sm text-slate-400">
             <p className="font-medium">{t("MessagesNoConversations")}</p>
             <p className="text-xs mt-1">{t("MessagesNoConversationsHint")}</p>
@@ -177,6 +184,21 @@ export function ConversationList({ orgId, currentUserId, activeId, onSelect }: P
             </button>
           );
         })}
+
+        {(conversationStatus === "CanLoadMore" || conversationStatus === "LoadingMore") && (
+          <div className="px-3 py-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full"
+              disabled={conversationStatus === "LoadingMore"}
+              onClick={() => loadMoreConversations(50)}
+            >
+              {t("LoadMore" as never) || "Load More"}
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Dialogs */}
