@@ -69,6 +69,27 @@ export function isRequestedFinancingTermValid(args: {
  * Reconstructing the base from price/fees/commission at a caller can therefore
  * understate or overstate the required customer contribution.
  */
+/**
+ * Returns the selected customer status ids accepted by a lender.
+ *
+ * An empty/undefined lender allow-list means the lender accepts every status;
+ * an empty customer selection is never sufficient for a configured-finance
+ * quote because there is nothing to snapshot as the eligibility decision.
+ */
+export function matchingCustomerEligibilityStatusIds<T extends string>(
+  selectedStatusIds: readonly T[],
+  companyAcceptedStatusIds?: readonly T[]
+): T[] {
+  if (selectedStatusIds.length === 0) {
+    return [];
+  }
+  if (!companyAcceptedStatusIds || companyAcceptedStatusIds.length === 0) {
+    return [...selectedStatusIds];
+  }
+  const accepted = new Set(companyAcceptedStatusIds);
+  return selectedStatusIds.filter((id) => accepted.has(id));
+}
+
 export function minimumDownPaymentForFinancingLimit(args: {
   currentDownPayment: number;
   financedAmount: number;
