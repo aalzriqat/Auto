@@ -269,6 +269,7 @@ export const createCompany = mutation({
       ...company,
       acceptedStatuses,
       ruleVersion: 1,
+      editRevision: 1,
     });
     await writeRuleVersion(ctx, companyId, args.orgId, user._id, "Company created");
     return companyId;
@@ -291,16 +292,42 @@ export const updateCompany = mutation({
     isActive: v.boolean(),
     acceptedStatuses: v.optional(v.array(v.id("orgCustomerStatuses"))),
     expectedCurrency: v.optional(v.string()),
+    expectedEditRevision: v.number(),
     expectedRuleVersion: v.optional(v.number()),
     feeTemplates: v.optional(v.array(financeFeeTemplateValidator)),
     ...dealerRuleArgs,
   },
   handler: async (ctx, args) => {
     const { user } = await requireOwner(ctx, args.orgId);
-    const { id, orgId, expectedCurrency, expectedRuleVersion, feeTemplates: incomingFeeTemplates, ...updates } = args;
+    const {
+      id,
+      orgId,
+      expectedCurrency,
+      expectedEditRevision,
+      expectedRuleVersion,
+      feeTemplates: incomingFeeTemplates,
+      ...updates
+    } = args;
 
     const existing = await ctx.db.get(id);
     if (!existing || existing.orgId !== orgId) throw new ConvexError("Not found");
+
+    const currentEditRevision = existing.editRevision ?? 1;
+    if (expectedEditRevision !== currentEditRevision) {
+      throw new ConvexError(
+        "Finance company settings changed since you opened them. Refresh the company and try again."
+      );
+    }
+
+    const currentRuleVersion = existing.ruleVersion ?? 1;
+    if (
+      expectedRuleVersion !== undefined &&
+      expectedRuleVersion !== currentRuleVersion
+    ) {
+      throw new ConvexError(
+        "Finance company dealer rules changed since you opened them. Refresh the company and try again."
+      );
+    }
 
     if (incomingFeeTemplates !== undefined) {
       throw new ConvexError(
@@ -387,6 +414,7 @@ export const updateCompany = mutation({
       ...(clearingLegacyTemplates ? { feeTemplates: undefined } : {}),
       ...(acceptedStatuses === undefined ? {} : { acceptedStatuses }),
       ...(rulesChanged ? { ruleVersion: (existing.ruleVersion ?? 1) + 1 } : {}),
+      editRevision: currentEditRevision + 1,
     });
 
     if (rulesChanged) {
@@ -408,6 +436,7 @@ export const deleteCompany = mutation({
       isActive: false,
       deactivatedAt: Date.now(),
       deactivatedBy: user._id,
+      editRevision: (existing.editRevision ?? 1) + 1,
     });
   },
 });
