@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { calculateUnifiedMurabaha, isRequestedFinancingTermValid } from "@/lib/financing";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -33,11 +34,12 @@ import { CheckCircle2 } from "lucide-react";
 
 import { quoteSchema, QuoteFormValues, QuoteDialogProps } from "./quote.schema";
 import { getErrorMessage } from "@/lib/errors";
+import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
 
 
 export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCustomerId }: QuoteDialogProps) {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
 
   const { results: customers } = usePaginatedQuery(
     api.customers.list,
@@ -50,9 +52,23 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
   );
   const financeCompanies = useQuery(api.finance.listCompanies, activeOrgId ? { orgId: activeOrgId } : "skip");
   const documentRules = useQuery(api.documents.listRules, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const customerStatusOptions =
+    useQuery(api.orgCustomerStatuses.list, activeOrgId ? { orgId: activeOrgId } : "skip")
+      ?.filter((status: Doc<"orgCustomerStatuses">) => status.isActive) ?? [];
 
   const saveQuote = useMutation(api.quotes.saveQuote);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [customerEligibilityStatusIds, setCustomerEligibilityStatusIds] = useState<
+    Id<"orgCustomerStatuses">[]
+  >([]);
+
+  const toggleCustomerStatus = (statusId: Id<"orgCustomerStatuses">) => {
+    setCustomerEligibilityStatusIds((current) =>
+      current.includes(statusId)
+        ? current.filter((id) => id !== statusId)
+        : [...current, statusId]
+    );
+  };
 
   const form = useForm<z.infer<typeof quoteSchema>>({
     resolver: zodResolver(quoteSchema as any),
@@ -85,7 +101,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
       companyId: "cash",
       companyName: t("CashDeal" as any),
       isCash: true,
-      totalFinancedAmount: principal,
+      totalFinancedAmount: watchAll.vehiclePrice,
       monthlyInstallment: 0,
       profitRateApplied: 0,
       totalProfit: 0,
@@ -96,6 +112,13 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
     // 2. Active Finance Companies
     const activeCompanies = financeCompanies.filter((c: Doc<"financeCompanies">) => c.isActive);
     for (const company of activeCompanies) {
+      const accepted = company.acceptedStatuses;
+      const customerEligible =
+        customerEligibilityStatusIds.length > 0 &&
+        (!accepted ||
+          accepted.length === 0 ||
+          customerEligibilityStatusIds.some((statusId) => accepted.includes(statusId)));
+      if (!customerEligible) continue;
 
       const executionFees = company.adminFees;
       const feesConfigured = executionFees !== undefined;
@@ -161,11 +184,25 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
     }
 
     setComparisons(results);
-  }, [watchAll.vehiclePrice, watchAll.downPayment, watchAll.termMonths, financeCompanies, valuations, documentRules]);
+  }, [
+    watchAll.vehiclePrice,
+    watchAll.downPayment,
+    watchAll.termMonths,
+    financeCompanies,
+    valuations,
+    documentRules,
+    customerEligibilityStatusIds,
+    t,
+  ]);
 
   const onSelectQuote = async (companyResult: any) => {
     const isValid = await form.trigger(["vehicleId", "customerId"]);
     if (!isValid) return;
+
+    if (!companyResult.isCash && customerEligibilityStatusIds.length === 0) {
+      toast.error(t("SelectStatusFilter" as any));
+      return;
+    }
 
     if (!companyResult.isCash && !companyResult.feesConfigured) {
       toast.error(t("ExecutionFeesNotConfigured" as any) || "Execution Fees are not configured for this finance company.");
@@ -195,6 +232,9 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
         customerId: values.customerId as Id<"customers">,
         mode: companyResult.isCash ? "CASH" : "CONFIGURED_FINANCE_COMPANY",
         companyId: companyResult.isCash ? undefined : (companyResult.companyId as Id<"financeCompanies">),
+        customerEligibilityStatusIds: companyResult.isCash
+          ? undefined
+          : customerEligibilityStatusIds,
         vehiclePrice: Number(values.vehiclePrice),
         desiredProfit,
         downPayment: Number(values.downPayment),
@@ -258,7 +298,10 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                     <FormControl>
                       <SearchableSelect
                         value={field.value}
-                        onValueChange={field.onChange}
+                        onValueChange={(value) => {
+                          field.onChange(value);
+                          setCustomerEligibilityStatusIds([]);
+                        }}
                         placeholder={t("SelectCustomer" as any)}
                         options={customers?.map((c) => ({
                           value: c._id,
@@ -308,6 +351,33 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                   </FormItem>
                 )}
               />
+            </div>
+
+            <div className="space-y-2 rounded-lg border p-3">
+              <p className="text-sm font-medium">{t("CustomerStatusReqs" as any)}</p>
+              {customerStatusOptions.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  {t("NoCustomerStatusesConfigured" as any)}
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-3">
+                  {customerStatusOptions.map((status: Doc<"orgCustomerStatuses">) => (
+                    <label
+                      key={status._id}
+                      className="flex cursor-pointer items-center gap-2 rounded-md border p-2 text-sm"
+                    >
+                      <Checkbox
+                        checked={customerEligibilityStatusIds.includes(status._id)}
+                        onCheckedChange={() => toggleCustomerStatus(status._id)}
+                      />
+                      <span>{translateCustomerStatusLabel(status.label, locale)}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              {customerEligibilityStatusIds.length === 0 && customerStatusOptions.length > 0 && (
+                <p className="text-xs text-muted-foreground">{t("SelectStatusFilter" as any)}</p>
+              )}
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pt-4">
