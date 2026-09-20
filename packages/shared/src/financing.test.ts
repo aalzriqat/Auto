@@ -3,6 +3,7 @@ import {
   calculateDBR,
   calculateMaximumAffordableVehiclePrice,
   minimumDownPaymentForFinancingLimit,
+  matchingCustomerEligibilityStatusIds,
 } from "./financing";
 import { describe, it, expect } from "vitest";
 
@@ -146,6 +147,39 @@ describe("Financing Logic", () => {
     });
   });
 
+  describe("matchingCustomerEligibilityStatusIds", () => {
+    it("requires a non-empty customer selection", () => {
+      expect(matchingCustomerEligibilityStatusIds([], ["SALARIED"])).toEqual([]);
+    });
+
+    it("treats an empty lender allow-list as accepting all selected statuses", () => {
+      expect(
+        matchingCustomerEligibilityStatusIds(
+          ["SALARIED", "SELF_EMPLOYED"],
+          []
+        )
+      ).toEqual(["SALARIED", "SELF_EMPLOYED"]);
+    });
+
+    it("returns only the selected statuses accepted by the lender", () => {
+      expect(
+        matchingCustomerEligibilityStatusIds(
+          ["SALARIED", "STUDENT"],
+          ["SALARIED", "SELF_EMPLOYED"]
+        )
+      ).toEqual(["SALARIED"]);
+    });
+
+    it("returns no match when all selected statuses are stale for that lender", () => {
+      expect(
+        matchingCustomerEligibilityStatusIds(
+          ["STUDENT"],
+          ["SALARIED", "SELF_EMPLOYED"]
+        )
+      ).toEqual([]);
+    });
+  });
+
   describe("minimumDownPaymentForFinancingLimit", () => {
     it("includes execution fees that are already inside financedAmount", () => {
       const result = calculateUnifiedMurabaha({
@@ -190,7 +224,7 @@ describe("Financing Logic", () => {
       ).toBe(1_300);
     });
 
-    it("keeps the current down payment when that is exactly what satisfies the ceiling", () => {
+    it("returns the theoretical minimum contribution even when the current payment is higher", () => {
       expect(
         minimumDownPaymentForFinancingLimit({
           currentDownPayment: 2_000,
