@@ -32,6 +32,15 @@ jobs:
         node-version: '22.21.1'
         cache: 'pnpm'
 
+    # JRE auto-provisioning is deliberately disabled above, so pin the scanner
+    # runtime explicitly. SonarQube Cloud requires Java 21+ when provisioning is
+    # disabled; this changes only how the scanner gets Java, not what it scans.
+    - name: Use Java 21 for SonarScanner
+      uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+      with:
+        distribution: temurin
+        java-version: '21'
+
     - name: Install dependencies
       run: pnpm install --frozen-lockfile --ignore-scripts
 
@@ -92,6 +101,11 @@ jobs:
     # `env` block declared on itself.
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      # SonarCloud's JRE metadata endpoint has intermittently returned 403 to
+      # GitHub-hosted runners while the same token and scanner succeed on other
+      # runs. Keep the analysis itself intact and use the runner's explicitly
+      # provisioned Java instead of making that endpoint a prerequisite.
+      SONAR_SCANNER_SKIP_JRE_PROVISIONING: 'true'
 
     steps:
     - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
