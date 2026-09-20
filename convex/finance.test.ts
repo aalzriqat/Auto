@@ -198,6 +198,85 @@ describe("finance companies", () => {
     expect(companies[0]?.deactivatedAt).toBeTypeOf("number");
   });
 
+  test("stale full-form finance company writes are refused even when ruleVersion does not change", async () => {
+    const { t, orgId, asOwner } = await setupFinanceOrg();
+    const companyId = await asOwner.mutation(api.finance.createCompany, {
+      orgId,
+      name: "Concurrent Finance",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      isActive: true,
+    });
+
+    const initiallyLoaded = await t.run((ctx) => ctx.db.get(companyId));
+    expect(initiallyLoaded?.editRevision).toBe(1);
+    expect(initiallyLoaded?.ruleVersion).toBe(1);
+
+    await asOwner.mutation(api.finance.updateCompany, {
+      expectedEditRevision: 1,
+      id: companyId,
+      orgId,
+      name: "Editor A",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      isActive: true,
+    });
+
+    const afterFirstWriter = await t.run((ctx) => ctx.db.get(companyId));
+    expect(afterFirstWriter?.editRevision).toBe(2);
+    // Name is not a dealer-purchase rule; the historical economics version
+    // deliberately stays put while the general edit revision advances.
+    expect(afterFirstWriter?.ruleVersion).toBe(1);
+
+    await expect(
+      asOwner.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
+        id: companyId,
+        orgId,
+        name: "Editor B stale overwrite",
+        profitRate: 6,
+        maxTermMonths: 72,
+        gracePeriodMonths: 0,
+        isActive: true,
+      })
+    ).rejects.toThrow(/changed since you opened/i);
+
+    const finalCompany = await t.run((ctx) => ctx.db.get(companyId));
+    expect(finalCompany?.name).toBe("Editor A");
+    expect(finalCompany?.editRevision).toBe(2);
+  });
+
+  test("a legacy finance company without editRevision starts at revision one and self-heals", async () => {
+    const { t, orgId, asOwner } = await setupFinanceOrg();
+    const companyId = await t.run((ctx) =>
+      ctx.db.insert("financeCompanies", {
+        orgId,
+        name: "Legacy Revision Finance",
+        profitRate: 4,
+        maxTermMonths: 48,
+        gracePeriodMonths: 0,
+        isActive: true,
+      })
+    );
+
+    await asOwner.mutation(api.finance.updateCompany, {
+      expectedEditRevision: 1,
+      id: companyId,
+      orgId,
+      name: "Legacy Revision Finance Updated",
+      profitRate: 4,
+      maxTermMonths: 48,
+      gracePeriodMonths: 0,
+      isActive: true,
+    });
+
+    const company = await t.run((ctx) => ctx.db.get(companyId));
+    expect(company?.editRevision).toBe(2);
+    expect(company?.name).toBe("Legacy Revision Finance Updated");
+  });
+
   test("deleting_a_customer_status_clears_it_from_finance_companies", async () => {
     const { t, orgId, asOwner } = await setupFinanceOrg();
     const keptStatusId = await t.run((ctx) =>
