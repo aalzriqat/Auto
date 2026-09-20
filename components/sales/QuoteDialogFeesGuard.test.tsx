@@ -1,4 +1,4 @@
-import { beforeEach, cleanup, describe, expect, fireEvent, render, screen, waitFor, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";\nimport { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { getFunctionName } from "convex/server";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 
