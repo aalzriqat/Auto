@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";\nimport { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, test, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 
 const stubs = vi.hoisted(() => ({
