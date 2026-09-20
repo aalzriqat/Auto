@@ -117,6 +117,7 @@ interface Seed {
   userId: Id<"users">;
   asUser: AuthenticatedTestConvex;
   customerId: Id<"customers">;
+  customerStatusId: Id<"orgCustomerStatuses">;
   vehicleId: Id<"vehicles">;
 }
 
@@ -156,7 +157,23 @@ async function seedDealer(suffix: string): Promise<Seed> {
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Expected", lastName: "Customer" })
   );
-  return { t, orgId, userId, asUser: t.withIdentity({ subject: `exp_user_${suffix}` }), customerId, vehicleId };
+  const customerStatusId = await t.run((ctx) =>
+    ctx.db.insert("orgCustomerStatuses", {
+      orgId,
+      label: "Eligible",
+      isActive: true,
+      order: 1,
+    })
+  );
+  return {
+    t,
+    orgId,
+    userId,
+    asUser: t.withIdentity({ subject: `exp_user_${suffix}` }),
+    customerId,
+    customerStatusId,
+    vehicleId,
+  };
 }
 
 async function createCompany(seed: Seed, name: string, feeTemplates: Template[]) {
@@ -187,6 +204,7 @@ async function createApplicationFor(seed: Seed, companyId: Id<"financeCompanies"
     termMonths: 48,
     mode: "CONFIGURED_FINANCE_COMPANY",
     companyId,
+    customerEligibilityStatusIds: [seed.customerStatusId],
     totalFinancedAmount: 20_000,
   });
   const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId });
@@ -739,6 +757,14 @@ describe("finalization re-checks configured fees, whichever rule the deal was cl
     const customerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Buyer", lastName: tag })
     );
+    const customerStatusId = await t.run((ctx) =>
+      ctx.db.insert("orgCustomerStatuses", {
+        orgId,
+        label: "Eligible",
+        isActive: true,
+        order: 1,
+      })
+    );
     const vehicleId = await t.run((ctx) =>
       ctx.db.insert("vehicles", {
         orgId,
@@ -773,7 +799,18 @@ describe("finalization re-checks configured fees, whichever rule the deal was cl
         feeTemplates: COMPANY_B_TEMPLATES,
       })
     );
-    return { t, orgId, userId, approverId, customerId, vehicleId, companyId, asUser, asApprover };
+    return {
+      t,
+      orgId,
+      userId,
+      approverId,
+      customerId,
+      customerStatusId,
+      vehicleId,
+      companyId,
+      asUser,
+      asApprover,
+    };
   }
 
   type Finalizable = Awaited<ReturnType<typeof seedFinalizable>>;
@@ -789,6 +826,7 @@ describe("finalization re-checks configured fees, whichever rule the deal was cl
       termMonths: 48,
       mode: "CONFIGURED_FINANCE_COMPANY",
       companyId: s.companyId,
+      customerEligibilityStatusIds: [s.customerStatusId],
       totalFinancedAmount: PRICE,
     });
     const applicationId = await s.asUser.mutation(api.applications.createFromQuote, { orgId: s.orgId, quoteId });

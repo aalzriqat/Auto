@@ -117,6 +117,14 @@ async function seedDealership(tag: string, opts: { sourceType?: "STOCK" | "SOURC
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Buyer", lastName: tag })
   );
+  const customerStatusId = await t.run((ctx) =>
+    ctx.db.insert("orgCustomerStatuses", {
+      orgId,
+      label: "Eligible",
+      isActive: true,
+      order: 1,
+    })
+  );
   const sourceType = opts.sourceType ?? "SOURCED";
   const vehicleId = await t.run((ctx) =>
     ctx.db.insert("vehicles", {
@@ -135,7 +143,18 @@ async function seedDealership(tag: string, opts: { sourceType?: "STOCK" | "SOURC
     })
   );
 
-  return { t, orgId, userId, approverId, customerId, vehicleId, companyId, asUser, asApprover };
+  return {
+    t,
+    orgId,
+    userId,
+    approverId,
+    customerId,
+    customerStatusId,
+    vehicleId,
+    companyId,
+    asUser,
+    asApprover,
+  };
 }
 
 type Seeded = Awaited<ReturnType<typeof seedDealership>>;
@@ -242,7 +261,12 @@ async function runDeal(
     downPayment,
     termMonths: 48,
     mode,
-    ...(mode === "CONFIGURED_FINANCE_COMPANY" ? { companyId: s.companyId } : {}),
+    ...(mode === "CONFIGURED_FINANCE_COMPANY"
+      ? {
+          companyId: s.companyId,
+          customerEligibilityStatusIds: [s.customerStatusId],
+        }
+      : {}),
     ...(mode === "MANUAL_FINANCE_COMPANY" && opts.manualProviderName !== undefined
       ? { manualProviderName: opts.manualProviderName }
       : {}),
@@ -6390,6 +6414,7 @@ async function approvedHandedOverDeal(s: Seeded): Promise<Id<"financeApplication
     termMonths: 48,
     mode: "CONFIGURED_FINANCE_COMPANY",
     companyId: s.companyId,
+    customerEligibilityStatusIds: [s.customerStatusId],
     totalFinancedAmount: VEHICLE_PRICE,
   });
   const applicationId = await s.asUser.mutation(api.applications.createFromQuote, {
@@ -6774,6 +6799,7 @@ describe("the closing matrix c16216 requires", () => {
       termMonths: 48,
       mode: "CONFIGURED_FINANCE_COMPANY" as const,
       companyId: s.companyId,
+      customerEligibilityStatusIds: [s.customerStatusId],
       totalFinancedAmount: VEHICLE_PRICE,
       vehicleItems: [
         { vehicleId: s.vehicleId, unitPrice: VEHICLE_PRICE },
