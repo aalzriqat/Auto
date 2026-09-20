@@ -106,6 +106,14 @@ async function seedDealership(tag: string) {
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Buyer", lastName: tag })
   );
+  const customerStatusId = await t.run((ctx) =>
+    ctx.db.insert("orgCustomerStatuses", {
+      orgId,
+      label: "Eligible",
+      isActive: true,
+      order: 1,
+    })
+  );
   const vehicleId = await t.run((ctx) =>
     ctx.db.insert("vehicles", {
       orgId, vin: `VINSN31${tag}`, make: "Kia", model: "Sportage", year: 2024, mileage: 10,
@@ -122,7 +130,18 @@ async function seedDealership(tag: string) {
     })
   );
 
-  return { t, orgId, userId, approverId, customerId, vehicleId, companyId, asUser, asApprover };
+  return {
+    t,
+    orgId,
+    userId,
+    approverId,
+    customerId,
+    customerStatusId,
+    vehicleId,
+    companyId,
+    asUser,
+    asApprover,
+  };
 }
 
 type Seeded = Awaited<ReturnType<typeof seedDealership>>;
@@ -138,6 +157,7 @@ async function approvedDealWithPinnedEconomics(s: Seeded) {
     termMonths: 48,
     mode: "CONFIGURED_FINANCE_COMPANY",
     companyId: s.companyId,
+    customerEligibilityStatusIds: [s.customerStatusId],
     totalFinancedAmount: VEHICLE_PRICE,
   });
   const applicationId = await s.asUser.mutation(api.applications.createFromQuote, {

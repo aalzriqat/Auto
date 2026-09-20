@@ -60,6 +60,7 @@ type Seed = {
   userId: Id<"users">;
   asOwner: AuthenticatedTestConvex;
   customerId: Id<"customers">;
+  customerStatusId: Id<"orgCustomerStatuses">;
   vehicleId: Id<"vehicles">;
 };
 
@@ -94,7 +95,23 @@ async function seedDealer(suffix: string): Promise<Seed> {
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Adopt", lastName: "Customer" })
   );
-  return { t, orgId, userId, asOwner: t.withIdentity({ subject: `adopt_user_${suffix}` }), customerId, vehicleId };
+  const customerStatusId = await t.run((ctx) =>
+    ctx.db.insert("orgCustomerStatuses", {
+      orgId,
+      label: "Eligible",
+      isActive: true,
+      order: 1,
+    })
+  );
+  return {
+    t,
+    orgId,
+    userId,
+    asOwner: t.withIdentity({ subject: `adopt_user_${suffix}` }),
+    customerId,
+    customerStatusId,
+    vehicleId,
+  };
 }
 
 /** A company created WITHOUT fees, an application frozen under it, THEN the fees configured. */
@@ -115,6 +132,7 @@ async function dealFrozenBeforeFees(s: Seed) {
     termMonths: 48,
     mode: "CONFIGURED_FINANCE_COMPANY",
     companyId,
+    customerEligibilityStatusIds: [s.customerStatusId],
     totalFinancedAmount: 20_000,
   });
   const applicationId = await s.asOwner.mutation(api.applications.createFromQuote, { orgId: s.orgId, quoteId });
