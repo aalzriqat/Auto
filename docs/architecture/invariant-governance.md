@@ -36,6 +36,7 @@ Supported proof classes include:
 - STATE_TRANSITION
 - CONCURRENCY
 - FAULT_INJECTION
+- FUZZ
 - REVERSAL
 - TENANCY
 - AUTHORIZATION
@@ -101,7 +102,7 @@ Each invariant declares metadata required by later phases:
 
 A DIRECT economic invariant must explicitly assess REPLAY, CONCURRENCY, REVERSAL, and RECONCILIATION. Those assessments may be REQUIRED, DEFERRED, or justified NOT_APPLICABLE; they may not be omitted.
 
-Tenant-sensitive invariants require TENANCY proof. Authorization-sensitive invariants require server-side AUTHORIZATION proof.
+Tenant-sensitive invariants require TENANCY proof. Authorization-sensitive invariants require server-side AUTHORIZATION proof. External-input-sensitive invariants must assess BOUNDARY and FUZZ; webhook-sensitive invariants must assess REPLAY, AUTHORIZATION, and NEGATIVE behavior; scheduled-work-sensitive invariants must explicitly assess REPLAY, CONCURRENCY, and FAULT_INJECTION.
 
 ## 6. Evidence boundaries
 
@@ -119,7 +120,7 @@ Use PREVIEW/runtime evidence for properties that depend on actual transaction co
 
 A structural guard can only prove the shapes it enumerates. Unknown/unreadable shapes must fail closed when certainty is required.
 
-Every structural proof must demonstrate that a representative violation makes the guard red.
+Every structural proof must name an executable `test`/`it`/`describe` negative-control marker. The validator parses the TypeScript AST, so a matching phrase in a comment or inert string does not count.
 
 ### Balanced journals
 
@@ -147,6 +148,10 @@ The self-audit protects against:
 - structural proofs without negative controls;
 - tenant/auth sensitivity without corresponding proof requirements;
 - DIRECT economic invariants that omit core economic risk assessments;
+- platform-serialization claims without preview concurrency evidence;
+- irreversible-by-design claims without explicit reversal N/A rationale;
+- external/webhook/scheduled sensitivity without the corresponding proof assessments;
+- supersession to unknown, inactive, or self IDs;
 - silent retirement.
 
 Structural/domain-specific censuses must separately fail closed when an expected subject population unexpectedly becomes zero.
