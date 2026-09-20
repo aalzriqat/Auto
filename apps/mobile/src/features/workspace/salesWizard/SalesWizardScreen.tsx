@@ -28,7 +28,11 @@ import { type AppTheme } from "../../../theme";
 import { useAppTheme, useThemedStyles } from "../../../providers/ThemeProvider";
 import { compactInitials } from "../nativeModules";
 import { useCommandIdentity, money, parseOptionalNumber, useGenericError, SearchInput } from "../modules/moduleShared";
-import { calculateUnifiedMurabaha, type UnifiedMurabahaResult } from "./murabaha";
+import {
+  calculateUnifiedMurabaha,
+  minimumDownPaymentForFinancingLimit,
+  type UnifiedMurabahaResult,
+} from "./murabaha";
 import { manualExecutionFeeInputValue } from "./salesWizardQuote";
 
 export type WizardPaymentType = "CASH" | "INSTALLMENT";
@@ -268,11 +272,12 @@ export function SalesWizardScreen({
             ? actualValuation * (maxLTV / 100)
             : Number.MAX_SAFE_INTEGER;
         const exceedsValuation = result ? result.financedAmount > maxFinancingAllowed && actualValuation > 0 : false;
-        const minimumDownPayment = feesConfigured
-          ? Math.max(
-              0,
-              effectivePrice + (company.commission || 0) + executionFees - maxFinancingAllowed,
-            )
+        const minimumDownPayment = result
+          ? minimumDownPaymentForFinancingLimit({
+              currentDownPayment: down,
+              financedAmount: result.financedAmount,
+              maxFinancingAllowed,
+            })
           : undefined;
         return { company, result, feesConfigured, actualValuation, maxFinancingAllowed, exceedsValuation, minimumDownPayment };
       });
