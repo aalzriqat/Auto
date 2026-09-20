@@ -746,6 +746,7 @@ export interface MobileFinanceCompany {
   includesCommissionInDebt?: boolean;
   maxFinancingLTV?: number;
   acceptedStatuses?: string[];
+  editRevision?: number;
   isActive: boolean;
 }
 
