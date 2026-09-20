@@ -136,6 +136,23 @@ async function dealFrozenBeforeFees(s: Seed) {
     totalFinancedAmount: 20_000,
   });
   const applicationId = await s.asOwner.mutation(api.applications.createFromQuote, { orgId: s.orgId, quoteId });
+  // Reconstruct the historical shape this fixture claims to exercise: the
+  // application was frozen before either single-fee authority or legacy fee
+  // templates existed. Creating the quote through today's API necessarily
+  // snapshots adminFees=0, so remove both authorities after creation.
+  await s.t.run(async (ctx) => {
+    const application = await ctx.db.get(applicationId);
+    if (!application?.companyRuleSnapshot) {
+      throw new Error("Expected a frozen company rule snapshot");
+    }
+    await ctx.db.patch(applicationId, {
+      companyRuleSnapshot: {
+        ...application.companyRuleSnapshot,
+        adminFees: undefined,
+        feeTemplates: undefined,
+      },
+    });
+  });
   await s.asOwner.mutation(api.finance.updateCompany, {
         expectedEditRevision: 1,
     id: companyId,
