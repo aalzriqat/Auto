@@ -4,6 +4,7 @@ import { describe, expect, test } from "vitest";
 
 const REPO_ROOT = path.resolve(__dirname, "..");
 const WEB_LIST = path.join(REPO_ROOT, "components", "messages", "ConversationList.tsx");
+const FLOATING_LIST = path.join(REPO_ROOT, "components", "messages", "FloatingMessenger.tsx");
 const MOBILE_LIST = path.join(
   REPO_ROOT,
   "apps",
@@ -25,6 +26,7 @@ const legacyListCall = /api\.directMessages\.listConversations\b/;
 describe("direct-message conversation pagination contract", () => {
   test.each([
     ["web full conversation list", WEB_LIST],
+    ["web floating conversation panel", FLOATING_LIST],
     ["mobile full conversation list", MOBILE_LIST],
   ])("%s cannot silently stop at the compatibility recent-list window", (_label, file) => {
     const code = source(file);
@@ -36,6 +38,13 @@ describe("direct-message conversation pagination contract", () => {
 
   test("web full list exposes a reachable next-page action", () => {
     const code = source(WEB_LIST);
+
+    expect(code).toContain('conversationStatus === "CanLoadMore"');
+    expect(code).toMatch(/loadMoreConversations\(\d+\)/);
+  });
+
+  test("web floating panel exposes a reachable next-page action", () => {
+    const code = source(FLOATING_LIST);
 
     expect(code).toContain('conversationStatus === "CanLoadMore"');
     expect(code).toMatch(/loadMoreConversations\(\d+\)/);
