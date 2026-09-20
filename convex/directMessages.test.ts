@@ -184,7 +184,7 @@ describe("directMessages member-scoped pagination", () => {
         ctx.db.insert("memberships", { orgId, userId: charlieId, roleId }),
       ]);
 
-      for (let index = 0; index < 17; index++) {
+      for (let index = 0; index < 117; index++) {
         const lastMessageAt = 1_000 + index;
         const conversationId = await ctx.db.insert("dmConversations", {
           orgId,
@@ -232,20 +232,20 @@ describe("directMessages member-scoped pagination", () => {
     const asBob = t.withIdentity({ subject: "bob_paged", clerkId: "bob_paged" });
     const first = await asBob.query(api.directMessages.listConversationsPage, {
       orgId,
-      paginationOpts: { numItems: 10, cursor: null },
+      paginationOpts: { numItems: 60, cursor: null },
     });
-    expect(first.page).toHaveLength(10);
+    expect(first.page).toHaveLength(60);
     expect(first.isDone).toBe(false);
 
     const second = await asBob.query(api.directMessages.listConversationsPage, {
       orgId,
-      paginationOpts: { numItems: 10, cursor: first.continueCursor },
+      paginationOpts: { numItems: 60, cursor: first.continueCursor },
     });
-    expect(second.page).toHaveLength(7);
+    expect(second.page).toHaveLength(57);
     expect(second.isDone).toBe(true);
 
     const rows = [...first.page, ...second.page];
-    expect(new Set(rows.map((row) => row._id)).size).toBe(17);
+    expect(new Set(rows.map((row) => row._id)).size).toBe(117);
     expect(rows.every((row) => row.memberIds.includes(bobId))).toBe(true);
     expect(rows.map((row) => row.lastMessageAt)).toEqual(
       [...rows.map((row) => row.lastMessageAt)].sort((a, b) => b - a),
