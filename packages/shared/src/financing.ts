@@ -61,15 +61,6 @@ export function isRequestedFinancingTermValid(args: {
 }
 
 /**
- * Minimum total down payment needed to bring the authoritative financed amount
- * back under a lender's financing ceiling.
- *
- * The excess must be measured from `financedAmount`, because that value already
- * reflects whether execution fees and commission are inside or outside the debt.
- * Reconstructing the base from price/fees/commission at a caller can therefore
- * understate or overstate the required customer contribution.
- */
-/**
  * Returns the selected customer status ids accepted by a lender.
  *
  * An empty/undefined lender allow-list means the lender accepts every status;
@@ -90,6 +81,15 @@ export function matchingCustomerEligibilityStatusIds<T extends string>(
   return selectedStatusIds.filter((id) => accepted.has(id));
 }
 
+/**
+ * Minimum total down payment needed to bring the authoritative financed amount
+ * back under a lender's financing ceiling.
+ *
+ * The excess must be measured from `financedAmount`, because that value already
+ * reflects whether execution fees and commission are inside or outside the debt.
+ * Reconstructing the base from price/fees/commission at a caller can therefore
+ * understate or overstate the required customer contribution.
+ */
 export function minimumDownPaymentForFinancingLimit(args: {
   currentDownPayment: number;
   financedAmount: number;
