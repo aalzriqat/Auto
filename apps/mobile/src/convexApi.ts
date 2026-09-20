@@ -2470,6 +2470,9 @@ export const api = {
       OrgScopedArgs,
       MobileDirectConversation[]
     >("directMessages:listConversations"),
+    getUnreadCount: makeFunctionReference<"query", OrgScopedArgs, number>(
+      "directMessages:getUnreadCount",
+    ),
     getConversation: makeFunctionReference<
       "query",
       DirectConversationArgs,
@@ -3163,6 +3166,7 @@ export const api = {
       OrgScopedArgs,
       MobileDirectConversation[]
     >;
+    getUnreadCount: FunctionReference<"query", "public", OrgScopedArgs, number>;
     getConversation: FunctionReference<
       "query",
       "public",
