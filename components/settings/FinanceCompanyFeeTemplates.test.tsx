@@ -109,6 +109,54 @@ describe("fee templates retirement in FinanceCompanyDialog", () => {
     expect(adminFeesInput.value).toBe("700");
   });
 
+  test("keeps the revision from the opened form snapshot when the reactive company prop advances", async () => {
+    const initialCompany = {
+      _id: "company_1" as never,
+      name: "National Finance",
+      profitRate: 4.5,
+      maxTermMonths: 72,
+      gracePeriodMonths: 0,
+      adminFees: 700,
+      defaultLtvPercent: 90,
+      isActive: true,
+      editRevision: 3,
+    };
+    const view = render(
+      <FinanceCompanyDialog open onOpenChange={() => {}} company={initialCompany} />
+    );
+
+    fireEvent.change(screen.getByLabelText("Company Name"), {
+      target: { value: "My stale local edit" },
+    });
+
+    // Simulate Convex pushing another editor's committed version while this
+    // dialog remains open. The form intentionally stays untouched, therefore
+    // its CAS token must stay untouched too.
+    view.rerender(
+      <FinanceCompanyDialog
+        open
+        onOpenChange={() => {}}
+        company={{
+          ...initialCompany,
+          name: "Other editor's committed name",
+          adminFees: 900,
+          editRevision: 4,
+        }}
+      />
+    );
+
+    expect((screen.getByLabelText("Company Name") as HTMLInputElement).value)
+      .toBe("My stale local edit");
+
+    save();
+
+    await waitFor(() => expect(mutations.update).toHaveBeenCalled());
+    const payload = mutations.update.mock.calls[0][0];
+    expect(payload.expectedEditRevision).toBe(3);
+    expect(payload.name).toBe("My stale local edit");
+    expect(payload.adminFees).toBe(700);
+  });
+
   test("saving edit sends adminFees and omits feeTemplates", async () => {
     renderEdit(700);
     fireEvent.change(screen.getByLabelText("ExecutionFees"), { target: { value: "750" } });
@@ -117,6 +165,7 @@ describe("fee templates retirement in FinanceCompanyDialog", () => {
     await waitFor(() => expect(mutations.update).toHaveBeenCalled());
     const payload = mutations.update.mock.calls[0][0];
     expect(payload.adminFees).toBe(750);
+    expect(payload.expectedEditRevision).toBe(1);
     expect(payload.feeTemplates).toBeUndefined();
   });
 
