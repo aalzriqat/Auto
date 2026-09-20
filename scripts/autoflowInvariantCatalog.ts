@@ -115,8 +115,39 @@ const STRUCTURAL_CONTROL_MARKERS: Readonly<Record<string, string>> = {
     "NEGATIVE CONTROL — removing a required Deal caller fails the ratchet",
 };
 
+const STRUCTURAL_CONTROL_REQUIRED_IDENTIFIERS: Readonly<
+  Record<string, readonly string[]>
+> = {
+  "scripts/tenantWriteGuard.test.ts": [
+    "findUnguardedTenantWrites",
+    "VULNERABLE",
+    "expect",
+  ],
+  "scripts/economicCommandCensus.test.ts": [
+    "buildGraph",
+    "censusForward",
+    "expect",
+  ],
+  "scripts/clientIdentityLifetime.test.ts": [
+    "auditClientCallers",
+    "expect",
+  ],
+  "scripts/reviewActionParity.test.ts": [
+    "cockpitSources",
+    "wiredMutations",
+    "REQUIRED_DEAL_COMMANDS",
+    "expect",
+  ],
+};
+
 function structuralControlMarkerFor(pathName: string): string | undefined {
   return STRUCTURAL_CONTROL_MARKERS[pathName];
+}
+
+function structuralControlRequiredIdentifiersFor(
+  pathName: string
+): readonly string[] | undefined {
+  return STRUCTURAL_CONTROL_REQUIRED_IDENTIFIERS[pathName];
 }
 
 const EVIDENCE_MARKERS: Readonly<Record<string, string>> = {
@@ -242,6 +273,68 @@ const profile = (
   scheduledWorkSensitive: false,
   ...overrides,
 });
+
+const MANDATORY_OBLIGATION_FLOORS: Readonly<
+  Record<string, readonly ProofObligation[]>
+> = {
+  "TEN-1": ["NEGATIVE", "TENANCY", "MUTATION", "BOUNDARY"],
+  "AUTH-1": ["NEGATIVE", "AUTHORIZATION", "MUTATION"],
+  "ECON-1": ["REPLAY", "MUTATION", "CONCURRENCY", "REVERSAL", "RECONCILIATION"],
+  "ECON-2": [
+    "REPLAY",
+    "NEGATIVE",
+    "MUTATION",
+    "CONCURRENCY",
+    "REVERSAL",
+    "RECONCILIATION",
+  ],
+  "ACC-1": [
+    "POSITIVE",
+    "NEGATIVE",
+    "REPLAY",
+    "PROPERTY",
+    "CONCURRENCY",
+    "REVERSAL",
+    "RECONCILIATION",
+  ],
+  "ACC-2": [
+    "REVERSAL",
+    "NEGATIVE",
+    "TENANCY",
+    "AUTHORIZATION",
+    "REPLAY",
+    "CONCURRENCY",
+    "RECONCILIATION",
+  ],
+  "ACC-3": ["POSITIVE", "NEGATIVE", "BOUNDARY"],
+  "CONS-1": [
+    "POSITIVE",
+    "NEGATIVE",
+    "REPLAY",
+    "CONCURRENCY",
+    "REVERSAL",
+    "RECONCILIATION",
+  ],
+  "LIFE-1": [
+    "STATE_TRANSITION",
+    "REVERSAL",
+    "NEGATIVE",
+    "REPLAY",
+    "CONCURRENCY",
+    "FAULT_INJECTION",
+    "RECONCILIATION",
+  ],
+  "PERF-1": ["BOUNDARY", "NEGATIVE", "MUTATION"],
+  "CONC-1": [
+    "REPLAY",
+    "STATE_TRANSITION",
+    "CONCURRENCY",
+    "FAULT_INJECTION",
+    "REVERSAL",
+    "RECONCILIATION",
+  ],
+  "UI-1": ["POSITIVE", "NEGATIVE", "MUTATION"],
+};
 
 export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
   {
@@ -757,11 +850,100 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
   },
 ] as const;
 
-export function sourceHasActiveTestMarker(
+type ActiveTestRegistration = {
+  kind: "test" | "it" | "describe";
+  title: string;
+  callback?: ts.ArrowFunction | ts.FunctionExpression;
+};
+
+const DISALLOWED_EVIDENCE_MODIFIERS = new Set([
+  "skip",
+  "skipIf",
+  "todo",
+  "runIf",
+  "only",
+  "fails",
+]);
+
+const ALLOWED_EVIDENCE_MODIFIERS = new Set([
+  "each",
+  "concurrent",
+  "sequential",
+]);
+
+function testRegistrationSignature(
+  expression: ts.Expression
+): { root: string; modifiers: string[] } | undefined {
+  if (ts.isIdentifier(expression)) {
+    return { root: expression.text, modifiers: [] };
+  }
+  if (ts.isPropertyAccessExpression(expression)) {
+    const base = testRegistrationSignature(expression.expression);
+    if (!base) return undefined;
+    return {
+      root: base.root,
+      modifiers: [...base.modifiers, expression.name.text],
+    };
+  }
+  if (ts.isCallExpression(expression)) {
+    return testRegistrationSignature(expression.expression);
+  }
+  return undefined;
+}
+
+function registrationFromCall(
+  call: ts.CallExpression
+): ActiveTestRegistration | undefined {
+  const signature = testRegistrationSignature(call.expression);
+  if (
+    !signature ||
+    !["test", "it", "describe"].includes(signature.root)
+  ) {
+    return undefined;
+  }
+
+  if (
+    signature.modifiers.some((modifier) =>
+      DISALLOWED_EVIDENCE_MODIFIERS.has(modifier)
+    )
+  ) {
+    return undefined;
+  }
+
+  if (
+    signature.modifiers.some(
+      (modifier) => !ALLOWED_EVIDENCE_MODIFIERS.has(modifier)
+    )
+  ) {
+    return undefined;
+  }
+
+  const first = call.arguments[0];
+  if (
+    !first ||
+    (!ts.isStringLiteral(first) &&
+      !ts.isNoSubstitutionTemplateLiteral(first))
+  ) {
+    return undefined;
+  }
+
+  const callback = call.arguments.find(
+    (argument, index) =>
+      index > 0 &&
+      (ts.isArrowFunction(argument) || ts.isFunctionExpression(argument))
+  ) as ts.ArrowFunction | ts.FunctionExpression | undefined;
+
+  return {
+    kind: signature.root as ActiveTestRegistration["kind"],
+    title: first.text,
+    callback,
+  };
+}
+
+function collectActiveTestRegistrations(
   source: string,
-  marker: string,
-  scriptKind: ts.ScriptKind = ts.ScriptKind.TS
-): boolean {
+  scriptKind: ts.ScriptKind
+): readonly ActiveTestRegistration[] {
   const file = ts.createSourceFile(
     "invariant-evidence.test.ts",
     source,
@@ -769,60 +951,86 @@ export function sourceHasActiveTestMarker(
     true,
     scriptKind
   );
-  let found = false;
+  const registrations: ActiveTestRegistration[] = [];
 
-  const isDisabledTestExpression = (expression: ts.Expression): boolean => {
-    if (ts.isCallExpression(expression)) {
-      return isDisabledTestExpression(expression.expression);
-    }
-    if (ts.isPropertyAccessExpression(expression)) {
-      const property = expression.name.text;
+  const scanStatements = (statements: readonly ts.Statement[]): void => {
+    for (const statement of statements) {
       if (
-        (property === "skip" || property === "skipIf" || property === "todo") &&
-        ts.isIdentifier(expression.expression) &&
-        (expression.expression.text === "test" ||
-          expression.expression.text === "it" ||
-          expression.expression.text === "describe")
+        !ts.isExpressionStatement(statement) ||
+        !ts.isCallExpression(statement.expression)
       ) {
-        return true;
+        continue;
       }
-      return isDisabledTestExpression(expression.expression);
-    }
-    return false;
-  };
 
-  const visit = (node: ts.Node, insideDisabledSuite = false): void => {
-    if (found) return;
-    const disabledHere =
-      insideDisabledSuite ||
-      (ts.isCallExpression(node) && isDisabledTestExpression(node.expression));
+      const registration = registrationFromCall(statement.expression);
+      if (!registration) {
+        continue;
+      }
 
-    if (!disabledHere && ts.isCallExpression(node) && node.arguments.length > 0) {
-      const callee = node.expression;
-      const first = node.arguments[0];
+      registrations.push(registration);
+
       if (
-        ts.isIdentifier(callee) &&
-        (callee.text === "test" || callee.text === "it" || callee.text === "describe") &&
-        (ts.isStringLiteral(first) || ts.isNoSubstitutionTemplateLiteral(first)) &&
-        first.text.includes(marker)
+        registration.kind === "describe" &&
+        registration.callback &&
+        ts.isBlock(registration.callback.body)
       ) {
-        found = true;
-        return;
+        scanStatements(registration.callback.body.statements);
       }
     }
-
-    ts.forEachChild(node, (child) => visit(child, disabledHere));
   };
 
-  visit(file);
-  return found;
+  scanStatements(file.statements);
+  return registrations;
+}
+
+function registrationIdentifiers(
+  registration: ActiveTestRegistration
+): ReadonlySet<string> {
+  const identifiers = new Set<string>();
+  if (!registration.callback) {
+    return identifiers;
+  }
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node)) {
+      identifiers.add(node.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  visit(registration.callback.body);
+  return identifiers;
+}
+
+export function sourceHasActiveTestMarker(
+  source: string,
+  marker: string,
+  scriptKind: ts.ScriptKind = ts.ScriptKind.TS
+): boolean {
+  const matches = collectActiveTestRegistrations(source, scriptKind).filter(
+    (registration) => registration.title.includes(marker)
+  );
+  return matches.length === 1;
 }
 
 export function structuralProofHasExecutableNegativeControl(
   source: string,
-  marker: string
+  marker: string,
+  requiredIdentifiers: readonly string[] = []
 ): boolean {
-  return sourceHasActiveTestMarker(source, marker, ts.ScriptKind.TS);
+  const matches = collectActiveTestRegistrations(source, ts.ScriptKind.TS).filter(
+    (registration) => registration.title.includes(marker)
+  );
+  if (matches.length !== 1) {
+    return false;
+  }
+
+  if (requiredIdentifiers.length === 0) {
+    return true;
+  }
+
+  const identifiers = registrationIdentifiers(matches[0]);
+  return requiredIdentifiers.every((identifier) => identifiers.has(identifier));
 }
 
 export function isActiveInvariant(invariant: InvariantDefinition): boolean {
@@ -916,6 +1124,21 @@ export function validateInvariantCatalog(
     const requirements = requirementMap(invariant);
     if (requirements.size !== invariant.requirements.length) {
       errors.push(invariant.id + " has duplicate proof obligations");
+    }
+
+    const obligationFloor = MANDATORY_OBLIGATION_FLOORS[invariant.id];
+    if (!obligationFloor) {
+      errors.push(invariant.id + " has no mandatory obligation floor");
+    } else {
+      for (const obligation of obligationFloor) {
+        if (!requirements.has(obligation)) {
+          errors.push(
+            invariant.id +
+              " is missing mandatory obligation assessment " +
+              obligation
+          );
+        }
+      }
     }
 
     for (const requirement of invariant.requirements) {
@@ -1154,17 +1377,29 @@ export function validateInvariantCatalog(
       }
 
       if (proof.mechanism === "STRUCTURAL") {
+        const requiredIdentifiers =
+          structuralControlRequiredIdentifiersFor(proof.path);
         if (!proof.negativeControlMarker) {
           errors.push(
             invariant.id + " structural proof has no executable negative-control marker: " + proof.path
           );
+        } else if (!requiredIdentifiers || requiredIdentifiers.length === 0) {
+          errors.push(
+            invariant.id +
+              " structural proof has no pinned analyzer/assertion contract: " +
+              proof.path
+          );
         } else if (
           !source ||
-          !structuralProofHasExecutableNegativeControl(source, proof.negativeControlMarker)
+          !structuralProofHasExecutableNegativeControl(
+            source,
+            proof.negativeControlMarker,
+            requiredIdentifiers
+          )
         ) {
           errors.push(
             invariant.id +
-              " structural proof negative-control marker is not an executable test/it/describe call: " +
+              " structural proof negative-control marker is not a unique active test with the required analyzer/assertion references: " +
               proof.path +
               " :: " +
               proof.negativeControlMarker
