@@ -223,6 +223,8 @@ function makeBackend(defects: Defects = {}) {
   const quotePrice = new Map<string, number>();
   const quoteCompany = new Map<string, string>();
   const companyLtv = new Map<string, number | undefined>();
+  /** Mirrors orgCustomerStatuses.seed/list closely enough for FD1/FD2 to exercise the real eligibility precondition. */
+  const customerStatusesByOrg = new Map<string, Array<Record<string, any>>>();
   const disbursementByKey = new Map<string, string>();
   const accountIdOf = (key: string) => {
     const hit = CHART.find((a) => a.systemKey === key);
@@ -511,6 +513,31 @@ function makeBackend(defects: Defects = {}) {
           const current = orgCurrency.get(String(args.orgId));
           return { ok: true as const, value: current === null || current === undefined ? null : { orgId: args.orgId, currency: current } };
         }
+      case "orgCustomerStatuses:seed": {
+        const orgId = String(args.orgId);
+        if (!customerStatusesByOrg.has(orgId)) {
+          customerStatusesByOrg.set(
+            orgId,
+            ["Social Security", "Salary Slip", "ID Only", "Commercial Register", "Delivery Apps"].map(
+              (label, order) => ({
+                _id: id("cust-status"),
+                orgId,
+                label,
+                isActive: true,
+                order,
+              })
+            )
+          );
+        }
+        return { ok: true as const, value: null };
+      }
+      case "orgCustomerStatuses:list":
+        return {
+          ok: true as const,
+          value: [...(customerStatusesByOrg.get(String(args.orgId)) ?? [])].sort(
+            (a, b) => Number(a.order) - Number(b.order)
+          ),
+        };
       case "chartOfAccounts:initialize":
         return { ok: true as const, value: null };
       case "chartOfAccounts:list":
