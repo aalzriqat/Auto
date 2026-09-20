@@ -123,12 +123,15 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
 
   test("NEGATIVE CONTROL: a missing proof file is refused", () => {
     const broken = copyCatalog();
-    broken[0].proofs.push({
-      path: "convex/this-proof-does-not-exist.test.ts",
-      mechanism: "EXECUTION",
-      obligations: ["NEGATIVE"],
-      note: "Synthetic negative control for the catalog file-existence guard.",
-    });
+    broken[0].proofs = [
+      ...broken[0].proofs,
+      {
+        path: "convex/this-proof-does-not-exist.test.ts",
+        mechanism: "EXECUTION",
+        obligations: ["NEGATIVE"],
+        note: "Synthetic negative control for the catalog file-existence guard.",
+      },
+    ];
 
     expect(validateInvariantCatalog(ROOT, broken)).toContain(
       broken[0].id +
@@ -169,10 +172,9 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
     const proofIndex = broken[index].proofs.findIndex(
       (proof) => proof.mechanism === "STRUCTURAL"
     );
-    broken[index].proofs[proofIndex] = {
-      ...broken[index].proofs[proofIndex],
-      negativeControl: false,
-    };
+    broken[index].proofs = broken[index].proofs.map((proof, currentIndex) =>
+      currentIndex === proofIndex ? { ...proof, negativeControl: false } : proof
+    );
 
     expect(validateInvariantCatalog(ROOT, broken)).toContain(
       broken[index].id +
@@ -197,12 +199,15 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
   test("NEGATIVE CONTROL: ENFORCED cannot hide a deferred proof obligation", () => {
     const broken = copyCatalog();
     const index = broken.findIndex((invariant) => invariant.state === "ENFORCED");
-    broken[index].requirements.push({
-      obligation: "PROPERTY",
-      status: "DEFERRED",
-      reason: "Synthetic deferred property obligation for the validator negative control.",
-      tracking: "SCRUM-342",
-    });
+    broken[index].requirements = [
+      ...broken[index].requirements,
+      {
+        obligation: "PROPERTY",
+        status: "DEFERRED",
+        reason: "Synthetic deferred property obligation for the validator negative control.",
+        tracking: "SCRUM-342",
+      },
+    ];
 
     expect(validateInvariantCatalog(ROOT, broken)).toContain(
       broken[index].id + " is ENFORCED while PROPERTY is still DEFERRED"
@@ -219,10 +224,10 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
     const requirementIndex = broken[index].requirements.findIndex(
       (requirement) => requirement.status === "NOT_APPLICABLE"
     );
-    broken[index].requirements[requirementIndex] = {
-      ...broken[index].requirements[requirementIndex],
-      reason: "",
-    };
+    broken[index].requirements = broken[index].requirements.map(
+      (requirement, currentIndex) =>
+        currentIndex === requirementIndex ? { ...requirement, reason: "" } : requirement
+    );
 
     const obligation = broken[index].requirements[requirementIndex].obligation;
     expect(validateInvariantCatalog(ROOT, broken)).toContain(
@@ -241,10 +246,12 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
     const requirementIndex = broken[index].requirements.findIndex(
       (requirement) => requirement.status === "DEFERRED"
     );
-    broken[index].requirements[requirementIndex] = {
-      ...broken[index].requirements[requirementIndex],
-      tracking: undefined,
-    };
+    broken[index].requirements = broken[index].requirements.map(
+      (requirement, currentIndex) =>
+        currentIndex === requirementIndex
+          ? { ...requirement, tracking: undefined }
+          : requirement
+    );
 
     const obligation = broken[index].requirements[requirementIndex].obligation;
     expect(validateInvariantCatalog(ROOT, broken)).toContain(
@@ -261,11 +268,16 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
     const requirementIndex = broken[index].requirements.findIndex(
       (requirement) => requirement.obligation === "TENANCY"
     );
-    broken[index].requirements[requirementIndex] = {
-      obligation: "TENANCY",
-      status: "NOT_APPLICABLE",
-      reason: "Synthetic invalid classification used only by this negative control.",
-    };
+    broken[index].requirements = broken[index].requirements.map(
+      (requirement, currentIndex) =>
+        currentIndex === requirementIndex
+          ? {
+              obligation: "TENANCY",
+              status: "NOT_APPLICABLE",
+              reason: "Synthetic invalid classification used only by this negative control.",
+            }
+          : requirement
+    );
 
     expect(validateInvariantCatalog(ROOT, broken)).toContain(
       broken[index].id + " is tenant-sensitive without required TENANCY proof"
