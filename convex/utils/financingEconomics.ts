@@ -22,7 +22,7 @@ import {
 // Pass-throughs, re-exported directly so they do not sit in this module's local
 // scope pretending to be used here.
 export { classifyGapResolution, evaluateQuotationException } from "../../lib/financingEconomics";
-export { isRequestedFinancingTermValid };
+export { isRequestedFinancingTermValid } from "../../lib/financing";
 
 /**
  * A stamp of the economics an irreversible confirmation is about, demanded back
