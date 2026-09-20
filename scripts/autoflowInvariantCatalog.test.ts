@@ -113,6 +113,18 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
     );
   });
 
+  test("NEGATIVE CONTROL: mandatory obligation assessments cannot silently disappear", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex((invariant) => invariant.id === "ACC-3");
+    broken[index].requirements = broken[index].requirements.filter(
+      (requirement) => requirement.obligation !== "BOUNDARY"
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      "ACC-3 is missing mandatory obligation assessment BOUNDARY"
+    );
+  });
+
   test("NEGATIVE CONTROL: deleting a required ID fails the independent ratchet", () => {
     const reduced = AUTOFLOW_INVARIANTS.filter((invariant) => invariant.id !== "TEN-1");
     const actual = reduced.map((invariant) => invariant.id).sort();
@@ -414,6 +426,102 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
       structuralProofHasExecutableNegativeControl(
         source,
         "NEGATIVE CONTROL — executable"
+      )
+    ).toBe(true);
+  });
+
+  test("NEGATIVE CONTROL: a marker inside an uninvoked function is not active evidence", () => {
+    const source = `
+      function neverCalled() {
+        test("NEGATIVE CONTROL — dormant", () => {
+          expect(true).toBe(true);
+        });
+      }
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — dormant"
+      )
+    ).toBe(false);
+  });
+
+  test("NEGATIVE CONTROL: a marker behind a conditional branch is not active evidence", () => {
+    const source = `
+      if (false) {
+        test("NEGATIVE CONTROL — conditional", () => {
+          expect(true).toBe(true);
+        });
+      }
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — conditional"
+      )
+    ).toBe(false);
+  });
+
+  test("NEGATIVE CONTROL: duplicate active markers are ambiguous and refused", () => {
+    const source = `
+      test("NEGATIVE CONTROL — duplicate", () => {
+        expect(true).toBe(true);
+      });
+      test("NEGATIVE CONTROL — duplicate", () => {
+        expect(true).toBe(true);
+      });
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — duplicate"
+      )
+    ).toBe(false);
+  });
+
+  test("an active nested test under an active describe remains valid evidence", () => {
+    const source = `
+      describe("active suite", () => {
+        test("NEGATIVE CONTROL — nested active", () => {
+          expect(true).toBe(true);
+        });
+      });
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — nested active"
+      )
+    ).toBe(true);
+  });
+
+  test("NEGATIVE CONTROL: a vacuous title match cannot satisfy an analyzer-backed control", () => {
+    const source = `
+      test("NEGATIVE CONTROL — analyzer backed", () => {
+        expect(true).toBe(true);
+      });
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — analyzer backed",
+        ["findUnguardedTenantWrites", "VULNERABLE", "expect"]
+      )
+    ).toBe(false);
+  });
+
+  test("an analyzer-backed control must reference the analyzer, fixture, and assertion", () => {
+    const source = `
+      test("NEGATIVE CONTROL — analyzer backed", () => {
+        const found = findUnguardedTenantWrites(VULNERABLE, "x.ts");
+        expect(found).toHaveLength(1);
+      });
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — analyzer backed",
+        ["findUnguardedTenantWrites", "VULNERABLE", "expect"]
       )
     ).toBe(true);
   });
