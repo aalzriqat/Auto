@@ -771,9 +771,33 @@ export function sourceHasActiveTestMarker(
   );
   let found = false;
 
-  const visit = (node: ts.Node): void => {
+  const isDisabledTestExpression = (expression: ts.Expression): boolean => {
+    if (ts.isCallExpression(expression)) {
+      return isDisabledTestExpression(expression.expression);
+    }
+    if (ts.isPropertyAccessExpression(expression)) {
+      const property = expression.name.text;
+      if (
+        (property === "skip" || property === "skipIf" || property === "todo") &&
+        ts.isIdentifier(expression.expression) &&
+        (expression.expression.text === "test" ||
+          expression.expression.text === "it" ||
+          expression.expression.text === "describe")
+      ) {
+        return true;
+      }
+      return isDisabledTestExpression(expression.expression);
+    }
+    return false;
+  };
+
+  const visit = (node: ts.Node, insideDisabledSuite = false): void => {
     if (found) return;
-    if (ts.isCallExpression(node) && node.arguments.length > 0) {
+    const disabledHere =
+      insideDisabledSuite ||
+      (ts.isCallExpression(node) && isDisabledTestExpression(node.expression));
+
+    if (!disabledHere && ts.isCallExpression(node) && node.arguments.length > 0) {
       const callee = node.expression;
       const first = node.arguments[0];
       if (
@@ -786,7 +810,8 @@ export function sourceHasActiveTestMarker(
         return;
       }
     }
-    ts.forEachChild(node, visit);
+
+    ts.forEachChild(node, (child) => visit(child, disabledHere));
   };
 
   visit(file);
