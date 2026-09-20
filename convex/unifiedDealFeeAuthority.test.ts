@@ -4940,6 +4940,10 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
             year: 2024,
             sellingPrice: 25_000,
             status: "AVAILABLE",
+            mileage: 0,
+            color: "Silver",
+            fuelType: "Hybrid",
+            transmission: "Auto",
           },
           orgSettings: {
             smartReplyFinancingMode: "calculated",
@@ -4970,6 +4974,10 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
             year: 2024,
             sellingPrice: 25_000,
             status: "AVAILABLE",
+            mileage: 0,
+            color: "Silver",
+            fuelType: "Hybrid",
+            transmission: "Auto",
           },
           orgSettings: {
             smartReplyFinancingMode: "calculated",
