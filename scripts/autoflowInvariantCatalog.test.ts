@@ -432,6 +432,38 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
     ).toBe(false);
   });
 
+  test("NEGATIVE CONTROL: tests nested under describe.skip cannot satisfy evidence", () => {
+    const source = `
+      describe.skip("disabled suite", () => {
+        test("NEGATIVE CONTROL — nested under skip", () => {
+          throw new Error("never executed");
+        });
+      });
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — nested under skip"
+      )
+    ).toBe(false);
+  });
+
+  test("NEGATIVE CONTROL: tests nested under curried describe.skipIf cannot satisfy evidence", () => {
+    const source = `
+      describe.skipIf(true)("disabled suite", () => {
+        test("NEGATIVE CONTROL — nested under skipIf", () => {
+          throw new Error("never executed");
+        });
+      });
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — nested under skipIf"
+      )
+    ).toBe(false);
+  });
+
   test("NEGATIVE CONTROL: PLATFORM_SERIALIZED_PROVEN requires PREVIEW concurrency proof", () => {
     const broken = copyCatalog();
     const index = broken.findIndex(
