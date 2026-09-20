@@ -397,6 +397,7 @@ describe("base approval — the confirmed deal", () => {
   test("configured Execution Fees seed the quotation expense estimate", async () => {
     const seed = await seedDealer();
     await seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
       id: seed.companyId,
       orgId: seed.orgId,
       name: "Jordan Finance",
@@ -421,6 +422,7 @@ describe("base approval — the confirmed deal", () => {
   test("quote-lineage repair restores the same frozen Execution Fees estimate as creation", async () => {
     const seed = await seedDealer();
     await seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
       id: seed.companyId,
       orgId: seed.orgId,
       name: "Jordan Finance",
@@ -821,6 +823,7 @@ describe("a manually named approval", () => {
   test("keeps the appraisal as the LTV BASE for a company that lends against it", async () => {
     const seed = await seedDealer();
     await seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
       id: seed.companyId,
       orgId: seed.orgId,
       name: "Jordan Finance",
@@ -1154,6 +1157,7 @@ describe("incomplete economics", () => {
     const seed = await seedDealer();
     // The company lends against the independent appraisal.
     await seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
       id: seed.companyId,
       orgId: seed.orgId,
       name: "Jordan Finance",
@@ -1191,6 +1195,7 @@ describe("incomplete economics", () => {
   test("a deal whose funding split could not be calculated cannot be handed over", async () => {
     const seed = await seedDealer();
     await seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
       id: seed.companyId,
       orgId: seed.orgId,
       name: "Jordan Finance",
@@ -1227,6 +1232,7 @@ describe("incomplete economics", () => {
     const seed = await seedDealer();
     await expect(
       seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
         id: seed.companyId,
         orgId: seed.orgId,
         name: "Jordan Finance",
@@ -1280,6 +1286,7 @@ describe("incomplete economics", () => {
     // minimum, which was twice the truth — the kind of drift that comes from
     // restating a scale instead of asking the engine for it.
     await seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
       id: seed.companyId,
       orgId: seed.orgId,
       name: "Jordan Finance",
@@ -1583,6 +1590,7 @@ describe("reconciliation queue", () => {
   test("a company that keeps the customer payment flags rather than blanking silently", async () => {
     const seed = await seedDealer();
     await seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
       id: seed.companyId,
       orgId: seed.orgId,
       name: "Jordan Finance",
@@ -1807,6 +1815,7 @@ describe("LTV configuration", () => {
 
     // The operator does exactly what the old copy told them to.
     await seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
       id: bareCompanyId,
       orgId: seed.orgId,
       name: "Unconfigured Finance Co",
@@ -2021,6 +2030,7 @@ describe("LTV configuration", () => {
   test("applies the LTV to the appraisal when that is the company's rule", async () => {
     const seed = await seedDealer();
     await seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
       id: seed.companyId,
       orgId: seed.orgId,
       name: "Jordan Finance",
@@ -2265,6 +2275,7 @@ describe("overrides and audit", () => {
     // A company that has not told us whether the customer's first payment
     // offsets the unfinanced share.
     await seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
       id: seed.companyId,
       orgId: seed.orgId,
       name: "Jordan Finance",
@@ -2460,6 +2471,7 @@ describe("overrides and audit", () => {
     // The company is edited after the deal snapshotted its rules — a new LTV,
     // a new rule version. The deal is still governed by the old snapshot.
     await seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
       id: seed.companyId,
       orgId: seed.orgId,
       name: "Jordan Finance",
@@ -2985,6 +2997,7 @@ describe("rule snapshots", () => {
 
     // The company tightens its tolerance to 1% and drops its LTV to 70%.
     await seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
       id: seed.companyId,
       orgId: seed.orgId,
       name: "Jordan Finance",
@@ -3024,6 +3037,7 @@ describe("rule snapshots", () => {
     expect(versionsAfterCreate).toHaveLength(1);
 
     await seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
       id: seed.companyId,
       orgId: seed.orgId,
       name: "Jordan Finance (Amman)",
@@ -3044,6 +3058,7 @@ describe("rule snapshots", () => {
     ).toHaveLength(1);
 
     await seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 2,
       id: seed.companyId,
       orgId: seed.orgId,
       name: "Jordan Finance (Amman)",
@@ -3074,6 +3089,7 @@ describe("rule snapshots", () => {
     });
 
     await seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
       id: seed.companyId,
       orgId: seed.orgId,
       name: "Renamed By Old Client",
@@ -3103,6 +3119,7 @@ describe("rule snapshots", () => {
 
     await expect(
       seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
         id: seed.companyId,
         orgId: seed.orgId,
         name: "Jordan Finance",
