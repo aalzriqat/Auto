@@ -89,6 +89,69 @@ describe("directMessages receipts", () => {
   });
 });
 
+describe("directMessages member-scoped visibility", () => {
+  test("other members' first 100 conversations cannot hide mine or my unread count", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Busy Message Dealer", createdAt: Date.now() })
+    );
+    const roleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "OWNER", permissions: [], isSystemOwnerRole: true })
+    );
+    const [aliceId, bobId, charlieId] = await t.run(async (ctx) =>
+      Promise.all([
+        ctx.db.insert("users", { clerkId: "alice_visibility", email: "alice.visibility@test.com", name: "Alice" }),
+        ctx.db.insert("users", { clerkId: "bob_visibility", email: "bob.visibility@test.com", name: "Bob" }),
+        ctx.db.insert("users", { clerkId: "charlie_visibility", email: "charlie.visibility@test.com", name: "Charlie" }),
+      ])
+    );
+    await t.run(async (ctx) => {
+      await Promise.all([
+        ctx.db.insert("memberships", { orgId, userId: aliceId, roleId }),
+        ctx.db.insert("memberships", { orgId, userId: bobId, roleId }),
+        ctx.db.insert("memberships", { orgId, userId: charlieId, roleId }),
+      ]);
+
+      for (let index = 0; index < 100; index++) {
+        await ctx.db.insert("dmConversations", {
+          orgId,
+          type: "DM",
+          memberIds: [aliceId, charlieId],
+          createdBy: aliceId,
+          lastMessageAt: 10_000 + index,
+          lastMessageBody: `noise-${index}`,
+          lastMessageSenderId: aliceId,
+        });
+      }
+    });
+
+    const targetConversationId = await t.run(async (ctx) => {
+      const conversationId = await ctx.db.insert("dmConversations", {
+        orgId,
+        type: "DM",
+        memberIds: [aliceId, bobId],
+        createdBy: aliceId,
+        // Deliberately older activity than all 100 unrelated conversations.
+        lastMessageAt: 1,
+        lastMessageBody: "target",
+        lastMessageSenderId: aliceId,
+      });
+      await ctx.db.insert("dmParticipantState", {
+        conversationId,
+        userId: bobId,
+        lastReadAt: 0,
+      });
+      return conversationId;
+    });
+
+    const asBob = t.withIdentity({ subject: "bob_visibility", clerkId: "bob_visibility" });
+
+    const conversations = await asBob.query(api.directMessages.listConversations, { orgId });
+    expect(conversations.map((conversation) => conversation._id)).toContain(targetConversationId);
+    expect(await asBob.query(api.directMessages.getUnreadCount, { orgId })).toBe(1);
+  });
+});
+
 describe("directMessages notifications", () => {
   test("sending a message notifies the other member in-app", async () => {
     const { orgId, conversationId, asAlice, asBob } = await setupDm();
