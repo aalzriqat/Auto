@@ -105,6 +105,23 @@ const ANY_EXECUTABLE_EVIDENCE: readonly EvidenceMechanism[] = [
   "PRODUCTION_MONITOR",
 ];
 
+const RUNTIME_SEMANTIC_OBLIGATIONS = new Set<ProofObligation>([
+  "POSITIVE",
+  "NEGATIVE",
+  "BOUNDARY",
+  "REPLAY",
+  "PROPERTY",
+  "STATE_TRANSITION",
+  "CONCURRENCY",
+  "FAULT_INJECTION",
+  "FUZZ",
+  "REVERSAL",
+  "TENANCY",
+  "AUTHORIZATION",
+  "RECONCILIATION",
+  "E2E",
+]);
+
 const STRUCTURAL_CONTROL_MARKERS: Readonly<Record<string, string>> = {
   "scripts/tenantWriteGuard.test.ts": "flags the shape that shipped as a Critical",
   "scripts/economicCommandCensus.test.ts":
@@ -346,6 +363,36 @@ const MANDATORY_OBLIGATION_FLOORS: Readonly<
     "RECONCILIATION",
   ],
   "UI-1": ["POSITIVE", "NEGATIVE", "MUTATION"],
+};
+
+const MANDATORY_REQUIRED_OBLIGATIONS: Readonly<
+  Record<string, readonly ProofObligation[]>
+> = {
+  "TEN-1": ["NEGATIVE", "TENANCY", "MUTATION"],
+  "AUTH-1": ["NEGATIVE", "AUTHORIZATION"],
+  "ECON-1": ["REPLAY", "MUTATION"],
+  "ECON-2": ["REPLAY", "NEGATIVE", "MUTATION"],
+  "ACC-1": ["POSITIVE", "NEGATIVE", "REPLAY"],
+  "ACC-2": ["REVERSAL", "NEGATIVE", "TENANCY", "AUTHORIZATION", "REPLAY"],
+  "ACC-3": ["POSITIVE", "NEGATIVE", "BOUNDARY"],
+  "CONS-1": ["POSITIVE", "NEGATIVE"],
+  "LIFE-1": ["STATE_TRANSITION", "REVERSAL", "NEGATIVE"],
+  "PERF-1": ["BOUNDARY", "NEGATIVE"],
+  "CONC-1": ["REPLAY", "STATE_TRANSITION", "CONCURRENCY"],
+  "UI-1": ["POSITIVE", "NEGATIVE", "MUTATION"],
+};
+
+const MANDATORY_APPLICABLE_OBLIGATIONS: Readonly<
+  Record<string, readonly ProofObligation[]>
+> = {
+  "TEN-1": ["BOUNDARY"],
+  "AUTH-1": ["MUTATION"],
+  "ACC-1": ["PROPERTY", "CONCURRENCY", "RECONCILIATION"],
+  "ACC-2": ["CONCURRENCY", "RECONCILIATION"],
+  "CONS-1": ["REVERSAL", "RECONCILIATION"],
+  "LIFE-1": ["REPLAY", "CONCURRENCY", "FAULT_INJECTION", "RECONCILIATION"],
+  "PERF-1": ["MUTATION"],
+  "CONC-1": ["FAULT_INJECTION", "RECONCILIATION"],
 };
 
 export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
@@ -1159,6 +1206,28 @@ export function validateInvariantCatalog(
       }
     }
 
+    for (const obligation of MANDATORY_REQUIRED_OBLIGATIONS[invariant.id] ?? []) {
+      if (requirements.get(obligation)?.status !== "REQUIRED") {
+        errors.push(
+          invariant.id +
+            " mandatory obligation " +
+            obligation +
+            " must remain REQUIRED"
+        );
+      }
+    }
+
+    for (const obligation of MANDATORY_APPLICABLE_OBLIGATIONS[invariant.id] ?? []) {
+      if (requirements.get(obligation)?.status === "NOT_APPLICABLE") {
+        errors.push(
+          invariant.id +
+            " mandatory obligation " +
+            obligation +
+            " cannot be NOT_APPLICABLE"
+        );
+      }
+    }
+
     for (const requirement of invariant.requirements) {
       if (requirement.status === "NOT_APPLICABLE" && (requirement.reason?.trim().length ?? 0) < 20) {
         errors.push(
@@ -1183,19 +1252,35 @@ export function validateInvariantCatalog(
         }
       }
       if (requirement.status === "REQUIRED") {
+        const satisfyingProofs = invariant.proofs.filter(
+          (proof) =>
+            proof.invariantId === invariant.id &&
+            proofCanSatisfy(requirement, proof)
+        );
+
         if (!requirement.acceptedEvidence || requirement.acceptedEvidence.length === 0) {
           errors.push(
             invariant.id + " required proof " + requirement.obligation + " has no accepted evidence mechanism"
           );
-        } else if (
-          !invariant.proofs.some(
+        } else if (satisfyingProofs.length === 0) {
+          errors.push(
+            invariant.id + " is missing required proof obligation " + requirement.obligation
+          );
+        }
+
+        if (
+          RUNTIME_SEMANTIC_OBLIGATIONS.has(requirement.obligation) &&
+          !satisfyingProofs.some(
             (proof) =>
-              proof.invariantId === invariant.id &&
-              proofCanSatisfy(requirement, proof)
+              proof.mechanism === "EXECUTION" ||
+              proof.mechanism === "PREVIEW"
           )
         ) {
           errors.push(
-            invariant.id + " is missing required proof obligation " + requirement.obligation
+            invariant.id +
+              " runtime semantic obligation " +
+              requirement.obligation +
+              " lacks EXECUTION/PREVIEW evidence"
           );
         }
       }
