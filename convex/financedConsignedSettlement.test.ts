@@ -139,7 +139,7 @@ async function seedDealership(tag: string, opts: { sourceType?: "STOCK" | "SOURC
   const companyId = await t.run((ctx) =>
     ctx.db.insert("financeCompanies", {
       orgId, name: "Jordan Auto Finance", profitRate: 5, maxTermMonths: 60,
-      gracePeriodMonths: 0, isActive: true, adminFees: 0,
+      gracePeriodMonths: 0, isActive: true, adminFees: 0, defaultLtvPercent: 100,
     })
   );
 
@@ -282,18 +282,6 @@ async function runDeal(
       amount: opts.deposit,
     });
   }
-
-  // The quotation solver refuses a company with no LTV, and the application
-  // freezes the company's rules at creation — so this has to be set before the
-  // application exists, not before the quotation. At 100% the company funds the
-  // whole approval and the dealership contributes nothing, which keeps these
-  // tests about the supplier rather than about the funding split.
-  await s.t.run(async (ctx) => {
-    const company = await ctx.db.get(s.companyId);
-    if (company && company.defaultLtvPercent === undefined) {
-      await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
-    }
-  });
 
   const applicationId = await s.asUser.mutation(api.applications.createFromQuote, {
     orgId: s.orgId,

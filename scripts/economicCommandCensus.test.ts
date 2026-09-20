@@ -273,8 +273,9 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     expect(retired.filter((c) => forward.has(c))).toEqual([]);
     // 116 → 117: `applications.repairQuoteEconomicsLineage` (TASK-DEAL-01).
     // 117 → 119: `financeDealCosts.planCustodyHandler` and `financeDealCosts.setFeeCustody` (AF-80).
-    // 119 → 120: `financeDealCosts.migrateLegacyCustodyToLedger` (AF-80 final round B).
-    expect(population.length).toBe(120);
+    // Fee-template adoption is classified RETIRED and therefore excluded from
+    // the live population by construction; the live census currently remains 119.
+    expect(population.length).toBe(119);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {

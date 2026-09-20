@@ -1863,6 +1863,7 @@ describe("LTV configuration", () => {
         maxTermMonths: 48,
         gracePeriodMonths: 0,
         maxFinancingLTV: 100,
+        adminFees: 0,
         isActive: true,
       })
     );
@@ -1872,6 +1873,7 @@ describe("LTV configuration", () => {
       vehicleId: seed.vehicleId,
       mode: "CONFIGURED_FINANCE_COMPANY",
       companyId: bareCompanyId,
+      customerEligibilityStatusIds: [seed.customerStatusId],
       vehiclePrice: DEAL.targetSelling,
       downPayment: DEAL.customerFirstPayment,
       termMonths: 48,

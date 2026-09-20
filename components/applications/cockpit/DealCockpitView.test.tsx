@@ -292,7 +292,7 @@ describe("the headline figure", () => {
     );
 
     expect(screen.queryByText("LossEstimated")).toBeNull();
-    expect(screen.getAllByText("LossActual").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText("LossActual")).toHaveLength(1);
     expect(screen.getByText("ProfitActualUnpostable")).toBeTruthy();
   });
 });
