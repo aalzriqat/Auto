@@ -434,7 +434,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
     statement:
       "Manual journals must post using the declared accounting date, and ordinary posting into a closed accounting period must be rejected.",
     sourceAreas: ["convex/financialAudit.ts", "convex/accountingPeriods.ts", "components/accounting/**"],
-    profile: profile({ economicImpact: "INDIRECT", authorizationSensitive: true }),
+    profile: profile({ economicImpact: "INDIRECT" }),
     requirements: [
       required("POSITIVE"),
       required("NEGATIVE"),
