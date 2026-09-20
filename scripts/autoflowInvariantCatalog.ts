@@ -167,7 +167,7 @@ function structuralControlRequiredIdentifiersFor(
   return STRUCTURAL_CONTROL_REQUIRED_IDENTIFIERS[pathName];
 }
 
-const PROOF_MARKERS: Readonly<Record<string, string>> = {
+export const AUTOFLOW_PROOF_MARKERS: Readonly<Record<string, string>> = {
   "scripts/tenantWriteGuard.test.ts::MUTATION":
     "every mutation that takes an orgId proves ownership before writing a caller-supplied id",
   "convex/saleCompletionTenancyGuards.test.ts::NEGATIVE,TENANCY":
@@ -230,11 +230,18 @@ const PROOF_MARKERS: Readonly<Record<string, string>> = {
     "cancelling sends the reason and ONE retained idempotency key",
 };
 
+function proofMarkerKey(
+  pathName: string,
+  obligations: readonly ProofObligation[]
+): string {
+  return pathName + "::" + obligations.join(",");
+}
+
 function markerFor(
   pathName: string,
   obligations: readonly ProofObligation[]
 ): string | undefined {
-  return PROOF_MARKERS[pathName + "::" + obligations.join(",")];
+  return AUTOFLOW_PROOF_MARKERS[proofMarkerKey(pathName, obligations)];
 }
 
 const WORKFLOW_EVIDENCE_REQUIRED_ACTIVE_LINES: Readonly<
@@ -1226,12 +1233,14 @@ function proofCanSatisfy(requirement: ProofRequirement, proof: InvariantProof): 
 
 export function validateInvariantCatalog(
   repoRoot: string,
-  catalog: readonly InvariantDefinition[] = AUTOFLOW_INVARIANTS
+  catalog: readonly InvariantDefinition[] = AUTOFLOW_INVARIANTS,
+  proofMarkers: Readonly<Record<string, string>> = AUTOFLOW_PROOF_MARKERS
 ): string[] {
   const errors: string[] = [];
   const seen = new Set<string>();
   const catalogIds = new Set(catalog.map((invariant) => invariant.id));
   const active = catalog.filter(isActiveInvariant);
+  const activeProofMarkerKeys = new Set<string>();
 
   if (active.length === 0) {
     errors.push("Invariant catalog has no active invariants");
@@ -1527,6 +1536,19 @@ export function validateInvariantCatalog(
     }
 
     for (const proof of invariant.proofs) {
+      const markerKey = proofMarkerKey(proof.path, proof.obligations);
+      activeProofMarkerKeys.add(markerKey);
+      const registeredMarker = proofMarkers[markerKey];
+      if (!registeredMarker) {
+        errors.push(
+          invariant.id + " proof has no registered marker binding: " + markerKey
+        );
+      } else if (proof.marker !== registeredMarker) {
+        errors.push(
+          invariant.id + " proof marker does not match registered binding: " + markerKey
+        );
+      }
+
       if (!catalogIds.has(proof.invariantId)) {
         errors.push(
           invariant.id + " proof references unknown invariant ID " + proof.invariantId
@@ -1655,6 +1677,14 @@ export function validateInvariantCatalog(
           );
         }
       }
+    }
+  }
+
+  for (const markerKey of Object.keys(proofMarkers)) {
+    if (!activeProofMarkerKeys.has(markerKey)) {
+      errors.push(
+        "Orphan proof marker binding has no active catalog proof: " + markerKey
+      );
     }
   }
 
