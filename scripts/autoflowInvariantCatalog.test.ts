@@ -475,10 +475,10 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
     );
   });
 
-  test("NEGATIVE CONTROL: direct economic invariants must explicitly assess core economic risks", () => {
+  test("NEGATIVE CONTROL: every economic invariant must explicitly assess core economic risks", () => {
     const broken = copyCatalog();
     const index = broken.findIndex(
-      (invariant) => invariant.profile.economicImpact === "DIRECT"
+      (invariant) => invariant.profile.economicImpact === "INDIRECT"
     );
     broken[index].requirements = broken[index].requirements.filter(
       (requirement) => requirement.obligation !== "CONCURRENCY"
@@ -486,7 +486,7 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
 
     expect(validateInvariantCatalog(ROOT, broken)).toContain(
       broken[index].id +
-        " has DIRECT economic impact without explicit CONCURRENCY assessment"
+        " has economic impact without explicit CONCURRENCY assessment"
     );
   });
 
