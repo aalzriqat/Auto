@@ -143,6 +143,71 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
     );
   });
 
+  test("NEGATIVE CONTROL: a mandatory REQUIRED obligation cannot be downgraded to N/A", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex((invariant) => invariant.id === "ACC-3");
+    broken[index].requirements = broken[index].requirements.map((requirement) =>
+      requirement.obligation === "BOUNDARY"
+        ? {
+            obligation: "BOUNDARY",
+            status: "NOT_APPLICABLE",
+            reason:
+              "Synthetic downgrade used to prove the mandatory REQUIRED status floor.",
+          }
+        : requirement
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      "ACC-3 mandatory obligation BOUNDARY must remain REQUIRED"
+    );
+  });
+
+  test("NEGATIVE CONTROL: a mandatory applicable gap cannot be dismissed as N/A", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex((invariant) => invariant.id === "TEN-1");
+    broken[index].requirements = broken[index].requirements.map((requirement) =>
+      requirement.obligation === "BOUNDARY"
+        ? {
+            obligation: "BOUNDARY",
+            status: "NOT_APPLICABLE",
+            reason:
+              "Synthetic downgrade used to prove an acknowledged gap cannot silently disappear.",
+          }
+        : requirement
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      "TEN-1 mandatory obligation BOUNDARY cannot be NOT_APPLICABLE"
+    );
+  });
+
+  test("NEGATIVE CONTROL: structural evidence alone cannot satisfy runtime semantics", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex((invariant) => invariant.id === "UI-1");
+    broken[index].requirements = broken[index].requirements.map((requirement) =>
+      requirement.obligation === "NEGATIVE"
+        ? {
+            ...requirement,
+            acceptedEvidence: ["STRUCTURAL"],
+          }
+        : requirement
+    );
+    broken[index].proofs = broken[index].proofs.map((proof) =>
+      proof.mechanism === "EXECUTION"
+        ? {
+            ...proof,
+            obligations: proof.obligations.filter(
+              (obligation) => obligation !== "NEGATIVE"
+            ),
+          }
+        : proof
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      "UI-1 runtime semantic obligation NEGATIVE lacks EXECUTION/PREVIEW evidence"
+    );
+  });
+
   test("NEGATIVE CONTROL: deleting a required ID fails the independent ratchet", () => {
     const reduced = AUTOFLOW_INVARIANTS.filter((invariant) => invariant.id !== "TEN-1");
     const actual = reduced.map((invariant) => invariant.id).sort();
