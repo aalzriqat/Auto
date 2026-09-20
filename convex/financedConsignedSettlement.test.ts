@@ -290,6 +290,7 @@ async function runDeal(
   if (opts.omitMode) {
     await s.t.run(async (ctx) => {
       await ctx.db.patch(quoteId, { mode: undefined });
+      await ctx.db.patch(applicationId, { quoteModeAtSubmission: undefined });
     });
   }
   await s.asUser.mutation(api.applications.updateStatus, {
