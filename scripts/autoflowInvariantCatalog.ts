@@ -819,8 +819,7 @@ export function validateInvariantCatalog(
     }
     if (
       invariant.profile.authorizationSensitive &&
-      requirements.get("AUTHORIZATION")?.status !== "REQUIRED" &&
-      invariant.id !== "ACC-3"
+      requirements.get("AUTHORIZATION")?.status !== "REQUIRED"
     ) {
       errors.push(invariant.id + " is authorization-sensitive without required AUTHORIZATION proof");
     }
