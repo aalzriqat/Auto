@@ -76,7 +76,6 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           financeCompanyFundedPortionMinor: jod(10_000),
           dealerContributionMinor: plannedContributionMinor,
           approvedDealerPurchaseAmountMinor: jod(12_000),
-          estimatedDealerBorneExpensesMinor: estimatedDealerBorneMinor,
         },
         parties: [],
         routeKnown: true,
@@ -88,7 +87,8 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           awaitingActuals: 0,
         },
         expectedDealerBorne: expectedFees,
-        canonicalProfit: null,
+        profit: { available: false, reason: "NoApprovedPurchaseAmount" },
+        vehicleConsigned: false,
       });
 
       expect(summary.dealerOutlay.plannedContributionMinor).toBe(1_950_000);
@@ -262,6 +262,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
       });
 
       expect(composed.readable).toBe(true);
+      if (!composed.readable) throw new Error("customer gap composition must be readable");
       expect(composed.amountMinor).toBe(jod(600));
 
       const summary = deriveDealFinancialSummary({
@@ -289,7 +290,8 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           awaitingActuals: 0,
         },
         expectedDealerBorne: { totalMinor: null, remainingMinor: null, reason: "NO_POLICY" },
-        canonicalProfit: null,
+        profit: { available: false, reason: "NoApprovedPurchaseAmount" },
+        vehicleConsigned: false,
       });
 
       // Held deposit = 500
@@ -323,7 +325,8 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           awaitingActuals: 0,
         },
         expectedDealerBorne: { totalMinor: null, remainingMinor: null, reason: "NO_POLICY" },
-        canonicalProfit: null,
+        profit: { available: false, reason: "NoApprovedPurchaseAmount" },
+        vehicleConsigned: false,
       });
 
       expect(summary.financier.outstanding.state).toBe("ESTIMATED_PRE_RECEIVABLE");
@@ -353,15 +356,10 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
 
   describe("Requirement J: Historical quote preservation", () => {
     test("quotes with manualAdminFees continue to resolve expected fee figures correctly", () => {
-      const quote = {
-        manualAdminFees: 650,
-      };
-      const quoteCompany = undefined;
-
-      const resolvedFees = quoteCompany?.adminFees ?? quote.manualAdminFees;
-      expect(resolvedFees).toBe(650);
-
-      const feeMinor = Math.round(resolvedFees * 1000);
+      const feeMinor = resolveExpectedExecutionFeesMinor({
+        quote: { mode: "MANUAL_FINANCE_COMPANY", manualAdminFees: 650 },
+        currency: "JOD",
+      });
       expect(feeMinor).toBe(650_000);
 
       const expectedFees = dealerBorneExpected("NO_TEMPLATES", [], "JOD", false, feeMinor, 150_000);
@@ -1086,10 +1084,8 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
             quote: { mode: "CONFIGURED_FINANCE_COMPANY", companyId: dummyCompanyId },
             companyRuleSnapshot: {
               ruleVersion: 1,
+              companyName: "Test Finance",
               defaultLtvPercent: 80,
-              profitRate: 5,
-              maxTermMonths: 60,
-              gracePeriodMonths: 0,
               adminFees: undefined,
             },
             currency: "JOD",
@@ -1103,10 +1099,8 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           quote: { mode: "CONFIGURED_FINANCE_COMPANY", companyId: dummyCompanyId },
           companyRuleSnapshot: {
             ruleVersion: 1,
+            companyName: "Test Finance",
             defaultLtvPercent: 80,
-            profitRate: 5,
-            maxTermMonths: 60,
-            gracePeriodMonths: 0,
             adminFees: 0,
           },
           currency: "JOD",
@@ -1120,10 +1114,8 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           quote: { mode: "CONFIGURED_FINANCE_COMPANY", companyId: dummyCompanyId },
           companyRuleSnapshot: {
             ruleVersion: 1,
+            companyName: "Test Finance",
             defaultLtvPercent: 80,
-            profitRate: 5,
-            maxTermMonths: 60,
-            gracePeriodMonths: 0,
             adminFees: 700,
           },
           currency: "JOD",
@@ -1176,10 +1168,8 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
             quote: { mode: "CONFIGURED_FINANCE_COMPANY", companyId: dummyCompanyId },
             companyRuleSnapshot: {
               ruleVersion: 1,
+              companyName: "Test Finance",
               defaultLtvPercent: 80,
-              profitRate: 5,
-              maxTermMonths: 60,
-              gracePeriodMonths: 0,
               adminFees: undefined,
               feeTemplates: undefined,
             },
