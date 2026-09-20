@@ -42,6 +42,7 @@ export function FinanceCompanyDialog({
     defaultLtvPercent?: number;
     isActive: boolean;
     acceptedStatuses?: string[];
+    editRevision?: number;
   };
 }) {
   const { activeOrgId } = useOrg();
@@ -179,6 +180,7 @@ export function FinanceCompanyDialog({
         await updateCompany({
           id: company._id,
           orgId: activeOrgId,
+          expectedEditRevision: company.editRevision ?? 1,
           ...payload,
         });
         toast.success(t("CompanyUpdatedSuccess" as any));
