@@ -203,7 +203,8 @@ const EVIDENCE_MARKERS: Readonly<Record<string, string>> = {
     "the rehearsal FAILS when the backend misbehaves — one defect per case",
   "convex/accountingPhase18.test.ts":
     "Phase 18 — snapshot correctness across a period boundary",
-  ".github/workflows/accounting-rehearsal.yml": "name: Accounting Cloud Rehearsal",
+  ".github/workflows/accounting-rehearsal.yml":
+    "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
   "scripts/reviewActionParity.test.ts":
     "NEGATIVE CONTROL — removing a required Deal caller fails the ratchet",
   "components/applications/cockpit/DealCockpitReviewParity.test.tsx":
@@ -212,6 +213,26 @@ const EVIDENCE_MARKERS: Readonly<Record<string, string>> = {
 
 function markerFor(pathName: string): string | undefined {
   return EVIDENCE_MARKERS[pathName];
+}
+
+const WORKFLOW_EVIDENCE_REQUIRED_ACTIVE_LINES: Readonly<
+  Record<string, readonly string[]>
+> = {
+  ".github/workflows/accounting-rehearsal.yml": [
+    "name: Accounting Cloud Rehearsal",
+    "on:",
+    "jobs:",
+    "rehearsal:",
+    "runs-on: ubuntu-latest",
+    "- name: Run the Accounting rehearsal",
+    "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
+  ],
+};
+
+function workflowEvidenceRequiredLinesFor(
+  pathName: string
+): readonly string[] | undefined {
+  return WORKFLOW_EVIDENCE_REQUIRED_ACTIVE_LINES[pathName];
 }
 
 const required = (
@@ -1072,6 +1093,25 @@ export function sourceHasActiveTestMarker(
   return matches.length === 1;
 }
 
+export function sourceHasActiveWorkflowMarker(
+  source: string,
+  marker: string,
+  requiredActiveLines: readonly string[] = []
+): boolean {
+  const activeLines = source
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"));
+
+  if (activeLines.filter((line) => line === marker).length !== 1) {
+    return false;
+  }
+
+  return requiredActiveLines.every((requiredLine) =>
+    activeLines.includes(requiredLine)
+  );
+}
+
 export function structuralProofHasExecutableNegativeControl(
   source: string,
   marker: string,
@@ -1462,16 +1502,47 @@ export function validateInvariantCatalog(
 
       if (proof.marker) {
         const isTestSource = /\.test\.tsx?$/.test(proof.path);
+        const isWorkflowSource = /^\.github\/workflows\/.*\.ya?ml$/.test(
+          proof.path
+        );
         const scriptKind = proof.path.endsWith(".tsx")
           ? ts.ScriptKind.TSX
           : ts.ScriptKind.TS;
+        const workflowRequiredLines = isWorkflowSource
+          ? workflowEvidenceRequiredLinesFor(proof.path)
+          : undefined;
+
+        if (
+          isWorkflowSource &&
+          (!workflowRequiredLines || workflowRequiredLines.length === 0)
+        ) {
+          errors.push(
+            invariant.id +
+              " workflow proof has no pinned active-line contract: " +
+              proof.path
+          );
+        }
+
         const markerExists = isTestSource
-          ? Boolean(source && sourceHasActiveTestMarker(source, proof.marker, scriptKind))
-          : Boolean(source?.includes(proof.marker));
+          ? Boolean(
+              source &&
+                sourceHasActiveTestMarker(source, proof.marker, scriptKind)
+            )
+          : isWorkflowSource
+            ? Boolean(
+                source &&
+                  workflowRequiredLines &&
+                  sourceHasActiveWorkflowMarker(
+                    source,
+                    proof.marker,
+                    workflowRequiredLines
+                  )
+              )
+            : Boolean(source?.includes(proof.marker));
         if (!markerExists) {
           errors.push(
             invariant.id +
-              " proof marker is missing or not an active executable test marker in " +
+              " proof marker is missing or inactive in " +
               proof.path +
               ": " +
               proof.marker
