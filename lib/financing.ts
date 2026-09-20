@@ -14,6 +14,7 @@ export {
   calculateDBR,
   isRequestedFinancingTermValid,
   minimumDownPaymentForFinancingLimit,
+  matchingCustomerEligibilityStatusIds,
 } from "@autoflow/shared/financing";
 export type {
   UnifiedMurabahaInput,
