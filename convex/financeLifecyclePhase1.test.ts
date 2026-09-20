@@ -153,11 +153,20 @@ describe("Finance lifecycle phase 1 quote mode", () => {
       vehiclePrice: 31000,
       downPayment: 31000,
       termMonths: 0,
+      // Deliberately hostile client outputs: CASH economics are server-owned.
+      totalFinancedAmount: 1,
+      monthlyInstallment: 999,
+      profitRateApplied: 7,
+      totalProfit: 123,
     });
 
     const quote = await asUser.query(api.quotes.get, { orgId, quoteId });
     expect(quote.mode).toBe("CASH");
     expect(quote.companyId).toBeUndefined();
+    expect(quote.totalFinancedAmount).toBe(31_000);
+    expect(quote.monthlyInstallment).toBe(0);
+    expect(quote.profitRateApplied).toBe(0);
+    expect(quote.totalProfit).toBe(0);
   });
 
   test("createQuote with mode=CONFIGURED_FINANCE_COMPANY requires companyId", async () => {
