@@ -139,6 +139,17 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
     );
   });
 
+  test("NEGATIVE CONTROL: proof without a stable marker is refused", () => {
+    const broken = copyCatalog();
+    broken[0].proofs = broken[0].proofs.map((proof, index) =>
+      index === 0 ? { ...proof, marker: undefined } : proof
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[0].id + " proof has no stable marker: " + broken[0].proofs[0].path
+    );
+  });
+
   test("NEGATIVE CONTROL: a stale proof marker is refused", () => {
     const broken = copyCatalog();
     broken[0].proofs = broken[0].proofs.map((proof, index) =>
