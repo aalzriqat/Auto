@@ -167,52 +167,74 @@ function structuralControlRequiredIdentifiersFor(
   return STRUCTURAL_CONTROL_REQUIRED_IDENTIFIERS[pathName];
 }
 
-const EVIDENCE_MARKERS: Readonly<Record<string, string>> = {
-  "scripts/tenantWriteGuard.test.ts": "flags the shape that shipped as a Critical",
-  "convex/saleCompletionTenancyGuards.test.ts":
+const PROOF_MARKERS: Readonly<Record<string, string>> = {
+  "scripts/tenantWriteGuard.test.ts::MUTATION":
+    "every mutation that takes an orgId proves ownership before writing a caller-supplied id",
+  "convex/saleCompletionTenancyGuards.test.ts::NEGATIVE,TENANCY":
     "a vehicle owned by another dealership is refused",
-  "convex/commitmentFinalization.test.ts":
+  "convex/commitmentFinalization.test.ts::NEGATIVE,AUTHORIZATION":
     "G.6f D7 applications.cancelApplication runs and creates no sale",
-  "convex/sales.test.ts":
+  "convex/sales.test.ts::NEGATIVE,AUTHORIZATION":
     "cancelling a completed sale removes its revenue from the profit and loss report",
-  "scripts/economicCommandCensus.test.ts":
-    "the population is derived identically in both directions",
-  "convex/idempotencyEconomicCommands.test.ts":
-    "a concurrent retry of the same intent still creates exactly one economic event",
-  "scripts/clientIdentityLifetime.test.ts": "the identity-guarded set is read, not hardcoded",
-  "hooks/useCommandIdentity.test.tsx":
-    "the same intent yields the SAME identity across retries",
-  "convex/accounting/ownedSaleTaxPosting.test.ts":
-    "the entry balances — which the broken version also did",
-  "convex/accounting/consignedSalePosting.test.ts":
+  "scripts/economicCommandCensus.test.ts::MUTATION":
+    "the population is exactly the classified set",
+  "convex/idempotencyEconomicCommands.test.ts::REPLAY":
+    "a sequential retry of the SAME intent creates exactly one economic event",
+  "scripts/clientIdentityLifetime.test.ts::NEGATIVE,MUTATION":
+    "no client caller mints its identity per ATTEMPT",
+  "hooks/useCommandIdentity.test.tsx::REPLAY,NEGATIVE":
+    "a FAILED attempt keeps its identity, so the retry is the same command",
+  "convex/accounting/ownedSaleTaxPosting.test.ts::POSITIVE,NEGATIVE":
+    "recognizes the whole price as revenue instead of carving the tax out of it",
+  "convex/accounting/consignedSalePosting.test.ts::POSITIVE,NEGATIVE":
     "recognizes the margin as commission and no vehicle revenue at all",
-  "convex/dealCustodyAccounting.test.ts": "issuing cash: Dr custody clearing / Cr cash on hand (CASH) or bank (BANK_TRANSFER)",
-  "convex/accountingPhase2.test.ts": "DEPOSIT_RECEIVED creates balanced journal entry",
-  "convex/accountingGenericReversalAuthority.test.ts":
-    "GR2 — the exact derived reserved reversal key is refused for the same reason",
-  "convex/manualJournalAccountingDate.test.ts":
-    "the journal entry carries the declared date, not the approval timestamp",
-  "convex/consignedOwnership.test.ts": "a sourced vehicle is the supplier's and the dealership is its agent",
-  "convex/consignmentEconomics.test.ts":
+  "convex/dealCustodyAccounting.test.ts::POSITIVE,NEGATIVE":
+    "issuing cash: Dr custody clearing / Cr cash on hand (CASH) or bank (BANK_TRANSFER)",
+  "convex/accountingPhase2.test.ts::NEGATIVE,REPLAY":
+    "duplicate idempotency key returns existing result without double-posting",
+  "convex/accountingGenericReversalAuthority.test.ts::REVERSAL,NEGATIVE,TENANCY,AUTHORIZATION":
+    "GR6 — foreign receipt, foreign non-receipt and missing id are one indistinguishable answer",
+  "convex/dealCustodyAccounting.test.ts::REVERSAL,NEGATIVE":
+    "reversing an ISSUED entry",
+  "convex/accountingPhase2.test.ts::REVERSAL,REPLAY":
+    "reversing an already-reversed event is idempotent on second call",
+  "convex/manualJournalAccountingDate.test.ts::POSITIVE,BOUNDARY":
+    "the exact maximum JavaScript date is still accepted — the guard is a boundary, not a mood",
+  "convex/accountingPhase2.test.ts::NEGATIVE,BOUNDARY":
+    "posting into closed period is rejected",
+  "convex/consignedOwnership.test.ts::POSITIVE,NEGATIVE":
+    "a sourced vehicle is the supplier's and the dealership is its agent",
+  "convex/consignmentEconomics.test.ts::POSITIVE,NEGATIVE":
     "the whole ticket is not published as profit",
-  "convex/cashDealCockpit.test.ts":
-    "an owned cash sale reports price less cost, reconciling to the ledger, with no estimate qualifier",
-  "convex/chequeReturnLifecycle.test.ts":
+  "convex/cashDealCockpit.test.ts::STATE_TRANSITION,REVERSAL,NEGATIVE":
+    "a cancelled sale reports no profit rather than the figure its reversed journal once had",
+  "convex/chequeReturnLifecycle.test.ts::STATE_TRANSITION,REVERSAL,NEGATIVE":
     "A1 — the canonical pending obligation is cancelled even though a posted sibling was reversed",
-  "scripts/accountingRehearsalCases.test.ts":
-    "C2 catches two distinct keys paying one free balance twice",
-  "convex/accountingPhase18.test.ts":
+  "convex/dealCustodyAccounting.test.ts::STATE_TRANSITION,REVERSAL,NEGATIVE":
+    "a write-off: Dr cash over/short / Cr clearing for exactly the unaccounted residual; reopening reverses it",
+  "scripts/accountingRehearsalCases.test.ts::NEGATIVE,BOUNDARY":
+    "P1 reports UNPROVEN rather than PASS when it cannot close the period",
+  "convex/accountingPhase18.test.ts::BOUNDARY":
     "snapshots accumulate per (account, currency, period) and reports sum them correctly",
-  ".github/workflows/accounting-rehearsal.yml":
+  ".github/workflows/accounting-rehearsal.yml::BOUNDARY":
     "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
-  "scripts/reviewActionParity.test.ts":
-    "NEGATIVE CONTROL — removing a required Deal caller fails the ratchet",
-  "components/applications/cockpit/DealCockpitReviewParity.test.tsx":
+  "convex/idempotencyEconomicCommands.test.ts::REPLAY,STATE_TRANSITION":
+    "a concurrent retry of the same intent still creates exactly one economic event",
+  "scripts/accountingRehearsalCases.test.ts::STATE_TRANSITION":
+    "C1/C2 do not PASS when the two workers ran one after the other (RG-01)",
+  ".github/workflows/accounting-rehearsal.yml::CONCURRENCY,REPLAY":
+    "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
+  "scripts/reviewActionParity.test.ts::NEGATIVE,MUTATION":
+    "the Deal wires every command on the frozen list",
+  "components/applications/cockpit/DealCockpitReviewParity.test.tsx::POSITIVE,NEGATIVE":
     "cancelling sends the reason and ONE retained idempotency key",
 };
 
-function markerFor(pathName: string): string | undefined {
-  return EVIDENCE_MARKERS[pathName];
+function markerFor(
+  pathName: string,
+  obligations: readonly ProofObligation[]
+): string | undefined {
+  return PROOF_MARKERS[pathName + "::" + obligations.join(",")];
 }
 
 const WORKFLOW_EVIDENCE_REQUIRED_ACTIVE_LINES: Readonly<
@@ -264,7 +286,7 @@ const execution = (
   mechanism: "EXECUTION",
   obligations,
   note,
-  marker: markerFor(pathName),
+  marker: markerFor(pathName, obligations),
 });
 
 const structural = (
@@ -276,7 +298,7 @@ const structural = (
   mechanism: "STRUCTURAL",
   obligations,
   note,
-  marker: markerFor(pathName),
+  marker: markerFor(pathName, obligations),
   negativeControlMarker: structuralControlMarkerFor(pathName),
 });
 
@@ -289,7 +311,7 @@ const preview = (
   mechanism: "PREVIEW",
   obligations,
   note,
-  marker: markerFor(pathName),
+  marker: markerFor(pathName, obligations),
 });
 
 const proofSet = (
