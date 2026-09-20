@@ -6,13 +6,18 @@ import type { Doc } from "../_generated/dataModel";
 type TemplateMap = Record<string, string>;
 
 type SmartReplyVehicle = Readonly<
-  Pick<Doc<"vehicles">, "model" | "year" | "sellingPrice" | "status"> &
-    Partial<
-      Pick<
-        Doc<"vehicles">,
-        "isDeleted" | "trim" | "mileage" | "color" | "fuelType" | "transmission"
-      >
-    >
+  Pick<
+    Doc<"vehicles">,
+    | "model"
+    | "year"
+    | "sellingPrice"
+    | "status"
+    | "mileage"
+    | "color"
+    | "fuelType"
+    | "transmission"
+  > &
+    Partial<Pick<Doc<"vehicles">, "isDeleted" | "trim">>
 >;
 
 type SmartReplyOrgSettings = Readonly<
