@@ -13,6 +13,14 @@ import {
 
 const ROOT = path.resolve(__dirname, "..");
 
+const REHEARSAL_WORKFLOW_CONTRACT = {
+  workflowName: "Accounting Cloud Rehearsal",
+  trigger: "pull_request",
+  jobId: "rehearsal",
+  runsOn: "ubuntu-latest",
+  stepName: "Run the Accounting rehearsal",
+} as const;
+
 const REQUIRED_INVARIANT_IDS = [
   "ACC-1",
   "ACC-2",
@@ -221,11 +229,11 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
   test("NEGATIVE CONTROL: orphan proof-marker bindings are refused", () => {
     const markers = {
       ...AUTOFLOW_PROOF_MARKERS,
-      "synthetic/orphan.test.ts::NEGATIVE": "orphan marker",
+      "SYN-1::synthetic/orphan.test.ts::NEGATIVE": "orphan marker",
     };
 
     expect(validateInvariantCatalog(ROOT, AUTOFLOW_INVARIANTS, markers)).toContain(
-      "Orphan proof marker binding has no active catalog proof: synthetic/orphan.test.ts::NEGATIVE"
+      "Orphan proof marker binding has no active catalog proof: SYN-1::synthetic/orphan.test.ts::NEGATIVE"
     );
   });
 
@@ -238,9 +246,73 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
     expect(validateInvariantCatalog(ROOT, broken)).toContain(
       broken[0].id +
         " proof marker does not match registered binding: " +
+        broken[0].proofs[0].invariantId +
+        "::" +
         broken[0].proofs[0].path +
         "::" +
         broken[0].proofs[0].obligations.join(",")
+    );
+  });
+
+  test("NEGATIVE CONTROL: unsupported proof source types fail closed instead of substring-matching", () => {
+    const broken = copyCatalog();
+    const original = broken[0].proofs[0];
+    const replacementKey =
+      original.invariantId + "::scripts/autoflowInvariantCatalog.ts::" +
+      original.obligations.join(",");
+    const originalKey =
+      original.invariantId + "::" + original.path + "::" +
+      original.obligations.join(",");
+    const markers = { ...AUTOFLOW_PROOF_MARKERS };
+    delete markers[originalKey];
+    markers[replacementKey] = "export type InvariantSeverity";
+
+    broken[0].proofs = broken[0].proofs.map((proof, index) =>
+      index === 0
+        ? {
+            ...proof,
+            path: "scripts/autoflowInvariantCatalog.ts",
+            marker: "export type InvariantSeverity",
+          }
+        : proof
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken, markers)).toContain(
+      broken[0].id +
+        " proof marker is missing or inactive in scripts/autoflowInvariantCatalog.ts: export type InvariantSeverity"
+    );
+  });
+
+  test("NEGATIVE CONTROL: structural path registries cannot retain orphan bindings", () => {
+    const broken = copyCatalog().map((invariant) => ({
+      ...invariant,
+      proofs: invariant.proofs.filter(
+        (proof) => proof.path !== "scripts/tenantWriteGuard.test.ts"
+      ),
+    }));
+    const errors = validateInvariantCatalog(ROOT, broken);
+
+    expect(errors).toContain(
+      "Orphan STRUCTURAL_CONTROL_MARKERS binding has no active catalog proof path: scripts/tenantWriteGuard.test.ts"
+    );
+    expect(errors).toContain(
+      "Orphan STRUCTURAL_CONTROL_REQUIRED_IDENTIFIERS binding has no active catalog proof path: scripts/tenantWriteGuard.test.ts"
+    );
+    expect(errors).toContain(
+      "Orphan STRUCTURAL_CONTROL_REQUIRED_CALLS binding has no active catalog proof path: scripts/tenantWriteGuard.test.ts"
+    );
+  });
+
+  test("NEGATIVE CONTROL: workflow contracts cannot retain orphan bindings", () => {
+    const broken = copyCatalog().map((invariant) => ({
+      ...invariant,
+      proofs: invariant.proofs.filter(
+        (proof) => proof.path !== ".github/workflows/accounting-rehearsal.yml"
+      ),
+    }));
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      "Orphan WORKFLOW_EVIDENCE_CONTRACTS binding has no active catalog proof path: .github/workflows/accounting-rehearsal.yml"
     );
   });
 
@@ -292,31 +364,54 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
 
   test("NEGATIVE CONTROL: a commented workflow marker is not preview evidence", () => {
     const source = `
-      # node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
       name: Accounting Cloud Rehearsal
       on:
+        pull_request:
       jobs:
         rehearsal:
           runs-on: ubuntu-latest
+          steps:
+            - name: Run the Accounting rehearsal
+              run: |
+                # node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
     `;
     expect(
       sourceHasActiveWorkflowMarker(
         source,
         "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
-        [
-          "name: Accounting Cloud Rehearsal",
-          "on:",
-          "jobs:",
-          "rehearsal:",
-          "runs-on: ubuntu-latest",
-          "- name: Run the Accounting rehearsal",
-          "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
-        ]
+        REHEARSAL_WORKFLOW_CONTRACT
       )
     ).toBe(false);
   });
 
-  test("active preview workflow evidence requires the pinned rehearsal command and structure", () => {
+  test("NEGATIVE CONTROL: a rehearsal command in the wrong job cannot satisfy preview evidence", () => {
+    const source = `
+      name: Accounting Cloud Rehearsal
+      on:
+        pull_request:
+      jobs:
+        rehearsal:
+          runs-on: ubuntu-latest
+          steps:
+            - name: Run the Accounting rehearsal
+              run: echo "decoy"
+        unrelated:
+          runs-on: ubuntu-latest
+          steps:
+            - name: Run the Accounting rehearsal
+              run: |
+                node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
+    `;
+    expect(
+      sourceHasActiveWorkflowMarker(
+        source,
+        "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
+        REHEARSAL_WORKFLOW_CONTRACT
+      )
+    ).toBe(false);
+  });
+
+  test("active preview workflow evidence requires the pinned rehearsal job, step, and command", () => {
     const source = `
       name: Accounting Cloud Rehearsal
       on:
@@ -333,15 +428,7 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
       sourceHasActiveWorkflowMarker(
         source,
         "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
-        [
-          "name: Accounting Cloud Rehearsal",
-          "on:",
-          "jobs:",
-          "rehearsal:",
-          "runs-on: ubuntu-latest",
-          "- name: Run the Accounting rehearsal",
-          "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
-        ]
+        REHEARSAL_WORKFLOW_CONTRACT
       )
     ).toBe(true);
   });
@@ -688,12 +775,31 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
       structuralProofHasExecutableNegativeControl(
         source,
         "NEGATIVE CONTROL — analyzer backed",
-        ["findUnguardedTenantWrites", "VULNERABLE", "expect"]
+        ["findUnguardedTenantWrites", "VULNERABLE", "expect"],
+        ["findUnguardedTenantWrites"]
       )
     ).toBe(false);
   });
 
-  test("an analyzer-backed control must reference the analyzer, fixture, and assertion", () => {
+  test("NEGATIVE CONTROL: identifier-only analyzer references cannot satisfy structural evidence", () => {
+    const source = `
+      test("NEGATIVE CONTROL — analyzer decoy", () => {
+        void findUnguardedTenantWrites;
+        void VULNERABLE;
+        void expect;
+      });
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — analyzer decoy",
+        ["findUnguardedTenantWrites", "VULNERABLE", "expect"],
+        ["findUnguardedTenantWrites"]
+      )
+    ).toBe(false);
+  });
+
+  test("an analyzer-backed control must execute the analyzer and assert its result", () => {
     const source = `
       test("NEGATIVE CONTROL — analyzer backed", () => {
         const found = findUnguardedTenantWrites(VULNERABLE, "x.ts");
@@ -704,7 +810,8 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
       structuralProofHasExecutableNegativeControl(
         source,
         "NEGATIVE CONTROL — analyzer backed",
-        ["findUnguardedTenantWrites", "VULNERABLE", "expect"]
+        ["findUnguardedTenantWrites", "VULNERABLE", "expect"],
+        ["findUnguardedTenantWrites"]
       )
     ).toBe(true);
   });
@@ -826,15 +933,33 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
 
     expect(errors).toContain(
       broken[index].id +
-        " is scheduled-work-sensitive without explicit REPLAY assessment"
+        " is scheduled-work-sensitive without an applicable REPLAY assessment"
     );
     expect(errors).toContain(
       broken[index].id +
-        " is scheduled-work-sensitive without explicit CONCURRENCY assessment"
+        " is scheduled-work-sensitive without an applicable CONCURRENCY assessment"
     );
     expect(errors).toContain(
       broken[index].id +
-        " is scheduled-work-sensitive without explicit FAULT_INJECTION assessment"
+        " is scheduled-work-sensitive without an applicable FAULT_INJECTION assessment"
+    );
+  });
+
+  test("NEGATIVE CONTROL: scheduled-work assessments cannot be dismissed as N/A", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex((invariant) => invariant.id === "CONC-1");
+    broken[index].requirements = broken[index].requirements.map((requirement) =>
+      requirement.obligation === "FAULT_INJECTION"
+        ? {
+            obligation: "FAULT_INJECTION",
+            status: "NOT_APPLICABLE",
+            reason: "Synthetic invalid N/A used to prove scheduled-work applicability is fail-closed.",
+          }
+        : requirement
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      "CONC-1 is scheduled-work-sensitive without an applicable FAULT_INJECTION assessment"
     );
   });
 
