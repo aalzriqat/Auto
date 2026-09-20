@@ -5,11 +5,51 @@ import type { Doc } from "../_generated/dataModel";
 
 type TemplateMap = Record<string, string>;
 
+type SmartReplyVehicle = Readonly<
+  Pick<Doc<"vehicles">, "model" | "year" | "sellingPrice" | "status"> &
+    Partial<
+      Pick<
+        Doc<"vehicles">,
+        "isDeleted" | "trim" | "mileage" | "color" | "fuelType" | "transmission"
+      >
+    >
+>;
+
+type SmartReplyOrgSettings = Readonly<
+  Partial<
+    Pick<
+      Doc<"orgSettings">,
+      | "smartReplyCustomTemplatesAr"
+      | "smartReplyCustomTemplatesEn"
+      | "currencySymbol"
+      | "currency"
+      | "dealershipAddress"
+      | "dealershipPhone"
+      | "dealershipName"
+      | "smartReplyFinancingMode"
+      | "smartReplyDefaultDownPaymentPercent"
+    >
+  >
+>;
+
+type SmartReplyFinanceCompany = Readonly<
+  Pick<
+    Doc<"financeCompanies">,
+    "isActive" | "profitRate" | "maxTermMonths" | "gracePeriodMonths"
+  > &
+    Partial<
+      Pick<
+        Doc<"financeCompanies">,
+        "name" | "adminFees" | "commission" | "insuranceRate" | "includesCommissionInDebt"
+      >
+    >
+>;
+
 interface BuildSmartReplyArgs {
   intent: Exclude<SmartReplyIntent, "complaint">;
-  vehicle: Doc<"vehicles"> | null;
-  orgSettings: Doc<"orgSettings"> | null;
-  financeCompany: Doc<"financeCompanies"> | null;
+  vehicle: SmartReplyVehicle | null;
+  orgSettings: SmartReplyOrgSettings | null;
+  financeCompany: SmartReplyFinanceCompany | null;
   locale: "en" | "ar";
 }
 
