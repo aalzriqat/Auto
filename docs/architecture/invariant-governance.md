@@ -100,9 +100,9 @@ Each invariant declares metadata required by later phases:
 - scheduled-work sensitivity;
 - source areas and optional symbols.
 
-A DIRECT economic invariant must explicitly assess REPLAY, CONCURRENCY, REVERSAL, and RECONCILIATION. Those assessments may be REQUIRED, DEFERRED, or justified NOT_APPLICABLE; they may not be omitted.
+Any invariant whose economic impact is INDIRECT or DIRECT must explicitly assess REPLAY, CONCURRENCY, REVERSAL, and RECONCILIATION. Those assessments may be REQUIRED, DEFERRED, or justified NOT_APPLICABLE; they may not be omitted.
 
-Tenant-sensitive invariants require TENANCY proof. Authorization-sensitive invariants require server-side AUTHORIZATION proof. External-input-sensitive invariants must assess BOUNDARY and FUZZ; webhook-sensitive invariants must assess REPLAY, AUTHORIZATION, and NEGATIVE behavior; scheduled-work-sensitive invariants must explicitly assess REPLAY, CONCURRENCY, and FAULT_INJECTION.
+Tenant-sensitive invariants require TENANCY proof. Authorization-sensitive invariants require server-side AUTHORIZATION proof. External-input-sensitive invariants must assess BOUNDARY and FUZZ; webhook-sensitive invariants must assess REPLAY, AUTHORIZATION, and NEGATIVE behavior; scheduled-work-sensitive invariants must have applicable (not NOT_APPLICABLE) REPLAY, CONCURRENCY, and FAULT_INJECTION assessments.
 
 ## 6. Evidence boundaries
 
@@ -116,11 +116,13 @@ Important repository boundaries:
 
 Use PREVIEW/runtime evidence for properties that depend on actual transaction conflict, scheduling, or platform limits.
 
+Workflow evidence is parsed structurally. A preview marker only counts when it appears in the pinned workflow, trigger, job, runner, named step, and that step's `run` body; the same command in another job or scope is not evidence.
+
 ### Structural guards
 
 A structural guard can only prove the shapes it enumerates. Unknown/unreadable shapes must fail closed when certainty is required.
 
-Every structural proof must name an executable direct `test`/`it`/`describe` negative-control marker. The validator parses the TypeScript AST, so a matching phrase in a comment, inert string, `test.skip`, or skipped describe does not count. Every proof record also carries its invariant ID; unknown or cross-bound proof IDs fail the self-audit and cannot satisfy a REQUIRED obligation.
+Every structural proof must name an executable direct `test`/`it` negative-control marker. The validator parses the TypeScript AST, requires the pinned analyzer calls to execute, and requires an assertion to consume analyzer-derived data; a matching phrase in a comment, inert string, `describe` title, `test.skip`, skipped suite, or identifier-only decoy does not count. Every proof record also carries its invariant ID; unknown or cross-bound proof IDs fail the self-audit and cannot satisfy a REQUIRED obligation.
 
 ### Balanced journals
 
@@ -149,7 +151,7 @@ The self-audit protects against:
 - proof evidence claiming undeclared obligations;
 - structural proofs without negative controls;
 - tenant/auth sensitivity without corresponding proof requirements;
-- DIRECT economic invariants that omit core economic risk assessments;
+- INDIRECT or DIRECT economic invariants that omit core economic risk assessments;
 - platform-serialization claims without preview concurrency evidence;
 - irreversible-by-design claims without explicit reversal N/A rationale;
 - external/webhook/scheduled sensitivity without the corresponding proof assessments;
