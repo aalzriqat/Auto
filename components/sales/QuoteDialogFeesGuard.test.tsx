@@ -49,7 +49,15 @@ const VEHICLE = "veh1" as Id<"vehicles">;
 const STATUS = "status1" as Id<"orgCustomerStatuses">;
 const COMPANY = "company1" as Id<"financeCompanies">;
 
+class ResizeObserverMock {
+  constructor(_callback: ResizeObserverCallback) {}
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
 beforeEach(() => {
+  vi.stubGlobal("ResizeObserver", ResizeObserverMock);
   cleanup();
   stubs.queryResults.clear();
 
