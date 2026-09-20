@@ -218,10 +218,10 @@ const dealRailMessages = defineBilingualMessages({
    * The customer's financing plan on the Deal — read-only, what the customer
    * agreed to pay; explicitly not the dealer's remittance or profit.
    */
-  FinancingPlanHeading: ["Original quotation financing plan", "خطة عرض السعر الأصلية"],
+  FinancingPlanHeading: ["Original quotation financing plan", "خطة التمويل في عرض السعر الأصلي"],
   FinancingPlanNote: [
     "Original quotation terms — may differ from currently approved deal terms.",
-    "أرقام عرض السعر الأصلي — قد تختلف عن أرقام الصفقة المعتمدة الحالية.",
+    "شروط التمويل في عرض السعر الأصلي — قد تختلف عن شروط الصفقة المعتمدة الحالية.",
   ],
   FinancingProvider: ["Financier", "جهة التمويل"],
   CustomerPrice: ["Vehicle price", "سعر السيارة"],
@@ -1509,6 +1509,7 @@ export const salesEn = {
   LineSupplierSettlement: "Supplier settlement",
   LineDealerContribution: "Dealership contribution to financing",
   LineActualExpenses: "Actual expenses",
+  LineForecastExpenses: "Forecast expenses",
   // --- Cash deal: the same screen, a different KIND of money ------------
   // The cash headline is an ordinary accounting result and reconciles to the
   // books, so it carries no "estimated / never posted" qualifier at all.
@@ -2496,6 +2497,7 @@ export const salesAr = {
   LineSupplierSettlement: "تسوية المورد",
   LineDealerContribution: "مساهمة المعرض في التمويل",
   LineActualExpenses: "مصاريف فعلية",
+  LineForecastExpenses: "مصاريف متوقعة",
   // --- صفقة نقدية: نفس الشاشة، ونوع مختلف من الأرقام ---------------------
   DealCockpitTitleCash: "صفقة بيع",
   StageSaleAgreed: "اتفاق البيع",
