@@ -356,7 +356,15 @@ const MANDATORY_OBLIGATION_FLOORS: Readonly<
     "CONCURRENCY",
     "RECONCILIATION",
   ],
-  "ACC-3": ["POSITIVE", "NEGATIVE", "BOUNDARY"],
+  "ACC-3": [
+    "POSITIVE",
+    "NEGATIVE",
+    "BOUNDARY",
+    "REPLAY",
+    "CONCURRENCY",
+    "REVERSAL",
+    "RECONCILIATION",
+  ],
   "CONS-1": [
     "POSITIVE",
     "NEGATIVE",
@@ -383,7 +391,15 @@ const MANDATORY_OBLIGATION_FLOORS: Readonly<
     "REVERSAL",
     "RECONCILIATION",
   ],
-  "UI-1": ["POSITIVE", "NEGATIVE", "MUTATION"],
+  "UI-1": [
+    "POSITIVE",
+    "NEGATIVE",
+    "MUTATION",
+    "REPLAY",
+    "CONCURRENCY",
+    "REVERSAL",
+    "RECONCILIATION",
+  ],
 };
 
 const MANDATORY_REQUIRED_OBLIGATIONS: Readonly<
@@ -688,6 +704,22 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
       required("POSITIVE"),
       required("NEGATIVE"),
       required("BOUNDARY"),
+      notApplicable(
+        "REPLAY",
+        "Accounting-date authority is validated per posting request; command replay safety is governed by the command-specific economic invariant."
+      ),
+      notApplicable(
+        "CONCURRENCY",
+        "This invariant defines date and period authority rather than collision semantics; concurrent posting behavior is governed by CONC-1."
+      ),
+      notApplicable(
+        "REVERSAL",
+        "This invariant determines the posting date and closed-period boundary; correction and reversal semantics are governed by ACC-2."
+      ),
+      notApplicable(
+        "RECONCILIATION",
+        "This invariant asserts period placement, not a subledger-to-GL balance relationship."
+      ),
     ],
     proofs: proofSet("ACC-3", [
       execution(
@@ -912,6 +944,22 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
       required("POSITIVE"),
       required("NEGATIVE", ["STRUCTURAL", "EXECUTION"]),
       required("MUTATION", ["STRUCTURAL", "EXECUTION"]),
+      notApplicable(
+        "REPLAY",
+        "UI-1 proves authority parity between surfaces; replay safety of the canonical economic command remains owned by its command invariant."
+      ),
+      notApplicable(
+        "CONCURRENCY",
+        "UI-1 forbids duplicate frontend authority paths; runtime command contention remains owned by CONC-1."
+      ),
+      notApplicable(
+        "REVERSAL",
+        "UI-1 does not define lifecycle inverse semantics; it requires both surfaces to invoke the same canonical command."
+      ),
+      notApplicable(
+        "RECONCILIATION",
+        "UI/backend authority parity does not itself assert ledger or subledger reconciliation."
+      ),
     ],
     proofs: proofSet("UI-1", [
       structural(
@@ -1375,11 +1423,14 @@ export function validateInvariantCatalog(
       }
     }
 
-    if (invariant.profile.economicImpact === "DIRECT") {
+    if (invariant.profile.economicImpact !== "NONE") {
       for (const obligation of ["REPLAY", "CONCURRENCY", "REVERSAL", "RECONCILIATION"] as const) {
         if (!requirements.has(obligation)) {
           errors.push(
-            invariant.id + " has DIRECT economic impact without explicit " + obligation + " assessment"
+            invariant.id +
+              " has economic impact without explicit " +
+              obligation +
+              " assessment"
           );
         }
       }
