@@ -1,0 +1,1025 @@
+import path from "node:path";
+import { describe, expect, test } from "vitest";
+import {
+  AUTOFLOW_INVARIANTS,
+  AUTOFLOW_PROOF_MARKERS,
+  isActiveInvariant,
+  sourceHasActiveWorkflowMarker,
+  structuralProofHasExecutableNegativeControl,
+  validateInvariantCatalog,
+  type InvariantDefinition,
+  type ProofObligation,
+} from "./autoflowInvariantCatalog";
+
+const ROOT = path.resolve(__dirname, "..");
+
+const REHEARSAL_WORKFLOW_CONTRACT = {
+  workflowName: "Accounting Cloud Rehearsal",
+  trigger: "pull_request",
+  jobId: "rehearsal",
+  runsOn: "ubuntu-latest",
+  stepName: "Run the Accounting rehearsal",
+} as const;
+
+const REQUIRED_INVARIANT_IDS = [
+  "ACC-1",
+  "ACC-2",
+  "ACC-3",
+  "AUTH-1",
+  "CONC-1",
+  "CONS-1",
+  "ECON-1",
+  "ECON-2",
+  "LIFE-1",
+  "PERF-1",
+  "TEN-1",
+  "UI-1",
+] as const;
+
+function copyCatalog(): InvariantDefinition[] {
+  return AUTOFLOW_INVARIANTS.map((invariant) => ({
+    ...invariant,
+    sourceAreas: [...invariant.sourceAreas],
+    symbols: invariant.symbols ? [...invariant.symbols] : undefined,
+    profile: { ...invariant.profile },
+    requirements: invariant.requirements.map((requirement) => ({
+      ...requirement,
+      acceptedEvidence: requirement.acceptedEvidence
+        ? [...requirement.acceptedEvidence]
+        : undefined,
+    })),
+    proofs: invariant.proofs.map((proof) => ({
+      ...proof,
+      obligations: [...proof.obligations],
+    })),
+    retirement: invariant.retirement
+      ? {
+          ...invariant.retirement,
+          supersededBy: invariant.retirement.supersededBy
+            ? [...invariant.retirement.supersededBy]
+            : undefined,
+        }
+      : undefined,
+  }));
+}
+
+function findWithRequirement(
+  catalog: InvariantDefinition[],
+  obligation: ProofObligation
+): number {
+  return catalog.findIndex((invariant) =>
+    invariant.requirements.some(
+      (requirement) =>
+        requirement.obligation === obligation && requirement.status === "REQUIRED"
+    )
+  );
+}
+
+describe("SCRUM-342 invariant catalog — current repository", () => {
+  test("the catalog is internally valid and every referenced proof exists", () => {
+    expect(validateInvariantCatalog(ROOT)).toEqual([]);
+  });
+
+  test("required invariant IDs cannot silently disappear or be renamed", () => {
+    const actual = AUTOFLOW_INVARIANTS.map((invariant) => invariant.id).sort();
+    expect(actual).toEqual([...REQUIRED_INVARIANT_IDS].sort());
+  });
+
+  test("the active catalog cannot vacuously collapse to zero", () => {
+    expect(AUTOFLOW_INVARIANTS.filter(isActiveInvariant).length).toBeGreaterThan(0);
+    expect(validateInvariantCatalog(ROOT, [])).toContain(
+      "Invariant catalog has no active invariants"
+    );
+  });
+
+  test("NEGATIVE CONTROL: a required family cannot retire every active member", () => {
+    const broken = copyCatalog();
+    for (const invariant of broken) {
+      if (invariant.id.startsWith("ACC-")) {
+        invariant.state = "RETIRED";
+        invariant.retirement = {
+          reason:
+            "Synthetic retirement used to prove the required-family anti-vacuity ratchet.",
+          tracking: "SCRUM-342",
+        };
+      }
+    }
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      "Required invariant family has no active invariant: ACC"
+    );
+  });
+
+  test("every PARTIAL invariant declares an explicit Jira owner", () => {
+    const unowned = AUTOFLOW_INVARIANTS.filter(
+      (invariant) =>
+        invariant.state === "PARTIAL" &&
+        !/^SCRUM-\d+$/.test(invariant.tracking ?? "")
+    ).map((invariant) => invariant.id);
+
+    expect(unowned).toEqual([]);
+  });
+
+  test("ENFORCED is derived from a catalog with no deferred obligations", () => {
+    const invalid = AUTOFLOW_INVARIANTS.filter(
+      (invariant) =>
+        invariant.state === "ENFORCED" &&
+        invariant.requirements.some((requirement) => requirement.status === "DEFERRED")
+    ).map((invariant) => invariant.id);
+
+    expect(invalid).toEqual([]);
+  });
+});
+
+describe("SCRUM-342 invariant catalog — validator negative controls", () => {
+  test("NEGATIVE CONTROL: duplicate invariant IDs are refused", () => {
+    const broken = copyCatalog();
+    broken.push(copyCatalog()[0]);
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      "Duplicate invariant id: " + broken[0].id
+    );
+  });
+
+  test("NEGATIVE CONTROL: mandatory obligation assessments cannot silently disappear", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex((invariant) => invariant.id === "ACC-3");
+    broken[index].requirements = broken[index].requirements.filter(
+      (requirement) => requirement.obligation !== "BOUNDARY"
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      "ACC-3 is missing mandatory obligation assessment BOUNDARY"
+    );
+  });
+
+  test("NEGATIVE CONTROL: a mandatory REQUIRED obligation cannot be downgraded to N/A", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex((invariant) => invariant.id === "ACC-3");
+    broken[index].requirements = broken[index].requirements.map((requirement) =>
+      requirement.obligation === "BOUNDARY"
+        ? {
+            obligation: "BOUNDARY",
+            status: "NOT_APPLICABLE",
+            reason:
+              "Synthetic downgrade used to prove the mandatory REQUIRED status floor.",
+          }
+        : requirement
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      "ACC-3 mandatory obligation BOUNDARY must remain REQUIRED"
+    );
+  });
+
+  test("NEGATIVE CONTROL: a mandatory applicable gap cannot be dismissed as N/A", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex((invariant) => invariant.id === "TEN-1");
+    broken[index].requirements = broken[index].requirements.map((requirement) =>
+      requirement.obligation === "BOUNDARY"
+        ? {
+            obligation: "BOUNDARY",
+            status: "NOT_APPLICABLE",
+            reason:
+              "Synthetic downgrade used to prove an acknowledged gap cannot silently disappear.",
+          }
+        : requirement
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      "TEN-1 mandatory obligation BOUNDARY cannot be NOT_APPLICABLE"
+    );
+  });
+
+  test("NEGATIVE CONTROL: structural evidence alone cannot satisfy runtime semantics", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex((invariant) => invariant.id === "UI-1");
+    broken[index].requirements = broken[index].requirements.map((requirement) =>
+      requirement.obligation === "NEGATIVE"
+        ? {
+            ...requirement,
+            acceptedEvidence: ["STRUCTURAL"],
+          }
+        : requirement
+    );
+    broken[index].proofs = broken[index].proofs.map((proof) =>
+      proof.mechanism === "EXECUTION"
+        ? {
+            ...proof,
+            obligations: proof.obligations.filter(
+              (obligation) => obligation !== "NEGATIVE"
+            ),
+          }
+        : proof
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      "UI-1 runtime semantic obligation NEGATIVE lacks EXECUTION/PREVIEW evidence"
+    );
+  });
+
+  test("NEGATIVE CONTROL: deleting a required ID fails the independent ratchet", () => {
+    const reduced = AUTOFLOW_INVARIANTS.filter((invariant) => invariant.id !== "TEN-1");
+    const actual = reduced.map((invariant) => invariant.id).sort();
+
+    expect(actual).not.toEqual([...REQUIRED_INVARIANT_IDS].sort());
+    expect(REQUIRED_INVARIANT_IDS).toContain("TEN-1");
+  });
+
+  test("NEGATIVE CONTROL: orphan proof-marker bindings are refused", () => {
+    const markers = {
+      ...AUTOFLOW_PROOF_MARKERS,
+      "SYN-1::synthetic/orphan.test.ts::NEGATIVE": "orphan marker",
+    };
+
+    expect(validateInvariantCatalog(ROOT, AUTOFLOW_INVARIANTS, markers)).toContain(
+      "Orphan proof marker binding has no active catalog proof: SYN-1::synthetic/orphan.test.ts::NEGATIVE"
+    );
+  });
+
+  test("NEGATIVE CONTROL: proof markers must match their registered binding", () => {
+    const broken = copyCatalog();
+    broken[0].proofs = broken[0].proofs.map((proof, index) =>
+      index === 0 ? { ...proof, marker: proof.marker + " changed" } : proof
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[0].id +
+        " proof marker does not match registered binding: " +
+        broken[0].proofs[0].invariantId +
+        "::" +
+        broken[0].proofs[0].path +
+        "::" +
+        broken[0].proofs[0].obligations.join(",")
+    );
+  });
+
+  test("NEGATIVE CONTROL: unsupported proof source types fail closed instead of substring-matching", () => {
+    const broken = copyCatalog();
+    const original = broken[0].proofs[0];
+    const replacementKey =
+      original.invariantId + "::scripts/autoflowInvariantCatalog.ts::" +
+      original.obligations.join(",");
+    const originalKey =
+      original.invariantId + "::" + original.path + "::" +
+      original.obligations.join(",");
+    const markers = { ...AUTOFLOW_PROOF_MARKERS };
+    delete markers[originalKey];
+    markers[replacementKey] = "export type InvariantSeverity";
+
+    broken[0].proofs = broken[0].proofs.map((proof, index) =>
+      index === 0
+        ? {
+            ...proof,
+            path: "scripts/autoflowInvariantCatalog.ts",
+            marker: "export type InvariantSeverity",
+          }
+        : proof
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken, markers)).toContain(
+      broken[0].id +
+        " proof marker is missing or inactive in scripts/autoflowInvariantCatalog.ts: export type InvariantSeverity"
+    );
+  });
+
+  test("NEGATIVE CONTROL: structural path registries cannot retain orphan bindings", () => {
+    const broken = copyCatalog().map((invariant) => ({
+      ...invariant,
+      proofs: invariant.proofs.filter(
+        (proof) => proof.path !== "scripts/tenantWriteGuard.test.ts"
+      ),
+    }));
+    const errors = validateInvariantCatalog(ROOT, broken);
+
+    expect(errors).toContain(
+      "Orphan STRUCTURAL_CONTROL_MARKERS binding has no active catalog proof path: scripts/tenantWriteGuard.test.ts"
+    );
+    expect(errors).toContain(
+      "Orphan STRUCTURAL_CONTROL_REQUIRED_IDENTIFIERS binding has no active catalog proof path: scripts/tenantWriteGuard.test.ts"
+    );
+    expect(errors).toContain(
+      "Orphan STRUCTURAL_CONTROL_REQUIRED_CALLS binding has no active catalog proof path: scripts/tenantWriteGuard.test.ts"
+    );
+  });
+
+  test("NEGATIVE CONTROL: workflow contracts cannot retain orphan bindings", () => {
+    const broken = copyCatalog().map((invariant) => ({
+      ...invariant,
+      proofs: invariant.proofs.filter(
+        (proof) => proof.path !== ".github/workflows/accounting-rehearsal.yml"
+      ),
+    }));
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      "Orphan WORKFLOW_EVIDENCE_CONTRACTS binding has no active catalog proof path: .github/workflows/accounting-rehearsal.yml"
+    );
+  });
+
+  test("NEGATIVE CONTROL: a missing proof file is refused", () => {
+    const broken = copyCatalog();
+    broken[0].proofs = [
+      ...broken[0].proofs,
+      {
+        invariantId: broken[0].id,
+        path: "convex/this-proof-does-not-exist.test.ts",
+        mechanism: "EXECUTION",
+        obligations: ["NEGATIVE"],
+        note: "Synthetic negative control for the catalog file-existence guard.",
+      },
+    ];
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[0].id +
+        " proof file does not exist: convex/this-proof-does-not-exist.test.ts"
+    );
+  });
+
+  test("NEGATIVE CONTROL: proof without a stable marker is refused", () => {
+    const broken = copyCatalog();
+    broken[0].proofs = broken[0].proofs.map((proof, index) =>
+      index === 0 ? { ...proof, marker: undefined } : proof
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[0].id + " proof has no stable marker: " + broken[0].proofs[0].path
+    );
+  });
+
+  test("NEGATIVE CONTROL: a stale proof marker is refused", () => {
+    const broken = copyCatalog();
+    broken[0].proofs = broken[0].proofs.map((proof, index) =>
+      index === 0
+        ? { ...proof, marker: "SCRUM-342-MARKER-THAT-DOES-NOT-EXIST" }
+        : proof
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[0].id +
+        " proof marker is missing or inactive in " +
+        broken[0].proofs[0].path +
+        ": SCRUM-342-MARKER-THAT-DOES-NOT-EXIST"
+    );
+  });
+
+  test("NEGATIVE CONTROL: a commented workflow marker is not preview evidence", () => {
+    const source = `
+      name: Accounting Cloud Rehearsal
+      on:
+        pull_request:
+      jobs:
+        rehearsal:
+          runs-on: ubuntu-latest
+          steps:
+            - name: Run the Accounting rehearsal
+              run: |
+                # node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
+    `;
+    expect(
+      sourceHasActiveWorkflowMarker(
+        source,
+        "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
+        REHEARSAL_WORKFLOW_CONTRACT
+      )
+    ).toBe(false);
+  });
+
+  test("NEGATIVE CONTROL: a rehearsal command in the wrong job cannot satisfy preview evidence", () => {
+    const source = `
+      name: Accounting Cloud Rehearsal
+      on:
+        pull_request:
+      jobs:
+        rehearsal:
+          runs-on: ubuntu-latest
+          steps:
+            - name: Run the Accounting rehearsal
+              run: echo "decoy"
+        unrelated:
+          runs-on: ubuntu-latest
+          steps:
+            - name: Run the Accounting rehearsal
+              run: |
+                node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
+    `;
+    expect(
+      sourceHasActiveWorkflowMarker(
+        source,
+        "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
+        REHEARSAL_WORKFLOW_CONTRACT
+      )
+    ).toBe(false);
+  });
+
+  test("active preview workflow evidence requires the pinned rehearsal job, step, and command", () => {
+    const source = `
+      name: Accounting Cloud Rehearsal
+      on:
+        pull_request:
+      jobs:
+        rehearsal:
+          runs-on: ubuntu-latest
+          steps:
+            - name: Run the Accounting rehearsal
+              run: |
+                node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
+    `;
+    expect(
+      sourceHasActiveWorkflowMarker(
+        source,
+        "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
+        REHEARSAL_WORKFLOW_CONTRACT
+      )
+    ).toBe(true);
+  });
+
+  test("NEGATIVE CONTROL: evidence cannot reference an unknown invariant ID", () => {
+    const broken = copyCatalog();
+    broken[0].proofs = broken[0].proofs.map((proof, index) =>
+      index === 0 ? { ...proof, invariantId: "NOPE-999" } : proof
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[0].id + " proof references unknown invariant ID NOPE-999"
+    );
+  });
+
+  test("NEGATIVE CONTROL: evidence cannot be bound to a different existing invariant", () => {
+    const broken = copyCatalog();
+    broken[0].proofs = broken[0].proofs.map((proof, index) =>
+      index === 0 ? { ...proof, invariantId: broken[1].id } : proof
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[0].id +
+        " contains proof bound to different invariant ID " +
+        broken[1].id
+    );
+  });
+
+  test("NEGATIVE CONTROL: PARTIAL without Jira ownership is refused", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex((invariant) => invariant.state === "PARTIAL");
+    broken[index] = { ...broken[index], tracking: undefined };
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id + " is PARTIAL without a SCRUM tracking issue"
+    );
+  });
+
+  test("NEGATIVE CONTROL: a structural proof must demonstrate its own failure mode", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex((invariant) =>
+      invariant.proofs.some((proof) => proof.mechanism === "STRUCTURAL")
+    );
+    const proofIndex = broken[index].proofs.findIndex(
+      (proof) => proof.mechanism === "STRUCTURAL"
+    );
+    broken[index].proofs = broken[index].proofs.map((proof, currentIndex) =>
+      currentIndex === proofIndex
+        ? { ...proof, negativeControlMarker: undefined }
+        : proof
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id +
+        " structural proof has no executable negative-control marker: " +
+        broken[index].proofs[proofIndex].path
+    );
+  });
+
+  test("NEGATIVE CONTROL: a REQUIRED obligation cannot exist without acceptable evidence", () => {
+    const broken = copyCatalog();
+    const index = findWithRequirement(broken, "NEGATIVE");
+    broken[index].proofs = broken[index].proofs.map((proof) => ({
+      ...proof,
+      obligations: proof.obligations.filter((obligation) => obligation !== "NEGATIVE"),
+    }));
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id + " is missing required proof obligation NEGATIVE"
+    );
+  });
+
+  test("NEGATIVE CONTROL: ENFORCED cannot hide a deferred proof obligation", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex((invariant) => invariant.state === "ENFORCED");
+    broken[index].requirements = [
+      ...broken[index].requirements,
+      {
+        obligation: "PROPERTY",
+        status: "DEFERRED",
+        reason: "Synthetic deferred property obligation for the validator negative control.",
+        tracking: "SCRUM-342",
+      },
+    ];
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id + " is ENFORCED while PROPERTY is still DEFERRED"
+    );
+  });
+
+  test("NEGATIVE CONTROL: NOT_APPLICABLE requires a real rationale", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex((invariant) =>
+      invariant.requirements.some(
+        (requirement) => requirement.status === "NOT_APPLICABLE"
+      )
+    );
+    const requirementIndex = broken[index].requirements.findIndex(
+      (requirement) => requirement.status === "NOT_APPLICABLE"
+    );
+    broken[index].requirements = broken[index].requirements.map(
+      (requirement, currentIndex) =>
+        currentIndex === requirementIndex ? { ...requirement, reason: "" } : requirement
+    );
+
+    const obligation = broken[index].requirements[requirementIndex].obligation;
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id +
+        " marks " +
+        obligation +
+        " NOT_APPLICABLE without a meaningful rationale"
+    );
+  });
+
+  test("NEGATIVE CONTROL: DEFERRED requires its own Jira ownership", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex((invariant) =>
+      invariant.requirements.some((requirement) => requirement.status === "DEFERRED")
+    );
+    const requirementIndex = broken[index].requirements.findIndex(
+      (requirement) => requirement.status === "DEFERRED"
+    );
+    broken[index].requirements = broken[index].requirements.map(
+      (requirement, currentIndex) =>
+        currentIndex === requirementIndex
+          ? { ...requirement, tracking: undefined }
+          : requirement
+    );
+
+    const obligation = broken[index].requirements[requirementIndex].obligation;
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id +
+        " defers " +
+        obligation +
+        " without a SCRUM tracking issue"
+    );
+  });
+
+  test("NEGATIVE CONTROL: tenant sensitivity requires executable TENANCY proof", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex((invariant) => invariant.profile.tenantSensitive);
+    const requirementIndex = broken[index].requirements.findIndex(
+      (requirement) => requirement.obligation === "TENANCY"
+    );
+    broken[index].requirements = broken[index].requirements.map(
+      (requirement, currentIndex) =>
+        currentIndex === requirementIndex
+          ? {
+              obligation: "TENANCY",
+              status: "NOT_APPLICABLE",
+              reason: "Synthetic invalid classification used only by this negative control.",
+            }
+          : requirement
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id + " is tenant-sensitive without required TENANCY proof"
+    );
+  });
+
+  test("NEGATIVE CONTROL: every economic invariant must explicitly assess core economic risks", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex(
+      (invariant) => invariant.profile.economicImpact === "INDIRECT"
+    );
+    broken[index].requirements = broken[index].requirements.filter(
+      (requirement) => requirement.obligation !== "CONCURRENCY"
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id +
+        " has economic impact without explicit CONCURRENCY assessment"
+    );
+  });
+
+  test("NEGATIVE CONTROL: evidence cannot claim an undeclared obligation", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex((invariant) => invariant.proofs.length > 0);
+    const obligation = broken[index].proofs[0].obligations[0];
+    broken[index].requirements = broken[index].requirements.filter(
+      (requirement) => requirement.obligation !== obligation
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id +
+        " proof references undeclared obligation " +
+        obligation +
+        ": " +
+        broken[index].proofs[0].path
+    );
+  });
+
+  test("NEGATIVE CONTROL: profile concurrency classification cannot contradict its proof obligation", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex(
+      (invariant) => invariant.profile.concurrency === "REQUIRED"
+    );
+    broken[index] = {
+      ...broken[index],
+      profile: { ...broken[index].profile, concurrency: "NOT_APPLICABLE" },
+    };
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id + " marks concurrency NOT_APPLICABLE inconsistently"
+    );
+  });
+
+  test("NEGATIVE CONTROL: reversal-required profile needs an applicable REVERSAL obligation", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex(
+      (invariant) => invariant.profile.reversal === "REQUIRED"
+    );
+    broken[index].requirements = broken[index].requirements.map((requirement) =>
+      requirement.obligation === "REVERSAL"
+        ? {
+            obligation: "REVERSAL",
+            status: "NOT_APPLICABLE",
+            reason: "Synthetic contradictory reversal classification for this negative control.",
+          }
+        : requirement
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id +
+        " declares reversal REQUIRED without an applicable REVERSAL obligation"
+    );
+  });
+
+  test("NEGATIVE CONTROL: a keyword in a comment is not an executable structural control", () => {
+    const source = `
+      // test("NEGATIVE CONTROL — comment only", () => { throw new Error("never"); });
+      const note = "NEGATIVE CONTROL — comment only";
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — comment only"
+      )
+    ).toBe(false);
+  });
+
+  test("an actual test declaration is accepted as executable structural control", () => {
+    const source = `
+      test("NEGATIVE CONTROL — executable", () => {
+        expect(true).toBe(true);
+      });
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — executable"
+      )
+    ).toBe(true);
+  });
+
+  test("NEGATIVE CONTROL: a marker inside an uninvoked function is not active evidence", () => {
+    const source = `
+      function neverCalled() {
+        test("NEGATIVE CONTROL — dormant", () => {
+          expect(true).toBe(true);
+        });
+      }
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — dormant"
+      )
+    ).toBe(false);
+  });
+
+  test("NEGATIVE CONTROL: a marker behind a conditional branch is not active evidence", () => {
+    const source = `
+      if (false) {
+        test("NEGATIVE CONTROL — conditional", () => {
+          expect(true).toBe(true);
+        });
+      }
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — conditional"
+      )
+    ).toBe(false);
+  });
+
+  test("NEGATIVE CONTROL: duplicate active markers are ambiguous and refused", () => {
+    const source = `
+      test("NEGATIVE CONTROL — duplicate", () => {
+        expect(true).toBe(true);
+      });
+      test("NEGATIVE CONTROL — duplicate", () => {
+        expect(true).toBe(true);
+      });
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — duplicate"
+      )
+    ).toBe(false);
+  });
+
+  test("an active nested test under an active describe remains valid evidence", () => {
+    const source = `
+      describe("active suite", () => {
+        test("NEGATIVE CONTROL — nested active", () => {
+          expect(true).toBe(true);
+        });
+      });
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — nested active"
+      )
+    ).toBe(true);
+  });
+
+  test("NEGATIVE CONTROL: a describe title alone cannot satisfy executable evidence", () => {
+    const source = `
+      describe("NEGATIVE CONTROL — suite title only", () => {
+        test("some different case", () => {
+          expect(true).toBe(true);
+        });
+      });
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — suite title only"
+      )
+    ).toBe(false);
+  });
+
+  test("NEGATIVE CONTROL: a vacuous title match cannot satisfy an analyzer-backed control", () => {
+    const source = `
+      test("NEGATIVE CONTROL — analyzer backed", () => {
+        expect(true).toBe(true);
+      });
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — analyzer backed",
+        ["findUnguardedTenantWrites", "VULNERABLE", "expect"],
+        ["findUnguardedTenantWrites"]
+      )
+    ).toBe(false);
+  });
+
+  test("NEGATIVE CONTROL: identifier-only analyzer references cannot satisfy structural evidence", () => {
+    const source = `
+      test("NEGATIVE CONTROL — analyzer decoy", () => {
+        void findUnguardedTenantWrites;
+        void VULNERABLE;
+        void expect;
+      });
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — analyzer decoy",
+        ["findUnguardedTenantWrites", "VULNERABLE", "expect"],
+        ["findUnguardedTenantWrites"]
+      )
+    ).toBe(false);
+  });
+
+  test("an analyzer-backed control must execute the analyzer and assert its result", () => {
+    const source = `
+      test("NEGATIVE CONTROL — analyzer backed", () => {
+        const found = findUnguardedTenantWrites(VULNERABLE, "x.ts");
+        expect(found).toHaveLength(1);
+      });
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — analyzer backed",
+        ["findUnguardedTenantWrites", "VULNERABLE", "expect"],
+        ["findUnguardedTenantWrites"]
+      )
+    ).toBe(true);
+  });
+
+  test("NEGATIVE CONTROL: test.skip cannot satisfy structural evidence", () => {
+    const source = `
+      test.skip("NEGATIVE CONTROL — skipped", () => {
+        throw new Error("never executed");
+      });
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — skipped"
+      )
+    ).toBe(false);
+  });
+
+  test("NEGATIVE CONTROL: tests nested under describe.skip cannot satisfy evidence", () => {
+    const source = `
+      describe.skip("disabled suite", () => {
+        test("NEGATIVE CONTROL — nested under skip", () => {
+          throw new Error("never executed");
+        });
+      });
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — nested under skip"
+      )
+    ).toBe(false);
+  });
+
+  test("NEGATIVE CONTROL: tests nested under curried describe.skipIf cannot satisfy evidence", () => {
+    const source = `
+      describe.skipIf(true)("disabled suite", () => {
+        test("NEGATIVE CONTROL — nested under skipIf", () => {
+          throw new Error("never executed");
+        });
+      });
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — nested under skipIf"
+      )
+    ).toBe(false);
+  });
+
+  test("NEGATIVE CONTROL: PLATFORM_SERIALIZED_PROVEN requires PREVIEW concurrency proof", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex(
+      (invariant) => invariant.profile.concurrency === "REQUIRED"
+    );
+    broken[index] = {
+      ...broken[index],
+      profile: {
+        ...broken[index].profile,
+        concurrency: "PLATFORM_SERIALIZED_PROVEN",
+      },
+      proofs: broken[index].proofs.filter((proof) => proof.mechanism !== "PREVIEW"),
+    };
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id +
+        " claims PLATFORM_SERIALIZED_PROVEN without required PREVIEW CONCURRENCY proof"
+    );
+  });
+
+  test("NEGATIVE CONTROL: IRREVERSIBLE_BY_DESIGN requires an explicit reversal N/A", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex(
+      (invariant) => invariant.profile.reversal === "REQUIRED"
+    );
+    broken[index] = {
+      ...broken[index],
+      profile: {
+        ...broken[index].profile,
+        reversal: "IRREVERSIBLE_BY_DESIGN",
+      },
+    };
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id +
+        " is IRREVERSIBLE_BY_DESIGN without REVERSAL marked NOT_APPLICABLE"
+    );
+  });
+
+  test("NEGATIVE CONTROL: external-input-sensitive invariants must assess FUZZ", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex((invariant) => invariant.state === "PARTIAL");
+    broken[index] = {
+      ...broken[index],
+      profile: {
+        ...broken[index].profile,
+        externalInputSensitive: true,
+      },
+    };
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id +
+        " is external-input-sensitive without an applicable FUZZ assessment"
+    );
+  });
+
+  test("NEGATIVE CONTROL: scheduled-work-sensitive invariants must assess fault boundaries", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex((invariant) => invariant.id === "TEN-1");
+    broken[index] = {
+      ...broken[index],
+      profile: {
+        ...broken[index].profile,
+        scheduledWorkSensitive: true,
+      },
+    };
+
+    const errors = validateInvariantCatalog(ROOT, broken);
+
+    expect(errors).toContain(
+      broken[index].id +
+        " is scheduled-work-sensitive without an applicable REPLAY assessment"
+    );
+    expect(errors).toContain(
+      broken[index].id +
+        " is scheduled-work-sensitive without an applicable CONCURRENCY assessment"
+    );
+    expect(errors).toContain(
+      broken[index].id +
+        " is scheduled-work-sensitive without an applicable FAULT_INJECTION assessment"
+    );
+  });
+
+  test("NEGATIVE CONTROL: scheduled-work assessments cannot be dismissed as N/A", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex((invariant) => invariant.id === "CONC-1");
+    broken[index].requirements = broken[index].requirements.map((requirement) =>
+      requirement.obligation === "FAULT_INJECTION"
+        ? {
+            obligation: "FAULT_INJECTION",
+            status: "NOT_APPLICABLE",
+            reason: "Synthetic invalid N/A used to prove scheduled-work applicability is fail-closed.",
+          }
+        : requirement
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      "CONC-1 is scheduled-work-sensitive without an applicable FAULT_INJECTION assessment"
+    );
+  });
+
+  test("NEGATIVE CONTROL: retirement cannot be silent deletion-by-label", () => {
+    const broken = copyCatalog();
+    broken[0] = { ...broken[0], state: "RETIRED", retirement: undefined };
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[0].id + " retirement metadata is incomplete"
+    );
+  });
+
+  test("NEGATIVE CONTROL: SUPERSEDED requires replacement invariant IDs", () => {
+    const broken = copyCatalog();
+    broken[0] = {
+      ...broken[0],
+      state: "SUPERSEDED",
+      retirement: {
+        reason: "Synthetic retirement record for the validator negative control.",
+        tracking: "SCRUM-342",
+      },
+    };
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[0].id + " is SUPERSEDED without replacement invariant IDs"
+    );
+  });
+
+  test("NEGATIVE CONTROL: SUPERSEDED replacement IDs must exist and be active", () => {
+    const broken = copyCatalog();
+    broken[0] = {
+      ...broken[0],
+      state: "SUPERSEDED",
+      retirement: {
+        reason: "Synthetic supersession with an unknown replacement for the validator.",
+        tracking: "SCRUM-342",
+        supersededBy: ["NOPE-999"],
+      },
+    };
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[0].id + " supersedes to unknown invariant ID NOPE-999"
+    );
+  });
+
+  test("NEGATIVE CONTROL: an invariant cannot supersede itself", () => {
+    const broken = copyCatalog();
+    broken[0] = {
+      ...broken[0],
+      state: "SUPERSEDED",
+      retirement: {
+        reason: "Synthetic self-supersession for the validator negative control.",
+        tracking: "SCRUM-342",
+        supersededBy: [broken[0].id],
+      },
+    };
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[0].id + " cannot supersede itself"
+    );
+  });
+
+});
