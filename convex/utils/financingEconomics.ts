@@ -1,7 +1,10 @@
 import { ConvexError, v } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
 import { toMinorSameCurrencyOrUndefined, assertFiniteNumber, assertMajorAmountRepresentable } from "./money";
-import { isRequestedFinancingTermValid } from "../../lib/financing";
+import {
+  isRequestedFinancingTermValid,
+  matchingCustomerEligibilityStatusIds,
+} from "../../lib/financing";
 import {
   PERCENT_DECIMAL_PLACES,
   percentRoundsToZero,
@@ -862,15 +865,15 @@ export function assertCustomerEligibilityForCompany<T extends string>(args: {
   selectedStatusIds: T[];
   companyAcceptedStatusIds?: T[];
 }): T[] {
-  const { selectedStatusIds, companyAcceptedStatusIds } = args;
-  if (!companyAcceptedStatusIds || companyAcceptedStatusIds.length === 0) {
-    return selectedStatusIds;
-  }
-  const acceptedSet = new Set(companyAcceptedStatusIds);
-  const matched = selectedStatusIds.filter((id) => acceptedSet.has(id));
+  const matched = matchingCustomerEligibilityStatusIds(
+    args.selectedStatusIds,
+    args.companyAcceptedStatusIds
+  );
   if (matched.length === 0) {
     throw new ConvexError(
-      "This finance company does not accept the selected customer eligibility status."
+      args.selectedStatusIds.length === 0
+        ? "Customer eligibility status is required for configured finance company quotes."
+        : "This finance company does not accept the selected customer eligibility status."
     );
   }
   return matched;
