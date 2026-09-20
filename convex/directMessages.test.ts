@@ -139,6 +139,9 @@ describe("directMessages member-scoped visibility", () => {
       await ctx.db.insert("dmParticipantState", {
         conversationId,
         userId: bobId,
+        orgId,
+        conversationLastMessageAt: 1,
+        hasUnread: true,
         lastReadAt: 0,
       });
       return conversationId;
@@ -148,6 +151,12 @@ describe("directMessages member-scoped visibility", () => {
 
     const conversations = await asBob.query(api.directMessages.listConversations, { orgId });
     expect(conversations.map((conversation) => conversation._id)).toContain(targetConversationId);
+
+    const page = await asBob.query(api.directMessages.listConversationsPage, {
+      orgId,
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+    expect(page.page.map((conversation) => conversation._id)).toContain(targetConversationId);
     expect(await asBob.query(api.directMessages.getUnreadCount, { orgId })).toBe(1);
   });
 });
