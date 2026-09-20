@@ -1,0 +1,50 @@
+name: Invariant Governance
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  invariant-catalog:
+    name: invariant-catalog
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Verify invariant catalog
+        run: pnpm test:invariants
+        env:
+          NODE_ENV: test
+
+      - name: Evidence boundary
+        if: always()
+        run: |
+          {
+            echo "## Invariant Governance"
+            echo
+            echo "This job verifies invariant-catalog integrity: stable IDs, proof obligations, admissible evidence references, gap ownership, retirement rules, and negative-control requirements."
+            echo
+            echo "It does **not** claim that every runtime obligation is complete, and it does not replace the full test suite, preview/runtime rehearsals, or open-ended adversarial review."
+          } >> "$GITHUB_STEP_SUMMARY"
