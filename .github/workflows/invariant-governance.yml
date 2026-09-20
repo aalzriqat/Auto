@@ -44,7 +44,7 @@ jobs:
           {
             echo "## Invariant Governance"
             echo
-            echo "This job verifies the invariant catalog, referenced evidence, and its negative-control requirements."
+            echo "This job verifies invariant-catalog integrity: stable IDs, proof obligations, admissible evidence references, gap ownership, retirement rules, and negative-control requirements."
             echo
-            echo "It does **not** replace the full test suite, preview accounting rehearsal, or open-ended adversarial review."
+            echo "It does **not** claim that every runtime obligation is complete, and it does not replace the full test suite, preview/runtime rehearsals, or open-ended adversarial review."
           } >> "$GITHUB_STEP_SUMMARY"
