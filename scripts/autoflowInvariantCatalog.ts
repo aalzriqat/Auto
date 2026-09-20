@@ -176,39 +176,39 @@ const EVIDENCE_MARKERS: Readonly<Record<string, string>> = {
   "convex/sales.test.ts":
     "cancelling a completed sale removes its revenue from the profit and loss report",
   "scripts/economicCommandCensus.test.ts":
-    "SCRUM-313 economic command classification ratchet",
+    "the population is derived identically in both directions",
   "convex/idempotencyEconomicCommands.test.ts":
     "a concurrent retry of the same intent still creates exactly one economic event",
-  "scripts/clientIdentityLifetime.test.ts": "SCRUM-313 client identity lifetime",
+  "scripts/clientIdentityLifetime.test.ts": "the identity-guarded set is read, not hardcoded",
   "hooks/useCommandIdentity.test.tsx":
     "the same intent yields the SAME identity across retries",
   "convex/accounting/ownedSaleTaxPosting.test.ts":
     "the entry balances — which the broken version also did",
   "convex/accounting/consignedSalePosting.test.ts":
     "recognizes the margin as commission and no vehicle revenue at all",
-  "convex/dealCustodyAccounting.test.ts": "what each movement posts",
-  "convex/accountingPhase2.test.ts": "Phase 2 — posting engine",
+  "convex/dealCustodyAccounting.test.ts": "issuing cash: Dr custody clearing / Cr cash on hand (CASH) or bank (BANK_TRANSFER)",
+  "convex/accountingPhase2.test.ts": "DEPOSIT_RECEIVED creates balanced journal entry",
   "convex/accountingGenericReversalAuthority.test.ts":
-    "SCRUM-254 §2 — key spelling does not create authority",
+    "GR2 — the exact derived reserved reversal key is refused for the same reason",
   "convex/manualJournalAccountingDate.test.ts":
-    "SCRUM-50 — a manual journal posts to its declared accounting date",
-  "convex/consignedOwnership.test.ts": "what a SOURCED vehicle is, by construction",
+    "the journal entry carries the declared date, not the approval timestamp",
+  "convex/consignedOwnership.test.ts": "a sourced vehicle is the supplier's and the dealership is its agent",
   "convex/consignmentEconomics.test.ts":
-    "SCRUM-33 — a sale with no basis on the row and no vehicle to ask",
+    "the whole ticket is not published as profit",
   "convex/cashDealCockpit.test.ts":
-    "the cash headline is an ACCOUNTING result, and says so",
+    "an owned cash sale reports price less cost, reconciling to the ledger, with no estimate qualifier",
   "convex/chequeReturnLifecycle.test.ts":
-    "SCRUM-130 §A — a returned tender cannot have its receipt resurrected",
+    "A1 — the canonical pending obligation is cancelled even though a posted sibling was reversed",
   "scripts/accountingRehearsalCases.test.ts":
-    "the rehearsal FAILS when the backend misbehaves — one defect per case",
+    "C2 catches two distinct keys paying one free balance twice",
   "convex/accountingPhase18.test.ts":
-    "Phase 18 — snapshot correctness across a period boundary",
+    "snapshots accumulate per (account, currency, period) and reports sum them correctly",
   ".github/workflows/accounting-rehearsal.yml":
     "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
   "scripts/reviewActionParity.test.ts":
     "NEGATIVE CONTROL — removing a required Deal caller fails the ratchet",
   "components/applications/cockpit/DealCockpitReviewParity.test.tsx":
-    "cancel — applications.cancelApplication, from the header",
+    "cancelling sends the reason and ONE retained idempotency key",
 };
 
 function markerFor(pathName: string): string | undefined {
@@ -1136,7 +1136,8 @@ export function sourceHasActiveTestMarker(
   scriptKind: ts.ScriptKind = ts.ScriptKind.TS
 ): boolean {
   const matches = collectActiveTestRegistrations(source, scriptKind).filter(
-    (registration) => registration.title.includes(marker)
+    (registration) =>
+      registration.kind !== "describe" && registration.title.includes(marker)
   );
   return matches.length === 1;
 }
@@ -1166,7 +1167,8 @@ export function structuralProofHasExecutableNegativeControl(
   requiredIdentifiers: readonly string[] = []
 ): boolean {
   const matches = collectActiveTestRegistrations(source, ts.ScriptKind.TS).filter(
-    (registration) => registration.title.includes(marker)
+    (registration) =>
+      registration.kind !== "describe" && registration.title.includes(marker)
   );
   if (matches.length !== 1) {
     return false;
