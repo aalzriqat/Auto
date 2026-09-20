@@ -62,6 +62,7 @@ interface Seed {
   userId: Id<"users">;
   approverId: Id<"users">;
   customerId: Id<"customers">;
+  customerStatusId: Id<"orgCustomerStatuses">;
   vehicleId: Id<"vehicles">;
   companyId: Id<"financeCompanies">;
   asUser: AuthenticatedTestConvex;
@@ -134,6 +135,14 @@ async function seedDealer(
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Econ", lastName: "Customer" })
   );
+  const customerStatusId = await t.run((ctx) =>
+    ctx.db.insert("orgCustomerStatuses", {
+      orgId,
+      label: "Eligible",
+      isActive: true,
+      order: 1,
+    })
+  );
 
   const companyId = await asUser.mutation(api.finance.createCompany, {
     orgId,
@@ -142,6 +151,7 @@ async function seedDealer(
     maxTermMonths: 60,
     gracePeriodMonths: 0,
     isActive: true,
+    adminFees: 0,
     maxFinancingLTV: companyRules.maxFinancingLTV ?? 85,
     defaultLtvPercent: companyRules.defaultLtvPercent ?? DEAL.ltvPercent,
     customerFirstPaymentOffsetsUnfinancedShare: true,
@@ -159,7 +169,18 @@ async function seedDealer(
       : {}),
   });
 
-  return { t, orgId, userId, approverId, customerId, vehicleId, companyId, asUser, asApprover };
+  return {
+    t,
+    orgId,
+    userId,
+    approverId,
+    customerId,
+    customerStatusId,
+    vehicleId,
+    companyId,
+    asUser,
+    asApprover,
+  };
 }
 
 /** Creates the quote and the application the economics hang off. */
@@ -170,6 +191,7 @@ async function createApplication(seed: Seed): Promise<Id<"financeApplications">>
     vehicleId: seed.vehicleId,
     mode: "CONFIGURED_FINANCE_COMPANY",
     companyId: seed.companyId,
+    customerEligibilityStatusIds: [seed.customerStatusId],
     vehiclePrice: DEAL.targetSelling,
     downPayment: DEAL.customerFirstPayment,
     termMonths: 48,
@@ -372,7 +394,7 @@ describe("base approval — the confirmed deal", () => {
     );
   });
 
-  test("only included dealer-borne policy fees seed the quotation expense estimate", async () => {
+  test("configured Execution Fees seed the quotation expense estimate", async () => {
     const seed = await seedDealer();
     await seed.asUser.mutation(api.finance.updateCompany, {
       id: seed.companyId,
@@ -382,43 +404,12 @@ describe("base approval — the confirmed deal", () => {
       maxTermMonths: 60,
       gracePeriodMonths: 0,
       isActive: true,
+      adminFees: 100,
       maxFinancingLTV: 85,
       defaultLtvPercent: 85,
       customerFirstPaymentOffsetsUnfinancedShare: true,
       expectedCurrency: "JOD",
       expectedRuleVersion: 1,
-      feeTemplates: [
-        {
-          feeType: "STAMPS",
-          estimatedAmountMinor: jod(100),
-          paidBy: "DEALER",
-          paidTo: "GOVERNMENT",
-          includedInQuotation: true,
-          deductedFromSettlement: false,
-          refundable: false,
-          accountingTreatment: "SELLING_EXPENSE",
-        },
-        {
-          feeType: "OWNERSHIP_TRANSFER",
-          estimatedAmountMinor: jod(200),
-          paidBy: "EMPLOYEE",
-          paidTo: "GOVERNMENT",
-          includedInQuotation: false,
-          deductedFromSettlement: false,
-          refundable: false,
-          accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
-        },
-        {
-          feeType: "INSURANCE",
-          estimatedAmountMinor: jod(300),
-          paidBy: "CUSTOMER",
-          paidTo: "INSURER",
-          includedInQuotation: true,
-          deductedFromSettlement: false,
-          refundable: false,
-          accountingTreatment: "INSURANCE_EXPENSE",
-        },
-      ],
     });
 
     const applicationId = await createApplication(seed);
@@ -427,7 +418,7 @@ describe("base approval — the confirmed deal", () => {
     expect(app.estimatedClosingExpensesMinor).toBe(jod(100));
   });
 
-  test("quote-lineage repair restores the same frozen included-fee estimate as creation", async () => {
+  test("quote-lineage repair restores the same frozen Execution Fees estimate as creation", async () => {
     const seed = await seedDealer();
     await seed.asUser.mutation(api.finance.updateCompany, {
       id: seed.companyId,
@@ -437,53 +428,12 @@ describe("base approval — the confirmed deal", () => {
       maxTermMonths: 60,
       gracePeriodMonths: 0,
       isActive: true,
+      adminFees: 140,
       maxFinancingLTV: 85,
       defaultLtvPercent: 85,
       customerFirstPaymentOffsetsUnfinancedShare: true,
       expectedCurrency: "JOD",
       expectedRuleVersion: 1,
-      feeTemplates: [
-        {
-          feeType: "STAMPS",
-          estimatedAmountMinor: jod(100),
-          paidBy: "DEALER",
-          paidTo: "GOVERNMENT",
-          includedInQuotation: true,
-          deductedFromSettlement: false,
-          refundable: false,
-          accountingTreatment: "SELLING_EXPENSE",
-        },
-        {
-          feeType: "OWNERSHIP_TRANSFER",
-          estimatedAmountMinor: jod(40),
-          paidBy: "EMPLOYEE",
-          paidTo: "GOVERNMENT",
-          includedInQuotation: true,
-          deductedFromSettlement: false,
-          refundable: false,
-          accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
-        },
-        {
-          feeType: "APPRAISAL_FEE",
-          estimatedAmountMinor: jod(20),
-          paidBy: "DEALER",
-          paidTo: "APPRAISER",
-          includedInQuotation: false,
-          deductedFromSettlement: false,
-          refundable: false,
-          accountingTreatment: "APPRAISAL_EXPENSE",
-        },
-        {
-          feeType: "INSURANCE",
-          estimatedAmountMinor: jod(300),
-          paidBy: "CUSTOMER",
-          paidTo: "INSURER",
-          includedInQuotation: true,
-          deductedFromSettlement: false,
-          refundable: false,
-          accountingTreatment: "INSURANCE_EXPENSE",
-        },
-      ],
     });
     const applicationId = await createApplication(seed);
     await seed.t.run((ctx) =>
