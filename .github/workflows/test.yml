@@ -32,15 +32,6 @@ jobs:
         node-version: '22.21.1'
         cache: 'pnpm'
 
-    # JRE auto-provisioning is deliberately disabled above, so pin the scanner
-    # runtime explicitly. SonarQube Cloud requires Java 21+ when provisioning is
-    # disabled; this changes only how the scanner gets Java, not what it scans.
-    - name: Use Java 21 for SonarScanner
-      uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
-      with:
-        distribution: temurin
-        java-version: '21'
-
     - name: Install dependencies
       run: pnpm install --frozen-lockfile --ignore-scripts
 
@@ -123,6 +114,15 @@ jobs:
       with:
         node-version: '22.21.1'
         cache: 'pnpm'
+
+    # JRE auto-provisioning is deliberately disabled above, so pin the scanner
+    # runtime explicitly. SonarQube Cloud requires Java 21+ when provisioning is
+    # disabled; this changes only how the scanner gets Java, not what it scans.
+    - name: Use Java 21 for SonarScanner
+      uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+      with:
+        distribution: temurin
+        java-version: '21'
 
     - name: Install dependencies
       run: pnpm install --frozen-lockfile --ignore-scripts
