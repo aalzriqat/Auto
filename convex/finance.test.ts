@@ -129,6 +129,7 @@ describe("finance companies", () => {
 
     await expect(
       asOwner.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
         id: companyId,
         orgId,
         name: "Standard Finance",
@@ -171,6 +172,7 @@ describe("finance companies", () => {
     });
 
     await asOwner.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
       id: companyId,
       orgId,
       name: "Jordan Finance Updated",
@@ -258,6 +260,7 @@ describe("finance companies", () => {
     // organization." and the record could never be edited again — the dialog
     // re-sent the dangling id on every save and offered no way to remove it.
     await asOwner.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
       id: companyId,
       orgId,
       name: "Stranded Finance Renamed",
@@ -294,6 +297,7 @@ describe("finance companies", () => {
     // so writing it unconditionally would erase the restriction and silently
     // widen the company to "accepts every customer".
     await asOwner.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
       id: companyId,
       orgId,
       name: "Restricted Finance Renamed",
@@ -332,6 +336,7 @@ describe("finance companies", () => {
     // that exist in someone else's org. Only createCompany covered this before.
     await expect(
       asOwner.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
         id: companyId,
         orgId,
         name: "Boundary Finance",
