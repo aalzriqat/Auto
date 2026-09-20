@@ -126,6 +126,7 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
     broken[0].proofs = [
       ...broken[0].proofs,
       {
+        invariantId: broken[0].id,
         path: "convex/this-proof-does-not-exist.test.ts",
         mechanism: "EXECUTION",
         obligations: ["NEGATIVE"],
@@ -160,9 +161,33 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
 
     expect(validateInvariantCatalog(ROOT, broken)).toContain(
       broken[0].id +
-        " proof marker is missing from " +
+        " proof marker is missing or not an active executable test marker in " +
         broken[0].proofs[0].path +
         ": SCRUM-342-MARKER-THAT-DOES-NOT-EXIST"
+    );
+  });
+
+  test("NEGATIVE CONTROL: evidence cannot reference an unknown invariant ID", () => {
+    const broken = copyCatalog();
+    broken[0].proofs = broken[0].proofs.map((proof, index) =>
+      index === 0 ? { ...proof, invariantId: "NOPE-999" } : proof
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[0].id + " proof references unknown invariant ID NOPE-999"
+    );
+  });
+
+  test("NEGATIVE CONTROL: evidence cannot be bound to a different existing invariant", () => {
+    const broken = copyCatalog();
+    broken[0].proofs = broken[0].proofs.map((proof, index) =>
+      index === 0 ? { ...proof, invariantId: broken[1].id } : proof
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[0].id +
+        " contains proof bound to different invariant ID " +
+        broken[1].id
     );
   });
 
@@ -391,6 +416,20 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
         "NEGATIVE CONTROL — executable"
       )
     ).toBe(true);
+  });
+
+  test("NEGATIVE CONTROL: test.skip cannot satisfy structural evidence", () => {
+    const source = `
+      test.skip("NEGATIVE CONTROL — skipped", () => {
+        throw new Error("never executed");
+      });
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — skipped"
+      )
+    ).toBe(false);
   });
 
   test("NEGATIVE CONTROL: PLATFORM_SERIALIZED_PROVEN requires PREVIEW concurrency proof", () => {
