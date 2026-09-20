@@ -60,6 +60,34 @@ export function isRequestedFinancingTermValid(args: {
   );
 }
 
+/**
+ * Minimum total down payment needed to bring the authoritative financed amount
+ * back under a lender's financing ceiling.
+ *
+ * The excess must be measured from `financedAmount`, because that value already
+ * reflects whether execution fees and commission are inside or outside the debt.
+ * Reconstructing the base from price/fees/commission at a caller can therefore
+ * understate or overstate the required customer contribution.
+ */
+export function minimumDownPaymentForFinancingLimit(args: {
+  currentDownPayment: number;
+  financedAmount: number;
+  maxFinancingAllowed: number;
+}): number {
+  const { currentDownPayment, financedAmount, maxFinancingAllowed } = args;
+  if (
+    !Number.isFinite(currentDownPayment) ||
+    !Number.isFinite(financedAmount) ||
+    !Number.isFinite(maxFinancingAllowed)
+  ) {
+    return 0;
+  }
+  return Math.max(
+    0,
+    currentDownPayment + financedAmount - maxFinancingAllowed
+  );
+}
+
 export function calculateUnifiedMurabaha({
   vehiclePrice,
   downPayment,
