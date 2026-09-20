@@ -233,7 +233,9 @@ export const search = query({
       const snapshotData = await getPublishedSnapshotData(ctx, orgId);
       if (!snapshotData) continue;
       const financeCompany = (snapshotData.financeCompany as FinanceCompanyTerms | null | undefined) ?? null;
-      const financeAvailable = Boolean(financeCompany);
+      const financeAvailable = Boolean(
+        financeCompany && financeCompany.adminFees !== undefined
+      );
       if (args.paymentType === "FINANCE" && !financeAvailable) continue;
       if (args.maxMonthlyPayment != null && !financeAvailable) continue;
 

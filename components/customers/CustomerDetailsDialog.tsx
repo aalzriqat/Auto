@@ -405,7 +405,7 @@ export function CustomerDetailsDialog({
                         <div className={`grid grid-cols-2 ${quote.companyId ? "md:grid-cols-3" : ""} gap-4 border-t pt-3`}>
                           <div>
                             <p className="text-xs text-muted-foreground">{t("TotalAmountDueFinanced" as any)}</p>
-                            <p className="font-medium">{quote.totalFinancedAmount?.toLocaleString(localeCode, { minimumFractionDigits: 2 })} {t("JOD")}</p>
+                            <p className="font-medium">{(quote.totalFinancedAmount ?? quote.vehiclePrice)?.toLocaleString(localeCode, { minimumFractionDigits: 2 })} {t("JOD")}</p>
                           </div>
                           {quote.companyId && (
                             <div>
@@ -495,7 +495,7 @@ export function CustomerDetailsDialog({
             selectedVehicle={printingQuote.vehicle ?? undefined}
             selectedCustomer={customer}
             selectedResult={{
-              totalFinancedAmount: printingQuote.totalFinancedAmount,
+              totalFinancedAmount: printingQuote.totalFinancedAmount ?? printingQuote.vehiclePrice,
               recipientName: printingQuote.recipientName || `${customer.firstName} ${customer.lastName}`,
             }}
             dateStr={formatCustomerDate(printingQuote.createdAt, locale)}

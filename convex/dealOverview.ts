@@ -31,6 +31,14 @@ import {
 } from "./utils/vehicleCostBasis";
 import { toMinorUnits } from "./utils/money";
 
+function frozenMajorAmountToMinorOrUnreadable(amount: number, currency: string): number {
+  try {
+    return toMinorUnits(amount, currency);
+  } catch {
+    return Number.NaN;
+  }
+}
+
 /**
  * The cockpit payload, typed through a one-module api slice for the reason
  * `dealWorkspace.ts` documents: annotating through the generated `api` from
@@ -446,7 +454,10 @@ export const financedDealOverview = query({
       const frozenEstimatedFees =
         app.estimatedDealerBorneExpensesMinor ??
         (app.companyRuleSnapshot?.adminFees !== undefined
-          ? toMinorUnits(app.companyRuleSnapshot.adminFees, cockpit.money.currency)
+          ? frozenMajorAmountToMinorOrUnreadable(
+              app.companyRuleSnapshot.adminFees,
+              cockpit.money.currency
+            )
           : undefined);
       const expectedDealerBorne = dealerBorneExpected(
         expected.source,

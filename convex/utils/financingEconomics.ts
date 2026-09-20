@@ -1,6 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
 import { toMinorSameCurrencyOrUndefined, assertFiniteNumber, assertMajorAmountRepresentable } from "./money";
+import { isRequestedFinancingTermValid } from "../../lib/financing";
 import {
   PERCENT_DECIMAL_PLACES,
   percentRoundsToZero,
@@ -18,6 +19,7 @@ import {
 // Pass-throughs, re-exported directly so they do not sit in this module's local
 // scope pretending to be used here.
 export { classifyGapResolution, evaluateQuotationException } from "../../lib/financingEconomics";
+export { isRequestedFinancingTermValid };
 
 /**
  * A stamp of the economics an irreversible confirmation is about, demanded back
@@ -794,21 +796,6 @@ export function assertRequestedFinancingTermValid(args: {
       "Finance term must be strictly greater than the grace period."
     );
   }
-}
-
-export function isRequestedFinancingTermValid(args: {
-  termMonths: number;
-  gracePeriodMonths?: number;
-  maxTermMonths?: number;
-}): boolean {
-  const grace = args.gracePeriodMonths ?? 0;
-  return (
-    Number.isFinite(args.termMonths) &&
-    Number.isInteger(args.termMonths) &&
-    args.termMonths > 0 &&
-    (args.maxTermMonths === undefined || args.termMonths <= args.maxTermMonths) &&
-    args.termMonths > grace
-  );
 }
 
 export function assertFinancedMurabahaResultValid(result: {
