@@ -141,10 +141,11 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
 
   test("NEGATIVE CONTROL: a stale proof marker is refused", () => {
     const broken = copyCatalog();
-    broken[0].proofs[0] = {
-      ...broken[0].proofs[0],
-      marker: "SCRUM-342-MARKER-THAT-DOES-NOT-EXIST",
-    };
+    broken[0].proofs = broken[0].proofs.map((proof, index) =>
+      index === 0
+        ? { ...proof, marker: "SCRUM-342-MARKER-THAT-DOES-NOT-EXIST" }
+        : proof
+    );
 
     expect(validateInvariantCatalog(ROOT, broken)).toContain(
       broken[0].id +
