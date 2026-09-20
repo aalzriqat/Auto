@@ -635,6 +635,22 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
     ).toBe(true);
   });
 
+  test("NEGATIVE CONTROL: a describe title alone cannot satisfy executable evidence", () => {
+    const source = `
+      describe("NEGATIVE CONTROL — suite title only", () => {
+        test("some different case", () => {
+          expect(true).toBe(true);
+        });
+      });
+    `;
+    expect(
+      structuralProofHasExecutableNegativeControl(
+        source,
+        "NEGATIVE CONTROL — suite title only"
+      )
+    ).toBe(false);
+  });
+
   test("NEGATIVE CONTROL: a vacuous title match cannot satisfy an analyzer-backed control", () => {
     const source = `
       test("NEGATIVE CONTROL — analyzer backed", () => {
