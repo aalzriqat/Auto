@@ -921,7 +921,13 @@ export function validateInvariantCatalog(
           errors.push(
             invariant.id + " required proof " + requirement.obligation + " has no accepted evidence mechanism"
           );
-        } else if (!invariant.proofs.some((proof) => proofCanSatisfy(requirement, proof))) {
+        } else if (
+          !invariant.proofs.some(
+            (proof) =>
+              proof.invariantId === invariant.id &&
+              proofCanSatisfy(requirement, proof)
+          )
+        ) {
           errors.push(
             invariant.id + " is missing required proof obligation " + requirement.obligation
           );
