@@ -274,6 +274,18 @@ const profile = (
   ...overrides,
 });
 
+const REQUIRED_ACTIVE_INVARIANT_FAMILIES = [
+  "TEN",
+  "AUTH",
+  "ECON",
+  "ACC",
+  "CONS",
+  "LIFE",
+  "PERF",
+  "CONC",
+  "UI",
+] as const;
+
 const MANDATORY_OBLIGATION_FLOORS: Readonly<
   Record<string, readonly ProofObligation[]>
 > = {
@@ -1064,6 +1076,12 @@ export function validateInvariantCatalog(
 
   if (active.length === 0) {
     errors.push("Invariant catalog has no active invariants");
+  }
+
+  for (const family of REQUIRED_ACTIVE_INVARIANT_FAMILIES) {
+    if (!active.some((invariant) => invariant.id.startsWith(family + "-"))) {
+      errors.push("Required invariant family has no active invariant: " + family);
+    }
   }
 
   for (const invariant of catalog) {
