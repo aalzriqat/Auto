@@ -795,15 +795,17 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
       },
     };
 
-    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+    const errors = validateInvariantCatalog(ROOT, broken);
+
+    expect(errors).toContain(
       broken[index].id +
         " is scheduled-work-sensitive without explicit REPLAY assessment"
     );
-    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+    expect(errors).toContain(
       broken[index].id +
         " is scheduled-work-sensitive without explicit CONCURRENCY assessment"
     );
-    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+    expect(errors).toContain(
       broken[index].id +
         " is scheduled-work-sensitive without explicit FAULT_INJECTION assessment"
     );
