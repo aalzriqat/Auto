@@ -22,6 +22,16 @@ vi.mock("@/components/ui/sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
+// Radix Dialog's focus trap is orthogonal to this regression and loops under
+// jsdom/React 19. Keep the real QuoteDialog body and finance-card rendering,
+// but replace only the modal shell so this test reaches the money-value branch.
+vi.mock("@/components/ui/dialog", () => ({
+  Dialog: ({ children }: any) => <>{children}</>,
+  DialogContent: ({ children }: any) => <div>{children}</div>,
+  DialogHeader: ({ children }: any) => <div>{children}</div>,
+  DialogTitle: ({ children }: any) => <h2>{children}</h2>,
+}));
+
 vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
   return {
