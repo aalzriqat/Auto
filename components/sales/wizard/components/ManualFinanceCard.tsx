@@ -225,7 +225,11 @@ export function ManualFinanceCard({
 
       {/* Details */}
       <button type="button" onClick={selectIfValid} className="w-full px-4 pb-3 space-y-1.5 text-xs text-start">
-        {result ? (
+        {!termValid ? (
+          <div className="text-center text-amber-500 py-1">
+            {locale === "ar" ? "مدة التمويل غير صالحة" : "Invalid financing term"}
+          </div>
+        ) : result ? (
           <>
             <div className="flex justify-between text-muted-foreground">
               <span>{t("FinancedAmount" as any)}</span>

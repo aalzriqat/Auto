@@ -265,6 +265,15 @@ export default function Step1QuoteSetup({
           return;
         }
 
+        if (selectedCompany.adminFees === undefined) {
+          form.setError("vehicleId", {
+            message:
+              t("ExecutionFeesNotConfigured" as any) ??
+              "Execution Fees are not configured for this finance company.",
+          });
+          return;
+        }
+
         if (
           !isRequestedFinancingTermValid({
             termMonths: values.termMonths,

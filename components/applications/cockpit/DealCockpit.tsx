@@ -2555,11 +2555,16 @@ function ProfitHeadline({
 }>) {
   const isManagementEstimate = profit.available && profit.basis === "MANAGEMENT_ESTIMATE";
   const isLoss = profit.available && profit.amountMinor < 0;
+  const isEstimatedLoss =
+    profit.available &&
+    profit.amountMinor < 0 &&
+    profit.basis === "MANAGEMENT_ESTIMATE" &&
+    profit.classification !== "ACTUAL_UNPOSTABLE";
   return (
     <div className="space-y-1">
       <p className="text-sm text-muted-foreground">
         {isLoss
-          ? profit.basis === "MANAGEMENT_ESTIMATE"
+          ? isEstimatedLoss
             ? t("LossEstimated")
             : t("LossActual")
           : t("NetDealershipProfit")}
