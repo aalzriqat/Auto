@@ -171,7 +171,7 @@ export function rateLimitRetryDelayMs(error) {
   if (!Number.isSafeInteger(seconds) || seconds < 0) return null;
   // Token-bucket retryAfter can land on a boundary; add a small deterministic
   // cushion so the retry does not arrive a few milliseconds before refill.
-  return Math.min(Math.max(seconds * 1000, 250) + 250, 5250);
+  return Math.min(Math.max(seconds * 1000, 250) + 250, 6250);
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
