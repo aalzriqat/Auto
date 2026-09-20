@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   AUTOFLOW_INVARIANTS,
   isActiveInvariant,
+  sourceHasActiveWorkflowMarker,
   structuralProofHasExecutableNegativeControl,
   validateInvariantCatalog,
   type InvariantDefinition,
@@ -256,10 +257,66 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
 
     expect(validateInvariantCatalog(ROOT, broken)).toContain(
       broken[0].id +
-        " proof marker is missing or not an active executable test marker in " +
+        " proof marker is missing or inactive in " +
         broken[0].proofs[0].path +
         ": SCRUM-342-MARKER-THAT-DOES-NOT-EXIST"
     );
+  });
+
+  test("NEGATIVE CONTROL: a commented workflow marker is not preview evidence", () => {
+    const source = `
+      # node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
+      name: Accounting Cloud Rehearsal
+      on:
+      jobs:
+        rehearsal:
+          runs-on: ubuntu-latest
+    `;
+    expect(
+      sourceHasActiveWorkflowMarker(
+        source,
+        "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
+        [
+          "name: Accounting Cloud Rehearsal",
+          "on:",
+          "jobs:",
+          "rehearsal:",
+          "runs-on: ubuntu-latest",
+          "- name: Run the Accounting rehearsal",
+          "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
+        ]
+      )
+    ).toBe(false);
+  });
+
+  test("active preview workflow evidence requires the pinned rehearsal command and structure", () => {
+    const source = `
+      name: Accounting Cloud Rehearsal
+      on:
+        pull_request:
+      jobs:
+        rehearsal:
+          runs-on: ubuntu-latest
+          steps:
+            - name: Run the Accounting rehearsal
+              run: |
+                node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
+    `;
+    expect(
+      sourceHasActiveWorkflowMarker(
+        source,
+        "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
+        [
+          "name: Accounting Cloud Rehearsal",
+          "on:",
+          "jobs:",
+          "rehearsal:",
+          "runs-on: ubuntu-latest",
+          "- name: Run the Accounting rehearsal",
+          "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
+        ]
+      )
+    ).toBe(true);
   });
 
   test("NEGATIVE CONTROL: evidence cannot reference an unknown invariant ID", () => {
