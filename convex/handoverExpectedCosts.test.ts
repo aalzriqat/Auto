@@ -1148,6 +1148,7 @@ describe("the fee-template cap", () => {
     );
     await expect(
       seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
         orgId: seed.orgId,
         id: companyId,
         name: "Legacy",
@@ -1164,7 +1165,8 @@ describe("the fee-template cap", () => {
       ctx.db.insert("financeCompanies", { orgId: seed.orgId, name: "Legacy", ...companyFields, feeTemplates: oversized })
     );
 
-    await seed.asUser.mutation(api.finance.updateCompany, { orgId: seed.orgId, id: companyId, name: "Legacy, renamed", ...companyFields });
+    await seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1, orgId: seed.orgId, id: companyId, name: "Legacy, renamed", ...companyFields });
     const renamed = await seed.t.run((ctx) => ctx.db.get(companyId));
     expect(renamed?.name).toBe("Legacy, renamed");
     expect(renamed?.feeTemplates).toEqual(oversized);
@@ -1172,6 +1174,7 @@ describe("the fee-template cap", () => {
     // Updating with feeTemplates is rejected as retired
     await expect(
       seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 2,
         orgId: seed.orgId,
         id: companyId,
         name: "Legacy, renamed",
@@ -1182,6 +1185,7 @@ describe("the fee-template cap", () => {
 
     // Adopting adminFees clears legacy feeTemplates
     await seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 2,
       orgId: seed.orgId,
       id: companyId,
       name: "Legacy, modernized",
