@@ -2401,6 +2401,16 @@ export default defineSchema({
     deactivatedAt: v.optional(v.number()),
     deactivatedBy: v.optional(v.id("users")),
 
+    /**
+     * Optimistic-concurrency token for full-form company edits.
+     *
+     * Distinct from ruleVersion: ruleVersion freezes dealer-purchase economics
+     * for historical deals, while editRevision covers every mutable field the
+     * settings forms can overwrite (name, customer terms, statuses, activity,
+     * and dealer rules). Legacy rows without it read as revision 1.
+     */
+    editRevision: v.optional(v.number()),
+
     // --- Dealer-side purchase rules -------------------------------------
     // The fields above describe the loan the company sells the CUSTOMER. These
     // describe the purchase it makes from the DEALERSHIP, which is a different
