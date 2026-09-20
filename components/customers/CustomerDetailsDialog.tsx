@@ -404,7 +404,11 @@ export function CustomerDetailsDialog({
 
                         <div className={`grid grid-cols-2 ${quote.companyId ? "md:grid-cols-3" : ""} gap-4 border-t pt-3`}>
                           <div>
-                            <p className="text-xs text-muted-foreground">{t("TotalAmountDueFinanced" as any)}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {quote.mode === "CASH" || (!quote.mode && !quote.companyId)
+                                ? t("VehiclePrice" as any)
+                                : t("TotalAmountDueFinanced" as any)}
+                            </p>
                             <p className="font-medium">{(quote.totalFinancedAmount ?? quote.vehiclePrice)?.toLocaleString(localeCode, { minimumFractionDigits: 2 })} {t("JOD")}</p>
                           </div>
                           {quote.companyId && (
