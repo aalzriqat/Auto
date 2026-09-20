@@ -397,7 +397,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                           <span className="text-muted-foreground">{t("TotalToPay" as any)}:</span>
                           <span className="font-semibold">{result.totalFinancedAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</span>
                         </div>
-                      ) : (
+                      ) : result.feesConfigured ? (
                         <>
                           <div className="flex justify-between text-sm border-b pb-1">
                             <span className="text-muted-foreground">{t("FinancedAmount" as any)}:</span>
@@ -437,7 +437,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                             </div>
                           )}
                         </>
-                      )}
+                      ) : null}
                     </div>
 
                     {!result.isCash && (
