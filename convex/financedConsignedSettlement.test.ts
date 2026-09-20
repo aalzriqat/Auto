@@ -1091,6 +1091,18 @@ describe("a lease, which is external but has no provider identity", () => {
  * The snapshotted company IS the answer when the mode cannot give one.
  */
 describe("a legacy deal that has a finance company but no recorded mode", () => {
+  test("the legacy fixture actually clears both quote and application mode evidence", async () => {
+    const s = await seedDealership("legacy0");
+    const { applicationId } = await runDeal(s, { omitMode: true, finalize: false });
+
+    const view = await s.asUser.query(api.applications.get, {
+      orgId: s.orgId,
+      applicationId,
+    });
+
+    expect(view?.quoteModeAtSubmission).toBeUndefined();
+  });
+
   test("is still asked the settlement route before finalizing", async () => {
     const s = await seedDealership("legacy1");
     await expect(runDeal(s, { omitMode: true })).rejects.toThrow(/record the settlement route/i);
