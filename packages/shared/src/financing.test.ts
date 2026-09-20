@@ -1,4 +1,9 @@
-import { calculateUnifiedMurabaha, calculateDBR, calculateMaximumAffordableVehiclePrice } from "./financing";
+import {
+  calculateUnifiedMurabaha,
+  calculateDBR,
+  calculateMaximumAffordableVehiclePrice,
+  minimumDownPaymentForFinancingLimit,
+} from "./financing";
 import { describe, it, expect } from "vitest";
 
 describe("Financing Logic", () => {
@@ -138,6 +143,61 @@ describe("Financing Logic", () => {
       expect(result.monthlyInstallment).toBe(0);
       // Everything else still computes normally — only the division is guarded.
       expect(result.totalContractValue).toBeGreaterThan(0);
+    });
+  });
+
+  describe("minimumDownPaymentForFinancingLimit", () => {
+    it("includes execution fees that are already inside financedAmount", () => {
+      const result = calculateUnifiedMurabaha({
+        vehiclePrice: 10_000,
+        downPayment: 1_000,
+        commission: 0,
+        processingFees: 300,
+        annualProfitRate: 5,
+        annualInsuranceRate: 0,
+        termMonths: 60,
+      });
+
+      expect(result.financedAmount).toBe(9_300);
+      expect(
+        minimumDownPaymentForFinancingLimit({
+          currentDownPayment: 1_000,
+          financedAmount: result.financedAmount,
+          maxFinancingAllowed: 9_000,
+        })
+      ).toBe(1_300);
+    });
+
+    it("does not add flat commission that is outside financedAmount", () => {
+      const result = calculateUnifiedMurabaha({
+        vehiclePrice: 10_000,
+        downPayment: 1_000,
+        commission: 500,
+        processingFees: 300,
+        annualProfitRate: 5,
+        annualInsuranceRate: 0,
+        termMonths: 60,
+        includesCommissionInDebt: true,
+      });
+
+      expect(result.financedAmount).toBe(9_300);
+      expect(
+        minimumDownPaymentForFinancingLimit({
+          currentDownPayment: 1_000,
+          financedAmount: result.financedAmount,
+          maxFinancingAllowed: 9_000,
+        })
+      ).toBe(1_300);
+    });
+
+    it("keeps the current down payment when that is exactly what satisfies the ceiling", () => {
+      expect(
+        minimumDownPaymentForFinancingLimit({
+          currentDownPayment: 2_000,
+          financedAmount: 7_500,
+          maxFinancingAllowed: 8_000,
+        })
+      ).toBe(1_500);
     });
   });
 
