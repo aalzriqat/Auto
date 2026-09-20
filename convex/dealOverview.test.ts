@@ -652,6 +652,33 @@ describe("dealOverview.financedDealOverview", () => {
     }
   );
 
+  test("a corrupt legacy frozen adminFees value withholds the expected outlay instead of crashing the deal overview", async () => {
+    const s = await seed("corrupt-admin-fees");
+    const applicationId = await insertApplication(s);
+    await s.t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        companyRuleSnapshot: {
+          ruleVersion: 1,
+          companyName: "Legacy Finance",
+          adminFees: Number.MAX_SAFE_INTEGER,
+          feeTemplates: [],
+        },
+      })
+    );
+
+    const view = await s.asOwner.query(api.dealOverview.financedDealOverview, {
+      orgId: s.orgId,
+      applicationId,
+    });
+
+    expect(view).not.toBeNull();
+    expect(view!.financialSummary!.dealerOutlay).toMatchObject({
+      expectedCostsRemainingMinor: null,
+      expectedCostsReason: "UNSAFE_AMOUNT",
+      totalExpectedMinor: null,
+    });
+  });
+
   test("two safe same-currency actuals that overflow between them are withheld as UNSAFE_AMOUNT, never summed", async () => {
     const s = await seed("u-overflow");
     const applicationId = await insertApplication(s);
