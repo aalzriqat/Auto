@@ -885,6 +885,42 @@ export function validateInvariantCatalog(
       }
     }
 
+    const concurrencyRequirement = requirements.get("CONCURRENCY");
+    if (
+      invariant.profile.concurrency === "REQUIRED" &&
+      concurrencyRequirement?.status !== "REQUIRED"
+    ) {
+      errors.push(invariant.id + " declares concurrency REQUIRED without required CONCURRENCY proof");
+    }
+    if (
+      invariant.profile.concurrency === "UNKNOWN" &&
+      concurrencyRequirement?.status !== "DEFERRED"
+    ) {
+      errors.push(invariant.id + " has UNKNOWN concurrency without a deferred CONCURRENCY obligation");
+    }
+    if (
+      invariant.profile.concurrency === "NOT_APPLICABLE" &&
+      invariant.profile.economicImpact === "DIRECT" &&
+      concurrencyRequirement?.status !== "NOT_APPLICABLE"
+    ) {
+      errors.push(invariant.id + " marks concurrency NOT_APPLICABLE inconsistently");
+    }
+
+    const reversalRequirement = requirements.get("REVERSAL");
+    if (
+      invariant.profile.reversal === "REQUIRED" &&
+      !["REQUIRED", "DEFERRED"].includes(reversalRequirement?.status ?? "")
+    ) {
+      errors.push(invariant.id + " declares reversal REQUIRED without an applicable REVERSAL obligation");
+    }
+    if (
+      invariant.profile.reversal === "NOT_APPLICABLE" &&
+      invariant.profile.economicImpact === "DIRECT" &&
+      reversalRequirement?.status !== "NOT_APPLICABLE"
+    ) {
+      errors.push(invariant.id + " marks reversal NOT_APPLICABLE inconsistently");
+    }
+
     if (
       invariant.state === "ENFORCED" &&
       invariant.profile.concurrency === "UNKNOWN"
