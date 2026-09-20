@@ -189,6 +189,9 @@ describe("live-cloud rate-limit retries are narrow and fail closed", () => {
 
   test("retry parsing accepts only the product's exact rate-limit message", () => {
     expect(rateLimitRetryDelayMs("Rate limit exceeded. Try again in 1s")).toBe(1250);
+    // The upload bucket refills 10 tokens/minute and can legitimately return 6s.
+    // Keep the 250ms boundary cushion instead of retrying 750ms too early.
+    expect(rateLimitRetryDelayMs("Rate limit exceeded. Try again in 6s")).toBe(6250);
     expect(rateLimitRetryDelayMs("Rate limit exceeded. Try again later")).toBeNull();
     expect(rateLimitRetryDelayMs("Customer not found")).toBeNull();
   });
