@@ -3,7 +3,7 @@ import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
-import { calculateUnifiedMurabaha, isRequestedFinancingTermValid } from "@/lib/financing";
+import { calculateUnifiedMurabaha, isRequestedFinancingTermValid, minimumDownPaymentForFinancingLimit } from "@/lib/financing";
 
 interface UseFinanceComparisonParams {
   vehiclePrice: number;
@@ -134,11 +134,12 @@ export function useFinanceComparison({
         result.financedAmount > maxFinancingAllowed &&
         actualValuation > 0;
 
-      const minimumDownPayment = feesConfigured
-        ? Math.max(
-            0,
-            effectivePrice + (company.commission || 0) + executionFees - maxFinancingAllowed
-          )
+      const minimumDownPayment = result
+        ? minimumDownPaymentForFinancingLimit({
+            currentDownPayment: downPayment,
+            financedAmount: result.financedAmount,
+            maxFinancingAllowed,
+          })
         : undefined;
 
       const companyDocs =
