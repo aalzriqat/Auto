@@ -32,7 +32,10 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { VehicleCostBar } from "../components/VehicleCostBar";
 import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
-import { isRequestedFinancingTermValid } from "@/lib/financing";
+import {
+  isRequestedFinancingTermValid,
+  matchingCustomerEligibilityStatusIds,
+} from "@/lib/financing";
 
 export type Step1Values = z.infer<typeof step1Schema>;
 
@@ -265,6 +268,30 @@ export default function Step1QuoteSetup({
           return;
         }
 
+        if (customerStatuses.length === 0) {
+          form.setError("vehicleId", {
+            message:
+              locale === "ar"
+                ? "اختر حالة عميل واحدة على الأقل قبل متابعة عرض التمويل."
+                : "Select at least one customer status before continuing with finance.",
+          });
+          return;
+        }
+
+        const matchingStatuses = matchingCustomerEligibilityStatusIds(
+          customerStatuses,
+          selectedCompany.acceptedStatuses?.map(String)
+        );
+        if (matchingStatuses.length === 0) {
+          form.setError("vehicleId", {
+            message:
+              locale === "ar"
+                ? "شركة التمويل المحددة لا تقبل حالات العميل المختارة."
+                : "The selected finance company does not accept the selected customer status.",
+          });
+          return;
+        }
+
         if (selectedCompany.adminFees === undefined) {
           form.setError("vehicleId", {
             message:
@@ -281,11 +308,16 @@ export default function Step1QuoteSetup({
             gracePeriodMonths: selectedCompany.gracePeriodMonths,
           })
         ) {
+          const maxTerm = selectedCompany.maxTermMonths;
           form.setError("termMonths", {
             message:
-              locale === "ar"
-                ? `مدة التمويل غير متاحة لهذه الشركة. الحد الأقصى ${selectedCompany.maxTermMonths} شهر.`
-                : `This term is unavailable for this finance company. Maximum is ${selectedCompany.maxTermMonths} months.`,
+              maxTerm !== undefined && maxTerm > 0
+                ? locale === "ar"
+                  ? `مدة التمويل غير متاحة لهذه الشركة. الحد الأقصى ${maxTerm} شهر.`
+                  : `This term is unavailable for this finance company. Maximum is ${maxTerm} months.`
+                : locale === "ar"
+                  ? "مدة التمويل غير متاحة لهذه الشركة."
+                  : "This term is unavailable for this finance company.",
           });
           return;
         }
