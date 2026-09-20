@@ -124,6 +124,8 @@ A structural guard can only prove the shapes it enumerates. Unknown/unreadable s
 
 Every structural proof must name an executable direct `test`/`it` negative-control marker. The validator parses the TypeScript AST, requires the pinned analyzer calls to execute, and requires an assertion to consume analyzer-derived data; a matching phrase in a comment, inert string, `describe` title, `test.skip`, skipped suite, or identifier-only decoy does not count. Every proof record also carries its invariant ID; unknown or cross-bound proof IDs fail the self-audit and cannot satisfy a REQUIRED obligation.
 
+Proof-marker bindings are invariant-scoped (`invariant ID + proof path + obligation set`) and are validated in both directions: every active proof must resolve to its registered marker, and every registered proof/control/workflow binding must correspond to an active catalog proof. Shared test files therefore remain auditable per invariant instead of allowing one surviving proof to hide another invariant's deleted binding.
+
 ### Balanced journals
 
 Debit equals credit is necessary, not sufficient. Semantic posting proof must assert accounts, amounts, ownership basis, dates, and other material event semantics.
