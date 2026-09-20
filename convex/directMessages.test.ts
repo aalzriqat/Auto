@@ -161,6 +161,98 @@ describe("directMessages member-scoped visibility", () => {
   });
 });
 
+describe("directMessages member-scoped pagination", () => {
+  test("pages only the caller's conversations in stable newest-first order without gaps or duplicates", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Paged Message Dealer", createdAt: Date.now() })
+    );
+    const roleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "OWNER", permissions: [], isSystemOwnerRole: true })
+    );
+    const [aliceId, bobId, charlieId] = await t.run(async (ctx) =>
+      Promise.all([
+        ctx.db.insert("users", { clerkId: "alice_paged", email: "alice.paged@test.com", name: "Alice" }),
+        ctx.db.insert("users", { clerkId: "bob_paged", email: "bob.paged@test.com", name: "Bob" }),
+        ctx.db.insert("users", { clerkId: "charlie_paged", email: "charlie.paged@test.com", name: "Charlie" }),
+      ])
+    );
+    await t.run(async (ctx) => {
+      await Promise.all([
+        ctx.db.insert("memberships", { orgId, userId: aliceId, roleId }),
+        ctx.db.insert("memberships", { orgId, userId: bobId, roleId }),
+        ctx.db.insert("memberships", { orgId, userId: charlieId, roleId }),
+      ]);
+
+      for (let index = 0; index < 17; index++) {
+        const lastMessageAt = 1_000 + index;
+        const conversationId = await ctx.db.insert("dmConversations", {
+          orgId,
+          type: "DM",
+          memberIds: [aliceId, bobId],
+          createdBy: aliceId,
+          lastMessageAt,
+          lastMessageBody: `bob-${index}`,
+          lastMessageSenderId: aliceId,
+        });
+        await ctx.db.insert("dmParticipantState", {
+          conversationId,
+          userId: bobId,
+          orgId,
+          conversationLastMessageAt: lastMessageAt,
+          hasUnread: true,
+          lastReadAt: 0,
+        });
+      }
+
+      // More recent conversations for somebody else must have zero effect on
+      // Bob's cursor or page size.
+      for (let index = 0; index < 25; index++) {
+        const lastMessageAt = 10_000 + index;
+        const conversationId = await ctx.db.insert("dmConversations", {
+          orgId,
+          type: "DM",
+          memberIds: [aliceId, charlieId],
+          createdBy: aliceId,
+          lastMessageAt,
+          lastMessageBody: `charlie-${index}`,
+          lastMessageSenderId: aliceId,
+        });
+        await ctx.db.insert("dmParticipantState", {
+          conversationId,
+          userId: charlieId,
+          orgId,
+          conversationLastMessageAt: lastMessageAt,
+          hasUnread: true,
+          lastReadAt: 0,
+        });
+      }
+    });
+
+    const asBob = t.withIdentity({ subject: "bob_paged", clerkId: "bob_paged" });
+    const first = await asBob.query(api.directMessages.listConversationsPage, {
+      orgId,
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+    expect(first.page).toHaveLength(10);
+    expect(first.isDone).toBe(false);
+
+    const second = await asBob.query(api.directMessages.listConversationsPage, {
+      orgId,
+      paginationOpts: { numItems: 10, cursor: first.continueCursor },
+    });
+    expect(second.page).toHaveLength(7);
+    expect(second.isDone).toBe(true);
+
+    const rows = [...first.page, ...second.page];
+    expect(new Set(rows.map((row) => row._id)).size).toBe(17);
+    expect(rows.every((row) => row.memberIds.includes(bobId))).toBe(true);
+    expect(rows.map((row) => row.lastMessageAt)).toEqual(
+      [...rows.map((row) => row.lastMessageAt)].sort((a, b) => b - a),
+    );
+  });
+});
+
 describe("directMessages notifications", () => {
   test("sending a message notifies the other member in-app", async () => {
     const { orgId, conversationId, asAlice, asBob } = await setupDm();
