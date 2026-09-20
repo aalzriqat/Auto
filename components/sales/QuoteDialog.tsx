@@ -28,7 +28,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { SearchableSelect } from "@/components/ui/searchable-select";
-import { calculateUnifiedMurabaha, isRequestedFinancingTermValid } from "@/lib/financing";
+import { calculateUnifiedMurabaha, isRequestedFinancingTermValid, minimumDownPaymentForFinancingLimit } from "@/lib/financing";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CheckCircle2 } from "lucide-react";
 
@@ -156,7 +156,13 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
         : Number.MAX_SAFE_INTEGER; // If no LTV/Valuation set, allow any amount
 
       const exceedsValuation = result ? result.financedAmount > maxFinancingAllowed && actualValuation > 0 : false;
-      const minimumDownPayment = watchAll.vehiclePrice - maxFinancingAllowed;
+      const minimumDownPayment = result
+        ? minimumDownPaymentForFinancingLimit({
+            currentDownPayment: watchAll.downPayment,
+            financedAmount: result.financedAmount,
+            maxFinancingAllowed,
+          })
+        : undefined;
 
       const requiredValuation = maxLTV > 0 && result
         ? result.financedAmount / (maxLTV / 100)
