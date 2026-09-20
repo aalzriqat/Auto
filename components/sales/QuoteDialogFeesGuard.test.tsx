@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";\nimport { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { getFunctionName } from "convex/server";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 
 const stubs = vi.hoisted(() => ({
@@ -22,22 +21,25 @@ vi.mock("@/components/ui/sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock("convex/react", () => ({
-  useQuery: (reference: never) => stubs.queryResults.get(getFunctionName(reference)),
-  usePaginatedQuery: () => ({
-    results: [
-      {
-        _id: "cust1",
-        firstName: "Test",
-        lastName: "Customer",
-        phone: "0790000000",
-      },
-    ],
-    status: "Exhausted",
-    loadMore: vi.fn(),
-  }),
-  useMutation: () => vi.fn(),
-}));
+vi.mock("convex/react", async () => {
+  const { getFunctionName } = await import("convex/server");
+  return {
+    useQuery: (reference: never) => stubs.queryResults.get(getFunctionName(reference)),
+    usePaginatedQuery: () => ({
+      results: [
+        {
+          _id: "cust1",
+          firstName: "Test",
+          lastName: "Customer",
+          phone: "0790000000",
+        },
+      ],
+      status: "Exhausted",
+      loadMore: vi.fn(),
+    }),
+    useMutation: () => vi.fn(),
+  };
+});
 
 import { QuoteDialog } from "./QuoteDialog";
 
