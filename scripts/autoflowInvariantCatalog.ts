@@ -172,10 +172,10 @@ const PROOF_MARKERS: Readonly<Record<string, string>> = {
     "every mutation that takes an orgId proves ownership before writing a caller-supplied id",
   "convex/saleCompletionTenancyGuards.test.ts::NEGATIVE,TENANCY":
     "a vehicle owned by another dealership is refused",
-  "convex/commitmentFinalization.test.ts::NEGATIVE,AUTHORIZATION":
-    "G.6f D7 applications.cancelApplication runs and creates no sale",
-  "convex/sales.test.ts::NEGATIVE,AUTHORIZATION":
-    "cancelling a completed sale removes its revenue from the profit and loss report",
+  "convex/accountingPhase10.test.ts::NEGATIVE,AUTHORIZATION":
+    "the poster cannot approve their own draft",
+  "convex/financeLifecyclePhase4.test.ts::NEGATIVE,AUTHORIZATION":
+    "user without APPROVE_FINANCE_APPLICATION cannot approve",
   "scripts/economicCommandCensus.test.ts::MUTATION":
     "the population is exactly the classified set",
   "convex/idempotencyEconomicCommands.test.ts::REPLAY":
@@ -212,8 +212,8 @@ const PROOF_MARKERS: Readonly<Record<string, string>> = {
     "A1 — the canonical pending obligation is cancelled even though a posted sibling was reversed",
   "convex/dealCustodyAccounting.test.ts::STATE_TRANSITION,REVERSAL,NEGATIVE":
     "a write-off: Dr cash over/short / Cr clearing for exactly the unaccounted residual; reopening reverses it",
-  "scripts/accountingRehearsalCases.test.ts::NEGATIVE,BOUNDARY":
-    "P1 reports UNPROVEN rather than PASS when it cannot close the period",
+  "convex/generalLedgerPagination.test.ts::NEGATIVE,BOUNDARY":
+    "125 seeded entries: bounded first page, a planted OLD entry is off page 1, pagination reaches it, no duplicates, deterministic order",
   "convex/accountingPhase18.test.ts::BOUNDARY":
     "snapshots accumulate per (account, currency, period) and reports sum them correctly",
   ".github/workflows/accounting-rehearsal.yml::BOUNDARY":
@@ -508,14 +508,14 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
     ],
     proofs: proofSet("AUTH-1", [
       execution(
-        "convex/commitmentFinalization.test.ts",
+        "convex/accountingPhase10.test.ts",
         ["NEGATIVE", "AUTHORIZATION"],
-        "Exercises actor separation and lifecycle authorization around commitment finalization and reversals."
+        "Proves backend segregation of duties by refusing a manual-journal poster who attempts to approve their own draft."
       ),
       execution(
-        "convex/sales.test.ts",
+        "convex/financeLifecyclePhase4.test.ts",
         ["NEGATIVE", "AUTHORIZATION"],
-        "Exercises sale cancellation permissions and different-actor enforcement."
+        "Proves backend permission enforcement by refusing finance approval when APPROVE_FINANCE_APPLICATION is absent."
       ),
     ]),
     tracking: SCRUM_342,
@@ -883,9 +883,9 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
     ],
     proofs: proofSet("PERF-1", [
       execution(
-        "scripts/accountingRehearsalCases.test.ts",
+        "convex/generalLedgerPagination.test.ts",
         ["NEGATIVE", "BOUNDARY"],
-        "Attacks rehearsal logic and pagination assumptions before its output is trusted."
+        "Proves a bounded first page is not treated as complete and that pagination reaches an intentionally off-page accounting entry without duplicates."
       ),
       execution(
         "convex/accountingPhase18.test.ts",
