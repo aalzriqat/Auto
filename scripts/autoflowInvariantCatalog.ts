@@ -54,6 +54,7 @@ export interface ProofRequirement {
 }
 
 export interface InvariantProof {
+  invariantId: string;
   path: string;
   mechanism: EvidenceMechanism;
   obligations: readonly ProofObligation[];
@@ -183,11 +184,13 @@ const notApplicable = (obligation: ProofObligation, reason: string): ProofRequir
   reason,
 });
 
+type UnboundInvariantProof = Omit<InvariantProof, "invariantId">;
+
 const execution = (
   pathName: string,
   obligations: readonly ProofObligation[],
   note: string
-): InvariantProof => ({
+): UnboundInvariantProof => ({
   path: pathName,
   mechanism: "EXECUTION",
   obligations,
@@ -199,7 +202,7 @@ const structural = (
   pathName: string,
   obligations: readonly ProofObligation[],
   note: string
-): InvariantProof => ({
+): UnboundInvariantProof => ({
   path: pathName,
   mechanism: "STRUCTURAL",
   obligations,
@@ -212,13 +215,19 @@ const preview = (
   pathName: string,
   obligations: readonly ProofObligation[],
   note: string
-): InvariantProof => ({
+): UnboundInvariantProof => ({
   path: pathName,
   mechanism: "PREVIEW",
   obligations,
   note,
   marker: markerFor(pathName),
 });
+
+const proofSet = (
+  invariantId: string,
+  proofs: readonly UnboundInvariantProof[]
+): readonly InvariantProof[] =>
+  proofs.map((proof) => ({ ...proof, invariantId }));
 
 const profile = (
   overrides: Partial<InvariantAssuranceProfile> = {}
@@ -253,7 +262,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         "A source-complete boundary matrix for every tenant-bearing relationship is not yet encoded."
       ),
     ],
-    proofs: [
+    proofs: proofSet("TEN-1", [
       structural(
         "scripts/tenantWriteGuard.test.ts",
         ["MUTATION"],
@@ -264,7 +273,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         ["NEGATIVE", "TENANCY"],
         "Execution proof for canonical sale-completion relationships and cross-organization resource refusal."
       ),
-    ],
+    ]),
     tracking: SCRUM_342,
     evidenceBoundary:
       "The write census and sale-completion execution tests are strong evidence for their covered shapes, but they are not yet a source-complete proof of every read path, helper-mediated relation, and future tenant-bearing table.",
@@ -286,7 +295,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         "The repository does not yet mutation-prove every sensitive command's authorization guard."
       ),
     ],
-    proofs: [
+    proofs: proofSet("AUTH-1", [
       execution(
         "convex/commitmentFinalization.test.ts",
         ["NEGATIVE", "AUTHORIZATION"],
@@ -297,7 +306,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         ["NEGATIVE", "AUTHORIZATION"],
         "Exercises sale cancellation permissions and different-actor enforcement."
       ),
-    ],
+    ]),
     tracking: SCRUM_342,
     evidenceBoundary:
       "These execution tests prove important economic actions, not a complete census proving that every sensitive command has the correct permission and actor-separation policy.",
@@ -327,7 +336,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         "This invariant does not assert a subledger or GL balance."
       ),
     ],
-    proofs: [
+    proofs: proofSet("ECON-1", [
       structural(
         "scripts/economicCommandCensus.test.ts",
         ["MUTATION"],
@@ -338,7 +347,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         ["REPLAY"],
         "Execution checks for one-intent/one-economic-effect and fingerprint completeness on identity-guarded commands."
       ),
-    ],
+    ]),
     evidenceBoundary:
       "This proves the exact census/classification contract and representative execution semantics. It does not mean every classification mechanism is automatically correct for every possible runtime interleaving.",
   },
@@ -368,7 +377,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         "Client identity lifetime does not itself assert ledger or subledger parity."
       ),
     ],
-    proofs: [
+    proofs: proofSet("ECON-2", [
       structural(
         "scripts/clientIdentityLifetime.test.ts",
         ["NEGATIVE", "MUTATION"],
@@ -379,7 +388,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         ["REPLAY", "NEGATIVE"],
         "Execution proof for retained command identity behavior and removal of the unsafe per-attempt renew API."
       ),
-    ],
+    ]),
     evidenceBoundary:
       "The structural census covers the repository client roots declared by the analyzer and explicitly enumerates server-only commands. It cannot prove behavior of an external caller that is not in this repository.",
   },
@@ -416,7 +425,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         "A source-complete event-type to subledger/GL reconciliation matrix is not yet present."
       ),
     ],
-    proofs: [
+    proofs: proofSet("ACC-1", [
       execution(
         "convex/accounting/ownedSaleTaxPosting.test.ts",
         ["POSITIVE", "NEGATIVE"],
@@ -437,7 +446,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         ["NEGATIVE", "REPLAY"],
         "Proves invalid journals are refused and duplicate posting identities do not double-post."
       ),
-    ],
+    ]),
     tracking: SCRUM_342,
     evidenceBoundary:
       "High-value posting families are deeply tested, but the repository does not yet have a source-complete semantic oracle, generative property layer, real-contention matrix, and reconciliation proof for every posting rule.",
@@ -472,7 +481,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         "Reversal-to-control-account reconciliation is not yet cataloged for every financial family."
       ),
     ],
-    proofs: [
+    proofs: proofSet("ACC-2", [
       execution(
         "convex/accountingGenericReversalAuthority.test.ts",
         ["REVERSAL", "NEGATIVE", "TENANCY", "AUTHORIZATION"],
@@ -488,7 +497,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         ["REVERSAL", "REPLAY"],
         "Proves inverse journal behavior and repeated reversal idempotency in the accounting engine."
       ),
-    ],
+    ]),
     tracking: SCRUM_342,
     evidenceBoundary:
       "The referenced domains prove their reversal model. A repository-wide census of every posted mutable financial surface, correction writer, contention case, and reconciliation consequence is still required.",
@@ -507,7 +516,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
       required("NEGATIVE"),
       required("BOUNDARY"),
     ],
-    proofs: [
+    proofs: proofSet("ACC-3", [
       execution(
         "convex/manualJournalAccountingDate.test.ts",
         ["POSITIVE", "BOUNDARY"],
@@ -518,7 +527,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         ["NEGATIVE", "BOUNDARY"],
         "Proves closed-period posting refusal in the accounting engine."
       ),
-    ],
+    ]),
     evidenceBoundary:
       "This exact manual-journal and ordinary-posting period contract is executed. Specialized reopen, migration, and opening-balance policies have separate rules and are not implied by this invariant.",
   },
@@ -555,7 +564,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         "Generative supplier receivable and GL reconciliation is not yet attached to this invariant."
       ),
     ],
-    proofs: [
+    proofs: proofSet("CONS-1", [
       execution(
         "convex/consignedOwnership.test.ts",
         ["POSITIVE", "NEGATIVE"],
@@ -571,7 +580,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         ["POSITIVE", "NEGATIVE"],
         "Proves agent-basis journal semantics and fail-closed handling of undefined tax policy."
       ),
-    ],
+    ]),
     tracking: SCRUM_342,
     evidenceBoundary:
       "Canonical ownership, economics and posting helpers are covered. Full reversal and supplier-subledger to GL reconciliation obligations remain explicit gaps rather than being hidden behind an ENFORCED label.",
@@ -607,7 +616,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         "Every lifecycle inverse is not yet generatively reconciled across all dependent ledgers."
       ),
     ],
-    proofs: [
+    proofs: proofSet("LIFE-1", [
       execution(
         "convex/cashDealCockpit.test.ts",
         ["STATE_TRANSITION", "REVERSAL", "NEGATIVE"],
@@ -623,7 +632,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         ["STATE_TRANSITION", "REVERSAL", "NEGATIVE"],
         "Exercises custody issue, return, reimburse, write-off, reopen and inverse transitions."
       ),
-    ],
+    ]),
     tracking: SCRUM_342,
     evidenceBoundary:
       "Several critical lifecycle families have strong inverse-transition tests, but there is not yet one enumerated model proving every economic transition, retry/interleaving, fault boundary, and dependent subledger or GL consequence.",
@@ -645,7 +654,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         "A repository-wide analyzer proving every authoritative read distinguishes bounded probes from complete totals is not yet present."
       ),
     ],
-    proofs: [
+    proofs: proofSet("PERF-1", [
       execution(
         "scripts/accountingRehearsalCases.test.ts",
         ["NEGATIVE", "BOUNDARY"],
@@ -661,7 +670,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         ["BOUNDARY"],
         "Runs accounting rehearsal against an actual preview backend rather than treating the in-memory harness as platform-limit evidence."
       ),
-    ],
+    ]),
     tracking: SCRUM_342,
     evidenceBoundary:
       "Accounting rehearsal covers selected authoritative paths and real preview behavior. A repository-wide source census for all authoritative complete reads remains missing.",
@@ -696,7 +705,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         "Post-contention reconciliation is not yet systematically asserted for every economic command family."
       ),
     ],
-    proofs: [
+    proofs: proofSet("CONC-1", [
       execution(
         "convex/idempotencyEconomicCommands.test.ts",
         ["REPLAY", "STATE_TRANSITION"],
@@ -712,7 +721,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         ["CONCURRENCY", "REPLAY"],
         "Provides real preview-backend evidence for the contention cases included in the rehearsal."
       ),
-    ],
+    ]),
     tracking: SCRUM_342,
     evidenceBoundary:
       "The repository explicitly documents that convex-test serializes and cannot authorize OCC claims. Preview rehearsal covers only enumerated cases, so whole-system contention and post-contention reconciliation remain partial.",
@@ -731,7 +740,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
       required("NEGATIVE", ["STRUCTURAL", "EXECUTION"]),
       required("MUTATION", ["STRUCTURAL", "EXECUTION"]),
     ],
-    proofs: [
+    proofs: proofSet("UI-1", [
       structural(
         "scripts/reviewActionParity.test.ts",
         ["NEGATIVE", "MUTATION"],
@@ -742,22 +751,23 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         ["POSITIVE", "NEGATIVE"],
         "UI-level parity checks for the Deal cockpit and Review migration behavior."
       ),
-    ],
+    ]),
     evidenceBoundary:
       "The migrated Review and Deal action set is protected. This does not claim every screen in AutoFlow is free of duplicate domain authority.",
   },
 ] as const;
 
-export function structuralProofHasExecutableNegativeControl(
+export function sourceHasActiveTestMarker(
   source: string,
-  marker: string
+  marker: string,
+  scriptKind: ts.ScriptKind = ts.ScriptKind.TS
 ): boolean {
   const file = ts.createSourceFile(
-    "structural-proof.test.ts",
+    "invariant-evidence.test.ts",
     source,
     ts.ScriptTarget.Latest,
     true,
-    ts.ScriptKind.TS
+    scriptKind
   );
   let found = false;
 
@@ -765,14 +775,10 @@ export function structuralProofHasExecutableNegativeControl(
     if (found) return;
     if (ts.isCallExpression(node) && node.arguments.length > 0) {
       const callee = node.expression;
-      const name = ts.isIdentifier(callee)
-        ? callee.text
-        : ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression)
-          ? callee.expression.text
-          : undefined;
       const first = node.arguments[0];
       if (
-        (name === "test" || name === "it" || name === "describe") &&
+        ts.isIdentifier(callee) &&
+        (callee.text === "test" || callee.text === "it" || callee.text === "describe") &&
         (ts.isStringLiteral(first) || ts.isNoSubstitutionTemplateLiteral(first)) &&
         first.text.includes(marker)
       ) {
@@ -785,6 +791,13 @@ export function structuralProofHasExecutableNegativeControl(
 
   visit(file);
   return found;
+}
+
+export function structuralProofHasExecutableNegativeControl(
+  source: string,
+  marker: string
+): boolean {
+  return sourceHasActiveTestMarker(source, marker, ts.ScriptKind.TS);
 }
 
 export function isActiveInvariant(invariant: InvariantDefinition): boolean {
@@ -813,6 +826,7 @@ export function validateInvariantCatalog(
 ): string[] {
   const errors: string[] = [];
   const seen = new Set<string>();
+  const catalogIds = new Set(catalog.map((invariant) => invariant.id));
   const active = catalog.filter(isActiveInvariant);
 
   if (active.length === 0) {
@@ -1041,6 +1055,16 @@ export function validateInvariantCatalog(
     }
 
     for (const proof of invariant.proofs) {
+      if (!catalogIds.has(proof.invariantId)) {
+        errors.push(
+          invariant.id + " proof references unknown invariant ID " + proof.invariantId
+        );
+      } else if (proof.invariantId !== invariant.id) {
+        errors.push(
+          invariant.id + " contains proof bound to different invariant ID " + proof.invariantId
+        );
+      }
+
       if (path.isAbsolute(proof.path) || proof.path.split(/[\\/]/).includes("..")) {
         errors.push(invariant.id + " proof path must be repository-relative: " + proof.path);
         continue;
@@ -1079,10 +1103,23 @@ export function validateInvariantCatalog(
         ? readFileSync(absolute, "utf8")
         : undefined;
 
-      if (proof.marker && !source?.includes(proof.marker)) {
-        errors.push(
-          invariant.id + " proof marker is missing from " + proof.path + ": " + proof.marker
-        );
+      if (proof.marker) {
+        const isTestSource = /\.test\.tsx?$/.test(proof.path);
+        const scriptKind = proof.path.endsWith(".tsx")
+          ? ts.ScriptKind.TSX
+          : ts.ScriptKind.TS;
+        const markerExists = isTestSource
+          ? Boolean(source && sourceHasActiveTestMarker(source, proof.marker, scriptKind))
+          : Boolean(source?.includes(proof.marker));
+        if (!markerExists) {
+          errors.push(
+            invariant.id +
+              " proof marker is missing or not an active executable test marker in " +
+              proof.path +
+              ": " +
+              proof.marker
+          );
+        }
       }
 
       if (proof.mechanism === "STRUCTURAL") {
