@@ -328,6 +328,42 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
     );
   });
 
+  test("NEGATIVE CONTROL: profile concurrency classification cannot contradict its proof obligation", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex(
+      (invariant) => invariant.profile.concurrency === "REQUIRED"
+    );
+    broken[index] = {
+      ...broken[index],
+      profile: { ...broken[index].profile, concurrency: "NOT_APPLICABLE" },
+    };
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id + " marks concurrency NOT_APPLICABLE inconsistently"
+    );
+  });
+
+  test("NEGATIVE CONTROL: reversal-required profile needs an applicable REVERSAL obligation", () => {
+    const broken = copyCatalog();
+    const index = broken.findIndex(
+      (invariant) => invariant.profile.reversal === "REQUIRED"
+    );
+    broken[index].requirements = broken[index].requirements.map((requirement) =>
+      requirement.obligation === "REVERSAL"
+        ? {
+            obligation: "REVERSAL",
+            status: "NOT_APPLICABLE",
+            reason: "Synthetic contradictory reversal classification for this negative control.",
+          }
+        : requirement
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[index].id +
+        " declares reversal REQUIRED without an applicable REVERSAL obligation"
+    );
+  });
+
   test("NEGATIVE CONTROL: retirement cannot be silent deletion-by-label", () => {
     const broken = copyCatalog();
     broken[0] = { ...broken[0], state: "RETIRED", retirement: undefined };
