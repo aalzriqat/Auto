@@ -34,7 +34,12 @@ const CONTRACT = path.join(REPO_ROOT, "apps", "mobile", "src", "convexApi.ts");
 // the dealer home screen's workspace search. Same story: the query already
 // existed in `convex/search.ts`, so this is one more real reference now
 // checked against the backend, with nothing dropped from the extraction.
-const EXPECTED_REFERENCE_COUNT = 195;
+//
+// Moved 195→196 by `directMessages:getUnreadCount` so the mobile messenger
+// badge is exact and does not derive unread state from a capped conversation
+// window. The backend function already exists; this deliberately extends the
+// checked mobile contract by one reference.
+const EXPECTED_REFERENCE_COUNT = 196;
 
 describe("mobile convexApi contract extraction", () => {
   test("reads the reference out of a multi-line declaration with nested generics", () => {

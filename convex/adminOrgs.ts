@@ -192,6 +192,11 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "customers", index: "by_org" },
   { kind: "orgRows", table: "supportOrgAccessGrants", index: "by_orgId" },
   { kind: "liveChatThreads" },
+  // Projected participant rows now carry orgId for member-scoped visibility.
+  // Sweep them directly before conversations so orphaned projected rows cannot
+  // survive an org purge; legacy rows without orgId are still removed by the
+  // dmConversations child-cleanup step immediately after this.
+  { kind: "orgRows", table: "dmParticipantState", index: "by_org_user_lastMessageAt" },
   { kind: "dmConversations" },
   { kind: "orgRows", table: "impersonationGrants", index: "by_orgId" },
   { kind: "orgRows", table: "paymentIntents", index: "by_org" },
