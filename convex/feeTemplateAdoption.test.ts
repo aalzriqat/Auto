@@ -137,6 +137,7 @@ async function dealFrozenBeforeFees(s: Seed) {
   });
   const applicationId = await s.asOwner.mutation(api.applications.createFromQuote, { orgId: s.orgId, quoteId });
   await s.asOwner.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
     id: companyId,
     orgId: s.orgId,
     name: "Late Fees Finance",
