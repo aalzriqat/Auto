@@ -120,7 +120,7 @@ Use PREVIEW/runtime evidence for properties that depend on actual transaction co
 
 A structural guard can only prove the shapes it enumerates. Unknown/unreadable shapes must fail closed when certainty is required.
 
-Every structural proof must name an executable `test`/`it`/`describe` negative-control marker. The validator parses the TypeScript AST, so a matching phrase in a comment or inert string does not count.
+Every structural proof must name an executable direct `test`/`it`/`describe` negative-control marker. The validator parses the TypeScript AST, so a matching phrase in a comment, inert string, `test.skip`, or skipped describe does not count. Every proof record also carries its invariant ID; unknown or cross-bound proof IDs fail the self-audit and cannot satisfy a REQUIRED obligation.
 
 ### Balanced journals
 
@@ -141,6 +141,8 @@ The self-audit protects against:
 - duplicate IDs;
 - missing proof files;
 - stale proof markers when markers are used;
+- proof records bound to unknown or different invariant IDs;
+- evidence markers that exist only in comments, inert strings, or skipped test declarations;
 - REQUIRED obligations with no admissible evidence;
 - DEFERRED obligations without Jira ownership;
 - NOT_APPLICABLE without rationale;
