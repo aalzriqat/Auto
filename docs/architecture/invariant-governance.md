@@ -1,134 +1,167 @@
 # AutoFlow Invariant Governance
 
 **Owner:** SCRUM-342  
-**Purpose:** make known correctness requirements deterministic and repository-enforced so adversarial reviewers can focus on novel defects rather than rediscovering established rules.
+**Purpose:** turn known Critical/High correctness rules into deterministic repository-enforced proof obligations so adversarial reviewers can focus on novel interactions.
 
-## 1. Why this exists
+## 1. Principle
 
-AutoFlow already has strong local controls: failing-first tests, structural ratchets, economic-command census, tenant-write analysis, idempotency checks, release rehearsals, and adversarial regression tests.
+A reviewer should not need to remember every accounting, tenancy, lifecycle, retry, or concurrency rule.
 
-That is necessary but not sufficient.
+Known rules belong in the repository as stable invariant IDs with explicit proof obligations and evidence boundaries.
 
-Independent reviewers still find different High/Critical defects because open-ended review is a search problem. A reviewer can follow one lifecycle, one legacy-state branch, or one concurrency path while another follows a different one. Coding conventions constrain implementation style; they do not define every business invariant or force every reviewer to traverse every state transition.
+A green invariant catalog does **not** mean the product is bug-free. It means the repository can explain which known invariants exist, which proof classes they require, which evidence satisfies those classes, and which gaps remain open.
 
-This document separates two jobs:
+## 2. One governance system
 
-1. **Deterministic invariant proof** — known critical rules must have named evidence and explicit evidence boundaries.
-2. **Open-ended adversarial review** — reviewers attack assumptions and interactions not already captured by deterministic controls.
+SCRUM-342 is the single correctness-governance foundation.
 
-A green adversarial review is never a substitute for invariant proof. A green invariant catalog is never a claim that the whole product is bug-free.
+Do not create parallel invariant registries, proof registries, state-machine catalogs, or release gates. Property testing, model/state-machine testing, concurrency, fault injection, mutation, reconciliation, change-impact reporting, fuzzing, and production monitors attach to this same catalog.
 
-## 2. Core rule
-
-> A Critical invariant is covered only when there is named evidence capable of turning red for a relevant violation.
-
-For structural analyzers, the analyzer itself must also be attacked. A source scanner that has never demonstrated a red result is observation, not a trustworthy guard.
-
-The machine-readable source of truth is:
+Machine-readable source of truth:
 
 - `scripts/autoflowInvariantCatalog.ts`
 - `scripts/autoflowInvariantCatalog.test.ts`
 
-The catalog uses stable IDs. Removing an ID is a deliberate governance change and must update the independent required-ID ratchet in the test.
+## 3. Separate WHAT from HOW
 
-## 3. Evidence types
+### Proof obligation — WHAT must be proved
 
-| Kind | What it can prove | What it cannot prove by itself |
-| --- | --- | --- |
-| **EXECUTION** | Real application behavior in Vitest/Convex tests: accepted/refused transitions, persisted rows, reversals, accounting effects, permissions, etc. | True platform contention if the harness serializes; undocumented paths not exercised by the test |
-| **STRUCTURAL** | Repository-wide source shape: every discovered writer/caller/classification follows a declared structural rule | Runtime semantics, dynamic behavior the analyzer cannot resolve, external callers |
-| **PREVIEW** | Behavior on an actual Convex preview/runtime, including properties the in-memory harness cannot honestly authorize | Production-only configuration or states not reproduced; cases the rehearsal does not enumerate |
+Supported proof classes include:
 
-A STRUCTURAL proof is admissible only when:
+- POSITIVE
+- NEGATIVE
+- BOUNDARY
+- REPLAY
+- PROPERTY
+- STATE_TRANSITION
+- CONCURRENCY
+- FAULT_INJECTION
+- REVERSAL
+- TENANCY
+- AUTHORIZATION
+- MUTATION
+- HISTORICAL_REGRESSION
+- RECONCILIATION
+- E2E
+- PRODUCTION_MONITOR
 
-- it fails closed on unreadable/undecidable shapes where the claim requires certainty;
-- it has an explicit negative/fault/self-test;
-- the evidence boundary says what the analyzer enumerates and what it does not.
+Each obligation is classified as:
+
+- **REQUIRED** — evidence must exist using an accepted evidence mechanism.
+- **DEFERRED** — required for completeness but not yet present; Critical/High gaps need a Jira owner and rationale.
+- **NOT_APPLICABLE** — genuinely irrelevant to this exact invariant; requires a rationale.
+
+### Evidence mechanism — HOW it is proved
+
+- **EXECUTION** — behavior executed in application/Convex tests.
+- **STRUCTURAL** — source/AST census or ratchet. Requires a demonstrated negative/mutation control.
+- **PREVIEW** — real preview/runtime evidence where the serialized test harness cannot prove the property.
+- **MANUAL_POLICY** — documented policy only; never substitutes for executable proof where executable proof is possible.
+- **PRODUCTION_MONITOR** — runtime detection/reconciliation. Supplementary unless the property is inherently production-only.
+
+A REQUIRED proof declares which evidence mechanisms are admissible. This prevents a structural census from being misread as proof of runtime semantics.
 
 ## 4. Enforcement states
 
-### ENFORCED
+### DOCUMENTED
 
-The exact invariant statement has sufficient evidence for the claim made in the catalog.
-
-This label is intentionally narrow. It does **not** mean the entire surrounding feature or domain is perfect.
+Invariant exists, but meaningful executable evidence is not yet sufficient.
 
 ### PARTIAL
 
-The repository has meaningful evidence but not enough to make the exact broad claim without overstatement.
+Meaningful evidence exists, but one or more applicable proof obligations are explicitly DEFERRED.
 
-Every PARTIAL invariant must name a Jira owner. In V1 that owner is SCRUM-342. As the work is decomposed, narrower follow-up issues may replace it.
+PARTIAL is a truthful state, not a failure badge.
 
-PARTIAL is preferable to a false green.
+### ENFORCED
 
-## 5. Current invariant families
+Every applicable REQUIRED obligation is satisfied by admissible evidence and no DEFERRED obligation remains.
 
-The exact current statements, evidence paths, state, and evidence boundaries live in `scripts/autoflowInvariantCatalog.ts`. The initial families are:
+The validator derives this contract mechanically; old ENFORCED labels are not grandfathered.
 
-| ID | Family | Baseline |
-| --- | --- | --- |
-| TEN-1 | Tenant isolation | PARTIAL |
-| AUTH-1 | Authorization / segregation of duties | PARTIAL |
-| ECON-1 | Economic command classification | ENFORCED |
-| ECON-2 | Client command identity lifetime | ENFORCED |
-| ACC-1 | Balanced + semantically correct posting | PARTIAL |
-| ACC-2 | Immutable history + canonical reversal | PARTIAL |
-| ACC-3 | Accounting date / closed-period authority | ENFORCED |
-| CONS-1 | Consignment ownership + economics | ENFORCED |
-| LIFE-1 | Lifecycle reversal completeness | PARTIAL |
-| PERF-1 | Completeness under scale | PARTIAL |
-| CONC-1 | Runtime concurrency / atomicity | PARTIAL |
-| UI-1 | One UI action / one backend authority | ENFORCED |
+### RETIRED / SUPERSEDED
 
-The table is a navigation aid only. Do not use it as the proof source; the catalog is authoritative.
+An invariant can leave the active set only through explicit retirement metadata with rationale and Jira ownership. SUPERSEDED also names replacement invariant IDs.
 
-## 6. Review protocol for every material change
+Silent deletion is not retirement.
 
-### Step A — identify impacted invariants
+## 5. Assurance profile
 
-Before implementation/review, map the changed behavior to invariant IDs.
+Each invariant declares metadata required by later phases:
 
-A change can impact an invariant without touching the invariant's current proof file. Examples:
+- economic impact: NONE / INDIRECT / DIRECT;
+- concurrency applicability;
+- reversal applicability;
+- tenant sensitivity;
+- authorization sensitivity;
+- external-input sensitivity;
+- webhook sensitivity;
+- scheduled-work sensitivity;
+- source areas and optional symbols.
 
-- adding a new money-bearing mutation impacts ECON-1;
-- adding a caller of an identity-guarded command impacts ECON-2;
-- adding a new caller-supplied tenant resource ID impacts TEN-1;
-- adding a cancellation path impacts LIFE-1 and often ACC-2;
-- changing a posting rule impacts ACC-1 even if total debit still equals total credit;
-- replacing a complete read with a bounded read impacts PERF-1.
+A DIRECT economic invariant must explicitly assess REPLAY, CONCURRENCY, REVERSAL, and RECONCILIATION. Those assessments may be REQUIRED, DEFERRED, or justified NOT_APPLICABLE; they may not be omitted.
 
-### Step B — establish a failing-first counterexample
+Tenant-sensitive invariants require TENANCY proof. Authorization-sensitive invariants require server-side AUTHORIZATION proof.
 
-For a bug fix, reproduce the defect before changing production code whenever technically possible.
+## 6. Evidence boundaries
 
-The test should fail for the defect, not merely fail because an implementation detail changed.
+Every invariant states what its evidence proves and what it does not.
 
-For a new invariant guard, also attack the guard itself:
+Important repository boundaries:
 
-- remove one required writer/caller;
-- alter one classification;
-- introduce one known unsafe shape;
-- mutate one source condition;
-- prove the guard reports the exact defect.
+### Convex test harness
 
-### Step C — fix the invariant, not only the reported line
+`convex-test` is not evidence of real Convex OCC contention where the harness serializes operations. Ordering tests must not be described as real contention proof.
 
-For every validated High/Critical finding ask:
+Use PREVIEW/runtime evidence for properties that depend on actual transaction conflict, scheduling, or platform limits.
 
-1. What invariant became false?
-2. What are **all writers** that can make it false?
-3. What are **all readers/deciders** that rely on it?
-4. What lifecycle transitions create, mutate, reverse, cancel, retry, or repair it?
-5. What legacy/pre-existing state can already violate the new assumption?
-6. What retry/concurrency path can observe an intermediate or duplicated effect?
-7. Can the invariant be centralized so the invalid state is harder to represent?
-8. Can a repository-wide ratchet prevent the next sibling path?
+### Structural guards
 
-A one-line patch is acceptable only when the invariant analysis proves there is only one relevant path.
+A structural guard can only prove the shapes it enumerates. Unknown/unreadable shapes must fail closed when certainty is required.
 
-### Step D — run deterministic proofs first
+Every structural proof must demonstrate that a representative violation makes the guard red.
 
-Run the mapped invariant proofs before asking an LLM reviewer for an open-ended review.
+### Balanced journals
+
+Debit equals credit is necessary, not sufficient. Semantic posting proof must assert accounts, amounts, ownership basis, dates, and other material event semantics.
+
+### Coverage
+
+Coverage is blind-spot telemetry, not correctness proof.
+
+## 7. Anti-vacuity rules
+
+The governance system must not become green by checking nothing.
+
+The self-audit protects against:
+
+- zero active invariants;
+- silent removal/rename of required IDs;
+- duplicate IDs;
+- missing proof files;
+- stale proof markers when markers are used;
+- REQUIRED obligations with no admissible evidence;
+- DEFERRED obligations without Jira ownership;
+- NOT_APPLICABLE without rationale;
+- proof evidence claiming undeclared obligations;
+- structural proofs without negative controls;
+- tenant/auth sensitivity without corresponding proof requirements;
+- DIRECT economic invariants that omit core economic risk assessments;
+- silent retirement.
+
+Structural/domain-specific censuses must separately fail closed when an expected subject population unexpectedly becomes zero.
+
+## 8. Review protocol
+
+For every material change:
+
+1. Map the change to invariant IDs.
+2. For a defect, reproduce the failure before changing production code whenever technically possible.
+3. Identify all writers/readers/transitions that can violate the invariant.
+4. Add or strengthen the proof obligation rather than only patching the reported line.
+5. Run deterministic invariant proofs first.
+6. Run open-ended adversarial review after known rules are green.
+7. A novel finding must normally strengthen an existing invariant, split an overly broad invariant, or create a new stable invariant ID.
 
 The dedicated catalog command is:
 
@@ -136,124 +169,42 @@ The dedicated catalog command is:
 pnpm test:invariants
 ```
 
-The normal full suite still matters. The invariant command proves catalog integrity; it does not replace domain tests.
+It verifies catalog integrity. It does not replace the full test suite or preview rehearsals.
 
-### Step E — adversarial review searches outside the catalog
+## 9. Current calibration rule
 
-After deterministic evidence is green, independent reviewers should attack:
+Existing evidence is reused rather than duplicated.
 
-- undocumented state combinations;
-- legacy data and missing relations;
-- transitions between valid states rather than only endpoint validation;
-- retry after lost response;
-- cancellation/reversal after partial completion;
-- concurrency and stale reads;
-- source-of-truth disagreements across read models;
-- bounded reads and runtime limits;
-- migration/backfill re-entry;
-- UI/backend authority drift;
-- assumptions the invariant catalog itself has not encoded.
+An invariant remains ENFORCED only when the stronger proof-obligation model supports that exact claim. If property, contention, reversal, reconciliation, or another applicable proof is still missing, the invariant remains PARTIAL and the gap is visible.
 
-A novel finding should normally result in one of three outcomes:
+## 10. Next phases
 
-1. existing invariant gets a stronger proof;
-2. existing invariant is split because its statement was too broad;
-3. a new stable invariant ID is added.
+All future work extends this same catalog:
 
-## 7. Finding closure standard
+1. change-impact reporter mapping touched code/symbols/commands/events to invariant IDs;
+2. property-based financial invariants;
+3. model/state-machine generation for critical lifecycles;
+4. complete economic-command concurrency classification and preview contention cases;
+5. fault-injection matrix;
+6. mutation completeness for Critical financial/security guards;
+7. generative subledger ↔ GL reconciliation;
+8. fuzzing of trust boundaries;
+9. production invariant monitoring;
+10. generated assurance dashboard;
+11. calibrated blocking impact gate after false-positive/blind-spot measurement.
 
-A High/Critical finding is not closed merely because its original reproduction is green.
+## 11. Metrics
 
-Closure requires evidence that:
+Track evidence, not a fake single correctness percentage:
 
-- the failing-first counterexample is green after the fix;
-- sibling paths were enumerated rather than assumed absent;
-- the fix does not weaken the test or redefine the expected result to match the implementation;
-- any structural guard has a demonstrated negative control;
-- legacy-state behavior is considered;
-- retry/idempotency behavior is considered for economic commands;
-- reversal/cancellation behavior is considered for lifecycle changes;
-- evidence boundaries are updated if the proof is narrower than previously believed.
+- active Critical/High invariant count;
+- ENFORCED vs PARTIAL;
+- REQUIRED obligations satisfied/missing by proof class;
+- known-invariant Critical escape rate;
+- novel Critical rate;
+- review rounds to convergence;
+- mutation survival;
+- age of Critical PARTIAL gaps;
+- false-positive rate of change-impact mapping.
 
-If a new reviewer finds a second manifestation of the same invariant violation, the response should expand the invariant proof instead of adding another isolated patch whenever practical.
-
-## 8. Important evidence boundaries in this repository
-
-### Convex test harness
-
-Repository tests explicitly document that `convex-test` serializes and does not provide real OCC contention evidence. Therefore a green serialized concurrency-shaped test must not be described as proof of real platform contention.
-
-Use preview/runtime rehearsal for claims that depend on actual Convex scheduling, transaction conflicts, or platform read/write limits.
-
-### Balanced journals
-
-`total debits === total credits` is necessary but not sufficient. Two wrong amounts can offset and still balance. Posting tests must assert semantic account/amount expectations for material event types.
-
-### Structural source guards
-
-A structural guard can only prove what its grammar enumerates. Unknown/unreadable shapes must not be silently treated as safe. Its report and evidence boundary must distinguish:
-
-- proved absent;
-- proved present and compliant;
-- unknown/unreadable.
-
-### Coverage percentage
-
-Coverage is supporting telemetry, not invariant proof. A high line/branch percentage does not establish the correctness of a state transition or business oracle.
-
-## 9. CI rollout
-
-### V1 — current PR
-
-- canonical invariant catalog;
-- self-audit with negative controls;
-- named `test:invariants` command;
-- dedicated visible CI job;
-- no weakening of existing tests;
-- no claim that change-impact mapping is complete.
-
-### V2 — impact reporter
-
-Build a source-aware reporter that maps a PR diff to impacted invariant IDs and prints:
-
-- impacted invariant;
-- why it was selected;
-- required proof commands/files;
-- proof state;
-- evidence gaps.
-
-The first version should be **report-only** until false positives and blind spots are measured.
-
-### V3 — state-transition/property harness
-
-For the highest-risk domains, encode transition models rather than isolated examples:
-
-- deposits/reservations;
-- sales/cancellation;
-- receivables/payments/refunds;
-- cheque lifecycle;
-- finance application/disbursement;
-- sourced/consigned settlement;
-- custody;
-- posting/reversal/outbox.
-
-The harness should test legal transitions, illegal transitions, inverse transitions, retry behavior, and preservation/conservation properties.
-
-### V4 — calibrated blocking gate
-
-Only after V2/V3 are measured should invariant impact become a required merge gate.
-
-A required gate must fail closed on analyzer uncertainty and must have mutation controls demonstrating that representative violations make it red.
-
-## 10. Metrics
-
-Track these over time:
-
-- **Known-invariant Critical escape rate:** Critical bugs violating an already cataloged invariant after merge.
-- **Novel Critical rate:** Critical bugs representing a genuinely new invariant class.
-- **Review rounds to convergence:** number of adversarial fix/review rounds before merge-ready.
-- **Guard mutation survival:** representative unsafe mutations not caught by the mapped guard.
-- **PARTIAL count:** especially Critical PARTIAL invariants and their age.
-- **False-positive rate:** invariant-impact warnings that do not correspond to a real proof obligation.
-
-The target is not "no reviewer ever finds another bug." The target is that new reviewers increasingly find novel interactions rather than repeat violations of known critical invariants.
+The target is not that reviewers never find another bug. The target is that known invariant violations stop escaping repeatedly, while reviewers increasingly spend their effort on genuinely novel interactions.
