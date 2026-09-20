@@ -60,6 +60,14 @@ export function FinanceCompanyDialog({
   const customerStatusOptions = loadedCustomerStatuses ?? [];
 
   const [isLoading, setIsLoading] = useState(false);
+  // CAS token for the exact form snapshot the operator opened. Keep this
+  // frozen while the dialog is open: Convex queries are reactive, so
+  // `company.editRevision` may advance underneath a form whose fields we
+  // deliberately do not reset. Reading the live prop at submit would pair
+  // stale field values with a fresh revision and defeat optimistic locking.
+  const [openedEditRevision, setOpenedEditRevision] = useState(
+    company?.editRevision ?? 1
+  );
   const [formData, setFormData] = useState({
     name: company?.name || "",
     profitRate: company?.profitRate || 0,
@@ -83,6 +91,7 @@ export function FinanceCompanyDialog({
 
   useEffect(() => {
     if (!open) return;
+    setOpenedEditRevision(company?.editRevision ?? 1);
     setFormData({
       name: company?.name || "",
       profitRate: company?.profitRate || 0,
@@ -180,7 +189,7 @@ export function FinanceCompanyDialog({
         await updateCompany({
           id: company._id,
           orgId: activeOrgId,
-          expectedEditRevision: company.editRevision ?? 1,
+          expectedEditRevision: openedEditRevision,
           ...payload,
         });
         toast.success(t("CompanyUpdatedSuccess" as any));
