@@ -404,6 +404,16 @@ export const saveQuote = mutation({
       }
     }
 
+    if (args.mode === "CASH") {
+      // CASH quote economics are authoritative server facts. The client may
+      // submit stale or fabricated financing outputs, but none of them may be
+      // persisted for a cash quote.
+      totalFinancedAmount = vehiclePrice;
+      monthlyInstallment = 0;
+      profitRateApplied = 0;
+      totalProfit = 0;
+    }
+
     const {
       totalFinancedAmount: _clientFinanced,
       monthlyInstallment: _clientInstallment,
