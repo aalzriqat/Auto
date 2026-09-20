@@ -3,7 +3,7 @@ import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
-import { calculateUnifiedMurabaha } from "@/lib/financing";
+import { calculateUnifiedMurabaha, isRequestedFinancingTermValid } from "@/lib/financing";
 
 interface UseFinanceComparisonParams {
   vehiclePrice: number;
@@ -87,6 +87,16 @@ export function useFinanceComparison({
       if (!accepted || accepted.length === 0) return true;
       return customerStatuses.some((s) => accepted.includes(s as Id<"orgCustomerStatuses">));
     });
+
+    // Never show a provider calculation for a term that the authoritative
+    // quote boundary would reject.
+    activeCompanies = activeCompanies.filter((company: Doc<"financeCompanies">) =>
+      isRequestedFinancingTermValid({
+        termMonths,
+        maxTermMonths: company.maxTermMonths,
+        gracePeriodMonths: company.gracePeriodMonths,
+      })
+    );
 
     return activeCompanies.map((company: Doc<"financeCompanies">) => {
       const executionFees = company.adminFees;

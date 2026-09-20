@@ -32,6 +32,7 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { VehicleCostBar } from "../components/VehicleCostBar";
 import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
+import { isRequestedFinancingTermValid } from "@/lib/financing";
 
 export type Step1Values = z.infer<typeof step1Schema>;
 
@@ -95,6 +96,11 @@ export default function Step1QuoteSetup({
     api.orgCustomerStatuses.list,
     activeOrgId ? { orgId: activeOrgId } : "skip"
   )?.filter((s: Doc<"orgCustomerStatuses">) => s.isActive) ?? [];
+
+  const financeCompanies = useQuery(
+    api.finance.listCompanies,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
 
   // Fetch AVAILABLE+RESERVED stock vehicles and SOURCING vehicles separately,
   // then merge — SOURCING vehicles are created inline by the wizard and must
@@ -228,6 +234,54 @@ export default function Step1QuoteSetup({
         });
         return;
       }
+
+      if (selectedCompanyId === OTHER_COMPANY_ID) {
+        if (
+          !isRequestedFinancingTermValid({
+            termMonths: values.termMonths,
+            gracePeriodMonths: 0,
+          })
+        ) {
+          form.setError("termMonths", {
+            message:
+              locale === "ar"
+                ? "مدة التمويل يجب أن تكون عدداً صحيحاً أكبر من صفر."
+                : "Financing term must be a positive whole number.",
+          });
+          return;
+        }
+      } else {
+        const selectedCompany = financeCompanies?.find(
+          (company: Doc<"financeCompanies">) => company._id === selectedCompanyId
+        );
+
+        if (!selectedCompany) {
+          form.setError("vehicleId", {
+            message:
+              locale === "ar"
+                ? "شركة التمويل المحددة غير متاحة."
+                : "The selected finance company is unavailable.",
+          });
+          return;
+        }
+
+        if (
+          !isRequestedFinancingTermValid({
+            termMonths: values.termMonths,
+            maxTermMonths: selectedCompany.maxTermMonths,
+            gracePeriodMonths: selectedCompany.gracePeriodMonths,
+          })
+        ) {
+          form.setError("termMonths", {
+            message:
+              locale === "ar"
+                ? `مدة التمويل غير متاحة لهذه الشركة. الحد الأقصى ${selectedCompany.maxTermMonths} شهر.`
+                : `This term is unavailable for this finance company. Maximum is ${selectedCompany.maxTermMonths} months.`,
+          });
+          return;
+        }
+      }
+
       if (selectedCompanyId === OTHER_COMPANY_ID && manualExecutionFees === undefined) {
         form.setError("vehicleId", {
           message: t("ExecutionFeesRequired" as any) ?? "Execution Fees are required for manual finance. Enter the expected fee amount, or 0 if none are charged.",
@@ -429,8 +483,18 @@ export default function Step1QuoteSetup({
                   <FormItem>
                     <FormLabel>{t("TermMonths" as any)}</FormLabel>
                     <FormControl>
-                      <Input type="number" {...field} />
+                      <Input
+                        type="number"
+                        step="1"
+                        min="1"
+                        {...field}
+                        onChange={(e) => {
+                          field.onChange(e);
+                          setSelectedCompanyId(undefined);
+                        }}
+                      />
                     </FormControl>
+                    <FormMessage />
                   </FormItem>
                 )}
               />

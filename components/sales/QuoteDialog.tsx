@@ -27,7 +27,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { SearchableSelect } from "@/components/ui/searchable-select";
-import { calculateUnifiedMurabaha } from "@/lib/financing";
+import { calculateUnifiedMurabaha, isRequestedFinancingTermValid } from "@/lib/financing";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CheckCircle2 } from "lucide-react";
 
@@ -100,6 +100,16 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
       const executionFees = company.adminFees;
       const feesConfigured = executionFees !== undefined;
       const commission = company.commission || 0;
+      const termValid = isRequestedFinancingTermValid({
+        termMonths: Number(watchAll.termMonths),
+        maxTermMonths: company.maxTermMonths,
+        gracePeriodMonths: company.gracePeriodMonths,
+      });
+
+      // Do not display a finance quote that the backend would reject.
+      if (!termValid) {
+        continue;
+      }
 
       const result = feesConfigured
         ? calculateUnifiedMurabaha({
@@ -268,7 +278,9 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t("TermMonths" as any)}</FormLabel>
-                    <FormControl><Input type="number" className="bg-background" {...field} /></FormControl>
+                    <FormControl>
+                      <Input type="number" step="1" min="1" className="bg-background" {...field} />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}

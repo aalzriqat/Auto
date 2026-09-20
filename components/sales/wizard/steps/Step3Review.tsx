@@ -9,7 +9,7 @@ import { toast } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { calculateUnifiedMurabaha } from "@/lib/financing";
+import { calculateUnifiedMurabaha, isRequestedFinancingTermValid } from "@/lib/financing";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { OTHER_COMPANY_ID } from "../types";
 
@@ -108,6 +108,14 @@ export function Step3Review({
       if (wizardData.manualExecutionFees === undefined) {
         return null;
       }
+      if (
+        !isRequestedFinancingTermValid({
+          termMonths: wizardData.termMonths,
+          gracePeriodMonths: 0,
+        })
+      ) {
+        return null;
+      }
       const result = calculateUnifiedMurabaha({
         vehiclePrice: effectivePrice,
         downPayment: wizardData.downPayment,
@@ -133,6 +141,16 @@ export function Step3Review({
     }
 
     if (!selectedCompany || selectedCompany.adminFees === undefined) return null;
+
+    if (
+      !isRequestedFinancingTermValid({
+        termMonths: wizardData.termMonths,
+        maxTermMonths: selectedCompany.maxTermMonths,
+        gracePeriodMonths: selectedCompany.gracePeriodMonths,
+      })
+    ) {
+      return null;
+    }
 
     const result = calculateUnifiedMurabaha({
       vehiclePrice: effectivePrice,
