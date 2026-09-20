@@ -476,10 +476,16 @@ export const getOrCreateDm = mutation({
       .unique();
     if (!otherMembership) throw new Error("User is not a member of this org.");
 
-    const myStates = await ctx.db
-      .query("dmParticipantState")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .collect();
+    const [projectedStates, legacyStates] = await Promise.all([
+      ctx.db
+        .query("dmParticipantState")
+        .withIndex("by_user_org", (q) =>
+          q.eq("userId", user._id).eq("orgId", args.orgId),
+        )
+        .collect(),
+      getLegacyParticipantStates(ctx, user._id),
+    ]);
+    const myStates = [...projectedStates, ...legacyStates];
     const candidates = await Promise.all(
       myStates.map((state) => ctx.db.get(state.conversationId)),
     );
