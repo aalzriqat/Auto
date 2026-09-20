@@ -545,7 +545,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         isActive: true,
         adminFees: 700,
       });
-      const migrated = (await t.run((ctx) => ctx.db.get(legacyCompanyId)))!;
+      const migrated = (await t.run((ctx) => ctx.db.get("financeCompanies", legacyCompanyId)))!;
       expect(migrated.adminFees).toBe(700);
       expect(migrated.feeTemplates).toBeUndefined();
       expect(migrated.ruleVersion).toBe(2);
@@ -715,7 +715,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         quoteId,
       });
 
-      const app = (await t.run((ctx) => ctx.db.get(applicationId)))!;
+      const app = (await t.run((ctx) => ctx.db.get("financeApplications", applicationId)))!;
       expect(app.estimatedDealerBorneExpensesMinor).toBe(0);
       expect(app.companyRuleSnapshot?.adminFees).toBe(0);
       expect(app.companyRuleSnapshot?.feeTemplates).toBeUndefined();
@@ -797,7 +797,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         quoteId,
       });
 
-      const app = (await t.run((ctx) => ctx.db.get(applicationId)))!;
+      const app = (await t.run((ctx) => ctx.db.get("financeApplications", applicationId)))!;
       expect(app.estimatedDealerBorneExpensesMinor).toBe(700_000);
       expect(app.companyRuleSnapshot?.adminFees).toBe(700);
       expect(app.companyRuleSnapshot?.feeTemplates).toBeUndefined();
@@ -990,15 +990,15 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
 
       expect(saleId).toBeTruthy();
 
-      const closedApp = (await t.run((ctx) => ctx.db.get(applicationId)))!;
+      const closedApp = (await t.run((ctx) => ctx.db.get("financeApplications", applicationId)))!;
       expect(closedApp.status).toBe("CLOSED");
 
-      const sale = (await t.run((ctx) => ctx.db.get(saleId)))!;
+      const sale = (await t.run((ctx) => ctx.db.get("sales", saleId)))!;
       expect(sale).toBeDefined();
       expect(sale.applicationId).toBe(applicationId);
       expect(sale.vehicleId).toBe(vehicleId);
 
-      const vehicle = (await t.run((ctx) => ctx.db.get(vehicleId)))!;
+      const vehicle = (await t.run((ctx) => ctx.db.get("vehicles", vehicleId)))!;
       expect(vehicle.status).toBe("SOLD");
     });
   });
@@ -1278,7 +1278,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         });
 
         const applicationId = await asOwner.mutation(api.applications.createFromQuote, { orgId, quoteId });
-        const app = (await t.run((ctx) => ctx.db.get(applicationId)))!;
+        const app = (await t.run((ctx) => ctx.db.get("financeApplications", applicationId)))!;
         expect(app.estimatedDealerBorneExpensesMinor).toBe(0);
       });
 
@@ -1309,7 +1309,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         });
 
         const applicationId = await asOwner.mutation(api.applications.createFromQuote, { orgId, quoteId });
-        const app = (await t.run((ctx) => ctx.db.get(applicationId)))!;
+        const app = (await t.run((ctx) => ctx.db.get("financeApplications", applicationId)))!;
         expect(app.estimatedDealerBorneExpensesMinor).toBe(700_000);
       });
 
@@ -1432,7 +1432,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         });
 
         const applicationId = await asOwner.mutation(api.applications.createFromQuote, { orgId, quoteId });
-        const app = (await t.run((ctx) => ctx.db.get(applicationId)))!;
+        const app = (await t.run((ctx) => ctx.db.get("financeApplications", applicationId)))!;
         expect(app.estimatedDealerBorneExpensesMinor).toBe(0);
       });
 
@@ -1454,7 +1454,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         });
 
         const applicationId = await asOwner.mutation(api.applications.createFromQuote, { orgId, quoteId });
-        const app = (await t.run((ctx) => ctx.db.get(applicationId)))!;
+        const app = (await t.run((ctx) => ctx.db.get("financeApplications", applicationId)))!;
         expect(app.estimatedDealerBorneExpensesMinor).toBe(700_000);
       });
 
@@ -1492,7 +1492,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           })
         );
 
-        const companyA = (await t.run((ctx) => ctx.db.get(companyId)))!;
+        const companyA = (await t.run((ctx) => ctx.db.get("financeCompanies", companyId)))!;
         // Seed in-flight application without lineage and with undefined adminFees in snapshot
         const appIdA = await t.run((ctx) =>
           ctx.db.insert("financeApplications", {
@@ -1522,7 +1522,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         ).rejects.toThrow(/Execution Fees are not configured for this finance company/);
 
         // Assert that the record was not repaired to 0
-        const unRepairedA = (await t.run((ctx) => ctx.db.get(appIdA)))!;
+        const unRepairedA = (await t.run((ctx) => ctx.db.get("financeApplications", appIdA)))!;
         expect(unRepairedA.estimatedDealerBorneExpensesMinor).toBeUndefined();
 
         // Subcase B: Manual finance with manualAdminFees undefined
@@ -1585,7 +1585,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           })
         ).rejects.toThrow(/Execution Fees are not configured for this manual finance company quote/);
 
-        const unRepairedB = (await t.run((ctx) => ctx.db.get(appIdB)))!;
+        const unRepairedB = (await t.run((ctx) => ctx.db.get("financeApplications", appIdB)))!;
         expect(unRepairedB.estimatedDealerBorneExpensesMinor).toBeUndefined();
       });
     });
@@ -1656,7 +1656,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           totalProfit: 5750,
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(quote.companyRuleVersion).toBe(1);
         expect(quote.companyRuleSnapshot).toBeDefined();
         expect(quote.companyRuleSnapshot?.adminFees).toBe(0);
@@ -1693,7 +1693,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           totalProfit: 7675,
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(quote.companyRuleSnapshot?.adminFees).toBe(700);
       });
 
@@ -1743,7 +1743,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           quoteId,
         });
 
-        const app = (await t.run((ctx) => ctx.db.get(appId)))!;
+        const app = (await t.run((ctx) => ctx.db.get("financeApplications", appId)))!;
         // Application must preserve the quote's frozen 0 fee authority, NOT the current company's 700
         expect(app.estimatedDealerBorneExpensesMinor).toBe(0);
         expect(app.companyRuleSnapshot?.adminFees).toBe(0);
@@ -1795,7 +1795,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           quoteId,
         });
 
-        const app = (await t.run((ctx) => ctx.db.get(appId)))!;
+        const app = (await t.run((ctx) => ctx.db.get("financeApplications", appId)))!;
         // Application must preserve the quote's frozen 700 fee authority, NOT the current company's 900
         expect(app.estimatedDealerBorneExpensesMinor).toBe(700_000);
         expect(app.companyRuleSnapshot?.adminFees).toBe(700);
@@ -1848,7 +1848,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           quoteId,
         });
 
-        const app = (await t.run((ctx) => ctx.db.get(appId)))!;
+        const app = (await t.run((ctx) => ctx.db.get("financeApplications", appId)))!;
         expect(app.estimatedDealerBorneExpensesMinor).toBe(0);
         expect(app.manualFinanceSnapshot?.adminFees).toBe(0);
       });
@@ -1911,7 +1911,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         });
 
         // Server independently produces the expected 20,500 financed amount and 512.5 monthly installment
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(quote.totalFinancedAmount).toBe(20_500);
         expect(quote.monthlyInstallment).toBe(512.5);
         expect(quote.customerQuotePricingSnapshot?.totalFinancedAmount).toBe(20_500);
@@ -1930,7 +1930,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           quoteId,
         });
 
-        const app = (await t.run((ctx) => ctx.db.get(appId)))!;
+        const app = (await t.run((ctx) => ctx.db.get("financeApplications", appId)))!;
         // 1. Application economics: matches frozen quote authority (500 JOD = 500,000 minor)
         expect(app.estimatedDealerBorneExpensesMinor).toBe(500_000);
 
@@ -1976,7 +1976,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           totalProfit: 1,
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(quote.totalFinancedAmount).toBe(20_700);
         expect(quote.customerQuotePricingSnapshot?.totalFinancedAmount).toBe(20_700);
         expect(quote.customerQuotePricingSnapshot?.executionFees).toBe(700);
@@ -2014,7 +2014,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           totalProfit: 1,
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(quote.monthlyInstallment).toBe(517.5);
         expect(quote.customerQuotePricingSnapshot?.monthlyInstallment).toBe(517.5);
       });
@@ -2053,7 +2053,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           profitRateApplied: 3,
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(quote.profitRateApplied).toBe(6);
         expect(quote.totalProfit).toBe(4920);
         expect(quote.customerQuotePricingSnapshot?.profitRate).toBe(6);
@@ -2102,7 +2102,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           quoteId,
         });
 
-        const app = (await t.run((ctx) => ctx.db.get(appId)))!;
+        const app = (await t.run((ctx) => ctx.db.get("financeApplications", appId)))!;
         // Preserves frozen snapshot from quote creation
         expect(app.customerQuotePricingSnapshot).toBeDefined();
         expect(app.customerQuotePricingSnapshot?.profitRate).toBe(5);
@@ -2137,7 +2137,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           totalProfit: 9,
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(quote.totalFinancedAmount).toBe(18_300);
         expect(quote.totalProfit).toBe(2196);
         expect(quote.monthlyInstallment).toBeCloseTo(20496 / 36, 4);
@@ -2177,7 +2177,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           totalProfit: 4000, // drifted
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         // Correct financed amount: 20,000 + 400 = 20,400
         expect(quote.totalFinancedAmount).toBe(20_400);
         expect(quote.totalProfit).toBe(20_400 * 0.05 * 4); // 4,080
@@ -2216,7 +2216,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           totalProfit: 4000,
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(quote.totalFinancedAmount).toBe(20_400);
         expect(quote.monthlyInstallment).toBe(510);
       });
@@ -2275,7 +2275,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           quoteId,
         });
 
-        const app = (await t.run((ctx) => ctx.db.get(appId)))!;
+        const app = (await t.run((ctx) => ctx.db.get("financeApplications", appId)))!;
         // Financed: 20,600. Installment: (20,600 + 4,120) / 48 = 515.
         expect(app.underwritingSnapshot?.proposedMonthlyInstallment).toBe(515);
         expect(app.underwritingSnapshot?.dbrAtSubmission).toBeCloseTo(515 / 2000, 4);
@@ -2404,7 +2404,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           termMonths: 48,
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         // Resolved vehiclePrice = 25,000. Financed amount = 25,000 - 5,000 + 500 = 20,500.
         expect(quote.vehiclePrice).toBe(25_000);
         expect(quote.totalFinancedAmount).toBe(20_500);
@@ -2434,7 +2434,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           // manualIncludesCommissionInDebt omitted
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(quote.totalFinancedAmount).toBe(20_300);
         expect(quote.customerQuotePricingSnapshot?.includesCommissionInDebt).toBe(true);
         expect(quote.customerQuotePricingSnapshot?.totalFinancedAmount).toBe(20_300);
@@ -2471,7 +2471,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           termMonths: 48,
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(quote.customerQuotePricingSnapshot?.currency).toBe("JOD");
 
         // Org currency is changed to USD in orgSettings
@@ -2567,7 +2567,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
             totalProfit: 1800,
           });
 
-          const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+          const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
           // Stored Murabaha computed outputs must be completely cleared/undefined
           expect(quote.totalFinancedAmount).toBeUndefined();
           expect(quote.monthlyInstallment).toBeUndefined();
@@ -2745,7 +2745,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           manualCommission: 50.125,
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(quote.customerQuotePricingSnapshot).toBeDefined();
         const snap = quote.customerQuotePricingSnapshot!;
 
@@ -3155,7 +3155,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         });
 
         expect(quoteId).toBeDefined();
-        const quote = await t.run((ctx) => ctx.db.get(quoteId));
+        const quote = await t.run((ctx) => ctx.db.get("quotes", quoteId));
         expect(quote).not.toBeNull();
         expect(quote?.companyId).toEqual(activeCompanyId);
       });
@@ -3178,7 +3178,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           orgId,
         });
 
-        const company = await t.run((ctx) => ctx.db.get(companyId));
+        const company = await t.run((ctx) => ctx.db.get("financeCompanies", companyId));
         expect(company?.isActive).toBe(false);
 
         // Subsequent quote attempt must reject
@@ -3281,7 +3281,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           termMonths: 48,
         });
 
-        const frozenQuote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const frozenQuote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(frozenQuote.customerQuotePricingSnapshot).toBeDefined();
         expect(frozenQuote.companyRuleSnapshot?.adminFees).toBe(300);
 
@@ -3291,7 +3291,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           orgId,
         });
 
-        const companyAfterDeactivation = (await t.run((ctx) => ctx.db.get(companyId)))!;
+        const companyAfterDeactivation = (await t.run((ctx) => ctx.db.get("financeCompanies", companyId)))!;
         expect(companyAfterDeactivation.isActive).toBe(false);
 
         // 3. Application attempted at 10:06 from previously frozen quote must succeed
@@ -3301,7 +3301,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         });
 
         expect(appId).toBeDefined();
-        const app = (await t.run((ctx) => ctx.db.get(appId)))!;
+        const app = (await t.run((ctx) => ctx.db.get("financeApplications", appId)))!;
         expect(app.estimatedDealerBorneExpensesMinor).toBe(300_000);
         expect(app.companyRuleSnapshot?.adminFees).toBe(300);
         expect(app.quoteId).toEqual(quoteId);
@@ -3378,7 +3378,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           totalFinancedAmount: 20_000,
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(quote.customerEligibilitySnapshot).toBeDefined();
         expect(quote.customerEligibilitySnapshot!.evaluatedAt).toBeGreaterThan(0);
         expect(quote.customerEligibilitySnapshot!.companyAcceptedStatusIds).toEqual([statusA]);
@@ -3433,7 +3433,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           totalFinancedAmount: 20_000,
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(quote.customerEligibilitySnapshot?.matchedStatusIds).toEqual([statusB]);
         expect(quote.customerEligibilitySnapshot?.selectedStatuses).toEqual([
           { statusId: statusB, label: "Private Sector" },
@@ -3525,7 +3525,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           totalFinancedAmount: 20_000,
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(quote.customerEligibilitySnapshot?.companyAcceptedStatusIds).toBeUndefined();
         expect(quote.customerEligibilitySnapshot?.matchedStatusIds).toEqual([statusA]);
         expect(quote.customerEligibilitySnapshot?.selectedStatuses).toEqual([
@@ -3570,7 +3570,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           totalFinancedAmount: 20_000,
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(quote.customerEligibilitySnapshot?.companyAcceptedStatusIds).toEqual([]);
         expect(quote.customerEligibilitySnapshot?.matchedStatusIds).toEqual([statusA]);
       });
@@ -3781,7 +3781,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           totalFinancedAmount: 20_000,
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(quote.customerEligibilitySnapshot?.selectedStatuses).toEqual([
           { statusId: statusA, label: "Gov Employee" },
         ]);
@@ -3950,7 +3950,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           orgId,
           quoteId,
         });
-        const app = (await t.run((ctx) => ctx.db.get(applicationId)))!;
+        const app = (await t.run((ctx) => ctx.db.get("financeApplications", applicationId)))!;
         expect(app.quoteId).toBe(quoteId);
       });
 
@@ -4002,7 +4002,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         expect(applicationId).toBeDefined();
 
         // Frozen quote snapshot preserved human label even though status row was deleted
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(quote.customerEligibilitySnapshot?.selectedStatuses).toEqual([
           { statusId: statusA, label: "Legacy Status" },
         ]);
@@ -4021,7 +4021,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           termMonths: 0,
           mode: "CASH",
         });
-        const cashQuote = (await t.run((ctx) => ctx.db.get(cashQuoteId)))!;
+        const cashQuote = (await t.run((ctx) => ctx.db.get("quotes", cashQuoteId)))!;
         expect(cashQuote.customerEligibilitySnapshot).toBeUndefined();
 
         // 2. MANUAL_FINANCE_COMPANY quote without customerEligibilityStatusIds
@@ -4037,7 +4037,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           manualAdminFees: 300,
           totalFinancedAmount: 15_300,
         });
-        const customQuote = (await t.run((ctx) => ctx.db.get(customQuoteId)))!;
+        const customQuote = (await t.run((ctx) => ctx.db.get("quotes", customQuoteId)))!;
         expect(customQuote.customerEligibilitySnapshot).toBeUndefined();
       });
     });
@@ -4671,7 +4671,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         });
         expect(result.responseId).toBeDefined();
 
-        const responseDoc = await t.run((ctx) => ctx.db.get(result.responseId));
+        const responseDoc = await t.run((ctx) => ctx.db.get("marketplaceResponses", result.responseId));
         expect(responseDoc?.financeOffer).toBeDefined();
         expect(responseDoc?.financeOffer?.processingFees).toBe(0);
         expect(responseDoc?.financeOffer?.totalContractValue).toBeGreaterThan(0);
@@ -4745,7 +4745,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           financeCompanyId: companyId,
         });
 
-        const responseDoc = await t.run((ctx) => ctx.db.get(result.responseId));
+        const responseDoc = await t.run((ctx) => ctx.db.get("marketplaceResponses", result.responseId));
         expect(responseDoc?.financeOffer?.processingFees).toBe(350);
         expect(responseDoc?.financeOffer?.totalContractValue).toBeGreaterThan(0);
       });
@@ -5085,7 +5085,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           totalFinancedAmount: 20_000,
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(quote.customerEligibilitySnapshot).toBeDefined();
         expect(quote.customerEligibilitySnapshot?.selectedStatuses?.map((s: { statusId: string }) => s.statusId)).toEqual([statusA]);
         expect(quote.customerEligibilitySnapshot?.matchedStatusIds).toEqual([statusA]);
@@ -5141,7 +5141,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           totalFinancedAmount: 20_000,
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(quote.customerEligibilitySnapshot?.matchedStatusIds).toEqual([statusB]);
         expect(quote.customerEligibilitySnapshot?.selectedStatuses).toEqual([
           { statusId: statusB, label: "Business Owner" },
@@ -5224,7 +5224,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           totalFinancedAmount: 20_000,
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(quote.customerEligibilitySnapshot?.companyAcceptedStatusIds).toBeUndefined();
         expect(quote.customerEligibilitySnapshot?.matchedStatusIds).toEqual([customerStatusId]);
       });
@@ -5257,7 +5257,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           totalFinancedAmount: 20_000,
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         // Empty array on the company is stored faithfully; the assertion function
         // treats [] and undefined equivalently ("accepts all").
         expect(
@@ -5481,7 +5481,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           totalFinancedAmount: 20_000,
         });
 
-        const quote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(quote.customerEligibilitySnapshot?.selectedStatuses?.map((s: { statusId: string }) => s.statusId)).toEqual([statusA, statusB]);
         expect(quote.customerEligibilitySnapshot?.matchedStatusIds).toEqual([statusA, statusB]);
         expect(quote.customerEligibilitySnapshot?.selectedStatuses).toHaveLength(2);
@@ -5660,7 +5660,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         const applicationId = await asOwner.mutation(api.applications.createFromQuote, { orgId, quoteId });
         expect(applicationId).toBeDefined();
 
-        const app = (await t.run((ctx) => ctx.db.get(applicationId)))!;
+        const app = (await t.run((ctx) => ctx.db.get("financeApplications", applicationId)))!;
         expect(app.status).toBe("PENDING_DOCS");
       });
 
@@ -5708,7 +5708,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         const applicationId = await asOwner.mutation(api.applications.createFromQuote, { orgId, quoteId });
         expect(applicationId).toBeDefined();
 
-        const savedQuote = (await t.run((ctx) => ctx.db.get(quoteId)))!;
+        const savedQuote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
         expect(savedQuote.customerEligibilitySnapshot?.selectedStatuses).toEqual([
           { statusId: statusA, label: "Status Temporary" },
         ]);
