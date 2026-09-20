@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import ts from "typescript";
 
 export type InvariantSeverity = "CRITICAL" | "HIGH";
 export type InvariantState =
@@ -23,6 +24,7 @@ export type ProofObligation =
   | "STATE_TRANSITION"
   | "CONCURRENCY"
   | "FAULT_INJECTION"
+  | "FUZZ"
   | "REVERSAL"
   | "TENANCY"
   | "AUTHORIZATION"
@@ -57,7 +59,7 @@ export interface InvariantProof {
   obligations: readonly ProofObligation[];
   note: string;
   marker?: string;
-  negativeControl?: boolean;
+  negativeControlMarker?: string;
 }
 
 export interface InvariantAssuranceProfile {
@@ -101,6 +103,20 @@ const ANY_EXECUTABLE_EVIDENCE: readonly EvidenceMechanism[] = [
   "PREVIEW",
   "PRODUCTION_MONITOR",
 ];
+
+const STRUCTURAL_CONTROL_MARKERS: Readonly<Record<string, string>> = {
+  "scripts/tenantWriteGuard.test.ts": "flags the shape that shipped as a Critical",
+  "scripts/economicCommandCensus.test.ts":
+    "BLIND SPOT 1: a callee is resolved through imports, never by bare name",
+  "scripts/clientIdentityLifetime.test.ts":
+    "FAULT 1: a comment containing a comma must not hide the identity",
+  "scripts/reviewActionParity.test.ts":
+    "NEGATIVE CONTROL — removing a required Deal caller fails the ratchet",
+};
+
+function structuralControlMarkerFor(pathName: string): string | undefined {
+  return STRUCTURAL_CONTROL_MARKERS[pathName];
+}
 
 const EVIDENCE_MARKERS: Readonly<Record<string, string>> = {
   "scripts/tenantWriteGuard.test.ts": "flags the shape that shipped as a Critical",
@@ -189,7 +205,7 @@ const structural = (
   obligations,
   note,
   marker: markerFor(pathName),
-  negativeControl: true,
+  negativeControlMarker: structuralControlMarkerFor(pathName),
 });
 
 const preview = (
@@ -620,7 +636,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
     statement:
       "An authoritative financial value, safety decision, or reconciliation result must not silently infer completeness from a bounded, truncated, or first-page-only read.",
     sourceAreas: ["convex/**", "scripts/accountingRehearsalCases.mjs", "components/accounting/**"],
-    profile: profile({ scheduledWorkSensitive: true }),
+    profile: profile(),
     requirements: [
       required("BOUNDARY", ANY_EXECUTABLE_EVIDENCE),
       required("NEGATIVE"),
@@ -732,11 +748,43 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
   },
 ] as const;
 
-export const STRUCTURAL_NEGATIVE_CONTROL_PATTERN =
-  /NEGATIVE CONTROL|FAULT(?:\s+\d+)?|self-tests?|guard nobody has watched fail|mutation control/i;
+export function structuralProofHasExecutableNegativeControl(
+  source: string,
+  marker: string
+): boolean {
+  const file = ts.createSourceFile(
+    "structural-proof.test.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS
+  );
+  let found = false;
 
-export function structuralProofHasNegativeControlSource(source: string): boolean {
-  return STRUCTURAL_NEGATIVE_CONTROL_PATTERN.test(source);
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    if (ts.isCallExpression(node) && node.arguments.length > 0) {
+      const callee = node.expression;
+      const name = ts.isIdentifier(callee)
+        ? callee.text
+        : ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression)
+          ? callee.expression.text
+          : undefined;
+      const first = node.arguments[0];
+      if (
+        (name === "test" || name === "it" || name === "describe") &&
+        (ts.isStringLiteral(first) || ts.isNoSubstitutionTemplateLiteral(first)) &&
+        first.text.includes(marker)
+      ) {
+        found = true;
+        return;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  visit(file);
+  return found;
 }
 
 export function isActiveInvariant(invariant: InvariantDefinition): boolean {
@@ -803,6 +851,18 @@ export function validateInvariantCatalog(
         (!invariant.retirement?.supersededBy || invariant.retirement.supersededBy.length === 0)
       ) {
         errors.push(invariant.id + " is SUPERSEDED without replacement invariant IDs");
+      }
+      if (invariant.state === "SUPERSEDED" && invariant.retirement?.supersededBy) {
+        for (const replacementId of invariant.retirement.supersededBy) {
+          const replacement = catalog.find((candidate) => candidate.id === replacementId);
+          if (replacementId === invariant.id) {
+            errors.push(invariant.id + " cannot supersede itself");
+          } else if (!replacement) {
+            errors.push(invariant.id + " supersedes to unknown invariant ID " + replacementId);
+          } else if (!isActiveInvariant(replacement)) {
+            errors.push(invariant.id + " supersedes to inactive invariant ID " + replacementId);
+          }
+        }
       }
       continue;
     }
@@ -874,6 +934,35 @@ export function validateInvariantCatalog(
     ) {
       errors.push(invariant.id + " is authorization-sensitive without required AUTHORIZATION proof");
     }
+    if (invariant.profile.externalInputSensitive) {
+      for (const obligation of ["BOUNDARY", "FUZZ"] as const) {
+        const status = requirements.get(obligation)?.status;
+        if (!status || status === "NOT_APPLICABLE") {
+          errors.push(
+            invariant.id + " is external-input-sensitive without an applicable " + obligation + " assessment"
+          );
+        }
+      }
+    }
+    if (invariant.profile.webhookSensitive) {
+      for (const obligation of ["REPLAY", "AUTHORIZATION", "NEGATIVE"] as const) {
+        const status = requirements.get(obligation)?.status;
+        if (!status || status === "NOT_APPLICABLE") {
+          errors.push(
+            invariant.id + " is webhook-sensitive without an applicable " + obligation + " assessment"
+          );
+        }
+      }
+    }
+    if (invariant.profile.scheduledWorkSensitive) {
+      for (const obligation of ["REPLAY", "CONCURRENCY", "FAULT_INJECTION"] as const) {
+        if (!requirements.has(obligation)) {
+          errors.push(
+            invariant.id + " is scheduled-work-sensitive without explicit " + obligation + " assessment"
+          );
+        }
+      }
+    }
 
     if (invariant.profile.economicImpact === "DIRECT") {
       for (const obligation of ["REPLAY", "CONCURRENCY", "REVERSAL", "RECONCILIATION"] as const) {
@@ -898,6 +987,21 @@ export function validateInvariantCatalog(
     ) {
       errors.push(invariant.id + " has UNKNOWN concurrency without a deferred CONCURRENCY obligation");
     }
+    if (invariant.profile.concurrency === "PLATFORM_SERIALIZED_PROVEN") {
+      const hasPreviewProof =
+        concurrencyRequirement?.status === "REQUIRED" &&
+        invariant.proofs.some(
+          (proof) =>
+            proof.mechanism === "PREVIEW" &&
+            proof.obligations.includes("CONCURRENCY")
+        );
+      if (!hasPreviewProof) {
+        errors.push(
+          invariant.id +
+            " claims PLATFORM_SERIALIZED_PROVEN without required PREVIEW CONCURRENCY proof"
+        );
+      }
+    }
     if (
       invariant.profile.concurrency === "NOT_APPLICABLE" &&
       invariant.profile.economicImpact === "DIRECT" &&
@@ -912,6 +1016,14 @@ export function validateInvariantCatalog(
       !["REQUIRED", "DEFERRED"].includes(reversalRequirement?.status ?? "")
     ) {
       errors.push(invariant.id + " declares reversal REQUIRED without an applicable REVERSAL obligation");
+    }
+    if (
+      invariant.profile.reversal === "IRREVERSIBLE_BY_DESIGN" &&
+      reversalRequirement?.status !== "NOT_APPLICABLE"
+    ) {
+      errors.push(
+        invariant.id + " is IRREVERSIBLE_BY_DESIGN without REVERSAL marked NOT_APPLICABLE"
+      );
     }
     if (
       invariant.profile.reversal === "NOT_APPLICABLE" &&
@@ -974,15 +1086,20 @@ export function validateInvariantCatalog(
       }
 
       if (proof.mechanism === "STRUCTURAL") {
-        if (proof.negativeControl !== true) {
+        if (!proof.negativeControlMarker) {
           errors.push(
-            invariant.id + " structural proof is not declared negative-controlled: " + proof.path
+            invariant.id + " structural proof has no executable negative-control marker: " + proof.path
           );
-        } else if (!source || !structuralProofHasNegativeControlSource(source)) {
+        } else if (
+          !source ||
+          !structuralProofHasExecutableNegativeControl(source, proof.negativeControlMarker)
+        ) {
           errors.push(
             invariant.id +
-              " structural proof declares a negative control but its source has no recognized fault/self-test marker: " +
-              proof.path
+              " structural proof negative-control marker is not an executable test/it/describe call: " +
+              proof.path +
+              " :: " +
+              proof.negativeControlMarker
           );
         }
       }
