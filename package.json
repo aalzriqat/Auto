@@ -27,7 +27,8 @@
     "dealer-worker:build": "npm run --prefix dealer-worker build",
     "load:smoke": "k6 run load-tests/k6/autoflow-smoke.js",
     "load:auth-smoke": "k6 run load-tests/k6/autoflow-authenticated-smoke.js",
-    "load:1000": "k6 run load-tests/k6/autoflow-1000-users.js"
+    "load:1000": "k6 run load-tests/k6/autoflow-1000-users.js",
+    "test:invariants": "vitest run scripts/autoflowInvariantCatalog.test.ts"
   },
   "dependencies": {
     "@autoflow/shared": "workspace:*",
