@@ -2,6 +2,7 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   AUTOFLOW_INVARIANTS,
+  AUTOFLOW_PROOF_MARKERS,
   isActiveInvariant,
   sourceHasActiveWorkflowMarker,
   structuralProofHasExecutableNegativeControl,
@@ -215,6 +216,32 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
 
     expect(actual).not.toEqual([...REQUIRED_INVARIANT_IDS].sort());
     expect(REQUIRED_INVARIANT_IDS).toContain("TEN-1");
+  });
+
+  test("NEGATIVE CONTROL: orphan proof-marker bindings are refused", () => {
+    const markers = {
+      ...AUTOFLOW_PROOF_MARKERS,
+      "synthetic/orphan.test.ts::NEGATIVE": "orphan marker",
+    };
+
+    expect(validateInvariantCatalog(ROOT, AUTOFLOW_INVARIANTS, markers)).toContain(
+      "Orphan proof marker binding has no active catalog proof: synthetic/orphan.test.ts::NEGATIVE"
+    );
+  });
+
+  test("NEGATIVE CONTROL: proof markers must match their registered binding", () => {
+    const broken = copyCatalog();
+    broken[0].proofs = broken[0].proofs.map((proof, index) =>
+      index === 0 ? { ...proof, marker: proof.marker + " changed" } : proof
+    );
+
+    expect(validateInvariantCatalog(ROOT, broken)).toContain(
+      broken[0].id +
+        " proof marker does not match registered binding: " +
+        broken[0].proofs[0].path +
+        "::" +
+        broken[0].proofs[0].obligations.join(",")
+    );
   });
 
   test("NEGATIVE CONTROL: a missing proof file is refused", () => {
