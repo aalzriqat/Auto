@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "@playwright/test";
-import { api } from "../../convex/_generated/api";
+import { api } from "../../convex/_generated/api";\nimport type { Id } from "../../convex/_generated/dataModel";
 import {
   USER_AUTH_FILE,
   authenticatedConvexClient,
@@ -305,7 +305,7 @@ async function runUiBackendMismatchAttack(
     const client = await authenticatedConvexClient(runtime.page);
     const backendMatches = await client
       .query(api.customers.search, {
-        orgId: orgId as never,
+        orgId: orgId as Id<"organizations">,
         search: email,
       })
       .catch(() => []);

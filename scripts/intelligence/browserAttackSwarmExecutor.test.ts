@@ -261,11 +261,13 @@ describe("SCRUM-350 trusted browser swarm worker", () => {
   it("refuses a tampered manifest whose worker artifact root no longer matches the run id", async () => {
     const item = mission();
     const original = manifestFor([item]);
+    const [originalWorker] = original.workers;
+    if (!originalWorker) throw new Error("test manifest missing worker");
     const manifest: BrowserSwarmRunManifest = {
       ...original,
       workers: [
         {
-          ...original.workers[0],
+          ...originalWorker,
           artifactRoot: "swarm/other-run/worker-1",
         },
       ],

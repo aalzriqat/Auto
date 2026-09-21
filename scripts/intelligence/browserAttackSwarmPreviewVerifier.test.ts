@@ -16,7 +16,7 @@ const env = {
   NEXT_PUBLIC_CONVEX_URL: "https://example-preview.convex.cloud",
   E2E_LOGIN_USER: "sales@example.test",
   E2E_APPROVER_USER: "manager@example.test",
-  CLERK_SECRET_KEY: "sk_test_fake",
+  CLERK_SECRET_KEY: "unit-test-clerk-secret",
 };
 
 describe("SCRUM-350 preview verifier", () => {
