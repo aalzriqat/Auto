@@ -30,6 +30,10 @@ const DEFAULT_RUNTIME = Object.freeze({
   readCommitTimestamp,
 });
 
+function compareStrings(a, b) {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 const EMPTY_RISKS = Object.freeze({
   economic: 0,
   tenancy: 0,
@@ -78,7 +82,7 @@ function assertSnapshotProvenance(repoRoot, calibrationCase, runtime) {
   );
   const expected = new Date(calibrationCase.snapshotAt);
   if (!Number.isFinite(expected.getTime())) {
-    throw new Error(
+    throw new TypeError(
       `Calibration case ${calibrationCase.id} has an invalid snapshot timestamp`,
     );
   }
@@ -252,6 +256,7 @@ export async function runHistoricalCalibrationCase({
 
   return {
     caseId: observation.caseId,
+    snapshotAt: calibrationCase.snapshotAt,
     baseSha: observation.baseSha,
     headSha: observation.headSha,
     changedFiles: observation.changedFiles,
@@ -381,6 +386,18 @@ export function scoreCalibrationCase(
 ) {
   if (!label || !Array.isArray(label.findings)) {
     throw new Error(`Calibration label is missing for ${result.caseId}`);
+  }
+  const snapshotAt = Date.parse(result.snapshotAt ?? "");
+  const revealedAfter = Date.parse(label.revealedAfter ?? "");
+  if (!Number.isFinite(snapshotAt) || !Number.isFinite(revealedAfter)) {
+    throw new TypeError(
+      `Calibration case ${result.caseId} has invalid hindsight-boundary timestamps`,
+    );
+  }
+  if (snapshotAt >= revealedAfter) {
+    throw new Error(
+      `Calibration case ${result.caseId} is not hindsight-free: snapshot ${result.snapshotAt} must precede disclosure ${label.revealedAfter}`,
+    );
   }
   const findings = label.findings.map((finding) =>
     scoreFinding(result, finding, candidateThreshold, escalationThreshold),
@@ -517,9 +534,9 @@ export function aggregateCalibration(scoredCases, caseResults) {
       blindAvailableCases.length -
       policyAvailableCases.length,
     blindExtraReviewRequirements: blindExtraRequirements.length,
-    uniqueBlindExtraReviewRequirements: [...new Set(blindExtraRequirements)].sort(),
+    uniqueBlindExtraReviewRequirements: [...new Set(blindExtraRequirements)].sort(compareStrings),
     policyExtraReviewRequirements: policyExtraRequirements.length,
-    uniquePolicyExtraReviewRequirements: [...new Set(policyExtraRequirements)].sort(),
+    uniquePolicyExtraReviewRequirements: [...new Set(policyExtraRequirements)].sort(compareStrings),
     negativeControlCases: negativeControls.length,
     blindAvailableNegativeControlCases: blindAvailableControls.length,
     policyAvailableNegativeControlCases: policyAvailableControls.length,
