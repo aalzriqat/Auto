@@ -1,14 +1,36 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_BROWSER_SWARM_MISSIONS,
+  SUPPORTED_BROWSER_SWARM_INVARIANT_IDS,
   buildBrowserSwarmRunManifest,
   classifyBrowserMissionEvidence,
   partitionBrowserAttackMissions,
   planBrowserAttackSwarm,
   type BrowserAttackMission,
 } from "./browserAttackSwarm";
+import {
+  AUTOFLOW_INVARIANTS,
+  isActiveInvariant,
+} from "../autoflowInvariantCatalog";
 
 describe("SCRUM-350 browser attack swarm control plane", () => {
+  it("keeps deterministic browser mappings source-complete with the active invariant catalog", () => {
+    const activeIds = AUTOFLOW_INVARIANTS
+      .filter(isActiveInvariant)
+      .map((invariant) => invariant.id)
+      .sort();
+
+    expect(SUPPORTED_BROWSER_SWARM_INVARIANT_IDS).toEqual(activeIds);
+  });
+
+  it("fails closed when an impacted invariant has no deterministic browser mapping", () => {
+    expect(() =>
+      planBrowserAttackSwarm({
+        impactedInvariants: [{ id: "UI1", severity: "HIGH" }],
+      }),
+    ).toThrow(/no deterministic mission mapping/);
+  });
+
   it("always emits deterministic tenant and authorization attacks for impacted critical invariants", () => {
     const plan = planBrowserAttackSwarm({
       impactedInvariants: [

@@ -237,6 +237,10 @@ const DETERMINISTIC_MISSIONS: Readonly<
   ],
 };
 
+export const SUPPORTED_BROWSER_SWARM_INVARIANT_IDS = Object.freeze(
+  Object.keys(DETERMINISTIC_MISSIONS).sort(),
+);
+
 const JEV_DEFAULT_ORACLE: Readonly<Record<BrowserAttackFamily, BrowserOracleKind>> = {
   TENANT_ESCAPE: "TENANT_ISOLATION",
   AUTHORIZATION_ABUSE: "AUTHORIZATION",
@@ -323,6 +327,20 @@ export function planBrowserAttackSwarm({
   if (!Number.isInteger(maxMissions) || maxMissions < 1 || maxMissions > MAX_BROWSER_SWARM_MISSIONS) {
     throw new Error(
       `Browser swarm maxMissions must be an integer from 1 to ${MAX_BROWSER_SWARM_MISSIONS}`,
+    );
+  }
+
+  const unsupportedInvariantIds = [
+    ...new Set(
+      impactedInvariants
+        .map((invariant) => invariant.id)
+        .filter((id) => !(id in DETERMINISTIC_MISSIONS)),
+    ),
+  ].sort();
+  if (unsupportedInvariantIds.length > 0) {
+    throw new Error(
+      "Browser swarm has no deterministic mission mapping for impacted invariant(s): " +
+        unsupportedInvariantIds.join(", "),
     );
   }
 
@@ -445,7 +463,7 @@ function assertSwarmPreviewIdentity(
   }
   if (
     parsed.protocol !== "https:" ||
-    !/^[a-z0-9-]+\\.convex\\.cloud$/.test(parsed.hostname) ||
+    !/^[a-z0-9-]+\.convex\.cloud$/.test(parsed.hostname) ||
     parsed.username ||
     parsed.password ||
     parsed.port ||

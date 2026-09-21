@@ -11,6 +11,13 @@ test.describe("SCRUM-350 browser adversarial swarm", () => {
 
   test("executes the assigned deterministic/Jev mission partition", async ({}, testInfo) => {
     const { manifest, workerId } = browserSwarmManifestFromEnv(process.env);
+    const worker = manifest.workers.find((entry) => entry.workerId === workerId);
+    if (!worker) throw new Error("Browser swarm worker missing from manifest");
+    const missionTimeoutBudget = worker.missions.reduce(
+      (total, mission) => total + mission.timeoutMs,
+      0,
+    );
+    testInfo.setTimeout(Math.max(60_000, missionTimeoutBudget + 60_000));
 
     await testInfo.attach("browser-swarm-manifest.json", {
       body: Buffer.from(JSON.stringify(manifest, null, 2)),
