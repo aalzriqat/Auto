@@ -14,11 +14,11 @@ import {
 const ROOT = path.resolve(__dirname, "..");
 
 const REHEARSAL_WORKFLOW_CONTRACT = {
-  workflowName: "Accounting Cloud Rehearsal",
-  trigger: "pull_request",
+  workflowName: "Trusted Accounting Cloud Rehearsal",
+  trigger: "workflow_run",
   jobId: "rehearsal",
   runsOn: "ubuntu-latest",
-  stepName: "Run the Accounting rehearsal",
+  stepName: "Run cloud accounting rehearsal from trusted main",
 } as const;
 
 const REQUIRED_INVARIANT_IDS = [
@@ -307,12 +307,12 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
     const broken = copyCatalog().map((invariant) => ({
       ...invariant,
       proofs: invariant.proofs.filter(
-        (proof) => proof.path !== ".github/workflows/accounting-rehearsal.yml"
+        (proof) => proof.path !== ".github/workflows/trusted-accounting-rehearsal.yml"
       ),
     }));
 
     expect(validateInvariantCatalog(ROOT, broken)).toContain(
-      "Orphan WORKFLOW_EVIDENCE_CONTRACTS binding has no active catalog proof path: .github/workflows/accounting-rehearsal.yml"
+      "Orphan WORKFLOW_EVIDENCE_CONTRACTS binding has no active catalog proof path: .github/workflows/trusted-accounting-rehearsal.yml"
     );
   });
 
@@ -364,21 +364,21 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
 
   test("NEGATIVE CONTROL: a commented workflow marker is not preview evidence", () => {
     const source = `
-      name: Accounting Cloud Rehearsal
+      name: Trusted Accounting Cloud Rehearsal
       on:
-        pull_request:
+        workflow_run:
       jobs:
         rehearsal:
           runs-on: ubuntu-latest
           steps:
-            - name: Run the Accounting rehearsal
+            - name: Run cloud accounting rehearsal from trusted main
               run: |
-                # node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
+                # REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
     `;
     expect(
       sourceHasActiveWorkflowMarker(
         source,
-        "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
+        'REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?',
         REHEARSAL_WORKFLOW_CONTRACT
       )
     ).toBe(false);
@@ -386,32 +386,32 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
 
   test("NEGATIVE CONTROL: a rehearsal command in the wrong job cannot satisfy preview evidence", () => {
     const source = `
-      name: Accounting Cloud Rehearsal
+      name: Trusted Accounting Cloud Rehearsal
       on:
-        pull_request:
+        workflow_run:
       jobs:
         rehearsal:
           runs-on: ubuntu-latest
           steps:
-            - name: Run the Accounting rehearsal
+            - name: Run cloud accounting rehearsal from trusted main
               run: echo "decoy"
         unrelated:
           runs-on: ubuntu-latest
           steps:
-            - name: Run the Accounting rehearsal
+            - name: Run cloud accounting rehearsal from trusted main
               run: |
-                node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
+                REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
     `;
     expect(
       sourceHasActiveWorkflowMarker(
         source,
-        "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
+        'REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?',
         REHEARSAL_WORKFLOW_CONTRACT
       )
     ).toBe(false);
   });
 
-  test("active preview workflow evidence requires the pinned rehearsal job, step, and command", () => {
+  test("NEGATIVE CONTROL: the secretless PR wrapper cannot substitute for trusted cloud preview evidence", () => {
     const source = `
       name: Accounting Cloud Rehearsal
       on:
@@ -420,14 +420,36 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
         rehearsal:
           runs-on: ubuntu-latest
           steps:
-            - name: Run the Accounting rehearsal
+            - name: Validate accounting rehearsal harness without credentials
               run: |
-                node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
+                REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
     `;
     expect(
       sourceHasActiveWorkflowMarker(
         source,
-        "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
+        'REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?',
+        REHEARSAL_WORKFLOW_CONTRACT
+      )
+    ).toBe(false);
+  });
+
+  test("active preview workflow evidence requires the pinned rehearsal job, step, and command", () => {
+    const source = `
+      name: Trusted Accounting Cloud Rehearsal
+      on:
+        workflow_run:
+      jobs:
+        rehearsal:
+          runs-on: ubuntu-latest
+          steps:
+            - name: Run cloud accounting rehearsal from trusted main
+              run: |
+                REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
+    `;
+    expect(
+      sourceHasActiveWorkflowMarker(
+        source,
+        'REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?',
         REHEARSAL_WORKFLOW_CONTRACT
       )
     ).toBe(true);

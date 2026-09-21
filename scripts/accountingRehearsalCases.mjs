@@ -28,6 +28,41 @@ function expectEqual(actual, expected, what) {
 
 const uuid = () => globalThis.crypto.randomUUID();
 
+const VEHICLE_CREATE_RATE_LIMIT =
+  /^vehicles:create failed: Rate limit exceeded\. Try again in (\d+(?:\.\d+)?)s$/;
+
+export async function createVehicleForRehearsal(
+  ownerMust,
+  args,
+  {
+    maxAttempts = 3,
+    maxRetryWaitMs = 2_100,
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  } = {},
+) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await ownerMust("mutation", "vehicles:create", args);
+    } catch (error) {
+      const message = String(error?.message ?? error);
+      const match = VEHICLE_CREATE_RATE_LIMIT.exec(message);
+      if (match === null || attempt === maxAttempts) throw error;
+
+      const retrySeconds = Number(match[1]);
+      if (!Number.isFinite(retrySeconds) || retrySeconds < 0) throw error;
+
+      const delayMs = Math.max(Math.ceil(retrySeconds * 1000) + 100, 100);
+      // Never retry before the product's own limiter says the interval ended.
+      // If honoring that interval would exceed this fixture helper's bounded
+      // wait budget, surface the original refusal instead of retrying early.
+      if (delayMs > maxRetryWaitMs) throw error;
+      await sleep(delayMs);
+    }
+  }
+
+  throw new Error("unreachable vehicle rehearsal retry state");
+}
+
 /**
  * A deposit whose free part is only PART of the row.
  *
@@ -47,7 +82,7 @@ async function makePartiallyCommittedDeposit({ orgId, ownerMust, label }) {
   });
 
   const vehicle = async (suffix, vin) =>
-    ownerMust("mutation", "vehicles:create", {
+    createVehicleForRehearsal(ownerMust, {
       orgId,
       vin,
       make: "Toyota",

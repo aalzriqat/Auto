@@ -66,6 +66,9 @@ const backendEnvSchema = z.object({
   // Cloudflare Turnstile secret for public dealer-site lead forms. The public
   // action fails closed when this is absent.
   TURNSTILE_SECRET_KEY: z.string().min(20).optional(),
+  // Positive deployment-class marker. Production/dev leave this absent;
+  // disposable CI previews carry exactly "preview".
+  AUTOFLOW_DEPLOYMENT_CLASS: z.literal("preview").optional(),
   // Domain registrar mode. Defaults to disabled; set to "mock" only for local
   // development/tests until a real registrar/payment/reconciliation workflow
   // exists.
@@ -144,6 +147,7 @@ export function getValidatedEnv() {
     STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,
     TAP_SECRET_API_KEY: process.env.TAP_SECRET_API_KEY,
     TURNSTILE_SECRET_KEY: process.env.TURNSTILE_SECRET_KEY,
+    AUTOFLOW_DEPLOYMENT_CLASS: process.env.AUTOFLOW_DEPLOYMENT_CLASS,
     DOMAIN_REGISTRAR_MODE: process.env.DOMAIN_REGISTRAR_MODE,
     CONVEX_SITE_URL: process.env.CONVEX_SITE_URL,
     VAPID_PUBLIC_KEY: process.env.VAPID_PUBLIC_KEY,

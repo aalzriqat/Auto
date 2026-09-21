@@ -3,6 +3,11 @@ import { withSentryConfig } from "@sentry/nextjs";
 import "./lib/env";
 
 const nextConfig: NextConfig = {
+  // SCRUM-350 builds a self-contained runtime exactly once in the trusted
+  // browser controller. Normal development/production builds keep their
+  // existing shape.
+  output:
+    process.env.AUTOFLOW_SWARM_STANDALONE === "1" ? "standalone" : undefined,
   transpilePackages: ["@autoflow/shared"],
   // Baked into the client bundle at build time — compared at runtime against
   // /api/build-id (read fresh on every request) to detect when a tab is

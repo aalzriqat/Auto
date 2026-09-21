@@ -234,14 +234,14 @@ export const AUTOFLOW_PROOF_MARKERS: Readonly<Record<string, string>> = {
     "125 seeded entries: bounded first page, a planted OLD entry is off page 1, pagination reaches it, no duplicates, deterministic order",
   "PERF-1::convex/accountingPhase18.test.ts::BOUNDARY":
     "snapshots accumulate per (account, currency, period) and reports sum them correctly",
-  "PERF-1::.github/workflows/accounting-rehearsal.yml::BOUNDARY":
-    "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
+  "PERF-1::.github/workflows/trusted-accounting-rehearsal.yml::BOUNDARY":
+    'REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?',
   "CONC-1::convex/idempotencyEconomicCommands.test.ts::REPLAY,STATE_TRANSITION":
     "a concurrent retry of the same intent still creates exactly one economic event",
   "CONC-1::scripts/accountingRehearsalCases.test.ts::STATE_TRANSITION":
     "C1/C2 do not PASS when the two workers ran one after the other (RG-01)",
-  "CONC-1::.github/workflows/accounting-rehearsal.yml::CONCURRENCY,REPLAY":
-    "node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
+  "CONC-1::.github/workflows/trusted-accounting-rehearsal.yml::CONCURRENCY,REPLAY":
+    'REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?',
   "UI-1::scripts/reviewActionParity.test.ts::NEGATIVE,MUTATION":
     "the Deal wires every command on the frozen list",
   "UI-1::components/applications/cockpit/DealCockpitReviewParity.test.tsx::POSITIVE,NEGATIVE":
@@ -277,12 +277,12 @@ interface WorkflowEvidenceContract {
 const WORKFLOW_EVIDENCE_CONTRACTS: Readonly<
   Record<string, WorkflowEvidenceContract>
 > = {
-  ".github/workflows/accounting-rehearsal.yml": {
-    workflowName: "Accounting Cloud Rehearsal",
-    trigger: "pull_request",
+  ".github/workflows/trusted-accounting-rehearsal.yml": {
+    workflowName: "Trusted Accounting Cloud Rehearsal",
+    trigger: "workflow_run",
     jobId: "rehearsal",
     runsOn: "ubuntu-latest",
-    stepName: "Run the Accounting rehearsal",
+    stepName: "Run cloud accounting rehearsal from trusted main",
   },
 };
 
@@ -945,7 +945,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         "Exercises ledger and report snapshot and delta boundaries at scale-sensitive accounting surfaces."
       ),
       preview(
-        ".github/workflows/accounting-rehearsal.yml",
+        ".github/workflows/trusted-accounting-rehearsal.yml",
         ["BOUNDARY"],
         "Runs accounting rehearsal against an actual preview backend rather than treating the in-memory harness as platform-limit evidence."
       ),
@@ -961,7 +961,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
     state: "PARTIAL",
     statement:
       "Critical economic commands that can race must preserve one economic effect and their state-machine invariants under real Convex contention, not merely under serialized convex-test execution.",
-    sourceAreas: ["convex/**", "scripts/accountingRehearsalCases.mjs", ".github/workflows/accounting-rehearsal.yml"],
+    sourceAreas: ["convex/**", "scripts/accountingRehearsalCases.mjs", ".github/workflows/trusted-accounting-rehearsal.yml"],
     profile: profile({
       economicImpact: "DIRECT",
       concurrency: "REQUIRED",
@@ -996,7 +996,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         "Proves the rehearsal instrument detects broken modeled concurrency cases."
       ),
       preview(
-        ".github/workflows/accounting-rehearsal.yml",
+        ".github/workflows/trusted-accounting-rehearsal.yml",
         ["CONCURRENCY", "REPLAY"],
         "Provides real preview-backend evidence for the contention cases included in the rehearsal."
       ),
