@@ -9,7 +9,6 @@ const AUTHORIZE_PREVIEW_URL =
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const REQUEST_TIMEOUT_MS = 30_000;
 const CONVEX_CLIENT_HEADER = "npm-cli-1.42.1";
-const SAFE_SLUG = /^[A-Za-z0-9][A-Za-z0-9_-]{0,100}$/;
 const SAFE_PREVIEW_NAME = /^[a-z0-9][a-z0-9._-]{0,60}$/;
 
 function positivePrNumber(value) {
@@ -36,8 +35,10 @@ export function parsePreviewDeployKey(deployKey) {
   if (
     parts.length !== 3 ||
     parts[0] !== "preview" ||
-    !SAFE_SLUG.test(parts[1] ?? "") ||
-    !SAFE_SLUG.test(parts[2] ?? "") ||
+    !parts[1] ||
+    !parts[2] ||
+    parts[1].length > 200 ||
+    parts[2].length > 200 ||
     !secret
   ) {
     throw new Error(
