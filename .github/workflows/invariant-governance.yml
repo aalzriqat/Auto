@@ -38,6 +38,11 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify Jev shadow impact harness
+        run: pnpm test:jev-impact
+        env:
+          NODE_ENV: test
+
       - name: Evidence boundary
         if: always()
         run: |

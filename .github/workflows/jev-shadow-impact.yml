@@ -1,0 +1,101 @@
+name: Jev Shadow Impact
+
+on:
+  # Secret-bearing analysis runs from the trusted workflow on main after the
+  # ordinary PR invariant workflow finishes. We never execute PR code here.
+  workflow_run:
+    workflows: [ "Invariant Governance" ]
+    types: [ completed ]
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      base_sha:
+        description: "Base commit SHA for manual shadow evaluation"
+        required: true
+        type: string
+      head_sha:
+        description: "Head commit SHA for manual shadow evaluation"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  shadow-impact:
+    name: advisory-impact
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.event == 'pull_request' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.pull_requests[0].number != null)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Require trusted ref for manual dispatch
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        run: |
+          echo "Manual Jev shadow evaluation must be dispatched from main." >&2
+          exit 1
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch pull-request head as data only
+        if: github.event_name == 'workflow_run'
+        env:
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+        run: |
+          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "workflow_run did not provide a valid PR number" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin "refs/pull/${PR_NUMBER}/head"
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+
+      - name: Install trusted main dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Verify Jev impact harness
+        run: pnpm test:jev-impact
+        env:
+          NODE_ENV: test
+
+      - name: Run Jev shadow impact
+        run: pnpm jev:shadow-impact
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          BASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].base.sha || github.event_name == 'push' && github.event.before || inputs.base_sha }}
+          HEAD_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].head.sha || github.event_name == 'push' && github.sha || inputs.head_sha }}
+
+      - name: Publish sanitized Jev summary
+        if: always()
+        run: |
+          if [ -f artifacts/jev-shadow-summary.md ]; then
+            cat artifacts/jev-shadow-summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload Jev advisory evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: jev-shadow-impact
+          path: |
+            artifacts/jev-shadow-impact.json
+            artifacts/jev-shadow-summary.md
+          if-no-files-found: warn
+          retention-days: 14
