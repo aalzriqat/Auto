@@ -61,7 +61,7 @@ export function clerkJwtPemFromJwks(value) {
 
   const keys = /** @type {{keys?: unknown}} */ (value).keys;
   if (!Array.isArray(keys)) {
-    throw new Error("Clerk JWKS payload is missing keys.");
+    throw new TypeError("Clerk JWKS payload is missing keys.");
   }
 
   const signingKeys = keys.filter((entry) => {

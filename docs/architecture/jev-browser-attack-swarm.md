@@ -47,12 +47,12 @@ The control plane is bound to immutable and independently verified inputs:
 
 1. The trusted controller checkout is pinned to `${{ github.workflow_sha }}`, not moving `main`.
 2. Mandatory invariant impact is derived by trusted code from exact base + source-head Git state using the canonical `jevImpact.mjs` mapper.
-3. The ordinary Playwright workflow produces an identity-only descriptor containing only the deterministic preview name, PR number, and exact source-head SHA.
-4. The descriptor contains no Convex URL and the descriptor step receives no Convex deploy key.
-5. The trusted workflow independently resolves the deterministic preview name through Convex's control plane and records the resulting deployment URL as trusted evidence.
+3. The pull-request Playwright workflow is a secretless preflight. It runs static browser validation and produces an identity-only descriptor containing only the deterministic preview name, PR number, and exact source-head SHA.
+4. That preflight contains no `secrets.*` references. The descriptor contains no Convex URL, deploy credential, Clerk secret, or reusable E2E identity material.
+5. The trusted workflow independently recreates and resolves the deterministic preview through Convex's control plane and records the resulting deployment URL as trusted evidence.
 6. The trusted workflow fetches GitHub's `refs/pull/<pr>/head` and `refs/pull/<pr>/merge` refs itself.
 7. The merge ref is accepted only when it has exactly two parents: the expected trusted base SHA followed by the expected source-head SHA.
-8. Browser execution checks out that validated merge commit, so the frontend under attack is the same base + PR candidate shape that the ordinary pull-request workflow tested.
+8. Full authenticated E2E and adversarial browser execution both check out that validated merge commit as candidate application code, while their controller and test code comes from the immutable trusted workflow revision.
 
 The candidate descriptor is untrusted data. It is size-bounded, archive-shape-checked, parsed by trusted code, and cannot supply backend authority.
 
@@ -64,15 +64,15 @@ The trusted controller derives the expected `e2e-*` preview name from the PR num
 
 The trusted resolver:
 
-- uses the preview deploy key only inside trusted controller execution;
+- uses the project-wide preview deploy key only inside trusted controller execution;
 - accepts only a preview deployment response;
 - accepts only a bare `https://*.convex.cloud` origin;
 - applies a bounded request timeout and response-size limit;
 - rejects redirects;
 - writes a sanitized authority artifact containing preview name, deployment name, and deployment URL; and
-- discards the preview admin key returned by the control plane rather than persisting it.
+- never persists the deployment admin key returned by the control plane.
 
-The candidate frontend receives only the trusted resolved Convex URL, never the preview deploy key.
+Before candidate backend code is deployed, trusted main converts that response into the deployment-scoped `preview:<deploymentName>|...` credential, scrubs the disposable preview environment to an explicit allowlist, overwrites Turnstile with Cloudflare's public always-pass test secret, and verifies the final environment-name set exactly. Candidate backend code therefore receives authority over that disposable preview only. Candidate frontend code receives public configuration only. The project-wide preview deploy key is never passed into a candidate process.
 
 ## Clerk authentication boundary
 
@@ -82,9 +82,9 @@ The resulting browser storage state is then reused by the trusted Playwright con
 
 The candidate server retains its real Clerk middleware. Instead of deleting middleware or supplying `CLERK_SECRET_KEY`, the trusted controller derives Clerk's public JWT verification key and passes only `CLERK_JWT_KEY` to candidate build/runtime.
 
-The swarm refuses non-test Clerk credentials: the configured publishable and secret keys must be development/test-instance `pk_test_` / `sk_test_` keys before trusted authentication runs.
+The trusted controller requires a development/test-instance Clerk publishable key before deriving public JWT verification material. Reusable Clerk secrets and E2E passwords exist only in trusted-main steps and are never passed to candidate containers or retyped into candidate DOM.
 
-This boundary protects the authoritative evaluation lane from exposing reusable login credentials to candidate-controlled browser code. It does not claim that a same-repository contributor is cryptographically isolated from repository-level Actions secrets; that broader author-trust boundary is repository governance, not a property of this workflow.
+This boundary is designed so same-repository pull-request code does not execute with reusable repository credentials. Candidate code can observe its own disposable preview state and public test configuration, but it does not receive project-wide Convex authority, Clerk secret keys, reusable E2E passwords, or GitHub write tokens.
 
 ## Phase A — deterministic preview attack harness
 
@@ -131,17 +131,20 @@ A trusted run manifest carries:
 - isolated worker IDs and artifact roots; and
 - the bounded mission partition.
 
-The execution layer calls the existing preview assertion path before any adversarial write. The disposable preview marker is still required; a URL string alone is not sufficient.
+The trusted controller performs the existing SCRUM-143 preview assertion before candidate browser execution and exports only a one-bit pre-attestation to the secretless mission runner. The disposable preview marker is still required; a URL string alone is not sufficient.
 
-Candidate-controlled application code is built and served only inside a pinned container. The candidate runtime:
+Candidate-controlled application code is isolated by role:
 
-- receives no Convex deploy key;
-- receives no Clerk secret key;
-- receives no E2E login user/password secrets;
-- receives no GitHub token;
-- runs with all Linux capabilities dropped and `no-new-privileges`;
-- has no Docker socket or trusted-controller mount; and
-- runs on an internal Docker network with only a loopback-published frontend port reachable by the trusted host.
+- candidate backend deployment runs in a pinned container and receives only the exact disposable preview's deployment-scoped admin credential;
+- candidate frontend build/runtime runs in pinned containers and receives no Convex deploy credential;
+- candidate frontend receives no Clerk secret key;
+- candidate frontend receives no E2E login user/password secrets;
+- candidate processes receive no GitHub token;
+- candidate containers run with all Linux capabilities dropped and `no-new-privileges`;
+- candidate containers have no Docker socket or trusted-controller mount; and
+- candidate frontend runtime runs on an internal Docker network with only a loopback-published port reachable by the trusted host.
+
+The disposable Convex preview environment is fail-closed to exactly `AUTOFLOW_DEPLOYMENT_CLASS`, both Clerk issuer URLs, `NEXT_PUBLIC_APP_URL`, and `TURNSTILE_SECRET_KEY`. Any newly inherited Preview default outside that allowlist is removed, and the post-scrub equality check fails if the final set differs. The Turnstile value is Cloudflare's public E2E test secret; AutoFlow accepts Cloudflare's `action: "test"` only when both the preview marker and that exact test secret are present.
 
 No production or customer-data attack path is permitted. `PLAYWRIGHT_BASE_URL` must be localhost/loopback, while the backend target must be the trusted bare Convex preview origin.
 

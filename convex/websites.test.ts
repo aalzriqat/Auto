@@ -312,35 +312,6 @@ describe("dealer website publishing", () => {
 });
 
 describe("dealer website leads", () => {
-  test("accepts Cloudflare test action only for a marked preview using the official test secret", async () => {
-    process.env.CLERK_JWT_ISSUER_DOMAIN = "https://test.clerk.accounts.dev";
-    process.env.NEXT_PUBLIC_APP_URL = "https://test.example.com";
-    process.env.TURNSTILE_SECRET_KEY = TURNSTILE_ALWAYS_PASS_TEST_SECRET;
-    process.env.AUTOFLOW_DEPLOYMENT_CLASS = "preview";
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        new Response(JSON.stringify({ success: true, action: "test" }), {
-          headers: { "Content-Type": "application/json" },
-        }),
-      ),
-    );
-
-    await expect(
-      verifyTurnstileToken("XXXX.DUMMY.TOKEN.XXXX"),
-    ).resolves.toBeUndefined();
-
-    delete process.env.AUTOFLOW_DEPLOYMENT_CLASS;
-    await expect(
-      verifyTurnstileToken("XXXX.DUMMY.TOKEN.XXXX"),
-    ).rejects.toThrow(/verification failed/i);
-
-    restoreEnv("CLERK_JWT_ISSUER_DOMAIN", ORIGINAL_CLERK_ISSUER);
-    restoreEnv("NEXT_PUBLIC_APP_URL", ORIGINAL_APP_URL);
-    restoreEnv("TURNSTILE_SECRET_KEY", ORIGINAL_TURNSTILE_SECRET);
-    vi.unstubAllGlobals();
-  });
-
   beforeEach(() => {
     process.env.CLERK_JWT_ISSUER_DOMAIN = "https://test.clerk.accounts.dev";
     process.env.NEXT_PUBLIC_APP_URL = "https://test.example.com";
@@ -361,6 +332,29 @@ describe("dealer website leads", () => {
     restoreEnv("TURNSTILE_SECRET_KEY", ORIGINAL_TURNSTILE_SECRET);
     vi.unstubAllGlobals();
   });
+
+  test("accepts Cloudflare test action only for a marked preview using the official test secret", async () => {
+    process.env.TURNSTILE_SECRET_KEY = TURNSTILE_ALWAYS_PASS_TEST_SECRET;
+    process.env.AUTOFLOW_DEPLOYMENT_CLASS = "preview";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ success: true, action: "test" }), {
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(
+      verifyTurnstileToken("XXXX.DUMMY.TOKEN.XXXX"),
+    ).resolves.toBeUndefined();
+
+    delete process.env.AUTOFLOW_DEPLOYMENT_CLASS;
+    await expect(
+      verifyTurnstileToken("XXXX.DUMMY.TOKEN.XXXX"),
+    ).rejects.toThrow(/verification failed/i);
+  });
+
 
   test("contact_form_creates_customer_and_lead", async () => {
     const { convex, orgId } = await publishDealerWebsite();
