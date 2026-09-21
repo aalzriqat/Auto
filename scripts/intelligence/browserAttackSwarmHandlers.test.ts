@@ -272,6 +272,10 @@ function handlerFor(family: BrowserAttackMission["family"]) {
 describe("SCRUM-350 initial browser attack handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.chromiumLaunch.mockReset();
+    mocks.authenticatedConvexClient.mockReset();
+    mocks.mkdir.mockReset().mockResolvedValue(undefined);
+    mocks.writeFile.mockReset().mockResolvedValue(undefined);
     process.env.PLAYWRIGHT_BASE_URL = "http://127.0.0.1:3000";
   });
 
@@ -292,11 +296,16 @@ describe("SCRUM-350 initial browser attack handlers", () => {
     const fixture = makeBrowserFixture(defaultScenario());
     const controller = new AbortController();
     let releaseLaunch!: () => void;
+    let markLaunchStarted!: () => void;
     const launchGate = new Promise<void>((resolve) => {
       releaseLaunch = resolve;
     });
+    const launchStarted = new Promise<void>((resolve) => {
+      markLaunchStarted = resolve;
+    });
 
     mocks.chromiumLaunch.mockImplementationOnce(async () => {
+      markLaunchStarted();
       await launchGate;
       return fixture.browser;
     });
@@ -305,6 +314,7 @@ describe("SCRUM-350 initial browser attack handlers", () => {
       executionContext("RTL_PARITY", controller.signal),
     );
 
+    await launchStarted;
     controller.abort(new Error("mission timed out during launch"));
     releaseLaunch();
 
