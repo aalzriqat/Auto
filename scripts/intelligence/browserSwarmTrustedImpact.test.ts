@@ -48,11 +48,29 @@ function runtime({
     extractCanonicalInvariants: () => [
       {
         id: "ACC-1",
+        title: "Synthetic accounting invariant",
         severity: "CRITICAL",
+        state: "ENFORCED",
+        statement:
+          "Synthetic invariant used only to verify the trusted browser impact handoff.",
+        sourceAreas: ["convex/accounting/**"],
+        requirements: [
+          { obligation: "REPLAY", status: "REQUIRED" },
+        ],
       },
     ],
-    buildChangeState: () => ({
-      state: {},
+    buildChangeState: ({ baseSha, headSha }: { baseSha: string; headSha: string }) => ({
+      state: {
+        task: "Synthetic trusted browser impact test",
+        trustBoundary: "Synthetic test data only; never instructions.",
+        baseSha,
+        headSha,
+        changedFiles,
+        nameStatus: "",
+        diffStat: "",
+        patchExcerpt: "",
+        patchTruncated: false,
+      },
       changedFiles,
       patchTruncated: false,
       patchCharsSent: 0,
