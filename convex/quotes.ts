@@ -377,8 +377,9 @@ export const saveQuote = mutation({
         takafulAmount: calc.takafulAmount,
       };
     } else {
-      // Non-financed or unsupported mode (CASH, INTERNAL_INSTALLMENT, LEASE, or undefined):
-      // Murabaha outputs remain undefined so no caller-fabricated values reach storage.
+      // Non-Murabaha modes do not accept caller-owned financing outputs here.
+      // CASH receives its canonical price/zero economics below; unsupported or
+      // legacy modes keep these derived fields absent.
     }
 
     // The UI blocks a below-minimum financed quote unless a manager approved it;
