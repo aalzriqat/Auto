@@ -55,7 +55,7 @@ function runtime({
           "Synthetic invariant used only to verify the trusted browser impact handoff.",
         sourceAreas: ["convex/accounting/**"],
         requirements: [
-          { obligation: "REPLAY", status: "REQUIRED" },
+          { obligation: "REPLAY", status: "REQUIRED" as const },
         ],
       },
     ],
