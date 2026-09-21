@@ -30,7 +30,8 @@
     "load:1000": "k6 run load-tests/k6/autoflow-1000-users.js",
     "test:invariants": "vitest run scripts/autoflowInvariantCatalog.test.ts",
     "test:jev-impact": "vitest run scripts/intelligence/jevImpact.test.ts",
-    "jev:shadow-impact": "node scripts/intelligence/runJevShadowImpact.mjs"
+    "jev:shadow-impact": "node scripts/intelligence/runJevShadowImpact.mjs",
+    "test:browser-swarm": "vitest run scripts/intelligence/browserAttackSwarm.test.ts"
   },
   "dependencies": {
     "@autoflow/shared": "workspace:*",
