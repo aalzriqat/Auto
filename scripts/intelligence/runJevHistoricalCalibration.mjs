@@ -28,6 +28,8 @@ function summaryMarkdown(payload) {
     `Combined recall: ${percent(metrics.combinedHighCriticalRecall)}`,
     `Incremental Jev hits: ${metrics.incrementalJevHits}`,
     `Extra review requirements: ${metrics.extraReviewRequirements}`,
+    `Negative-control added-review rate: ${percent(metrics.negativeControlAddedReviewRate)}`,
+    `Negative-control escalation rate: ${percent(metrics.negativeControlEscalationRate)}`,
     `Input tokens: ${metrics.usage.input_tokens}`,
     `Output tokens: ${metrics.usage.output_tokens}`,
     `Total Jev latency: ${metrics.totalLatencyMs} ms`,
