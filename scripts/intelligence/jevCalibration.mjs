@@ -166,8 +166,12 @@ export function scoreCalibrationCase(
 
   return {
     caseId: result.caseId,
+    negativeControl: label.control === "NEGATIVE_LOW_RISK",
     findings,
     addedRequirements,
+    escalationRequirements: addedRequirements.filter((requirement) =>
+      requirement.startsWith("escalate-"),
+    ),
   };
 }
 
@@ -183,6 +187,13 @@ export function aggregateCalibration(scoredCases, caseResults) {
     ),
   );
   const allAddedRequirements = scoredCases.flatMap((entry) => entry.addedRequirements);
+  const negativeControls = scoredCases.filter((entry) => entry.negativeControl);
+  const negativeControlsWithAddedReview = negativeControls.filter(
+    (entry) => entry.addedRequirements.length > 0,
+  );
+  const negativeControlsWithEscalation = negativeControls.filter(
+    (entry) => entry.escalationRequirements.length > 0,
+  );
   const usage = caseResults.reduce(
     (sum, result) => ({
       input_tokens: sum.input_tokens + result.usage.input_tokens,
@@ -201,6 +212,15 @@ export function aggregateCalibration(scoredCases, caseResults) {
     incrementalJevHits: highCritical.filter((finding) => finding.incrementalJevHit).length,
     extraReviewRequirements: allAddedRequirements.length,
     uniqueExtraReviewRequirements: [...new Set(allAddedRequirements)].sort(),
+    negativeControlCases: negativeControls.length,
+    negativeControlAddedReviewRate:
+      negativeControls.length === 0
+        ? null
+        : negativeControlsWithAddedReview.length / negativeControls.length,
+    negativeControlEscalationRate:
+      negativeControls.length === 0
+        ? null
+        : negativeControlsWithEscalation.length / negativeControls.length,
     usage,
     totalLatencyMs,
   };
