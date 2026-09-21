@@ -6,7 +6,11 @@
  * finance company quotes.
  */
 import { api, type QuoteSaveArgs } from "../../../convexApi";
-import { manualExecutionFeeInputValue } from "./salesWizardQuote";
+import {
+  effectiveMobileQuoteVehiclePrice,
+  manualExecutionFeeInputValue,
+  mobileFinancingTermIsValid,
+} from "./salesWizardQuote";
 
 describe("Mobile Quote Contract & Wizard (S1-R11-H1)", () => {
   test("QuoteSaveArgs includes customerEligibilityStatusIds", () => {
@@ -90,5 +94,20 @@ describe("Mobile Quote Contract & Wizard (S1-R11-H1)", () => {
       expect(manualExecutionFeeInputValue(25.5)).toBe("25.5");
     });
   });
+  describe("mobile quote pricing and financing-term authority", () => {
+    test("folds desired dealer profit into the authoritative vehicle price", () => {
+      expect(effectiveMobileQuoteVehiclePrice(9_500, 1_000)).toBe(10_500);
+      expect(effectiveMobileQuoteVehiclePrice(9_500, 0)).toBe(9_500);
+    });
+
+    test("rejects non-integer, over-max, and grace-only financing terms", () => {
+      expect(mobileFinancingTermIsValid({ termMonths: 48, maxTermMonths: 60 })).toBe(true);
+      expect(mobileFinancingTermIsValid({ termMonths: 61, maxTermMonths: 60 })).toBe(false);
+      expect(mobileFinancingTermIsValid({ termMonths: 12.5, maxTermMonths: 60 })).toBe(false);
+      expect(mobileFinancingTermIsValid({ termMonths: 3, gracePeriodMonths: 3 })).toBe(false);
+      expect(mobileFinancingTermIsValid({ termMonths: 4, gracePeriodMonths: 3 })).toBe(true);
+    });
+  });
+
 });
 
