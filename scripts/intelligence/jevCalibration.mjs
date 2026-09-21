@@ -2,23 +2,27 @@ import {
   DEFAULT_CANDIDATE_THRESHOLD,
   buildChangeState,
   buildJevQuestions,
+  buildJevRiskQuestions,
   callJev,
   deriveReviewMatrix,
   deterministicInvariantImpact,
   extractCanonicalInvariants,
   extraDeterministicRequirementsForFiles,
   normalizeJevResponse,
+  normalizeJevRiskResponse,
 } from "./jevImpact.mjs";
 
 const DEFAULT_RUNTIME = Object.freeze({
   buildChangeState,
   buildJevQuestions,
+  buildJevRiskQuestions,
   callJev,
   deriveReviewMatrix,
   deterministicInvariantImpact,
   extractCanonicalInvariants,
   extraDeterministicRequirementsForFiles,
   normalizeJevResponse,
+  normalizeJevRiskResponse,
 });
 
 function assertCalibrationCase(calibrationCase) {
@@ -66,8 +70,18 @@ export function buildCalibrationObservation({
     deterministicImpact,
     extraDeterministicRequirements,
     state: change.state,
-    questions: runtime.buildJevQuestions(invariants),
+    blindQuestions: runtime.buildJevRiskQuestions(),
+    policyQuestions: runtime.buildJevQuestions(invariants),
     invariants,
+  };
+}
+
+async function timedJevCall({ runtime, apiKey, state, questions }) {
+  const startedAt = Date.now();
+  const rawResponse = await runtime.callJev({ apiKey, state, questions });
+  return {
+    rawResponse,
+    latencyMs: Date.now() - startedAt,
   };
 }
 
@@ -83,19 +97,41 @@ export async function runHistoricalCalibrationCase({
     calibrationCase,
     runtimeOverrides,
   });
-  const startedAt = Date.now();
-  const rawResponse = await runtime.callJev({
+
+  // Primary hindsight-free track: generic risk questions only. No current
+  // invariant IDs, statements, source areas, or later finding labels are sent.
+  const blindCall = await timedJevCall({
+    runtime,
     apiKey,
     state: observation.state,
-    questions: observation.questions,
+    questions: observation.blindQuestions,
   });
-  const latencyMs = Date.now() - startedAt;
-  const jev = runtime.normalizeJevResponse(rawResponse, observation.invariants);
-  const reviewMatrix = runtime.deriveReviewMatrix({
+  const blindJev = runtime.normalizeJevRiskResponse(blindCall.rawResponse);
+  const blindReviewMatrix = runtime.deriveReviewMatrix({
+    deterministicImpact: [],
+    extraDeterministicRequirements: [],
+    risks: blindJev.risks,
+    invariantImpact: {},
+  });
+
+  // Secondary operational replay: apply today's complete AutoFlow policy to the
+  // same old diff. This is useful for current routing, but is not counted as the
+  // hindsight-free Jev metric because today's invariant catalog is newer.
+  const policyCall = await timedJevCall({
+    runtime,
+    apiKey,
+    state: observation.state,
+    questions: observation.policyQuestions,
+  });
+  const policyJev = runtime.normalizeJevResponse(
+    policyCall.rawResponse,
+    observation.invariants,
+  );
+  const policyReviewMatrix = runtime.deriveReviewMatrix({
     deterministicImpact: observation.deterministicImpact,
     extraDeterministicRequirements: observation.extraDeterministicRequirements,
-    risks: jev.risks,
-    invariantImpact: jev.invariantImpact,
+    risks: policyJev.risks,
+    invariantImpact: policyJev.invariantImpact,
   });
 
   return {
@@ -106,12 +142,21 @@ export async function runHistoricalCalibrationCase({
     patchTruncated: observation.patchTruncated,
     patchCharsSent: observation.patchCharsSent,
     deterministicImpact: observation.deterministicImpact,
-    model: jev.model,
-    usage: jev.usage,
-    risks: jev.risks,
-    invariantImpact: jev.invariantImpact,
-    reviewMatrix,
-    latencyMs,
+    blind: {
+      model: blindJev.model,
+      usage: blindJev.usage,
+      risks: blindJev.risks,
+      reviewMatrix: blindReviewMatrix,
+      latencyMs: blindCall.latencyMs,
+    },
+    policy: {
+      model: policyJev.model,
+      usage: policyJev.usage,
+      risks: policyJev.risks,
+      invariantImpact: policyJev.invariantImpact,
+      reviewMatrix: policyReviewMatrix,
+      latencyMs: policyCall.latencyMs,
+    },
   };
 }
 
@@ -120,32 +165,66 @@ function intersects(values, accepted) {
   return values.some((value) => acceptedSet.has(value));
 }
 
+function matchingRisks(risks, acceptedRiskKeys, candidateThreshold) {
+  return acceptedRiskKeys.filter(
+    (risk) => (risks[risk] ?? 0) >= candidateThreshold,
+  );
+}
+
 function scoreFinding(result, finding, candidateThreshold) {
   const deterministicInvariantIds = result.deterministicImpact.map((impact) => impact.id);
-  const jevInvariantIds = result.reviewMatrix.candidateInvariants.map((entry) => entry.id);
-  const deterministicRequirements = result.reviewMatrix.deterministicRequirements;
-  const jevRequirements = result.reviewMatrix.jevAdvisoryRequirements;
-  const riskHits = finding.acceptedRiskKeys.filter(
-    (risk) => (result.risks[risk] ?? 0) >= candidateThreshold,
+  const deterministicRequirements = result.policy.reviewMatrix.deterministicRequirements;
+
+  const blindRiskHits = matchingRisks(
+    result.blind.risks,
+    finding.acceptedRiskKeys,
+    candidateThreshold,
   );
+  const blindJevHit =
+    intersects(
+      result.blind.reviewMatrix.jevAdvisoryRequirements,
+      finding.acceptedRequirements,
+    ) || blindRiskHits.length > 0;
+
+  const policyInvariantIds = result.policy.reviewMatrix.candidateInvariants.map(
+    (entry) => entry.id,
+  );
+  const policyRiskHits = matchingRisks(
+    result.policy.risks,
+    finding.acceptedRiskKeys,
+    candidateThreshold,
+  );
+  const policyJevHit =
+    intersects(policyInvariantIds, finding.acceptedInvariantIds) ||
+    intersects(
+      result.policy.reviewMatrix.jevAdvisoryRequirements,
+      finding.acceptedRequirements,
+    ) ||
+    policyRiskHits.length > 0;
 
   const deterministicHit =
     intersects(deterministicInvariantIds, finding.acceptedInvariantIds) ||
     intersects(deterministicRequirements, finding.acceptedRequirements);
-  const jevHit =
-    intersects(jevInvariantIds, finding.acceptedInvariantIds) ||
-    intersects(jevRequirements, finding.acceptedRequirements) ||
-    riskHits.length > 0;
 
   return {
     id: finding.id,
     severity: finding.severity,
     deterministicHit,
-    jevHit,
-    combinedHit: deterministicHit || jevHit,
-    incrementalJevHit: !deterministicHit && jevHit,
-    riskHits,
+    blindJevHit,
+    policyJevHit,
+    operationalCombinedHit: deterministicHit || policyJevHit,
+    incrementalBlindJevHit: !deterministicHit && blindJevHit,
+    incrementalPolicyJevHit: !deterministicHit && policyJevHit,
+    blindRiskHits,
+    policyRiskHits,
   };
+}
+
+function addedRequirements(reviewMatrix) {
+  const deterministic = new Set(reviewMatrix.deterministicRequirements);
+  return reviewMatrix.jevAdvisoryRequirements.filter(
+    (requirement) => !deterministic.has(requirement),
+  );
 }
 
 export function scoreCalibrationCase(
@@ -159,17 +238,19 @@ export function scoreCalibrationCase(
   const findings = label.findings.map((finding) =>
     scoreFinding(result, finding, candidateThreshold),
   );
-  const deterministicSet = new Set(result.reviewMatrix.deterministicRequirements);
-  const addedRequirements = result.reviewMatrix.jevAdvisoryRequirements.filter(
-    (requirement) => !deterministicSet.has(requirement),
-  );
+  const blindAddedRequirements = addedRequirements(result.blind.reviewMatrix);
+  const policyAddedRequirements = addedRequirements(result.policy.reviewMatrix);
 
   return {
     caseId: result.caseId,
     negativeControl: label.control === "NEGATIVE_LOW_RISK",
     findings,
-    addedRequirements,
-    escalationRequirements: addedRequirements.filter((requirement) =>
+    blindAddedRequirements,
+    policyAddedRequirements,
+    blindEscalationRequirements: blindAddedRequirements.filter((requirement) =>
+      requirement.startsWith("escalate-"),
+    ),
+    policyEscalationRequirements: policyAddedRequirements.filter((requirement) =>
       requirement.startsWith("escalate-"),
     ),
   };
@@ -180,48 +261,96 @@ function recall(findings, key) {
   return findings.filter((finding) => finding[key]).length / findings.length;
 }
 
+function rate(numerator, denominator) {
+  return denominator === 0 ? null : numerator / denominator;
+}
+
 export function aggregateCalibration(scoredCases, caseResults) {
   const highCritical = scoredCases.flatMap((entry) =>
     entry.findings.filter(
       (finding) => finding.severity === "CRITICAL" || finding.severity === "HIGH",
     ),
   );
-  const allAddedRequirements = scoredCases.flatMap((entry) => entry.addedRequirements);
   const negativeControls = scoredCases.filter((entry) => entry.negativeControl);
-  const negativeControlsWithAddedReview = negativeControls.filter(
-    (entry) => entry.addedRequirements.length > 0,
+  const blindExtraRequirements = scoredCases.flatMap(
+    (entry) => entry.blindAddedRequirements,
   );
-  const negativeControlsWithEscalation = negativeControls.filter(
-    (entry) => entry.escalationRequirements.length > 0,
+  const policyExtraRequirements = scoredCases.flatMap(
+    (entry) => entry.policyAddedRequirements,
   );
+  const blindNegativeWithReview = negativeControls.filter(
+    (entry) => entry.blindAddedRequirements.length > 0,
+  );
+  const policyNegativeWithReview = negativeControls.filter(
+    (entry) => entry.policyAddedRequirements.length > 0,
+  );
+  const blindNegativeWithEscalation = negativeControls.filter(
+    (entry) => entry.blindEscalationRequirements.length > 0,
+  );
+  const policyNegativeWithEscalation = negativeControls.filter(
+    (entry) => entry.policyEscalationRequirements.length > 0,
+  );
+
   const usage = caseResults.reduce(
     (sum, result) => ({
-      input_tokens: sum.input_tokens + result.usage.input_tokens,
-      output_tokens: sum.output_tokens + result.usage.output_tokens,
+      blind_input_tokens: sum.blind_input_tokens + result.blind.usage.input_tokens,
+      blind_output_tokens: sum.blind_output_tokens + result.blind.usage.output_tokens,
+      policy_input_tokens: sum.policy_input_tokens + result.policy.usage.input_tokens,
+      policy_output_tokens: sum.policy_output_tokens + result.policy.usage.output_tokens,
     }),
-    { input_tokens: 0, output_tokens: 0 },
+    {
+      blind_input_tokens: 0,
+      blind_output_tokens: 0,
+      policy_input_tokens: 0,
+      policy_output_tokens: 0,
+    },
   );
-  const totalLatencyMs = caseResults.reduce((sum, result) => sum + result.latencyMs, 0);
+  const latency = caseResults.reduce(
+    (sum, result) => ({
+      blind_ms: sum.blind_ms + result.blind.latencyMs,
+      policy_ms: sum.policy_ms + result.policy.latencyMs,
+    }),
+    { blind_ms: 0, policy_ms: 0 },
+  );
 
   return {
     cases: scoredCases.length,
     highCriticalFindings: highCritical.length,
-    deterministicHighCriticalRecall: recall(highCritical, "deterministicHit"),
-    jevHighCriticalRecall: recall(highCritical, "jevHit"),
-    combinedHighCriticalRecall: recall(highCritical, "combinedHit"),
-    incrementalJevHits: highCritical.filter((finding) => finding.incrementalJevHit).length,
-    extraReviewRequirements: allAddedRequirements.length,
-    uniqueExtraReviewRequirements: [...new Set(allAddedRequirements)].sort(),
+    currentDeterministicReplayRecall: recall(highCritical, "deterministicHit"),
+    blindJevHighCriticalRecall: recall(highCritical, "blindJevHit"),
+    currentPolicyJevHighCriticalRecall: recall(highCritical, "policyJevHit"),
+    operationalCombinedHighCriticalRecall: recall(
+      highCritical,
+      "operationalCombinedHit",
+    ),
+    incrementalBlindJevHits: highCritical.filter(
+      (finding) => finding.incrementalBlindJevHit,
+    ).length,
+    incrementalPolicyJevHits: highCritical.filter(
+      (finding) => finding.incrementalPolicyJevHit,
+    ).length,
+    blindExtraReviewRequirements: blindExtraRequirements.length,
+    uniqueBlindExtraReviewRequirements: [...new Set(blindExtraRequirements)].sort(),
+    policyExtraReviewRequirements: policyExtraRequirements.length,
+    uniquePolicyExtraReviewRequirements: [...new Set(policyExtraRequirements)].sort(),
     negativeControlCases: negativeControls.length,
-    negativeControlAddedReviewRate:
-      negativeControls.length === 0
-        ? null
-        : negativeControlsWithAddedReview.length / negativeControls.length,
-    negativeControlEscalationRate:
-      negativeControls.length === 0
-        ? null
-        : negativeControlsWithEscalation.length / negativeControls.length,
+    blindNegativeControlAddedReviewRate: rate(
+      blindNegativeWithReview.length,
+      negativeControls.length,
+    ),
+    policyNegativeControlAddedReviewRate: rate(
+      policyNegativeWithReview.length,
+      negativeControls.length,
+    ),
+    blindNegativeControlEscalationRate: rate(
+      blindNegativeWithEscalation.length,
+      negativeControls.length,
+    ),
+    policyNegativeControlEscalationRate: rate(
+      policyNegativeWithEscalation.length,
+      negativeControls.length,
+    ),
     usage,
-    totalLatencyMs,
+    latency,
   };
 }
