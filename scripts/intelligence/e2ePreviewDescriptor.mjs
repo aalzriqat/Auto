@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   PreviewTargetingError,
-  assertPreviewTargeting,
+  previewNameForRef,
 } from "../e2ePreviewBootstrap.mjs";
 
 const DESCRIPTOR_VERSION = 2;
@@ -91,9 +91,29 @@ export function validateE2EPreviewDescriptor(value, expected) {
  * @param {Record<string, string | undefined>} env
  */
 export function buildE2EPreviewDescriptor(env) {
-  const deployKey = env.CONVEX_DEPLOY_KEY;
+  const prNumberRaw = env.PR_NUMBER?.trim();
+  if (!/^\d+$/.test(prNumberRaw ?? "")) {
+    throw new PreviewTargetingError(
+      "PR_NUMBER must be the numeric pull-request number.",
+    );
+  }
+  const prNumber = Number(prNumberRaw);
+  if (!Number.isSafeInteger(prNumber) || prNumber <= 0) {
+    throw new PreviewTargetingError(
+      "PR_NUMBER must be a positive safe integer.",
+    );
+  }
+
   const previewName = env.CONVEX_PREVIEW_NAME;
-  assertPreviewTargeting({ deployKey, previewName, env });
+  const expectedPreviewName = previewNameForRef({
+    ref: "refs/pull/" + prNumber + "/merge",
+    prNumber: String(prNumber),
+  });
+  if (previewName !== expectedPreviewName) {
+    throw new PreviewTargetingError(
+      "CONVEX_PREVIEW_NAME does not match the deterministic PR preview identity.",
+    );
+  }
 
   const headSha = env.HEAD_SHA;
   if (!/^[0-9a-f]{40}$/i.test(headSha ?? "")) {
@@ -102,18 +122,11 @@ export function buildE2EPreviewDescriptor(env) {
     );
   }
 
-  const prNumber = env.PR_NUMBER?.trim();
-  if (!/^\d+$/.test(prNumber ?? "")) {
-    throw new PreviewTargetingError(
-      "PR_NUMBER must be the numeric pull-request number.",
-    );
-  }
-
   return {
     version: DESCRIPTOR_VERSION,
     previewName,
     headSha,
-    prNumber: Number(prNumber),
+    prNumber,
   };
 }
 
