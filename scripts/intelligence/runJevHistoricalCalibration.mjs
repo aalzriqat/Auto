@@ -26,10 +26,15 @@ function summaryMarkdown(payload) {
     `Cases: ${metrics.cases}`,
     `High/Critical findings: ${metrics.highCriticalFindings}`,
     `Current deterministic replay recall: ${percent(metrics.currentDeterministicReplayRecall)}`,
-    `Blind Jev recall: ${percent(metrics.blindJevHighCriticalRecall)}`,
-    `Current-policy Jev recall: ${percent(metrics.currentPolicyJevHighCriticalRecall)}`,
+    `Blind Jev scrutiny recall: ${percent(metrics.blindJevHighCriticalRecall)}`,
+    `Blind Jev escalation recall: ${percent(metrics.blindJevHighCriticalEscalationRecall)}`,
+    `Current-policy Jev scrutiny recall: ${percent(metrics.currentPolicyJevHighCriticalRecall)}`,
+    `Current-policy Jev escalation recall: ${percent(metrics.currentPolicyJevHighCriticalEscalationRecall)}`,
     `Operational combined recall: ${percent(metrics.operationalCombinedHighCriticalRecall)}`,
     `Incremental blind Jev hits: ${metrics.incrementalBlindJevHits}`,
+    `Blind track availability: ${percent(metrics.blindTrackAvailabilityRate)}`,
+    `Policy track availability: ${percent(metrics.policyTrackAvailabilityRate)}`,
+    `Unavailable tracks: ${metrics.unavailableTracks}`,
     `Blind negative-control added-review rate: ${percent(metrics.blindNegativeControlAddedReviewRate)}`,
     `Blind negative-control escalation rate: ${percent(metrics.blindNegativeControlEscalationRate)}`,
     `Policy negative-control added-review rate: ${percent(metrics.policyNegativeControlAddedReviewRate)}`,
@@ -70,7 +75,10 @@ export async function runJevHistoricalCalibration({
   });
   const metrics = aggregateCalibration(scoredCases, results);
   const payload = {
-    status: "CALIBRATION_COMPLETE",
+    status:
+      metrics.unavailableTracks === 0
+        ? "CALIBRATION_COMPLETE"
+        : "CALIBRATION_COMPLETE_WITH_UNAVAILABLE",
     authority:
       "Calibration may tune advisory routing thresholds only. It cannot remove deterministic proof obligations or correctness gates.",
     hindsightBoundary:
@@ -97,12 +105,15 @@ export async function runJevHistoricalCalibration({
     ),
   ]);
   process.stdout.write(
-    `Jev historical calibration: ${payload.status}; blind High/Critical recall ${percent(metrics.blindJevHighCriticalRecall)}; operational combined recall ${percent(metrics.operationalCombinedHighCriticalRecall)}\n`,
+    `Jev historical calibration: ${payload.status}; blind scrutiny recall ${percent(metrics.blindJevHighCriticalRecall)}; blind escalation recall ${percent(metrics.blindJevHighCriticalEscalationRecall)}; operational combined recall ${percent(metrics.operationalCombinedHighCriticalRecall)}\n`,
   );
   return payload;
 }
 
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : undefined;
 if (invokedPath && invokedPath === fileURLToPath(import.meta.url)) {
-  await runJevHistoricalCalibration();
+  const payload = await runJevHistoricalCalibration();
+  if (payload.metrics.unavailableTracks > 0) {
+    process.exitCode = 2;
+  }
 }
