@@ -1,7 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "@playwright/test";
-import { api } from "../../convex/_generated/api";\nimport type { Id } from "../../convex/_generated/dataModel";
+import { api } from "../../convex/_generated/api";
+import type { Id } from "../../convex/_generated/dataModel";
 import {
   USER_AUTH_FILE,
   authenticatedConvexClient,
