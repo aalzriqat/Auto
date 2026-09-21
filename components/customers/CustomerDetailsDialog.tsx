@@ -37,6 +37,12 @@ import { buildWhatsAppDeepLink } from "@/lib/whatsappDeepLink";
 import { interpolate } from "@/lib/i18n/interpolate";
 import { translateLeadSourceLabel } from "@/lib/i18n/defaultLabels";
 import { translateLeadStage, translateWorkflowStatus } from "@/lib/i18n/statusLabels";
+import {
+  customerQuotePaymentType,
+  customerQuoteTotalAmount,
+  isCashQuotePresentation,
+  isFinancedQuotePresentation,
+} from "@/components/customers/customerQuotePresentation";
 
 interface CustomerActivityItem {
   id: string;
@@ -377,24 +383,24 @@ export function CustomerDetailsDialog({
                           </span>
                         </div>
 
-                        <div className={`grid grid-cols-2 ${quote.companyId ? "md:grid-cols-4" : ""} gap-4 bg-muted/50 p-3 rounded-md`}>
+                        <div className={`grid grid-cols-2 ${isFinancedQuotePresentation(quote) ? "md:grid-cols-4" : ""} gap-4 bg-muted/50 p-3 rounded-md`}>
                           <div>
                             <p className="text-xs text-muted-foreground">{t("VehiclePrice" as any)}</p>
                             <p className="font-medium">{quote.vehiclePrice?.toLocaleString(localeCode)} {t("JOD")}</p>
                           </div>
-                          {quote.companyId && (
+                          {isFinancedQuotePresentation(quote) && (
                             <div>
                               <p className="text-xs text-muted-foreground">{t("DownPayment" as any)}</p>
                               <p className="font-medium">{quote.downPayment?.toLocaleString(localeCode)} {t("JOD")}</p>
                             </div>
                           )}
-                          {quote.companyId && (
+                          {isFinancedQuotePresentation(quote) && (
                             <div>
                               <p className="text-xs text-muted-foreground">{t("Term" as any)}</p>
                               <p className="font-medium">{quote.termMonths} {t("Months")}</p>
                             </div>
                           )}
-                          {quote.companyId && (
+                          {isFinancedQuotePresentation(quote) && (
                             <div>
                               <p className="text-xs text-muted-foreground">{t("ProfitRate" as any)}</p>
                               <p className="font-medium">{quote.profitRateApplied || 0}%</p>
@@ -402,22 +408,22 @@ export function CustomerDetailsDialog({
                           )}
                         </div>
 
-                        <div className={`grid grid-cols-2 ${quote.companyId ? "md:grid-cols-3" : ""} gap-4 border-t pt-3`}>
+                        <div className={`grid grid-cols-2 ${isFinancedQuotePresentation(quote) ? "md:grid-cols-3" : ""} gap-4 border-t pt-3`}>
                           <div>
                             <p className="text-xs text-muted-foreground">
-                              {quote.mode === "CASH" || (!quote.mode && !quote.companyId)
+                              {isCashQuotePresentation(quote)
                                 ? t("VehiclePrice" as any)
                                 : t("TotalAmountDueFinanced" as any)}
                             </p>
-                            <p className="font-medium">{(quote.totalFinancedAmount ?? quote.vehiclePrice)?.toLocaleString(localeCode, { minimumFractionDigits: 2 })} {t("JOD")}</p>
+                            <p className="font-medium">{customerQuoteTotalAmount(quote)?.toLocaleString(localeCode, { minimumFractionDigits: 2 }) ?? "—"} {customerQuoteTotalAmount(quote) !== undefined ? t("JOD") : ""}</p>
                           </div>
-                          {quote.companyId && (
+                          {isFinancedQuotePresentation(quote) && (
                             <div>
                               <p className="text-xs text-muted-foreground">{t("TotalProfit" as any)}</p>
                               <p className="font-medium text-orange-600">{quote.totalProfit?.toLocaleString(localeCode, { minimumFractionDigits: 2 })} {t("JOD")}</p>
                             </div>
                           )}
-                          {quote.companyId && (
+                          {isFinancedQuotePresentation(quote) && (
                             <div className="bg-primary/10 -m-2 p-2 rounded-md text-center">
                               <p className="text-xs text-primary font-medium">{t("MonthlyInstallment" as any)}</p>
                               <p className="text-lg font-bold text-primary">{quote.monthlyInstallment?.toLocaleString(localeCode, { minimumFractionDigits: 2 })} <span className="text-xs font-normal">{t("JOD")}</span></p>
@@ -494,12 +500,12 @@ export function CustomerDetailsDialog({
 
         {printingQuote && customer && (
           <QuotePrintTemplate
-            paymentType={printingQuote.companyId ? "INSTALLMENT" : "CASH"}
+            paymentType={customerQuotePaymentType(printingQuote)}
             wizardData={{} as any}
             selectedVehicle={printingQuote.vehicle ?? undefined}
             selectedCustomer={customer}
             selectedResult={{
-              totalFinancedAmount: printingQuote.totalFinancedAmount ?? printingQuote.vehiclePrice,
+              totalFinancedAmount: customerQuoteTotalAmount(printingQuote),
               recipientName: printingQuote.recipientName || `${customer.firstName} ${customer.lastName}`,
             }}
             dateStr={formatCustomerDate(printingQuote.createdAt, locale)}
