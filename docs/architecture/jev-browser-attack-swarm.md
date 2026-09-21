@@ -113,6 +113,21 @@ Expected evidence types include Playwright traces, screenshots, backend-state pr
 
 Absolute paths, path traversal, raw credentials, and raw customer data are refused.
 
+## Current Phase A execution slice
+
+The first trusted executor is now defined around three non-negotiable rules:
+
+- the SCRUM-143 preview verifier must pass before the worker dispatches its first mission;
+- mission timeouts abort the handler through an `AbortSignal` rather than merely abandoning a live browser action; and
+- evidence must remain inside the manifest-assigned worker artifact root or the mission is classified as a harness error.
+
+The first executable browser attacks are deliberately non-destructive and preview-only:
+
+- **RTL parity** checks that switching to Arabic reaches `lang=ar` + `dir=rtl` without changing the authenticated organization confirmed by backend authority;
+- **UI/backend mismatch** creates one synthetic preview customer through the real UI, verifies exactly one matching backend record, reloads, and checks that the UI still reflects the authoritative state.
+
+Synthetic identities use the reserved E2E preview only. No customer/production data is permitted.
+
 ## Phase B — Jev tactical routing
 
 Jev receives sanitized impact/risk context and may propose additional attack families with probabilities.

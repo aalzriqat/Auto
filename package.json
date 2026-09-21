@@ -31,7 +31,7 @@
     "test:invariants": "vitest run scripts/autoflowInvariantCatalog.test.ts",
     "test:jev-impact": "vitest run scripts/intelligence/jevImpact.test.ts",
     "jev:shadow-impact": "node scripts/intelligence/runJevShadowImpact.mjs",
-    "test:browser-swarm": "vitest run scripts/intelligence/browserAttackSwarm.test.ts"
+    "test:browser-swarm": "vitest run scripts/intelligence/browserAttackSwarm.test.ts scripts/intelligence/browserAttackSwarmExecutor.test.ts"
   },
   "dependencies": {
     "@autoflow/shared": "workspace:*",
