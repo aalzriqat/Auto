@@ -67,12 +67,14 @@ function assertTrustedImpact(value, expected) {
  *   authorityArtifact: unknown,
  *   baseSha: string,
  *   headSha: string,
+ *   testedSha: string,
  *   prNumber: number,
  * }} input
  */
 export function assembleTrustedBrowserSwarmRun(input) {
   const baseSha = exactSha(input.baseSha, "baseSha");
   const headSha = exactSha(input.headSha, "headSha");
+  const testedSha = exactSha(input.testedSha, "testedSha");
   const prNumber = positivePrNumber(input.prNumber);
   const expectedPreviewName = previewNameForRef({
     ref: "refs/pull/" + prNumber + "/merge",
@@ -105,6 +107,7 @@ export function assembleTrustedBrowserSwarmRun(input) {
     authority: "TRUSTED_MAIN_BROWSER_SWARM_RUN",
     baseSha,
     headSha,
+    testedSha,
     prNumber,
     previewName: descriptor.previewName,
     convexCloudUrl: convexAuthority.convexCloudUrl,
@@ -129,6 +132,7 @@ export async function prepareTrustedBrowserSwarmRun({
 } = {}) {
   const baseSha = exactSha(env.BASE_SHA, "BASE_SHA");
   const headSha = exactSha(env.HEAD_SHA, "HEAD_SHA");
+  const testedSha = exactSha(env.TESTED_SHA, "TESTED_SHA");
   const prNumber = positivePrNumber(env.PR_NUMBER);
   const impactPath =
     env.TRUSTED_IMPACT_PATH ??
@@ -163,6 +167,7 @@ export async function prepareTrustedBrowserSwarmRun({
     authorityArtifact,
     baseSha,
     headSha,
+    testedSha,
     prNumber,
   });
 
@@ -182,6 +187,7 @@ export async function prepareTrustedBrowserSwarmRun({
         "preview_name=" + payload.previewName,
         "convex_cloud_url=" + payload.convexCloudUrl,
         "head_sha=" + payload.headSha,
+        "tested_sha=" + payload.testedSha,
         "pr_number=" + String(payload.prNumber),
         "",
       ].join("\n"),
