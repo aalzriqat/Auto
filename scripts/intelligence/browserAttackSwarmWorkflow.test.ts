@@ -106,7 +106,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     });
   });
 
-  it("pins the trusted control plane to the immutable workflow revision and candidate code to the exact trusted head", () => {
+  it("pins the trusted control plane and executes the exact PR merge commit that produced the preview", () => {
     const trusted = step(
       "prepare",
       "Checkout trusted control plane from immutable workflow revision",
@@ -123,10 +123,26 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
 
     const candidate = step(
       "attack-worker",
-      "Checkout exact candidate head as application code",
+      "Checkout exact tested PR merge as application code",
     );
-    expect(candidate.with?.ref).toBe("${{ needs.prepare.outputs.head_sha }}");
+    expect(candidate.with?.ref).toBe("${{ needs.prepare.outputs.tested_sha }}");
     expect(candidate.with?.["persist-credentials"]).toBe(false);
+
+    const fetchAndVerify = step(
+      "prepare",
+      "Fetch and verify exact PR head and tested merge commit as data only",
+    );
+    const fetchEnv = fetchAndVerify.env ?? {};
+    const fetchRun = String(fetchAndVerify.run ?? "");
+    expect(fetchEnv).toHaveProperty(
+      "EXPECTED_TESTED_SHA",
+      "${{ github.event.workflow_run.head_sha }}",
+    );
+    expect(fetchRun).toContain("refs/pull/${PR_NUMBER}/merge:refs/autoflow/pr-merge");
+    expect(fetchRun).toContain("FIRST_PARENT");
+    expect(fetchRun).toContain("SECOND_PARENT");
+    expect(fetchRun).toContain("EXPECTED_BASE_SHA");
+    expect(fetchRun).toContain("EXPECTED_HEAD_SHA");
   });
 
   it("never exposes privileged secrets to candidate-controlled build or server processes", () => {
