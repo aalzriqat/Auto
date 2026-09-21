@@ -111,6 +111,7 @@ describe("Jev shadow impact mapper", () => {
 
   test("Jev can add scrutiny but cannot subtract deterministic requirements", () => {
     const matrix = deriveReviewMatrix({
+      extraDeterministicRequirements: ["review:correctness-governance"],
       deterministicImpact: [
         {
           id: "ACC-1",
@@ -134,6 +135,7 @@ describe("Jev shadow impact mapper", () => {
       invariantImpact: { "ACC-1": 0.97, "CONC-1": 0.81, "TEN-1": 0.02 },
     });
 
+    expect(matrix.combinedRequirements).toContain("review:correctness-governance");
     expect(matrix.combinedRequirements).toContain("proof:POSITIVE");
     expect(matrix.combinedRequirements).toContain("proof:NEGATIVE");
     expect(matrix.combinedRequirements).toContain("proof:REPLAY");

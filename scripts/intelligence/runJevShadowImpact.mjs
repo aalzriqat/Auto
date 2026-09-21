@@ -115,12 +115,28 @@ if (!apiKey) {
 }
 
 try {
-  const invariants = extractCanonicalInvariants(repoRoot, headSha);
+  // The secret-bearing workflow executes the harness and canonical invariant
+  // catalog from trusted main. Candidate code is Git data only. A PR must not
+  // be able to shrink its own impact map by editing invariant metadata.
+  const invariants = extractCanonicalInvariants(repoRoot);
   const change = buildChangeState({ repoRoot, baseSha, headSha });
   const deterministicImpact = deterministicInvariantImpact(
     change.changedFiles,
     invariants,
   );
+  const governanceFiles = new Set([
+    "scripts/autoflowInvariantCatalog.ts",
+    ".github/workflows/invariant-governance.yml",
+    ".github/workflows/jev-shadow-impact.yml",
+  ]);
+  const changesCorrectnessGovernance = change.changedFiles.some(
+    (file) =>
+      governanceFiles.has(file) ||
+      file.startsWith("scripts/intelligence/"),
+  );
+  const extraDeterministicRequirements = changesCorrectnessGovernance
+    ? ["review:correctness-governance", "proof:jev-harness"]
+    : [];
   const questions = buildJevQuestions(invariants);
   const rawResponse = await callJev({
     apiKey,
@@ -130,6 +146,7 @@ try {
   const jev = normalizeJevResponse(rawResponse, invariants);
   const reviewMatrix = deriveReviewMatrix({
     deterministicImpact,
+    extraDeterministicRequirements,
     risks: jev.risks,
     invariantImpact: jev.invariantImpact,
   });
@@ -149,6 +166,7 @@ try {
     risks: jev.risks,
     invariantImpact: jev.invariantImpact,
     deterministicImpact,
+    changesCorrectnessGovernance,
     reviewMatrix,
   });
 } catch (error) {

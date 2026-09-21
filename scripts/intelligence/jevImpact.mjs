@@ -454,12 +454,13 @@ export function normalizeJevResponse(response, invariants) {
 
 export function deriveReviewMatrix({
   deterministicImpact = [],
+  extraDeterministicRequirements = [],
   risks,
   invariantImpact,
   candidateThreshold = DEFAULT_CANDIDATE_THRESHOLD,
   escalationThreshold = DEFAULT_ESCALATION_THRESHOLD,
 }) {
-  const deterministicRequirements = new Set();
+  const deterministicRequirements = new Set(extraDeterministicRequirements);
   for (const impact of deterministicImpact) {
     deterministicRequirements.add(`review-invariant:${impact.id}`);
     for (const obligation of impact.requiredObligations) {
