@@ -494,7 +494,7 @@ export async function verifyBrowserSwarmBuildArtifact({
     rootEntries[1] !== "runtime"
   ) {
     throw new Error(
-      "Candidate build artifact has an unexpected artifact root entry or is missing required content.",
+      "Candidate build artifact is missing its manifest/runtime root or contains an unexpected artifact root entry.",
     );
   }
 
