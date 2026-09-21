@@ -56,6 +56,19 @@ The control plane is bound to immutable and independently verified inputs:
 
 The candidate descriptor is untrusted data. It is size-bounded, archive-shape-checked, parsed by trusted code, and cannot supply backend authority.
 
+## Repository-wide pull-request secret boundary
+
+The same trust rule applies outside the browser swarm. A direct `pull_request` workflow executes a revision the pull request can change, so it must contain **no repository-secret references**.
+
+Repository-enforced tests scan every workflow with a direct `pull_request` trigger and reject any `${{ secrets.* }}` expression. Privileged follow-up work is moved behind default-branch `workflow_run` controllers:
+
+- Security DAST builds use deterministic public placeholders; they do not need real Convex or Clerk credentials.
+- Tests and coverage stay secretless on pull requests.
+- Sonar PR analysis runs in the trusted `Sonar PR Report` workflow. Candidate source and LCOV are treated as bounded untrusted data; `SONAR_TOKEN` is visible only to the trusted scanner process.
+- Accounting Cloud Rehearsal's direct PR job validates the harness only. The real cloud rehearsal runs in `Trusted Accounting Cloud Rehearsal`, which recreates a disposable preview, scrubs its environment, deploys the exact candidate backend with only that preview's deployment-scoped credential, and runs the Clerk-backed rehearsal from trusted main.
+
+Trusted main pushes may use deployment/service credentials because the code being executed has already crossed the repository's merge boundary. This rule is specifically about preventing pull-request-controlled GitHub Actions code from receiving reusable repository secrets.
+
 ## Convex preview authority
 
 The preview URL is not accepted from candidate code.
