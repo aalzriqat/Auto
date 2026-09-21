@@ -18,7 +18,75 @@
 import { describe, expect, test } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENCY_SCALES, DEFAULT_ORG_CURRENCY, assertBothAttemptsExecuted, runRehearsalCases } from "./accountingRehearsalCases.mjs";
+import {
+  CURRENCY_SCALES,
+  DEFAULT_ORG_CURRENCY,
+  assertBothAttemptsExecuted,
+  createVehicleForRehearsal,
+  runRehearsalCases,
+} from "./accountingRehearsalCases.mjs";
+
+describe("vehicle fixture rate-limit retry", () => {
+  test("retries only the known transient vehicles:create rate-limit refusal", async () => {
+    let attempts = 0;
+    const sleeps: number[] = [];
+    const ownerMust = async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error("vehicles:create failed: Rate limit exceeded. Try again in 1s");
+      }
+      return "vehicle-id";
+    };
+
+    await expect(
+      createVehicleForRehearsal(ownerMust, { orgId: "org" }, {
+        sleep: async (ms: number) => {
+          sleeps.push(ms);
+        },
+      }),
+    ).resolves.toBe("vehicle-id");
+
+    expect(attempts).toBe(2);
+    expect(sleeps).toEqual([1100]);
+  });
+
+  test("does not retry an unrelated vehicle-create refusal", async () => {
+    let attempts = 0;
+    const ownerMust = async () => {
+      attempts += 1;
+      throw new Error("vehicles:create failed: VIN already exists");
+    };
+
+    await expect(
+      createVehicleForRehearsal(ownerMust, { orgId: "org" }, {
+        sleep: async () => undefined,
+      }),
+    ).rejects.toThrow(/VIN already exists/);
+
+    expect(attempts).toBe(1);
+  });
+
+  test("bounds retries and rethrows the final rate-limit refusal", async () => {
+    let attempts = 0;
+    const ownerMust = async () => {
+      attempts += 1;
+      throw new Error("vehicles:create failed: Rate limit exceeded. Try again in 9s");
+    };
+
+    const sleeps: number[] = [];
+    await expect(
+      createVehicleForRehearsal(ownerMust, { orgId: "org" }, {
+        maxAttempts: 3,
+        sleep: async (ms: number) => {
+          sleeps.push(ms);
+        },
+      }),
+    ).rejects.toThrow(/Rate limit exceeded/);
+
+    expect(attempts).toBe(3);
+    expect(sleeps).toEqual([2100, 2100]);
+  });
+});
 
 type Deposit = {
   _id: string;
