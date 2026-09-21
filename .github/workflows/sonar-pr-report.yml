@@ -99,7 +99,7 @@ jobs:
               [.projectStatus.conditions[]? | select(.status == "ERROR")] |
               if length == 0 then empty
               else .[] |
-                "- (.metricKey): actual (.actualValue // "n/a"), threshold (.errorThreshold // "n/a"), comparator (.comparator // "n/a")"
+                "- \(.metricKey): actual \(.actualValue // "n/a"), threshold \(.errorThreshold // "n/a"), comparator \(.comparator // "n/a")"
               end
             ' <<<"${gate_json}")"
 
