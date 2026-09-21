@@ -1,5 +1,6 @@
 import {
   DEFAULT_CANDIDATE_THRESHOLD,
+  assertAncestorCommit,
   buildChangeState,
   buildJevQuestions,
   buildJevRiskQuestions,
@@ -10,9 +11,11 @@ import {
   extraDeterministicRequirementsForFiles,
   normalizeJevResponse,
   normalizeJevRiskResponse,
+  readCommitTimestamp,
 } from "./jevImpact.mjs";
 
 const DEFAULT_RUNTIME = Object.freeze({
+  assertAncestorCommit,
   buildChangeState,
   buildJevQuestions,
   buildJevRiskQuestions,
@@ -23,6 +26,7 @@ const DEFAULT_RUNTIME = Object.freeze({
   extraDeterministicRequirementsForFiles,
   normalizeJevResponse,
   normalizeJevRiskResponse,
+  readCommitTimestamp,
 });
 
 /**
@@ -52,6 +56,26 @@ function assertCalibrationCase(calibrationCase) {
   }
 }
 
+function assertSnapshotProvenance(repoRoot, calibrationCase, runtime) {
+  runtime.assertAncestorCommit(
+    repoRoot,
+    calibrationCase.baseSha,
+    calibrationCase.headSha,
+  );
+  const expected = new Date(calibrationCase.snapshotAt);
+  if (!Number.isFinite(expected.getTime())) {
+    throw new Error(
+      `Calibration case ${calibrationCase.id} has an invalid snapshot timestamp`,
+    );
+  }
+  const actual = runtime.readCommitTimestamp(repoRoot, calibrationCase.headSha);
+  if (actual !== expected.toISOString()) {
+    throw new Error(
+      `Calibration case ${calibrationCase.id} timestamp mismatch: expected ${expected.toISOString()} but commit is ${actual}`,
+    );
+  }
+}
+
 /**
  * @param {{
  *   repoRoot?: string,
@@ -66,6 +90,7 @@ export function buildCalibrationObservation({
 }) {
   assertCalibrationCase(calibrationCase);
   const runtime = { ...DEFAULT_RUNTIME, ...runtimeOverrides };
+  assertSnapshotProvenance(repoRoot, calibrationCase, runtime);
   const invariants = runtime.extractCanonicalInvariants(repoRoot);
   const change = runtime.buildChangeState({
     repoRoot,
