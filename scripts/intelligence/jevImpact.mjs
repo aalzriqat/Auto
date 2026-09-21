@@ -419,7 +419,7 @@ export function readCommitTimestamp(repoRoot, ref) {
   const raw = safeGit(repoRoot, ["show", "-s", "--format=%cI", ref]).trim();
   const parsed = new Date(raw);
   if (!Number.isFinite(parsed.getTime())) {
-    throw new Error(`Unable to parse commit timestamp for ${ref}`);
+    throw new TypeError(`Unable to parse commit timestamp for ${ref}`);
   }
   return parsed.toISOString();
 }
