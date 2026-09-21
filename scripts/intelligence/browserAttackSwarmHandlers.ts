@@ -224,8 +224,8 @@ async function runRtlParityAttack(
     await runtime.page.waitForTimeout(250);
 
     const html = runtime.page.locator("html");
-    const dir = await html.getAttribute("dir").catch(() => null);
-    const lang = await html.getAttribute("lang").catch(() => null);
+    const dir = await html.getAttribute("dir");
+    const lang = await html.getAttribute("lang");
     const orgIdAfter = orgIdFromUrl(runtime.page.url());
     const passed =
       backendOwnsOrg &&
@@ -399,8 +399,7 @@ async function runUiBackendMismatchAttack(
     const visibleAfterReload = await runtime.page
       .getByText(lastName, { exact: false })
       .first()
-      .isVisible({ timeout: 5_000 })
-      .catch(() => false);
+      .isVisible({ timeout: 5_000 });
 
     const passed =
       exactBackendMatches.length === 1 &&

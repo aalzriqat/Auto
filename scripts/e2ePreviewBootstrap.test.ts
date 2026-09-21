@@ -545,6 +545,7 @@ describe("main", () => {
     await expect(main({ ...ENV, NEXT_PUBLIC_CONVEX_URL: "" }, d)).rejects.toThrow(
       /cannot be checked against the one the browser will drive/,
     );
+    expect(d.log).toHaveBeenCalledTimes(1);
     expect(d.run).not.toHaveBeenCalled();
   });
 });

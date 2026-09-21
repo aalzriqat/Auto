@@ -409,6 +409,74 @@ export function runConvex(args, label, spawn = spawnSync) {
  * }} [deps]
  */
 /**
+ * Resolves the preview targeting + identity context shared by both seeding and
+ * assertion-only execution.
+ *
+ * The caller owns two details that intentionally differ between flows:
+ * - the human-facing identity / missing-URL messages; and
+ * - an optional `onResolved` hook. `main()` uses that hook to preserve its
+ *   existing progress-log ordering BEFORE the missing-URL refusal.
+ *
+ * @param {Record<string, string | undefined>} env
+ * @param {{
+ *   resolveId: (options: { email: string, secretKey: string | undefined }) => Promise<string>,
+ *   identityError: string,
+ *   missingUrlError: string,
+ *   onResolved?: (context: {
+ *     deployKey: string | undefined,
+ *     previewName: string | undefined,
+ *     primaryEmail: string,
+ *     approverEmail: string,
+ *     primaryClerkUserId: string,
+ *     approverClerkUserId: string,
+ *     expectedCloudUrl: string | undefined,
+ *   }) => void,
+ * }} options
+ */
+async function resolveE2EPreviewContext(env, options) {
+  const deployKey = env.CONVEX_DEPLOY_KEY;
+  const previewName = env.CONVEX_PREVIEW_NAME;
+  assertPreviewTargeting({ deployKey, previewName, env });
+
+  const primaryEmail = env.E2E_LOGIN_USER;
+  const approverEmail = env.E2E_APPROVER_USER;
+  if (!primaryEmail || !approverEmail) {
+    throw new PreviewTargetingError(options.identityError);
+  }
+
+  const secretKey = env.CLERK_SECRET_KEY;
+  const primaryClerkUserId = await options.resolveId({
+    email: primaryEmail,
+    secretKey,
+  });
+  const approverClerkUserId = await options.resolveId({
+    email: approverEmail,
+    secretKey,
+  });
+  const expectedCloudUrl = env.NEXT_PUBLIC_CONVEX_URL;
+
+  const resolved = {
+    deployKey,
+    previewName,
+    primaryEmail,
+    approverEmail,
+    primaryClerkUserId,
+    approverClerkUserId,
+    expectedCloudUrl,
+  };
+  options.onResolved?.(resolved);
+
+  if (!expectedCloudUrl) {
+    throw new PreviewTargetingError(options.missingUrlError);
+  }
+
+  return {
+    ...resolved,
+    expectedCloudUrl,
+  };
+}
+
+/**
  * Re-asserts that an already-seeded E2E preview still belongs to the exact
  * deployment and Clerk seats the browser is about to drive.
  *
@@ -426,29 +494,24 @@ export async function assertExistingE2EPreview(
   env = /** @type {Record<string, string | undefined>} */ ({ ...process.env }),
   deps = {},
 ) {
-  const { run = runConvex, resolveClerkUserId: resolveId = resolveClerkUserId } = deps;
-  const deployKey = env.CONVEX_DEPLOY_KEY;
-  const previewName = env.CONVEX_PREVIEW_NAME;
-  assertPreviewTargeting({ deployKey, previewName, env });
+  const {
+    run = runConvex,
+    resolveClerkUserId: resolveId = resolveClerkUserId,
+  } = deps;
 
-  const primaryEmail = env.E2E_LOGIN_USER;
-  const approverEmail = env.E2E_APPROVER_USER;
-  if (!primaryEmail || !approverEmail) {
-    throw new PreviewTargetingError(
+  const {
+    deployKey,
+    previewName,
+    primaryClerkUserId,
+    approverClerkUserId,
+    expectedCloudUrl,
+  } = await resolveE2EPreviewContext(env, {
+    resolveId,
+    identityError:
       "E2E_LOGIN_USER and E2E_APPROVER_USER must both be set before an existing preview can be asserted.",
-    );
-  }
-
-  const secretKey = env.CLERK_SECRET_KEY;
-  const primaryClerkUserId = await resolveId({ email: primaryEmail, secretKey });
-  const approverClerkUserId = await resolveId({ email: approverEmail, secretKey });
-  const expectedCloudUrl = env.NEXT_PUBLIC_CONVEX_URL;
-
-  if (!expectedCloudUrl) {
-    throw new PreviewTargetingError(
+    missingUrlError:
       "NEXT_PUBLIC_CONVEX_URL is not set, so the existing preview cannot be checked against the deployment the browser will drive.",
-    );
-  }
+  });
 
   run(
     buildConvexRunArgs({
@@ -480,53 +543,60 @@ export async function main(
   env = /** @type {Record<string, string | undefined>} */ ({ ...process.env }),
   deps = {},
 ) {
-  const { run = runConvex, resolveClerkUserId: resolveId = resolveClerkUserId, log = console.log } = deps;
-  const deployKey = env.CONVEX_DEPLOY_KEY;
-  const previewName = env.CONVEX_PREVIEW_NAME;
-  assertPreviewTargeting({ deployKey, previewName, env });
+  const {
+    run = runConvex,
+    resolveClerkUserId: resolveId = resolveClerkUserId,
+    log = console.log,
+  } = deps;
 
-  const primaryEmail = env.E2E_LOGIN_USER;
-  const approverEmail = env.E2E_APPROVER_USER;
-  if (!primaryEmail || !approverEmail) {
-    throw new PreviewTargetingError(
+  const context = await resolveE2EPreviewContext(env, {
+    resolveId,
+    identityError:
       "E2E_LOGIN_USER and E2E_APPROVER_USER must both be set. AutoFlow refuses to let one person both create and " +
-        "approve a deal, so the approval E2E path needs two provisioned identities.",
-    );
-  }
-
-  const secretKey = env.CLERK_SECRET_KEY;
-  const primaryClerkUserId = await resolveId({ email: primaryEmail, secretKey });
-  const approverClerkUserId = await resolveId({ email: approverEmail, secretKey });
-
-  /**
-   * The URL the browser is about to drive, captured by the deploy step.
-   *
-   * Passed so the SERVER can compare it with its own `CONVEX_CLOUD_URL` and
-   * refuse a mismatch. Without it, a `--preview-name` that resolved to some
-   * other preview would seed one database while the suite drove another, and
-   * every spec would fail as though the product were broken.
-   */
-  const expectedCloudUrl = env.NEXT_PUBLIC_CONVEX_URL;
-
-  log(
-    `Seeding preview "${safeForLog(previewName)}" at ${safeForLog(expectedCloudUrl)}: ` +
-      `${safeForLog(maskEmail(primaryEmail))} -> ${safeForLog(primaryClerkUserId)}, ` +
-      `${safeForLog(maskEmail(approverEmail))} -> ${safeForLog(approverClerkUserId)}`,
-  );
-
-  if (!expectedCloudUrl) {
-    throw new PreviewTargetingError(
+      "approve a deal, so the approval E2E path needs two provisioned identities.",
+    missingUrlError:
       "NEXT_PUBLIC_CONVEX_URL is not set, so the deployment being seeded cannot be checked against the one the browser " +
-        "will drive. Run this after the deploy step that captures it.",
-    );
-  }
+      "will drive. Run this after the deploy step that captures it.",
+    onResolved: ({
+      previewName,
+      expectedCloudUrl,
+      primaryEmail,
+      approverEmail,
+      primaryClerkUserId,
+      approverClerkUserId,
+    }) => {
+      log(
+        `Seeding preview "${safeForLog(previewName)}" at ${safeForLog(expectedCloudUrl)}: ` +
+          `${safeForLog(maskEmail(primaryEmail))} -> ${safeForLog(primaryClerkUserId)}, ` +
+          `${safeForLog(maskEmail(approverEmail))} -> ${safeForLog(approverClerkUserId)}`,
+      );
+    },
+  });
+
+  const {
+    deployKey,
+    previewName,
+    primaryEmail,
+    approverEmail,
+    primaryClerkUserId,
+    approverClerkUserId,
+    expectedCloudUrl,
+  } = context;
 
   run(
     buildConvexRunArgs({
       functionName: "e2eBootstrap:bootstrapE2EOrganization",
       argsJson: JSON.stringify({
-        primary: { clerkUserId: primaryClerkUserId, email: primaryEmail, name: "E2E Salesperson" },
-        approver: { clerkUserId: approverClerkUserId, email: approverEmail, name: "E2E Manager" },
+        primary: {
+          clerkUserId: primaryClerkUserId,
+          email: primaryEmail,
+          name: "E2E Salesperson",
+        },
+        approver: {
+          clerkUserId: approverClerkUserId,
+          email: approverEmail,
+          name: "E2E Manager",
+        },
         expectedCloudUrl,
       }),
       previewName,
@@ -539,7 +609,11 @@ export async function main(
   run(
     buildConvexRunArgs({
       functionName: "e2eBootstrap:assertE2EBootstrap",
-      argsJson: JSON.stringify({ primaryClerkUserId, approverClerkUserId, expectedCloudUrl }),
+      argsJson: JSON.stringify({
+        primaryClerkUserId,
+        approverClerkUserId,
+        expectedCloudUrl,
+      }),
       previewName,
       deployKey,
       env,

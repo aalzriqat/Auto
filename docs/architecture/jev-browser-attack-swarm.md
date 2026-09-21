@@ -8,7 +8,7 @@ The swarm is an exploration and evidence system. It is not a correctness authori
 
 Required browser missions are the union of deterministic invariant obligations and Jev suggestions:
 
-```
+```text
 required browser missions
   = deterministic invariant missions
     ∪ Jev-suggested missions
@@ -51,7 +51,7 @@ Initial control plane:
 6. Store sanitized worker evidence under isolated per-run/per-worker artifact roots.
 7. Classify outcomes from deterministic oracles only.
 
-Initial attack families:
+Planned attack-family vocabulary:
 
 - tenant escape;
 - authorization abuse;
@@ -67,6 +67,13 @@ Initial attack families:
 - completeness/pagination boundaries;
 - RTL parity; and
 - optimistic UI/backend authority mismatch.
+
+The vocabulary is broader than the current executable registry. In the present
+Phase A slice, only `RTL_PARITY` and `UI_BACKEND_MISMATCH` have real browser
+handlers. A plan containing any other family is refused before manifest
+creation; it is never allowed to degrade later into a runtime
+`HARNESS_ERROR`. Adding a new family therefore requires adding its handler and
+expanding the executable-family registry in the same reviewed change.
 
 ## Preview safety
 

@@ -379,6 +379,23 @@ describe("SCRUM-350 initial browser attack handlers", () => {
     expect(toggle.click).not.toHaveBeenCalled();
   });
 
+  it("propagates a DOM oracle read failure as a harness error", async () => {
+    const fixture = makeBrowserFixture(defaultScenario());
+    fixture.page.locator.mockImplementationOnce(() => ({
+      getAttribute: vi.fn(async () => {
+        throw new Error("dom unavailable");
+      }),
+    }));
+
+    await expect(
+      handlerFor("RTL_PARITY")(
+        executionContext("RTL_PARITY"),
+      ),
+    ).rejects.toThrow(/dom unavailable/);
+
+    expect(fixture.browser.close).toHaveBeenCalled();
+  });
+
   it("reports an RTL oracle failure when the authenticated organization is not backend-owned", async () => {
     makeBrowserFixture(defaultScenario({ backendOwnsOrg: false }));
 
@@ -429,6 +446,25 @@ describe("SCRUM-350 initial browser attack handlers", () => {
         executionContext("UI_BACKEND_MISMATCH"),
       ),
     ).rejects.toThrow(/could not open the Add Customer dialog/);
+
+    expect(fixture.browser.close).toHaveBeenCalled();
+  });
+
+  it("propagates a post-reload visibility probe failure as a harness error", async () => {
+    const fixture = makeBrowserFixture(defaultScenario());
+    fixture.page.getByText.mockReturnValueOnce({
+      first: vi.fn(() => ({
+        isVisible: vi.fn(async () => {
+          throw new Error("page closed during oracle");
+        }),
+      })),
+    });
+
+    await expect(
+      handlerFor("UI_BACKEND_MISMATCH")(
+        executionContext("UI_BACKEND_MISMATCH"),
+      ),
+    ).rejects.toThrow(/page closed during oracle/);
 
     expect(fixture.browser.close).toHaveBeenCalled();
   });
