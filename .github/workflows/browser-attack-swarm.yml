@@ -106,7 +106,7 @@ jobs:
             process.stdout.write(JSON.stringify({state, context, description, target_url: targetUrl}));
           '             pending             autoflow/trusted-browser-swarm             "Trusted browser swarm is evaluating this exact PR merge."             "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")"
 
-          curl --fail --silent --show-error             --request POST             --header "Authorization: Bearer $GITHUB_TOKEN"             --header "Accept: application/vnd.github+json"             --header "X-GitHub-Api-Version: 2022-11-28"             "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$TESTED_SHA"             --data "$STATUS_JSON" > /dev/null
+          curl --fail --silent --show-error             --request POST             --header "Authorization: Bearer $GITHUB_TOKEN"             --header "Accept: application/vnd.github+json"             --header "Content-Type: application/json"             --header "X-GitHub-Api-Version: 2022-11-28"             "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$TESTED_SHA"             --data "$STATUS_JSON" > /dev/null
 
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
@@ -423,7 +423,7 @@ jobs:
             process.stdout.write(JSON.stringify({state, context, description, target_url: targetUrl}));
           '             "$STATE"             autoflow/trusted-browser-swarm             "$DESCRIPTION"             "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")"
 
-          curl --fail --silent --show-error             --request POST             --header "Authorization: Bearer $GITHUB_TOKEN"             --header "Accept: application/vnd.github+json"             --header "X-GitHub-Api-Version: 2022-11-28"             "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$TESTED_SHA"             --data "$STATUS_JSON" > /dev/null
+          curl --fail --silent --show-error             --request POST             --header "Authorization: Bearer $GITHUB_TOKEN"             --header "Accept: application/vnd.github+json"             --header "Content-Type: application/json"             --header "X-GitHub-Api-Version: 2022-11-28"             "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$TESTED_SHA"             --data "$STATUS_JSON" > /dev/null
 
           if [ "$STATE" != "success" ]; then
             exit 1
