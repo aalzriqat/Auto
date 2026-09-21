@@ -218,7 +218,14 @@ function makeBrowserFixture(scenario: Scenario) {
     }),
   });
 
-  return { state, page, browser, browserContext, tracing };
+  return {
+    state,
+    page,
+    browser,
+    browserContext,
+    tracing,
+    addCustomerButton,
+  };
 }
 
 function mission(
@@ -496,11 +503,9 @@ describe("SCRUM-350 initial browser attack handlers", () => {
 
   it("propagates an Add Customer click failure as a harness error", async () => {
     const fixture = makeBrowserFixture(defaultScenario());
-    const addButton = fixture.page.getByRole(
-      "button",
-      { name: "Add Customer", exact: true },
+    fixture.addCustomerButton.click.mockRejectedValueOnce(
+      new Error("button detached"),
     );
-    addButton.click.mockRejectedValueOnce(new Error("button detached"));
 
     await expect(
       handlerFor("UI_BACKEND_MISMATCH")(
