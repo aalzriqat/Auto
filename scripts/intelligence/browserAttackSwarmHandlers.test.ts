@@ -278,12 +278,6 @@ function handlerFor(family: BrowserAttackMission["family"]) {
 }
 
 describe("SCRUM-350 initial browser attack handlers", () => {
-  it("keeps the executable Phase A family set identical to the handler registry", () => {
-    expect(Object.keys(createInitialBrowserAttackHandlers()).sort()).toEqual(
-      [...PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES].sort(),
-    );
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.chromiumLaunch.mockReset();
@@ -291,6 +285,12 @@ describe("SCRUM-350 initial browser attack handlers", () => {
     mocks.mkdir.mockReset().mockResolvedValue(undefined);
     mocks.writeFile.mockReset().mockResolvedValue(undefined);
     process.env.PLAYWRIGHT_BASE_URL = "http://127.0.0.1:3000";
+  });
+
+  it("keeps the executable Phase A family set identical to the handler registry", () => {
+    expect(Object.keys(createInitialBrowserAttackHandlers()).sort()).toEqual(
+      [...PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES].sort(),
+    );
   });
 
   it("refuses an already-aborted mission before launching Chromium", async () => {

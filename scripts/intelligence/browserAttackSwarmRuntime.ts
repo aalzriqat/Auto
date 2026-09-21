@@ -135,7 +135,7 @@ function parseJevSuggestions(raw: string | undefined): JevBrowserMissionSuggesti
   if (!raw?.trim()) return [];
   const value = parseJson(raw, "BROWSER_SWARM_JEV_SUGGESTIONS_JSON");
   if (!Array.isArray(value)) {
-    throw new Error("BROWSER_SWARM_JEV_SUGGESTIONS_JSON must be an array");
+    throw new TypeError("BROWSER_SWARM_JEV_SUGGESTIONS_JSON must be an array");
   }
 
   return value.map((entry, index) => {

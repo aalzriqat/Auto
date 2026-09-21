@@ -16,6 +16,10 @@ function rsaJwk(): JsonWebKey {
 }
 
 describe("trusted Clerk public JWT key resolver", () => {
+  it("classifies a non-object JWKS payload as a type error", () => {
+    expect(() => clerkJwtPemFromJwks(null)).toThrow(TypeError);
+  });
+
   it("derives only a Clerk development Frontend API origin", () => {
     expect(clerkTestFrontendApiOrigin(publishableKey())).toBe(
       "https://steady-hound-42.clerk.accounts.dev",

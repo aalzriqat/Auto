@@ -491,7 +491,7 @@ async function resolveE2EPreviewContext(env, options) {
  * }} [deps]
  */
 export async function assertExistingE2EPreview(
-  env = /** @type {Record<string, string | undefined>} */ ({ ...process.env }),
+  env = /** @type {Record<string, string | undefined>} */ (process.env),
   deps = {},
 ) {
   const {
@@ -540,7 +540,7 @@ export async function assertExistingE2EPreview(
  * }} [deps]
  */
 export async function main(
-  env = /** @type {Record<string, string | undefined>} */ ({ ...process.env }),
+  env = /** @type {Record<string, string | undefined>} */ (process.env),
   deps = {},
 ) {
   const {
@@ -627,20 +627,22 @@ const invokedDirectly =
 
 if (invokedDirectly) {
   const [mode, ref, prNumber] = process.argv.slice(2);
-  const run =
-    mode === "--print-name"
-      ? async () => {
-          const name = previewNameForRef({ ref, prNumber });
-          if (!PREVIEW_NAME_PATTERN.test(name)) {
-            throw new PreviewTargetingError(
-              `Could not derive a safe preview name from ${JSON.stringify(ref)}.`,
-            );
-          }
-          process.stdout.write(name);
-        }
-      : mode === "--assert-only"
-        ? () => assertExistingE2EPreview()
-        : () => main();
+  let run;
+  if (mode === "--print-name") {
+    run = async () => {
+      const name = previewNameForRef({ ref, prNumber });
+      if (!PREVIEW_NAME_PATTERN.test(name)) {
+        throw new PreviewTargetingError(
+          `Could not derive a safe preview name from ${JSON.stringify(ref)}.`,
+        );
+      }
+      process.stdout.write(name);
+    };
+  } else if (mode === "--assert-only") {
+    run = () => assertExistingE2EPreview();
+  } else {
+    run = () => main();
+  }
 
   run().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));

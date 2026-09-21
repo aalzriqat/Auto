@@ -12,7 +12,7 @@ function requireMatch(actual, expected, label) {
 }
 
 function assertManifestShape(manifest) {
-  if (!manifest || manifest.version !== 1 || manifest.requiresPreviewMarker !== true) {
+  if (manifest?.version !== 1 || manifest?.requiresPreviewMarker !== true) {
     throw new Error(
       "Browser swarm manifest does not require the SCRUM-143 preview marker.",
     );

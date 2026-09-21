@@ -35,7 +35,7 @@ function assertTrustedImpact(value, expected) {
     throw new Error("Trusted browser impact artifact does not match exact base/head.");
   }
   if (!Array.isArray(impact.impactedInvariants)) {
-    throw new Error("Trusted browser impact artifact is missing impacted invariants.");
+    throw new TypeError("Trusted browser impact artifact is missing impacted invariants.");
   }
   const impactedInvariants = impact.impactedInvariants.map((entry, index) => {
     if (

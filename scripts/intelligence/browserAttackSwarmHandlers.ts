@@ -196,6 +196,27 @@ async function finishMissionBrowser({
   return artifacts;
 }
 
+async function rethrowAfterMissionCleanup(
+  runtime: Awaited<ReturnType<typeof openMissionBrowser>>,
+  error: unknown,
+  cleanupStarted: boolean,
+): Promise<never> {
+  if (!cleanupStarted) {
+    try {
+      await finishMissionBrowser(runtime);
+    } catch (cleanupError) {
+      if (
+        error instanceof Error &&
+        cleanupError instanceof Error &&
+        error.cause === undefined
+      ) {
+        error.cause = cleanupError;
+      }
+    }
+  }
+  throw error;
+}
+
 async function writeBackendEvidence(
   paths: ArtifactWriter,
   value: unknown,
@@ -226,7 +247,7 @@ async function runRtlParityAttack(
     const client = await authenticatedConvexClient(runtime.page);
     const orgs = await client.query(api.organizations.listMine, {});
     if (!Array.isArray(orgs)) {
-      throw new Error(
+      throw new TypeError(
         "RTL parity harness received a non-array organization authority response.",
       );
     }
@@ -295,21 +316,7 @@ async function runRtlParityAttack(
       artifacts,
     };
   } catch (error) {
-    if (!cleanupStarted) {
-      try {
-        cleanupStarted = true;
-        await finishMissionBrowser(runtime);
-      } catch (cleanupError) {
-        if (
-          error instanceof Error &&
-          cleanupError instanceof Error &&
-          error.cause === undefined
-        ) {
-          error.cause = cleanupError;
-        }
-      }
-    }
-    throw error;
+    return rethrowAfterMissionCleanup(runtime, error, cleanupStarted);
   }
 }
 
@@ -388,7 +395,7 @@ async function runUiBackendMismatchAttack(
     });
 
     if (!Array.isArray(backendMatches)) {
-      throw new Error(
+      throw new TypeError(
         "UI/backend authority harness received a non-array customer authority response.",
       );
     }
@@ -452,21 +459,7 @@ async function runUiBackendMismatchAttack(
       artifacts,
     };
   } catch (error) {
-    if (!cleanupStarted) {
-      try {
-        cleanupStarted = true;
-        await finishMissionBrowser(runtime);
-      } catch (cleanupError) {
-        if (
-          error instanceof Error &&
-          cleanupError instanceof Error &&
-          error.cause === undefined
-        ) {
-          error.cause = cleanupError;
-        }
-      }
-    }
-    throw error;
+    return rethrowAfterMissionCleanup(runtime, error, cleanupStarted);
   }
 }
 

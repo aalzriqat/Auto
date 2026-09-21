@@ -1,6 +1,12 @@
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { previewNameForRef } from "../e2ePreviewBootstrap.mjs";
-import { assembleTrustedBrowserSwarmRun } from "./prepareTrustedBrowserSwarmRun.mjs";
+import {
+  assembleTrustedBrowserSwarmRun,
+  prepareTrustedBrowserSwarmRun,
+} from "./prepareTrustedBrowserSwarmRun.mjs";
 
 const BASE_SHA = "a".repeat(40);
 const HEAD_SHA = "b".repeat(40);
@@ -66,6 +72,96 @@ function assemble(options: {
 }
 
 describe("trusted browser swarm run assembly", () => {
+  it("writes the trusted run artifact and GitHub outputs from bounded handoff files", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "autoflow-swarm-run-"));
+    try {
+      const artifactsDir = path.join(repoRoot, "artifacts");
+      const descriptorPath = path.join(repoRoot, "descriptor.json");
+      const githubOutput = path.join(repoRoot, "github-output.txt");
+      await mkdir(artifactsDir, { recursive: true });
+      await Promise.all([
+        writeFile(
+          path.join(artifactsDir, "browser-swarm-trusted-impact.json"),
+          JSON.stringify(impact()),
+          "utf8",
+        ),
+        writeFile(
+          path.join(artifactsDir, "browser-swarm-convex-authority.json"),
+          JSON.stringify(authority()),
+          "utf8",
+        ),
+        writeFile(descriptorPath, JSON.stringify(descriptor()), "utf8"),
+        writeFile(githubOutput, "", "utf8"),
+      ]);
+
+      const payload = await prepareTrustedBrowserSwarmRun({
+        repoRoot,
+        env: {
+          BASE_SHA,
+          HEAD_SHA,
+          TESTED_SHA,
+          PR_NUMBER: String(PR_NUMBER),
+          PREVIEW_DESCRIPTOR_PATH: descriptorPath,
+          GITHUB_OUTPUT: githubOutput,
+        },
+      });
+
+      const persisted = JSON.parse(
+        await readFile(
+          path.join(artifactsDir, "browser-swarm-trusted-run.json"),
+          "utf8",
+        ),
+      );
+      expect(persisted).toEqual(payload);
+      expect(persisted.testedSha).toBe(TESTED_SHA);
+
+      const outputs = await readFile(githubOutput, "utf8");
+      expect(outputs).toContain("should_run=true");
+      expect(outputs).toContain('worker_matrix={"worker_index":[1,2]}');
+      expect(outputs).toContain("tested_sha=" + TESTED_SHA);
+      expect(outputs).toContain("preview_name=" + PREVIEW_NAME);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when a trusted handoff file is not valid JSON", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "autoflow-swarm-invalid-"));
+    try {
+      const artifactsDir = path.join(repoRoot, "artifacts");
+      const descriptorPath = path.join(repoRoot, "descriptor.json");
+      await mkdir(artifactsDir, { recursive: true });
+      await Promise.all([
+        writeFile(
+          path.join(artifactsDir, "browser-swarm-trusted-impact.json"),
+          JSON.stringify(impact()),
+          "utf8",
+        ),
+        writeFile(
+          path.join(artifactsDir, "browser-swarm-convex-authority.json"),
+          JSON.stringify(authority()),
+          "utf8",
+        ),
+        writeFile(descriptorPath, "{not-json", "utf8"),
+      ]);
+
+      await expect(
+        prepareTrustedBrowserSwarmRun({
+          repoRoot,
+          env: {
+            BASE_SHA,
+            HEAD_SHA,
+            TESTED_SHA,
+            PR_NUMBER: String(PR_NUMBER),
+            PREVIEW_DESCRIPTOR_PATH: descriptorPath,
+          },
+        }),
+      ).rejects.toThrow(/valid JSON/);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it("hands exact trusted impact and control-plane preview authority to bounded workers", () => {
     const payload = assemble();
 

@@ -129,6 +129,29 @@ export function validateConvexPreviewAuthority(value, expectedPreviewName) {
   };
 }
 
+async function readBoundedJsonObject(response) {
+  const declaredLength = Number(response.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
+    throw new Error("Convex preview authority response exceeds the size limit.");
+  }
+
+  const raw = await response.text();
+  if (Buffer.byteLength(raw, "utf8") > MAX_RESPONSE_BYTES) {
+    throw new Error("Convex preview authority response exceeds the size limit.");
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    throw new Error("Convex preview authority response is not valid JSON.");
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new TypeError("Convex preview authority response must be an object.");
+  }
+  return /** @type {Record<string, unknown>} */ (payload);
+}
+
 export async function resolveConvexPreviewAuthority({
   deployKey,
   previewName,
@@ -182,27 +205,7 @@ export async function resolveConvexPreviewAuthority({
     );
   }
 
-  const declaredLength = Number(response.headers.get("content-length") ?? "0");
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
-    throw new Error("Convex preview authority response exceeds the size limit.");
-  }
-
-  const raw = await response.text();
-  if (Buffer.byteLength(raw, "utf8") > MAX_RESPONSE_BYTES) {
-    throw new Error("Convex preview authority response exceeds the size limit.");
-  }
-
-  let payload;
-  try {
-    payload = JSON.parse(raw);
-  } catch {
-    throw new Error("Convex preview authority response is not valid JSON.");
-  }
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    throw new Error("Convex preview authority response must be an object.");
-  }
-
-  const responseObject = /** @type {Record<string, unknown>} */ (payload);
+  const responseObject = await readBoundedJsonObject(response);
   if (
     responseObject.deploymentType !== undefined &&
     responseObject.deploymentType !== "preview"

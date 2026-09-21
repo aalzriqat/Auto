@@ -1,5 +1,4 @@
 import { createPublicKey } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -57,7 +56,7 @@ export function clerkTestFrontendApiOrigin(publishableKey) {
  */
 export function clerkJwtPemFromJwks(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Clerk JWKS payload must be an object.");
+    throw new TypeError("Clerk JWKS payload must be an object.");
   }
 
   const keys = /** @type {{keys?: unknown}} */ (value).keys;
@@ -143,34 +142,25 @@ export async function fetchClerkTestJwtPem({
 }
 
 /**
+ * Resolve the test-instance public signing key and write only the PEM bytes to
+ * stdout. The CLI accepts no output path: the trusted workflow owns temporary
+ * file placement, so caller-controlled arguments cannot steer filesystem writes.
+ *
  * @param {{
- *   outputPath: string,
  *   publishableKey?: string,
  *   fetchImpl?: typeof fetch,
- * }} options
+ * }} [options]
  */
-export async function writeClerkTestJwtPem({
-  outputPath,
+export async function printClerkTestJwtPem({
   publishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
   fetchImpl = fetch,
-}) {
-  if (!outputPath) {
-    throw new Error("A Clerk JWT PEM output path is required.");
-  }
+} = {}) {
   const pem = await fetchClerkTestJwtPem({ publishableKey, fetchImpl });
-  await mkdir(path.dirname(outputPath), { recursive: true });
-  await writeFile(outputPath, pem, { encoding: "utf8", mode: 0o600 });
-  process.stdout.write("Resolved Clerk test-instance public JWT key.\n");
+  process.stdout.write(pem);
   return pem;
 }
 
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : undefined;
 if (invokedPath && invokedPath === fileURLToPath(import.meta.url)) {
-  const outputPath = process.argv[2];
-  if (!outputPath) {
-    throw new Error(
-      "Usage: node scripts/intelligence/clerkPublicJwtKey.mjs <output-path>",
-    );
-  }
-  await writeClerkTestJwtPem({ outputPath });
+  await printClerkTestJwtPem();
 }

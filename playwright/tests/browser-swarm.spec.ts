@@ -9,10 +9,9 @@ import { verifyBrowserSwarmPreview } from "../../scripts/intelligence/browserAtt
 
 const enabled = process.env.BROWSER_SWARM_ENABLED === "1";
 
-test.describe("SCRUM-350 browser adversarial swarm", () => {
-  test.skip(!enabled, "Browser swarm is only enabled by its dedicated preview workflow.");
-
-  test("executes the assigned deterministic/Jev mission partition", async ({}, testInfo) => {
+if (enabled) {
+  test.describe("SCRUM-350 browser adversarial swarm", () => {
+    test("executes the assigned deterministic/Jev mission partition", async ({}, testInfo) => {
     assertBrowserSwarmExecutionEnvironment(process.env);
     const { manifest, workerId } = browserSwarmManifestFromEnv(process.env);
     const worker = manifest.workers.find((entry) => entry.workerId === workerId);
@@ -50,5 +49,6 @@ test.describe("SCRUM-350 browser adversarial swarm", () => {
       JSON.stringify(execution.results, null, 2),
     ).toBe(0);
     expect(execution.passed).toBe(true);
+    });
   });
-});
+}

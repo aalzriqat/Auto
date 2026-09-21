@@ -73,7 +73,9 @@ export function buildTrustedBrowserSwarmImpact({
     authority: "TRUSTED_MAIN_CANONICAL_GIT_IMPACT",
     baseSha,
     headSha,
-    changedFiles: [...change.changedFiles].sort(),
+    changedFiles: [...change.changedFiles].sort((left, right) =>
+      left.localeCompare(right),
+    ),
     impactedInvariants,
     shouldRun: impactedInvariants.length > 0,
   };

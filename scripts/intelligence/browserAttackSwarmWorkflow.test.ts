@@ -92,6 +92,11 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(prepareIf).toContain(
       "github.event.workflow_run.head_repository.full_name == github.repository",
     );
+
+    const attackIf = String(job("attack-worker").if ?? "");
+    expect(attackIf).toContain(
+      "github.event.workflow_run.head_repository.full_name == github.repository",
+    );
   });
 
   it("serializes ordinary E2E and trusted swarm around the same PR preview resource", () => {
@@ -118,12 +123,18 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       "attack-worker",
       "Checkout trusted browser controller from immutable workflow revision",
     );
+    expect(workerTrusted.if).toBe(
+      "${{ github.event.workflow_run.head_repository.full_name == github.repository }}",
+    );
     expect(workerTrusted.with?.ref).toBe("${{ github.workflow_sha }}");
     expect(workerTrusted.with?.["persist-credentials"]).toBe(false);
 
     const candidate = step(
       "attack-worker",
       "Checkout exact tested PR merge as application code",
+    );
+    expect(candidate.if).toBe(
+      "${{ github.event.workflow_run.head_repository.full_name == github.repository }}",
     );
     expect(candidate.with?.ref).toBe("${{ needs.prepare.outputs.tested_sha }}");
     expect(candidate.with?.["persist-credentials"]).toBe(false);
@@ -302,10 +313,20 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(stopRun).toContain('docker network rm "$CANDIDATE_NETWORK"');
   });
 
-  it("grants only the explicit commit-status write needed for the trusted verdict bridge", () => {
+  it("grants privileged workflow permissions only to the trusted jobs that need them", () => {
     expect(workflow.permissions).toEqual({
       contents: "read",
+    });
+    expect(job("prepare").permissions).toEqual({
+      contents: "read",
       actions: "read",
+      statuses: "write",
+    });
+    expect(job("attack-worker").permissions).toEqual({
+      contents: "read",
+    });
+    expect(job("verdict").permissions).toEqual({
+      contents: "read",
       statuses: "write",
     });
 

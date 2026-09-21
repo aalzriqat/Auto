@@ -247,7 +247,7 @@ const DETERMINISTIC_MISSIONS: Readonly<
 };
 
 export const SUPPORTED_BROWSER_SWARM_INVARIANT_IDS = Object.freeze(
-  Object.keys(DETERMINISTIC_MISSIONS).sort(),
+  Object.keys(DETERMINISTIC_MISSIONS).sort((left, right) => left.localeCompare(right)),
 );
 
 const JEV_DEFAULT_ORACLE: Readonly<Record<BrowserAttackFamily, BrowserOracleKind>> = {
@@ -302,7 +302,7 @@ function dedupeByMissionKey(
   const seen = new Set<string>();
   const result: BrowserAttackMission[] = [];
   for (const mission of missions) {
-    const key = `${mission.family}::${[...mission.invariantIds].sort().join(",")}`;
+    const key = `${mission.family}::${[...mission.invariantIds].sort((left, right) => left.localeCompare(right)).join(",")}`;
     if (seen.has(key)) continue;
     seen.add(key);
     result.push(mission);
@@ -345,7 +345,7 @@ export function planBrowserAttackSwarm({
         .map((invariant) => invariant.id)
         .filter((id) => !(id in DETERMINISTIC_MISSIONS)),
     ),
-  ].sort();
+  ].sort((left, right) => left.localeCompare(right));
   if (unsupportedInvariantIds.length > 0) {
     throw new Error(
       "Browser swarm has no deterministic mission mapping for impacted invariant(s): " +
@@ -365,7 +365,9 @@ export function planBrowserAttackSwarm({
     );
   }
 
-  const impactedIds = [...new Set(impactedInvariants.map((entry) => entry.id))].sort();
+  const impactedIds = [...new Set(impactedInvariants.map((entry) => entry.id))].sort(
+    (left, right) => left.localeCompare(right),
+  );
   const jevCandidates = jevSuggestions
     .map((suggestion) => {
       assertProbability(suggestion.probability);
@@ -508,7 +510,7 @@ export function buildBrowserSwarmRunManifest({
         .map((mission) => mission.family)
         .filter((family) => !PHASE_A_EXECUTABLE_FAMILY_SET.has(family)),
     ),
-  ].sort();
+  ].sort((left, right) => left.localeCompare(right));
   if (unsupportedFamilies.length > 0) {
     throw new Error(
       "Browser swarm Phase A has no executable handler for mission family/families: " +
