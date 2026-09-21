@@ -101,6 +101,14 @@ const dealRailMessages = defineBilingualMessages({
     "Verify the deal figures and terms before confirming vehicle handover.",
     "تحقّق من أرقام وتفاصيل الصفقة قبل تأكيد تسليم المركبة.",
   ],
+  HandoverActualLossWarning: [
+    "Warning: this deal has an actual loss in its settled management economics.",
+    "تحذير: هذه الصفقة تسجّل خسارة فعلية في أرقام الإدارة بعد التسوية.",
+  ],
+  HandoverActualLossWarningDesc: [
+    "Verify the settled deal figures before confirming vehicle handover. This management result is actual but is not posted to the books.",
+    "تحقّق من أرقام الصفقة بعد التسوية قبل تأكيد تسليم المركبة. هذه نتيجة إدارية فعلية لكنها غير مُرحّلة إلى الدفاتر.",
+  ],
 
   /**
    * The appraisal stage when the appraiser is NOT on record.
