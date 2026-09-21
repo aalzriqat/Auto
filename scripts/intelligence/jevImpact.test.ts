@@ -10,6 +10,7 @@ import {
 import {
   JEV_ENDPOINT,
   MAX_JEV_RESPONSE_BYTES,
+  assertAncestorCommit,
   assertCommitSha,
   buildChangeState,
   buildJevQuestions,
@@ -20,6 +21,7 @@ import {
   globMatches,
   normalizeJevResponse,
   parseNameStatus,
+  readCommitTimestamp,
   truncatePatch,
 } from "./jevImpact.mjs";
 import {
@@ -209,6 +211,14 @@ describe("Jev shadow impact mapper", () => {
     expect(change.changedFiles).toContain(unusualPath);
     expect(change.state.patchExcerpt).toContain("fee");
     expect(change.patchCharsSent).toBeLessThanOrEqual(512);
+
+    expect(() => assertAncestorCommit(repoRoot, baseSha, headSha)).not.toThrow();
+    expect(() => assertAncestorCommit(repoRoot, headSha, baseSha)).toThrow(
+      /not an ancestor/,
+    );
+    expect(readCommitTimestamp(repoRoot, headSha)).toBe(
+      new Date(git(["show", "-s", "--format=%cI", headSha])).toISOString(),
+    );
   });
 
   test("rename status considers both old and new paths", () => {
