@@ -56,16 +56,15 @@ jobs:
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
           EXPECTED_HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
           EXPECTED_BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
-          EXPECTED_TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
             echo "workflow_run did not provide a valid PR number" >&2
             exit 1
           fi
-          for value in "$EXPECTED_HEAD_SHA" "$EXPECTED_BASE_SHA" "$EXPECTED_TESTED_SHA"; do
+          for value in "$EXPECTED_HEAD_SHA" "$EXPECTED_BASE_SHA"; do
             if ! [[ "$value" =~ ^[0-9a-fA-F]{40}$ ]]; then
-              echo "workflow_run did not provide exact base/head/tested SHAs" >&2
+              echo "workflow_run did not provide exact base/head SHAs" >&2
               exit 1
             fi
           done
@@ -80,21 +79,18 @@ jobs:
             echo "Fetched PR head does not match workflow_run PR head SHA" >&2
             exit 1
           fi
-          if [ "$FETCHED_MERGE" != "$EXPECTED_TESTED_SHA" ]; then
-            echo "Fetched PR merge commit does not match the triggering workflow SHA" >&2
-            exit 1
-          fi
-
           git cat-file -e "${EXPECTED_BASE_SHA}^{commit}"
           git cat-file -e "${EXPECTED_HEAD_SHA}^{commit}"
-          git cat-file -e "${EXPECTED_TESTED_SHA}^{commit}"
+          git cat-file -e "${FETCHED_MERGE}^{commit}"
 
-          PARENTS="$(git show -s --format=%P "$EXPECTED_TESTED_SHA")"
+          PARENTS="$(git show -s --format=%P "$FETCHED_MERGE")"
           read -r FIRST_PARENT SECOND_PARENT EXTRA_PARENT <<< "$PARENTS"
           if [ "$FIRST_PARENT" != "$EXPECTED_BASE_SHA" ] || [ "$SECOND_PARENT" != "$EXPECTED_HEAD_SHA" ] || [ -n "${EXTRA_PARENT:-}" ]; then
-            echo "Triggering workflow SHA is not the exact two-parent PR merge of base + head." >&2
+            echo "GitHub PR merge ref is not the exact two-parent merge of the trusted base + head." >&2
             exit 1
           fi
+
+          echo "TESTED_SHA=$FETCHED_MERGE" >> "$GITHUB_ENV"
 
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
@@ -184,7 +180,7 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
           HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
-          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+          TESTED_SHA: ${{ env.TESTED_SHA }}
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
           BROWSER_SWARM_RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
           PREVIEW_DESCRIPTOR_PATH: ${{ runner.temp }}/e2e-preview-descriptor/e2e-preview-descriptor.json
