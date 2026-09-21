@@ -32,7 +32,9 @@ const syntheticInvariant = {
   requirements: [{ obligation: "E2E", status: "REQUIRED" }],
 };
 
-function syntheticChange(calibrationCase) {
+type CalibrationCase = (typeof JEV_CALIBRATION_CASES)[number];
+
+function syntheticChange(calibrationCase: CalibrationCase) {
   return {
     state: {
       task: "historical impact classification",
@@ -144,7 +146,7 @@ describe("Jev historical calibration", () => {
           risks: { ...risks, uiAuthority: 0.7 },
           invariantImpact: { "UI-1": 0.75 },
         }),
-        deriveReviewMatrix: ({ invariantImpact }) =>
+        deriveReviewMatrix: ({ invariantImpact }: { invariantImpact: Record<string, number> }) =>
           Object.keys(invariantImpact).length === 0
             ? {
                 deterministicRequirements: [],
