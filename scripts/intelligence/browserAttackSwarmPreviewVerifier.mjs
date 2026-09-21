@@ -14,6 +14,14 @@ function requireMatch(actual, expected, label) {
   }
 }
 
+/**
+ * @param {import("./browserAttackSwarm").BrowserSwarmRunManifest} manifest
+ * @param {Record<string, string | undefined>} [env]
+ * @param {{
+ *   resolveClerkUserId?: typeof resolveClerkUserId,
+ *   runConvex?: typeof runConvex,
+ * }} [deps]
+ */
 export async function verifyBrowserSwarmPreview(
   manifest,
   env = process.env,

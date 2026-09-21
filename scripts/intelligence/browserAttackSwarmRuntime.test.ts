@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  assertBrowserSwarmExecutionEnvironment,
   browserSwarmLocalBaseUrl,
   browserSwarmManifestFromEnv,
 } from "./browserAttackSwarmRuntime";
@@ -15,6 +16,38 @@ const baseEnv = {
 };
 
 describe("SCRUM-350 browser swarm runtime config", () => {
+  it("requires a fresh CI-owned Playwright web server for real swarm execution", () => {
+    expect(() =>
+      assertBrowserSwarmExecutionEnvironment({
+        BROWSER_SWARM_ENABLED: "1",
+        CI: "true",
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      assertBrowserSwarmExecutionEnvironment({
+        BROWSER_SWARM_ENABLED: "1",
+        CI: "false",
+      }),
+    ).toThrow(/CI=true/);
+
+    expect(() =>
+      assertBrowserSwarmExecutionEnvironment({
+        BROWSER_SWARM_ENABLED: "1",
+        CI: "true",
+        PLAYWRIGHT_SKIP_WEBSERVER: "1",
+      }),
+    ).toThrow(/PLAYWRIGHT_SKIP_WEBSERVER/);
+
+    expect(() =>
+      assertBrowserSwarmExecutionEnvironment({
+        BROWSER_SWARM_ENABLED: "1",
+        CI: "true",
+        PLAYWRIGHT_BASE_URL: "https://autoflowdealer.com",
+      }),
+    ).toThrow(/localhost\/loopback/);
+  });
+
   it("allows only a local loopback frontend origin for attack execution", () => {
     expect(browserSwarmLocalBaseUrl({})).toBe("http://127.0.0.1:3000");
     expect(

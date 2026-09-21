@@ -86,7 +86,7 @@ async function openMissionBrowser(
   });
 
   const abort = () => {
-    void browser.close();
+    void browser.close().catch(() => {});
   };
   context.signal.addEventListener("abort", abort, { once: true });
 
@@ -158,7 +158,7 @@ async function runRtlParityAttack(
       Boolean(orgIdBefore) &&
       Array.isArray(orgs) &&
       orgs.some(
-        (entry: { _id?: string }) => String(entry?._id ?? "") === orgIdBefore,
+        (entry) => entry !== null && String(entry._id) === orgIdBefore,
       );
 
     const toggle = runtime.page.getByRole("button", { name: /^(en|ar)$/i });
@@ -301,12 +301,10 @@ async function runUiBackendMismatchAttack(
     }
 
     const client = await authenticatedConvexClient(runtime.page);
-    const backendMatches = await client
-      .query(api.customers.search, {
-        orgId: orgId as Id<"organizations">,
-        search: email,
-      })
-      .catch(() => []);
+    const backendMatches = await client.query(api.customers.search, {
+      orgId: orgId as Id<"organizations">,
+      search: email,
+    });
 
     const exactBackendMatches = Array.isArray(backendMatches)
       ? backendMatches.filter(
@@ -317,7 +315,7 @@ async function runUiBackendMismatchAttack(
         )
       : [];
 
-    await runtime.page.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
+    await runtime.page.reload({ waitUntil: "domcontentloaded" });
     const searchInput = runtime.page
       .locator('main input[placeholder^="Search"]:not([readonly])')
       .first();

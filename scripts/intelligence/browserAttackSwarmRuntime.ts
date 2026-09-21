@@ -60,6 +60,25 @@ export function browserSwarmLocalBaseUrl(env: Env): string {
   return parsed.origin;
 }
 
+export function assertBrowserSwarmExecutionEnvironment(env: Env): void {
+  if (env.BROWSER_SWARM_ENABLED !== "1") {
+    throw new Error(
+      "Browser swarm execution requires BROWSER_SWARM_ENABLED=1",
+    );
+  }
+  if (env.CI !== "true") {
+    throw new Error(
+      "Browser swarm execution requires CI=true so Playwright cannot reuse an existing local server",
+    );
+  }
+  if (env.PLAYWRIGHT_SKIP_WEBSERVER?.trim()) {
+    throw new Error(
+      "Browser swarm execution refuses PLAYWRIGHT_SKIP_WEBSERVER; the tested frontend must be freshly built and started by Playwright",
+    );
+  }
+  browserSwarmLocalBaseUrl(env);
+}
+
 function parseJson(raw: string, label: string): unknown {
   try {
     return JSON.parse(raw);
