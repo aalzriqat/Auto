@@ -184,6 +184,32 @@ jobs:
             exit 1
           fi
 
+      - name: Recreate disposable Convex preview from trusted main
+        working-directory: trusted
+        env:
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          PREVIEW_NAME="$(node scripts/e2ePreviewBootstrap.mjs --print-name "refs/pull/${PR_NUMBER}/merge" "$PR_NUMBER")"
+
+          retry_convex() {
+            local attempt delay
+            delay=2
+            for attempt in 1 2 3 4 5; do
+              if "$@"; then return 0; fi
+              if [ "$attempt" = "5" ]; then return 1; fi
+              echo "Trusted preview recreation failed on attempt $attempt/5; retrying in ${delay}s..." >&2
+              sleep "$delay"
+              delay=$((delay * 2))
+            done
+          }
+
+          retry_convex pnpm exec convex deploy \
+            --typecheck enable \
+            --preview-create "$PREVIEW_NAME" \
+            --preview-run e2eBootstrap:markPreviewDeployment
+
       - name: Resolve named Convex preview from trusted control plane
         working-directory: trusted
         run: node scripts/intelligence/convexPreviewAuthority.mjs
@@ -214,11 +240,241 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  attack-worker:
-    name: attack-worker-${{ matrix.worker_index }}
+  trusted-e2e:
+    name: trusted-e2e
     needs: prepare
     if: >-
+      needs.prepare.result == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout trusted E2E controller from immutable workflow revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: trusted
+          persist-credentials: false
+
+      - name: Checkout exact tested PR merge as candidate application code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.tested_sha }}
+          path: candidate
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+
+      - name: Install trusted E2E dependencies
+        working-directory: trusted
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install trusted Chromium
+        working-directory: trusted
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Deploy exact candidate backend with disposable preview credential
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.preview_name }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+        run: |
+          set -euo pipefail
+
+          ADMIN_KEY="$(
+            cd trusted
+            node --input-type=module <<'NODE'
+          import { resolveConvexPreviewCredentials } from "./scripts/intelligence/convexPreviewAuthority.mjs";
+          const resolved = await resolveConvexPreviewCredentials({
+            deployKey: process.env.CONVEX_PREVIEW_DEPLOY_KEY,
+            previewName: process.env.CONVEX_PREVIEW_NAME,
+          });
+          process.stdout.write(resolved.adminKey);
+          NODE
+          )"
+
+          if [ -z "$ADMIN_KEY" ]; then
+            echo "Trusted control plane returned an empty preview deployment credential." >&2
+            exit 1
+          fi
+          echo "::add-mask::$ADMIN_KEY"
+
+          docker run --rm \
+            --name autoflow-trusted-candidate-backend \
+            --network bridge \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --volume "$GITHUB_WORKSPACE/candidate:/app" \
+            --workdir /app \
+            --env HOME=/tmp/home \
+            --env NEXT_PUBLIC_CONVEX_URL \
+            --env CONVEX_PREVIEW_ADMIN_KEY="$ADMIN_KEY" \
+            node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
+            sh -lc 'corepack enable && corepack prepare pnpm@11.13.0 --activate && pnpm install --frozen-lockfile --ignore-scripts && pnpm exec convex deploy --url "$NEXT_PUBLIC_CONVEX_URL" --admin-key "$CONVEX_PREVIEW_ADMIN_KEY" --typecheck enable'
+
+      - name: Seed and assert the QA dealership from trusted main
+        working-directory: trusted
+        run: node scripts/e2ePreviewBootstrap.mjs
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.preview_name }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+
+      - name: Resolve public Clerk JWT verification material
+        working-directory: trusted
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          case "$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY" in
+            pk_test_*) ;;
+            *)
+              echo "Trusted E2E refuses a non-test Clerk publishable key." >&2
+              exit 1
+              ;;
+          esac
+          JWT_KEY_PATH="$RUNNER_TEMP/clerk-jwt-key.pem"
+          node scripts/intelligence/clerkPublicJwtKey.mjs > "$JWT_KEY_PATH"
+          chmod 600 "$JWT_KEY_PATH"
+          {
+            echo 'CLERK_JWT_KEY<<__AUTOFLOW_CLERK_JWT_KEY__'
+            cat "$JWT_KEY_PATH"
+            echo '__AUTOFLOW_CLERK_JWT_KEY__'
+          } >> "$GITHUB_ENV"
+          rm -f "$JWT_KEY_PATH"
+
+      - name: Authenticate E2E seats with trusted main code
+        working-directory: trusted
+        run: pnpm exec playwright test playwright/tests/auth.setup.ts --project=setup
+        env:
+          CI: true
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          NEXT_PUBLIC_APP_URL: http://localhost:3000
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
+          E2E_LOGIN_VERIFICATION_CODE: ${{ secrets.E2E_LOGIN_VERIFICATION_CODE }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+          E2E_APPROVER_PASSWORD: ${{ secrets.E2E_APPROVER_PASSWORD }}
+
+      - name: Build exact candidate frontend in isolated container
+        env:
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+          NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --name autoflow-trusted-e2e-build \
+            --network bridge \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --volume "$GITHUB_WORKSPACE/candidate:/app" \
+            --workdir /app \
+            --env HOME=/tmp/home \
+            --env NEXT_PUBLIC_CONVEX_URL \
+            --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY \
+            --env CLERK_JWT_KEY \
+            --env NEXT_PUBLIC_TURNSTILE_SITE_KEY \
+            --env NEXT_PUBLIC_APP_URL \
+            node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
+            sh -lc 'corepack enable && corepack prepare pnpm@11.13.0 --activate && pnpm install --frozen-lockfile --ignore-scripts && pnpm build'
+
+      - name: Start exact candidate frontend in isolated container
+        env:
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+          NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
+        run: |
+          set -euo pipefail
+          CANDIDATE_CONTAINER="autoflow-trusted-e2e-candidate"
+          CANDIDATE_NETWORK="autoflow-trusted-e2e-net"
+          echo "CANDIDATE_CONTAINER=$CANDIDATE_CONTAINER" >> "$GITHUB_ENV"
+          echo "CANDIDATE_NETWORK=$CANDIDATE_NETWORK" >> "$GITHUB_ENV"
+          docker network create --internal "$CANDIDATE_NETWORK" >/dev/null
+          docker run --detach --rm \
+            --name "$CANDIDATE_CONTAINER" \
+            --network "$CANDIDATE_NETWORK" \
+            --publish 127.0.0.1:3000:3000 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --volume "$GITHUB_WORKSPACE/candidate:/app" \
+            --workdir /app \
+            --env HOME=/tmp/home \
+            --env NEXT_PUBLIC_CONVEX_URL \
+            --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY \
+            --env CLERK_JWT_KEY \
+            --env NEXT_PUBLIC_TURNSTILE_SITE_KEY \
+            --env NEXT_PUBLIC_APP_URL \
+            node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
+            sh -lc 'corepack enable && corepack prepare pnpm@11.13.0 --activate && pnpm exec next start -H 0.0.0.0 -p 3000'
+
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error http://127.0.0.1:3000/api/health > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs "$CANDIDATE_CONTAINER" >&2 || true
+          exit 1
+
+      - name: Run full trusted E2E suite against exact candidate
+        working-directory: trusted
+        run: pnpm exec playwright test --project=chromium --no-deps
+        env:
+          CI: true
+          PLAYWRIGHT_SKIP_WEBSERVER: "1"
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          E2E_APPROVER_USER: trusted-attested
+          E2E_APPROVER_PASSWORD: trusted-attested
+
+      - name: Stop isolated trusted E2E candidate frontend
+        if: always()
+        run: |
+          if [ -n "${CANDIDATE_CONTAINER:-}" ]; then
+            docker rm --force "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
+          fi
+          if [ -n "${CANDIDATE_NETWORK:-}" ]; then
+            docker network rm "$CANDIDATE_NETWORK" >/dev/null 2>&1 || true
+          fi
+
+      - name: Upload trusted E2E report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trusted-pr-e2e-report
+          path: |
+            trusted/playwright-report/
+            trusted/test-results/
+          if-no-files-found: warn
+          retention-days: 14
+
+  attack-worker:
+    name: attack-worker-${{ matrix.worker_index }}
+    needs: [prepare, trusted-e2e]
+    if: >-
       needs.prepare.outputs.should_run == 'true' &&
+      needs.trusted-e2e.result == 'success' &&
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
@@ -267,20 +523,12 @@ jobs:
         working-directory: trusted
         env:
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
-          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
         run: |
           set -euo pipefail
           case "$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY" in
             pk_test_*) ;;
             *)
               echo "Trusted browser swarm refuses a non-test Clerk publishable key." >&2
-              exit 1
-              ;;
-          esac
-          case "$CLERK_SECRET_KEY" in
-            sk_test_*) ;;
-            *)
-              echo "Trusted browser swarm refuses a non-test Clerk secret key." >&2
               exit 1
               ;;
           esac
@@ -295,6 +543,20 @@ jobs:
           } >> "$GITHUB_ENV"
           rm -f "$JWT_KEY_PATH"
 
+      - name: Assert seeded preview from trusted control plane
+        working-directory: trusted
+        run: |
+          set -euo pipefail
+          node scripts/e2ePreviewBootstrap.mjs --assert-only
+          echo "BROWSER_SWARM_PREVIEW_ATTESTED=1" >> "$GITHUB_ENV"
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.preview_name }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+
       - name: Authenticate E2E seats on trusted main frontend
         working-directory: trusted
         run: pnpm exec playwright test playwright/tests/auth.setup.ts --project=setup
@@ -305,7 +567,7 @@ jobs:
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
-          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+          NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
           E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
           E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
           E2E_LOGIN_VERIFICATION_CODE: ${{ secrets.E2E_LOGIN_VERIFICATION_CODE }}
@@ -320,7 +582,7 @@ jobs:
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
-          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+          NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
 
       - name: Start exact candidate frontend in isolated container
         run: |
@@ -350,7 +612,7 @@ jobs:
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
-          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+          NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
 
       - name: Execute trusted browser missions
         working-directory: trusted
@@ -366,15 +628,9 @@ jobs:
           BROWSER_SWARM_WORKER_ID: worker-${{ matrix.worker_index }}
           BROWSER_SWARM_IMPACTED_INVARIANTS_JSON: ${{ needs.prepare.outputs.impacted_invariants_json }}
           BROWSER_SWARM_JEV_SUGGESTIONS_JSON: "[]"
-          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          BROWSER_SWARM_PREVIEW_ATTESTED: ${{ env.BROWSER_SWARM_PREVIEW_ATTESTED }}
           CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.preview_name }}
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
-          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
-          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
-          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
-          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
-          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
-          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
 
       - name: Stop isolated candidate frontend
         if: always()
@@ -400,7 +656,7 @@ jobs:
 
   verdict:
     name: trusted-browser-swarm-verdict
-    needs: [prepare, attack-worker]
+    needs: [prepare, trusted-e2e, attack-worker]
     if: always() && needs.prepare.outputs.tested_sha != ''
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -414,6 +670,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
           PREPARE_RESULT: ${{ needs.prepare.result }}
+          TRUSTED_E2E_RESULT: ${{ needs.trusted-e2e.result }}
           ATTACK_RESULT: ${{ needs.attack-worker.result }}
           SHOULD_RUN: ${{ needs.prepare.outputs.should_run }}
         run: |
@@ -422,13 +679,13 @@ jobs:
           STATE=failure
           DESCRIPTION="Trusted browser swarm did not complete successfully."
 
-          if [ "$PREPARE_RESULT" = "success" ]; then
+          if [ "$PREPARE_RESULT" = "success" ] && [ "$TRUSTED_E2E_RESULT" = "success" ]; then
             if [ "$SHOULD_RUN" = "false" ]; then
               STATE=success
-              DESCRIPTION="No mandatory browser-swarm invariant impact for this PR merge."
+              DESCRIPTION="Trusted E2E passed; no mandatory browser-swarm invariant impact."
             elif [ "$SHOULD_RUN" = "true" ] && [ "$ATTACK_RESULT" = "success" ]; then
               STATE=success
-              DESCRIPTION="Trusted browser swarm passed on this exact PR merge."
+              DESCRIPTION="Trusted E2E and browser swarm passed on this exact PR merge."
             fi
           fi
 

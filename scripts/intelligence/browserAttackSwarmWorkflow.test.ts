@@ -5,6 +5,7 @@ import { parse as parseYaml } from "yaml";
 
 type WorkflowStep = {
   name?: string;
+  if?: string;
   uses?: string;
   with?: Record<string, unknown>;
   env?: Record<string, unknown>;
@@ -37,12 +38,16 @@ const workflowPath = path.resolve(
   ".github/workflows/browser-attack-swarm.yml",
 );
 const workflow = parseYaml(readFileSync(workflowPath, "utf8")) as Workflow;
-const playwrightWorkflow = parseYaml(
-  readFileSync(
-    path.resolve(process.cwd(), ".github/workflows/playwright.yml"),
-    "utf8",
-  ),
-) as Workflow;
+const playwrightWorkflowSource = readFileSync(
+  path.resolve(process.cwd(), ".github/workflows/playwright.yml"),
+  "utf8",
+);
+const playwrightWorkflow = parseYaml(playwrightWorkflowSource) as Workflow;
+const trustedMainE2EWorkflowSource = readFileSync(
+  path.resolve(process.cwd(), ".github/workflows/trusted-main-e2e.yml"),
+  "utf8",
+);
+const trustedMainE2EWorkflow = parseYaml(trustedMainE2EWorkflowSource) as Workflow;
 
 function job(name: string): WorkflowJob {
   const value = workflow.jobs?.[name];
@@ -76,6 +81,28 @@ const CANDIDATE_FORBIDDEN_ENV = [
 ] as const;
 
 describe("SCRUM-350 trusted browser swarm workflow authority", () => {
+  it("keeps the PR preflight completely free of reusable secret references", () => {
+    expect(playwrightWorkflowSource).not.toContain("secrets.");
+    expect(playwrightWorkflowSource).not.toContain("CLERK_SECRET_KEY");
+    expect(playwrightWorkflowSource).not.toContain("CONVEX_DEPLOY_KEY");
+    expect(playwrightWorkflowSource).not.toContain("E2E_LOGIN_PASSWORD");
+    expect(playwrightWorkflowSource).not.toContain("E2E_APPROVER_PASSWORD");
+
+    const checkout = playwrightWorkflow.jobs?.playwright?.steps?.find(
+      (entry) => String(entry.uses ?? "").startsWith("actions/checkout@"),
+    );
+    expect(checkout?.with?.["persist-credentials"]).toBe(false);
+  });
+
+  it("keeps credential-backed main E2E off pull_request entirely", () => {
+    expect(trustedMainE2EWorkflowSource).toContain("secrets.");
+    expect(trustedMainE2EWorkflow.on?.workflow_run).toBeUndefined();
+    expect(trustedMainE2EWorkflowSource).not.toMatch(/^\s*pull_request:/m);
+    expect(trustedMainE2EWorkflow.jobs?.playwright?.if).toBe(
+      "github.ref == 'refs/heads/main'",
+    );
+  });
+
   it("runs only as a successful Playwright workflow_run follow-up", () => {
     expect(workflow.on?.workflow_run?.workflows).toEqual([
       "E2E Tests (Playwright)",
@@ -161,16 +188,42 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(plan.env).toHaveProperty("TESTED_SHA", "${{ env.TESTED_SHA }}");
   });
 
-  it("never exposes privileged secrets to candidate-controlled build or server processes", () => {
-    for (const stepName of [
-      "Build exact candidate frontend in isolated container",
-      "Start exact candidate frontend in isolated container",
-    ]) {
-      const env = step("attack-worker", stepName).env ?? {};
-      for (const key of CANDIDATE_FORBIDDEN_ENV) {
-        expect(env, stepName + " must not receive " + key).not.toHaveProperty(key);
+  it("never exposes reusable credentials to candidate frontend processes", () => {
+    for (const jobName of ["trusted-e2e", "attack-worker"]) {
+      for (const stepName of [
+        "Build exact candidate frontend in isolated container",
+        "Start exact candidate frontend in isolated container",
+      ]) {
+        const env = step(jobName, stepName).env ?? {};
+        for (const key of CANDIDATE_FORBIDDEN_ENV) {
+          expect(
+            env,
+            jobName + " :: " + stepName + " must not receive " + key,
+          ).not.toHaveProperty(key);
+        }
+        expect(env).toHaveProperty(
+          "NEXT_PUBLIC_APP_URL",
+          "http://127.0.0.1:3000",
+        );
       }
     }
+  });
+
+  it("deploys candidate backend only with a deployment-scoped preview credential", () => {
+    const deploy = step(
+      "trusted-e2e",
+      "Deploy exact candidate backend with disposable preview credential",
+    );
+    const deployRun = String(deploy.run ?? "");
+    expect(deploy.env).toHaveProperty("CONVEX_PREVIEW_DEPLOY_KEY");
+    expect(deployRun).toContain("resolveConvexPreviewCredentials");
+    expect(deployRun).toContain("--env CONVEX_PREVIEW_ADMIN_KEY=");
+    expect(deployRun).toContain('--admin-key "$CONVEX_PREVIEW_ADMIN_KEY"');
+    expect(deployRun).not.toContain("--env CONVEX_PREVIEW_DEPLOY_KEY");
+    expect(deployRun).not.toContain("--env CLERK_SECRET_KEY");
+    expect(deployRun).not.toContain("$GITHUB_WORKSPACE/trusted:/");
+    expect(deployRun).toContain("--cap-drop ALL");
+    expect(deployRun).toContain("--security-opt no-new-privileges");
   });
 
   it("runs candidate-controlled code only inside the pinned isolation container", () => {
@@ -209,6 +262,13 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(descriptor.env).not.toHaveProperty("NEXT_PUBLIC_CONVEX_URL");
     expect(descriptor.env).not.toHaveProperty("CONVEX_DEPLOY_KEY");
 
+    const recreate = step(
+      "prepare",
+      "Recreate disposable Convex preview from trusted main",
+    );
+    expect(recreate.env).toHaveProperty("CONVEX_DEPLOY_KEY");
+    expect(String(recreate.run ?? "")).toContain("--preview-create");
+
     const authority = step(
       "prepare",
       "Resolve named Convex preview from trusted control plane",
@@ -244,20 +304,32 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       "http://localhost:3000",
     );
 
+    const attest = step(
+      "attack-worker",
+      "Assert seeded preview from trusted control plane",
+    );
+    expect(attest.env).toHaveProperty("CONVEX_DEPLOY_KEY");
+    expect(attest.env).toHaveProperty("CLERK_SECRET_KEY");
+    expect(String(attest.run ?? "")).toContain("--assert-only");
+    expect(String(attest.run ?? "")).toContain(
+      "BROWSER_SWARM_PREVIEW_ATTESTED=1",
+    );
+
     const execute = step("attack-worker", "Execute trusted browser missions");
     const env = execute.env ?? {};
     expect(execute.run).toContain("--no-deps");
-    expect(env).toHaveProperty("CONVEX_DEPLOY_KEY");
-    expect(env).toHaveProperty("CLERK_SECRET_KEY");
-    expect(env).toHaveProperty("E2E_LOGIN_USER");
-    expect(env).toHaveProperty("E2E_APPROVER_USER");
+    expect(env).not.toHaveProperty("CONVEX_DEPLOY_KEY");
+    expect(env).not.toHaveProperty("CLERK_SECRET_KEY");
+    expect(env).not.toHaveProperty("E2E_LOGIN_USER");
+    expect(env).not.toHaveProperty("E2E_APPROVER_USER");
     expect(env).toHaveProperty(
       "PLAYWRIGHT_BASE_URL",
       "http://localhost:3000",
     );
-    expect(env).not.toHaveProperty("E2E_LOGIN_PASSWORD");
-    expect(env).not.toHaveProperty("E2E_LOGIN_VERIFICATION_CODE");
-    expect(env).not.toHaveProperty("E2E_APPROVER_PASSWORD");
+    expect(env).toHaveProperty(
+      "BROWSER_SWARM_PREVIEW_ATTESTED",
+      "${{ env.BROWSER_SWARM_PREVIEW_ATTESTED }}",
+    );
     expect(env).toHaveProperty("BROWSER_SWARM_TRUSTED_EXTERNAL_SERVER", "1");
     expect(env).toHaveProperty("PLAYWRIGHT_SKIP_WEBSERVER", "1");
   });
@@ -270,9 +342,9 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     const resolverEnv = resolver.env ?? {};
     const resolverRun = String(resolver.run ?? "");
     expect(resolverEnv).toHaveProperty("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY");
-    expect(resolverEnv).toHaveProperty("CLERK_SECRET_KEY");
+    expect(resolverEnv).not.toHaveProperty("CLERK_SECRET_KEY");
     expect(resolverRun).toContain("pk_test_*");
-    expect(resolverRun).toContain("sk_test_*");
+    expect(resolverRun).not.toContain("sk_test_*");
     expect(resolverRun).toContain("clerkPublicJwtKey.mjs");
     expect(resolverRun).toContain("CLERK_JWT_KEY");
 
@@ -292,6 +364,22 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       expect(candidateStep.env ?? {}).not.toHaveProperty("CLERK_SECRET_KEY");
       expect(String(candidateStep.run ?? "")).toContain("--env CLERK_JWT_KEY");
     }
+  });
+
+  it("runs the complete Playwright regression suite from trusted main against the exact candidate", () => {
+    const run = step(
+      "trusted-e2e",
+      "Run full trusted E2E suite against exact candidate",
+    );
+    expect(run.run).toContain("playwright test --project=chromium --no-deps");
+    expect(run.env).toHaveProperty("PLAYWRIGHT_SKIP_WEBSERVER", "1");
+    expect(run.env).toHaveProperty(
+      "NEXT_PUBLIC_CONVEX_URL",
+      "${{ needs.prepare.outputs.convex_cloud_url }}",
+    );
+    expect(run.env).not.toHaveProperty("CLERK_SECRET_KEY");
+    expect(run.env).not.toHaveProperty("CONVEX_DEPLOY_KEY");
+    expect(run.env).not.toHaveProperty("E2E_LOGIN_PASSWORD");
   });
 
   it("runs candidate runtime on an internal Docker network and cleans that network up", () => {
@@ -321,6 +409,9 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       contents: "read",
       actions: "read",
       statuses: "write",
+    });
+    expect(job("trusted-e2e").permissions).toEqual({
+      contents: "read",
     });
     expect(job("attack-worker").permissions).toEqual({
       contents: "read",
@@ -358,11 +449,16 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       "${{ needs.prepare.result }}",
     );
     expect(verdict.env).toHaveProperty(
+      "TRUSTED_E2E_RESULT",
+      "${{ needs.trusted-e2e.result }}",
+    );
+    expect(verdict.env).toHaveProperty(
       "ATTACK_RESULT",
       "${{ needs.attack-worker.result }}",
     );
     expect(verdictRun).toContain('STATE=failure');
     expect(verdictRun).toContain('[ "$PREPARE_RESULT" = "success" ]');
+    expect(verdictRun).toContain('[ "$TRUSTED_E2E_RESULT" = "success" ]');
     expect(verdictRun).toContain('[ "$SHOULD_RUN" = "false" ]');
     expect(verdictRun).toContain(
       '[ "$SHOULD_RUN" = "true" ] && [ "$ATTACK_RESULT" = "success" ]',

@@ -1,8 +1,3 @@
-import { spawnSync } from "node:child_process";
-import path from "node:path";
-
-const PREVIEW_ASSERTION_TIMEOUT_MS = 120_000;
-
 function requireMatch(actual, expected, label) {
   if (!actual || !expected || String(actual).trim() !== String(expected).trim()) {
     throw new Error(
@@ -20,24 +15,17 @@ function assertManifestShape(manifest) {
 }
 
 /**
- * Executes SCRUM-143's existing ESM bootstrap as a real Node process instead
- * of importing it through Playwright's transformed test loader.
+ * The trusted workflow performs the server-side SCRUM-143 assertion before
+ * any candidate frontend is started. This runtime verifier binds that
+ * pre-attestation to the same preview name and URL carried by the immutable
+ * manifest, without needing any reusable Convex or Clerk credential here.
  *
  * @param {import("./browserAttackSwarm").BrowserSwarmRunManifest} manifest
  * @param {Record<string, string | undefined>} [env]
- * @param {{
- *   spawn?: (
- *     command: string,
- *     args: string[],
- *     options: object,
- *   ) => { status: number | null, error?: Error | undefined },
- *   cwd?: string,
- * }} [deps]
  */
 export async function verifyBrowserSwarmPreview(
   manifest,
   env = process.env,
-  deps = {},
 ) {
   assertManifestShape(manifest);
 
@@ -50,34 +38,15 @@ export async function verifyBrowserSwarmPreview(
     "NEXT_PUBLIC_CONVEX_URL",
   );
 
-  const spawn = deps.spawn ?? spawnSync;
-  const cwd = deps.cwd ?? process.cwd();
-  const script = path.resolve(cwd, "scripts/e2ePreviewBootstrap.mjs");
-  const result = spawn(process.execPath, [script, "--assert-only"], {
-    cwd,
-    env: { ...process.env, ...env },
-    stdio: "inherit",
-    shell: false,
-    timeout: PREVIEW_ASSERTION_TIMEOUT_MS,
-  });
-
-  if (result.error) {
+  if (env.BROWSER_SWARM_PREVIEW_ATTESTED !== "1") {
     throw new Error(
-      "SCRUM-143 preview assertion process could not start: " +
-        result.error.message,
-    );
-  }
-  if (result.status !== 0) {
-    throw new Error(
-      "SCRUM-143 preview assertion failed with exit code " +
-        String(result.status) +
-        ".",
+      "Trusted SCRUM-143 preview attestation is missing; refusing browser execution.",
     );
   }
 
   return {
     verified: true,
     summary:
-      "SCRUM-143 marker, deployment identity, seeded organization and both E2E seats verified.",
+      "Trusted preflight attested the SCRUM-143 marker, deployment identity, seeded organization and both E2E seats.",
   };
 }

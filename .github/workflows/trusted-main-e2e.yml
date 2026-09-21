@@ -1,0 +1,116 @@
+name: Trusted Main E2E (Playwright)
+
+# Full credential-backed browser regression runs only after code is on main.
+# Pull requests are exercised by the immutable workflow_run controller instead.
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trusted-main-playwright-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  playwright:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Deal cockpit visual gate
+        run: |
+          set -euo pipefail
+          pnpm run test:visual:deal-cockpit
+          SHOTS="$(find test-results/deal-cockpit-visual -mindepth 2 -maxdepth 2 -name 'deal-cockpit-*.png' | wc -l)"
+          if [ "$SHOTS" -ne 16 ]; then
+            echo "expected 16 screenshots, found $SHOTS" >&2
+            exit 1
+          fi
+        env:
+          CI: true
+
+      - name: Name the disposable main preview
+        run: |
+          set -euo pipefail
+          NAME="$(node scripts/e2ePreviewBootstrap.mjs --print-name "$GITHUB_REF" "")"
+          echo "CONVEX_PREVIEW_NAME=$NAME" >> "$GITHUB_ENV"
+          echo "Preview deployment name: $NAME"
+
+      - name: Recreate Convex E2E backend
+        run: |
+          set -euo pipefail
+          retry_convex() {
+            local attempt delay
+            delay=2
+            for attempt in 1 2 3 4 5; do
+              if "$@"; then return 0; fi
+              if [ "$attempt" = "5" ]; then return 1; fi
+              sleep "$delay"
+              delay=$((delay * 2))
+            done
+          }
+          retry_convex pnpm exec convex deploy \
+            --typecheck enable \
+            --preview-create "$CONVEX_PREVIEW_NAME" \
+            --preview-run e2eBootstrap:markPreviewDeployment \
+            --cmd 'echo "NEXT_PUBLIC_CONVEX_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"' \
+            --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+
+      - name: Seed the QA dealership
+        run: node scripts/e2ePreviewBootstrap.mjs
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+
+      - name: Run full Playwright suite
+        run: pnpm exec playwright test
+        env:
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
+          E2E_LOGIN_VERIFICATION_CODE: ${{ secrets.E2E_LOGIN_VERIFICATION_CODE }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+          E2E_APPROVER_PASSWORD: ${{ secrets.E2E_APPROVER_PASSWORD }}
+          CI: true
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: trusted-main-playwright-report
+          path: playwright-report/
+          retention-days: 14

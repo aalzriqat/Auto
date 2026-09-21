@@ -152,7 +152,32 @@ async function readBoundedJsonObject(response) {
   return /** @type {Record<string, unknown>} */ (payload);
 }
 
-export async function resolveConvexPreviewAuthority({
+export function assertPreviewDeploymentAdminKey(value, expectedDeploymentName) {
+  if (typeof value !== "string" || !value) {
+    throw new TypeError("Convex control plane did not return a preview deployment admin key.");
+  }
+  const separator = value.indexOf("|");
+  if (separator <= 0 || separator === value.length - 1) {
+    throw new Error("Convex preview deployment admin key is malformed.");
+  }
+  const prefix = value.slice(0, separator);
+  const secret = value.slice(separator + 1);
+  const parts = prefix.split(":");
+  if (
+    parts.length !== 2 ||
+    parts[0] !== "preview" ||
+    parts[1] !== expectedDeploymentName ||
+    !secret ||
+    /[\r\n]/.test(secret)
+  ) {
+    throw new Error(
+      "Convex control plane returned an admin key that is not scoped to the resolved preview deployment.",
+    );
+  }
+  return value;
+}
+
+export async function resolveConvexPreviewCredentials({
   deployKey,
   previewName,
   fetchImpl = fetch,
@@ -215,20 +240,32 @@ export async function resolveConvexPreviewAuthority({
     );
   }
 
-  const artifact = {
-    version: 1,
-    authority: "CONVEX_CONTROL_PLANE_AUTHORIZE_PREVIEW",
+  const artifact = validateConvexPreviewAuthority(
+    {
+      version: 1,
+      authority: "CONVEX_CONTROL_PLANE_AUTHORIZE_PREVIEW",
+      previewName,
+      convexCloudUrl: assertConvexCloudOrigin(
+        typeof responseObject.url === "string" ? responseObject.url : undefined,
+      ),
+      deploymentName:
+        typeof responseObject.deploymentName === "string"
+          ? responseObject.deploymentName
+          : "",
+    },
     previewName,
-    convexCloudUrl: assertConvexCloudOrigin(
-      typeof responseObject.url === "string" ? responseObject.url : undefined,
-    ),
-    deploymentName:
-      typeof responseObject.deploymentName === "string"
-        ? responseObject.deploymentName
-        : "",
-  };
+  );
+  const adminKey = assertPreviewDeploymentAdminKey(
+    responseObject.adminKey,
+    artifact.deploymentName,
+  );
 
-  return validateConvexPreviewAuthority(artifact, previewName);
+  return { authority: artifact, adminKey };
+}
+
+export async function resolveConvexPreviewAuthority(options) {
+  const resolved = await resolveConvexPreviewCredentials(options);
+  return resolved.authority;
 }
 
 export async function writeConvexPreviewAuthority({

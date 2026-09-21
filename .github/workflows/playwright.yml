@@ -1,38 +1,25 @@
 name: E2E Tests (Playwright)
 
-# The repo's only E2E suite. Signs in with a dedicated Clerk test-mode
-# account (the E2E_LOGIN_* secrets), so these runs never send a real email.
+# Pull-request code is untrusted input. This workflow deliberately has zero
+# reusable secret references: it performs static browser validation and emits
+# only an identity descriptor. The default-branch workflow_run owns all
+# privileged preview provisioning and authenticated E2E execution.
 on:
-  push:
-    branches: ["main"]
   pull_request:
     branches: ["main"]
   workflow_dispatch:
 
-
-# Least-privilege default for every job here: this workflow only reads the
-# repository. Without an explicit block, jobs inherit the repository-wide
-# default token scope, which is broader than anything below needs.
 permissions:
   contents: read
 
-# One preview deployment per ref, and one run using it.
-#
-# The deploy step below RECREATES the preview named after this ref, so two
-# concurrent runs on the same branch would delete each other's database
-# mid-suite — the second run's `--preview-create` destroys the first run's
-# deployment while its browser is still driving it. Superseding the older run
-# is the honest resolution: its result was about to become meaningless anyway.
 concurrency:
-  # Shared with Trusted Browser Attack Swarm. A new PR run must cancel any
-  # older swarm before --preview-create can destroy/recreate this PR's preview.
   group: playwright-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   playwright:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -49,25 +36,13 @@ jobs:
           node-version: "22.21.1"
           cache: "pnpm"
 
-      - name: Install dependencies
+      - name: Install dependencies without lifecycle scripts
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Install Playwright browsers
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Deal cockpit visual gate (static, no credentials)
-        # `playwright.visual.config.ts` renders the cockpit's own markup under
-        # the app's compiled stylesheet in real Chromium: EN/AR × light/dark ×
-        # 390/1280. It needs the installed browser and nothing else — no Clerk
-        # session, no Convex deployment — so it runs BEFORE the preview is
-        # provisioned and cannot be skipped by a credential that is absent on a
-        # fork. A red here fails the job like any other step.
-        #
-        # The gate writes into a FRESH per-run directory and rejects fixtures
-        # that predate the run, so a stale artifact cannot make a broken bridge
-        # look green. The check after it is the belt to that brace: it refuses
-        # a run that produced no screenshots, which is what "the suite matched
-        # zero specs" or "the bridge wrote nothing" would look like from here.
         run: |
           set -euo pipefail
           pnpm run test:visual:deal-cockpit
@@ -89,125 +64,14 @@ jobs:
           retention-days: 14
 
       - name: Name the preview deployment
-        # An EXPLICIT name, derived deterministically from the ref, because
-        # every command after this one has to be able to say which deployment
-        # it means. `convex run` with a preview key and no target selector does
-        # NOT refuse — it resolves to the project's shared DEV deployment. So
-        # an unnamed preview is not merely untidy; it is the difference between
-        # seeding the deployment under test and silently seeding shared
-        # infrastructure. SCRUM-143.
-        #
-        # ⚠️ THE NAME IS DERIVED FROM `github.ref` — THE SAME STRING THE
-        # `concurrency` GROUP ABOVE IS KEYED ON — AND CARRIES A DIGEST OF IT.
-        # `--preview-create` DELETES the named deployment, so the name is a
-        # destructive resource key and must collide only when the concurrency
-        # group collides. Sanitising the ref did not satisfy that:
-        # `feature/foo` and `feature-foo` produce the same name in different
-        # groups, and so do any two refs sharing their first 61 sanitised
-        # characters — either pair runs concurrently and the second run deletes
-        # the first's backend mid-suite. See `previewNameForRef`.
+        if: github.event_name == 'pull_request'
         run: |
           set -euo pipefail
-          NAME="$(node scripts/e2ePreviewBootstrap.mjs --print-name "$GITHUB_REF" "${PR_NUMBER:-}")"
+          NAME="$(node scripts/e2ePreviewBootstrap.mjs --print-name "$GITHUB_REF" "$PR_NUMBER")"
           echo "CONVEX_PREVIEW_NAME=$NAME" >> "$GITHUB_ENV"
-          echo "Preview deployment name: $NAME"
+          echo "Preview identity: $NAME"
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
-
-      - name: Prepare Convex E2E backend
-        # The four backend env vars this step used to write with `convex env
-        # set` come from the Convex project's DEFAULT ENVIRONMENT VARIABLES
-        # (Project Settings -> Default Environment Variables, scoped to
-        # Preview): CLERK_JWT_ISSUER_DOMAIN, CLERK_DEV_JWT_ISSUER_DOMAIN,
-        # TURNSTILE_SECRET_KEY and NEXT_PUBLIC_APP_URL.
-        #
-        # They have to be seeded at CREATION, not written afterwards. A preview
-        # deployment starts with no env vars at all, so `auth.config.ts`'s own
-        # validation failed the very first deploy -- which is why this step used
-        # to deploy, swallow that failure with `|| true`, set the four vars, and
-        # deploy a second time. That never worked: `convex env set` returned
-        # "Not authorized" because the preview was created WITHOUT A NAME (it
-        # appeared in the dashboard as `preview/`), so there was no deployment
-        # to resolve to. Seeding defaults removed the two-pass dance; naming the
-        # preview above removes the unresolvable-target class entirely. SCRUM-95.
-        #
-        # ⚠️ TWO FLAGS DO THE SCRUM-143 WORK, AND BOTH ARE SAFETY, NOT
-        # CONVENIENCE.
-        #
-        # `--preview-create` deletes and recreates the named preview, so every
-        # run starts from a genuinely empty database rather than inheriting
-        # whatever the last run on this branch left behind. The CLI also refuses
-        # it outright for any key that is not a PREVIEW deploy key, which makes
-        # it the first of the controls that stop this reaching production.
-        #
-        # `--preview-run` is the second: the CLI invokes that function ONLY on
-        # the preview branch of its deploy path and only for a newly-claimed
-        # deployment, and IGNORES the flag entirely when deploying to
-        # production. `markPreviewDeployment` therefore mints its marker on
-        # previews and nowhere else, and the seeding mutation refuses to write
-        # anything without that marker.
-        #
-        # The retry wrapper stays. Convex refuses requests transiently under
-        # load with "Try again later", and treating that as fatal is exactly the
-        # defect SCRUM-142 records against the release rollout.
-        run: |
-          set -euo pipefail
-
-          if [ -z "${CONVEX_PREVIEW_NAME:-}" ]; then
-            echo "CONVEX_PREVIEW_NAME is empty; refusing to deploy an unnamed preview." >&2
-            exit 1
-          fi
-
-          retry_convex() {
-            local attempt delay
-            delay=2
-            for attempt in 1 2 3 4 5; do
-              if "$@"; then
-                return 0
-              fi
-              if [ "$attempt" = "5" ]; then
-                return 1
-              fi
-              echo "Convex command failed on attempt $attempt/5; retrying in ${delay}s..." >&2
-              sleep "$delay"
-              delay=$((delay * 2))
-            done
-          }
-
-          retry_convex pnpm exec convex deploy \
-            --typecheck enable \
-            --preview-create "$CONVEX_PREVIEW_NAME" \
-            --preview-run e2eBootstrap:markPreviewDeployment \
-            --cmd 'echo "NEXT_PUBLIC_CONVEX_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"' \
-            --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL
-        env:
-          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
-
-      - name: Seed the QA dealership on that preview
-        # Resolves both configured Clerk identities to their stable user ids,
-        # seeds one QA organization with the product's own default roles, seats
-        # the salesperson as OWNER and the approver as MANAGER, and then RE-READS
-        # the result and asserts it satisfies the suite's contract — same org,
-        # two distinct people, approver holding approve:finance_application.
-        #
-        # Idempotent, so a re-run against a surviving preview adds nothing and
-        # `auth.setup.ts` never has to guess whether a previous run seeded.
-        #
-        # A failure here is an infrastructure failure and says so, BEFORE a
-        # browser starts. That is the whole point: the previous shape of this
-        # workflow reported the same fault as two failing auth-setup tests and
-        # twenty product specs that never ran.
-        run: node scripts/e2ePreviewBootstrap.mjs
-        env:
-          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
-          CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
-          # The URL the browser will drive, captured by the deploy step above.
-          # Passed so the deployment can compare it with its OWN identity and
-          # refuse to be seeded while the suite drives a different one.
-          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
-          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
-          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
-          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
 
       - name: Write sanitized preview descriptor
         if: github.event_name == 'pull_request'
@@ -224,34 +88,4 @@ jobs:
           name: e2e-preview-descriptor
           path: artifacts/e2e-preview-descriptor.json
           if-no-files-found: error
-          retention-days: 14
-
-      - name: Run Playwright tests
-        # playwright.config.ts's webServer builds and starts the production
-        # server itself and waits for it to be ready, so no separate
-        # build/start/wait-for-server steps are needed here.
-        run: pnpm exec playwright test
-        env:
-          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
-          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
-          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
-          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
-          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
-          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
-          E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
-          E2E_LOGIN_VERIFICATION_CODE: ${{ secrets.E2E_LOGIN_VERIFICATION_CODE }}
-          # The SECOND identity. AutoFlow refuses to let one person both create
-          # and approve a deal, so the financed workflow cannot be driven end to
-          # end by one login — without these the two-identity spec skips, and a
-          # skip reads exactly like a pass.
-          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
-          E2E_APPROVER_PASSWORD: ${{ secrets.E2E_APPROVER_PASSWORD }}
-          CI: true
-
-      - name: Upload Playwright report
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
-        with:
-          name: playwright-report
-          path: playwright-report/
           retention-days: 14

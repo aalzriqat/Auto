@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   assertConvexCloudOrigin,
+  assertPreviewDeploymentAdminKey,
   parsePreviewDeployKey,
   resolveConvexPreviewAuthority,
+  resolveConvexPreviewCredentials,
   validateConvexPreviewAuthority,
 } from "./convexPreviewAuthority.mjs";
 
@@ -21,6 +23,27 @@ describe("trusted Convex preview authority", () => {
     expect(() =>
       parsePreviewDeployKey("preview:team-one|unit-test-secret"),
     ).toThrow(/preview:team:project/);
+  });
+
+  it("accepts only a deployment-scoped preview admin key", () => {
+    expect(
+      assertPreviewDeploymentAdminKey(
+        "preview:elegant-butterfly-952|deployment-secret",
+        "elegant-butterfly-952",
+      ),
+    ).toBe("preview:elegant-butterfly-952|deployment-secret");
+    expect(() =>
+      assertPreviewDeploymentAdminKey(
+        "preview:team-one:project-two|project-wide-secret",
+        "elegant-butterfly-952",
+      ),
+    ).toThrow(/not scoped/);
+    expect(() =>
+      assertPreviewDeploymentAdminKey(
+        "preview:another-deployment|deployment-secret",
+        "elegant-butterfly-952",
+      ),
+    ).toThrow(/not scoped/);
   });
 
   it("accepts only bare Convex cloud origins", () => {
@@ -90,6 +113,16 @@ describe("trusted Convex preview authority", () => {
       deploymentName: "elegant-butterfly-952",
     });
     expect(JSON.stringify(authority)).not.toContain("must-not-persist");
+
+    const credentials = await resolveConvexPreviewCredentials({
+      deployKey: DEPLOY_KEY,
+      previewName: PREVIEW_NAME,
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+    expect(credentials.authority).toEqual(authority);
+    expect(credentials.adminKey).toBe(
+      "preview:elegant-butterfly-952|must-not-persist",
+    );
   });
 
   it("fails closed when the control plane resolves anything except a preview", async () => {
