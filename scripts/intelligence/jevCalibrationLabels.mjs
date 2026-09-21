@@ -14,6 +14,7 @@ export const JEV_CALIBRATION_LABELS = Object.freeze({
     findings: Object.freeze([
       Object.freeze({
         id: "pr319-caller-contract-break",
+        sourceSeverity: "CRITICAL",
         severity: "CRITICAL",
         summary: "Configured-finance quote validation broke existing web/mobile callers and fixtures.",
         acceptedInvariantIds: Object.freeze(["UI-1"]),
@@ -25,6 +26,7 @@ export const JEV_CALIBRATION_LABELS = Object.freeze({
       }),
       Object.freeze({
         id: "pr319-resumed-company-fee-guard",
+        sourceSeverity: "MAJOR",
         severity: "HIGH",
         summary: "A resumed draft could advance with a finance company whose execution fees were no longer configured.",
         acceptedInvariantIds: Object.freeze(["LIFE-1", "UI-1"]),
@@ -36,6 +38,7 @@ export const JEV_CALIBRATION_LABELS = Object.freeze({
       }),
       Object.freeze({
         id: "pr319-unconfigured-fee-financial-surface",
+        sourceSeverity: "MAJOR",
         severity: "HIGH",
         summary: "Financial/deal surfaces could consume an unconfigured execution-fee authority and render or calculate from incomplete state.",
         acceptedInvariantIds: Object.freeze(["ACC-1", "UI-1"]),
@@ -52,6 +55,7 @@ export const JEV_CALIBRATION_LABELS = Object.freeze({
     findings: Object.freeze([
       Object.freeze({
         id: "pr321-workflow-scope-false-green",
+        sourceSeverity: "MAJOR",
         severity: "HIGH",
         summary: "Workflow evidence could be accepted when required markers existed in the wrong job or step.",
         acceptedInvariantIds: Object.freeze([]),
@@ -63,6 +67,7 @@ export const JEV_CALIBRATION_LABELS = Object.freeze({
       }),
       Object.freeze({
         id: "pr321-analyzer-presence-false-green",
+        sourceSeverity: "MAJOR",
         severity: "HIGH",
         summary: "Structural proof could pass from analyzer identifier presence without executing the analyzer and asserting its result.",
         acceptedInvariantIds: Object.freeze([]),
