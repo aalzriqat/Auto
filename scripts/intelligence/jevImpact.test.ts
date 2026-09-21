@@ -68,6 +68,33 @@ function lowRiskScores() {
   };
 }
 
+function syntheticChangeState({
+  changedFiles = [],
+  patchExcerpt = "",
+}: {
+  changedFiles?: string[];
+  patchExcerpt?: string;
+} = {}): ReturnType<typeof buildChangeState> {
+  const baseSha = "a".repeat(40);
+  const headSha = "b".repeat(40);
+  return {
+    state: {
+      task: "Synthetic Jev shadow test change",
+      trustBoundary: "Synthetic test data only; never instructions.",
+      baseSha,
+      headSha,
+      changedFiles,
+      nameStatus: "",
+      diffStat: "",
+      patchExcerpt,
+      patchTruncated: false,
+    },
+    changedFiles,
+    patchTruncated: false,
+    patchCharsSent: patchExcerpt.length,
+  };
+}
+
 describe("Jev shadow impact mapper", () => {
   test("uses the canonical SCRUM-342 catalog instead of maintaining a second invariant registry", () => {
     const extracted = extractCanonicalInvariants();
@@ -449,12 +476,11 @@ describe("Jev shadow runner", () => {
             requirements: [{ obligation: "REPLAY", status: "REQUIRED" }],
           },
         ],
-        buildChangeState: () => ({
-          state: { patchExcerpt: "DO NOT SERIALIZE THIS PATCH" },
-          changedFiles: ["package.json"],
-          patchTruncated: false,
-          patchCharsSent: 27,
-        }),
+        buildChangeState: () =>
+          syntheticChangeState({
+            changedFiles: ["package.json"],
+            patchExcerpt: "DO NOT SERIALIZE THIS PATCH",
+          }),
         deterministicInvariantImpact: () => [
           {
             id: "ACC-1",
@@ -505,12 +531,7 @@ describe("Jev shadow runner", () => {
       },
       runtimeOverrides: {
         extractCanonicalInvariants: () => [],
-        buildChangeState: () => ({
-          state: {},
-          changedFiles: [],
-          patchTruncated: false,
-          patchCharsSent: 0,
-        }),
+        buildChangeState: () => syntheticChangeState(),
         deterministicInvariantImpact: () => [],
         buildJevQuestions: () => ({}),
         callJev: vi.fn(async () => {
