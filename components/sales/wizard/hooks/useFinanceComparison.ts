@@ -3,7 +3,12 @@ import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
-import { calculateUnifiedMurabaha, isRequestedFinancingTermValid, minimumDownPaymentForFinancingLimit } from "@/lib/financing";
+import {
+  calculateUnifiedMurabaha,
+  isRequestedFinancingTermValid,
+  matchingCustomerEligibilityStatusIds,
+  minimumDownPaymentForFinancingLimit,
+} from "@/lib/financing";
 
 interface UseFinanceComparisonParams {
   vehiclePrice: number;
@@ -82,11 +87,13 @@ export function useFinanceComparison({
     // Each company opts into which customer statuses it accepts via its
     // `acceptedStatuses` setting (configured in Finance Settings). No
     // restriction configured (undefined/empty) means it accepts all.
-    activeCompanies = activeCompanies.filter((company: Doc<"financeCompanies">) => {
-      const accepted = company.acceptedStatuses;
-      if (!accepted || accepted.length === 0) return true;
-      return customerStatuses.some((s) => accepted.includes(s as Id<"orgCustomerStatuses">));
-    });
+    activeCompanies = activeCompanies.filter(
+      (company: Doc<"financeCompanies">) =>
+        matchingCustomerEligibilityStatusIds(
+          customerStatuses,
+          company.acceptedStatuses?.map(String)
+        ).length > 0
+    );
 
     // Never show a provider calculation for a term that the authoritative
     // quote boundary would reject.
