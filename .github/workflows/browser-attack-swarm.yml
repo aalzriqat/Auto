@@ -37,10 +37,12 @@ jobs:
       pr_number: ${{ steps.plan.outputs.pr_number }}
 
     steps:
-      - name: Checkout trusted control plane from main
+      - name: Checkout trusted control plane from immutable workflow revision
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: main
+          # workflow_run loads this workflow from the default branch. Pin the
+          # exact commit that defined this run; never chase a moving main ref.
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           path: trusted
           # The token is read-only in this workflow and is retained only so
@@ -178,10 +180,10 @@ jobs:
       matrix: ${{ fromJSON(needs.prepare.outputs.worker_matrix) }}
 
     steps:
-      - name: Checkout trusted browser controller from main
+      - name: Checkout trusted browser controller from immutable workflow revision
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: main
+          ref: ${{ github.workflow_sha }}
           path: trusted
           persist-credentials: false
 
