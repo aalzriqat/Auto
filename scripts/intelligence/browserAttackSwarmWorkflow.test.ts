@@ -98,16 +98,19 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     });
   });
 
-  it("keeps the control plane on main and candidate code on the exact trusted head output", () => {
-    const trusted = step("prepare", "Checkout trusted control plane from main");
+  it("pins the trusted control plane to the immutable workflow revision and candidate code to the exact trusted head", () => {
+    const trusted = step(
+      "prepare",
+      "Checkout trusted control plane from immutable workflow revision",
+    );
     expect(trusted.uses).toMatch(/^actions\/checkout@/);
-    expect(trusted.with?.ref).toBe("main");
+    expect(trusted.with?.ref).toBe("${{ github.workflow_sha }}");
 
     const workerTrusted = step(
       "attack-worker",
-      "Checkout trusted browser controller from main",
+      "Checkout trusted browser controller from immutable workflow revision",
     );
-    expect(workerTrusted.with?.ref).toBe("main");
+    expect(workerTrusted.with?.ref).toBe("${{ github.workflow_sha }}");
     expect(workerTrusted.with?.["persist-credentials"]).toBe(false);
 
     const candidate = step(
