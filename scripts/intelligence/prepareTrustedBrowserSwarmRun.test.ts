@@ -57,6 +57,7 @@ describe("trusted browser swarm run assembly", () => {
 
     expect(payload.shouldRun).toBe(true);
     expect(payload.workerCount).toBe(2);
+    expect(payload.workerMatrix).toEqual({ worker_index: [1, 2] });
     expect(payload.planningMode).toBe("TRUSTED_WORKER_RECONSTRUCTION");
     expect(payload.impactedInvariants).toEqual([
       { id: "UI-1", severity: "HIGH" },
@@ -72,6 +73,7 @@ describe("trusted browser swarm run assembly", () => {
 
     expect(payload.shouldRun).toBe(false);
     expect(payload.workerCount).toBe(0);
+    expect(payload.workerMatrix).toEqual({ worker_index: [] });
     expect(payload.planningMode).toBe("TRUSTED_WORKER_RECONSTRUCTION");
   });
 
@@ -87,6 +89,7 @@ describe("trusted browser swarm run assembly", () => {
       { id: "TEN-1", severity: "CRITICAL" },
     ]);
     expect(payload.workerCount).toBe(2);
+    expect(payload.workerMatrix).toEqual({ worker_index: [1, 2] });
   });
 
   it("refuses a candidate descriptor from a different exact head", () => {
