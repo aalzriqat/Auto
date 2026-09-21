@@ -33,7 +33,6 @@ function descriptor(overrides: Record<string, unknown> = {}) {
     version: 2,
     previewName: PREVIEW_NAME,
     headSha: HEAD_SHA,
-    testedSha: TESTED_SHA,
     prNumber: PR_NUMBER,
     ...overrides,
   };
@@ -61,6 +60,7 @@ function assemble(options: {
     authorityArtifact: options.authorityArtifact ?? authority(),
     baseSha: BASE_SHA,
     headSha: HEAD_SHA,
+    testedSha: TESTED_SHA,
     prNumber: PR_NUMBER,
   });
 }
@@ -114,6 +114,16 @@ describe("trusted browser swarm run assembly", () => {
         descriptorArtifact: descriptor({ headSha: "c".repeat(40) }),
       }),
     ).toThrow(/head SHA/);
+  });
+
+  it("refuses candidate-supplied tested SHA authority in the descriptor", () => {
+    expect(() =>
+      assemble({
+        descriptorArtifact: descriptor({
+          testedSha: TESTED_SHA,
+        }),
+      }),
+    ).toThrow(/unexpected fields/);
   });
 
   it("refuses candidate-supplied deployment authority in the descriptor", () => {
