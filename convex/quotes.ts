@@ -153,6 +153,13 @@ export const saveQuote = mutation({
       assertMajorAmountRepresentable(args.desiredProfit, orgCurrency, "Desired profit");
     }
 
+    const isFinancedQuote =
+      args.mode === "CONFIGURED_FINANCE_COMPANY" ||
+      args.mode === "MANUAL_FINANCE_COMPANY";
+    if (isFinancedQuote && args.vehicleItems && args.vehicleItems.length > 0) {
+      throw new ConvexError("Financed quotations support exactly one vehicle.");
+    }
+
     let vehicleId = args.vehicleId;
     let vehiclePrice = args.vehiclePrice;
 
