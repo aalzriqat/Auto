@@ -47,10 +47,21 @@ function summaryMarkdown(payload) {
   return `${lines.join("\n")}\n`;
 }
 
+/**
+ * @param {{
+ *   repoRoot?: string,
+ *   env?: NodeJS.ProcessEnv,
+ *   cases?: Array<{id: string, prNumber: number, baseSha: string, headSha: string, snapshotAt: string}>,
+ *   runCase?: typeof runHistoricalCalibrationCase,
+ *   loadLabels?: () => Promise<{JEV_CALIBRATION_LABELS: Record<string, any>}>,
+ * }} options
+ */
 export async function runJevHistoricalCalibration({
   repoRoot = process.cwd(),
   env = process.env,
   cases = JEV_CALIBRATION_CASES,
+  runCase = runHistoricalCalibrationCase,
+  loadLabels = () => import("./jevCalibrationLabels.mjs"),
 } = {}) {
   const apiKey = env.TYPESAFE_API_KEY?.trim();
   if (!apiKey) throw new Error("TYPESAFE_API_KEY is required for historical calibration");
@@ -58,7 +69,7 @@ export async function runJevHistoricalCalibration({
   const results = [];
   for (const calibrationCase of cases) {
     results.push(
-      await runHistoricalCalibrationCase({
+      await runCase({
         repoRoot,
         calibrationCase,
         apiKey,
@@ -67,7 +78,7 @@ export async function runJevHistoricalCalibration({
   }
 
   // Load hindsight labels only after every blind + policy Jev request has completed.
-  const { JEV_CALIBRATION_LABELS } = await import("./jevCalibrationLabels.mjs");
+  const { JEV_CALIBRATION_LABELS } = await loadLabels();
   const scoredCases = results.map((result) => {
     const label = JEV_CALIBRATION_LABELS[result.caseId];
     if (!label) throw new Error(`Missing calibration label for ${result.caseId}`);
