@@ -34,7 +34,11 @@ import {
   matchingCustomerEligibilityStatusIds,
   type UnifiedMurabahaResult,
 } from "./murabaha";
-import { manualExecutionFeeInputValue } from "./salesWizardQuote";
+import {
+  effectiveMobileQuoteVehiclePrice,
+  manualExecutionFeeInputValue,
+  mobileFinancingTermIsValid,
+} from "./salesWizardQuote";
 
 export type WizardPaymentType = "CASH" | "INSTALLMENT";
 
@@ -229,7 +233,7 @@ export function SalesWizardScreen({
   const profit = parseOptionalNumber(desiredProfit) ?? 0;
   const down = parseOptionalNumber(downPayment) ?? 0;
   const term = parseOptionalNumber(termMonths) ?? 0;
-  const effectivePrice = price + profit;
+  const effectivePrice = effectiveMobileQuoteVehiclePrice(price, profit);
 
   const minimumProfit = selectedVehicle?.minimumProfit ?? 0;
   const isProfitBelowMinimum = !isCash && Boolean(vehicleId) && profit < minimumProfit;
@@ -253,7 +257,12 @@ export function SalesWizardScreen({
       .map((company) => {
         const executionFees = company.adminFees;
         const feesConfigured = executionFees !== undefined;
-        const result = feesConfigured
+        const termIsValid = mobileFinancingTermIsValid({
+          termMonths: term,
+          gracePeriodMonths: company.gracePeriodMonths,
+          maxTermMonths: company.maxTermMonths,
+        });
+        const result = feesConfigured && termIsValid
           ? calculateUnifiedMurabaha({
               vehiclePrice: effectivePrice,
               downPayment: down,
@@ -289,9 +298,10 @@ export function SalesWizardScreen({
   const parsedManualFees = parseOptionalNumber(manualFees);
   const manualFeesConfigured = parsedManualFees !== undefined;
 
+  const manualTermIsValid = mobileFinancingTermIsValid({ termMonths: term });
   const manualResult = useMemo(
     () =>
-      manualFeesConfigured
+      manualFeesConfigured && manualTermIsValid
         ? calculateUnifiedMurabaha({
             vehiclePrice: effectivePrice,
             downPayment: down,
@@ -303,11 +313,22 @@ export function SalesWizardScreen({
             includesCommissionInDebt: manualIncludesCommission,
           })
         : null,
-    [down, effectivePrice, manualCommission, parsedManualFees, manualFeesConfigured, manualInsuranceRate, manualProfitRate, manualIncludesCommission, term],
+    [down, effectivePrice, manualCommission, parsedManualFees, manualFeesConfigured, manualInsuranceRate, manualProfitRate, manualIncludesCommission, manualTermIsValid, term],
   );
 
   const selectedComparison = comparisons.find((row) => row.company._id === selectedCompanyId) ?? null;
   const selectedResult = selectedCompanyId === OTHER_COMPANY_ID ? manualResult : selectedComparison?.result ?? null;
+  const isFinancingTermValid =
+    isCash ||
+    (selectedCompanyId === OTHER_COMPANY_ID
+      ? manualTermIsValid
+      : selectedComparison
+        ? mobileFinancingTermIsValid({
+            termMonths: term,
+            gracePeriodMonths: selectedComparison.company.gracePeriodMonths,
+            maxTermMonths: selectedComparison.company.maxTermMonths,
+          })
+        : false);
 
   const filteredVehicles = (availableVehicles ?? []).filter((vehicle) => {
     const haystack = `${vehicle.year} ${vehicle.make} ${vehicle.model} ${vehicle.vin}`.toLowerCase();
@@ -320,9 +341,10 @@ export function SalesWizardScreen({
 
   const isFinanceSelectedValid =
     isCash ||
-    (selectedCompanyId === OTHER_COMPANY_ID
-      ? manualFeesConfigured
-      : Boolean(selectedComparison?.feesConfigured));
+    (isFinancingTermValid &&
+      (selectedCompanyId === OTHER_COMPANY_ID
+        ? manualFeesConfigured
+        : Boolean(selectedComparison?.feesConfigured)));
 
   const canLeaveStep1 =
     Boolean(vehicleId) &&
@@ -479,6 +501,17 @@ export function SalesWizardScreen({
 
     const manual = selectedCompanyId === OTHER_COMPANY_ID;
     const configuredFinance = !isCash && !manual;
+    if (!isCash && !isFinancingTermValid) {
+      reportError(
+        "Mobile wizard financing term is invalid",
+        new Error(
+          locale === "ar"
+            ? "مدة التمويل المحددة غير متاحة لشركة التمويل المختارة."
+            : "The selected financing term is not available for this finance option."
+        )
+      );
+      return;
+    }
     if (configuredFinance) {
       if (!selectedCompanyId || customerStatuses.length === 0) {
         reportError(
@@ -525,7 +558,7 @@ export function SalesWizardScreen({
           ? customerStatuses
           : undefined,
         mode: isCash ? "CASH" : manual ? "MANUAL_FINANCE_COMPANY" : "CONFIGURED_FINANCE_COMPANY",
-        vehiclePrice: price,
+        vehiclePrice: effectivePrice,
         desiredProfit: profit,
         downPayment: down,
         termMonths: isCash ? 0 : term,
@@ -572,7 +605,7 @@ export function SalesWizardScreen({
       locale === "ar" ? "عرض سعر — AutoFlow" : "Quote — AutoFlow",
       `${locale === "ar" ? "العميل" : "Customer"}: ${customer?.firstName ?? ""} ${customer?.lastName ?? ""}`,
       `${locale === "ar" ? "السيارة" : "Vehicle"}: ${vehicleLine}`,
-      `${locale === "ar" ? "السعر" : "Price"}: ${money(price, locale)}`,
+      `${locale === "ar" ? "السعر" : "Price"}: ${money(effectivePrice, locale)}`,
     ];
     if (!isCash && selectedResult) {
       lines.push(
