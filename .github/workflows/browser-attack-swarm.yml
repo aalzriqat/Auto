@@ -211,6 +211,36 @@ jobs:
         working-directory: trusted
         run: pnpm exec playwright install --with-deps chromium
 
+      - name: Resolve test-only Clerk public JWT verification key
+        working-directory: trusted
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          case "$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY" in
+            pk_test_*) ;;
+            *)
+              echo "Trusted browser swarm refuses a non-test Clerk publishable key." >&2
+              exit 1
+              ;;
+          esac
+          case "$CLERK_SECRET_KEY" in
+            sk_test_*) ;;
+            *)
+              echo "Trusted browser swarm refuses a non-test Clerk secret key." >&2
+              exit 1
+              ;;
+          esac
+
+          JWT_KEY_PATH="$RUNNER_TEMP/clerk-jwt-key.pem"
+          node scripts/intelligence/clerkPublicJwtKey.mjs "$JWT_KEY_PATH"
+          {
+            echo 'CLERK_JWT_KEY<<__AUTOFLOW_CLERK_JWT_KEY__'
+            cat "$JWT_KEY_PATH"
+            echo '__AUTOFLOW_CLERK_JWT_KEY__'
+          } >> "$GITHUB_ENV"
+
       - name: Authenticate E2E seats on trusted main frontend
         working-directory: trusted
         run: pnpm exec playwright test playwright/tests/auth.setup.ts --project=setup
@@ -228,22 +258,10 @@ jobs:
           E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
           E2E_APPROVER_PASSWORD: ${{ secrets.E2E_APPROVER_PASSWORD }}
 
-      - name: Remove candidate auth proxy before isolated runtime
-        run: |
-          set -euo pipefail
-          # Phase A attacks UI/backend authority, not Clerk middleware. The E2E
-          # seats were authenticated against trusted main above, so candidate
-          # code never needs CLERK_SECRET_KEY or login passwords.
-          rm -f \
-            "$GITHUB_WORKSPACE/candidate/proxy.ts" \
-            "$GITHUB_WORKSPACE/candidate/middleware.ts" \
-            "$GITHUB_WORKSPACE/candidate/src/proxy.ts" \
-            "$GITHUB_WORKSPACE/candidate/src/middleware.ts"
-
       - name: Build exact candidate frontend in isolated container
         run: |
           set -euo pipefail
-          docker run --rm             --name "autoflow-swarm-build-${{ matrix.worker_index }}"             --network bridge             --cap-drop ALL             --security-opt no-new-privileges             --volume "$GITHUB_WORKSPACE/candidate:/app"             --workdir /app             --env HOME=/tmp/home             --env NEXT_PUBLIC_CONVEX_URL             --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY             --env NEXT_PUBLIC_TURNSTILE_SITE_KEY             --env NEXT_PUBLIC_APP_URL             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5             sh -lc 'corepack enable && corepack prepare pnpm@11.13.0 --activate && pnpm install --frozen-lockfile --ignore-scripts && pnpm build'
+          docker run --rm             --name "autoflow-swarm-build-${{ matrix.worker_index }}"             --network bridge             --cap-drop ALL             --security-opt no-new-privileges             --volume "$GITHUB_WORKSPACE/candidate:/app"             --workdir /app             --env HOME=/tmp/home             --env NEXT_PUBLIC_CONVEX_URL             --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY             --env CLERK_JWT_KEY             --env NEXT_PUBLIC_TURNSTILE_SITE_KEY             --env NEXT_PUBLIC_APP_URL             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5             sh -lc 'corepack enable && corepack prepare pnpm@11.13.0 --activate && pnpm install --frozen-lockfile --ignore-scripts && pnpm build'
         env:
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
@@ -262,7 +280,7 @@ jobs:
           # trusted host can still reach its published loopback port.
           docker network create --internal "$CANDIDATE_NETWORK" >/dev/null
 
-          docker run --detach --rm             --name "$CANDIDATE_CONTAINER"             --network "$CANDIDATE_NETWORK"             --publish 127.0.0.1:3000:3000             --cap-drop ALL             --security-opt no-new-privileges             --volume "$GITHUB_WORKSPACE/candidate:/app"             --workdir /app             --env HOME=/tmp/home             --env NEXT_PUBLIC_CONVEX_URL             --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY             --env NEXT_PUBLIC_TURNSTILE_SITE_KEY             --env NEXT_PUBLIC_APP_URL             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5             sh -lc 'corepack enable && corepack prepare pnpm@11.13.0 --activate && pnpm exec next start -H 0.0.0.0 -p 3000'
+          docker run --detach --rm             --name "$CANDIDATE_CONTAINER"             --network "$CANDIDATE_NETWORK"             --publish 127.0.0.1:3000:3000             --cap-drop ALL             --security-opt no-new-privileges             --volume "$GITHUB_WORKSPACE/candidate:/app"             --workdir /app             --env HOME=/tmp/home             --env NEXT_PUBLIC_CONVEX_URL             --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY             --env CLERK_JWT_KEY             --env NEXT_PUBLIC_TURNSTILE_SITE_KEY             --env NEXT_PUBLIC_APP_URL             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5             sh -lc 'corepack enable && corepack prepare pnpm@11.13.0 --activate && pnpm exec next start -H 0.0.0.0 -p 3000'
 
           for attempt in $(seq 1 60); do
             if curl --fail --silent --show-error               http://127.0.0.1:3000/api/health > /dev/null; then
