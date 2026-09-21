@@ -12,6 +12,46 @@ function percent(value) {
   return value === null ? "n/a" : `${Math.round(value * 100)}%`;
 }
 
+function listMetric(values) {
+  return values.length === 0 ? "(none)" : values.join(", ");
+}
+
+function publicTrack(track) {
+  if (track.status === "COMPLETE") {
+    return {
+      status: track.status,
+      model: track.model,
+      usage: track.usage,
+      risks: track.risks,
+      invariantImpact: track.invariantImpact,
+      reviewMatrix: track.reviewMatrix,
+      latencyMs: track.latencyMs,
+    };
+  }
+  return {
+    status: track.status,
+    reason: track.reason,
+    latencyMs: track.latencyMs,
+  };
+}
+
+function publicCaseResult(result, score) {
+  return {
+    caseId: result.caseId,
+    snapshotAt: result.snapshotAt,
+    baseSha: result.baseSha,
+    headSha: result.headSha,
+    changedFiles: result.changedFiles,
+    patchTruncated: result.patchTruncated,
+    patchCharsSent: result.patchCharsSent,
+    deterministicImpact: result.deterministicImpact,
+    deterministicReviewMatrix: result.deterministicReviewMatrix,
+    blind: publicTrack(result.blind),
+    policy: publicTrack(result.policy),
+    score,
+  };
+}
+
 function summaryMarkdown(payload) {
   const metrics = payload.metrics;
   const lines = [
@@ -32,12 +72,16 @@ function summaryMarkdown(payload) {
     `Current-policy Jev escalation recall: ${percent(metrics.currentPolicyJevHighCriticalEscalationRecall)}`,
     `Operational combined recall: ${percent(metrics.operationalCombinedHighCriticalRecall)}`,
     `Incremental blind Jev hits: ${metrics.incrementalBlindJevHits}`,
+    `Incremental current-policy Jev hits: ${metrics.incrementalPolicyJevHits}`,
+    `Blind extra review requirements: ${metrics.blindExtraReviewRequirements} — ${listMetric(metrics.uniqueBlindExtraReviewRequirements)}`,
+    `Current-policy extra review requirements: ${metrics.policyExtraReviewRequirements} — ${listMetric(metrics.uniquePolicyExtraReviewRequirements)}`,
     `Blind track availability: ${percent(metrics.blindTrackAvailabilityRate)}`,
     `Policy track availability: ${percent(metrics.policyTrackAvailabilityRate)}`,
     `Unavailable tracks: ${metrics.unavailableTracks}`,
     `Blind negative-control added-review rate: ${percent(metrics.blindNegativeControlAddedReviewRate)}`,
     `Blind negative-control escalation rate: ${percent(metrics.blindNegativeControlEscalationRate)}`,
     `Policy negative-control added-review rate: ${percent(metrics.policyNegativeControlAddedReviewRate)}`,
+    `Policy negative-control escalation rate: ${percent(metrics.policyNegativeControlEscalationRate)}`,
     `Blind input/output tokens: ${metrics.usage.blind_input_tokens}/${metrics.usage.blind_output_tokens}`,
     `Policy input/output tokens: ${metrics.usage.policy_input_tokens}/${metrics.usage.policy_output_tokens}`,
     `Blind/policy Jev latency: ${metrics.latency.blind_ms}/${metrics.latency.policy_ms} ms`,
@@ -95,10 +139,9 @@ export async function runJevHistoricalCalibration({
     hindsightBoundary:
       "Blind Jev calls used generic risk questions only; current invariant policy and finding labels were excluded. Finding labels were imported only after all blind and policy calls completed.",
     metrics,
-    cases: results.map((result, index) => ({
-      ...result,
-      score: scoredCases[index],
-    })),
+    cases: results.map((result, index) =>
+      publicCaseResult(result, scoredCases[index]),
+    ),
   };
 
   const outputDir = path.join(repoRoot, "artifacts");
