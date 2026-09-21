@@ -82,11 +82,20 @@ jobs:
           BASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].base.sha || github.event_name == 'push' && github.event.before || inputs.base_sha }}
           HEAD_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].head.sha || github.event_name == 'push' && github.sha || inputs.head_sha }}
 
+      - name: Publish sanitized Jev summary
+        if: always()
+        run: |
+          if [ -f artifacts/jev-shadow-summary.md ]; then
+            cat artifacts/jev-shadow-summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Upload Jev advisory evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: jev-shadow-impact
-          path: artifacts/jev-shadow-impact.json
+          path: |
+            artifacts/jev-shadow-impact.json
+            artifacts/jev-shadow-summary.md
           if-no-files-found: warn
           retention-days: 14

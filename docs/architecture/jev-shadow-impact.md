@@ -20,7 +20,7 @@ The initial integration is intentionally shadow-only:
 - the unprivileged `Invariant Governance` workflow first runs the deterministic catalog and Jev-harness tests on the candidate PR with no Jev secret;
 - only after that workflow succeeds does the secret-bearing PR analysis run through `workflow_run` from trusted `main`; it fetches the PR commit only as Git data and never checks out or executes PR code;
 - during shadow calibration, secret-bearing PR analysis is restricted to same-repository PRs; fork PRs cannot consume the TypeSafe credential or send candidate diffs to TypeSafe;
-- the secret-bearing workflow also reads the invariant catalog from trusted `main`, not from the candidate commit, so a PR cannot shrink its own impact map by weakening `sourceAreas` or invariant metadata; changes to the invariant catalog, invariant-governance workflow, Jev workflow, or `scripts/intelligence/**` force a deterministic correctness-governance review requirement;
+- the secret-bearing workflow also reads the invariant catalog from trusted `main`, not from the candidate commit, so a PR cannot shrink its own impact map by weakening `sourceAreas` or invariant metadata; changes to the invariant catalog, invariant-governance workflow, Jev workflow, `package.json`, `pnpm-lock.yaml`, or `scripts/intelligence/**` force a deterministic correctness-governance review requirement;
 - the trusted workflow disables external diff and text-conversion execution while reading the candidate diff.
 
 Promotion to blocking authority is out of scope until historical AutoFlow evaluation measures false negatives, false positives, reviewer disagreement, and known High/Critical escape behavior.
@@ -34,15 +34,15 @@ GitHub only emits `workflow_run` to a workflow that already exists on the defaul
 The PR workflow sends only change-analysis state:
 
 - base and head commit SHA;
-- changed paths and name/status records;
+- changed paths and name/status records read through Git's NUL-delimited format so unusual filenames cannot distort the deterministic census;
 - diff statistics;
 - a bounded patch excerpt, keeping both the head and tail when truncation is necessary.
 
-The request explicitly marks diff contents as untrusted data rather than instructions. The workflow never sends the API key in the state or body; it is supplied only as the HTTP Bearer credential from `TYPESAFE_API_KEY`.
+The request explicitly marks diff contents as untrusted data rather than instructions. The workflow never sends the API key in the state or body; it is supplied only as the HTTP Bearer credential from `TYPESAFE_API_KEY`. The credential can only be sent to the fixed TypeSafe System One endpoint, response size and timeout are bounded, and unexpected response schema is rejected rather than guessed through.
 
 For a pull request, the harness, installed dependencies, and canonical invariant catalog all come from trusted `main`. Candidate changes to the catalog are treated as untrusted diff data and deterministically escalated for correctness-governance review; they become part of the trusted catalog only after merge.
 
-The public CI artifact deliberately excludes the raw patch, request state, API key, Authorization header, and raw HTTP response. It records probabilities, model, token usage, deterministic impact, and the derived advisory review matrix.
+The public CI artifact deliberately excludes the raw patch, request state, API key, Authorization header, and raw HTTP response. It records probabilities, model, token usage, deterministic impact, and the derived advisory review matrix. Human-readable workflow summary content is first written to a fixed trusted artifact path with provider-controlled text neutralized, then appended by the workflow shell to GitHub's step summary.
 
 ## Current probability policy
 

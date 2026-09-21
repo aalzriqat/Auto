@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   buildChangeState,
   buildJevQuestions,
@@ -10,11 +11,26 @@ import {
   normalizeJevResponse,
 } from "./jevImpact.mjs";
 
-const repoRoot = process.cwd();
-const outputDir = path.join(repoRoot, "artifacts");
-const outputPath = path.join(outputDir, "jev-shadow-impact.json");
-const summaryPath = process.env.GITHUB_STEP_SUMMARY;
-await mkdir(outputDir, { recursive: true });
+/**
+ * @typedef {Object} ShadowRuntime
+ * @property {typeof buildChangeState} buildChangeState
+ * @property {typeof buildJevQuestions} buildJevQuestions
+ * @property {typeof callJev} callJev
+ * @property {typeof deriveReviewMatrix} deriveReviewMatrix
+ * @property {typeof deterministicInvariantImpact} deterministicInvariantImpact
+ * @property {typeof extractCanonicalInvariants} extractCanonicalInvariants
+ * @property {typeof normalizeJevResponse} normalizeJevResponse
+ */
+
+const DEFAULT_RUNTIME = Object.freeze({
+  buildChangeState,
+  buildJevQuestions,
+  callJev,
+  deriveReviewMatrix,
+  deterministicInvariantImpact,
+  extractCanonicalInvariants,
+  normalizeJevResponse,
+});
 
 function percent(value) {
   return `${Math.round(value * 100)}%`;
@@ -28,8 +44,13 @@ function summaryText(value) {
   return String(value).replace(/[\r\n<>]/g, " ");
 }
 
-async function appendSummary(payload) {
-  if (!summaryPath) return;
+function redactSecret(value, secret) {
+  const text = String(value);
+  if (!secret) return text;
+  return text.split(secret).join("[REDACTED]");
+}
+
+export function buildSummaryMarkdown(payload) {
   const lines = [
     "## Jev Shadow Impact",
     "",
@@ -49,7 +70,7 @@ async function appendSummary(payload) {
       .map(([id, probability]) => `- ${inlineCode(id)}: ${percent(probability)}`);
     lines.push(
       "",
-      `Model: \`${payload.model}\``,
+      `Model: ${inlineCode(payload.model)}`,
       `Input tokens: ${payload.usage.input_tokens}`,
       `Patch excerpt sent: ${payload.patchCharsSent} chars${payload.patchTruncated ? " (head/tail truncated)" : ""}`,
       "",
@@ -75,106 +96,146 @@ async function appendSummary(payload) {
       ),
     );
   } else if (payload.reason) {
-    lines.push("", `Reason: ${summaryText(payload.reason)}`);
+    lines.push("", `Reason: ${inlineCode(summaryText(payload.reason))}`);
   }
 
-  await writeFile(summaryPath, `${lines.join("\n")}\n`, { flag: "a" });
+  return `${lines.join("\n")}\n`;
 }
 
-async function finish(payload) {
-  // Never serialize the request state, raw patch, API key, or Authorization header.
-  await writeFile(outputPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-  await appendSummary(payload);
+async function writeArtifacts({ repoRoot, payload }) {
+  const outputDir = path.join(repoRoot, "artifacts");
+  const outputPath = path.join(outputDir, "jev-shadow-impact.json");
+  const summaryPath = path.join(outputDir, "jev-shadow-summary.md");
+  await mkdir(outputDir, { recursive: true });
+  await Promise.all([
+    writeFile(outputPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8"),
+    writeFile(summaryPath, buildSummaryMarkdown(payload), "utf8"),
+  ]);
   process.stdout.write(`Jev shadow result: ${payload.status}\n`);
   process.stdout.write(`Artifact: ${path.relative(repoRoot, outputPath)}\n`);
+  return payload;
 }
 
-const baseSha = process.env.BASE_SHA;
-const headSha = process.env.HEAD_SHA;
-const apiKey = process.env.TYPESAFE_API_KEY;
+/**
+ * @param {{
+ *   repoRoot?: string,
+ *   env?: Record<string, string | undefined>,
+ *   runtimeOverrides?: Partial<ShadowRuntime>,
+ * }} [options]
+ */
+export async function runJevShadowImpact({
+  repoRoot = process.cwd(),
+  env = process.env,
+  runtimeOverrides = {},
+} = {}) {
+  const runtime = { ...DEFAULT_RUNTIME, ...runtimeOverrides };
+  const baseSha = env.BASE_SHA;
+  const headSha = env.HEAD_SHA;
+  const apiKey = env.TYPESAFE_API_KEY?.trim();
 
-if (!baseSha || !headSha) {
-  await finish({
-    status: "ADVISORY_UNAVAILABLE",
-    blocking: false,
-    reason: "BASE_SHA or HEAD_SHA is missing",
-  });
-  process.exit(0);
+  if (!baseSha || !headSha) {
+    return writeArtifacts({
+      repoRoot,
+      payload: {
+        status: "ADVISORY_UNAVAILABLE",
+        blocking: false,
+        reason: "BASE_SHA or HEAD_SHA is missing",
+      },
+    });
+  }
+
+  if (!apiKey) {
+    return writeArtifacts({
+      repoRoot,
+      payload: {
+        status: "SKIPPED_NO_CREDENTIAL",
+        blocking: false,
+        reason: "TYPESAFE_API_KEY is unavailable to this trusted workflow context.",
+        baseSha,
+        headSha,
+      },
+    });
+  }
+
+  try {
+    // The secret-bearing workflow executes the harness and canonical invariant
+    // catalog from trusted main. Candidate code is Git data only. A PR must not
+    // be able to shrink its own impact map by editing invariant metadata.
+    const invariants = runtime.extractCanonicalInvariants(repoRoot);
+    const change = runtime.buildChangeState({ repoRoot, baseSha, headSha });
+    const deterministicImpact = runtime.deterministicInvariantImpact(
+      change.changedFiles,
+      invariants,
+    );
+    const governanceFiles = new Set([
+      "scripts/autoflowInvariantCatalog.ts",
+      ".github/workflows/invariant-governance.yml",
+      ".github/workflows/jev-shadow-impact.yml",
+      "package.json",
+      "pnpm-lock.yaml",
+    ]);
+    const changesCorrectnessGovernance = change.changedFiles.some(
+      (file) =>
+        governanceFiles.has(file) ||
+        file.startsWith("scripts/intelligence/"),
+    );
+    const extraDeterministicRequirements = changesCorrectnessGovernance
+      ? ["review:correctness-governance", "proof:jev-harness"]
+      : [];
+    const questions = runtime.buildJevQuestions(invariants);
+    const rawResponse = await runtime.callJev({
+      apiKey,
+      state: change.state,
+      questions,
+    });
+    const jev = runtime.normalizeJevResponse(rawResponse, invariants);
+    const reviewMatrix = runtime.deriveReviewMatrix({
+      deterministicImpact,
+      extraDeterministicRequirements,
+      risks: jev.risks,
+      invariantImpact: jev.invariantImpact,
+    });
+
+    return writeArtifacts({
+      repoRoot,
+      payload: {
+        status: "ADVISORY_COMPLETE",
+        blocking: false,
+        authority:
+          "Jev may add scrutiny only. Existing AutoFlow tests, invariant proofs, preview rehearsals, required checks, and reviewer decisions remain authoritative.",
+        baseSha,
+        headSha,
+        changedFiles: change.changedFiles,
+        patchTruncated: change.patchTruncated,
+        patchCharsSent: change.patchCharsSent,
+        model: jev.model,
+        usage: jev.usage,
+        risks: jev.risks,
+        invariantImpact: jev.invariantImpact,
+        deterministicImpact,
+        changesCorrectnessGovernance,
+        reviewMatrix,
+      },
+    });
+  } catch (error) {
+    const reason = redactSecret(
+      error instanceof Error ? error.message : String(error),
+      apiKey,
+    ).slice(0, 1_000);
+    return writeArtifacts({
+      repoRoot,
+      payload: {
+        status: "ADVISORY_UNAVAILABLE",
+        blocking: false,
+        reason,
+        baseSha,
+        headSha,
+      },
+    });
+  }
 }
 
-if (!apiKey) {
-  await finish({
-    status: "SKIPPED_NO_CREDENTIAL",
-    blocking: false,
-    reason:
-      "TYPESAFE_API_KEY is unavailable to this trusted workflow context.",
-    baseSha,
-    headSha,
-  });
-  process.exit(0);
-}
-
-try {
-  // The secret-bearing workflow executes the harness and canonical invariant
-  // catalog from trusted main. Candidate code is Git data only. A PR must not
-  // be able to shrink its own impact map by editing invariant metadata.
-  const invariants = extractCanonicalInvariants(repoRoot);
-  const change = buildChangeState({ repoRoot, baseSha, headSha });
-  const deterministicImpact = deterministicInvariantImpact(
-    change.changedFiles,
-    invariants,
-  );
-  const governanceFiles = new Set([
-    "scripts/autoflowInvariantCatalog.ts",
-    ".github/workflows/invariant-governance.yml",
-    ".github/workflows/jev-shadow-impact.yml",
-  ]);
-  const changesCorrectnessGovernance = change.changedFiles.some(
-    (file) =>
-      governanceFiles.has(file) ||
-      file.startsWith("scripts/intelligence/"),
-  );
-  const extraDeterministicRequirements = changesCorrectnessGovernance
-    ? ["review:correctness-governance", "proof:jev-harness"]
-    : [];
-  const questions = buildJevQuestions(invariants);
-  const rawResponse = await callJev({
-    apiKey,
-    state: change.state,
-    questions,
-  });
-  const jev = normalizeJevResponse(rawResponse, invariants);
-  const reviewMatrix = deriveReviewMatrix({
-    deterministicImpact,
-    extraDeterministicRequirements,
-    risks: jev.risks,
-    invariantImpact: jev.invariantImpact,
-  });
-
-  await finish({
-    status: "ADVISORY_COMPLETE",
-    blocking: false,
-    authority:
-      "Jev may add scrutiny only. Existing AutoFlow tests, invariant proofs, preview rehearsals, required checks, and reviewer decisions remain authoritative.",
-    baseSha,
-    headSha,
-    changedFiles: change.changedFiles,
-    patchTruncated: change.patchTruncated,
-    patchCharsSent: change.patchCharsSent,
-    model: jev.model,
-    usage: jev.usage,
-    risks: jev.risks,
-    invariantImpact: jev.invariantImpact,
-    deterministicImpact,
-    changesCorrectnessGovernance,
-    reviewMatrix,
-  });
-} catch (error) {
-  await finish({
-    status: "ADVISORY_UNAVAILABLE",
-    blocking: false,
-    reason: error instanceof Error ? error.message : String(error),
-    baseSha,
-    headSha,
-  });
+const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : undefined;
+if (invokedPath && invokedPath === fileURLToPath(import.meta.url)) {
+  await runJevShadowImpact();
 }

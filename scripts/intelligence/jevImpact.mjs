@@ -8,6 +8,8 @@ export const JEV_MODEL = "jev-latest";
 export const DEFAULT_CANDIDATE_THRESHOLD = 0.35;
 export const DEFAULT_ESCALATION_THRESHOLD = 0.65;
 export const DEFAULT_MAX_PATCH_CHARS = 60_000;
+export const MAX_JEV_RESPONSE_CHARS = 1_000_000;
+export const MAX_JEV_TIMEOUT_MS = 60_000;
 
 /**
  * @typedef {Object} ExtractedRequirement
@@ -182,7 +184,7 @@ function requirementsFromNode(node) {
   if (!ts.isArrayLiteralExpression(value)) return [];
   return value.elements
     .map((entry) => requirementFromNode(entry))
-    .filter(Boolean);
+    .filter((requirement) => requirement !== undefined);
 }
 
 export function assertCommitSha(value, name = "commit SHA") {
@@ -284,29 +286,42 @@ export function extractCanonicalInvariants(repoRoot = process.cwd(), ref) {
   return invariants;
 }
 
-function escapeRegexCharacter(character) {
-  return /[\\^$.*+?()[\]{}|]/.test(character) ? `\\${character}` : character;
-}
+export function globMatches(pattern, value) {
+  if (typeof pattern !== "string" || typeof value !== "string") return false;
+  const memo = new Map();
 
-export function globToRegExp(pattern) {
-  let expression = "^";
-  for (let index = 0; index < pattern.length; index += 1) {
-    const character = pattern[index];
-    if (character === "*") {
-      if (pattern[index + 1] === "*") {
-        expression += ".*";
-        index += 1;
-      } else {
-        expression += "[^/]*";
+  function matches(patternIndex, valueIndex) {
+    const memoKey = `${patternIndex}:${valueIndex}`;
+    if (memo.has(memoKey)) return memo.get(memoKey);
+
+    let result;
+    if (patternIndex === pattern.length) {
+      result = valueIndex === value.length;
+    } else if (pattern[patternIndex] === "*") {
+      const recursive = pattern[patternIndex + 1] === "*";
+      const nextPatternIndex = patternIndex + (recursive ? 2 : 1);
+      result = matches(nextPatternIndex, valueIndex);
+      if (!result && valueIndex < value.length) {
+        const canConsume = recursive || value[valueIndex] !== "/";
+        result = canConsume && matches(patternIndex, valueIndex + 1);
       }
-    } else if (character === "?") {
-      expression += "[^/]";
+    } else if (pattern[patternIndex] === "?") {
+      result =
+        valueIndex < value.length &&
+        value[valueIndex] !== "/" &&
+        matches(patternIndex + 1, valueIndex + 1);
     } else {
-      expression += escapeRegexCharacter(character);
+      result =
+        valueIndex < value.length &&
+        pattern[patternIndex] === value[valueIndex] &&
+        matches(patternIndex + 1, valueIndex + 1);
     }
+
+    memo.set(memoKey, result);
+    return result;
   }
-  expression += "$";
-  return new RegExp(expression);
+
+  return matches(0, 0);
 }
 
 /**
@@ -319,7 +334,7 @@ export function deterministicInvariantImpact(changedFiles, invariants) {
   return invariants
     .map((invariant) => {
       const matchingFiles = normalizedFiles.filter((file) =>
-        invariant.sourceAreas.some((pattern) => globToRegExp(pattern).test(file)),
+        invariant.sourceAreas.some((pattern) => globMatches(pattern, file)),
       );
       if (matchingFiles.length === 0) return undefined;
       return {
@@ -331,42 +346,67 @@ export function deterministicInvariantImpact(changedFiles, invariants) {
           .map((requirement) => requirement.obligation),
       };
     })
-    .filter(Boolean);
+    .filter((impact) => impact !== undefined);
 }
 
 function safeGit(repoRoot, args) {
-  return execFileSync("git", args, {
+  const output = execFileSync("git", args, {
     cwd: repoRoot,
-    encoding: "utf8",
+    encoding: "buffer",
     maxBuffer: 16 * 1024 * 1024,
   });
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(output);
+  } catch {
+    throw new Error("git output was not valid UTF-8");
+  }
 }
 
 export function parseNameStatus(nameStatus) {
+  if (!nameStatus.includes("\0")) {
+    throw new Error("git name-status output must be NUL-delimited");
+  }
+
+  const tokens = nameStatus.split("\0");
+  if (tokens.at(-1) === "") tokens.pop();
   const files = [];
-  for (const line of nameStatus.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    const parts = line.split("\t");
-    const status = parts.shift() ?? "";
-    if (status.startsWith("R") || status.startsWith("C")) {
-      files.push(...parts.slice(0, 2));
-    } else if (parts[0]) {
-      files.push(parts[0]);
+  for (let index = 0; index < tokens.length; ) {
+    const status = tokens[index++];
+    if (!/^[ACDMRTUXB](?:[0-9]{1,3})?$/.test(status ?? "")) {
+      throw new Error(`unexpected git name-status token: ${status ?? "<missing>"}`);
+    }
+    const pathCount = status.startsWith("R") || status.startsWith("C") ? 2 : 1;
+    if (index + pathCount > tokens.length) {
+      throw new Error(`incomplete git name-status record for ${status}`);
+    }
+    for (let offset = 0; offset < pathCount; offset += 1) {
+      const file = tokens[index++];
+      if (!file) throw new Error(`empty path in git name-status record for ${status}`);
+      files.push(file);
     }
   }
-  return [...new Set(files.filter(Boolean))];
+  return [...new Set(files)];
 }
 
 export function truncatePatch(patch, maxChars = DEFAULT_MAX_PATCH_CHARS) {
+  if (!Number.isSafeInteger(maxChars) || maxChars < 0) {
+    throw new Error("maxPatchChars must be a non-negative safe integer");
+  }
   if (patch.length <= maxChars) {
     return { excerpt: patch, truncated: false };
   }
   const marker = "\n\n--- AUTOFLOW HARNESS: MIDDLE OF DIFF OMITTED ---\n\n";
-  const available = Math.max(0, maxChars - marker.length);
+  if (maxChars <= marker.length) {
+    return { excerpt: marker.slice(0, maxChars), truncated: true };
+  }
+  const available = maxChars - marker.length;
   const headLength = Math.ceil(available / 2);
   const tailLength = Math.floor(available / 2);
   return {
-    excerpt: patch.slice(0, headLength) + marker + patch.slice(-tailLength),
+    excerpt:
+      patch.slice(0, headLength) +
+      marker +
+      (tailLength > 0 ? patch.slice(-tailLength) : ""),
     truncated: true,
   };
 }
@@ -380,7 +420,7 @@ export function buildChangeState({
   assertCommitSha(baseSha, "baseSha");
   assertCommitSha(headSha, "headSha");
   const range = `${baseSha}...${headSha}`;
-  const nameStatus = safeGit(repoRoot, ["diff", "--name-status", range]).trim();
+  const nameStatus = safeGit(repoRoot, ["diff", "--name-status", "-z", range]);
   const diffStat = safeGit(repoRoot, ["diff", "--stat", range]).trim();
   const patch = safeGit(repoRoot, [
     "diff",
@@ -424,6 +464,7 @@ export function buildJevQuestions(invariants) {
     throw new Error("Jev question set cannot be built from an empty invariant catalog");
   }
   const questions = {};
+  const invariantQuestionKeys = new Set();
   for (const [risk, definition] of Object.entries(RISK_QUESTIONS)) {
     questions[`risk__${risk}`] = {
       type: "noul",
@@ -436,7 +477,12 @@ export function buildJevQuestions(invariants) {
   }
 
   for (const invariant of invariants) {
-    questions[invariantQuestionKey(invariant.id)] = {
+    const key = invariantQuestionKey(invariant.id);
+    if (invariantQuestionKeys.has(key)) {
+      throw new Error(`Jev invariant question key collision for ${invariant.id}`);
+    }
+    invariantQuestionKeys.add(key);
+    questions[key] = {
       type: "noul",
       instructions:
         `Could this change plausibly alter, violate, weaken, bypass, or require new proof for ` +
@@ -469,9 +515,20 @@ export function normalizeJevResponse(response, invariants) {
     !response ||
     typeof response !== "object" ||
     !response.answers ||
-    typeof response.answers !== "object"
+    typeof response.answers !== "object" ||
+    Array.isArray(response.answers)
   ) {
     throw new Error("Jev response is missing answers");
+  }
+
+  const expectedAnswerKeys = new Set([
+    ...Object.keys(RISK_QUESTIONS).map((risk) => `risk__${risk}`),
+    ...invariants.map((invariant) => invariantQuestionKey(invariant.id)),
+  ]);
+  for (const key of Object.keys(response.answers)) {
+    if (!expectedAnswerKeys.has(key)) {
+      throw new Error(`Jev response contains an unexpected answer key: ${key}`);
+    }
   }
 
   const risks = {};
@@ -490,21 +547,31 @@ export function normalizeJevResponse(response, invariants) {
   const outputTokens = response.usage?.output_tokens;
   if (
     typeof inputTokens !== "number" ||
-    !Number.isFinite(inputTokens) ||
+    !Number.isSafeInteger(inputTokens) ||
     inputTokens < 0 ||
     typeof outputTokens !== "number" ||
-    !Number.isFinite(outputTokens) ||
+    !Number.isSafeInteger(outputTokens) ||
     outputTokens < 0
   ) {
     throw new Error("Jev response is missing valid token usage");
   }
 
   return {
-    model: typeof response.model === "string" ? response.model : "unknown",
+    model:
+      typeof response.model === "string" && response.model.length <= 256
+        ? response.model
+        : "unknown",
     usage: { input_tokens: inputTokens, output_tokens: outputTokens },
     risks,
     invariantImpact,
   };
+}
+
+function assertProbability(value, name) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error(`${name} must be a finite probability from 0 to 1`);
+  }
+  return value;
 }
 
 /**
@@ -524,6 +591,18 @@ export function deriveReviewMatrix({
   candidateThreshold = DEFAULT_CANDIDATE_THRESHOLD,
   escalationThreshold = DEFAULT_ESCALATION_THRESHOLD,
 }) {
+  assertProbability(candidateThreshold, "candidateThreshold");
+  assertProbability(escalationThreshold, "escalationThreshold");
+  if (candidateThreshold > escalationThreshold) {
+    throw new Error("candidateThreshold cannot exceed escalationThreshold");
+  }
+  for (const [risk, probability] of Object.entries(risks)) {
+    assertProbability(probability, `risk ${risk}`);
+  }
+  for (const [id, probability] of Object.entries(invariantImpact)) {
+    assertProbability(probability, `invariant ${id}`);
+  }
+
   const deterministicRequirements = new Set(extraDeterministicRequirements);
   for (const impact of deterministicImpact) {
     deterministicRequirements.add(`review-invariant:${impact.id}`);
@@ -586,32 +665,57 @@ export async function callJev({
   apiKey,
   state,
   questions,
-  model = JEV_MODEL,
-  endpoint = JEV_ENDPOINT,
   timeoutMs = 15_000,
   fetchImpl = globalThis.fetch,
 }) {
-  if (!apiKey || !apiKey.trim()) throw new Error("TYPESAFE_API_KEY is required");
+  const credential = apiKey?.trim();
+  if (!credential) throw new Error("TYPESAFE_API_KEY is required");
   if (typeof fetchImpl !== "function") throw new Error("Global fetch is unavailable");
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_JEV_TIMEOUT_MS) {
+    throw new Error(`timeoutMs must be an integer from 1 to ${MAX_JEV_TIMEOUT_MS}`);
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetchImpl(endpoint, {
+    const response = await fetchImpl(JEV_ENDPOINT, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${credential}`,
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ model, state, questions }),
+      body: JSON.stringify({ model: JEV_MODEL, state, questions }),
       signal: controller.signal,
     });
 
     if (!response.ok) {
       throw new Error(`Jev request failed with HTTP ${response.status}`);
     }
-    return await response.json();
+
+    const contentLengthHeader = response.headers?.get?.("content-length");
+    const contentLength =
+      contentLengthHeader === null || contentLengthHeader === undefined
+        ? undefined
+        : Number(contentLengthHeader);
+    if (
+      contentLength !== undefined &&
+      (!Number.isSafeInteger(contentLength) ||
+        contentLength < 0 ||
+        contentLength > MAX_JEV_RESPONSE_CHARS)
+    ) {
+      throw new Error("Jev response exceeded the maximum allowed size");
+    }
+
+    const rawBody = await response.text();
+    if (rawBody.length > MAX_JEV_RESPONSE_CHARS) {
+      throw new Error("Jev response exceeded the maximum allowed size");
+    }
+    try {
+      return JSON.parse(rawBody);
+    } catch {
+      throw new Error("Jev response was not valid JSON");
+    }
   } finally {
     clearTimeout(timer);
   }
