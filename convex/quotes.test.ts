@@ -261,3 +261,43 @@ describe("quotes.updateQuoteStatus lead stage advance", () => {
     });
   });
 });
+
+describe("financed quote single-vehicle authority", () => {
+  test("NEGATIVE CONTROL: rejects vehicleItems before financed quote normalization", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const secondVehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "1HGCM82633A555555",
+        make: "Toyota",
+        model: "Corolla",
+        year: 2021,
+        color: "White",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 12000,
+        sellingPrice: 15000,
+        status: "AVAILABLE",
+      })
+    );
+
+    await expect(
+      asUser.mutation(api.quotes.saveQuote, {
+        orgId,
+        customerId,
+        vehicleId,
+        vehicleItems: [
+          { vehicleId, unitPrice: 19_000 },
+          { vehicleId: secondVehicleId, unitPrice: 15_000 },
+        ],
+        mode: "MANUAL_FINANCE_COMPANY",
+        vehiclePrice: 34_000,
+        desiredProfit: 1_000,
+        downPayment: 5_000,
+        termMonths: 48,
+        manualAdminFees: 0,
+        manualProfitRate: 5,
+      })
+    ).rejects.toThrow(/exactly one vehicle/i);
+  });
+});
