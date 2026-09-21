@@ -134,10 +134,10 @@ function parseImpactedInvariants(raw: string): {
 }
 
 function parseJevSuggestions(raw: string | undefined): JevBrowserMissionSuggestion[] {
-  if (!raw?.trim()) return [];
-  if (Buffer.byteLength(raw, "utf8") > MAX_JEV_SUGGESTIONS_JSON_BYTES) {
+  if (raw && Buffer.byteLength(raw, "utf8") > MAX_JEV_SUGGESTIONS_JSON_BYTES) {
     throw new Error("BROWSER_SWARM_JEV_SUGGESTIONS_JSON exceeds the 4 KiB limit");
   }
+  if (!raw?.trim()) return [];
   const value = parseJson(raw, "BROWSER_SWARM_JEV_SUGGESTIONS_JSON");
   if (!Array.isArray(value)) {
     throw new TypeError("BROWSER_SWARM_JEV_SUGGESTIONS_JSON must be an array");

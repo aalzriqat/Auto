@@ -17,6 +17,8 @@ import { fileURLToPath } from "node:url";
 
 export const BUILD_MANIFEST_FILE = "browser-swarm-candidate-build.json";
 export const MAX_BROWSER_BUILD_FILES = 30_000;
+export const MAX_BROWSER_BUILD_ENTRIES = 45_000;
+export const MAX_BROWSER_BUILD_DEPTH = 64;
 export const MAX_BROWSER_BUILD_BYTES = 512 * 1024 * 1024;
 export const MAX_BROWSER_BUILD_MANIFEST_BYTES = 8 * 1024 * 1024;
 
@@ -146,7 +148,15 @@ async function materializeEntry({
   candidateBoundary,
   ancestry,
   budget,
+  depth = 0,
 }) {
+  if (depth > MAX_BROWSER_BUILD_DEPTH) {
+    throw new Error("Candidate build exceeds the maximum runtime directory depth.");
+  }
+  budget.entries += 1;
+  if (budget.entries > MAX_BROWSER_BUILD_ENTRIES) {
+    throw new Error("Candidate build exceeds the maximum runtime entry count.");
+  }
   const sourceReal = await realpath(sourcePath);
   if (!isInside(candidateBoundary, sourceReal)) {
     throw new Error(
@@ -172,6 +182,7 @@ async function materializeEntry({
         candidateBoundary,
         ancestry: nextAncestry,
         budget,
+        depth: depth + 1,
       });
     }
     return;
@@ -206,12 +217,20 @@ async function hashFile(filePath) {
 async function collectRuntimeRecords(runtimeRoot) {
   const records = [];
   let totalBytes = 0;
+  let totalEntries = 0;
 
-  async function walk(currentRoot, relativeRoot = "") {
+  async function walk(currentRoot, relativeRoot = "", depth = 0) {
+    if (depth > MAX_BROWSER_BUILD_DEPTH) {
+      throw new Error("Candidate artifact exceeds the maximum runtime directory depth.");
+    }
     const entries = (await readdir(currentRoot, { withFileTypes: true })).sort(
       (left, right) => left.name.localeCompare(right.name),
     );
     for (const entry of entries) {
+      totalEntries += 1;
+      if (totalEntries > MAX_BROWSER_BUILD_ENTRIES) {
+        throw new Error("Candidate artifact exceeds the maximum runtime entry count.");
+      }
       const absolute = path.join(currentRoot, entry.name);
       const relative = relativeRoot
         ? relativeRoot + "/" + entry.name
@@ -222,7 +241,7 @@ async function collectRuntimeRecords(runtimeRoot) {
         throw new Error("Materialized candidate artifact must not contain symlinks.");
       }
       if (info.isDirectory()) {
-        await walk(absolute, relative);
+        await walk(absolute, relative, depth + 1);
         continue;
       }
       if (!info.isFile()) {
@@ -419,7 +438,7 @@ export async function createBrowserSwarmBuildArtifact({
   await rm(artifactRoot, { recursive: true, force: true });
   const runtimeRoot = path.join(artifactRoot, "runtime");
   await mkdir(runtimeRoot, { recursive: true });
-  const budget = { files: 0, bytes: 0 };
+  const budget = { entries: 0, files: 0, bytes: 0 };
 
   await materializeEntry({
     sourcePath: standaloneRoot,
@@ -521,7 +540,9 @@ export async function verifyBrowserSwarmBuildArtifact({
     records.length !== manifest.fileCount ||
     totalBytes !== manifest.totalBytes
   ) {
-    throw new Error("Candidate build artifact file set is missing or partial.");
+    throw new Error(
+      "Candidate build artifact file set, digest, or size is missing, partial, or inconsistent.",
+    );
   }
   const expectedByPath = new Map(
     manifest.files.map((record) => [record.path, record]),

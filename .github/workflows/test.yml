@@ -67,23 +67,9 @@ jobs:
         fi
       if: always()
 
-  # SonarCloud currently analyses this repo in Automatic Analysis mode, which
-  # does NOT read sonar-project.properties — so every exclusion in that file is
-  # dead config. That is why `load-tests/**` is still analysed and still
-  # contributes vulnerabilities to the Security Rating gate,
-  # and why `sonar.javascript.lcov.reportPaths` has never actually delivered a
-  # coverage report.
-  #
-  # This job runs the scanner from CI, which makes that file authoritative. It
-  # activates the moment a SONAR_TOKEN repo secret exists and is skipped
-  # otherwise, so merging it changes nothing until the token is added.
-  #
-  # ORDERING IS MANDATORY, not advisory: SonarCloud REJECTS a CI submission while
-  # Automatic Analysis is enabled ("You are running CI analysis while Automatic
-  # Analysis is enabled") and the scanner exits non-zero. So switch Automatic
-  # Analysis off in the SonarCloud UI in the same sitting as adding the token, or
-  # this job goes red on every push in between. It is not a required check, so it
-  # will not block a merge either way.
+  # Pull-request Sonar analysis is deliberately outside this candidate-controlled
+  # workflow. The direct PR lane only generates coverage as data; the immutable
+  # trusted Sonar PR Report workflow consumes it and owns scanner credentials.
   type-check:
     runs-on: ubuntu-latest
 

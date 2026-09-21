@@ -217,6 +217,27 @@ describe("SCRUM-350 immutable candidate build artifact", () => {
     }
   });
 
+  it("fails closed on candidate-controlled pathological directory depth", async () => {
+    const f = await fixture();
+    try {
+      let current = path.join(f.candidateRoot, ".next/standalone");
+      for (let index = 0; index < 70; index += 1) {
+        current = path.join(current, "d" + index);
+        await mkdir(current);
+      }
+
+      await expect(
+        createBrowserSwarmBuildArtifact({
+          candidateRoot: f.candidateRoot,
+          artifactRoot: f.artifactRoot,
+          identity,
+        }),
+      ).rejects.toThrow(/maximum runtime directory depth/i);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it("will not materialize a candidate symlink that escapes the candidate checkout", async () => {
     const f = await fixture();
     const outside = path.join(f.root, "outside-secret.txt");
