@@ -51,8 +51,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          if find . -path './.git' -prune -o -type l -print -quit | grep -q .; then
-            echo "::error::Bootstrap Sonar refuses symlinks in candidate source."
+          if git ls-files -s | awk '$1 == "120000" { found=1 } END { exit found ? 0 : 1 }'; then
+            echo "::error::Bootstrap Sonar refuses Git-tracked symlinks in candidate source."
             exit 1
           fi
 
