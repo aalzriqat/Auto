@@ -60,12 +60,14 @@ describe("trusted Clerk public JWT key resolver", () => {
 
   it("fetches only the derived Clerk JWKS endpoint and returns PEM", async () => {
     const jwk = { ...rsaJwk(), use: "sig", alg: "RS256" };
-    const fetchImpl = vi.fn(async () =>
-      new Response(JSON.stringify({ keys: [jwk] }), {
+    let requestedResource: string | URL | Request | undefined;
+    const fetchImpl = vi.fn(async (resource: string | URL | Request) => {
+      requestedResource = resource;
+      return new Response(JSON.stringify({ keys: [jwk] }), {
         status: 200,
         headers: { "content-type": "application/json" },
-      }),
-    );
+      });
+    });
 
     const pem = await fetchClerkTestJwtPem({
       publishableKey: publishableKey(),
@@ -73,7 +75,7 @@ describe("trusted Clerk public JWT key resolver", () => {
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(fetchImpl.mock.calls[0]?.[0]).toBe(
+    expect(String(requestedResource)).toBe(
       "https://steady-hound-42.clerk.accounts.dev/.well-known/jwks.json",
     );
     expect(pem).toContain("-----BEGIN PUBLIC KEY-----");
