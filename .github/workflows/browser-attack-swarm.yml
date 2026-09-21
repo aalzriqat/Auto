@@ -148,6 +148,13 @@ jobs:
             exit 1
           fi
 
+      - name: Resolve named Convex preview from trusted control plane
+        working-directory: trusted
+        run: node scripts/intelligence/convexPreviewAuthority.mjs
+        env:
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+
       - name: Assemble trusted run and fail closed on unsupported impact
         id: plan
         working-directory: trusted
@@ -165,6 +172,7 @@ jobs:
           name: trusted-browser-swarm-plan
           path: |
             trusted/artifacts/browser-swarm-trusted-impact.json
+            trusted/artifacts/browser-swarm-convex-authority.json
             trusted/artifacts/browser-swarm-trusted-run.json
           if-no-files-found: error
           retention-days: 14
