@@ -414,6 +414,38 @@ export function truncatePatch(patch, maxChars = DEFAULT_MAX_PATCH_CHARS) {
   };
 }
 
+export function readCommitTimestamp(repoRoot, ref) {
+  assertCommitSha(ref, "commit SHA");
+  const raw = safeGit(repoRoot, ["show", "-s", "--format=%cI", ref]).trim();
+  const parsed = new Date(raw);
+  if (!Number.isFinite(parsed.getTime())) {
+    throw new Error(`Unable to parse commit timestamp for ${ref}`);
+  }
+  return parsed.toISOString();
+}
+
+export function assertAncestorCommit(repoRoot, baseSha, headSha) {
+  assertCommitSha(baseSha, "base SHA");
+  assertCommitSha(headSha, "head SHA");
+  try {
+    execFileSync(
+      resolveTrustedGitExecutable(),
+      ["merge-base", "--is-ancestor", baseSha, headSha],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 10_000,
+        windowsHide: true,
+      },
+    );
+  } catch {
+    throw new Error(
+      `Historical calibration base ${baseSha} is not an ancestor of ${headSha}`,
+    );
+  }
+}
+
 export function buildChangeState({
   repoRoot = process.cwd(),
   baseSha,
