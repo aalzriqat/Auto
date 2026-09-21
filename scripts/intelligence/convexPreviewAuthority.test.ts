@@ -25,7 +25,13 @@ describe("trusted Convex preview authority", () => {
     ).toThrow(/preview:team:project/);
   });
 
-  it("accepts only a deployment-scoped preview admin key", () => {
+  it("accepts only deployment-scoped preview admin keys in Convex raw or user-facing form", () => {
+    expect(
+      assertPreviewDeploymentAdminKey(
+        "elegant-butterfly-952|deployment-secret",
+        "elegant-butterfly-952",
+      ),
+    ).toBe("elegant-butterfly-952|deployment-secret");
     expect(
       assertPreviewDeploymentAdminKey(
         "preview:elegant-butterfly-952|deployment-secret",
@@ -35,6 +41,12 @@ describe("trusted Convex preview authority", () => {
     expect(() =>
       assertPreviewDeploymentAdminKey(
         "preview:team-one:project-two|project-wide-secret",
+        "elegant-butterfly-952",
+      ),
+    ).toThrow(/not scoped/);
+    expect(() =>
+      assertPreviewDeploymentAdminKey(
+        "another-deployment|deployment-secret",
         "elegant-butterfly-952",
       ),
     ).toThrow(/not scoped/);
@@ -70,7 +82,7 @@ describe("trusted Convex preview authority", () => {
         JSON.stringify({
           deploymentName: "elegant-butterfly-952",
           url: "https://elegant-butterfly-952.convex.cloud",
-          adminKey: "preview:elegant-butterfly-952|must-not-persist",
+          adminKey: "elegant-butterfly-952|must-not-persist",
           deploymentType: "preview",
           reference: null,
           isDefault: false,
@@ -121,7 +133,7 @@ describe("trusted Convex preview authority", () => {
     });
     expect(credentials.authority).toEqual(authority);
     expect(credentials.adminKey).toBe(
-      "preview:elegant-butterfly-952|must-not-persist",
+      "elegant-butterfly-952|must-not-persist",
     );
   });
 
