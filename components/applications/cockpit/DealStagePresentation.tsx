@@ -1,6 +1,8 @@
 import { AlertTriangle, Ban, Check, CircleDot, Minus } from "lucide-react";
 import type { api } from "@/convex/_generated/api";
 
+// SCRUM-350 controlled trusted-swarm validation marker.
+// Intentionally no runtime behavior change; this path deterministically maps to UI-1.
 /**
  * The cockpit's server-shaped read model, whichever query produced it.
  *
