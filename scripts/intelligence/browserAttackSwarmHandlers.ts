@@ -66,11 +66,10 @@ function orgIdFromUrl(url: string): string | null {
 
 async function resolveOrgRoute(page: Page): Promise<string | null> {
   await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
-  await page
-    .waitForURL(/\/[^/]+\/(dashboard|sales|leads|accounting)(\?.*)?$/, {
-      timeout: 20_000,
-    })
-    .catch(() => {});
+  await page.waitForURL(
+    /\/[^/]+\/(dashboard|sales|leads|accounting)(\?.*)?$/,
+    { timeout: 20_000 },
+  );
   return orgIdFromUrl(page.url());
 }
 
@@ -88,7 +87,10 @@ async function openMissionBrowser(
 
   const browser = await chromium.launch({ headless: true });
   const abort = () => {
-    void browser.close().catch(() => {});
+    void browser.close().catch((error: unknown) => {
+      const kind = error instanceof Error ? error.name : typeof error;
+      console.error("Browser swarm abort cleanup failed (" + kind + ").");
+    });
   };
   context.signal.addEventListener("abort", abort, { once: true });
 
@@ -118,7 +120,17 @@ async function openMissionBrowser(
     return { browser, browserContext, page, paths };
   } catch (error) {
     context.signal.removeEventListener("abort", abort);
-    await browser.close().catch(() => {});
+    try {
+      await browser.close();
+    } catch (cleanupError) {
+      if (
+        error instanceof Error &&
+        cleanupError instanceof Error &&
+        error.cause === undefined
+      ) {
+        error.cause = cleanupError;
+      }
+    }
     throw error;
   }
 }
@@ -135,23 +147,52 @@ async function finishMissionBrowser({
   paths: ArtifactWriter;
 }): Promise<readonly string[]> {
   const artifacts: string[] = [];
+  const failures: Error[] = [];
 
   if (!page.isClosed()) {
-    await page
-      .screenshot({
+    try {
+      await page.screenshot({
         path: absoluteArtifact(paths.screenshot),
         fullPage: true,
-      })
-      .then(() => artifacts.push(paths.screenshot))
-      .catch(() => {});
+      });
+      artifacts.push(paths.screenshot);
+    } catch (error) {
+      failures.push(
+        error instanceof Error
+          ? error
+          : new Error("Browser swarm screenshot capture failed."),
+      );
+    }
   }
 
-  await browserContext.tracing
-    .stop({ path: absoluteArtifact(paths.trace) })
-    .then(() => artifacts.push(paths.trace))
-    .catch(() => {});
+  try {
+    await browserContext.tracing.stop({ path: absoluteArtifact(paths.trace) });
+    artifacts.push(paths.trace);
+  } catch (error) {
+    failures.push(
+      error instanceof Error
+        ? error
+        : new Error("Browser swarm trace capture failed."),
+    );
+  }
 
-  await browser.close().catch(() => {});
+  try {
+    await browser.close();
+  } catch (error) {
+    failures.push(
+      error instanceof Error
+        ? error
+        : new Error("Browser swarm browser close failed."),
+    );
+  }
+
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures,
+      "Browser swarm evidence cleanup did not complete successfully.",
+    );
+  }
+
   return artifacts;
 }
 
@@ -172,6 +213,7 @@ async function runRtlParityAttack(
 ): Promise<BrowserMissionEvidence> {
   const startedAt = new Date().toISOString();
   const runtime = await openMissionBrowser(context);
+  let cleanupStarted = false;
 
   try {
     const orgIdBefore = await resolveOrgRoute(runtime.page);
@@ -193,9 +235,7 @@ async function runRtlParityAttack(
     );
 
     const toggle = runtime.page.getByRole("button", { name: /^(en|ar)$/i });
-    const toggleVisible = await toggle
-      .isVisible({ timeout: 5_000 })
-      .catch(() => false);
+    const toggleVisible = await toggle.isVisible({ timeout: 5_000 });
 
     if (!toggleVisible) {
       throw new Error(
@@ -203,19 +243,10 @@ async function runRtlParityAttack(
       );
     }
 
-    const label = ((await toggle.textContent().catch(() => "")) ?? "")
-      .trim()
-      .toLowerCase();
-    let switched = false;
+    const label = ((await toggle.textContent()) ?? "").trim().toLowerCase();
     if (label === "en") {
-      switched = await toggle
-        .click()
-        .then(() => true)
-        .catch(() => false);
-    } else if (label === "ar") {
-      switched = true;
-    }
-    if (!switched) {
+      await toggle.click();
+    } else if (label !== "ar") {
       throw new Error(
         "RTL parity harness could not operate the EN/AR language control.",
       );
@@ -241,8 +272,10 @@ async function runRtlParityAttack(
       dir,
       lang,
       toggleVisible,
-      switched,
+      switched: true,
     });
+    cleanupStarted = true;
+    cleanupStarted = true;
     const artifacts = [
       ...(await finishMissionBrowser(runtime)),
       backendArtifact,
@@ -263,7 +296,20 @@ async function runRtlParityAttack(
       artifacts,
     };
   } catch (error) {
-    await finishMissionBrowser(runtime);
+    if (!cleanupStarted) {
+      try {
+        cleanupStarted = true;
+        await finishMissionBrowser(runtime);
+      } catch (cleanupError) {
+        if (
+          error instanceof Error &&
+          cleanupError instanceof Error &&
+          error.cause === undefined
+        ) {
+          error.cause = cleanupError;
+        }
+      }
+    }
     throw error;
   }
 }
@@ -273,10 +319,7 @@ async function safeVisible(
   role: "button" | "dialog",
   name: string | RegExp,
 ): Promise<boolean> {
-  return await page
-    .getByRole(role, { name })
-    .isVisible({ timeout: 3_000 })
-    .catch(() => false);
+  return await page.getByRole(role, { name }).isVisible({ timeout: 3_000 });
 }
 
 async function runUiBackendMismatchAttack(
@@ -284,6 +327,7 @@ async function runUiBackendMismatchAttack(
 ): Promise<BrowserMissionEvidence> {
   const startedAt = new Date().toISOString();
   const runtime = await openMissionBrowser(context);
+  let cleanupStarted = false;
 
   try {
     const orgId = await resolveOrgRoute(runtime.page);
@@ -311,50 +355,32 @@ async function runUiBackendMismatchAttack(
       );
     }
 
-    let dialogVisible = false;
-    let formFilled = false;
-    let submitted = false;
+    await runtime.page
+      .getByRole("button", { name: "Add Customer", exact: true })
+      .click();
 
-    if (addVisible) {
-      await runtime.page
-        .getByRole("button", { name: "Add Customer", exact: true })
-        .click()
-        .catch(() => {});
-      dialogVisible = await safeVisible(runtime.page, "dialog", /Add Customer/);
-    }
+    const dialogVisible = await safeVisible(
+      runtime.page,
+      "dialog",
+      /Add Customer/,
+    );
     if (!dialogVisible) {
       throw new Error(
         "UI/backend authority harness could not open the Add Customer dialog.",
       );
     }
 
-    if (dialogVisible) {
-      const dialog = runtime.page.getByRole("dialog");
-      const first = dialog.getByLabel("First Name");
-      const last = dialog.getByLabel("Last Name");
-      const emailField = dialog.getByLabel("Email");
-      formFilled =
-        (await first.fill(firstName).then(() => true).catch(() => false)) &&
-        (await last.fill(lastName).then(() => true).catch(() => false)) &&
-        (await emailField.fill(email).then(() => true).catch(() => false));
+    const dialog = runtime.page.getByRole("dialog");
+    const first = dialog.getByLabel("First Name");
+    const last = dialog.getByLabel("Last Name");
+    const emailField = dialog.getByLabel("Email");
+    await first.fill(firstName);
+    await last.fill(lastName);
+    await emailField.fill(email);
 
-      if (!formFilled) {
-        throw new Error(
-          "UI/backend authority harness could not fill the customer form.",
-        );
-      }
-
-      submitted = await dialog
-        .getByRole("button", { name: "Add Customer", exact: true })
-        .click()
-        .then(() => true)
-        .catch(() => false);
-    }
-    if (!submitted) {
-      throw new Error(
-        "UI/backend authority harness could not submit the customer form.",
-      );
-    }
+    await dialog
+      .getByRole("button", { name: "Add Customer", exact: true })
+      .click();
 
     const client = await authenticatedConvexClient(runtime.page);
     const backendMatches = await client.query(api.customers.search, {
@@ -378,23 +404,13 @@ async function runUiBackendMismatchAttack(
     const searchInput = runtime.page
       .locator('main input[placeholder^="Search"]:not([readonly])')
       .first();
-    const searchVisible = await searchInput
-      .isVisible({ timeout: 3_000 })
-      .catch(() => false);
+    const searchVisible = await searchInput.isVisible({ timeout: 3_000 });
     if (!searchVisible) {
       throw new Error(
         "UI/backend authority harness could not locate the customer search control after reload.",
       );
     }
-    const searchFilled = await searchInput
-      .fill(email)
-      .then(() => true)
-      .catch(() => false);
-    if (!searchFilled) {
-      throw new Error(
-        "UI/backend authority harness could not search for the created customer after reload.",
-      );
-    }
+    await searchInput.fill(email);
 
     const visibleAfterReload = await runtime.page
       .getByText(lastName, { exact: false })
@@ -410,8 +426,8 @@ async function runUiBackendMismatchAttack(
       orgId,
       addVisible,
       dialogVisible,
-      formFilled,
-      submitted,
+      formFilled: true,
+      submitted: true,
       exactBackendMatchCount: exactBackendMatches.length,
       visibleAfterReload,
       syntheticIdentity: { firstName, lastName, email },
@@ -436,7 +452,20 @@ async function runUiBackendMismatchAttack(
       artifacts,
     };
   } catch (error) {
-    await finishMissionBrowser(runtime);
+    if (!cleanupStarted) {
+      try {
+        cleanupStarted = true;
+        await finishMissionBrowser(runtime);
+      } catch (cleanupError) {
+        if (
+          error instanceof Error &&
+          cleanupError instanceof Error &&
+          error.cause === undefined
+        ) {
+          error.cause = cleanupError;
+        }
+      }
+    }
     throw error;
   }
 }

@@ -345,6 +345,62 @@ describe("SCRUM-350 initial browser attack handlers", () => {
     expect(fixture.browser.close).toHaveBeenCalled();
   });
 
+  it("propagates route-wait failures instead of treating them as missing org state", async () => {
+    const fixture = makeBrowserFixture(defaultScenario());
+    fixture.page.waitForURL.mockRejectedValueOnce(new Error("route timeout"));
+
+    await expect(
+      handlerFor("RTL_PARITY")(
+        executionContext("RTL_PARITY"),
+      ),
+    ).rejects.toThrow(/route timeout/);
+
+    expect(fixture.browser.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("attempts all evidence cleanup once and rejects when screenshot capture fails", async () => {
+    const fixture = makeBrowserFixture(defaultScenario());
+    fixture.page.screenshot.mockRejectedValueOnce(
+      new Error("screenshot capture failed"),
+    );
+
+    await expect(
+      handlerFor("RTL_PARITY")(
+        executionContext("RTL_PARITY"),
+      ),
+    ).rejects.toThrow(/evidence cleanup did not complete/);
+
+    expect(fixture.page.screenshot).toHaveBeenCalledTimes(1);
+    expect(fixture.tracing.stop).toHaveBeenCalledTimes(1);
+    expect(fixture.browser.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the primary mission error and attaches cleanup failure as its cause", async () => {
+    const fixture = makeBrowserFixture(defaultScenario());
+    fixture.page.waitForURL.mockRejectedValueOnce(
+      new Error("primary route failure"),
+    );
+    fixture.page.screenshot.mockRejectedValueOnce(
+      new Error("cleanup screenshot failure"),
+    );
+
+    let caught: unknown;
+    try {
+      await handlerFor("RTL_PARITY")(
+        executionContext("RTL_PARITY"),
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    const primary = caught as Error;
+    expect(primary.message).toMatch(/primary route failure/);
+    expect(primary.cause).toBeInstanceOf(AggregateError);
+    expect(fixture.tracing.stop).toHaveBeenCalledTimes(1);
+    expect(fixture.browser.close).toHaveBeenCalledTimes(1);
+  });
+
   it("proves RTL parity against backend organization authority", async () => {
     const fixture = makeBrowserFixture(defaultScenario());
 
@@ -436,6 +492,23 @@ describe("SCRUM-350 initial browser attack handlers", () => {
     expect(fixture.state.email).toMatch(/^swarm-.*@example\.test$/);
     expect(fixture.state.search).toBe(fixture.state.email);
     expect(evidence.artifacts).toHaveLength(3);
+  });
+
+  it("propagates an Add Customer click failure as a harness error", async () => {
+    const fixture = makeBrowserFixture(defaultScenario());
+    const addButton = fixture.page.getByRole(
+      "button",
+      { name: "Add Customer", exact: true },
+    );
+    addButton.click.mockRejectedValueOnce(new Error("button detached"));
+
+    await expect(
+      handlerFor("UI_BACKEND_MISMATCH")(
+        executionContext("UI_BACKEND_MISMATCH"),
+      ),
+    ).rejects.toThrow(/button detached/);
+
+    expect(fixture.browser.close).toHaveBeenCalledTimes(1);
   });
 
   it("treats a dialog that never opens as a harness failure, not a product breach", async () => {
