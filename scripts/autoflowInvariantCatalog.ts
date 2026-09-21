@@ -235,13 +235,13 @@ export const AUTOFLOW_PROOF_MARKERS: Readonly<Record<string, string>> = {
   "PERF-1::convex/accountingPhase18.test.ts::BOUNDARY":
     "snapshots accumulate per (account, currency, period) and reports sum them correctly",
   "PERF-1::.github/workflows/trusted-accounting-rehearsal.yml::BOUNDARY":
-    "REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
+    'REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?',
   "CONC-1::convex/idempotencyEconomicCommands.test.ts::REPLAY,STATE_TRANSITION":
     "a concurrent retry of the same intent still creates exactly one economic event",
   "CONC-1::scripts/accountingRehearsalCases.test.ts::STATE_TRANSITION":
     "C1/C2 do not PASS when the two workers ran one after the other (RG-01)",
   "CONC-1::.github/workflows/trusted-accounting-rehearsal.yml::CONCURRENCY,REPLAY":
-    "REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
+    'REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?',
   "UI-1::scripts/reviewActionParity.test.ts::NEGATIVE,MUTATION":
     "the Deal wires every command on the frozen list",
   "UI-1::components/applications/cockpit/DealCockpitReviewParity.test.tsx::POSITIVE,NEGATIVE":
