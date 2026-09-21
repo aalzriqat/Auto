@@ -4,6 +4,7 @@ import { assembleTrustedBrowserSwarmRun } from "./prepareTrustedBrowserSwarmRun.
 
 const BASE_SHA = "a".repeat(40);
 const HEAD_SHA = "b".repeat(40);
+const TESTED_SHA = "c".repeat(40);
 const PR_NUMBER = 325;
 const PREVIEW_NAME = previewNameForRef({
   ref: "refs/pull/325/merge",
@@ -32,6 +33,7 @@ function descriptor(overrides: Record<string, unknown> = {}) {
     version: 2,
     previewName: PREVIEW_NAME,
     headSha: HEAD_SHA,
+    testedSha: TESTED_SHA,
     prNumber: PR_NUMBER,
     ...overrides,
   };
@@ -74,6 +76,7 @@ describe("trusted browser swarm run assembly", () => {
     expect(payload.impactedInvariants).toEqual([
       { id: "UI-1", severity: "HIGH" },
     ]);
+    expect(payload.testedSha).toBe(TESTED_SHA);
     expect(payload.previewName).toBe(PREVIEW_NAME);
     expect(payload.convexCloudUrl).toBe(
       "https://trusted-preview.convex.cloud",
