@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { previewNameForRef } from "../e2ePreviewBootstrap.mjs";
 import { validateE2EPreviewDescriptor } from "./e2ePreviewDescriptor.mjs";
+import { validateConvexPreviewAuthority } from "./convexPreviewAuthority.mjs";
 
 function exactSha(value, label) {
   if (!/^[0-9a-f]{40}$/i.test(value ?? "")) {
@@ -63,6 +64,7 @@ function assertTrustedImpact(value, expected) {
  * @param {{
  *   impactArtifact: unknown,
  *   descriptorArtifact: unknown,
+ *   authorityArtifact: unknown,
  *   baseSha: string,
  *   headSha: string,
  *   prNumber: number,
@@ -85,6 +87,10 @@ export function assembleTrustedBrowserSwarmRun(input) {
     expectedPrNumber: prNumber,
     expectedPreviewName,
   });
+  const convexAuthority = validateConvexPreviewAuthority(
+    input.authorityArtifact,
+    expectedPreviewName,
+  );
 
   const shouldRun = impactedInvariants.length > 0;
   // Two is the initial bounded rollout. Keep the matrix derived from the same
@@ -101,7 +107,8 @@ export function assembleTrustedBrowserSwarmRun(input) {
     headSha,
     prNumber,
     previewName: descriptor.previewName,
-    convexCloudUrl: descriptor.convexCloudUrl,
+    convexCloudUrl: convexAuthority.convexCloudUrl,
+    convexDeploymentName: convexAuthority.deploymentName,
     impactedInvariants,
     shouldRun,
     workerCount,
@@ -130,16 +137,22 @@ export async function prepareTrustedBrowserSwarmRun({
   if (!descriptorPath) {
     throw new Error("PREVIEW_DESCRIPTOR_PATH is required.");
   }
+  const authorityPath =
+    env.CONVEX_AUTHORITY_PATH ??
+    path.join(repoRoot, "artifacts/browser-swarm-convex-authority.json");
 
-  const [impactRaw, descriptorRaw] = await Promise.all([
+  const [impactRaw, descriptorRaw, authorityRaw] = await Promise.all([
     readFile(impactPath, "utf8"),
     readFile(descriptorPath, "utf8"),
+    readFile(authorityPath, "utf8"),
   ]);
   let impactArtifact;
   let descriptorArtifact;
+  let authorityArtifact;
   try {
     impactArtifact = JSON.parse(impactRaw);
     descriptorArtifact = JSON.parse(descriptorRaw);
+    authorityArtifact = JSON.parse(authorityRaw);
   } catch {
     throw new Error("Trusted browser swarm handoff artifacts must be valid JSON.");
   }
@@ -147,6 +160,7 @@ export async function prepareTrustedBrowserSwarmRun({
   const payload = assembleTrustedBrowserSwarmRun({
     impactArtifact,
     descriptorArtifact,
+    authorityArtifact,
     baseSha,
     headSha,
     prNumber,
