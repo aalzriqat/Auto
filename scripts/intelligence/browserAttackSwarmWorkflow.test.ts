@@ -171,6 +171,10 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(authEnv).toHaveProperty("CLERK_SECRET_KEY");
     expect(authEnv).toHaveProperty("E2E_LOGIN_PASSWORD");
     expect(authEnv).toHaveProperty("E2E_APPROVER_PASSWORD");
+    expect(authEnv).toHaveProperty(
+      "PLAYWRIGHT_BASE_URL",
+      "http://localhost:3000",
+    );
 
     const execute = step("attack-worker", "Execute trusted browser missions");
     const env = execute.env ?? {};
@@ -179,6 +183,10 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(env).toHaveProperty("CLERK_SECRET_KEY");
     expect(env).toHaveProperty("E2E_LOGIN_USER");
     expect(env).toHaveProperty("E2E_APPROVER_USER");
+    expect(env).toHaveProperty(
+      "PLAYWRIGHT_BASE_URL",
+      "http://localhost:3000",
+    );
     expect(env).not.toHaveProperty("E2E_LOGIN_PASSWORD");
     expect(env).not.toHaveProperty("E2E_LOGIN_VERIFICATION_CODE");
     expect(env).not.toHaveProperty("E2E_APPROVER_PASSWORD");

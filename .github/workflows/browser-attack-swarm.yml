@@ -214,6 +214,7 @@ jobs:
         run: pnpm exec playwright test playwright/tests/auth.setup.ts --project=setup
         env:
           CI: true
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
@@ -284,7 +285,7 @@ jobs:
           CI: true
           PLAYWRIGHT_SKIP_WEBSERVER: "1"
           BROWSER_SWARM_TRUSTED_EXTERNAL_SERVER: "1"
-          PLAYWRIGHT_BASE_URL: http://127.0.0.1:3000
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
           BROWSER_SWARM_ENABLED: "1"
           BROWSER_SWARM_RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
           BROWSER_SWARM_WORKER_COUNT: ${{ needs.prepare.outputs.worker_count }}
