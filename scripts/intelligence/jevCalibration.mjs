@@ -142,6 +142,7 @@ export function buildCalibrationObservation({
     patchTruncated: change.patchTruncated,
     patchCharsSent: change.patchCharsSent,
     deterministicImpact,
+    extraDeterministicRequirements,
     deterministicReviewMatrix,
     state: change.state,
     blindQuestions: runtime.buildJevRiskQuestions(),
@@ -246,12 +247,7 @@ export async function runHistoricalCalibrationCase({
     normalize: (response) =>
       runtime.normalizeJevResponse(response, observation.invariants),
     deterministicImpact: observation.deterministicImpact,
-    extraDeterministicRequirements:
-      observation.deterministicReviewMatrix.deterministicRequirements.filter(
-        (requirement) =>
-          requirement === "review:correctness-governance" ||
-          requirement === "proof:jev-harness",
-      ),
+    extraDeterministicRequirements: observation.extraDeterministicRequirements,
   });
 
   return {
