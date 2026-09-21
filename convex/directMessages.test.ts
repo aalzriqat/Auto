@@ -413,6 +413,23 @@ describe("directMessages projection compatibility", () => {
     });
 
     const asAlice = t.withIdentity({ subject: "alice_group", clerkId: "alice_group" });
+
+    await expect(
+      asAlice.mutation(api.directMessages.createGroup, {
+        orgId,
+        name: "Too small after normalization",
+        memberIds: [aliceId, bobId],
+      }),
+    ).rejects.toThrow("A group needs at least 2 distinct other members.");
+
+    await expect(
+      asAlice.mutation(api.directMessages.createGroup, {
+        orgId,
+        name: "Repeated member",
+        memberIds: [bobId, bobId],
+      }),
+    ).rejects.toThrow("A group needs at least 2 distinct other members.");
+
     await expect(
       asAlice.mutation(api.directMessages.createGroup, {
         orgId,
