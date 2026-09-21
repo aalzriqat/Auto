@@ -86,21 +86,13 @@ export function assembleTrustedBrowserSwarmRun(input) {
     expectedPreviewName,
   });
 
-  if (impactedInvariants.length === 0) {
-    return {
-      version: 1,
-      authority: "TRUSTED_MAIN_BROWSER_SWARM_RUN",
-      baseSha,
-      headSha,
-      prNumber,
-      previewName: descriptor.previewName,
-      convexCloudUrl: descriptor.convexCloudUrl,
-      impactedInvariants,
-      shouldRun: false,
-      workerCount: 0,
-      planningMode: "TRUSTED_WORKER_RECONSTRUCTION",
-    };
-  }
+  const shouldRun = impactedInvariants.length > 0;
+  // Two is the initial bounded rollout. Keep the matrix derived from the same
+  // trusted workerCount so GitHub cannot drift from the run evidence.
+  const workerCount = shouldRun ? 2 : 0;
+  const workerMatrix = {
+    worker_index: Array.from({ length: workerCount }, (_, index) => index + 1),
+  };
 
   return {
     version: 1,
@@ -111,12 +103,9 @@ export function assembleTrustedBrowserSwarmRun(input) {
     previewName: descriptor.previewName,
     convexCloudUrl: descriptor.convexCloudUrl,
     impactedInvariants,
-    shouldRun: true,
-    // Two is the initial bounded rollout. The trusted TypeScript planner in
-    // each worker reconstructs the exact deterministic mission set and may
-    // leave one bucket empty; unsupported families fail closed there before
-    // browser dispatch.
-    workerCount: 2,
+    shouldRun,
+    workerCount,
+    workerMatrix,
     planningMode: "TRUSTED_WORKER_RECONSTRUCTION",
   };
 }
@@ -174,6 +163,7 @@ export async function prepareTrustedBrowserSwarmRun({
       [
         "should_run=" + String(payload.shouldRun),
         "worker_count=" + String(payload.workerCount),
+        "worker_matrix=" + JSON.stringify(payload.workerMatrix),
         "impacted_invariants_json=" + JSON.stringify(payload.impactedInvariants),
         "preview_name=" + payload.previewName,
         "convex_cloud_url=" + payload.convexCloudUrl,
