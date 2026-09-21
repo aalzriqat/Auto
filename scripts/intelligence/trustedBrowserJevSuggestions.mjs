@@ -7,10 +7,10 @@ export const MAX_BROWSER_JEV_RESPONSE_BYTES = 16 * 1024;
 export const BROWSER_JEV_TIMEOUT_MS = 8_000;
 
 const AUTHORITY = "TRUSTED_MAIN_JEV_BROWSER_EXPLORATION";
-const EXECUTABLE_FAMILIES = [
+const EXECUTABLE_FAMILIES = new Set([
   "UI_BACKEND_MISMATCH",
   "RTL_PARITY",
-];
+]);
 const QUESTION_TO_FAMILY = Object.freeze({
   family__UI_BACKEND_MISMATCH: "UI_BACKEND_MISMATCH",
   family__RTL_PARITY: "RTL_PARITY",
@@ -123,8 +123,12 @@ export function normalizeTrustedBrowserJevResponse(response) {
   ) {
     throw new Error("Jev browser response is missing answers.");
   }
-  const expectedKeys = Object.keys(QUESTION_TO_FAMILY).sort();
-  const answerKeys = Object.keys(response.answers).sort();
+  const expectedKeys = Object.keys(QUESTION_TO_FAMILY).sort((left, right) =>
+    left.localeCompare(right),
+  );
+  const answerKeys = Object.keys(response.answers).sort((left, right) =>
+    left.localeCompare(right),
+  );
   if (
     answerKeys.length !== expectedKeys.length ||
     answerKeys.some((key, index) => key !== expectedKeys[index])
@@ -198,7 +202,7 @@ function validateSuggestion(value, index) {
   exactKeys(value, ["family", "probability"], "Trusted Jev suggestion");
   if (
     typeof value.family !== "string" ||
-    !EXECUTABLE_FAMILIES.includes(value.family) ||
+    !EXECUTABLE_FAMILIES.has(value.family) ||
     typeof value.probability !== "number" ||
     !Number.isFinite(value.probability) ||
     value.probability < 0 ||
@@ -207,6 +211,49 @@ function validateSuggestion(value, index) {
     throw new Error("Trusted Jev suggestion " + index + " is malformed.");
   }
   return { family: value.family, probability: value.probability };
+}
+
+function validateArtifactSuggestions(rawSuggestions) {
+  if (!Array.isArray(rawSuggestions) || rawSuggestions.length > 2) {
+    throw new Error("Trusted Jev browser artifact suggestions are not bounded.");
+  }
+  const suggestions = rawSuggestions.map(validateSuggestion);
+  const families = new Set();
+  for (const suggestion of suggestions) {
+    if (families.has(suggestion.family)) {
+      throw new Error("Trusted Jev browser artifact contains duplicate families.");
+    }
+    families.add(suggestion.family);
+  }
+  return suggestions;
+}
+
+function assertArtifactStatusMetadata(value, suggestions) {
+  if (value.status === "SKIPPED_NO_IMPACT") {
+    if (
+      value.model !== null ||
+      value.usage !== null ||
+      suggestions.length !== 0
+    ) {
+      throw new Error("No-impact Jev artifact must contain no model output.");
+    }
+    return;
+  }
+
+  if (
+    typeof value.model !== "string" ||
+    !value.model ||
+    value.model.length > 256 ||
+    !value.usage ||
+    typeof value.usage !== "object" ||
+    Array.isArray(value.usage) ||
+    !Number.isSafeInteger(value.usage.input_tokens) ||
+    value.usage.input_tokens < 0 ||
+    !Number.isSafeInteger(value.usage.output_tokens) ||
+    value.usage.output_tokens < 0
+  ) {
+    throw new Error("Live Jev browser artifact model metadata is invalid.");
+  }
 }
 
 export function validateTrustedBrowserJevArtifact(value, expected) {
@@ -247,42 +294,8 @@ export function validateTrustedBrowserJevArtifact(value, expected) {
     }
   }
 
-  if (!Array.isArray(value.suggestions) || value.suggestions.length > 2) {
-    throw new Error("Trusted Jev browser artifact suggestions are not bounded.");
-  }
-  const suggestions = value.suggestions.map(validateSuggestion);
-  const families = new Set();
-  for (const suggestion of suggestions) {
-    if (families.has(suggestion.family)) {
-      throw new Error("Trusted Jev browser artifact contains duplicate families.");
-    }
-    families.add(suggestion.family);
-  }
-
-  if (value.status === "SKIPPED_NO_IMPACT") {
-    if (
-      value.model !== null ||
-      value.usage !== null ||
-      suggestions.length !== 0
-    ) {
-      throw new Error("No-impact Jev artifact must contain no model output.");
-    }
-  } else {
-    if (
-      typeof value.model !== "string" ||
-      !value.model ||
-      value.model.length > 256 ||
-      !value.usage ||
-      typeof value.usage !== "object" ||
-      Array.isArray(value.usage) ||
-      !Number.isSafeInteger(value.usage.input_tokens) ||
-      value.usage.input_tokens < 0 ||
-      !Number.isSafeInteger(value.usage.output_tokens) ||
-      value.usage.output_tokens < 0
-    ) {
-      throw new Error("Live Jev browser artifact model metadata is invalid.");
-    }
-  }
+  const suggestions = validateArtifactSuggestions(value.suggestions);
+  assertArtifactStatusMetadata(value, suggestions);
 
   return {
     version: 1,

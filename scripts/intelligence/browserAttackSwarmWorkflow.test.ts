@@ -196,6 +196,21 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(plan.env).toHaveProperty("TESTED_SHA", "${{ env.TESTED_SHA }}");
   });
 
+  it("reasserts same-repository trust at every privileged downstream job boundary", () => {
+    for (const jobName of ["candidate-build", "verdict"]) {
+      const condition = String(job(jobName).if ?? "");
+      expect(condition).toContain(
+        "github.event.workflow_run.event == 'pull_request'",
+      );
+      expect(condition).toContain(
+        "github.event.workflow_run.head_repository.full_name == github.repository",
+      );
+      expect(condition).toContain(
+        "github.event.workflow_run.pull_requests[0].number != null",
+      );
+    }
+  });
+
   it("builds candidate frontend once with no reusable credentials and reuses only the verified artifact", () => {
     const build = step(
       "candidate-build",
@@ -240,9 +255,8 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
 
     const source = readFileSync(workflowPath, "utf8");
     expect(
-      (source.match(/Build exact tested candidate once in isolated container/g) ?? [])
-        .length,
-    ).toBe(1);
+      source.match(/Build exact tested candidate once in isolated container/g) ?? [],
+    ).toHaveLength(1);
     expect(source).not.toContain("Build exact candidate frontend in isolated container");
   });
 

@@ -214,15 +214,19 @@ async function hashFile(filePath) {
   return hash.digest("hex");
 }
 
+function assertRuntimeTraversalDepth(depth) {
+  if (depth > MAX_BROWSER_BUILD_DEPTH) {
+    throw new Error("Candidate artifact exceeds the maximum runtime directory depth.");
+  }
+}
+
 async function collectRuntimeRecords(runtimeRoot) {
   const records = [];
   let totalBytes = 0;
   let totalEntries = 0;
 
   async function walk(currentRoot, relativeRoot = "", depth = 0) {
-    if (depth > MAX_BROWSER_BUILD_DEPTH) {
-      throw new Error("Candidate artifact exceeds the maximum runtime directory depth.");
-    }
+    assertRuntimeTraversalDepth(depth);
     const entries = (await readdir(currentRoot, { withFileTypes: true })).sort(
       (left, right) => left.name.localeCompare(right.name),
     );

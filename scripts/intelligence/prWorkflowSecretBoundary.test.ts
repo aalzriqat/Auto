@@ -100,6 +100,9 @@ describe("pull-request workflow secret boundary", () => {
 
     expect(source.match(/\$\{\{\s*secrets\./g)?.length).toBe(1);
     expect(source).toContain("pnpm install --frozen-lockfile --ignore-scripts");
+    expect(source).toContain("git ls-files -s");
+    expect(source).toContain("'$1 == \"120000\" { found=1 }");
+    expect(source).not.toContain("find . -path './.git'");
     expect(source).toContain("git show \"$BASE_SHA:sonar-project.properties\"");
     expect(source).toContain("-Dsonar.pullrequest.key=325");
     expect(source).toContain(
