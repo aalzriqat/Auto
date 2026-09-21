@@ -19,6 +19,7 @@ The initial integration is intentionally shadow-only:
 - a missing credential, API error, malformed response, timeout, or unavailable model produces `ADVISORY_UNAVAILABLE` / `SKIPPED_NO_CREDENTIAL`, not a safe verdict;
 - the unprivileged `Invariant Governance` workflow first runs the deterministic catalog and Jev-harness tests on the candidate PR with no Jev secret;
 - only after that workflow succeeds does the secret-bearing PR analysis run through `workflow_run` from trusted `main`; it fetches the PR commit only as Git data and never checks out or executes PR code;
+- during shadow calibration, secret-bearing PR analysis is restricted to same-repository PRs; fork PRs cannot consume the TypeSafe credential or send candidate diffs to TypeSafe;
 - the secret-bearing workflow also reads the invariant catalog from trusted `main`, not from the candidate commit, so a PR cannot shrink its own impact map by weakening `sourceAreas` or invariant metadata; changes to the invariant catalog, invariant-governance workflow, Jev workflow, or `scripts/intelligence/**` force a deterministic correctness-governance review requirement;
 - the trusted workflow disables external diff and text-conversion execution while reading the candidate diff.
 
