@@ -1,0 +1,272 @@
+name: Trusted Browser Attack Swarm
+
+on:
+  workflow_run:
+    workflows: [ "E2E Tests (Playwright)" ]
+    types: [ completed ]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: trusted-browser-swarm-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    name: trusted-plan
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.pull_requests[0].number != null
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      should_run: ${{ steps.plan.outputs.should_run }}
+      worker_count: ${{ steps.plan.outputs.worker_count }}
+      worker_matrix: ${{ steps.plan.outputs.worker_matrix }}
+      impacted_invariants_json: ${{ steps.plan.outputs.impacted_invariants_json }}
+      preview_name: ${{ steps.plan.outputs.preview_name }}
+      convex_cloud_url: ${{ steps.plan.outputs.convex_cloud_url }}
+      head_sha: ${{ steps.plan.outputs.head_sha }}
+      pr_number: ${{ steps.plan.outputs.pr_number }}
+
+    steps:
+      - name: Checkout trusted control plane from main
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+          path: trusted
+          # The token is read-only in this workflow and is retained only so
+          # the trusted checkout can fetch the exact PR head as Git data.
+          persist-credentials: true
+
+      - name: Fetch and verify exact candidate head as data only
+        working-directory: trusted
+        env:
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          EXPECTED_HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "workflow_run did not provide a valid PR number" >&2
+            exit 1
+          fi
+          if ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || ! [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "workflow_run did not provide exact base/head SHAs" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin "refs/pull/${PR_NUMBER}/head"
+          FETCHED_HEAD="$(git rev-parse FETCH_HEAD)"
+          if [ "$FETCHED_HEAD" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "Fetched PR head does not match workflow_run head SHA" >&2
+            exit 1
+          fi
+          git cat-file -e "${EXPECTED_BASE_SHA}^{commit}"
+          git cat-file -e "${EXPECTED_HEAD_SHA}^{commit}"
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+          cache: "pnpm"
+          cache-dependency-path: trusted/pnpm-lock.yaml
+
+      - name: Install trusted main dependencies
+        working-directory: trusted
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Verify trusted impact and browser control plane
+        working-directory: trusted
+        run: |
+          set -euo pipefail
+          pnpm test:jev-impact
+          pnpm test:browser-swarm
+        env:
+          NODE_ENV: test
+
+      - name: Derive mandatory impact from trusted main
+        working-directory: trusted
+        run: pnpm browser-swarm:trusted-impact
+        env:
+          BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
+          HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
+
+      - name: Download triggering E2E preview descriptor
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/e2e-preview-descriptor"
+          curl --fail --silent --show-error             -H "Authorization: Bearer $GITHUB_TOKEN"             -H "Accept: application/vnd.github+json"             -H "X-GitHub-Api-Version: 2022-11-28"             "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$TRIGGER_RUN_ID/artifacts?per_page=100"             > "$RUNNER_TEMP/artifacts.json"
+
+          ARTIFACT_ID="$(node -e '
+            const fs = require("node:fs");
+            const payload = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const matches = (payload.artifacts || []).filter(
+              (artifact) => artifact.name === "e2e-preview-descriptor" && artifact.expired !== true,
+            );
+            if (matches.length !== 1) {
+              throw new Error("Expected exactly one live e2e-preview-descriptor artifact");
+            }
+            process.stdout.write(String(matches[0].id));
+          ' "$RUNNER_TEMP/artifacts.json")"
+
+          curl --fail --silent --show-error --location             -H "Authorization: Bearer $GITHUB_TOKEN"             -H "Accept: application/vnd.github+json"             -H "X-GitHub-Api-Version: 2022-11-28"             "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip"             -o "$RUNNER_TEMP/e2e-preview-descriptor.zip"
+
+          unzip -q "$RUNNER_TEMP/e2e-preview-descriptor.zip"             -d "$RUNNER_TEMP/e2e-preview-descriptor"
+          test -f "$RUNNER_TEMP/e2e-preview-descriptor/e2e-preview-descriptor.json"
+
+      - name: Assemble trusted run and fail closed on unsupported impact
+        id: plan
+        working-directory: trusted
+        run: pnpm browser-swarm:prepare-trusted-run
+        env:
+          BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
+          HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          BROWSER_SWARM_RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
+          PREVIEW_DESCRIPTOR_PATH: ${{ runner.temp }}/e2e-preview-descriptor/e2e-preview-descriptor.json
+
+      - name: Publish trusted plan evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trusted-browser-swarm-plan
+          path: |
+            trusted/artifacts/browser-swarm-trusted-impact.json
+            trusted/artifacts/browser-swarm-trusted-run.json
+          if-no-files-found: error
+          retention-days: 14
+
+  attack-worker:
+    name: attack-worker-${{ matrix.worker_index }}
+    needs: prepare
+    if: needs.prepare.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.worker_matrix) }}
+
+    steps:
+      - name: Checkout trusted browser controller from main
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: main
+          path: trusted
+          persist-credentials: false
+
+      - name: Checkout exact candidate head as application code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.head_sha }}
+          path: candidate
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+
+      - name: Install trusted controller dependencies
+        working-directory: trusted
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install exact candidate dependencies
+        working-directory: candidate
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install trusted Chromium
+        working-directory: trusted
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Build exact candidate frontend
+        working-directory: candidate
+        run: pnpm build
+        env:
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+
+      - name: Start exact candidate frontend on loopback
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          nohup pnpm exec next start -H 127.0.0.1 -p 3000             > "$RUNNER_TEMP/candidate-server.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/candidate-server.pid"
+
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error               http://127.0.0.1:3000/api/health > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Exact candidate frontend did not become healthy on loopback." >&2
+          exit 1
+        env:
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+
+      - name: Execute trusted browser missions
+        working-directory: trusted
+        run: pnpm exec playwright test playwright/tests/browser-swarm.spec.ts --project=chromium
+        env:
+          CI: true
+          PLAYWRIGHT_SKIP_WEBSERVER: "1"
+          BROWSER_SWARM_TRUSTED_EXTERNAL_SERVER: "1"
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:3000
+          BROWSER_SWARM_ENABLED: "1"
+          BROWSER_SWARM_RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
+          BROWSER_SWARM_WORKER_COUNT: ${{ needs.prepare.outputs.worker_count }}
+          BROWSER_SWARM_WORKER_ID: worker-${{ matrix.worker_index }}
+          BROWSER_SWARM_IMPACTED_INVARIANTS_JSON: ${{ needs.prepare.outputs.impacted_invariants_json }}
+          BROWSER_SWARM_JEV_SUGGESTIONS_JSON: "[]"
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.preview_name }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
+          E2E_LOGIN_VERIFICATION_CODE: ${{ secrets.E2E_LOGIN_VERIFICATION_CODE }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+          E2E_APPROVER_PASSWORD: ${{ secrets.E2E_APPROVER_PASSWORD }}
+
+      - name: Stop candidate frontend
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/candidate-server.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/candidate-server.pid")" 2>/dev/null || true
+          fi
+
+      - name: Upload trusted swarm evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trusted-browser-swarm-worker-${{ matrix.worker_index }}
+          path: |
+            trusted/swarm/
+            trusted/playwright-report/
+            trusted/test-results/
+          if-no-files-found: warn
+          retention-days: 14
