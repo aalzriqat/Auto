@@ -458,16 +458,8 @@ function invariantQuestionKey(id) {
   return `invariant__${id.replace(/\W/g, "_")}`;
 }
 
-/**
- * @param {ExtractedInvariant[]} invariants
- * @returns {Record<string, {type: "noul", instructions: string, criteria: {true: string, false: string}}>}
- */
-export function buildJevQuestions(invariants) {
-  if (invariants.length === 0) {
-    throw new Error("Jev question set cannot be built from an empty invariant catalog");
-  }
+export function buildJevRiskQuestions() {
   const questions = {};
-  const invariantQuestionKeys = new Set();
   for (const [risk, definition] of Object.entries(RISK_QUESTIONS)) {
     questions[`risk__${risk}`] = {
       type: "noul",
@@ -478,6 +470,19 @@ export function buildJevQuestions(invariants) {
       },
     };
   }
+  return questions;
+}
+
+/**
+ * @param {ExtractedInvariant[]} invariants
+ * @returns {Record<string, {type: "noul", instructions: string, criteria: {true: string, false: string}}>}
+ */
+export function buildJevQuestions(invariants) {
+  if (invariants.length === 0) {
+    throw new Error("Jev question set cannot be built from an empty invariant catalog");
+  }
+  const questions = buildJevRiskQuestions();
+  const invariantQuestionKeys = new Set();
 
   for (const invariant of invariants) {
     const key = invariantQuestionKey(invariant.id);
@@ -568,6 +573,10 @@ export function normalizeJevResponse(response, invariants) {
     risks,
     invariantImpact,
   };
+}
+
+export function normalizeJevRiskResponse(response) {
+  return normalizeJevResponse(response, []);
 }
 
 function assertProbability(value, name) {
