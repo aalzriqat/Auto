@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { browserSwarmManifestFromEnv } from "./browserAttackSwarmRuntime";
+import {
+  browserSwarmLocalBaseUrl,
+  browserSwarmManifestFromEnv,
+} from "./browserAttackSwarmRuntime";
 
 const baseEnv = {
   BROWSER_SWARM_IMPACTED_INVARIANTS_JSON:
@@ -12,6 +15,26 @@ const baseEnv = {
 };
 
 describe("SCRUM-350 browser swarm runtime config", () => {
+  it("allows only a local loopback frontend origin for attack execution", () => {
+    expect(browserSwarmLocalBaseUrl({})).toBe("http://127.0.0.1:3000");
+    expect(
+      browserSwarmLocalBaseUrl({
+        PLAYWRIGHT_BASE_URL: "http://localhost:3000/",
+      }),
+    ).toBe("http://localhost:3000");
+
+    expect(() =>
+      browserSwarmLocalBaseUrl({
+        PLAYWRIGHT_BASE_URL: "https://autoflowdealer.com",
+      }),
+    ).toThrow(/localhost\/loopback/);
+    expect(() =>
+      browserSwarmLocalBaseUrl({
+        PLAYWRIGHT_BASE_URL: "http://10.0.0.12:3000",
+      }),
+    ).toThrow(/localhost\/loopback/);
+  });
+
   it("reconstructs the same bounded manifest in every worker", () => {
     const first = browserSwarmManifestFromEnv(baseEnv);
     const second = browserSwarmManifestFromEnv({

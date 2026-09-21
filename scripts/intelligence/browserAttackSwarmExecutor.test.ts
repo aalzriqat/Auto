@@ -230,6 +230,49 @@ describe("SCRUM-350 trusted browser swarm worker", () => {
     );
   });
 
+  it("waits for an aborted handler to quiesce before dispatching the next mission", async () => {
+    const first = mission({ id: "first", timeoutMs: 15 });
+    const second = mission({ id: "second", timeoutMs: 100 });
+    let firstCleanupCompleted = false;
+    let secondStartedAfterCleanup = false;
+
+    const result = await executeBrowserSwarmWorker({
+      manifest: manifestFor([first, second]),
+      workerId: "worker-1",
+      verifyPreviewTarget: async () => ({
+        verified: true,
+        summary: "verified",
+      }),
+      handlers: {
+        UI_BACKEND_MISMATCH: async ({ mission: current, signal }) => {
+          if (current.id === "first") {
+            return await new Promise((_, reject) => {
+              signal.addEventListener(
+                "abort",
+                () => {
+                  setTimeout(() => {
+                    firstCleanupCompleted = true;
+                    reject(new Error("first mission cleanup complete"));
+                  }, 25);
+                },
+                { once: true },
+              );
+            });
+          }
+
+          secondStartedAfterCleanup = firstCleanupCompleted;
+          return evidenceFor(second);
+        },
+      },
+    });
+
+    expect(result.results.map((entry) => entry.outcome)).toEqual([
+      "HARNESS_ERROR",
+      "PASS",
+    ]);
+    expect(secondStartedAfterCleanup).toBe(true);
+  });
+
   it("reports deterministic oracle failures as confirmed breaches", async () => {
     const item = mission();
 

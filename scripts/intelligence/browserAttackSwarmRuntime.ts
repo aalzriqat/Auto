@@ -33,6 +33,33 @@ function required(env: Env, key: string): string {
   return value;
 }
 
+export function browserSwarmLocalBaseUrl(env: Env): string {
+  const raw = env.PLAYWRIGHT_BASE_URL?.trim() || "http://127.0.0.1:3000";
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("PLAYWRIGHT_BASE_URL must be a valid local HTTP origin");
+  }
+
+  const localHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);
+  if (
+    parsed.protocol !== "http:" ||
+    !localHosts.has(parsed.hostname) ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash ||
+    parsed.pathname !== "/"
+  ) {
+    throw new Error(
+      "PLAYWRIGHT_BASE_URL must be a bare localhost/loopback HTTP origin for the preview swarm",
+    );
+  }
+
+  return parsed.origin;
+}
+
 function parseJson(raw: string, label: string): unknown {
   try {
     return JSON.parse(raw);

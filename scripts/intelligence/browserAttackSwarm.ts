@@ -445,14 +445,16 @@ function assertSwarmPreviewIdentity(
   }
   if (
     parsed.protocol !== "https:" ||
+    !/^[a-z0-9-]+\\.convex\\.cloud$/.test(parsed.hostname) ||
     parsed.username ||
     parsed.password ||
+    parsed.port ||
     parsed.search ||
     parsed.hash ||
     parsed.pathname !== "/"
   ) {
     throw new Error(
-      "Browser swarm expectedCloudUrl must be a bare HTTPS deployment origin",
+      "Browser swarm expectedCloudUrl must be a bare HTTPS deployment origin on convex.cloud",
     );
   }
 }

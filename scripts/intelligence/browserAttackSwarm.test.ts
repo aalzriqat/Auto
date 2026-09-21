@@ -243,6 +243,16 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
       buildBrowserSwarmRunManifest({
         plan,
         workerCount: 1,
+        runId: "pr-350-abcdef1234",
+        previewName: "e2e-pr-350-abcdef1234",
+        expectedCloudUrl: "https://example-preview.invalid",
+      }),
+    ).toThrow(/convex\.cloud/);
+
+    expect(() =>
+      buildBrowserSwarmRunManifest({
+        plan,
+        workerCount: 1,
         runId: "../escape",
         previewName: "e2e-pr-350-abcdef1234",
         expectedCloudUrl: "https://example.convex.cloud",

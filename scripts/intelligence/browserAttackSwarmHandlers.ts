@@ -10,6 +10,7 @@ import type {
   BrowserAttackHandlerRegistry,
   BrowserMissionExecutionContext,
 } from "./browserAttackSwarmExecutor";
+import { browserSwarmLocalBaseUrl } from "./browserAttackSwarmRuntime";
 import type { BrowserMissionEvidence } from "./browserAttackSwarm";
 
 type ArtifactWriter = {
@@ -42,10 +43,6 @@ function absoluteArtifact(relativePath: string): string {
 
 async function ensureArtifactRoot(paths: ArtifactWriter): Promise<void> {
   await mkdir(absoluteArtifact(paths.root), { recursive: true });
-}
-
-function baseUrl(): string {
-  return process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3000";
 }
 
 function orgIdFromUrl(url: string): string | null {
@@ -83,7 +80,7 @@ async function openMissionBrowser(
 
   const browser = await chromium.launch({ headless: true });
   const browserContext = await browser.newContext({
-    baseURL: baseUrl(),
+    baseURL: browserSwarmLocalBaseUrl(process.env),
     storageState: USER_AUTH_FILE,
   });
 

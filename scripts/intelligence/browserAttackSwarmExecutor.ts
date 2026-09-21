@@ -135,25 +135,38 @@ async function runHandlerWithCancellation(
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      const timeoutError = new BrowserSwarmExecutionError(
-        "Browser mission " +
-          context.mission.id +
-          " exceeded its " +
-          context.mission.timeoutMs +
-          "ms timeout and was aborted",
-      );
-      reject(timeoutError);
-      controller.abort(timeoutError);
-    }, context.mission.timeoutMs);
+  const task = Promise.resolve().then(() =>
+    handler({ ...context, signal: controller.signal }),
+  );
+  const timeout = new Promise<{ kind: "timeout" }>((resolve) => {
+    timer = setTimeout(
+      () => resolve({ kind: "timeout" }),
+      context.mission.timeoutMs,
+    );
   });
 
   try {
-    return await Promise.race([
-      handler({ ...context, signal: controller.signal }),
+    const winner = await Promise.race([
+      task.then((value) => ({ kind: "value" as const, value })),
       timeout,
     ]);
+    if (winner.kind === "value") return winner.value;
+
+    const timeoutError = new BrowserSwarmExecutionError(
+      "Browser mission " +
+        context.mission.id +
+        " exceeded its " +
+        context.mission.timeoutMs +
+        "ms timeout and was aborted",
+    );
+    controller.abort(timeoutError);
+
+    // Do not dispatch the next adversarial mission while the timed-out handler
+    // can still mutate the shared preview. A handler is required to observe the
+    // AbortSignal and quiesce; if it does not, the worker intentionally remains
+    // blocked until the outer job timeout kills the process.
+    await task.catch(() => undefined);
+    throw timeoutError;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }

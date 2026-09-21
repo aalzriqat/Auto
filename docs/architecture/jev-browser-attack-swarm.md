@@ -83,7 +83,11 @@ A run manifest carries:
 
 The execution layer must call the existing preview assertion path before any adversarial write. The preview marker is the authority proving that the deployment is disposable; a URL string alone is not sufficient.
 
-No production or customer-data attack path is permitted. SCRUM-353 remains the prerequisite for any future production/customer-data use.
+No production or customer-data attack path is permitted. Phase A browser execution additionally refuses any remote frontend origin: `PLAYWRIGHT_BASE_URL` must be localhost/loopback, while the backend manifest must be a bare `https://*.convex.cloud` origin verified through SCRUM-143. This prevents a miswired run from driving a production frontend while probing a preview backend.
+
+Timed-out handlers must quiesce after their AbortSignal fires before the worker dispatches the next mission; the worker never overlaps a live timed-out mutator with a later attack.
+
+SCRUM-353 remains the prerequisite for any future production/customer-data use.
 
 ## Bounded parallelism
 
