@@ -6,34 +6,13 @@ import {
   assertPreviewTargeting,
 } from "../e2ePreviewBootstrap.mjs";
 
-function assertConvexCloudOrigin(value) {
-  let parsed;
-  try {
-    parsed = new URL(value ?? "");
-  } catch {
-    throw new PreviewTargetingError(
-      "NEXT_PUBLIC_CONVEX_URL must be a valid Convex cloud deployment origin.",
-    );
-  }
-  if (
-    parsed.protocol !== "https:" ||
-    !/^[a-z0-9-]+\.convex\.cloud$/.test(parsed.hostname) ||
-    parsed.username ||
-    parsed.password ||
-    parsed.port ||
-    parsed.pathname !== "/" ||
-    parsed.search ||
-    parsed.hash
-  ) {
-    throw new PreviewTargetingError(
-      "NEXT_PUBLIC_CONVEX_URL must be a bare https://*.convex.cloud origin.",
-    );
-  }
-  return parsed.origin;
-}
+const DESCRIPTOR_VERSION = 2;
 
 /**
- * Re-validates an untrusted descriptor artifact in a trusted workflow.
+ * Re-validates the candidate-produced handoff as identity data only.
+ *
+ * Deliberately absent: any Convex deployment URL. The trusted workflow resolves
+ * previewName -> deployment URL independently through Convex's control plane.
  *
  * @param {unknown} value
  * @param {{
@@ -53,7 +32,6 @@ export function validateE2EPreviewDescriptor(value, expected) {
   const allowedKeys = new Set([
     "version",
     "previewName",
-    "convexCloudUrl",
     "headSha",
     "prNumber",
   ]);
@@ -66,7 +44,7 @@ export function validateE2EPreviewDescriptor(value, expected) {
     );
   }
 
-  if (descriptor.version !== 1) {
+  if (descriptor.version !== DESCRIPTOR_VERSION) {
     throw new PreviewTargetingError(
       "E2E preview descriptor version is not supported.",
     );
@@ -79,12 +57,6 @@ export function validateE2EPreviewDescriptor(value, expected) {
       "E2E preview descriptor preview name does not match the trusted workflow expectation.",
     );
   }
-
-  const convexCloudUrl = assertConvexCloudOrigin(
-    typeof descriptor.convexCloudUrl === "string"
-      ? descriptor.convexCloudUrl
-      : undefined,
-  );
 
   if (
     typeof descriptor.headSha !== "string" ||
@@ -108,9 +80,8 @@ export function validateE2EPreviewDescriptor(value, expected) {
   }
 
   return {
-    version: 1,
+    version: DESCRIPTOR_VERSION,
     previewName: descriptor.previewName,
-    convexCloudUrl,
     headSha: descriptor.headSha,
     prNumber: descriptor.prNumber,
   };
@@ -124,7 +95,6 @@ export function buildE2EPreviewDescriptor(env) {
   const previewName = env.CONVEX_PREVIEW_NAME;
   assertPreviewTargeting({ deployKey, previewName, env });
 
-  const convexCloudUrl = assertConvexCloudOrigin(env.NEXT_PUBLIC_CONVEX_URL);
   const headSha = env.HEAD_SHA;
   if (!/^[0-9a-f]{40}$/i.test(headSha ?? "")) {
     throw new PreviewTargetingError(
@@ -140,9 +110,8 @@ export function buildE2EPreviewDescriptor(env) {
   }
 
   return {
-    version: 1,
+    version: DESCRIPTOR_VERSION,
     previewName,
-    convexCloudUrl,
     headSha,
     prNumber: Number(prNumber),
   };
@@ -163,7 +132,7 @@ export async function writeE2EPreviewDescriptor({
   const outputPath = path.join(outputDir, "e2e-preview-descriptor.json");
   await mkdir(outputDir, { recursive: true });
   await writeFile(outputPath, JSON.stringify(descriptor, null, 2) + "\n", "utf8");
-  process.stdout.write("Wrote sanitized E2E preview descriptor.\n");
+  process.stdout.write("Wrote sanitized E2E preview identity descriptor.\n");
   return descriptor;
 }
 
