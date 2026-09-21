@@ -1,29 +1,26 @@
-name: Accounting Cloud Rehearsal
+name: Sonar Main
 
-# Direct pull-request workflows are untrusted. This lane validates the
-# rehearsal harness itself with no repository secrets; the real cloud rehearsal
-# is executed by Trusted Accounting Cloud Rehearsal via workflow_run.
 on:
-  pull_request:
+  push:
     branches: ["main"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: accounting-rehearsal-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  rehearsal:
+  scan:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
@@ -38,8 +35,10 @@ jobs:
       - name: Install dependencies without lifecycle scripts
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Validate accounting rehearsal harness without credentials
-        run: >-
-          pnpm exec vitest run
-          scripts/accountingPreviewRehearsal.test.ts
-          scripts/accountingRehearsalCases.test.ts
+      - name: Generate coverage for Sonar
+        run: pnpm test:coverage:sonar
+        env:
+          NODE_ENV: test
+
+      - name: SonarCloud scan
+        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1

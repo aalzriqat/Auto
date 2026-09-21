@@ -48,6 +48,11 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify browser attack swarm authority
+        run: pnpm test:browser-swarm
+        env:
+          NODE_ENV: test
+
       - name: Evidence boundary
         if: always()
         run: |

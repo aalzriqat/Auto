@@ -1,0 +1,338 @@
+name: Trusted Accounting Cloud Rehearsal
+
+on:
+  workflow_run:
+    workflows: ["Accounting Cloud Rehearsal"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trusted-accounting-rehearsal-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
+  cancel-in-progress: true
+
+jobs:
+  rehearsal:
+    name: trusted-accounting-rehearsal
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.pull_requests[0].number != null
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      statuses: write
+    outputs:
+      tested_sha: ${{ steps.provenance.outputs.tested_sha }}
+
+    env:
+      PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+      HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
+      BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout immutable trusted controller
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          path: trusted
+          persist-credentials: true
+
+      - name: Verify exact PR head and merge provenance
+        id: provenance
+        working-directory: trusted
+        run: |
+          set -euo pipefail
+          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "workflow_run did not provide a valid PR number" >&2
+            exit 1
+          fi
+          for value in "$HEAD_SHA" "$BASE_SHA"; do
+            if ! [[ "$value" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "workflow_run did not provide exact base/head SHAs" >&2
+              exit 1
+            fi
+          done
+
+          current_head="$(
+            curl --fail --silent --show-error \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" |
+            jq -r '.head.sha'
+          )"
+          if [ "$current_head" != "$HEAD_SHA" ]; then
+            echo "::notice::Skipping stale accounting rehearsal for $HEAD_SHA; PR is now at $current_head."
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch --no-tags origin \
+            "refs/pull/${PR_NUMBER}/head:refs/autoflow/accounting-pr-head" \
+            "refs/pull/${PR_NUMBER}/merge:refs/autoflow/accounting-pr-merge"
+
+          FETCHED_HEAD="$(git rev-parse refs/autoflow/accounting-pr-head)"
+          FETCHED_MERGE="$(git rev-parse refs/autoflow/accounting-pr-merge)"
+          if [ "$FETCHED_HEAD" != "$HEAD_SHA" ]; then
+            echo "Fetched PR head does not match workflow_run head SHA" >&2
+            exit 1
+          fi
+
+          PARENTS="$(git show -s --format=%P "$FETCHED_MERGE")"
+          read -r FIRST_PARENT SECOND_PARENT EXTRA_PARENT <<< "$PARENTS"
+          if [ "$FIRST_PARENT" != "$BASE_SHA" ] || [ "$SECOND_PARENT" != "$HEAD_SHA" ] || [ -n "${EXTRA_PARENT:-}" ]; then
+            echo "GitHub PR merge ref is not the exact two-parent merge of trusted base + head." >&2
+            exit 1
+          fi
+
+          echo "TESTED_SHA=$FETCHED_MERGE" >> "$GITHUB_ENV"
+          echo "tested_sha=$FETCHED_MERGE" >> "$GITHUB_OUTPUT"
+          echo "stale=false" >> "$GITHUB_OUTPUT"
+
+      - name: Mark trusted accounting rehearsal pending
+        if: steps.provenance.outputs.stale == 'false'
+        env:
+          TESTED_SHA: ${{ steps.provenance.outputs.tested_sha }}
+        run: |
+          set -euo pipefail
+          payload="$(node -e '
+            const [state, context, description, targetUrl] = process.argv.slice(1);
+            process.stdout.write(JSON.stringify({state, context, description, target_url: targetUrl}));
+          ' pending autoflow/trusted-accounting-rehearsal "Trusted accounting rehearsal is testing the exact PR merge." "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")"
+          curl --fail --silent --show-error \
+            -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$TESTED_SHA" \
+            --data "$payload" >/dev/null
+
+      - name: Checkout exact tested PR merge as candidate backend source
+        if: steps.provenance.outputs.stale == 'false'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ steps.provenance.outputs.tested_sha }}
+          path: candidate
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        if: steps.provenance.outputs.stale == 'false'
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        if: steps.provenance.outputs.stale == 'false'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+          cache: "pnpm"
+          cache-dependency-path: trusted/pnpm-lock.yaml
+
+      - name: Install trusted rehearsal dependencies
+        if: steps.provenance.outputs.stale == 'false'
+        working-directory: trusted
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Name and recreate disposable rehearsal preview from trusted main
+        if: steps.provenance.outputs.stale == 'false'
+        working-directory: trusted
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          SCOPED="$(node -e 'import("./scripts/accountingPreviewRehearsal.mjs").then(m => process.stdout.write(m.rehearsalRefScope(process.argv[1])))' "refs/pull/${PR_NUMBER}/merge")"
+          PREVIEW_NAME="$(node scripts/e2ePreviewBootstrap.mjs --print-name "$SCOPED" "$PR_NUMBER")"
+          if [ -z "$PREVIEW_NAME" ]; then
+            echo "Trusted rehearsal refused an empty preview name." >&2
+            exit 1
+          fi
+          echo "CONVEX_PREVIEW_NAME=$PREVIEW_NAME" >> "$GITHUB_ENV"
+
+          retry_convex() {
+            local attempt delay
+            delay=2
+            for attempt in 1 2 3 4 5; do
+              if "$@"; then return 0; fi
+              if [ "$attempt" = "5" ]; then return 1; fi
+              sleep "$delay"
+              delay=$((delay * 2))
+            done
+          }
+
+          retry_convex pnpm exec convex deploy \
+            --typecheck enable \
+            --preview-create "$PREVIEW_NAME" \
+            --preview-run e2eBootstrap:markPreviewDeployment
+
+      - name: Scrub preview and deploy exact candidate backend with disposable credential
+        if: steps.provenance.outputs.stale == 'false'
+        working-directory: trusted
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+
+          AUTH_JSON="$(node --input-type=module <<'NODE'
+          import { resolveConvexPreviewCredentials } from "./scripts/intelligence/convexPreviewAuthority.mjs";
+          const resolved = await resolveConvexPreviewCredentials({
+            deployKey: process.env.CONVEX_PREVIEW_DEPLOY_KEY,
+            previewName: process.env.CONVEX_PREVIEW_NAME,
+          });
+          process.stdout.write(JSON.stringify({
+            url: resolved.authority.convexCloudUrl,
+            adminKey: resolved.adminKey,
+          }));
+          NODE
+          )"
+          NEXT_PUBLIC_CONVEX_URL="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).url)' "$AUTH_JSON")"
+          ADMIN_KEY="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).adminKey)' "$AUTH_JSON")"
+          unset AUTH_JSON
+          if [ -z "$NEXT_PUBLIC_CONVEX_URL" ] || [ -z "$ADMIN_KEY" ]; then
+            echo "Trusted control plane did not return complete rehearsal preview credentials." >&2
+            exit 1
+          fi
+          echo "::add-mask::$ADMIN_KEY"
+          echo "NEXT_PUBLIC_CONVEX_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"
+
+          mapfile -t CURRENT_ENV_NAMES < <(
+            pnpm exec convex env list --names-only \
+              --url "$NEXT_PUBLIC_CONVEX_URL" \
+              --admin-key "$ADMIN_KEY"
+          )
+          for name in "${CURRENT_ENV_NAMES[@]}"; do
+            if ! [[ "$name" =~ ^[A-Z][A-Z0-9_]*$ ]]; then
+              echo "Preview env listing contained an unexpected value." >&2
+              exit 1
+            fi
+            case "$name" in
+              AUTOFLOW_DEPLOYMENT_CLASS|CLERK_DEV_JWT_ISSUER_DOMAIN|CLERK_JWT_ISSUER_DOMAIN|NEXT_PUBLIC_APP_URL|TURNSTILE_SECRET_KEY)
+                ;;
+              *)
+                pnpm exec convex env remove "$name" \
+                  --url "$NEXT_PUBLIC_CONVEX_URL" \
+                  --admin-key "$ADMIN_KEY"
+                ;;
+            esac
+          done
+
+          pnpm exec convex env set TURNSTILE_SECRET_KEY \
+            '1x0000000000000000000000000000000AA' --force \
+            --url "$NEXT_PUBLIC_CONVEX_URL" \
+            --admin-key "$ADMIN_KEY"
+          pnpm exec convex env set NEXT_PUBLIC_APP_URL \
+            'http://127.0.0.1:3000' --force \
+            --url "$NEXT_PUBLIC_CONVEX_URL" \
+            --admin-key "$ADMIN_KEY"
+
+          mapfile -t SCRUBBED_ENV_NAMES < <(
+            pnpm exec convex env list --names-only \
+              --url "$NEXT_PUBLIC_CONVEX_URL" \
+              --admin-key "$ADMIN_KEY"
+          )
+          ACTUAL="$(printf '%s\n' "${SCRUBBED_ENV_NAMES[@]}" | LC_ALL=C sort)"
+          EXPECTED="$(printf '%s\n' \
+            AUTOFLOW_DEPLOYMENT_CLASS \
+            CLERK_DEV_JWT_ISSUER_DOMAIN \
+            CLERK_JWT_ISSUER_DOMAIN \
+            NEXT_PUBLIC_APP_URL \
+            TURNSTILE_SECRET_KEY | LC_ALL=C sort)"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "Disposable rehearsal preview environment does not match the trusted allowlist." >&2
+            exit 1
+          fi
+
+          docker run --rm \
+            --name autoflow-trusted-accounting-backend \
+            --network bridge \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --volume "$GITHUB_WORKSPACE/candidate:/app" \
+            --workdir /app \
+            --env HOME=/tmp/home \
+            --env NEXT_PUBLIC_CONVEX_URL \
+            --env CONVEX_PREVIEW_ADMIN_KEY="$ADMIN_KEY" \
+            node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
+            sh -lc 'corepack enable && corepack prepare pnpm@11.13.0 --activate && pnpm install --frozen-lockfile --ignore-scripts && pnpm exec convex deploy --url "$NEXT_PUBLIC_CONVEX_URL" --admin-key "$CONVEX_PREVIEW_ADMIN_KEY" --typecheck enable'
+
+      - name: Seed synthetic QA dealership from trusted main
+        if: steps.provenance.outputs.stale == 'false'
+        working-directory: trusted
+        run: node scripts/e2ePreviewBootstrap.mjs
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+
+      - name: Run cloud accounting rehearsal from trusted main
+        if: steps.provenance.outputs.stale == 'false'
+        working-directory: trusted
+        run: |
+          REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
+          cat rehearsal-evidence.json
+          exit "${status:-0}"
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+
+      - name: Upload trusted rehearsal evidence
+        if: always() && steps.provenance.outputs.stale == 'false'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trusted-accounting-rehearsal-evidence
+          path: trusted/rehearsal-evidence.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  verdict:
+    name: trusted-accounting-rehearsal-verdict
+    needs: rehearsal
+    if: >-
+      always() &&
+      needs.rehearsal.outputs.tested_sha != '' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.pull_requests[0].number != null
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - name: Publish trusted accounting rehearsal verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTED_SHA: ${{ needs.rehearsal.outputs.tested_sha }}
+          REHEARSAL_RESULT: ${{ needs.rehearsal.result }}
+        run: |
+          set -euo pipefail
+          state=failure
+          description="Trusted accounting rehearsal did not complete successfully."
+          if [ "$REHEARSAL_RESULT" = "success" ]; then
+            state=success
+            description="Trusted accounting cloud rehearsal passed."
+          fi
+          payload="$(node -e '
+            const [state, context, description, targetUrl] = process.argv.slice(1);
+            process.stdout.write(JSON.stringify({state, context, description, target_url: targetUrl}));
+          ' "$state" autoflow/trusted-accounting-rehearsal "$description" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")"
+          curl --fail --silent --show-error \
+            -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$TESTED_SHA" \
+            --data "$payload" >/dev/null
+          if [ "$state" != "success" ]; then
+            exit 1
+          fi

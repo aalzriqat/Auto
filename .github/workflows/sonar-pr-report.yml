@@ -1,0 +1,386 @@
+name: Sonar PR Report
+
+on:
+  workflow_run:
+    workflows: ["Tests"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: trusted-sonar-pr-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
+  cancel-in-progress: true
+
+jobs:
+  scan-report:
+    name: trusted-sonar-pr
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.pull_requests[0].number != null
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+      statuses: write
+    outputs:
+      tested_sha: ${{ steps.provenance.outputs.tested_sha }}
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+      HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
+      BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
+      HEAD_REF: ${{ github.event.workflow_run.pull_requests[0].head.ref }}
+      BASE_REF: ${{ github.event.workflow_run.pull_requests[0].base.ref }}
+      PROJECT_KEY: aalzriqat_Auto
+      COMMENT_MARKER: "<!-- autoflow-sonar-pr-report -->"
+
+    steps:
+      - name: Require Sonar credential
+        run: |
+          set -euo pipefail
+          if [ -z "${SONAR_TOKEN:-}" ]; then
+            echo "::error::SONAR_TOKEN is unavailable; trusted PR analysis cannot run."
+            exit 1
+          fi
+
+      - name: Checkout immutable trusted controller
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          path: trusted
+          persist-credentials: true
+
+      - name: Verify exact PR head and merge provenance
+        id: provenance
+        working-directory: trusted
+        run: |
+          set -euo pipefail
+          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "workflow_run did not provide a valid PR number" >&2
+            exit 1
+          fi
+          for value in "$HEAD_SHA" "$BASE_SHA"; do
+            if ! [[ "$value" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "workflow_run did not provide exact base/head SHAs" >&2
+              exit 1
+            fi
+          done
+
+          current_head="$(
+            curl --fail --silent --show-error \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/repos/$REPOSITORY/pulls/$PR_NUMBER" |
+            jq -r '.head.sha'
+          )"
+          if [ "$current_head" != "$HEAD_SHA" ]; then
+            echo "::notice::Skipping stale trusted Sonar run for $HEAD_SHA; PR is now at $current_head."
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch --no-tags origin \
+            "refs/pull/${PR_NUMBER}/head:refs/autoflow/sonar-pr-head" \
+            "refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-pr-merge"
+
+          FETCHED_HEAD="$(git rev-parse refs/autoflow/sonar-pr-head)"
+          FETCHED_MERGE="$(git rev-parse refs/autoflow/sonar-pr-merge)"
+          if [ "$FETCHED_HEAD" != "$HEAD_SHA" ]; then
+            echo "Fetched PR head does not match workflow_run head SHA" >&2
+            exit 1
+          fi
+
+          PARENTS="$(git show -s --format=%P "$FETCHED_MERGE")"
+          read -r FIRST_PARENT SECOND_PARENT EXTRA_PARENT <<< "$PARENTS"
+          if [ "$FIRST_PARENT" != "$BASE_SHA" ] || [ "$SECOND_PARENT" != "$HEAD_SHA" ] || [ -n "${EXTRA_PARENT:-}" ]; then
+            echo "GitHub PR merge ref is not the exact two-parent merge of trusted base + head." >&2
+            exit 1
+          fi
+
+          echo "tested_sha=$FETCHED_MERGE" >> "$GITHUB_OUTPUT"
+          echo "stale=false" >> "$GITHUB_OUTPUT"
+
+      - name: Mark trusted Sonar pending
+        if: steps.provenance.outputs.stale == 'false'
+        env:
+          TESTED_SHA: ${{ steps.provenance.outputs.tested_sha }}
+        run: |
+          set -euo pipefail
+          payload="$(node -e '
+            const [state, context, description, targetUrl] = process.argv.slice(1);
+            process.stdout.write(JSON.stringify({state, context, description, target_url: targetUrl}));
+          ' pending autoflow/trusted-sonar-pr "Trusted Sonar is analysing the exact PR merge." "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")"
+          curl --fail --silent --show-error \
+            -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$GITHUB_API_URL/repos/$REPOSITORY/statuses/$TESTED_SHA" \
+            --data "$payload" >/dev/null
+
+      - name: Checkout exact tested PR merge as data only
+        if: steps.provenance.outputs.stale == 'false'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ steps.provenance.outputs.tested_sha }}
+          path: candidate
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Download candidate-generated coverage as untrusted data
+        if: steps.provenance.outputs.stale == 'false'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: coverage-report
+          path: ${{ runner.temp }}/sonar-coverage
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Sanitize scanner inputs
+        if: steps.provenance.outputs.stale == 'false'
+        run: |
+          set -euo pipefail
+
+          if find candidate "$RUNNER_TEMP/sonar-coverage" -type l -print -quit | grep -q .; then
+            echo "::error::Trusted Sonar refuses symlinks in candidate source or coverage."
+            exit 1
+          fi
+
+          LCOV="$RUNNER_TEMP/sonar-coverage/lcov.info"
+          if [ ! -f "$LCOV" ]; then
+            echo "::error::coverage-report does not contain lcov.info at artifact root."
+            exit 1
+          fi
+          bytes="$(wc -c < "$LCOV")"
+          if [ "$bytes" -gt 52428800 ]; then
+            echo "::error::lcov.info exceeds the 50 MiB trusted input limit."
+            exit 1
+          fi
+
+          node <<'NODE'
+          const fs = require("node:fs");
+          const lcov = fs.readFileSync(process.env.RUNNER_TEMP + "/sonar-coverage/lcov.info", "utf8");
+          for (const line of lcov.split(/\r?\n/)) {
+            if (!line.startsWith("SF:")) continue;
+            const source = line.slice(3).replaceAll("\\", "/");
+            if (
+              source.startsWith("/") ||
+              source.split("/").includes("..") ||
+              !/^(convex|scripts)\//.test(source)
+            ) {
+              throw new Error("Trusted Sonar refuses out-of-scope LCOV source path: " + source);
+            }
+          }
+          NODE
+
+          mkdir -p candidate/coverage
+          cp "$RUNNER_TEMP/sonar-coverage/lcov.info" candidate/coverage/lcov.info
+          cp trusted/sonar-project.properties candidate/sonar-project.properties
+
+      - name: Trusted SonarCloud scan
+        if: steps.provenance.outputs.stale == 'false'
+        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          projectBaseDir: candidate
+          args: >-
+            -Dsonar.host.url=https://sonarcloud.io
+            -Dsonar.projectKey=aalzriqat_Auto
+            -Dsonar.organization=aalzriqat
+            -Dsonar.pullrequest.key=${{ github.event.workflow_run.pull_requests[0].number }}
+            -Dsonar.pullrequest.branch=${{ github.event.workflow_run.pull_requests[0].head.ref }}
+            -Dsonar.pullrequest.base=${{ github.event.workflow_run.pull_requests[0].base.ref }}
+            -Dsonar.scm.revision=${{ github.event.workflow_run.pull_requests[0].head.sha }}
+
+      - name: Fetch Sonar issues and upsert PR report
+        if: steps.provenance.outputs.stale == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sonar_api="https://sonarcloud.io/api"
+
+          current_head="$(
+            curl --fail --silent --show-error \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/repos/$REPOSITORY/pulls/$PR_NUMBER" |
+            jq -r '.head.sha'
+          )"
+          if [ "$current_head" != "$HEAD_SHA" ]; then
+            echo "::notice::Skipping stale Sonar report for $HEAD_SHA; PR is now at $current_head."
+            exit 0
+          fi
+
+          gate_json=""
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            if gate_json="$(
+              curl --fail --silent --show-error --retry 2 --retry-all-errors \
+                --header "Authorization: Bearer $SONAR_TOKEN" \
+                --get "$sonar_api/qualitygates/project_status" \
+                --data-urlencode "projectKey=$PROJECT_KEY" \
+                --data-urlencode "pullRequest=$PR_NUMBER"
+            )"; then
+              gate_status="$(jq -r '.projectStatus.status // empty' <<<"$gate_json")"
+              if [ -n "$gate_status" ]; then
+                break
+              fi
+            fi
+            if [ "$attempt" -eq 12 ]; then
+              echo "::error::Sonar quality-gate status was unavailable after retries."
+              exit 1
+            fi
+            sleep 5
+          done
+
+          issues_json="$(
+            curl --fail --silent --show-error --retry 2 --retry-all-errors \
+              --header "Authorization: Bearer $SONAR_TOKEN" \
+              --get "$sonar_api/issues/search" \
+              --data-urlencode "componentKeys=$PROJECT_KEY" \
+              --data-urlencode "pullRequest=$PR_NUMBER" \
+              --data-urlencode "issueStatuses=OPEN,CONFIRMED" \
+              --data-urlencode "ps=500"
+          )"
+
+          gate_status="$(jq -r '.projectStatus.status // "UNKNOWN"' <<<"$gate_json")"
+          issue_count="$(jq -r '.total // (.issues | length)' <<<"$issues_json")"
+
+          {
+            printf '%s\n\n' "$COMMENT_MARKER"
+            printf '## SonarQube Cloud — PR #%s\n\n' "$PR_NUMBER"
+            printf '**Quality Gate:** `%s` · **Open PR issues:** %s · **Analysed head:** `%s`\n\n' \
+              "$gate_status" "$issue_count" "$HEAD_SHA"
+
+            failed_conditions="$(jq -r '
+              [.projectStatus.conditions[]? | select(.status == "ERROR")] |
+              if length == 0 then empty
+              else .[] |
+                "- \(.metricKey): actual \(.actualValue // "n/a"), threshold \(.errorThreshold // "n/a"), comparator \(.comparator // "n/a")"
+              end
+            ' <<<"$gate_json")"
+
+            if [ -n "$failed_conditions" ]; then
+              printf '### Failed quality-gate conditions\n\n%s\n\n' "$failed_conditions"
+            fi
+
+            if [ "$issue_count" -eq 0 ]; then
+              printf 'No open Sonar issues are reported for this PR analysis.\n\n'
+            else
+              printf '### Open issues\n\n'
+              printf '| Quality | Severity | Rule | File | Line | Message |\n'
+              printf '| --- | --- | --- | --- | ---: | --- |\n'
+              jq -r --arg project "$PROJECT_KEY" '
+                .issues[] |
+                [
+                  (.impacts[0].softwareQuality // .type // "UNKNOWN"),
+                  (.impacts[0].severity // .severity // "UNKNOWN"),
+                  (.rule // "UNKNOWN"),
+                  ((.component // "") | sub(("^" + $project + ":"); "")),
+                  ((.line // .textRange.startLine // "-") | tostring),
+                  ((.message // "") | gsub("\\|"; "\\\\|") | gsub("[\\r\\n]+"; " "))
+                ] |
+                "| `\(.[0])` | `\(.[1])` | `\(.[2])` | `\(.[3])` | \(.[4]) | \(.[5]) |"
+              ' <<<"$issues_json"
+              printf '\n'
+            fi
+
+            printf '_Generated by the trusted `Sonar PR Report` workflow. Candidate source and LCOV are treated as untrusted data; candidate code is not executed with `SONAR_TOKEN`._\n'
+          } > sonar-pr-report.md
+
+          cat sonar-pr-report.md >> "$GITHUB_STEP_SUMMARY"
+
+          comments_json="$(
+            curl --fail --silent --show-error \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100"
+          )"
+          existing_comment_id="$(
+            jq -r --arg marker "$COMMENT_MARKER" '
+              [.[] | select((.body // "") | contains($marker)) | .id][0] // empty
+            ' <<<"$comments_json"
+          )"
+
+          jq -Rs '{body: .}' < sonar-pr-report.md > sonar-pr-report-payload.json
+          if [ -n "$existing_comment_id" ]; then
+            curl --fail --silent --show-error \
+              -X PATCH \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              -H "Content-Type: application/json" \
+              --data-binary @sonar-pr-report-payload.json \
+              "$GITHUB_API_URL/repos/$REPOSITORY/issues/comments/$existing_comment_id" >/dev/null
+          else
+            curl --fail --silent --show-error \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              -H "Content-Type: application/json" \
+              --data-binary @sonar-pr-report-payload.json \
+              "$GITHUB_API_URL/repos/$REPOSITORY/issues/$PR_NUMBER/comments" >/dev/null
+          fi
+
+          if [ "$gate_status" != "OK" ]; then
+            echo "::error::Sonar quality gate is $gate_status."
+            exit 1
+          fi
+
+  verdict:
+    name: trusted-sonar-pr-verdict
+    needs: scan-report
+    if: >-
+      always() &&
+      needs.scan-report.outputs.tested_sha != '' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.pull_requests[0].number != null
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - name: Publish trusted Sonar verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTED_SHA: ${{ needs.scan-report.outputs.tested_sha }}
+          SCAN_RESULT: ${{ needs.scan-report.result }}
+        run: |
+          set -euo pipefail
+          state=failure
+          description="Trusted Sonar PR analysis did not complete successfully."
+          if [ "$SCAN_RESULT" = "success" ]; then
+            state=success
+            description="Trusted Sonar PR analysis passed."
+          fi
+          payload="$(node -e '
+            const [state, context, description, targetUrl] = process.argv.slice(1);
+            process.stdout.write(JSON.stringify({state, context, description, target_url: targetUrl}));
+          ' "$state" autoflow/trusted-sonar-pr "$description" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")"
+          curl --fail --silent --show-error \
+            -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$TESTED_SHA" \
+            --data "$payload" >/dev/null
+          if [ "$state" != "success" ]; then
+            exit 1
+          fi

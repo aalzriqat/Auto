@@ -134,26 +134,27 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      - name: Prepare deterministic public runtime placeholders
+        run: |
+          set -euo pipefail
+          key="pk_test_$(printf '%s' 'ci-security-placeholder.clerk.accounts.dev$' | base64 -w0 | tr -d '=')"
+          [ ${#key} -gt 40 ] || { echo "::error::Clerk placeholder assembly failed"; exit 1; }
+          {
+            echo "NEXT_PUBLIC_CONVEX_URL=https://ci-security-placeholder.convex.cloud"
+            echo "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$key"
+            echo "NEXT_PUBLIC_APP_URL=http://localhost:3000"
+          } >> "$GITHUB_ENV"
+
       - name: Build production bundle
         run: pnpm build
-        env:
-          NEXT_PUBLIC_CONVEX_URL: ${{ secrets.NEXT_PUBLIC_CONVEX_URL }}
-          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
-          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
-          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
 
       - name: Start production server
         run: pnpm start &
-        env:
-          NEXT_PUBLIC_CONVEX_URL: ${{ secrets.NEXT_PUBLIC_CONVEX_URL }}
-          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
-          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
-          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
 
       - name: Wait for server
         run: |
           for attempt in {1..60}; do
-            if curl --silent --fail http://localhost:3000 > /dev/null; then
+            if curl --silent --fail http://localhost:3000/api/health > /dev/null; then
               exit 0
             fi
             sleep 1
@@ -194,26 +195,27 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      - name: Prepare deterministic public runtime placeholders
+        run: |
+          set -euo pipefail
+          key="pk_test_$(printf '%s' 'ci-security-placeholder.clerk.accounts.dev$' | base64 -w0 | tr -d '=')"
+          [ ${#key} -gt 40 ] || { echo "::error::Clerk placeholder assembly failed"; exit 1; }
+          {
+            echo "NEXT_PUBLIC_CONVEX_URL=https://ci-security-placeholder.convex.cloud"
+            echo "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$key"
+            echo "NEXT_PUBLIC_APP_URL=http://localhost:3000"
+          } >> "$GITHUB_ENV"
+
       - name: Build production bundle
         run: pnpm build
-        env:
-          NEXT_PUBLIC_CONVEX_URL: ${{ secrets.NEXT_PUBLIC_CONVEX_URL }}
-          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
-          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
-          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
 
       - name: Start production server
         run: pnpm start &
-        env:
-          NEXT_PUBLIC_CONVEX_URL: ${{ secrets.NEXT_PUBLIC_CONVEX_URL }}
-          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
-          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
-          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
 
       - name: Wait for server
         run: |
           for attempt in {1..60}; do
-            if curl --silent --fail http://localhost:3000 > /dev/null; then
+            if curl --silent --fail http://localhost:3000/api/health > /dev/null; then
               exit 0
             fi
             sleep 1

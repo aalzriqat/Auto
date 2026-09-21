@@ -67,98 +67,9 @@ jobs:
         fi
       if: always()
 
-  # SonarCloud currently analyses this repo in Automatic Analysis mode, which
-  # does NOT read sonar-project.properties — so every exclusion in that file is
-  # dead config. That is why `load-tests/**` is still analysed and still
-  # contributes vulnerabilities to the Security Rating gate,
-  # and why `sonar.javascript.lcov.reportPaths` has never actually delivered a
-  # coverage report.
-  #
-  # This job runs the scanner from CI, which makes that file authoritative. It
-  # activates the moment a SONAR_TOKEN repo secret exists and is skipped
-  # otherwise, so merging it changes nothing until the token is added.
-  #
-  # ORDERING IS MANDATORY, not advisory: SonarCloud REJECTS a CI submission while
-  # Automatic Analysis is enabled ("You are running CI analysis while Automatic
-  # Analysis is enabled") and the scanner exits non-zero. So switch Automatic
-  # Analysis off in the SonarCloud UI in the same sitting as adding the token, or
-  # this job goes red on every push in between. It is not a required check, so it
-  # will not block a merge either way.
-  sonarcloud:
-    runs-on: ubuntu-latest
-    # Forked PRs get no secrets, so the scan would always be a no-op there.
-    if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
-    # Job-level so the scan step's own `if` can read it — a step cannot see the
-    # `env` block declared on itself.
-    env:
-      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-
-    steps:
-    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      with:
-        persist-credentials: false
-        # Sonar needs full history to attribute new code to the right commits.
-        fetch-depth: 0
-
-    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-      with:
-        version: 11.13.0
-
-    - name: Use Node.js
-      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-      with:
-        node-version: '22.21.1'
-        cache: 'pnpm'
-
-    - name: Install dependencies
-      run: pnpm install --frozen-lockfile --ignore-scripts
-
-    # Produces coverage/lcov.info, which sonar-project.properties points at.
-    #
-    # `test:coverage:sonar` instruments ALL non-generated production TypeScript
-    # that Sonar measures as main code — `convex/**/*.ts` and `scripts/**/*.ts`,
-    # minus `convex/_generated/**` and `**/*.test.ts`.
-    #
-    # It used to carry a hand-maintained module allowlist, and this note used to
-    # say that list held 7 modules while it had already drifted to 16 — which is
-    # the whole problem with the shape. An allowlist cannot measure NEW code: a
-    # file that is not on it reports 0% however well tested it is. 15 of the 24
-    # Convex production files SCRUM-195/208 touches were off it — including every
-    # module the branch ADDS — so the gate read 53.1% on new code that ~4,000
-    # tests exercise. There is now no list to drift.
-    #
-    # That failure had a second half, found and fixed in SCRUM-208 c16195. The
-    # command began `vitest run convex`, and a vitest positional argument is a
-    # filter on which test FILES EXECUTE, not merely on what is instrumented.
-    # It matched 183 of the repo's 286 test files by path substring — the 182
-    # under `convex/` plus `scripts/convexApiContract.test.ts`, whose path
-    # happens to contain the word. The other seven under `scripts/` never ran.
-    #
-    # `scripts/commitmentWriteGuard.ts` is not a fixture. It parses the Convex
-    # tree and decides whether commitment-authority writes go through the choke,
-    # so a green result from it is an authorization. Sonar read it as 182 of 182
-    # new lines uncovered while its own 55-test suite measured 92.47% line
-    # coverage of it — an instrumentation artifact, identical in kind to the
-    # allowlist above and one directory over.
-    #
-    # The filter is now `convex scripts`, which collects 190 files: the union,
-    # with `convexApiContract.test.ts` counted once.
-    #
-    # Do not reintroduce a list to move the percentage, and do not narrow the
-    # execution filter back to one tree (SCRUM-208 c16151, c16195).
-    - name: Generate coverage for Sonar
-      run: pnpm test:coverage:sonar
-      env:
-        NODE_ENV: test
-
-    - name: SonarCloud scan
-      if: ${{ env.SONAR_TOKEN != '' }}
-      uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
-
-    - name: Note when the scan is skipped
-      if: ${{ env.SONAR_TOKEN == '' }}
-      run: echo "::notice::SONAR_TOKEN is not set — skipping the SonarCloud scan. Until it is, SonarCloud analyses this repo in Automatic Analysis mode, which ignores sonar-project.properties."
-
+  # Pull-request Sonar analysis is deliberately outside this candidate-controlled
+  # workflow. The direct PR lane only generates coverage as data; the immutable
+  # trusted Sonar PR Report workflow consumes it and owns scanner credentials.
   type-check:
     runs-on: ubuntu-latest
 
@@ -473,4 +384,4 @@ jobs:
     - name: Secret scan
       uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_TOKEN: ${{ github.token }}
