@@ -63,6 +63,22 @@ export interface BrowserMissionPlan {
   droppedJevSuggestions: number;
 }
 
+
+export interface BrowserSwarmWorkerPlan {
+  workerId: string;
+  artifactRoot: string;
+  missions: readonly BrowserAttackMission[];
+}
+
+export interface BrowserSwarmRunManifest {
+  version: 1;
+  runId: string;
+  previewName: string;
+  expectedCloudUrl: string;
+  requiresPreviewMarker: true;
+  workers: readonly BrowserSwarmWorkerPlan[];
+}
+
 export interface BrowserMissionEvidence {
   missionId: string;
   workerId: string;
@@ -402,6 +418,74 @@ export function partitionBrowserAttackMissions(
   }
 
   return buckets;
+}
+
+function assertSafeRunId(runId: string): void {
+  if (!/^[a-z0-9][a-z0-9._-]{0,80}$/.test(runId)) {
+    throw new Error(
+      "Browser swarm runId must be a lowercase safe identifier of at most 81 characters",
+    );
+  }
+}
+
+function assertSwarmPreviewIdentity(
+  previewName: string,
+  expectedCloudUrl: string,
+): void {
+  if (!/^e2e-[a-z0-9][a-z0-9._-]{0,56}$/.test(previewName)) {
+    throw new Error(
+      "Browser swarm previewName must be an explicit e2e-* disposable preview identifier",
+    );
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(expectedCloudUrl);
+  } catch {
+    throw new TypeError("Browser swarm expectedCloudUrl must be a valid URL");
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash ||
+    parsed.pathname !== "/"
+  ) {
+    throw new Error(
+      "Browser swarm expectedCloudUrl must be a bare HTTPS deployment origin",
+    );
+  }
+}
+
+export function buildBrowserSwarmRunManifest({
+  plan,
+  workerCount,
+  runId,
+  previewName,
+  expectedCloudUrl,
+}: {
+  plan: BrowserMissionPlan;
+  workerCount: number;
+  runId: string;
+  previewName: string;
+  expectedCloudUrl: string;
+}): BrowserSwarmRunManifest {
+  assertSafeRunId(runId);
+  assertSwarmPreviewIdentity(previewName, expectedCloudUrl);
+  const partitions = partitionBrowserAttackMissions(plan.missions, workerCount);
+
+  return {
+    version: 1,
+    runId,
+    previewName,
+    expectedCloudUrl,
+    requiresPreviewMarker: true,
+    workers: partitions.map((missions, index) => ({
+      workerId: `worker-${index + 1}`,
+      artifactRoot: `swarm/${runId}/worker-${index + 1}`,
+      missions,
+    })),
+  };
 }
 
 function isSafeArtifactPath(pathValue: string): boolean {
