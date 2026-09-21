@@ -1583,7 +1583,10 @@ describe("the stage the rail names carries its own action", () => {
 });
 
 describe("handover states the door it closes, with the figures to check", () => {
-  const openDialog = (factOverrides: Record<string, unknown> = {}) => {
+  const openDialog = (
+    factOverrides: Record<string, unknown> = {},
+    dealOverrides: Record<string, unknown> = {}
+  ) => {
     const onSubmit = vi.fn(noopAsync);
     render(
       <DealCockpitView
@@ -1604,6 +1607,7 @@ describe("handover states the door it closes, with the figures to check", () => 
             currency: { code: "JOD", scale: 3 },
             ...factOverrides,
           },
+          ...dealOverrides,
         })}
         financeDecision={wiring({
           facts: {
@@ -1658,6 +1662,56 @@ describe("handover states the door it closes, with the figures to check", () => 
     });
     expect(within(dialog).getByText("HandoverSealsApprovedAmount")).toBeTruthy();
     expect(within(dialog).queryByText(/150,000|150000/)).toBeNull();
+  });
+
+  test("labels an ACTUAL_UNPOSTABLE loss as actual at handover", () => {
+    const { dialog } = openDialog({}, {
+      money: {
+        currency: "JOD",
+        settlesDirectToSupplier: false,
+        routeKnown: true,
+        profit: {
+          available: true,
+          basis: "MANAGEMENT_ESTIMATE",
+          amountMinor: -500 * JOD,
+          currency: "JOD",
+          classification: "ACTUAL_UNPOSTABLE",
+          postable: false,
+          lines: [],
+        },
+        expenses: { lines: [], actualTotalMinor: 0, awaitingActuals: 0 },
+        parties: [],
+      },
+    });
+
+    expect(within(dialog).getByText("HandoverActualLossWarning")).toBeTruthy();
+    expect(within(dialog).getByText("HandoverActualLossWarningDesc")).toBeTruthy();
+    expect(within(dialog).queryByText("HandoverLossWarning")).toBeNull();
+  });
+
+  test("keeps an unsettled management loss labelled as estimated", () => {
+    const { dialog } = openDialog({}, {
+      money: {
+        currency: "JOD",
+        settlesDirectToSupplier: false,
+        routeKnown: true,
+        profit: {
+          available: true,
+          basis: "MANAGEMENT_ESTIMATE",
+          amountMinor: -500 * JOD,
+          currency: "JOD",
+          classification: "ESTIMATED_AWAITING_SETTLEMENT",
+          postable: false,
+          lines: [],
+        },
+        expenses: { lines: [], actualTotalMinor: 0, awaitingActuals: 0 },
+        parties: [],
+      },
+    });
+
+    expect(within(dialog).getByText("HandoverLossWarning")).toBeTruthy();
+    expect(within(dialog).getByText("HandoverLossWarningDesc")).toBeTruthy();
+    expect(within(dialog).queryByText("HandoverActualLossWarning")).toBeNull();
   });
 
   test("confirming sends the notes through to the caller", async () => {
