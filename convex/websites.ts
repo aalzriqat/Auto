@@ -35,6 +35,8 @@ const PUBLIC_LEAD_MAX_FINGERPRINT_CHARS = 256;
 const PUBLIC_LEAD_MAX_IP_HASH_CHARS = 128;
 const PUBLIC_LEAD_DUPLICATE_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const TURNSTILE_ACTION = "turnstile-spin-v1";
+export const TURNSTILE_ALWAYS_PASS_TEST_SECRET =
+  "1x0000000000000000000000000000000AA";
 
 const OPEN_LEAD_STAGES = new Set([
   "NEW",
@@ -251,7 +253,12 @@ export async function verifyTurnstileToken(token: string): Promise<void> {
   }
 
   const action = optionalString(result.action);
-  if (action && action !== TURNSTILE_ACTION) {
+  const expectedAction =
+    env.AUTOFLOW_DEPLOYMENT_CLASS === "preview" &&
+    env.TURNSTILE_SECRET_KEY === TURNSTILE_ALWAYS_PASS_TEST_SECRET
+      ? "test"
+      : TURNSTILE_ACTION;
+  if (action && action !== expectedAction) {
     console.error("Turnstile verification returned unexpected action", action);
     throw new ConvexError("Request verification failed. Please try again.");
   }

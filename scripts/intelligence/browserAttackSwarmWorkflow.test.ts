@@ -209,6 +209,49 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     }
   });
 
+  it("scrubs the disposable preview to an explicit non-sensitive environment allowlist before candidate backend execution", () => {
+    const trustedSteps = job("trusted-e2e").steps ?? [];
+    const scrubIndex = trustedSteps.findIndex(
+      (entry) =>
+        entry.name ===
+        "Scrub disposable preview environment before candidate execution",
+    );
+    const deployIndex = trustedSteps.findIndex(
+      (entry) =>
+        entry.name ===
+        "Deploy exact candidate backend with disposable preview credential",
+    );
+    expect(scrubIndex).toBeGreaterThanOrEqual(0);
+    expect(deployIndex).toBeGreaterThan(scrubIndex);
+
+    const scrub = step(
+      "trusted-e2e",
+      "Scrub disposable preview environment before candidate execution",
+    );
+    const run = String(scrub.run ?? "");
+    expect(scrub.env).toHaveProperty("CONVEX_PREVIEW_DEPLOY_KEY");
+    expect(run).toContain("resolveConvexPreviewCredentials");
+    expect(run).toContain("convex env list --names-only");
+    expect(run).toContain("convex env remove");
+    expect(run).toContain(
+      "1x0000000000000000000000000000000AA",
+    );
+    for (const allowed of [
+      "AUTOFLOW_DEPLOYMENT_CLASS",
+      "CLERK_DEV_JWT_ISSUER_DOMAIN",
+      "CLERK_JWT_ISSUER_DOMAIN",
+      "NEXT_PUBLIC_APP_URL",
+      "TURNSTILE_SECRET_KEY",
+    ]) {
+      expect(run).toContain(allowed);
+    }
+    expect(run).toContain(
+      "Disposable preview environment does not match the trusted allowlist.",
+    );
+    expect(run).toContain('--url "$NEXT_PUBLIC_CONVEX_URL"');
+    expect(run).toContain('--admin-key "$ADMIN_KEY"');
+  });
+
   it("deploys candidate backend only with a deployment-scoped preview credential", () => {
     const deploy = step(
       "trusted-e2e",

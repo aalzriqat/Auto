@@ -284,6 +284,86 @@ jobs:
         working-directory: trusted
         run: pnpm exec playwright install --with-deps chromium
 
+      - name: Scrub disposable preview environment before candidate execution
+        working-directory: trusted
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.preview_name }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+        run: |
+          set -euo pipefail
+
+          ADMIN_KEY="$(
+            node --input-type=module <<'NODE'
+          import { resolveConvexPreviewCredentials } from "./scripts/intelligence/convexPreviewAuthority.mjs";
+          const resolved = await resolveConvexPreviewCredentials({
+            deployKey: process.env.CONVEX_PREVIEW_DEPLOY_KEY,
+            previewName: process.env.CONVEX_PREVIEW_NAME,
+          });
+          process.stdout.write(resolved.adminKey);
+          NODE
+          )"
+          if [ -z "$ADMIN_KEY" ]; then
+            echo "Trusted control plane returned an empty preview deployment credential." >&2
+            exit 1
+          fi
+          echo "::add-mask::$ADMIN_KEY"
+
+          mapfile -t CURRENT_ENV_NAMES < <(
+            pnpm exec convex env list --names-only \
+              --url "$NEXT_PUBLIC_CONVEX_URL" \
+              --admin-key "$ADMIN_KEY"
+          )
+
+          for name in "${CURRENT_ENV_NAMES[@]}"; do
+            if ! [[ "$name" =~ ^[A-Z][A-Z0-9_]*$ ]]; then
+              echo "Preview env listing contained an unexpected value; refusing candidate execution." >&2
+              exit 1
+            fi
+            case "$name" in
+              AUTOFLOW_DEPLOYMENT_CLASS|CLERK_DEV_JWT_ISSUER_DOMAIN|CLERK_JWT_ISSUER_DOMAIN|NEXT_PUBLIC_APP_URL|TURNSTILE_SECRET_KEY)
+                ;;
+              *)
+                pnpm exec convex env remove "$name" \
+                  --url "$NEXT_PUBLIC_CONVEX_URL" \
+                  --admin-key "$ADMIN_KEY"
+                ;;
+            esac
+          done
+
+          # The only secret-shaped value candidate code may observe is
+          # Cloudflare's documented public E2E secret, never a real widget key.
+          pnpm exec convex env set TURNSTILE_SECRET_KEY \
+            '1x0000000000000000000000000000000AA' --force \
+            --url "$NEXT_PUBLIC_CONVEX_URL" \
+            --admin-key "$ADMIN_KEY"
+          pnpm exec convex env set NEXT_PUBLIC_APP_URL \
+            'http://127.0.0.1:3000' --force \
+            --url "$NEXT_PUBLIC_CONVEX_URL" \
+            --admin-key "$ADMIN_KEY"
+
+          mapfile -t SCRUBBED_ENV_NAMES < <(
+            pnpm exec convex env list --names-only \
+              --url "$NEXT_PUBLIC_CONVEX_URL" \
+              --admin-key "$ADMIN_KEY"
+          )
+          ACTUAL="$(
+            printf '%s\n' "${SCRUBBED_ENV_NAMES[@]}" | LC_ALL=C sort
+          )"
+          EXPECTED="$(
+            printf '%s\n' \
+              AUTOFLOW_DEPLOYMENT_CLASS \
+              CLERK_DEV_JWT_ISSUER_DOMAIN \
+              CLERK_JWT_ISSUER_DOMAIN \
+              NEXT_PUBLIC_APP_URL \
+              TURNSTILE_SECRET_KEY | LC_ALL=C sort
+          )"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "Disposable preview environment does not match the trusted allowlist." >&2
+            printf 'Expected:\n%s\nActual:\n%s\n' "$EXPECTED" "$ACTUAL" >&2
+            exit 1
+          fi
+
       - name: Deploy exact candidate backend with disposable preview credential
         env:
           CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}

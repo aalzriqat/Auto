@@ -3,7 +3,11 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import schema from "./schema";
 import type { Id } from "./_generated/dataModel";
-import { websiteLeadBlocklistValueHash } from "./websites";
+import {
+  TURNSTILE_ALWAYS_PASS_TEST_SECRET,
+  verifyTurnstileToken,
+  websiteLeadBlocklistValueHash,
+} from "./websites";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -13,6 +17,7 @@ vi.mock("./rateLimit", () => ({
 const ORIGINAL_CLERK_ISSUER = process.env.CLERK_JWT_ISSUER_DOMAIN;
 const ORIGINAL_APP_URL = process.env.NEXT_PUBLIC_APP_URL;
 const ORIGINAL_TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY;
+const ORIGINAL_DEPLOYMENT_CLASS = process.env.AUTOFLOW_DEPLOYMENT_CLASS;
 const ORIGINAL_DOMAIN_REGISTRAR_MODE = process.env.DOMAIN_REGISTRAR_MODE;
 
 function restoreEnv(name: string, value: string | undefined) {
@@ -38,6 +43,7 @@ beforeEach(() => {
 
 afterEach(() => {
   restoreEnv("DOMAIN_REGISTRAR_MODE", ORIGINAL_DOMAIN_REGISTRAR_MODE);
+  restoreEnv("AUTOFLOW_DEPLOYMENT_CLASS", ORIGINAL_DEPLOYMENT_CLASS);
 });
 
 async function seedDealer() {
@@ -306,6 +312,35 @@ describe("dealer website publishing", () => {
 });
 
 describe("dealer website leads", () => {
+  test("accepts Cloudflare test action only for a marked preview using the official test secret", async () => {
+    process.env.CLERK_JWT_ISSUER_DOMAIN = "https://test.clerk.accounts.dev";
+    process.env.NEXT_PUBLIC_APP_URL = "https://test.example.com";
+    process.env.TURNSTILE_SECRET_KEY = TURNSTILE_ALWAYS_PASS_TEST_SECRET;
+    process.env.AUTOFLOW_DEPLOYMENT_CLASS = "preview";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ success: true, action: "test" }), {
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(
+      verifyTurnstileToken("XXXX.DUMMY.TOKEN.XXXX"),
+    ).resolves.toBeUndefined();
+
+    delete process.env.AUTOFLOW_DEPLOYMENT_CLASS;
+    await expect(
+      verifyTurnstileToken("XXXX.DUMMY.TOKEN.XXXX"),
+    ).rejects.toThrow(/verification failed/i);
+
+    restoreEnv("CLERK_JWT_ISSUER_DOMAIN", ORIGINAL_CLERK_ISSUER);
+    restoreEnv("NEXT_PUBLIC_APP_URL", ORIGINAL_APP_URL);
+    restoreEnv("TURNSTILE_SECRET_KEY", ORIGINAL_TURNSTILE_SECRET);
+    vi.unstubAllGlobals();
+  });
+
   beforeEach(() => {
     process.env.CLERK_JWT_ISSUER_DOMAIN = "https://test.clerk.accounts.dev";
     process.env.NEXT_PUBLIC_APP_URL = "https://test.example.com";
