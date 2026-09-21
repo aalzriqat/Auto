@@ -49,9 +49,78 @@ function syntheticChange(calibrationCase: CalibrationCase) {
   };
 }
 
+function provenanceOverrides(calibrationCase: CalibrationCase) {
+  return {
+    assertAncestorCommit: () => undefined,
+    readCommitTimestamp: () =>
+      new Date(calibrationCase.snapshotAt).toISOString(),
+  };
+}
+
+function matrix({
+  deterministicRequirements = [],
+  jevAdvisoryRequirements = [],
+  candidateInvariants = [],
+}: {
+  deterministicRequirements?: string[];
+  jevAdvisoryRequirements?: string[];
+  candidateInvariants?: Array<{ id: string; probability: number }>;
+} = {}) {
+  return {
+    deterministicRequirements,
+    jevAdvisoryRequirements,
+    combinedRequirements: [
+      ...new Set([...deterministicRequirements, ...jevAdvisoryRequirements]),
+    ].sort(),
+    candidateInvariants,
+  };
+}
+
+function completeTrack({
+  trackRisks = risks,
+  invariantImpact = {},
+  reviewMatrix = matrix(),
+  inputTokens = 10,
+  outputTokens = 2,
+  latencyMs = 100,
+}: {
+  trackRisks?: typeof risks;
+  invariantImpact?: Record<string, number>;
+  reviewMatrix?: ReturnType<typeof matrix>;
+  inputTokens?: number;
+  outputTokens?: number;
+  latencyMs?: number;
+} = {}) {
+  return {
+    status: "COMPLETE" as const,
+    model: "jev-test",
+    usage: { input_tokens: inputTokens, output_tokens: outputTokens },
+    risks: trackRisks,
+    invariantImpact,
+    reviewMatrix,
+    latencyMs,
+  };
+}
+
+function unavailableTrack(reason = "provider unavailable") {
+  return {
+    status: "UNAVAILABLE" as const,
+    reason,
+    usage: null,
+    risks: null,
+    invariantImpact: null,
+    reviewMatrix: null,
+    latencyMs: 50,
+  };
+}
+
+function deterministicMatrix(requirements: string[] = []) {
+  return matrix({ deterministicRequirements: requirements });
+}
+
 describe("Jev historical calibration", () => {
   it("pins unique exact-SHA snapshots without embedding hindsight labels", () => {
-    const ids = new Set();
+    const ids = new Set<string>();
     const allowedKeys = ["baseSha", "headSha", "id", "prNumber", "snapshotAt"];
 
     for (const calibrationCase of JEV_CALIBRATION_CASES) {
@@ -83,8 +152,7 @@ describe("Jev historical calibration", () => {
     const observation = buildCalibrationObservation({
       calibrationCase,
       runtimeOverrides: {
-        assertAncestorCommit: () => undefined,
-        readCommitTimestamp: () => new Date(calibrationCase.snapshotAt).toISOString(),
+        ...provenanceOverrides(calibrationCase),
         extractCanonicalInvariants: () => [syntheticInvariant],
         buildChangeState: () => syntheticChange(calibrationCase),
         deterministicInvariantImpact: () => [],
@@ -166,8 +234,7 @@ describe("Jev historical calibration", () => {
       calibrationCase,
       apiKey: "synthetic-key",
       runtimeOverrides: {
-        assertAncestorCommit: () => undefined,
-        readCommitTimestamp: () => new Date(calibrationCase.snapshotAt).toISOString(),
+        ...provenanceOverrides(calibrationCase),
         extractCanonicalInvariants: () => [syntheticInvariant],
         buildChangeState: () => syntheticChange(calibrationCase),
         deterministicInvariantImpact: () => [],
@@ -185,20 +252,6 @@ describe("Jev historical calibration", () => {
           risks: { ...risks, uiAuthority: 0.7 },
           invariantImpact: { "UI-1": 0.75 },
         }),
-        deriveReviewMatrix: ({ invariantImpact }: { invariantImpact: Record<string, number> }) =>
-          Object.keys(invariantImpact).length === 0
-            ? {
-                deterministicRequirements: [],
-                jevAdvisoryRequirements: ["review:ui-backend-authority"],
-                combinedRequirements: ["review:ui-backend-authority"],
-                candidateInvariants: [],
-              }
-            : {
-                deterministicRequirements: [],
-                jevAdvisoryRequirements: ["review:ui-backend-authority"],
-                combinedRequirements: ["review:ui-backend-authority"],
-                candidateInvariants: [{ id: "UI-1", probability: 0.75 }],
-              },
       },
     });
 
@@ -207,11 +260,54 @@ describe("Jev historical calibration", () => {
     expect(result).not.toHaveProperty("state");
     expect(result).not.toHaveProperty("questions");
     expect(result).not.toHaveProperty("invariants");
-    expect(result.blind).not.toHaveProperty("invariantImpact");
+    expect(result.blind).toMatchObject({ status: "COMPLETE" });
+    expect(result.blind.invariantImpact).toEqual({});
+    expect(result.policy).toMatchObject({ status: "COMPLETE" });
     expect(result.policy.invariantImpact).toEqual({ "UI-1": 0.75 });
   });
 
-  it("attributes deterministic, blind Jev, and current-policy hits separately", () => {
+  it("preserves unavailable tracks, redacts credentials, and continues policy replay", async () => {
+    const calibrationCase = JEV_CALIBRATION_CASES[0];
+    let calls = 0;
+    const result = await runHistoricalCalibrationCase({
+      calibrationCase,
+      apiKey: "synthetic-key",
+      runtimeOverrides: {
+        ...provenanceOverrides(calibrationCase),
+        extractCanonicalInvariants: () => [syntheticInvariant],
+        buildChangeState: () => syntheticChange(calibrationCase),
+        deterministicInvariantImpact: () => [],
+        extraDeterministicRequirementsForFiles: () => [],
+        callJev: async () => {
+          calls += 1;
+          if (calls === 1) {
+            throw new Error("synthetic-key provider unavailable\nwith details");
+          }
+          return { kind: "policy" };
+        },
+        normalizeJevResponse: () => ({
+          model: "jev-test",
+          usage: { input_tokens: 12, output_tokens: 3 },
+          risks: { ...risks, uiAuthority: 0.7 },
+          invariantImpact: { "UI-1": 0.75 },
+        }),
+      },
+    });
+
+    expect(calls).toBe(2);
+    expect(result.blind).toMatchObject({
+      status: "UNAVAILABLE",
+      usage: null,
+      risks: null,
+    });
+    expect(result.blind.reason).not.toContain("synthetic-key");
+    expect(result.blind.reason).toContain("[redacted]");
+    expect(result.blind.reason).not.toContain("\n");
+    expect(result.policy).toMatchObject({ status: "COMPLETE" });
+    expect(result.deterministicReviewMatrix).toBeDefined();
+  });
+
+  it("attributes deterministic, scrutiny, and escalation hits separately", () => {
     const result = {
       caseId: "synthetic",
       deterministicImpact: [
@@ -222,31 +318,34 @@ describe("Jev historical calibration", () => {
           requiredObligations: ["STATE_TRANSITION"],
         },
       ],
-      blind: {
-        risks: { ...risks, uiAuthority: 0.8 },
-        reviewMatrix: {
-          deterministicRequirements: [],
-          jevAdvisoryRequirements: ["review:ui-backend-authority"],
-          combinedRequirements: ["review:ui-backend-authority"],
-          candidateInvariants: [],
-        },
-      },
-      policy: {
-        risks: { ...risks, uiAuthority: 0.75 },
-        reviewMatrix: {
+      deterministicReviewMatrix: deterministicMatrix([
+        "review-invariant:LIFE-1",
+        "proof:STATE_TRANSITION",
+      ]),
+      blind: completeTrack({
+        trackRisks: { ...risks, uiAuthority: 0.8 },
+        reviewMatrix: matrix({
+          jevAdvisoryRequirements: [
+            "review:ui-backend-authority",
+            "escalate-risk:uiAuthority",
+          ],
+        }),
+      }),
+      policy: completeTrack({
+        trackRisks: { ...risks, uiAuthority: 0.75 },
+        invariantImpact: { "UI-1": 0.72 },
+        reviewMatrix: matrix({
           deterministicRequirements: [
             "review-invariant:LIFE-1",
             "proof:STATE_TRANSITION",
           ],
-          jevAdvisoryRequirements: ["review:ui-backend-authority"],
-          combinedRequirements: [
-            "proof:STATE_TRANSITION",
-            "review-invariant:LIFE-1",
+          jevAdvisoryRequirements: [
             "review:ui-backend-authority",
+            "escalate-risk:uiAuthority",
           ],
           candidateInvariants: [{ id: "UI-1", probability: 0.72 }],
-        },
-      },
+        }),
+      }),
     };
 
     const score = scoreCalibrationCase(result, {
@@ -271,130 +370,219 @@ describe("Jev historical calibration", () => {
     expect(score.findings[0]).toMatchObject({
       deterministicHit: true,
       blindJevHit: false,
+      blindEscalatedHit: false,
       operationalCombinedHit: true,
       incrementalBlindJevHit: false,
     });
     expect(score.findings[1]).toMatchObject({
       deterministicHit: false,
       blindJevHit: true,
+      blindEscalatedHit: true,
       policyJevHit: true,
+      policyEscalatedHit: true,
       operationalCombinedHit: true,
       incrementalBlindJevHit: true,
       incrementalPolicyJevHit: true,
     });
   });
 
-  it("measures blind and policy review pressure on hidden low-risk controls", () => {
+  it("counts unavailable Jev as a miss without erasing deterministic baseline evidence", () => {
     const result = {
-      caseId: "negative-control",
-      deterministicImpact: [],
-      blind: {
-        risks,
-        reviewMatrix: {
-          deterministicRequirements: [],
-          jevAdvisoryRequirements: ["proof:FUZZ", "escalate-risk:externalInput"],
-          combinedRequirements: ["proof:FUZZ", "escalate-risk:externalInput"],
-          candidateInvariants: [],
+      caseId: "unavailable",
+      deterministicImpact: [
+        {
+          id: "LIFE-1",
+          severity: "CRITICAL",
+          matchingFiles: ["convex/example.ts"],
+          requiredObligations: ["STATE_TRANSITION"],
         },
-      },
-      policy: {
-        risks,
-        reviewMatrix: {
-          deterministicRequirements: [],
-          jevAdvisoryRequirements: ["proof:BOUNDARY"],
-          combinedRequirements: ["proof:BOUNDARY"],
-          candidateInvariants: [],
-        },
-      },
+      ],
+      deterministicReviewMatrix: deterministicMatrix(["proof:STATE_TRANSITION"]),
+      blind: unavailableTrack(),
+      policy: unavailableTrack(),
     };
     const score = scoreCalibrationCase(result, {
-      control: "NEGATIVE_LOW_RISK",
-      findings: [],
+      findings: [
+        {
+          id: "known",
+          severity: "CRITICAL",
+          acceptedInvariantIds: ["LIFE-1"],
+          acceptedRiskKeys: ["lifecycle"],
+          acceptedRequirements: ["proof:STATE_TRANSITION"],
+        },
+      ],
     });
 
-    expect(score).toMatchObject({
-      negativeControl: true,
-      blindAddedRequirements: ["proof:FUZZ", "escalate-risk:externalInput"],
-      policyAddedRequirements: ["proof:BOUNDARY"],
-      blindEscalationRequirements: ["escalate-risk:externalInput"],
-      policyEscalationRequirements: [],
+    expect(score.findings[0]).toMatchObject({
+      deterministicHit: true,
+      blindAvailable: false,
+      policyAvailable: false,
+      blindJevHit: false,
+      policyJevHit: false,
+      operationalCombinedHit: true,
+    });
+    expect(score.blindAddedRequirements).toEqual([]);
+    expect(score.policyAddedRequirements).toEqual([]);
+  });
+
+  it("measures review pressure only across available low-risk controls", () => {
+    const availableScore = scoreCalibrationCase(
+      {
+        caseId: "negative-available",
+        deterministicImpact: [],
+        deterministicReviewMatrix: deterministicMatrix(),
+        blind: completeTrack({
+          reviewMatrix: matrix({
+            jevAdvisoryRequirements: [
+              "proof:FUZZ",
+              "escalate-risk:externalInput",
+            ],
+          }),
+        }),
+        policy: completeTrack({
+          reviewMatrix: matrix({
+            jevAdvisoryRequirements: ["proof:BOUNDARY"],
+          }),
+        }),
+      },
+      { control: "NEGATIVE_LOW_RISK", findings: [] },
+    );
+    const unavailableScore = scoreCalibrationCase(
+      {
+        caseId: "negative-unavailable",
+        deterministicImpact: [],
+        deterministicReviewMatrix: deterministicMatrix(),
+        blind: unavailableTrack(),
+        policy: unavailableTrack(),
+      },
+      { control: "NEGATIVE_LOW_RISK", findings: [] },
+    );
+
+    const metrics = aggregateCalibration(
+      [availableScore, unavailableScore],
+      [
+        {
+          blind: completeTrack({ inputTokens: 50, outputTokens: 2 }),
+          policy: completeTrack({ inputTokens: 60, outputTokens: 3 }),
+        },
+        {
+          blind: unavailableTrack(),
+          policy: unavailableTrack(),
+        },
+      ],
+    );
+
+    expect(metrics).toMatchObject({
+      negativeControlCases: 2,
+      blindAvailableNegativeControlCases: 1,
+      policyAvailableNegativeControlCases: 1,
+      blindNegativeControlAddedReviewRate: 1,
+      policyNegativeControlAddedReviewRate: 1,
+      blindNegativeControlEscalationRate: 1,
+      policyNegativeControlEscalationRate: 0,
+      blindTrackAvailabilityRate: 0.5,
+      policyTrackAvailabilityRate: 0.5,
+      unavailableTracks: 2,
     });
   });
 
-  it("aggregates recall, false-positive pressure, usage, and latency by track", () => {
-    const scoredCases = [
+  it("aggregates recall, escalation, usage, and latency by track", () => {
+    const positive = scoreCalibrationCase(
       {
         caseId: "positive",
-        negativeControl: false,
+        deterministicImpact: [
+          {
+            id: "LIFE-1",
+            severity: "CRITICAL",
+            matchingFiles: ["convex/example.ts"],
+            requiredObligations: ["STATE_TRANSITION"],
+          },
+        ],
+        deterministicReviewMatrix: deterministicMatrix([
+          "proof:STATE_TRANSITION",
+        ]),
+        blind: completeTrack({
+          trackRisks: { ...risks, uiAuthority: 0.8 },
+          reviewMatrix: matrix({
+            jevAdvisoryRequirements: [
+              "review:ui-backend-authority",
+              "escalate-risk:uiAuthority",
+            ],
+          }),
+          inputTokens: 100,
+          outputTokens: 5,
+          latencyMs: 200,
+        }),
+        policy: completeTrack({
+          trackRisks: { ...risks, uiAuthority: 0.7 },
+          invariantImpact: { "UI-1": 0.7 },
+          reviewMatrix: matrix({
+            deterministicRequirements: ["proof:STATE_TRANSITION"],
+            jevAdvisoryRequirements: [
+              "review:ui-backend-authority",
+              "escalate-risk:uiAuthority",
+            ],
+            candidateInvariants: [{ id: "UI-1", probability: 0.7 }],
+          }),
+          inputTokens: 120,
+          outputTokens: 6,
+          latencyMs: 250,
+        }),
+      },
+      {
         findings: [
           {
             id: "a",
             severity: "CRITICAL",
-            deterministicHit: false,
-            blindJevHit: true,
-            policyJevHit: true,
-            operationalCombinedHit: true,
-            incrementalBlindJevHit: true,
-            incrementalPolicyJevHit: true,
+            acceptedInvariantIds: ["UI-1"],
+            acceptedRiskKeys: ["uiAuthority"],
+            acceptedRequirements: ["review:ui-backend-authority"],
           },
           {
             id: "b",
             severity: "HIGH",
-            deterministicHit: true,
-            blindJevHit: false,
-            policyJevHit: false,
-            operationalCombinedHit: true,
-            incrementalBlindJevHit: false,
-            incrementalPolicyJevHit: false,
+            acceptedInvariantIds: ["LIFE-1"],
+            acceptedRiskKeys: [],
+            acceptedRequirements: ["proof:STATE_TRANSITION"],
           },
         ],
-        blindAddedRequirements: ["proof:BOUNDARY"],
-        policyAddedRequirements: ["proof:BOUNDARY"],
-        blindEscalationRequirements: [],
-        policyEscalationRequirements: [],
       },
-      {
-        caseId: "negative",
-        negativeControl: true,
-        findings: [],
-        blindAddedRequirements: ["proof:FUZZ", "escalate-risk:externalInput"],
-        policyAddedRequirements: [],
-        blindEscalationRequirements: ["escalate-risk:externalInput"],
-        policyEscalationRequirements: [],
-      },
-    ];
-    const caseResults = [
-      {
-        blind: { usage: { input_tokens: 100, output_tokens: 5 }, latencyMs: 200 },
-        policy: { usage: { input_tokens: 120, output_tokens: 6 }, latencyMs: 250 },
-      },
-      {
-        blind: { usage: { input_tokens: 50, output_tokens: 2 }, latencyMs: 100 },
-        policy: { usage: { input_tokens: 60, output_tokens: 3 }, latencyMs: 120 },
-      },
-    ];
+    );
 
-    expect(aggregateCalibration(scoredCases, caseResults)).toMatchObject({
-      cases: 2,
+    const result = {
+      blind: completeTrack({
+        inputTokens: 100,
+        outputTokens: 5,
+        latencyMs: 200,
+      }),
+      policy: completeTrack({
+        inputTokens: 120,
+        outputTokens: 6,
+        latencyMs: 250,
+      }),
+    };
+
+    expect(aggregateCalibration([positive], [result])).toMatchObject({
+      cases: 1,
       highCriticalFindings: 2,
       currentDeterministicReplayRecall: 0.5,
       blindJevHighCriticalRecall: 0.5,
+      blindJevHighCriticalEscalationRecall: 0.5,
       currentPolicyJevHighCriticalRecall: 0.5,
+      currentPolicyJevHighCriticalEscalationRecall: 0.5,
       operationalCombinedHighCriticalRecall: 1,
       incrementalBlindJevHits: 1,
       incrementalPolicyJevHits: 1,
-      negativeControlCases: 1,
-      blindNegativeControlAddedReviewRate: 1,
-      policyNegativeControlAddedReviewRate: 0,
-      blindNegativeControlEscalationRate: 1,
-      policyNegativeControlEscalationRate: 0,
+      blindTrackAvailabilityRate: 1,
+      policyTrackAvailabilityRate: 1,
+      unavailableTracks: 0,
       usage: {
-        blind_input_tokens: 150,
-        blind_output_tokens: 7,
-        policy_input_tokens: 180,
-        policy_output_tokens: 9,
+        blind_input_tokens: 100,
+        blind_output_tokens: 5,
+        policy_input_tokens: 120,
+        policy_output_tokens: 6,
       },
-      latency: { blind_ms: 300, policy_ms: 370 },
+      latency: { blind_ms: 200, policy_ms: 250 },
     });
   });
 
@@ -409,6 +597,8 @@ describe("Jev historical calibration", () => {
         "scripts/intelligence/jevCalibration.mjs",
       ]),
     ).toEqual(["review:correctness-governance", "proof:jev-harness"]);
-    expect(extraDeterministicRequirementsForFiles(["components/home/Hero.tsx"])).toEqual([]);
+    expect(
+      extraDeterministicRequirementsForFiles(["components/home/Hero.tsx"]),
+    ).toEqual([]);
   });
 });
