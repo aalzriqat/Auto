@@ -275,7 +275,6 @@ async function runRtlParityAttack(
       switched: true,
     });
     cleanupStarted = true;
-    cleanupStarted = true;
     const artifacts = [
       ...(await finishMissionBrowser(runtime)),
       backendArtifact,
@@ -432,6 +431,7 @@ async function runUiBackendMismatchAttack(
       visibleAfterReload,
       syntheticIdentity: { firstName, lastName, email },
     });
+    cleanupStarted = true;
     const artifacts = [
       ...(await finishMissionBrowser(runtime)),
       backendArtifact,

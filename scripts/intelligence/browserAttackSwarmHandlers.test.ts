@@ -501,6 +501,23 @@ describe("SCRUM-350 initial browser attack handlers", () => {
     expect(evidence.artifacts).toHaveLength(3);
   });
 
+  it("attempts UI/backend evidence cleanup only once when screenshot capture fails", async () => {
+    const fixture = makeBrowserFixture(defaultScenario());
+    fixture.page.screenshot.mockRejectedValueOnce(
+      new Error("ui screenshot capture failed"),
+    );
+
+    await expect(
+      handlerFor("UI_BACKEND_MISMATCH")(
+        executionContext("UI_BACKEND_MISMATCH"),
+      ),
+    ).rejects.toThrow(/evidence cleanup did not complete/);
+
+    expect(fixture.page.screenshot).toHaveBeenCalledTimes(1);
+    expect(fixture.tracing.stop).toHaveBeenCalledTimes(1);
+    expect(fixture.browser.close).toHaveBeenCalledTimes(1);
+  });
+
   it("propagates an Add Customer click failure as a harness error", async () => {
     const fixture = makeBrowserFixture(defaultScenario());
     fixture.addCustomerButton.click.mockRejectedValueOnce(
