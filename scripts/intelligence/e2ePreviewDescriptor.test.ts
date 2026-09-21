@@ -102,7 +102,7 @@ describe("sanitized E2E preview descriptor", () => {
         ...BASE_ENV,
         HEAD_SHA: "main",
       }),
-    ).toThrow(/40-character commit SHA/);
+    ).toThrow(/40-character .*commit SHA/);
 
     expect(() =>
       buildE2EPreviewDescriptor({
