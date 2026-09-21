@@ -8,6 +8,7 @@ const AUTHORIZE_PREVIEW_URL =
   CONVEX_PROVISION_ORIGIN + "/api/deployment/authorize_preview";
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const REQUEST_TIMEOUT_MS = 30_000;
+const CONVEX_CLIENT_HEADER = "npm-cli-1.42.1";
 const SAFE_SLUG = /^[A-Za-z0-9][A-Za-z0-9_-]{0,100}$/;
 const SAFE_PREVIEW_NAME = /^[a-z0-9][a-z0-9._-]{0,60}$/;
 
@@ -147,7 +148,7 @@ export async function resolveConvexPreviewAuthority({
         authorization: "Bearer " + deployKey,
         "content-type": "application/json",
         accept: "application/json",
-        "convex-client": "autoflow-trusted-browser-swarm",
+        "convex-client": CONVEX_CLIENT_HEADER,
       },
       body: JSON.stringify({
         previewName,
