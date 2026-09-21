@@ -594,6 +594,13 @@ function compareStrings(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
+function normalizeResponseByteChunk(value) {
+  if (Object.prototype.toString.call(value) !== "[object Uint8Array]") {
+    throw new Error("Jev response stream returned an invalid chunk");
+  }
+  return Uint8Array.from(value);
+}
+
 function validateReviewProbabilities(risks, invariantImpact, candidateThreshold, escalationThreshold) {
   assertProbability(candidateThreshold, "candidateThreshold");
   assertProbability(escalationThreshold, "escalationThreshold");
@@ -734,10 +741,8 @@ export async function callJev({
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          if (!(value instanceof Uint8Array)) {
-            throw new Error("Jev response stream returned an invalid chunk");
-          }
-          receivedBytes += value.byteLength;
+          const chunk = normalizeResponseByteChunk(value);
+          receivedBytes += chunk.byteLength;
           if (receivedBytes > MAX_JEV_RESPONSE_BYTES) {
             try {
               await reader.cancel("Jev response exceeded the maximum allowed size");
@@ -747,7 +752,7 @@ export async function callJev({
             throw new Error("Jev response exceeded the maximum allowed size");
           }
           try {
-            decodedParts.push(decoder.decode(value, { stream: true }));
+            decodedParts.push(decoder.decode(chunk, { stream: true }));
           } catch {
             throw new Error("Jev response was not valid UTF-8");
           }
