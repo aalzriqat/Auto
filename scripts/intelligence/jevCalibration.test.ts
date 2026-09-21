@@ -83,6 +83,8 @@ describe("Jev historical calibration", () => {
     const observation = buildCalibrationObservation({
       calibrationCase,
       runtimeOverrides: {
+        assertAncestorCommit: () => undefined,
+        readCommitTimestamp: () => new Date(calibrationCase.snapshotAt).toISOString(),
         extractCanonicalInvariants: () => [syntheticInvariant],
         buildChangeState: () => syntheticChange(calibrationCase),
         deterministicInvariantImpact: () => [],
@@ -113,6 +115,41 @@ describe("Jev historical calibration", () => {
     }
   });
 
+  it("fails closed when historical provenance does not match the pinned snapshot", () => {
+    const calibrationCase = JEV_CALIBRATION_CASES[0];
+
+    expect(() =>
+      buildCalibrationObservation({
+        calibrationCase,
+        runtimeOverrides: {
+          assertAncestorCommit: () => undefined,
+          readCommitTimestamp: () => "2000-01-01T00:00:00.000Z",
+          extractCanonicalInvariants: () => [syntheticInvariant],
+          buildChangeState: () => syntheticChange(calibrationCase),
+          deterministicInvariantImpact: () => [],
+          extraDeterministicRequirementsForFiles: () => [],
+        },
+      }),
+    ).toThrow(/timestamp mismatch/);
+
+    expect(() =>
+      buildCalibrationObservation({
+        calibrationCase,
+        runtimeOverrides: {
+          assertAncestorCommit: () => {
+            throw new Error("not an ancestor");
+          },
+          readCommitTimestamp: () =>
+            new Date(calibrationCase.snapshotAt).toISOString(),
+          extractCanonicalInvariants: () => [syntheticInvariant],
+          buildChangeState: () => syntheticChange(calibrationCase),
+          deterministicInvariantImpact: () => [],
+          extraDeterministicRequirementsForFiles: () => [],
+        },
+      }),
+    ).toThrow(/not an ancestor/);
+  });
+
   it("executes blind Jev before policy replay and returns no raw prompt state", async () => {
     const calibrationCase = JEV_CALIBRATION_CASES[0];
     const callKinds: string[] = [];
@@ -129,6 +166,8 @@ describe("Jev historical calibration", () => {
       calibrationCase,
       apiKey: "synthetic-key",
       runtimeOverrides: {
+        assertAncestorCommit: () => undefined,
+        readCommitTimestamp: () => new Date(calibrationCase.snapshotAt).toISOString(),
         extractCanonicalInvariants: () => [syntheticInvariant],
         buildChangeState: () => syntheticChange(calibrationCase),
         deterministicInvariantImpact: () => [],
