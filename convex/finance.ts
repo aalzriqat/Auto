@@ -217,7 +217,7 @@ async function sanitizeAcceptedStatuses(
     if (status && status.orgId !== orgId) {
       throw new ConvexError("Accepted customer status not found in this organization.");
     }
-    if (status) live.push(statusId);
+    if (status?.isActive) live.push(statusId);
   }
   return live;
 }
@@ -265,8 +265,12 @@ export const createCompany = mutation({
     assertCustomerLoanTermsValid(company, orgCurrency);
     assertDealerRulesValid(company, orgCurrency);
     const acceptedStatuses = await sanitizeAcceptedStatuses(ctx, args.orgId, args.acceptedStatuses);
+    const lostConfiguredStatusScope =
+      (args.acceptedStatuses?.length ?? 0) > 0 &&
+      (acceptedStatuses?.length ?? 0) === 0;
     const companyId = await ctx.db.insert("financeCompanies", {
       ...company,
+      isActive: lostConfiguredStatusScope ? false : company.isActive,
       acceptedStatuses,
       ruleVersion: 1,
       editRevision: 1,
@@ -336,6 +340,9 @@ export const updateCompany = mutation({
     }
 
     const acceptedStatuses = await sanitizeAcceptedStatuses(ctx, orgId, updates.acceptedStatuses);
+    const lostConfiguredStatusScope =
+      (updates.acceptedStatuses?.length ?? 0) > 0 &&
+      (acceptedStatuses?.length ?? 0) === 0;
 
     const dealerRuleKeys = Object.keys(dealerRuleArgs) as Array<keyof typeof dealerRuleArgs>;
     const presentDealerRules = Object.fromEntries(
@@ -410,6 +417,7 @@ export const updateCompany = mutation({
 
     await ctx.db.patch(id, {
       ...updates,
+      isActive: lostConfiguredStatusScope ? false : updates.isActive,
       ...presentDealerRules,
       ...(clearingLegacyTemplates ? { feeTemplates: undefined } : {}),
       ...(acceptedStatuses === undefined ? {} : { acceptedStatuses }),
