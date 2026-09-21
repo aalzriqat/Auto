@@ -12,6 +12,7 @@
 import { describe, expect, test, vi } from "vitest";
 import {
   PreviewTargetingError,
+  assertExistingE2EPreview,
   assertPreviewTargeting,
   buildConvexRunArgs,
   isPreviewDeployKey,
@@ -401,6 +402,69 @@ describe("runConvex — failure reporting", () => {
   test("returns quietly on success", () => {
     const spawn = vi.fn(() => ({ status: 0, error: undefined }));
     expect(() => runConvex(["exec"], "label", spawn)).not.toThrow();
+  });
+});
+
+describe("assertExistingE2EPreview", () => {
+  const ENV = {
+    CONVEX_DEPLOY_KEY: PREVIEW_KEY,
+    CONVEX_PREVIEW_NAME: "e2e-pr-350-0123456789",
+    NEXT_PUBLIC_CONVEX_URL: "https://impressive-ox-948.convex.cloud",
+    CLERK_SECRET_KEY: "unit-test-clerk-secret",
+    E2E_LOGIN_USER: "primary-secret@example.com",
+    E2E_APPROVER_USER: "approver-secret@example.com",
+  };
+
+  function deps() {
+    const calls: { fn: string; args: string[] }[] = [];
+    return {
+      calls,
+      run: vi.fn((args: string[], label: string) => {
+        calls.push({ fn: label, args });
+      }),
+      resolveClerkUserId: vi.fn(async ({ email }: { email: string }) =>
+        email.startsWith("primary") ? "user_primary" : "user_approver",
+      ),
+    };
+  }
+
+  test("asserts an existing preview without reseeding it", async () => {
+    const d = deps();
+
+    await assertExistingE2EPreview(ENV, d);
+
+    expect(d.calls.map((call) => call.fn)).toEqual([
+      "e2eBootstrap:assertE2EBootstrap",
+    ]);
+    expect(d.calls[0]!.args).toContain("--preview-name");
+    expect(
+      d.calls[0]!.args[d.calls[0]!.args.indexOf("--preview-name") + 1],
+    ).toBe(ENV.CONVEX_PREVIEW_NAME);
+    const asserted = JSON.parse(d.calls[0]!.args[4]!);
+    expect(asserted).toEqual({
+      primaryClerkUserId: "user_primary",
+      approverClerkUserId: "user_approver",
+      expectedCloudUrl: ENV.NEXT_PUBLIC_CONVEX_URL,
+    });
+  });
+
+  test("fails closed before Clerk lookup when the deploy key is not preview-only", async () => {
+    const d = deps();
+
+    await expect(
+      assertExistingE2EPreview({ ...ENV, CONVEX_DEPLOY_KEY: PROD_KEY }, d),
+    ).rejects.toThrow(/not a PREVIEW deploy key/);
+    expect(d.resolveClerkUserId).not.toHaveBeenCalled();
+    expect(d.run).not.toHaveBeenCalled();
+  });
+
+  test("refuses an assertion with a missing browser deployment URL", async () => {
+    const d = deps();
+
+    await expect(
+      assertExistingE2EPreview({ ...ENV, NEXT_PUBLIC_CONVEX_URL: "" }, d),
+    ).rejects.toThrow(/existing preview cannot be checked/);
+    expect(d.run).not.toHaveBeenCalled();
   });
 });
 

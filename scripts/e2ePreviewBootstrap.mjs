@@ -408,6 +408,61 @@ export function runConvex(args, label, spawn = spawnSync) {
  *   log?: (message: string) => void,
  * }} [deps]
  */
+/**
+ * Re-asserts that an already-seeded E2E preview still belongs to the exact
+ * deployment and Clerk seats the browser is about to drive.
+ *
+ * This is intentionally separate from `main()`: browser swarm workers must
+ * never reseed shared preview state merely to prove it is still the right
+ * target.
+ *
+ * @param {Record<string, string | undefined>} [env]
+ * @param {{
+ *   run?: (args: string[], label: string) => void,
+ *   resolveClerkUserId?: (options: { email: string, secretKey: string | undefined }) => Promise<string>,
+ * }} [deps]
+ */
+export async function assertExistingE2EPreview(env = process.env, deps = {}) {
+  const { run = runConvex, resolveClerkUserId: resolveId = resolveClerkUserId } = deps;
+  const deployKey = env.CONVEX_DEPLOY_KEY;
+  const previewName = env.CONVEX_PREVIEW_NAME;
+  assertPreviewTargeting({ deployKey, previewName, env });
+
+  const primaryEmail = env.E2E_LOGIN_USER;
+  const approverEmail = env.E2E_APPROVER_USER;
+  if (!primaryEmail || !approverEmail) {
+    throw new PreviewTargetingError(
+      "E2E_LOGIN_USER and E2E_APPROVER_USER must both be set before an existing preview can be asserted.",
+    );
+  }
+
+  const secretKey = env.CLERK_SECRET_KEY;
+  const primaryClerkUserId = await resolveId({ email: primaryEmail, secretKey });
+  const approverClerkUserId = await resolveId({ email: approverEmail, secretKey });
+  const expectedCloudUrl = env.NEXT_PUBLIC_CONVEX_URL;
+
+  if (!expectedCloudUrl) {
+    throw new PreviewTargetingError(
+      "NEXT_PUBLIC_CONVEX_URL is not set, so the existing preview cannot be checked against the deployment the browser will drive.",
+    );
+  }
+
+  run(
+    buildConvexRunArgs({
+      functionName: "e2eBootstrap:assertE2EBootstrap",
+      argsJson: JSON.stringify({
+        primaryClerkUserId,
+        approverClerkUserId,
+        expectedCloudUrl,
+      }),
+      previewName,
+      deployKey,
+      env,
+    }),
+    "e2eBootstrap:assertE2EBootstrap",
+  );
+}
+
 export async function main(env = process.env, deps = {}) {
   const { run = runConvex, resolveClerkUserId: resolveId = resolveClerkUserId, log = console.log } = deps;
   const deployKey = env.CONVEX_DEPLOY_KEY;
@@ -493,7 +548,9 @@ if (invokedDirectly) {
           }
           process.stdout.write(name);
         }
-      : () => main();
+      : mode === "--assert-only"
+        ? () => assertExistingE2EPreview()
+        : () => main();
 
   run().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));

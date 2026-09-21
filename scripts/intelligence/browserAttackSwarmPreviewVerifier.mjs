@@ -1,25 +1,35 @@
-import {
-  PreviewTargetingError,
-  assertPreviewTargeting,
-  buildConvexRunArgs,
-  resolveClerkUserId,
-  runConvex,
-} from "../e2ePreviewBootstrap.mjs";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
 
 function requireMatch(actual, expected, label) {
   if (!actual || !expected || String(actual).trim() !== String(expected).trim()) {
-    throw new PreviewTargetingError(
+    throw new Error(
       label + " does not match the browser swarm manifest; refusing preview execution.",
     );
   }
 }
 
+function assertManifestShape(manifest) {
+  if (!manifest || manifest.version !== 1 || manifest.requiresPreviewMarker !== true) {
+    throw new Error(
+      "Browser swarm manifest does not require the SCRUM-143 preview marker.",
+    );
+  }
+}
+
 /**
+ * Executes SCRUM-143's existing ESM bootstrap as a real Node process instead
+ * of importing it through Playwright's transformed test loader.
+ *
  * @param {import("./browserAttackSwarm").BrowserSwarmRunManifest} manifest
  * @param {Record<string, string | undefined>} [env]
  * @param {{
- *   resolveClerkUserId?: typeof resolveClerkUserId,
- *   runConvex?: typeof runConvex,
+ *   spawn?: (
+ *     command: string,
+ *     args: string[],
+ *     options: object,
+ *   ) => { status: number | null, error?: Error | undefined },
+ *   cwd?: string,
  * }} [deps]
  */
 export async function verifyBrowserSwarmPreview(
@@ -27,17 +37,10 @@ export async function verifyBrowserSwarmPreview(
   env = process.env,
   deps = {},
 ) {
-  if (!manifest || manifest.version !== 1 || manifest.requiresPreviewMarker !== true) {
-    throw new PreviewTargetingError(
-      "Browser swarm manifest does not require the SCRUM-143 preview marker.",
-    );
-  }
+  assertManifestShape(manifest);
 
-  const deployKey = env.CONVEX_DEPLOY_KEY;
   const previewName = env.CONVEX_PREVIEW_NAME;
   const expectedCloudUrl = env.NEXT_PUBLIC_CONVEX_URL;
-
-  assertPreviewTargeting({ deployKey, previewName, env });
   requireMatch(previewName, manifest.previewName, "CONVEX_PREVIEW_NAME");
   requireMatch(
     expectedCloudUrl?.replace(/\/$/, ""),
@@ -45,40 +48,29 @@ export async function verifyBrowserSwarmPreview(
     "NEXT_PUBLIC_CONVEX_URL",
   );
 
-  const primaryEmail = env.E2E_LOGIN_USER;
-  const approverEmail = env.E2E_APPROVER_USER;
-  const clerkSecret = env.CLERK_SECRET_KEY;
-  if (!primaryEmail || !approverEmail || !clerkSecret) {
-    throw new PreviewTargetingError(
-      "Browser swarm preview verification requires E2E_LOGIN_USER, E2E_APPROVER_USER and CLERK_SECRET_KEY.",
+  const spawn = deps.spawn ?? spawnSync;
+  const cwd = deps.cwd ?? process.cwd();
+  const script = path.resolve(cwd, "scripts/e2ePreviewBootstrap.mjs");
+  const result = spawn(process.execPath, [script, "--assert-only"], {
+    cwd,
+    env: { ...process.env, ...env },
+    stdio: "inherit",
+    shell: false,
+  });
+
+  if (result.error) {
+    throw new Error(
+      "SCRUM-143 preview assertion process could not start: " +
+        result.error.message,
     );
   }
-
-  const resolveId = deps.resolveClerkUserId ?? resolveClerkUserId;
-  const run = deps.runConvex ?? runConvex;
-
-  const primaryClerkUserId = await resolveId({
-    email: primaryEmail,
-    secretKey: clerkSecret,
-  });
-  const approverClerkUserId = await resolveId({
-    email: approverEmail,
-    secretKey: clerkSecret,
-  });
-
-  const args = buildConvexRunArgs({
-    functionName: "e2eBootstrap:assertE2EBootstrap",
-    argsJson: JSON.stringify({
-      primaryClerkUserId,
-      approverClerkUserId,
-      expectedCloudUrl: manifest.expectedCloudUrl,
-    }),
-    previewName: manifest.previewName,
-    deployKey,
-    env,
-  });
-
-  run(args, "e2eBootstrap:assertE2EBootstrap");
+  if (result.status !== 0) {
+    throw new Error(
+      "SCRUM-143 preview assertion failed with exit code " +
+        String(result.status) +
+        ".",
+    );
+  }
 
   return {
     verified: true,
