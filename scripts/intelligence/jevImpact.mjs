@@ -590,6 +590,26 @@ const RISK_REQUIREMENTS = Object.freeze({
   uiAuthority: ["review:ui-backend-authority"],
 });
 
+const CORRECTNESS_GOVERNANCE_FILES = new Set([
+  "scripts/autoflowInvariantCatalog.ts",
+  ".github/workflows/invariant-governance.yml",
+  ".github/workflows/jev-shadow-impact.yml",
+  ".github/workflows/jev-historical-calibration.yml",
+  "package.json",
+  "pnpm-lock.yaml",
+]);
+
+export function extraDeterministicRequirementsForFiles(changedFiles) {
+  const changesCorrectnessGovernance = changedFiles.some(
+    (file) =>
+      CORRECTNESS_GOVERNANCE_FILES.has(file) ||
+      file.startsWith("scripts/intelligence/"),
+  );
+  return changesCorrectnessGovernance
+    ? ["review:correctness-governance", "proof:jev-harness"]
+    : [];
+}
+
 function compareStrings(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
