@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { JEV_CALIBRATION_CASES } from "./jevCalibrationCases.mjs";
 import { JEV_CALIBRATION_LABELS } from "./jevCalibrationLabels.mjs";
 import {
@@ -8,6 +11,23 @@ import {
   scoreCalibrationCase,
 } from "./jevCalibration.mjs";
 import { extraDeterministicRequirementsForFiles } from "./jevImpact.mjs";
+import { runJevHistoricalCalibration } from "./runJevHistoricalCalibration.mjs";
+
+const tempDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    tempDirectories.splice(0).map((directory) =>
+      rm(directory, { recursive: true, force: true }),
+    ),
+  );
+});
+
+async function tempDirectory() {
+  const directory = await mkdtemp(path.join(tmpdir(), "autoflow-jev-calibration-"));
+  tempDirectories.push(directory);
+  return directory;
+}
 
 const risks = {
   economic: 0.1,
@@ -586,6 +606,84 @@ describe("Jev historical calibration", () => {
       },
       latency: { blind_ms: 200, policy_ms: 250 },
     });
+  });
+
+  it("loads hindsight labels only after every Jev case and writes incomplete evidence", async () => {
+    const repoRoot = await tempDirectory();
+    const events: string[] = [];
+    const cases = [
+      {
+        id: "case-one",
+        prNumber: 1,
+        baseSha: "a".repeat(40),
+        headSha: "b".repeat(40),
+        snapshotAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: "case-two",
+        prNumber: 2,
+        baseSha: "c".repeat(40),
+        headSha: "d".repeat(40),
+        snapshotAt: "2026-01-02T00:00:00.000Z",
+      },
+    ];
+    let index = 0;
+    const runCase = vi.fn(async ({ calibrationCase }) => {
+      events.push(`call:${calibrationCase.id}`);
+      index += 1;
+      return {
+        caseId: calibrationCase.id,
+        baseSha: calibrationCase.baseSha,
+        headSha: calibrationCase.headSha,
+        changedFiles: [],
+        patchTruncated: false,
+        patchCharsSent: 0,
+        deterministicImpact: [],
+        deterministicReviewMatrix: deterministicMatrix(),
+        blind:
+          index === 2
+            ? unavailableTrack("synthetic outage")
+            : completeTrack(),
+        policy: completeTrack(),
+      };
+    });
+    const loadLabels = vi.fn(async () => {
+      events.push("labels");
+      return {
+        JEV_CALIBRATION_LABELS: {
+          "case-one": { control: "NEGATIVE_LOW_RISK", findings: [] },
+          "case-two": { control: "NEGATIVE_LOW_RISK", findings: [] },
+        },
+      };
+    });
+
+    const payload = await runJevHistoricalCalibration({
+      repoRoot,
+      env: { TYPESAFE_API_KEY: "runner-sentinel" },
+      cases,
+      runCase,
+      loadLabels,
+    });
+
+    expect(events).toEqual(["call:case-one", "call:case-two", "labels"]);
+    expect(payload).toMatchObject({
+      status: "CALIBRATION_COMPLETE_WITH_UNAVAILABLE",
+      metrics: {
+        unavailableTracks: 1,
+        blindTrackAvailabilityRate: 0.5,
+        policyTrackAvailabilityRate: 1,
+      },
+    });
+
+    const artifact = JSON.parse(
+      await readFile(
+        path.join(repoRoot, "artifacts/jev-historical-calibration.json"),
+        "utf8",
+      ),
+    );
+    expect(artifact.status).toBe("CALIBRATION_COMPLETE_WITH_UNAVAILABLE");
+    expect(JSON.stringify(artifact)).not.toContain("patchExcerpt");
+    expect(JSON.stringify(artifact)).not.toContain("runner-sentinel");
   });
 
   it("uses the same fail-closed governance routing in live and historical modes", () => {
