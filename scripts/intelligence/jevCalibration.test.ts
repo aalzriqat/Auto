@@ -232,7 +232,7 @@ describe("Jev historical calibration", () => {
 
     const result = await runHistoricalCalibrationCase({
       calibrationCase,
-      apiKey: "synthetic-key",
+      apiKey: "redaction-sentinel",
       runtimeOverrides: {
         ...provenanceOverrides(calibrationCase),
         extractCanonicalInvariants: () => [syntheticInvariant],
@@ -271,7 +271,7 @@ describe("Jev historical calibration", () => {
     let calls = 0;
     const result = await runHistoricalCalibrationCase({
       calibrationCase,
-      apiKey: "synthetic-key",
+      apiKey: "redaction-sentinel",
       runtimeOverrides: {
         ...provenanceOverrides(calibrationCase),
         extractCanonicalInvariants: () => [syntheticInvariant],
@@ -281,7 +281,7 @@ describe("Jev historical calibration", () => {
         callJev: async () => {
           calls += 1;
           if (calls === 1) {
-            throw new Error("synthetic-key provider unavailable\nwith details");
+            throw new Error("redaction-sentinel provider unavailable\nwith details");
           }
           return { kind: "policy" };
         },
@@ -300,9 +300,11 @@ describe("Jev historical calibration", () => {
       usage: null,
       risks: null,
     });
-    expect(result.blind.reason).not.toContain("synthetic-key");
-    expect(result.blind.reason).toContain("[redacted]");
-    expect(result.blind.reason).not.toContain("\n");
+    const unavailableReason =
+      result.blind.status === "UNAVAILABLE" ? result.blind.reason : "";
+    expect(unavailableReason).not.toContain("redaction-sentinel");
+    expect(unavailableReason).toContain("[redacted]");
+    expect(unavailableReason).not.toContain("\n");
     expect(result.policy).toMatchObject({ status: "COMPLETE" });
     expect(result.deterministicReviewMatrix).toBeDefined();
   });
