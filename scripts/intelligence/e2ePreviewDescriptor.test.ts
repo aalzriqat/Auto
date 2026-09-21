@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { previewNameForRef } from "../e2ePreviewBootstrap.mjs";
 import {
   buildE2EPreviewDescriptor,
   validateE2EPreviewDescriptor,
 } from "./e2ePreviewDescriptor.mjs";
 
+const PREVIEW_NAME = previewNameForRef({
+  ref: "refs/pull/325/merge",
+  prNumber: "325",
+});
 const BASE_ENV = {
-  CONVEX_DEPLOY_KEY: "preview:team:project|unit-test-secret",
-  CONVEX_PREVIEW_NAME: "e2e-pr-325-abcdef1234",
+  CONVEX_PREVIEW_NAME: PREVIEW_NAME,
   NEXT_PUBLIC_CONVEX_URL: "https://candidate-supplied.convex.cloud",
   HEAD_SHA: "a".repeat(40),
   PR_NUMBER: "325",
@@ -16,7 +20,7 @@ describe("sanitized E2E preview descriptor", () => {
   it("emits only preview identity, PR number, and exact candidate head", () => {
     expect(buildE2EPreviewDescriptor(BASE_ENV)).toEqual({
       version: 2,
-      previewName: "e2e-pr-325-abcdef1234",
+      previewName: PREVIEW_NAME,
       headSha: "a".repeat(40),
       prNumber: 325,
     });
@@ -29,7 +33,7 @@ describe("sanitized E2E preview descriptor", () => {
       validateE2EPreviewDescriptor(descriptor, {
         expectedHeadSha: BASE_ENV.HEAD_SHA,
         expectedPrNumber: 325,
-        expectedPreviewName: BASE_ENV.CONVEX_PREVIEW_NAME,
+        expectedPreviewName: PREVIEW_NAME,
       }),
     ).toEqual(descriptor);
 
@@ -39,7 +43,7 @@ describe("sanitized E2E preview descriptor", () => {
         {
           expectedHeadSha: BASE_ENV.HEAD_SHA,
           expectedPrNumber: 325,
-          expectedPreviewName: BASE_ENV.CONVEX_PREVIEW_NAME,
+          expectedPreviewName: PREVIEW_NAME,
         },
       ),
     ).toThrow(/head SHA/);
@@ -50,7 +54,7 @@ describe("sanitized E2E preview descriptor", () => {
         {
           expectedHeadSha: BASE_ENV.HEAD_SHA,
           expectedPrNumber: 325,
-          expectedPreviewName: BASE_ENV.CONVEX_PREVIEW_NAME,
+          expectedPreviewName: PREVIEW_NAME,
         },
       ),
     ).toThrow(/unexpected fields/);
@@ -68,7 +72,7 @@ describe("sanitized E2E preview descriptor", () => {
         {
           expectedHeadSha: BASE_ENV.HEAD_SHA,
           expectedPrNumber: 325,
-          expectedPreviewName: BASE_ENV.CONVEX_PREVIEW_NAME,
+          expectedPreviewName: PREVIEW_NAME,
         },
       ),
     ).toThrow(/unexpected fields/);
@@ -76,9 +80,10 @@ describe("sanitized E2E preview descriptor", () => {
     expect(JSON.stringify(descriptor)).not.toContain("convex.cloud");
   });
 
-  it("does not copy deploy, Clerk, or candidate URL material into the descriptor", () => {
+  it("does not copy credentials or candidate URL material into the descriptor", () => {
     const descriptor = buildE2EPreviewDescriptor({
       ...BASE_ENV,
+      CONVEX_DEPLOY_KEY: "preview:team:project|unit-test-secret",
       CLERK_SECRET_KEY: "clerk-secret",
       E2E_LOGIN_PASSWORD: "password-secret",
     });
@@ -90,13 +95,13 @@ describe("sanitized E2E preview descriptor", () => {
     expect(serialized).not.toContain("candidate-supplied");
   });
 
-  it("refuses a non-preview deploy key before publishing target identity", () => {
+  it("refuses a preview name that does not match the PR resource identity", () => {
     expect(() =>
       buildE2EPreviewDescriptor({
         ...BASE_ENV,
-        CONVEX_DEPLOY_KEY: "prod:team:project|unit-test-secret",
+        CONVEX_PREVIEW_NAME: "e2e-pr-325-forged0000",
       }),
-    ).toThrow(/not a PREVIEW deploy key/);
+    ).toThrow(/deterministic PR preview identity/);
   });
 
   it("refuses ambiguous head and PR identities", () => {
