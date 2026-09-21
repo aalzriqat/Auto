@@ -56,6 +56,14 @@ function step(jobName: string, stepName: string): WorkflowStep {
   return value;
 }
 
+function playwrightStep(stepName: string): WorkflowStep {
+  const value = playwrightWorkflow.jobs?.playwright?.steps?.find(
+    (entry) => entry.name === stepName,
+  );
+  if (!value) throw new Error("Missing Playwright workflow step :: " + stepName);
+  return value;
+}
+
 const CANDIDATE_FORBIDDEN_ENV = [
   "CLERK_SECRET_KEY",
   "CONVEX_DEPLOY_KEY",
@@ -162,6 +170,30 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(run).toContain("e2e-preview-descriptor.json");
     expect(run).not.toContain("unzip -q");
     expect(run).not.toMatch(/unzip\s+[^\n]*\s-d\s/);
+  });
+
+  it("keeps candidate handoff identity-only and resolves Convex URL from the trusted control plane", () => {
+    const descriptor = playwrightStep("Write sanitized preview descriptor");
+    expect(descriptor.env).not.toHaveProperty("NEXT_PUBLIC_CONVEX_URL");
+
+    const authority = step(
+      "prepare",
+      "Resolve named Convex preview from trusted control plane",
+    );
+    expect(authority.run).toContain("convexPreviewAuthority.mjs");
+    expect(authority.env).toHaveProperty("CONVEX_PREVIEW_DEPLOY_KEY");
+    expect(authority.env).toHaveProperty("PR_NUMBER");
+
+    const publish = step("prepare", "Publish trusted plan evidence");
+    expect(String(publish.with?.path ?? "")).toContain(
+      "browser-swarm-convex-authority.json",
+    );
+
+    const plan = step(
+      "prepare",
+      "Assemble trusted run and fail closed on unsupported impact",
+    );
+    expect(plan.env).not.toHaveProperty("NEXT_PUBLIC_CONVEX_URL");
   });
 
   it("authenticates only on trusted main and never retypes passwords into candidate code", () => {
