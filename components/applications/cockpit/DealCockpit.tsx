@@ -4525,6 +4525,16 @@ export function DealCockpitView({
                       : deal && "money" in deal && deal.money?.profit.available
                         ? deal.money.profit.amountMinor
                         : null,
+                  managementProfitClassification:
+                    financialOverview?.data?.financialSummary?.profit.available &&
+                    financialOverview.data.financialSummary.profit.basis === "MANAGEMENT_ESTIMATE"
+                      ? financialOverview.data.financialSummary.profit.classification
+                      : deal &&
+                          "money" in deal &&
+                          deal.money?.profit.available &&
+                          deal.money.profit.basis === "MANAGEMENT_ESTIMATE"
+                        ? deal.money.profit.classification
+                        : null,
                 }
               : {
                   approvedPurchaseAmountMinor: null,
@@ -4537,6 +4547,16 @@ export function DealCockpitView({
                       ? financialOverview.data.financialSummary.profit.amountMinor
                       : deal && "money" in deal && deal.money?.profit.available
                         ? deal.money.profit.amountMinor
+                        : null,
+                  managementProfitClassification:
+                    financialOverview?.data?.financialSummary?.profit.available &&
+                    financialOverview.data.financialSummary.profit.basis === "MANAGEMENT_ESTIMATE"
+                      ? financialOverview.data.financialSummary.profit.classification
+                      : deal &&
+                          "money" in deal &&
+                          deal.money?.profit.available &&
+                          deal.money.profit.basis === "MANAGEMENT_ESTIMATE"
+                        ? deal.money.profit.classification
                         : null,
                 }
           }
