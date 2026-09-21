@@ -251,6 +251,45 @@ describe("Jev historical calibration", () => {
     });
   });
 
+  it("measures Jev review pressure on hidden low-risk controls", () => {
+    const result = {
+      caseId: "negative-control",
+      deterministicImpact: [],
+      risks,
+      reviewMatrix: {
+        deterministicRequirements: [],
+        jevAdvisoryRequirements: ["proof:FUZZ", "escalate-risk:externalInput"],
+        combinedRequirements: ["proof:FUZZ", "escalate-risk:externalInput"],
+        candidateInvariants: [],
+      },
+    };
+    const score = scoreCalibrationCase(result, {
+      control: "NEGATIVE_LOW_RISK",
+      findings: [],
+    });
+
+    expect(score).toMatchObject({
+      negativeControl: true,
+      addedRequirements: ["proof:FUZZ", "escalate-risk:externalInput"],
+      escalationRequirements: ["escalate-risk:externalInput"],
+    });
+
+    const metrics = aggregateCalibration(
+      [score],
+      [
+        {
+          usage: { input_tokens: 50, output_tokens: 2 },
+          latencyMs: 100,
+        },
+      ],
+    );
+    expect(metrics).toMatchObject({
+      negativeControlCases: 1,
+      negativeControlAddedReviewRate: 1,
+      negativeControlEscalationRate: 1,
+    });
+  });
+
   it("uses the same fail-closed governance routing in live and historical modes", () => {
     expect(
       extraDeterministicRequirementsForFiles([
