@@ -56,10 +56,11 @@ export default clerkMiddleware(async (auth, req) => {
 export const config = {
   matcher: [
     // Skip Next.js internals and all static files, unless found in search params
-    "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
+    "/((?!api/health(?:/|$)|_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
     "/manifest.webmanifest",
     "/:analyticsId([a-f0-9]{16,})/script.js",
-    // Always run for API routes
-    "/(api|trpc)(.*)",
+    // Always run for API routes except the public process-health endpoint.
+    // Health must remain observable even when Clerk itself is unavailable.
+    "/(api(?!/health(?:/|$))|trpc)(.*)",
   ],
 };
