@@ -2,10 +2,6 @@ import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { previewNameForRef } from "../e2ePreviewBootstrap.mjs";
-import {
-  buildBrowserSwarmRunManifest,
-  planBrowserAttackSwarm,
-} from "./browserAttackSwarm";
 import { validateE2EPreviewDescriptor } from "./e2ePreviewDescriptor.mjs";
 
 function exactSha(value, label) {
@@ -70,7 +66,6 @@ function assertTrustedImpact(value, expected) {
  *   baseSha: string,
  *   headSha: string,
  *   prNumber: number,
- *   runId: string,
  * }} input
  */
 export function assembleTrustedBrowserSwarmRun(input) {
@@ -103,20 +98,9 @@ export function assembleTrustedBrowserSwarmRun(input) {
       impactedInvariants,
       shouldRun: false,
       workerCount: 0,
-      missionCount: 0,
-      manifest: null,
+      planningMode: "TRUSTED_WORKER_RECONSTRUCTION",
     };
   }
-
-  const plan = planBrowserAttackSwarm({ impactedInvariants });
-  const workerCount = Math.min(2, Math.max(1, plan.missions.length));
-  const manifest = buildBrowserSwarmRunManifest({
-    plan,
-    workerCount,
-    runId: input.runId,
-    previewName: descriptor.previewName,
-    expectedCloudUrl: descriptor.convexCloudUrl,
-  });
 
   return {
     version: 1,
@@ -128,9 +112,12 @@ export function assembleTrustedBrowserSwarmRun(input) {
     convexCloudUrl: descriptor.convexCloudUrl,
     impactedInvariants,
     shouldRun: true,
-    workerCount,
-    missionCount: plan.missions.length,
-    manifest,
+    // Two is the initial bounded rollout. The trusted TypeScript planner in
+    // each worker reconstructs the exact deterministic mission set and may
+    // leave one bucket empty; unsupported families fail closed there before
+    // browser dispatch.
+    workerCount: 2,
+    planningMode: "TRUSTED_WORKER_RECONSTRUCTION",
   };
 }
 
@@ -147,9 +134,6 @@ export async function prepareTrustedBrowserSwarmRun({
   const baseSha = exactSha(env.BASE_SHA, "BASE_SHA");
   const headSha = exactSha(env.HEAD_SHA, "HEAD_SHA");
   const prNumber = positivePrNumber(env.PR_NUMBER);
-  const runId = env.BROWSER_SWARM_RUN_ID?.trim();
-  if (!runId) throw new Error("BROWSER_SWARM_RUN_ID is required.");
-
   const impactPath =
     env.TRUSTED_IMPACT_PATH ??
     path.join(repoRoot, "artifacts/browser-swarm-trusted-impact.json");
@@ -177,7 +161,6 @@ export async function prepareTrustedBrowserSwarmRun({
     baseSha,
     headSha,
     prNumber,
-    runId,
   });
 
   const outputDir = path.join(repoRoot, "artifacts");
@@ -204,8 +187,8 @@ export async function prepareTrustedBrowserSwarmRun({
 
   process.stdout.write(
     "Trusted browser swarm run: " +
-      payload.missionCount +
-      " mission(s), " +
+      payload.impactedInvariants.length +
+      " impacted invariant(s), " +
       payload.workerCount +
       " worker(s)\n",
   );

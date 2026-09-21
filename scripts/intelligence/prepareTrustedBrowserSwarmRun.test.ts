@@ -48,30 +48,23 @@ function assemble(options: {
     baseSha: BASE_SHA,
     headSha: HEAD_SHA,
     prNumber: PR_NUMBER,
-    runId: "gh-12345-1",
   });
 }
 
 describe("trusted browser swarm run assembly", () => {
-  it("creates the executable UI Phase-A manifest from trusted impact + descriptor", () => {
+  it("hands the exact trusted impact to bounded main-controlled workers", () => {
     const payload = assemble();
 
     expect(payload.shouldRun).toBe(true);
     expect(payload.workerCount).toBe(2);
-    expect(payload.missionCount).toBe(2);
+    expect(payload.planningMode).toBe("TRUSTED_WORKER_RECONSTRUCTION");
     expect(payload.impactedInvariants).toEqual([
       { id: "UI-1", severity: "HIGH" },
     ]);
-    expect(payload.manifest?.previewName).toBe(PREVIEW_NAME);
-    expect(payload.manifest?.expectedCloudUrl).toBe(
+    expect(payload.previewName).toBe(PREVIEW_NAME);
+    expect(payload.convexCloudUrl).toBe(
       "https://example-preview.convex.cloud",
     );
-    expect(
-      payload.manifest?.workers
-        .flatMap((worker) => worker.missions)
-        .map((mission) => mission.family)
-        .sort(),
-    ).toEqual(["RTL_PARITY", "UI_BACKEND_MISMATCH"]);
   });
 
   it("produces an explicit trusted no-op when canonical impact is empty", () => {
@@ -79,18 +72,21 @@ describe("trusted browser swarm run assembly", () => {
 
     expect(payload.shouldRun).toBe(false);
     expect(payload.workerCount).toBe(0);
-    expect(payload.missionCount).toBe(0);
-    expect(payload.manifest).toBeNull();
+    expect(payload.planningMode).toBe("TRUSTED_WORKER_RECONSTRUCTION");
   });
 
-  it("fails before workers when a deterministic impacted family lacks a Phase-A handler", () => {
-    expect(() =>
-      assemble({
-        impactArtifact: impact([
-          { id: "TEN-1", severity: "CRITICAL" },
-        ]),
-      }),
-    ).toThrow(/no executable handler.*TENANT_ESCAPE/i);
+  it("preserves unsupported deterministic impact for the trusted worker planner to reject", () => {
+    const payload = assemble({
+      impactArtifact: impact([
+        { id: "TEN-1", severity: "CRITICAL" },
+      ]),
+    });
+
+    expect(payload.shouldRun).toBe(true);
+    expect(payload.impactedInvariants).toEqual([
+      { id: "TEN-1", severity: "CRITICAL" },
+    ]);
+    expect(payload.workerCount).toBe(2);
   });
 
   it("refuses a candidate descriptor from a different exact head", () => {
