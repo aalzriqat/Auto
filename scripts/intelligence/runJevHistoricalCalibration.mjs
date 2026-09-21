@@ -19,20 +19,23 @@ function summaryMarkdown(payload) {
     "",
     `**Status:** ${payload.status}`,
     "",
-    "Hindsight boundary: historical finding labels are loaded only after all Jev calls complete.",
+    "Primary blind track: generic risk questions only; no current invariant statements or finding labels.",
+    "Secondary policy track: today's full AutoFlow invariant policy replayed against the same historical diff.",
+    "Finding labels are loaded only after every Jev call completes.",
     "",
     `Cases: ${metrics.cases}`,
     `High/Critical findings: ${metrics.highCriticalFindings}`,
-    `Deterministic recall: ${percent(metrics.deterministicHighCriticalRecall)}`,
-    `Jev recall: ${percent(metrics.jevHighCriticalRecall)}`,
-    `Combined recall: ${percent(metrics.combinedHighCriticalRecall)}`,
-    `Incremental Jev hits: ${metrics.incrementalJevHits}`,
-    `Extra review requirements: ${metrics.extraReviewRequirements}`,
-    `Negative-control added-review rate: ${percent(metrics.negativeControlAddedReviewRate)}`,
-    `Negative-control escalation rate: ${percent(metrics.negativeControlEscalationRate)}`,
-    `Input tokens: ${metrics.usage.input_tokens}`,
-    `Output tokens: ${metrics.usage.output_tokens}`,
-    `Total Jev latency: ${metrics.totalLatencyMs} ms`,
+    `Current deterministic replay recall: ${percent(metrics.currentDeterministicReplayRecall)}`,
+    `Blind Jev recall: ${percent(metrics.blindJevHighCriticalRecall)}`,
+    `Current-policy Jev recall: ${percent(metrics.currentPolicyJevHighCriticalRecall)}`,
+    `Operational combined recall: ${percent(metrics.operationalCombinedHighCriticalRecall)}`,
+    `Incremental blind Jev hits: ${metrics.incrementalBlindJevHits}`,
+    `Blind negative-control added-review rate: ${percent(metrics.blindNegativeControlAddedReviewRate)}`,
+    `Blind negative-control escalation rate: ${percent(metrics.blindNegativeControlEscalationRate)}`,
+    `Policy negative-control added-review rate: ${percent(metrics.policyNegativeControlAddedReviewRate)}`,
+    `Blind input/output tokens: ${metrics.usage.blind_input_tokens}/${metrics.usage.blind_output_tokens}`,
+    `Policy input/output tokens: ${metrics.usage.policy_input_tokens}/${metrics.usage.policy_output_tokens}`,
+    `Blind/policy Jev latency: ${metrics.latency.blind_ms}/${metrics.latency.policy_ms} ms`,
     "",
     "This report is calibration evidence only. It cannot remove or waive any deterministic AutoFlow gate.",
   ];
@@ -58,7 +61,7 @@ export async function runJevHistoricalCalibration({
     );
   }
 
-  // Load hindsight labels only after every Jev request has completed.
+  // Load hindsight labels only after every blind + policy Jev request has completed.
   const { JEV_CALIBRATION_LABELS } = await import("./jevCalibrationLabels.mjs");
   const scoredCases = results.map((result) => {
     const label = JEV_CALIBRATION_LABELS[result.caseId];
@@ -71,7 +74,7 @@ export async function runJevHistoricalCalibration({
     authority:
       "Calibration may tune advisory routing thresholds only. It cannot remove deterministic proof obligations or correctness gates.",
     hindsightBoundary:
-      "Finding labels were not imported until all Jev calls completed.",
+      "Blind Jev calls used generic risk questions only; current invariant policy and finding labels were excluded. Finding labels were imported only after all blind and policy calls completed.",
     metrics,
     cases: results.map((result, index) => ({
       ...result,
@@ -94,7 +97,7 @@ export async function runJevHistoricalCalibration({
     ),
   ]);
   process.stdout.write(
-    `Jev historical calibration: ${payload.status}; combined High/Critical recall ${percent(metrics.combinedHighCriticalRecall)}\n`,
+    `Jev historical calibration: ${payload.status}; blind High/Critical recall ${percent(metrics.blindJevHighCriticalRecall)}; operational combined recall ${percent(metrics.operationalCombinedHighCriticalRecall)}\n`,
   );
   return payload;
 }
