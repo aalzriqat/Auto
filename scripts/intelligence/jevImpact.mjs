@@ -9,6 +9,45 @@ export const DEFAULT_CANDIDATE_THRESHOLD = 0.35;
 export const DEFAULT_ESCALATION_THRESHOLD = 0.65;
 export const DEFAULT_MAX_PATCH_CHARS = 60_000;
 
+/**
+ * @typedef {Object} ExtractedRequirement
+ * @property {string} obligation
+ * @property {"REQUIRED" | "DEFERRED" | "NOT_APPLICABLE"} status
+ */
+
+/**
+ * @typedef {Object} ExtractedInvariant
+ * @property {string} id
+ * @property {string} title
+ * @property {string} severity
+ * @property {string} state
+ * @property {string} statement
+ * @property {string[]} sourceAreas
+ * @property {ExtractedRequirement[]} requirements
+ */
+
+/**
+ * @typedef {Object} DeterministicInvariantImpact
+ * @property {string} id
+ * @property {string} severity
+ * @property {string[]} matchingFiles
+ * @property {string[]} requiredObligations
+ */
+
+/**
+ * @typedef {Object} JevRiskScores
+ * @property {number} economic
+ * @property {number} tenancy
+ * @property {number} authorization
+ * @property {number} replay
+ * @property {number} concurrency
+ * @property {number} reversal
+ * @property {number} lifecycle
+ * @property {number} completeness
+ * @property {number} externalInput
+ * @property {number} uiAuthority
+ */
+
 const RISK_QUESTIONS = {
   economic: {
     instructions:
@@ -121,6 +160,7 @@ function literalStringArray(node) {
     .filter((entry) => typeof entry === "string");
 }
 
+/** @returns {ExtractedRequirement | undefined} */
 function requirementFromNode(node) {
   const value = unwrapExpression(node);
   if (!ts.isCallExpression(value) || !ts.isIdentifier(value.expression)) return undefined;
@@ -135,6 +175,7 @@ function requirementFromNode(node) {
   return status ? { obligation, status } : undefined;
 }
 
+/** @returns {ExtractedRequirement[]} */
 function requirementsFromNode(node) {
   if (!node) return [];
   const value = unwrapExpression(node);
@@ -151,6 +192,11 @@ export function assertCommitSha(value, name = "commit SHA") {
   return value;
 }
 
+/**
+ * @param {string} [repoRoot]
+ * @param {string} [ref]
+ * @returns {ExtractedInvariant[]}
+ */
 export function extractCanonicalInvariants(repoRoot = process.cwd(), ref) {
   const catalogPath = path.join(repoRoot, "scripts/autoflowInvariantCatalog.ts");
   const source = ref
@@ -263,6 +309,11 @@ export function globToRegExp(pattern) {
   return new RegExp(expression);
 }
 
+/**
+ * @param {string[]} changedFiles
+ * @param {ExtractedInvariant[]} invariants
+ * @returns {DeterministicInvariantImpact[]}
+ */
 export function deterministicInvariantImpact(changedFiles, invariants) {
   const normalizedFiles = [...new Set(changedFiles.map((file) => file.replaceAll("\\", "/")))];
   return invariants
@@ -364,6 +415,10 @@ function invariantQuestionKey(id) {
   return `invariant__${id.replace(/[^A-Za-z0-9_]/g, "_")}`;
 }
 
+/**
+ * @param {ExtractedInvariant[]} invariants
+ * @returns {Record<string, {type: "noul", instructions: string, criteria: {true: string, false: string}}>}
+ */
 export function buildJevQuestions(invariants) {
   if (invariants.length === 0) {
     throw new Error("Jev question set cannot be built from an empty invariant catalog");
@@ -452,6 +507,15 @@ export function normalizeJevResponse(response, invariants) {
   };
 }
 
+/**
+ * @param {Object} input
+ * @param {DeterministicInvariantImpact[]} [input.deterministicImpact]
+ * @param {string[]} [input.extraDeterministicRequirements]
+ * @param {JevRiskScores} input.risks
+ * @param {Record<string, number>} input.invariantImpact
+ * @param {number} [input.candidateThreshold]
+ * @param {number} [input.escalationThreshold]
+ */
 export function deriveReviewMatrix({
   deterministicImpact = [],
   extraDeterministicRequirements = [],
