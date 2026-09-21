@@ -11,7 +11,7 @@ export const JEV_CALIBRATION_CASES = Object.freeze([
     prNumber: 309,
     baseSha: "a0486e4803dd3ab4f24ecd4f1adfe9cea9db1581",
     headSha: "f18da057dc369595d97d983573552e58cef42b30",
-    snapshotAt: "2026-09-14T20:48:50Z",
+    snapshotAt: "2026-09-14T21:03:13Z",
   }),
   Object.freeze({
     id: "pr319-pre-first-review",
