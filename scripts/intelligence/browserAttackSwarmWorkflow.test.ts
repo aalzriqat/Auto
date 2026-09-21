@@ -175,6 +175,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
   it("keeps candidate handoff identity-only and resolves Convex URL from the trusted control plane", () => {
     const descriptor = playwrightStep("Write sanitized preview descriptor");
     expect(descriptor.env).not.toHaveProperty("NEXT_PUBLIC_CONVEX_URL");
+    expect(descriptor.env).not.toHaveProperty("CONVEX_DEPLOY_KEY");
 
     const authority = step(
       "prepare",
