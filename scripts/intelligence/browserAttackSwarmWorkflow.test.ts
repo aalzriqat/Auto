@@ -14,7 +14,9 @@ type WorkflowStep = {
 
 type WorkflowJob = {
   if?: string;
+  needs?: string | string[];
   permissions?: Record<string, string>;
+  outputs?: Record<string, unknown>;
   steps?: WorkflowStep[];
 };
 
@@ -156,15 +158,21 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(workerTrusted.with?.ref).toBe("${{ github.workflow_sha }}");
     expect(workerTrusted.with?.["persist-credentials"]).toBe(false);
 
-    const candidate = step(
-      "attack-worker",
-      "Checkout exact tested PR merge as application code",
+    const buildCandidate = step(
+      "candidate-build",
+      "Checkout exact tested PR merge for the one candidate build",
     );
-    expect(candidate.if).toBe(
-      "${{ github.event.workflow_run.head_repository.full_name == github.repository }}",
+    expect(buildCandidate.with?.ref).toBe(
+      "${{ needs.prepare.outputs.tested_sha }}",
     );
-    expect(candidate.with?.ref).toBe("${{ needs.prepare.outputs.tested_sha }}");
-    expect(candidate.with?.["persist-credentials"]).toBe(false);
+    expect(buildCandidate.with?.["persist-credentials"]).toBe(false);
+
+    expect(
+      (job("attack-worker").steps ?? []).some(
+        (entry) =>
+          entry.name === "Checkout exact tested PR merge as application code",
+      ),
+    ).toBe(false);
 
     const fetchAndVerify = step(
       "prepare",
@@ -188,25 +196,54 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(plan.env).toHaveProperty("TESTED_SHA", "${{ env.TESTED_SHA }}");
   });
 
-  it("never exposes reusable credentials to candidate frontend processes", () => {
+  it("builds candidate frontend once with no reusable credentials and reuses only the verified artifact", () => {
+    const build = step(
+      "candidate-build",
+      "Build exact tested candidate once in isolated container",
+    );
+    const buildEnv = build.env ?? {};
+    for (const key of CANDIDATE_FORBIDDEN_ENV) {
+      expect(buildEnv).not.toHaveProperty(key);
+    }
+    expect(buildEnv).toHaveProperty(
+      "NEXT_PUBLIC_APP_URL",
+      "http://127.0.0.1:3000",
+    );
+    expect(buildEnv).toHaveProperty(
+      "VERCEL_GIT_COMMIT_SHA",
+      "${{ needs.prepare.outputs.tested_sha }}",
+    );
+    expect(buildEnv).toHaveProperty("AUTOFLOW_SWARM_STANDALONE", "1");
+    expect(String(build.run ?? "")).toContain("pnpm build");
+    expect(String(build.run ?? "")).toContain("--cap-drop ALL");
+    expect(String(build.run ?? "")).not.toContain("actions/cache");
+
     for (const jobName of ["trusted-e2e", "attack-worker"]) {
-      for (const stepName of [
-        "Build exact candidate frontend in isolated container",
-        "Start exact candidate frontend in isolated container",
-      ]) {
-        const env = step(jobName, stepName).env ?? {};
-        for (const key of CANDIDATE_FORBIDDEN_ENV) {
-          expect(
-            env,
-            jobName + " :: " + stepName + " must not receive " + key,
-          ).not.toHaveProperty(key);
-        }
-        expect(env).toHaveProperty(
-          "NEXT_PUBLIC_APP_URL",
-          "http://127.0.0.1:3000",
+      const start = step(
+        jobName,
+        "Start verified exact-SHA candidate frontend artifact",
+      );
+      const env = start.env ?? {};
+      for (const key of CANDIDATE_FORBIDDEN_ENV) {
+        expect(env, jobName + " runtime must not receive " + key).not.toHaveProperty(
+          key,
         );
       }
+      const run = String(start.run ?? "");
+      expect(run).toContain(
+        "$RUNNER_TEMP/browser-swarm-candidate-build/runtime:/app:ro",
+      );
+      expect(run).toContain("node server.js");
+      expect(run).not.toContain("pnpm install");
+      expect(run).not.toContain("pnpm build");
     }
+
+    const source = readFileSync(workflowPath, "utf8");
+    expect(
+      (source.match(/Build exact tested candidate once in isolated container/g) ?? [])
+        .length,
+    ).toBe(1);
+    expect(source).not.toContain("Build exact candidate frontend in isolated container");
   });
 
   it("scrubs the disposable preview to an explicit non-sensitive environment allowlist before candidate backend execution", () => {
@@ -269,22 +306,136 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(deployRun).toContain("--security-opt no-new-privileges");
   });
 
-  it("runs candidate-controlled code only inside the pinned isolation container", () => {
-    for (const stepName of [
-      "Build exact candidate frontend in isolated container",
-      "Start exact candidate frontend in isolated container",
-    ]) {
-      const run = String(step("attack-worker", stepName).run ?? "");
-      expect(run).toContain("docker run");
-      expect(run).toContain(
-        "node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
+  it("keeps the one candidate build isolated and never gives workers candidate source or a mutable candidate cache", () => {
+    const build = step(
+      "candidate-build",
+      "Build exact tested candidate once in isolated container",
+    );
+    const buildRun = String(build.run ?? "");
+    expect(buildRun).toContain("docker run");
+    expect(buildRun).toContain(
+      "node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
+    );
+    expect(buildRun).toContain("$GITHUB_WORKSPACE/candidate:/app");
+    expect(buildRun).toContain("--cap-drop ALL");
+    expect(buildRun).toContain("--security-opt no-new-privileges");
+    expect(buildRun).not.toContain("/var/run/docker.sock");
+    expect(buildRun).not.toContain("$GITHUB_WORKSPACE/trusted");
+
+    const workflowSource = readFileSync(workflowPath, "utf8");
+    expect(workflowSource).not.toContain("actions/cache@");
+    expect(
+      (job("attack-worker").steps ?? []).some((entry) =>
+        String(entry.run ?? "").includes("$GITHUB_WORKSPACE/candidate:/app"),
+      ),
+    ).toBe(false);
+  });
+
+  it("publishes one same-run SHA-bound build artifact and every consumer independently verifies it", () => {
+    const upload = step(
+      "candidate-build",
+      "Upload immutable exact-SHA candidate build",
+    );
+    expect(upload.with?.name).toBe(
+      "trusted-candidate-build-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
+    expect(upload.with?.["include-hidden-files"]).toBe(true);
+    expect(upload.with?.["retention-days"]).toBe(1);
+
+    for (const jobName of ["trusted-e2e", "attack-worker"]) {
+      const download = step(jobName, "Download immutable exact-SHA candidate build");
+      expect(download.uses).toBe(
+        "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
       );
-      expect(run).toContain('$GITHUB_WORKSPACE/candidate:/app');
-      expect(run).toContain("--cap-drop ALL");
-      expect(run).toContain("--security-opt no-new-privileges");
-      expect(run).not.toContain("/var/run/docker.sock");
-      expect(run).not.toContain("$GITHUB_WORKSPACE/trusted");
+      expect(download.with?.["artifact-ids"]).toBe(
+        "${{ needs.candidate-build.outputs.artifact_id }}",
+      );
+      expect(download.with?.path).toBe(
+        "${{ runner.temp }}/browser-swarm-candidate-build",
+      );
+
+      const verify = step(
+        jobName,
+        "Independently verify exact-SHA candidate build",
+      );
+      expect(String(verify.run ?? "")).toContain(
+        "browserSwarmBuildArtifact.mjs verify",
+      );
+      expect(verify.env).toMatchObject({
+        TESTED_SHA: "${{ needs.prepare.outputs.tested_sha }}",
+        PR_NUMBER: "${{ needs.prepare.outputs.pr_number }}",
+        BROWSER_SWARM_RUN_ID:
+          "gh-${{ github.run_id }}-${{ github.run_attempt }}",
+        CONTROLLER_SHA: "${{ github.workflow_sha }}",
+        CONVEX_PREVIEW_NAME: "${{ needs.prepare.outputs.preview_name }}",
+        NEXT_PUBLIC_CONVEX_URL:
+          "${{ needs.prepare.outputs.convex_cloud_url }}",
+      });
     }
+  });
+
+  it("calls Jev once in the trusted prepare job and gives workers only sanitized additive suggestions", () => {
+    const jev = step(
+      "prepare",
+      "Generate bounded Jev browser exploration once",
+    );
+    expect(jev.run).toBe("pnpm browser-swarm:jev-exploration");
+    expect(jev.env).toHaveProperty(
+      "TYPESAFE_API_KEY",
+      "${{ secrets.TYPESAFE_API_KEY }}",
+    );
+    expect(jev.env).toHaveProperty(
+      "TESTED_SHA",
+      "${{ steps.provenance.outputs.tested_sha }}",
+    );
+
+    const execute = step("attack-worker", "Execute trusted browser missions");
+    expect(execute.env).toHaveProperty(
+      "BROWSER_SWARM_JEV_SUGGESTIONS_JSON",
+      "${{ needs.prepare.outputs.jev_suggestions_json }}",
+    );
+    expect(execute.env).not.toHaveProperty("TYPESAFE_API_KEY");
+
+    expect(job("candidate-build").needs).toBe("prepare");
+    expect(job("attack-worker").needs).toEqual([
+      "prepare",
+      "candidate-build",
+      "trusted-e2e",
+    ]);
+  });
+
+  it("revalidates the named preview before each worker and exact PR merge again before a success verdict", () => {
+    const preview = step(
+      "attack-worker",
+      "Assert seeded preview from trusted control plane",
+    );
+    const previewRun = String(preview.run ?? "");
+    expect(previewRun).toContain("resolveConvexPreviewAuthority");
+    expect(previewRun).toContain(
+      "Named preview was recreated underneath this swarm",
+    );
+
+    const fresh = step(
+      "verdict",
+      "Revalidate tested PR merge is still current",
+    );
+    const freshRun = String(fresh.run ?? "");
+    expect(freshRun).toContain("refs/pull/${PR_NUMBER}/head");
+    expect(freshRun).toContain("refs/pull/${PR_NUMBER}/merge");
+    expect(freshRun).toContain("EXPECTED_HEAD_SHA");
+    expect(freshRun).toContain("EXPECTED_TESTED_SHA");
+
+    const verdict = step(
+      "verdict",
+      "Publish authoritative trusted swarm verdict",
+    );
+    expect(verdict.env).toHaveProperty(
+      "FRESH_CURRENT",
+      "${{ steps.freshness.outputs.fresh }}",
+    );
+    expect(String(verdict.run ?? "")).toContain(
+      '[ "$FRESH_CURRENT" = "true" ]',
+    );
   });
 
   it("treats the triggering workflow artifact as untrusted data, never as an extractable filesystem", () => {
@@ -400,8 +551,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(allWorkerRun).not.toContain("candidate/src/middleware.ts");
 
     for (const stepName of [
-      "Build exact candidate frontend in isolated container",
-      "Start exact candidate frontend in isolated container",
+      "Start verified exact-SHA candidate frontend artifact",
     ]) {
       const candidateStep = step("attack-worker", stepName);
       expect(candidateStep.env ?? {}).not.toHaveProperty("CLERK_SECRET_KEY");
@@ -429,7 +579,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     const startRun = String(
       step(
         "attack-worker",
-        "Start exact candidate frontend in isolated container",
+        "Start verified exact-SHA candidate frontend artifact",
       ).run ?? "",
     );
     expect(startRun).toContain("docker network create --internal");
@@ -452,6 +602,9 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       contents: "read",
       actions: "read",
       statuses: "write",
+    });
+    expect(job("candidate-build").permissions).toEqual({
+      contents: "read",
     });
     expect(job("trusted-e2e").permissions).toEqual({
       contents: "read",
@@ -498,6 +651,10 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(verdict.env).toHaveProperty(
       "ATTACK_RESULT",
       "${{ needs.attack-worker.result }}",
+    );
+    expect(verdict.env).toHaveProperty(
+      "FRESH_CURRENT",
+      "${{ steps.freshness.outputs.fresh }}",
     );
     expect(verdictRun).toContain('STATE=failure');
     expect(verdictRun).toContain('[ "$PREPARE_RESULT" = "success" ]');

@@ -10,6 +10,8 @@ import type { InvariantSeverity } from "../autoflowInvariantCatalog";
 
 type Env = Record<string, string | undefined>;
 
+const MAX_JEV_SUGGESTIONS_JSON_BYTES = 4 * 1024;
+
 const KNOWN_FAMILIES = new Set<BrowserAttackFamily>([
   "TENANT_ESCAPE",
   "AUTHORIZATION_ABUSE",
@@ -133,14 +135,31 @@ function parseImpactedInvariants(raw: string): {
 
 function parseJevSuggestions(raw: string | undefined): JevBrowserMissionSuggestion[] {
   if (!raw?.trim()) return [];
+  if (Buffer.byteLength(raw, "utf8") > MAX_JEV_SUGGESTIONS_JSON_BYTES) {
+    throw new Error("BROWSER_SWARM_JEV_SUGGESTIONS_JSON exceeds the 4 KiB limit");
+  }
   const value = parseJson(raw, "BROWSER_SWARM_JEV_SUGGESTIONS_JSON");
   if (!Array.isArray(value)) {
     throw new TypeError("BROWSER_SWARM_JEV_SUGGESTIONS_JSON must be an array");
   }
+  if (value.length > 2) {
+    throw new Error("BROWSER_SWARM_JEV_SUGGESTIONS_JSON may contain at most 2 suggestions");
+  }
 
+  const seen = new Set<BrowserAttackFamily>();
   return value.map((entry, index) => {
-    if (!entry || typeof entry !== "object") {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       throw new Error("Jev suggestion " + index + " must be an object");
+    }
+    const keys = Object.keys(entry);
+    if (
+      keys.length !== 2 ||
+      !keys.includes("family") ||
+      !keys.includes("probability")
+    ) {
+      throw new Error(
+        "Jev suggestion " + index + " contains unexpected or missing fields",
+      );
     }
     const candidate = entry as { family?: unknown; probability?: unknown };
     if (
@@ -154,8 +173,13 @@ function parseJevSuggestions(raw: string | undefined): JevBrowserMissionSuggesti
           " must contain a known family and numeric probability",
       );
     }
+    const family = candidate.family as BrowserAttackFamily;
+    if (seen.has(family)) {
+      throw new Error("Jev suggestions contain duplicate family " + family);
+    }
+    seen.add(family);
     return {
-      family: candidate.family as BrowserAttackFamily,
+      family,
       probability: candidate.probability,
     };
   });

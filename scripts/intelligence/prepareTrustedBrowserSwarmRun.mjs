@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { previewNameForRef } from "../e2ePreviewBootstrap.mjs";
 import { validateE2EPreviewDescriptor } from "./e2ePreviewDescriptor.mjs";
 import { validateConvexPreviewAuthority } from "./convexPreviewAuthority.mjs";
+import { validateTrustedBrowserJevArtifact } from "./trustedBrowserJevSuggestions.mjs";
 
 function exactSha(value, label) {
   if (!/^[0-9a-f]{40}$/i.test(value ?? "")) {
@@ -18,6 +19,16 @@ function positivePrNumber(value) {
     throw new Error("PR_NUMBER must be a positive integer.");
   }
   return number;
+}
+
+function safeRunId(value) {
+  if (
+    typeof value !== "string" ||
+    !/^[a-z0-9][a-z0-9._-]{0,80}$/.test(value)
+  ) {
+    throw new Error("BROWSER_SWARM_RUN_ID must be a lowercase safe identifier.");
+  }
+  return value;
 }
 
 function assertTrustedImpact(value, expected) {
@@ -65,10 +76,12 @@ function assertTrustedImpact(value, expected) {
  *   impactArtifact: unknown,
  *   descriptorArtifact: unknown,
  *   authorityArtifact: unknown,
+ *   jevArtifact: unknown,
  *   baseSha: string,
  *   headSha: string,
  *   testedSha: string,
  *   prNumber: number,
+ *   runId: string,
  * }} input
  */
 export function assembleTrustedBrowserSwarmRun(input) {
@@ -76,6 +89,7 @@ export function assembleTrustedBrowserSwarmRun(input) {
   const headSha = exactSha(input.headSha, "headSha");
   const testedSha = exactSha(input.testedSha, "testedSha");
   const prNumber = positivePrNumber(input.prNumber);
+  const runId = safeRunId(input.runId);
   const expectedPreviewName = previewNameForRef({
     ref: "refs/pull/" + prNumber + "/merge",
     prNumber: String(prNumber),
@@ -93,8 +107,22 @@ export function assembleTrustedBrowserSwarmRun(input) {
     input.authorityArtifact,
     expectedPreviewName,
   );
+  const jevExploration = validateTrustedBrowserJevArtifact(
+    input.jevArtifact,
+    { baseSha, headSha, testedSha, prNumber, runId },
+  );
 
   const shouldRun = impactedInvariants.length > 0;
+  if (shouldRun && jevExploration.status !== "LIVE") {
+    throw new Error(
+      "Impacted browser swarm run requires live trusted Jev exploration.",
+    );
+  }
+  if (!shouldRun && jevExploration.status !== "SKIPPED_NO_IMPACT") {
+    throw new Error(
+      "No-impact browser swarm run must skip Jev exploration.",
+    );
+  }
   // Two is the initial bounded rollout. Keep the matrix derived from the same
   // trusted workerCount so GitHub cannot drift from the run evidence.
   const workerCount = shouldRun ? 2 : 0;
@@ -109,14 +137,21 @@ export function assembleTrustedBrowserSwarmRun(input) {
     headSha,
     testedSha,
     prNumber,
+    runId,
     previewName: descriptor.previewName,
     convexCloudUrl: convexAuthority.convexCloudUrl,
     convexDeploymentName: convexAuthority.deploymentName,
     impactedInvariants,
+    jevExploration: {
+      status: jevExploration.status,
+      model: jevExploration.model,
+      usage: jevExploration.usage,
+      suggestions: jevExploration.suggestions,
+    },
     shouldRun,
     workerCount,
     workerMatrix,
-    planningMode: "TRUSTED_WORKER_RECONSTRUCTION",
+    planningMode: "TRUSTED_DETERMINISTIC_PLUS_BOUNDED_JEV",
   };
 }
 
@@ -134,6 +169,7 @@ export async function prepareTrustedBrowserSwarmRun({
   const headSha = exactSha(env.HEAD_SHA, "HEAD_SHA");
   const testedSha = exactSha(env.TESTED_SHA, "TESTED_SHA");
   const prNumber = positivePrNumber(env.PR_NUMBER);
+  const runId = safeRunId(env.BROWSER_SWARM_RUN_ID);
   const impactPath =
     env.TRUSTED_IMPACT_PATH ??
     path.join(repoRoot, "artifacts/browser-swarm-trusted-impact.json");
@@ -144,19 +180,28 @@ export async function prepareTrustedBrowserSwarmRun({
   const authorityPath =
     env.CONVEX_AUTHORITY_PATH ??
     path.join(repoRoot, "artifacts/browser-swarm-convex-authority.json");
+  const jevPath =
+    env.JEV_SUGGESTIONS_PATH ??
+    path.join(repoRoot, "artifacts/browser-swarm-jev-suggestions.json");
 
-  const [impactRaw, descriptorRaw, authorityRaw] = await Promise.all([
+  const [impactRaw, descriptorRaw, authorityRaw, jevRaw] = await Promise.all([
     readFile(impactPath, "utf8"),
     readFile(descriptorPath, "utf8"),
     readFile(authorityPath, "utf8"),
+    readFile(jevPath, "utf8"),
   ]);
+  if (Buffer.byteLength(jevRaw, "utf8") > 32 * 1024) {
+    throw new Error("Trusted Jev browser handoff artifact exceeds 32 KiB.");
+  }
   let impactArtifact;
   let descriptorArtifact;
   let authorityArtifact;
+  let jevArtifact;
   try {
     impactArtifact = JSON.parse(impactRaw);
     descriptorArtifact = JSON.parse(descriptorRaw);
     authorityArtifact = JSON.parse(authorityRaw);
+    jevArtifact = JSON.parse(jevRaw);
   } catch {
     throw new Error("Trusted browser swarm handoff artifacts must be valid JSON.");
   }
@@ -165,10 +210,12 @@ export async function prepareTrustedBrowserSwarmRun({
     impactArtifact,
     descriptorArtifact,
     authorityArtifact,
+    jevArtifact,
     baseSha,
     headSha,
     testedSha,
     prNumber,
+    runId,
   });
 
   const outputDir = path.join(repoRoot, "artifacts");
@@ -184,6 +231,7 @@ export async function prepareTrustedBrowserSwarmRun({
         "worker_count=" + String(payload.workerCount),
         "worker_matrix=" + JSON.stringify(payload.workerMatrix),
         "impacted_invariants_json=" + JSON.stringify(payload.impactedInvariants),
+        "jev_suggestions_json=" + JSON.stringify(payload.jevExploration.suggestions),
         "preview_name=" + payload.previewName,
         "convex_cloud_url=" + payload.convexCloudUrl,
         "head_sha=" + payload.headSha,
@@ -200,7 +248,9 @@ export async function prepareTrustedBrowserSwarmRun({
       payload.impactedInvariants.length +
       " impacted invariant(s), " +
       payload.workerCount +
-      " worker(s)\n",
+      " worker(s), Jev=" +
+      payload.jevExploration.status +
+      "\n",
   );
   return payload;
 }
