@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
 
@@ -8,7 +8,7 @@ export const JEV_MODEL = "jev-latest";
 export const DEFAULT_CANDIDATE_THRESHOLD = 0.35;
 export const DEFAULT_ESCALATION_THRESHOLD = 0.65;
 export const DEFAULT_MAX_PATCH_CHARS = 60_000;
-export const MAX_JEV_RESPONSE_CHARS = 1_000_000;
+export const MAX_JEV_RESPONSE_BYTES = 1_000_000;
 export const MAX_JEV_TIMEOUT_MS = 60_000;
 
 /**
@@ -194,19 +194,65 @@ export function assertCommitSha(value, name = "commit SHA") {
   return value;
 }
 
+function findCanonicalInvariantArray(file) {
+  for (const statement of file.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (!ts.isIdentifier(declaration.name) || declaration.name.text !== "AUTOFLOW_INVARIANTS") {
+        continue;
+      }
+      if (!declaration.initializer) continue;
+      const initializer = unwrapExpression(declaration.initializer);
+      if (ts.isArrayLiteralExpression(initializer)) return initializer;
+    }
+  }
+  throw new Error("Canonical AUTOFLOW_INVARIANTS array was not found");
+}
+
+/** @returns {ExtractedInvariant} */
+function invariantFromCatalogElement(element) {
+  const value = unwrapExpression(element);
+  if (!ts.isObjectLiteralExpression(value)) {
+    throw new Error("Canonical invariant catalog contains an unsupported non-object entry");
+  }
+  const properties = objectProperties(value);
+  const invariant = {
+    id: literalString(properties.get("id")),
+    title: literalString(properties.get("title")),
+    severity: literalString(properties.get("severity")),
+    state: literalString(properties.get("state")),
+    statement: literalString(properties.get("statement")),
+    sourceAreas: literalStringArray(properties.get("sourceAreas")),
+    requirements: requirementsFromNode(properties.get("requirements")),
+  };
+  if (
+    !invariant.id ||
+    !invariant.title ||
+    !invariant.severity ||
+    !invariant.state ||
+    !invariant.statement
+  ) {
+    throw new Error("Canonical invariant entry is missing required literal metadata");
+  }
+  return /** @type {ExtractedInvariant} */ (invariant);
+}
+
+function assertActiveInvariantComplete(invariant) {
+  if (invariant.sourceAreas.length === 0) {
+    throw new Error(`Active invariant ${invariant.id} has no literal sourceAreas`);
+  }
+  if (invariant.requirements.length === 0) {
+    throw new Error(`Active invariant ${invariant.id} has no parseable requirements`);
+  }
+}
+
 /**
  * @param {string} [repoRoot]
- * @param {string} [ref]
  * @returns {ExtractedInvariant[]}
  */
-export function extractCanonicalInvariants(repoRoot = process.cwd(), ref) {
+export function extractCanonicalInvariants(repoRoot = process.cwd()) {
   const catalogPath = path.join(repoRoot, "scripts/autoflowInvariantCatalog.ts");
-  const source = ref
-    ? safeGit(repoRoot, [
-        "show",
-        `${assertCommitSha(ref, "catalog ref")}:scripts/autoflowInvariantCatalog.ts`,
-      ])
-    : readFileSync(catalogPath, "utf8");
+  const source = readFileSync(catalogPath, "utf8");
   const file = ts.createSourceFile(
     catalogPath,
     source,
@@ -214,75 +260,14 @@ export function extractCanonicalInvariants(repoRoot = process.cwd(), ref) {
     true,
     ts.ScriptKind.TS,
   );
-
-  let catalogArray;
-  for (const statement of file.statements) {
-    if (!ts.isVariableStatement(statement)) continue;
-    for (const declaration of statement.declarationList.declarations) {
-      if (
-        !ts.isIdentifier(declaration.name) ||
-        declaration.name.text !== "AUTOFLOW_INVARIANTS" ||
-        !declaration.initializer
-      ) {
-        continue;
-      }
-      const initializer = unwrapExpression(declaration.initializer);
-      if (ts.isArrayLiteralExpression(initializer)) catalogArray = initializer;
-    }
-  }
-
-  if (!catalogArray) {
-    throw new Error("Canonical AUTOFLOW_INVARIANTS array was not found");
-  }
-
+  const catalogArray = findCanonicalInvariantArray(file);
   const invariants = catalogArray.elements
-    .map((element) => {
-      const value = unwrapExpression(element);
-      if (!ts.isObjectLiteralExpression(value)) {
-        throw new Error(
-          "Canonical invariant catalog contains an unsupported non-object entry",
-        );
-      }
-      const properties = objectProperties(value);
-      const invariant = {
-        id: literalString(properties.get("id")),
-        title: literalString(properties.get("title")),
-        severity: literalString(properties.get("severity")),
-        state: literalString(properties.get("state")),
-        statement: literalString(properties.get("statement")),
-        sourceAreas: literalStringArray(properties.get("sourceAreas")),
-        requirements: requirementsFromNode(properties.get("requirements")),
-      };
-
-      if (
-        !invariant.id ||
-        !invariant.title ||
-        !invariant.severity ||
-        !invariant.state ||
-        !invariant.statement
-      ) {
-        throw new Error(
-          "Canonical invariant entry is missing required literal metadata",
-        );
-      }
-      return invariant;
-    })
-    .filter(
-      (invariant) =>
-        invariant.state !== "RETIRED" && invariant.state !== "SUPERSEDED",
-    );
-
+    .map((element) => invariantFromCatalogElement(element))
+    .filter((invariant) => invariant.state !== "RETIRED" && invariant.state !== "SUPERSEDED");
   if (invariants.length === 0) {
     throw new Error("Canonical invariant catalog has no active invariants");
   }
-  for (const invariant of invariants) {
-    if (invariant.sourceAreas.length === 0) {
-      throw new Error(`Active invariant ${invariant.id} has no literal sourceAreas`);
-    }
-    if (invariant.requirements.length === 0) {
-      throw new Error(`Active invariant ${invariant.id} has no parseable requirements`);
-    }
-  }
+  invariants.forEach(assertActiveInvariantComplete);
   return invariants;
 }
 
@@ -349,8 +334,26 @@ export function deterministicInvariantImpact(changedFiles, invariants) {
     .filter((impact) => impact !== undefined);
 }
 
+function resolveTrustedGitExecutable() {
+  const candidates =
+    process.platform === "win32"
+      ? [
+          "C:\\Program Files\\Git\\cmd\\git.exe",
+          "C:\\Program Files\\Git\\bin\\git.exe",
+          "C:\\Program Files (x86)\\Git\\cmd\\git.exe",
+        ]
+      : process.platform === "darwin"
+        ? ["/usr/bin/git", "/opt/homebrew/bin/git", "/usr/local/bin/git"]
+        : ["/usr/bin/git", "/bin/git"];
+  const executable = candidates.find((candidate) => existsSync(candidate));
+  if (!executable) {
+    throw new Error("A trusted absolute Git executable was not found");
+  }
+  return executable;
+}
+
 function safeGit(repoRoot, args) {
-  const output = execFileSync("git", args, {
+  const output = execFileSync(resolveTrustedGitExecutable(), args, {
     cwd: repoRoot,
     encoding: "buffer",
     maxBuffer: 16 * 1024 * 1024,
@@ -372,7 +375,7 @@ export function parseNameStatus(nameStatus) {
   const files = [];
   for (let index = 0; index < tokens.length; ) {
     const status = tokens[index++];
-    if (!/^[ACDMRTUXB](?:[0-9]{1,3})?$/.test(status ?? "")) {
+    if (!/^[ACDMRTUXB](?:\d{1,3})?$/.test(status ?? "")) {
       throw new Error(`unexpected git name-status token: ${status ?? "<missing>"}`);
     }
     const pathCount = status.startsWith("R") || status.startsWith("C") ? 2 : 1;
@@ -452,7 +455,7 @@ export function buildChangeState({
 }
 
 function invariantQuestionKey(id) {
-  return `invariant__${id.replace(/[^A-Za-z0-9_]/g, "_")}`;
+  return `invariant__${id.replace(/\W/g, "_")}`;
 }
 
 /**
@@ -574,6 +577,67 @@ function assertProbability(value, name) {
   return value;
 }
 
+const RISK_REQUIREMENTS = Object.freeze({
+  economic: ["proof:REPLAY", "review:financial-authority"],
+  tenancy: ["proof:TENANCY"],
+  authorization: ["proof:AUTHORIZATION"],
+  replay: ["proof:REPLAY"],
+  concurrency: ["proof:CONCURRENCY", "review:preview-contention"],
+  reversal: ["proof:REVERSAL"],
+  lifecycle: ["proof:STATE_TRANSITION"],
+  completeness: ["proof:BOUNDARY"],
+  externalInput: ["proof:BOUNDARY", "proof:FUZZ"],
+  uiAuthority: ["review:ui-backend-authority"],
+});
+
+function compareStrings(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function validateReviewProbabilities(risks, invariantImpact, candidateThreshold, escalationThreshold) {
+  assertProbability(candidateThreshold, "candidateThreshold");
+  assertProbability(escalationThreshold, "escalationThreshold");
+  if (candidateThreshold > escalationThreshold) {
+    throw new Error("candidateThreshold cannot exceed escalationThreshold");
+  }
+  for (const [risk, probability] of Object.entries(risks)) {
+    assertProbability(probability, `risk ${risk}`);
+  }
+  for (const [id, probability] of Object.entries(invariantImpact)) {
+    assertProbability(probability, `invariant ${id}`);
+  }
+}
+
+function collectDeterministicRequirements(deterministicImpact, extraRequirements) {
+  const requirements = new Set(extraRequirements);
+  for (const impact of deterministicImpact) {
+    requirements.add(`review-invariant:${impact.id}`);
+    impact.requiredObligations.forEach((obligation) => requirements.add(`proof:${obligation}`));
+  }
+  return requirements;
+}
+
+function collectCandidateInvariants(invariantImpact, candidateThreshold) {
+  return Object.entries(invariantImpact)
+    .filter(([, probability]) => probability >= candidateThreshold)
+    .sort((a, b) => b[1] - a[1])
+    .map(([id, probability]) => ({ id, probability }));
+}
+
+function collectJevAdvisoryRequirements(candidateInvariants, risks, candidateThreshold, escalationThreshold) {
+  const requirements = new Set();
+  for (const { id, probability } of candidateInvariants) {
+    requirements.add(`review-invariant:${id}`);
+    if (probability >= escalationThreshold) requirements.add(`escalate-invariant:${id}`);
+  }
+  for (const [risk, probability] of Object.entries(risks)) {
+    if (probability < candidateThreshold) continue;
+    (RISK_REQUIREMENTS[risk] ?? []).forEach((requirement) => requirements.add(requirement));
+    if (probability >= escalationThreshold) requirements.add(`escalate-risk:${risk}`);
+  }
+  return requirements;
+}
+
 /**
  * @param {Object} input
  * @param {DeterministicInvariantImpact[]} [input.deterministicImpact]
@@ -591,72 +655,25 @@ export function deriveReviewMatrix({
   candidateThreshold = DEFAULT_CANDIDATE_THRESHOLD,
   escalationThreshold = DEFAULT_ESCALATION_THRESHOLD,
 }) {
-  assertProbability(candidateThreshold, "candidateThreshold");
-  assertProbability(escalationThreshold, "escalationThreshold");
-  if (candidateThreshold > escalationThreshold) {
-    throw new Error("candidateThreshold cannot exceed escalationThreshold");
-  }
-  for (const [risk, probability] of Object.entries(risks)) {
-    assertProbability(probability, `risk ${risk}`);
-  }
-  for (const [id, probability] of Object.entries(invariantImpact)) {
-    assertProbability(probability, `invariant ${id}`);
-  }
-
-  const deterministicRequirements = new Set(extraDeterministicRequirements);
-  for (const impact of deterministicImpact) {
-    deterministicRequirements.add(`review-invariant:${impact.id}`);
-    for (const obligation of impact.requiredObligations) {
-      deterministicRequirements.add(`proof:${obligation}`);
-    }
-  }
-
-  const jevAdvisoryRequirements = new Set();
-  const candidateInvariants = Object.entries(invariantImpact)
-    .filter(([, probability]) => probability >= candidateThreshold)
-    .sort((a, b) => b[1] - a[1])
-    .map(([id, probability]) => ({ id, probability }));
-
-  for (const { id, probability } of candidateInvariants) {
-    jevAdvisoryRequirements.add(`review-invariant:${id}`);
-    if (probability >= escalationThreshold) {
-      jevAdvisoryRequirements.add(`escalate-invariant:${id}`);
-    }
-  }
-
-  const riskRules = {
-    economic: ["proof:REPLAY", "review:financial-authority"],
-    tenancy: ["proof:TENANCY"],
-    authorization: ["proof:AUTHORIZATION"],
-    replay: ["proof:REPLAY"],
-    concurrency: ["proof:CONCURRENCY", "review:preview-contention"],
-    reversal: ["proof:REVERSAL"],
-    lifecycle: ["proof:STATE_TRANSITION"],
-    completeness: ["proof:BOUNDARY"],
-    externalInput: ["proof:BOUNDARY", "proof:FUZZ"],
-    uiAuthority: ["review:ui-backend-authority"],
-  };
-
-  for (const [risk, probability] of Object.entries(risks)) {
-    if (probability < candidateThreshold) continue;
-    for (const requirement of riskRules[risk] ?? []) {
-      jevAdvisoryRequirements.add(requirement);
-    }
-    if (probability >= escalationThreshold) {
-      jevAdvisoryRequirements.add(`escalate-risk:${risk}`);
-    }
-  }
+  validateReviewProbabilities(risks, invariantImpact, candidateThreshold, escalationThreshold);
+  const deterministicRequirements = collectDeterministicRequirements(
+    deterministicImpact,
+    extraDeterministicRequirements,
+  );
+  const candidateInvariants = collectCandidateInvariants(invariantImpact, candidateThreshold);
+  const jevAdvisoryRequirements = collectJevAdvisoryRequirements(
+    candidateInvariants,
+    risks,
+    candidateThreshold,
+    escalationThreshold,
+  );
 
   // Load-bearing policy: Jev can add scrutiny but cannot remove a deterministic requirement.
-  const combinedRequirements = new Set([
-    ...deterministicRequirements,
-    ...jevAdvisoryRequirements,
-  ]);
-
+  const combinedRequirements = new Set([...deterministicRequirements, ...jevAdvisoryRequirements]);
   return {
-    deterministicRequirements: [...deterministicRequirements].sort(),
-    jevAdvisoryRequirements: [...jevAdvisoryRequirements].sort(),
-    combinedRequirements: [...combinedRequirements].sort(),
+    deterministicRequirements: [...deterministicRequirements].sort(compareStrings),
+    jevAdvisoryRequirements: [...jevAdvisoryRequirements].sort(compareStrings),
+    combinedRequirements: [...combinedRequirements].sort(compareStrings),
     candidateInvariants,
   };
 }
@@ -695,22 +712,62 @@ export async function callJev({
 
     const contentLengthHeader = response.headers?.get?.("content-length");
     const contentLength =
-      contentLengthHeader === null || contentLengthHeader === undefined
+      contentLengthHeader === null
         ? undefined
         : Number(contentLengthHeader);
     if (
       contentLength !== undefined &&
       (!Number.isSafeInteger(contentLength) ||
         contentLength < 0 ||
-        contentLength > MAX_JEV_RESPONSE_CHARS)
+        contentLength > MAX_JEV_RESPONSE_BYTES)
     ) {
       throw new Error("Jev response exceeded the maximum allowed size");
     }
 
-    const rawBody = await response.text();
-    if (rawBody.length > MAX_JEV_RESPONSE_CHARS) {
-      throw new Error("Jev response exceeded the maximum allowed size");
+    let rawBody;
+    if (response.body?.getReader) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8", { fatal: true });
+      let receivedBytes = 0;
+      const decodedParts = [];
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!(value instanceof Uint8Array)) {
+            throw new Error("Jev response stream returned an invalid chunk");
+          }
+          receivedBytes += value.byteLength;
+          if (receivedBytes > MAX_JEV_RESPONSE_BYTES) {
+            try {
+              await reader.cancel("Jev response exceeded the maximum allowed size");
+            } catch {
+              // The size violation is authoritative even if cancellation itself fails.
+            }
+            throw new Error("Jev response exceeded the maximum allowed size");
+          }
+          try {
+            decodedParts.push(decoder.decode(value, { stream: true }));
+          } catch {
+            throw new Error("Jev response was not valid UTF-8");
+          }
+        }
+        try {
+          decodedParts.push(decoder.decode());
+        } catch {
+          throw new Error("Jev response was not valid UTF-8");
+        }
+        rawBody = decodedParts.join("");
+      } finally {
+        reader.releaseLock?.();
+      }
+    } else {
+      rawBody = await response.text();
+      if (new TextEncoder().encode(rawBody).byteLength > MAX_JEV_RESPONSE_BYTES) {
+        throw new Error("Jev response exceeded the maximum allowed size");
+      }
     }
+
     try {
       return JSON.parse(rawBody);
     } catch {

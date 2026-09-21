@@ -9,7 +9,7 @@ import {
 } from "../autoflowInvariantCatalog";
 import {
   JEV_ENDPOINT,
-  MAX_JEV_RESPONSE_CHARS,
+  MAX_JEV_RESPONSE_BYTES,
   assertCommitSha,
   buildChangeState,
   buildJevQuestions,
@@ -45,12 +45,14 @@ async function tempRepoRoot() {
 
 function responseWithJson(body: unknown, options: { ok?: boolean; status?: number } = {}) {
   const raw = JSON.stringify(body);
-  return {
-    ok: options.ok ?? true,
-    status: options.status ?? 200,
-    headers: new Headers({ "content-length": String(raw.length) }),
-    text: vi.fn(async () => raw),
-  } as unknown as Response;
+  const status = options.status ?? (options.ok === false ? 500 : 200);
+  return new Response(raw, {
+    status,
+    headers: {
+      "content-length": String(new TextEncoder().encode(raw).byteLength),
+      "content-type": "application/json",
+    },
+  });
 }
 
 function lowRiskScores() {
@@ -385,13 +387,40 @@ describe("Jev shadow impact mapper", () => {
       ok: true,
       status: 200,
       headers: new Headers({
-        "content-length": String(MAX_JEV_RESPONSE_CHARS + 1),
+        "content-length": String(MAX_JEV_RESPONSE_BYTES + 1),
       }),
       text: vi.fn(async () => "{}"),
     })) as unknown as typeof fetch;
     await expect(
       callJev({ apiKey: "x", state: {}, questions: {}, fetchImpl: oversized }),
     ).rejects.toThrow(/maximum allowed size/);
+
+    const cancel = vi.fn();
+    const chunkSize = Math.floor(MAX_JEV_RESPONSE_BYTES / 2) + 1;
+    const oversizedStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(chunkSize));
+        controller.enqueue(new Uint8Array(chunkSize));
+      },
+      cancel,
+    });
+    const underreported = vi.fn(async () =>
+      new Response(oversizedStream, {
+        status: 200,
+        headers: { "content-length": "2" },
+      }),
+    ) as unknown as typeof fetch;
+    await expect(
+      callJev({ apiKey: "x", state: {}, questions: {}, fetchImpl: underreported }),
+    ).rejects.toThrow(/maximum allowed size/);
+    expect(cancel).toHaveBeenCalledOnce();
+
+    const invalidUtf8 = vi.fn(async () =>
+      new Response(new Uint8Array([0xff]), { status: 200 }),
+    ) as unknown as typeof fetch;
+    await expect(
+      callJev({ apiKey: "x", state: {}, questions: {}, fetchImpl: invalidUtf8 }),
+    ).rejects.toThrow(/not valid UTF-8/);
 
     const invalidJson = vi.fn(async () => ({
       ok: true,
