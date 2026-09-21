@@ -1,4 +1,14 @@
 export const JEV_CALIBRATION_LABELS = Object.freeze({
+  "pr285-add-vehicle-wizard": Object.freeze({
+    control: "NEGATIVE_LOW_RISK",
+    revealedAfter: "2026-09-06T06:35:05Z",
+    findings: Object.freeze([]),
+  }),
+  "pr309-pricing-copy": Object.freeze({
+    control: "NEGATIVE_LOW_RISK",
+    revealedAfter: "2026-09-14T22:02:32Z",
+    findings: Object.freeze([]),
+  }),
   "pr319-pre-first-review": Object.freeze({
     revealedAfter: "2026-09-20T00:42:06Z",
     findings: Object.freeze([
