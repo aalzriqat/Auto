@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { verifyBrowserSwarmPreview } from "./browserAttackSwarmPreviewVerifier.mjs";
+import type { BrowserSwarmRunManifest } from "./browserAttackSwarm";
 
-const manifest = {
+const manifest: BrowserSwarmRunManifest = {
   version: 1,
   runId: "pr-350-preview-test",
   previewName: "e2e-pr-350-preview-test",
@@ -78,7 +79,10 @@ describe("SCRUM-350 preview verifier", () => {
   it("refuses manifests that do not explicitly require the preview marker", async () => {
     await expect(
       verifyBrowserSwarmPreview(
-        { ...manifest, requiresPreviewMarker: false },
+        {
+          ...manifest,
+          requiresPreviewMarker: false,
+        } as unknown as BrowserSwarmRunManifest,
         env,
       ),
     ).rejects.toThrow(/does not require the SCRUM-143 preview marker/);
