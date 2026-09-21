@@ -302,10 +302,48 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(stopRun).toContain('docker network rm "$CANDIDATE_NETWORK"');
   });
 
-  it("keeps the workflow token read-only", () => {
+  it("grants only the explicit commit-status write needed for the trusted verdict bridge", () => {
     expect(workflow.permissions).toEqual({
       contents: "read",
       actions: "read",
+      statuses: "write",
     });
+
+    const pending = step(
+      "prepare",
+      "Mark trusted browser swarm pending on tested merge",
+    );
+    expect(pending.env).toHaveProperty("GITHUB_TOKEN", "${{ github.token }}");
+    expect(String(pending.run ?? "")).toContain(
+      "autoflow/trusted-browser-swarm",
+    );
+    expect(String(pending.run ?? "")).toContain("pending");
+
+    const verdict = step(
+      "verdict",
+      "Publish authoritative trusted swarm verdict",
+    );
+    const verdictRun = String(verdict.run ?? "");
+    expect(verdict.env).toHaveProperty("GITHUB_TOKEN", "${{ github.token }}");
+    expect(verdict.env).toHaveProperty(
+      "TESTED_SHA",
+      "${{ needs.prepare.outputs.tested_sha }}",
+    );
+    expect(verdict.env).toHaveProperty(
+      "PREPARE_RESULT",
+      "${{ needs.prepare.result }}",
+    );
+    expect(verdict.env).toHaveProperty(
+      "ATTACK_RESULT",
+      "${{ needs.attack-worker.result }}",
+    );
+    expect(verdictRun).toContain('STATE=failure');
+    expect(verdictRun).toContain('[ "$PREPARE_RESULT" = "success" ]');
+    expect(verdictRun).toContain('[ "$SHOULD_RUN" = "false" ]');
+    expect(verdictRun).toContain(
+      '[ "$SHOULD_RUN" = "true" ] && [ "$ATTACK_RESULT" = "success" ]',
+    );
+    expect(verdictRun).toContain("autoflow/trusted-browser-swarm");
+    expect(verdictRun).toContain('if [ "$STATE" != "success" ]');
   });
 });
