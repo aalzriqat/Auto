@@ -207,6 +207,25 @@ jobs:
           E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
           E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
 
+      - name: Write sanitized preview descriptor
+        if: github.event_name == 'pull_request'
+        run: pnpm e2e:preview-descriptor
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+
+      - name: Upload sanitized preview descriptor
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e2e-preview-descriptor
+          path: artifacts/e2e-preview-descriptor.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Run Playwright tests
         # playwright.config.ts's webServer builds and starts the production
         # server itself and waits for it to be ready, so no separate
