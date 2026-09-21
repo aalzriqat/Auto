@@ -749,3 +749,93 @@ describe("vehicle valuations", () => {
     expect(valuations).toHaveLength(0);
   });
 });
+
+describe("finance company accepted-status lifecycle", () => {
+  test("NEGATIVE CONTROL: deactivating the last accepted status deactivates the lender instead of widening eligibility", async () => {
+    const { t, orgId, asOwner } = await setupFinanceOrg();
+    const statusId = await t.run((ctx) =>
+      ctx.db.insert("orgCustomerStatuses", {
+        orgId,
+        label: "Salaried only",
+        isActive: true,
+        order: 1,
+      })
+    );
+    const companyId = await asOwner.mutation(api.finance.createCompany, {
+      orgId,
+      name: "Scoped Finance",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      adminFees: 0,
+      isActive: true,
+      acceptedStatuses: [statusId],
+    });
+
+    await asOwner.mutation(api.orgCustomerStatuses.update, {
+      orgId,
+      statusId,
+      isActive: false,
+    });
+
+    const company = await t.run((ctx) => ctx.db.get(companyId));
+    expect(company?.acceptedStatuses).toEqual([]);
+    expect(company?.isActive).toBe(false);
+    expect(company?.editRevision).toBe(2);
+  });
+
+  test("NEGATIVE CONTROL: saving an inactive-only status scope cannot become accept-all", async () => {
+    const { t, orgId, asOwner } = await setupFinanceOrg();
+    const inactiveStatusId = await t.run((ctx) =>
+      ctx.db.insert("orgCustomerStatuses", {
+        orgId,
+        label: "Inactive scope",
+        isActive: false,
+        order: 1,
+      })
+    );
+
+    const companyId = await asOwner.mutation(api.finance.createCompany, {
+      orgId,
+      name: "Sanitized Finance",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      adminFees: 0,
+      isActive: true,
+      acceptedStatuses: [inactiveStatusId],
+    });
+
+    const company = await t.run((ctx) => ctx.db.get(companyId));
+    expect(company?.acceptedStatuses).toEqual([]);
+    expect(company?.isActive).toBe(false);
+  });
+
+  test("removing one status preserves an active lender when another accepted status remains", async () => {
+    const { t, orgId, asOwner } = await setupFinanceOrg();
+    const statusIds = await t.run(async (ctx) => [
+      await ctx.db.insert("orgCustomerStatuses", { orgId, label: "A", isActive: true, order: 1 }),
+      await ctx.db.insert("orgCustomerStatuses", { orgId, label: "B", isActive: true, order: 2 }),
+    ]);
+    const companyId = await asOwner.mutation(api.finance.createCompany, {
+      orgId,
+      name: "Multi-scope Finance",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      adminFees: 0,
+      isActive: true,
+      acceptedStatuses: statusIds,
+    });
+
+    await asOwner.mutation(api.orgCustomerStatuses.update, {
+      orgId,
+      statusId: statusIds[0],
+      isActive: false,
+    });
+
+    const company = await t.run((ctx) => ctx.db.get(companyId));
+    expect(company?.acceptedStatuses).toEqual([statusIds[1]]);
+    expect(company?.isActive).toBe(true);
+  });
+});
