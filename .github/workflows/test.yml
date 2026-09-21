@@ -67,9 +67,95 @@ jobs:
         fi
       if: always()
 
+  # One-time SCRUM-350 bootstrap. Branch protection still requires SonarCloud's
+  # native PR check, but the immutable trusted scanner is introduced by PR #325
+  # itself and therefore cannot run from default-branch workflow_run until this
+  # PR lands. This job is intentionally inert for every other PR. It never runs
+  # package scripts with the credential: candidate source + same-run LCOV are
+  # treated strictly as scanner data, and scanner configuration is restored
+  # from the protected base commit.
+  sonarcloud-bootstrap-325:
+    needs: unit-and-integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.number == 325 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/scrum-350-browser-swarm'
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+
+    - name: Download same-run coverage as untrusted data
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      with:
+        name: coverage-report
+        path: coverage
+
+    - name: Sanitize bootstrap scanner inputs
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      run: |
+        set -euo pipefail
+
+        if find . -path './.git' -prune -o -type l -print -quit | grep -q .; then
+          echo "::error::Bootstrap Sonar refuses symlinks in candidate source."
+          exit 1
+        fi
+
+        LCOV="coverage/lcov.info"
+        if [ ! -f "$LCOV" ]; then
+          echo "::error::Same-run coverage artifact does not contain coverage/lcov.info."
+          exit 1
+        fi
+        bytes="$(wc -c < "$LCOV")"
+        if [ "$bytes" -gt 52428800 ]; then
+          echo "::error::lcov.info exceeds the 50 MiB trusted input limit."
+          exit 1
+        fi
+
+        node <<'NODE'
+        const fs = require("node:fs");
+        const lcov = fs.readFileSync("coverage/lcov.info", "utf8");
+        for (const line of lcov.split(/\r?\n/)) {
+          if (!line.startsWith("SF:")) continue;
+          const source = line.slice(3).replaceAll("\\", "/");
+          if (
+            source.startsWith("/") ||
+            source.split("/").includes("..") ||
+            !/^(convex|scripts)\//.test(source)
+          ) {
+            throw new Error("Bootstrap Sonar refuses out-of-scope LCOV source path: " + source);
+          }
+        }
+        NODE
+
+        git show "$BASE_SHA:sonar-project.properties" > "$RUNNER_TEMP/sonar-project.properties"
+        cp "$RUNNER_TEMP/sonar-project.properties" sonar-project.properties
+
+    - name: SonarCloud bootstrap scan for PR 325 only
+      uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      with:
+        args: >-
+          -Dsonar.host.url=https://sonarcloud.io
+          -Dsonar.projectKey=aalzriqat_Auto
+          -Dsonar.organization=aalzriqat
+          -Dsonar.pullrequest.key=325
+          -Dsonar.pullrequest.branch=agent/scrum-350-browser-swarm
+          -Dsonar.pullrequest.base=main
+          -Dsonar.scm.revision=${{ github.event.pull_request.head.sha }}
+
   # Pull-request Sonar analysis is deliberately outside this candidate-controlled
-  # workflow. The direct PR lane only generates coverage as data; the immutable
-  # trusted Sonar PR Report workflow consumes it and owns scanner credentials.
+  # workflow after bootstrap. The direct PR lane only generates coverage as
+  # data; the immutable trusted Sonar PR Report workflow owns scanner credentials.
   type-check:
     runs-on: ubuntu-latest
 
