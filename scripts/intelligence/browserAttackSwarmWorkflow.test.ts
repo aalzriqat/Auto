@@ -161,16 +161,70 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(run).not.toMatch(/unzip\s+[^\n]*\s-d\s/);
   });
 
-  it("keeps preview/assertion credentials only in the trusted browser-controller step", () => {
-    const env =
-      step("attack-worker", "Execute trusted browser missions").env ?? {};
+  it("authenticates only on trusted main and never retypes passwords into candidate code", () => {
+    const auth = step(
+      "attack-worker",
+      "Authenticate E2E seats on trusted main frontend",
+    );
+    const authEnv = auth.env ?? {};
+    expect(auth.run).toContain("auth.setup.ts");
+    expect(authEnv).toHaveProperty("CLERK_SECRET_KEY");
+    expect(authEnv).toHaveProperty("E2E_LOGIN_PASSWORD");
+    expect(authEnv).toHaveProperty("E2E_APPROVER_PASSWORD");
 
+    const execute = step("attack-worker", "Execute trusted browser missions");
+    const env = execute.env ?? {};
+    expect(execute.run).toContain("--no-deps");
     expect(env).toHaveProperty("CONVEX_DEPLOY_KEY");
     expect(env).toHaveProperty("CLERK_SECRET_KEY");
-    expect(env).toHaveProperty("E2E_LOGIN_PASSWORD");
-    expect(env).toHaveProperty("E2E_APPROVER_PASSWORD");
+    expect(env).toHaveProperty("E2E_LOGIN_USER");
+    expect(env).toHaveProperty("E2E_APPROVER_USER");
+    expect(env).not.toHaveProperty("E2E_LOGIN_PASSWORD");
+    expect(env).not.toHaveProperty("E2E_LOGIN_VERIFICATION_CODE");
+    expect(env).not.toHaveProperty("E2E_APPROVER_PASSWORD");
     expect(env).toHaveProperty("BROWSER_SWARM_TRUSTED_EXTERNAL_SERVER", "1");
     expect(env).toHaveProperty("PLAYWRIGHT_SKIP_WEBSERVER", "1");
+  });
+
+  it("removes candidate Clerk middleware before build so candidate code never needs the secret key", () => {
+    const run = String(
+      step(
+        "attack-worker",
+        "Remove candidate auth proxy before isolated runtime",
+      ).run ?? "",
+    );
+    expect(run).toContain("candidate/proxy.ts");
+    expect(run).toContain("candidate/middleware.ts");
+    expect(run).toContain("candidate/src/proxy.ts");
+    expect(run).toContain("candidate/src/middleware.ts");
+
+    for (const stepName of [
+      "Build exact candidate frontend in isolated container",
+      "Start exact candidate frontend in isolated container",
+    ]) {
+      expect(step("attack-worker", stepName).env ?? {}).not.toHaveProperty(
+        "CLERK_SECRET_KEY",
+      );
+    }
+  });
+
+  it("runs candidate runtime on an internal Docker network and cleans that network up", () => {
+    const startRun = String(
+      step(
+        "attack-worker",
+        "Start exact candidate frontend in isolated container",
+      ).run ?? "",
+    );
+    expect(startRun).toContain("docker network create --internal");
+    expect(startRun).toContain('--network "$CANDIDATE_NETWORK"');
+    expect(startRun).toContain("--publish 127.0.0.1:3000:3000");
+    expect(startRun).toContain("--cap-drop ALL");
+    expect(startRun).toContain("--security-opt no-new-privileges");
+
+    const stopRun = String(
+      step("attack-worker", "Stop isolated candidate frontend").run ?? "",
+    );
+    expect(stopRun).toContain('docker network rm "$CANDIDATE_NETWORK"');
   });
 
   it("keeps the workflow token read-only", () => {
