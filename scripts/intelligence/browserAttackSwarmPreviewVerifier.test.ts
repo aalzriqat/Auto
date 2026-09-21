@@ -65,6 +65,7 @@ describe("SCRUM-350 preview verifier", () => {
       stdio: "inherit",
       shell: false,
     });
+    if (!options.env) throw new Error("spawn env missing");
     expect(options.env.CONVEX_PREVIEW_NAME).toBe(manifest.previewName);
     expect(options.env.NEXT_PUBLIC_CONVEX_URL).toBe(manifest.expectedCloudUrl);
   });

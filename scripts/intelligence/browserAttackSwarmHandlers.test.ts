@@ -29,7 +29,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     mkdir: mocks.mkdir,
     writeFile: mocks.writeFile,
     default: {
-      ...(actual.default ?? actual),
+      ...actual,
       mkdir: mocks.mkdir,
       writeFile: mocks.writeFile,
     },
