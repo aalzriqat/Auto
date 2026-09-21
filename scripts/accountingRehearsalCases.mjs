@@ -160,6 +160,16 @@ async function readDeposit({ orgId, vehicleId, depositId, ownerMust }) {
   return row;
 }
 
+async function customerEligibilityStatusFor({ orgId, ownerMust }) {
+  // Configured financing requires explicit eligibility evidence. Exercise the
+  // public settings path and read the seeded row back; never fabricate an id.
+  await ownerMust("mutation", "orgCustomerStatuses:seed", { orgId });
+  const statuses = await ownerMust("query", "orgCustomerStatuses:list", { orgId });
+  const active = (statuses ?? []).find((status) => status.isActive);
+  if (!active) fail("no active customer eligibility status exists after seeding");
+  return active._id;
+}
+
 /**
  * Brings the fresh organization to the state a real dealership starts in:
  * a chart of accounts and an OPEN period.
@@ -1681,6 +1691,7 @@ export async function runRehearsalCases(ctx) {
         firstName: "Rehearsal",
         lastName: `fd1-${stamp}`,
       });
+      const customerStatusId = await customerEligibilityStatusFor({ orgId, ownerMust });
       const companyId = await ownerMust("mutation", "finance:createCompany", {
         orgId,
         name: `Rehearsal Finance ${stamp}`,
@@ -1690,6 +1701,10 @@ export async function runRehearsalCases(ctx) {
         // The product refuses to quote for a company with no LTV; the first
         // cloud run of this case failed on exactly that.
         defaultLtvPercent: 100,
+        // Explicit zero is a configured execution-fee policy; undefined means
+        // unknown and must be rejected by the product.
+        adminFees: 0,
+        acceptedStatuses: [customerStatusId],
         isActive: true,
       });
       const price = 22000;
@@ -1702,6 +1717,7 @@ export async function runRehearsalCases(ctx) {
         termMonths: 48,
         mode: "CONFIGURED_FINANCE_COMPANY",
         companyId,
+        customerEligibilityStatusIds: [customerStatusId],
         totalFinancedAmount: price,
       });
       const applicationId = await ownerMust("mutation", "applications:createFromQuote", { orgId, quoteId });
@@ -1916,13 +1932,15 @@ export async function runRehearsalCases(ctx) {
 
       const vehicleId = await makeVehicle({ orgId, ownerMust, label: `fd2${stamp}` });
       const customerId = await ownerMust("mutation", "customers:create", { orgId, firstName: "Rehearsal", lastName: `fd2-${stamp}` });
+      const customerStatusId = await customerEligibilityStatusFor({ orgId, ownerMust });
       const companyId = await ownerMust("mutation", "finance:createCompany", {
         orgId, name: `Rehearsal Finance FD2 ${stamp}`, profitRate: 5, maxTermMonths: 60, gracePeriodMonths: 0,
-        defaultLtvPercent: 100, isActive: true,
+        defaultLtvPercent: 100, adminFees: 0, acceptedStatuses: [customerStatusId], isActive: true,
       });
       const quoteId = await ownerMust("mutation", "quotes:saveQuote", {
         orgId, customerId, vehicleId, vehiclePrice: 22000, downPayment: 0, termMonths: 48,
-        mode: "CONFIGURED_FINANCE_COMPANY", companyId, totalFinancedAmount: 22000,
+        mode: "CONFIGURED_FINANCE_COMPANY", companyId,
+        customerEligibilityStatusIds: [customerStatusId], totalFinancedAmount: 22000,
       });
       // UNPINNED on purpose: no quotation, no approval. The early licensing
       // estimate is the deal's first money fact.
@@ -2041,13 +2059,16 @@ export async function runRehearsalCases(ctx) {
         await ownerMust("mutation", "orgSettings:upsert", { orgId: org2, currency: before.currency, currencySymbol: "?" });
         const v2 = await makeVehicle({ orgId: org2, ownerMust, label: `fd2r${round}${stamp}` });
         const c2 = await ownerMust("mutation", "customers:create", { orgId: org2, firstName: "Rehearsal", lastName: `fd2r-${round}-${stamp}` });
+        const customerStatus2 = await customerEligibilityStatusFor({ orgId: org2, ownerMust });
         const co2 = await ownerMust("mutation", "finance:createCompany", {
           orgId: org2, name: `Rehearsal Finance FD2r ${round} ${stamp}`, profitRate: 5, maxTermMonths: 60,
-          gracePeriodMonths: 0, defaultLtvPercent: 100, isActive: true,
+          gracePeriodMonths: 0, defaultLtvPercent: 100, adminFees: 0,
+          acceptedStatuses: [customerStatus2], isActive: true,
         });
         const q2 = await ownerMust("mutation", "quotes:saveQuote", {
           orgId: org2, customerId: c2, vehicleId: v2, vehiclePrice: 22000, downPayment: 0, termMonths: 48,
-          mode: "CONFIGURED_FINANCE_COMPANY", companyId: co2, totalFinancedAmount: 22000,
+          mode: "CONFIGURED_FINANCE_COMPANY", companyId: co2,
+          customerEligibilityStatusIds: [customerStatus2], totalFinancedAmount: 22000,
         });
         const [switched, created] = await Promise.all([
           ownerCall("mutation", "orgSettings:upsert", { orgId: org2, currency: otherScaleCode, currencySymbol: "?" }),

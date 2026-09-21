@@ -1305,6 +1305,7 @@ export const cleanupDanglingAcceptedStatuses = internalMutation({
         await ctx.db.patch(company._id, {
           acceptedStatuses: live,
           ...(deactivate ? { isActive: false } : {}),
+          editRevision: (company.editRevision ?? 1) + 1,
         });
       }
     }

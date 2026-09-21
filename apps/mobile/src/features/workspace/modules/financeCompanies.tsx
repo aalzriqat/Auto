@@ -136,7 +136,11 @@ export function FinanceCompaniesModule({ orgId }: { orgId: string }) {
     };
     try {
       if (editing) {
-        await updateCompany({ ...payload, id: editing._id });
+        await updateCompany({
+          ...payload,
+          id: editing._id,
+          expectedEditRevision: editing.editRevision ?? 1,
+        });
       } else {
         await createCompany(payload);
       }

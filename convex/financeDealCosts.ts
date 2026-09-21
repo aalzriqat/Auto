@@ -45,7 +45,6 @@ import {
 } from "./utils/settlementDeductions";
 import { assertSupportedDenomination } from "./utils/money";
 import {
-  assertFeeTemplatesWithinLimit,
   feeTemplatesExceedConfigurationLimit,
   MAX_CUSTODY_ENTRIES,
   MAX_DEAL_CUSTODY_DECISION_RECORDS,
@@ -1791,8 +1790,8 @@ export const adoptCompanyFeeTemplates = mutation({
     reason: v.string(),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireOwner(ctx, args.orgId);
-    const app = await requireOwnedRow(
+    await requireOwner(ctx, args.orgId);
+    await requireOwnedRow(
       ctx,
       args.orgId,
       "financeApplications",
@@ -1803,83 +1802,9 @@ export const adoptCompanyFeeTemplates = mutation({
     if (!reason) {
       throw new ConvexError("Say why this deal is adopting the company's configured fees.");
     }
-
-    const company = await companyFor(ctx, app);
-    const fees = await loadActiveFees(ctx, app._id);
-    // Existence is the whole question here, so the read is one indexed row —
-    // never the full custody set, which only the writers that balance every
-    // record need to hydrate.
-    const anyCustody = await ctx.db
-      .query("financeDealCustody")
-      .withIndex("by_application", (q) => q.eq("applicationId", app._id))
-      .first();
-    const adoption = deriveFeeTemplateAdoption({
-      app,
-      company,
-      liveFeeCount: fees.length,
-      custodyRecorded: anyCustody !== null,
-    });
-    if (adoption.state !== "AVAILABLE" || company === null || app.companyRuleSnapshot === undefined) {
-      const why: Record<FeeTemplateAdoptionState, string> = {
-        NOT_NEEDED: "This deal already carries configured fees; they are never replaced.",
-        AVAILABLE: "",
-        COMPANY_HAS_NO_TEMPLATES: "The finance company has no fees configured to adopt.",
-        NO_COMPANY_SNAPSHOT: "This deal has no finance-company rule snapshot to adopt fees into.",
-        COMPANY_INACTIVE: "This finance company is deactivated; its fees are not adopted onto deals.",
-        BLOCKED_COSTS_RECORDED:
-          "Costs or custody have already been recorded on this deal without a policy; adopting one now would rewrite what was expected of them.",
-        BLOCKED_DEAL_PROGRESSED:
-          "The vehicle has been handed over or the deal is closed; its expected costs are history and are not rewritten.",
-        COMPANY_TEMPLATES_UNREADABLE:
-          "One of the finance company's configured fees has an amount that cannot be read as money. Correct the company's fee configuration before adopting it onto this deal.",
-        COMPANY_TEMPLATES_OVER_LIMIT:
-          "The finance company has more fees configured than one policy may carry. Save a compliant fee list on the company before adopting it onto this deal.",
-      };
-      throw new ConvexError(why[adoption.state] || "The company's fees cannot be adopted onto this deal.");
-    }
-    const templates = company.feeTemplates ?? [];
-    // Held to the same configuration policy a fresh snapshot is held to.
-    assertFeeTemplatesWithinLimit(templates, `Adopting ${company.name}'s fees onto this deal`);
-    // And to the same amount rule the company WRITERS enforce — on the stored
-    // rows, not on what was once submitted. `v.number()` admits NaN, Infinity,
-    // fractions, negatives and unsafe values, and a template written before
-    // that guard existed, or raw-edited since, carries whatever it carries.
-    // Refused BEFORE the audit row and the snapshot patch: a corrupt policy is
-    // never frozen onto a deal as what its costs are expected to be.
-    templates.forEach((template, index) => {
-      assertMinorAmount(
-        template.estimatedAmountMinor,
-        `Configured fee #${index + 1} (${template.feeType}) estimated amount`
-      );
-    });
-
-    const now = Date.now();
-    const fromRuleVersion = company.ruleVersion ?? 1;
-    await ctx.db.insert("financeApplicationOverrides", {
-      orgId: args.orgId,
-      applicationId: app._id,
-      field: "companyRuleSnapshot.feeTemplates",
-      previousValue: "none (frozen without fee templates)",
-      newValue: `${templates.length} configured fee(s) adopted from ${company.name} rule version ${fromRuleVersion}`,
-      reason,
-      changedBy: user._id,
-      changedAt: now,
-    });
-    await invalidateClassification(
-      ctx, app, user._id,
-      "The finance company's configured fees were adopted onto the deal after its accounting was classified."
+    throw new ConvexError(
+      "Company fee templates have been retired. Deal execution fees are managed via Execution Fees (مصاريف التنفيذ)."
     );
-    await ctx.db.patch(app._id, {
-      companyRuleSnapshot: {
-        ...app.companyRuleSnapshot,
-        feeTemplates: templates,
-        feeTemplatesAdoptedFromRuleVersion: fromRuleVersion,
-        feeTemplatesAdoptedAt: now,
-        feeTemplatesAdoptedBy: user._id,
-      },
-      updatedAt: now,
-    });
-    return { adoptedCount: templates.length, fromRuleVersion };
   },
 });
 

@@ -1,15 +1,60 @@
-import { calculateUnifiedMurabaha } from "../../lib/financing";
+import { calculateUnifiedMurabaha, isRequestedFinancingTermValid } from "../../lib/financing";
 import { socialSmartReplyEn, socialSmartReplyAr } from "../../lib/i18n/domains/socialSmartReply";
 import type { SmartReplyIntent } from "./smartReplyIntent";
 import type { Doc } from "../_generated/dataModel";
 
 type TemplateMap = Record<string, string>;
 
+type SmartReplyVehicle = Readonly<
+  Pick<
+    Doc<"vehicles">,
+    | "model"
+    | "year"
+    | "sellingPrice"
+    | "status"
+    | "mileage"
+    | "color"
+    | "fuelType"
+    | "transmission"
+  > &
+    Partial<Pick<Doc<"vehicles">, "isDeleted" | "trim">>
+>;
+
+type SmartReplyOrgSettings = Readonly<
+  Partial<
+    Pick<
+      Doc<"orgSettings">,
+      | "smartReplyCustomTemplatesAr"
+      | "smartReplyCustomTemplatesEn"
+      | "currencySymbol"
+      | "currency"
+      | "dealershipAddress"
+      | "dealershipPhone"
+      | "dealershipName"
+      | "smartReplyFinancingMode"
+      | "smartReplyDefaultDownPaymentPercent"
+    >
+  >
+>;
+
+type SmartReplyFinanceCompany = Readonly<
+  Pick<
+    Doc<"financeCompanies">,
+    "isActive" | "profitRate" | "maxTermMonths" | "gracePeriodMonths"
+  > &
+    Partial<
+      Pick<
+        Doc<"financeCompanies">,
+        "name" | "adminFees" | "commission" | "insuranceRate" | "includesCommissionInDebt"
+      >
+    >
+>;
+
 interface BuildSmartReplyArgs {
   intent: Exclude<SmartReplyIntent, "complaint">;
-  vehicle: Doc<"vehicles"> | null;
-  orgSettings: Doc<"orgSettings"> | null;
-  financeCompany: Doc<"financeCompanies"> | null;
+  vehicle: SmartReplyVehicle | null;
+  orgSettings: SmartReplyOrgSettings | null;
+  financeCompany: SmartReplyFinanceCompany | null;
   locale: "en" | "ar";
 }
 
@@ -97,9 +142,21 @@ export function buildSmartReplyText({ intent, vehicle, orgSettings, financeCompa
       orgSettings?.smartReplyFinancingMode === "calculated" &&
       financeCompany &&
       financeCompany.isActive &&
+      financeCompany.adminFees !== undefined &&
       vehicle.status === "AVAILABLE";
 
     if (!canCalculate) {
+      return fill(tpl(custom, "financingGeneric", strings.SmartReplyFinancingGeneric), { model: vehicle.model, year: vehicle.year });
+    }
+
+    const termMonths = financeCompany.maxTermMonths;
+    if (
+      !isRequestedFinancingTermValid({
+        termMonths,
+        maxTermMonths: financeCompany.maxTermMonths,
+        gracePeriodMonths: financeCompany.gracePeriodMonths,
+      })
+    ) {
       return fill(tpl(custom, "financingGeneric", strings.SmartReplyFinancingGeneric), { model: vehicle.model, year: vehicle.year });
     }
 
@@ -109,15 +166,15 @@ export function buildSmartReplyText({ intent, vehicle, orgSettings, financeCompa
       vehiclePrice: vehicle.sellingPrice,
       downPayment,
       commission: financeCompany.commission ?? 0,
-      processingFees: financeCompany.adminFees ?? 0,
+      processingFees: financeCompany.adminFees!,
       annualProfitRate: financeCompany.profitRate,
       annualInsuranceRate: financeCompany.insuranceRate ?? 0,
-      termMonths: financeCompany.maxTermMonths,
+      termMonths,
       gracePeriodMonths: financeCompany.gracePeriodMonths,
       includesCommissionInDebt: financeCompany.includesCommissionInDebt,
     });
 
-    if (!monthlyInstallment) {
+    if (!monthlyInstallment || monthlyInstallment <= 0) {
       return fill(tpl(custom, "financingGeneric", strings.SmartReplyFinancingGeneric), { model: vehicle.model, year: vehicle.year });
     }
 

@@ -364,7 +364,6 @@ export function HandoverCostsPanel({
   onReconcile,
   onRecordTemplateActual,
   onAbandonTemplateActual,
-  onAdoptCompanyFees,
 }: Readonly<{
   /** `undefined` while loading or when this caller may not read the cost rows. */
   costs: HandoverCostsData | undefined;
@@ -407,12 +406,6 @@ export function HandoverCostsPanel({
    * identity is either the first to land, or refused because the lost one did.
    */
   onAbandonTemplateActual?: (row: ExpectedHandoverRow) => void;
-  /**
-   * Adopts the company's configured fees onto a deal frozen without any —
-   * owner-only, audited, refused by the server outside the AVAILABLE state.
-   * Absent for a caller who may not, so the notice renders without an action.
-   */
-  onAdoptCompanyFees?: (reason: string) => Promise<void>;
 }>) {
   /** The configured row whose record form is open, by position. */
   const [recordingTemplateIndex, setRecordingTemplateIndex] = useState<number | null>(null);
@@ -675,25 +668,15 @@ export function HandoverCostsPanel({
                 configured fee — what it says, what was actually paid, and the
                 one action a row without an actual has. Nothing here is typed
                 as an expectation. */}
-            {expected && (
+            {expected && checklist && checklist.rows.length > 0 && (
               <section className="space-y-2" data-testid="deal-handover-expected">
                 <div className="space-y-0.5">
                   <p className="text-sm font-medium">{t("HandoverExpectedHeading")}</p>
                   <p className="text-xs text-muted-foreground">
-                    {t(
-                      checklist
-                        ? "HandoverExpectedNote"
-                        : expected.source === "NO_SNAPSHOT"
-                          ? "HandoverExpectedNoSnapshot"
-                          : "HandoverExpectedNotConfigured"
-                    )}
+                    {t("HandoverExpectedNote")}
                   </p>
                 </div>
-                {expected.adoption && (
-                  <FeeAdoptionNotice adoption={expected.adoption} t={t} onAdopt={onAdoptCompanyFees} />
-                )}
-                {checklist && (
-                  <ul className="space-y-1.5">
+                <ul className="space-y-1.5">
                     {checklist.rows.map((row) => (
                       <li
                         key={row.templateIndex}
@@ -883,7 +866,6 @@ export function HandoverCostsPanel({
                       </li>
                     ))}
                   </ul>
-                )}
                 <p className="pt-1 text-sm font-medium">{t("AdditionalCostsHeading")}</p>
               </section>
             )}
@@ -1300,95 +1282,7 @@ function AddForm({
   );
 }
 
-/**
- * What the server says about adopting the company's since-configured fees:
- * a sentence for every non-trivial state, and the owner's action only in
- * the one state the server would accept it.
- */
-function FeeAdoptionNotice({
-  adoption,
-  t,
-  onAdopt,
-}: Readonly<{
-  adoption: HandoverFeeAdoption;
-  t: (key: string) => string;
-  onAdopt: ((reason: string) => Promise<void>) | undefined;
-}>) {
-  const [reason, setReason] = useState("");
-  const [open, setOpen] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  if (adoption.state === "NOT_NEEDED") {
-    return adoption.adopted ? (
-      <p className="text-xs text-muted-foreground" data-testid="deal-handover-fees-adopted">
-        {t("HandoverExpectedAdopted")} <bdi dir="ltr">{adoption.adopted.fromRuleVersion}</bdi>
-      </p>
-    ) : null;
-  }
-  const noticeKey =
-    adoption.state === "AVAILABLE"
-      ? "HandoverExpectedAdoptable"
-      : adoption.state === "BLOCKED_COSTS_RECORDED"
-        ? "HandoverExpectedAdoptBlockedCosts"
-        : adoption.state === "BLOCKED_DEAL_PROGRESSED"
-          ? "HandoverExpectedAdoptBlockedProgressed"
-          : adoption.state === "COMPANY_INACTIVE"
-            ? "HandoverExpectedAdoptCompanyInactive"
-            : adoption.state === "COMPANY_TEMPLATES_UNREADABLE"
-              ? "HandoverExpectedAdoptCompanyUnreadable"
-              : adoption.state === "COMPANY_TEMPLATES_OVER_LIMIT"
-                ? "HandoverExpectedAdoptCompanyOverLimit"
-                : null;
-  if (noticeKey === null) return null;
-  return (
-    <div className="space-y-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm" data-testid="deal-handover-fee-adoption">
-      <p className="text-amber-800 dark:text-amber-300">
-        {t(noticeKey)} (<bdi dir="ltr">{adoption.liveTemplateCount}</bdi>)
-      </p>
-      {adoption.state === "AVAILABLE" && onAdopt && !open && (
-        <Button type="button" size="sm" variant="outline" onClick={() => setOpen(true)}>
-          {t("AdoptCompanyFees")}
-        </Button>
-      )}
-      {open && onAdopt && (
-        <form
-          className="space-y-2"
-          onSubmit={async (event) => {
-            event.preventDefault();
-            if (!reason.trim()) return;
-            setSubmitting(true);
-            setError(null);
-            try {
-              await onAdopt(reason.trim());
-              setOpen(false);
-            } catch (err) {
-              setError(err instanceof Error ? err.message : String(err));
-            } finally {
-              setSubmitting(false);
-            }
-          }}
-        >
-          <Label htmlFor="handover-adopt-reason">{t("AdoptCompanyFeesReason")}</Label>
-          <Input id="handover-adopt-reason" value={reason} onChange={(e) => setReason(e.target.value)} required />
-          {error && (
-            <p role="alert" className="text-xs font-medium text-destructive">
-              {error}
-            </p>
-          )}
-          <div className="flex gap-2">
-            <Button type="submit" size="sm" disabled={submitting || !reason.trim()}>
-              {submitting && <Loader2 className="h-4 w-4 me-1.5 animate-spin" />}
-              {t("AdoptCompanyFeesConfirm")}
-            </Button>
-            <Button type="button" size="sm" variant="ghost" disabled={submitting} onClick={() => setOpen(false)}>
-              {t("Cancel")}
-            </Button>
-          </div>
-        </form>
-      )}
-    </div>
-  );
-}
+
 
 /**
  * The one thing an operator enters on a configured row: what was actually

@@ -251,6 +251,7 @@ const FIELD_VISIBILITY: Record<
   /** Rates and fee templates. The `requiresLtvPercent` flag below replaces the
    *  one workflow question a non-finance caller asked of it. */
   companyRuleSnapshot: "FINANCE",
+  customerQuotePricingSnapshot: "FINANCE",
   financingReconciliationReason: "FINANCE",
   /** Both snapshots carry the figures the decision was taken against. */
   manualFinanceSnapshot: "FINANCE",

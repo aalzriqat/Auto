@@ -62,8 +62,26 @@ async function setup() {
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Sam", lastName: "Lee" })
   );
+  const customerStatusId = await t.run((ctx) =>
+    ctx.db.insert("orgCustomerStatuses", {
+      orgId,
+      label: "Eligible",
+      isActive: true,
+      order: 1,
+    })
+  );
 
-  return { t, orgId, userId, approverId, customerId, vehicleId, asUser, asApprover };
+  return {
+    t,
+    orgId,
+    userId,
+    approverId,
+    customerId,
+    customerStatusId,
+    vehicleId,
+    asUser,
+    asApprover,
+  };
 }
 
 describe("applications.finalizeDeal", () => {
@@ -1245,7 +1263,7 @@ async function classifyFinancedDeal(
 }
 async function setupFinalizedFinancedDeal() {
   const base = await setup();
-  const { t, orgId, customerId, vehicleId, asUser, asApprover } = base;
+  const { t, orgId, customerId, customerStatusId, vehicleId, asUser, asApprover } = base;
 
   const companyId = await t.run((ctx) =>
     ctx.db.insert("financeCompanies", {
@@ -1255,6 +1273,7 @@ async function setupFinalizedFinancedDeal() {
       maxTermMonths: 60,
       gracePeriodMonths: 0,
       isActive: true,
+      adminFees: 0,
       // The quotation solver refuses a company with no LTV, and the application
       // freezes the company's rules at creation. At 100% the company funds the
       // whole approval, which keeps these tests about the receivable rather than
@@ -1272,6 +1291,7 @@ async function setupFinalizedFinancedDeal() {
     termMonths: 48,
     mode: "CONFIGURED_FINANCE_COMPANY",
     companyId,
+    customerEligibilityStatusIds: [customerStatusId],
     totalFinancedAmount: 17000,
   });
 
@@ -1580,7 +1600,7 @@ describe("applications logs, expected payment, and finalization guards", () => {
   });
 
   test("finalizeDeal rejects finance company mismatch between application and quote", async () => {
-    const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
+    const { t, orgId, customerId, customerStatusId, vehicleId, asUser, asApprover } = await setup();
     const companyIds = await t.run(async (ctx) => {
       const firstCompanyId = await ctx.db.insert("financeCompanies", {
         orgId,
@@ -1589,6 +1609,7 @@ describe("applications logs, expected payment, and finalization guards", () => {
         maxTermMonths: 60,
         gracePeriodMonths: 0,
         isActive: true,
+        adminFees: 0,
       });
       const secondCompanyId = await ctx.db.insert("financeCompanies", {
         orgId,
@@ -1597,6 +1618,7 @@ describe("applications logs, expected payment, and finalization guards", () => {
         maxTermMonths: 60,
         gracePeriodMonths: 0,
         isActive: true,
+        adminFees: 0,
       });
       return { firstCompanyId, secondCompanyId };
     });
@@ -1609,6 +1631,7 @@ describe("applications logs, expected payment, and finalization guards", () => {
       termMonths: 48,
       mode: "CONFIGURED_FINANCE_COMPANY",
       companyId: companyIds.firstCompanyId,
+      customerEligibilityStatusIds: [customerStatusId],
       totalFinancedAmount: 17000,
     });
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
@@ -1632,7 +1655,7 @@ describe("applications logs, expected payment, and finalization guards", () => {
 /** Seeds a finalized financed deal whose expected payment method is CHEQUE. */
 async function setupFinalizedFinancedDealWithCheque() {
   const base = await setup();
-  const { t, orgId, customerId, vehicleId, asUser, asApprover } = base;
+  const { t, orgId, customerId, customerStatusId, vehicleId, asUser, asApprover } = base;
 
   const companyId = await t.run((ctx) =>
     ctx.db.insert("financeCompanies", {
@@ -1647,6 +1670,7 @@ async function setupFinalizedFinancedDealWithCheque() {
       // whole approval, which keeps these tests about the receivable rather than
       // about the funding split.
       defaultLtvPercent: 100,
+      adminFees: 0,
     })
   );
 
@@ -1659,6 +1683,7 @@ async function setupFinalizedFinancedDealWithCheque() {
     termMonths: 48,
     mode: "CONFIGURED_FINANCE_COMPANY",
     companyId,
+    customerEligibilityStatusIds: [customerStatusId],
     totalFinancedAmount: 17000,
   });
 
@@ -1796,6 +1821,7 @@ describe("applications required document enforcement", () => {
       termMonths: 48,
       mode: "MANUAL_FINANCE_COMPANY",
       manualProviderName: "Manual Bank",
+      manualAdminFees: 0,
       totalFinancedAmount: 17000,
     });
 
@@ -1839,6 +1865,7 @@ describe("applications required document enforcement", () => {
       termMonths: 48,
       mode: "MANUAL_FINANCE_COMPANY",
       manualProviderName: "Manual Bank",
+      manualAdminFees: 0,
       totalFinancedAmount: 17000,
     });
 
@@ -1913,6 +1940,7 @@ describe("applications required document enforcement", () => {
       termMonths: 48,
       mode: "MANUAL_FINANCE_COMPANY",
       manualProviderName: "Manual Bank",
+      manualAdminFees: 0,
       totalFinancedAmount: 17000,
     });
 

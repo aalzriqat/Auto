@@ -117,6 +117,14 @@ async function seedDealership(tag: string, opts: { sourceType?: "STOCK" | "SOURC
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Buyer", lastName: tag })
   );
+  const customerStatusId = await t.run((ctx) =>
+    ctx.db.insert("orgCustomerStatuses", {
+      orgId,
+      label: "Eligible",
+      isActive: true,
+      order: 1,
+    })
+  );
   const sourceType = opts.sourceType ?? "SOURCED";
   const vehicleId = await t.run((ctx) =>
     ctx.db.insert("vehicles", {
@@ -131,11 +139,22 @@ async function seedDealership(tag: string, opts: { sourceType?: "STOCK" | "SOURC
   const companyId = await t.run((ctx) =>
     ctx.db.insert("financeCompanies", {
       orgId, name: "Jordan Auto Finance", profitRate: 5, maxTermMonths: 60,
-      gracePeriodMonths: 0, isActive: true,
+      gracePeriodMonths: 0, isActive: true, adminFees: 0, defaultLtvPercent: 100,
     })
   );
 
-  return { t, orgId, userId, approverId, customerId, vehicleId, companyId, asUser, asApprover };
+  return {
+    t,
+    orgId,
+    userId,
+    approverId,
+    customerId,
+    customerStatusId,
+    vehicleId,
+    companyId,
+    asUser,
+    asApprover,
+  };
 }
 
 type Seeded = Awaited<ReturnType<typeof seedDealership>>;
@@ -241,11 +260,17 @@ async function runDeal(
     vehiclePrice: VEHICLE_PRICE,
     downPayment,
     termMonths: 48,
-    ...(opts.omitMode ? {} : { mode }),
-    ...(mode === "CONFIGURED_FINANCE_COMPANY" ? { companyId: s.companyId } : {}),
+    mode,
+    ...(mode === "CONFIGURED_FINANCE_COMPANY"
+      ? {
+          companyId: s.companyId,
+          customerEligibilityStatusIds: [s.customerStatusId],
+        }
+      : {}),
     ...(mode === "MANUAL_FINANCE_COMPANY" && opts.manualProviderName !== undefined
       ? { manualProviderName: opts.manualProviderName }
       : {}),
+    ...(mode === "MANUAL_FINANCE_COMPANY" ? { manualAdminFees: 0 } : {}),
     totalFinancedAmount: VEHICLE_PRICE - downPayment,
   });
 
@@ -258,22 +283,16 @@ async function runDeal(
     });
   }
 
-  // The quotation solver refuses a company with no LTV, and the application
-  // freezes the company's rules at creation — so this has to be set before the
-  // application exists, not before the quotation. At 100% the company funds the
-  // whole approval and the dealership contributes nothing, which keeps these
-  // tests about the supplier rather than about the funding split.
-  await s.t.run(async (ctx) => {
-    const company = await ctx.db.get(s.companyId);
-    if (company && company.defaultLtvPercent === undefined) {
-      await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
-    }
-  });
-
   const applicationId = await s.asUser.mutation(api.applications.createFromQuote, {
     orgId: s.orgId,
     quoteId,
   });
+  if (opts.omitMode) {
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(quoteId, { mode: undefined });
+      await ctx.db.patch(applicationId, { quoteModeAtSubmission: undefined });
+    });
+  }
   await s.asUser.mutation(api.applications.updateStatus, {
     orgId: s.orgId, applicationId, status: "UNDER_REVIEW",
   });
@@ -1073,6 +1092,18 @@ describe("a lease, which is external but has no provider identity", () => {
  * The snapshotted company IS the answer when the mode cannot give one.
  */
 describe("a legacy deal that has a finance company but no recorded mode", () => {
+  test("the legacy fixture actually clears both quote and application mode evidence", async () => {
+    const s = await seedDealership("legacy0");
+    const { applicationId } = await runDeal(s, { omitMode: true, finalize: false });
+
+    const view = await s.asUser.query(api.applications.get, {
+      orgId: s.orgId,
+      applicationId,
+    });
+
+    expect(view?.quoteModeAtSubmission).toBeUndefined();
+  });
+
   test("is still asked the settlement route before finalizing", async () => {
     const s = await seedDealership("legacy1");
     await expect(runDeal(s, { omitMode: true })).rejects.toThrow(/record the settlement route/i);
@@ -6384,6 +6415,7 @@ async function approvedHandedOverDeal(s: Seeded): Promise<Id<"financeApplication
     termMonths: 48,
     mode: "CONFIGURED_FINANCE_COMPANY",
     companyId: s.companyId,
+    customerEligibilityStatusIds: [s.customerStatusId],
     totalFinancedAmount: VEHICLE_PRICE,
   });
   const applicationId = await s.asUser.mutation(api.applications.createFromQuote, {
@@ -6768,6 +6800,7 @@ describe("the closing matrix c16216 requires", () => {
       termMonths: 48,
       mode: "CONFIGURED_FINANCE_COMPANY" as const,
       companyId: s.companyId,
+      customerEligibilityStatusIds: [s.customerStatusId],
       totalFinancedAmount: VEHICLE_PRICE,
       vehicleItems: [
         { vehicleId: s.vehicleId, unitPrice: VEHICLE_PRICE },
@@ -7794,7 +7827,17 @@ describe("DIRECT_TO_SUPPLIER: the finance company's configured fees gate finaliz
     await s.t.run((ctx) => ctx.db.patch(s.companyId, { feeTemplates: TEMPLATES }));
     const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: false });
     // What `runDeal` records for the direct route only when it finalizes itself.
-    await s.t.run((ctx) => ctx.db.patch(applicationId, { approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE }));
+    const app = (await s.t.run((ctx) => ctx.db.get(applicationId)))!;
+    await s.t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+        companyRuleSnapshot: {
+          ...app.companyRuleSnapshot!,
+          adminFees: undefined,
+          feeTemplates: TEMPLATES,
+        },
+      })
+    );
     return { s, applicationId };
   }
   const recordActual = (
@@ -7998,6 +8041,27 @@ describe("finalization judges the deal's costs as they are NOW, never the stored
       route: "THROUGH_DEALERSHIP",
       finalize: false,
       beforeHandover: async (id) => {
+        const app = (await s.t.run((ctx) => ctx.db.get(id)))!;
+        await s.t.run((ctx) =>
+          ctx.db.patch(id, {
+            companyRuleSnapshot: {
+              ...app.companyRuleSnapshot!,
+              feeTemplates: [
+                {
+                  feeType: "APPRAISAL_FEE",
+                  description: "Valuation",
+                  estimatedAmountMinor: Number.NaN,
+                  paidBy: "DEALER",
+                  paidTo: "APPRAISER",
+                  includedInQuotation: false,
+                  deductedFromSettlement: false,
+                  refundable: false,
+                  accountingTreatment: "APPRAISAL_EXPENSE",
+                },
+              ],
+            },
+          })
+        );
         await approveEconomics(s, id);
         const feeId = await s.asUser.mutation(api.financeDealCosts.recordTemplateFeeActual, {
           orgId: s.orgId, applicationId: id, templateIndex: 0, feeType: "APPRAISAL_FEE",

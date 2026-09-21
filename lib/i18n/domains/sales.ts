@@ -67,6 +67,12 @@ const dealRailMessages = defineBilingualMessages({
     "لا يوجد ما ينتظر إكماله في هذه الخطوة.",
   ],
 
+  /** Handover stage ready: all requirements met, prompt operator to register vehicle handover. */
+  StageReadyForHandoverAction: [
+    "All handover requirements are complete. When the vehicle is handed over to the customer, register handover here.",
+    "جميع متطلبات التسليم مكتملة. عند تسليم المركبة للعميل، سجّل التسليم هنا.",
+  ],
+
   /**
    * Waiting on THEM, and it says so. Deliberately not "payment is outstanding",
    * which reads like a dealership failure for a payment the dealership cannot
@@ -75,6 +81,25 @@ const dealRailMessages = defineBilingualMessages({
   BlockerAwaitingDisbursement: [
     "Waiting on the finance company to pay",
     "بانتظار صرف شركة التمويل",
+  ],
+
+  /**
+   * Disbursement stage in rail ahead of handover: clarifies that disbursement
+   * confirmation occurs after handover and finalization.
+   */
+  BlockerDisbursementAfterHandover: [
+    "Recorded after vehicle handover and finalization",
+    "يُسجَّل بعد تسليم المركبة وإتمام الصفقة",
+  ],
+
+  /** Handover loss confirmation warning: when estimated management profit is negative. */
+  HandoverLossWarning: [
+    "Warning: this deal is currently forecasting an estimated loss.",
+    "تحذير: هذه الصفقة تُسجِّل خسارة تقديرية.",
+  ],
+  HandoverLossWarningDesc: [
+    "Verify the deal figures and terms before confirming vehicle handover.",
+    "تحقّق من أرقام وتفاصيل الصفقة قبل تأكيد تسليم المركبة.",
   ],
 
   /**
@@ -193,10 +218,10 @@ const dealRailMessages = defineBilingualMessages({
    * The customer's financing plan on the Deal — read-only, what the customer
    * agreed to pay; explicitly not the dealer's remittance or profit.
    */
-  FinancingPlanHeading: ["Financing plan", "خطة التمويل"],
+  FinancingPlanHeading: ["Original quotation financing plan", "خطة التمويل في عرض السعر الأصلي"],
   FinancingPlanNote: [
-    "What the customer agreed to pay, as the quote recorded it — not what the finance company remits to the dealership.",
-    "ما اتفق العميل على دفعه كما سجّله عرض السعر — وليس ما تحوّله جهة التمويل إلى المعرض.",
+    "Original quotation terms — may differ from currently approved deal terms.",
+    "شروط التمويل في عرض السعر الأصلي — قد تختلف عن شروط الصفقة المعتمدة الحالية.",
   ],
   FinancingProvider: ["Financier", "جهة التمويل"],
   CustomerPrice: ["Vehicle price", "سعر السيارة"],
@@ -509,11 +534,18 @@ const dealOverviewMessages = defineBilingualMessages({
   OverviewApprovedPurchase: ["Approved purchase amount", "قيمة الشراء المعتمدة"],
   OverviewCustomerPaid: ["Customer paid to the dealership", "ما دفعه العميل للمعرض"],
   OverviewCustomerPaidNote: ["held deposits — receipt-backed", "العربون المحتجز — مدعوم بإيصال"],
+  OverviewGapTotalPlanned: ["Customer appraisal-gap contribution", "مساهمة العميل في فرق التخمين"],
+  OverviewGapTotalPlannedNote: ["planned to the dealership — not received", "مخطط للمعرض — غير مقبوض"],
+  OverviewGapCashBreakdown: ["Cash", "نقداً"],
+  OverviewGapInstallmentBreakdown: ["Dealership installments", "أقساط للمعرض"],
   OverviewGapCashPlanned: ["Appraisal-gap cash agreed with the customer", "نقد فرق التخمين المتفق عليه مع العميل"],
   OverviewGapCashPlannedNote: ["allocated, not received — no receipt yet", "مخصَّص وليس مقبوضًا — لا إيصال بعد"],
   OverviewCustomerPaidUnknown: ["cannot be totalled — a deposit could not be read", "تعذّر الجمع — عربون غير قابل للقراءة"],
   OverviewCustomerFirstPayment: ["Customer first payment", "الدفعة الأولى من العميل"],
   OverviewFinancierFunds: ["Finance company funds", "تمويل شركة التمويل"],
+  OverviewFinancierExpectedRemittance: ["Expected remittance from finance company", "التحويل المتوقع من شركة التمويل"],
+  OverviewFinancierPaidSeparatelyNote: ["includes dealer contribution paid separately", "يشمل مساهمة المعرض المدفوعة على حدة"],
+  OverviewFinancierNettedNote: ["net of dealer contribution", "مخصوم منه مساهمة المعرض"],
   OverviewFinancierBalance: ["Remaining from the finance company", "المتبقي من شركة التمويل"],
   OverviewFinancierOutstanding: ["still to collect — from the receivable", "متبقٍ للتحصيل — من الذمة المدينة"],
   OverviewFinancierCollected: ["collected in full", "محصَّل بالكامل"],
@@ -551,6 +583,8 @@ const dealOverviewMessages = defineBilingualMessages({
   OverviewRouteDirect: ["financier pays him directly", "تدفعه شركة التمويل مباشرة"],
   OverviewRouteThroughDealership: ["through the dealership", "عبر المعرض"],
   OverviewNetProfit: ["Net dealer profit", "صافي ربح المعرض"],
+  LossEstimated: ["Estimated loss", "خسارة تقديرية"],
+  LossActual: ["Actual loss", "خسارة فعلية"],
   OverviewNotYet: ["Not yet", "ليس بعد"],
   OverviewHeading: ["Deal at a glance", "الصفقة بالأرقام"],
   OverviewLoading: ["Loading the deal's figures…", "جارٍ تحميل أرقام الصفقة…"],
@@ -922,6 +956,11 @@ export const salesEn = {
   ViewApplication: "View Application →",
   ApplicationStartedSuccess: "Finance application started successfully",
   SmartQuoteComparison: "Smart Quote Comparison",
+  ExecutionFeesNotConfigured: "Execution Fees are not configured for this finance company.",
+  FeesNotConfigured: "Fees not configured",
+  ConfigureFeesInSettings: "Configure Execution Fees in Finance Settings.",
+  EnterExecutionFees: "Enter Execution Fees",
+  ExecutionFeesRequired: "Execution fees must be configured (enter 0 if none).",
   VehiclePriceJOD: "Vehicle Price (JOD)",
   TotalToPay: "Total to Pay",
   FinancedAmount: "Financed Amount",
@@ -1470,6 +1509,7 @@ export const salesEn = {
   LineSupplierSettlement: "Supplier settlement",
   LineDealerContribution: "Dealership contribution to financing",
   LineActualExpenses: "Actual expenses",
+  LineForecastExpenses: "Forecast expenses",
   // --- Cash deal: the same screen, a different KIND of money ------------
   // The cash headline is an ordinary accounting result and reconciles to the
   // books, so it carries no "estimated / never posted" qualifier at all.
@@ -1903,6 +1943,11 @@ export const salesAr = {
   ApplicationStartedSuccess: "تم بدء طلب التمويل بنجاح",
   QuoteSaveFail: "فشل في حفظ عرض السعر",
   SmartQuoteComparison: "مقارنة عروض الأسعار الذكية",
+  ExecutionFeesNotConfigured: "مصاريف التنفيذ غير مُعدّة لشركة التمويل هذه.",
+  FeesNotConfigured: "المصاريف غير مُعدّة",
+  ConfigureFeesInSettings: "قم بإعداد مصاريف التنفيذ من إعدادات التمويل.",
+  EnterExecutionFees: "أدخل مصاريف التنفيذ",
+  ExecutionFeesRequired: "يجب إعداد مصاريف التنفيذ (أدخل 0 إذا لم توجد).",
   VehiclePriceJOD: "سعر المركبة (دينار اردني)",
   TotalToPay: "الإجمالي للدفع",
   FinancedAmount: "المبلغ الممول",
@@ -2452,6 +2497,7 @@ export const salesAr = {
   LineSupplierSettlement: "تسوية المورد",
   LineDealerContribution: "مساهمة المعرض في التمويل",
   LineActualExpenses: "مصاريف فعلية",
+  LineForecastExpenses: "مصاريف متوقعة",
   // --- صفقة نقدية: نفس الشاشة، ونوع مختلف من الأرقام ---------------------
   DealCockpitTitleCash: "صفقة بيع",
   StageSaleAgreed: "اتفاق البيع",

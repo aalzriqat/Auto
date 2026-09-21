@@ -148,4 +148,8 @@ describe("every backend function the mobile app declares exists", () => {
     const report = broken.map((b) => `  ${b.reference} → ${b.reason} (${b.expectedModule})`).join("\n");
     expect(broken, `Mobile declares backend functions that do not exist:\n${report}`).toEqual([]);
   });
+
+  test("mobile QuoteSaveArgs contract includes customerEligibilityStatusIds", () => {
+    expect(contractSource).toMatch(/customerEligibilityStatusIds\?:\s*string\[\]/);
+  });
 });

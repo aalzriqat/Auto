@@ -26,18 +26,25 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { SearchableSelect } from "@/components/ui/searchable-select";
-import { calculateUnifiedMurabaha } from "@/lib/financing";
+import {
+  calculateUnifiedMurabaha,
+  isRequestedFinancingTermValid,
+  matchingCustomerEligibilityStatusIds,
+  minimumDownPaymentForFinancingLimit,
+} from "@/lib/financing";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CheckCircle2 } from "lucide-react";
 
 import { quoteSchema, QuoteFormValues, QuoteDialogProps } from "./quote.schema";
 import { getErrorMessage } from "@/lib/errors";
+import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
 
 
 export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCustomerId }: QuoteDialogProps) {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
 
   const { results: customers } = usePaginatedQuery(
     api.customers.list,
@@ -50,9 +57,23 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
   );
   const financeCompanies = useQuery(api.finance.listCompanies, activeOrgId ? { orgId: activeOrgId } : "skip");
   const documentRules = useQuery(api.documents.listRules, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const customerStatusOptions =
+    useQuery(api.orgCustomerStatuses.list, activeOrgId ? { orgId: activeOrgId } : "skip")
+      ?.filter((status: Doc<"orgCustomerStatuses">) => status.isActive) ?? [];
 
   const saveQuote = useMutation(api.quotes.saveQuote);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [customerEligibilityStatusIds, setCustomerEligibilityStatusIds] = useState<
+    Id<"orgCustomerStatuses">[]
+  >([]);
+
+  const toggleCustomerStatus = (statusId: Id<"orgCustomerStatuses">) => {
+    setCustomerEligibilityStatusIds((current) =>
+      current.includes(statusId)
+        ? current.filter((id) => id !== statusId)
+        : [...current, statusId]
+    );
+  };
 
   const form = useForm<z.infer<typeof quoteSchema>>({
     resolver: zodResolver(quoteSchema as any),
@@ -85,7 +106,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
       companyId: "cash",
       companyName: t("CashDeal" as any),
       isCash: true,
-      totalFinancedAmount: principal,
+      totalFinancedAmount: watchAll.vehiclePrice,
       monthlyInstallment: 0,
       profitRateApplied: 0,
       totalProfit: 0,
@@ -96,21 +117,40 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
     // 2. Active Finance Companies
     const activeCompanies = financeCompanies.filter((c: Doc<"financeCompanies">) => c.isActive);
     for (const company of activeCompanies) {
+      const customerEligible =
+        matchingCustomerEligibilityStatusIds(
+          customerEligibilityStatusIds,
+          company.acceptedStatuses
+        ).length > 0;
+      if (!customerEligible) continue;
 
-      const executionFees = company.adminFees || 0;
+      const executionFees = company.adminFees;
+      const feesConfigured = executionFees !== undefined;
       const commission = company.commission || 0;
-
-      const result = calculateUnifiedMurabaha({
-        vehiclePrice: watchAll.vehiclePrice,
-        downPayment: watchAll.downPayment,
-        commission: commission,
-        processingFees: executionFees,
-        annualProfitRate: company.profitRate,
-        annualInsuranceRate: company.insuranceRate || 0,
-        termMonths: watchAll.termMonths,
+      const termValid = isRequestedFinancingTermValid({
+        termMonths: Number(watchAll.termMonths),
+        maxTermMonths: company.maxTermMonths,
         gracePeriodMonths: company.gracePeriodMonths,
-        includesCommissionInDebt: company.includesCommissionInDebt,
       });
+
+      // Do not display a finance quote that the backend would reject.
+      if (!termValid) {
+        continue;
+      }
+
+      const result = feesConfigured
+        ? calculateUnifiedMurabaha({
+            vehiclePrice: watchAll.vehiclePrice,
+            downPayment: watchAll.downPayment,
+            commission: commission,
+            processingFees: executionFees,
+            annualProfitRate: company.profitRate,
+            annualInsuranceRate: company.insuranceRate || 0,
+            termMonths: watchAll.termMonths,
+            gracePeriodMonths: company.gracePeriodMonths,
+            includesCommissionInDebt: company.includesCommissionInDebt,
+          })
+        : null;
 
       const actualValuation = valuations?.find((v: Doc<"vehicleValuations">) => v.companyId === company._id)?.valuationAmount || 0;
       const maxLTV = company.maxFinancingLTV || 0;
@@ -119,10 +159,16 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
         ? actualValuation * (maxLTV / 100)
         : Number.MAX_SAFE_INTEGER; // If no LTV/Valuation set, allow any amount
 
-      const exceedsValuation = result.financedAmount > maxFinancingAllowed && actualValuation > 0;
-      const minimumDownPayment = watchAll.vehiclePrice - maxFinancingAllowed;
+      const exceedsValuation = result ? result.financedAmount > maxFinancingAllowed && actualValuation > 0 : false;
+      const minimumDownPayment = result
+        ? minimumDownPaymentForFinancingLimit({
+            currentDownPayment: watchAll.downPayment,
+            financedAmount: result.financedAmount,
+            maxFinancingAllowed,
+          })
+        : undefined;
 
-      const requiredValuation = maxLTV > 0
+      const requiredValuation = maxLTV > 0 && result
         ? result.financedAmount / (maxLTV / 100)
         : 0;
 
@@ -132,12 +178,13 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
         companyId: company._id,
         companyName: company.name,
         isCash: false,
-        totalFinancedAmount: result.financedAmount,
-        monthlyInstallment: result.monthlyInstallment,
+        feesConfigured,
+        totalFinancedAmount: result?.financedAmount,
+        monthlyInstallment: result?.monthlyInstallment,
         profitRateApplied: company.profitRate,
-        totalProfit: result.totalProfit,
+        totalProfit: result?.totalProfit,
         requiredValuation,
-        takafulAmount: result.takafulAmount,
+        takafulAmount: result?.takafulAmount,
         actualValuation,
         maxFinancingAllowed,
         exceedsValuation,
@@ -147,11 +194,30 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
     }
 
     setComparisons(results);
-  }, [watchAll.vehiclePrice, watchAll.downPayment, watchAll.termMonths, financeCompanies, valuations, documentRules]);
+  }, [
+    watchAll.vehiclePrice,
+    watchAll.downPayment,
+    watchAll.termMonths,
+    financeCompanies,
+    valuations,
+    documentRules,
+    customerEligibilityStatusIds,
+    t,
+  ]);
 
   const onSelectQuote = async (companyResult: any) => {
     const isValid = await form.trigger(["vehicleId", "customerId"]);
     if (!isValid) return;
+
+    if (!companyResult.isCash && customerEligibilityStatusIds.length === 0) {
+      toast.error(t("SelectStatusFilter" as any));
+      return;
+    }
+
+    if (!companyResult.isCash && !companyResult.feesConfigured) {
+      toast.error(t("ExecutionFeesNotConfigured" as any) || "Execution Fees are not configured for this finance company.");
+      return;
+    }
 
     if (companyResult.exceedsValuation) {
       toast.error(t("ExceedsFinancingLimit" as any));
@@ -176,6 +242,9 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
         customerId: values.customerId as Id<"customers">,
         mode: companyResult.isCash ? "CASH" : "CONFIGURED_FINANCE_COMPANY",
         companyId: companyResult.isCash ? undefined : (companyResult.companyId as Id<"financeCompanies">),
+        customerEligibilityStatusIds: companyResult.isCash
+          ? undefined
+          : customerEligibilityStatusIds,
         vehiclePrice: Number(values.vehiclePrice),
         desiredProfit,
         downPayment: Number(values.downPayment),
@@ -239,7 +308,10 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                     <FormControl>
                       <SearchableSelect
                         value={field.value}
-                        onValueChange={field.onChange}
+                        onValueChange={(value) => {
+                          field.onChange(value);
+                          setCustomerEligibilityStatusIds([]);
+                        }}
                         placeholder={t("SelectCustomer" as any)}
                         options={customers?.map((c) => ({
                           value: c._id,
@@ -259,7 +331,9 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t("TermMonths" as any)}</FormLabel>
-                    <FormControl><Input type="number" className="bg-background" {...field} /></FormControl>
+                    <FormControl>
+                      <Input type="number" step="1" min="1" className="bg-background" {...field} />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -289,6 +363,33 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
               />
             </div>
 
+            <div className="space-y-2 rounded-lg border p-3">
+              <p className="text-sm font-medium">{t("CustomerStatusReqs" as any)}</p>
+              {customerStatusOptions.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  {t("NoCustomerStatusesConfigured" as any)}
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-3">
+                  {customerStatusOptions.map((status: Doc<"orgCustomerStatuses">) => (
+                    <label
+                      key={status._id}
+                      className="flex cursor-pointer items-center gap-2 rounded-md border p-2 text-sm"
+                    >
+                      <Checkbox
+                        checked={customerEligibilityStatusIds.includes(status._id)}
+                        onCheckedChange={() => toggleCustomerStatus(status._id)}
+                      />
+                      <span>{translateCustomerStatusLabel(status.label, locale)}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              {customerEligibilityStatusIds.length === 0 && customerStatusOptions.length > 0 && (
+                <p className="text-xs text-muted-foreground">{t("SelectStatusFilter" as any)}</p>
+              )}
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pt-4">
               {comparisons.map((result) => (
                 <Card key={result.companyId} className={`relative flex flex-col ${result.isCash ? 'border-primary/50' : ''} ${result.exceedsValuation ? 'border-red-500/50' : ''}`}>
@@ -306,7 +407,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                           <span className="text-muted-foreground">{t("TotalToPay" as any)}:</span>
                           <span className="font-semibold">{result.totalFinancedAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</span>
                         </div>
-                      ) : (
+                      ) : result.feesConfigured ? (
                         <>
                           <div className="flex justify-between text-sm border-b pb-1">
                             <span className="text-muted-foreground">{t("FinancedAmount" as any)}:</span>
@@ -346,25 +447,38 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                             </div>
                           )}
                         </>
-                      )}
+                      ) : null}
                     </div>
 
                     {!result.isCash && (
                       <div className="bg-primary/5 p-3 rounded-md mb-4 text-center">
                         <div className="text-sm text-primary font-medium mb-1">{t("MonthlyInstallment" as any)}</div>
-                        <div className="text-2xl font-bold text-primary">{result.monthlyInstallment.toLocaleString(undefined, { minimumFractionDigits: 2 })} <span className="text-sm font-normal">JOD</span></div>
+                        <div className="text-2xl font-bold text-primary">
+                          {result.feesConfigured && result.monthlyInstallment !== undefined ? (
+                            <>
+                              {result.monthlyInstallment.toLocaleString(undefined, { minimumFractionDigits: 2 })}{" "}
+                              <span className="text-sm font-normal">JOD</span>
+                            </>
+                          ) : (
+                            <span className="text-amber-500 text-sm">{t("FeesNotConfigured" as any) || "Fees Not Configured"}</span>
+                          )}
+                        </div>
                       </div>
                     )}
 
                     <Button
                       type="button"
                       className="w-full mt-auto"
-                      variant={result.isCash ? "outline" : result.exceedsValuation ? "destructive" : "default"}
+                      variant={result.isCash ? "outline" : (!result.feesConfigured ? "secondary" : result.exceedsValuation ? "destructive" : "default")}
                       onClick={() => onSelectQuote(result)}
-                      disabled={isSubmitting || result.exceedsValuation}
+                      disabled={isSubmitting || (!result.isCash && !result.feesConfigured) || result.exceedsValuation}
                     >
                       <CheckCircle2 className="w-4 h-4 me-2" />
-                      {result.exceedsValuation ? (t("IncreaseDownPayment" as any)) : (t("SelectSave" as any))}
+                      {!result.isCash && !result.feesConfigured
+                        ? (t("FeesNotConfigured" as any) || "Fees Not Configured")
+                        : result.exceedsValuation
+                          ? (t("IncreaseDownPayment" as any))
+                          : (t("SelectSave" as any))}
                     </Button>
                   </CardContent>
                 </Card>

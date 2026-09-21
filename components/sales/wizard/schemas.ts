@@ -5,7 +5,7 @@ export const step1Schema = z.object({
   vehiclePrice: z.coerce.number().min(1),
   desiredProfit: z.coerce.number().min(0),
   downPayment: z.coerce.number().min(0),
-  termMonths: z.coerce.number().min(0),
+  termMonths: z.coerce.number().int().min(0),
   vehicleCondition: z.string().optional(),
 });
 

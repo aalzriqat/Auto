@@ -9,7 +9,7 @@
  * state change was never the part that was broken.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 
@@ -17,9 +17,12 @@ const MODULES = import.meta.glob("./**/*.ts");
 
 const ORIGINAL_ALLOWLIST = process.env.SUPER_ADMIN_EMAILS;
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setTimeout"] });
   process.env.SUPER_ADMIN_EMAILS = "admin@autoflow.dev";
 });
 afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
   if (ORIGINAL_ALLOWLIST === undefined) delete process.env.SUPER_ADMIN_EMAILS;
   else process.env.SUPER_ADMIN_EMAILS = ORIGINAL_ALLOWLIST;
 });

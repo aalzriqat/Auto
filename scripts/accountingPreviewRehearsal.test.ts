@@ -10,6 +10,8 @@ import { describe, expect, test } from "vitest";
 import {
   assertRehearsalEnv,
   convexCall,
+  convexCallWithRateLimitRetry,
+  rateLimitRetryDelayMs,
   isClerkSessionId,
   isPreviewCloudUrl,
   mintConvexToken,
@@ -119,6 +121,107 @@ describe("convexCall reports failures as data, not exceptions", () => {
         notJson as unknown as typeof fetch
       )
     ).rejects.toThrow(/non-JSON response/);
+  });
+});
+
+describe("live-cloud rate-limit retries are narrow and fail closed", () => {
+  const spec = {
+    convexUrl: "https://x.convex.cloud",
+    token: "t",
+    kind: "mutation",
+    path: "customers:create",
+    args: { orgId: "o" },
+  };
+
+  test("the exact pre-write tenant limiter refusal is retried, then the real result is returned", async () => {
+    let calls = 0;
+    const fetchImpl = async () => {
+      calls += 1;
+      const payload =
+        calls === 1
+          ? { status: "error", errorData: { message: "Rate limit exceeded. Try again in 1s" } }
+          : { status: "success", value: "customer_1" };
+      return { status: 200, text: async () => JSON.stringify(payload) } as unknown as Response;
+    };
+    const sleeps: number[] = [];
+
+    const result = await convexCallWithRateLimitRetry(spec, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      sleepImpl: async (ms: number) => {
+        sleeps.push(ms);
+      },
+      maxAttempts: 3,
+    });
+
+    expect(result).toEqual({ ok: true, value: "customer_1" });
+    expect(calls).toBe(2);
+    expect(sleeps).toEqual([1250]);
+  });
+
+  test("an arbitrary business refusal is NEVER retried or converted into success", async () => {
+    let calls = 0;
+    const fetchImpl = async () => {
+      calls += 1;
+      return {
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            status: "error",
+            errorData: { message: "Execution Fees are not configured for this finance company." },
+          }),
+      } as unknown as Response;
+    };
+
+    const result = await convexCallWithRateLimitRetry(spec, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      sleepImpl: async () => {
+        throw new Error("business refusals must not sleep/retry");
+      },
+      maxAttempts: 5,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "Execution Fees are not configured for this finance company.",
+    });
+    expect(calls).toBe(1);
+  });
+
+  test("retry parsing accepts only the product's exact rate-limit message", () => {
+    expect(rateLimitRetryDelayMs("Rate limit exceeded. Try again in 1s")).toBe(1250);
+    // The upload bucket refills 10 tokens/minute and can legitimately return 6s.
+    // Keep the 250ms boundary cushion instead of retrying 750ms too early.
+    expect(rateLimitRetryDelayMs("Rate limit exceeded. Try again in 6s")).toBe(6250);
+    expect(rateLimitRetryDelayMs("Rate limit exceeded. Try again later")).toBeNull();
+    expect(rateLimitRetryDelayMs("Customer not found")).toBeNull();
+  });
+
+  test("persistent throttling remains a failure after the bounded retry budget", async () => {
+    let calls = 0;
+    const fetchImpl = async () => {
+      calls += 1;
+      return {
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            status: "error",
+            errorData: { message: "Rate limit exceeded. Try again in 0s" },
+          }),
+      } as unknown as Response;
+    };
+    const sleeps: number[] = [];
+
+    const result = await convexCallWithRateLimitRetry(spec, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      sleepImpl: async (ms: number) => {
+        sleeps.push(ms);
+      },
+      maxAttempts: 3,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(calls).toBe(3);
+    expect(sleeps).toEqual([500, 500]);
   });
 });
 

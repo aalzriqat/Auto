@@ -1,4 +1,4 @@
-import { calculateUnifiedMurabaha } from "@/lib/financing";
+import { calculateUnifiedMurabaha, isRequestedFinancingTermValid, type UnifiedMurabahaResult } from "@/lib/financing";
 import type { Lang, PublicSite, PublicVehicle } from "./theme-props";
 
 /** Generic illustrative terms used when the seller hasn't picked one of their
@@ -24,9 +24,24 @@ export function estimateMonthlyInstallment({
   vehiclePrice: number;
   downPayment: number;
   termMonths: number;
-}) {
+}): UnifiedMurabahaResult | null {
   const terms = financeCompany ?? DEFAULT_FINANCE_TERMS;
-  return calculateUnifiedMurabaha({
+
+  if (terms.adminFees === undefined) {
+    return null;
+  }
+
+  if (
+    !isRequestedFinancingTermValid({
+      termMonths,
+      maxTermMonths: terms.maxTermMonths,
+      gracePeriodMonths: terms.gracePeriodMonths,
+    })
+  ) {
+    return null;
+  }
+
+  const result = calculateUnifiedMurabaha({
     vehiclePrice,
     downPayment,
     commission: terms.commission,
@@ -37,6 +52,20 @@ export function estimateMonthlyInstallment({
     gracePeriodMonths: terms.gracePeriodMonths,
     includesCommissionInDebt: terms.includesCommissionInDebt,
   });
+
+  if (
+    !Number.isFinite(result.financedAmount) ||
+    !Number.isFinite(result.monthlyInstallment) ||
+    !Number.isFinite(result.totalContractValue) ||
+    !Number.isFinite(result.totalProfit) ||
+    result.monthlyInstallment <= 0 ||
+    result.financedAmount <= 0 ||
+    result.totalContractValue <= 0
+  ) {
+    return null;
+  }
+
+  return result;
 }
 
 export function waLink(phone: string | null | undefined, message: string) {
@@ -235,6 +264,11 @@ const KINETIC_TEXT = {
   carPriceLabel: ["Car Price (JOD)", "سعر السيارة (دينار)"],
   downPaymentPercentLabel: ["Down Payment", "الدفعة الأولى"],
   estimatedMonthlyPayment: ["Estimated Monthly Payment", "القسط الشهري المقدر"],
+  estimateUnavailable: ["Finance estimate unavailable", "تقدير التمويل غير متوفر"],
+  contactDealershipForFinancing: [
+    "Contact the dealership for financing details",
+    "تواصل مع المعرض للحصول على تفاصيل التمويل",
+  ],
   perMonth: ["/ month*", "/ شهرياً*"],
   applyForFinanceNow: ["Apply for Finance Now", "تقدم بطلب تمويل الآن"],
   financeTermsNote: ["*Terms and conditions apply. Rates may vary based on credit profile and bank or financing company approval.", "*تطبق الشروط والأحكام. قد تختلف الأسعار حسب الملف الائتماني وموافقة البنك أو شركة التمويل."],

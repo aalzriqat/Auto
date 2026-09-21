@@ -29,6 +29,15 @@ import {
   type DealerPreparationExpenses,
   type VehicleCostBasis,
 } from "./utils/vehicleCostBasis";
+import { toMinorUnits } from "./utils/money";
+
+function frozenMajorAmountToMinorOrUnreadable(amount: number, currency: string): number {
+  try {
+    return toMinorUnits(amount, currency);
+  } catch {
+    return Number.NaN;
+  }
+}
 
 /**
  * The cockpit payload, typed through a one-module api slice for the reason
@@ -153,8 +162,26 @@ export function dealerBorneExpected(
    * and would leave this figure standing beside a recorded total that had
    * silently dropped it.
    */
-  dealerBorneLineForeign = false
+  dealerBorneLineForeign = false,
+  estimatedDealerBorneExpensesMinor?: number,
+  dealerBorneActualMinor = 0
 ): DealFinancialSummaryInputs["expectedDealerBorne"] {
+  // If the application carries a frozen expected fee total (Execution Fees / adminFees):
+  if (estimatedDealerBorneExpensesMinor !== undefined) {
+    if (dealerBorneLineForeign) {
+      return { totalMinor: null, remainingMinor: null, reason: "MIXED_DENOMINATION" };
+    }
+    if (!isMinorAmount(estimatedDealerBorneExpensesMinor) || !isMinorAmount(dealerBorneActualMinor)) {
+      return { totalMinor: null, remainingMinor: null, reason: "UNSAFE_AMOUNT" };
+    }
+    const totalMinor = estimatedDealerBorneExpensesMinor;
+    const remainingMinor = Math.max(0, totalMinor - dealerBorneActualMinor);
+    if (!Number.isSafeInteger(totalMinor) || !Number.isSafeInteger(remainingMinor)) {
+      return { totalMinor: null, remainingMinor: null, reason: "UNSAFE_AMOUNT" };
+    }
+    return { totalMinor, remainingMinor, reason: null };
+  }
+
   if (source !== "COMPANY_RULE_SNAPSHOT") return { totalMinor: null, remainingMinor: null, reason: "NO_POLICY" };
   const dealerRows = rows.filter((row) => row.paidBy === "DEALER" || row.paidBy === "EMPLOYEE");
   // FAIL CLOSED: an actual recorded in another currency cannot be subtracted
@@ -235,6 +262,7 @@ function routeSpecificProfit(args: {
   fullCostBasis: VehicleCostBasis | null;
   /** SOURCED: the dealership's pre-deal preparation spend, subtracted once. */
   preparation: DealerPreparationExpenses | null;
+  expectedExpensesMinor?: number;
   /**
    * The cockpit's own "fully settled" — money settled AND every cost line
    * carrying a CHECKED actual — as `buildCockpitMoney` classifies a
@@ -286,6 +314,7 @@ function routeSpecificProfit(args: {
     dealerContributionMinor: app.dealerContributionMinor,
     customerDirectToDealerMinor: customerGapToDealer.amountMinor,
     actualExpensesMinor: money.expenses.actualTotalMinor,
+    expectedExpensesMinor: args.expectedExpensesMinor,
     currency: money.currency,
     fullySettled: args.fullySettled,
   });
@@ -422,6 +451,22 @@ export const financedDealOverview = query({
             ? "MIXED_DENOMINATION"
             : null,
       };
+      const frozenEstimatedFees =
+        app.estimatedDealerBorneExpensesMinor ??
+        (app.companyRuleSnapshot?.adminFees !== undefined
+          ? frozenMajorAmountToMinorOrUnreadable(
+              app.companyRuleSnapshot.adminFees,
+              cockpit.money.currency
+            )
+          : undefined);
+      const expectedDealerBorne = dealerBorneExpected(
+        expected.source,
+        expected.rows,
+        cockpit.money.currency,
+        expensesMixed,
+        frozenEstimatedFees,
+        feeSummary.dealerBorneActualMinor
+      );
       financialSummary = deriveDealFinancialSummary({
         currency: cockpit.money.currency,
         routeKnown: cockpit.money.routeKnown,
@@ -437,13 +482,18 @@ export const financedDealOverview = query({
           money: cockpit.money,
           fullCostBasis: costBasisFor(null),
           preparation,
+          expectedExpensesMinor: expectedDealerBorne.totalMinor ?? undefined,
           fullySettled,
           expensesMixed,
           expensesUnreadable,
         }),
         vehicleConsigned: consigned,
-        app,
-        expectedDealerBorne: dealerBorneExpected(expected.source, expected.rows, cockpit.money.currency, expensesMixed),
+        app: {
+          ...app,
+          dealerContributionSettlement:
+            app.dealerContributionSettlement ?? app.companyRuleSnapshot?.dealerContributionSettlement,
+        },
+        expectedDealerBorne,
         feeEvidence,
       });
     }

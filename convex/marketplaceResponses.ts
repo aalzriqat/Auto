@@ -8,6 +8,14 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { refreshDealerBadges, checkMarketplaceQuota, consumeMarketplaceLead, getOwnProfile } from "./marketplaceDealers";
 import { calculateUnifiedMurabaha } from "../lib/financing";
 import { assertFiniteNumber } from "./utils/money";
+import {
+  assertCustomerLoanTermsValid,
+  assertFinancedMurabahaResultValid,
+  assertFinancedQuoteContributionValid,
+  assertRequestedFinancingTermValid,
+  requireConfiguredExecutionFees,
+} from "./utils/financingEconomics";
+import { getOrgCurrency } from "./accounting/workflowHooks";
 
 const MAX_NOTE_CHARS = 1000;
 const MAX_LISTED_REQUESTS = 100;
@@ -43,6 +51,10 @@ async function buildFinanceOffer(
   if (!company || company.orgId !== orgId || !company.isActive) {
     throw new ConvexError("Finance company not found.");
   }
+  const orgCurrency = await getOrgCurrency(ctx, orgId);
+  assertCustomerLoanTermsValid(company, orgCurrency);
+  const processingFees = requireConfiguredExecutionFees(company, "finance offer");
+
   // Guard before the range checks below: comparisons against NaN are all false,
   // so a non-finite term or down payment would pass every one of them and reach
   // calculateUnifiedMurabaha, which then returns NaN for the whole offer —
@@ -50,15 +62,17 @@ async function buildFinanceOffer(
   assertFiniteNumber(args.vehiclePrice, "vehicle price");
   assertFiniteNumber(args.downPayment, "down payment");
   assertFiniteNumber(args.termMonths, "term");
-  if (args.termMonths <= 0 || args.termMonths > company.maxTermMonths) {
-    throw new ConvexError(`Term must be between 1 and ${company.maxTermMonths} months for this finance company.`);
-  }
-  if (args.downPayment < 0 || args.downPayment >= args.vehiclePrice) {
-    throw new ConvexError("Down payment must be between zero and the vehicle price.");
-  }
+  assertRequestedFinancingTermValid({
+    termMonths: args.termMonths,
+    gracePeriodMonths: company.gracePeriodMonths,
+    maxTermMonths: company.maxTermMonths,
+  });
+  assertFinancedQuoteContributionValid({
+    vehiclePrice: args.vehiclePrice,
+    downPayment: args.downPayment,
+  });
 
   const commission = company.commission ?? 0;
-  const processingFees = company.adminFees ?? 0;
   const result = calculateUnifiedMurabaha({
     vehiclePrice: args.vehiclePrice,
     downPayment: args.downPayment,
@@ -70,6 +84,8 @@ async function buildFinanceOffer(
     gracePeriodMonths: company.gracePeriodMonths,
     includesCommissionInDebt: company.includesCommissionInDebt ?? false,
   });
+
+  assertFinancedMurabahaResultValid(result);
 
   return {
     vehiclePrice: args.vehiclePrice,

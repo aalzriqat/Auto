@@ -168,6 +168,7 @@ export const remove = mutation({
       await ctx.db.patch(company._id, {
         acceptedStatuses: remaining,
         ...(emptied && company.isActive ? { isActive: false } : {}),
+        editRevision: (company.editRevision ?? 1) + 1,
       });
 
       updatedCompanies.push(company.name);

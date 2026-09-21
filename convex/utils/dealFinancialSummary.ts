@@ -1,4 +1,4 @@
-import { isMinorAmount, type DealProfit } from "./financingEconomics";
+import { composeCustomerGapToDealer, isMinorAmount, type DealProfit } from "./financingEconomics";
 
 /**
  * The operator's financial overview of one FINANCED deal, derived once on the
@@ -108,6 +108,8 @@ export type DealFinancialSummaryInputs = Readonly<{
     dealerContributionMinor?: number;
     customerFirstPaymentMinor?: number;
     customerGapCashToDealerMinor?: number;
+    customerGapInstallmentToDealerMinor?: number;
+    dealerContributionSettlement?: "PAID_SEPARATELY" | "NETTED_FROM_REMITTANCE";
     /** What the financier is expected to remit to the dealership, as the economics froze it. */
     expectedDealerRemittanceMinor?: number;
   }>;
@@ -177,12 +179,18 @@ export type DealFinancialSummary = Readonly<{
    * a paid total: resolving a gap moves no money. `null` when no gap
    * allocation has been recorded.
    */
+  customerGapPlanned?: Readonly<{
+    totalMinor: number;
+    cashMinor: number;
+    installmentMinor: number;
+  }> | null;
   customerGapCashPlannedMinor: number | null;
   /** The customer's first payment as the economics froze it, whoever receives it. */
   customerFirstPaymentMinor: number | null;
   financier: Readonly<{
     fundedPortionMinor: number | null;
     outstanding: FinancierOutstanding;
+    dealerContributionSettlement?: "PAID_SEPARATELY" | "NETTED_FROM_REMITTANCE";
   }>;
   /**
    * The dealership's side, kept as separate facts — none of them "paid".
@@ -384,11 +392,27 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
       ? null
       : boundary.serve("supplierAmount", supplier.amountMinor);
 
+  let customerGapPlanned: DealFinancialSummary["customerGapPlanned"] = null;
+  if (
+    app.customerGapCashToDealerMinor !== undefined ||
+    app.customerGapInstallmentToDealerMinor !== undefined
+  ) {
+    const composed = composeCustomerGapToDealer(app);
+    if (composed.readable) {
+      customerGapPlanned = {
+        totalMinor: composed.amountMinor,
+        cashMinor: app.customerGapCashToDealerMinor ?? 0,
+        installmentMinor: app.customerGapInstallmentToDealerMinor ?? 0,
+      };
+    }
+  }
+
   return {
     currency,
     customerSalePrice: customerSalePriceFor(app, boundary),
     approvedPurchaseAmountMinor: boundary.serve("approvedPurchaseAmount", app.approvedDealerPurchaseAmountMinor),
     customerPaidToDealer,
+    customerGapPlanned,
     customerGapCashPlannedMinor: boundary.serve("customerGapCashPlanned", app.customerGapCashToDealerMinor),
     customerFirstPaymentMinor: boundary.serve("customerFirstPayment", app.customerFirstPaymentMinor),
     financier: {
@@ -403,6 +427,7 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
         },
         boundary
       ),
+      ...(app.dealerContributionSettlement ? { dealerContributionSettlement: app.dealerContributionSettlement } : {}),
     },
     dealerOutlay: {
       plannedContributionMinor,

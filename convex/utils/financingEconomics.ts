@@ -1,6 +1,10 @@
 import { ConvexError, v } from "convex/values";
-import { Doc } from "../_generated/dataModel";
-import { toMinorSameCurrencyOrUndefined } from "./money";
+import { Doc, Id } from "../_generated/dataModel";
+import { toMinorSameCurrencyOrUndefined, assertFiniteNumber, assertMajorAmountRepresentable } from "./money";
+import {
+  isRequestedFinancingTermValid,
+  matchingCustomerEligibilityStatusIds,
+} from "../../lib/financing";
 import {
   PERCENT_DECIMAL_PLACES,
   percentRoundsToZero,
@@ -8,7 +12,6 @@ import {
   computeDealerProceeds,
   computeExpectedRemittance,
   computeFundingComposition,
-  evaluateQuotationException,
   resolveLtvBaseMinor,
   validateGapShares,
   type CustomerContributionSettlement,
@@ -19,6 +22,7 @@ import {
 // Pass-throughs, re-exported directly so they do not sit in this module's local
 // scope pretending to be used here.
 export { classifyGapResolution, evaluateQuotationException } from "../../lib/financingEconomics";
+export { isRequestedFinancingTermValid } from "../../lib/financing";
 
 /**
  * A stamp of the economics an irreversible confirmation is about, demanded back
@@ -311,6 +315,7 @@ export const financeCompanyRuleSnapshotValidator = v.object({
   // recorded per company and the solver declines when it is unset rather than
   // generalising one dealership's arrangement to every company.
   customerFirstPaymentOffsetsUnfinancedShare: v.optional(v.boolean()),
+  adminFees: v.optional(v.number()),
   feeTemplates: v.optional(v.array(financeFeeTemplateValidator)),
   /**
    * Set ONLY by `financeDealCosts.adoptCompanyFeeTemplates`: the snapshot was
@@ -326,6 +331,84 @@ export const financeCompanyRuleSnapshotValidator = v.object({
   feeTemplatesAdoptedAt: v.optional(v.number()),
   feeTemplatesAdoptedBy: v.optional(v.id("users")),
 });
+
+/**
+ * Customer-facing quote pricing snapshot.
+ *
+ * Freezes the complete Murabaha calculation inputs and outputs at the moment
+ * the quotation is calculated, so that application underwriting (DBR, LTV)
+ * and dealer-borne expenses remain permanently anchored to the exact quotation
+ * terms rather than drifting if company settings or currency move later.
+ */
+export const customerQuotePricingSnapshotValidator = v.object({
+  currency: v.string(),
+  vehiclePrice: v.number(),
+  downPayment: v.number(),
+  termMonths: v.number(),
+
+  executionFees: v.number(),
+  commission: v.number(),
+  profitRate: v.number(),
+  insuranceRate: v.number(),
+  gracePeriodMonths: v.number(),
+  includesCommissionInDebt: v.boolean(),
+
+  totalFinancedAmount: v.number(),
+  totalContractValue: v.number(),
+  monthlyInstallment: v.number(),
+  totalProfit: v.number(),
+  takafulAmount: v.number(),
+
+  companyRuleVersion: v.optional(v.number()),
+});
+
+export type CustomerQuotePricingSnapshot = {
+  currency: string;
+  vehiclePrice: number;
+  downPayment: number;
+  termMonths: number;
+  executionFees: number;
+  commission: number;
+  profitRate: number;
+  insuranceRate: number;
+  gracePeriodMonths: number;
+  includesCommissionInDebt: boolean;
+  totalFinancedAmount: number;
+  totalContractValue: number;
+  monthlyInstallment: number;
+  totalProfit: number;
+  takafulAmount: number;
+  companyRuleVersion?: number;
+};
+
+/**
+ * Customer eligibility snapshot for financing quotations.
+ *
+ * Freezes the selected customer eligibility evidence (status IDs and labels),
+ * the company's accepted status IDs at the time of quotation, and the matched
+ * status IDs that justified eligibility.
+ */
+export const customerEligibilitySnapshotValidator = v.object({
+  selectedStatuses: v.array(
+    v.object({
+      statusId: v.id("orgCustomerStatuses"),
+      label: v.string(),
+    })
+  ),
+  companyAcceptedStatusIds: v.optional(v.array(v.id("orgCustomerStatuses"))),
+  matchedStatusIds: v.array(v.id("orgCustomerStatuses")),
+  evaluatedAt: v.number(),
+});
+
+export type CustomerEligibilitySnapshot = {
+  selectedStatuses: Array<{
+    statusId: Id<"orgCustomerStatuses">;
+    label: string;
+  }>;
+  companyAcceptedStatusIds?: Id<"orgCustomerStatuses">[];
+  matchedStatusIds: Id<"orgCustomerStatuses">[];
+  evaluatedAt: number;
+};
 
 // ---------------------------------------------------------------------------
 // Derived TypeScript types
@@ -458,7 +541,10 @@ export function buildRuleSnapshot(
     // invents a commercial arrangement.
     customerFirstPaymentOffsetsUnfinancedShare:
       company.customerFirstPaymentOffsetsUnfinancedShare,
-    feeTemplates: company.feeTemplates,
+    adminFees: company.adminFees,
+    // feeTemplates is retired as a write authority and omitted from all new snapshots.
+    // Historical application snapshots frozen before retirement retain their stored templates.
+    feeTemplates: undefined,
   };
 }
 
@@ -584,6 +670,255 @@ export function assertPercent(value: number, label: string): void {
   if (!Number.isFinite(value) || value < 0 || value > 100) {
     throw new ConvexError(`${label} must be a percentage between 0 and 100 (got ${value}).`);
   }
+}
+
+export type CustomerLoanTerms = {
+  profitRate: number;
+  maxTermMonths: number;
+  gracePeriodMonths: number;
+  insuranceRate?: number;
+  commission?: number;
+  adminFees?: number;
+  includesCommissionInDebt?: boolean;
+};
+
+/**
+ * Asserts that customer-loan terms (profit rate, max term months, grace period,
+ * insurance rate, commission, and execution fees) are finite, within their valid
+ * domains, and representable in the specified currency.
+ *
+ * Enforces:
+ * - profitRate: finite and >= 0
+ * - maxTermMonths: finite, positive integer (> 0)
+ * - gracePeriodMonths: finite, non-negative integer (>= 0), strictly less than maxTermMonths
+ * - insuranceRate: finite and >= 0 (if present)
+ * - commission: finite and >= 0, exactly representable in currency (if present)
+ * - adminFees: finite and >= 0, exactly representable in currency (if present)
+ */
+export function assertCustomerLoanTermsValid(
+  terms: CustomerLoanTerms,
+  currency?: string
+): void {
+  assertFiniteNumber(terms.profitRate, "Profit rate");
+  if (terms.profitRate < 0) {
+    throw new ConvexError("Profit rate cannot be negative.");
+  }
+
+  assertFiniteNumber(terms.maxTermMonths, "Maximum term months");
+  if (!Number.isInteger(terms.maxTermMonths) || terms.maxTermMonths <= 0) {
+    throw new ConvexError(
+      `Maximum term months must be a positive integer (got ${terms.maxTermMonths}).`
+    );
+  }
+
+  assertFiniteNumber(terms.gracePeriodMonths, "Grace period months");
+  if (!Number.isInteger(terms.gracePeriodMonths) || terms.gracePeriodMonths < 0) {
+    throw new ConvexError(
+      `Grace period months must be a non-negative integer (got ${terms.gracePeriodMonths}).`
+    );
+  }
+  if (terms.gracePeriodMonths >= terms.maxTermMonths) {
+    throw new ConvexError(
+      `Grace period months (${terms.gracePeriodMonths}) must be strictly less than maximum term months (${terms.maxTermMonths}).`
+    );
+  }
+
+  if (terms.insuranceRate !== undefined) {
+    assertFiniteNumber(terms.insuranceRate, "Insurance rate");
+    if (terms.insuranceRate < 0) {
+      throw new ConvexError("Insurance rate cannot be negative.");
+    }
+  }
+
+  if (terms.commission !== undefined) {
+    assertFiniteNumber(terms.commission, "Commission");
+    if (terms.commission < 0) {
+      throw new ConvexError("Commission cannot be negative.");
+    }
+    if (currency) {
+      assertMajorAmountRepresentable(terms.commission, currency, "Commission");
+    }
+  }
+
+  if (terms.adminFees !== undefined) {
+    assertFiniteNumber(terms.adminFees, "Execution fees (adminFees)");
+    if (terms.adminFees < 0) {
+      throw new ConvexError(
+        `Execution fees (adminFees) must be a non-negative finite number (got ${terms.adminFees}).`
+      );
+    }
+    if (currency) {
+      assertMajorAmountRepresentable(
+        terms.adminFees,
+        currency,
+        "Execution fees (adminFees)"
+      );
+    } else {
+      const minor = Math.round(terms.adminFees * 1000);
+      if (!Number.isSafeInteger(minor)) {
+        throw new ConvexError(
+          `Execution fees (adminFees) amount is too large to represent safely.`
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Asserts that a requested financing term is commercially and canonically valid.
+ *
+ * Invariant: Every financed calculation must operate on a finite positive integer term,
+ * within the provider's maximum term, and strictly greater than its grace period.
+ */
+export function assertRequestedFinancingTermValid(args: {
+  termMonths: number;
+  gracePeriodMonths?: number;
+  maxTermMonths?: number;
+}): void {
+  const grace = args.gracePeriodMonths ?? 0;
+
+  if (
+    !Number.isFinite(args.termMonths) ||
+    !Number.isInteger(args.termMonths) ||
+    args.termMonths <= 0
+  ) {
+    throw new ConvexError("Term months must be a positive integer.");
+  }
+
+  if (
+    args.maxTermMonths !== undefined &&
+    args.termMonths > args.maxTermMonths
+  ) {
+    throw new ConvexError(
+      `Term exceeds the finance company's maximum term (term months ${args.termMonths} exceeds maximum term allowed by finance company (${args.maxTermMonths})).`
+    );
+  }
+
+  if (grace >= args.termMonths) {
+    throw new ConvexError(
+      "Finance term must be strictly greater than the grace period."
+    );
+  }
+}
+
+export function assertFinancedMurabahaResultValid(result: {
+  financedAmount: number;
+  totalContractValue: number;
+  monthlyInstallment: number;
+  totalProfit?: number;
+  takafulAmount?: number;
+}): void {
+  if (!Number.isFinite(result.financedAmount) || result.financedAmount <= 0) {
+    throw new ConvexError("Calculated financed amount must be positive and finite.");
+  }
+  if (!Number.isFinite(result.totalContractValue) || result.totalContractValue <= 0) {
+    throw new ConvexError("Calculated total contract value must be positive and finite.");
+  }
+  if (!Number.isFinite(result.monthlyInstallment) || result.monthlyInstallment <= 0) {
+    throw new ConvexError("Calculated monthly installment must be positive and finite.");
+  }
+  if (result.totalProfit !== undefined && (!Number.isFinite(result.totalProfit) || result.totalProfit < 0)) {
+    throw new ConvexError("Calculated total profit must be finite and non-negative.");
+  }
+  if (result.takafulAmount !== undefined && (!Number.isFinite(result.takafulAmount) || result.takafulAmount < 0)) {
+    throw new ConvexError("Calculated takaful amount must be finite and non-negative.");
+  }
+}
+
+/**
+ * Asserts that a finance company is eligible to originate a new customer quotation.
+ *
+ * Invariant: Only an active finance company belonging to the specified organization
+ * may originate a new configured financing quote. Later deactivation of the company
+ * does NOT invalidate already-frozen quotes.
+ */
+export function assertFinanceCompanyEligibleForNewQuote<
+  T extends { orgId: string; isActive?: boolean; name?: string }
+>(args: {
+  company: T | null;
+  orgId: string;
+}): asserts args is { company: T; orgId: string } {
+  const { company, orgId } = args;
+  if (!company || company.orgId !== orgId) {
+    throw new ConvexError("Finance company not found in this organization.");
+  }
+  if (!company.isActive) {
+    throw new ConvexError(
+      "Finance company is inactive or unavailable for new quotations."
+    );
+  }
+}
+
+/**
+ * Asserts that the submitted customer eligibility statuses satisfy the company's
+ * acceptedStatuses policy.
+ *
+ * Invariant:
+ * - If companyAcceptedStatusIds is undefined or empty: company accepts all categories;
+ *   matchedStatusIds = selectedStatusIds.
+ * - If companyAcceptedStatusIds is populated: at least one selected status must be
+ *   in companyAcceptedStatusIds.
+ *   Throws ConvexError("This finance company does not accept the selected customer eligibility status.")
+ *   if no match is found.
+ */
+export function assertCustomerEligibilityForCompany<T extends string>(args: {
+  selectedStatusIds: T[];
+  companyAcceptedStatusIds?: T[];
+}): T[] {
+  const matched = matchingCustomerEligibilityStatusIds(
+    args.selectedStatusIds,
+    args.companyAcceptedStatusIds
+  );
+  if (matched.length === 0) {
+    throw new ConvexError(
+      args.selectedStatusIds.length === 0
+        ? "Customer eligibility status is required for configured finance company quotes."
+        : "This finance company does not accept the selected customer eligibility status."
+    );
+  }
+  return matched;
+}
+
+/**
+ * Asserts that a customer contribution (down payment) is structurally valid
+ * for a financed quotation.
+ *
+ * A financed quotation represents financing of an unpaid portion of the vehicle
+ * transaction. Therefore, down payment must be non-negative and strictly less
+ * than the authoritative quoted vehicle price, regardless of fees or commissions.
+ */
+export function assertFinancedQuoteContributionValid(args: {
+  vehiclePrice: number;
+  downPayment: number;
+}): void {
+  if (args.downPayment < 0) {
+    throw new ConvexError("Down payment cannot be negative.");
+  }
+  if (args.downPayment >= args.vehiclePrice) {
+    throw new ConvexError(
+      "Down payment must be less than the vehicle price for financed quotations."
+    );
+  }
+}
+
+/**
+ * Asserts that execution fees (adminFees) are explicitly configured on a finance company.
+ *
+ * In AutoFlow, financeCompanies.adminFees is the single expected execution-fee authority.
+ * An adminFees value of 0 indicates explicitly zero fees, whereas undefined indicates
+ * unconfigured/unknown fees. No financing calculation may substitute zero for an unconfigured
+ * adminFees.
+ */
+export function requireConfiguredExecutionFees(
+  company: { adminFees?: number },
+  context: "quotation" | "finance offer" = "quotation"
+): number {
+  if (company.adminFees === undefined) {
+    throw new ConvexError(
+      `Execution Fees are not configured for this finance company. Configure the expected execution fee amount, or enter 0 if none are charged, before generating a ${context}.`
+    );
+  }
+  return company.adminFees;
 }
 
 /**
@@ -1548,7 +1883,8 @@ export type ManagementProfitLine =
    */
   | { key: "PREPARATION_EXPENSES"; sign: -1; amountMinor: number }
   | { key: "DEALER_CONTRIBUTION"; sign: -1; amountMinor: number }
-  | { key: "ACTUAL_EXPENSES"; sign: -1; amountMinor: number };
+  | { key: "ACTUAL_EXPENSES"; sign: -1; amountMinor: number }
+  | { key: "FORECAST_EXPENSES"; sign: -1; amountMinor: number };
 
 /**
  * `صافي ربح المعرض` — a MANAGEMENT figure, never an accounting result.
@@ -1744,6 +2080,7 @@ export function deriveManagementProfit(args: {
    */
   customerDirectToDealerMinor?: number;
   actualExpensesMinor: number;
+  expectedExpensesMinor?: number;
   currency: string;
   fullySettled: boolean;
 }): ManagementProfit {
@@ -1764,6 +2101,12 @@ export function deriveManagementProfit(args: {
   // the row in hand, and the failure mode of assuming it is an overstated profit.
   if (args.dealerContributionMinor === undefined)
     return { available: false, reason: "NoDealerContribution" };
+  if (args.expectedExpensesMinor !== undefined && !isMinorAmount(args.expectedExpensesMinor)) {
+    return { available: false, reason: "CorruptInput" };
+  }
+  const expenseBasisMinor = !args.fullySettled
+    ? Math.max(args.expectedExpensesMinor ?? 0, args.actualExpensesMinor)
+    : args.actualExpensesMinor;
   // FAIL CLOSED on EVERY operand, the same rule as the STOCK sibling below.
   // `computeDealerProceeds` asserts each input; this once checked only for
   // negatives, so NaN, Infinity, a fraction or an unsafe integer written
@@ -1777,7 +2120,7 @@ export function deriveManagementProfit(args: {
     args.supplierSettlementMinor,
     args.dealerContributionMinor,
     args.customerDirectToDealerMinor ?? 0,
-    args.actualExpensesMinor,
+    expenseBasisMinor,
   ];
   if (!operands.every(isMinorAmount)) {
     return { available: false, reason: "CorruptInput" };
@@ -1792,7 +2135,14 @@ export function deriveManagementProfit(args: {
     },
     { key: "SUPPLIER_SETTLEMENT", sign: -1, amountMinor: args.supplierSettlementMinor },
     { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: args.dealerContributionMinor },
-    { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: args.actualExpensesMinor },
+    {
+      key:
+        !args.fullySettled && (args.expectedExpensesMinor ?? 0) > args.actualExpensesMinor
+          ? "FORECAST_EXPENSES"
+          : "ACTUAL_EXPENSES",
+      sign: -1,
+      amountMinor: expenseBasisMinor,
+    },
   ];
   // Summed from the same lines the screen renders, so the headline and its
   // derivation cannot disagree — the arithmetic happens once, here. Safe
@@ -1838,6 +2188,7 @@ export function deriveStockManagementProfit(args: {
   /** The customer's PLANNED gap contribution to the dealership — see `deriveManagementProfit`. */
   customerDirectToDealerMinor?: number;
   actualExpensesMinor: number;
+  expectedExpensesMinor?: number;
   currency: string;
   fullySettled: boolean;
 }): ManagementProfit {
@@ -1847,6 +2198,12 @@ export function deriveStockManagementProfit(args: {
   if (args.vehicleCostMinor === undefined) return { available: false, reason: "NoVehicleCost" };
   if (args.dealerContributionMinor === undefined)
     return { available: false, reason: "NoDealerContribution" };
+  if (args.expectedExpensesMinor !== undefined && !isMinorAmount(args.expectedExpensesMinor)) {
+    return { available: false, reason: "CorruptInput" };
+  }
+  const expenseBasisMinor = !args.fullySettled
+    ? Math.max(args.expectedExpensesMinor ?? 0, args.actualExpensesMinor)
+    : args.actualExpensesMinor;
   // FAIL CLOSED on every operand, the approved amount included. `v.number()`
   // admits NaN, Infinity, fractions and unsafe integers, and a negative minor
   // amount is not a smaller cost — it is a corrupt row. None of them may reach
@@ -1856,7 +2213,7 @@ export function deriveStockManagementProfit(args: {
     args.vehicleCostMinor,
     args.dealerContributionMinor,
     args.customerDirectToDealerMinor ?? 0,
-    args.actualExpensesMinor,
+    expenseBasisMinor,
   ];
   if (!operands.every(isMinorAmount)) {
     return { available: false, reason: "CorruptInput" };
@@ -1866,7 +2223,14 @@ export function deriveStockManagementProfit(args: {
     { key: "CUSTOMER_PLANNED_TO_DEALER", sign: 1, amountMinor: args.customerDirectToDealerMinor ?? 0 },
     { key: "VEHICLE_COST", sign: -1, amountMinor: args.vehicleCostMinor },
     { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: args.dealerContributionMinor },
-    { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: args.actualExpensesMinor },
+    {
+      key:
+        !args.fullySettled && (args.expectedExpensesMinor ?? 0) > args.actualExpensesMinor
+          ? "FORECAST_EXPENSES"
+          : "ACTUAL_EXPENSES",
+      sign: -1,
+      amountMinor: expenseBasisMinor,
+    },
   ];
   const amountMinor = lines.reduce((total, line) => total + line.sign * line.amountMinor, 0);
   // Safe operands can still overflow between them; a result that is not a
