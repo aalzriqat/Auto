@@ -217,7 +217,9 @@ function validateArtifactSuggestions(rawSuggestions) {
   if (!Array.isArray(rawSuggestions) || rawSuggestions.length > 2) {
     throw new Error("Trusted Jev browser artifact suggestions are not bounded.");
   }
-  const suggestions = rawSuggestions.map(validateSuggestion);
+  const suggestions = rawSuggestions.map((suggestion, index) =>
+    validateSuggestion(suggestion, index),
+  );
   const families = new Set();
   for (const suggestion of suggestions) {
     if (families.has(suggestion.family)) {
