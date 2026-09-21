@@ -243,11 +243,13 @@ export function SalesWizardScreen({
     if (isCash || !vehicleId || price <= 0 || customerStatuses.length === 0) return [];
     return (companies ?? [])
       .filter((company) => company.isActive)
-      .filter((company) => {
-        const accepted = company.acceptedStatuses;
-        if (!accepted || accepted.length === 0) return true;
-        return customerStatuses.some((status) => accepted.includes(status));
-      })
+      .filter(
+        (company) =>
+          matchingCustomerEligibilityStatusIds(
+            customerStatuses,
+            company.acceptedStatuses
+          ).length > 0
+      )
       .map((company) => {
         const executionFees = company.adminFees;
         const feesConfigured = executionFees !== undefined;
