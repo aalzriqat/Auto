@@ -61,6 +61,14 @@ describe("pull-request workflow secret boundary", () => {
     expect(security).toContain("ci-security-placeholder.convex.cloud");
     expect(security).not.toContain("CLERK_SECRET_KEY");
     expect(security).not.toContain("NEXT_PUBLIC_CONVEX_URL: ${{ secrets.");
+    expect(
+      security.match(
+        /curl --silent --fail http:\/\/localhost:3000\/api\/health/g,
+      )?.length,
+    ).toBe(2);
+    expect(security).not.toMatch(
+      /curl --silent --fail http:\/\/localhost:3000\s/,
+    );
 
     const accounting = readFileSync(
       path.join(workflowsDir, "accounting-rehearsal.yml"),
