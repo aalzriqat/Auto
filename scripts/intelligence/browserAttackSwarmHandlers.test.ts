@@ -238,6 +238,7 @@ function mission(
 
 function executionContext(
   family: BrowserAttackMission["family"],
+  signal = new AbortController().signal,
 ): BrowserMissionExecutionContext {
   const attack = mission(family);
   const worker: BrowserSwarmWorkerPlan = {
@@ -258,7 +259,7 @@ function executionContext(
     manifest,
     worker,
     mission: attack,
-    signal: new AbortController().signal,
+    signal,
   };
 }
 
@@ -272,6 +273,59 @@ describe("SCRUM-350 initial browser attack handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.PLAYWRIGHT_BASE_URL = "http://127.0.0.1:3000";
+  });
+
+  it("refuses an already-aborted mission before launching Chromium", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("mission timed out"));
+
+    await expect(
+      handlerFor("RTL_PARITY")(
+        executionContext("RTL_PARITY", controller.signal),
+      ),
+    ).rejects.toThrow(/mission timed out/);
+
+    expect(mocks.chromiumLaunch).not.toHaveBeenCalled();
+  });
+
+  it("closes Chromium when timeout fires while launch is still resolving", async () => {
+    const fixture = makeBrowserFixture(defaultScenario());
+    const controller = new AbortController();
+    let releaseLaunch!: () => void;
+    const launchGate = new Promise<void>((resolve) => {
+      releaseLaunch = resolve;
+    });
+
+    mocks.chromiumLaunch.mockImplementationOnce(async () => {
+      await launchGate;
+      return fixture.browser;
+    });
+
+    const pending = handlerFor("RTL_PARITY")(
+      executionContext("RTL_PARITY", controller.signal),
+    );
+
+    controller.abort(new Error("mission timed out during launch"));
+    releaseLaunch();
+
+    await expect(pending).rejects.toThrow(/mission timed out during launch/);
+    expect(fixture.browser.close).toHaveBeenCalled();
+    expect(fixture.browser.newContext).not.toHaveBeenCalled();
+  });
+
+  it("closes Chromium when browser-context setup fails", async () => {
+    const fixture = makeBrowserFixture(defaultScenario());
+    fixture.browser.newContext.mockRejectedValueOnce(
+      new Error("context setup failed"),
+    );
+
+    await expect(
+      handlerFor("RTL_PARITY")(
+        executionContext("RTL_PARITY"),
+      ),
+    ).rejects.toThrow(/context setup failed/);
+
+    expect(fixture.browser.close).toHaveBeenCalled();
   });
 
   it("proves RTL parity against backend organization authority", async () => {

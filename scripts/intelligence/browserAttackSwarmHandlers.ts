@@ -42,6 +42,12 @@ function absoluteArtifact(relativePath: string): string {
   return path.resolve(process.cwd(), relativePath);
 }
 
+function throwIfMissionAborted(signal: AbortSignal): void {
+  if (!signal.aborted) return;
+  if (signal.reason instanceof Error) throw signal.reason;
+  throw new Error("Browser mission was aborted before the browser operation completed.");
+}
+
 async function ensureArtifactRoot(paths: ArtifactWriter): Promise<void> {
   await mkdir(absoluteArtifact(paths.root), { recursive: true });
 }
@@ -78,26 +84,43 @@ async function openMissionBrowser(
 }> {
   const paths = artifactPaths(context);
   await ensureArtifactRoot(paths);
+  throwIfMissionAborted(context.signal);
 
   const browser = await chromium.launch({ headless: true });
-  const browserContext = await browser.newContext({
-    baseURL: browserSwarmLocalBaseUrl(process.env),
-    storageState: USER_AUTH_FILE,
-  });
-
   const abort = () => {
     void browser.close().catch(() => {});
   };
   context.signal.addEventListener("abort", abort, { once: true });
 
-  await browserContext.tracing.start({
-    screenshots: true,
-    snapshots: true,
-    sources: false,
-  });
-  const page = await browserContext.newPage();
+  try {
+    // The timeout may have fired while chromium.launch() was still resolving.
+    // addEventListener does not replay an abort that already happened, so the
+    // explicit check here is load-bearing: without it a timed-out handler can
+    // proceed into mutations after the executor has already decided to abort.
+    throwIfMissionAborted(context.signal);
 
-  return { browser, browserContext, page, paths };
+    const browserContext = await browser.newContext({
+      baseURL: browserSwarmLocalBaseUrl(process.env),
+      storageState: USER_AUTH_FILE,
+    });
+    throwIfMissionAborted(context.signal);
+
+    await browserContext.tracing.start({
+      screenshots: true,
+      snapshots: true,
+      sources: false,
+    });
+    throwIfMissionAborted(context.signal);
+
+    const page = await browserContext.newPage();
+    throwIfMissionAborted(context.signal);
+
+    return { browser, browserContext, page, paths };
+  } catch (error) {
+    context.signal.removeEventListener("abort", abort);
+    await browser.close().catch(() => {});
+    throw error;
+  }
 }
 
 async function finishMissionBrowser({
