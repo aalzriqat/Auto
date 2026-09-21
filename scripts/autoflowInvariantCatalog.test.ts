@@ -378,7 +378,7 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
     expect(
       sourceHasActiveWorkflowMarker(
         source,
-        "REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
+        'REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?',
         REHEARSAL_WORKFLOW_CONTRACT
       )
     ).toBe(false);
@@ -405,7 +405,7 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
     expect(
       sourceHasActiveWorkflowMarker(
         source,
-        "REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
+        'REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?',
         REHEARSAL_WORKFLOW_CONTRACT
       )
     ).toBe(false);
@@ -449,7 +449,7 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
     expect(
       sourceHasActiveWorkflowMarker(
         source,
-        "REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?",
+        'REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?',
         REHEARSAL_WORKFLOW_CONTRACT
       )
     ).toBe(true);
