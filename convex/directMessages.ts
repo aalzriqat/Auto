@@ -544,11 +544,14 @@ export const createGroup = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId);
 
-    if (args.memberIds.length < 2) {
-      throw new Error("A group needs at least 2 other members.");
+    const otherMemberIds = Array.from(
+      new Set(args.memberIds.filter((id) => id !== user._id)),
+    );
+    if (otherMemberIds.length < 2) {
+      throw new Error("A group needs at least 2 distinct other members.");
     }
 
-    for (const uid of args.memberIds) {
+    for (const uid of otherMemberIds) {
       const membership = await ctx.db
         .query("memberships")
         .withIndex("by_org_user", (q) =>
@@ -558,10 +561,7 @@ export const createGroup = mutation({
       if (!membership) throw new Error("One or more users are not members of this org.");
     }
 
-    const allMembers = [
-      user._id,
-      ...args.memberIds.filter((id) => id !== user._id),
-    ];
+    const allMembers = [user._id, ...otherMemberIds];
     const now = Date.now();
 
     const id = await ctx.db.insert("dmConversations", {
