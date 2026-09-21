@@ -1,6 +1,6 @@
 # Jev-Directed Browser Adversarial Release Swarm
 
-SCRUM-350 builds a bounded, massively parallel browser adversarial harness for AutoFlow preview releases.
+SCRUM-350 adds a bounded, parallel browser adversarial release harness for AutoFlow preview releases.
 
 The swarm is an exploration and evidence system. It is not a correctness authority.
 
@@ -39,6 +39,53 @@ A confirmed breach requires a deterministic oracle failure and later a reproduci
 
 Harness failures are recorded separately from product breaches.
 
+## Trusted controller boundary
+
+The authoritative swarm is a default-branch `workflow_run` workflow. Candidate code cannot redefine the controller that evaluates the same pull request.
+
+The control plane is bound to immutable and independently verified inputs:
+
+1. The trusted controller checkout is pinned to `${{ github.workflow_sha }}`, not moving `main`.
+2. Mandatory invariant impact is derived by trusted code from exact base + source-head Git state using the canonical `jevImpact.mjs` mapper.
+3. The ordinary Playwright workflow produces an identity-only descriptor containing only the deterministic preview name, PR number, and exact source-head SHA.
+4. The descriptor contains no Convex URL and the descriptor step receives no Convex deploy key.
+5. The trusted workflow independently resolves the deterministic preview name through Convex's control plane and records the resulting deployment URL as trusted evidence.
+6. The trusted workflow fetches GitHub's `refs/pull/<pr>/head` and `refs/pull/<pr>/merge` refs itself.
+7. The merge ref is accepted only when it has exactly two parents: the expected trusted base SHA followed by the expected source-head SHA.
+8. Browser execution checks out that validated merge commit, so the frontend under attack is the same base + PR candidate shape that the ordinary pull-request workflow tested.
+
+The candidate descriptor is untrusted data. It is size-bounded, archive-shape-checked, parsed by trusted code, and cannot supply backend authority.
+
+## Convex preview authority
+
+The preview URL is not accepted from candidate code.
+
+The trusted controller derives the expected `e2e-*` preview name from the PR number, parses the repository's preview deploy key only to identify its team/project authority, and calls Convex's fixed control-plane endpoint for that named preview.
+
+The trusted resolver:
+
+- uses the preview deploy key only inside trusted controller execution;
+- accepts only a preview deployment response;
+- accepts only a bare `https://*.convex.cloud` origin;
+- applies a bounded request timeout and response-size limit;
+- rejects redirects;
+- writes a sanitized authority artifact containing preview name, deployment name, and deployment URL; and
+- discards the preview admin key returned by the control plane rather than persisting it.
+
+The candidate frontend receives only the trusted resolved Convex URL, never the preview deploy key.
+
+## Clerk authentication boundary
+
+Reusable E2E passwords are entered only against the immutable trusted-controller frontend.
+
+The resulting browser storage state is then reused by the trusted Playwright controller when driving the candidate frontend with `--no-deps`; candidate code is never given the login passwords or verification code.
+
+The candidate server retains its real Clerk middleware. Instead of deleting middleware or supplying `CLERK_SECRET_KEY`, the trusted controller derives Clerk's public JWT verification key and passes only `CLERK_JWT_KEY` to candidate build/runtime.
+
+The swarm refuses non-test Clerk credentials: the configured publishable and secret keys must be development/test-instance `pk_test_` / `sk_test_` keys before trusted authentication runs.
+
+This boundary protects the authoritative evaluation lane from exposing reusable login credentials to candidate-controlled browser code. It does not claim that a same-repository contributor is cryptographically isolated from repository-level Actions secrets; that broader author-trust boundary is repository governance, not a property of this workflow.
+
 ## Phase A — deterministic preview attack harness
 
 Initial control plane:
@@ -47,7 +94,7 @@ Initial control plane:
 2. Add bounded Jev suggestions only after mandatory missions are admitted.
 3. Partition missions across at most eight workers.
 4. Bind every worker plan to one explicit disposable preview identity.
-5. Require the existing SCRUM-143 preview marker + URL identity assertion before browser execution.
+5. Require the existing SCRUM-143 disposable-preview marker and deployment assertion before browser execution.
 6. Store sanitized worker evidence under isolated per-run/per-worker artifact roots.
 7. Classify outcomes from deterministic oracles only.
 
@@ -68,31 +115,37 @@ Planned attack-family vocabulary:
 - RTL parity; and
 - optimistic UI/backend authority mismatch.
 
-The vocabulary is broader than the current executable registry. In the present
-Phase A slice, only `RTL_PARITY` and `UI_BACKEND_MISMATCH` have real browser
-handlers. A plan containing any other family is refused before manifest
-creation; it is never allowed to degrade later into a runtime
-`HARNESS_ERROR`. Adding a new family therefore requires adding its handler and
-expanding the executable-family registry in the same reviewed change.
+The vocabulary is broader than the current executable registry. In the present Phase A slice, only `RTL_PARITY` and `UI_BACKEND_MISMATCH` have real browser handlers. A plan containing any other family is refused before manifest creation; it is never allowed to degrade later into a runtime `HARNESS_ERROR`. Adding a new family therefore requires adding its handler and expanding the executable-family registry in the same reviewed change.
 
-## Preview safety
+## Preview and candidate isolation
 
-The swarm reuses the existing E2E preview bootstrap safety model. It does not invent a competing environment selector.
+The swarm reuses the existing E2E preview bootstrap safety model. It does not invent a competing production/customer-data selector.
 
-A run manifest carries:
+A trusted run manifest carries:
 
 - a safe run ID;
 - one explicit `e2e-*` preview name;
-- the expected Convex cloud URL;
+- the independently resolved Convex cloud URL;
 - `requiresPreviewMarker: true`;
+- the exact tested merge SHA;
 - isolated worker IDs and artifact roots; and
 - the bounded mission partition.
 
-The execution layer must call the existing preview assertion path before any adversarial write. The preview marker is the authority proving that the deployment is disposable; a URL string alone is not sufficient.
+The execution layer calls the existing preview assertion path before any adversarial write. The disposable preview marker is still required; a URL string alone is not sufficient.
 
-No production or customer-data attack path is permitted. Phase A browser execution additionally refuses any remote frontend origin: `PLAYWRIGHT_BASE_URL` must be localhost/loopback, while the backend manifest must be a bare `https://*.convex.cloud` origin verified through SCRUM-143. This prevents a miswired run from driving a production frontend while probing a preview backend.
+Candidate-controlled application code is built and served only inside a pinned container. The candidate runtime:
 
-Timed-out handlers must quiesce after their AbortSignal fires before the worker dispatches the next mission; the worker never overlaps a live timed-out mutator with a later attack.
+- receives no Convex deploy key;
+- receives no Clerk secret key;
+- receives no E2E login user/password secrets;
+- receives no GitHub token;
+- runs with all Linux capabilities dropped and `no-new-privileges`;
+- has no Docker socket or trusted-controller mount; and
+- runs on an internal Docker network with only a loopback-published frontend port reachable by the trusted host.
+
+No production or customer-data attack path is permitted. `PLAYWRIGHT_BASE_URL` must be localhost/loopback, while the backend target must be the trusted bare Convex preview origin.
+
+Timed-out handlers must quiesce after their `AbortSignal` fires before the worker dispatches the next mission; the worker never overlaps a live timed-out mutator with a later attack.
 
 SCRUM-353 remains the prerequisite for any future production/customer-data use.
 
@@ -106,9 +159,11 @@ Hard initial limits:
 - stable cost-weighted partitioning;
 - no hidden worker multiplication inside Playwright until state isolation is proven.
 
-The initial production rollout should begin below those maximums and increase only with measured cost, collision, and flake evidence.
+The initial rollout uses two trusted browser workers when deterministic impact exists. It may increase only with measured cost, collision, and flake evidence.
 
 ## Evidence contract
+
+Trusted plan evidence records the canonical invariant impact, Convex control-plane authority, exact source/tested Git identities, and assembled run.
 
 Mission evidence records:
 
@@ -122,19 +177,13 @@ Mission evidence records:
 
 Expected evidence types include Playwright traces, screenshots, backend-state probes, and bounded network/console logs.
 
-Absolute paths, path traversal, raw credentials, and raw customer data are refused.
+Absolute paths, path traversal, raw credentials, raw customer data, and persisted control-plane admin keys are refused.
 
-## Current Phase A execution slice
+## Current executable browser attacks
 
-The first trusted executor is now defined around three non-negotiable rules:
+The first executable browser attacks are deliberately preview-only:
 
-- the SCRUM-143 preview verifier must pass before the worker dispatches its first mission;
-- mission timeouts abort the handler through an `AbortSignal` rather than merely abandoning a live browser action; and
-- evidence must remain inside the manifest-assigned worker artifact root or the mission is classified as a harness error.
-
-The first executable browser attacks are deliberately non-destructive and preview-only:
-
-- **RTL parity** checks that switching to Arabic reaches `lang=ar` + `dir=rtl` without changing the authenticated organization confirmed by backend authority;
+- **RTL parity** checks that switching to Arabic reaches `lang=ar` + `dir=rtl` without changing the authenticated organization confirmed by backend authority.
 - **UI/backend mismatch** creates one synthetic preview customer through the real UI, verifies exactly one matching backend record, reloads, and checks that the UI still reflects the authoritative state.
 
 Synthetic identities use the reserved E2E preview only. No customer/production data is permitted.
