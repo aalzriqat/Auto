@@ -25,6 +25,18 @@ const DEFAULT_RUNTIME = Object.freeze({
   normalizeJevRiskResponse,
 });
 
+/**
+ * @typedef {object} CalibrationCase
+ * @property {string} id
+ * @property {number} prNumber
+ * @property {string} baseSha
+ * @property {string} headSha
+ * @property {string} snapshotAt
+ */
+
+/** @typedef {Partial<typeof DEFAULT_RUNTIME>} CalibrationRuntimeOverrides */
+
+/** @param {CalibrationCase} calibrationCase */
 function assertCalibrationCase(calibrationCase) {
   if (!calibrationCase || typeof calibrationCase !== "object") {
     throw new Error("Calibration case is required");
@@ -40,11 +52,18 @@ function assertCalibrationCase(calibrationCase) {
   }
 }
 
+/**
+ * @param {{
+ *   repoRoot?: string,
+ *   calibrationCase: CalibrationCase,
+ *   runtimeOverrides?: CalibrationRuntimeOverrides,
+ * }} options
+ */
 export function buildCalibrationObservation({
   repoRoot = process.cwd(),
   calibrationCase,
   runtimeOverrides = {},
-} = {}) {
+}) {
   assertCalibrationCase(calibrationCase);
   const runtime = { ...DEFAULT_RUNTIME, ...runtimeOverrides };
   const invariants = runtime.extractCanonicalInvariants(repoRoot);
@@ -76,6 +95,14 @@ export function buildCalibrationObservation({
   };
 }
 
+/**
+ * @param {{
+ *   runtime: typeof DEFAULT_RUNTIME,
+ *   apiKey: string,
+ *   state: unknown,
+ *   questions: Record<string, unknown>,
+ * }} options
+ */
 async function timedJevCall({ runtime, apiKey, state, questions }) {
   const startedAt = Date.now();
   const rawResponse = await runtime.callJev({ apiKey, state, questions });
@@ -85,12 +112,20 @@ async function timedJevCall({ runtime, apiKey, state, questions }) {
   };
 }
 
+/**
+ * @param {{
+ *   repoRoot?: string,
+ *   calibrationCase: CalibrationCase,
+ *   apiKey: string,
+ *   runtimeOverrides?: CalibrationRuntimeOverrides,
+ * }} options
+ */
 export async function runHistoricalCalibrationCase({
   repoRoot = process.cwd(),
   calibrationCase,
   apiKey,
   runtimeOverrides = {},
-} = {}) {
+}) {
   const runtime = { ...DEFAULT_RUNTIME, ...runtimeOverrides };
   const observation = buildCalibrationObservation({
     repoRoot,
