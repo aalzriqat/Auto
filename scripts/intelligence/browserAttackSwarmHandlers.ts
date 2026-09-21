@@ -320,6 +320,12 @@ async function runUiBackendMismatchAttack(
       : [];
 
     await runtime.page.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
+    const searchInput = runtime.page
+      .locator('main input[placeholder^="Search"]:not([readonly])')
+      .first();
+    if (await searchInput.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await searchInput.fill(email).catch(() => {});
+    }
     const visibleAfterReload = await runtime.page
       .getByText(lastName, { exact: false })
       .first()
