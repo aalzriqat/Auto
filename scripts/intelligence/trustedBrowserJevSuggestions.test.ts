@@ -118,6 +118,7 @@ describe("SCRUM-350 trusted Jev browser exploration", () => {
           TESTED_SHA: expected.testedSha,
           PR_NUMBER: String(expected.prNumber),
           BROWSER_SWARM_RUN_ID: expected.runId,
+          NODE_ENV: "test",
           TYPESAFE_API_KEY: "secret",
         },
         impactArtifact: {
