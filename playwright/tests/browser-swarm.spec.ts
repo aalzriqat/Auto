@@ -1,0 +1,43 @@
+import { test, expect } from "@playwright/test";
+import { createInitialBrowserAttackHandlers } from "../../scripts/intelligence/browserAttackSwarmHandlers";
+import { executeBrowserSwarmWorker } from "../../scripts/intelligence/browserAttackSwarmExecutor";
+import { browserSwarmManifestFromEnv } from "../../scripts/intelligence/browserAttackSwarmRuntime";
+import { verifyBrowserSwarmPreview } from "../../scripts/intelligence/browserAttackSwarmPreviewVerifier.mjs";
+
+const enabled = process.env.BROWSER_SWARM_ENABLED === "1";
+
+test.describe("SCRUM-350 browser adversarial swarm", () => {
+  test.skip(!enabled, "Browser swarm is only enabled by its dedicated preview workflow.");
+
+  test("executes the assigned deterministic/Jev mission partition", async ({}, testInfo) => {
+    const { manifest, workerId } = browserSwarmManifestFromEnv(process.env);
+
+    await testInfo.attach("browser-swarm-manifest.json", {
+      body: Buffer.from(JSON.stringify(manifest, null, 2)),
+      contentType: "application/json",
+    });
+
+    const execution = await executeBrowserSwarmWorker({
+      manifest,
+      workerId,
+      verifyPreviewTarget: (runManifest) =>
+        verifyBrowserSwarmPreview(runManifest, process.env),
+      handlers: createInitialBrowserAttackHandlers(),
+    });
+
+    await testInfo.attach("browser-swarm-execution.json", {
+      body: Buffer.from(JSON.stringify(execution, null, 2)),
+      contentType: "application/json",
+    });
+
+    expect(
+      execution.harnessErrorCount,
+      JSON.stringify(execution.results, null, 2),
+    ).toBe(0);
+    expect(
+      execution.confirmedBreachCount,
+      JSON.stringify(execution.results, null, 2),
+    ).toBe(0);
+    expect(execution.passed).toBe(true);
+  });
+});
