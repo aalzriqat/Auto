@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  BrowserAttackMission,
-  BrowserSwarmRunManifest,
-  BrowserSwarmWorkerPlan,
+import {
+  PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES,
+  type BrowserAttackMission,
+  type BrowserSwarmRunManifest,
+  type BrowserSwarmWorkerPlan,
 } from "./browserAttackSwarm";
 import type { BrowserMissionExecutionContext } from "./browserAttackSwarmExecutor";
 
@@ -270,6 +271,12 @@ function handlerFor(family: BrowserAttackMission["family"]) {
 }
 
 describe("SCRUM-350 initial browser attack handlers", () => {
+  it("keeps the executable Phase A family set identical to the handler registry", () => {
+    expect(Object.keys(createInitialBrowserAttackHandlers()).sort()).toEqual(
+      [...PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES].sort(),
+    );
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.chromiumLaunch.mockReset();
@@ -383,16 +390,18 @@ describe("SCRUM-350 initial browser attack handlers", () => {
     expect(evidence.oracle.summary).toMatch(/diverged/);
   });
 
-  it("reports an RTL oracle failure when the language control is unavailable", async () => {
-    makeBrowserFixture(
+  it("treats a missing language control as a harness failure, not a product breach", async () => {
+    const fixture = makeBrowserFixture(
       defaultScenario({ languageButtonVisible: false }),
     );
 
-    const evidence = await handlerFor("RTL_PARITY")(
-      executionContext("RTL_PARITY"),
-    );
+    await expect(
+      handlerFor("RTL_PARITY")(
+        executionContext("RTL_PARITY"),
+      ),
+    ).rejects.toThrow(/could not locate the EN\/AR language control/);
 
-    expect(evidence.oracle.passed).toBe(false);
+    expect(fixture.browser.close).toHaveBeenCalled();
   });
 
   it("proves a UI customer mutation against backend authority and reload persistence", async () => {
@@ -412,15 +421,16 @@ describe("SCRUM-350 initial browser attack handlers", () => {
     expect(evidence.artifacts).toHaveLength(3);
   });
 
-  it("fails the UI/backend oracle when the dialog never opens", async () => {
-    makeBrowserFixture(defaultScenario({ dialogVisible: false }));
+  it("treats a dialog that never opens as a harness failure, not a product breach", async () => {
+    const fixture = makeBrowserFixture(defaultScenario({ dialogVisible: false }));
 
-    const evidence = await handlerFor("UI_BACKEND_MISMATCH")(
-      executionContext("UI_BACKEND_MISMATCH"),
-    );
+    await expect(
+      handlerFor("UI_BACKEND_MISMATCH")(
+        executionContext("UI_BACKEND_MISMATCH"),
+      ),
+    ).rejects.toThrow(/could not open the Add Customer dialog/);
 
-    expect(evidence.oracle.passed).toBe(false);
-    expect(evidence.oracle.summary).toMatch(/disagreed/);
+    expect(fixture.browser.close).toHaveBeenCalled();
   });
 
   it("fails the UI/backend oracle on duplicate authoritative records", async () => {

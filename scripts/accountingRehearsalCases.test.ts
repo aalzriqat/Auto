@@ -66,7 +66,7 @@ describe("vehicle fixture rate-limit retry", () => {
     expect(attempts).toBe(1);
   });
 
-  test("bounds retries and rethrows the final rate-limit refusal", async () => {
+  test("does not retry early when the reported wait exceeds the fixture budget", async () => {
     let attempts = 0;
     const ownerMust = async () => {
       attempts += 1;
@@ -77,14 +77,15 @@ describe("vehicle fixture rate-limit retry", () => {
     await expect(
       createVehicleForRehearsal(ownerMust, { orgId: "org" }, {
         maxAttempts: 3,
+        maxRetryWaitMs: 2_100,
         sleep: async (ms: number) => {
           sleeps.push(ms);
         },
       }),
     ).rejects.toThrow(/Rate limit exceeded/);
 
-    expect(attempts).toBe(3);
-    expect(sleeps).toEqual([2100, 2100]);
+    expect(attempts).toBe(1);
+    expect(sleeps).toEqual([]);
   });
 });
 

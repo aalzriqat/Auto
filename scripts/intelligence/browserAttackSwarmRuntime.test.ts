@@ -85,25 +85,16 @@ describe("SCRUM-350 browser swarm runtime config", () => {
     ]);
   });
 
-  it("admits Jev suggestions only through the normal union planner", () => {
-    const { manifest } = browserSwarmManifestFromEnv({
-      ...baseEnv,
-      BROWSER_SWARM_WORKER_COUNT: "3",
-      BROWSER_SWARM_WORKER_ID: "worker-3",
-      BROWSER_SWARM_JEV_SUGGESTIONS_JSON:
-        '[{"family":"TENANT_ESCAPE","probability":0.91}]',
-    });
-
-    expect(
-      manifest.workers.flatMap((worker) => worker.missions).map((m) => m.family),
-    ).toContain("TENANT_ESCAPE");
-    expect(
-      manifest.workers
-        .flatMap((worker) => worker.missions)
-        .filter((m) => m.source === "DETERMINISTIC")
-        .map((m) => m.family)
-        .sort(),
-    ).toEqual(["RTL_PARITY", "UI_BACKEND_MISMATCH"]);
+  it("fails closed before manifest creation when Jev suggests an unimplemented Phase A family", () => {
+    expect(() =>
+      browserSwarmManifestFromEnv({
+        ...baseEnv,
+        BROWSER_SWARM_WORKER_COUNT: "3",
+        BROWSER_SWARM_WORKER_ID: "worker-3",
+        BROWSER_SWARM_JEV_SUGGESTIONS_JSON:
+          '[{"family":"TENANT_ESCAPE","probability":0.91}]',
+      }),
+    ).toThrow(/no executable handler.*TENANT_ESCAPE/i);
   });
 
   it("rejects unknown Jev attack families before planning", () => {

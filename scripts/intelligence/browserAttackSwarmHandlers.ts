@@ -175,38 +175,53 @@ async function runRtlParityAttack(
 
   try {
     const orgIdBefore = await resolveOrgRoute(runtime.page);
+    if (!orgIdBefore) {
+      throw new Error(
+        "RTL parity harness could not resolve the authenticated organization route.",
+      );
+    }
+
     const client = await authenticatedConvexClient(runtime.page);
     const orgs = await client.query(api.organizations.listMine, {});
-    const backendOwnsOrg =
-      Boolean(orgIdBefore) &&
-      Array.isArray(orgs) &&
-      orgs.some(
-        (entry) => entry !== null && String(entry._id) === orgIdBefore,
+    if (!Array.isArray(orgs)) {
+      throw new Error(
+        "RTL parity harness received a non-array organization authority response.",
       );
+    }
+    const backendOwnsOrg = orgs.some(
+      (entry) => entry !== null && String(entry._id) === orgIdBefore,
+    );
 
     const toggle = runtime.page.getByRole("button", { name: /^(en|ar)$/i });
     const toggleVisible = await toggle
       .isVisible({ timeout: 5_000 })
       .catch(() => false);
 
-    let switched = false;
-    if (toggleVisible) {
-      const label = ((await toggle.textContent().catch(() => "")) ?? "")
-        .trim()
-        .toLowerCase();
-      if (label === "en") {
-        switched = await toggle
-          .click()
-          .then(() => true)
-          .catch(() => false);
-      } else if (label === "ar") {
-        switched = true;
-      }
+    if (!toggleVisible) {
+      throw new Error(
+        "RTL parity harness could not locate the EN/AR language control.",
+      );
     }
 
-    if (switched) {
-      await runtime.page.waitForTimeout(250);
+    const label = ((await toggle.textContent().catch(() => "")) ?? "")
+      .trim()
+      .toLowerCase();
+    let switched = false;
+    if (label === "en") {
+      switched = await toggle
+        .click()
+        .then(() => true)
+        .catch(() => false);
+    } else if (label === "ar") {
+      switched = true;
     }
+    if (!switched) {
+      throw new Error(
+        "RTL parity harness could not operate the EN/AR language control.",
+      );
+    }
+
+    await runtime.page.waitForTimeout(250);
 
     const html = runtime.page.locator("html");
     const dir = await html.getAttribute("dir").catch(() => null);
@@ -214,8 +229,6 @@ async function runRtlParityAttack(
     const orgIdAfter = orgIdFromUrl(runtime.page.url());
     const passed =
       backendOwnsOrg &&
-      toggleVisible &&
-      switched &&
       dir === "rtl" &&
       lang === "ar" &&
       orgIdAfter === orgIdBefore;
@@ -292,6 +305,12 @@ async function runUiBackendMismatchAttack(
       "button",
       "Add Customer",
     );
+    if (!addVisible) {
+      throw new Error(
+        "UI/backend authority harness could not locate the Add Customer control.",
+      );
+    }
+
     let dialogVisible = false;
     let formFilled = false;
     let submitted = false;
@@ -302,6 +321,11 @@ async function runUiBackendMismatchAttack(
         .click()
         .catch(() => {});
       dialogVisible = await safeVisible(runtime.page, "dialog", /Add Customer/);
+    }
+    if (!dialogVisible) {
+      throw new Error(
+        "UI/backend authority harness could not open the Add Customer dialog.",
+      );
     }
 
     if (dialogVisible) {
@@ -314,13 +338,22 @@ async function runUiBackendMismatchAttack(
         (await last.fill(lastName).then(() => true).catch(() => false)) &&
         (await emailField.fill(email).then(() => true).catch(() => false));
 
-      if (formFilled) {
-        submitted = await dialog
-          .getByRole("button", { name: "Add Customer", exact: true })
-          .click()
-          .then(() => true)
-          .catch(() => false);
+      if (!formFilled) {
+        throw new Error(
+          "UI/backend authority harness could not fill the customer form.",
+        );
       }
+
+      submitted = await dialog
+        .getByRole("button", { name: "Add Customer", exact: true })
+        .click()
+        .then(() => true)
+        .catch(() => false);
+    }
+    if (!submitted) {
+      throw new Error(
+        "UI/backend authority harness could not submit the customer form.",
+      );
     }
 
     const client = await authenticatedConvexClient(runtime.page);
@@ -329,22 +362,40 @@ async function runUiBackendMismatchAttack(
       search: email,
     });
 
-    const exactBackendMatches = Array.isArray(backendMatches)
-      ? backendMatches.filter(
-          (customer: { email?: string; firstName?: string; lastName?: string }) =>
-            customer.email === email &&
-            customer.firstName === firstName &&
-            customer.lastName === lastName,
-        )
-      : [];
+    if (!Array.isArray(backendMatches)) {
+      throw new Error(
+        "UI/backend authority harness received a non-array customer authority response.",
+      );
+    }
+    const exactBackendMatches = backendMatches.filter(
+      (customer: { email?: string; firstName?: string; lastName?: string }) =>
+        customer.email === email &&
+        customer.firstName === firstName &&
+        customer.lastName === lastName,
+    );
 
     await runtime.page.reload({ waitUntil: "domcontentloaded" });
     const searchInput = runtime.page
       .locator('main input[placeholder^="Search"]:not([readonly])')
       .first();
-    if (await searchInput.isVisible({ timeout: 3_000 }).catch(() => false)) {
-      await searchInput.fill(email).catch(() => {});
+    const searchVisible = await searchInput
+      .isVisible({ timeout: 3_000 })
+      .catch(() => false);
+    if (!searchVisible) {
+      throw new Error(
+        "UI/backend authority harness could not locate the customer search control after reload.",
+      );
     }
+    const searchFilled = await searchInput
+      .fill(email)
+      .then(() => true)
+      .catch(() => false);
+    if (!searchFilled) {
+      throw new Error(
+        "UI/backend authority harness could not search for the created customer after reload.",
+      );
+    }
+
     const visibleAfterReload = await runtime.page
       .getByText(lastName, { exact: false })
       .first()
@@ -352,10 +403,6 @@ async function runUiBackendMismatchAttack(
       .catch(() => false);
 
     const passed =
-      addVisible &&
-      dialogVisible &&
-      formFilled &&
-      submitted &&
       exactBackendMatches.length === 1 &&
       visibleAfterReload;
 

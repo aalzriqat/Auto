@@ -36,6 +36,7 @@ export async function createVehicleForRehearsal(
   args,
   {
     maxAttempts = 3,
+    maxRetryWaitMs = 2_100,
     sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   } = {},
 ) {
@@ -50,9 +51,11 @@ export async function createVehicleForRehearsal(
       const retrySeconds = Number(match[1]);
       if (!Number.isFinite(retrySeconds) || retrySeconds < 0) throw error;
 
-      // The product currently reports one second. Bound the harness delay so a
-      // malformed/unexpected refusal can never stall CI for an arbitrary time.
-      const delayMs = Math.min(Math.max(Math.ceil(retrySeconds * 1000) + 100, 100), 2_100);
+      const delayMs = Math.max(Math.ceil(retrySeconds * 1000) + 100, 100);
+      // Never retry before the product's own limiter says the interval ended.
+      // If honoring that interval would exceed this fixture helper's bounded
+      // wait budget, surface the original refusal instead of retrying early.
+      if (delayMs > maxRetryWaitMs) throw error;
       await sleep(delayMs);
     }
   }

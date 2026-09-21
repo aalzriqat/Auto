@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
+const PREVIEW_ASSERTION_TIMEOUT_MS = 120_000;
+
 function requireMatch(actual, expected, label) {
   if (!actual || !expected || String(actual).trim() !== String(expected).trim()) {
     throw new Error(
@@ -56,6 +58,7 @@ export async function verifyBrowserSwarmPreview(
     env: { ...process.env, ...env },
     stdio: "inherit",
     shell: false,
+    timeout: PREVIEW_ASSERTION_TIMEOUT_MS,
   });
 
   if (result.error) {

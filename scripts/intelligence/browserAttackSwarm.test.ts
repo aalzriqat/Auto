@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_BROWSER_SWARM_MISSIONS,
+  PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES,
   SUPPORTED_BROWSER_SWARM_INVARIANT_IDS,
   buildBrowserSwarmRunManifest,
   classifyBrowserMissionEvidence,
@@ -207,7 +208,6 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
   it("binds every worker to one explicit disposable preview identity", () => {
     const plan = planBrowserAttackSwarm({
       impactedInvariants: [
-        { id: "TEN-1", severity: "CRITICAL" },
         { id: "UI-1", severity: "HIGH" },
       ],
     });
@@ -236,6 +236,26 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
         worker.artifactRoot.startsWith("swarm/pr-350-abcdef1234/worker-"),
       ),
     ).toBe(true);
+  });
+
+  it("fails before manifest creation when Phase A has no executable handler", () => {
+    const plan = planBrowserAttackSwarm({
+      impactedInvariants: [{ id: "TEN-1", severity: "CRITICAL" }],
+    });
+
+    expect(PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES).toEqual([
+      "RTL_PARITY",
+      "UI_BACKEND_MISMATCH",
+    ]);
+    expect(() =>
+      buildBrowserSwarmRunManifest({
+        plan,
+        workerCount: 1,
+        runId: "pr-350-abcdef1234",
+        previewName: "e2e-pr-350-abcdef1234",
+        expectedCloudUrl: "https://example-preview.convex.cloud",
+      }),
+    ).toThrow(/no executable handler.*TENANT_ESCAPE/i);
   });
 
   it("refuses ambiguous or non-preview swarm targets before browser execution", () => {

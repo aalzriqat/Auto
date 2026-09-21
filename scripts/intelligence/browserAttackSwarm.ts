@@ -20,6 +20,15 @@ export type BrowserAttackFamily =
   | "RTL_PARITY"
   | "UI_BACKEND_MISMATCH";
 
+export const PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES = [
+  "RTL_PARITY",
+  "UI_BACKEND_MISMATCH",
+] as const satisfies readonly BrowserAttackFamily[];
+
+const PHASE_A_EXECUTABLE_FAMILY_SET = new Set<BrowserAttackFamily>(
+  PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES,
+);
+
 export type BrowserOracleKind =
   | "TENANT_ISOLATION"
   | "AUTHORIZATION"
@@ -492,6 +501,21 @@ export function buildBrowserSwarmRunManifest({
 }): BrowserSwarmRunManifest {
   assertSafeRunId(runId);
   assertSwarmPreviewIdentity(previewName, expectedCloudUrl);
+
+  const unsupportedFamilies = [
+    ...new Set(
+      plan.missions
+        .map((mission) => mission.family)
+        .filter((family) => !PHASE_A_EXECUTABLE_FAMILY_SET.has(family)),
+    ),
+  ].sort();
+  if (unsupportedFamilies.length > 0) {
+    throw new Error(
+      "Browser swarm Phase A has no executable handler for mission family/families: " +
+        unsupportedFamilies.join(", "),
+    );
+  }
+
   const partitions = partitionBrowserAttackMissions(plan.missions, workerCount);
 
   return {

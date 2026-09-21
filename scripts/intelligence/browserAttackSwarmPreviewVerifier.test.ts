@@ -33,6 +33,7 @@ type SpawnFn = (
     stdio?: string;
     shell?: boolean;
     env?: Record<string, string | undefined>;
+    timeout?: number;
   },
 ) => SpawnResult;
 
@@ -64,6 +65,7 @@ describe("SCRUM-350 preview verifier", () => {
       cwd: "/repo",
       stdio: "inherit",
       shell: false,
+      timeout: 120_000,
     });
     if (!options.env) throw new Error("spawn env missing");
     expect(options.env.CONVEX_PREVIEW_NAME).toBe(manifest.previewName);
