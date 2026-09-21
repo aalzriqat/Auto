@@ -43,6 +43,11 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify Jev historical calibration harness
+        run: pnpm test:jev-calibration
+        env:
+          NODE_ENV: test
+
       - name: Evidence boundary
         if: always()
         run: |
