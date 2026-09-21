@@ -121,13 +121,30 @@ jobs:
             if (matches.length !== 1) {
               throw new Error("Expected exactly one live e2e-preview-descriptor artifact");
             }
-            process.stdout.write(String(matches[0].id));
+            const artifact = matches[0];
+            if (!Number.isSafeInteger(artifact.size_in_bytes) || artifact.size_in_bytes > 16384) {
+              throw new Error("e2e-preview-descriptor artifact exceeds the 16 KiB trusted handoff limit");
+            }
+            process.stdout.write(String(artifact.id));
           ' "$RUNNER_TEMP/artifacts.json")"
 
           curl --fail --silent --show-error --location             -H "Authorization: Bearer $GITHUB_TOKEN"             -H "Accept: application/vnd.github+json"             -H "X-GitHub-Api-Version: 2022-11-28"             "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip"             -o "$RUNNER_TEMP/e2e-preview-descriptor.zip"
 
-          unzip -q "$RUNNER_TEMP/e2e-preview-descriptor.zip"             -d "$RUNNER_TEMP/e2e-preview-descriptor"
-          test -f "$RUNNER_TEMP/e2e-preview-descriptor/e2e-preview-descriptor.json"
+          mapfile -t ZIP_ENTRIES < <(
+            unzip -Z1 "$RUNNER_TEMP/e2e-preview-descriptor.zip"
+          )
+          if [ "${#ZIP_ENTRIES[@]}" -ne 1 ] || [ "${ZIP_ENTRIES[0]}" != "e2e-preview-descriptor.json" ]; then
+            echo "Descriptor artifact must contain exactly e2e-preview-descriptor.json at archive root." >&2
+            exit 1
+          fi
+
+          unzip -p "$RUNNER_TEMP/e2e-preview-descriptor.zip"             e2e-preview-descriptor.json             > "$RUNNER_TEMP/e2e-preview-descriptor/e2e-preview-descriptor.json"
+
+          DESCRIPTOR_BYTES="$(wc -c < "$RUNNER_TEMP/e2e-preview-descriptor/e2e-preview-descriptor.json")"
+          if [ "$DESCRIPTOR_BYTES" -gt 8192 ]; then
+            echo "Descriptor JSON exceeds the 8 KiB trusted parsing limit." >&2
+            exit 1
+          fi
 
       - name: Assemble trusted run and fail closed on unsupported impact
         id: plan
@@ -195,7 +212,7 @@ jobs:
       - name: Build exact candidate frontend in isolated container
         run: |
           set -euo pipefail
-          docker run --rm             --name "autoflow-swarm-build-${{ matrix.worker_index }}"             --network bridge             --volume "$GITHUB_WORKSPACE/candidate:/app"             --workdir /app             --env HOME=/tmp/home             --env NEXT_PUBLIC_CONVEX_URL             --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY             --env NEXT_PUBLIC_TURNSTILE_SITE_KEY             --env NEXT_PUBLIC_APP_URL             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5             sh -lc 'corepack enable && corepack prepare pnpm@11.13.0 --activate && pnpm install --frozen-lockfile --ignore-scripts && pnpm build'
+          docker run --rm             --name "autoflow-swarm-build-${{ matrix.worker_index }}"             --network bridge             --cap-drop ALL             --security-opt no-new-privileges             --volume "$GITHUB_WORKSPACE/candidate:/app"             --workdir /app             --env HOME=/tmp/home             --env NEXT_PUBLIC_CONVEX_URL             --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY             --env NEXT_PUBLIC_TURNSTILE_SITE_KEY             --env NEXT_PUBLIC_APP_URL             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5             sh -lc 'corepack enable && corepack prepare pnpm@11.13.0 --activate && pnpm install --frozen-lockfile --ignore-scripts && pnpm build'
         env:
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}

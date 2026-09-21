@@ -141,9 +141,24 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
         "node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
       );
       expect(run).toContain('$GITHUB_WORKSPACE/candidate:/app');
+      expect(run).toContain("--cap-drop ALL");
+      expect(run).toContain("--security-opt no-new-privileges");
       expect(run).not.toContain("/var/run/docker.sock");
       expect(run).not.toContain("$GITHUB_WORKSPACE/trusted");
     }
+  });
+
+  it("treats the triggering workflow artifact as untrusted data, never as an extractable filesystem", () => {
+    const run = String(
+      step("prepare", "Download triggering E2E preview descriptor").run ?? "",
+    );
+
+    expect(run).toContain("artifact.size_in_bytes > 16384");
+    expect(run).toContain("unzip -Z1");
+    expect(run).toContain("unzip -p");
+    expect(run).toContain("e2e-preview-descriptor.json");
+    expect(run).not.toContain("unzip -q");
+    expect(run).not.toMatch(/unzip\s+[^\n]*\s-d\s/);
   });
 
   it("keeps preview/assertion credentials only in the trusted browser-controller step", () => {
