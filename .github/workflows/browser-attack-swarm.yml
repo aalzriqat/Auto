@@ -34,6 +34,7 @@ jobs:
       preview_name: ${{ steps.plan.outputs.preview_name }}
       convex_cloud_url: ${{ steps.plan.outputs.convex_cloud_url }}
       head_sha: ${{ steps.plan.outputs.head_sha }}
+      tested_sha: ${{ steps.plan.outputs.tested_sha }}
       pr_number: ${{ steps.plan.outputs.pr_number }}
 
     steps:
@@ -49,30 +50,51 @@ jobs:
           # the trusted checkout can fetch the exact PR head as Git data.
           persist-credentials: true
 
-      - name: Fetch and verify exact candidate head as data only
+      - name: Fetch and verify exact PR head and tested merge commit as data only
         working-directory: trusted
         env:
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
           EXPECTED_HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
           EXPECTED_BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
+          EXPECTED_TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
             echo "workflow_run did not provide a valid PR number" >&2
             exit 1
           fi
-          if ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || ! [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "workflow_run did not provide exact base/head SHAs" >&2
-            exit 1
-          fi
-          git fetch --no-tags origin "refs/pull/${PR_NUMBER}/head"
-          FETCHED_HEAD="$(git rev-parse FETCH_HEAD)"
+          for value in "$EXPECTED_HEAD_SHA" "$EXPECTED_BASE_SHA" "$EXPECTED_TESTED_SHA"; do
+            if ! [[ "$value" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "workflow_run did not provide exact base/head/tested SHAs" >&2
+              exit 1
+            fi
+          done
+
+          git fetch --no-tags origin \
+            "refs/pull/${PR_NUMBER}/head:refs/autoflow/pr-head" \
+            "refs/pull/${PR_NUMBER}/merge:refs/autoflow/pr-merge"
+
+          FETCHED_HEAD="$(git rev-parse refs/autoflow/pr-head)"
+          FETCHED_MERGE="$(git rev-parse refs/autoflow/pr-merge)"
           if [ "$FETCHED_HEAD" != "$EXPECTED_HEAD_SHA" ]; then
-            echo "Fetched PR head does not match workflow_run head SHA" >&2
+            echo "Fetched PR head does not match workflow_run PR head SHA" >&2
             exit 1
           fi
+          if [ "$FETCHED_MERGE" != "$EXPECTED_TESTED_SHA" ]; then
+            echo "Fetched PR merge commit does not match the triggering workflow SHA" >&2
+            exit 1
+          fi
+
           git cat-file -e "${EXPECTED_BASE_SHA}^{commit}"
           git cat-file -e "${EXPECTED_HEAD_SHA}^{commit}"
+          git cat-file -e "${EXPECTED_TESTED_SHA}^{commit}"
+
+          PARENTS="$(git show -s --format=%P "$EXPECTED_TESTED_SHA")"
+          read -r FIRST_PARENT SECOND_PARENT EXTRA_PARENT <<< "$PARENTS"
+          if [ "$FIRST_PARENT" != "$EXPECTED_BASE_SHA" ] || [ "$SECOND_PARENT" != "$EXPECTED_HEAD_SHA" ] || [ -n "${EXTRA_PARENT:-}" ]; then
+            echo "Triggering workflow SHA is not the exact two-parent PR merge of base + head." >&2
+            exit 1
+          fi
 
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
@@ -162,6 +184,7 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
           HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
           BROWSER_SWARM_RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
           PREVIEW_DESCRIPTOR_PATH: ${{ runner.temp }}/e2e-preview-descriptor/e2e-preview-descriptor.json
@@ -195,10 +218,10 @@ jobs:
           path: trusted
           persist-credentials: false
 
-      - name: Checkout exact candidate head as application code
+      - name: Checkout exact tested PR merge as application code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ needs.prepare.outputs.head_sha }}
+          ref: ${{ needs.prepare.outputs.tested_sha }}
           path: candidate
           persist-credentials: false
 
