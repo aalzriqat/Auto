@@ -134,15 +134,20 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     );
     const fetchEnv = fetchAndVerify.env ?? {};
     const fetchRun = String(fetchAndVerify.run ?? "");
-    expect(fetchEnv).toHaveProperty(
-      "EXPECTED_TESTED_SHA",
-      "${{ github.event.workflow_run.head_sha }}",
-    );
+    expect(fetchEnv).not.toHaveProperty("EXPECTED_TESTED_SHA");
     expect(fetchRun).toContain("refs/pull/${PR_NUMBER}/merge:refs/autoflow/pr-merge");
+    expect(fetchRun).toContain("FETCHED_MERGE");
     expect(fetchRun).toContain("FIRST_PARENT");
     expect(fetchRun).toContain("SECOND_PARENT");
     expect(fetchRun).toContain("EXPECTED_BASE_SHA");
     expect(fetchRun).toContain("EXPECTED_HEAD_SHA");
+    expect(fetchRun).toContain('echo "TESTED_SHA=$FETCHED_MERGE" >> "$GITHUB_ENV"');
+
+    const plan = step(
+      "prepare",
+      "Assemble trusted run and fail closed on unsupported impact",
+    );
+    expect(plan.env).toHaveProperty("TESTED_SHA", "${{ env.TESTED_SHA }}");
   });
 
   it("never exposes privileged secrets to candidate-controlled build or server processes", () => {
