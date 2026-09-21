@@ -71,11 +71,21 @@ export function assertBrowserSwarmExecutionEnvironment(env: Env): void {
       "Browser swarm execution requires CI=true so Playwright cannot reuse an existing local server",
     );
   }
-  if (env.PLAYWRIGHT_SKIP_WEBSERVER?.trim()) {
+  const skipWebServer = Boolean(env.PLAYWRIGHT_SKIP_WEBSERVER?.trim());
+  const trustedExternalServer =
+    env.BROWSER_SWARM_TRUSTED_EXTERNAL_SERVER === "1";
+
+  if (skipWebServer && !trustedExternalServer) {
     throw new Error(
-      "Browser swarm execution refuses PLAYWRIGHT_SKIP_WEBSERVER; the tested frontend must be freshly built and started by Playwright",
+      "Browser swarm execution refuses PLAYWRIGHT_SKIP_WEBSERVER unless the trusted main workflow attests BROWSER_SWARM_TRUSTED_EXTERNAL_SERVER=1",
     );
   }
+  if (trustedExternalServer && !skipWebServer) {
+    throw new Error(
+      "BROWSER_SWARM_TRUSTED_EXTERNAL_SERVER=1 requires PLAYWRIGHT_SKIP_WEBSERVER so Playwright cannot start a second frontend",
+    );
+  }
+
   browserSwarmLocalBaseUrl(env);
 }
 

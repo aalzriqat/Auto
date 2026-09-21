@@ -37,7 +37,25 @@ describe("SCRUM-350 browser swarm runtime config", () => {
         CI: "true",
         PLAYWRIGHT_SKIP_WEBSERVER: "1",
       }),
-    ).toThrow(/PLAYWRIGHT_SKIP_WEBSERVER/);
+    ).toThrow(/trusted main workflow/);
+
+    expect(() =>
+      assertBrowserSwarmExecutionEnvironment({
+        BROWSER_SWARM_ENABLED: "1",
+        CI: "true",
+        PLAYWRIGHT_SKIP_WEBSERVER: "1",
+        BROWSER_SWARM_TRUSTED_EXTERNAL_SERVER: "1",
+        PLAYWRIGHT_BASE_URL: "http://127.0.0.1:3000",
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      assertBrowserSwarmExecutionEnvironment({
+        BROWSER_SWARM_ENABLED: "1",
+        CI: "true",
+        BROWSER_SWARM_TRUSTED_EXTERNAL_SERVER: "1",
+      }),
+    ).toThrow(/requires PLAYWRIGHT_SKIP_WEBSERVER/);
 
     expect(() =>
       assertBrowserSwarmExecutionEnvironment({
