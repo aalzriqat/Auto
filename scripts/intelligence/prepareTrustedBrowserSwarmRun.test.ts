@@ -29,11 +29,21 @@ function impact(
 
 function descriptor(overrides: Record<string, unknown> = {}) {
   return {
-    version: 1,
+    version: 2,
     previewName: PREVIEW_NAME,
-    convexCloudUrl: "https://example-preview.convex.cloud",
     headSha: HEAD_SHA,
     prNumber: PR_NUMBER,
+    ...overrides,
+  };
+}
+
+function authority(overrides: Record<string, unknown> = {}) {
+  return {
+    version: 1,
+    authority: "CONVEX_CONTROL_PLANE_AUTHORIZE_PREVIEW",
+    previewName: PREVIEW_NAME,
+    convexCloudUrl: "https://trusted-preview.convex.cloud",
+    deploymentName: "trusted-preview",
     ...overrides,
   };
 }
@@ -41,10 +51,12 @@ function descriptor(overrides: Record<string, unknown> = {}) {
 function assemble(options: {
   impactArtifact?: unknown;
   descriptorArtifact?: unknown;
+  authorityArtifact?: unknown;
 } = {}) {
   return assembleTrustedBrowserSwarmRun({
     impactArtifact: options.impactArtifact ?? impact(),
     descriptorArtifact: options.descriptorArtifact ?? descriptor(),
+    authorityArtifact: options.authorityArtifact ?? authority(),
     baseSha: BASE_SHA,
     headSha: HEAD_SHA,
     prNumber: PR_NUMBER,
@@ -52,7 +64,7 @@ function assemble(options: {
 }
 
 describe("trusted browser swarm run assembly", () => {
-  it("hands the exact trusted impact to bounded main-controlled workers", () => {
+  it("hands exact trusted impact and control-plane preview authority to bounded workers", () => {
     const payload = assemble();
 
     expect(payload.shouldRun).toBe(true);
@@ -64,8 +76,9 @@ describe("trusted browser swarm run assembly", () => {
     ]);
     expect(payload.previewName).toBe(PREVIEW_NAME);
     expect(payload.convexCloudUrl).toBe(
-      "https://example-preview.convex.cloud",
+      "https://trusted-preview.convex.cloud",
     );
+    expect(payload.convexDeploymentName).toBe("trusted-preview");
   });
 
   it("produces an explicit trusted no-op when canonical impact is empty", () => {
@@ -100,6 +113,16 @@ describe("trusted browser swarm run assembly", () => {
     ).toThrow(/head SHA/);
   });
 
+  it("refuses candidate-supplied deployment authority in the descriptor", () => {
+    expect(() =>
+      assemble({
+        descriptorArtifact: descriptor({
+          convexCloudUrl: "https://candidate-choice.convex.cloud",
+        }),
+      }),
+    ).toThrow(/unexpected fields/);
+  });
+
   it("refuses a descriptor whose preview name does not match the PR merge ref", () => {
     expect(() =>
       assemble({
@@ -108,6 +131,26 @@ describe("trusted browser swarm run assembly", () => {
         }),
       }),
     ).toThrow(/preview name/);
+  });
+
+  it("refuses Convex authority for a different preview name", () => {
+    expect(() =>
+      assemble({
+        authorityArtifact: authority({
+          previewName: "e2e-pr-999-deadbeef00",
+        }),
+      }),
+    ).toThrow(/trusted preview name/);
+  });
+
+  it("refuses forged Convex authority metadata", () => {
+    expect(() =>
+      assemble({
+        authorityArtifact: authority({
+          authority: "CANDIDATE_DESCRIPTOR",
+        }),
+      }),
+    ).toThrow(/metadata/);
   });
 
   it("refuses an impact artifact whose authority metadata is candidate-controlled", () => {
