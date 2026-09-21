@@ -185,29 +185,27 @@ jobs:
         working-directory: trusted
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Install exact candidate dependencies
-        working-directory: candidate
-        run: pnpm install --frozen-lockfile --ignore-scripts
-
       - name: Install trusted Chromium
         working-directory: trusted
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: Build exact candidate frontend
-        working-directory: candidate
-        run: pnpm build
+      - name: Build exact candidate frontend in isolated container
+        run: |
+          set -euo pipefail
+          docker run --rm             --name "autoflow-swarm-build-${{ matrix.worker_index }}"             --network bridge             --volume "$GITHUB_WORKSPACE/candidate:/app"             --workdir /app             --env HOME=/tmp/home             --env NEXT_PUBLIC_CONVEX_URL             --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY             --env NEXT_PUBLIC_TURNSTILE_SITE_KEY             --env NEXT_PUBLIC_APP_URL             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5             sh -lc 'corepack enable && corepack prepare pnpm@11.13.0 --activate && pnpm install --frozen-lockfile --ignore-scripts && pnpm build'
         env:
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
           NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
 
-      - name: Start exact candidate frontend on loopback
-        working-directory: candidate
+      - name: Start exact candidate frontend in isolated container
         run: |
           set -euo pipefail
-          nohup pnpm exec next start -H 127.0.0.1 -p 3000             > "$RUNNER_TEMP/candidate-server.log" 2>&1 &
-          echo "$!" > "$RUNNER_TEMP/candidate-server.pid"
+          CANDIDATE_CONTAINER="autoflow-swarm-candidate-${{ matrix.worker_index }}"
+          echo "CANDIDATE_CONTAINER=$CANDIDATE_CONTAINER" >> "$GITHUB_ENV"
+
+          docker run --detach --rm             --name "$CANDIDATE_CONTAINER"             --network bridge             --publish 127.0.0.1:3000:3000             --volume "$GITHUB_WORKSPACE/candidate:/app"             --workdir /app             --env HOME=/tmp/home             --env NEXT_PUBLIC_CONVEX_URL             --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY             --env NEXT_PUBLIC_TURNSTILE_SITE_KEY             --env NEXT_PUBLIC_APP_URL             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5             sh -lc 'corepack enable && corepack prepare pnpm@11.13.0 --activate && pnpm exec next start -H 0.0.0.0 -p 3000'
 
           for attempt in $(seq 1 60); do
             if curl --fail --silent --show-error               http://127.0.0.1:3000/api/health > /dev/null; then
@@ -215,7 +213,9 @@ jobs:
             fi
             sleep 2
           done
-          echo "Exact candidate frontend did not become healthy on loopback." >&2
+
+          docker logs "$CANDIDATE_CONTAINER" >&2 || true
+          echo "Exact candidate frontend did not become healthy on isolated loopback." >&2
           exit 1
         env:
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
@@ -250,11 +250,11 @@ jobs:
           E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
           E2E_APPROVER_PASSWORD: ${{ secrets.E2E_APPROVER_PASSWORD }}
 
-      - name: Stop candidate frontend
+      - name: Stop isolated candidate frontend
         if: always()
         run: |
-          if [ -f "$RUNNER_TEMP/candidate-server.pid" ]; then
-            kill "$(cat "$RUNNER_TEMP/candidate-server.pid")" 2>/dev/null || true
+          if [ -n "${CANDIDATE_CONTAINER:-}" ]; then
+            docker rm --force "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
           fi
 
       - name: Upload trusted swarm evidence

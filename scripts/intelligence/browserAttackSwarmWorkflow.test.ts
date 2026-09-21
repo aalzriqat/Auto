@@ -98,13 +98,29 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
 
   it("never exposes privileged secrets to candidate-controlled build or server processes", () => {
     for (const stepName of [
-      "Build exact candidate frontend",
-      "Start exact candidate frontend on loopback",
+      "Build exact candidate frontend in isolated container",
+      "Start exact candidate frontend in isolated container",
     ]) {
       const env = step("attack-worker", stepName).env ?? {};
       for (const key of CANDIDATE_FORBIDDEN_ENV) {
         expect(env, stepName + " must not receive " + key).not.toHaveProperty(key);
       }
+    }
+  });
+
+  it("runs candidate-controlled code only inside the pinned isolation container", () => {
+    for (const stepName of [
+      "Build exact candidate frontend in isolated container",
+      "Start exact candidate frontend in isolated container",
+    ]) {
+      const run = String(step("attack-worker", stepName).run ?? "");
+      expect(run).toContain("docker run");
+      expect(run).toContain(
+        "node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
+      );
+      expect(run).toContain('$GITHUB_WORKSPACE/candidate:/app');
+      expect(run).not.toContain("/var/run/docker.sock");
+      expect(run).not.toContain("$GITHUB_WORKSPACE/trusted");
     }
   });
 
