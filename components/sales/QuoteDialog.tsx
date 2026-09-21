@@ -28,7 +28,12 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { SearchableSelect } from "@/components/ui/searchable-select";
-import { calculateUnifiedMurabaha, isRequestedFinancingTermValid, minimumDownPaymentForFinancingLimit } from "@/lib/financing";
+import {
+  calculateUnifiedMurabaha,
+  isRequestedFinancingTermValid,
+  matchingCustomerEligibilityStatusIds,
+  minimumDownPaymentForFinancingLimit,
+} from "@/lib/financing";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CheckCircle2 } from "lucide-react";
 
@@ -112,12 +117,11 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
     // 2. Active Finance Companies
     const activeCompanies = financeCompanies.filter((c: Doc<"financeCompanies">) => c.isActive);
     for (const company of activeCompanies) {
-      const accepted = company.acceptedStatuses;
       const customerEligible =
-        customerEligibilityStatusIds.length > 0 &&
-        (!accepted ||
-          accepted.length === 0 ||
-          customerEligibilityStatusIds.some((statusId) => accepted.includes(statusId)));
+        matchingCustomerEligibilityStatusIds(
+          customerEligibilityStatusIds,
+          company.acceptedStatuses
+        ).length > 0;
       if (!customerEligible) continue;
 
       const executionFees = company.adminFees;
