@@ -318,6 +318,9 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       "autoflow/trusted-browser-swarm",
     );
     expect(String(pending.run ?? "")).toContain("pending");
+    expect(String(pending.run ?? "")).toContain(
+      'Content-Type: application/json',
+    );
 
     const verdict = step(
       "verdict",
@@ -344,6 +347,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       '[ "$SHOULD_RUN" = "true" ] && [ "$ATTACK_RESULT" = "success" ]',
     );
     expect(verdictRun).toContain("autoflow/trusted-browser-swarm");
+    expect(verdictRun).toContain("Content-Type: application/json");
     expect(verdictRun).toContain('if [ "$STATE" != "success" ]');
   });
 });
