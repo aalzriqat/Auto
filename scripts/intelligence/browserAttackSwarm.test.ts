@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_BROWSER_SWARM_MISSIONS,
+  buildBrowserSwarmRunManifest,
   classifyBrowserMissionEvidence,
   partitionBrowserAttackMissions,
   planBrowserAttackSwarm,
@@ -179,6 +180,74 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
         harnessError: "browser crashed before the backend probe",
       }),
     ).toBe("HARNESS_ERROR");
+  });
+
+  it("binds every worker to one explicit disposable preview identity", () => {
+    const plan = planBrowserAttackSwarm({
+      impactedInvariants: [
+        { id: "TEN-1", severity: "CRITICAL" },
+        { id: "UI-1", severity: "HIGH" },
+      ],
+    });
+    const manifest = buildBrowserSwarmRunManifest({
+      plan,
+      workerCount: 2,
+      runId: "pr-350-abcdef1234",
+      previewName: "e2e-pr-350-abcdef1234",
+      expectedCloudUrl: "https://example-preview.convex.cloud",
+    });
+
+    expect(manifest).toMatchObject({
+      version: 1,
+      runId: "pr-350-abcdef1234",
+      previewName: "e2e-pr-350-abcdef1234",
+      expectedCloudUrl: "https://example-preview.convex.cloud",
+      requiresPreviewMarker: true,
+    });
+    expect(manifest.workers).toHaveLength(2);
+    expect(manifest.workers.map((worker) => worker.workerId)).toEqual([
+      "worker-1",
+      "worker-2",
+    ]);
+    expect(
+      manifest.workers.every((worker) =>
+        worker.artifactRoot.startsWith("swarm/pr-350-abcdef1234/worker-"),
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses ambiguous or non-preview swarm targets before browser execution", () => {
+    const plan = planBrowserAttackSwarm({ impactedInvariants: [] });
+
+    expect(() =>
+      buildBrowserSwarmRunManifest({
+        plan,
+        workerCount: 1,
+        runId: "pr-350-abcdef1234",
+        previewName: "production",
+        expectedCloudUrl: "https://example.convex.cloud",
+      }),
+    ).toThrow(/e2e-\*/);
+
+    expect(() =>
+      buildBrowserSwarmRunManifest({
+        plan,
+        workerCount: 1,
+        runId: "pr-350-abcdef1234",
+        previewName: "e2e-pr-350-abcdef1234",
+        expectedCloudUrl: "http://example.convex.cloud",
+      }),
+    ).toThrow(/bare HTTPS deployment origin/);
+
+    expect(() =>
+      buildBrowserSwarmRunManifest({
+        plan,
+        workerCount: 1,
+        runId: "../escape",
+        previewName: "e2e-pr-350-abcdef1234",
+        expectedCloudUrl: "https://example.convex.cloud",
+      }),
+    ).toThrow(/runId/);
   });
 
   it("rejects evidence path traversal", () => {
