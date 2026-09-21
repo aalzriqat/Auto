@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -44,7 +44,15 @@ function FloatingMessengerInner({ orgId }: Props) {
   const panelRef = useRef<HTMLDivElement>(null);
 
   const me = useQuery(api.users.getMe);
-  const conversations = useQuery(api.directMessages.listConversations, { orgId });
+  const {
+    results: conversations,
+    status: conversationStatus,
+    loadMore: loadMoreConversations,
+  } = usePaginatedQuery(
+    api.directMessages.listConversationsPage,
+    { orgId },
+    { initialNumItems: 50 },
+  );
   const unreadCount = useQuery(api.directMessages.getUnreadCount, { orgId });
   const markDelivered = useMutation(api.directMessages.markDelivered);
   const currentUserId = me?._id;
@@ -52,7 +60,7 @@ function FloatingMessengerInner({ orgId }: Props) {
   // ── Global sound notifications ──────────────────────────────────────────────
   const prevTimestampsRef = useRef<Record<string, number>>({});
   useEffect(() => {
-    if (!conversations || !currentUserId) return;
+    if (!currentUserId) return;
     for (const conv of conversations) {
       const isIncoming =
         conv.lastMessageSenderId !== undefined &&
@@ -190,7 +198,7 @@ function FloatingMessengerInner({ orgId }: Props) {
 
           {/* Conversation rows */}
           <div className="flex-1 overflow-y-auto py-1">
-            {filtered.length === 0 && (
+            {conversationStatus === "Exhausted" && filtered.length === 0 && (
               <div className="px-4 py-6 text-center text-sm text-slate-400">
                 {t("MessagesNoConversations")}
               </div>
@@ -268,6 +276,19 @@ function FloatingMessengerInner({ orgId }: Props) {
                 </button>
               );
             })}
+
+            {(conversationStatus === "CanLoadMore" || conversationStatus === "LoadingMore") && (
+              <div className="px-3 py-2">
+                <button
+                  type="button"
+                  disabled={conversationStatus === "LoadingMore"}
+                  onClick={() => loadMoreConversations(50)}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-wait disabled:opacity-60"
+                >
+                  {t("LoadMore" as never) || "Load More"}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -1,4 +1,4 @@
-import type { MutationCtx } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import { v } from "convex/values";
@@ -31,6 +31,129 @@ async function latestMessageCreationTime(
   return latestMessage?._creationTime ?? 0;
 }
 
+type ParticipantStateUpdate = {
+  lastDeliveredAt?: number;
+  lastReadAt?: number;
+  typingAt?: number | undefined;
+  isMuted?: boolean;
+};
+
+function isUnreadForUser(
+  conversation: Doc<"dmConversations">,
+  userId: Id<"users">,
+  lastReadAt: number | undefined,
+) {
+  return (
+    conversation.lastMessageSenderId !== undefined &&
+    conversation.lastMessageSenderId !== userId &&
+    conversation.lastMessageAt > (lastReadAt ?? 0)
+  );
+}
+
+async function getParticipantState(
+  ctx: QueryCtx | MutationCtx,
+  conversationId: Id<"dmConversations">,
+  userId: Id<"users">,
+) {
+  return await ctx.db
+    .query("dmParticipantState")
+    .withIndex("by_conversation_user", (q) =>
+      q.eq("conversationId", conversationId).eq("userId", userId),
+    )
+    .unique();
+}
+
+async function upsertParticipantState(
+  ctx: MutationCtx,
+  conversation: Doc<"dmConversations">,
+  userId: Id<"users">,
+  update: ParticipantStateUpdate = {},
+) {
+  const existing = await getParticipantState(ctx, conversation._id, userId);
+  const effectiveLastReadAt = update.lastReadAt ?? existing?.lastReadAt;
+  const projection = {
+    orgId: conversation.orgId,
+    conversationLastMessageAt: conversation.lastMessageAt,
+    hasUnread: isUnreadForUser(conversation, userId, effectiveLastReadAt),
+    ...update,
+  };
+
+  if (existing) {
+    await ctx.db.patch(existing._id, projection);
+    return { isMuted: update.isMuted ?? existing.isMuted ?? false };
+  }
+
+  await ctx.db.insert("dmParticipantState", {
+    conversationId: conversation._id,
+    userId,
+    ...projection,
+  });
+  return { isMuted: update.isMuted ?? false };
+}
+
+async function getLegacyParticipantStates(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+) {
+  return await ctx.db
+    .query("dmParticipantState")
+    .withIndex("by_user_org", (q) => q.eq("userId", userId).eq("orgId", undefined))
+    .collect();
+}
+
+async function hydrateConversationStates(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  userId: Id<"users">,
+  states: Doc<"dmParticipantState">[],
+) {
+  const pairs = (
+    await Promise.all(
+      states.map(async (state) => ({
+        state,
+        conversation: await ctx.db.get(state.conversationId),
+      })),
+    )
+  ).filter(
+    (
+      pair,
+    ): pair is {
+      state: Doc<"dmParticipantState">;
+      conversation: Doc<"dmConversations">;
+    } =>
+      pair.conversation !== null &&
+      pair.conversation.orgId === orgId &&
+      pair.conversation.memberIds.includes(userId),
+  );
+
+  const memberIds = Array.from(
+    new Set(pairs.flatMap(({ conversation }) => conversation.memberIds)),
+  );
+  const memberDocs = await Promise.all(memberIds.map((id) => ctx.db.get(id)));
+  const memberById = new Map(
+    memberDocs
+      .filter((member): member is Doc<"users"> => member !== null)
+      .map((member) => [member._id, member]),
+  );
+
+  return pairs.map(({ state, conversation }) => ({
+    ...conversation,
+    members: conversation.memberIds
+      .map((id) => memberById.get(id))
+      .filter((member): member is Doc<"users"> => member !== undefined)
+      .map((member) => ({
+        _id: member._id,
+        name: member.name ?? member.email,
+        imageUrl: member.imageUrl,
+      })),
+    hasUnread:
+      state.hasUnread ??
+      isUnreadForUser(conversation, userId, state.lastReadAt),
+    isMuted: state.isMuted ?? false,
+    lastDeliveredAt: state.lastDeliveredAt ?? 0,
+  }));
+}
+
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
 /** List all conversations the current user is a member of, sorted by latest activity. */
@@ -39,50 +162,69 @@ export const listConversations = query({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId);
 
-    const all = await ctx.db
-      .query("dmConversations")
-      .withIndex("by_org_lastMessageAt", (q) => q.eq("orgId", args.orgId))
-      .order("desc")
-      .take(100);
+    const [projectedStates, legacyStates] = await Promise.all([
+      ctx.db
+        .query("dmParticipantState")
+        .withIndex("by_org_user_lastMessageAt", (q) =>
+          q.eq("orgId", args.orgId).eq("userId", user._id),
+        )
+        .order("desc")
+        .take(100),
+      getLegacyParticipantStates(ctx, user._id),
+    ]);
 
-    const mine = all.filter((c) => c.memberIds.includes(user._id));
+    const stateByConversation = new Map<string, Doc<"dmParticipantState">>();
+    for (const state of projectedStates) {
+      stateByConversation.set(state.conversationId, state);
+    }
+    for (const state of legacyStates) {
+      if (!stateByConversation.has(state.conversationId)) {
+        stateByConversation.set(state.conversationId, state);
+      }
+    }
 
-    // Attach participant state (unread indicator) for each conversation
-    const results = await Promise.all(
-      mine.map(async (conv) => {
-        const state = await ctx.db
-          .query("dmParticipantState")
-          .withIndex("by_conversation_user", (q) =>
-            q.eq("conversationId", conv._id).eq("userId", user._id),
-          )
-          .unique();
-
-        const hasUnread =
-          conv.lastMessageSenderId !== undefined &&
-          conv.lastMessageAt > (state?.lastReadAt ?? 0) &&
-          conv.lastMessageSenderId !== user._id;
-
-        // Fetch member info for display
-        const members = await Promise.all(
-          conv.memberIds.map(async (uid) => {
-            const u = await ctx.db.get(uid);
-            return u
-              ? { _id: u._id, name: u.name ?? u.email, imageUrl: u.imageUrl }
-              : null;
-          }),
-        );
-
-        return {
-          ...conv,
-          members: members.filter(Boolean),
-          hasUnread,
-          isMuted: state?.isMuted ?? false,
-          lastDeliveredAt: state?.lastDeliveredAt ?? 0,
-        };
-      }),
+    const conversations = await hydrateConversationStates(
+      ctx,
+      args.orgId,
+      user._id,
+      Array.from(stateByConversation.values()),
     );
 
-    return results;
+    return conversations
+      .sort(
+        (a, b) =>
+          b.lastMessageAt - a.lastMessageAt ||
+          b._id.toString().localeCompare(a._id.toString()),
+      )
+      .slice(0, 100);
+  },
+});
+
+/** Member-scoped deterministic pagination for the full messages experience. */
+export const listConversationsPage = query({
+  args: {
+    orgId: v.id("organizations"),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId);
+
+    const page = await ctx.db
+      .query("dmParticipantState")
+      .withIndex("by_org_user_lastMessageAt", (q) =>
+        q.eq("orgId", args.orgId).eq("userId", user._id),
+      )
+      .order("desc")
+      .paginate(args.paginationOpts);
+
+    const conversations = await hydrateConversationStates(
+      ctx,
+      args.orgId,
+      user._id,
+      page.page,
+    );
+
+    return { ...page, page: conversations };
   },
 });
 
@@ -92,35 +234,37 @@ export const getUnreadCount = query({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId);
 
-    const all = await ctx.db
-      .query("dmConversations")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .take(100);
-
-    const mine = all.filter((c) => c.memberIds.includes(user._id));
-
-    let count = 0;
-    for (const conv of mine) {
-      const state = await ctx.db
+    const [projectedUnread, legacyStates] = await Promise.all([
+      ctx.db
         .query("dmParticipantState")
-        .withIndex("by_conversation_user", (q) =>
-          q.eq("conversationId", conv._id).eq("userId", user._id),
+        .withIndex("by_org_user_unread", (q) =>
+          q
+            .eq("orgId", args.orgId)
+            .eq("userId", user._id)
+            .eq("hasUnread", true),
         )
-        .unique();
+        .collect(),
+      getLegacyParticipantStates(ctx, user._id),
+    ]);
 
-      if (
-        conv.lastMessageSenderId !== undefined &&
-        conv.lastMessageAt > (state?.lastReadAt ?? 0) &&
-        conv.lastMessageSenderId !== user._id
-      ) {
-        count++;
-      }
-    }
-    return count;
+    const legacyPairs = await Promise.all(
+      legacyStates.map(async (state) => ({
+        state,
+        conversation: await ctx.db.get(state.conversationId),
+      })),
+    );
+    const legacyUnread = legacyPairs.filter(
+      ({ state, conversation }) =>
+        conversation !== null &&
+        conversation.orgId === args.orgId &&
+        conversation.memberIds.includes(user._id) &&
+        isUnreadForUser(conversation, user._id, state.lastReadAt),
+    ).length;
+
+    return projectedUnread.length + legacyUnread;
   },
 });
 
-/** List messages in a conversation (paginated, newest first). */
 export const listMessages = query({
   args: {
     conversationId: v.id("dmConversations"),
@@ -324,7 +468,6 @@ export const getOrCreateDm = mutation({
       throw new Error("Cannot create a DM with yourself.");
     }
 
-    // Verify other user is also a member
     const otherMembership = await ctx.db
       .query("memberships")
       .withIndex("by_org_user", (q) =>
@@ -333,21 +476,34 @@ export const getOrCreateDm = mutation({
       .unique();
     if (!otherMembership) throw new Error("User is not a member of this org.");
 
-    // Find existing DM between these two users in this org
-    const existing = await ctx.db
-      .query("dmConversations")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.eq(q.field("type"), "DM"))
-      .take(200);
-
-    const found = existing.find(
-      (c) =>
-        c.memberIds.length === 2 &&
-        c.memberIds.includes(user._id) &&
-        c.memberIds.includes(args.otherUserId),
+    const [projectedStates, legacyStates] = await Promise.all([
+      ctx.db
+        .query("dmParticipantState")
+        .withIndex("by_user_org", (q) =>
+          q.eq("userId", user._id).eq("orgId", args.orgId),
+        )
+        .collect(),
+      getLegacyParticipantStates(ctx, user._id),
+    ]);
+    const myStates = [...projectedStates, ...legacyStates];
+    const candidates = await Promise.all(
+      myStates.map((state) => ctx.db.get(state.conversationId)),
+    );
+    const found = candidates.find(
+      (conversation) =>
+        conversation !== null &&
+        conversation.orgId === args.orgId &&
+        conversation.type === "DM" &&
+        conversation.memberIds.length === 2 &&
+        conversation.memberIds.includes(user._id) &&
+        conversation.memberIds.includes(args.otherUserId),
     );
 
-    if (found) return found._id;
+    if (found) {
+      await upsertParticipantState(ctx, found, user._id);
+      await upsertParticipantState(ctx, found, args.otherUserId);
+      return found._id;
+    }
 
     const now = Date.now();
     const id = await ctx.db.insert("dmConversations", {
@@ -358,23 +514,27 @@ export const getOrCreateDm = mutation({
       lastMessageAt: now,
     });
 
-    // Seed participant state rows for both members
     await ctx.db.insert("dmParticipantState", {
       conversationId: id,
       userId: user._id,
+      orgId: args.orgId,
+      conversationLastMessageAt: now,
+      hasUnread: false,
       lastDeliveredAt: now,
       lastReadAt: now,
     });
     await ctx.db.insert("dmParticipantState", {
       conversationId: id,
       userId: args.otherUserId,
+      orgId: args.orgId,
+      conversationLastMessageAt: now,
+      hasUnread: false,
     });
 
     return id;
   },
 });
 
-/** Create a group conversation. */
 export const createGroup = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -388,15 +548,14 @@ export const createGroup = mutation({
       throw new Error("A group needs at least 2 other members.");
     }
 
-    // Verify all members belong to the org
     for (const uid of args.memberIds) {
-      const m = await ctx.db
+      const membership = await ctx.db
         .query("memberships")
         .withIndex("by_org_user", (q) =>
           q.eq("orgId", args.orgId).eq("userId", uid),
         )
         .unique();
-      if (!m) throw new Error("One or more users are not members of this org.");
+      if (!membership) throw new Error("One or more users are not members of this org.");
     }
 
     const allMembers = [
@@ -418,6 +577,9 @@ export const createGroup = mutation({
       await ctx.db.insert("dmParticipantState", {
         conversationId: id,
         userId: uid,
+        orgId: args.orgId,
+        conversationLastMessageAt: now,
+        hasUnread: false,
         lastDeliveredAt: uid === user._id ? now : undefined,
         lastReadAt: uid === user._id ? now : undefined,
       });
@@ -427,7 +589,6 @@ export const createGroup = mutation({
   },
 });
 
-/** Send a message to a conversation. */
 export const sendMessage = mutation({
   args: {
     conversationId: v.id("dmConversations"),
@@ -450,52 +611,46 @@ export const sendMessage = mutation({
     });
 
     const now = Date.now();
+    const lastMessageBody =
+      trimmed.length > 80 ? trimmed.slice(0, 80) + "…" : trimmed;
 
-    // Update conversation preview
     await ctx.db.patch(args.conversationId, {
       lastMessageAt: now,
-      lastMessageBody:
-        trimmed.length > 80 ? trimmed.slice(0, 80) + "…" : trimmed,
+      lastMessageBody,
       lastMessageSenderId: user._id,
     });
 
-    // Mark sender as "read" immediately; clear typing
-    const myState = await ctx.db
-      .query("dmParticipantState")
-      .withIndex("by_conversation_user", (q) =>
-        q.eq("conversationId", args.conversationId).eq("userId", user._id),
-      )
-      .unique();
+    const projectedConversation: Doc<"dmConversations"> = {
+      ...conv,
+      lastMessageAt: now,
+      lastMessageBody,
+      lastMessageSenderId: user._id,
+    };
 
-    if (myState) {
-      await ctx.db.patch(myState._id, {
-        lastDeliveredAt: now,
-        lastReadAt: now,
-        typingAt: undefined,
-      });
+    const participantState = new Map<string, { isMuted: boolean }>();
+    for (const uid of conv.memberIds) {
+      const state = await upsertParticipantState(
+        ctx,
+        projectedConversation,
+        uid,
+        uid === user._id
+          ? { lastDeliveredAt: now, lastReadAt: now, typingAt: undefined }
+          : {},
+      );
+      participantState.set(uid, state);
     }
 
-    // Notify every other member (in-app always; email/WhatsApp/push per their
-    // own preferences, via dispatch()) unless they've muted this conversation
-    // — the same signal that already suppresses the in-browser sound.
     const senderName = user.name ?? user.email ?? "Someone";
-    const preview = trimmed.length > 80 ? trimmed.slice(0, 80) + "…" : trimmed;
     const recipients = conv.memberIds.filter((id) => id !== user._id);
     for (const recipientId of recipients) {
-      const recipientState = await ctx.db
-        .query("dmParticipantState")
-        .withIndex("by_conversation_user", (q) =>
-          q.eq("conversationId", args.conversationId).eq("userId", recipientId),
-        )
-        .unique();
-      if (recipientState?.isMuted) continue;
+      if (participantState.get(recipientId)?.isMuted) continue;
 
       await notifyUser(
         ctx,
         conv.orgId,
         recipientId,
         "message.received",
-        { senderName, preview },
+        { senderName, preview: lastMessageBody },
         { link: `/${conv.orgId}/messages` },
       );
     }
@@ -504,7 +659,6 @@ export const sendMessage = mutation({
   },
 });
 
-/** Mark the latest incoming conversation activity as delivered to this user's active client. */
 export const markDelivered = mutation({
   args: { conversationId: v.id("dmConversations") },
   handler: async (ctx, args) => {
@@ -516,33 +670,20 @@ export const markDelivered = mutation({
     if (conv.lastMessageSenderId === undefined) return;
     if (conv.lastMessageSenderId === user._id) return;
 
-    const state = await ctx.db
-      .query("dmParticipantState")
-      .withIndex("by_conversation_user", (q) =>
-        q.eq("conversationId", args.conversationId).eq("userId", user._id),
-      )
-      .unique();
-
     const deliveredAt = Math.max(
       Date.now(),
       conv.lastMessageAt,
       await latestMessageCreationTime(ctx, args.conversationId),
     );
-    if (state) {
-      if ((state.lastDeliveredAt ?? 0) >= deliveredAt) return;
-      await ctx.db.patch(state._id, { lastDeliveredAt: deliveredAt });
-      return;
-    }
+    const state = await getParticipantState(ctx, args.conversationId, user._id);
+    if ((state?.lastDeliveredAt ?? 0) >= deliveredAt && state?.orgId !== undefined) return;
 
-    await ctx.db.insert("dmParticipantState", {
-      conversationId: args.conversationId,
-      userId: user._id,
+    await upsertParticipantState(ctx, conv, user._id, {
       lastDeliveredAt: deliveredAt,
     });
   },
 });
 
-/** Mark the current user as having read the conversation (triggers "seen" receipts). */
 export const markRead = mutation({
   args: { conversationId: v.id("dmConversations") },
   handler: async (ctx, args) => {
@@ -552,36 +693,18 @@ export const markRead = mutation({
     if (!conv) return;
     if (!conv.memberIds.includes(user._id)) return;
 
-    const state = await ctx.db
-      .query("dmParticipantState")
-      .withIndex("by_conversation_user", (q) =>
-        q.eq("conversationId", args.conversationId).eq("userId", user._id),
-      )
-      .unique();
-
     const now = Math.max(
       Date.now(),
       conv.lastMessageAt,
       await latestMessageCreationTime(ctx, args.conversationId),
     );
-    const deliveredAt = now;
-    if (state) {
-      await ctx.db.patch(state._id, {
-        lastDeliveredAt: deliveredAt,
-        lastReadAt: now,
-      });
-    } else {
-      await ctx.db.insert("dmParticipantState", {
-        conversationId: args.conversationId,
-        userId: user._id,
-        lastDeliveredAt: deliveredAt,
-        lastReadAt: now,
-      });
-    }
+    await upsertParticipantState(ctx, conv, user._id, {
+      lastDeliveredAt: now,
+      lastReadAt: now,
+    });
   },
 });
 
-/** Update typing indicator — call while user is typing, clear when they stop or send. */
 export const setTyping = mutation({
   args: {
     conversationId: v.id("dmConversations"),
@@ -593,27 +716,12 @@ export const setTyping = mutation({
     const conv = await ctx.db.get(args.conversationId);
     if (!conv || !conv.memberIds.includes(user._id)) return;
 
-    const state = await ctx.db
-      .query("dmParticipantState")
-      .withIndex("by_conversation_user", (q) =>
-        q.eq("conversationId", args.conversationId).eq("userId", user._id),
-      )
-      .unique();
-
-    const update = { typingAt: args.isTyping ? Date.now() : undefined };
-    if (state) {
-      await ctx.db.patch(state._id, update);
-    } else {
-      await ctx.db.insert("dmParticipantState", {
-        conversationId: args.conversationId,
-        userId: user._id,
-        ...update,
-      });
-    }
+    await upsertParticipantState(ctx, conv, user._id, {
+      typingAt: args.isTyping ? Date.now() : undefined,
+    });
   },
 });
 
-/** Toggle mute for this conversation (suppresses notification sounds). */
 export const setMuted = mutation({
   args: {
     conversationId: v.id("dmConversations"),
@@ -625,21 +733,8 @@ export const setMuted = mutation({
     const conv = await ctx.db.get(args.conversationId);
     if (!conv || !conv.memberIds.includes(user._id)) return;
 
-    const state = await ctx.db
-      .query("dmParticipantState")
-      .withIndex("by_conversation_user", (q) =>
-        q.eq("conversationId", args.conversationId).eq("userId", user._id),
-      )
-      .unique();
-
-    if (state) {
-      await ctx.db.patch(state._id, { isMuted: args.isMuted });
-    } else {
-      await ctx.db.insert("dmParticipantState", {
-        conversationId: args.conversationId,
-        userId: user._id,
-        isMuted: args.isMuted,
-      });
-    }
+    await upsertParticipantState(ctx, conv, user._id, {
+      isMuted: args.isMuted,
+    });
   },
 });
