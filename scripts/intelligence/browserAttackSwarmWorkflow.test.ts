@@ -197,25 +197,35 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(env).toHaveProperty("PLAYWRIGHT_SKIP_WEBSERVER", "1");
   });
 
-  it("removes candidate Clerk middleware before build so candidate code never needs the secret key", () => {
-    const run = String(
-      step(
-        "attack-worker",
-        "Remove candidate auth proxy before isolated runtime",
-      ).run ?? "",
+  it("preserves exact candidate auth middleware and gives it only public JWT verification material", () => {
+    const resolver = step(
+      "attack-worker",
+      "Resolve test-only Clerk public JWT verification key",
     );
-    expect(run).toContain("candidate/proxy.ts");
-    expect(run).toContain("candidate/middleware.ts");
-    expect(run).toContain("candidate/src/proxy.ts");
-    expect(run).toContain("candidate/src/middleware.ts");
+    const resolverEnv = resolver.env ?? {};
+    const resolverRun = String(resolver.run ?? "");
+    expect(resolverEnv).toHaveProperty("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY");
+    expect(resolverEnv).toHaveProperty("CLERK_SECRET_KEY");
+    expect(resolverRun).toContain("pk_test_*");
+    expect(resolverRun).toContain("sk_test_*");
+    expect(resolverRun).toContain("clerkPublicJwtKey.mjs");
+    expect(resolverRun).toContain("CLERK_JWT_KEY");
+
+    const allWorkerRun = (job("attack-worker").steps ?? [])
+      .map((entry) => String(entry.run ?? ""))
+      .join("\n");
+    expect(allWorkerRun).not.toContain("candidate/proxy.ts");
+    expect(allWorkerRun).not.toContain("candidate/middleware.ts");
+    expect(allWorkerRun).not.toContain("candidate/src/proxy.ts");
+    expect(allWorkerRun).not.toContain("candidate/src/middleware.ts");
 
     for (const stepName of [
       "Build exact candidate frontend in isolated container",
       "Start exact candidate frontend in isolated container",
     ]) {
-      expect(step("attack-worker", stepName).env ?? {}).not.toHaveProperty(
-        "CLERK_SECRET_KEY",
-      );
+      const candidateStep = step("attack-worker", stepName);
+      expect(candidateStep.env ?? {}).not.toHaveProperty("CLERK_SECRET_KEY");
+      expect(String(candidateStep.run ?? "")).toContain("--env CLERK_JWT_KEY");
     }
   });
 
