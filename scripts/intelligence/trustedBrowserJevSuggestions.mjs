@@ -306,6 +306,21 @@ async function writeArtifact(repoRoot, artifact) {
   return artifact;
 }
 
+/**
+ * @typedef {{
+ *   buildChangeState: typeof buildChangeState,
+ *   callJev: typeof callJev,
+ * }} TrustedBrowserJevRuntime
+ */
+
+/**
+ * @param {{
+ *   repoRoot?: string,
+ *   env?: Record<string, string | undefined>,
+ *   impactArtifact?: unknown,
+ *   runtimeOverrides?: Partial<TrustedBrowserJevRuntime>,
+ * }} [options]
+ */
 export async function runTrustedBrowserJevExploration({
   repoRoot = process.cwd(),
   env = process.env,
