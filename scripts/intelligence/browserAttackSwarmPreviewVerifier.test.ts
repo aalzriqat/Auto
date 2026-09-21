@@ -20,13 +20,29 @@ const env = {
   CLERK_SECRET_KEY: "unit-test-clerk-secret",
 };
 
-function successSpawn() {
-  return { status: 0, signal: null, output: [], pid: 1, stdout: null, stderr: null };
+type SpawnResult = {
+  status: number | null;
+  error?: Error | undefined;
+};
+
+type SpawnFn = (
+  command: string,
+  args: string[],
+  options: {
+    cwd?: string;
+    stdio?: string;
+    shell?: boolean;
+    env?: Record<string, string | undefined>;
+  },
+) => SpawnResult;
+
+function successSpawn(): SpawnResult {
+  return { status: 0 };
 }
 
 describe("SCRUM-350 preview verifier", () => {
   it("executes SCRUM-143 through a real Node ESM process boundary", async () => {
-    const spawn = vi.fn(() => successSpawn());
+    const spawn = vi.fn<SpawnFn>(() => successSpawn());
 
     const result = await verifyBrowserSwarmPreview(manifest, env, {
       spawn,
@@ -36,7 +52,9 @@ describe("SCRUM-350 preview verifier", () => {
     expect(result.verified).toBe(true);
     expect(spawn).toHaveBeenCalledTimes(1);
 
-    const [command, args, options] = spawn.mock.calls[0]!;
+    const call = spawn.mock.calls[0];
+    if (!call) throw new Error("spawn call missing");
+    const [command, args, options] = call;
     expect(command).toBe(process.execPath);
     expect(args).toEqual([
       "/repo/scripts/e2ePreviewBootstrap.mjs",
@@ -52,7 +70,7 @@ describe("SCRUM-350 preview verifier", () => {
   });
 
   it("refuses when the runtime preview name differs from the signed run manifest", async () => {
-    const spawn = vi.fn(() => successSpawn());
+    const spawn = vi.fn<SpawnFn>(() => successSpawn());
 
     await expect(
       verifyBrowserSwarmPreview(
@@ -66,7 +84,7 @@ describe("SCRUM-350 preview verifier", () => {
   });
 
   it("refuses when the browser backend URL and manifest URL diverge", async () => {
-    const spawn = vi.fn(() => successSpawn());
+    const spawn = vi.fn<SpawnFn>(() => successSpawn());
 
     await expect(
       verifyBrowserSwarmPreview(
@@ -83,7 +101,7 @@ describe("SCRUM-350 preview verifier", () => {
   });
 
   it("refuses manifests that do not explicitly require the preview marker", async () => {
-    const spawn = vi.fn(() => successSpawn());
+    const spawn = vi.fn<SpawnFn>(() => successSpawn());
 
     await expect(
       verifyBrowserSwarmPreview(
@@ -100,10 +118,7 @@ describe("SCRUM-350 preview verifier", () => {
   });
 
   it("fails closed when SCRUM-143's assertion process returns non-zero", async () => {
-    const spawn = vi.fn(() => ({
-      ...successSpawn(),
-      status: 7,
-    }));
+    const spawn = vi.fn<SpawnFn>(() => ({ status: 7 }));
 
     await expect(
       verifyBrowserSwarmPreview(manifest, env, { spawn }),
@@ -111,8 +126,7 @@ describe("SCRUM-350 preview verifier", () => {
   });
 
   it("does not hide a failure to start the SCRUM-143 assertion process", async () => {
-    const spawn = vi.fn(() => ({
-      ...successSpawn(),
+    const spawn = vi.fn<SpawnFn>(() => ({
       status: null,
       error: new Error("ENOENT"),
     }));

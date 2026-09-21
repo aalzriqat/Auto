@@ -422,7 +422,10 @@ export function runConvex(args, label, spawn = spawnSync) {
  *   resolveClerkUserId?: (options: { email: string, secretKey: string | undefined }) => Promise<string>,
  * }} [deps]
  */
-export async function assertExistingE2EPreview(env = process.env, deps = {}) {
+export async function assertExistingE2EPreview(
+  env = /** @type {Record<string, string | undefined>} */ ({ ...process.env }),
+  deps = {},
+) {
   const { run = runConvex, resolveClerkUserId: resolveId = resolveClerkUserId } = deps;
   const deployKey = env.CONVEX_DEPLOY_KEY;
   const previewName = env.CONVEX_PREVIEW_NAME;
@@ -463,7 +466,20 @@ export async function assertExistingE2EPreview(env = process.env, deps = {}) {
   );
 }
 
-export async function main(env = process.env, deps = {}) {
+/**
+ * Seeds and then verifies the disposable E2E preview.
+ *
+ * @param {Record<string, string | undefined>} [env]
+ * @param {{
+ *   run?: (args: string[], label: string) => void,
+ *   resolveClerkUserId?: (options: { email: string, secretKey: string | undefined }) => Promise<string>,
+ *   log?: (message: string) => void,
+ * }} [deps]
+ */
+export async function main(
+  env = /** @type {Record<string, string | undefined>} */ ({ ...process.env }),
+  deps = {},
+) {
   const { run = runConvex, resolveClerkUserId: resolveId = resolveClerkUserId, log = console.log } = deps;
   const deployKey = env.CONVEX_DEPLOY_KEY;
   const previewName = env.CONVEX_PREVIEW_NAME;

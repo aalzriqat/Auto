@@ -22,10 +22,19 @@ vi.mock("../../playwright/utils", () => ({
   authenticatedConvexClient: mocks.authenticatedConvexClient,
 }));
 
-vi.mock("node:fs/promises", () => ({
-  mkdir: mocks.mkdir,
-  writeFile: mocks.writeFile,
-}));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    mkdir: mocks.mkdir,
+    writeFile: mocks.writeFile,
+    default: {
+      ...(actual.default ?? actual),
+      mkdir: mocks.mkdir,
+      writeFile: mocks.writeFile,
+    },
+  };
+});
 
 import { createInitialBrowserAttackHandlers } from "./browserAttackSwarmHandlers";
 
