@@ -152,6 +152,9 @@ function deterministicMatrix(requirements: string[] = []) {
   return matrix({ deterministicRequirements: requirements });
 }
 
+const SYNTHETIC_SNAPSHOT_AT = "2026-01-01T00:00:00.000Z";
+const SYNTHETIC_REVEALED_AFTER = "2026-01-01T00:01:00.000Z";
+
 describe("Jev historical calibration", () => {
   it("pins unique exact-SHA snapshots without embedding hindsight labels", () => {
     const ids = new Set<string>();
@@ -346,6 +349,7 @@ describe("Jev historical calibration", () => {
   it("attributes deterministic, scrutiny, and escalation hits separately", () => {
     const result = {
       caseId: "synthetic",
+      snapshotAt: SYNTHETIC_SNAPSHOT_AT,
       deterministicImpact: [
         {
           id: "LIFE-1",
@@ -385,6 +389,7 @@ describe("Jev historical calibration", () => {
     };
 
     const score = scoreCalibrationCase(result, {
+      revealedAfter: SYNTHETIC_REVEALED_AFTER,
       findings: [
         {
           id: "deterministic",
@@ -425,6 +430,7 @@ describe("Jev historical calibration", () => {
   it("counts unavailable Jev as a miss without erasing deterministic baseline evidence", () => {
     const result = {
       caseId: "unavailable",
+      snapshotAt: SYNTHETIC_SNAPSHOT_AT,
       deterministicImpact: [
         {
           id: "LIFE-1",
@@ -438,6 +444,7 @@ describe("Jev historical calibration", () => {
       policy: unavailableTrack(),
     };
     const score = scoreCalibrationCase(result, {
+      revealedAfter: SYNTHETIC_REVEALED_AFTER,
       findings: [
         {
           id: "known",
@@ -465,6 +472,7 @@ describe("Jev historical calibration", () => {
     const availableScore = scoreCalibrationCase(
       {
         caseId: "negative-available",
+      snapshotAt: SYNTHETIC_SNAPSHOT_AT,
         deterministicImpact: [],
         deterministicReviewMatrix: deterministicMatrix(),
         blind: completeTrack({
@@ -481,17 +489,26 @@ describe("Jev historical calibration", () => {
           }),
         }),
       },
-      { control: "NEGATIVE_LOW_RISK", findings: [] },
+      {
+        control: "NEGATIVE_LOW_RISK",
+        revealedAfter: SYNTHETIC_REVEALED_AFTER,
+        findings: [],
+      },
     );
     const unavailableScore = scoreCalibrationCase(
       {
         caseId: "negative-unavailable",
+      snapshotAt: SYNTHETIC_SNAPSHOT_AT,
         deterministicImpact: [],
         deterministicReviewMatrix: deterministicMatrix(),
         blind: unavailableTrack(),
         policy: unavailableTrack(),
       },
-      { control: "NEGATIVE_LOW_RISK", findings: [] },
+      {
+        control: "NEGATIVE_LOW_RISK",
+        revealedAfter: SYNTHETIC_REVEALED_AFTER,
+        findings: [],
+      },
     );
 
     const metrics = aggregateCalibration(
@@ -526,6 +543,7 @@ describe("Jev historical calibration", () => {
     const positive = scoreCalibrationCase(
       {
         caseId: "positive",
+      snapshotAt: SYNTHETIC_SNAPSHOT_AT,
         deterministicImpact: [
           {
             id: "LIFE-1",
@@ -566,6 +584,7 @@ describe("Jev historical calibration", () => {
         }),
       },
       {
+        revealedAfter: SYNTHETIC_REVEALED_AFTER,
         findings: [
           {
             id: "a",
@@ -622,6 +641,31 @@ describe("Jev historical calibration", () => {
     });
   });
 
+  it("rejects scoring when the snapshot is not strictly before disclosure", () => {
+    const result = {
+      caseId: "post-disclosure",
+      snapshotAt: "2026-01-01T00:01:00.000Z",
+      deterministicImpact: [],
+      deterministicReviewMatrix: deterministicMatrix(),
+      blind: completeTrack(),
+      policy: completeTrack(),
+    };
+
+    expect(() =>
+      scoreCalibrationCase(result, {
+        revealedAfter: "2026-01-01T00:01:00.000Z",
+        findings: [],
+      }),
+    ).toThrow(/not hindsight-free/);
+
+    expect(() =>
+      scoreCalibrationCase(
+        { ...result, snapshotAt: "not-a-date" },
+        { revealedAfter: SYNTHETIC_REVEALED_AFTER, findings: [] },
+      ),
+    ).toThrow(/invalid hindsight-boundary timestamps/);
+  });
+
   it("loads hindsight labels only after every Jev case and writes incomplete evidence", async () => {
     const repoRoot = await tempDirectory();
     const events: string[] = [];
@@ -647,6 +691,7 @@ describe("Jev historical calibration", () => {
       index += 1;
       return {
         caseId: calibrationCase.id,
+        snapshotAt: calibrationCase.snapshotAt,
         baseSha: calibrationCase.baseSha,
         headSha: calibrationCase.headSha,
         changedFiles: [],
@@ -659,14 +704,23 @@ describe("Jev historical calibration", () => {
             ? unavailableTrack("synthetic outage")
             : completeTrack(),
         policy: completeTrack(),
+        sensitiveExtra: "must-not-reach-public-artifact",
       };
     });
     const loadLabels = vi.fn(async () => {
       events.push("labels");
       return {
         JEV_CALIBRATION_LABELS: {
-          "case-one": { control: "NEGATIVE_LOW_RISK", findings: [] },
-          "case-two": { control: "NEGATIVE_LOW_RISK", findings: [] },
+          "case-one": {
+            control: "NEGATIVE_LOW_RISK",
+            revealedAfter: "2026-01-01T00:01:00.000Z",
+            findings: [],
+          },
+          "case-two": {
+            control: "NEGATIVE_LOW_RISK",
+            revealedAfter: "2026-01-02T00:01:00.000Z",
+            findings: [],
+          },
         },
       };
     });
@@ -698,6 +752,9 @@ describe("Jev historical calibration", () => {
     expect(artifact.status).toBe("CALIBRATION_COMPLETE_WITH_UNAVAILABLE");
     expect(JSON.stringify(artifact)).not.toContain("patchExcerpt");
     expect(JSON.stringify(artifact)).not.toContain("runner-sentinel");
+    expect(JSON.stringify(artifact)).not.toContain(
+      "must-not-reach-public-artifact",
+    );
   });
 
   it("uses the same fail-closed governance routing in live and historical modes", () => {
