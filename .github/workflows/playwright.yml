@@ -24,7 +24,9 @@ permissions:
 # deployment while its browser is still driving it. Superseding the older run
 # is the honest resolution: its result was about to become meaningless anyway.
 concurrency:
-  group: playwright-${{ github.ref }}
+  # Shared with Trusted Browser Attack Swarm. A new PR run must cancel any
+  # older swarm before --preview-create can destroy/recreate this PR's preview.
+  group: playwright-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

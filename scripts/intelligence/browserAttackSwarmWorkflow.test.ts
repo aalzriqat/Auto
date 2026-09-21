@@ -18,6 +18,10 @@ type WorkflowJob = {
 };
 
 type Workflow = {
+  concurrency?: {
+    group?: string;
+    "cancel-in-progress"?: boolean;
+  };
   on?: {
     workflow_run?: {
       workflows?: string[];
@@ -33,6 +37,12 @@ const workflowPath = path.resolve(
   ".github/workflows/browser-attack-swarm.yml",
 );
 const workflow = parseYaml(readFileSync(workflowPath, "utf8")) as Workflow;
+const playwrightWorkflow = parseYaml(
+  readFileSync(
+    path.resolve(process.cwd(), ".github/workflows/playwright.yml"),
+    "utf8",
+  ),
+) as Workflow;
 
 function job(name: string): WorkflowJob {
   const value = workflow.jobs?.[name];
@@ -74,6 +84,18 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(prepareIf).toContain(
       "github.event.workflow_run.head_repository.full_name == github.repository",
     );
+  });
+
+  it("serializes ordinary E2E and trusted swarm around the same PR preview resource", () => {
+    expect(playwrightWorkflow.concurrency).toEqual({
+      group: "playwright-${{ github.event.pull_request.number || github.ref }}",
+      "cancel-in-progress": true,
+    });
+    expect(workflow.concurrency).toEqual({
+      group:
+        "playwright-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}",
+      "cancel-in-progress": true,
+    });
   });
 
   it("keeps the control plane on main and candidate code on the exact trusted head output", () => {

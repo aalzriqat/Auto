@@ -10,7 +10,10 @@ permissions:
   actions: read
 
 concurrency:
-  group: trusted-browser-swarm-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
+  # Deliberately the same PR-level group used by the triggering Playwright
+  # workflow. A newer E2E run therefore cancels an older swarm before it can
+  # recreate the same named preview underneath that swarm.
+  group: playwright-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
   cancel-in-progress: true
 
 jobs:
