@@ -162,6 +162,17 @@ jobs:
           echo "Server did not become ready within 60 seconds." >&2
           exit 1
 
+      - name: Verify root document before DAST
+        run: |
+          set -euo pipefail
+          status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' http://localhost:3000/)"
+          case "$status" in
+            5??)
+              echo "::error::Root document returned HTTP $status"
+              exit 1
+              ;;
+          esac
+
       - name: ZAP baseline scan
         uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
         continue-on-error: true
@@ -222,6 +233,17 @@ jobs:
           done
           echo "Server did not become ready within 60 seconds." >&2
           exit 1
+
+      - name: Verify root document before DAST
+        run: |
+          set -euo pipefail
+          status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' http://localhost:3000/)"
+          case "$status" in
+            5??)
+              echo "::error::Root document returned HTTP $status"
+              exit 1
+              ;;
+          esac
 
       - name: Run Nuclei
         uses: projectdiscovery/nuclei-action@32a91c0da7be14c07b0ade6c14fa0f6e78d97c9c # v3.1.0
