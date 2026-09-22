@@ -1,0 +1,73 @@
+name: Jev Historical Calibration
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "scripts/intelligence/jevCalibration.mjs"
+      - "scripts/intelligence/jevCalibrationCases.mjs"
+      - "scripts/intelligence/jevCalibrationLabels.mjs"
+      - "scripts/intelligence/jevCalibration.test.ts"
+      - "scripts/intelligence/runJevHistoricalCalibration.mjs"
+      - "scripts/intelligence/jevImpact.mjs"
+      - "scripts/intelligence/runJevShadowImpact.mjs"
+      - ".github/workflows/jev-historical-calibration.yml"
+      - ".github/workflows/invariant-governance.yml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+
+permissions:
+  contents: read
+
+jobs:
+  historical-calibration:
+    name: historical-calibration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+          cache: "pnpm"
+
+      - name: Install trusted main dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Verify calibration harness
+        run: pnpm test:jev-calibration
+        env:
+          NODE_ENV: test
+
+      - name: Run hindsight-free historical calibration
+        run: pnpm jev:calibrate
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+
+      - name: Publish calibration summary
+        if: always()
+        run: |
+          if [ -f artifacts/jev-historical-calibration.md ]; then
+            cat artifacts/jev-historical-calibration.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload sanitized calibration evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: jev-historical-calibration
+          path: |
+            artifacts/jev-historical-calibration.json
+            artifacts/jev-historical-calibration.md
+          if-no-files-found: warn
+          retention-days: 30
