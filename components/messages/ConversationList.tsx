@@ -202,7 +202,7 @@ export function ConversationList({ orgId, currentUserId, activeId, onSelect }: P
               disabled={conversationStatus === "LoadingMore"}
               onClick={() => loadMoreConversations(50)}
             >
-              {t("LoadMore" as never) || "Load More"}
+              {t("LoadMore")}
             </Button>
           </div>
         )}
