@@ -138,10 +138,13 @@ jobs:
         run: |
           set -euo pipefail
           key="pk_test_$(printf '%s' 'ci-security-placeholder.clerk.accounts.dev$' | base64 -w0 | tr -d '=')"
-          [ ${#key} -gt 40 ] || { echo "::error::Clerk placeholder assembly failed"; exit 1; }
+          secret="sk_test_$(printf '%s' 'autoflow-ci-security-server-placeholder' | sha256sum | cut -d' ' -f1)"
+          [ ${#key} -gt 40 ] || { echo "::error::Clerk publishable placeholder assembly failed"; exit 1; }
+          [ ${#secret} -gt 40 ] || { echo "::error::Clerk server placeholder assembly failed"; exit 1; }
           {
             echo "NEXT_PUBLIC_CONVEX_URL=https://ci-security-placeholder.convex.cloud"
             echo "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$key"
+            echo "CLERK_SECRET_KEY=$secret"
             echo "NEXT_PUBLIC_APP_URL=http://localhost:3000"
           } >> "$GITHUB_ENV"
 
@@ -210,10 +213,13 @@ jobs:
         run: |
           set -euo pipefail
           key="pk_test_$(printf '%s' 'ci-security-placeholder.clerk.accounts.dev$' | base64 -w0 | tr -d '=')"
-          [ ${#key} -gt 40 ] || { echo "::error::Clerk placeholder assembly failed"; exit 1; }
+          secret="sk_test_$(printf '%s' 'autoflow-ci-security-server-placeholder' | sha256sum | cut -d' ' -f1)"
+          [ ${#key} -gt 40 ] || { echo "::error::Clerk publishable placeholder assembly failed"; exit 1; }
+          [ ${#secret} -gt 40 ] || { echo "::error::Clerk server placeholder assembly failed"; exit 1; }
           {
             echo "NEXT_PUBLIC_CONVEX_URL=https://ci-security-placeholder.convex.cloud"
             echo "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$key"
+            echo "CLERK_SECRET_KEY=$secret"
             echo "NEXT_PUBLIC_APP_URL=http://localhost:3000"
           } >> "$GITHUB_ENV"
 
