@@ -41,6 +41,10 @@ jobs:
         pnpm test:coverage:sonar
       env:
         NODE_ENV: test
+        # The full V8 coverage merge now exceeds Node's ~4 GiB default heap
+        # after all tests pass. Raise only the collector heap; coverage,
+        # assertions, files and thresholds remain unchanged.
+        NODE_OPTIONS: --max-old-space-size=5632
 
     - name: Upload coverage report
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
