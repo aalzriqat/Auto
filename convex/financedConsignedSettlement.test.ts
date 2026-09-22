@@ -6769,10 +6769,6 @@ describe("the closing matrix c16216 requires", () => {
   test("a multi-vehicle quote cannot become a financed deal at all", async () => {
     const s = await seedDealership("c16216multi");
 
-    // c16216 §2, door one. This is the guard the deposit slice actually rests
-    // on: `deposit.vehicleId` is the quote's FIRST line item and nothing more,
-    // so reading it as an allocation would give car one the whole عربون and
-    // leave its siblings looking undeposited.
     const secondVehicleId = await s.t.run((ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId,
@@ -6791,26 +6787,28 @@ describe("the closing matrix c16216 requires", () => {
         sourceCost: SUPPLIER_ENTITLEMENT,
       })
     );
-    const quoteId = await s.asUser.mutation(api.quotes.saveQuote, {
-      orgId: s.orgId,
-      customerId: s.customerId,
-      vehicleId: s.vehicleId,
-      vehiclePrice: VEHICLE_PRICE,
-      downPayment: 0,
-      termMonths: 48,
-      mode: "CONFIGURED_FINANCE_COMPANY" as const,
-      companyId: s.companyId,
-      customerEligibilityStatusIds: [s.customerStatusId],
-      totalFinancedAmount: VEHICLE_PRICE,
-      vehicleItems: [
-        { vehicleId: s.vehicleId, unitPrice: VEHICLE_PRICE },
-        { vehicleId: secondVehicleId, unitPrice: VEHICLE_PRICE },
-      ],
-    });
 
+    const before = await s.t.run((ctx) => ctx.db.query("quotes").collect());
     await expect(
-      s.asUser.mutation(api.applications.createFromQuote, { orgId: s.orgId, quoteId })
+      s.asUser.mutation(api.quotes.saveQuote, {
+        orgId: s.orgId,
+        customerId: s.customerId,
+        vehicleId: s.vehicleId,
+        vehiclePrice: VEHICLE_PRICE,
+        downPayment: 0,
+        termMonths: 48,
+        mode: "CONFIGURED_FINANCE_COMPANY" as const,
+        companyId: s.companyId,
+        customerEligibilityStatusIds: [s.customerStatusId],
+        totalFinancedAmount: VEHICLE_PRICE,
+        vehicleItems: [
+          { vehicleId: s.vehicleId, unitPrice: VEHICLE_PRICE },
+          { vehicleId: secondVehicleId, unitPrice: VEHICLE_PRICE },
+        ],
+      })
     ).rejects.toThrow(/exactly one vehicle/i);
+    const after = await s.t.run((ctx) => ctx.db.query("quotes").collect());
+    expect(after).toHaveLength(before.length);
   });
 
   test("and if that door were opened, the settlement plan still refuses to guess the slice", async () => {
