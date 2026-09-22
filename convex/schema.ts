@@ -6100,13 +6100,21 @@ export default defineSchema({
   dmParticipantState: defineTable({
     conversationId: v.id("dmConversations"),
     userId: v.id("users"),
+    // Member-scoped conversation projection. Optional only for legacy pre-launch
+    // rows; every current writer populates all three fields below.
+    orgId: v.optional(v.id("organizations")),
+    conversationLastMessageAt: v.optional(v.number()),
+    hasUnread: v.optional(v.boolean()),
     lastDeliveredAt: v.optional(v.number()), // marks messages up to here as delivered to this user's active client
     lastReadAt: v.optional(v.number()), // marks messages up to here as "seen"
     typingAt: v.optional(v.number()),   // last keystroke timestamp
     isMuted: v.optional(v.boolean()),   // suppress sounds for this conversation
   })
     .index("by_conversation_user", ["conversationId", "userId"])
-    .index("by_user", ["userId"]),
+    .index("by_user", ["userId"])
+    .index("by_user_org", ["userId", "orgId"])
+    .index("by_org_user_lastMessageAt", ["orgId", "userId", "conversationLastMessageAt"])
+    .index("by_org_user_unread", ["orgId", "userId", "hasUnread"]),
 
   // Temporary, audited "act as a specific real member" access for super
   // admins: same real-membership-grant pattern as supportOrgAccessGrants

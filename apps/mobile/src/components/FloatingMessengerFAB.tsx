@@ -22,8 +22,9 @@ export function FloatingMessengerFAB({
   const { locale, textDirection } = useLocale();
   const theme = useAppTheme();
   const styles = useThemedStyles(makeStyles);
-  const conversations = useQuery(api.directMessages.listConversations, { orgId });
-  const unreadCount = (conversations ?? []).filter((conversation) => conversation.hasUnread).length;
+  // Badge correctness must not depend on the recent-conversation list window.
+  // The backend count is member-scoped and exact across the caller's conversations.
+  const unreadCount = useQuery(api.directMessages.getUnreadCount, { orgId }) ?? 0;
   const pulse = useRef(new Animated.Value(0)).current;
   const [open, setOpen] = useState(false);
   const closeMessenger = () => setOpen(false);
