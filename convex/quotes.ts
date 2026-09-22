@@ -419,9 +419,15 @@ export const saveQuote = mutation({
         takafulAmount: calc.takafulAmount,
       };
     } else {
-      // Non-Murabaha modes do not accept caller-owned financing outputs here.
-      // CASH receives its canonical price/zero economics below; unsupported or
-      // legacy modes keep these derived fields absent.
+      // Non-Murabaha modes never preserve caller-owned financing outputs.
+      // CASH still has canonical server-owned economics used by the downstream
+      // sale lifecycle; other unsupported/legacy modes leave these fields absent.
+      if (args.mode === "CASH") {
+        totalFinancedAmount = vehiclePrice;
+        monthlyInstallment = 0;
+        profitRateApplied = 0;
+        totalProfit = 0;
+      }
     }
 
     // The UI blocks a below-minimum financed quote unless a manager approved it;
