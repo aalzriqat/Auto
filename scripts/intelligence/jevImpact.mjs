@@ -414,6 +414,38 @@ export function truncatePatch(patch, maxChars = DEFAULT_MAX_PATCH_CHARS) {
   };
 }
 
+export function readCommitTimestamp(repoRoot, ref) {
+  assertCommitSha(ref, "commit SHA");
+  const raw = safeGit(repoRoot, ["show", "-s", "--format=%cI", ref]).trim();
+  const parsed = new Date(raw);
+  if (!Number.isFinite(parsed.getTime())) {
+    throw new TypeError(`Unable to parse commit timestamp for ${ref}`);
+  }
+  return parsed.toISOString();
+}
+
+export function assertAncestorCommit(repoRoot, baseSha, headSha) {
+  assertCommitSha(baseSha, "base SHA");
+  assertCommitSha(headSha, "head SHA");
+  try {
+    execFileSync(
+      resolveTrustedGitExecutable(),
+      ["merge-base", "--is-ancestor", baseSha, headSha],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 10_000,
+        windowsHide: true,
+      },
+    );
+  } catch {
+    throw new Error(
+      `Historical calibration base ${baseSha} is not an ancestor of ${headSha}`,
+    );
+  }
+}
+
 export function buildChangeState({
   repoRoot = process.cwd(),
   baseSha,
@@ -458,16 +490,8 @@ function invariantQuestionKey(id) {
   return `invariant__${id.replace(/\W/g, "_")}`;
 }
 
-/**
- * @param {ExtractedInvariant[]} invariants
- * @returns {Record<string, {type: "noul", instructions: string, criteria: {true: string, false: string}}>}
- */
-export function buildJevQuestions(invariants) {
-  if (invariants.length === 0) {
-    throw new Error("Jev question set cannot be built from an empty invariant catalog");
-  }
+export function buildJevRiskQuestions() {
   const questions = {};
-  const invariantQuestionKeys = new Set();
   for (const [risk, definition] of Object.entries(RISK_QUESTIONS)) {
     questions[`risk__${risk}`] = {
       type: "noul",
@@ -478,6 +502,19 @@ export function buildJevQuestions(invariants) {
       },
     };
   }
+  return questions;
+}
+
+/**
+ * @param {ExtractedInvariant[]} invariants
+ * @returns {Record<string, {type: "noul", instructions: string, criteria: {true: string, false: string}}>}
+ */
+export function buildJevQuestions(invariants) {
+  if (invariants.length === 0) {
+    throw new Error("Jev question set cannot be built from an empty invariant catalog");
+  }
+  const questions = buildJevRiskQuestions();
+  const invariantQuestionKeys = new Set();
 
   for (const invariant of invariants) {
     const key = invariantQuestionKey(invariant.id);
@@ -570,6 +607,10 @@ export function normalizeJevResponse(response, invariants) {
   };
 }
 
+export function normalizeJevRiskResponse(response) {
+  return normalizeJevResponse(response, []);
+}
+
 function assertProbability(value, name) {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
     throw new Error(`${name} must be a finite probability from 0 to 1`);
@@ -589,6 +630,26 @@ const RISK_REQUIREMENTS = Object.freeze({
   externalInput: ["proof:BOUNDARY", "proof:FUZZ"],
   uiAuthority: ["review:ui-backend-authority"],
 });
+
+const CORRECTNESS_GOVERNANCE_FILES = new Set([
+  "scripts/autoflowInvariantCatalog.ts",
+  ".github/workflows/invariant-governance.yml",
+  ".github/workflows/jev-shadow-impact.yml",
+  ".github/workflows/jev-historical-calibration.yml",
+  "package.json",
+  "pnpm-lock.yaml",
+]);
+
+export function extraDeterministicRequirementsForFiles(changedFiles) {
+  const changesCorrectnessGovernance = changedFiles.some(
+    (file) =>
+      CORRECTNESS_GOVERNANCE_FILES.has(file) ||
+      file.startsWith("scripts/intelligence/"),
+  );
+  return changesCorrectnessGovernance
+    ? ["review:correctness-governance", "proof:jev-harness"]
+    : [];
+}
 
 function compareStrings(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
