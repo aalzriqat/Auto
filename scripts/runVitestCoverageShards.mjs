@@ -37,7 +37,6 @@ const sharedShardArgs = [
   "--coverage",
   "--maxWorkers=1",
   "--exclude=convex/unifiedDealFeeAuthority.test.ts",
-  ...thresholdZeroArgs,
 ];
 
 function runVitest(args) {
