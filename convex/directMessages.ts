@@ -3,7 +3,7 @@ import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
-import { requireTenantAuth, requireAuth } from "./utils/tenancy";
+import { requireTenantAuth } from "./utils/tenancy";
 import { Doc, Id } from "./_generated/dataModel";
 import { notifyUser } from "./utils/notifications";
 
@@ -16,6 +16,18 @@ function ensureMember(
   if (!conversation.memberIds.includes(userId)) {
     throw new Error("Not a member of this conversation.");
   }
+}
+
+async function requireCurrentConversationMember(
+  ctx: QueryCtx | MutationCtx,
+  conversation: Doc<"dmConversations">,
+) {
+  // Conversation membership is historical state; tenant membership is live
+  // authority. A former dealership member must not retain DM access merely
+  // because their user id remains on an old conversation row.
+  const { user } = await requireTenantAuth(ctx, conversation.orgId);
+  ensureMember(user._id, conversation);
+  return user;
 }
 
 async function latestMessageCreationTime(
@@ -271,11 +283,9 @@ export const listMessages = query({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
-    const user = await requireAuth(ctx);
-
     const conv = await ctx.db.get(args.conversationId);
     if (!conv) throw new Error("Conversation not found.");
-    ensureMember(user._id, conv);
+    const user = await requireCurrentConversationMember(ctx, conv);
 
     const page = await ctx.db
       .query("dmMessages")
@@ -366,11 +376,9 @@ export const listMessages = query({
 export const getConversation = query({
   args: { conversationId: v.id("dmConversations") },
   handler: async (ctx, args) => {
-    const user = await requireAuth(ctx);
-
     const conv = await ctx.db.get(args.conversationId);
     if (!conv) return null;
-    if (!conv.memberIds.includes(user._id)) return null;
+    const user = await requireCurrentConversationMember(ctx, conv);
 
     const members = await Promise.all(
       conv.memberIds.map(async (uid) => {
@@ -595,11 +603,9 @@ export const sendMessage = mutation({
     body: v.string(),
   },
   handler: async (ctx, args) => {
-    const user = await requireAuth(ctx);
-
     const conv = await ctx.db.get(args.conversationId);
     if (!conv) throw new Error("Conversation not found.");
-    ensureMember(user._id, conv);
+    const user = await requireCurrentConversationMember(ctx, conv);
 
     const trimmed = args.body.trim();
     if (!trimmed) throw new Error("Message body cannot be empty.");
@@ -662,11 +668,9 @@ export const sendMessage = mutation({
 export const markDelivered = mutation({
   args: { conversationId: v.id("dmConversations") },
   handler: async (ctx, args) => {
-    const user = await requireAuth(ctx);
-
     const conv = await ctx.db.get(args.conversationId);
     if (!conv) return;
-    if (!conv.memberIds.includes(user._id)) return;
+    const user = await requireCurrentConversationMember(ctx, conv);
     if (conv.lastMessageSenderId === undefined) return;
     if (conv.lastMessageSenderId === user._id) return;
 
@@ -687,11 +691,9 @@ export const markDelivered = mutation({
 export const markRead = mutation({
   args: { conversationId: v.id("dmConversations") },
   handler: async (ctx, args) => {
-    const user = await requireAuth(ctx);
-
     const conv = await ctx.db.get(args.conversationId);
     if (!conv) return;
-    if (!conv.memberIds.includes(user._id)) return;
+    const user = await requireCurrentConversationMember(ctx, conv);
 
     const now = Math.max(
       Date.now(),
@@ -711,10 +713,9 @@ export const setTyping = mutation({
     isTyping: v.boolean(),
   },
   handler: async (ctx, args) => {
-    const user = await requireAuth(ctx);
-
     const conv = await ctx.db.get(args.conversationId);
-    if (!conv || !conv.memberIds.includes(user._id)) return;
+    if (!conv) return;
+    const user = await requireCurrentConversationMember(ctx, conv);
 
     await upsertParticipantState(ctx, conv, user._id, {
       typingAt: args.isTyping ? Date.now() : undefined,
@@ -728,10 +729,9 @@ export const setMuted = mutation({
     isMuted: v.boolean(),
   },
   handler: async (ctx, args) => {
-    const user = await requireAuth(ctx);
-
     const conv = await ctx.db.get(args.conversationId);
-    if (!conv || !conv.memberIds.includes(user._id)) return;
+    if (!conv) return;
+    const user = await requireCurrentConversationMember(ctx, conv);
 
     await upsertParticipantState(ctx, conv, user._id, {
       isMuted: args.isMuted,
