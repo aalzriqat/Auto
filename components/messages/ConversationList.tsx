@@ -46,6 +46,13 @@ export function ConversationList({ orgId, currentUserId, activeId, onSelect }: P
     { initialNumItems: 50 },
   );
   const markDelivered = useMutation(api.directMessages.markDelivered);
+  const backfillConversationProjection = useMutation(
+    api.directMessages.backfillMyConversationProjection,
+  );
+
+  useEffect(() => {
+    backfillConversationProjection({ orgId }).catch(() => null);
+  }, [backfillConversationProjection, orgId]);
 
   useEffect(() => {
     for (const conv of conversations) {
