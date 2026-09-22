@@ -174,13 +174,15 @@ export async function runJevHistoricalCalibration({
     return scoreCalibrationCase(result, label);
   });
   const metrics = aggregateCalibration(scoredCases, results);
+  let status = "CALIBRATION_COMPLETE";
+  if (failedCaseIds.length > 0) {
+    status = "CALIBRATION_FAILED_WITH_EVIDENCE";
+  } else if (metrics.unavailableTracks > 0) {
+    status = "CALIBRATION_COMPLETE_WITH_UNAVAILABLE";
+  }
+
   const payload = {
-    status:
-      failedCaseIds.length > 0
-        ? "CALIBRATION_FAILED_WITH_EVIDENCE"
-        : metrics.unavailableTracks === 0
-          ? "CALIBRATION_COMPLETE"
-          : "CALIBRATION_COMPLETE_WITH_UNAVAILABLE",
+    status,
     failedCaseIds,
     authority:
       "Calibration may tune advisory routing thresholds only. It cannot remove deterministic proof obligations or correctness gates.",
