@@ -39,7 +39,9 @@ async function hasCurrentOrgMembership(
     .query("memberships")
     .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
     .unique();
-  return membership !== null;
+  // Match requireTenantAuth's live-authority boundary. An offboarding row is
+  // retained for lifecycle/audit work but no longer grants product access.
+  return membership !== null && membership.offboardingStatus === undefined;
 }
 
 async function latestMessageCreationTime(
@@ -490,7 +492,7 @@ export const getOrgMembers = query({
 
     const members = await Promise.all(
       memberships
-        .filter((m) => m.userId !== user._id)
+        .filter((m) => m.userId !== user._id && m.offboardingStatus === undefined)
         .map(async (m) => {
           const u = await ctx.db.get(m.userId);
           if (!u) return null;
@@ -521,13 +523,9 @@ export const getOrCreateDm = mutation({
       throw new Error("Cannot create a DM with yourself.");
     }
 
-    const otherMembership = await ctx.db
-      .query("memberships")
-      .withIndex("by_org_user", (q) =>
-        q.eq("orgId", args.orgId).eq("userId", args.otherUserId),
-      )
-      .unique();
-    if (!otherMembership) throw new Error("User is not a member of this org.");
+    if (!(await hasCurrentOrgMembership(ctx, args.orgId, args.otherUserId))) {
+      throw new Error("User is not an active member of this org.");
+    }
 
     await projectLegacyParticipantStatesForUser(ctx, user._id);
     const myStates = await ctx.db
@@ -602,13 +600,9 @@ export const createGroup = mutation({
     }
 
     for (const uid of otherMemberIds) {
-      const membership = await ctx.db
-        .query("memberships")
-        .withIndex("by_org_user", (q) =>
-          q.eq("orgId", args.orgId).eq("userId", uid),
-        )
-        .unique();
-      if (!membership) throw new Error("One or more users are not members of this org.");
+      if (!(await hasCurrentOrgMembership(ctx, args.orgId, uid))) {
+        throw new Error("One or more users are not active members of this org.");
+      }
     }
 
     const allMembers = [user._id, ...otherMemberIds];
