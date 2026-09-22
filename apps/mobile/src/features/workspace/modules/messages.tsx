@@ -73,7 +73,14 @@ export function MessagesModule({ orgId }: { orgId: string }) {
     { initialNumItems: 25 },
   );
   const members = useQuery(api.directMessages.getOrgMembers, { orgId });
+  const backfillConversationProjection = useMutation(
+    api.directMessages.backfillMyConversationProjection,
+  );
   const getOrCreateDm = useMutation(api.directMessages.getOrCreateDm);
+
+  useEffect(() => {
+    backfillConversationProjection({ orgId }).catch(() => null);
+  }, [backfillConversationProjection, orgId]);
   const createGroup = useMutation(api.directMessages.createGroup);
   const sendDirectMessage = useMutation(api.directMessages.sendMessage);
   const markDelivered = useMutation(api.directMessages.markDelivered);
