@@ -2416,7 +2416,7 @@ export const api = {
     ),
     updateCompany: makeFunctionReference<
       "mutation",
-      FinanceCompanyMutationArgs & { id: string },
+      FinanceCompanyMutationArgs & { id: string; expectedEditRevision: number },
       null
     >("finance:updateCompany"),
     deleteCompany: makeFunctionReference<"mutation", OrgScopedArgs & { id: string }, null>(
