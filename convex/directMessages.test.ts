@@ -47,13 +47,15 @@ describe("directMessages current-membership authority", () => {
     const { t, orgId, conversationId, asBob } = await setupDm();
 
     await t.run(async (ctx) => {
+      const bob = await ctx.db
+        .query("users")
+        .filter((q) => q.eq(q.field("clerkId"), "bob_dm"))
+        .first();
+      if (!bob) throw new Error("Bob user fixture missing");
       const membership = await ctx.db
         .query("memberships")
         .withIndex("by_org_user", (q) =>
-          q.eq("orgId", orgId).eq("userId", (await ctx.db
-            .query("users")
-            .filter((q) => q.eq(q.field("clerkId"), "bob_dm"))
-            .first())!._id),
+          q.eq("orgId", orgId).eq("userId", bob._id),
         )
         .unique();
       if (!membership) throw new Error("Bob membership fixture missing");
