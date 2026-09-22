@@ -2465,6 +2465,11 @@ export const api = {
     >("notifications:archive"),
   },
   directMessages: {
+    backfillMyConversationProjection: makeFunctionReference<
+      "mutation",
+      OrgScopedArgs,
+      { updated: number }
+    >("directMessages:backfillMyConversationProjection"),
     listConversations: makeFunctionReference<
       "query",
       OrgScopedArgs,
