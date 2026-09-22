@@ -116,7 +116,7 @@ async function upsertParticipantState(
 }
 
 async function getLegacyParticipantStates(
-  ctx: QueryCtx,
+  ctx: QueryCtx | MutationCtx,
   userId: Id<"users">,
 ) {
   return await ctx.db
@@ -177,6 +177,45 @@ async function hydrateConversationStates(
     lastDeliveredAt: state.lastDeliveredAt ?? 0,
   }));
 }
+
+/**
+ * One-time compatibility projection for participant rows created before the
+ * member-scoped org/activity fields existed. It scans only this authenticated
+ * user's legacy state rows, and only patches conversations that actually belong
+ * to the requested organization and still contain the user historically.
+ *
+ * The paginated read stays entirely index-backed; this mutation is what moves
+ * compatible legacy rows into that index without reintroducing an org-wide
+ * conversation scan.
+ */
+export const backfillMyConversationProjection = mutation({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId);
+    const legacyStates = await getLegacyParticipantStates(ctx, user._id);
+    let updated = 0;
+
+    for (const state of legacyStates) {
+      const conversation = await ctx.db.get(state.conversationId);
+      if (
+        conversation === null ||
+        conversation.orgId !== args.orgId ||
+        !conversation.memberIds.includes(user._id)
+      ) {
+        continue;
+      }
+
+      await ctx.db.patch(state._id, {
+        orgId: args.orgId,
+        conversationLastMessageAt: conversation.lastMessageAt,
+        hasUnread: isUnreadForUser(conversation, user._id, state.lastReadAt),
+      });
+      updated += 1;
+    }
+
+    return { updated };
+  },
+});
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
