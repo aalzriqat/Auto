@@ -166,6 +166,223 @@ describe("directMessages delivery authority after membership removal", () => {
   });
 });
 
+
+describe("directMessages offboarding authority", () => {
+  test("offboarding the only recipient blocks a DM send before message or notification writes", async () => {
+    const { t, orgId, conversationId, asAlice } = await setupDm();
+    const bob = await t.run((ctx) =>
+      ctx.db
+        .query("users")
+        .filter((q) => q.eq(q.field("clerkId"), "bob_dm"))
+        .first()
+    );
+    if (!bob) throw new Error("Bob user fixture missing");
+
+    await t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) =>
+          q.eq("orgId", orgId).eq("userId", bob._id),
+        )
+        .unique();
+      if (!membership) throw new Error("Bob membership fixture missing");
+      await ctx.db.patch(membership._id, {
+        offboardingStatus: "PENDING_EXTERNAL_REMOVAL",
+        offboardingRequestedAt: Date.now(),
+      });
+    });
+
+    const before = await t.run((ctx) =>
+      ctx.db
+        .query("dmMessages")
+        .withIndex("by_conversation", (q) => q.eq("conversationId", conversationId))
+        .collect()
+    );
+
+    await expect(
+      asAlice.mutation(api.directMessages.sendMessage, {
+        conversationId,
+        body: "must not reach an offboarding member",
+      }),
+    ).rejects.toThrow(/no current recipients/i);
+
+    const after = await t.run((ctx) =>
+      ctx.db
+        .query("dmMessages")
+        .withIndex("by_conversation", (q) => q.eq("conversationId", conversationId))
+        .collect()
+    );
+    const notifications = await t.run((ctx) =>
+      ctx.db
+        .query("notifications")
+        .withIndex("by_user", (q) => q.eq("userId", bob._id))
+        .collect()
+    );
+    expect(after).toHaveLength(before.length);
+    expect(notifications).toHaveLength(0);
+  });
+
+  test("group sends notify active recipients only when another historical member is offboarding", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Offboarding Group Dealer", createdAt: Date.now() })
+    );
+    const roleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "OWNER", permissions: [], isSystemOwnerRole: true })
+    );
+    const [aliceId, bobId, charlieId] = await t.run(async (ctx) =>
+      Promise.all([
+        ctx.db.insert("users", { clerkId: "alice_offboard_group", email: "alice.offboard.group@test.com", name: "Alice" }),
+        ctx.db.insert("users", { clerkId: "bob_offboard_group", email: "bob.offboard.group@test.com", name: "Bob" }),
+        ctx.db.insert("users", { clerkId: "charlie_offboard_group", email: "charlie.offboard.group@test.com", name: "Charlie" }),
+      ])
+    );
+    await t.run(async (ctx) => {
+      await Promise.all([
+        ctx.db.insert("memberships", { orgId, userId: aliceId, roleId }),
+        ctx.db.insert("memberships", { orgId, userId: bobId, roleId }),
+        ctx.db.insert("memberships", { orgId, userId: charlieId, roleId }),
+      ]);
+    });
+    const asAlice = t.withIdentity({ subject: "alice_offboard_group", clerkId: "alice_offboard_group" });
+    const groupId = await asAlice.mutation(api.directMessages.createGroup, {
+      orgId,
+      name: "Ops",
+      memberIds: [bobId, charlieId],
+    });
+
+    await t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", bobId))
+        .unique();
+      if (!membership) throw new Error("Bob membership fixture missing");
+      await ctx.db.patch(membership._id, {
+        offboardingStatus: "EXTERNAL_REMOVAL_RETRYING",
+        offboardingRequestedAt: Date.now(),
+      });
+    });
+
+    await asAlice.mutation(api.directMessages.sendMessage, {
+      conversationId: groupId,
+      body: "active recipients only",
+    });
+
+    const [bobNotifications, charlieNotifications] = await t.run(async (ctx) =>
+      Promise.all([
+        ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", bobId)).collect(),
+        ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", charlieId)).collect(),
+      ])
+    );
+    expect(bobNotifications).toHaveLength(0);
+    expect(charlieNotifications).toHaveLength(1);
+  });
+
+  test("offboarding users are excluded from reads and legacy projection backfill", async () => {
+    const { t, orgId, conversationId, asAlice, asBob } = await setupDm();
+    const bob = await t.run((ctx) =>
+      ctx.db
+        .query("users")
+        .filter((q) => q.eq(q.field("clerkId"), "bob_dm"))
+        .first()
+    );
+    if (!bob) throw new Error("Bob user fixture missing");
+
+    await t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) =>
+          q.eq("orgId", orgId).eq("userId", bob._id),
+        )
+        .unique();
+      if (!membership) throw new Error("Bob membership fixture missing");
+      await ctx.db.patch(membership._id, {
+        offboardingStatus: "PENDING_EXTERNAL_REMOVAL",
+        offboardingRequestedAt: Date.now(),
+      });
+      const state = await ctx.db
+        .query("dmParticipantState")
+        .withIndex("by_conversation_user", (q) =>
+          q.eq("conversationId", conversationId).eq("userId", bob._id),
+        )
+        .unique();
+      if (!state) throw new Error("Bob participant state fixture missing");
+      await ctx.db.patch(state._id, {
+        orgId: undefined,
+        conversationLastMessageAt: undefined,
+        hasUnread: undefined,
+      });
+    });
+
+    await expect(
+      asBob.query(api.directMessages.getConversation, { conversationId }),
+    ).rejects.toThrow();
+
+    const visible = await asAlice.query(api.directMessages.getConversation, {
+      conversationId,
+    });
+    expect(visible?.members.map((member) => member?._id)).not.toContain(bob._id);
+
+    // The offboarding caller cannot run the public backfill mutation because
+    // requireTenantAuth has already revoked product authority. Exercise the
+    // same compatibility path through an active caller and assert the stale
+    // legacy row is absent from indexed reads.
+    const alicePage = await asAlice.query(api.directMessages.listConversationsPage, {
+      orgId,
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+    expect(alicePage.page[0]?.members.map((member) => member?._id)).not.toContain(bob._id);
+  });
+
+  test("new DMs and groups reject offboarding invitees", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Invite Authority Dealer", createdAt: Date.now() })
+    );
+    const roleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "OWNER", permissions: [], isSystemOwnerRole: true })
+    );
+    const [aliceId, bobId, charlieId] = await t.run(async (ctx) =>
+      Promise.all([
+        ctx.db.insert("users", { clerkId: "alice_invite_dm", email: "alice.invite@test.com", name: "Alice" }),
+        ctx.db.insert("users", { clerkId: "bob_invite_dm", email: "bob.invite@test.com", name: "Bob" }),
+        ctx.db.insert("users", { clerkId: "charlie_invite_dm", email: "charlie.invite@test.com", name: "Charlie" }),
+      ])
+    );
+    await t.run(async (ctx) => {
+      await ctx.db.insert("memberships", { orgId, userId: aliceId, roleId });
+      await ctx.db.insert("memberships", {
+        orgId,
+        userId: bobId,
+        roleId,
+        offboardingStatus: "PENDING_EXTERNAL_REMOVAL",
+        offboardingRequestedAt: Date.now(),
+      });
+      await ctx.db.insert("memberships", { orgId, userId: charlieId, roleId });
+    });
+    const asAlice = t.withIdentity({ subject: "alice_invite_dm", clerkId: "alice_invite_dm" });
+
+    await expect(
+      asAlice.mutation(api.directMessages.getOrCreateDm, {
+        orgId,
+        otherUserId: bobId,
+      }),
+    ).rejects.toThrow(/active member/i);
+
+    await expect(
+      asAlice.mutation(api.directMessages.createGroup, {
+        orgId,
+        name: "Invalid offboarding invite",
+        memberIds: [bobId, charlieId],
+      }),
+    ).rejects.toThrow(/active members/i);
+
+    const orgMembers = await asAlice.query(api.directMessages.getOrgMembers, { orgId });
+    expect(orgMembers.map((member) => member?._id)).not.toContain(bobId);
+    expect(orgMembers.map((member) => member?._id)).toContain(charlieId);
+  });
+});
+
 describe("directMessages receipts", () => {
   test("delivery upgrades a sent message without marking it read", async () => {
     const { orgId, conversationId, asAlice, asBob } = await setupDm();
