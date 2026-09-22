@@ -2346,8 +2346,8 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         ).rejects.toThrow(/Monthly installment must be a finite number/);
       });
 
-      // 10. vehicleItems changes effective price while caller sends different vehiclePrice -> calculation uses server-resolved price
-      test("10. vehicleItems changes effective price while caller sends different vehiclePrice -> calculation uses server-resolved price", async () => {
+      // 10. financed quotes reject vehicleItems before any multi-vehicle normalization.
+      test("10. financed vehicleItems are rejected before quote economics are calculated", async () => {
         const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
         const vehicleId2 = await t.run((ctx) =>
           ctx.db.insert("vehicles", {
@@ -2380,28 +2380,25 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           })
         );
 
-        // Caller passes vehiclePrice: 10,000, but vehicleItems has 15,000 + 10,000 = 25,000
-        const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
-          orgId,
-          customerId,
-          vehicleId,
-          vehicleItems: [
-            { vehicleId, unitPrice: 15_000 },
-            { vehicleId: vehicleId2, unitPrice: 10_000 },
-          ],
-          companyId,
-          mode: "CONFIGURED_FINANCE_COMPANY",
-          vehiclePrice: 10_000, // Fabricated / mismatched
-          downPayment: 5_000,
-          termMonths: 48,
-        });
-
-        const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
-        // Resolved vehiclePrice = 25,000. Financed amount = 25,000 - 5,000 + 500 = 20,500.
-        expect(quote.vehiclePrice).toBe(25_000);
-        expect(quote.totalFinancedAmount).toBe(20_500);
-        expect(quote.customerQuotePricingSnapshot?.vehiclePrice).toBe(25_000);
-        expect(quote.customerQuotePricingSnapshot?.totalFinancedAmount).toBe(20_500);
+        const before = await t.run((ctx) => ctx.db.query("quotes").collect());
+        await expect(
+          asOwner.mutation(api.quotes.saveQuote, {
+            orgId,
+            customerId,
+            vehicleId,
+            vehicleItems: [
+              { vehicleId, unitPrice: 15_000 },
+              { vehicleId: vehicleId2, unitPrice: 10_000 },
+            ],
+            companyId,
+            mode: "CONFIGURED_FINANCE_COMPANY",
+            vehiclePrice: 10_000,
+            downPayment: 5_000,
+            termMonths: 48,
+          })
+        ).rejects.toThrow(/exactly one vehicle/i);
+        const after = await t.run((ctx) => ctx.db.query("quotes").collect());
+        expect(after).toHaveLength(before.length);
       });
 
       // 11. manual includesCommissionInDebt omitted -> uses manual default true
@@ -4307,7 +4304,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         expect(quoteId).toBeDefined();
       });
 
-      test("server-derived vehicleItems price is the comparison authority, not caller vehiclePrice", async () => {
+      test("financed vehicleItems cannot bypass the single-vehicle contribution authority", async () => {
         const { t, orgId, asOwner, customerId, customerStatusId } = await setupMatrixEnv();
 
         const v1 = await t.run((ctx) =>
@@ -4355,48 +4352,23 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           acceptedStatuses: [customerStatusId],
         });
 
-        // Items sum to 12_000 + 13_000 = 25_000.
-        // Caller passes stale/tampered vehiclePrice: 10_000, but downPayment: 15_000.
-        // 15_000 > 10_000, but 15_000 < 25_000 (server-derived). This MUST be accepted!
-        const acceptedQuoteId = await asOwner.mutation(api.quotes.saveQuote, {
-          orgId,
-          customerId,
-          vehicleId: v1,
-          vehiclePrice: 10_000,
-          vehicleItems: [
-            { vehicleId: v1, unitPrice: 12_000 },
-            { vehicleId: v2, unitPrice: 13_000 },
-          ],
-          downPayment: 15_000,
-          termMonths: 48,
-          mode: "CONFIGURED_FINANCE_COMPANY",
-          companyId,
-          customerEligibilityStatusIds: [customerStatusId],
-          totalFinancedAmount: 10_500,
-        });
-        expect(acceptedQuoteId).toBeDefined();
-
-        // Conversely, caller passes vehiclePrice: 30_000, but items sum to 25_000.
-        // Caller supplies downPayment: 26_000.
-        // 26_000 < 30_000 (caller), but 26_000 >= 25_000 (server-derived). This MUST be rejected!
         await expect(
           asOwner.mutation(api.quotes.saveQuote, {
             orgId,
             customerId,
             vehicleId: v1,
-            vehiclePrice: 30_000,
+            vehiclePrice: 10_000,
             vehicleItems: [
               { vehicleId: v1, unitPrice: 12_000 },
               { vehicleId: v2, unitPrice: 13_000 },
             ],
-            downPayment: 26_000,
+            downPayment: 15_000,
             termMonths: 48,
             mode: "CONFIGURED_FINANCE_COMPANY",
             companyId,
             customerEligibilityStatusIds: [customerStatusId],
-            totalFinancedAmount: 10_500,
           })
-        ).rejects.toThrow("Down payment must be less than the vehicle price for financed quotations.");
+        ).rejects.toThrow(/exactly one vehicle/i);
       });
 
       test("direct API bypass attempt is rejected before quote insertion", async () => {
