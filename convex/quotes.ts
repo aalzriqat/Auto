@@ -20,7 +20,7 @@ import {
   type CustomerQuotePricingSnapshot,
   type FinanceCompanyRuleSnapshot,
 } from "./utils/financingEconomics";
-import { calculateUnifiedMurabaha } from "../lib/financing";
+import { calculateUnifiedMurabaha, minimumDownPaymentForFinancingLimit } from "../lib/financing";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { assertMajorAmountRepresentable } from "./utils/money";
 
@@ -292,6 +292,41 @@ export const saveQuote = mutation({
 
       assertFinancedMurabahaResultValid(calc);
 
+      const maxFinancingLTV = company.maxFinancingLTV;
+      if (maxFinancingLTV !== undefined && maxFinancingLTV > 0) {
+        const valuation = await ctx.db
+          .query("vehicleValuations")
+          .withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicleId))
+          .filter((q) =>
+            q.and(
+              q.eq(q.field("orgId"), args.orgId),
+              q.eq(q.field("companyId"), company._id),
+            ),
+          )
+          .first();
+
+        if (valuation !== null && valuation.valuationAmount > 0) {
+          if (!Number.isFinite(valuation.valuationAmount)) {
+            throw new ConvexError("Finance company valuation is not a finite amount.");
+          }
+          const maxFinancingAllowed =
+            valuation.valuationAmount * (maxFinancingLTV / 100);
+          if (!Number.isFinite(maxFinancingAllowed)) {
+            throw new ConvexError("Finance company valuation limit is not a finite amount.");
+          }
+          if (calc.financedAmount > maxFinancingAllowed) {
+            const minimumDownPayment = minimumDownPaymentForFinancingLimit({
+              currentDownPayment: args.downPayment,
+              financedAmount: calc.financedAmount,
+              maxFinancingAllowed,
+            });
+            throw new ConvexError(
+              `Financed amount exceeds the finance company's valuation financing limit. Increase the down payment to at least ${minimumDownPayment}.`,
+            );
+          }
+        }
+      }
+
       totalFinancedAmount = calc.financedAmount;
       monthlyInstallment = calc.monthlyInstallment;
       profitRateApplied = company.profitRate;
@@ -410,16 +445,6 @@ export const saveQuote = mutation({
       if (lead.customerId !== args.customerId || (lead.vehicleId && lead.vehicleId !== vehicleId)) {
         throw new ConvexError("Lead does not match the quote customer and vehicle.");
       }
-    }
-
-    if (args.mode === "CASH") {
-      // CASH quote economics are authoritative server facts. The client may
-      // submit stale or fabricated financing outputs, but none of them may be
-      // persisted for a cash quote.
-      totalFinancedAmount = vehiclePrice;
-      monthlyInstallment = 0;
-      profitRateApplied = 0;
-      totalProfit = 0;
     }
 
     const {
