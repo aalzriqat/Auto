@@ -627,6 +627,17 @@ export const sendMessage = mutation({
     const trimmed = args.body.trim();
     if (!trimmed) throw new Error("Message body cannot be empty.");
 
+    const activeMemberIds: Id<"users">[] = [];
+    for (const uid of conv.memberIds) {
+      if (await hasCurrentOrgMembership(ctx, conv.orgId, uid)) {
+        activeMemberIds.push(uid);
+      }
+    }
+    const recipients = activeMemberIds.filter((id) => id !== user._id);
+    if (recipients.length === 0) {
+      throw new Error("Conversation has no current recipients.");
+    }
+
     const msgId = await ctx.db.insert("dmMessages", {
       conversationId: args.conversationId,
       senderId: user._id,
@@ -649,17 +660,6 @@ export const sendMessage = mutation({
       lastMessageBody,
       lastMessageSenderId: user._id,
     };
-
-    const activeMemberIds: Id<"users">[] = [];
-    for (const uid of conv.memberIds) {
-      if (await hasCurrentOrgMembership(ctx, conv.orgId, uid)) {
-        activeMemberIds.push(uid);
-      }
-    }
-    const recipients = activeMemberIds.filter((id) => id !== user._id);
-    if (recipients.length === 0) {
-      throw new Error("Conversation has no current recipients.");
-    }
 
     const participantState = new Map<string, { isMuted: boolean }>();
     for (const uid of activeMemberIds) {
