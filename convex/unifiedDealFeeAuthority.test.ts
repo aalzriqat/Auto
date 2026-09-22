@@ -523,6 +523,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         asOwner.mutation(api.finance.updateCompany, {
           orgId,
           id: legacyCompanyId,
+          expectedEditRevision: 1,
           name: "Legacy Co",
           profitRate: 5,
           maxTermMonths: 60,
@@ -536,6 +537,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
       await asOwner.mutation(api.finance.updateCompany, {
         orgId,
         id: legacyCompanyId,
+        expectedEditRevision: 1,
         name: "Legacy Co Migrated",
         profitRate: 5,
         maxTermMonths: 60,
@@ -2903,6 +2905,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
             asOwner.mutation(api.finance.updateCompany, {
               id: companyId,
               orgId,
+              expectedEditRevision: 1,
               name: "Valid Co",
               profitRate: 5,
               maxTermMonths: invalidMax,
@@ -3072,6 +3075,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           asOwner.mutation(api.finance.updateCompany, {
             id: validCompanyId,
             orgId,
+            expectedEditRevision: 1,
             name: "Valid Grace Co",
             profitRate: 5,
             maxTermMonths: 60,
@@ -5570,6 +5574,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         await asOwner.mutation(api.finance.updateCompany, {
           id: companyId,
           orgId,
+          expectedEditRevision: 1,
           name: "TOCTOU Finance",
           profitRate: 5,
           maxTermMonths: 60,
@@ -5645,6 +5650,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         await asOwner.mutation(api.finance.updateCompany, {
           id: companyId,
           orgId,
+          expectedEditRevision: 1,
           name: "Lineage Finance",
           profitRate: 5,
           maxTermMonths: 60,
