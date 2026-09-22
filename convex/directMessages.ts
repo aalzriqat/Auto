@@ -30,6 +30,18 @@ async function requireCurrentConversationMember(
   return user;
 }
 
+async function hasCurrentOrgMembership(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  userId: Id<"users">,
+) {
+  const membership = await ctx.db
+    .query("memberships")
+    .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
+    .unique();
+  return membership !== null;
+}
+
 async function latestMessageCreationTime(
   ctx: MutationCtx,
   conversationId: Id<"dmConversations">,
@@ -308,27 +320,30 @@ export const listMessages = query({
     );
 
     // Get all participant states + member info for read-receipt display
-    const memberInfoAndStates = await Promise.all(
-      conv.memberIds.map(async (uid) => {
-        const state = await ctx.db
-          .query("dmParticipantState")
-          .withIndex("by_conversation_user", (q) =>
-            q.eq("conversationId", args.conversationId).eq("userId", uid),
-          )
-          .unique();
-        const u = await ctx.db.get(uid);
-        return {
-          userId: uid,
-          lastDeliveredAt: Math.max(
-            state?.lastDeliveredAt ?? 0,
-            state?.lastReadAt ?? 0,
-          ),
-          lastReadAt: state?.lastReadAt ?? 0,
-          name: u?.name ?? u?.email ?? "?",
-          imageUrl: u?.imageUrl,
-        };
-      }),
-    );
+    const memberInfoAndStates = (
+      await Promise.all(
+        conv.memberIds.map(async (uid) => {
+          if (!(await hasCurrentOrgMembership(ctx, conv.orgId, uid))) return null;
+          const state = await ctx.db
+            .query("dmParticipantState")
+            .withIndex("by_conversation_user", (q) =>
+              q.eq("conversationId", args.conversationId).eq("userId", uid),
+            )
+            .unique();
+          const u = await ctx.db.get(uid);
+          return {
+            userId: uid,
+            lastDeliveredAt: Math.max(
+              state?.lastDeliveredAt ?? 0,
+              state?.lastReadAt ?? 0,
+            ),
+            lastReadAt: state?.lastReadAt ?? 0,
+            name: u?.name ?? u?.email ?? "?",
+            imageUrl: u?.imageUrl,
+          };
+        }),
+      )
+    ).filter((state): state is NonNullable<typeof state> => state !== null);
 
     const otherStates = memberInfoAndStates.filter(
       (s) => s.userId !== user._id,
@@ -382,6 +397,7 @@ export const getConversation = query({
 
     const members = await Promise.all(
       conv.memberIds.map(async (uid) => {
+        if (!(await hasCurrentOrgMembership(ctx, conv.orgId, uid))) return null;
         const u = await ctx.db.get(uid);
         return u
           ? { _id: u._id, name: u.name ?? u.email, imageUrl: u.imageUrl }
@@ -406,6 +422,7 @@ export const getConversation = query({
       conv.memberIds
         .filter((uid) => uid !== user._id)
         .map(async (uid) => {
+          if (!(await hasCurrentOrgMembership(ctx, conv.orgId, uid))) return null;
           const state = await ctx.db
             .query("dmParticipantState")
             .withIndex("by_conversation_user", (q) =>
@@ -633,8 +650,19 @@ export const sendMessage = mutation({
       lastMessageSenderId: user._id,
     };
 
-    const participantState = new Map<string, { isMuted: boolean }>();
+    const activeMemberIds: Id<"users">[] = [];
     for (const uid of conv.memberIds) {
+      if (await hasCurrentOrgMembership(ctx, conv.orgId, uid)) {
+        activeMemberIds.push(uid);
+      }
+    }
+    const recipients = activeMemberIds.filter((id) => id !== user._id);
+    if (recipients.length === 0) {
+      throw new Error("Conversation has no current recipients.");
+    }
+
+    const participantState = new Map<string, { isMuted: boolean }>();
+    for (const uid of activeMemberIds) {
       const state = await upsertParticipantState(
         ctx,
         projectedConversation,
@@ -647,7 +675,6 @@ export const sendMessage = mutation({
     }
 
     const senderName = user.name ?? user.email ?? "Someone";
-    const recipients = conv.memberIds.filter((id) => id !== user._id);
     for (const recipientId of recipients) {
       if (participantState.get(recipientId)?.isMuted) continue;
 
