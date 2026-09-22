@@ -60,7 +60,11 @@ describe("pull-request workflow secret boundary", () => {
   it("keeps direct PR security and accounting lanes free of privileged runtime credentials", () => {
     const security = readFileSync(path.join(workflowsDir, "security.yml"), "utf8");
     expect(security).toContain("ci-security-placeholder.convex.cloud");
-    expect(security).not.toContain("CLERK_SECRET_KEY");
+    // DAST needs the Clerk server variable to exercise middleware-backed
+    // documents. It must be a locally generated placeholder, never a
+    // repository credential.
+    expect(security).toContain('echo "CLERK_SECRET_KEY=$secret"');
+    expect(security).not.toContain("${{ secrets.CLERK_SECRET_KEY }}");
     expect(security).not.toContain("NEXT_PUBLIC_CONVEX_URL: ${{ secrets.");
     expect(
       security.match(
