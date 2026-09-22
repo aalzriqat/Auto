@@ -816,7 +816,7 @@ describe("directMessages projection compatibility", () => {
         name: "Invalid group",
         memberIds: [bobId, outsiderId],
       }),
-    ).rejects.toThrow("One or more users are not members of this org.");
+    ).rejects.toThrow("One or more users are not active members of this org.");
 
     const groupId = await asAlice.mutation(api.directMessages.createGroup, {
       orgId,
