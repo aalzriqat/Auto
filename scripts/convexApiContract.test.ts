@@ -43,7 +43,11 @@ const CONTRACT = path.join(REPO_ROOT, "apps", "mobile", "src", "convexApi.ts");
 // Moved 196→197 by `directMessages:listConversationsPage` so the full mobile
 // messages module can reach conversations beyond the compatibility recent-list
 // window instead of silently stopping at 100.
-const EXPECTED_REFERENCE_COUNT = 197;
+//
+// Moved 197→198 by `directMessages:backfillMyConversationProjection`, the
+// one-time compatibility mutation that drains pre-projection participant rows
+// so subscribed reads remain member-scoped and index-backed.
+const EXPECTED_REFERENCE_COUNT = 198;
 
 describe("mobile convexApi contract extraction", () => {
   test("reads the reference out of a multi-line declaration with nested generics", () => {
