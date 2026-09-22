@@ -82,6 +82,89 @@ describe("directMessages current-membership authority", () => {
   });
 });
 
+describe("directMessages delivery authority after membership removal", () => {
+  test("a DM with no current recipient refuses the send before inserting or notifying", async () => {
+    const { t, orgId, conversationId, asAlice, asBob } = await setupDm();
+
+    const bob = await t.run((ctx) =>
+      ctx.db
+        .query("users")
+        .filter((q) => q.eq(q.field("clerkId"), "bob_dm"))
+        .first()
+    );
+    if (!bob) throw new Error("Bob user fixture missing");
+
+    await t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) =>
+          q.eq("orgId", orgId).eq("userId", bob._id),
+        )
+        .unique();
+      if (!membership) throw new Error("Bob membership fixture missing");
+      await ctx.db.delete(membership._id);
+    });
+
+    const beforeMessages = await t.run((ctx) =>
+      ctx.db
+        .query("dmMessages")
+        .withIndex("by_conversation", (q) => q.eq("conversationId", conversationId))
+        .collect()
+    );
+
+    await expect(
+      asAlice.mutation(api.directMessages.sendMessage, {
+        conversationId,
+        body: "must not leak to a former member",
+      }),
+    ).rejects.toThrow(/no current recipients/i);
+
+    const afterMessages = await t.run((ctx) =>
+      ctx.db
+        .query("dmMessages")
+        .withIndex("by_conversation", (q) => q.eq("conversationId", conversationId))
+        .collect()
+    );
+    expect(afterMessages).toHaveLength(beforeMessages.length);
+
+    const bobNotifications = await asBob.query(api.notifications.listPage, {
+      orgId,
+      showArchived: false,
+      paginationOpts: { numItems: 10, cursor: null },
+    }).catch(() => null);
+    expect(bobNotifications).toBeNull();
+  });
+
+  test("current participants remain visible while former participants are removed from conversation projection", async () => {
+    const { t, orgId, conversationId, asAlice } = await setupDm();
+
+    const bob = await t.run((ctx) =>
+      ctx.db
+        .query("users")
+        .filter((q) => q.eq(q.field("clerkId"), "bob_dm"))
+        .first()
+    );
+    if (!bob) throw new Error("Bob user fixture missing");
+
+    await t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) =>
+          q.eq("orgId", orgId).eq("userId", bob._id),
+        )
+        .unique();
+      if (!membership) throw new Error("Bob membership fixture missing");
+      await ctx.db.delete(membership._id);
+    });
+
+    const conversation = await asAlice.query(api.directMessages.getConversation, {
+      conversationId,
+    });
+    expect(conversation?.members.map((member) => member?._id)).not.toContain(bob._id);
+    expect(conversation?.members).toHaveLength(1);
+  });
+});
+
 describe("directMessages receipts", () => {
   test("delivery upgrades a sent message without marking it read", async () => {
     const { orgId, conversationId, asAlice, asBob } = await setupDm();
