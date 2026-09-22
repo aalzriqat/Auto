@@ -3170,6 +3170,12 @@ export const api = {
     archive: FunctionReference<"mutation", "public", OrgScopedArgs & { notificationId: string }, null>;
   };
   directMessages: {
+    backfillMyConversationProjection: FunctionReference<
+      "mutation",
+      "public",
+      OrgScopedArgs,
+      { updated: number }
+    >;
     listConversations: FunctionReference<
       "query",
       "public",
