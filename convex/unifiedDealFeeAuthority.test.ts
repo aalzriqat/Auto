@@ -2535,8 +2535,10 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         ).rejects.toThrow(/Quotation monthly installment does not match its frozen customer pricing snapshot/);
       });
 
-      // 14. all quote modes verified (CASH, INTERNAL_INSTALLMENT, LEASE, undefined) -> no mode preserves caller-fabricated Murabaha economics
-      test("14. all quote modes verified (CASH, INTERNAL_INSTALLMENT, LEASE, undefined) -> no mode preserves caller-fabricated Murabaha economics", async () => {
+      // 14. CASH overwrites hostile client outputs with its server-owned cash
+      // economics; modes with no defined Murabaha authority strip the same
+      // fabricated fields instead of preserving them.
+      test("14. non-Murabaha modes never preserve caller-fabricated financing economics", async () => {
         const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
 
         const unfinancedModes = ["CASH", "INTERNAL_INSTALLMENT", "LEASE", undefined] as const;
@@ -2550,18 +2552,24 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
             vehiclePrice: 20_000,
             downPayment: 5_000,
             termMonths: 48,
-            totalFinancedAmount: 15_000, // Caller fabricates computed Murabaha outputs
+            totalFinancedAmount: 15_000,
             monthlyInstallment: 350,
             profitRateApplied: 8,
             totalProfit: 1800,
           });
 
           const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
-          // Stored Murabaha computed outputs must be completely cleared/undefined
-          expect(quote.totalFinancedAmount).toBeUndefined();
-          expect(quote.monthlyInstallment).toBeUndefined();
-          expect(quote.profitRateApplied).toBeUndefined();
-          expect(quote.totalProfit).toBeUndefined();
+          if (mode === "CASH") {
+            expect(quote.totalFinancedAmount).toBe(20_000);
+            expect(quote.monthlyInstallment).toBe(0);
+            expect(quote.profitRateApplied).toBe(0);
+            expect(quote.totalProfit).toBe(0);
+          } else {
+            expect(quote.totalFinancedAmount).toBeUndefined();
+            expect(quote.monthlyInstallment).toBeUndefined();
+            expect(quote.profitRateApplied).toBeUndefined();
+            expect(quote.totalProfit).toBeUndefined();
+          }
           expect(quote.customerQuotePricingSnapshot).toBeUndefined();
         }
       });
