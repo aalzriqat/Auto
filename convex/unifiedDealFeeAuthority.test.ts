@@ -5377,7 +5377,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           ctx.db.insert("orgCustomerStatuses", {
             orgId,
             label: "Archived Status",
-            isActive: false,
+            isActive: true,
             order: 1,
           })
         );
@@ -5393,6 +5393,12 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
           adminFees: 500,
           acceptedStatuses: [inactiveStatusId],
         });
+
+        // Corrupt/stale-storage negative control: bypass the normal status
+        // lifecycle mutation, which would safely detach the status and
+        // deactivate a now-unscoped lender. saveQuote must still reject the
+        // inactive selected status on its own boundary.
+        await t.run((ctx) => ctx.db.patch(inactiveStatusId, { isActive: false }));
 
         await expect(
           asOwner.mutation(api.quotes.saveQuote, {
