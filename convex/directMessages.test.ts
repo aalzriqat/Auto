@@ -42,6 +42,44 @@ async function latestStatus(actor: DmTestContext["asAlice"], conversationId: DmT
   return page.page[0]?.status;
 }
 
+describe("directMessages current-membership authority", () => {
+  test("former org members cannot keep direct conversation read/write access from stale memberIds", async () => {
+    const { t, orgId, conversationId, asBob } = await setupDm();
+
+    await t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) =>
+          q.eq("orgId", orgId).eq("userId", (await ctx.db
+            .query("users")
+            .filter((q) => q.eq(q.field("clerkId"), "bob_dm"))
+            .first())!._id),
+        )
+        .unique();
+      if (!membership) throw new Error("Bob membership fixture missing");
+      await ctx.db.delete(membership._id);
+    });
+
+    await expect(
+      asBob.query(api.directMessages.listMessages, {
+        conversationId,
+        paginationOpts: { numItems: 10, cursor: null },
+      }),
+    ).rejects.toThrow();
+
+    await expect(
+      asBob.query(api.directMessages.getConversation, { conversationId }),
+    ).rejects.toThrow();
+
+    await expect(
+      asBob.mutation(api.directMessages.sendMessage, {
+        conversationId,
+        body: "former member must not send",
+      }),
+    ).rejects.toThrow();
+  });
+});
+
 describe("directMessages receipts", () => {
   test("delivery upgrades a sent message without marking it read", async () => {
     const { orgId, conversationId, asAlice, asBob } = await setupDm();
