@@ -7,7 +7,10 @@ if (mode !== "unit" && mode !== "sonar") {
   throw new Error('Usage: node scripts/runVitestCoverageShards.mjs <unit|sonar>');
 }
 
-const shardCount = Number(process.env.VITEST_COVERAGE_SHARDS ?? "4");
+// Four coverage shards still allowed a single V8 worker to grow past 5.5 GiB
+// on the full AutoFlow suite. Eight keeps each coverage process bounded while
+// preserving the exact same test census and final merged coverage gate.
+const shardCount = Number(process.env.VITEST_COVERAGE_SHARDS ?? "8");
 if (!Number.isInteger(shardCount) || shardCount < 2 || shardCount > 16) {
   throw new Error("VITEST_COVERAGE_SHARDS must be an integer between 2 and 16.");
 }
