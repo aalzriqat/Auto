@@ -41,9 +41,9 @@ jobs:
         pnpm test:coverage:sonar
       env:
         NODE_ENV: test
-        # The full V8 coverage merge now exceeds Node's ~4 GiB default heap
-        # after all tests pass. Raise only the collector heap; coverage,
-        # assertions, files and thresholds remain unchanged.
+        # Coverage runs are split into bounded Vitest shards and merged before
+        # threshold enforcement. Keep headroom for the final V8 coverage merge;
+        # assertions, tracked files and coverage thresholds remain unchanged.
         NODE_OPTIONS: --max-old-space-size=5632
 
     - name: Upload coverage report
