@@ -29,7 +29,7 @@ async function setupDm() {
     otherUserId: bobId,
   });
 
-  return { orgId, conversationId, asAlice, asBob };
+  return { t, orgId, conversationId, asAlice, asBob };
 }
 
 type DmTestContext = Awaited<ReturnType<typeof setupDm>>;
@@ -458,17 +458,33 @@ describe("directMessages projection compatibility", () => {
     expect(targetConversation).not.toBeNull();
 
     const asBob = t.withIdentity({ subject: "bob_legacy_dm", clerkId: "bob_legacy_dm" });
-    expect(await asBob.query(api.directMessages.getUnreadCount, { orgId })).toBe(1);
 
-    const visible = await asBob.query(api.directMessages.listConversations, { orgId });
-    expect(visible.map((conversation) => conversation._id)).toEqual([targetConversation!._id]);
-    expect(visible[0]?.hasUnread).toBe(true);
+    // Legacy compatibility is mutation-only: subscribed reads stay index-backed.
+    // One backfill drains this user's full legacy set, projecting rows for
+    // organizations they still belong to and deleting stale/orphan state.
+    expect(await asBob.query(api.directMessages.getUnreadCount, { orgId })).toBe(0);
+    expect(await asBob.query(api.directMessages.listConversations, { orgId })).toEqual([]);
 
     const projected = await asBob.mutation(
       api.directMessages.backfillMyConversationProjection,
       { orgId },
     );
     expect(projected.updated).toBe(1);
+
+    const remainingLegacy = await t.run((ctx) =>
+      ctx.db
+        .query("dmParticipantState")
+        .withIndex("by_user_org", (q) =>
+          q.eq("userId", bobId).eq("orgId", undefined),
+        )
+        .collect(),
+    );
+    expect(remainingLegacy).toEqual([]);
+
+    expect(await asBob.query(api.directMessages.getUnreadCount, { orgId })).toBe(1);
+    const visible = await asBob.query(api.directMessages.listConversations, { orgId });
+    expect(visible.map((conversation) => conversation._id)).toEqual([targetConversation!._id]);
+    expect(visible[0]?.hasUnread).toBe(true);
 
     const paged = await asBob.query(api.directMessages.listConversationsPage, {
       orgId,
