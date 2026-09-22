@@ -127,12 +127,13 @@ describe("directMessages delivery authority after membership removal", () => {
     );
     expect(afterMessages).toHaveLength(beforeMessages.length);
 
-    const bobNotifications = await asBob.query(api.notifications.listPage, {
-      orgId,
-      showArchived: false,
-      paginationOpts: { numItems: 10, cursor: null },
-    }).catch(() => null);
-    expect(bobNotifications).toBeNull();
+    const bobNotifications = await t.run((ctx) =>
+      ctx.db
+        .query("notifications")
+        .withIndex("by_user", (q) => q.eq("userId", bob._id))
+        .collect()
+    );
+    expect(bobNotifications).toHaveLength(0);
   });
 
   test("current participants remain visible while former participants are removed from conversation projection", async () => {
