@@ -595,8 +595,13 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // Total: 494 totalMutations, 322 analysed.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 495,
-      analysed: 323,
+      // 495→496 / 323→324: directMessages.backfillMyConversationProjection
+      // is a public org-authenticated maintenance mutation. Its writes are to
+      // participant-state rows selected from the authenticated user's own
+      // index; each legacy row is then tied back to its conversation and live
+      // organization membership before projection, or deleted as stale.
+      totalMutations: 496,
+      analysed: 324,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 157,
     });
