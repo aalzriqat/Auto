@@ -55,7 +55,14 @@ function FloatingMessengerInner({ orgId }: Props) {
   );
   const unreadCount = useQuery(api.directMessages.getUnreadCount, { orgId });
   const markDelivered = useMutation(api.directMessages.markDelivered);
+  const backfillConversationProjection = useMutation(
+    api.directMessages.backfillMyConversationProjection,
+  );
   const currentUserId = me?._id;
+
+  useEffect(() => {
+    backfillConversationProjection({ orgId }).catch(() => null);
+  }, [backfillConversationProjection, orgId]);
 
   // ── Global sound notifications ──────────────────────────────────────────────
   const prevTimestampsRef = useRef<Record<string, number>>({});
