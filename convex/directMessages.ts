@@ -125,6 +125,42 @@ async function getLegacyParticipantStates(
     .collect();
 }
 
+async function projectLegacyParticipantStatesForUser(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+) {
+  // Legacy projection work is deliberately mutation-only. The old implementation
+  // re-scanned every legacy row on each subscribed query recomputation, and
+  // rows from a user's other organizations could never drain. Process the
+  // caller's complete legacy set once, project rows for organizations they
+  // still belong to, and delete stale state for conversations they can no
+  // longer access. Future reads are index-only.
+  const legacyStates = await getLegacyParticipantStates(ctx, userId);
+  let updated = 0;
+
+  for (const state of legacyStates) {
+    const conversation = await ctx.db.get(state.conversationId);
+    const stillAuthorized =
+      conversation !== null &&
+      conversation.memberIds.includes(userId) &&
+      (await hasCurrentOrgMembership(ctx, conversation.orgId, userId));
+
+    if (!conversation || !stillAuthorized) {
+      await ctx.db.delete(state._id);
+      continue;
+    }
+
+    await ctx.db.patch(state._id, {
+      orgId: conversation.orgId,
+      conversationLastMessageAt: conversation.lastMessageAt,
+      hasUnread: isUnreadForUser(conversation, userId, state.lastReadAt),
+    });
+    updated += 1;
+  }
+
+  return { updated };
+}
+
 async function hydrateConversationStates(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
@@ -153,7 +189,11 @@ async function hydrateConversationStates(
   const memberIds = Array.from(
     new Set(pairs.flatMap(({ conversation }) => conversation.memberIds)),
   );
-  const memberDocs = await Promise.all(memberIds.map((id) => ctx.db.get(id)));
+  const memberDocs = await Promise.all(
+    memberIds.map(async (id) =>
+      (await hasCurrentOrgMembership(ctx, orgId, id)) ? await ctx.db.get(id) : null,
+    ),
+  );
   const memberById = new Map(
     memberDocs
       .filter((member): member is Doc<"users"> => member !== null)
@@ -192,28 +232,7 @@ export const backfillMyConversationProjection = mutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId);
-    const legacyStates = await getLegacyParticipantStates(ctx, user._id);
-    let updated = 0;
-
-    for (const state of legacyStates) {
-      const conversation = await ctx.db.get(state.conversationId);
-      if (
-        conversation === null ||
-        conversation.orgId !== args.orgId ||
-        !conversation.memberIds.includes(user._id)
-      ) {
-        continue;
-      }
-
-      await ctx.db.patch(state._id, {
-        orgId: args.orgId,
-        conversationLastMessageAt: conversation.lastMessageAt,
-        hasUnread: isUnreadForUser(conversation, user._id, state.lastReadAt),
-      });
-      updated += 1;
-    }
-
-    return { updated };
+    return await projectLegacyParticipantStatesForUser(ctx, user._id);
   },
 });
 
@@ -225,32 +244,19 @@ export const listConversations = query({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId);
 
-    const [projectedStates, legacyStates] = await Promise.all([
-      ctx.db
-        .query("dmParticipantState")
-        .withIndex("by_org_user_lastMessageAt", (q) =>
-          q.eq("orgId", args.orgId).eq("userId", user._id),
-        )
-        .order("desc")
-        .take(100),
-      getLegacyParticipantStates(ctx, user._id),
-    ]);
-
-    const stateByConversation = new Map<string, Doc<"dmParticipantState">>();
-    for (const state of projectedStates) {
-      stateByConversation.set(state.conversationId, state);
-    }
-    for (const state of legacyStates) {
-      if (!stateByConversation.has(state.conversationId)) {
-        stateByConversation.set(state.conversationId, state);
-      }
-    }
+    const projectedStates = await ctx.db
+      .query("dmParticipantState")
+      .withIndex("by_org_user_lastMessageAt", (q) =>
+        q.eq("orgId", args.orgId).eq("userId", user._id),
+      )
+      .order("desc")
+      .take(100);
 
     const conversations = await hydrateConversationStates(
       ctx,
       args.orgId,
       user._id,
-      Array.from(stateByConversation.values()),
+      projectedStates,
     );
 
     return conversations
@@ -297,34 +303,17 @@ export const getUnreadCount = query({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId);
 
-    const [projectedUnread, legacyStates] = await Promise.all([
-      ctx.db
-        .query("dmParticipantState")
-        .withIndex("by_org_user_unread", (q) =>
-          q
-            .eq("orgId", args.orgId)
-            .eq("userId", user._id)
-            .eq("hasUnread", true),
-        )
-        .collect(),
-      getLegacyParticipantStates(ctx, user._id),
-    ]);
+    const projectedUnread = await ctx.db
+      .query("dmParticipantState")
+      .withIndex("by_org_user_unread", (q) =>
+        q
+          .eq("orgId", args.orgId)
+          .eq("userId", user._id)
+          .eq("hasUnread", true),
+      )
+      .collect();
 
-    const legacyPairs = await Promise.all(
-      legacyStates.map(async (state) => ({
-        state,
-        conversation: await ctx.db.get(state.conversationId),
-      })),
-    );
-    const legacyUnread = legacyPairs.filter(
-      ({ state, conversation }) =>
-        conversation !== null &&
-        conversation.orgId === args.orgId &&
-        conversation.memberIds.includes(user._id) &&
-        isUnreadForUser(conversation, user._id, state.lastReadAt),
-    ).length;
-
-    return projectedUnread.length + legacyUnread;
+    return projectedUnread.length;
   },
 });
 
@@ -540,16 +529,13 @@ export const getOrCreateDm = mutation({
       .unique();
     if (!otherMembership) throw new Error("User is not a member of this org.");
 
-    const [projectedStates, legacyStates] = await Promise.all([
-      ctx.db
-        .query("dmParticipantState")
-        .withIndex("by_user_org", (q) =>
-          q.eq("userId", user._id).eq("orgId", args.orgId),
-        )
-        .collect(),
-      getLegacyParticipantStates(ctx, user._id),
-    ]);
-    const myStates = [...projectedStates, ...legacyStates];
+    await projectLegacyParticipantStatesForUser(ctx, user._id);
+    const myStates = await ctx.db
+      .query("dmParticipantState")
+      .withIndex("by_user_org", (q) =>
+        q.eq("userId", user._id).eq("orgId", args.orgId),
+      )
+      .collect();
     const candidates = await Promise.all(
       myStates.map((state) => ctx.db.get(state.conversationId)),
     );
