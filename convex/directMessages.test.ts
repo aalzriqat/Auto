@@ -464,6 +464,29 @@ describe("directMessages projection compatibility", () => {
     expect(visible.map((conversation) => conversation._id)).toEqual([targetConversation!._id]);
     expect(visible[0]?.hasUnread).toBe(true);
 
+    const projected = await asBob.mutation(
+      api.directMessages.backfillMyConversationProjection,
+      { orgId },
+    );
+    expect(projected.updated).toBe(1);
+
+    const paged = await asBob.query(api.directMessages.listConversationsPage, {
+      orgId,
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+    expect(paged.page.map((conversation) => conversation._id)).toEqual([
+      targetConversation!._id,
+    ]);
+    expect(paged.page[0]?.hasUnread).toBe(true);
+
+    // Idempotent: once projected, there is nothing left in this org for the
+    // compatibility mutation to change.
+    expect(
+      await asBob.mutation(api.directMessages.backfillMyConversationProjection, {
+        orgId,
+      }),
+    ).toEqual({ updated: 0 });
+
     const existingId = await asBob.mutation(api.directMessages.getOrCreateDm, {
       orgId,
       otherUserId: aliceId,
