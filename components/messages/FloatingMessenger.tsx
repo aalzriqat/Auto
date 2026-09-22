@@ -292,7 +292,7 @@ function FloatingMessengerInner({ orgId }: Props) {
                   onClick={() => loadMoreConversations(50)}
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-wait disabled:opacity-60"
                 >
-                  {t("LoadMore" as never) || "Load More"}
+                  {t("LoadMore")}
                 </button>
               </div>
             )}
