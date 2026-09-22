@@ -36,6 +36,16 @@ describe("direct-message conversation pagination contract", () => {
     expect(code).not.toMatch(legacyListCall);
   });
 
+  test.each([
+    ["web full conversation list", WEB_LIST],
+    ["web floating conversation panel", FLOATING_LIST],
+    ["mobile full conversation list", MOBILE_LIST],
+  ])("%s projects legacy participant rows before relying on the member index", (_label, file) => {
+    const code = source(file);
+    expect(code).toContain("backfillMyConversationProjection");
+    expect(code).toMatch(/backfillConversationProjection\(\{ orgId \}\)/);
+  });
+
   test("web full list exposes a reachable next-page action", () => {
     const code = source(WEB_LIST);
 
@@ -57,9 +67,10 @@ describe("direct-message conversation pagination contract", () => {
     expect(code).toMatch(/loadMoreConversations\(\d+\)/);
   });
 
-  test("mobile facade binds the paginated backend query", () => {
+  test("mobile facade binds the paginated backend query and legacy projection mutation", () => {
     const code = source(MOBILE_API);
 
     expect(code).toContain('"directMessages:listConversationsPage"');
+    expect(code).toContain('"directMessages:backfillMyConversationProjection"');
   });
 });
