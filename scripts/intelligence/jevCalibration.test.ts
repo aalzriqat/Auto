@@ -757,6 +757,113 @@ describe("Jev historical calibration", () => {
     );
   });
 
+  it("writes sanitized unavailable evidence when a case rejects before Jev execution", async () => {
+    const repoRoot = await tempDirectory();
+    const events: string[] = [];
+    const cases = [
+      {
+        id: "case-rejects",
+        prNumber: 11,
+        baseSha: "1".repeat(40),
+        headSha: "2".repeat(40),
+        snapshotAt: "2026-02-01T00:00:00.000Z",
+      },
+      {
+        id: "case-completes",
+        prNumber: 12,
+        baseSha: "3".repeat(40),
+        headSha: "4".repeat(40),
+        snapshotAt: "2026-02-02T00:00:00.000Z",
+      },
+    ];
+
+    const runCase = vi.fn(async ({ calibrationCase }) => {
+      events.push(`call:${calibrationCase.id}`);
+      if (calibrationCase.id === "case-rejects") {
+        throw new Error(
+          "provenance failed with TYPESAFE_API_KEY=runner-secret-must-not-leak",
+        );
+      }
+      return {
+        caseId: calibrationCase.id,
+        snapshotAt: calibrationCase.snapshotAt,
+        baseSha: calibrationCase.baseSha,
+        headSha: calibrationCase.headSha,
+        changedFiles: ["components/safe.tsx"],
+        patchTruncated: false,
+        patchCharsSent: 10,
+        deterministicImpact: [],
+        deterministicReviewMatrix: deterministicMatrix(),
+        blind: completeTrack(),
+        policy: completeTrack(),
+      };
+    });
+
+    const loadLabels = vi.fn(async () => {
+      events.push("labels");
+      return {
+        JEV_CALIBRATION_LABELS: {
+          "case-rejects": {
+            control: "NEGATIVE_LOW_RISK",
+            revealedAfter: "2026-02-01T00:01:00.000Z",
+            findings: [],
+          },
+          "case-completes": {
+            control: "NEGATIVE_LOW_RISK",
+            revealedAfter: "2026-02-02T00:01:00.000Z",
+            findings: [],
+          },
+        },
+      };
+    });
+
+    const payload = await runJevHistoricalCalibration({
+      repoRoot,
+      env: { NODE_ENV: "test", TYPESAFE_API_KEY: "runner-key-must-not-leak" },
+      cases,
+      runCase,
+      loadLabels,
+    });
+
+    expect(events).toEqual([
+      "call:case-rejects",
+      "call:case-completes",
+      "labels",
+    ]);
+    expect(payload).toMatchObject({
+      status: "CALIBRATION_FAILED_WITH_EVIDENCE",
+      failedCaseIds: ["case-rejects"],
+      metrics: {
+        cases: 2,
+        unavailableTracks: 2,
+        blindTrackAvailabilityRate: 0.5,
+        policyTrackAvailabilityRate: 0.5,
+      },
+    });
+
+    const artifactText = await readFile(
+      path.join(repoRoot, "artifacts/jev-historical-calibration.json"),
+      "utf8",
+    );
+    const artifact = JSON.parse(artifactText);
+    expect(artifact.cases[0]).toMatchObject({
+      caseId: "case-rejects",
+      caseExecutionFailure: true,
+      blind: { status: "UNAVAILABLE", reason: "CASE_EXECUTION_FAILED" },
+      policy: { status: "UNAVAILABLE", reason: "CASE_EXECUTION_FAILED" },
+    });
+    expect(artifactText).not.toContain("runner-secret-must-not-leak");
+    expect(artifactText).not.toContain("runner-key-must-not-leak");
+    expect(artifactText).not.toContain("provenance failed");
+
+    const markdown = await readFile(
+      path.join(repoRoot, "artifacts/jev-historical-calibration.md"),
+      "utf8",
+    );
+    expect(markdown).toContain("CALIBRATION_FAILED_WITH_EVIDENCE");
+    expect(markdown).toContain("Failed case executions: 1 — case-rejects");
+  });
+
   it("uses the same fail-closed governance routing in live and historical modes", () => {
     expect(
       extraDeterministicRequirementsForFiles([
