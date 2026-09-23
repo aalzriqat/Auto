@@ -75,18 +75,24 @@ jobs:
             fi
           done
 
-          current_head="$(
+          current_pr="$(
             curl --fail --silent --show-error \
               -H "Accept: application/vnd.github+json" \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
-              "$GITHUB_API_URL/repos/$REPOSITORY/pulls/$PR_NUMBER" |
-            jq -r '.head.sha'
+              "$GITHUB_API_URL/repos/$REPOSITORY/pulls/$PR_NUMBER"
           )"
+          current_head="$(jq -r '.head.sha' <<<"$current_pr")"
+          current_base="$(jq -r '.base.sha' <<<"$current_pr")"
+          current_base_ref="$(jq -r '.base.ref' <<<"$current_pr")"
           if [ "$current_head" != "$HEAD_SHA" ]; then
             echo "::notice::Skipping stale trusted Sonar run for $HEAD_SHA; PR is now at $current_head."
             echo "stale=true" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+          if ! [[ "$current_base" =~ ^[0-9a-fA-F]{40}$ ]] || [ -z "$current_base_ref" ]; then
+            echo "GitHub PR API did not return a valid current base identity." >&2
+            exit 1
           fi
 
           git fetch --no-tags origin \
@@ -102,12 +108,14 @@ jobs:
 
           PARENTS="$(git show -s --format=%P "$FETCHED_MERGE")"
           read -r FIRST_PARENT SECOND_PARENT EXTRA_PARENT <<< "$PARENTS"
-          if [ "$FIRST_PARENT" != "$BASE_SHA" ] || [ "$SECOND_PARENT" != "$HEAD_SHA" ] || [ -n "${EXTRA_PARENT:-}" ]; then
-            echo "GitHub PR merge ref is not the exact two-parent merge of trusted base + head." >&2
+          if [ "$FIRST_PARENT" != "$current_base" ] || [ "$SECOND_PARENT" != "$HEAD_SHA" ] || [ -n "${EXTRA_PARENT:-}" ]; then
+            echo "GitHub PR merge ref is not the exact two-parent merge of current trusted base + head." >&2
             exit 1
           fi
 
           echo "tested_sha=$FETCHED_MERGE" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$current_base" >> "$GITHUB_OUTPUT"
+          echo "base_ref=$current_base_ref" >> "$GITHUB_OUTPUT"
           echo "stale=false" >> "$GITHUB_OUTPUT"
 
       - name: Mark trusted Sonar pending
