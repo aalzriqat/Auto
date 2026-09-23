@@ -150,6 +150,36 @@ export type FinancedDealOverview = Readonly<{
  * above its expectation has nothing left — an actual row's existence alone
  * does not retire the expectation.
  */
+/**
+ * Actuals that can consume the frozen single execution-fee expectation.
+ *
+ * The scalar adminFees authority has no template position, so an arbitrary
+ * dealer-borne cost must never retire it. Only a live finance-company fee paid
+ * by the dealership is evidence for that position. Invalid/overflowing actuals
+ * return NaN deliberately so dealerBorneExpected fails closed as UNSAFE_AMOUNT.
+ */
+export function frozenExecutionFeeActualMinor(
+  fees: ReadonlyArray<Doc<"financeDealFees">>,
+  dealCurrency: string
+): number {
+  let total = 0;
+  for (const fee of fees) {
+    if (
+      fee.voidedAt !== undefined ||
+      fee.feeType !== "FINANCE_COMPANY_FEE" ||
+      (fee.paidBy !== "DEALER" && fee.paidBy !== "EMPLOYEE") ||
+      fee.currency !== dealCurrency ||
+      fee.actualAmountMinor === undefined
+    ) {
+      continue;
+    }
+    if (!isMinorAmount(fee.actualAmountMinor)) return Number.NaN;
+    total += fee.actualAmountMinor;
+    if (!Number.isSafeInteger(total)) return Number.NaN;
+  }
+  return total;
+}
+
 export function dealerBorneExpected(
   source: ReturnType<typeof deriveExpectedFees>["source"],
   rows: ReadonlyArray<ExpectedFeeRow>,
@@ -465,7 +495,7 @@ export const financedDealOverview = query({
         cockpit.money.currency,
         expensesMixed,
         frozenEstimatedFees,
-        feeSummary.dealerBorneActualMinor
+        frozenExecutionFeeActualMinor(fees, cockpit.money.currency)
       );
       financialSummary = deriveDealFinancialSummary({
         currency: cockpit.money.currency,
@@ -485,7 +515,10 @@ export const financedDealOverview = query({
           expectedExpensesMinor: expectedDealerBorne.totalMinor ?? undefined,
           fullySettled,
           expensesMixed,
-          expensesUnreadable,
+          expensesUnreadable:
+            expensesUnreadable ||
+            (frozenEstimatedFees !== undefined &&
+              expectedDealerBorne.reason === "UNSAFE_AMOUNT"),
         }),
         vehicleConsigned: consigned,
         app: {
