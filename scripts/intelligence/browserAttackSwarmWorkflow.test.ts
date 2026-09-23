@@ -130,12 +130,12 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
 
   it("serializes ordinary E2E and trusted swarm around the same PR preview resource", () => {
     expect(playwrightWorkflow.concurrency).toEqual({
-      group: "playwright-${{ github.event.pull_request.number || github.ref }}",
+      group: "direct-playwright-${{ github.event.pull_request.number || github.ref }}",
       "cancel-in-progress": true,
     });
     expect(workflow.concurrency).toEqual({
       group:
-        "playwright-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}",
+        "trusted-browser-swarm-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}",
       "cancel-in-progress": true,
     });
   });
