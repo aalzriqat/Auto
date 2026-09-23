@@ -160,13 +160,11 @@ export function assertPreviewDeploymentAdminKey(value, expectedDeploymentName) {
   if (separator <= 0 || separator === value.length - 1) {
     throw new Error("Convex preview deployment admin key is malformed.");
   }
-  const prefix = value.slice(0, separator);
+  const deploymentName = value.slice(0, separator);
   const secret = value.slice(separator + 1);
-  const parts = prefix.split(":");
   if (
-    parts.length !== 2 ||
-    parts[0] !== "preview" ||
-    parts[1] !== expectedDeploymentName ||
+    deploymentName !== expectedDeploymentName ||
+    deploymentName.includes(":") ||
     !secret ||
     /[\r\n]/.test(secret)
   ) {
