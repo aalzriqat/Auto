@@ -50,14 +50,29 @@ const sharedCoverageArgs = [
   `--exclude=${authorityTest}`,
 ];
 
-function runVitest(args) {
+function runVitest(args, diagnosticFiles = []) {
   const result = spawnSync(process.execPath, [vitestBin, ...args], {
     cwd: root,
     env: process.env,
     stdio: "inherit",
   });
   if (result.error) throw result.error;
-  if (result.status !== 0) process.exit(result.status ?? 1);
+  if (result.status !== 0) {
+    process.stderr.write(
+      `Vitest coverage subprocess failed (status=${String(result.status)}, signal=${String(result.signal)}).\n`,
+    );
+    if (diagnosticFiles.length > 0) {
+      process.stderr.write(
+        `Re-running failing batch without coverage to expose assertion output: ${diagnosticFiles.join(" ")}\n`,
+      );
+      spawnSync(process.execPath, [vitestBin, "run", ...diagnosticFiles, "--maxWorkers=1"], {
+        cwd: root,
+        env: process.env,
+        stdio: "inherit",
+      });
+    }
+    process.exit(result.status ?? 1);
+  }
 }
 
 const excludedDirs = new Set([
@@ -115,19 +130,27 @@ if (mode === "unit") {
   const testFiles = collectUnitTestFiles().sort();
   if (testFiles.length === 0) throw new Error("No unit/integration test files discovered.");
 
-  for (let index = 0; index < testFiles.length; index += 1) {
-    const testFile = testFiles[index];
+  const batchSize = Number(process.env.VITEST_COVERAGE_BATCH_SIZE ?? "8");
+  if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 16) {
+    throw new Error("VITEST_COVERAGE_BATCH_SIZE must be an integer between 1 and 16.");
+  }
+  const batchCount = Math.ceil(testFiles.length / batchSize);
+  for (let offset = 0, batch = 1; offset < testFiles.length; offset += batchSize, batch += 1) {
+    const batchFiles = testFiles.slice(offset, offset + batchSize);
     process.stdout.write(
-      `Coverage file ${index + 1}/${testFiles.length}: ${testFile}\n`,
+      `Coverage batch ${batch}/${batchCount}: ${batchFiles.join(" ")}\n`,
     );
-    runVitest([
-      "run",
-      testFile,
-      "--reporter=blob",
-      `--outputFile=${path.join(blobDir, `unit-${index + 1}.json`)}`,
-      ...sharedCoverageArgs,
-      ...thresholdZeroArgs,
-    ]);
+    runVitest(
+      [
+        "run",
+        ...batchFiles,
+        "--reporter=blob",
+        `--outputFile=${path.join(blobDir, `unit-batch-${batch}.json`)}`,
+        ...sharedCoverageArgs,
+        ...thresholdZeroArgs,
+      ],
+      batchFiles,
+    );
   }
 } else {
   for (let shard = 1; shard <= shardCount; shard += 1) {
