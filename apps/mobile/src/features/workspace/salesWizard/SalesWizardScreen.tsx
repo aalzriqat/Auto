@@ -896,7 +896,11 @@ export function SalesWizardScreen({
                         <Text style={[styles.companyRate, { color: accent }]}>{company.profitRate}%</Text>
                       </View>
                       <Text style={[styles.companyMonthly, { color: accent }]}>
-                        {result ? (
+                        {feesConfigured && !result ? (
+                          <Text style={[styles.companyMonthlyUnit, { color: theme.colors.warning }]}>
+                            {locale === "ar" ? "مدة التمويل غير صالحة" : "Invalid financing term"}
+                          </Text>
+                        ) : result ? (
                           <>
                             {money(result.monthlyInstallment, locale)}
                             <Text style={styles.companyMonthlyUnit}> /{locale === "ar" ? "شهر" : "mo"}</Text>
@@ -948,7 +952,11 @@ export function SalesWizardScreen({
                     <View style={styles.companyHeader}>
                       <Text style={styles.companyName}>{locale === "ar" ? "جهة أخرى (يدوي)" : "Others (manual)"}</Text>
                       <Text style={[styles.companyMonthly, { color: accent }]}>
-                        {manualResult ? (
+                        {!manualTermIsValid ? (
+                          <Text style={[styles.companyMonthlyUnit, { color: theme.colors.warning }]}>
+                            {locale === "ar" ? "مدة التمويل غير صالحة" : "Invalid financing term"}
+                          </Text>
+                        ) : manualResult ? (
                           <>
                             {money(manualResult.monthlyInstallment, locale)}
                             <Text style={styles.companyMonthlyUnit}> /{locale === "ar" ? "شهر" : "mo"}</Text>
