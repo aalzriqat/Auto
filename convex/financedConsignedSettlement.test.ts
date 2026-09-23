@@ -8023,6 +8023,35 @@ describe("finalization judges the deal's costs as they are NOW, never the stored
     await expectRefusedWithNoFootprint(b.s, b.applicationId, /not in JOD/);
   });
 
+  test("NEGATIVE CONTROL: a historical frozen template still blocks finalization when adminFees is absent", async () => {
+    const { s, applicationId } = await classifiedDeal("fin-missing-frozen-template");
+    await s.t.run(async (ctx) => {
+      const app = (await ctx.db.get(applicationId))!;
+      await ctx.db.patch(applicationId, {
+        companyRuleSnapshot: {
+          ...app.companyRuleSnapshot!,
+          adminFees: undefined,
+          feeTemplates: [
+            {
+              feeType: "APPRAISAL_FEE",
+              description: "Legacy frozen valuation fee",
+              estimatedAmountMinor: 50 * SCALE,
+              paidBy: "DEALER",
+              paidTo: "APPRAISER",
+              includedInQuotation: false,
+              deductedFromSettlement: false,
+              refundable: false,
+              accountingTreatment: "APPRAISAL_EXPENSE",
+            },
+          ],
+        },
+      });
+    });
+
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))!.accountingClassification).toBe("CLASSIFIED");
+    await expectRefusedWithNoFootprint(s, applicationId, /configured.*no actual recorded/i);
+  });
+
   test("an estimate-less exact-position actual (corrupt frozen estimate) still finalizes once reconciled and classified", async () => {
     const s = await seedDealership("fin-estimateless");
     await s.t.run((ctx) =>
