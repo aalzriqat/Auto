@@ -305,10 +305,10 @@ export const saveQuote = mutation({
           )
           .first();
 
+        if (valuation !== null && !Number.isFinite(valuation.valuationAmount)) {
+          throw new ConvexError("Finance company valuation is not a finite amount.");
+        }
         if (valuation !== null && valuation.valuationAmount > 0) {
-          if (!Number.isFinite(valuation.valuationAmount)) {
-            throw new ConvexError("Finance company valuation is not a finite amount.");
-          }
           const maxFinancingAllowed =
             valuation.valuationAmount * (maxFinancingLTV / 100);
           if (!Number.isFinite(maxFinancingAllowed)) {
