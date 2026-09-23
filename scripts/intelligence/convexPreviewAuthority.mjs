@@ -116,15 +116,25 @@ export function validateConvexPreviewAuthority(value, expectedPreviewName) {
     throw new Error("Convex preview authority deployment name is malformed.");
   }
 
+  const convexCloudUrl = assertConvexCloudOrigin(
+    typeof artifact.convexCloudUrl === "string"
+      ? artifact.convexCloudUrl
+      : undefined,
+  );
+  if (
+    new URL(convexCloudUrl).hostname !==
+    artifact.deploymentName + ".convex.cloud"
+  ) {
+    throw new Error(
+      "Convex preview authority deployment name does not match its deployment URL.",
+    );
+  }
+
   return {
     version: 1,
     authority: "CONVEX_CONTROL_PLANE_AUTHORIZE_PREVIEW",
     previewName: artifact.previewName,
-    convexCloudUrl: assertConvexCloudOrigin(
-      typeof artifact.convexCloudUrl === "string"
-        ? artifact.convexCloudUrl
-        : undefined,
-    ),
+    convexCloudUrl,
     deploymentName: artifact.deploymentName,
   };
 }
