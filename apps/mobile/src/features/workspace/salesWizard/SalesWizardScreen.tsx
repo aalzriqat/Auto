@@ -50,6 +50,7 @@ interface ComparisonRow {
   company: MobileFinanceCompany;
   result: UnifiedMurabahaResult | null;
   feesConfigured: boolean;
+  termIsValid: boolean;
   actualValuation: number;
   maxFinancingAllowed: number;
   exceedsValuation: boolean;
@@ -291,7 +292,7 @@ export function SalesWizardScreen({
               maxFinancingAllowed,
             })
           : undefined;
-        return { company, result, feesConfigured, actualValuation, maxFinancingAllowed, exceedsValuation, minimumDownPayment };
+        return { company, result, feesConfigured, termIsValid, actualValuation, maxFinancingAllowed, exceedsValuation, minimumDownPayment };
       });
   }, [companies, customerStatuses, down, effectivePrice, isCash, price, term, valuations, vehicleId]);
 
@@ -874,21 +875,21 @@ export function SalesWizardScreen({
                       : "Select the customer status first to see available offers."}
                   </Text>
                 ) : null}
-                {comparisons.map(({ company, exceedsValuation, feesConfigured, minimumDownPayment, result }) => {
+                {comparisons.map(({ company, exceedsValuation, feesConfigured, termIsValid, minimumDownPayment, result }) => {
                   const selected = selectedCompanyId === company._id;
                   return (
                     <Pressable
                       key={company._id}
                       accessibilityRole="button"
-                      accessibilityState={{ selected, disabled: !feesConfigured }}
-                      disabled={!feesConfigured}
+                      accessibilityState={{ selected, disabled: !feesConfigured || !termIsValid }}
+                      disabled={!feesConfigured || !termIsValid}
                       style={[
                         styles.companyCard,
                         selected && { borderColor: accent, borderWidth: 2 },
-                        !feesConfigured && { opacity: 0.6 },
+                        (!feesConfigured || !termIsValid) && { opacity: 0.6 },
                       ]}
                       onPress={() => {
-                        if (feesConfigured) setSelectedCompanyId(company._id);
+                        if (feesConfigured && termIsValid) setSelectedCompanyId(company._id);
                       }}
                     >
                       <View style={styles.companyHeader}>
