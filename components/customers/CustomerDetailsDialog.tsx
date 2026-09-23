@@ -215,8 +215,8 @@ export function CustomerDetailsDialog({
         kind: "quote" as const,
         title: interpolate(t("CustomerActivityQuoteTitle"), { vehicle: quote.vehicleDesc }),
         detail: interpolate(t("CustomerActivityQuoteDetail"), {
-          amount: quote.totalFinancedAmount?.toLocaleString(localeCode) ?? quote.vehiclePrice?.toLocaleString(localeCode) ?? "—",
-          currency: t("JOD"),
+          amount: customerQuoteTotalAmount(quote)?.toLocaleString(localeCode) ?? "—",
+          currency: customerQuoteTotalAmount(quote) === null ? "" : t("JOD"),
         }),
         status: translateWorkflowStatus(quote.status, t),
         timestamp: quote.createdAt,
