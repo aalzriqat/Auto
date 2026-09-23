@@ -428,7 +428,7 @@ describe("deriveDealFinancialSummary", () => {
       expect(s.dealerOutlay.knownCommittedMinor).toBeNull();
       expect(s.dealerOutlay.totalExpectedMinor).toBeNull();
       expect(s.unreadable.map((entry) => entry.field).sort()).toEqual(
-        ["approvedPurchaseAmount", "customerFirstPayment", "customerGapCashPlanned", "customerSalePrice", "financierFundedPortion", "plannedContribution"].sort()
+        ["approvedPurchaseAmount", "customerFirstPayment", "customerGapCashPlanned", "customerGapPlanned", "customerSalePrice", "financierFundedPortion", "plannedContribution"].sort()
       );
       expect(s.unreadable.every((entry) => entry.reason === "UNSAFE_AMOUNT")).toBe(true);
       expect(JSON.stringify(s)).not.toContain(String(corrupt));
