@@ -81,6 +81,19 @@ const EXPECTED_ZERO_THRESHOLDS = [
   "--coverage.thresholds.statements=0",
 ] as const;
 
+const EXPECTED_VITEST_INCLUDE = ["**/*.test.ts", "**/*.test.tsx"] as const;
+const EXPECTED_VITEST_EXCLUDE = [
+  "node_modules",
+  "**/node_modules/**",
+  ".next",
+  "out",
+  "build",
+  "apps/**",
+  "packages/**",
+  ".claude/**",
+  "**/.claude/**",
+] as const;
+
 /**
  * Independent census based on vitest.config.ts include/exclude policy.
  * This deliberately does NOT reuse the runner's collector or excludedDirs, so
@@ -165,6 +178,15 @@ afterEach(() => {
 
 describe("runVitestCoverageShards", () => {
   test("unit mode preserves the census, isolates authority once, batches deterministically, and restores repository thresholds at merge", async () => {
+    const loadedConfig = (await import("../vitest.config")).default as {
+      test?: { include?: string[]; exclude?: string[] };
+    };
+    // Pin the independent census assumptions to the actual Vitest config. A
+    // config-only scope expansion (for example removing apps/**) must fail this
+    // contract instead of leaving both the runner and the test silently narrow.
+    expect(loadedConfig.test?.include).toEqual([...EXPECTED_VITEST_INCLUDE]);
+    expect(loadedConfig.test?.exclude).toEqual([...EXPECTED_VITEST_EXCLUDE]);
+
     await run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_SHARDS: "2" });
 
     expect(fsBoundary.removed.some((p) => p.endsWith(".vitest-reports"))).toBe(true);
