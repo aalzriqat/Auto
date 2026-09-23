@@ -170,6 +170,15 @@ describe("trusted Convex preview authority", () => {
     ).toThrow(/trusted preview name/);
     expect(() =>
       validateConvexPreviewAuthority(
+        {
+          ...valid,
+          convexCloudUrl: "https://different-deployment-123.convex.cloud",
+        },
+        PREVIEW_NAME,
+      ),
+    ).toThrow(/does not match its deployment URL/);
+    expect(() =>
+      validateConvexPreviewAuthority(
         { ...valid, adminKey: "secret" },
         PREVIEW_NAME,
       ),
