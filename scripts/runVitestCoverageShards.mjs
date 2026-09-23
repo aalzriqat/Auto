@@ -22,6 +22,7 @@ const root = process.cwd();
 const vitestBin = path.join(root, "node_modules", "vitest", "vitest.mjs");
 const blobDir = path.join(root, ".vitest-reports");
 const coverageDir = path.join(root, "coverage");
+const authorityTest = "convex/unifiedDealFeeAuthority.test.ts";
 
 const thresholdZeroArgs = [
   "--coverage.thresholds.lines=0",
@@ -39,10 +40,14 @@ const sonarCoverageArgs = [
   ...thresholdZeroArgs,
 ];
 
+// The authority suite is run as its own covered process below. Excluding it
+// from the remaining workers prevents duplicate execution while its V8 blob is
+// still merged into the same final report and therefore contributes to both
+// repository thresholds and Sonar's exact-head coverage evidence.
 const sharedCoverageArgs = [
   "--coverage",
   "--maxWorkers=1",
-  "--exclude=convex/unifiedDealFeeAuthority.test.ts",
+  `--exclude=${authorityTest}`,
 ];
 
 function runVitest(args) {
@@ -82,7 +87,7 @@ function collectUnitTestFiles(directory = root, relative = "") {
     if (!entry.isFile()) continue;
     if (!/\.test\.tsx?$/.test(entry.name)) continue;
     const candidate = relative ? `${relative}/${entry.name}` : entry.name;
-    if (candidate === "convex/unifiedDealFeeAuthority.test.ts") continue;
+    if (candidate === authorityTest) continue;
     files.push(candidate);
   }
   return files;
@@ -91,6 +96,20 @@ function collectUnitTestFiles(directory = root, relative = "") {
 rmSync(blobDir, { recursive: true, force: true });
 rmSync(coverageDir, { recursive: true, force: true });
 mkdirSync(blobDir, { recursive: true });
+
+// Negative control for the coverage pipeline itself: the release-critical
+// authority suite must produce a V8 coverage blob on every covered path. It is
+// deliberately isolated so coverage instrumentation cannot reintroduce the
+// long-lived-process OOM that motivated this runner.
+runVitest([
+  "run",
+  authorityTest,
+  "--reporter=blob",
+  `--outputFile=${path.join(blobDir, "unified-deal-authority.json")}`,
+  "--coverage",
+  "--maxWorkers=1",
+  ...(mode === "sonar" ? sonarCoverageArgs : thresholdZeroArgs),
+]);
 
 if (mode === "unit") {
   const testFiles = collectUnitTestFiles().sort();
