@@ -4,11 +4,16 @@ import type { Doc, Id } from "../../convex/_generated/dataModel";
 
 const stubs = vi.hoisted(() => ({
   queryResults: new Map<string, unknown>(),
+  translate: (key: string) => key,
 }));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
+  // QuoteDialog intentionally depends on `t` in the comparison effect. The
+  // production provider keeps that callback stable; this mock must preserve the
+  // same identity contract or every render retriggers the effect and creates an
+  // artificial render loop (which coverage eventually reports as a V8 OOM).
   useLanguage: () => ({
-    t: (key: string) => key,
+    t: stubs.translate,
     locale: "en",
     isRtl: false,
   }),
