@@ -194,7 +194,7 @@ export function unrecordedConfiguredFeePositions(
 ): number[] {
   // When the deal operates under the single fee authority (adminFees),
   // configured fee templates do not govern deal finalization or closure.
-  if (snapshot?.adminFees !== undefined) return [];
+  if (snapshot?.adminFees !== undefined && !(snapshot.feeTemplates?.length)) return [];
   const templates = snapshot?.feeTemplates ?? [];
   const missing: number[] = [];
   templates.forEach((_template, templateIndex) => {
@@ -237,7 +237,7 @@ export function assertConfiguredFeesRecorded(
 ): void {
   // When the deal operates under single fee authority (adminFees),
   // template positions do not govern finalization.
-  if (snapshot?.adminFees !== undefined) return;
+  if (snapshot?.adminFees !== undefined && !(snapshot.feeTemplates?.length)) return;
 
   // Closure CAPACITY, not configuration policy: a frozen policy with more
   // fees than a deal can carry live can never be completed, and the count
