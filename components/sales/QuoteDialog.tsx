@@ -98,7 +98,10 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
   useEffect(() => {
     if (!financeCompanies) return;
 
-    const principal = watchAll.vehiclePrice - watchAll.downPayment;
+    const vehiclePrice = Number(watchAll.vehiclePrice) || 0;
+    const downPayment = Number(watchAll.downPayment) || 0;
+    const termMonths = Number(watchAll.termMonths);
+    const principal = vehiclePrice - downPayment;
     const results = [];
 
     // 1. Cash Deal Option
@@ -106,7 +109,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
       companyId: "cash",
       companyName: t("CashDeal" as any),
       isCash: true,
-      totalFinancedAmount: watchAll.vehiclePrice,
+      totalFinancedAmount: vehiclePrice,
       monthlyInstallment: 0,
       profitRateApplied: 0,
       totalProfit: 0,
@@ -128,7 +131,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
       const feesConfigured = executionFees !== undefined;
       const commission = company.commission || 0;
       const termValid = isRequestedFinancingTermValid({
-        termMonths: Number(watchAll.termMonths),
+        termMonths,
         maxTermMonths: company.maxTermMonths,
         gracePeriodMonths: company.gracePeriodMonths,
       });
@@ -140,13 +143,13 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
 
       const result = feesConfigured
         ? calculateUnifiedMurabaha({
-            vehiclePrice: watchAll.vehiclePrice,
-            downPayment: watchAll.downPayment,
+            vehiclePrice,
+            downPayment,
             commission: commission,
             processingFees: executionFees,
             annualProfitRate: company.profitRate,
             annualInsuranceRate: company.insuranceRate || 0,
-            termMonths: watchAll.termMonths,
+            termMonths,
             gracePeriodMonths: company.gracePeriodMonths,
             includesCommissionInDebt: company.includesCommissionInDebt,
           })
@@ -162,7 +165,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
       const exceedsValuation = result ? result.financedAmount > maxFinancingAllowed && actualValuation > 0 : false;
       const minimumDownPayment = result
         ? minimumDownPaymentForFinancingLimit({
-            currentDownPayment: watchAll.downPayment,
+            currentDownPayment: downPayment,
             financedAmount: result.financedAmount,
             maxFinancingAllowed,
           })
