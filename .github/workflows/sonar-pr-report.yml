@@ -209,7 +209,7 @@ jobs:
             -Dsonar.organization=aalzriqat
             -Dsonar.pullrequest.key=${{ github.event.workflow_run.pull_requests[0].number }}
             -Dsonar.pullrequest.branch=${{ github.event.workflow_run.pull_requests[0].head.ref }}
-            -Dsonar.pullrequest.base=${{ github.event.workflow_run.pull_requests[0].base.ref }}
+            -Dsonar.pullrequest.base=${{ steps.provenance.outputs.base_ref }}
             -Dsonar.scm.revision=${{ github.event.workflow_run.pull_requests[0].head.sha }}
 
       - name: Fetch Sonar issues and upsert PR report
