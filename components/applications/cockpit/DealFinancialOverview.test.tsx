@@ -230,6 +230,27 @@ describe("DealFinancialOverview", () => {
     expect(within(screen.getByTestId("overview-customer-paid")).getByText(salesAr.OverviewCustomerPaidNote)).toBeTruthy();
   });
 
+  test.each([tEn, tAr])("an unreadable composed gap is named as the TOTAL plan and never falls back to a readable cash component — %#", (t) => {
+    const dictionary = t === tEn ? salesEn : salesAr;
+    render(
+      <DealFinancialOverview
+        summary={{
+          ...summary,
+          customerGapPlanned: null,
+          customerGapCashPlannedMinor: 200_000,
+          unreadable: [{ field: "customerGapPlanned", reason: "UNSAFE_AMOUNT" }],
+        }}
+        money={money}
+        t={t}
+      />
+    );
+    const row = within(screen.getByTestId("overview-gap-cash-planned"));
+    expect(row.getByText(dictionary.OverviewGapTotalPlanned)).toBeTruthy();
+    expect(row.getByText("—")).toBeTruthy();
+    expect(row.getByText(dictionary.OverviewAmountUnreadable)).toBeTruthy();
+    expect(row.queryByText("200 JOD")).toBeNull();
+  });
+
   test("a dealer-borne line in another currency withholds costs, committed and total with the reason — never a partial total", () => {
     render(
       <DealFinancialOverview
