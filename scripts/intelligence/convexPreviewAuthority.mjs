@@ -162,11 +162,8 @@ export function assertPreviewDeploymentAdminKey(value, expectedDeploymentName) {
   }
   const prefix = value.slice(0, separator);
   const secret = value.slice(separator + 1);
-  const parts = prefix.split(":");
   if (
-    parts.length !== 2 ||
-    parts[0] !== "preview" ||
-    parts[1] !== expectedDeploymentName ||
+    prefix !== expectedDeploymentName ||
     !secret ||
     /[\r\n]/.test(secret)
   ) {
