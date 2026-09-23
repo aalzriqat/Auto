@@ -141,6 +141,32 @@ describe("configured finance valuation ceiling", () => {
     ).rejects.toThrow(/financing limit|down payment/i);
   });
 
+  test("NEGATIVE CONTROL: rejects a non-finite lender valuation before LTV logic", async () => {
+    const seed = await setupConfiguredQuote();
+    await seed.t.run((ctx) =>
+      ctx.db.insert("vehicleValuations", {
+        orgId: seed.orgId,
+        vehicleId: seed.vehicleId,
+        companyId: seed.companyId,
+        valuationAmount: Number.NaN,
+      })
+    );
+
+    await expect(
+      seed.asUser.mutation(api.quotes.saveQuote, {
+        orgId: seed.orgId,
+        customerId: seed.customerId,
+        vehicleId: seed.vehicleId,
+        companyId: seed.companyId,
+        customerEligibilityStatusIds: [seed.customerStatusId],
+        mode: "CONFIGURED_FINANCE_COMPANY",
+        vehiclePrice: 19_000,
+        downPayment: 1_000,
+        termMonths: 48,
+      })
+    ).rejects.toThrow(/valuation is not a finite amount/i);
+  });
+
   test("accepts configured financing exactly at the lender valuation ceiling", async () => {
     const seed = await setupConfiguredQuote();
     await seed.t.run((ctx) =>
