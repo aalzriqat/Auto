@@ -249,6 +249,7 @@ export type SummaryMoneyField =
   | "customerSalePrice"
   | "approvedPurchaseAmount"
   | "customerPaidToDealer"
+  | "customerGapPlanned"
   | "customerGapCashPlanned"
   | "customerFirstPayment"
   | "financierFundedPortion"
@@ -404,6 +405,8 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
         cashMinor: app.customerGapCashToDealerMinor ?? 0,
         installmentMinor: app.customerGapInstallmentToDealerMinor ?? 0,
       };
+    } else {
+      boundary.unreadable.push({ field: "customerGapPlanned", reason: "UNSAFE_AMOUNT" });
     }
   }
 
