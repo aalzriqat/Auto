@@ -87,7 +87,7 @@ export function FinanceCompanyCard({
 
         {!result.feesConfigured && (
           <span className="text-[10px] font-medium text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full">
-            {t("ExecutionFeesNotConfigured" as any) || "Fees not configured"}
+            {t("FeesNotConfigured" as any) || "Fees not configured"}
           </span>
         )}
 
