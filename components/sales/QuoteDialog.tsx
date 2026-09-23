@@ -101,7 +101,6 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
     const vehiclePrice = Number(watchAll.vehiclePrice) || 0;
     const downPayment = Number(watchAll.downPayment) || 0;
     const termMonths = Number(watchAll.termMonths);
-    const principal = vehiclePrice - downPayment;
     const results = [];
 
     // 1. Cash Deal Option
