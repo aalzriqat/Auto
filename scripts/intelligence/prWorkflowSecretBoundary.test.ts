@@ -60,6 +60,14 @@ describe("pull-request workflow secret boundary", () => {
     }
   });
 
+  it("keeps expensive Tests runs single-flight per PR or ref", () => {
+    const tests = readFileSync(path.join(workflowsDir, "test.yml"), "utf8");
+    expect(tests).toContain(
+      "group: tests-${{ github.event.pull_request.number || github.ref }}",
+    );
+    expect(tests).toContain("cancel-in-progress: true");
+  });
+
   it("keeps direct PR security and accounting lanes free of privileged runtime credentials", () => {
     const security = readFileSync(path.join(workflowsDir, "security.yml"), "utf8");
     expect(security).toContain("ci-security-placeholder.convex.cloud");
