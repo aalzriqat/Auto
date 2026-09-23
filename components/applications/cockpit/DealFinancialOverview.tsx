@@ -221,6 +221,13 @@ export function DealFinancialOverview({
                 : t("OverviewGapTotalPlannedNote")
             }
           />
+        ) : unreadable.has("customerGapPlanned") ? (
+          <Fact
+            testId="overview-gap-cash-planned"
+            label={t("OverviewGapTotalPlanned")}
+            value={null}
+            note={t("OverviewAmountUnreadable")}
+          />
         ) : (summary.customerGapCashPlannedMinor !== null || unreadable.has("customerGapCashPlanned")) && (
           <Fact
             testId="overview-gap-cash-planned"
