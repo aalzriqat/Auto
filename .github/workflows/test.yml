@@ -13,6 +13,13 @@ on:
 permissions:
   contents: read
 
+# A new commit makes every older PR test result stale. Keep only the newest
+# expensive test matrix alive for each PR/ref; this changes scheduling only,
+# never the test census or coverage thresholds.
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unit-and-integration:
     runs-on: ubuntu-latest
