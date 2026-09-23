@@ -132,12 +132,15 @@ export const update = mutation({
     isActive: v.optional(v.boolean()),
     order: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
+  handler: async (
+    ctx,
+    args
+  ): Promise<{ updatedCompanies: string[]; deactivatedCompanies: string[] }> => {
     await requireOwner(ctx, args.orgId);
 
     await requireOwnedRow(ctx, args.orgId, "orgCustomerStatuses", args.statusId, "Customer status not found.");
     const current = await ctx.db.get(args.statusId);
-    if (!current) return;
+    if (!current) return { updatedCompanies: [], deactivatedCompanies: [] };
 
     const patch: Record<string, unknown> = {};
     if (args.label !== undefined) patch.label = args.label;
@@ -147,8 +150,9 @@ export const update = mutation({
     await ctx.db.patch(args.statusId, patch);
 
     if (args.isActive === false && current.isActive) {
-      await detachStatusFromFinanceCompanies(ctx, args.orgId, args.statusId);
+      return await detachStatusFromFinanceCompanies(ctx, args.orgId, args.statusId);
     }
+    return { updatedCompanies: [], deactivatedCompanies: [] };
   },
 });
 
