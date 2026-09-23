@@ -23,12 +23,26 @@ const fsBoundary = vi.hoisted(() => ({
   created: [] as string[],
 }));
 
-vi.mock("node:child_process", () => ({
-  spawnSync: (file: string, args: string[], options: Record<string, unknown>) => {
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const spawnSync = (
+    file: string,
+    args: string[],
+    options: Record<string, unknown>,
+  ) => {
     childBoundary.calls.push({ file, args, options });
     return childBoundary.results.shift() ?? { status: 0, signal: null };
-  },
-}));
+  };
+  return {
+    ...actual,
+    default: {
+      ...(actual as unknown as { default?: Record<string, unknown> }).default,
+      ...actual,
+      spawnSync,
+    },
+    spawnSync,
+  };
+});
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
