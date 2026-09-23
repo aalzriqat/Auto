@@ -9,6 +9,8 @@
  * by silently narrowing the census or threshold contract.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { readdirSync } from "node:fs";
+import path from "node:path";
 
 const childBoundary = vi.hoisted(() => ({
   calls: [] as Array<{ file: string; args: string[]; options: Record<string, unknown> }>,
@@ -72,6 +74,52 @@ function batchTestFiles(call: (typeof childBoundary.calls)[number]): string[] {
   return args.slice(1, reporter).filter((arg) => /\.test\.tsx?$/.test(arg));
 }
 
+const EXPECTED_ZERO_THRESHOLDS = [
+  "--coverage.thresholds.lines=0",
+  "--coverage.thresholds.functions=0",
+  "--coverage.thresholds.branches=0",
+  "--coverage.thresholds.statements=0",
+] as const;
+
+/**
+ * Independent census based on vitest.config.ts include/exclude policy.
+ * This deliberately does NOT reuse the runner's collector or excludedDirs, so
+ * changing the runner to skip another directory makes this assertion fail.
+ */
+function expectedVitestCensus(
+  directory = process.cwd(),
+  relative = "",
+): string[] {
+  const excludedByVitest = new Set([
+    "node_modules",
+    ".next",
+    "out",
+    "build",
+    "apps",
+    "packages",
+    ".claude",
+    // Repository metadata is not test source even though Vitest's glob engine
+    // ignores it implicitly.
+    ".git",
+  ]);
+  const files: string[] = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (excludedByVitest.has(entry.name)) continue;
+      files.push(
+        ...expectedVitestCensus(
+          path.join(directory, entry.name),
+          relative ? `${relative}/${entry.name}` : entry.name,
+        ),
+      );
+      continue;
+    }
+    if (!entry.isFile() || !/\.test\.tsx?$/.test(entry.name)) continue;
+    files.push(relative ? `${relative}/${entry.name}` : entry.name);
+  }
+  return files.sort();
+}
+
 async function run(mode: string, env: Record<string, string | undefined> = {}) {
   for (const key of ["VITEST_COVERAGE_SHARDS", "VITEST_COVERAGE_BATCH_SIZE"]) {
     delete process.env[key];
@@ -126,7 +174,7 @@ describe("runVitestCoverageShards", () => {
     const authority = rawArgs(childBoundary.calls[0]);
     expect(authority).toContain("convex/unifiedDealFeeAuthority.test.ts");
     expect(authority).toContain("--coverage");
-    expect(authority).toContain("--coverage.thresholds.lines=0");
+    for (const threshold of EXPECTED_ZERO_THRESHOLDS) expect(authority).toContain(threshold);
 
     const batches = childBoundary.calls.filter(isBatchCall);
     expect(batches.length).toBeGreaterThan(1);
@@ -135,19 +183,23 @@ describe("runVitestCoverageShards", () => {
     expect(files.filter((f) => f === "scripts/runVitestCoverageShards.test.ts")).toHaveLength(1);
     expect(files).not.toContain("convex/unifiedDealFeeAuthority.test.ts");
     expect([...files].sort()).toEqual(files);
+    const expected = expectedVitestCensus().filter(
+      (file) => file !== "convex/unifiedDealFeeAuthority.test.ts",
+    );
+    expect(files).toEqual(expected);
 
     for (const batch of batches) {
       const args = rawArgs(batch);
       expect(args).toContain("--coverage");
       expect(args).toContain("--maxWorkers=1");
       expect(args).toContain("--exclude=convex/unifiedDealFeeAuthority.test.ts");
-      expect(args).toContain("--coverage.thresholds.lines=0");
+      for (const threshold of EXPECTED_ZERO_THRESHOLDS) expect(args).toContain(threshold);
     }
 
     const merge = rawArgs(childBoundary.calls.at(-1)!);
     expect(merge.some((arg) => arg.startsWith("--merge-reports="))).toBe(true);
     expect(merge).toContain("--coverage");
-    expect(merge).not.toContain("--coverage.thresholds.lines=0");
+    for (const threshold of EXPECTED_ZERO_THRESHOLDS) expect(merge).not.toContain(threshold);
     expect(stdout.join("")).toContain("Coverage batch 1/");
   });
 
@@ -174,7 +226,7 @@ describe("runVitestCoverageShards", () => {
     const merge = rawArgs(childBoundary.calls[3]);
     expect(merge.some((arg) => arg.startsWith("--merge-reports="))).toBe(true);
     expect(merge).toContain("--coverage.include=convex/**/*.ts");
-    expect(merge).toContain("--coverage.thresholds.lines=0");
+    for (const threshold of EXPECTED_ZERO_THRESHOLDS) expect(merge).toContain(threshold);
   });
 
   test("rejects an unknown mode before touching the filesystem or spawning Vitest", async () => {
