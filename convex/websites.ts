@@ -398,7 +398,39 @@ export async function getPublishedSnapshotData(
   const snapshot = await ctx.db.get(settings.publishedSnapshotId);
   if (!snapshot || snapshot.orgId !== orgId || snapshot.websiteSettingsId !== settings._id) return null;
 
-  return (snapshot.snapshotJson ?? null) as PublishedSnapshotData | null;
+  const published = (snapshot.snapshotJson ?? null) as PublishedSnapshotData | null;
+  if (!published) return null;
+
+  // adminFees became the single execution-fee authority after older website
+  // snapshots had already been published. Those snapshots may contain a
+  // synthetic 0 from the pre-authority projection, which would make public
+  // affordability quote unknown fees as free. Preserve the published snapshot
+  // for every other field, but refresh this one authority from the currently
+  // selected finance-company row. Missing/inactive/cross-org authority fails
+  // closed by suppressing public finance terms.
+  if (published.financeCompany !== undefined && published.financeCompany !== null) {
+    if (!settings.activeFinanceCompanyId) {
+      return { ...published, financeCompany: null };
+    }
+    const company = await ctx.db.get(settings.activeFinanceCompanyId);
+    if (!company || company.orgId !== orgId || !company.isActive) {
+      return { ...published, financeCompany: null };
+    }
+    if (typeof published.financeCompany !== "object" || Array.isArray(published.financeCompany)) {
+      return { ...published, financeCompany: null };
+    }
+    const financeCompany = {
+      ...(published.financeCompany as Record<string, unknown>),
+    };
+    if (company.adminFees === undefined) {
+      delete financeCompany.adminFees;
+    } else {
+      financeCompany.adminFees = company.adminFees;
+    }
+    return { ...published, financeCompany };
+  }
+
+  return published;
 }
 
 export async function activePrimaryDomain(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">) {
