@@ -7,10 +7,12 @@ if (mode !== "unit" && mode !== "sonar") {
   throw new Error('Usage: node scripts/runVitestCoverageShards.mjs <unit|sonar>');
 }
 
-// Four coverage shards still allowed a single V8 worker to grow past 5.5 GiB
-// on the full AutoFlow suite. Eight keeps each coverage process bounded while
-// preserving the exact same test census and final merged coverage gate.
-const shardCount = Number(process.env.VITEST_COVERAGE_SHARDS ?? "8");
+// Coverage is deliberately process-isolated rather than buying reliability by
+// raising Node's heap ceiling. Eight shards still allowed shard 1 to exceed the
+// 5.5 GiB CI ceiling on the production suite. Sixteen is the bounded maximum:
+// it preserves the exact test census and final merged coverage gate while
+// reducing the maximum amount of V8 coverage state retained by one process.
+const shardCount = Number(process.env.VITEST_COVERAGE_SHARDS ?? "16");
 if (!Number.isInteger(shardCount) || shardCount < 2 || shardCount > 16) {
   throw new Error("VITEST_COVERAGE_SHARDS must be an integer between 2 and 16.");
 }
