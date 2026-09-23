@@ -652,6 +652,76 @@ describe("dealOverview.financedDealOverview", () => {
     }
   );
 
+  test("NEGATIVE CONTROL: unrelated dealer costs do not consume the frozen execution-fee estimate", async () => {
+    const s = await seed("frozen-fee-unplanned");
+    const applicationId = await insertApplication(s);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, {
+        estimatedDealerBorneExpensesMinor: 200_000,
+      });
+      await ctx.db.insert("financeDealFees", {
+        orgId: s.orgId,
+        applicationId,
+        feeType: "OTHER_CLOSING_EXPENSE",
+        currency: "JOD",
+        actualAmountMinor: 300_000,
+        paidBy: "DEALER",
+        paidTo: "OTHER",
+        accountingTreatment: "SELLING_EXPENSE",
+        includedInQuotation: false,
+        deductedFromSettlement: false,
+        refundable: false,
+        source: "MANUAL",
+        createdBy: s.userId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    });
+
+    const view = await s.asOwner.query(api.dealOverview.financedDealOverview, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    expect(view!.financialSummary!.dealerOutlay).toMatchObject({
+      recordedCostsMinor: 300_000,
+      expectedCostsRemainingMinor: 200_000,
+      totalExpectedMinor: 2_150_000,
+    });
+  });
+
+  test("a matching dealership-paid finance-company fee consumes only its frozen execution-fee position", async () => {
+    const s = await seed("frozen-fee-match");
+    const applicationId = await insertApplication(s);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, {
+        estimatedDealerBorneExpensesMinor: 200_000,
+      });
+      await ctx.db.insert("financeDealFees", {
+        orgId: s.orgId,
+        applicationId,
+        feeType: "FINANCE_COMPANY_FEE",
+        currency: "JOD",
+        actualAmountMinor: 75_000,
+        paidBy: "DEALER",
+        paidTo: "FINANCE_COMPANY",
+        accountingTreatment: "SELLING_EXPENSE",
+        includedInQuotation: false,
+        deductedFromSettlement: false,
+        refundable: false,
+        source: "MANUAL",
+        createdBy: s.userId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    });
+
+    const view = await s.asOwner.query(api.dealOverview.financedDealOverview, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    expect(view!.financialSummary!.dealerOutlay.expectedCostsRemainingMinor).toBe(125_000);
+  });
+
   test("a corrupt legacy frozen adminFees value withholds the expected outlay instead of crashing the deal overview", async () => {
     const s = await seed("corrupt-admin-fees");
     const applicationId = await insertApplication(s);
@@ -677,6 +747,7 @@ describe("dealOverview.financedDealOverview", () => {
       expectedCostsReason: "UNSAFE_AMOUNT",
       totalExpectedMinor: null,
     });
+    expect(view!.financialSummary!.profit).toEqual({ available: false, reason: "ExpensesUnreadable" });
   });
 
   test("two safe same-currency actuals that overflow between them are withheld as UNSAFE_AMOUNT, never summed", async () => {
