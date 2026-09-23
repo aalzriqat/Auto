@@ -690,9 +690,9 @@ export function DealCockpit({
   const saveDocumentFile = useMutation(api.documents.saveDocumentFile);
   const orgCurrency = useCurrency();
   const currencyMarker = (cur: string) => {
-    if (cur === "JOD" || cur === orgCurrency.code) {
+    if (cur === orgCurrency.code) {
       if (locale === "ar") {
-        return orgCurrency.symbol ?? "د.أ";
+        return orgCurrency.symbol ?? (cur === "JOD" ? "د.أ" : orgCurrency.displayLabel);
       }
       return orgCurrency.displayLabel;
     }
@@ -3711,6 +3711,15 @@ export function DealCockpitView({
     }
   };
 
+  const overviewProfit = financialOverview?.data?.financialSummary?.profit;
+  const handoverManagementProfit = {
+    managementProfitMinor: overviewProfit?.available ? overviewProfit.amountMinor : null,
+    managementProfitClassification:
+      overviewProfit?.available && overviewProfit.basis === "MANAGEMENT_ESTIMATE"
+        ? overviewProfit.classification
+        : null,
+  };
+
   return (
     <div className="space-y-6">
       {/* --- header ------------------------------------------------------ */}
@@ -4517,47 +4526,14 @@ export function DealCockpitView({
           // denominated — the legacy Review screen consumes the same object.
           evidence={
             handoverEvidence
-              ? {
-                  ...handoverEvidence,
-                  managementProfitMinor:
-                    financialOverview?.data?.financialSummary?.profit.available
-                      ? financialOverview.data.financialSummary.profit.amountMinor
-                      : deal && "money" in deal && deal.money?.profit.available
-                        ? deal.money.profit.amountMinor
-                        : null,
-                  managementProfitClassification:
-                    financialOverview?.data?.financialSummary?.profit.available &&
-                    financialOverview.data.financialSummary.profit.basis === "MANAGEMENT_ESTIMATE"
-                      ? financialOverview.data.financialSummary.profit.classification
-                      : deal &&
-                          "money" in deal &&
-                          deal.money?.profit.available &&
-                          deal.money.profit.basis === "MANAGEMENT_ESTIMATE"
-                        ? deal.money.profit.classification
-                        : null,
-                }
+              ? { ...handoverEvidence, ...handoverManagementProfit }
               : {
                   approvedPurchaseAmountMinor: null,
                   financeCompanyFundedPortionMinor: null,
                   dealerContributionMinor: null,
                   approvedAmountIsFarFromEvidence: false,
                   currency: null,
-                  managementProfitMinor:
-                    financialOverview?.data?.financialSummary?.profit.available
-                      ? financialOverview.data.financialSummary.profit.amountMinor
-                      : deal && "money" in deal && deal.money?.profit.available
-                        ? deal.money.profit.amountMinor
-                        : null,
-                  managementProfitClassification:
-                    financialOverview?.data?.financialSummary?.profit.available &&
-                    financialOverview.data.financialSummary.profit.basis === "MANAGEMENT_ESTIMATE"
-                      ? financialOverview.data.financialSummary.profit.classification
-                      : deal &&
-                          "money" in deal &&
-                          deal.money?.profit.available &&
-                          deal.money.profit.basis === "MANAGEMENT_ESTIMATE"
-                        ? deal.money.profit.classification
-                        : null,
+                  ...handoverManagementProfit,
                 }
           }
           // `deal` is a union — the cash variant comes from `sales.dealCockpit`
