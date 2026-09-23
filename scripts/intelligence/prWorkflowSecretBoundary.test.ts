@@ -36,9 +36,6 @@ describe("pull-request workflow secret boundary", () => {
     expect(direct.length).toBeGreaterThan(0);
 
     for (const workflow of direct) {
-      if (workflow.path === ".github/workflows/sonar-bootstrap-325.yml") {
-        continue;
-      }
       expect(
         workflow.source,
         workflow.path + " must be secretless because same-repository PR code controls this workflow revision.",
@@ -46,68 +43,8 @@ describe("pull-request workflow secret boundary", () => {
     }
   });
 
-  it("allows only the one-time PR 325 Sonar bootstrap secret on the pinned scanner action", () => {
-    const source = readFileSync(
-      path.join(workflowsDir, "sonar-bootstrap-325.yml"),
-      "utf8",
-    );
-    const parsed = parseYaml(source) as {
-      on?: Record<string, unknown>;
-      jobs?: Record<
-        string,
-        {
-          if?: string;
-          permissions?: Record<string, string>;
-          steps?: Array<{
-            name?: string;
-            uses?: string;
-            run?: string;
-            env?: Record<string, string>;
-            with?: Record<string, unknown>;
-          }>;
-        }
-      >;
-    };
-
-    expect(parsed.on).toHaveProperty("pull_request");
-    const job = parsed.jobs?.["sonar-bootstrap-325"];
-    expect(job).toBeDefined();
-    expect(job?.if).toContain("github.event.pull_request.number == 325");
-    expect(job?.if).toContain(
-      "github.event.pull_request.head.ref == 'agent/scrum-350-browser-swarm'",
-    );
-    expect(job?.if).toContain(
-      "github.event.pull_request.head.repo.full_name == github.repository",
-    );
-    expect(job?.permissions).toEqual({ contents: "read" });
-
-    const steps = job?.steps ?? [];
-    const scanner = steps.find(
-      (step) => step.name === "SonarCloud bootstrap scan for PR 325 only",
-    );
-    expect(scanner?.uses).toBe(
-      "SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f",
-    );
-    expect(scanner?.env).toEqual({
-      SONAR_TOKEN: "${{ secrets.SONAR_TOKEN }}",
-    });
-
-    for (const step of steps) {
-      if (step === scanner) continue;
-      expect(JSON.stringify(step)).not.toMatch(/\$\{\{\s*secrets\./);
-      expect(step.run ?? "").not.toContain("SONAR_TOKEN");
-    }
-
-    expect(source.match(/\$\{\{\s*secrets\./g)?.length).toBe(1);
-    expect(source).toContain("pnpm install --frozen-lockfile --ignore-scripts");
-    expect(source).toContain("git ls-files -s");
-    expect(source).toContain("'$1 == \"120000\" { found=1 }");
-    expect(source).not.toContain("find . -path './.git'");
-    expect(source).toContain("git show \"$BASE_SHA:sonar-project.properties\"");
-    expect(source).toContain("-Dsonar.pullrequest.key=325");
-    expect(source).toContain(
-      "-Dsonar.scm.revision=${{ github.event.pull_request.head.sha }}",
-    );
+  it("does not retain obsolete PR-specific privileged bootstrap workflows", () => {
+    expect(readdirSync(workflowsDir)).not.toContain("sonar-bootstrap-325.yml");
   });
 
   it("keeps privileged PR follow-up workflows on workflow_run rather than pull_request", () => {
@@ -157,6 +94,18 @@ describe("pull-request workflow secret boundary", () => {
     expect(source).toContain("projectBaseDir: candidate");
     expect(source).toContain("autoflow/trusted-sonar-pr");
     expect(source.match(/statuses\/\$TESTED_SHA/g)?.length).toBe(2);
+    expect(source).toContain("current_base_sha");
+    expect(source).toContain('git merge-base --is-ancestor "$current_base_sha" "$HEAD_SHA"');
+    expect(source).toContain('"$FIRST_PARENT" != "$current_base_sha"');
+    expect(source).toContain(
+      "-Dsonar.pullrequest.base=${{ steps.provenance.outputs.base_ref }}",
+    );
+    expect(source).toContain(
+      "-Dsonar.pullrequest.branch=${{ steps.provenance.outputs.head_ref }}",
+    );
+    expect(source).not.toContain(
+      "BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}",
+    );
     expect(source).not.toContain("working-directory: candidate");
     expect(source).not.toMatch(/candidate[^\n]*pnpm\s+(?:install|run|exec)/);
   });
