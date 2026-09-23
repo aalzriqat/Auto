@@ -44,6 +44,18 @@ describe("trusted Convex preview authority", () => {
         "elegant-butterfly-952",
       ),
     ).toThrow(/not scoped/);
+    expect(() =>
+      assertPreviewDeploymentAdminKey(
+        "elegant-butterfly-952|line-one\nline-two",
+        "elegant-butterfly-952",
+      ),
+    ).toThrow(/not scoped/);
+    expect(() =>
+      assertPreviewDeploymentAdminKey(
+        "elegant-butterfly-952|",
+        "elegant-butterfly-952",
+      ),
+    ).toThrow(/malformed/);
   });
 
   it("accepts only bare Convex cloud origins", () => {
@@ -177,6 +189,12 @@ describe("trusted Convex preview authority", () => {
         PREVIEW_NAME,
       ),
     ).toThrow(/does not match its deployment URL/);
+    expect(() =>
+      validateConvexPreviewAuthority(
+        { ...valid, convexCloudUrl: undefined },
+        PREVIEW_NAME,
+      ),
+    ).toThrow(/invalid deployment URL/);
     expect(() =>
       validateConvexPreviewAuthority(
         { ...valid, adminKey: "secret" },
