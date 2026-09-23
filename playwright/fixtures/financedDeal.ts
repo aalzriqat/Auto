@@ -132,7 +132,22 @@ export async function ensureFinanceCompany(page: Page): Promise<void> {
     await expect(page.getByText(CUSTOMER_STATUS, { exact: true }).first()).toBeVisible();
   }
 
-  if (await existsWithin(page.getByText(COMPANY_NAME, { exact: true }))) return;
+  const existingCompanyRow = page.getByRole("row").filter({ hasText: COMPANY_NAME }).first();
+  if (await existsWithin(existingCompanyRow)) {
+    await existingCompanyRow.getByRole("button").first().click();
+    const dialog = page.getByRole("dialog");
+    const adminFees = dialog.locator("#admin-fees");
+    await expect(adminFees).toBeVisible();
+    if ((await adminFees.inputValue()).trim() === "") {
+      await adminFees.fill("0");
+      await adminFees.press("Enter");
+      await expect(dialog).not.toBeVisible();
+    } else {
+      await page.keyboard.press("Escape");
+      await expect(dialog).not.toBeVisible();
+    }
+    return;
+  }
 
   await page.getByRole("button", { name: "Add Company" }).click();
   const dialog = page.getByRole("dialog");
