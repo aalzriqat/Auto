@@ -139,6 +139,25 @@ describe("deriveDealFinancialSummary", () => {
     });
   });
 
+  test("an unsafe installment gap marks the planned gap unreadable instead of looking absent", () => {
+    const s = deriveDealFinancialSummary(
+      inputs({
+        app: {
+          ...inputs().app,
+          customerGapCashToDealerMinor: 200_000,
+          customerGapInstallmentToDealerMinor: Number.NaN,
+        },
+      })
+    );
+
+    expect(s.customerGapPlanned).toBeNull();
+    expect(s.customerGapCashPlannedMinor).toBe(200_000);
+    expect(s.unreadable).toContainEqual({
+      field: "customerGapPlanned",
+      reason: "UNSAFE_AMOUNT",
+    });
+  });
+
   describe("the financier's remaining balance: estimated before a receivable, actual after", () => {
     test("OUTSTANDING from the receivable once one exists, on the through-dealership route", () => {
       expect(deriveDealFinancialSummary(inputs()).financier.outstanding).toEqual({
