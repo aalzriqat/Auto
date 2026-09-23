@@ -211,6 +211,7 @@ describe("runVitestCoverageShards", () => {
     expect(authority).toContain("convex/unifiedDealFeeAuthority.test.ts");
     expect(authority).toContain("--coverage.include=convex/**/*.ts");
     expect(authority).toContain("--coverage.include=scripts/**/*.mjs");
+    for (const threshold of EXPECTED_ZERO_THRESHOLDS) expect(authority).toContain(threshold);
 
     const shard1 = rawArgs(childBoundary.calls[1]);
     const shard2 = rawArgs(childBoundary.calls[2]);
@@ -220,7 +221,7 @@ describe("runVitestCoverageShards", () => {
       expect(args).toContain("convex");
       expect(args).toContain("scripts");
       expect(args).toContain("--exclude=convex/unifiedDealFeeAuthority.test.ts");
-      expect(args).toContain("--coverage.thresholds.lines=0");
+      for (const threshold of EXPECTED_ZERO_THRESHOLDS) expect(args).toContain(threshold);
     }
 
     const merge = rawArgs(childBoundary.calls[3]);
