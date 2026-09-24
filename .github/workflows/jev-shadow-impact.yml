@@ -43,20 +43,51 @@ jobs:
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: main
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Fetch pull-request head as data only
+      - name: Resolve current pull-request base and fetch head as data only
+        id: pr-context
         if: github.event_name == 'workflow_run'
         env:
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          EXPECTED_HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
             echo "workflow_run did not provide a valid PR number" >&2
             exit 1
           fi
-          git fetch --no-tags origin "refs/pull/${PR_NUMBER}/head"
+          if ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "workflow_run did not provide an exact head SHA" >&2
+            exit 1
+          fi
+          PR_JSON="$(
+            curl --fail --silent --show-error \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"
+          )"
+          CURRENT_HEAD="$(jq -r '.head.sha' <<< "$PR_JSON")"
+          CURRENT_BASE="$(jq -r '.base.sha' <<< "$PR_JSON")"
+          if [ "$CURRENT_HEAD" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "workflow_run head is stale; PR is now at $CURRENT_HEAD" >&2
+            exit 1
+          fi
+          if ! [[ "$CURRENT_BASE" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "GitHub did not return an exact current PR base SHA" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin "refs/pull/${PR_NUMBER}/head:refs/autoflow/jev-pr-head"
+          if [ "$(git rev-parse refs/autoflow/jev-pr-head)" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "Fetched PR head does not match workflow_run head SHA" >&2
+            exit 1
+          fi
+          echo "base_sha=$CURRENT_BASE" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$EXPECTED_HEAD_SHA" >> "$GITHUB_OUTPUT"
 
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
@@ -79,8 +110,8 @@ jobs:
         run: pnpm jev:shadow-impact
         env:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
-          BASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].base.sha || github.event_name == 'push' && github.event.before || inputs.base_sha }}
-          HEAD_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].head.sha || github.event_name == 'push' && github.sha || inputs.head_sha }}
+          BASE_SHA: ${{ github.event_name == 'workflow_run' && steps.pr-context.outputs.base_sha || github.event_name == 'push' && github.event.before || inputs.base_sha }}
+          HEAD_SHA: ${{ github.event_name == 'workflow_run' && steps.pr-context.outputs.head_sha || github.event_name == 'push' && github.sha || inputs.head_sha }}
 
       - name: Publish sanitized Jev summary
         if: always()
