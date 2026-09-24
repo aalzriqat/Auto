@@ -9,6 +9,7 @@
  * by silently narrowing the census or threshold contract.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +18,30 @@ const childBoundary = vi.hoisted(() => ({
   calls: [] as Array<{ file: string; args: string[]; options: Record<string, unknown> }>,
   results: [] as Array<{ status: number | null; signal: string | null; error?: Error }>,
 }));
+
+// The runner's child processes are the system boundary under test. Keep the
+// real module shape (including its default export), but never let this suite
+// launch Vitest recursively when it imports the runner in-process.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const interceptedSpawnSync = (
+    file: string,
+    args: readonly string[],
+    options: Record<string, unknown>,
+  ) => {
+    childBoundary.calls.push({ file, args: [...args], options });
+    return childBoundary.results.shift() ?? { status: 0, signal: null };
+  };
+  return {
+    ...actual,
+    default: {
+      ...(actual as unknown as { default?: Record<string, unknown> }).default,
+      ...actual,
+      spawnSync: interceptedSpawnSync,
+    },
+    spawnSync: interceptedSpawnSync,
+  };
+});
 
 class ExitSignal extends Error {
   constructor(readonly code: number) {
@@ -130,6 +155,15 @@ async function run(mode: string, env: Record<string, string | undefined> = {}) {
 beforeEach(() => {
   childBoundary.calls.length = 0;
   childBoundary.results.length = 0;
+  // Regression control for c33ee35cc: without the child-process boundary,
+  // importing the real runner below recursively launches this suite again and
+  // CI never reaches a verdict. Probe the boundary before any test can import
+  // the runner so that losing the mock fails quickly instead of hanging.
+  spawnSync(process.execPath, ["--version"], { cwd: process.cwd() });
+  if (childBoundary.calls.length !== 1) {
+    throw new Error("Coverage runner tests must intercept child processes before importing the runner.");
+  }
+  childBoundary.calls.length = 0;
   stdout = [];
   stderr = [];
   process.exit = ((code?: number) => {
