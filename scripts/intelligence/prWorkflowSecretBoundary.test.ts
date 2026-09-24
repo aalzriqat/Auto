@@ -111,10 +111,12 @@ describe("pull-request workflow secret boundary", () => {
     expect(source).toContain("still-current exact merge");
     expect(source).toContain("+refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-report-merge");
     expect(source).toContain('if [ "$current_merge" != "$TESTED_SHA" ]; then');
-    expect(source.indexOf("sonar-report-merge")).toBeGreaterThan(source.indexOf("qualitygates/project_status"));
+    expect(source.indexOf("sonar-report-merge")).toBeGreaterThan(source.indexOf("sonar-pr-report-payload.json"));
+    expect(source.indexOf("sonar-report-merge")).toBeLessThan(source.indexOf("-X PATCH"));
     expect(source).toContain("tested-merge-sha.txt");
     expect(source).toContain('if [ "$coverage_merge" != "$TESTED_SHA" ]; then');
     expect(source).toContain('git merge-base --is-ancestor "$FIRST_PARENT" refs/autoflow/sonar-main');
+    expect(source).toContain('if [ "$live_base_ref" != "main" ]; then');
     const tests = readFileSync(path.join(workflowsDir, "test.yml"), "utf8");
     expect(tests).toContain('printf \'%s\\n\' "$GITHUB_SHA" > coverage/tested-merge-sha.txt');
     expect(source).not.toContain("github.event.workflow_run.pull_requests[0].base.sha");
@@ -140,6 +142,7 @@ describe("pull-request workflow secret boundary", () => {
     expect(source).toContain("refs/pull/${PR_NUMBER}/head:refs/autoflow/accounting-pr-head");
     expect(source).toContain("refs/pull/${PR_NUMBER}/merge:refs/autoflow/accounting-pr-merge");
     expect(source).toContain('git merge-base --is-ancestor "$FIRST_PARENT" refs/autoflow/accounting-main');
+    expect(source).toContain('if [ "$live_base_ref" != "main" ]; then');
     expect(source).toContain("FIRST_PARENT");
     expect(source).not.toContain("github.event.workflow_run.pull_requests[0].base.sha");
     expect(source.match(/statuses\/\$TESTED_SHA/g)?.length).toBe(2);
@@ -151,6 +154,7 @@ describe("pull-request workflow secret boundary", () => {
     expect(source).toContain("refs/pull/${PR_NUMBER}/head:refs/autoflow/jev-pr-head");
     expect(source).toContain("refs/pull/${PR_NUMBER}/merge:refs/autoflow/jev-pr-merge");
     expect(source).toContain('git merge-base --is-ancestor "$FIRST_PARENT" refs/autoflow/jev-main');
+    expect(source).toContain('if [ "$live_base_ref" != "main" ]; then');
     expect(source).toContain("steps.pr-context.outputs.base_sha");
     expect(source).not.toContain("github.event.workflow_run.pull_requests[0].base.sha");
   });

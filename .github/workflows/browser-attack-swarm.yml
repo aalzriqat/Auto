@@ -28,6 +28,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      pull-requests: read
       statuses: write
     outputs:
       should_run: ${{ steps.plan.outputs.should_run }}
@@ -61,6 +62,7 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
           EXPECTED_HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
@@ -93,10 +95,23 @@ jobs:
           fi
 
           # Triggers cover only PRs into main. A retarget after the triggering run
-          # moves the merge onto another base, so the base must still be on main.
+          # moves the merge onto another base: the PR must still target main, and
+          # the merge base must be on it (a branch cut from main passes ancestry alone).
           git fetch --no-tags origin "+refs/heads/main:refs/autoflow/swarm-main"
           if ! git merge-base --is-ancestor "$FIRST_PARENT" refs/autoflow/swarm-main; then
             echo "PR merge base $FIRST_PARENT is not on main; the PR was retargeted or its merge ref is stale." >&2
+            exit 1
+          fi
+          live_base_ref="$(
+            curl --fail --silent --show-error \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" |
+            jq -r '.base.ref // empty'
+          )"
+          if [ "$live_base_ref" != "main" ]; then
+            echo "PR now targets '$live_base_ref', not main; refusing the retargeted PR." >&2
             exit 1
           fi
 

@@ -92,10 +92,23 @@ jobs:
           fi
 
           # Triggers cover only PRs into main. A retarget after the triggering run
-          # moves the merge onto another base, so the base must still be on main.
+          # moves the merge onto another base: the PR must still target main, and
+          # the merge base must be on it (a branch cut from main passes ancestry alone).
           git fetch --no-tags origin "+refs/heads/main:refs/autoflow/sonar-main"
           if ! git merge-base --is-ancestor "$FIRST_PARENT" refs/autoflow/sonar-main; then
             echo "PR merge base $FIRST_PARENT is not on main; the PR was retargeted or its merge ref is stale." >&2
+            exit 1
+          fi
+          live_base_ref="$(
+            curl --fail --silent --show-error \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" |
+            jq -r '.base.ref // empty'
+          )"
+          if [ "$live_base_ref" != "main" ]; then
+            echo "PR now targets '$live_base_ref', not main; refusing the retargeted PR." >&2
             exit 1
           fi
 
@@ -317,17 +330,6 @@ jobs:
 
           cat sonar-pr-report.md >> "$GITHUB_STEP_SUMMARY"
 
-          # An unchanged head is not enough: a base advance or retarget moves the
-          # PR merge ref without moving the head. Recheck immediately before the
-          # write so the comment only ever describes the exact merge analysed.
-          git -C trusted fetch --no-tags origin \
-            "+refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-report-merge"
-          current_merge="$(git -C trusted rev-parse refs/autoflow/sonar-report-merge)"
-          if [ "$current_merge" != "$TESTED_SHA" ]; then
-            echo "::notice::Skipping stale Sonar report for merge $TESTED_SHA; PR merge is now $current_merge."
-            exit 0
-          fi
-
           comments_json="$(
             curl --fail --silent --show-error \
               -H "Accept: application/vnd.github+json" \
@@ -342,6 +344,17 @@ jobs:
           )"
 
           jq -Rs '{body: .}' < sonar-pr-report.md > sonar-pr-report-payload.json
+
+          # An unchanged head is not enough: a base advance or retarget moves the
+          # PR merge ref without moving the head. Recheck immediately before the
+          # write so the comment only ever describes the exact merge analysed.
+          git -C trusted fetch --no-tags origin \
+            "+refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-report-merge"
+          current_merge="$(git -C trusted rev-parse refs/autoflow/sonar-report-merge)"
+          if [ "$current_merge" != "$TESTED_SHA" ]; then
+            echo "::notice::Skipping stale Sonar report for merge $TESTED_SHA; PR merge is now $current_merge."
+            exit 0
+          fi
           if [ -n "$existing_comment_id" ]; then
             curl --fail --silent --show-error \
               -X PATCH \
