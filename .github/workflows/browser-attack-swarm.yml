@@ -39,6 +39,7 @@ jobs:
       convex_cloud_url: ${{ steps.plan.outputs.convex_cloud_url }}
       head_sha: ${{ steps.plan.outputs.head_sha }}
       tested_sha: ${{ steps.provenance.outputs.tested_sha }}
+      base_sha: ${{ steps.provenance.outputs.base_sha }}
       pr_number: ${{ steps.plan.outputs.pr_number }}
 
     steps:
@@ -60,19 +61,35 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
           EXPECTED_HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
-          EXPECTED_BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
             echo "workflow_run did not provide a valid PR number" >&2
             exit 1
           fi
-          for value in "$EXPECTED_HEAD_SHA" "$EXPECTED_BASE_SHA"; do
-            if ! [[ "$value" =~ ^[0-9a-fA-F]{40}$ ]]; then
-              echo "workflow_run did not provide exact base/head SHAs" >&2
-              exit 1
-            fi
-          done
+          if ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "workflow_run did not provide an exact head SHA" >&2
+            exit 1
+          fi
+
+          PR_JSON="$(
+            curl --fail --silent --show-error \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"
+          )"
+          CURRENT_HEAD="$(jq -r '.head.sha' <<< "$PR_JSON")"
+          CURRENT_BASE="$(jq -r '.base.sha' <<< "$PR_JSON")"
+          if [ "$CURRENT_HEAD" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "::notice::Skipping stale trusted browser run for $EXPECTED_HEAD_SHA; PR is now at $CURRENT_HEAD."
+            exit 1
+          fi
+          if ! [[ "$CURRENT_BASE" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "GitHub did not return an exact current PR base SHA" >&2
+            exit 1
+          fi
 
           git fetch --no-tags origin \
             "refs/pull/${PR_NUMBER}/head:refs/autoflow/pr-head" \
@@ -84,18 +101,19 @@ jobs:
             echo "Fetched PR head does not match workflow_run PR head SHA" >&2
             exit 1
           fi
-          git cat-file -e "${EXPECTED_BASE_SHA}^{commit}"
+          git cat-file -e "${CURRENT_BASE}^{commit}"
           git cat-file -e "${EXPECTED_HEAD_SHA}^{commit}"
           git cat-file -e "${FETCHED_MERGE}^{commit}"
 
           PARENTS="$(git show -s --format=%P "$FETCHED_MERGE")"
           read -r FIRST_PARENT SECOND_PARENT EXTRA_PARENT <<< "$PARENTS"
-          if [ "$FIRST_PARENT" != "$EXPECTED_BASE_SHA" ] || [ "$SECOND_PARENT" != "$EXPECTED_HEAD_SHA" ] || [ -n "${EXTRA_PARENT:-}" ]; then
-            echo "GitHub PR merge ref is not the exact two-parent merge of the trusted base + head." >&2
+          if [ "$FIRST_PARENT" != "$CURRENT_BASE" ] || [ "$SECOND_PARENT" != "$EXPECTED_HEAD_SHA" ] || [ -n "${EXTRA_PARENT:-}" ]; then
+            echo "GitHub PR merge ref is not the exact two-parent merge of the current trusted base + triggering head." >&2
             exit 1
           fi
 
           echo "TESTED_SHA=$FETCHED_MERGE" >> "$GITHUB_ENV"
+          echo "base_sha=$CURRENT_BASE" >> "$GITHUB_OUTPUT"
           echo "tested_sha=$FETCHED_MERGE" >> "$GITHUB_OUTPUT"
 
       - name: Mark trusted browser swarm pending on tested merge
@@ -139,7 +157,7 @@ jobs:
         working-directory: trusted
         run: pnpm browser-swarm:trusted-impact
         env:
-          BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
+          BASE_SHA: ${{ steps.provenance.outputs.base_sha }}
           HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
 
       - name: Generate bounded Jev browser exploration once
@@ -147,7 +165,7 @@ jobs:
         run: pnpm browser-swarm:jev-exploration
         env:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
-          BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
+          BASE_SHA: ${{ steps.provenance.outputs.base_sha }}
           HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
           TESTED_SHA: ${{ steps.provenance.outputs.tested_sha }}
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
@@ -234,7 +252,7 @@ jobs:
         working-directory: trusted
         run: pnpm browser-swarm:prepare-trusted-run
         env:
-          BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
+          BASE_SHA: ${{ steps.provenance.outputs.base_sha }}
           HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
           TESTED_SHA: ${{ env.TESTED_SHA }}
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
@@ -345,7 +363,7 @@ jobs:
         env:
           CANDIDATE_ROOT: ${{ github.workspace }}/candidate
           BROWSER_SWARM_BUILD_ARTIFACT_ROOT: ${{ runner.temp }}/browser-swarm-candidate-build
-          BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
           HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
           TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
           CONTROLLER_SHA: ${{ github.workflow_sha }}
@@ -591,7 +609,7 @@ jobs:
         run: node trusted/scripts/intelligence/browserSwarmBuildArtifact.mjs verify
         env:
           BROWSER_SWARM_BUILD_ARTIFACT_ROOT: ${{ runner.temp }}/browser-swarm-candidate-build
-          BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
           HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
           TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
           CONTROLLER_SHA: ${{ github.workflow_sha }}
@@ -750,7 +768,7 @@ jobs:
         run: node trusted/scripts/intelligence/browserSwarmBuildArtifact.mjs verify
         env:
           BROWSER_SWARM_BUILD_ARTIFACT_ROOT: ${{ runner.temp }}/browser-swarm-candidate-build
-          BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
           HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
           TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
           CONTROLLER_SHA: ${{ github.workflow_sha }}
