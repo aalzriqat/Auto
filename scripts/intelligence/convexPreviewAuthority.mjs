@@ -162,6 +162,13 @@ async function readBoundedJsonObject(response) {
   return /** @type {Record<string, unknown>} */ (payload);
 }
 
+// Deployment admin keys are `<name>|<secret>` or `<type>:<name>|<secret>`, the
+// shapes the Convex CLI itself parses (deploymentNameFromAdminKey: the name is
+// the last `:` segment). A three-part `preview:<team>:<project>` key is a
+// project-wide preview DEPLOY key and `project:` keys span a project; neither is
+// scoped to one deployment, so both are refused.
+const ADMIN_KEY_DEPLOYMENT_TYPES = new Set(["prod", "dev", "preview"]);
+
 export function assertPreviewDeploymentAdminKey(value, expectedDeploymentName) {
   if (typeof value !== "string" || !value) {
     throw new TypeError("Convex control plane did not return a preview deployment admin key.");
@@ -170,15 +177,32 @@ export function assertPreviewDeploymentAdminKey(value, expectedDeploymentName) {
   if (separator <= 0 || separator === value.length - 1) {
     throw new Error("Convex preview deployment admin key is malformed.");
   }
-  const deploymentName = value.slice(0, separator);
+  const prefixParts = value.slice(0, separator).split(":");
   const secret = value.slice(separator + 1);
+  const typed = prefixParts.length === 2;
+  const deploymentName = prefixParts[prefixParts.length - 1];
+  const shapeOk =
+    prefixParts.length === 1 ||
+    (typed && ADMIN_KEY_DEPLOYMENT_TYPES.has(prefixParts[0]));
   if (
+    !shapeOk ||
     deploymentName !== expectedDeploymentName ||
-    !secret ||
     /[\r\n]/.test(secret)
   ) {
+    // Public CI logs: describe the key's shape, never its secret. The type
+    // prefix and the deployment name are identifiers, not credentials.
+    const shape =
+      prefixParts.length === 1
+        ? "untyped"
+        : typed
+          ? "type '" + prefixParts[0] + "'"
+          : prefixParts.length + " prefix segments";
     throw new Error(
-      "Convex control plane returned an admin key that is not scoped to the resolved preview deployment.",
+      "Convex control plane returned an admin key that is not scoped to the resolved preview deployment (" +
+        shape +
+        ", deployment name " +
+        (deploymentName === expectedDeploymentName ? "matches" : "differs") +
+        ").",
     );
   }
   return value;

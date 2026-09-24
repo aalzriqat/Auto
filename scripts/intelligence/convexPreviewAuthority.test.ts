@@ -32,6 +32,32 @@ describe("trusted Convex preview authority", () => {
         "elegant-butterfly-952",
       ),
     ).toBe("elegant-butterfly-952|deployment-secret");
+    for (const type of ["prod", "dev", "preview"]) {
+      expect(
+        assertPreviewDeploymentAdminKey(
+          type + ":elegant-butterfly-952|deployment-secret",
+          "elegant-butterfly-952",
+        ),
+      ).toBe(type + ":elegant-butterfly-952|deployment-secret");
+    }
+    expect(() =>
+      assertPreviewDeploymentAdminKey(
+        "project:elegant-butterfly-952|project-secret",
+        "elegant-butterfly-952",
+      ),
+    ).toThrow(/not scoped.*type 'project'/);
+    expect(() =>
+      assertPreviewDeploymentAdminKey(
+        "preview:another-deployment|deployment-secret",
+        "elegant-butterfly-952",
+      ),
+    ).toThrow(/not scoped.*differs/);
+    expect(() =>
+      assertPreviewDeploymentAdminKey(
+        "preview:x:elegant-butterfly-952|deployment-secret",
+        "elegant-butterfly-952",
+      ),
+    ).toThrow(/not scoped.*3 prefix segments/);
     expect(() =>
       assertPreviewDeploymentAdminKey(
         "preview:team-one:project-two|project-wide-secret",
