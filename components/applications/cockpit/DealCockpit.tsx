@@ -299,6 +299,7 @@ const PROFIT_LINE_LABEL: Record<string, string> = {
   SUPPLIER_SETTLEMENT: "LineSupplierSettlement",
   DEALER_CONTRIBUTION: "LineDealerContribution",
   ACTUAL_EXPENSES: "LineActualExpenses",
+  FORECAST_EXPENSES: "LineForecastExpenses",
   PREPARATION_EXPENSES: "LinePreparationExpenses",
   /** CASH only. A different derivation, so deliberately different keys. */
   SALE_PRICE: "LineSalePrice",
@@ -484,7 +485,7 @@ export function DealCockpit({
   // The container raises its own toasts, so it needs its own translator — the
   // view's `t` is not in scope here, and an English string in a toast is how a
   // screen that is otherwise fully Arabic starts leaking its source language.
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const recordReceipt = useMutation(api.supplierReceivables.recordReceipt);
   const amendAdvice = useMutation(api.applications.amendSupplierDisbursementAdvice);
   const recordSubmittedQuotation = useMutation(api.financingEconomics.recordSubmittedQuotation);
@@ -666,7 +667,6 @@ export function DealCockpit({
    */
   const overview = useQuery(api.dealOverview.financedDealOverview, deal ? { orgId, applicationId } : "skip");
   const recordDealFee = useMutation(api.financeDealCosts.recordDealFee);
-  const adoptCompanyFeeTemplates = useMutation(api.financeDealCosts.adoptCompanyFeeTemplates);
   const recordTemplateFeeActual = useMutation(api.financeDealCosts.recordTemplateFeeActual);
   const recordActualFeeAmount = useMutation(api.financeDealCosts.recordActualFeeAmount);
   const voidDealFee = useMutation(api.financeDealCosts.voidDealFee);
@@ -689,6 +689,15 @@ export function DealCockpit({
   const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
   const saveDocumentFile = useMutation(api.documents.saveDocumentFile);
   const orgCurrency = useCurrency();
+  const currencyMarker = (cur: string) => {
+    if (cur === orgCurrency.code) {
+      if (locale === "ar") {
+        return orgCurrency.symbol ?? (cur === "JOD" ? "د.أ" : orgCurrency.displayLabel);
+      }
+      return orgCurrency.displayLabel;
+    }
+    return cur;
+  };
 
   const canReviewApplication = !permissionsLoading && hasPermission(PERMISSIONS.REVIEW_FINANCE_APPLICATION);
   const canApproveApplication = !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
@@ -773,7 +782,7 @@ export function DealCockpit({
   const supplierName = app?.vehicle?.sourcedFromName ?? undefined;
   const formatEconomics = (minor: number) => {
     return `${(minor / economicsFactor).toLocaleString()} ${
-      economicsCurrencyCode === orgCurrency.code ? orgCurrency.displayLabel : economicsCurrencyCode
+      economicsCurrencyCode === orgCurrency.code ? currencyMarker(economicsCurrencyCode) : economicsCurrencyCode
     }`;
   };
   /**
@@ -878,25 +887,13 @@ export function DealCockpit({
           scaleOf: (cur: string) => safeScaleForCurrency(cur, 2),
           money: (minor: number, currency: string) =>
             `${(minor / Math.pow(10, safeScaleForCurrency(currency, 2))).toLocaleString()} ${
-              currency === orgCurrency.code ? orgCurrency.displayLabel : currency
+              currency === orgCurrency.code ? currencyMarker(currency) : currency
             }`,
           // Frozen once the sale is recognized (`economicsFrozen`): the server
           // refuses every posting-bearing edit, so none is offered, and the
           // panel says why at its head.
           canManage: canCreateApplication && !(dealCosts?.economicsFrozen?.frozen ?? app.status === "CLOSED"),
           dealClosed: dealCosts?.economicsFrozen?.frozen ?? app.status === "CLOSED",
-          // Owner-only on the server (the authority that edits the company's
-          // fees); the notice still renders for everyone, the action does not.
-          onAdoptCompanyFees: isOwner
-            ? async (reason: string) => {
-                try {
-                  await adoptCompanyFeeTemplates({ orgId, applicationId, reason });
-                  toast.success(t("CompanyFeesAdopted"));
-                } catch (error) {
-                  throw new Error(getErrorMessage(error));
-                }
-              }
-            : undefined,
           onAdd: async (values: NewHandoverCost) => {
             const feeIntent = `record-deal-fee:${applicationId}:${values.intentId}`;
             try {
@@ -1021,7 +1018,7 @@ export function DealCockpit({
     return `${major.toLocaleString(undefined, {
       maximumFractionDigits: scale,
     })} ${
-      currency === orgCurrency.code ? orgCurrency.displayLabel : currency
+      currency === orgCurrency.code ? currencyMarker(currency) : currency
     }`;
   };
   /**
@@ -1645,7 +1642,7 @@ export function DealCockpit({
    */
   const custodyMoney = (minor: number, currency: string) =>
     `${(minor / Math.pow(10, safeScaleForCurrency(currency, 2))).toLocaleString()} ${
-      currency === orgCurrency.code ? orgCurrency.displayLabel : currency
+      currency === orgCurrency.code ? currencyMarker(currency) : currency
     }`;
   // One intent per dialog attempt. The deal, record and kind are named for
   // legibility only; the attempt's `intentId` is what makes it one command.
@@ -2558,13 +2555,25 @@ function ProfitHeadline({
   t: (key: string) => string;
 }>) {
   const isManagementEstimate = profit.available && profit.basis === "MANAGEMENT_ESTIMATE";
+  const isLoss = profit.available && profit.amountMinor < 0;
+  const isEstimatedLoss =
+    profit.available &&
+    profit.amountMinor < 0 &&
+    profit.basis === "MANAGEMENT_ESTIMATE" &&
+    profit.classification !== "ACTUAL_UNPOSTABLE";
   return (
     <div className="space-y-1">
-      <p className="text-sm text-muted-foreground">{t("NetDealershipProfit")}</p>
+      <p className="text-sm text-muted-foreground">
+        {isLoss
+          ? isEstimatedLoss
+            ? t("LossEstimated")
+            : t("LossActual")
+          : t("NetDealershipProfit")}
+      </p>
       {profit.available ? (
         <>
           <div className="flex flex-wrap items-baseline gap-3">
-            <p className="text-3xl font-semibold">
+            <p className={`text-3xl font-semibold ${isLoss ? "text-destructive font-bold" : ""}`}>
               <Money>{money(profit.amountMinor)}</Money>
             </p>
             {/* The qualifier is not decoration. It renders from the same
@@ -2872,7 +2881,7 @@ function MoneyPanel({
           <DealFinancialOverview summary={overview.data.financialSummary} money={overview.moneyIn} t={t} />
         )}
         {/* One fact per served line of the deal itself, then one per party the server names. */}
-        {typeof canonicalProfit !== "string" && (
+        {typeof canonicalProfit !== "string" && !overview?.data?.financialSummary && (
           <DealSummaryFacts profit={canonicalProfit} summary={summary} money={money} t={t} />
         )}
         {parties && (
@@ -3525,7 +3534,12 @@ export function DealCockpitView({
     // The same provenance-gated resolution the focus panel uses, so a node
     // and the panel can never name different parties for one step.
     owner: stageOwnerLabel(stage, activeAppraisalProvider, t),
-    blocker: stage.blocker ? t(`Blocker${stage.blocker}`) : undefined,
+    blocker:
+      stage.key === "DISBURSEMENT" && stage.state === "PENDING"
+        ? t("BlockerDisbursementAfterHandover")
+        : stage.blocker
+          ? t(`Blocker${stage.blocker}`)
+          : undefined,
   }));
   // Whether the close is being refused for want of the settlement route — the
   // one case where the route control belongs on the live step itself.
@@ -3695,6 +3709,15 @@ export function DealCockpitView({
     } finally {
       setCorrectionSubmitting(false);
     }
+  };
+
+  const overviewProfit = financialOverview?.data?.financialSummary?.profit;
+  const handoverManagementProfit = {
+    managementProfitMinor: overviewProfit?.available ? overviewProfit.amountMinor : null,
+    managementProfitClassification:
+      overviewProfit?.available && overviewProfit.basis === "MANAGEMENT_ESTIMATE"
+        ? overviewProfit.classification
+        : null,
   };
 
   return (
@@ -4502,13 +4525,16 @@ export function DealCockpitView({
           // opinion about the figures, the anomaly verdict, or how any of it is
           // denominated — the legacy Review screen consumes the same object.
           evidence={
-            handoverEvidence ?? {
-              approvedPurchaseAmountMinor: null,
-              financeCompanyFundedPortionMinor: null,
-              dealerContributionMinor: null,
-              approvedAmountIsFarFromEvidence: false,
-              currency: null,
-            }
+            handoverEvidence
+              ? { ...handoverEvidence, ...handoverManagementProfit }
+              : {
+                  approvedPurchaseAmountMinor: null,
+                  financeCompanyFundedPortionMinor: null,
+                  dealerContributionMinor: null,
+                  approvedAmountIsFarFromEvidence: false,
+                  currency: null,
+                  ...handoverManagementProfit,
+                }
           }
           // `deal` is a union — the cash variant comes from `sales.dealCockpit`
           // and carries no stamp, because nothing on that path seals financing
@@ -4730,7 +4756,11 @@ function StageFocusRow({
                 )}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">{t("StageReadyToProceed")}</p>
+              <p className="text-sm text-muted-foreground">
+                {action?.actionKey === "RegisterHandoverAction" || action?.actionKey === "ActionConfirmHandover"
+                  ? t("StageReadyForHandoverAction")
+                  : t("StageReadyToProceed")}
+              </p>
             )}
 
             {/* The action for the step this block NAMES. A step worth naming

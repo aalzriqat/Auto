@@ -92,7 +92,13 @@ export default function FinanceCompaniesPage() {
   const handleToggleStatusActive = async (statusId: Id<"orgCustomerStatuses">, isActive: boolean) => {
     if (!activeOrgId) return;
     try {
-      await updateStatus({ orgId: activeOrgId, statusId, isActive });
+      const result = await updateStatus({ orgId: activeOrgId, statusId, isActive });
+      if (result?.deactivatedCompanies?.length) {
+        toast.warning(
+          `${t("CompaniesDeactivatedNoStatuses" as any) || "Deactivated — no accepted statuses left"}: ${result.deactivatedCompanies.join(", ")}`,
+          { duration: 10000 }
+        );
+      }
     } catch (error) {
       toast.error(getErrorMessage(error));
     }

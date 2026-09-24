@@ -1,19 +1,24 @@
 /**
- * The finance company's expected handover costs (fee templates) in the
- * settings dialog.
+ * Verification of the retirement of company fee templates in favor of
+ * company `adminFees` (Execution Fees / مصاريف التنفيذ) as the single
+ * authoritative expected fee figure.
  *
- * `finance.createCompany` / `updateCompany` have accepted `feeTemplates` since
- * the Unified Deal started freezing them onto each application, and this form
- * never asked — so every company configured through the product had none and
- * every deal's handover checklist started empty. These tests hold the form to
- * the contract the mutations rely on: an untouched list is OMITTED (the server
- * reads an omitted rule as "leave it alone"), an edited list is sent whole,
- * amounts are scaled at the ORG currency, and nothing is ever dropped quietly.
+ * Old business rule:
+ * - Finance company dialog rendered a complex `fee-templates-section` where operators
+ *   configured itemized fee templates (lien, insurance, evaluation, etc.).
+ *
+ * Why obsolete:
+ * - Fee templates policy created duplicate, conflicting authorities for expected
+ *   dealer-borne fees alongside company `adminFees` (Execution Fees).
+ * - PR unified deal execution fees under `financeCompanies.adminFees`.
+ *
+ * New invariant:
+ * - The company dialog does NOT render the duplicate `fee-templates-section`.
+ * - The dialog configures `adminFees` ("Execution Fees") as the single fee authority.
+ * - Submissions carry `adminFees` and do not submit `feeTemplates`.
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MAX_FEE_TEMPLATES } from "@/convex/utils/dealCostLimits";
-import type { FinanceFeeTemplate } from "@/lib/financeFeeTemplateForm";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const mutations = vi.hoisted(() => ({
   create: vi.fn(async (args: Record<string, unknown>) => {
@@ -26,14 +31,7 @@ const mutations = vi.hoisted(() => ({
   }),
 }));
 
-/** What `orgSettings.get` answers: `undefined` is "still loading", `null` is "no row". */
 const orgSettings = vi.hoisted(() => ({ current: { currency: "JOD" } as { currency: string } | null | undefined }));
-
-// UI behavior at the shared boundary does not require mounting one hundred
-// complete rows. Backend tests exercise the real production cap; this suite
-// uses a small boundary so the full 5k-test CI run cannot time out on jsdom
-// rendering work unrelated to the invariant.
-vi.mock("@/convex/utils/dealCostLimits", () => ({ MAX_FEE_TEMPLATES: 2 }));
 
 vi.mock("convex/react", () => ({
   useMutation: (reference: string) => (reference.includes("update") ? mutations.update : mutations.create),
@@ -70,30 +68,7 @@ afterEach(() => {
   orgSettings.current = { currency: "JOD" };
 });
 
-const lien: FinanceFeeTemplate = {
-  feeType: "LIEN_REGISTRATION",
-  description: "Traffic department lien",
-  estimatedAmountMinor: 37_500,
-  paidBy: "CUSTOMER",
-  paidTo: "GOVERNMENT",
-  includedInQuotation: true,
-  deductedFromSettlement: false,
-  refundable: true,
-  accountingTreatment: "CUSTOMER_RECEIVABLE",
-};
-
-const insurance: FinanceFeeTemplate = {
-  feeType: "INSURANCE",
-  estimatedAmountMinor: 250_000,
-  paidBy: "DEALER",
-  paidTo: "INSURER",
-  includedInQuotation: false,
-  deductedFromSettlement: true,
-  refundable: false,
-  accountingTreatment: "INSURANCE_EXPENSE",
-};
-
-function renderEdit(feeTemplates: FinanceFeeTemplate[] | undefined, adminFees?: number) {
+function renderEdit(adminFees?: number) {
   return render(
     <FinanceCompanyDialog
       open
@@ -106,9 +81,7 @@ function renderEdit(feeTemplates: FinanceFeeTemplate[] | undefined, adminFees?: 
         gracePeriodMonths: 0,
         adminFees,
         defaultLtvPercent: 90,
-        ruleVersion: 7,
         isActive: true,
-        feeTemplates,
       }}
     />
   );
@@ -118,339 +91,126 @@ function renderCreate() {
   return render(<FinanceCompanyDialog open onOpenChange={() => {}} />);
 }
 
-function feeRows() {
-  return within(screen.getByTestId("fee-templates-section")).queryAllByRole("listitem");
-}
-
 function save() {
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
 }
 
-/** The `feeTemplates` argument of the first recorded call, typed as the validator shape. */
-function sentTemplates(mutation: typeof mutations.create | typeof mutations.update): FinanceFeeTemplate[] {
-  return mutation.mock.calls[0][0].feeTemplates as FinanceFeeTemplate[];
-}
-
-describe("edit load", () => {
-  test("renders every stored template with its amount in major units and its fields intact", () => {
-    renderEdit([lien, insurance]);
-
-    const rows = feeRows();
-    expect(rows).toHaveLength(2);
-    expect(screen.getByTestId("fee-templates-count").textContent).toBe("FeeTemplateCount");
-
-    const [first, second] = rows;
-    expect((within(first).getByLabelText("FeeTemplateType") as HTMLSelectElement).value).toBe("LIEN_REGISTRATION");
-    expect((within(first).getByLabelText("FeeTemplateEstimatedAmount") as HTMLInputElement).value).toBe("37.5");
-    expect((within(first).getByLabelText("FeeTemplateDescription") as HTMLInputElement).value).toBe(
-      "Traffic department lien"
-    );
-    expect((within(second).getByLabelText("FeeTemplateEstimatedAmount") as HTMLInputElement).value).toBe("250");
-    expect((within(second).getByLabelText("FeeTemplateDescription") as HTMLInputElement).value).toBe("");
-
-    // The accounting fields are behind a disclosure, loaded, not defaulted.
-    fireEvent.click(within(first).getByRole("button", { name: "FeeTemplateAccountingDetails" }));
-    expect((within(first).getByLabelText("FeeTemplatePaidBy") as HTMLSelectElement).value).toBe("CUSTOMER");
-    expect((within(first).getByLabelText("FeeTemplatePaidTo") as HTMLSelectElement).value).toBe("GOVERNMENT");
-    expect((within(first).getByLabelText("CostTreatmentLabel") as HTMLSelectElement).value).toBe(
-      "CUSTOMER_RECEIVABLE"
-    );
-    expect((within(first).getByLabelText("FeeTemplateIncludedInQuotation") as HTMLInputElement).checked).toBe(true);
-    expect((within(first).getByLabelText("FeeTemplateDeductedFromSettlement") as HTMLInputElement).checked).toBe(
-      false
-    );
-    expect((within(first).getByLabelText("FeeTemplateRefundable") as HTMLInputElement).checked).toBe(true);
+describe("fee templates retirement in FinanceCompanyDialog", () => {
+  test("does NOT render fee-templates-section or fee template controls", () => {
+    renderEdit(700);
+    expect(screen.queryByTestId("fee-templates-section")).toBeNull();
+    expect(screen.queryByText("FeeTemplateType")).toBeNull();
   });
 
-  test("a company with no templates shows the empty state, not a phantom row", () => {
-    renderEdit(undefined);
-    expect(feeRows()).toHaveLength(0);
-    expect(screen.getByText("FeeTemplatesEmpty")).toBeTruthy();
+  test("renders Execution Fees (adminFees) as the single configured fee field", () => {
+    renderEdit(700);
+    const adminFeesInput = screen.getByLabelText("ExecutionFees") as HTMLInputElement;
+    expect(adminFeesInput).toBeTruthy();
+    expect(adminFeesInput.value).toBe("700");
   });
-});
 
-describe("no silent loss", () => {
-  test("saving without touching the list OMITS feeTemplates, so the server keeps the stored ones verbatim", async () => {
-    renderEdit([lien, insurance]);
+  test("keeps the revision from the opened form snapshot when the reactive company prop advances", async () => {
+    const initialCompany = {
+      _id: "company_1" as never,
+      name: "National Finance",
+      profitRate: 4.5,
+      maxTermMonths: 72,
+      gracePeriodMonths: 0,
+      adminFees: 700,
+      defaultLtvPercent: 90,
+      isActive: true,
+      editRevision: 3,
+    };
+    const view = render(
+      <FinanceCompanyDialog open onOpenChange={() => {}} company={initialCompany} />
+    );
 
-    fireEvent.change(document.querySelectorAll("input")[0], { target: { value: "National Finance Co" } });
+    fireEvent.change(screen.getByLabelText("Company Name"), {
+      target: { value: "My stale local edit" },
+    });
+
+    // Simulate Convex pushing another editor's committed version while this
+    // dialog remains open. The form intentionally stays untouched, therefore
+    // its CAS token must stay untouched too.
+    view.rerender(
+      <FinanceCompanyDialog
+        open
+        onOpenChange={() => {}}
+        company={{
+          ...initialCompany,
+          name: "Other editor's committed name",
+          adminFees: 900,
+          editRevision: 4,
+        }}
+      />
+    );
+
+    expect((screen.getByLabelText("Company Name") as HTMLInputElement).value)
+      .toBe("My stale local edit");
+
     save();
 
     await waitFor(() => expect(mutations.update).toHaveBeenCalled());
     const payload = mutations.update.mock.calls[0][0];
-    expect(payload.name).toBe("National Finance Co");
-    // Present-as-undefined is the contract: `updateCompany` only writes a
-    // dealer rule the caller sent, and the legacy dialog and mobile client
-    // never send this one — an unconditional `[]` here would have wiped
-    // every company's policy on its next rename.
+    expect(payload.expectedEditRevision).toBe(3);
+    expect(payload.name).toBe("My stale local edit");
+    expect(payload.adminFees).toBe(700);
+  });
+
+  test("saving edit sends adminFees and omits feeTemplates", async () => {
+    renderEdit(700);
+    fireEvent.change(screen.getByLabelText("ExecutionFees"), { target: { value: "750" } });
+    save();
+
+    await waitFor(() => expect(mutations.update).toHaveBeenCalled());
+    const payload = mutations.update.mock.calls[0][0];
+    expect(payload.adminFees).toBe(750);
+    expect(payload.expectedEditRevision).toBe(1);
     expect(payload.feeTemplates).toBeUndefined();
   });
 
-  test("an edited list is sent WHOLE: the untouched sibling row is carried byte-identical", async () => {
-    renderEdit([lien, insurance]);
-
-    const [, second] = feeRows();
-    fireEvent.change(within(second).getByLabelText("FeeTemplateEstimatedAmount"), { target: { value: "275" } });
-    save();
-
-    await waitFor(() => expect(mutations.update).toHaveBeenCalled());
-    expect(mutations.update.mock.calls[0][0].feeTemplates).toEqual([
-      lien,
-      { ...insurance, estimatedAmountMinor: 275_000 },
-    ]);
-    expect(mutations.update.mock.calls[0][0]).toMatchObject({
-      expectedCurrency: "JOD",
-      expectedRuleVersion: 7,
-    });
-  });
-
-  test("a row with an unusable amount blocks the save instead of vanishing from the payload", async () => {
-    renderEdit([lien]);
-
-    fireEvent.click(screen.getByRole("button", { name: "FeeTemplateAdd" }));
-    const [, added] = feeRows();
-    fireEvent.change(within(added).getByLabelText("FeeTemplateEstimatedAmount"), { target: { value: "1.2345" } });
-    save();
-
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("FeeTemplatesFixBeforeSave"));
-    expect(mutations.update).not.toHaveBeenCalled();
-    expect(within(added).getByRole("alert").textContent).toBe("FeeTemplateAmountTooPrecise");
-    expect(within(added).getByLabelText("FeeTemplateEstimatedAmount").getAttribute("aria-invalid")).toBe("true");
-  });
-
-  test("a blank amount on a new row is a refusal, never a silent zero", async () => {
-    renderEdit([lien]);
-
-    fireEvent.click(screen.getByRole("button", { name: "FeeTemplateAdd" }));
-    save();
-
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("FeeTemplatesFixBeforeSave"));
-    expect(mutations.update).not.toHaveBeenCalled();
-    expect(screen.getByRole("alert").textContent).toBe("FeeTemplateAmountEmpty");
-  });
-});
-
-describe("creation and update payload conversion", () => {
-  test("a new company sends the added template with exact minor units and explicit defaults", async () => {
-    renderCreate();
-
-    fireEvent.change(document.querySelectorAll("input")[0], { target: { value: "New Finance" } });
-    fireEvent.change(screen.getByLabelText("DefaultDealerLtv"), { target: { value: "90" } });
-    fireEvent.click(screen.getByRole("button", { name: "FeeTemplateAdd" }));
-
-    const [row] = feeRows();
-    fireEvent.change(within(row).getByLabelText("FeeTemplateType"), { target: { value: "INSURANCE" } });
-    fireEvent.change(within(row).getByLabelText("FeeTemplateEstimatedAmount"), { target: { value: "12.505" } });
-    fireEvent.change(within(row).getByLabelText("FeeTemplateDescription"), { target: { value: "Comprehensive" } });
-    save();
-
-    await waitFor(() => expect(mutations.create).toHaveBeenCalled());
-    expect(mutations.create.mock.calls[0][0].feeTemplates).toEqual([
-      {
-        feeType: "INSURANCE",
-        description: "Comprehensive",
-        // 12.505 JOD = 12,505 fils — by string scaling, not 12.505 * 1000.
-        estimatedAmountMinor: 12_505,
-        paidBy: "DEALER",
-        // Re-derived for the chosen type, and shown under the disclosure.
-        paidTo: "INSURER",
-        accountingTreatment: "INSURANCE_EXPENSE",
-        includedInQuotation: false,
-        deductedFromSettlement: false,
-        refundable: false,
-      },
-    ]);
-    expect(mutations.create.mock.calls[0][0].expectedCurrency).toBe("JOD");
-  });
-
-  test("scales at the ORG currency: the same figure is cents for a USD org", async () => {
-    orgSettings.current = { currency: "USD" };
-    renderCreate();
-
-    fireEvent.change(document.querySelectorAll("input")[0], { target: { value: "Dollar Finance" } });
-    fireEvent.click(screen.getByRole("button", { name: "FeeTemplateAdd" }));
-    fireEvent.change(within(feeRows()[0]).getByLabelText("FeeTemplateEstimatedAmount"), {
-      target: { value: "12.5" },
-    });
-    save();
-
-    await waitFor(() => expect(mutations.create).toHaveBeenCalled());
-    expect(sentTemplates(mutations.create)[0].estimatedAmountMinor).toBe(1_250);
-  });
-
-  test("cannot save while the org currency is still loading, so no amount is scaled by a guess", () => {
-    orgSettings.current = undefined;
-    renderCreate();
-
-    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "FeeTemplateAdd" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText("FeeTemplatesCurrencyLoading")).toBeTruthy();
-  });
-
-  test("an unsupported legacy currency refuses fee editing instead of using the scale-2 fallback", () => {
-    orgSettings.current = { currency: "JD" };
-    renderCreate();
-
-    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "FeeTemplateAdd" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText("FeeTemplatesCurrencyUnsupported")).toBeTruthy();
-  });
-
-  test("a same-scale live currency change invalidates rather than relabels an in-progress draft", async () => {
-    const view = renderCreate();
-    fireEvent.click(screen.getByRole("button", { name: "FeeTemplateAdd" }));
-    fireEvent.change(within(feeRows()[0]).getByLabelText("FeeTemplateEstimatedAmount"), {
-      target: { value: "12.500" },
-    });
-
-    // JOD and BHD are both scale 3. A scale-only dependency used to keep this
-    // draft and submit its freshly reactive BHD label/authority.
-    orgSettings.current = { currency: "BHD" };
-    view.rerender(<FinanceCompanyDialog open onOpenChange={() => {}} />);
-
-    await waitFor(() => expect(screen.getByText("FeeTemplatesCurrencyChanged")).toBeTruthy());
-    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "FeeTemplateAdd" }) as HTMLButtonElement).disabled).toBe(true);
-    save();
-    expect(mutations.create).not.toHaveBeenCalled();
-  });
-
-  test("the advanced accounting fields are sent as chosen", async () => {
-    renderCreate();
-
-    fireEvent.change(document.querySelectorAll("input")[0], { target: { value: "New Finance" } });
-    fireEvent.click(screen.getByRole("button", { name: "FeeTemplateAdd" }));
-    const [row] = feeRows();
-    fireEvent.change(within(row).getByLabelText("FeeTemplateEstimatedAmount"), { target: { value: "5" } });
-    fireEvent.click(within(row).getByRole("button", { name: "FeeTemplateAccountingDetails" }));
-    fireEvent.change(within(row).getByLabelText("FeeTemplatePaidBy"), { target: { value: "CUSTOMER" } });
-    fireEvent.change(within(row).getByLabelText("FeeTemplatePaidTo"), { target: { value: "OTHER" } });
-    fireEvent.change(within(row).getByLabelText("CostTreatmentLabel"), { target: { value: "CUSTOMER_RECEIVABLE" } });
-    fireEvent.click(within(row).getByLabelText("FeeTemplateIncludedInQuotation"));
-    fireEvent.click(within(row).getByLabelText("FeeTemplateDeductedFromSettlement"));
-    fireEvent.click(within(row).getByLabelText("FeeTemplateRefundable"));
-    save();
-
-    await waitFor(() => expect(mutations.create).toHaveBeenCalled());
-    expect(sentTemplates(mutations.create)[0]).toMatchObject({
-      estimatedAmountMinor: 5_000,
-      paidBy: "CUSTOMER",
-      paidTo: "OTHER",
-      accountingTreatment: "CUSTOMER_RECEIVABLE",
-      includedInQuotation: true,
-      deductedFromSettlement: true,
-      refundable: true,
-    });
-  });
-
-  test("legacy Execution Fees stay a separate figure — never migrated into, or inferred from, the templates", async () => {
-    renderEdit([lien], 150);
-
-    // Touch the list so it IS sent, then confirm the legacy amount rides
-    // alongside untouched and no template was manufactured from it.
-    fireEvent.click(screen.getByRole("button", { name: "FeeTemplateAdd" }));
-    const [, added] = feeRows();
-    fireEvent.change(within(added).getByLabelText("FeeTemplateEstimatedAmount"), { target: { value: "20" } });
+  test("saving edit with unset adminFees preserves adminFees as undefined", async () => {
+    renderEdit(undefined);
+    fireEvent.change(screen.getByLabelText("Company Name"), { target: { value: "Updated Name" } });
     save();
 
     await waitFor(() => expect(mutations.update).toHaveBeenCalled());
     const payload = mutations.update.mock.calls[0][0];
-    expect(payload.adminFees).toBe(150);
-    expect(sentTemplates(mutations.update)).toHaveLength(2);
-    expect(sentTemplates(mutations.update)[0]).toEqual(lien);
-    expect(sentTemplates(mutations.update).some((template) => template.estimatedAmountMinor === 150_000)).toBe(
-      false
-    );
-  });
-});
-
-describe("add and remove", () => {
-  test("each remove button has a unique accessible name", () => {
-    renderEdit([insurance, insurance]);
-
-    const names = feeRows().map((row) =>
-      within(row).getByRole("button", { name: /FeeTemplateRemove/ }).getAttribute("aria-label")
-    );
-    expect(new Set(names).size).toBe(2);
+    expect(payload.name).toBe("Updated Name");
+    expect(payload.adminFees).toBeUndefined();
+    expect(payload.feeTemplates).toBeUndefined();
   });
 
-  test("removing a row sends the remaining list, and removing the last one sends an empty list", async () => {
-    renderEdit([lien, insurance]);
-
-    fireEvent.click(within(feeRows()[0]).getByRole("button", { name: /FeeTemplateRemove 1:/ }));
-    expect(feeRows()).toHaveLength(1);
+  test("saving edit with explicit 0 sends adminFees as 0", async () => {
+    renderEdit(undefined);
+    fireEvent.change(screen.getByLabelText("ExecutionFees"), { target: { value: "0" } });
     save();
 
     await waitFor(() => expect(mutations.update).toHaveBeenCalled());
-    expect(mutations.update.mock.calls[0][0].feeTemplates).toEqual([insurance]);
-
-    mutations.update.mockClear();
-    fireEvent.click(within(feeRows()[0]).getByRole("button", { name: /FeeTemplateRemove 1:/ }));
-    expect(feeRows()).toHaveLength(0);
-    save();
-
-    await waitFor(() => expect(mutations.update).toHaveBeenCalled());
-    // `[]`, not `undefined`: an emptied list must reach the server as "no
-    // expected costs", which `args.feeTemplates ?? existing.feeTemplates`
-    // applies — an omitted one would silently keep both templates.
-    expect(mutations.update.mock.calls[0][0].feeTemplates).toEqual([]);
+    const payload = mutations.update.mock.calls[0][0];
+    expect(payload.adminFees).toBe(0);
   });
 
-  test("adding a row on an untouched company marks the list as edited", async () => {
-    renderEdit([lien]);
-
-    fireEvent.click(screen.getByRole("button", { name: "FeeTemplateAdd" }));
-    fireEvent.change(within(feeRows()[1]).getByLabelText("FeeTemplateEstimatedAmount"), {
-      target: { value: "8.25" },
-    });
+  test("saving new company sends adminFees and omits feeTemplates", async () => {
+    renderCreate();
+    fireEvent.change(screen.getByLabelText("Company Name"), { target: { value: "New Finance Co" } });
+    fireEvent.change(screen.getByLabelText("ExecutionFees"), { target: { value: "600" } });
     save();
 
-    await waitFor(() => expect(mutations.update).toHaveBeenCalled());
-    const sent = sentTemplates(mutations.update);
-    expect(sent).toHaveLength(2);
-    expect(sent[0]).toEqual(lien);
-    expect(sent[1]).toMatchObject({ feeType: "OWNERSHIP_TRANSFER", estimatedAmountMinor: 8_250 });
-  });
-});
-
-describe("the configuration limit", () => {
-  const atLimit = Array.from({ length: MAX_FEE_TEMPLATES }, (_, i) => ({
-    ...insurance,
-    description: `fee ${i}`,
-  }));
-
-  test("Add is disabled at MAX_FEE_TEMPLATES and the limit is named", () => {
-    renderEdit(atLimit);
-
-    expect(feeRows()).toHaveLength(MAX_FEE_TEMPLATES);
-    expect((screen.getByRole("button", { name: "FeeTemplateAdd" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText("FeeTemplatesLimitReached")).toBeTruthy();
+    await waitFor(() => expect(mutations.create).toHaveBeenCalled());
+    const payload = mutations.create.mock.calls[0][0];
+    expect(payload.name).toBe("New Finance Co");
+    expect(payload.adminFees).toBe(600);
+    expect(payload.feeTemplates).toBeUndefined();
   });
 
-  test("a company already past the cap is still editable while the list is left alone, and repaired by a compliant edit", async () => {
-    renderEdit([...atLimit, lien, insurance]);
-
-    expect(screen.getByRole("alert").textContent).toBe("FeeTemplatesOverLimit");
-
-    // Untouched: omitted, carried verbatim by the server (its own rule).
-    fireEvent.change(document.querySelectorAll("input")[0], { target: { value: "Renamed" } });
+  test("clearing an existing adminFees value is rejected with error toast and does not submit", async () => {
+    renderEdit(700);
+    fireEvent.change(screen.getByLabelText("ExecutionFees"), { target: { value: "" } });
+    expect(screen.getByText("ExecutionFeesCannotClear")).toBeTruthy();
     save();
-    await waitFor(() => expect(mutations.update).toHaveBeenCalled());
-    expect(mutations.update.mock.calls[0][0].feeTemplates).toBeUndefined();
-    mutations.update.mockClear();
 
-    // Touched but still over: refused here, exactly as the server would.
-    fireEvent.click(within(feeRows()[0]).getByRole("button", { name: /FeeTemplateRemove 1:/ }));
-    expect(screen.getByRole("alert").textContent).toBe("FeeTemplatesOverLimit");
-    save();
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("FeeTemplatesOverLimit"));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("ExecutionFeesCannotClear"));
     expect(mutations.update).not.toHaveBeenCalled();
-
-    // Down to the cap: sent, and accepted.
-    fireEvent.click(within(feeRows()[0]).getByRole("button", { name: /FeeTemplateRemove 1:/ }));
-    expect(screen.queryByRole("alert")).toBeNull();
-    save();
-    await waitFor(() => expect(mutations.update).toHaveBeenCalled());
-    expect(mutations.update.mock.calls[0][0].feeTemplates).toHaveLength(MAX_FEE_TEMPLATES);
   });
 });

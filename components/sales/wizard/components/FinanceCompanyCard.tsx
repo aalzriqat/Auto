@@ -45,17 +45,19 @@ export function FinanceCompanyCard({
     <button
       type="button"
       onClick={() => {
-        if (!result.exceedsValuation) {
+        if (!result.exceedsValuation && result.feesConfigured) {
           onSelect(result.companyId);
         }
       }}
       className={cn(
         "text-start rounded-xl border transition-all duration-200 overflow-hidden",
-        result.exceedsValuation
-          ? "border-red-500/40 opacity-70 cursor-not-allowed"
-          : selected
-            ? "border-indigo-500 ring-2 ring-indigo-500/30 shadow-lg shadow-indigo-500/10"
-            : "border-border hover:border-indigo-500/50 hover:shadow-md"
+        !result.feesConfigured
+          ? "border-amber-500/40 opacity-75 cursor-not-allowed"
+          : result.exceedsValuation
+            ? "border-red-500/40 opacity-70 cursor-not-allowed"
+            : selected
+              ? "border-indigo-500 ring-2 ring-indigo-500/30 shadow-lg shadow-indigo-500/10"
+              : "border-border hover:border-indigo-500/50 hover:shadow-md"
       )}
     >
       {/* Header */}
@@ -83,7 +85,13 @@ export function FinanceCompanyCard({
           </div>
         )}
 
-        {result.exceedsValuation && (
+        {!result.feesConfigured && (
+          <span className="text-[10px] font-medium text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full">
+            {t("FeesNotConfigured" as any) || "Fees not configured"}
+          </span>
+        )}
+
+        {result.feesConfigured && result.exceedsValuation && (
           <AlertTriangle className="w-4 h-4 text-red-400" />
         )}
       </div>
@@ -97,93 +105,86 @@ export function FinanceCompanyCard({
         <p
           className={cn(
             "text-2xl font-bold",
-            result.exceedsValuation
-              ? "text-rose-600 dark:text-rose-400"
-              : selected
-                ? "text-indigo-400"
-                : "text-foreground"
+            !result.feesConfigured
+              ? "text-amber-500 text-base"
+              : result.exceedsValuation
+                ? "text-rose-600 dark:text-rose-400"
+                : selected
+                  ? "text-indigo-400"
+                  : "text-foreground"
           )}
         >
-          {result.monthlyInstallment.toLocaleString(
-            undefined,
-            {
-              minimumFractionDigits: 2,
-            }
+          {result.feesConfigured && result.monthlyInstallment !== undefined ? (
+            <>
+              {result.monthlyInstallment.toLocaleString(
+                undefined,
+                {
+                  minimumFractionDigits: 2,
+                }
+              )}
+              <span className="text-sm font-normal text-muted-foreground ms-1">
+                {t("JOD" as any)}
+              </span>
+            </>
+          ) : (
+            t("FeesNotConfigured" as any) || "Fees not configured"
           )}
-
-          <span className="text-sm font-normal text-muted-foreground ms-1">
-            {t("JOD" as any)}
-          </span>
         </p>
       </div>
 
       {/* Details */}
       <div className="px-4 pb-3 space-y-1.5 text-xs">
-        <div className="flex justify-between text-muted-foreground">
-          <span>{t("FinancedAmount" as any)}</span>
+        {result.feesConfigured && result.totalFinancedAmount !== undefined ? (
+          <>
+            <div className="flex justify-between text-muted-foreground">
+              <span>{t("FinancedAmount" as any)}</span>
 
-          <span className="font-medium text-foreground">
-            {result.totalFinancedAmount.toLocaleString(
-              undefined,
-              {
-                minimumFractionDigits: 2,
-              }
+              <span className="font-medium text-foreground">
+                {result.totalFinancedAmount.toLocaleString(
+                  undefined,
+                  {
+                    minimumFractionDigits: 2,
+                  }
+                )}
+              </span>
+            </div>
+
+            <div className="flex justify-between text-muted-foreground">
+              <span>{t("TotalProfit" as any) || "Total Profit"}</span>
+
+              <span className="font-medium text-foreground">
+                {(result.totalProfit ?? 0).toLocaleString(
+                  undefined,
+                  {
+                    minimumFractionDigits: 2,
+                  }
+                )}
+              </span>
+            </div>
+
+            {result.takafulAmount !== undefined && result.takafulAmount > 0 && (
+              <div className="flex justify-between text-muted-foreground">
+                <span>{t("Takaful" as any)}</span>
+
+                <span className="font-medium text-foreground">
+                  {result.takafulAmount.toLocaleString(
+                    undefined,
+                    {
+                      minimumFractionDigits: 2,
+                    }
+                  )}
+                </span>
+              </div>
             )}
-          </span>
-        </div>
-
-        <div className="flex justify-between text-muted-foreground">
-          <span>{t("TotalProfit" as any) || "Total Profit"}</span>
-
-          <span className="font-medium text-foreground">
-            {result.totalProfit.toLocaleString(
-              undefined,
-              {
-                minimumFractionDigits: 2,
-              }
-            )}
-          </span>
-        </div>
-
-        {result.takafulAmount > 0 && (
-          <div className="flex justify-between text-muted-foreground">
-            <span>{t("Takaful" as any)}</span>
-
-            <span className="font-medium text-foreground">
-              {result.takafulAmount.toLocaleString(
-                undefined,
-                {
-                  minimumFractionDigits: 2,
-                }
-              )}
-            </span>
-          </div>
-        )}
-
-        {result.actualValuation > 0 && (
-          <div className="flex justify-between text-muted-foreground">
-            <span>{t("FinanceCompanyValuation" as any)}</span>
-
-            <span
-              className={cn(
-                "font-medium",
-                result.exceedsValuation
-                  ? "text-rose-600 dark:text-rose-400"
-                  : "text-foreground"
-              )}
-            >
-              {result.actualValuation.toLocaleString(
-                undefined,
-                {
-                  minimumFractionDigits: 2,
-                }
-              )}
-            </span>
+          </>
+        ) : (
+          <div className="text-center text-muted-foreground/80 py-1">
+            {t("ConfigureFeesInSettings" as any) || "Execution fees must be configured in settings"}
           </div>
         )}
 
         {/* Exceeds valuation warning */}
-        {result.exceedsValuation && (
+        {result.exceedsValuation && result.totalFinancedAmount !== undefined && result.minimumDownPayment !== undefined && (
           <div className="rounded-md bg-rose-50 dark:bg-rose-950/60 border border-rose-300 dark:border-rose-700 p-2 mt-2 space-y-0.5">
             <p className="font-semibold text-rose-700 dark:text-rose-300">
               {t("ExceedsLimit" as any) || "Exceeds Financing Limit"}

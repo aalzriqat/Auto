@@ -24,8 +24,8 @@ interface FinancePanelProps {
   onChangeManualInsuranceRate: (value: number) => void;
   manualExecutionCommission: number;
   onChangeManualExecutionCommission: (value: number) => void;
-  manualExecutionFees: number;
-  onChangeManualExecutionFees: (value: number) => void;
+  manualExecutionFees: number | undefined;
+  onChangeManualExecutionFees: (value: number | undefined) => void;
   manualIncludesCommissionInDebt: boolean;
   onChangeManualIncludesCommissionInDebt: (value: boolean) => void;
 }

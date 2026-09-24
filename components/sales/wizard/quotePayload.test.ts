@@ -80,4 +80,32 @@ describe("buildWizardQuotePayload", () => {
     expect(payload.companyId).toBeUndefined();
     expect("manualProviderName" in payload).toBe(false);
   });
+
+  test("populates customerEligibilityStatusIds for configured finance company quotes", () => {
+    const payload = buildWizardQuotePayload({
+      orgId: "org_1",
+      customerId: "customer_1",
+      paymentType: "INSTALLMENT",
+      wizardData: {
+        vehicleId: "vehicle_1",
+        vehiclePrice: 20_000,
+        desiredProfit: 500,
+        downPayment: 5_000,
+        termMonths: 48,
+        selectedCompanyId: "company_1",
+        customerStatuses: ["status_1", "status_2"],
+      },
+      selectedResult: {
+        companyName: "Bank A",
+        totalFinancedAmount: 15_500,
+        monthlyInstallment: 380,
+        profitRateApplied: 5,
+        totalProfit: 2_740,
+      },
+    });
+
+    expect(payload.mode).toBe("CONFIGURED_FINANCE_COMPANY");
+    expect(payload.companyId).toBe("company_1");
+    expect(payload.customerEligibilityStatusIds).toEqual(["status_1", "status_2"]);
+  });
 });

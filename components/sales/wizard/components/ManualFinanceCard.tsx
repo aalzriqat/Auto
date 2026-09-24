@@ -2,7 +2,7 @@
 
 import { Check, PenLine } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { calculateUnifiedMurabaha } from "@/lib/financing";
+import { calculateUnifiedMurabaha, isRequestedFinancingTermValid } from "@/lib/financing";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 
 interface ManualFinanceCardProps {
@@ -16,8 +16,8 @@ interface ManualFinanceCardProps {
   onChangeInsuranceRate: (value: number) => void;
   executionCommission: number;
   onChangeExecutionCommission: (value: number) => void;
-  executionFees: number;
-  onChangeExecutionFees: (value: number) => void;
+  executionFees: number | undefined;
+  onChangeExecutionFees: (value: number | undefined) => void;
   includesCommissionInDebt: boolean;
   onChangeIncludesCommissionInDebt: (value: boolean) => void;
   onSelect: () => void;
@@ -40,19 +40,29 @@ export function ManualFinanceCard({
   onChangeIncludesCommissionInDebt,
   onSelect,
 }: ManualFinanceCardProps) {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
 
-  const result = calculateUnifiedMurabaha({
-    vehiclePrice,
-    downPayment,
-    commission: executionCommission,
-    processingFees: executionFees,
-    annualProfitRate: profitRate,
-    annualInsuranceRate: insuranceRate,
+  const feesConfigured = executionFees !== undefined;
+  const termValid = isRequestedFinancingTermValid({
     termMonths,
     gracePeriodMonths: 0,
-    includesCommissionInDebt,
   });
+  const selectIfValid = () => {
+    if (termValid) onSelect();
+  };
+  const result = feesConfigured && termValid
+    ? calculateUnifiedMurabaha({
+        vehiclePrice,
+        downPayment,
+        commission: executionCommission,
+        processingFees: executionFees,
+        annualProfitRate: profitRate,
+        annualInsuranceRate: insuranceRate,
+        termMonths,
+        gracePeriodMonths: 0,
+        includesCommissionInDebt,
+      })
+    : null;
 
   return (
     <div
@@ -66,7 +76,7 @@ export function ManualFinanceCard({
       {/* Header */}
       <button
         type="button"
-        onClick={onSelect}
+        onClick={selectIfValid}
         aria-pressed={selected}
         className={cn(
           "w-full px-4 py-3 border-b flex items-center justify-between text-start",
@@ -104,7 +114,7 @@ export function ManualFinanceCard({
             value={profitRate || ""}
             onChange={(e) => {
               onChangeProfitRate(parseFloat(e.target.value) || 0);
-              onSelect();
+              selectIfValid();
             }}
             className="flex h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
@@ -118,7 +128,7 @@ export function ManualFinanceCard({
             value={insuranceRate || ""}
             onChange={(e) => {
               onChangeInsuranceRate(parseFloat(e.target.value) || 0);
-              onSelect();
+              selectIfValid();
             }}
             className="flex h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
@@ -132,7 +142,7 @@ export function ManualFinanceCard({
             value={executionCommission || ""}
             onChange={(e) => {
               onChangeExecutionCommission(parseFloat(e.target.value) || 0);
-              onSelect();
+              selectIfValid();
             }}
             className="flex h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
@@ -143,10 +153,16 @@ export function ManualFinanceCard({
           <input
             type="number"
             step="0.01"
-            value={executionFees || ""}
+            value={executionFees !== undefined ? executionFees : ""}
             onChange={(e) => {
-              onChangeExecutionFees(parseFloat(e.target.value) || 0);
-              onSelect();
+              const val = e.target.value.trim();
+              if (val === "") {
+                onChangeExecutionFees(undefined);
+              } else {
+                const parsed = parseFloat(val);
+                onChangeExecutionFees(isNaN(parsed) ? undefined : parsed);
+              }
+              selectIfValid();
             }}
             className="flex h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
@@ -167,7 +183,7 @@ export function ManualFinanceCard({
             checked={includesCommissionInDebt}
             onChange={(e) => {
               onChangeIncludesCommissionInDebt(e.target.checked);
-              onSelect();
+              selectIfValid();
             }}
           />
           <label
@@ -185,38 +201,62 @@ export function ManualFinanceCard({
       {/* Monthly installment */}
       <button
         type="button"
-        onClick={onSelect}
+        onClick={selectIfValid}
         className="w-full px-4 pt-3 pb-2 text-center bg-gradient-to-b from-background to-muted/10"
       >
         <p className="text-xs text-muted-foreground mb-0.5">{t("MonthlyInstallment" as any)}</p>
         <p className={cn("text-2xl font-bold", selected ? "text-indigo-400" : "text-foreground")}>
-          {result.monthlyInstallment.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-          <span className="text-sm font-normal text-muted-foreground ms-1">{t("JOD" as any)}</span>
+          {!termValid ? (
+            <span className="text-base font-medium text-amber-500">
+              {locale === "ar" ? "مدة التمويل غير صالحة" : "Invalid financing term"}
+            </span>
+          ) : result ? (
+            <>
+              {result.monthlyInstallment.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+              <span className="text-sm font-normal text-muted-foreground ms-1">{t("JOD" as any)}</span>
+            </>
+          ) : (
+            <span className="text-base font-medium text-amber-500">
+              {t("EnterExecutionFees" as any) || "Enter Execution Fees"}
+            </span>
+          )}
         </p>
       </button>
 
       {/* Details */}
-      <button type="button" onClick={onSelect} className="w-full px-4 pb-3 space-y-1.5 text-xs text-start">
-        <div className="flex justify-between text-muted-foreground">
-          <span>{t("FinancedAmount" as any)}</span>
-          <span className="font-medium text-foreground">
-            {result.financedAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-          </span>
-        </div>
+      <button type="button" onClick={selectIfValid} className="w-full px-4 pb-3 space-y-1.5 text-xs text-start">
+        {!termValid ? (
+          <div className="text-center text-amber-500 py-1">
+            {locale === "ar" ? "مدة التمويل غير صالحة" : "Invalid financing term"}
+          </div>
+        ) : result ? (
+          <>
+            <div className="flex justify-between text-muted-foreground">
+              <span>{t("FinancedAmount" as any)}</span>
+              <span className="font-medium text-foreground">
+                {result.financedAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+              </span>
+            </div>
 
-        <div className="flex justify-between text-muted-foreground">
-          <span>{t("TotalProfit" as any) || "Total Profit"}</span>
-          <span className="font-medium text-foreground">
-            {result.totalProfit.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-          </span>
-        </div>
+            <div className="flex justify-between text-muted-foreground">
+              <span>{t("TotalProfit" as any) || "Total Profit"}</span>
+              <span className="font-medium text-foreground">
+                {result.totalProfit.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+              </span>
+            </div>
 
-        {result.takafulAmount > 0 && (
-          <div className="flex justify-between text-muted-foreground">
-            <span>{t("Takaful" as any)}</span>
-            <span className="font-medium text-foreground">
-              {result.takafulAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-            </span>
+            {result.takafulAmount > 0 && (
+              <div className="flex justify-between text-muted-foreground">
+                <span>{t("Takaful" as any)}</span>
+                <span className="font-medium text-foreground">
+                  {result.takafulAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                </span>
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="text-center text-muted-foreground/80 py-1">
+            {t("ExecutionFeesRequired" as any) || "Execution fees must be configured (enter 0 if none)"}
           </div>
         )}
       </button>

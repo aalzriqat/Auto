@@ -21,6 +21,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   shadow-impact:
@@ -43,20 +44,65 @@ jobs:
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: main
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Fetch pull-request head as data only
+      - name: Resolve current pull-request base and fetch head as data only
+        id: pr-context
         if: github.event_name == 'workflow_run'
         env:
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
         run: |
+          set -euo pipefail
           if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
             echo "workflow_run did not provide a valid PR number" >&2
             exit 1
           fi
-          git fetch --no-tags origin "refs/pull/${PR_NUMBER}/head"
+          if ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "workflow_run did not provide an exact head SHA" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin \
+            "refs/pull/${PR_NUMBER}/head:refs/autoflow/jev-pr-head" \
+            "refs/pull/${PR_NUMBER}/merge:refs/autoflow/jev-pr-merge"
+          FETCHED_HEAD="$(git rev-parse refs/autoflow/jev-pr-head)"
+          FETCHED_MERGE="$(git rev-parse refs/autoflow/jev-pr-merge)"
+          if [ "$FETCHED_HEAD" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "Fetched PR head does not match workflow_run head SHA" >&2
+            exit 1
+          fi
+          PARENTS="$(git show -s --format=%P "$FETCHED_MERGE")"
+          read -r FIRST_PARENT SECOND_PARENT EXTRA_PARENT <<< "$PARENTS"
+          if ! [[ "$FIRST_PARENT" =~ ^[0-9a-fA-F]{40}$ ]] || [ "$SECOND_PARENT" != "$EXPECTED_HEAD_SHA" ] || [ -n "${EXTRA_PARENT:-}" ]; then
+            echo "GitHub PR merge ref is not an exact two-parent merge with the triggering head." >&2
+            exit 1
+          fi
+
+          # Triggers cover only PRs into main. A retarget after the triggering run
+          # moves the merge onto another base: the PR must still target main, and
+          # the merge base must be on it (a branch cut from main passes ancestry alone).
+          git fetch --no-tags origin "+refs/heads/main:refs/autoflow/jev-main"
+          if ! git merge-base --is-ancestor "$FIRST_PARENT" refs/autoflow/jev-main; then
+            echo "PR merge base $FIRST_PARENT is not on main; the PR was retargeted or its merge ref is stale." >&2
+            exit 1
+          fi
+          live_base_ref="$(
+            curl --fail --silent --show-error \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" |
+            jq -r '.base.ref // empty'
+          )"
+          if [ "$live_base_ref" != "main" ]; then
+            echo "PR now targets '$live_base_ref', not main; refusing the retargeted PR." >&2
+            exit 1
+          fi
+          echo "base_sha=$FIRST_PARENT" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$EXPECTED_HEAD_SHA" >> "$GITHUB_OUTPUT"
 
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
@@ -79,8 +125,8 @@ jobs:
         run: pnpm jev:shadow-impact
         env:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
-          BASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].base.sha || github.event_name == 'push' && github.event.before || inputs.base_sha }}
-          HEAD_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].head.sha || github.event_name == 'push' && github.sha || inputs.head_sha }}
+          BASE_SHA: ${{ github.event_name == 'workflow_run' && steps.pr-context.outputs.base_sha || github.event_name == 'push' && github.event.before || inputs.base_sha }}
+          HEAD_SHA: ${{ github.event_name == 'workflow_run' && steps.pr-context.outputs.head_sha || github.event_name == 'push' && github.sha || inputs.head_sha }}
 
       - name: Publish sanitized Jev summary
         if: always()

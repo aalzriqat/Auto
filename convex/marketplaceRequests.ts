@@ -10,7 +10,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { compareDealerRank, listOptedInDealerProfiles, checkMarketplaceQuota } from "./marketplaceDealers";
 import { hasPlanFeature } from "./subscriptions";
 import { scoreVehicleAgainstRequest } from "./utils/marketplaceMatching";
-import { calculateUnifiedMurabaha } from "../lib/financing";
+import { calculateUnifiedMurabaha, isRequestedFinancingTermValid } from "../lib/financing";
 
 const MAX_MATCHED_DEALERS = 5;
 const REQUEST_EXPIRES_AFTER_DAYS = 14;
@@ -185,24 +185,50 @@ type BuyerFinancePreferences = {
 };
 
 /** Computes the buyer-personalized installment + the term snapshot the estimate was built from, so the buyer keeps seeing the exact numbers even as rates drift. */
-function computePersonalizedFinance(
+export function computePersonalizedFinance(
   price: number,
   terms: SnapshotFinanceTerms,
   prefs: BuyerFinancePreferences | undefined
 ) {
+  if (terms.adminFees === undefined) {
+    return null;
+  }
+  const preferredTerm = prefs?.preferredTermMonths ?? DEFAULT_TERM_MONTHS;
+  if (!Number.isFinite(preferredTerm) || !Number.isInteger(preferredTerm) || preferredTerm <= 0) {
+    return null;
+  }
+  const termMonths = Math.min(preferredTerm, terms.maxTermMonths);
+  if (
+    !isRequestedFinancingTermValid({
+      termMonths,
+      maxTermMonths: terms.maxTermMonths,
+      gracePeriodMonths: terms.gracePeriodMonths,
+    })
+  ) {
+    return null;
+  }
   const downPayment = prefs?.downPaymentAmount ?? Math.round(price * DEFAULT_DOWN_PAYMENT_PCT);
-  const termMonths = Math.min(prefs?.preferredTermMonths ?? DEFAULT_TERM_MONTHS, terms.maxTermMonths);
   const result = calculateUnifiedMurabaha({
     vehiclePrice: price,
     downPayment,
     commission: terms.commission ?? 0,
-    processingFees: terms.adminFees ?? 0,
+    processingFees: terms.adminFees,
     annualProfitRate: terms.profitRate,
     annualInsuranceRate: terms.insuranceRate ?? 0,
     termMonths,
     gracePeriodMonths: terms.gracePeriodMonths,
     includesCommissionInDebt: terms.includesCommissionInDebt ?? false,
   });
+  if (
+    !Number.isFinite(result.monthlyInstallment) ||
+    result.monthlyInstallment <= 0 ||
+    !Number.isFinite(result.financedAmount) ||
+    result.financedAmount <= 0 ||
+    !Number.isFinite(result.totalContractValue) ||
+    result.totalContractValue <= 0
+  ) {
+    return null;
+  }
   return {
     monthly: Math.round(result.monthlyInstallment),
     snapshot: {
@@ -212,7 +238,7 @@ function computePersonalizedFinance(
       annualProfitRate: terms.profitRate,
       annualInsuranceRate: terms.insuranceRate ?? 0,
       commission: terms.commission ?? 0,
-      processingFees: terms.adminFees ?? 0,
+      processingFees: terms.adminFees,
     },
   };
 }
@@ -224,7 +250,7 @@ type ScoredDealerMatch = {
   matchedVehicleRawId?: string;
   estimatedMonthlyPayment?: number;
   matchReasons?: string[];
-  calculationSnapshot?: ReturnType<typeof computePersonalizedFinance>["snapshot"];
+  calculationSnapshot?: NonNullable<ReturnType<typeof computePersonalizedFinance>>["snapshot"];
 };
 
 /**
@@ -277,7 +303,7 @@ async function matchDealersToRequest(
         const result = scoreVehicleAgainstRequest(
           params.criteria,
           { make: vehicle.make, model: vehicle.model, year: vehicle.year ?? null, price: vehicle.price ?? null },
-          { monthlyEstimate: finance?.monthly ?? null, financeAvailable: Boolean(financeTerms) }
+          { monthlyEstimate: finance?.monthly ?? null, financeAvailable: Boolean(financeTerms && financeTerms.adminFees !== undefined) }
         );
         if (!result) continue;
 

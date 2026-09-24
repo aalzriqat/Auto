@@ -144,4 +144,21 @@ describe("wizardDrafts", () => {
     expect(draftA?.paymentType).toBe("CASH");
     expect(draftB?.paymentType).toBe("INSTALLMENT");
   });
+
+  test("persists and restores customerStatuses in wizardData", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asUser } = await seedMember(t, "sales_wd_003");
+    await asUser.mutation(api.wizardDrafts.saveDraft, {
+      orgId,
+      paymentType: "INSTALLMENT",
+      currentStep: 2,
+      wizardData: {
+        ...DRAFT_DATA,
+        customerStatuses: ["status_alpha", "status_beta"],
+      },
+    });
+
+    const draft = await asUser.query(api.wizardDrafts.getMyDraft, { orgId });
+    expect(draft?.wizardData.customerStatuses).toEqual(["status_alpha", "status_beta"]);
+  });
 });

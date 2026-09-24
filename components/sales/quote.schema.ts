@@ -5,7 +5,7 @@ export const quoteSchema = z.object({
   customerId: z.string().min(1, "Customer is required"),
   vehiclePrice: z.coerce.number().min(0, "Price must be positive"),
   downPayment: z.coerce.number().min(0, "Down payment must be positive"),
-  termMonths: z.coerce.number().min(0),
+  termMonths: z.coerce.number().int().min(0),
 });
 
 export type QuoteFormValues = z.infer<typeof quoteSchema>;

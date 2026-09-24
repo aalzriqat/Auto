@@ -15,6 +15,9 @@ export {
   calculateUnifiedMurabaha,
   calculateMaximumAffordableVehiclePrice,
   calculateDBR,
+  minimumDownPaymentForFinancingLimit,
+  matchingCustomerEligibilityStatusIds,
+  isRequestedFinancingTermValid,
 } from "@autoflow/shared/financing";
 export type {
   UnifiedMurabahaInput,

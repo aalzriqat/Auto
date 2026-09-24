@@ -116,15 +116,25 @@ export function validateConvexPreviewAuthority(value, expectedPreviewName) {
     throw new Error("Convex preview authority deployment name is malformed.");
   }
 
+  const convexCloudUrl = assertConvexCloudOrigin(
+    typeof artifact.convexCloudUrl === "string"
+      ? artifact.convexCloudUrl
+      : undefined,
+  );
+  if (
+    new URL(convexCloudUrl).hostname !==
+    artifact.deploymentName + ".convex.cloud"
+  ) {
+    throw new Error(
+      "Convex preview authority deployment name does not match its deployment URL.",
+    );
+  }
+
   return {
     version: 1,
     authority: "CONVEX_CONTROL_PLANE_AUTHORIZE_PREVIEW",
     previewName: artifact.previewName,
-    convexCloudUrl: assertConvexCloudOrigin(
-      typeof artifact.convexCloudUrl === "string"
-        ? artifact.convexCloudUrl
-        : undefined,
-    ),
+    convexCloudUrl,
     deploymentName: artifact.deploymentName,
   };
 }
@@ -152,6 +162,16 @@ async function readBoundedJsonObject(response) {
   return /** @type {Record<string, unknown>} */ (payload);
 }
 
+// Deployment admin keys are `<name>|<secret>` or `<type>:<name>|<secret>`, the
+// shapes the Convex CLI itself parses (deploymentNameFromAdminKey: the name is
+// the last `:` segment). A three-part `preview:<team>:<project>` key is a
+// project-wide preview DEPLOY key and `project:` keys span a project; neither is
+// scoped to one deployment, so both are refused.
+const ADMIN_KEY_DEPLOYMENT_TYPES = new Set(["prod", "dev", "preview"]);
+// Type literals the refusal may name. Anything else is reported without its
+// bytes: the refusal reaches public CI logs before any ::add-mask:: runs.
+const ADMIN_KEY_NAMEABLE_TYPES = new Set([...ADMIN_KEY_DEPLOYMENT_TYPES, "project"]);
+
 export function assertPreviewDeploymentAdminKey(value, expectedDeploymentName) {
   if (typeof value !== "string" || !value) {
     throw new TypeError("Convex control plane did not return a preview deployment admin key.");
@@ -160,18 +180,31 @@ export function assertPreviewDeploymentAdminKey(value, expectedDeploymentName) {
   if (separator <= 0 || separator === value.length - 1) {
     throw new Error("Convex preview deployment admin key is malformed.");
   }
-  const prefix = value.slice(0, separator);
+  const prefixParts = value.slice(0, separator).split(":");
   const secret = value.slice(separator + 1);
-  const parts = prefix.split(":");
+  const typed = prefixParts.length === 2;
+  const deploymentName = prefixParts.at(-1);
+  const shapeOk =
+    prefixParts.length === 1 ||
+    (typed && ADMIN_KEY_DEPLOYMENT_TYPES.has(prefixParts[0]));
   if (
-    parts.length !== 2 ||
-    parts[0] !== "preview" ||
-    parts[1] !== expectedDeploymentName ||
-    !secret ||
+    !shapeOk ||
+    deploymentName !== expectedDeploymentName ||
     /[\r\n]/.test(secret)
   ) {
+    // Public CI logs: describe the key's shape using fixed literals only, never
+    // bytes taken from the key itself.
+    let shape = prefixParts.length + " prefix segments";
+    if (prefixParts.length === 1) shape = "untyped";
+    else if (typed && ADMIN_KEY_NAMEABLE_TYPES.has(prefixParts[0])) {
+      shape = "type '" + prefixParts[0] + "'";
+    } else if (typed) shape = "unrecognized type";
     throw new Error(
-      "Convex control plane returned an admin key that is not scoped to the resolved preview deployment.",
+      "Convex control plane returned an admin key that is not scoped to the resolved preview deployment (" +
+        shape +
+        ", deployment name " +
+        (deploymentName === expectedDeploymentName ? "matches" : "differs") +
+        ").",
     );
   }
   return value;

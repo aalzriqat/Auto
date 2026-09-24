@@ -8,6 +8,7 @@ import {
   deriveReviewMatrix,
   deterministicInvariantImpact,
   extractCanonicalInvariants,
+  extraDeterministicRequirementsForFiles,
   normalizeJevResponse,
 } from "./jevImpact.mjs";
 
@@ -19,6 +20,7 @@ import {
  * @property {typeof deriveReviewMatrix} deriveReviewMatrix
  * @property {typeof deterministicInvariantImpact} deterministicInvariantImpact
  * @property {typeof extractCanonicalInvariants} extractCanonicalInvariants
+ * @property {typeof extraDeterministicRequirementsForFiles} extraDeterministicRequirementsForFiles
  * @property {typeof normalizeJevResponse} normalizeJevResponse
  */
 
@@ -29,6 +31,7 @@ const DEFAULT_RUNTIME = Object.freeze({
   deriveReviewMatrix,
   deterministicInvariantImpact,
   extractCanonicalInvariants,
+  extraDeterministicRequirementsForFiles,
   normalizeJevResponse,
 });
 
@@ -167,21 +170,10 @@ export async function runJevShadowImpact({
       change.changedFiles,
       invariants,
     );
-    const governanceFiles = new Set([
-      "scripts/autoflowInvariantCatalog.ts",
-      ".github/workflows/invariant-governance.yml",
-      ".github/workflows/jev-shadow-impact.yml",
-      "package.json",
-      "pnpm-lock.yaml",
-    ]);
-    const changesCorrectnessGovernance = change.changedFiles.some(
-      (file) =>
-        governanceFiles.has(file) ||
-        file.startsWith("scripts/intelligence/"),
-    );
-    const extraDeterministicRequirements = changesCorrectnessGovernance
-      ? ["review:correctness-governance", "proof:jev-harness"]
-      : [];
+    const extraDeterministicRequirements =
+      runtime.extraDeterministicRequirementsForFiles(change.changedFiles);
+    const changesCorrectnessGovernance =
+      extraDeterministicRequirements.includes("review:correctness-governance");
     const questions = runtime.buildJevQuestions(invariants);
     const rawResponse = await runtime.callJev({
       apiKey,

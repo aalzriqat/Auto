@@ -78,7 +78,12 @@ async function seedQuote(
     status: "ACCEPTED" as const,
     createdBy: args.userId,
     createdAt: Date.now(),
-    ...(args.companyId ? { companyId: args.companyId } : {}),
+    ...(args.companyId
+      ? {
+          companyId: args.companyId,
+          mode: "CONFIGURED_FINANCE_COMPANY" as const,
+        }
+      : {}),
     ...(args.totalFinancedAmount !== undefined
       ? { totalFinancedAmount: args.totalFinancedAmount }
       : {}),
@@ -119,6 +124,7 @@ describe("Finance lifecycle Phase 8 — underwriting snapshot", () => {
         maxTermMonths: 60,
         gracePeriodMonths: 0,
         isActive: true,
+        adminFees: 0,
       })
     );
     await t.run((ctx) =>

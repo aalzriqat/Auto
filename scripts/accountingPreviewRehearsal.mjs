@@ -157,9 +157,48 @@ export async function convexCall(
   };
 }
 
+/**
+ * The product's tenant write limiter rejects BEFORE the handler's first write.
+ * A real rehearsal can legitimately exhaust that bucket because it drives many
+ * supported create mutations in one short burst. Retrying ONLY that exact
+ * refusal keeps the rehearsal about business invariants instead of runner
+ * timing, while every other Convex error remains evidence immediately.
+ */
+export function rateLimitRetryDelayMs(error) {
+  const match = /^Rate limit exceeded\. Try again in (\d+)s$/.exec(String(error ?? "").trim());
+  if (!match) return null;
+  const seconds = Number(match[1]);
+  if (!Number.isSafeInteger(seconds) || seconds < 0) return null;
+  // Token-bucket retryAfter can land on a boundary; add a small deterministic
+  // cushion so the retry does not arrive a few milliseconds before refill.
+  return Math.min(Math.max(seconds * 1000, 250) + 250, 6250);
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function convexCallWithRateLimitRetry(
+  spec,
+  { fetchImpl = fetch, sleepImpl = sleep, maxAttempts = 5 } = {}
+) {
+  if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 10) {
+    throw new RehearsalError("maxAttempts must be an integer from 1 through 10.");
+  }
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const result = await convexCall(spec, fetchImpl);
+    if (result.ok) return result;
+
+    const delayMs = rateLimitRetryDelayMs(result.error);
+    if (delayMs === null || attempt === maxAttempts) return result;
+    await sleepImpl(delayMs);
+  }
+
+  throw new RehearsalError("rate-limit retry loop terminated unexpectedly");
+}
+
 /** Same, but a failure is fatal — for steps whose success later cases depend on. */
-export async function mustCall(spec, fetchImpl = fetch) {
-  const result = await convexCall(spec, fetchImpl);
+export async function mustCall(spec, fetchImpl = fetch, sleepImpl = sleep) {
+  const result = await convexCallWithRateLimitRetry(spec, { fetchImpl, sleepImpl });
   if (!result.ok) {
     throw new RehearsalError(`${spec.path} failed: ${result.error}`);
   }
@@ -482,12 +521,24 @@ export async function main(env = process.env) {
   const approver = await mintConvexToken({ userId: approverUserId, secretKey: config.clerkSecret });
 
   const asSales = (kind, fnPath, args) =>
-    convexCall({ convexUrl: config.convexUrl, token: sales.jwt, kind, path: fnPath, args });
+    convexCallWithRateLimitRetry({
+      convexUrl: config.convexUrl,
+      token: sales.jwt,
+      kind,
+      path: fnPath,
+      args,
+    });
   /** No Authorization header at all — for the case that proves money needs one. */
   const anonymousCall = (kind, fnPath, args) =>
     convexCall({ convexUrl: config.convexUrl, token: null, kind, path: fnPath, args });
   const asApprover = (kind, fnPath, args) =>
-    convexCall({ convexUrl: config.convexUrl, token: approver.jwt, kind, path: fnPath, args });
+    convexCallWithRateLimitRetry({
+      convexUrl: config.convexUrl,
+      token: approver.jwt,
+      kind,
+      path: fnPath,
+      args,
+    });
   const salesMust = (kind, fnPath, args) =>
     mustCall({ convexUrl: config.convexUrl, token: sales.jwt, kind, path: fnPath, args });
   const approverMust = (kind, fnPath, args) =>

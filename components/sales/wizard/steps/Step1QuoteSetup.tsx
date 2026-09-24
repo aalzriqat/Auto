@@ -10,7 +10,7 @@ import { toast } from "@/components/ui/sonner";
 import { api } from "@/convex/_generated/api";
 import { Id, Doc } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
-import { PaymentType, WizardData } from "../types";
+import { OTHER_COMPANY_ID, PaymentType, WizardData } from "../types";
 import { step1Schema } from "../schemas";
 
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -32,6 +32,10 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { VehicleCostBar } from "../components/VehicleCostBar";
 import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
+import {
+  isRequestedFinancingTermValid,
+  matchingCustomerEligibilityStatusIds,
+} from "@/lib/financing";
 
 export type Step1Values = z.infer<typeof step1Schema>;
 
@@ -73,14 +77,16 @@ export default function Step1QuoteSetup({
   const [manualExecutionCommission, setManualExecutionCommission] = useState(
     initialData.manualExecutionCommission || 0
   );
-  const [manualExecutionFees, setManualExecutionFees] = useState(
-    initialData.manualExecutionFees || 0
+  const [manualExecutionFees, setManualExecutionFees] = useState<number | undefined>(
+    initialData.manualExecutionFees
   );
   const [manualIncludesCommissionInDebt, setManualIncludesCommissionInDebt] = useState(
     initialData.manualIncludesCommissionInDebt ?? true
   );
 
-  const [customerStatuses, setCustomerStatuses] = useState<string[]>([]);
+  const [customerStatuses, setCustomerStatuses] = useState<string[]>(
+    initialData.customerStatuses || []
+  );
 
   const toggleStatus = (id: string) => {
     setCustomerStatuses((prev) =>
@@ -93,6 +99,11 @@ export default function Step1QuoteSetup({
     api.orgCustomerStatuses.list,
     activeOrgId ? { orgId: activeOrgId } : "skip"
   )?.filter((s: Doc<"orgCustomerStatuses">) => s.isActive) ?? [];
+
+  const financeCompanies = useQuery(
+    api.finance.listCompanies,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
 
   // Fetch AVAILABLE+RESERVED stock vehicles and SOURCING vehicles separately,
   // then merge — SOURCING vehicles are created inline by the wizard and must
@@ -219,11 +230,105 @@ export default function Step1QuoteSetup({
   };
 
   const onSubmit = (values: Step1Values) => {
-    if (paymentType === "INSTALLMENT" && !selectedCompanyId) {
-      form.setError("vehicleId", {
-        message: "Please select a financing company",
-      });
-      return;
+    if (paymentType === "INSTALLMENT") {
+      if (!selectedCompanyId) {
+        form.setError("vehicleId", {
+          message: "Please select a financing company",
+        });
+        return;
+      }
+
+      if (selectedCompanyId === OTHER_COMPANY_ID) {
+        if (
+          !isRequestedFinancingTermValid({
+            termMonths: values.termMonths,
+            gracePeriodMonths: 0,
+          })
+        ) {
+          form.setError("termMonths", {
+            message:
+              locale === "ar"
+                ? "مدة التمويل يجب أن تكون عدداً صحيحاً أكبر من صفر."
+                : "Financing term must be a positive whole number.",
+          });
+          return;
+        }
+      } else {
+        const selectedCompany = financeCompanies?.find(
+          (company: Doc<"financeCompanies">) => company._id === selectedCompanyId
+        );
+
+        if (!selectedCompany) {
+          form.setError("vehicleId", {
+            message:
+              locale === "ar"
+                ? "شركة التمويل المحددة غير متاحة."
+                : "The selected finance company is unavailable.",
+          });
+          return;
+        }
+
+        if (customerStatuses.length === 0) {
+          form.setError("vehicleId", {
+            message:
+              locale === "ar"
+                ? "اختر حالة عميل واحدة على الأقل قبل متابعة عرض التمويل."
+                : "Select at least one customer status before continuing with finance.",
+          });
+          return;
+        }
+
+        const matchingStatuses = matchingCustomerEligibilityStatusIds(
+          customerStatuses,
+          selectedCompany.acceptedStatuses?.map(String)
+        );
+        if (matchingStatuses.length === 0) {
+          form.setError("vehicleId", {
+            message:
+              locale === "ar"
+                ? "شركة التمويل المحددة لا تقبل حالات العميل المختارة."
+                : "The selected finance company does not accept the selected customer status.",
+          });
+          return;
+        }
+
+        if (selectedCompany.adminFees === undefined) {
+          form.setError("vehicleId", {
+            message:
+              t("ExecutionFeesNotConfigured" as any) ??
+              "Execution Fees are not configured for this finance company.",
+          });
+          return;
+        }
+
+        if (
+          !isRequestedFinancingTermValid({
+            termMonths: values.termMonths,
+            maxTermMonths: selectedCompany.maxTermMonths,
+            gracePeriodMonths: selectedCompany.gracePeriodMonths,
+          })
+        ) {
+          const maxTerm = selectedCompany.maxTermMonths;
+          form.setError("termMonths", {
+            message:
+              maxTerm !== undefined && maxTerm > 0
+                ? locale === "ar"
+                  ? `مدة التمويل غير متاحة لهذه الشركة. الحد الأقصى ${maxTerm} شهر.`
+                  : `This term is unavailable for this finance company. Maximum is ${maxTerm} months.`
+                : locale === "ar"
+                  ? "مدة التمويل غير متاحة لهذه الشركة."
+                  : "This term is unavailable for this finance company.",
+          });
+          return;
+        }
+      }
+
+      if (selectedCompanyId === OTHER_COMPANY_ID && manualExecutionFees === undefined) {
+        form.setError("vehicleId", {
+          message: t("ExecutionFeesRequired" as any) ?? "Execution Fees are required for manual finance. Enter the expected fee amount, or 0 if none are charged.",
+        });
+        return;
+      }
     }
 
     if (isBlockedByProfit) {
@@ -246,6 +351,7 @@ export default function Step1QuoteSetup({
       manualExecutionCommission,
       manualExecutionFees,
       manualIncludesCommissionInDebt,
+      customerStatuses: isCash ? undefined : customerStatuses,
     });
   };
 
@@ -418,8 +524,18 @@ export default function Step1QuoteSetup({
                   <FormItem>
                     <FormLabel>{t("TermMonths" as any)}</FormLabel>
                     <FormControl>
-                      <Input type="number" {...field} />
+                      <Input
+                        type="number"
+                        step="1"
+                        min="1"
+                        {...field}
+                        onChange={(e) => {
+                          field.onChange(e);
+                          setSelectedCompanyId(undefined);
+                        }}
+                      />
                     </FormControl>
+                    <FormMessage />
                   </FormItem>
                 )}
               />

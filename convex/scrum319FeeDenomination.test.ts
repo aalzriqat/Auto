@@ -95,6 +95,14 @@ async function seedDeal(tag: string) {
   const customerId = await s.t.run((ctx) =>
     ctx.db.insert("customers", { orgId: s.orgId, firstName: "Buyer", lastName: tag })
   );
+  const customerStatusId = await s.t.run((ctx) =>
+    ctx.db.insert("orgCustomerStatuses", {
+      orgId: s.orgId,
+      label: "Eligible",
+      isActive: true,
+      order: 1,
+    })
+  );
   const vehicleId = await s.t.run((ctx) =>
     ctx.db.insert("vehicles", {
       orgId: s.orgId, vin: `VIN319${tag}`, make: "Kia", model: "Sportage", year: 2024, mileage: 10,
@@ -107,12 +115,16 @@ async function seedDeal(tag: string) {
     ctx.db.insert("financeCompanies", {
       orgId: s.orgId, name: "Jordan Auto Finance", profitRate: 5, maxTermMonths: 60,
       gracePeriodMonths: 0, isActive: true, defaultLtvPercent: 100,
+      adminFees: 0,
     })
   );
   const quoteId = await s.asUser.mutation(api.quotes.saveQuote, {
     orgId: s.orgId, customerId, vehicleId,
     vehiclePrice: VEHICLE_PRICE, downPayment: 0, termMonths: 48,
-    mode: "CONFIGURED_FINANCE_COMPANY", companyId, totalFinancedAmount: VEHICLE_PRICE,
+    mode: "CONFIGURED_FINANCE_COMPANY",
+    companyId,
+    customerEligibilityStatusIds: [customerStatusId],
+    totalFinancedAmount: VEHICLE_PRICE,
   });
   const applicationId = await s.asUser.mutation(api.applications.createFromQuote, { orgId: s.orgId, quoteId });
   const app0 = await s.t.run((ctx) => ctx.db.get(applicationId));
