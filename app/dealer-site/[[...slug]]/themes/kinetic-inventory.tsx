@@ -469,13 +469,16 @@ function KineticFinanceMiniCalculator({
   const clampedTermMonths = Math.min(termMonths, maxMonths);
 
   const downAmount = Math.round(startingPrice * (downPercent / 100));
-  const { monthlyInstallment } = estimateMonthlyInstallment({
+  const estimate = estimateMonthlyInstallment({
     financeCompany,
     vehiclePrice: startingPrice,
     downPayment: downAmount,
     termMonths: clampedTermMonths,
   });
-  const monthly = Math.round(monthlyInstallment);
+  const monthly =
+    estimate && Number.isFinite(estimate.monthlyInstallment)
+      ? Math.round(estimate.monthlyInstallment)
+      : null;
 
   return (
     <div className="bg-primary text-white p-6 rounded-2xl shadow-xl space-y-6 overflow-hidden relative">
@@ -497,7 +500,11 @@ function KineticFinanceMiniCalculator({
         </div>
         <div className="pt-4 border-t border-white/10 flex items-center justify-between">
           <p className="text-sm">{k.monthlyInstallment}</p>
-          <p className="text-2xl font-bold text-luxury-gold">{monthly.toLocaleString()} JOD</p>
+          {monthly != null && Number.isFinite(monthly) ? (
+            <p className="text-2xl font-bold text-luxury-gold">{monthly.toLocaleString()} JOD</p>
+          ) : (
+            <p className="text-sm font-bold text-luxury-gold">{k.estimateUnavailable}</p>
+          )}
         </div>
       </div>
       <Link href="/finance" className="w-full bg-secondary text-white py-3 rounded-xl font-bold hover:brightness-110 transition-all z-10 relative block text-center">{k.applyForFinance}</Link>

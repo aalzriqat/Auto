@@ -28,7 +28,17 @@ import { type AppTheme } from "../../../theme";
 import { useAppTheme, useThemedStyles } from "../../../providers/ThemeProvider";
 import { compactInitials } from "../nativeModules";
 import { useCommandIdentity, money, parseOptionalNumber, useGenericError, SearchInput } from "../modules/moduleShared";
-import { calculateUnifiedMurabaha, type UnifiedMurabahaResult } from "./murabaha";
+import {
+  calculateUnifiedMurabaha,
+  minimumDownPaymentForFinancingLimit,
+  matchingCustomerEligibilityStatusIds,
+  type UnifiedMurabahaResult,
+} from "./murabaha";
+import {
+  effectiveMobileQuoteVehiclePrice,
+  manualExecutionFeeInputValue,
+  mobileFinancingTermIsValid,
+} from "./salesWizardQuote";
 
 export type WizardPaymentType = "CASH" | "INSTALLMENT";
 
@@ -38,11 +48,13 @@ type WizardStep = 1 | 2 | 3 | 4;
 
 interface ComparisonRow {
   company: MobileFinanceCompany;
-  result: UnifiedMurabahaResult;
+  result: UnifiedMurabahaResult | null;
+  feesConfigured: boolean;
+  termIsValid: boolean;
   actualValuation: number;
   maxFinancingAllowed: number;
   exceedsValuation: boolean;
-  minimumDownPayment: number;
+  minimumDownPayment?: number;
 }
 
 function accentColor(paymentType: WizardPaymentType, colors: AppTheme["colors"]): string {
@@ -154,7 +166,7 @@ export function SalesWizardScreen({
   const [manualProfitRate, setManualProfitRate] = useState("0");
   const [manualInsuranceRate, setManualInsuranceRate] = useState("0");
   const [manualCommission, setManualCommission] = useState("0");
-  const [manualFees, setManualFees] = useState("0");
+  const [manualFees, setManualFees] = useState("");
   const [manualIncludesCommission, setManualIncludesCommission] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerSearch, setPickerSearch] = useState("");
@@ -222,7 +234,7 @@ export function SalesWizardScreen({
   const profit = parseOptionalNumber(desiredProfit) ?? 0;
   const down = parseOptionalNumber(downPayment) ?? 0;
   const term = parseOptionalNumber(termMonths) ?? 0;
-  const effectivePrice = price + profit;
+  const effectivePrice = effectiveMobileQuoteVehiclePrice(price, profit);
 
   const minimumProfit = selectedVehicle?.minimumProfit ?? 0;
   const isProfitBelowMinimum = !isCash && Boolean(vehicleId) && profit < minimumProfit;
@@ -236,23 +248,34 @@ export function SalesWizardScreen({
     if (isCash || !vehicleId || price <= 0 || customerStatuses.length === 0) return [];
     return (companies ?? [])
       .filter((company) => company.isActive)
-      .filter((company) => {
-        const accepted = company.acceptedStatuses;
-        if (!accepted || accepted.length === 0) return true;
-        return customerStatuses.some((status) => accepted.includes(status));
-      })
+      .filter(
+        (company) =>
+          matchingCustomerEligibilityStatusIds(
+            customerStatuses,
+            company.acceptedStatuses
+          ).length > 0
+      )
       .map((company) => {
-        const result = calculateUnifiedMurabaha({
-          vehiclePrice: effectivePrice,
-          downPayment: down,
-          commission: company.commission || 0,
-          processingFees: company.adminFees || 0,
-          annualProfitRate: company.profitRate,
-          annualInsuranceRate: company.insuranceRate || 0,
+        const executionFees = company.adminFees;
+        const feesConfigured = executionFees !== undefined;
+        const termIsValid = mobileFinancingTermIsValid({
           termMonths: term,
           gracePeriodMonths: company.gracePeriodMonths,
-          includesCommissionInDebt: company.includesCommissionInDebt,
+          maxTermMonths: company.maxTermMonths,
         });
+        const result = feesConfigured && termIsValid
+          ? calculateUnifiedMurabaha({
+              vehiclePrice: effectivePrice,
+              downPayment: down,
+              commission: company.commission || 0,
+              processingFees: executionFees,
+              annualProfitRate: company.profitRate,
+              annualInsuranceRate: company.insuranceRate || 0,
+              termMonths: term,
+              gracePeriodMonths: company.gracePeriodMonths,
+              includesCommissionInDebt: company.includesCommissionInDebt,
+            })
+          : null;
         const actualValuation =
           (valuations ?? []).find((valuation) => valuation.companyId === company._id)
             ?.valuationAmount || 0;
@@ -261,32 +284,52 @@ export function SalesWizardScreen({
           maxLTV > 0 && actualValuation > 0
             ? actualValuation * (maxLTV / 100)
             : Number.MAX_SAFE_INTEGER;
-        const exceedsValuation = result.financedAmount > maxFinancingAllowed && actualValuation > 0;
-        const minimumDownPayment = Math.max(
-          0,
-          effectivePrice + (company.commission || 0) + (company.adminFees || 0) - maxFinancingAllowed,
-        );
-        return { company, result, actualValuation, maxFinancingAllowed, exceedsValuation, minimumDownPayment };
+        const exceedsValuation = result ? result.financedAmount > maxFinancingAllowed && actualValuation > 0 : false;
+        const minimumDownPayment = result
+          ? minimumDownPaymentForFinancingLimit({
+              currentDownPayment: down,
+              financedAmount: result.financedAmount,
+              maxFinancingAllowed,
+            })
+          : undefined;
+        return { company, result, feesConfigured, termIsValid, actualValuation, maxFinancingAllowed, exceedsValuation, minimumDownPayment };
       });
   }, [companies, customerStatuses, down, effectivePrice, isCash, price, term, valuations, vehicleId]);
 
+  const parsedManualFees = parseOptionalNumber(manualFees);
+  const manualFeesConfigured = parsedManualFees !== undefined;
+
+  const manualTermIsValid = mobileFinancingTermIsValid({ termMonths: term });
   const manualResult = useMemo(
     () =>
-      calculateUnifiedMurabaha({
-        vehiclePrice: effectivePrice,
-        downPayment: down,
-        commission: parseOptionalNumber(manualCommission) ?? 0,
-        processingFees: parseOptionalNumber(manualFees) ?? 0,
-        annualProfitRate: parseOptionalNumber(manualProfitRate) ?? 0,
-        annualInsuranceRate: parseOptionalNumber(manualInsuranceRate) ?? 0,
-        termMonths: term,
-        includesCommissionInDebt: manualIncludesCommission,
-      }),
-    [down, effectivePrice, manualCommission, manualFees, manualInsuranceRate, manualProfitRate, manualIncludesCommission, term],
+      manualFeesConfigured && manualTermIsValid
+        ? calculateUnifiedMurabaha({
+            vehiclePrice: effectivePrice,
+            downPayment: down,
+            commission: parseOptionalNumber(manualCommission) ?? 0,
+            processingFees: parsedManualFees,
+            annualProfitRate: parseOptionalNumber(manualProfitRate) ?? 0,
+            annualInsuranceRate: parseOptionalNumber(manualInsuranceRate) ?? 0,
+            termMonths: term,
+            includesCommissionInDebt: manualIncludesCommission,
+          })
+        : null,
+    [down, effectivePrice, manualCommission, parsedManualFees, manualFeesConfigured, manualInsuranceRate, manualProfitRate, manualIncludesCommission, manualTermIsValid, term],
   );
 
   const selectedComparison = comparisons.find((row) => row.company._id === selectedCompanyId) ?? null;
   const selectedResult = selectedCompanyId === OTHER_COMPANY_ID ? manualResult : selectedComparison?.result ?? null;
+  const isFinancingTermValid =
+    isCash ||
+    (selectedCompanyId === OTHER_COMPANY_ID
+      ? manualTermIsValid
+      : selectedComparison
+        ? mobileFinancingTermIsValid({
+            termMonths: term,
+            gracePeriodMonths: selectedComparison.company.gracePeriodMonths,
+            maxTermMonths: selectedComparison.company.maxTermMonths,
+          })
+        : false);
 
   const filteredVehicles = (availableVehicles ?? []).filter((vehicle) => {
     const haystack = `${vehicle.year} ${vehicle.make} ${vehicle.model} ${vehicle.vin}`.toLowerCase();
@@ -297,11 +340,18 @@ export function SalesWizardScreen({
     return haystack.includes(customerSearch.trim().toLowerCase());
   });
 
+  const isFinanceSelectedValid =
+    isCash ||
+    (isFinancingTermValid &&
+      (selectedCompanyId === OTHER_COMPANY_ID
+        ? manualFeesConfigured
+        : Boolean(selectedComparison?.feesConfigured)));
+
   const canLeaveStep1 =
     Boolean(vehicleId) &&
     price > 0 &&
     !isBlockedByProfit &&
-    (isCash || Boolean(selectedCompanyId));
+    isFinanceSelectedValid;
 
   // Resume prompt: mirrors the web wizard DB-draft restore.
   useEffect(() => {
@@ -325,8 +375,9 @@ export function SalesWizardScreen({
     setManualProfitRate(String(data.manualProfitRate ?? 0));
     setManualInsuranceRate(String(data.manualInsuranceRate ?? 0));
     setManualCommission(String(data.manualExecutionCommission ?? 0));
-    setManualFees(String(data.manualExecutionFees ?? 0));
+    setManualFees(manualExecutionFeeInputValue(data.manualExecutionFees));
     setManualIncludesCommission(data.manualIncludesCommissionInDebt ?? true);
+    setCustomerStatuses((data as any).customerStatuses || []);
     setStep(Math.min(dbDraft.currentStep, 3) as WizardStep);
     setResumePromptVisible(false);
   }
@@ -358,6 +409,7 @@ export function SalesWizardScreen({
           manualExecutionCommission: parseOptionalNumber(manualCommission),
           manualExecutionFees: parseOptionalNumber(manualFees),
           manualIncludesCommissionInDebt: manualIncludesCommission,
+          customerStatuses,
         },
         selectedCustomerId: customer?._id,
       }).catch((error: unknown) => console.error(error));
@@ -366,7 +418,7 @@ export function SalesWizardScreen({
       if (draftTimer.current) clearTimeout(draftTimer.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, vehicleId, price, profit, down, term, selectedCompanyId, manualProfitRate, manualInsuranceRate, manualCommission, manualFees, manualIncludesCommission, customer, resumePromptVisible, resumeChecked]);
+  }, [step, vehicleId, price, profit, down, term, selectedCompanyId, manualProfitRate, manualInsuranceRate, manualCommission, manualFees, manualIncludesCommission, customerStatuses, customer, resumePromptVisible, resumeChecked]);
 
   async function handleDownloadVoucher() {
     if (!voucher) return;
@@ -447,16 +499,67 @@ export function SalesWizardScreen({
 
   async function handleCreateQuote() {
     if (!customer || !vehicleId) return;
+
+    const manual = selectedCompanyId === OTHER_COMPANY_ID;
+    const configuredFinance = !isCash && !manual;
+    if (!isCash && !isFinancingTermValid) {
+      reportError(
+        "Mobile wizard financing term is invalid",
+        new Error(
+          locale === "ar"
+            ? "مدة التمويل المحددة غير متاحة لشركة التمويل المختارة."
+            : "The selected financing term is not available for this finance option."
+        )
+      );
+      return;
+    }
+    if (configuredFinance) {
+      if (!selectedCompanyId || customerStatuses.length === 0) {
+        reportError(
+          "Mobile wizard quote eligibility is incomplete",
+          new Error(
+            locale === "ar"
+              ? "اختر حالة عميل واحدة على الأقل قبل إنشاء عرض التمويل."
+              : "Select at least one customer status before creating a finance quote."
+          )
+        );
+        return;
+      }
+
+      const company = (companies ?? []).find(
+        (candidate) => candidate._id === selectedCompanyId
+      );
+      if (
+        !company ||
+        matchingCustomerEligibilityStatusIds(
+          customerStatuses,
+          company.acceptedStatuses
+        ).length === 0
+      ) {
+        reportError(
+          "Mobile wizard finance company eligibility mismatch",
+          new Error(
+            locale === "ar"
+              ? "شركة التمويل المحددة لا تقبل حالات العميل المختارة."
+              : "The selected finance company does not accept the selected customer status."
+          )
+        );
+        return;
+      }
+    }
+
     setSaving(true);
     try {
-      const manual = selectedCompanyId === OTHER_COMPANY_ID;
       const id = await saveQuote({
         orgId,
         customerId: customer._id,
         vehicleId,
         companyId: !isCash && !manual ? selectedCompanyId : undefined,
+        customerEligibilityStatusIds: configuredFinance
+          ? customerStatuses
+          : undefined,
         mode: isCash ? "CASH" : manual ? "MANUAL_FINANCE_COMPANY" : "CONFIGURED_FINANCE_COMPANY",
-        vehiclePrice: price,
+        vehiclePrice: effectivePrice,
         desiredProfit: profit,
         downPayment: down,
         termMonths: isCash ? 0 : term,
@@ -469,7 +572,7 @@ export function SalesWizardScreen({
         manualProviderName: manual ? (locale === "ar" ? "جهة أخرى" : "Other provider") : undefined,
         manualProfitRate: manual ? parseOptionalNumber(manualProfitRate) ?? 0 : undefined,
         manualInsuranceRate: manual ? parseOptionalNumber(manualInsuranceRate) ?? 0 : undefined,
-        manualAdminFees: manual ? parseOptionalNumber(manualFees) ?? 0 : undefined,
+        manualAdminFees: manual ? parseOptionalNumber(manualFees) : undefined,
         manualCommission: manual ? parseOptionalNumber(manualCommission) ?? 0 : undefined,
         manualIncludesCommissionInDebt: manual ? manualIncludesCommission : undefined,
       });
@@ -503,7 +606,7 @@ export function SalesWizardScreen({
       locale === "ar" ? "عرض سعر — AutoFlow" : "Quote — AutoFlow",
       `${locale === "ar" ? "العميل" : "Customer"}: ${customer?.firstName ?? ""} ${customer?.lastName ?? ""}`,
       `${locale === "ar" ? "السيارة" : "Vehicle"}: ${vehicleLine}`,
-      `${locale === "ar" ? "السعر" : "Price"}: ${money(price, locale)}`,
+      `${locale === "ar" ? "السعر" : "Price"}: ${money(effectivePrice, locale)}`,
     ];
     if (!isCash && selectedResult) {
       lines.push(
@@ -772,36 +875,63 @@ export function SalesWizardScreen({
                       : "Select the customer status first to see available offers."}
                   </Text>
                 ) : null}
-                {comparisons.map(({ company, exceedsValuation, minimumDownPayment, result }) => {
+                {comparisons.map(({ company, exceedsValuation, feesConfigured, termIsValid, minimumDownPayment, result }) => {
                   const selected = selectedCompanyId === company._id;
                   return (
                     <Pressable
                       key={company._id}
                       accessibilityRole="button"
-                      accessibilityState={{ selected }}
-                      style={[styles.companyCard, selected && { borderColor: accent, borderWidth: 2 }]}
-                      onPress={() => setSelectedCompanyId(company._id)}
+                      accessibilityState={{ selected, disabled: !feesConfigured || !termIsValid }}
+                      disabled={!feesConfigured || !termIsValid}
+                      style={[
+                        styles.companyCard,
+                        selected && { borderColor: accent, borderWidth: 2 },
+                        (!feesConfigured || !termIsValid) && { opacity: 0.6 },
+                      ]}
+                      onPress={() => {
+                        if (feesConfigured && termIsValid) setSelectedCompanyId(company._id);
+                      }}
                     >
                       <View style={styles.companyHeader}>
                         <Text style={styles.companyName}>{company.name}</Text>
                         <Text style={[styles.companyRate, { color: accent }]}>{company.profitRate}%</Text>
                       </View>
                       <Text style={[styles.companyMonthly, { color: accent }]}>
-                        {money(result.monthlyInstallment, locale)}
-                        <Text style={styles.companyMonthlyUnit}> /{locale === "ar" ? "شهر" : "mo"}</Text>
+                        {feesConfigured && !result ? (
+                          <Text style={[styles.companyMonthlyUnit, { color: theme.colors.warning }]}>
+                            {locale === "ar" ? "مدة التمويل غير صالحة" : "Invalid financing term"}
+                          </Text>
+                        ) : result ? (
+                          <>
+                            {money(result.monthlyInstallment, locale)}
+                            <Text style={styles.companyMonthlyUnit}> /{locale === "ar" ? "شهر" : "mo"}</Text>
+                          </>
+                        ) : (
+                          <Text style={[styles.companyMonthlyUnit, { color: theme.colors.warning }]}>
+                            {locale === "ar" ? "الرسوم غير محددة" : "Fees not configured"}
+                          </Text>
+                        )}
                       </Text>
-                      <View style={styles.companyMetaRow}>
-                        <Text style={styles.companyMeta}>
-                          {locale === "ar" ? "التمويل" : "Financed"}: {money(result.financedAmount, locale)}
+                      {result ? (
+                        <View style={styles.companyMetaRow}>
+                          <Text style={styles.companyMeta}>
+                            {locale === "ar" ? "التمويل" : "Financed"}: {money(result.financedAmount, locale)}
+                          </Text>
+                          <Text style={styles.companyMeta}>
+                            {locale === "ar" ? "الربح" : "Profit"}: {money(result.totalProfit, locale)}
+                          </Text>
+                          <Text style={styles.companyMeta}>
+                            {locale === "ar" ? "التكافل" : "Takaful"}: {money(result.takafulAmount, locale)}
+                          </Text>
+                        </View>
+                      ) : null}
+                      {!feesConfigured ? (
+                        <Text style={styles.companyWarning}>
+                          {locale === "ar"
+                            ? "رسوم التنفيذ غير محددة لهذه الشركة في الإعدادات"
+                            : "Execution fees are not configured for this company"}
                         </Text>
-                        <Text style={styles.companyMeta}>
-                          {locale === "ar" ? "الربح" : "Profit"}: {money(result.totalProfit, locale)}
-                        </Text>
-                        <Text style={styles.companyMeta}>
-                          {locale === "ar" ? "التكافل" : "Takaful"}: {money(result.takafulAmount, locale)}
-                        </Text>
-                      </View>
-                      {exceedsValuation ? (
+                      ) : exceedsValuation && minimumDownPayment !== undefined ? (
                         <Text style={styles.companyWarning}>
                           {locale === "ar"
                             ? `يتجاوز حد التمويل — الحد الأدنى للدفعة ${money(minimumDownPayment, locale)}`
@@ -823,8 +953,20 @@ export function SalesWizardScreen({
                     <View style={styles.companyHeader}>
                       <Text style={styles.companyName}>{locale === "ar" ? "جهة أخرى (يدوي)" : "Others (manual)"}</Text>
                       <Text style={[styles.companyMonthly, { color: accent }]}>
-                        {money(manualResult.monthlyInstallment, locale)}
-                        <Text style={styles.companyMonthlyUnit}> /{locale === "ar" ? "شهر" : "mo"}</Text>
+                        {!manualTermIsValid ? (
+                          <Text style={[styles.companyMonthlyUnit, { color: theme.colors.warning }]}>
+                            {locale === "ar" ? "مدة التمويل غير صالحة" : "Invalid financing term"}
+                          </Text>
+                        ) : manualResult ? (
+                          <>
+                            {money(manualResult.monthlyInstallment, locale)}
+                            <Text style={styles.companyMonthlyUnit}> /{locale === "ar" ? "شهر" : "mo"}</Text>
+                          </>
+                        ) : (
+                          <Text style={[styles.companyMonthlyUnit, { color: theme.colors.warning }]}>
+                            {locale === "ar" ? "أدخل الرسوم" : "Enter fees"}
+                          </Text>
+                        )}
                       </Text>
                     </View>
                     {selectedCompanyId === OTHER_COMPANY_ID ? (

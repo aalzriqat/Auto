@@ -68,6 +68,12 @@ async function seedOrg(t: any, seed: string, minimumProfit: number | undefined) 
       lastName: "Buyer",
       email: `${seed}-buyer@example.com`,
     });
+    const customerStatusId = await ctx.db.insert("orgCustomerStatuses", {
+      orgId,
+      label: "Eligible",
+      isActive: true,
+      order: 1,
+    });
     const companyId = await ctx.db.insert("financeCompanies", {
       orgId,
       name: "Finance Co",
@@ -78,8 +84,9 @@ async function seedOrg(t: any, seed: string, minimumProfit: number | undefined) 
       // The quotation solver refuses a company with no LTV, and the application
       // freezes the company rules at creation.
       defaultLtvPercent: 100,
+      adminFees: 0,
     });
-    return { orgId, userId, approverId, vehicleId, customerId, companyId };
+    return { orgId, userId, approverId, vehicleId, customerId, customerStatusId, companyId };
   });
   return {
     ...ids,
@@ -94,6 +101,7 @@ function financedQuote(ids: any, desiredProfit: number | undefined) {
     customerId: ids.customerId,
     vehicleId: ids.vehicleId,
     companyId: ids.companyId,
+    customerEligibilityStatusIds: [ids.customerStatusId],
     mode: "CONFIGURED_FINANCE_COMPANY" as const,
     vehiclePrice: 20000 + (desiredProfit ?? 0),
     ...(desiredProfit === undefined ? {} : { desiredProfit }),
@@ -131,7 +139,7 @@ describe("quotes.saveQuote enforces the minimum-profit approval", () => {
     // would read false and let it through.
     await expect(
       ids.asOwner.mutation(api.quotes.saveQuote, financedQuote(ids, NaN))
-    ).rejects.toThrow(/below the minimum profit/i);
+    ).rejects.toThrow(/finite number/i);
   });
 
   test("accepts a financed quote at or above the minimum profit", async () => {

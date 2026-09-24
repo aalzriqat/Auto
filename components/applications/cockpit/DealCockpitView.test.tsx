@@ -272,6 +272,29 @@ describe("the headline figure", () => {
     expect(screen.getByText("ProfitNotCalculable")).toBeTruthy();
     expect(screen.getByText("ProfitNeedsApprovedPurchase")).toBeTruthy();
   });
+
+  test("an ACTUAL_UNPOSTABLE loss is labelled actual everywhere on the same screen", () => {
+    renderCockpit(
+      dealFixture({
+        money: {
+          ...dealFixture().money,
+          profit: {
+            available: true,
+            basis: "MANAGEMENT_ESTIMATE",
+            amountMinor: -500 * SCALE,
+            currency: "JOD",
+            classification: "ACTUAL_UNPOSTABLE",
+            postable: false,
+            lines: [{ key: "APPROVED_PURCHASE", sign: 1, amountMinor: 9_000 * SCALE }],
+          },
+        },
+      })
+    );
+
+    expect(screen.queryByText("LossEstimated")).toBeNull();
+    expect(screen.getAllByText("LossActual")).toHaveLength(1);
+    expect(screen.getByText("ProfitActualUnpostable")).toBeTruthy();
+  });
 });
 
 /**

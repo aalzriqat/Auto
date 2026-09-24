@@ -14,13 +14,16 @@ export function KineticSalesHome(props: ThemeProps) {
   const [price, setPrice] = useState(25000);
   const [downPercent, setDownPercent] = useState(20);
   const termMonths = Math.min(60, site.financeCompany?.maxTermMonths ?? 60);
-  const { monthlyInstallment } = estimateMonthlyInstallment({
+  const estimate = estimateMonthlyInstallment({
     financeCompany: site.financeCompany,
     vehiclePrice: price,
     downPayment: price * (downPercent / 100),
     termMonths,
   });
-  const monthly = Math.round(monthlyInstallment);
+  const monthly =
+    estimate && Number.isFinite(estimate.monthlyInstallment)
+      ? Math.round(estimate.monthlyInstallment)
+      : null;
 
   return (
     <div className="theme-kinetic bg-background text-on-background font-body-md selection:bg-secondary selection:text-white" dir={dir}>
@@ -187,10 +190,17 @@ export function KineticSalesHome(props: ThemeProps) {
                 </div>
                 <div className="bg-surface-container-low p-6 rounded-xl border-l-4 border-secondary">
                   <p className="text-sm font-bold text-outline uppercase mb-1">{k.estimatedMonthlyPayment}</p>
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-4xl font-black text-primary">{monthly.toLocaleString()} JOD</span>
-                    <span className="text-on-surface-variant text-sm">{k.perMonth}</span>
-                  </div>
+                  {monthly != null && Number.isFinite(monthly) ? (
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-4xl font-black text-primary">{monthly.toLocaleString()} JOD</span>
+                      <span className="text-on-surface-variant text-sm">{k.perMonth}</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      <span className="text-xl font-bold text-primary block">{k.estimateUnavailable}</span>
+                      <span className="text-on-surface-variant text-xs block">{k.contactDealershipForFinancing}</span>
+                    </div>
+                  )}
                 </div>
                 <Link href="/finance" className="w-full py-4 bg-secondary text-white font-bold rounded-lg uppercase italic tracking-widest hover:scale-95 transition-transform flex items-center justify-center gap-2">
                   {k.applyForFinanceNow}

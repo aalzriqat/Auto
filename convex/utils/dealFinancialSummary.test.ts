@@ -139,6 +139,25 @@ describe("deriveDealFinancialSummary", () => {
     });
   });
 
+  test("an unsafe installment gap marks the planned gap unreadable instead of looking absent", () => {
+    const s = deriveDealFinancialSummary(
+      inputs({
+        app: {
+          ...inputs().app,
+          customerGapCashToDealerMinor: 200_000,
+          customerGapInstallmentToDealerMinor: Number.NaN,
+        },
+      })
+    );
+
+    expect(s.customerGapPlanned).toBeNull();
+    expect(s.customerGapCashPlannedMinor).toBe(200_000);
+    expect(s.unreadable).toContainEqual({
+      field: "customerGapPlanned",
+      reason: "UNSAFE_AMOUNT",
+    });
+  });
+
   describe("the financier's remaining balance: estimated before a receivable, actual after", () => {
     test("OUTSTANDING from the receivable once one exists, on the through-dealership route", () => {
       expect(deriveDealFinancialSummary(inputs()).financier.outstanding).toEqual({
@@ -409,7 +428,7 @@ describe("deriveDealFinancialSummary", () => {
       expect(s.dealerOutlay.knownCommittedMinor).toBeNull();
       expect(s.dealerOutlay.totalExpectedMinor).toBeNull();
       expect(s.unreadable.map((entry) => entry.field).sort()).toEqual(
-        ["approvedPurchaseAmount", "customerFirstPayment", "customerGapCashPlanned", "customerSalePrice", "financierFundedPortion", "plannedContribution"].sort()
+        ["approvedPurchaseAmount", "customerFirstPayment", "customerGapCashPlanned", "customerGapPlanned", "customerSalePrice", "financierFundedPortion", "plannedContribution"].sort()
       );
       expect(s.unreadable.every((entry) => entry.reason === "UNSAFE_AMOUNT")).toBe(true);
       expect(JSON.stringify(s)).not.toContain(String(corrupt));

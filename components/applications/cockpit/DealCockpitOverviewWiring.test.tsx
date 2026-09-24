@@ -279,22 +279,18 @@ describe("the custody section", () => {
     expect(record.mock.calls[0][0]).not.toHaveProperty("custodyId");
   });
 
-  test("adopting the company's fees is offered to the owner only, and calls the audited mutation", async () => {
+  // Old business rule: adopting company fee templates was offered to the owner on the cockpit handover panel.
+  // Why obsolete: Company fee templates and adoption UX have been retired in favor of company adminFees (Execution Fees) as single authority.
+  // New invariant: fee template adoption UX is retired, so the adopt button and notice are not rendered.
+  test("fee template adoption UX is retired from the cockpit", () => {
     permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
     permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
     const costs = dealCosts();
     costs.expected.adoption = { state: "AVAILABLE", liveTemplateCount: 2, liveRuleVersion: 2, adopted: null };
     queryResults.set(COSTS_QUERY, costs);
-    renderCockpit();
-    expect(screen.queryByRole("button", { name: salesEn.AdoptCompanyFees })).toBeNull();
-    cleanup();
     stubs.isOwner = true;
     renderCockpit();
-    const notice = screen.getByTestId("deal-handover-fee-adoption");
-    fireEvent.click(within(notice).getByRole("button", { name: salesEn.AdoptCompanyFees }));
-    fireEvent.change(within(notice).getByLabelText(salesEn.AdoptCompanyFeesReason), { target: { value: "late" } });
-    fireEvent.click(within(notice).getByRole("button", { name: salesEn.AdoptCompanyFeesConfirm }));
-    const adopt = mutations.get("financeDealCosts:adoptCompanyFeeTemplates")!;
-    await waitFor(() => expect(adopt).toHaveBeenCalledWith({ orgId: ORG, applicationId: APP, reason: "late" }));
+    expect(screen.queryByRole("button", { name: salesEn.AdoptCompanyFees })).toBeNull();
+    expect(screen.queryByTestId("deal-handover-fee-adoption")).toBeNull();
   });
 });

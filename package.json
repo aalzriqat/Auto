@@ -8,8 +8,8 @@
     "start": "next start",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
-    "test:coverage:sonar": "vitest run convex scripts --coverage --coverage.include=\"convex/**/*.ts\" --coverage.include=\"scripts/**/*.ts\" --coverage.include=\"scripts/**/*.mjs\" --coverage.exclude=\"convex/_generated/**\" --coverage.exclude=\"**/*.test.ts\" --coverage.thresholds.lines=0 --coverage.thresholds.functions=0 --coverage.thresholds.branches=0 --coverage.thresholds.statements=0",
+    "test:coverage": "pnpm test:unified-deal-authority && node scripts/runVitestCoverageShards.mjs unit",
+    "test:coverage:sonar": "node scripts/runVitestCoverageShards.mjs sonar",
     "typecheck": "tsc --noEmit",
     "typecheck:convex": "tsc -p convex/tsconfig.json --noEmit",
     "shared:typecheck": "pnpm --filter @autoflow/shared typecheck",
@@ -38,7 +38,8 @@
     "e2e:preview-descriptor": "node scripts/intelligence/e2ePreviewDescriptor.mjs",
     "browser-swarm:prepare-trusted-run": "node scripts/intelligence/prepareTrustedBrowserSwarmRun.mjs",
     "browser-swarm:jev-exploration": "node scripts/intelligence/trustedBrowserJevSuggestions.mjs",
-    "browser-swarm:build-artifact": "node scripts/intelligence/browserSwarmBuildArtifact.mjs"
+    "browser-swarm:build-artifact": "node scripts/intelligence/browserSwarmBuildArtifact.mjs",
+    "test:unified-deal-authority": "vitest run convex/unifiedDealFeeAuthority.test.ts"
   },
   "dependencies": {
     "@autoflow/shared": "workspace:*",

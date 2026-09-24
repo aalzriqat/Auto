@@ -1678,6 +1678,9 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     expect(within(stamps).queryByRole("button", { name: "RecordTemplateActual" })).toBeNull();
   });
 
+  // Old business rule: a deal with no templates rendered the expected section with "HandoverExpectedNotConfigured".
+  // Why obsolete: Company fee templates policy is retired; the expected checklist section is only rendered when historical template rows exist.
+  // New invariant: when no templates exist, the expected checklist section is not rendered, and actual costs remain recordable.
   test("a deal whose company configured nothing says so — no zero, no checklist rows, additional costs still recordable", () => {
     readableDeal();
     permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
@@ -1694,7 +1697,7 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
       })
     );
     renderCockpit();
-    expect(screen.getByTestId("deal-handover-expected").textContent).toContain("HandoverExpectedNotConfigured");
+    expect(screen.queryByTestId("deal-handover-expected")).toBeNull();
     expect(screen.queryByTestId("deal-handover-expected-0")).toBeNull();
     expect(screen.getByTestId("deal-handover-costs-totals").textContent).toContain("FactUnavailable");
     expect(screen.queryByTestId("deal-handover-costs-difference")).toBeNull();

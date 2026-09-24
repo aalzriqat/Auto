@@ -1,11 +1,34 @@
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
+import type { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { advanceLeadStage } from "./utils/leadStageHelpers";
 import { notifyUser, getActorName } from "./utils/notifications";
 import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
+import {
+  assertCustomerEligibilityForCompany,
+  assertCustomerLoanTermsValid,
+  assertFinanceCompanyEligibleForNewQuote,
+  assertFinancedMurabahaResultValid,
+  assertFinancedQuoteContributionValid,
+  assertRequestedFinancingTermValid,
+  buildRuleSnapshot,
+  requireConfiguredExecutionFees,
+  type CustomerEligibilitySnapshot,
+  type CustomerQuotePricingSnapshot,
+  type FinanceCompanyRuleSnapshot,
+} from "./utils/financingEconomics";
+import { calculateUnifiedMurabaha, minimumDownPaymentForFinancingLimit } from "../lib/financing";
+import { getOrgCurrency } from "./accounting/workflowHooks";
+import { assertMajorAmountRepresentable } from "./utils/money";
+
+function assertFiniteNumber(val: unknown, name: string): void {
+  if (val !== undefined && (typeof val !== "number" || !Number.isFinite(val))) {
+    throw new ConvexError(`${name} must be a finite number.`);
+  }
+}
 
 const quoteModeValidator = v.optional(v.union(
   v.literal("CASH"),
@@ -59,6 +82,7 @@ export const saveQuote = mutation({
       unitPrice: v.number(),
     }))),
     companyId: v.optional(v.id("financeCompanies")),
+    customerEligibilityStatusIds: v.optional(v.array(v.id("orgCustomerStatuses"))),
     mode: quoteModeValidator,
     leadId: v.optional(v.id("leads")),
     vehiclePrice: v.number(),
@@ -85,9 +109,55 @@ export const saveQuote = mutation({
     // than CREATE_SALES, which is reserved for finalizing an actual sale.
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
+    // Finite checks on all numeric inputs and caller-supplied outputs
+    assertFiniteNumber(args.vehiclePrice, "Vehicle price");
+    assertFiniteNumber(args.desiredProfit, "Desired profit");
+    assertFiniteNumber(args.downPayment, "Down payment");
+    assertFiniteNumber(args.termMonths, "Term months");
+    assertFiniteNumber(args.totalFinancedAmount, "Total financed amount");
+    assertFiniteNumber(args.monthlyInstallment, "Monthly installment");
+    assertFiniteNumber(args.profitRateApplied, "Profit rate applied");
+    assertFiniteNumber(args.totalProfit, "Total profit");
+    assertFiniteNumber(args.manualProfitRate, "Manual profit rate");
+    assertFiniteNumber(args.manualInsuranceRate, "Manual insurance rate");
+    assertFiniteNumber(args.manualAdminFees, "Manual admin fees");
+    assertFiniteNumber(args.manualCommission, "Manual commission");
+
+    if (args.downPayment < 0) {
+      throw new ConvexError("Down payment cannot be negative.");
+    }
+    if (args.termMonths < 0) {
+      throw new ConvexError("Term months cannot be negative.");
+    }
+    if (
+      (args.mode === "CONFIGURED_FINANCE_COMPANY" || args.mode === "MANUAL_FINANCE_COMPANY") &&
+      (!Number.isInteger(args.termMonths) || args.termMonths <= 0)
+    ) {
+      throw new ConvexError("Term months must be a positive integer.");
+    }
+    if (!Number.isInteger(args.termMonths)) {
+      throw new ConvexError("Term months must be a non-negative integer.");
+    }
+
     const customer = await ctx.db.get(args.customerId);
     if (!customer || customer.orgId !== args.orgId) {
       throw new ConvexError("Customer not found in this organization.");
+    }
+
+    const orgCurrency = await getOrgCurrency(ctx, args.orgId);
+
+    // Exact denomination representability: every monetary major-unit input that becomes
+    // deal economics must be representable without loss in the organization's currency.
+    assertMajorAmountRepresentable(args.downPayment, orgCurrency, "Down payment");
+    if (args.desiredProfit !== undefined) {
+      assertMajorAmountRepresentable(args.desiredProfit, orgCurrency, "Desired profit");
+    }
+
+    const isFinancedQuote =
+      args.mode === "CONFIGURED_FINANCE_COMPANY" ||
+      args.mode === "MANUAL_FINANCE_COMPANY";
+    if (isFinancedQuote && args.vehicleItems && args.vehicleItems.length > 0) {
+      throw new ConvexError("Financed quotations support exactly one vehicle.");
     }
 
     let vehicleId = args.vehicleId;
@@ -96,9 +166,11 @@ export const saveQuote = mutation({
     if (args.vehicleItems && args.vehicleItems.length > 0) {
       const seen = new Set<string>();
       for (const item of args.vehicleItems) {
+        assertFiniteNumber(item.unitPrice, "Vehicle item unit price");
         if (item.unitPrice <= 0) {
           throw new ConvexError("Each vehicle in the quote must have a positive price.");
         }
+        assertMajorAmountRepresentable(item.unitPrice, orgCurrency, "Vehicle line item price");
         if (seen.has(item.vehicleId)) {
           throw new ConvexError("The same vehicle cannot be added twice to a quote.");
         }
@@ -117,18 +189,244 @@ export const saveQuote = mutation({
       }
     }
 
+    assertMajorAmountRepresentable(vehiclePrice, orgCurrency, "Vehicle price");
+
+    if (vehiclePrice <= 0) {
+      throw new ConvexError("Vehicle price must be positive.");
+    }
+
+    if (args.mode === "CONFIGURED_FINANCE_COMPANY" || args.mode === "MANUAL_FINANCE_COMPANY") {
+      assertFinancedQuoteContributionValid({
+        vehiclePrice,
+        downPayment: args.downPayment,
+      });
+    }
+
     if (args.mode === "CONFIGURED_FINANCE_COMPANY" && !args.companyId) {
       throw new ConvexError("Configured finance company quotes require a finance company.");
     }
 
-    if (args.mode !== undefined && args.mode !== "CONFIGURED_FINANCE_COMPANY" && args.companyId) {
+    if (args.companyId !== undefined && args.mode !== "CONFIGURED_FINANCE_COMPANY") {
       throw new ConvexError("Finance company can only be set for configured finance company quotes.");
     }
 
-    if (args.companyId) {
-      const company = await ctx.db.get(args.companyId);
-      if (!company || company.orgId !== args.orgId) {
-        throw new ConvexError("Finance company not found in this organization.");
+    let companyRuleSnapshot: FinanceCompanyRuleSnapshot | undefined;
+    let companyRuleVersion: number | undefined;
+    let customerQuotePricingSnapshot: CustomerQuotePricingSnapshot | undefined;
+    let customerEligibilitySnapshot: CustomerEligibilitySnapshot | undefined;
+    let totalFinancedAmount: number | undefined;
+    let monthlyInstallment: number | undefined;
+    let profitRateApplied: number | undefined;
+    let totalProfit: number | undefined;
+
+    if (args.mode === "CONFIGURED_FINANCE_COMPANY") {
+      const rawCompany = await ctx.db.get(args.companyId!);
+      assertFinanceCompanyEligibleForNewQuote({
+        company: rawCompany,
+        orgId: args.orgId,
+      });
+      const company = rawCompany!;
+      // Defensive validation against corrupt or legacy company rows in DB
+      assertCustomerLoanTermsValid(company, orgCurrency);
+
+      const configuredAdminFees = requireConfiguredExecutionFees(company, "quotation");
+
+      assertRequestedFinancingTermValid({
+        termMonths: args.termMonths,
+        gracePeriodMonths: company.gracePeriodMonths,
+        maxTermMonths: company.maxTermMonths,
+      });
+      const gracePeriodMonths = company.gracePeriodMonths ?? 0;
+
+      if (!args.customerEligibilityStatusIds || args.customerEligibilityStatusIds.length === 0) {
+        throw new ConvexError("Customer eligibility status is required for configured finance company quotes.");
+      }
+
+      // Deduplicate deterministically preserving order
+      const deduplicatedStatusIds = Array.from(new Set(args.customerEligibilityStatusIds));
+      const selectedStatuses: Array<{ statusId: Id<"orgCustomerStatuses">; label: string }> = [];
+
+      for (const statusId of deduplicatedStatusIds) {
+        const statusDoc = await ctx.db.get(statusId);
+        if (!statusDoc || statusDoc.orgId !== args.orgId) {
+          throw new ConvexError("Customer eligibility status not found in this organization.");
+        }
+        if (!statusDoc.isActive) {
+          throw new ConvexError("Customer eligibility status is inactive or unavailable.");
+        }
+        selectedStatuses.push({
+          statusId,
+          label: statusDoc.label,
+        });
+      }
+
+      const matchedStatusIds = assertCustomerEligibilityForCompany({
+        selectedStatusIds: deduplicatedStatusIds,
+        companyAcceptedStatusIds: company.acceptedStatuses,
+      }) as Id<"orgCustomerStatuses">[];
+
+      customerEligibilitySnapshot = {
+        selectedStatuses,
+        companyAcceptedStatusIds: company.acceptedStatuses,
+        matchedStatusIds,
+        evaluatedAt: Date.now(),
+      };
+
+      companyRuleSnapshot = buildRuleSnapshot(company);
+      // Align companyRuleVersion with snapshot ruleVersion (representing dealer-purchase
+      // rules such as adminFees, LTV, and settlement), whereas customerQuotePricingSnapshot
+      // freezes the complete customer-facing Murabaha pricing terms.
+      companyRuleVersion = companyRuleSnapshot.ruleVersion;
+
+      const calc = calculateUnifiedMurabaha({
+        vehiclePrice,
+        downPayment: args.downPayment,
+        commission: company.commission ?? 0,
+        processingFees: configuredAdminFees,
+        annualProfitRate: company.profitRate,
+        annualInsuranceRate: company.insuranceRate ?? 0,
+        termMonths: args.termMonths,
+        gracePeriodMonths,
+        includesCommissionInDebt: company.includesCommissionInDebt ?? false,
+      });
+
+      assertFinancedMurabahaResultValid(calc);
+
+      const maxFinancingLTV = company.maxFinancingLTV;
+      if (maxFinancingLTV !== undefined && maxFinancingLTV > 0) {
+        const valuation = await ctx.db
+          .query("vehicleValuations")
+          .withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicleId))
+          .filter((q) =>
+            q.and(
+              q.eq(q.field("orgId"), args.orgId),
+              q.eq(q.field("companyId"), company._id),
+            ),
+          )
+          .first();
+
+        if (valuation !== null && !Number.isFinite(valuation.valuationAmount)) {
+          throw new ConvexError("Finance company valuation is not a finite amount.");
+        }
+        if (valuation !== null && valuation.valuationAmount > 0) {
+          const maxFinancingAllowed =
+            valuation.valuationAmount * (maxFinancingLTV / 100);
+          if (!Number.isFinite(maxFinancingAllowed)) {
+            throw new ConvexError("Finance company valuation limit is not a finite amount.");
+          }
+          if (calc.financedAmount > maxFinancingAllowed) {
+            const minimumDownPayment = minimumDownPaymentForFinancingLimit({
+              currentDownPayment: args.downPayment,
+              financedAmount: calc.financedAmount,
+              maxFinancingAllowed,
+            });
+            throw new ConvexError(
+              `Financed amount exceeds the finance company's valuation financing limit. Increase the down payment to at least ${minimumDownPayment}.`,
+            );
+          }
+        }
+      }
+
+      totalFinancedAmount = calc.financedAmount;
+      monthlyInstallment = calc.monthlyInstallment;
+      profitRateApplied = company.profitRate;
+      totalProfit = calc.totalProfit;
+
+      customerQuotePricingSnapshot = {
+        currency: orgCurrency,
+        vehiclePrice,
+        downPayment: args.downPayment,
+        termMonths: args.termMonths,
+        executionFees: configuredAdminFees,
+        commission: company.commission ?? 0,
+        profitRate: company.profitRate,
+        insuranceRate: company.insuranceRate ?? 0,
+        gracePeriodMonths,
+        includesCommissionInDebt: company.includesCommissionInDebt ?? false,
+        totalFinancedAmount: calc.financedAmount,
+        totalContractValue: calc.totalContractValue,
+        monthlyInstallment: calc.monthlyInstallment,
+        totalProfit: calc.totalProfit,
+        takafulAmount: calc.takafulAmount,
+        companyRuleVersion,
+      };
+    } else if (args.mode === "MANUAL_FINANCE_COMPANY") {
+      assertRequestedFinancingTermValid({
+        termMonths: args.termMonths,
+        gracePeriodMonths: 0,
+      });
+      if (args.manualAdminFees === undefined) {
+        throw new ConvexError(
+          "Execution Fees are not configured for this manual finance company quote. Enter the expected execution fee amount, or enter 0 if none are charged."
+        );
+      }
+      assertMajorAmountRepresentable(args.manualAdminFees, orgCurrency, "Manual execution fees");
+      if (args.manualCommission !== undefined) {
+        assertMajorAmountRepresentable(args.manualCommission, orgCurrency, "Manual commission");
+      }
+      if (args.manualAdminFees < 0) {
+        throw new ConvexError("Execution fees cannot be negative.");
+      }
+      if (args.manualProfitRate !== undefined && args.manualProfitRate < 0) {
+        throw new ConvexError("Manual profit rate cannot be negative.");
+      }
+      if (args.manualInsuranceRate !== undefined && args.manualInsuranceRate < 0) {
+        throw new ConvexError("Manual insurance rate cannot be negative.");
+      }
+      if (args.manualCommission !== undefined && args.manualCommission < 0) {
+        throw new ConvexError("Manual commission cannot be negative.");
+      }
+
+      const manualProfitRate = args.manualProfitRate ?? 0;
+      const manualInsuranceRate = args.manualInsuranceRate ?? 0;
+      const manualCommission = args.manualCommission ?? 0;
+      const manualIncludesCommissionInDebt = args.manualIncludesCommissionInDebt ?? true;
+
+      const calc = calculateUnifiedMurabaha({
+        vehiclePrice,
+        downPayment: args.downPayment,
+        commission: manualCommission,
+        processingFees: args.manualAdminFees,
+        annualProfitRate: manualProfitRate,
+        annualInsuranceRate: manualInsuranceRate,
+        termMonths: args.termMonths,
+        gracePeriodMonths: 0,
+        includesCommissionInDebt: manualIncludesCommissionInDebt,
+      });
+
+      assertFinancedMurabahaResultValid(calc);
+
+      totalFinancedAmount = calc.financedAmount;
+      monthlyInstallment = calc.monthlyInstallment;
+      profitRateApplied = manualProfitRate;
+      totalProfit = calc.totalProfit;
+
+      customerQuotePricingSnapshot = {
+        currency: orgCurrency,
+        vehiclePrice,
+        downPayment: args.downPayment,
+        termMonths: args.termMonths,
+        executionFees: args.manualAdminFees,
+        commission: manualCommission,
+        profitRate: manualProfitRate,
+        insuranceRate: manualInsuranceRate,
+        gracePeriodMonths: 0,
+        includesCommissionInDebt: manualIncludesCommissionInDebt,
+        totalFinancedAmount: calc.financedAmount,
+        totalContractValue: calc.totalContractValue,
+        monthlyInstallment: calc.monthlyInstallment,
+        totalProfit: calc.totalProfit,
+        takafulAmount: calc.takafulAmount,
+      };
+    } else {
+      // Non-Murabaha modes never preserve caller-owned financing outputs.
+      // CASH still has canonical server-owned economics used by the downstream
+      // sale lifecycle; other unsupported/legacy modes leave these fields absent.
+      if (args.mode === "CASH") {
+        totalFinancedAmount = vehiclePrice;
+        monthlyInstallment = 0;
+        profitRateApplied = 0;
+        totalProfit = 0;
       }
     }
 
@@ -156,12 +454,17 @@ export const saveQuote = mutation({
     }
 
     const {
+      totalFinancedAmount: _clientFinanced,
+      monthlyInstallment: _clientInstallment,
+      profitRateApplied: _clientRate,
+      totalProfit: _clientProfit,
       manualProviderName,
       manualProfitRate,
       manualInsuranceRate,
       manualAdminFees,
       manualCommission,
       manualIncludesCommissionInDebt,
+      customerEligibilityStatusIds: _clientStatusIds,
       ...quoteArgs
     } = args;
 
@@ -178,6 +481,14 @@ export const saveQuote = mutation({
       ...(args.mode === "MANUAL_FINANCE_COMPANY" && manualAdminFees !== undefined ? { manualAdminFees } : {}),
       ...(args.mode === "MANUAL_FINANCE_COMPANY" && manualCommission !== undefined ? { manualCommission } : {}),
       ...(args.mode === "MANUAL_FINANCE_COMPANY" && manualIncludesCommissionInDebt !== undefined ? { manualIncludesCommissionInDebt } : {}),
+      ...(companyRuleSnapshot ? { companyRuleSnapshot } : {}),
+      ...(companyRuleVersion !== undefined ? { companyRuleVersion } : {}),
+      ...(customerQuotePricingSnapshot ? { customerQuotePricingSnapshot } : {}),
+      ...(customerEligibilitySnapshot ? { customerEligibilitySnapshot } : {}),
+      ...(totalFinancedAmount !== undefined ? { totalFinancedAmount } : {}),
+      ...(monthlyInstallment !== undefined ? { monthlyInstallment } : {}),
+      ...(profitRateApplied !== undefined ? { profitRateApplied } : {}),
+      ...(totalProfit !== undefined ? { totalProfit } : {}),
       status: "DRAFT",
       createdBy: user._id,
       createdAt: Date.now(),

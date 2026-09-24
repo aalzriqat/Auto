@@ -7,6 +7,8 @@ import {
   approvedPurchaseBasisValidator,
   creditDecisionValidator,
   customerContributionSettlementValidator,
+  customerEligibilitySnapshotValidator,
+  customerQuotePricingSnapshotValidator,
   dealerContributionSettlementValidator,
   feeAccountingTreatmentValidator,
   feePartyValidator,
@@ -2399,6 +2401,16 @@ export default defineSchema({
     deactivatedAt: v.optional(v.number()),
     deactivatedBy: v.optional(v.id("users")),
 
+    /**
+     * Optimistic-concurrency token for full-form company edits.
+     *
+     * Distinct from ruleVersion: ruleVersion freezes dealer-purchase economics
+     * for historical deals, while editRevision covers every mutable field the
+     * settings forms can overwrite (name, customer terms, statuses, activity,
+     * and dealer rules). Legacy rows without it read as revision 1.
+     */
+    editRevision: v.optional(v.number()),
+
     // --- Dealer-side purchase rules -------------------------------------
     // The fields above describe the loan the company sells the CUSTOMER. These
     // describe the purchase it makes from the DEALERSHIP, which is a different
@@ -2530,6 +2542,14 @@ export default defineSchema({
     manualAdminFees: v.optional(v.number()),
     manualCommission: v.optional(v.number()),
     manualIncludesCommissionInDebt: v.optional(v.boolean()),
+
+    // Frozen finance company rule snapshot and version at the time the quotation was calculated.
+    // Bound to the quotation so createFromQuote and dealer-side economics remain anchored
+    // to the identical fee authority even if the finance company settings change later.
+    companyRuleVersion: v.optional(v.number()),
+    companyRuleSnapshot: v.optional(financeCompanyRuleSnapshotValidator),
+    customerQuotePricingSnapshot: v.optional(customerQuotePricingSnapshotValidator),
+    customerEligibilitySnapshot: v.optional(customerEligibilitySnapshotValidator),
 
     status: v.union(v.literal("DRAFT"), v.literal("SHARED"), v.literal("ACCEPTED"), v.literal("EXPIRED")),
     expiresAt: v.optional(v.number()),
@@ -2939,6 +2959,7 @@ export default defineSchema({
 
     companyRuleSnapshot: v.optional(financeCompanyRuleSnapshotValidator),
     companyRuleVersionId: v.optional(v.id("financeCompanyRuleVersions")),
+    customerQuotePricingSnapshot: v.optional(customerQuotePricingSnapshotValidator),
 
     // Set by the migration on rows whose pre-existing figures cannot be
     // reinterpreted safely. Reported on, never silently cleared.
@@ -4986,6 +5007,7 @@ export default defineSchema({
       manualExecutionFees: v.optional(v.number()),
       manualIncludesCommissionInDebt: v.optional(v.boolean()),
       recipientName: v.optional(v.string()),
+      customerStatuses: v.optional(v.array(v.string())),
     }),
     selectedCustomerId: v.optional(v.string()),
     savedAt: v.number(),

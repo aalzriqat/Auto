@@ -113,7 +113,7 @@ export type PublicSite = {
     maxTermMonths: number;
     gracePeriodMonths: number;
     insuranceRate: number;
-    adminFees: number;
+    adminFees?: number;
     commission: number;
     includesCommissionInDebt: boolean;
   } | null;

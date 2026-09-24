@@ -9,7 +9,7 @@ import { toast } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { calculateUnifiedMurabaha } from "@/lib/financing";
+import { calculateUnifiedMurabaha, isRequestedFinancingTermValid } from "@/lib/financing";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { OTHER_COMPANY_ID } from "../types";
 
@@ -105,11 +105,22 @@ export function Step3Review({
     }
 
     if (isManualFinance) {
+      if (wizardData.manualExecutionFees === undefined) {
+        return null;
+      }
+      if (
+        !isRequestedFinancingTermValid({
+          termMonths: wizardData.termMonths,
+          gracePeriodMonths: 0,
+        })
+      ) {
+        return null;
+      }
       const result = calculateUnifiedMurabaha({
         vehiclePrice: effectivePrice,
         downPayment: wizardData.downPayment,
         commission: wizardData.manualExecutionCommission || 0,
-        processingFees: wizardData.manualExecutionFees || 0,
+        processingFees: wizardData.manualExecutionFees,
         annualProfitRate: wizardData.manualProfitRate || 0,
         annualInsuranceRate: wizardData.manualInsuranceRate || 0,
         termMonths: wizardData.termMonths,
@@ -129,13 +140,23 @@ export function Step3Review({
       };
     }
 
-    if (!selectedCompany) return null;
+    if (!selectedCompany || selectedCompany.adminFees === undefined) return null;
+
+    if (
+      !isRequestedFinancingTermValid({
+        termMonths: wizardData.termMonths,
+        maxTermMonths: selectedCompany.maxTermMonths,
+        gracePeriodMonths: selectedCompany.gracePeriodMonths,
+      })
+    ) {
+      return null;
+    }
 
     const result = calculateUnifiedMurabaha({
       vehiclePrice: effectivePrice,
       downPayment: wizardData.downPayment,
       commission: selectedCompany.commission || 0,
-      processingFees: selectedCompany.adminFees || 0,
+      processingFees: selectedCompany.adminFees,
       annualProfitRate: selectedCompany.profitRate,
       annualInsuranceRate: selectedCompany.insuranceRate || 0,
       termMonths: wizardData.termMonths,
@@ -196,6 +217,9 @@ export function Step3Review({
         customerId: quotePayload.customerId as Id<"customers">,
         leadId: quotePayload.leadId as Id<"leads"> | undefined,
         companyId: quotePayload.companyId as Id<"financeCompanies"> | undefined,
+        customerEligibilityStatusIds: quotePayload.customerEligibilityStatusIds as
+          | Id<"orgCustomerStatuses">[]
+          | undefined,
       });
 
       toast.success(t("QuoteSavedSuccess"));

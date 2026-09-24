@@ -44,6 +44,12 @@ export type HandoverEvidence = {
   approvedAmountIsFarFromEvidence: boolean;
   /** Null when the deal's denomination cannot be established. Fails closed. */
   currency: { code: string; scale: number } | null;
+  managementProfitMinor?: number | null;
+  /** Travels with the management figure so the frozen attempt never relabels an actual loss as estimated. */
+  managementProfitClassification?:
+    | "ESTIMATED_AWAITING_SETTLEMENT"
+    | "ACTUAL_UNPOSTABLE"
+    | null;
 };
 
 type ConfirmHandoverDialogProps = {
@@ -234,6 +240,28 @@ export function ConfirmHandoverDialog({
               <p className="text-sm font-medium text-destructive">
                 {t("HandoverAmountLooksUnusual")}
               </p>
+            )}
+            {shown.managementProfitMinor != null && shown.managementProfitMinor < 0 && (
+              <div
+                role="alert"
+                className="mt-2 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-sm"
+                data-testid="handover-loss-warning"
+              >
+                <p className="font-semibold text-destructive">
+                  {t(
+                    shown.managementProfitClassification === "ACTUAL_UNPOSTABLE"
+                      ? "HandoverActualLossWarning"
+                      : "HandoverLossWarning"
+                  )}
+                </p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {t(
+                    shown.managementProfitClassification === "ACTUAL_UNPOSTABLE"
+                      ? "HandoverActualLossWarningDesc"
+                      : "HandoverLossWarningDesc"
+                  )}
+                </p>
+              </div>
             )}
             <p className="text-xs text-muted-foreground">{t("HandoverVerifyBeforeContinuing")}</p>
           </div>

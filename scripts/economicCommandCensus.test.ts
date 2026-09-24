@@ -86,7 +86,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "expenses.remove": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "expenses.reverseExpense": { bucket: "STATE_GUARDED", mechanism: "posts only from pre-existing durable state, so its accounting idempotency key is stable across a retry and the posting engine dedupes it" },
   "expenses.update": { bucket: "STATE_GUARDED", mechanism: "reverses through hookPrepaidExpenseAmortizationsReversed, whose reversal key is derived from the original posted event, not from a fresh id" },
-  "financeDealCosts.adoptCompanyFeeTemplates": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic (a rule-snapshot patch on financeApplications); adopts configured fee templates into an empty snapshot slot, owner-only and audited, and posts nothing" },
+  "financeDealCosts.adoptCompanyFeeTemplates": { bucket: "RETIRED", mechanism: "public compatibility endpoint remains source-visible but always throws; fee-template adoption was retired when adminFees became the sole expected execution-fee authority" },
   "financeDealCosts.classifyDealAccounting": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "financeDealCosts.openDealCustody": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; the ISSUED entry it mints posts under `custody_entry_${entryId}` INSIDE the idempotent section, so a replay returns the stored custody id and never reaches the hook" },
   "financeDealCosts.planCustodyHandler": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic (a `plannedCustody` patch on financeApplications); names who will handle the handover before any cash moves, audited, and posts nothing" },
@@ -256,17 +256,26 @@ describe("SCRUM-313 economic command classification ratchet", () => {
   });
 
   test("the population is exactly the classified set", () => {
-    const classified = Object.keys(CLASSIFICATION).sort((a, b) => a.localeCompare(b));
+    const liveClassified = Object.entries(CLASSIFICATION)
+      .filter(([, entry]) => entry.bucket !== "RETIRED")
+      .map(([id]) => id)
+      .sort((a, b) => a.localeCompare(b));
+    const retired = Object.entries(CLASSIFICATION)
+      .filter(([, entry]) => entry.bucket === "RETIRED")
+      .map(([id]) => id)
+      .sort((a, b) => a.localeCompare(b));
     const population = [...forward].sort((a, b) => a.localeCompare(b));
     // Both directions, so a NEW public financial writer fails here rather than
     // entering the codebase unclassified, and a classification for a command
     // that no longer exists fails too rather than rotting.
     expect(population.filter((p) => !CLASSIFICATION[p])).toEqual([]);
-    expect(classified.filter((c) => !forward.has(c))).toEqual([]);
+    expect(liveClassified.filter((c) => !forward.has(c))).toEqual([]);
+    expect(retired.filter((c) => forward.has(c))).toEqual([]);
     // 116 → 117: `applications.repairQuoteEconomicsLineage` (TASK-DEAL-01).
     // 117 → 119: `financeDealCosts.planCustodyHandler` and `financeDealCosts.setFeeCustody` (AF-80).
-    // 119 → 120: `financeDealCosts.migrateLegacyCustodyToLedger` (AF-80 final round B).
-    expect(population.length).toBe(120);
+    // Fee-template adoption is classified RETIRED and therefore excluded from
+    // the live population by construction; the live census currently remains 119.
+    expect(population.length).toBe(119);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {

@@ -81,12 +81,15 @@ export function DealFinancialOverview({
     unreadable.has(field) ? t("OverviewAmountUnreadable") : t("NotRecorded");
 
   /**
-   * The financier's remaining balance as its own fact, on its own authority:
-   * the receivable's outstanding once one exists, the frozen economics'
-   * expected remittance before that, or the reason there is none. It does not
-   * depend on the funded portion being recorded — that is a different field
-   * and only THAT row says "not recorded" when it is missing.
+   * The financier's remaining balance or expected remittance as its own fact,
+   * on its own authority: the receivable's outstanding once one exists, the
+   * frozen economics' expected remittance before that, or the reason there is none.
    */
+  const isPreReceivableEstimate = summary.financier.outstanding.state === "ESTIMATED_PRE_RECEIVABLE";
+  const financierLabel = isPreReceivableEstimate
+    ? t("OverviewFinancierExpectedRemittance")
+    : t("OverviewFinancierBalance");
+
   const balance = ((): { value: string | null; note: string } => {
     const o = summary.financier.outstanding;
     switch (o.state) {
@@ -94,11 +97,19 @@ export function DealFinancialOverview({
         return { value: money(o.amountMinor, cur), note: t("OverviewFinancierOutstanding") };
       case "COLLECTED":
         return { value: money(o.amountMinor, cur), note: t("OverviewFinancierCollected") };
-      case "ESTIMATED_PRE_RECEIVABLE":
+      case "ESTIMATED_PRE_RECEIVABLE": {
+        const mode = summary.financier.dealerContributionSettlement;
+        const modeNote =
+          mode === "NETTED_FROM_REMITTANCE"
+            ? t("OverviewFinancierNettedNote")
+            : mode === "PAID_SEPARATELY"
+              ? t("OverviewFinancierPaidSeparatelyNote")
+              : t("OverviewFinancierEstimatedBasis");
         return {
           value: money(o.amountMinor, cur),
-          note: `${t("OverviewFinancierEstimated")} · ${t("OverviewFinancierEstimatedBasis")}`,
+          note: `${t("OverviewFinancierEstimated")} · ${modeNote}`,
         };
+      }
       case "NONE_DIRECT_ROUTE":
         return { value: null, note: t("OverviewFinancierDirectRoute") };
       case "NOT_YET_RECEIVABLE":
@@ -199,7 +210,25 @@ export function DealFinancialOverview({
                 : t("OverviewCustomerPaidUnknown")
           }
         />
-        {(summary.customerGapCashPlannedMinor !== null || unreadable.has("customerGapCashPlanned")) && (
+        {summary.customerGapPlanned ? (
+          <Fact
+            testId="overview-gap-cash-planned"
+            label={t("OverviewGapTotalPlanned")}
+            value={m(summary.customerGapPlanned.totalMinor)}
+            note={
+              summary.customerGapPlanned.installmentMinor > 0
+                ? `${t("OverviewGapCashBreakdown")}: ${money(summary.customerGapPlanned.cashMinor, cur)} · ${t("OverviewGapInstallmentBreakdown")}: ${money(summary.customerGapPlanned.installmentMinor, cur)}`
+                : t("OverviewGapTotalPlannedNote")
+            }
+          />
+        ) : unreadable.has("customerGapPlanned") ? (
+          <Fact
+            testId="overview-gap-cash-planned"
+            label={t("OverviewGapTotalPlanned")}
+            value={null}
+            note={t("OverviewAmountUnreadable")}
+          />
+        ) : (summary.customerGapCashPlannedMinor !== null || unreadable.has("customerGapCashPlanned")) && (
           <Fact
             testId="overview-gap-cash-planned"
             label={t("OverviewGapCashPlanned")}
@@ -221,7 +250,7 @@ export function DealFinancialOverview({
         />
         <Fact
           testId="overview-financier-balance"
-          label={t("OverviewFinancierBalance")}
+          label={financierLabel}
           value={balance.value}
           note={balance.note}
         />
@@ -275,7 +304,13 @@ export function DealFinancialOverview({
         <Fact testId="overview-supplier" label={t("OverviewSupplierDue")} value={supplierValue} note={supplierNote} />
         <Fact
           testId="overview-net-profit"
-          label={t("OverviewNetProfit")}
+          label={
+            summary.profit.available && summary.profit.amountMinor < 0
+              ? summary.profit.basis === "MANAGEMENT_ESTIMATE" && summary.profit.classification !== "ACTUAL_UNPOSTABLE"
+                ? t("LossEstimated")
+                : t("LossActual")
+              : t("OverviewNetProfit")
+          }
           value={summary.profit.available ? money(summary.profit.amountMinor, cur) : null}
           note={summary.profit.available ? undefined : t("ProfitNotCalculable")}
           emphasis

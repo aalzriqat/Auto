@@ -132,7 +132,22 @@ export async function ensureFinanceCompany(page: Page): Promise<void> {
     await expect(page.getByText(CUSTOMER_STATUS, { exact: true }).first()).toBeVisible();
   }
 
-  if (await existsWithin(page.getByText(COMPANY_NAME, { exact: true }))) return;
+  const existingCompanyRow = page.getByRole("row").filter({ hasText: COMPANY_NAME }).first();
+  if (await existsWithin(existingCompanyRow)) {
+    await existingCompanyRow.getByRole("button").first().click();
+    const dialog = page.getByRole("dialog");
+    const adminFees = dialog.locator("#admin-fees");
+    await expect(adminFees).toBeVisible();
+    if ((await adminFees.inputValue()).trim() === "") {
+      await adminFees.fill("0");
+      await adminFees.press("Enter");
+      await expect(dialog).not.toBeVisible();
+    } else {
+      await page.keyboard.press("Escape");
+      await expect(dialog).not.toBeVisible();
+    }
+    return;
+  }
 
   await page.getByRole("button", { name: "Add Company" }).click();
   const dialog = page.getByRole("dialog");
@@ -146,6 +161,11 @@ export async function ensureFinanceCompany(page: Page): Promise<void> {
   // The field SCRUM-68 turns on: with no purchase LTV the quotation calculator
   // cannot run and the funding split cannot be worked out.
   await dialog.locator("#default-ltv-percent").fill(PURCHASE_LTV);
+  // Execution fees are authoritative financing economics. Undefined means
+  // "not configured", not zero, and the wizard now correctly refuses to quote
+  // such a company. Make the E2E lender explicitly zero-fee so the fixture
+  // exercises the configured-finance path without inventing hidden costs.
+  await dialog.locator("#admin-fees").fill("0");
   // `.first()`: a deployment someone has been experimenting on can carry more
   // than one status of the same name, and this only needs the company to accept
   // the one the wizard will offer.
