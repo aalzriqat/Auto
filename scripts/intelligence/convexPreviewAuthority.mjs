@@ -168,6 +168,9 @@ async function readBoundedJsonObject(response) {
 // project-wide preview DEPLOY key and `project:` keys span a project; neither is
 // scoped to one deployment, so both are refused.
 const ADMIN_KEY_DEPLOYMENT_TYPES = new Set(["prod", "dev", "preview"]);
+// Type literals the refusal may name. Anything else is reported without its
+// bytes: the refusal reaches public CI logs before any ::add-mask:: runs.
+const ADMIN_KEY_NAMEABLE_TYPES = new Set([...ADMIN_KEY_DEPLOYMENT_TYPES, "project"]);
 
 export function assertPreviewDeploymentAdminKey(value, expectedDeploymentName) {
   if (typeof value !== "string" || !value) {
@@ -189,11 +192,13 @@ export function assertPreviewDeploymentAdminKey(value, expectedDeploymentName) {
     deploymentName !== expectedDeploymentName ||
     /[\r\n]/.test(secret)
   ) {
-    // Public CI logs: describe the key's shape, never its secret. The type
-    // prefix and the deployment name are identifiers, not credentials.
+    // Public CI logs: describe the key's shape using fixed literals only, never
+    // bytes taken from the key itself.
     let shape = prefixParts.length + " prefix segments";
     if (prefixParts.length === 1) shape = "untyped";
-    else if (typed) shape = "type '" + prefixParts[0] + "'";
+    else if (typed && ADMIN_KEY_NAMEABLE_TYPES.has(prefixParts[0])) {
+      shape = "type '" + prefixParts[0] + "'";
+    } else if (typed) shape = "unrecognized type";
     throw new Error(
       "Convex control plane returned an admin key that is not scoped to the resolved preview deployment (" +
         shape +

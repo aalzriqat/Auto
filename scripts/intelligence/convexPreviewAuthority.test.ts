@@ -84,6 +84,23 @@ describe("trusted Convex preview authority", () => {
     ).toThrow(/malformed/);
   });
 
+  it("never echoes unrecognized admin-key prefix bytes into the refusal", () => {
+    // The refusal reaches public CI logs before any ::add-mask:: runs, so only
+    // fixed, known type literals may be named.
+    let message = "";
+    try {
+      assertPreviewDeploymentAdminKey(
+        "sk_sensitive_example:elegant-butterfly-952|opaque-secret",
+        "elegant-butterfly-952",
+      );
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toMatch(/not scoped.*unrecognized type/);
+    expect(message).not.toContain("sk_sensitive_example");
+    expect(message).not.toContain("opaque-secret");
+  });
+
   it("accepts only bare Convex cloud origins", () => {
     expect(
       assertConvexCloudOrigin("https://elegant-butterfly-952.convex.cloud"),
