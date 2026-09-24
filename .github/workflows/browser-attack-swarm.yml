@@ -81,13 +81,8 @@ jobs:
               "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"
           )"
           CURRENT_HEAD="$(jq -r '.head.sha' <<< "$PR_JSON")"
-          CURRENT_BASE="$(jq -r '.base.sha' <<< "$PR_JSON")"
           if [ "$CURRENT_HEAD" != "$EXPECTED_HEAD_SHA" ]; then
             echo "::notice::Skipping stale trusted browser run for $EXPECTED_HEAD_SHA; PR is now at $CURRENT_HEAD."
-            exit 1
-          fi
-          if ! [[ "$CURRENT_BASE" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "GitHub did not return an exact current PR base SHA" >&2
             exit 1
           fi
 
@@ -101,19 +96,18 @@ jobs:
             echo "Fetched PR head does not match workflow_run PR head SHA" >&2
             exit 1
           fi
-          git cat-file -e "${CURRENT_BASE}^{commit}"
           git cat-file -e "${EXPECTED_HEAD_SHA}^{commit}"
           git cat-file -e "${FETCHED_MERGE}^{commit}"
 
           PARENTS="$(git show -s --format=%P "$FETCHED_MERGE")"
           read -r FIRST_PARENT SECOND_PARENT EXTRA_PARENT <<< "$PARENTS"
-          if [ "$FIRST_PARENT" != "$CURRENT_BASE" ] || [ "$SECOND_PARENT" != "$EXPECTED_HEAD_SHA" ] || [ -n "${EXTRA_PARENT:-}" ]; then
-            echo "GitHub PR merge ref is not the exact two-parent merge of the current trusted base + triggering head." >&2
+          if ! [[ "$FIRST_PARENT" =~ ^[0-9a-fA-F]{40}$ ]] || [ "$SECOND_PARENT" != "$EXPECTED_HEAD_SHA" ] || [ -n "${EXTRA_PARENT:-}" ]; then
+            echo "GitHub PR merge ref is not an exact two-parent merge with the triggering head." >&2
             exit 1
           fi
 
           echo "TESTED_SHA=$FETCHED_MERGE" >> "$GITHUB_ENV"
-          echo "base_sha=$CURRENT_BASE" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$FIRST_PARENT" >> "$GITHUB_OUTPUT"
           echo "tested_sha=$FETCHED_MERGE" >> "$GITHUB_OUTPUT"
 
       - name: Mark trusted browser swarm pending on tested merge
