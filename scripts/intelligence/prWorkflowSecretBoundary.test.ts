@@ -156,6 +156,9 @@ describe("pull-request workflow secret boundary", () => {
     expect(source).toContain("path: ${{ runner.temp }}/sonar-coverage");
     expect(source).toContain("projectBaseDir: candidate");
     expect(source).toContain("autoflow/trusted-sonar-pr");
+    expect(source).toContain("$GITHUB_API_URL/repos/$REPOSITORY/pulls/$PR_NUMBER");
+    expect(source).toContain("current_base");
+    expect(source).not.toContain("github.event.workflow_run.pull_requests[0].base.sha");
     expect(source.match(/statuses\/\$TESTED_SHA/g)?.length).toBe(2);
     expect(source).not.toContain("working-directory: candidate");
     expect(source).not.toMatch(/candidate[^\n]*pnpm\s+(?:install|run|exec)/);
@@ -175,6 +178,17 @@ describe("pull-request workflow secret boundary", () => {
     expect(source).not.toContain("$GITHUB_WORKSPACE/trusted:/");
     expect(source).toContain("Disposable rehearsal preview environment does not match the trusted allowlist.");
     expect(source).toContain("autoflow/trusted-accounting-rehearsal");
+    expect(source).toContain("$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER");
+    expect(source).toContain("current_base");
+    expect(source).not.toContain("github.event.workflow_run.pull_requests[0].base.sha");
     expect(source.match(/statuses\/\$TESTED_SHA/g)?.length).toBe(2);
+  });
+
+  it("keeps Jev workflow_run analysis on immutable trusted code and the live PR base", () => {
+    const source = readFileSync(path.join(workflowsDir, "jev-shadow-impact.yml"), "utf8");
+    expect(source).toContain("ref: ${{ github.workflow_sha }}");
+    expect(source).toContain("$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER");
+    expect(source).toContain("steps.pr-context.outputs.base_sha");
+    expect(source).not.toContain("github.event.workflow_run.pull_requests[0].base.sha");
   });
 });
