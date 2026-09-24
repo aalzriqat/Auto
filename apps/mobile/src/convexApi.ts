@@ -2468,11 +2468,24 @@ export const api = {
     >("notifications:archive"),
   },
   directMessages: {
+    backfillMyConversationProjection: makeFunctionReference<
+      "mutation",
+      OrgScopedArgs,
+      { updated: number }
+    >("directMessages:backfillMyConversationProjection"),
     listConversations: makeFunctionReference<
       "query",
       OrgScopedArgs,
       MobileDirectConversation[]
     >("directMessages:listConversations"),
+    listConversationsPage: makeFunctionReference<
+      "query",
+      OrgScopedArgs & { paginationOpts: PaginationOpts },
+      MobilePageResult<MobileDirectConversation>
+    >("directMessages:listConversationsPage"),
+    getUnreadCount: makeFunctionReference<"query", OrgScopedArgs, number>(
+      "directMessages:getUnreadCount",
+    ),
     getConversation: makeFunctionReference<
       "query",
       DirectConversationArgs,
@@ -3160,12 +3173,25 @@ export const api = {
     archive: FunctionReference<"mutation", "public", OrgScopedArgs & { notificationId: string }, null>;
   };
   directMessages: {
+    backfillMyConversationProjection: FunctionReference<
+      "mutation",
+      "public",
+      OrgScopedArgs,
+      { updated: number }
+    >;
     listConversations: FunctionReference<
       "query",
       "public",
       OrgScopedArgs,
       MobileDirectConversation[]
     >;
+    listConversationsPage: FunctionReference<
+      "query",
+      "public",
+      OrgScopedArgs & { paginationOpts: PaginationOpts },
+      MobilePageResult<MobileDirectConversation>
+    >;
+    getUnreadCount: FunctionReference<"query", "public", OrgScopedArgs, number>;
     getConversation: FunctionReference<
       "query",
       "public",

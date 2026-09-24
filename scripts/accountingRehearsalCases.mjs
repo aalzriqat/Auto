@@ -2626,7 +2626,7 @@ async function findReceivable({ orgId, ownerMust, receivableId }) {
 async function makeVehicle({ orgId, ownerMust, label }) {
   const stamp = Date.now().toString(36);
   const vin = `RHS${label}${stamp}`.replace(/[ioq]/gi, "z").toUpperCase().padEnd(17, "0").slice(0, 17);
-  return ownerMust("mutation", "vehicles:create", {
+  return createVehicleForRehearsal(ownerMust, {
     orgId,
     vin,
     make: "Toyota",

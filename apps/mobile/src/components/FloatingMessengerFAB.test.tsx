@@ -35,7 +35,7 @@ describe("FloatingMessengerFAB", () => {
 
   test("renders English labels when the locale is English", async () => {
     getItemAsync.mockResolvedValueOnce("en");
-    mockUseQuery.mockReturnValue([] as unknown as ReturnType<typeof useQuery>);
+    mockUseQuery.mockReturnValue(0 as unknown as ReturnType<typeof useQuery>);
 
     const rendered = await render(
       <LocaleProvider>
@@ -49,11 +49,7 @@ describe("FloatingMessengerFAB", () => {
   });
 
   test("shows an unread badge, opens the messenger sheet, and closes it again", async () => {
-    mockUseQuery.mockReturnValue([
-      { _id: "c1", hasUnread: true },
-      { _id: "c2", hasUnread: false },
-      { _id: "c3", hasUnread: true },
-    ] as unknown as ReturnType<typeof useQuery>);
+    mockUseQuery.mockReturnValue(2 as unknown as ReturnType<typeof useQuery>);
 
     const rendered = await render(
       <LocaleProvider>
@@ -72,7 +68,7 @@ describe("FloatingMessengerFAB", () => {
   });
 
   test("hides the badge and stops pulsing when there is nothing unread", async () => {
-    mockUseQuery.mockReturnValue([{ _id: "c1", hasUnread: false }] as unknown as ReturnType<typeof useQuery>);
+    mockUseQuery.mockReturnValue(0 as unknown as ReturnType<typeof useQuery>);
 
     const rendered = await render(
       <LocaleProvider>
@@ -84,11 +80,7 @@ describe("FloatingMessengerFAB", () => {
   });
 
   test("caps the badge at 9+", async () => {
-    mockUseQuery.mockReturnValue(
-      Array.from({ length: 12 }, (_, index) => ({ _id: `c${index}`, hasUnread: true })) as unknown as ReturnType<
-        typeof useQuery
-      >,
-    );
+    mockUseQuery.mockReturnValue(12 as unknown as ReturnType<typeof useQuery>);
 
     const rendered = await render(
       <LocaleProvider>
@@ -99,7 +91,7 @@ describe("FloatingMessengerFAB", () => {
     expect(rendered.getByText("9+")).toBeTruthy();
   });
 
-  test("treats an undefined conversations query as zero unread", async () => {
+  test("treats an undefined unread-count query as zero unread", async () => {
     mockUseQuery.mockReturnValue(undefined as unknown as ReturnType<typeof useQuery>);
 
     const rendered = await render(
