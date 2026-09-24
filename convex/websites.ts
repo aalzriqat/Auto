@@ -402,11 +402,9 @@ export async function getPublishedSnapshotData(
   if (!published) return null;
 
   // adminFees became the single execution-fee authority after older website
-  // snapshots had already been published. Those snapshots may contain a
-  // synthetic 0 from the pre-authority projection, which would make public
-  // affordability quote unknown fees as free. Preserve the published snapshot
-  // for every other field, but refresh this one authority from the currently
-  // selected finance-company row. Missing/inactive/cross-org authority fails
+  // snapshots had already been published. Keep every published finance term
+  // tied to one lender: legacy snapshots without identity, snapshots for a
+  // different active lender, and missing/inactive/cross-org authority all fail
   // closed by suppressing public finance terms.
   if (published.financeCompany !== undefined && published.financeCompany !== null) {
     if (!settings.activeFinanceCompanyId) {
@@ -417,6 +415,10 @@ export async function getPublishedSnapshotData(
       return { ...published, financeCompany: null };
     }
     if (typeof published.financeCompany !== "object" || Array.isArray(published.financeCompany)) {
+      return { ...published, financeCompany: null };
+    }
+    const publishedCompanyId = (published.financeCompany as { _id?: unknown })._id;
+    if (publishedCompanyId === undefined || publishedCompanyId !== company._id) {
       return { ...published, financeCompany: null };
     }
     const financeCompany = {

@@ -38,6 +38,7 @@ async function publicFinanceCompany(ctx: QueryCtx | MutationCtx, websiteSettings
   if (!company || !company.isActive) return null;
 
   return {
+    _id: company._id,
     name: company.name,
     profitRate: company.profitRate,
     maxTermMonths: company.maxTermMonths,

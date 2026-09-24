@@ -4773,6 +4773,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         });
 
         expect(projection.financeCompany).toBeDefined();
+        expect(projection.financeCompany!._id).toBe(companyId);
         expect(projection.financeCompany!.adminFees).toBeUndefined();
       });
 
@@ -4825,6 +4826,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         });
 
         expect(projection.financeCompany).toBeDefined();
+        expect(projection.financeCompany!._id).toBe(companyId);
         expect(projection.financeCompany!.adminFees).toBe(0);
       });
 
