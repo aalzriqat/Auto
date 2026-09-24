@@ -157,7 +157,7 @@ describe("pull-request workflow secret boundary", () => {
     expect(source).toContain("projectBaseDir: candidate");
     expect(source).toContain("autoflow/trusted-sonar-pr");
     expect(source).toContain("$GITHUB_API_URL/repos/$REPOSITORY/pulls/$PR_NUMBER");
-    expect(source).toContain("current_base");
+    expect(source).toContain("FIRST_PARENT");
     expect(source).not.toContain("github.event.workflow_run.pull_requests[0].base.sha");
     expect(source.match(/statuses\/\$TESTED_SHA/g)?.length).toBe(2);
     expect(source).not.toContain("working-directory: candidate");
@@ -179,7 +179,7 @@ describe("pull-request workflow secret boundary", () => {
     expect(source).toContain("Disposable rehearsal preview environment does not match the trusted allowlist.");
     expect(source).toContain("autoflow/trusted-accounting-rehearsal");
     expect(source).toContain("$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER");
-    expect(source).toContain("current_base");
+    expect(source).toContain("FIRST_PARENT");
     expect(source).not.toContain("github.event.workflow_run.pull_requests[0].base.sha");
     expect(source.match(/statuses\/\$TESTED_SHA/g)?.length).toBe(2);
   });
