@@ -13,10 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  # Direct PR browser validation is single-flight per PR/ref. Keep this domain
-  # separate from the privileged workflow_run swarm so a late swarm start can
-  # never cancel the newer direct E2E run that should supersede it.
-  group: direct-playwright-${{ github.event.pull_request.number || github.ref }}
+  group: playwright-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
