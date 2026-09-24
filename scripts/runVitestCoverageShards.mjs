@@ -20,8 +20,19 @@ if (!Number.isInteger(shardCount) || shardCount < 2 || shardCount > 16) {
 
 const root = process.cwd();
 const vitestBin = path.join(root, "node_modules", "vitest", "vitest.mjs");
-const blobDir = path.join(root, ".vitest-reports");
-const coverageDir = path.join(root, "coverage");
+const blobDir = path.resolve(
+  root,
+  process.env.AUTOFLOW_COVERAGE_BLOB_DIR ?? ".vitest-reports",
+);
+const coverageDir = path.resolve(
+  root,
+  process.env.AUTOFLOW_COVERAGE_REPORTS_DIR ?? "coverage",
+);
+const discoveryRoot = path.resolve(
+  root,
+  process.env.AUTOFLOW_COVERAGE_DISCOVERY_ROOT ?? ".",
+);
+const coverageReportsArg = `--coverage.reportsDirectory=${coverageDir}`;
 const authorityTest = "convex/unifiedDealFeeAuthority.test.ts";
 
 const thresholdZeroArgs = [
@@ -86,7 +97,7 @@ const excludedDirs = new Set([
   ".git",
 ]);
 
-function collectUnitTestFiles(directory = root, relative = "") {
+function collectUnitTestFiles(directory = discoveryRoot, relative = "") {
   const files = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (entry.isDirectory()) {
@@ -122,6 +133,7 @@ runVitest([
   "--reporter=blob",
   `--outputFile=${path.join(blobDir, "unified-deal-authority.json")}`,
   "--coverage",
+  coverageReportsArg,
   "--maxWorkers=1",
   ...(mode === "sonar" ? sonarCoverageArgs : thresholdZeroArgs),
 ]);
@@ -147,6 +159,7 @@ if (mode === "unit") {
         "--reporter=blob",
         `--outputFile=${path.join(blobDir, `unit-batch-${batch}.json`)}`,
         ...sharedCoverageArgs,
+        coverageReportsArg,
         ...thresholdZeroArgs,
       ],
       batchFiles,
@@ -162,6 +175,7 @@ if (mode === "unit") {
       "--reporter=blob",
       `--outputFile=${path.join(blobDir, `sonar-${shard}.json`)}`,
       ...sharedCoverageArgs,
+      coverageReportsArg,
       ...sonarCoverageArgs,
     ]);
   }
@@ -174,6 +188,7 @@ if (mode === "unit") {
 const mergeArgs = [
   `--merge-reports=${blobDir}`,
   "--coverage",
+  coverageReportsArg,
   ...(mode === "sonar" ? sonarCoverageArgs : []),
 ];
 runVitest(mergeArgs);
