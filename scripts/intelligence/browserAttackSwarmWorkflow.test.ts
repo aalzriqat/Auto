@@ -185,8 +185,11 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(fetchRun).toContain("FETCHED_MERGE");
     expect(fetchRun).toContain("FIRST_PARENT");
     expect(fetchRun).toContain("SECOND_PARENT");
-    expect(fetchRun).toContain("EXPECTED_BASE_SHA");
+    expect(fetchEnv).not.toHaveProperty("EXPECTED_BASE_SHA");
     expect(fetchRun).toContain("EXPECTED_HEAD_SHA");
+    expect(fetchRun).toContain("$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER");
+    expect(fetchRun).toContain("CURRENT_BASE");
+    expect(fetchRun).toContain('echo "base_sha=$CURRENT_BASE" >> "$GITHUB_OUTPUT"');
     expect(fetchRun).toContain('echo "TESTED_SHA=$FETCHED_MERGE" >> "$GITHUB_ENV"');
 
     const plan = step(
