@@ -158,6 +158,11 @@ describe("pull-request workflow secret boundary", () => {
     expect(source).toContain("autoflow/trusted-sonar-pr");
     expect(source).toContain("$GITHUB_API_URL/repos/$REPOSITORY/pulls/$PR_NUMBER");
     expect(source).toContain("FIRST_PARENT");
+    expect(source).toContain("TRIGGER_STARTED_AT");
+    expect(source).toContain("MERGE_COMMIT_EPOCH");
+    expect(source).toContain("mismatched coverage provenance");
+    expect(source).toContain(".merge_commit_sha // empty");
+    expect(source).toContain("still-current exact merge");
     expect(source).not.toContain("github.event.workflow_run.pull_requests[0].base.sha");
     expect(source.match(/statuses\/\$TESTED_SHA/g)?.length).toBe(2);
     expect(source).not.toContain("working-directory: candidate");
