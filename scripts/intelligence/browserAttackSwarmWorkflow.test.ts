@@ -182,6 +182,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     const fetchRun = String(fetchAndVerify.run ?? "");
     expect(fetchEnv).not.toHaveProperty("EXPECTED_TESTED_SHA");
     expect(fetchRun).toContain("refs/pull/${PR_NUMBER}/merge:refs/autoflow/pr-merge");
+    expect(fetchRun).toContain('git merge-base --is-ancestor "$FIRST_PARENT" refs/autoflow/swarm-main');
     expect(fetchRun).toContain("FETCHED_MERGE");
     expect(fetchRun).toContain("FIRST_PARENT");
     expect(fetchRun).toContain("SECOND_PARENT");

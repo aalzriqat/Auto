@@ -78,6 +78,14 @@ jobs:
             echo "GitHub PR merge ref is not an exact two-parent merge with the triggering head." >&2
             exit 1
           fi
+
+          # Triggers cover only PRs into main. A retarget after the triggering run
+          # moves the merge onto another base, so the base must still be on main.
+          git fetch --no-tags origin "+refs/heads/main:refs/autoflow/jev-main"
+          if ! git merge-base --is-ancestor "$FIRST_PARENT" refs/autoflow/jev-main; then
+            echo "PR merge base $FIRST_PARENT is not on main; the PR was retargeted or its merge ref is stale." >&2
+            exit 1
+          fi
           echo "base_sha=$FIRST_PARENT" >> "$GITHUB_OUTPUT"
           echo "head_sha=$EXPECTED_HEAD_SHA" >> "$GITHUB_OUTPUT"
 

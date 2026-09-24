@@ -74,6 +74,14 @@ jobs:
             exit 1
           fi
 
+          # Triggers cover only PRs into main. A retarget after the triggering run
+          # moves the merge onto another base, so the base must still be on main.
+          git fetch --no-tags origin "+refs/heads/main:refs/autoflow/accounting-main"
+          if ! git merge-base --is-ancestor "$FIRST_PARENT" refs/autoflow/accounting-main; then
+            echo "PR merge base $FIRST_PARENT is not on main; the PR was retargeted or its merge ref is stale." >&2
+            exit 1
+          fi
+
           echo "TESTED_SHA=$FETCHED_MERGE" >> "$GITHUB_ENV"
           echo "base_sha=$FIRST_PARENT" >> "$GITHUB_OUTPUT"
           echo "tested_sha=$FETCHED_MERGE" >> "$GITHUB_OUTPUT"

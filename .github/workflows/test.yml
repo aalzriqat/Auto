@@ -53,6 +53,15 @@ jobs:
         # assertions, tracked files and coverage thresholds remain unchanged.
         NODE_OPTIONS: --max-old-space-size=5632
 
+    - name: Record the tested merge for trusted Sonar
+      if: always() && github.event_name == 'pull_request'
+      # A re-run keeps its original merge, so the trusted Sonar workflow binds
+      # coverage to this SHA instead of guessing from timestamps. This file is
+      # a staleness guard, not an authenticity proof: PR code controls this job.
+      run: |
+        mkdir -p coverage
+        printf '%s\n' "$GITHUB_SHA" > coverage/tested-merge-sha.txt
+
     - name: Upload coverage report
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       if: always()

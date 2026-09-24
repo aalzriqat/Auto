@@ -91,6 +91,14 @@ jobs:
             exit 1
           fi
 
+          # Triggers cover only PRs into main. A retarget after the triggering run
+          # moves the merge onto another base, so the base must still be on main.
+          git fetch --no-tags origin "+refs/heads/main:refs/autoflow/sonar-main"
+          if ! git merge-base --is-ancestor "$FIRST_PARENT" refs/autoflow/sonar-main; then
+            echo "PR merge base $FIRST_PARENT is not on main; the PR was retargeted or its merge ref is stale." >&2
+            exit 1
+          fi
+
           MERGE_COMMIT_EPOCH="$(git show -s --format=%ct "$FETCHED_MERGE")"
           TRIGGER_STARTED_EPOCH="$(date -u -d "$TRIGGER_STARTED_AT" +%s)"
           if [ "$MERGE_COMMIT_EPOCH" -gt "$TRIGGER_STARTED_EPOCH" ]; then
@@ -141,11 +149,24 @@ jobs:
 
       - name: Sanitize scanner inputs
         if: steps.provenance.outputs.stale == 'false'
+        env:
+          TESTED_SHA: ${{ steps.provenance.outputs.tested_sha }}
         run: |
           set -euo pipefail
 
           if find candidate "$RUNNER_TEMP/sonar-coverage" -type l -print -quit | grep -q .; then
             echo "::error::Trusted Sonar refuses symlinks in candidate source or coverage."
+            exit 1
+          fi
+
+          TESTED_MERGE_FILE="$RUNNER_TEMP/sonar-coverage/tested-merge-sha.txt"
+          if [ ! -f "$TESTED_MERGE_FILE" ]; then
+            echo "::error::coverage-report does not name its tested merge; merge main into the PR and re-run Tests."
+            exit 1
+          fi
+          coverage_merge="$(head -c 64 "$TESTED_MERGE_FILE" | tr -d '[:space:]')"
+          if [ "$coverage_merge" != "$TESTED_SHA" ]; then
+            echo "::error::Coverage was produced for merge $coverage_merge, not the analysed merge $TESTED_SHA. Re-run Tests on the current merge."
             exit 1
           fi
 
@@ -218,17 +239,6 @@ jobs:
             exit 0
           fi
 
-          # An unchanged head is not enough: a base advance or retarget moves the
-          # PR merge ref without moving the head. Publish only for the exact merge
-          # this run analysed, using the same Git-ref authority as provenance.
-          git -C trusted fetch --no-tags origin \
-            "+refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-report-merge"
-          current_merge="$(git -C trusted rev-parse refs/autoflow/sonar-report-merge)"
-          if [ "$current_merge" != "$TESTED_SHA" ]; then
-            echo "::notice::Skipping stale Sonar report for merge $TESTED_SHA; PR merge is now $current_merge."
-            exit 0
-          fi
-
           gate_json=""
           for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
             if gate_json="$(
@@ -266,8 +276,8 @@ jobs:
           {
             printf '%s\n\n' "$COMMENT_MARKER"
             printf '## SonarQube Cloud — PR #%s\n\n' "$PR_NUMBER"
-            printf '**Quality Gate:** `%s` · **Open PR issues:** %s · **Analysed head:** `%s`\n\n' \
-              "$gate_status" "$issue_count" "$HEAD_SHA"
+            printf '**Quality Gate:** `%s` · **Open PR issues:** %s · **Analysed head:** `%s` · **Analysed merge:** `%s`\n\n' \
+              "$gate_status" "$issue_count" "$HEAD_SHA" "$TESTED_SHA"
 
             failed_conditions="$(jq -r '
               [.projectStatus.conditions[]? | select(.status == "ERROR")] |
@@ -306,6 +316,17 @@ jobs:
           } > sonar-pr-report.md
 
           cat sonar-pr-report.md >> "$GITHUB_STEP_SUMMARY"
+
+          # An unchanged head is not enough: a base advance or retarget moves the
+          # PR merge ref without moving the head. Recheck immediately before the
+          # write so the comment only ever describes the exact merge analysed.
+          git -C trusted fetch --no-tags origin \
+            "+refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-report-merge"
+          current_merge="$(git -C trusted rev-parse refs/autoflow/sonar-report-merge)"
+          if [ "$current_merge" != "$TESTED_SHA" ]; then
+            echo "::notice::Skipping stale Sonar report for merge $TESTED_SHA; PR merge is now $current_merge."
+            exit 0
+          fi
 
           comments_json="$(
             curl --fail --silent --show-error \
