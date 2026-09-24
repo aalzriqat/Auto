@@ -180,7 +180,7 @@ export function assertPreviewDeploymentAdminKey(value, expectedDeploymentName) {
   const prefixParts = value.slice(0, separator).split(":");
   const secret = value.slice(separator + 1);
   const typed = prefixParts.length === 2;
-  const deploymentName = prefixParts[prefixParts.length - 1];
+  const deploymentName = prefixParts.at(-1);
   const shapeOk =
     prefixParts.length === 1 ||
     (typed && ADMIN_KEY_DEPLOYMENT_TYPES.has(prefixParts[0]));
@@ -191,12 +191,9 @@ export function assertPreviewDeploymentAdminKey(value, expectedDeploymentName) {
   ) {
     // Public CI logs: describe the key's shape, never its secret. The type
     // prefix and the deployment name are identifiers, not credentials.
-    const shape =
-      prefixParts.length === 1
-        ? "untyped"
-        : typed
-          ? "type '" + prefixParts[0] + "'"
-          : prefixParts.length + " prefix segments";
+    let shape = prefixParts.length + " prefix segments";
+    if (prefixParts.length === 1) shape = "untyped";
+    else if (typed) shape = "type '" + prefixParts[0] + "'";
     throw new Error(
       "Convex control plane returned an admin key that is not scoped to the resolved preview deployment (" +
         shape +
