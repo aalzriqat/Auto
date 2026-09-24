@@ -15,6 +15,7 @@ interface SetupResult {
   userId: Id<"users">;
   approverId: Id<"users">;
   customerId: Id<"customers">;
+  customerStatusId: Id<"orgCustomerStatuses">;
   vehicleId: Id<"vehicles">;
   companyId: Id<"financeCompanies">;
   asUser: AuthenticatedTestConvex;
@@ -64,6 +65,14 @@ async function seedFinanceLifecycleDealer(): Promise<SetupResult> {
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Finance", lastName: "Lifecycle" })
   );
+  const customerStatusId = await t.run((ctx) =>
+    ctx.db.insert("orgCustomerStatuses", {
+      orgId,
+      label: "Eligible",
+      isActive: true,
+      order: 1,
+    })
+  );
   const companyId = await t.run((ctx) =>
     ctx.db.insert("financeCompanies", {
       orgId,
@@ -72,10 +81,22 @@ async function seedFinanceLifecycleDealer(): Promise<SetupResult> {
       maxTermMonths: 60,
       gracePeriodMonths: 0,
       isActive: true,
+      adminFees: 0,
     })
   );
 
-  return { t, orgId, userId, approverId, customerId, vehicleId, companyId, asUser, asApprover };
+  return {
+    t,
+    orgId,
+    userId,
+    approverId,
+    customerId,
+    customerStatusId,
+    vehicleId,
+    companyId,
+    asUser,
+    asApprover,
+  };
 }
 
 async function createVehicle(
@@ -132,15 +153,25 @@ describe("Finance lifecycle phase 1 quote mode", () => {
       vehiclePrice: 31000,
       downPayment: 31000,
       termMonths: 0,
+      // Deliberately hostile client outputs: CASH economics are server-owned.
+      totalFinancedAmount: 1,
+      monthlyInstallment: 999,
+      profitRateApplied: 7,
+      totalProfit: 123,
     });
 
     const quote = await asUser.query(api.quotes.get, { orgId, quoteId });
     expect(quote.mode).toBe("CASH");
     expect(quote.companyId).toBeUndefined();
+    expect(quote.totalFinancedAmount).toBe(31_000);
+    expect(quote.monthlyInstallment).toBe(0);
+    expect(quote.profitRateApplied).toBe(0);
+    expect(quote.totalProfit).toBe(0);
   });
 
   test("createQuote with mode=CONFIGURED_FINANCE_COMPANY requires companyId", async () => {
-    const { orgId, customerId, vehicleId, companyId, asUser } = await seedFinanceLifecycleDealer();
+    const { orgId, customerId, customerStatusId, vehicleId, companyId, asUser } =
+      await seedFinanceLifecycleDealer();
 
     await expect(
       asUser.mutation(api.quotes.saveQuote, {
@@ -159,6 +190,7 @@ describe("Finance lifecycle phase 1 quote mode", () => {
       customerId,
       vehicleId,
       companyId,
+      customerEligibilityStatusIds: [customerStatusId],
       mode: "CONFIGURED_FINANCE_COMPANY",
       vehiclePrice: 31000,
       downPayment: 5000,
@@ -243,10 +275,10 @@ describe("Finance lifecycle phase 1 quote mode", () => {
         adminFees: 150,
         commission: 300,
         includesCommissionInDebt: false,
-        totalFinancedAmount: 24000,
-        monthlyInstallment: 610,
-        totalProfit: 5280,
       });
+      expect(application?.manualFinanceSnapshot?.totalFinancedAmount).toBe(24_450);
+      expect(application?.manualFinanceSnapshot?.monthlyInstallment).toBeCloseTo(700.390625);
+      expect(application?.manualFinanceSnapshot?.totalProfit).toBeCloseTo(6_112.5);
 
       const sale = await ctx.db.query("sales").withIndex("by_quote", (q) => q.eq("quoteId", quoteId)).first();
       expect(sale?.financingType).toBe("FINANCED");

@@ -4,8 +4,8 @@ import { mutation } from "./functions";
 import { Id } from "./_generated/dataModel";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
-import { assertFeeTemplatesWithinLimit } from "./utils/dealCostLimits";
 import {
+  assertCustomerLoanTermsValid,
   assertMinorAmount,
   assertPercent,
   buildRuleSnapshot,
@@ -13,10 +13,11 @@ import {
   dealerContributionSettlementValidator,
   financeFeeTemplateValidator,
   ltvBasisValidator,
+  type CustomerLoanTerms,
 } from "./utils/financingEconomics";
 import { PERCENT_DECIMAL_PLACES, percentRoundsToZero } from "../lib/financingEconomics";
 import { getOrgCurrency } from "./accounting/workflowHooks";
-import { denominationOf } from "./utils/money";
+import { scaleForCurrency, toMinorUnits, fromMinorUnits, assertMajorAmountRepresentable } from "./utils/money";
 
 /**
  * The dealer-side purchase rules, as create/update accept them.
@@ -42,17 +43,16 @@ const dealerRuleArgs = {
   customerContributionSettlement: v.optional(customerContributionSettlementValidator),
   feesDeductedFromSettlement: v.optional(v.boolean()),
   customerFirstPaymentOffsetsUnfinancedShare: v.optional(v.boolean()),
-  feeTemplates: v.optional(v.array(financeFeeTemplateValidator)),
 } as const;
 
 type DealerRuleArgs = {
+  adminFees?: number;
   defaultLtvPercent?: number;
   minimumLtvPercent?: number;
   maxFinancingLTV?: number;
   minimumCustomerFirstPaymentMinor?: number;
   allowedAppraisalVariancePercent?: number;
   lowerAppraisalTolerancePercent?: number;
-  feeTemplates?: Array<{ estimatedAmountMinor: number }>;
 };
 
 /**
@@ -62,7 +62,29 @@ type DealerRuleArgs = {
  * v.number() accepts NaN and Infinity, and NaN defeats every range comparison
  * (NaN > 100 is false), so each check is written to reject rather than accept.
  */
-function assertDealerRulesValid(rules: DealerRuleArgs): void {
+function assertDealerRulesValid(rules: DealerRuleArgs, currency?: string): void {
+  if (rules.adminFees !== undefined) {
+    if (!Number.isFinite(rules.adminFees) || rules.adminFees < 0) {
+      throw new ConvexError(
+        `Execution fees (adminFees) must be a non-negative finite number (got ${rules.adminFees}).`
+      );
+    }
+    if (currency) {
+      assertMajorAmountRepresentable(
+        rules.adminFees,
+        currency,
+        "Execution fees (adminFees)"
+      );
+    } else {
+      const minor = Math.round(rules.adminFees * 1000);
+      if (!Number.isSafeInteger(minor)) {
+        throw new ConvexError(
+          `Execution fees (adminFees) amount is too large to represent safely.`
+        );
+      }
+    }
+  }
+
   for (const [value, label] of [
     [rules.defaultLtvPercent, "Default LTV"],
     [rules.minimumLtvPercent, "Minimum LTV"],
@@ -122,9 +144,6 @@ function assertDealerRulesValid(rules: DealerRuleArgs): void {
 
   if (rules.minimumCustomerFirstPaymentMinor !== undefined) {
     assertMinorAmount(rules.minimumCustomerFirstPaymentMinor, "Minimum customer first payment");
-  }
-  for (const template of rules.feeTemplates ?? []) {
-    assertMinorAmount(template.estimatedAmountMinor, "Fee template estimated amount");
   }
 }
 
@@ -198,37 +217,9 @@ async function sanitizeAcceptedStatuses(
     if (status && status.orgId !== orgId) {
       throw new ConvexError("Accepted customer status not found in this organization.");
     }
-    if (status) live.push(statusId);
+    if (status?.isActive) live.push(statusId);
   }
   return live;
-}
-
-/**
- * Binds client-side major-to-minor conversion to the denomination read in the
- * same Convex transaction as the company write. The read participates in OCC,
- * so a concurrent org-currency change conflicts instead of reinterpreting an
- * already converted integer under a different scale.
- */
-async function assertFeeTemplateCurrency(
-  ctx: MutationCtx,
-  orgId: Id<"organizations">,
-  feeTemplates: Array<{ estimatedAmountMinor: number }> | undefined,
-  expectedCurrency: string | undefined
-): Promise<void> {
-  if (!feeTemplates || feeTemplates.length === 0) return;
-  const expected = denominationOf(expectedCurrency);
-  if (!expected) {
-    throw new ConvexError("A supported expected currency is required when saving fee templates.");
-  }
-  const currentCurrency = await getOrgCurrency(ctx, orgId);
-  if (!denominationOf(currentCurrency)) {
-    throw new ConvexError("The organization currency is not supported for fee-template amounts.");
-  }
-  if (currentCurrency !== expected.code) {
-    throw new ConvexError(
-      `The organization currency changed from ${expected.code} to ${currentCurrency}. Reload before saving fee templates.`
-    );
-  }
 }
 
 // --- Finance Companies ---
@@ -259,19 +250,30 @@ export const createCompany = mutation({
     isActive: v.boolean(),
     acceptedStatuses: v.optional(v.array(v.id("orgCustomerStatuses"))),
     expectedCurrency: v.optional(v.string()),
+    feeTemplates: v.optional(v.array(financeFeeTemplateValidator)),
     ...dealerRuleArgs,
   },
   handler: async (ctx, args) => {
     const { user } = await requireOwner(ctx, args.orgId);
-    const { expectedCurrency, ...company } = args;
-    assertDealerRulesValid(company);
-    assertFeeTemplatesWithinLimit(company.feeTemplates, "Creating this finance company");
-    await assertFeeTemplateCurrency(ctx, args.orgId, company.feeTemplates, expectedCurrency);
+    if (args.feeTemplates !== undefined) {
+      throw new ConvexError(
+        "Configuring company fee templates is retired. Use Execution Fees (adminFees) as the single expected fee authority."
+      );
+    }
+    const { expectedCurrency, feeTemplates: _retiredFeeTemplates, ...company } = args;
+    const orgCurrency = await getOrgCurrency(ctx, args.orgId);
+    assertCustomerLoanTermsValid(company, orgCurrency);
+    assertDealerRulesValid(company, orgCurrency);
     const acceptedStatuses = await sanitizeAcceptedStatuses(ctx, args.orgId, args.acceptedStatuses);
+    const lostConfiguredStatusScope =
+      (args.acceptedStatuses?.length ?? 0) > 0 &&
+      (acceptedStatuses?.length ?? 0) === 0;
     const companyId = await ctx.db.insert("financeCompanies", {
       ...company,
+      isActive: lostConfiguredStatusScope ? false : company.isActive,
       acceptedStatuses,
       ruleVersion: 1,
+      editRevision: 1,
     });
     await writeRuleVersion(ctx, companyId, args.orgId, user._id, "Company created");
     return companyId;
@@ -294,47 +296,54 @@ export const updateCompany = mutation({
     isActive: v.boolean(),
     acceptedStatuses: v.optional(v.array(v.id("orgCustomerStatuses"))),
     expectedCurrency: v.optional(v.string()),
+    expectedEditRevision: v.number(),
     expectedRuleVersion: v.optional(v.number()),
+    feeTemplates: v.optional(v.array(financeFeeTemplateValidator)),
     ...dealerRuleArgs,
   },
   handler: async (ctx, args) => {
     const { user } = await requireOwner(ctx, args.orgId);
-    const { id, orgId, expectedCurrency, expectedRuleVersion, ...updates } = args;
+    const {
+      id,
+      orgId,
+      expectedCurrency,
+      expectedEditRevision,
+      expectedRuleVersion,
+      feeTemplates: incomingFeeTemplates,
+      ...updates
+    } = args;
 
     const existing = await ctx.db.get(id);
     if (!existing || existing.orgId !== orgId) throw new ConvexError("Not found");
-    if (args.feeTemplates !== undefined) {
-      const currentRuleVersion = existing.ruleVersion ?? 1;
-      if (!Number.isSafeInteger(expectedRuleVersion) || expectedRuleVersion !== currentRuleVersion) {
-        throw new ConvexError(
-          "This finance company's fee policy changed while you were editing it. Reload before saving."
-        );
-      }
-    }
-    // Only a list the caller SENDS is held to the template cap. A company
-    // already past it (frozen before the cap existed) still takes an edit
-    // that leaves the list alone — carried verbatim by the merge below, never
-    // truncated — and is repaired by the first edit that sends a compliant
-    // list. Refused before any write, like the rest of the validation.
-    assertFeeTemplatesWithinLimit(args.feeTemplates, "Saving these fee templates");
-    await assertFeeTemplateCurrency(ctx, orgId, args.feeTemplates, expectedCurrency);
-    // Writes back the sanitized list, so a company carrying ids of
-    // since-deleted statuses is repaired the first time it is saved.
-    const acceptedStatuses = await sanitizeAcceptedStatuses(ctx, orgId, updates.acceptedStatuses);
 
-    // `acceptedStatuses` is optional, and Convex deletes a field patched to
-    // `undefined`. Spreading it unconditionally would therefore erase a
-    // company's restriction list for any caller that simply left the argument
-    // out — silently widening it to "accepts every customer". Only write the
-    // key when the caller actually sent one.
-    //
-    // The dealer-purchase rules need the same treatment for a sharper reason:
-    // the existing settings dialog and the mobile app do not know these fields
-    // exist yet and send none of them. If an omitted rule were written as
-    // `undefined` it would be deleted, so saving a company's name from an older
-    // client would silently wipe its LTV bounds and exception tolerance — and
-    // the next deal would be quoted under `buildRuleSnapshot`'s conservative
-    // defaults instead of the company's real terms, with nothing to show why.
+    const currentEditRevision = existing.editRevision ?? 1;
+    if (expectedEditRevision !== currentEditRevision) {
+      throw new ConvexError(
+        "Finance company settings changed since you opened them. Refresh the company and try again."
+      );
+    }
+
+    const currentRuleVersion = existing.ruleVersion ?? 1;
+    if (
+      expectedRuleVersion !== undefined &&
+      expectedRuleVersion !== currentRuleVersion
+    ) {
+      throw new ConvexError(
+        "Finance company dealer rules changed since you opened them. Refresh the company and try again."
+      );
+    }
+
+    if (incomingFeeTemplates !== undefined) {
+      throw new ConvexError(
+        "Updating company fee templates is retired. Use Execution Fees (adminFees) as the single expected fee authority."
+      );
+    }
+
+    const acceptedStatuses = await sanitizeAcceptedStatuses(ctx, orgId, updates.acceptedStatuses);
+    const lostConfiguredStatusScope =
+      (updates.acceptedStatuses?.length ?? 0) > 0 &&
+      (acceptedStatuses?.length ?? 0) === 0;
+
     const dealerRuleKeys = Object.keys(dealerRuleArgs) as Array<keyof typeof dealerRuleArgs>;
     const presentDealerRules = Object.fromEntries(
       dealerRuleKeys
@@ -343,15 +352,17 @@ export const updateCompany = mutation({
     );
     for (const key of dealerRuleKeys) delete updates[key];
 
-    // Validate the EFFECTIVE merged rules, not the caller's arguments.
-    // Validating the arguments alone let a partial update persist an
-    // impossible company: lowering maxFinancingLTV to 70 while an existing
-    // minimum of 80 was preserved passed every check on the way in, then
-    // produced a snapshot no LTV could ever satisfy — and every subsequent
-    // quote for that company failed with an error about the deal.
-    // Read from `args` rather than the erased `presentDealerRules` record so
-    // each field keeps its own type instead of the union of all of them.
+    // If adminFees is being set (or already configured), any legacy feeTemplates
+    // must be explicitly cleared rather than kept dormant in the database document.
+    const clearingLegacyTemplates =
+      (args.adminFees !== undefined || existing.adminFees !== undefined) &&
+      existing.feeTemplates !== undefined &&
+      existing.feeTemplates.length > 0;
+
+    const effectiveFeeTemplates = clearingLegacyTemplates ? undefined : existing.feeTemplates;
+
     const effectiveRules: DealerRuleArgs = {
+      adminFees: args.adminFees ?? existing.adminFees,
       defaultLtvPercent: args.defaultLtvPercent ?? existing.defaultLtvPercent,
       minimumLtvPercent: args.minimumLtvPercent ?? existing.minimumLtvPercent,
       maxFinancingLTV: args.maxFinancingLTV ?? existing.maxFinancingLTV,
@@ -361,22 +372,43 @@ export const updateCompany = mutation({
         args.allowedAppraisalVariancePercent ?? existing.allowedAppraisalVariancePercent,
       lowerAppraisalTolerancePercent:
         args.lowerAppraisalTolerancePercent ?? existing.lowerAppraisalTolerancePercent,
-      feeTemplates: args.feeTemplates ?? existing.feeTemplates,
     };
-    assertDealerRulesValid(effectiveRules);
 
-    // Archive the terms the company operated under BEFORE this edit, when it
-    // has never been versioned. Otherwise the first edit bumps straight to
-    // version 2 and version 1 — the version every application snapshotted in
-    // the meantime points at — is never written, leaving a permanent hole in
-    // the audit chain the table exists to provide.
+    if (
+      effectiveRules.adminFees !== undefined &&
+      effectiveFeeTemplates !== undefined &&
+      effectiveFeeTemplates.length > 0
+    ) {
+      throw new ConvexError(
+        "Cannot retain fee templates when execution fees (adminFees) is set. Execution fees is the single expected fee authority."
+      );
+    }
+
+    const orgCurrency = await getOrgCurrency(ctx, orgId);
+
+    const effectiveTerms: CustomerLoanTerms = {
+      profitRate: updates.profitRate,
+      maxTermMonths: updates.maxTermMonths,
+      gracePeriodMonths: updates.gracePeriodMonths,
+      insuranceRate: updates.insuranceRate ?? existing.insuranceRate,
+      commission: updates.commission ?? existing.commission,
+      adminFees: args.adminFees ?? existing.adminFees,
+      includesCommissionInDebt: updates.includesCommissionInDebt ?? existing.includesCommissionInDebt,
+    };
+    assertCustomerLoanTermsValid(effectiveTerms, orgCurrency);
+    assertDealerRulesValid(effectiveRules, orgCurrency);
+
     const needsInitialVersion = existing.ruleVersion === undefined;
 
-    const rulesChanged = dealerRuleKeys.some(
-      (key) =>
-        presentDealerRules[key] !== undefined &&
-        JSON.stringify(presentDealerRules[key]) !== JSON.stringify(existing[key])
-    ) || (updates.maxFinancingLTV !== undefined && updates.maxFinancingLTV !== existing.maxFinancingLTV);
+    const rulesChanged =
+      clearingLegacyTemplates ||
+      dealerRuleKeys.some(
+        (key) =>
+          presentDealerRules[key] !== undefined &&
+          JSON.stringify(presentDealerRules[key]) !== JSON.stringify(existing[key])
+      ) ||
+      (updates.maxFinancingLTV !== undefined && updates.maxFinancingLTV !== existing.maxFinancingLTV) ||
+      (updates.adminFees !== undefined && updates.adminFees !== existing.adminFees);
 
     if (needsInitialVersion) {
       await ctx.db.patch(id, { ruleVersion: 1 });
@@ -385,11 +417,12 @@ export const updateCompany = mutation({
 
     await ctx.db.patch(id, {
       ...updates,
+      isActive: lostConfiguredStatusScope ? false : updates.isActive,
       ...presentDealerRules,
+      ...(clearingLegacyTemplates ? { feeTemplates: undefined } : {}),
       ...(acceptedStatuses === undefined ? {} : { acceptedStatuses }),
-      // Only bump on an actual rule change: a version per name edit would fill
-      // the history with rows no deal was ever approved under.
       ...(rulesChanged ? { ruleVersion: (existing.ruleVersion ?? 1) + 1 } : {}),
+      editRevision: currentEditRevision + 1,
     });
 
     if (rulesChanged) {
@@ -411,6 +444,7 @@ export const deleteCompany = mutation({
       isActive: false,
       deactivatedAt: Date.now(),
       deactivatedBy: user._id,
+      editRevision: (existing.editRevision ?? 1) + 1,
     });
   },
 });

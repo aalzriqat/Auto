@@ -27,12 +27,16 @@ export function KineticFinanceCalculator(props: ThemeProps) {
   const clampedMonths = Math.min(months, maxMonths);
 
   const downAmount = price * (downPercent / 100);
-  const { monthlyInstallment: monthlyPayment } = estimateMonthlyInstallment({
+  const estimate = estimateMonthlyInstallment({
     financeCompany,
     vehiclePrice: price,
     downPayment: downAmount,
     termMonths: clampedMonths,
   });
+  const monthlyPayment =
+    estimate && Number.isFinite(estimate.monthlyInstallment)
+      ? estimate.monthlyInstallment
+      : null;
   const profitRate = financeCompany?.profitRate ?? 4.5;
 
   return (
@@ -128,10 +132,17 @@ export function KineticFinanceCalculator(props: ThemeProps) {
             <div className="bg-primary text-white p-8 rounded-xl shadow-xl relative overflow-hidden">
               <div className="absolute top-0 right-0 w-32 h-32 bg-secondary opacity-20 blur-3xl rounded-full -mr-16 -mt-16" />
               <h4 className="font-label-caps text-label-caps text-primary-fixed mb-6 uppercase">{k.estimatedMonthlyInstallment}</h4>
-              <div className="flex items-baseline gap-2 mb-8">
-                <span className="font-headline-lg text-5xl font-extrabold text-white">{Math.round(monthlyPayment).toLocaleString()}</span>
-                <span className="font-headline-lg text-xl text-primary-fixed">JOD/mo</span>
-              </div>
+              {monthlyPayment != null && Number.isFinite(monthlyPayment) ? (
+                <div className="flex items-baseline gap-2 mb-8">
+                  <span className="font-headline-lg text-5xl font-extrabold text-white">{Math.round(monthlyPayment).toLocaleString()}</span>
+                  <span className="font-headline-lg text-xl text-primary-fixed">JOD/mo</span>
+                </div>
+              ) : (
+                <div className="mb-8">
+                  <span className="font-headline-lg text-2xl font-bold text-white block mb-1">{k.estimateUnavailable}</span>
+                  <span className="text-sm text-primary-fixed block">{k.contactDealershipForFinancing}</span>
+                </div>
+              )}
               <div className="space-y-4 pt-6 border-t border-white/10">
                 <div className="flex justify-between items-center">
                   <span className="text-on-primary-container font-body-md">{k.fixedInterestRate}</span>

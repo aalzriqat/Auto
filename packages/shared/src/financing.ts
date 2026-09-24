@@ -45,6 +45,70 @@ export interface UnifiedMurabahaResult {
   monthlyInstallment: number;
 }
 
+export function isRequestedFinancingTermValid(args: {
+  termMonths: number;
+  gracePeriodMonths?: number;
+  maxTermMonths?: number;
+}): boolean {
+  const grace = args.gracePeriodMonths ?? 0;
+  return (
+    Number.isFinite(args.termMonths) &&
+    Number.isInteger(args.termMonths) &&
+    args.termMonths > 0 &&
+    (args.maxTermMonths === undefined || args.termMonths <= args.maxTermMonths) &&
+    args.termMonths > grace
+  );
+}
+
+/**
+ * Returns the selected customer status ids accepted by a lender.
+ *
+ * An empty/undefined lender allow-list means the lender accepts every status;
+ * an empty customer selection is never sufficient for a configured-finance
+ * quote because there is nothing to snapshot as the eligibility decision.
+ */
+export function matchingCustomerEligibilityStatusIds<T extends string>(
+  selectedStatusIds: readonly T[],
+  companyAcceptedStatusIds?: readonly T[]
+): T[] {
+  if (selectedStatusIds.length === 0) {
+    return [];
+  }
+  if (!companyAcceptedStatusIds || companyAcceptedStatusIds.length === 0) {
+    return [...selectedStatusIds];
+  }
+  const accepted = new Set(companyAcceptedStatusIds);
+  return selectedStatusIds.filter((id) => accepted.has(id));
+}
+
+/**
+ * Minimum total down payment needed to bring the authoritative financed amount
+ * back under a lender's financing ceiling.
+ *
+ * The excess must be measured from `financedAmount`, because that value already
+ * reflects whether execution fees and commission are inside or outside the debt.
+ * Reconstructing the base from price/fees/commission at a caller can therefore
+ * understate or overstate the required customer contribution.
+ */
+export function minimumDownPaymentForFinancingLimit(args: {
+  currentDownPayment: number;
+  financedAmount: number;
+  maxFinancingAllowed: number;
+}): number {
+  const { currentDownPayment, financedAmount, maxFinancingAllowed } = args;
+  if (
+    !Number.isFinite(currentDownPayment) ||
+    !Number.isFinite(financedAmount) ||
+    !Number.isFinite(maxFinancingAllowed)
+  ) {
+    return 0;
+  }
+  return Math.max(
+    0,
+    currentDownPayment + financedAmount - maxFinancingAllowed
+  );
+}
+
 export function calculateUnifiedMurabaha({
   vehiclePrice,
   downPayment,

@@ -1,4 +1,10 @@
-import { calculateUnifiedMurabaha, calculateDBR, calculateMaximumAffordableVehiclePrice } from "./financing";
+import {
+  calculateUnifiedMurabaha,
+  calculateDBR,
+  calculateMaximumAffordableVehiclePrice,
+  minimumDownPaymentForFinancingLimit,
+  matchingCustomerEligibilityStatusIds,
+} from "./financing";
 import { describe, it, expect } from "vitest";
 
 describe("Financing Logic", () => {
@@ -138,6 +144,94 @@ describe("Financing Logic", () => {
       expect(result.monthlyInstallment).toBe(0);
       // Everything else still computes normally — only the division is guarded.
       expect(result.totalContractValue).toBeGreaterThan(0);
+    });
+  });
+
+  describe("matchingCustomerEligibilityStatusIds", () => {
+    it("requires a non-empty customer selection", () => {
+      expect(matchingCustomerEligibilityStatusIds([], ["SALARIED"])).toEqual([]);
+    });
+
+    it("treats an empty lender allow-list as accepting all selected statuses", () => {
+      expect(
+        matchingCustomerEligibilityStatusIds(
+          ["SALARIED", "SELF_EMPLOYED"],
+          []
+        )
+      ).toEqual(["SALARIED", "SELF_EMPLOYED"]);
+    });
+
+    it("returns only the selected statuses accepted by the lender", () => {
+      expect(
+        matchingCustomerEligibilityStatusIds(
+          ["SALARIED", "STUDENT"],
+          ["SALARIED", "SELF_EMPLOYED"]
+        )
+      ).toEqual(["SALARIED"]);
+    });
+
+    it("returns no match when all selected statuses are stale for that lender", () => {
+      expect(
+        matchingCustomerEligibilityStatusIds(
+          ["STUDENT"],
+          ["SALARIED", "SELF_EMPLOYED"]
+        )
+      ).toEqual([]);
+    });
+  });
+
+  describe("minimumDownPaymentForFinancingLimit", () => {
+    it("includes execution fees that are already inside financedAmount", () => {
+      const result = calculateUnifiedMurabaha({
+        vehiclePrice: 10_000,
+        downPayment: 1_000,
+        commission: 0,
+        processingFees: 300,
+        annualProfitRate: 5,
+        annualInsuranceRate: 0,
+        termMonths: 60,
+      });
+
+      expect(result.financedAmount).toBe(9_300);
+      expect(
+        minimumDownPaymentForFinancingLimit({
+          currentDownPayment: 1_000,
+          financedAmount: result.financedAmount,
+          maxFinancingAllowed: 9_000,
+        })
+      ).toBe(1_300);
+    });
+
+    it("does not add flat commission that is outside financedAmount", () => {
+      const result = calculateUnifiedMurabaha({
+        vehiclePrice: 10_000,
+        downPayment: 1_000,
+        commission: 500,
+        processingFees: 300,
+        annualProfitRate: 5,
+        annualInsuranceRate: 0,
+        termMonths: 60,
+        includesCommissionInDebt: true,
+      });
+
+      expect(result.financedAmount).toBe(9_300);
+      expect(
+        minimumDownPaymentForFinancingLimit({
+          currentDownPayment: 1_000,
+          financedAmount: result.financedAmount,
+          maxFinancingAllowed: 9_000,
+        })
+      ).toBe(1_300);
+    });
+
+    it("returns the theoretical minimum contribution even when the current payment is higher", () => {
+      expect(
+        minimumDownPaymentForFinancingLimit({
+          currentDownPayment: 2_000,
+          financedAmount: 7_500,
+          maxFinancingAllowed: 8_000,
+        })
+      ).toBe(1_500);
     });
   });
 

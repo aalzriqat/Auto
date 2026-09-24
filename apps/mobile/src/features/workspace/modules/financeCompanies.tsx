@@ -136,7 +136,22 @@ export function FinanceCompaniesModule({ orgId }: { orgId: string }) {
     };
     try {
       if (editing) {
-        await updateCompany({ ...payload, id: editing._id });
+        if (editing.adminFees != null && form.adminFees.trim() === "") {
+          reportError(
+            "Mobile finance company execution fees cannot be cleared",
+            new Error(
+              locale === "ar"
+                ? "لا يمكن إفراغ رسوم التنفيذ بعد ضبطها — أدخل 0 إذا لم تكن هناك رسوم."
+                : "Execution fees cannot be cleared once configured. Enter 0 if none are charged."
+            )
+          );
+          return;
+        }
+        await updateCompany({
+          ...payload,
+          id: editing._id,
+          expectedEditRevision: editing.editRevision ?? 1,
+        });
       } else {
         await createCompany(payload);
       }

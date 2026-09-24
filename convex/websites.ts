@@ -398,7 +398,41 @@ export async function getPublishedSnapshotData(
   const snapshot = await ctx.db.get(settings.publishedSnapshotId);
   if (!snapshot || snapshot.orgId !== orgId || snapshot.websiteSettingsId !== settings._id) return null;
 
-  return (snapshot.snapshotJson ?? null) as PublishedSnapshotData | null;
+  const published = (snapshot.snapshotJson ?? null) as PublishedSnapshotData | null;
+  if (!published) return null;
+
+  // adminFees became the single execution-fee authority after older website
+  // snapshots had already been published. Keep every published finance term
+  // tied to one lender: legacy snapshots without identity, snapshots for a
+  // different active lender, and missing/inactive/cross-org authority all fail
+  // closed by suppressing public finance terms.
+  if (published.financeCompany !== undefined && published.financeCompany !== null) {
+    if (!settings.activeFinanceCompanyId) {
+      return { ...published, financeCompany: null };
+    }
+    const company = await ctx.db.get(settings.activeFinanceCompanyId);
+    if (!company || company.orgId !== orgId || !company.isActive) {
+      return { ...published, financeCompany: null };
+    }
+    if (typeof published.financeCompany !== "object" || Array.isArray(published.financeCompany)) {
+      return { ...published, financeCompany: null };
+    }
+    const publishedCompanyId = (published.financeCompany as { _id?: unknown })._id;
+    if (publishedCompanyId === undefined || publishedCompanyId !== company._id) {
+      return { ...published, financeCompany: null };
+    }
+    const financeCompany = {
+      ...(published.financeCompany as Record<string, unknown>),
+    };
+    if (company.adminFees === undefined) {
+      delete financeCompany.adminFees;
+    } else {
+      financeCompany.adminFees = company.adminFees;
+    }
+    return { ...published, financeCompany };
+  }
+
+  return published;
 }
 
 export async function activePrimaryDomain(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">) {

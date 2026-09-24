@@ -96,27 +96,76 @@ import { assertFinancedDepositsSurviveParentReversal } from "./utils/depositAppl
 const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
 
 /**
- * Quotation costs frozen by the finance-company policy. The application
- * creator and the explicit legacy-lineage repair must use this same function;
- * reading today's editable company policy would retroactively rewrite a deal.
+ * Canonical resolver for a deal's expected execution-fee authority.
+ * Enforces the route-wide single-authority invariants across createFromQuote
+ * and repairQuoteEconomicsLineage:
+ * - CONFIGURED_FINANCE_COMPANY requires companyRuleSnapshot.adminFees (or legacy feeTemplates)
+ * - MANUAL_FINANCE_COMPANY requires quote.manualAdminFees
+ * - Ambiguous quotes (e.g. companyId with missing/invalid mode) fail closed
+ * - Explicit 0 is valid and resolves to 0
+ * - Absent authority rejects and NEVER silently converts to 0
  */
-function includedDealerBorneExpensesMinor(
-  snapshot: FinanceCompanyRuleSnapshot | undefined
-): number {
-  return (
-    snapshot?.feeTemplates
-      ?.filter(
-        (template) =>
-          template.includedInQuotation &&
-          (template.paidBy === "DEALER" || template.paidBy === "EMPLOYEE")
-      )
-      .reduce((total, template) => {
-        assertValidMinorAmount(template.estimatedAmountMinor, "included fee estimate");
-        const next = total + template.estimatedAmountMinor;
-        assertValidMinorAmount(next, "included dealer-borne fee total");
-        return next;
-      }, 0) ?? 0
-  );
+export function resolveExpectedExecutionFeesMinor(args: {
+  quote: {
+    mode?: string;
+    companyId?: Id<"financeCompanies">;
+    manualAdminFees?: number;
+  };
+  companyRuleSnapshot?: FinanceCompanyRuleSnapshot;
+  currency: string;
+}): number {
+  const { quote, companyRuleSnapshot, currency } = args;
+
+  // Ambiguous quote: company is attached but mode is not CONFIGURED_FINANCE_COMPANY
+  if (quote.companyId !== undefined && quote.mode !== "CONFIGURED_FINANCE_COMPANY") {
+    throw new ConvexError(
+      "Finance company can only be set for configured finance company quotes."
+    );
+  }
+
+  if (quote.mode === "CONFIGURED_FINANCE_COMPANY") {
+    if (!quote.companyId || !companyRuleSnapshot) {
+      throw new ConvexError(
+        "The application's frozen finance-company policy is missing. Reconcile the policy snapshot before repairing quotation economics."
+      );
+    }
+    if (companyRuleSnapshot.adminFees !== undefined) {
+      const minor = toMinorUnits(companyRuleSnapshot.adminFees, currency);
+      assertValidMinorAmount(minor, "frozen admin fee total");
+      return minor;
+    }
+    // Historical legacy fallback: snapshot preserved feeTemplates from before single fee authority
+    if (companyRuleSnapshot.feeTemplates && companyRuleSnapshot.feeTemplates.length > 0) {
+      return companyRuleSnapshot.feeTemplates
+        .filter(
+          (template) =>
+            template.includedInQuotation &&
+            (template.paidBy === "DEALER" || template.paidBy === "EMPLOYEE")
+        )
+        .reduce((total, template) => {
+          assertValidMinorAmount(template.estimatedAmountMinor, "included fee estimate");
+          const next = total + template.estimatedAmountMinor;
+          assertValidMinorAmount(next, "included dealer-borne fee total");
+          return next;
+        }, 0);
+    }
+    throw new ConvexError(
+      "Execution Fees are not configured for this finance company. Enter the expected execution fee amount, or enter 0 if none are charged."
+    );
+  }
+
+  if (quote.mode === "MANUAL_FINANCE_COMPANY") {
+    if (quote.manualAdminFees === undefined) {
+      throw new ConvexError(
+        "Execution Fees are not configured for this manual finance company quote. Enter the expected execution fee amount, or enter 0 if none are charged."
+      );
+    }
+    const minor = toMinorUnits(quote.manualAdminFees, currency);
+    assertValidMinorAmount(minor, "manual admin fee total");
+    return minor;
+  }
+
+  return 0;
 }
 
 /**
@@ -1381,6 +1430,7 @@ async function buildCockpitMoney(
       // engine uses, so the cockpit and the engine cannot disagree about it.
       customerDirectToDealerMinor: customerGapToDealer.amountMinor,
       actualExpensesMinor,
+      expectedExpensesMinor: app.estimatedDealerBorneExpensesMinor,
       currency,
       fullySettled,
     });
@@ -2328,6 +2378,41 @@ export const createFromQuote = mutation({
       }
     }
 
+    const economicsCurrency = await getOrgCurrency(ctx, args.orgId);
+    assertSupportedDenomination(economicsCurrency, "creating the finance application");
+
+    let proposedInstallment: number;
+    let totalFinancedAmount: number | undefined;
+
+    if (quote.customerQuotePricingSnapshot) {
+      if (quote.customerQuotePricingSnapshot.currency !== economicsCurrency) {
+        throw new ConvexError(
+          `Quote currency (${quote.customerQuotePricingSnapshot.currency}) does not match organization currency (${economicsCurrency}).`
+        );
+      }
+      if (
+        quote.monthlyInstallment !== undefined &&
+        Math.abs(quote.monthlyInstallment - quote.customerQuotePricingSnapshot.monthlyInstallment) > 1e-4
+      ) {
+        throw new ConvexError(
+          "Quotation monthly installment does not match its frozen customer pricing snapshot."
+        );
+      }
+      if (
+        quote.totalFinancedAmount !== undefined &&
+        Math.abs(quote.totalFinancedAmount - quote.customerQuotePricingSnapshot.totalFinancedAmount) > 1e-4
+      ) {
+        throw new ConvexError(
+          "Quotation total financed amount does not match its frozen customer pricing snapshot."
+        );
+      }
+      proposedInstallment = quote.customerQuotePricingSnapshot.monthlyInstallment;
+      totalFinancedAmount = quote.customerQuotePricingSnapshot.totalFinancedAmount;
+    } else {
+      proposedInstallment = quote.monthlyInstallment ?? 0;
+      totalFinancedAmount = quote.totalFinancedAmount;
+    }
+
     const guarantors = await ctx.db
       .query("guarantors")
       .withIndex("by_customer", (q) => q.eq("customerId", quote.customerId))
@@ -2336,7 +2421,6 @@ export const createFromQuote = mutation({
 
     const salary = customer.employment?.salary;
     const existingMonthlyDebt = customer.financials?.totalMonthlyDebt;
-    const proposedInstallment = quote.monthlyInstallment ?? 0;
     const dbr =
       salary && salary > 0
         ? ((existingMonthlyDebt ?? 0) + proposedInstallment) / salary
@@ -2360,8 +2444,8 @@ export const createFromQuote = mutation({
       vehicleValuation = allValued
         ? valuations.reduce((sum, v) => sum + (v?.valuationAmount ?? 0), 0)
         : undefined;
-      if (vehicleValuation && quote.totalFinancedAmount !== undefined) {
-        ltv = (quote.totalFinancedAmount / vehicleValuation) * 100;
+      if (vehicleValuation && totalFinancedAmount !== undefined) {
+        ltv = (totalFinancedAmount / vehicleValuation) * 100;
       }
     }
 
@@ -2397,37 +2481,40 @@ export const createFromQuote = mutation({
             ...(quote.manualIncludesCommissionInDebt !== undefined
               ? { includesCommissionInDebt: quote.manualIncludesCommissionInDebt }
               : {}),
-            ...(quote.totalFinancedAmount !== undefined ? { totalFinancedAmount: quote.totalFinancedAmount } : {}),
-            ...(quote.monthlyInstallment !== undefined ? { monthlyInstallment: quote.monthlyInstallment } : {}),
+            ...(totalFinancedAmount !== undefined ? { totalFinancedAmount } : {}),
+            ...(proposedInstallment !== undefined ? { monthlyInstallment: proposedInstallment } : {}),
             ...(quote.totalProfit !== undefined ? { totalProfit: quote.totalProfit } : {}),
           }
         : undefined;
 
     // Snapshot the finance company's dealer-purchase rules onto the
     // application, and point at the immutable version row they came from.
-    // Read live, these would let an edit to the company next month
-    // retroactively change the terms this deal was approved under.
+    // When the quote froze its rule snapshot at creation, that frozen authority
+    // is preserved so subsequent edits to the finance company cannot silently
+    // reinterpret the financial basis (installment, financed amount, DBR, LTV).
     let companyRuleSnapshot: FinanceCompanyRuleSnapshot | undefined;
     let companyRuleVersionId: Id<"financeCompanyRuleVersions"> | undefined;
-    if (quoteCompany) {
-      companyRuleSnapshot = buildRuleSnapshot(quoteCompany);
-      // New snapshots are held to the configuration policy before they are
-      // frozen. Its lower template limit reserves capacity under the deal's
-      // live-line ceiling for additional costs; an older snapshot above this
-      // policy but within live capacity remains closeable and is never
-      // rewritten here. The company is repaired by an explicit compliant
-      // list; the snapshot is never truncated to fit.
-      assertFeeTemplatesWithinLimit(
-        companyRuleSnapshot.feeTemplates,
-        `Creating an application under ${quoteCompany.name}`
-      );
-      const versionRow = await ctx.db
-        .query("financeCompanyRuleVersions")
-        .withIndex("by_company_version", (q) =>
-          q.eq("companyId", quoteCompany!._id).eq("version", companyRuleSnapshot!.ruleVersion)
-        )
-        .first();
-      if (versionRow) companyRuleVersionId = versionRow._id;
+    if (quote.mode === "CONFIGURED_FINANCE_COMPANY") {
+      if (quote.companyRuleSnapshot) {
+        companyRuleSnapshot = quote.companyRuleSnapshot;
+      } else if (quoteCompany) {
+        companyRuleSnapshot = buildRuleSnapshot(quoteCompany);
+      }
+      if (companyRuleSnapshot) {
+        if (companyRuleSnapshot.feeTemplates && companyRuleSnapshot.adminFees === undefined) {
+          assertFeeTemplatesWithinLimit(
+            companyRuleSnapshot.feeTemplates,
+            `Creating an application under ${quoteCompany?.name ?? companyRuleSnapshot.companyName}`
+          );
+        }
+        const versionRow = await ctx.db
+          .query("financeCompanyRuleVersions")
+          .withIndex("by_company_version", (q) =>
+            q.eq("companyId", quote.companyId!).eq("version", companyRuleSnapshot!.ruleVersion)
+          )
+          .first();
+        if (versionRow) companyRuleVersionId = versionRow._id;
+      }
     }
 
     // Carry the commercial facts the operator already stated on the quote
@@ -2442,8 +2529,6 @@ export const createFromQuote = mutation({
     // denomination before any write, then convert once at this lineage
     // boundary. A corrupt NaN/negative legacy quote must fail closed rather
     // than seed unusable economics (Convex's v.number() accepts NaN).
-    const economicsCurrency = await getOrgCurrency(ctx, args.orgId);
-    assertSupportedDenomination(economicsCurrency, "creating the finance application");
     const targetSellingAmountMinor = toMinorUnits(quote.vehiclePrice, economicsCurrency);
     const customerFirstPaymentMinor = toMinorUnits(quote.downPayment, economicsCurrency);
     assertValidMinorAmount(targetSellingAmountMinor, "quoted vehicle price");
@@ -2455,7 +2540,11 @@ export const createFromQuote = mutation({
     // the customer for a cost the policy explicitly excluded. EMPLOYEE means
     // the dealership advances/reimburses the money and is therefore
     // dealer-borne, matching the cockpit's financial summary classification.
-    const dealerBorneExpensesMinor = includedDealerBorneExpensesMinor(companyRuleSnapshot);
+    const dealerBorneExpensesMinor = resolveExpectedExecutionFeesMinor({
+      quote,
+      companyRuleSnapshot,
+      currency: economicsCurrency,
+    });
 
     // SCRUM-195: a live finance application is per-vehicle commitment evidence
     // in its own right — no deposit required. So creating one is an
@@ -2497,6 +2586,7 @@ export const createFromQuote = mutation({
       estimatedClosingExpensesMinor: dealerBorneExpensesMinor,
       ...(companyRuleSnapshot ? { companyRuleSnapshot } : {}),
       ...(companyRuleVersionId ? { companyRuleVersionId } : {}),
+      ...(quote.customerQuotePricingSnapshot ? { customerQuotePricingSnapshot: quote.customerQuotePricingSnapshot } : {}),
       notes: args.notes,
       createdAt: now,
       updatedAt: now,
@@ -2610,7 +2700,11 @@ export const repairQuoteEconomicsLineage = mutation({
 
     const targetSellingAmountMinor = toMinorUnits(quote.vehiclePrice, expectedCurrency);
     const customerFirstPaymentMinor = toMinorUnits(quote.downPayment, expectedCurrency);
-    const dealerBorneExpensesMinor = includedDealerBorneExpensesMinor(app.companyRuleSnapshot);
+    const dealerBorneExpensesMinor = resolveExpectedExecutionFeesMinor({
+      quote,
+      companyRuleSnapshot: app.companyRuleSnapshot,
+      currency: expectedCurrency,
+    });
     assertValidMinorAmount(targetSellingAmountMinor, "quoted vehicle price");
     assertValidMinorAmount(customerFirstPaymentMinor, "quoted customer first payment");
     const expected = {

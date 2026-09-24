@@ -6,6 +6,7 @@ import { listOptedInDealerProfiles } from "./marketplaceDealers";
 import { getPublishedSnapshotData, getSettingsByOrg, activePrimaryDomain } from "./websites";
 import { projectedVehicleRows, websiteSectionMap } from "./websiteProjection";
 import { calculateUnifiedMurabaha } from "../lib/financing";
+import { isRequestedFinancingTermValid } from "./utils/financingEconomics";
 
 const MAX_CANDIDATE_ORGS = 100;
 // Bounds the merged cross-org result set — founding-dealer scale, same
@@ -95,21 +96,40 @@ type FinanceCompanyTerms = {
 };
 
 /** Illustrative only — buyer hasn't picked their own down payment/term yet, so this uses the same default assumptions as the public dealer-site calculator. Returns null when the dealer has no active finance company to estimate against. */
-function estimateMonthlyPayment(price: number, financeCompany: FinanceCompanyTerms | null): number | null {
-  if (!financeCompany) return null;
+export function estimateMonthlyPayment(price: number, financeCompany: FinanceCompanyTerms | null): number | null {
+  if (!financeCompany || financeCompany.adminFees === undefined) return null;
   const downPayment = price * (ESTIMATE_DOWN_PAYMENT_PCT / 100);
   const termMonths = Math.min(ESTIMATE_TERM_MONTHS, financeCompany.maxTermMonths);
-  const { monthlyInstallment } = calculateUnifiedMurabaha({
+  if (
+    !isRequestedFinancingTermValid({
+      termMonths,
+      maxTermMonths: financeCompany.maxTermMonths,
+      gracePeriodMonths: financeCompany.gracePeriodMonths,
+    })
+  ) {
+    return null;
+  }
+  const { monthlyInstallment, financedAmount, totalContractValue } = calculateUnifiedMurabaha({
     vehiclePrice: price,
     downPayment,
     commission: financeCompany.commission ?? 0,
-    processingFees: financeCompany.adminFees ?? 0,
+    processingFees: financeCompany.adminFees,
     annualProfitRate: financeCompany.profitRate,
     annualInsuranceRate: financeCompany.insuranceRate ?? 0,
     termMonths,
     gracePeriodMonths: financeCompany.gracePeriodMonths,
     includesCommissionInDebt: financeCompany.includesCommissionInDebt ?? false,
   });
+  if (
+    !Number.isFinite(monthlyInstallment) ||
+    monthlyInstallment <= 0 ||
+    !Number.isFinite(financedAmount) ||
+    financedAmount <= 0 ||
+    !Number.isFinite(totalContractValue) ||
+    totalContractValue <= 0
+  ) {
+    return null;
+  }
   return Math.round(monthlyInstallment);
 }
 
@@ -213,7 +233,9 @@ export const search = query({
       const snapshotData = await getPublishedSnapshotData(ctx, orgId);
       if (!snapshotData) continue;
       const financeCompany = (snapshotData.financeCompany as FinanceCompanyTerms | null | undefined) ?? null;
-      const financeAvailable = Boolean(financeCompany);
+      const financeAvailable = Boolean(
+        financeCompany && financeCompany.adminFees !== undefined
+      );
       if (args.paymentType === "FINANCE" && !financeAvailable) continue;
       if (args.maxMonthlyPayment != null && !financeAvailable) continue;
 

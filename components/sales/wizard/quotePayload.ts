@@ -50,6 +50,10 @@ export function buildWizardQuotePayload({
       paymentType === "CASH" || isManualFinance
         ? undefined
         : wizardData.selectedCompanyId,
+    customerEligibilityStatusIds:
+      mode === "CONFIGURED_FINANCE_COMPANY" && wizardData.customerStatuses
+        ? (wizardData.customerStatuses as any)
+        : undefined,
     mode,
     vehiclePrice: wizardData.vehiclePrice + (wizardData.desiredProfit || 0),
     // Sent separately from the folded-in price so the backend can check it
@@ -68,7 +72,7 @@ export function buildWizardQuotePayload({
           manualProviderName: providerName || "Other finance option",
           manualProfitRate: wizardData.manualProfitRate ?? 0,
           manualInsuranceRate: wizardData.manualInsuranceRate ?? 0,
-          manualAdminFees: wizardData.manualExecutionFees ?? 0,
+          manualAdminFees: wizardData.manualExecutionFees,
           manualCommission: wizardData.manualExecutionCommission ?? 0,
           manualIncludesCommissionInDebt: wizardData.manualIncludesCommissionInDebt ?? true,
         }

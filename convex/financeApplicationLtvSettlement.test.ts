@@ -158,6 +158,14 @@ async function seed(tag: string, opts: { dealerContributionSettlement?: "PAID_SE
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Buyer", lastName: tag })
   );
+  const customerStatusId = await t.run((ctx) =>
+    ctx.db.insert("orgCustomerStatuses", {
+      orgId,
+      label: "Eligible",
+      isActive: true,
+      order: 1,
+    })
+  );
   const vehicleId = await t.run((ctx) =>
     ctx.db.insert("vehicles", {
       orgId, vin: `VIN117${tag}`, make: "Kia", model: "Sportage", year: 2024, mileage: 10,
@@ -170,6 +178,7 @@ async function seed(tag: string, opts: { dealerContributionSettlement?: "PAID_SE
     ctx.db.insert("financeCompanies", {
       orgId, name: "Jordan Auto Finance", profitRate: 5, maxTermMonths: 60,
       gracePeriodMonths: 0, isActive: true,
+      adminFees: 0,
       // The legitimate, configured rate. Present, so nothing here is the
       // "missing rate" recovery case — the CONTROL needs no rate supplied.
       defaultLtvPercent: SNAPSHOT_LTV,
@@ -179,7 +188,20 @@ async function seed(tag: string, opts: { dealerContributionSettlement?: "PAID_SE
     })
   );
 
-  return { t, orgId, managerId, manager2Id, ownerId, customerId, vehicleId, companyId, asManager, asManager2, asOwner };
+  return {
+    t,
+    orgId,
+    managerId,
+    manager2Id,
+    ownerId,
+    customerId,
+    customerStatusId,
+    vehicleId,
+    companyId,
+    asManager,
+    asManager2,
+    asOwner,
+  };
 }
 
 type Seeded = Awaited<ReturnType<typeof seed>>;
@@ -195,6 +217,7 @@ async function toApprovedApplication(s: Seeded): Promise<Id<"financeApplications
     termMonths: 48,
     mode: "CONFIGURED_FINANCE_COMPANY",
     companyId: s.companyId,
+    customerEligibilityStatusIds: [s.customerStatusId],
     totalFinancedAmount: VEHICLE_PRICE,
   });
   const applicationId = await s.asManager.mutation(api.applications.createFromQuote, {

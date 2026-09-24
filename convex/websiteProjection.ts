@@ -38,12 +38,13 @@ async function publicFinanceCompany(ctx: QueryCtx | MutationCtx, websiteSettings
   if (!company || !company.isActive) return null;
 
   return {
+    _id: company._id,
     name: company.name,
     profitRate: company.profitRate,
     maxTermMonths: company.maxTermMonths,
     gracePeriodMonths: company.gracePeriodMonths,
     insuranceRate: company.insuranceRate ?? 0,
-    adminFees: company.adminFees ?? 0,
+    adminFees: company.adminFees,
     commission: company.commission ?? 0,
     includesCommissionInDebt: company.includesCommissionInDebt ?? false,
   };

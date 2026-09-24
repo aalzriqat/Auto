@@ -1583,7 +1583,13 @@ describe("the stage the rail names carries its own action", () => {
 });
 
 describe("handover states the door it closes, with the figures to check", () => {
-  const openDialog = (factOverrides: Record<string, unknown> = {}) => {
+  const openDialog = (
+    factOverrides: Record<string, unknown> = {},
+    dealOverrides: Record<string, unknown> = {},
+    managementProfitClassification?:
+      | "ACTUAL_UNPOSTABLE"
+      | "ESTIMATED_AWAITING_SETTLEMENT"
+  ) => {
     const onSubmit = vi.fn(noopAsync);
     render(
       <DealCockpitView
@@ -1604,6 +1610,7 @@ describe("handover states the door it closes, with the figures to check", () => 
             currency: { code: "JOD", scale: 3 },
             ...factOverrides,
           },
+          ...dealOverrides,
         })}
         financeDecision={wiring({
           facts: {
@@ -1624,6 +1631,29 @@ describe("handover states the door it closes, with the figures to check", () => 
           onOpenChange: vi.fn(),
           onSubmit,
         }}
+        financialOverview={
+          managementProfitClassification
+            ? {
+                loading: false,
+                // Handover profit provenance is the server-owned financial overview.
+                // Keep this fixture intentionally minimal: the dialog consumes only
+                // financialSummary.profit, and must never fall back to deal.money.
+                data: {
+                  financialSummary: {
+                    profit: {
+                      available: true,
+                      basis: "MANAGEMENT_ESTIMATE",
+                      amountMinor: -500 * JOD,
+                      currency: "JOD",
+                      classification: managementProfitClassification,
+                      postable: false,
+                      lines: [],
+                    },
+                  },
+                } as never,
+              }
+            : undefined
+        }
         onRecordSupplierReceipt={async () => {}}
       />
     );
@@ -1658,6 +1688,46 @@ describe("handover states the door it closes, with the figures to check", () => 
     });
     expect(within(dialog).getByText("HandoverSealsApprovedAmount")).toBeTruthy();
     expect(within(dialog).queryByText(/150,000|150000/)).toBeNull();
+  });
+
+  test("labels an ACTUAL_UNPOSTABLE loss as actual at handover", () => {
+    const { dialog } = openDialog({}, {}, "ACTUAL_UNPOSTABLE");
+
+    expect(within(dialog).getByText("HandoverActualLossWarning")).toBeTruthy();
+    expect(within(dialog).getByText("HandoverActualLossWarningDesc")).toBeTruthy();
+    expect(within(dialog).queryByText("HandoverLossWarning")).toBeNull();
+  });
+
+  test("keeps an unsettled management loss labelled as estimated", () => {
+    const { dialog } = openDialog({}, {}, "ESTIMATED_AWAITING_SETTLEMENT");
+
+    expect(within(dialog).getByText("HandoverLossWarning")).toBeTruthy();
+    expect(within(dialog).getByText("HandoverLossWarningDesc")).toBeTruthy();
+    expect(within(dialog).queryByText("HandoverActualLossWarning")).toBeNull();
+  });
+
+  test("never falls back to legacy cockpit money profit when the authoritative overview is absent", () => {
+    const { dialog } = openDialog({}, {
+      money: {
+        currency: "JOD",
+        settlesDirectToSupplier: false,
+        routeKnown: true,
+        profit: {
+          available: true,
+          basis: "MANAGEMENT_ESTIMATE",
+          amountMinor: -500 * JOD,
+          currency: "JOD",
+          classification: "ACTUAL_UNPOSTABLE",
+          postable: false,
+          lines: [],
+        },
+        expenses: { lines: [], actualTotalMinor: 0, awaitingActuals: 0 },
+        parties: [],
+      },
+    });
+
+    expect(within(dialog).queryByText("HandoverActualLossWarning")).toBeNull();
+    expect(within(dialog).queryByText("HandoverLossWarning")).toBeNull();
   });
 
   test("confirming sends the notes through to the caller", async () => {

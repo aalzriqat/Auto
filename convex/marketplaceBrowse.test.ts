@@ -223,12 +223,29 @@ describe("marketplaceBrowse.search", () => {
   test("filters by price range and payment type", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedPublishedDealer(t, { name: "Cash Only Dealer", subdomainSlug: "cashonly", city: "Amman", withFinance: false });
-    await seedPublishedDealer(t, { name: "Finance Dealer", subdomainSlug: "financedealer", city: "Amman", withFinance: true });
+    await seedPublishedDealer(t, {
+      name: "Finance Dealer",
+      subdomainSlug: "financedealer",
+      city: "Amman",
+      withFinance: true,
+      financeTerms: { adminFees: 0 },
+    });
+    await seedPublishedDealer(t, {
+      name: "Unconfigured Finance Dealer",
+      subdomainSlug: "unconfiguredfinance",
+      city: "Amman",
+      withFinance: true,
+    });
 
     const financeOnly = await t.query(api.marketplaceBrowse.search, { paymentType: "FINANCE" });
     expect(financeOnly.vehicles).toHaveLength(1);
     expect(financeOnly.vehicles[0].dealershipName).toBe("Finance Dealer");
     expect(financeOnly.vehicles[0].financeAvailable).toBe(true);
+
+    const allVehicles = await t.query(api.marketplaceBrowse.search, {});
+    const unconfigured = allVehicles.vehicles.find((vehicle) => vehicle.dealershipName === "Unconfigured Finance Dealer");
+    expect(unconfigured?.financeAvailable).toBe(false);
+    expect(unconfigured?.estimatedMonthlyPayment).toBeNull();
 
     const tooExpensive = await t.query(api.marketplaceBrowse.search, { priceMin: 20000 });
     expect(tooExpensive.vehicles).toHaveLength(0);

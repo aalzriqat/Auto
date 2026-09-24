@@ -18,6 +18,7 @@ export interface WizardData {
   manualExecutionFees?: number;
   manualIncludesCommissionInDebt?: boolean;
   recipientName?: string;
+  customerStatuses?: string[];
   /** Set when the wizard was launched from a lead's context, so the resulting quote links back to it. */
   leadId?: string;
   /** Seeds the vehicle picker's "source a vehicle" form when launched via a SOLD vehicle's "Source another like this" action. */

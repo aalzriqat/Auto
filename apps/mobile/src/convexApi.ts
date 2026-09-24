@@ -746,6 +746,7 @@ export interface MobileFinanceCompany {
   includesCommissionInDebt?: boolean;
   maxFinancingLTV?: number;
   acceptedStatuses?: string[];
+  editRevision?: number;
   isActive: boolean;
 }
 
@@ -1400,6 +1401,7 @@ export interface MobileWizardDraftData {
   manualExecutionCommission?: number;
   manualExecutionFees?: number;
   manualIncludesCommissionInDebt?: boolean;
+  customerStatuses?: string[];
   recipientName?: string;
 }
 
@@ -1930,10 +1932,11 @@ type MemberCreateAccountArgs = OrgScopedArgs & {
   roleId: string;
 };
 
-type QuoteSaveArgs = OrgScopedArgs & {
+export type QuoteSaveArgs = OrgScopedArgs & {
   customerId: string;
   vehicleId: string;
   companyId?: string;
+  customerEligibilityStatusIds?: string[];
   mode?: MobileQuoteMode;
   leadId?: string;
   vehiclePrice: number;
@@ -2413,7 +2416,7 @@ export const api = {
     ),
     updateCompany: makeFunctionReference<
       "mutation",
-      FinanceCompanyMutationArgs & { id: string },
+      FinanceCompanyMutationArgs & { id: string; expectedEditRevision: number },
       null
     >("finance:updateCompany"),
     deleteCompany: makeFunctionReference<"mutation", OrgScopedArgs & { id: string }, null>(

@@ -117,6 +117,7 @@ interface Seed {
   userId: Id<"users">;
   asUser: AuthenticatedTestConvex;
   customerId: Id<"customers">;
+  customerStatusId: Id<"orgCustomerStatuses">;
   vehicleId: Id<"vehicles">;
 }
 
@@ -156,20 +157,39 @@ async function seedDealer(suffix: string): Promise<Seed> {
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Expected", lastName: "Customer" })
   );
-  return { t, orgId, userId, asUser: t.withIdentity({ subject: `exp_user_${suffix}` }), customerId, vehicleId };
+  const customerStatusId = await t.run((ctx) =>
+    ctx.db.insert("orgCustomerStatuses", {
+      orgId,
+      label: "Eligible",
+      isActive: true,
+      order: 1,
+    })
+  );
+  return {
+    t,
+    orgId,
+    userId,
+    asUser: t.withIdentity({ subject: `exp_user_${suffix}` }),
+    customerId,
+    customerStatusId,
+    vehicleId,
+  };
 }
 
 async function createCompany(seed: Seed, name: string, feeTemplates: Template[]) {
-  return await seed.asUser.mutation(api.finance.createCompany, {
-    orgId: seed.orgId,
-    name,
-    profitRate: 5,
-    maxTermMonths: 60,
-    gracePeriodMonths: 0,
-    defaultLtvPercent: 80,
-    isActive: true,
-    expectedCurrency: "JOD",
-    feeTemplates,
+  return await seed.t.run(async (ctx) => {
+    return await ctx.db.insert("financeCompanies", {
+      orgId: seed.orgId,
+      name,
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      defaultLtvPercent: 80,
+      isActive: true,
+      ruleVersion: 1,
+      adminFees: 0,
+      feeTemplates: feeTemplates.length > 0 ? feeTemplates : undefined,
+    });
   });
 }
 
@@ -184,9 +204,26 @@ async function createApplicationFor(seed: Seed, companyId: Id<"financeCompanies"
     termMonths: 48,
     mode: "CONFIGURED_FINANCE_COMPANY",
     companyId,
+    customerEligibilityStatusIds: [seed.customerStatusId],
     totalFinancedAmount: 20_000,
   });
-  return await seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId });
+  const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId });
+  const company = await seed.t.run((ctx) => ctx.db.get(companyId));
+  if (company?.feeTemplates && company.feeTemplates.length > 0) {
+    await seed.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      if (app && app.companyRuleSnapshot) {
+        await ctx.db.patch(applicationId, {
+          companyRuleSnapshot: {
+            ...app.companyRuleSnapshot,
+            adminFees: undefined,
+            feeTemplates: company.feeTemplates,
+          },
+        });
+      }
+    });
+  }
+  return applicationId;
 }
 
 async function costsOf(seed: Seed, applicationId: Id<"financeApplications">) {
@@ -269,17 +306,8 @@ describe("the expected checklist comes from the application's frozen snapshot", 
 
     const company = await seed.t.run((ctx) => ctx.db.get(companyId));
     if (!company) throw new Error("company vanished");
-    await seed.asUser.mutation(api.finance.updateCompany, {
-      id: companyId,
-      orgId: seed.orgId,
-      name: company.name,
-      profitRate: company.profitRate,
-      maxTermMonths: company.maxTermMonths,
-      gracePeriodMonths: company.gracePeriodMonths,
-      isActive: true,
-      expectedCurrency: "JOD",
-      expectedRuleVersion: company.ruleVersion ?? 1,
-      feeTemplates: COMPANY_B_TEMPLATES,
+    await seed.t.run(async (ctx) => {
+      await ctx.db.patch(companyId, { feeTemplates: COMPANY_B_TEMPLATES });
     });
     // The live row moved (control), the deal did not.
     const liveNow = (await seed.t.run((ctx) => ctx.db.get(companyId)))?.feeTemplates;
@@ -729,6 +757,14 @@ describe("finalization re-checks configured fees, whichever rule the deal was cl
     const customerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Buyer", lastName: tag })
     );
+    const customerStatusId = await t.run((ctx) =>
+      ctx.db.insert("orgCustomerStatuses", {
+        orgId,
+        label: "Eligible",
+        isActive: true,
+        order: 1,
+      })
+    );
     const vehicleId = await t.run((ctx) =>
       ctx.db.insert("vehicles", {
         orgId,
@@ -749,18 +785,32 @@ describe("finalization re-checks configured fees, whichever rule the deal was cl
     // 100% LTV: the company funds the whole approval and the dealership
     // contributes nothing, so no NETTED refusal and a knowable remittance —
     // the fixture Codex described.
-    const companyId = await asUser.mutation(api.finance.createCompany, {
+    const companyId = await t.run((ctx) =>
+      ctx.db.insert("financeCompanies", {
+        orgId,
+        name: `Finance ${tag}`,
+        profitRate: 5,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        defaultLtvPercent: 100,
+        isActive: true,
+        ruleVersion: 1,
+        adminFees: 0,
+        feeTemplates: COMPANY_B_TEMPLATES,
+      })
+    );
+    return {
+      t,
       orgId,
-      name: `Finance ${tag}`,
-      profitRate: 5,
-      maxTermMonths: 60,
-      gracePeriodMonths: 0,
-      defaultLtvPercent: 100,
-      isActive: true,
-      expectedCurrency: "JOD",
-      feeTemplates: COMPANY_B_TEMPLATES,
-    });
-    return { t, orgId, userId, approverId, customerId, vehicleId, companyId, asUser, asApprover };
+      userId,
+      approverId,
+      customerId,
+      customerStatusId,
+      vehicleId,
+      companyId,
+      asUser,
+      asApprover,
+    };
   }
 
   type Finalizable = Awaited<ReturnType<typeof seedFinalizable>>;
@@ -776,9 +826,22 @@ describe("finalization re-checks configured fees, whichever rule the deal was cl
       termMonths: 48,
       mode: "CONFIGURED_FINANCE_COMPANY",
       companyId: s.companyId,
+      customerEligibilityStatusIds: [s.customerStatusId],
       totalFinancedAmount: PRICE,
     });
     const applicationId = await s.asUser.mutation(api.applications.createFromQuote, { orgId: s.orgId, quoteId });
+    await s.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      if (app && app.companyRuleSnapshot) {
+        await ctx.db.patch(applicationId, {
+          companyRuleSnapshot: {
+            ...app.companyRuleSnapshot,
+            adminFees: undefined,
+            feeTemplates: COMPANY_B_TEMPLATES,
+          },
+        });
+      }
+    });
     await s.asUser.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "UNDER_REVIEW" });
     await s.asApprover.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "APPROVED" });
     await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
@@ -1064,74 +1127,74 @@ describe("the fee-template cap", () => {
       applications: await ctx.db.query("financeApplications").collect(),
     }));
 
-  test("create and an explicit update accept the cap and refuse one past it before any write", async () => {
+  test("create and update refuse feeTemplates configuration because fee templates are retired", async () => {
     expect(MAX_FEE_TEMPLATES).toBeLessThan(MAX_LIVE_DEAL_FEE_LINES);
     const seed = await seedDealer("templateCap");
-    const companyId = await createCompany(seed, "At the cap", templates(MAX_FEE_TEMPLATES));
-    await seed.asUser.mutation(api.finance.updateCompany, {
-      orgId: seed.orgId,
-      id: companyId,
-      name: "At the cap",
-      ...companyFields,
-      expectedCurrency: "JOD",
-      expectedRuleVersion: 1,
-      feeTemplates: templates(MAX_FEE_TEMPLATES),
-    });
-    const before = await policyTables(seed);
-    expect(before.companies[0]?.feeTemplates).toHaveLength(MAX_FEE_TEMPLATES);
+    await expect(
+      seed.asUser.mutation(api.finance.createCompany, {
+        orgId: seed.orgId,
+        name: "Retired",
+        ...companyFields,
+        feeTemplates: templates(1),
+      })
+    ).rejects.toThrow(/Configuring company fee templates is retired/i);
 
-    await expect(createCompany(seed, "Past the cap", templates(MAX_FEE_TEMPLATES + 1))).rejects.toThrow(tooMany);
+    const companyId = await seed.t.run((ctx) =>
+      ctx.db.insert("financeCompanies", {
+        orgId: seed.orgId,
+        name: "Legacy",
+        ...companyFields,
+      })
+    );
     await expect(
       seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
         orgId: seed.orgId,
         id: companyId,
-        name: "At the cap",
+        name: "Legacy",
         ...companyFields,
-        expectedCurrency: "JOD",
-        expectedRuleVersion: 1,
-        feeTemplates: templates(MAX_FEE_TEMPLATES + 1),
+        feeTemplates: templates(1),
       })
-    ).rejects.toThrow(tooMany);
-    expect(await policyTables(seed)).toEqual(before);
+    ).rejects.toThrow(/Updating company fee templates is retired/i);
   });
 
-  test("a legacy company past the cap: an unrelated edit still saves with the list verbatim, no application can freeze it, and an explicit compliant list repairs it", async () => {
+  test("a legacy company past the cap: an unrelated edit still saves with the list verbatim, and adopting adminFees clears it", async () => {
     const seed = await seedDealer("legacyOversize");
     const oversized = templates(MAX_FEE_TEMPLATES + 1);
     const companyId = await seed.t.run((ctx) =>
       ctx.db.insert("financeCompanies", { orgId: seed.orgId, name: "Legacy", ...companyFields, feeTemplates: oversized })
     );
 
-    await seed.asUser.mutation(api.finance.updateCompany, { orgId: seed.orgId, id: companyId, name: "Legacy, renamed", ...companyFields });
+    await seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1, orgId: seed.orgId, id: companyId, name: "Legacy, renamed", ...companyFields });
     const renamed = await seed.t.run((ctx) => ctx.db.get(companyId));
     expect(renamed?.name).toBe("Legacy, renamed");
     expect(renamed?.feeTemplates).toEqual(oversized);
 
-    const quoteId = await seed.asUser.mutation(api.quotes.saveQuote, {
-      orgId: seed.orgId,
-      customerId: seed.customerId,
-      vehicleId: seed.vehicleId,
-      vehiclePrice: 20_000,
-      downPayment: 0,
-      termMonths: 48,
-      mode: "CONFIGURED_FINANCE_COMPANY",
-      companyId,
-      totalFinancedAmount: 20_000,
-    });
-    await expect(seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId })).rejects.toThrow(tooMany);
-    expect((await policyTables(seed)).applications).toEqual([]);
+    // Updating with feeTemplates is rejected as retired
+    await expect(
+      seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 2,
+        orgId: seed.orgId,
+        id: companyId,
+        name: "Legacy, renamed",
+        ...companyFields,
+        feeTemplates: templates(2),
+      })
+    ).rejects.toThrow(/Updating company fee templates is retired/i);
 
+    // Adopting adminFees clears legacy feeTemplates
     await seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 2,
       orgId: seed.orgId,
       id: companyId,
-      name: "Legacy, renamed",
+      name: "Legacy, modernized",
       ...companyFields,
-      expectedCurrency: "JOD",
-      expectedRuleVersion: 1,
-      feeTemplates: templates(2),
+      adminFees: 500,
     });
-    const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId });
-    expect((await seed.t.run((ctx) => ctx.db.get(applicationId)))?.companyRuleSnapshot?.feeTemplates).toHaveLength(2);
+    const modernized = await seed.t.run((ctx) => ctx.db.get(companyId));
+    expect(modernized?.adminFees).toBe(500);
+    expect(modernized?.feeTemplates).toBeUndefined();
   });
 
   test("a deal already frozen past closure capacity is refused at the closure door with the cause, not a count of unrecorded fees", async () => {

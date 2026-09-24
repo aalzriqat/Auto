@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { query, QueryCtx } from "./_generated/server";
-import { calculateMaximumAffordableVehiclePrice } from "../lib/financing";
+import { calculateMaximumAffordableVehiclePrice, isRequestedFinancingTermValid } from "../lib/financing";
 import { listOptedInDealerProfiles } from "./marketplaceDealers";
 import { hasPlanFeature } from "./subscriptions";
 import { getPublishedSnapshotData } from "./websites";
@@ -51,7 +51,7 @@ function termsSignature(terms: FinanceTerms): string {
     terms.maxTermMonths,
     terms.gracePeriodMonths ?? 0,
     terms.insuranceRate ?? 0,
-    terms.adminFees ?? 0,
+    terms.adminFees ?? "undefined",
     terms.commission ?? 0,
     terms.includesCommissionInDebt ?? false,
   ].join("|");
@@ -70,16 +70,34 @@ export function computeAffordabilityRange(
   if (!(inputs.maximumMonthlyPayment > 0) || inputs.termMonths <= 0 || inputs.downPayment < 0) {
     return null;
   }
+  // Reject non-integer or non-finite requested terms
+  if (!Number.isFinite(inputs.termMonths) || !Number.isInteger(inputs.termMonths)) {
+    return null;
+  }
 
   const prices: number[] = [];
   const seen = new Set<string>();
   for (const terms of termsList) {
+    if (terms.adminFees === undefined) continue;
     const signature = termsSignature(terms);
     if (seen.has(signature)) continue;
     seen.add(signature);
 
     const termMonths = Math.min(inputs.termMonths, terms.maxTermMonths);
     if (termMonths <= 0) continue;
+    // Consume the canonical requested-term invariant rather than relying on
+    // calculateMaximumAffordableVehiclePrice's internal guard against
+    // termMonths - gracePeriodMonths <= 0 (which returns 0 — a valid-looking
+    // price that silently encodes impossible economics).
+    if (
+      !isRequestedFinancingTermValid({
+        termMonths,
+        maxTermMonths: terms.maxTermMonths,
+        gracePeriodMonths: terms.gracePeriodMonths,
+      })
+    ) {
+      continue;
+    }
 
     const price = calculateMaximumAffordableVehiclePrice({
       maximumMonthlyPayment: inputs.maximumMonthlyPayment,
@@ -89,7 +107,7 @@ export function computeAffordabilityRange(
         annualProfitRate: terms.profitRate,
         annualInsuranceRate: terms.insuranceRate ?? 0,
         commission: terms.commission ?? 0,
-        processingFees: terms.adminFees ?? 0,
+        processingFees: terms.adminFees,
         gracePeriodMonths: terms.gracePeriodMonths ?? 0,
         includesCommissionInDebt: terms.includesCommissionInDebt ?? false,
       },

@@ -91,28 +91,20 @@ describe("finance companies", () => {
     accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE" as const,
   };
 
-  test("fee template amounts are transactionally bound to the expected org currency", async () => {
+  test("fee template configuration is rejected on createCompany as retired authority", async () => {
     const { t, orgId, asOwner } = await setupFinanceOrg();
-
-    // Reproduces the TOCTOU: the dialog may have converted 12.500 JOD to
-    // 12,500 fils, then a still-fresh organization switches to USD before the
-    // company mutation commits. With no expected-currency precondition the
-    // exact same integer is stored and later read as $125.00.
-    await asOwner.mutation(api.orgSettings.upsert, { orgId, currency: "JOD" });
-    await asOwner.mutation(api.orgSettings.upsert, { orgId, currency: "USD" });
 
     await expect(
       asOwner.mutation(api.finance.createCompany, {
         orgId,
-        name: "Currency Race Finance",
+        name: "Retired Templates Finance",
         profitRate: 5,
         maxTermMonths: 60,
         gracePeriodMonths: 0,
         isActive: true,
-        expectedCurrency: "JOD",
         feeTemplates: [expectedOwnershipTransfer],
       })
-    ).rejects.toThrow(/currency changed/i);
+    ).rejects.toThrow(/Configuring company fee templates is retired/i);
 
     expect(
       await t.run((ctx) =>
@@ -122,89 +114,35 @@ describe("finance companies", () => {
           .collect()
       )
     ).toHaveLength(0);
-
-    const companyId = await asOwner.mutation(api.finance.createCompany, {
-      orgId,
-      name: "USD Finance",
-      profitRate: 5,
-      maxTermMonths: 60,
-      gracePeriodMonths: 0,
-      isActive: true,
-      expectedCurrency: "USD",
-      feeTemplates: [expectedOwnershipTransfer],
-    });
-    const company = await t.run((ctx) => ctx.db.get(companyId));
-    expect(company?.feeTemplates).toEqual([expectedOwnershipTransfer]);
-    expect(company).not.toHaveProperty("expectedCurrency");
   });
 
-  test("fee template writes reject absent, noncanonical, and unsupported currency authority", async () => {
-    const { t, orgId, asOwner } = await setupFinanceOrg();
-    const base = {
-      orgId,
-      name: "Unsafe Currency Finance",
-      profitRate: 5,
-      maxTermMonths: 60,
-      gracePeriodMonths: 0,
-      isActive: true,
-      feeTemplates: [expectedOwnershipTransfer],
-    };
-
-    await expect(asOwner.mutation(api.finance.createCompany, base)).rejects.toThrow(/expected currency/i);
-    await expect(
-      asOwner.mutation(api.finance.createCompany, { ...base, expectedCurrency: "jod" })
-    ).rejects.toThrow(/expected currency/i);
-
-    await t.run(async (ctx) => {
-      await ctx.db.insert("orgSettings", {
-        orgId,
-        currency: "JD",
-        currencySymbol: "JD",
-        enabledPaymentTypes: [],
-      });
-    });
-    await expect(
-      asOwner.mutation(api.finance.createCompany, { ...base, expectedCurrency: "JOD" })
-    ).rejects.toThrow(/organization currency is not supported/i);
-  });
-
-  test("concurrent fee-policy edits require the exact current rule version", async () => {
+  test("fee template configuration is rejected on updateCompany as retired authority", async () => {
     const { t, orgId, asOwner } = await setupFinanceOrg();
     const companyId = await asOwner.mutation(api.finance.createCompany, {
       orgId,
-      name: "Versioned Finance",
+      name: "Standard Finance",
       profitRate: 5,
       maxTermMonths: 60,
       gracePeriodMonths: 0,
       isActive: true,
     });
 
-    const commonUpdate = {
-      id: companyId,
-      orgId,
-      name: "Versioned Finance",
-      profitRate: 5,
-      maxTermMonths: 60,
-      gracePeriodMonths: 0,
-      isActive: true,
-      expectedCurrency: "JOD",
-    };
-    await asOwner.mutation(api.finance.updateCompany, {
-      ...commonUpdate,
-      expectedRuleVersion: 1,
-      feeTemplates: [expectedOwnershipTransfer],
-    });
     await expect(
       asOwner.mutation(api.finance.updateCompany, {
-        ...commonUpdate,
-        expectedRuleVersion: 1,
-        feeTemplates: [{ ...expectedOwnershipTransfer, estimatedAmountMinor: 99_000 }],
+        expectedEditRevision: 1,
+        id: companyId,
+        orgId,
+        name: "Standard Finance",
+        profitRate: 5,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        isActive: true,
+        feeTemplates: [expectedOwnershipTransfer],
       })
-    ).rejects.toThrow(/changed while you were editing/i);
+    ).rejects.toThrow(/Updating company fee templates is retired/i);
 
     const company = await t.run((ctx) => ctx.db.get(companyId));
-    expect(company?.ruleVersion).toBe(2);
-    expect(company?.feeTemplates).toEqual([expectedOwnershipTransfer]);
+    expect(company?.feeTemplates).toBeUndefined();
   });
 
   test("owner_manages_company_lifecycle_and_list_reflects_deactivation", async () => {
@@ -234,6 +172,7 @@ describe("finance companies", () => {
     });
 
     await asOwner.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
       id: companyId,
       orgId,
       name: "Jordan Finance Updated",
@@ -257,6 +196,85 @@ describe("finance companies", () => {
       deactivatedBy: userId,
     });
     expect(companies[0]?.deactivatedAt).toBeTypeOf("number");
+  });
+
+  test("stale full-form finance company writes are refused even when ruleVersion does not change", async () => {
+    const { t, orgId, asOwner } = await setupFinanceOrg();
+    const companyId = await asOwner.mutation(api.finance.createCompany, {
+      orgId,
+      name: "Concurrent Finance",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      isActive: true,
+    });
+
+    const initiallyLoaded = await t.run((ctx) => ctx.db.get(companyId));
+    expect(initiallyLoaded?.editRevision).toBe(1);
+    expect(initiallyLoaded?.ruleVersion).toBe(1);
+
+    await asOwner.mutation(api.finance.updateCompany, {
+      expectedEditRevision: 1,
+      id: companyId,
+      orgId,
+      name: "Editor A",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      isActive: true,
+    });
+
+    const afterFirstWriter = await t.run((ctx) => ctx.db.get(companyId));
+    expect(afterFirstWriter?.editRevision).toBe(2);
+    // Name is not a dealer-purchase rule; the historical economics version
+    // deliberately stays put while the general edit revision advances.
+    expect(afterFirstWriter?.ruleVersion).toBe(1);
+
+    await expect(
+      asOwner.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
+        id: companyId,
+        orgId,
+        name: "Editor B stale overwrite",
+        profitRate: 6,
+        maxTermMonths: 72,
+        gracePeriodMonths: 0,
+        isActive: true,
+      })
+    ).rejects.toThrow(/changed since you opened/i);
+
+    const finalCompany = await t.run((ctx) => ctx.db.get(companyId));
+    expect(finalCompany?.name).toBe("Editor A");
+    expect(finalCompany?.editRevision).toBe(2);
+  });
+
+  test("a legacy finance company without editRevision starts at revision one and self-heals", async () => {
+    const { t, orgId, asOwner } = await setupFinanceOrg();
+    const companyId = await t.run((ctx) =>
+      ctx.db.insert("financeCompanies", {
+        orgId,
+        name: "Legacy Revision Finance",
+        profitRate: 4,
+        maxTermMonths: 48,
+        gracePeriodMonths: 0,
+        isActive: true,
+      })
+    );
+
+    await asOwner.mutation(api.finance.updateCompany, {
+      expectedEditRevision: 1,
+      id: companyId,
+      orgId,
+      name: "Legacy Revision Finance Updated",
+      profitRate: 4,
+      maxTermMonths: 48,
+      gracePeriodMonths: 0,
+      isActive: true,
+    });
+
+    const company = await t.run((ctx) => ctx.db.get(companyId));
+    expect(company?.editRevision).toBe(2);
+    expect(company?.name).toBe("Legacy Revision Finance Updated");
   });
 
   test("deleting_a_customer_status_clears_it_from_finance_companies", async () => {
@@ -321,6 +339,7 @@ describe("finance companies", () => {
     // organization." and the record could never be edited again — the dialog
     // re-sent the dangling id on every save and offered no way to remove it.
     await asOwner.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
       id: companyId,
       orgId,
       name: "Stranded Finance Renamed",
@@ -357,6 +376,7 @@ describe("finance companies", () => {
     // so writing it unconditionally would erase the restriction and silently
     // widen the company to "accepts every customer".
     await asOwner.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
       id: companyId,
       orgId,
       name: "Restricted Finance Renamed",
@@ -395,6 +415,7 @@ describe("finance companies", () => {
     // that exist in someone else's org. Only createCompany covered this before.
     await expect(
       asOwner.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
         id: companyId,
         orgId,
         name: "Boundary Finance",
@@ -726,5 +747,95 @@ describe("vehicle valuations", () => {
 
     const valuations = await asOwner.query(api.finance.listValuations, { orgId, vehicleId });
     expect(valuations).toHaveLength(0);
+  });
+});
+
+describe("finance company accepted-status lifecycle", () => {
+  test("NEGATIVE CONTROL: deactivating the last accepted status deactivates the lender instead of widening eligibility", async () => {
+    const { t, orgId, asOwner } = await setupFinanceOrg();
+    const statusId = await t.run((ctx) =>
+      ctx.db.insert("orgCustomerStatuses", {
+        orgId,
+        label: "Salaried only",
+        isActive: true,
+        order: 1,
+      })
+    );
+    const companyId = await asOwner.mutation(api.finance.createCompany, {
+      orgId,
+      name: "Scoped Finance",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      adminFees: 0,
+      isActive: true,
+      acceptedStatuses: [statusId],
+    });
+
+    await asOwner.mutation(api.orgCustomerStatuses.update, {
+      orgId,
+      statusId,
+      isActive: false,
+    });
+
+    const company = await t.run((ctx) => ctx.db.get(companyId));
+    expect(company?.acceptedStatuses).toEqual([]);
+    expect(company?.isActive).toBe(false);
+    expect(company?.editRevision).toBe(2);
+  });
+
+  test("NEGATIVE CONTROL: saving an inactive-only status scope cannot become accept-all", async () => {
+    const { t, orgId, asOwner } = await setupFinanceOrg();
+    const inactiveStatusId = await t.run((ctx) =>
+      ctx.db.insert("orgCustomerStatuses", {
+        orgId,
+        label: "Inactive scope",
+        isActive: false,
+        order: 1,
+      })
+    );
+
+    const companyId = await asOwner.mutation(api.finance.createCompany, {
+      orgId,
+      name: "Sanitized Finance",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      adminFees: 0,
+      isActive: true,
+      acceptedStatuses: [inactiveStatusId],
+    });
+
+    const company = await t.run((ctx) => ctx.db.get(companyId));
+    expect(company?.acceptedStatuses).toEqual([]);
+    expect(company?.isActive).toBe(false);
+  });
+
+  test("removing one status preserves an active lender when another accepted status remains", async () => {
+    const { t, orgId, asOwner } = await setupFinanceOrg();
+    const statusIds = await t.run(async (ctx) => [
+      await ctx.db.insert("orgCustomerStatuses", { orgId, label: "A", isActive: true, order: 1 }),
+      await ctx.db.insert("orgCustomerStatuses", { orgId, label: "B", isActive: true, order: 2 }),
+    ]);
+    const companyId = await asOwner.mutation(api.finance.createCompany, {
+      orgId,
+      name: "Multi-scope Finance",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      adminFees: 0,
+      isActive: true,
+      acceptedStatuses: statusIds,
+    });
+
+    await asOwner.mutation(api.orgCustomerStatuses.update, {
+      orgId,
+      statusId: statusIds[0],
+      isActive: false,
+    });
+
+    const company = await t.run((ctx) => ctx.db.get(companyId));
+    expect(company?.acceptedStatuses).toEqual([statusIds[1]]);
+    expect(company?.isActive).toBe(true);
   });
 });
