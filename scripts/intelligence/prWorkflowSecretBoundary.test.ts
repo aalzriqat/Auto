@@ -36,9 +36,6 @@ describe("pull-request workflow secret boundary", () => {
     expect(direct.length).toBeGreaterThan(0);
 
     for (const workflow of direct) {
-      if (workflow.path === ".github/workflows/sonar-bootstrap-325.yml") {
-        continue;
-      }
       expect(
         workflow.source,
         workflow.path + " must be secretless because same-repository PR code controls this workflow revision.",
@@ -46,68 +43,8 @@ describe("pull-request workflow secret boundary", () => {
     }
   });
 
-  it("allows only the one-time PR 325 Sonar bootstrap secret on the pinned scanner action", () => {
-    const source = readFileSync(
-      path.join(workflowsDir, "sonar-bootstrap-325.yml"),
-      "utf8",
-    );
-    const parsed = parseYaml(source) as {
-      on?: Record<string, unknown>;
-      jobs?: Record<
-        string,
-        {
-          if?: string;
-          permissions?: Record<string, string>;
-          steps?: Array<{
-            name?: string;
-            uses?: string;
-            run?: string;
-            env?: Record<string, string>;
-            with?: Record<string, unknown>;
-          }>;
-        }
-      >;
-    };
-
-    expect(parsed.on).toHaveProperty("pull_request");
-    const job = parsed.jobs?.["sonar-bootstrap-325"];
-    expect(job).toBeDefined();
-    expect(job?.if).toContain("github.event.pull_request.number == 325");
-    expect(job?.if).toContain(
-      "github.event.pull_request.head.ref == 'agent/scrum-350-browser-swarm'",
-    );
-    expect(job?.if).toContain(
-      "github.event.pull_request.head.repo.full_name == github.repository",
-    );
-    expect(job?.permissions).toEqual({ contents: "read" });
-
-    const steps = job?.steps ?? [];
-    const scanner = steps.find(
-      (step) => step.name === "SonarCloud bootstrap scan for PR 325 only",
-    );
-    expect(scanner?.uses).toBe(
-      "SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f",
-    );
-    expect(scanner?.env).toEqual({
-      SONAR_TOKEN: "${{ secrets.SONAR_TOKEN }}",
-    });
-
-    for (const step of steps) {
-      if (step === scanner) continue;
-      expect(JSON.stringify(step)).not.toMatch(/\$\{\{\s*secrets\./);
-      expect(step.run ?? "").not.toContain("SONAR_TOKEN");
-    }
-
-    expect(source.match(/\$\{\{\s*secrets\./g)?.length).toBe(1);
-    expect(source).toContain("pnpm install --frozen-lockfile --ignore-scripts");
-    expect(source).toContain("git ls-files -s");
-    expect(source).toContain("'$1 == \"120000\" { found=1 }");
-    expect(source).not.toContain("find . -path './.git'");
-    expect(source).toContain("git show \"$BASE_SHA:sonar-project.properties\"");
-    expect(source).toContain("-Dsonar.pullrequest.key=325");
-    expect(source).toContain(
-      "-Dsonar.scm.revision=${{ github.event.pull_request.head.sha }}",
-    );
+  it("does not retain obsolete PR-specific privileged bootstrap workflows", () => {
+    expect(readdirSync(workflowsDir)).not.toContain("sonar-bootstrap-325.yml");
   });
 
   it("keeps privileged PR follow-up workflows on workflow_run rather than pull_request", () => {
@@ -121,6 +58,14 @@ describe("pull-request workflow secret boundary", () => {
       expect(parsed.on).toMatchObject({ workflow_run: expect.any(Object) });
       expect(parsed.on).not.toHaveProperty("pull_request");
     }
+  });
+
+  it("keeps expensive Tests runs single-flight per PR or ref", () => {
+    const tests = readFileSync(path.join(workflowsDir, "test.yml"), "utf8");
+    expect(tests).toContain(
+      "group: tests-${{ github.event.pull_request.number || github.ref }}",
+    );
+    expect(tests).toContain("cancel-in-progress: true");
   });
 
   it("keeps direct PR security and accounting lanes free of privileged runtime credentials", () => {
@@ -156,6 +101,25 @@ describe("pull-request workflow secret boundary", () => {
     expect(source).toContain("path: ${{ runner.temp }}/sonar-coverage");
     expect(source).toContain("projectBaseDir: candidate");
     expect(source).toContain("autoflow/trusted-sonar-pr");
+    expect(source).toContain("refs/pull/${PR_NUMBER}/head:refs/autoflow/sonar-pr-head");
+    expect(source).toContain("refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-pr-merge");
+    expect(source).toContain("FIRST_PARENT");
+    expect(source).toContain("TRIGGER_STARTED_AT");
+    expect(source).toContain("MERGE_COMMIT_EPOCH");
+    expect(source).toContain("mismatched coverage provenance");
+    expect(source).toContain("refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-final-merge");
+    expect(source).toContain("still-current exact merge");
+    expect(source).toContain("+refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-report-merge");
+    expect(source).toContain('if [ "$current_merge" != "$TESTED_SHA" ]; then');
+    expect(source.indexOf("sonar-report-merge")).toBeGreaterThan(source.indexOf("sonar-pr-report-payload.json"));
+    expect(source.indexOf("sonar-report-merge")).toBeLessThan(source.indexOf("-X PATCH"));
+    expect(source).toContain("tested-merge-sha.txt");
+    expect(source).toContain('if [ "$coverage_merge" != "$TESTED_SHA" ]; then');
+    expect(source).toContain('git merge-base --is-ancestor "$FIRST_PARENT" refs/autoflow/sonar-main');
+    expect(source).toContain('if [ "$live_base_ref" != "main" ]; then');
+    const tests = readFileSync(path.join(workflowsDir, "test.yml"), "utf8");
+    expect(tests).toContain('printf \'%s\\n\' "$GITHUB_SHA" > coverage/tested-merge-sha.txt');
+    expect(source).not.toContain("github.event.workflow_run.pull_requests[0].base.sha");
     expect(source.match(/statuses\/\$TESTED_SHA/g)?.length).toBe(2);
     expect(source).not.toContain("working-directory: candidate");
     expect(source).not.toMatch(/candidate[^\n]*pnpm\s+(?:install|run|exec)/);
@@ -175,6 +139,23 @@ describe("pull-request workflow secret boundary", () => {
     expect(source).not.toContain("$GITHUB_WORKSPACE/trusted:/");
     expect(source).toContain("Disposable rehearsal preview environment does not match the trusted allowlist.");
     expect(source).toContain("autoflow/trusted-accounting-rehearsal");
+    expect(source).toContain("refs/pull/${PR_NUMBER}/head:refs/autoflow/accounting-pr-head");
+    expect(source).toContain("refs/pull/${PR_NUMBER}/merge:refs/autoflow/accounting-pr-merge");
+    expect(source).toContain('git merge-base --is-ancestor "$FIRST_PARENT" refs/autoflow/accounting-main');
+    expect(source).toContain('if [ "$live_base_ref" != "main" ]; then');
+    expect(source).toContain("FIRST_PARENT");
+    expect(source).not.toContain("github.event.workflow_run.pull_requests[0].base.sha");
     expect(source.match(/statuses\/\$TESTED_SHA/g)?.length).toBe(2);
+  });
+
+  it("keeps Jev workflow_run analysis on immutable trusted code and the live PR base", () => {
+    const source = readFileSync(path.join(workflowsDir, "jev-shadow-impact.yml"), "utf8");
+    expect(source).toContain("ref: ${{ github.workflow_sha }}");
+    expect(source).toContain("refs/pull/${PR_NUMBER}/head:refs/autoflow/jev-pr-head");
+    expect(source).toContain("refs/pull/${PR_NUMBER}/merge:refs/autoflow/jev-pr-merge");
+    expect(source).toContain('git merge-base --is-ancestor "$FIRST_PARENT" refs/autoflow/jev-main');
+    expect(source).toContain('if [ "$live_base_ref" != "main" ]; then');
+    expect(source).toContain("steps.pr-context.outputs.base_sha");
+    expect(source).not.toContain("github.event.workflow_run.pull_requests[0].base.sha");
   });
 });

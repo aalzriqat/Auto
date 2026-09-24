@@ -36,9 +36,9 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
       HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
-      BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
       HEAD_REF: ${{ github.event.workflow_run.pull_requests[0].head.ref }}
       BASE_REF: ${{ github.event.workflow_run.pull_requests[0].base.ref }}
+      TRIGGER_STARTED_AT: ${{ github.event.workflow_run.run_started_at || github.event.workflow_run.created_at }}
       PROJECT_KEY: aalzriqat_Auto
       COMMENT_MARKER: "<!-- autoflow-sonar-pr-report -->"
 
@@ -68,25 +68,9 @@ jobs:
             echo "workflow_run did not provide a valid PR number" >&2
             exit 1
           fi
-          for value in "$HEAD_SHA" "$BASE_SHA"; do
-            if ! [[ "$value" =~ ^[0-9a-fA-F]{40}$ ]]; then
-              echo "workflow_run did not provide exact base/head SHAs" >&2
-              exit 1
-            fi
-          done
-
-          current_head="$(
-            curl --fail --silent --show-error \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "$GITHUB_API_URL/repos/$REPOSITORY/pulls/$PR_NUMBER" |
-            jq -r '.head.sha'
-          )"
-          if [ "$current_head" != "$HEAD_SHA" ]; then
-            echo "::notice::Skipping stale trusted Sonar run for $HEAD_SHA; PR is now at $current_head."
-            echo "stale=true" >> "$GITHUB_OUTPUT"
-            exit 0
+          if ! [[ "$HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "workflow_run did not provide an exact head SHA" >&2
+            exit 1
           fi
 
           git fetch --no-tags origin \
@@ -102,11 +86,40 @@ jobs:
 
           PARENTS="$(git show -s --format=%P "$FETCHED_MERGE")"
           read -r FIRST_PARENT SECOND_PARENT EXTRA_PARENT <<< "$PARENTS"
-          if [ "$FIRST_PARENT" != "$BASE_SHA" ] || [ "$SECOND_PARENT" != "$HEAD_SHA" ] || [ -n "${EXTRA_PARENT:-}" ]; then
-            echo "GitHub PR merge ref is not the exact two-parent merge of trusted base + head." >&2
+          if ! [[ "$FIRST_PARENT" =~ ^[0-9a-fA-F]{40}$ ]] || [ "$SECOND_PARENT" != "$HEAD_SHA" ] || [ -n "${EXTRA_PARENT:-}" ]; then
+            echo "GitHub PR merge ref is not an exact two-parent merge with the triggering head." >&2
             exit 1
           fi
 
+          # Triggers cover only PRs into main. A retarget after the triggering run
+          # moves the merge onto another base: the PR must still target main, and
+          # the merge base must be on it (a branch cut from main passes ancestry alone).
+          git fetch --no-tags origin "+refs/heads/main:refs/autoflow/sonar-main"
+          if ! git merge-base --is-ancestor "$FIRST_PARENT" refs/autoflow/sonar-main; then
+            echo "PR merge base $FIRST_PARENT is not on main; the PR was retargeted or its merge ref is stale." >&2
+            exit 1
+          fi
+          live_base_ref="$(
+            curl --fail --silent --show-error \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" |
+            jq -r '.base.ref // empty'
+          )"
+          if [ "$live_base_ref" != "main" ]; then
+            echo "PR now targets '$live_base_ref', not main; refusing the retargeted PR." >&2
+            exit 1
+          fi
+
+          MERGE_COMMIT_EPOCH="$(git show -s --format=%ct "$FETCHED_MERGE")"
+          TRIGGER_STARTED_EPOCH="$(date -u -d "$TRIGGER_STARTED_AT" +%s)"
+          if [ "$MERGE_COMMIT_EPOCH" -gt "$TRIGGER_STARTED_EPOCH" ]; then
+            echo "Current PR merge ref was created after the triggering Tests run started; refusing mismatched coverage provenance." >&2
+            exit 1
+          fi
+
+          echo "base_sha=$FIRST_PARENT" >> "$GITHUB_OUTPUT"
           echo "tested_sha=$FETCHED_MERGE" >> "$GITHUB_OUTPUT"
           echo "stale=false" >> "$GITHUB_OUTPUT"
 
@@ -149,11 +162,24 @@ jobs:
 
       - name: Sanitize scanner inputs
         if: steps.provenance.outputs.stale == 'false'
+        env:
+          TESTED_SHA: ${{ steps.provenance.outputs.tested_sha }}
         run: |
           set -euo pipefail
 
           if find candidate "$RUNNER_TEMP/sonar-coverage" -type l -print -quit | grep -q .; then
             echo "::error::Trusted Sonar refuses symlinks in candidate source or coverage."
+            exit 1
+          fi
+
+          TESTED_MERGE_FILE="$RUNNER_TEMP/sonar-coverage/tested-merge-sha.txt"
+          if [ ! -f "$TESTED_MERGE_FILE" ]; then
+            echo "::error::coverage-report does not name its tested merge; merge main into the PR and re-run Tests."
+            exit 1
+          fi
+          coverage_merge="$(head -c 64 "$TESTED_MERGE_FILE" | tr -d '[:space:]')"
+          if [ "$coverage_merge" != "$TESTED_SHA" ]; then
+            echo "::error::Coverage was produced for merge $coverage_merge, not the analysed merge $TESTED_SHA. Re-run Tests on the current merge."
             exit 1
           fi
 
@@ -207,6 +233,8 @@ jobs:
       - name: Fetch Sonar issues and upsert PR report
         if: steps.provenance.outputs.stale == 'false'
         shell: bash
+        env:
+          TESTED_SHA: ${{ steps.provenance.outputs.tested_sha }}
         run: |
           set -euo pipefail
           sonar_api="https://sonarcloud.io/api"
@@ -261,8 +289,8 @@ jobs:
           {
             printf '%s\n\n' "$COMMENT_MARKER"
             printf '## SonarQube Cloud — PR #%s\n\n' "$PR_NUMBER"
-            printf '**Quality Gate:** `%s` · **Open PR issues:** %s · **Analysed head:** `%s`\n\n' \
-              "$gate_status" "$issue_count" "$HEAD_SHA"
+            printf '**Quality Gate:** `%s` · **Open PR issues:** %s · **Analysed head:** `%s` · **Analysed merge:** `%s`\n\n' \
+              "$gate_status" "$issue_count" "$HEAD_SHA" "$TESTED_SHA"
 
             failed_conditions="$(jq -r '
               [.projectStatus.conditions[]? | select(.status == "ERROR")] |
@@ -316,6 +344,17 @@ jobs:
           )"
 
           jq -Rs '{body: .}' < sonar-pr-report.md > sonar-pr-report-payload.json
+
+          # An unchanged head is not enough: a base advance or retarget moves the
+          # PR merge ref without moving the head. Recheck immediately before the
+          # write so the comment only ever describes the exact merge analysed.
+          git -C trusted fetch --no-tags origin \
+            "+refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-report-merge"
+          current_merge="$(git -C trusted rev-parse refs/autoflow/sonar-report-merge)"
+          if [ "$current_merge" != "$TESTED_SHA" ]; then
+            echo "::notice::Skipping stale Sonar report for merge $TESTED_SHA; PR merge is now $current_merge."
+            exit 0
+          fi
           if [ -n "$existing_comment_id" ]; then
             curl --fail --silent --show-error \
               -X PATCH \
@@ -356,18 +395,34 @@ jobs:
       contents: read
       statuses: write
     steps:
+      - name: Checkout immutable trusted verdict controller
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          path: trusted-verdict
+          persist-credentials: true
+
       - name: Publish trusted Sonar verdict
+        working-directory: trusted-verdict
         env:
           GH_TOKEN: ${{ github.token }}
           TESTED_SHA: ${{ needs.scan-report.outputs.tested_sha }}
           SCAN_RESULT: ${{ needs.scan-report.result }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
         run: |
           set -euo pipefail
+          git fetch --no-tags origin \
+            "refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-final-merge"
+          current_merge="$(git rev-parse refs/autoflow/sonar-final-merge)"
+
           state=failure
           description="Trusted Sonar PR analysis did not complete successfully."
-          if [ "$SCAN_RESULT" = "success" ]; then
+          if [ "$SCAN_RESULT" = "success" ] && [ "$current_merge" = "$TESTED_SHA" ]; then
             state=success
-            description="Trusted Sonar PR analysis passed."
+            description="Trusted Sonar PR analysis passed on the still-current exact merge."
+          elif [ "$SCAN_RESULT" = "success" ]; then
+            description="Trusted Sonar result is stale because the PR merge changed during analysis."
           fi
           payload="$(node -e '
             const [state, context, description, targetUrl] = process.argv.slice(1);

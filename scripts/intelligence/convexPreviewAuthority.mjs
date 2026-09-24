@@ -116,15 +116,25 @@ export function validateConvexPreviewAuthority(value, expectedPreviewName) {
     throw new Error("Convex preview authority deployment name is malformed.");
   }
 
+  const convexCloudUrl = assertConvexCloudOrigin(
+    typeof artifact.convexCloudUrl === "string"
+      ? artifact.convexCloudUrl
+      : undefined,
+  );
+  if (
+    new URL(convexCloudUrl).hostname !==
+    artifact.deploymentName + ".convex.cloud"
+  ) {
+    throw new Error(
+      "Convex preview authority deployment name does not match its deployment URL.",
+    );
+  }
+
   return {
     version: 1,
     authority: "CONVEX_CONTROL_PLANE_AUTHORIZE_PREVIEW",
     previewName: artifact.previewName,
-    convexCloudUrl: assertConvexCloudOrigin(
-      typeof artifact.convexCloudUrl === "string"
-        ? artifact.convexCloudUrl
-        : undefined,
-    ),
+    convexCloudUrl,
     deploymentName: artifact.deploymentName,
   };
 }
@@ -160,13 +170,10 @@ export function assertPreviewDeploymentAdminKey(value, expectedDeploymentName) {
   if (separator <= 0 || separator === value.length - 1) {
     throw new Error("Convex preview deployment admin key is malformed.");
   }
-  const prefix = value.slice(0, separator);
+  const deploymentName = value.slice(0, separator);
   const secret = value.slice(separator + 1);
-  const parts = prefix.split(":");
   if (
-    parts.length !== 2 ||
-    parts[0] !== "preview" ||
-    parts[1] !== expectedDeploymentName ||
+    deploymentName !== expectedDeploymentName ||
     !secret ||
     /[\r\n]/.test(secret)
   ) {
