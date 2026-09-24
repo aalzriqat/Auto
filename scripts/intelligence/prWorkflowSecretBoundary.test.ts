@@ -156,12 +156,13 @@ describe("pull-request workflow secret boundary", () => {
     expect(source).toContain("path: ${{ runner.temp }}/sonar-coverage");
     expect(source).toContain("projectBaseDir: candidate");
     expect(source).toContain("autoflow/trusted-sonar-pr");
-    expect(source).toContain("$GITHUB_API_URL/repos/$REPOSITORY/pulls/$PR_NUMBER");
+    expect(source).toContain("refs/pull/${PR_NUMBER}/head:refs/autoflow/sonar-pr-head");
+    expect(source).toContain("refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-pr-merge");
     expect(source).toContain("FIRST_PARENT");
     expect(source).toContain("TRIGGER_STARTED_AT");
     expect(source).toContain("MERGE_COMMIT_EPOCH");
     expect(source).toContain("mismatched coverage provenance");
-    expect(source).toContain(".merge_commit_sha // empty");
+    expect(source).toContain("refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-final-merge");
     expect(source).toContain("still-current exact merge");
     expect(source).not.toContain("github.event.workflow_run.pull_requests[0].base.sha");
     expect(source.match(/statuses\/\$TESTED_SHA/g)?.length).toBe(2);
@@ -183,7 +184,8 @@ describe("pull-request workflow secret boundary", () => {
     expect(source).not.toContain("$GITHUB_WORKSPACE/trusted:/");
     expect(source).toContain("Disposable rehearsal preview environment does not match the trusted allowlist.");
     expect(source).toContain("autoflow/trusted-accounting-rehearsal");
-    expect(source).toContain("$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER");
+    expect(source).toContain("refs/pull/${PR_NUMBER}/head:refs/autoflow/accounting-pr-head");
+    expect(source).toContain("refs/pull/${PR_NUMBER}/merge:refs/autoflow/accounting-pr-merge");
     expect(source).toContain("FIRST_PARENT");
     expect(source).not.toContain("github.event.workflow_run.pull_requests[0].base.sha");
     expect(source.match(/statuses\/\$TESTED_SHA/g)?.length).toBe(2);
@@ -192,7 +194,8 @@ describe("pull-request workflow secret boundary", () => {
   it("keeps Jev workflow_run analysis on immutable trusted code and the live PR base", () => {
     const source = readFileSync(path.join(workflowsDir, "jev-shadow-impact.yml"), "utf8");
     expect(source).toContain("ref: ${{ github.workflow_sha }}");
-    expect(source).toContain("$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER");
+    expect(source).toContain("refs/pull/${PR_NUMBER}/head:refs/autoflow/jev-pr-head");
+    expect(source).toContain("refs/pull/${PR_NUMBER}/merge:refs/autoflow/jev-pr-merge");
     expect(source).toContain("steps.pr-context.outputs.base_sha");
     expect(source).not.toContain("github.event.workflow_run.pull_requests[0].base.sha");
   });
