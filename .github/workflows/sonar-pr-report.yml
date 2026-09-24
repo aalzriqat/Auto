@@ -36,7 +36,6 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
       HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
-      BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
       HEAD_REF: ${{ github.event.workflow_run.pull_requests[0].head.ref }}
       BASE_REF: ${{ github.event.workflow_run.pull_requests[0].base.ref }}
       PROJECT_KEY: aalzriqat_Auto
@@ -68,25 +67,28 @@ jobs:
             echo "workflow_run did not provide a valid PR number" >&2
             exit 1
           fi
-          for value in "$HEAD_SHA" "$BASE_SHA"; do
-            if ! [[ "$value" =~ ^[0-9a-fA-F]{40}$ ]]; then
-              echo "workflow_run did not provide exact base/head SHAs" >&2
-              exit 1
-            fi
-          done
+          if ! [[ "$HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "workflow_run did not provide an exact head SHA" >&2
+            exit 1
+          fi
 
-          current_head="$(
+          PR_JSON="$(
             curl --fail --silent --show-error \
               -H "Accept: application/vnd.github+json" \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
-              "$GITHUB_API_URL/repos/$REPOSITORY/pulls/$PR_NUMBER" |
-            jq -r '.head.sha'
+              "$GITHUB_API_URL/repos/$REPOSITORY/pulls/$PR_NUMBER"
           )"
+          current_head="$(jq -r '.head.sha' <<< "$PR_JSON")"
+          current_base="$(jq -r '.base.sha' <<< "$PR_JSON")"
           if [ "$current_head" != "$HEAD_SHA" ]; then
             echo "::notice::Skipping stale trusted Sonar run for $HEAD_SHA; PR is now at $current_head."
             echo "stale=true" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+          if ! [[ "$current_base" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "GitHub did not return an exact current PR base SHA" >&2
+            exit 1
           fi
 
           git fetch --no-tags origin \
@@ -102,11 +104,12 @@ jobs:
 
           PARENTS="$(git show -s --format=%P "$FETCHED_MERGE")"
           read -r FIRST_PARENT SECOND_PARENT EXTRA_PARENT <<< "$PARENTS"
-          if [ "$FIRST_PARENT" != "$BASE_SHA" ] || [ "$SECOND_PARENT" != "$HEAD_SHA" ] || [ -n "${EXTRA_PARENT:-}" ]; then
-            echo "GitHub PR merge ref is not the exact two-parent merge of trusted base + head." >&2
+          if [ "$FIRST_PARENT" != "$current_base" ] || [ "$SECOND_PARENT" != "$HEAD_SHA" ] || [ -n "${EXTRA_PARENT:-}" ]; then
+            echo "GitHub PR merge ref is not the exact two-parent merge of the current trusted base + triggering head." >&2
             exit 1
           fi
 
+          echo "base_sha=$current_base" >> "$GITHUB_OUTPUT"
           echo "tested_sha=$FETCHED_MERGE" >> "$GITHUB_OUTPUT"
           echo "stale=false" >> "$GITHUB_OUTPUT"
 
