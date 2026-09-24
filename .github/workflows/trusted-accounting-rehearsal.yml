@@ -56,20 +56,6 @@ jobs:
             exit 1
           fi
 
-          PR_JSON="$(
-            curl --fail --silent --show-error \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"
-          )"
-          current_head="$(jq -r '.head.sha' <<< "$PR_JSON")"
-          if [ "$current_head" != "$HEAD_SHA" ]; then
-            echo "::notice::Skipping stale accounting rehearsal for $HEAD_SHA; PR is now at $current_head."
-            echo "stale=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
           git fetch --no-tags origin \
             "refs/pull/${PR_NUMBER}/head:refs/autoflow/accounting-pr-head" \
             "refs/pull/${PR_NUMBER}/merge:refs/autoflow/accounting-pr-merge"
