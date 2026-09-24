@@ -9,58 +9,14 @@
  * by silently narrowing the census or threshold contract.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { readdirSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const childBoundary = vi.hoisted(() => ({
   calls: [] as Array<{ file: string; args: string[]; options: Record<string, unknown> }>,
   results: [] as Array<{ status: number | null; signal: string | null; error?: Error }>,
 }));
-
-const fsBoundary = vi.hoisted(() => ({
-  readdirOverride: null as null | ((directory: string, options: unknown) => unknown[]),
-  removed: [] as string[],
-  created: [] as string[],
-}));
-
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  const spawnSync = (
-    file: string,
-    args: string[],
-    options: Record<string, unknown>,
-  ) => {
-    childBoundary.calls.push({ file, args, options });
-    return childBoundary.results.shift() ?? { status: 0, signal: null };
-  };
-  return {
-    ...actual,
-    default: {
-      ...(actual as unknown as { default?: Record<string, unknown> }).default,
-      ...actual,
-      spawnSync,
-    },
-    spawnSync,
-  };
-});
-
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return {
-    ...actual,
-    readdirSync: (directory: string, options: unknown) =>
-      fsBoundary.readdirOverride
-        ? fsBoundary.readdirOverride(directory, options)
-        : actual.readdirSync(directory, options as never),
-    rmSync: (target: string) => {
-      fsBoundary.removed.push(String(target));
-    },
-    mkdirSync: (target: string) => {
-      fsBoundary.created.push(String(target));
-      return undefined;
-    },
-  };
-});
 
 class ExitSignal extends Error {
   constructor(readonly code: number) {
@@ -147,10 +103,22 @@ function expectedVitestCensus(
   return files.sort();
 }
 
+const TEST_BLOB_DIR = ".vitest-reports-runner-test";
+const TEST_COVERAGE_DIR = ".coverage-runner-test";
+const tempDiscoveryRoots: string[] = [];
+
 async function run(mode: string, env: Record<string, string | undefined> = {}) {
-  for (const key of ["VITEST_COVERAGE_SHARDS", "VITEST_COVERAGE_BATCH_SIZE"]) {
+  for (const key of [
+    "VITEST_COVERAGE_SHARDS",
+    "VITEST_COVERAGE_BATCH_SIZE",
+    "AUTOFLOW_COVERAGE_BLOB_DIR",
+    "AUTOFLOW_COVERAGE_REPORTS_DIR",
+    "AUTOFLOW_COVERAGE_DISCOVERY_ROOT",
+  ]) {
     delete process.env[key];
   }
+  process.env.AUTOFLOW_COVERAGE_BLOB_DIR = TEST_BLOB_DIR;
+  process.env.AUTOFLOW_COVERAGE_REPORTS_DIR = TEST_COVERAGE_DIR;
   for (const [key, value] of Object.entries(env)) {
     if (value !== undefined) process.env[key] = value;
   }
@@ -162,9 +130,6 @@ async function run(mode: string, env: Record<string, string | undefined> = {}) {
 beforeEach(() => {
   childBoundary.calls.length = 0;
   childBoundary.results.length = 0;
-  fsBoundary.readdirOverride = null;
-  fsBoundary.removed.length = 0;
-  fsBoundary.created.length = 0;
   stdout = [];
   stderr = [];
   process.exit = ((code?: number) => {
@@ -187,6 +152,11 @@ afterEach(() => {
     if (!(key in ORIGINAL_ENV)) delete process.env[key];
   }
   Object.assign(process.env, ORIGINAL_ENV);
+  rmSync(path.join(process.cwd(), TEST_BLOB_DIR), { recursive: true, force: true });
+  rmSync(path.join(process.cwd(), TEST_COVERAGE_DIR), { recursive: true, force: true });
+  for (const directory of tempDiscoveryRoots.splice(0)) {
+    rmSync(directory, { recursive: true, force: true });
+  }
   vi.restoreAllMocks();
 });
 
@@ -203,11 +173,10 @@ describe("runVitestCoverageShards", () => {
 
     await run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_SHARDS: "2" });
 
-    expect(fsBoundary.removed.some((p) => p.endsWith(".vitest-reports"))).toBe(true);
-    expect(fsBoundary.removed.some((p) => p.endsWith("coverage"))).toBe(true);
-    expect(fsBoundary.created.some((p) => p.endsWith(".vitest-reports"))).toBe(true);
-
     const authority = rawArgs(childBoundary.calls[0]);
+    expect(authority).toContain(
+      `--coverage.reportsDirectory=${path.join(process.cwd(), TEST_COVERAGE_DIR)}`,
+    );
     expect(authority).toContain("convex/unifiedDealFeeAuthority.test.ts");
     expect(authority).toContain("--coverage");
     for (const threshold of EXPECTED_ZERO_THRESHOLDS) expect(authority).toContain(threshold);
@@ -269,7 +238,7 @@ describe("runVitestCoverageShards", () => {
   test("rejects an unknown mode before touching the filesystem or spawning Vitest", async () => {
     await expect(run("mystery")).rejects.toThrow("Usage: node scripts/runVitestCoverageShards.mjs <unit|sonar>");
     expect(childBoundary.calls).toHaveLength(0);
-    expect(fsBoundary.removed).toHaveLength(0);
+    expect(childBoundary.calls).toHaveLength(0);
   });
 
   test.each(["1", "17", "2.5", "not-a-number"])(
@@ -291,8 +260,11 @@ describe("runVitestCoverageShards", () => {
   });
 
   test("fails closed when unit test discovery returns an empty census", async () => {
-    fsBoundary.readdirOverride = () => [];
-    await expect(run("unit")).rejects.toThrow("No unit/integration test files discovered.");
+    const emptyRoot = mkdtempSync(path.join(os.tmpdir(), "autoflow-coverage-empty-"));
+    tempDiscoveryRoots.push(emptyRoot);
+    await expect(
+      run("unit", { AUTOFLOW_COVERAGE_DISCOVERY_ROOT: emptyRoot }),
+    ).rejects.toThrow("No unit/integration test files discovered.");
     expect(childBoundary.calls).toHaveLength(1);
   });
 
