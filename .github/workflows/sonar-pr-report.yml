@@ -199,6 +199,8 @@ jobs:
       - name: Fetch Sonar issues and upsert PR report
         if: steps.provenance.outputs.stale == 'false'
         shell: bash
+        env:
+          TESTED_SHA: ${{ steps.provenance.outputs.tested_sha }}
         run: |
           set -euo pipefail
           sonar_api="https://sonarcloud.io/api"
@@ -213,6 +215,17 @@ jobs:
           )"
           if [ "$current_head" != "$HEAD_SHA" ]; then
             echo "::notice::Skipping stale Sonar report for $HEAD_SHA; PR is now at $current_head."
+            exit 0
+          fi
+
+          # An unchanged head is not enough: a base advance or retarget moves the
+          # PR merge ref without moving the head. Publish only for the exact merge
+          # this run analysed, using the same Git-ref authority as provenance.
+          git -C trusted fetch --no-tags origin \
+            "+refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-report-merge"
+          current_merge="$(git -C trusted rev-parse refs/autoflow/sonar-report-merge)"
+          if [ "$current_merge" != "$TESTED_SHA" ]; then
+            echo "::notice::Skipping stale Sonar report for merge $TESTED_SHA; PR merge is now $current_merge."
             exit 0
           fi
 
