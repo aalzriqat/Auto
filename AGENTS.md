@@ -28,14 +28,19 @@ data-integrity invariant:
    when they prove different things. Make a regression test fail on pre-fix
    code whenever technically possible. Give structural guards negative or
    mutation controls, and record any proof that is deferred or inapplicable.
-3. **A second occurrence of a class is evidence the previous guardrail failed,**
-   not merely that the code did. Do not simply fix it again; ask why the earlier
-   protection did not fire, and improve that layer. Classes that move money,
-   auth, tenancy or production data are mechanized on the first occurrence.
-4. **Close it honestly — FIX VERIFIED is not DEFECT CLASS CLOSED.** Claim the
-   defect class closed only when siblings have been addressed and the
-   applicable proof obligations are satisfied; otherwise state the remaining
-   gap.
+3. **A second occurrence of a class shows its protection was absent,
+   incomplete or ineffective — determine which.** Do not simply fix it again;
+   establish whether a guard existed, and if it did, why it did not fire, and
+   improve that layer. Classes that move money, auth, tenancy or production
+   data are mechanized on the first occurrence.
+4. **Close it honestly, in the catalog's terms.** Map an important finding to
+   an existing invariant ID in `scripts/autoflowInvariantCatalog.ts`, or create
+   one, and state its proof state as the catalog defines it — **DOCUMENTED**,
+   **PARTIAL** or **ENFORCED**. A fixed instance is not an ENFORCED class: an
+   invariant is ENFORCED only when siblings are addressed and every applicable
+   proof obligation is satisfied. When executable evidence is not yet possible,
+   record the obligation as **DEFERRED** with a Jira owner, and the invariant
+   stays PARTIAL with the gap visible.
 
 Prefer executable protection wherever it can measure the property. Record what
 the evidence proves and what remains unverified. Keep instructions and runbooks
