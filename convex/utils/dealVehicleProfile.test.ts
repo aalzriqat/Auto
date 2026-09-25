@@ -37,7 +37,7 @@ function ctxWith(getUrl: (id: Id<"_storage">) => Promise<string | null>): QueryC
 describe("projectDealVehicleProfile (SCRUM-372 vehicle card)", () => {
   it("returns ONLY the allowlisted attributes and the first photo's URL", async () => {
     const ctx = ctxWith(async (id) => `https://files.example/${id}`);
-    const profile = await projectDealVehicleProfile(ctx, vehicle(), ORG);
+    const profile = await projectDealVehicleProfile(ctx, vehicle(), ORG, true);
 
     expect(profile).toEqual({
       make: "Toyota",
@@ -57,26 +57,35 @@ describe("projectDealVehicleProfile (SCRUM-372 vehicle card)", () => {
 
   it("refuses a vehicle from another organization without minting a URL", async () => {
     const ctx = ctxWith(async () => "https://files.example/leak");
-    expect(await projectDealVehicleProfile(ctx, vehicle({ orgId: OTHER_ORG }), ORG)).toBeNull();
+    expect(await projectDealVehicleProfile(ctx, vehicle({ orgId: OTHER_ORG }), ORG, true)).toBeNull();
     expect(ctx.storage.getUrl).not.toHaveBeenCalled();
   });
 
   it("refuses a soft-deleted vehicle and a missing one", async () => {
     const ctx = ctxWith(async () => "https://files.example/x");
-    expect(await projectDealVehicleProfile(ctx, vehicle({ isDeleted: true }), ORG)).toBeNull();
-    expect(await projectDealVehicleProfile(ctx, null, ORG)).toBeNull();
+    expect(await projectDealVehicleProfile(ctx, vehicle({ isDeleted: true }), ORG, true)).toBeNull();
+    expect(await projectDealVehicleProfile(ctx, null, ORG, true)).toBeNull();
     expect(ctx.storage.getUrl).not.toHaveBeenCalled();
   });
 
   it("serves a null photo when the vehicle has no images", async () => {
     const ctx = ctxWith(async () => "https://files.example/x");
-    const profile = await projectDealVehicleProfile(ctx, vehicle({ imageIds: [] }), ORG);
+    const profile = await projectDealVehicleProfile(ctx, vehicle({ imageIds: [] }), ORG, true);
     expect(profile?.photoUrl).toBeNull();
     expect(ctx.storage.getUrl).not.toHaveBeenCalled();
   });
 
+  it("withholds the whole card, photo included, from a caller who may not view vehicles", async () => {
+    // A custom role can hold VIEW_SALES without VIEW_VEHICLES. The vehicle
+    // readers refuse that caller, so the deal cockpit must not become a second
+    // way to the same photo (CodeRabbit on PR #338).
+    const ctx = ctxWith(async () => "https://files.example/x");
+    expect(await projectDealVehicleProfile(ctx, vehicle(), ORG, false)).toBeNull();
+    expect(ctx.storage.getUrl).not.toHaveBeenCalled();
+  });
+
   it("degrades to a null photo when storage no longer resolves or throws", async () => {
-    const gone = await projectDealVehicleProfile(ctxWith(async () => null), vehicle(), ORG);
+    const gone = await projectDealVehicleProfile(ctxWith(async () => null), vehicle(), ORG, true);
     expect(gone?.photoUrl).toBeNull();
 
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -86,6 +95,7 @@ describe("projectDealVehicleProfile (SCRUM-372 vehicle card)", () => {
       }),
       vehicle(),
       ORG,
+      true,
     );
     expect(thrown?.photoUrl).toBeNull();
     expect(thrown?.make).toBe("Toyota");

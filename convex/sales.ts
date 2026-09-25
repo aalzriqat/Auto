@@ -2301,7 +2301,9 @@ export const dealCockpit = query({
       ctx.db.get(sale.customerId),
       ctx.db.get(sale.salespersonId),
     ]);
-    const vehicleProfile = await projectDealVehicleProfile(ctx, vehicle, args.orgId);
+    const canViewVehicles =
+      isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_VEHICLES);
+    const vehicleProfile = await projectDealVehicleProfile(ctx, vehicle, args.orgId, canViewVehicles);
 
     // The currency the sale FROZE in when it is consigned, falling back to the
     // org's. Not the org's current setting on a consigned row: that field is what

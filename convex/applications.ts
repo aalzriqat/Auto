@@ -1961,7 +1961,9 @@ export const dealCockpit = query({
       ctx.db.get(app.quoteId),
       app.finalizedSaleId ? ctx.db.get(app.finalizedSaleId) : Promise.resolve(null),
     ]);
-    const vehicleProfile = await projectDealVehicleProfile(ctx, vehicle, args.orgId);
+    const canViewVehicles =
+      isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_VEHICLES);
+    const vehicleProfile = await projectDealVehicleProfile(ctx, vehicle, args.orgId, canViewVehicles);
 
     /**
      * The sale this deal should be READ at — or null when there is no sale that

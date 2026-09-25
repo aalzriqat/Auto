@@ -21,15 +21,21 @@ export interface DealVehicleProfile {
 }
 
 /**
- * Null unless the vehicle exists, belongs to `orgId` and is not soft-deleted.
- * The deal's own tenancy check does not cover the vehicle row it points at, so
- * the org is re-checked here before any storage URL is minted for it.
+ * Null unless the caller may view vehicles, and the vehicle exists, belongs to
+ * `orgId` and is not soft-deleted. The cockpit queries authorize on VIEW_SALES,
+ * which a custom role can hold without VIEW_VEHICLES — the permission every
+ * other vehicle-photo reader requires — so the caller's right is passed in and
+ * checked here, not assumed from the deal's. The deal's own tenancy check does
+ * not cover the vehicle row it points at either, so the org is re-checked too,
+ * both before any storage URL is minted.
  */
 export async function projectDealVehicleProfile(
   ctx: QueryCtx,
   vehicle: Doc<"vehicles"> | null,
   orgId: Id<"organizations">,
+  canViewVehicles: boolean,
 ): Promise<DealVehicleProfile | null> {
+  if (!canViewVehicles) return null;
   if (!vehicle || vehicle.orgId !== orgId || vehicle.isDeleted) return null;
 
   const firstImageId = vehicle.imageIds?.[0];
