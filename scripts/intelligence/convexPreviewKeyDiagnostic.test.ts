@@ -1,0 +1,318 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  diagnosePreviewKeyScope,
+  previewNamesForPr,
+  workflowMaskCommands,
+} from "./convexPreviewKeyDiagnostic.mjs";
+
+const DEPLOY_KEY = "preview:team-one:project-two|deploy-key-secret";
+const KEY_A = "preview:team-one:project-two|secret-for-a";
+const KEY_B = "preview:team-one:project-two|secret-for-b";
+const NAMES = ["e2e-pr-7-aaaaaaaaaa", "e2e-pr-7-bbbbbbbbbb"] as const;
+
+type Claims = Record<string, Record<string, unknown>>;
+
+/**
+ * A fake control plane plus two fake deployments. `accepts[host]` lists the
+ * admin keys that deployment's get_config_hashes answers 200 for; every other
+ * key gets 401.
+ */
+function fakeConvex(claims: Claims, accepts: Record<string, string[]>) {
+  return vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    const target = new URL(String(url));
+    if (target.pathname === "/api/claim_preview_deployment") {
+      const body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify(claims[body.identifier]), { status: 200 });
+    }
+    if (target.pathname === "/api/get_config_hashes") {
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      const key = auth.replace(/^Convex /, "");
+      const ok = (accepts[target.hostname] ?? []).includes(key);
+      return new Response("{}", { status: ok ? 200 : 401 });
+    }
+    return new Response("{}", { status: 404 });
+  });
+}
+
+const CLAIMS: Claims = {
+  [NAMES[0]]: {
+    deploymentName: "dep-a",
+    instanceUrl: "https://dep-a.convex.cloud",
+    adminKey: KEY_A,
+    isNewDeployment: false,
+  },
+  [NAMES[1]]: {
+    deploymentName: "dep-b",
+    instanceUrl: "https://dep-b.convex.cloud",
+    adminKey: KEY_B,
+    isNewDeployment: false,
+  },
+};
+
+describe("Convex preview key-scope diagnostic", () => {
+  it("derives the swarm and rehearsal preview names the trusted lanes use", () => {
+    const names = previewNamesForPr("327");
+    expect(names.swarm).toMatch(/^e2e-pr-327-[0-9a-f]+$/);
+    expect(names.rehearsal).toMatch(/^e2e-pr-327-[0-9a-f]+$/);
+    expect(names.swarm).not.toBe(names.rehearsal);
+    expect(() => previewNamesForPr("7; rm -rf /")).toThrow(/PR number/);
+  });
+
+  it("reports DEPLOYMENT_SCOPED only when each key works on its own preview and nowhere else", async () => {
+    const report = await diagnosePreviewKeyScope({
+      deployKey: DEPLOY_KEY,
+      previewNames: NAMES,
+      fetchImpl: fakeConvex(CLAIMS, {
+        "dep-a.convex.cloud": [KEY_A],
+        "dep-b.convex.cloud": [KEY_B],
+      }) as typeof fetch,
+    });
+
+    expect(report.verdict).toBe("DEPLOYMENT_SCOPED");
+    expect(report.previews.map((p) => p.keyEqualsDeployKey)).toEqual([false, false]);
+    expect(report.previews.map((p) => p.prefixEqualsDeployKeyPrefix)).toEqual([true, true]);
+    expect(report.keyAEqualsKeyB).toBe(false);
+    expect(report.probes).toEqual({
+      keyAOnA: 200,
+      keyAOnB: 401,
+      keyBOnB: 200,
+      keyBOnA: 401,
+      deployKeyOnA: 401,
+    });
+  });
+
+  it("reports NOT_DEPLOYMENT_SCOPED when a claimed key also opens the other preview", async () => {
+    const report = await diagnosePreviewKeyScope({
+      deployKey: DEPLOY_KEY,
+      previewNames: NAMES,
+      fetchImpl: fakeConvex(CLAIMS, {
+        "dep-a.convex.cloud": [KEY_A],
+        "dep-b.convex.cloud": [KEY_A, KEY_B],
+      }) as typeof fetch,
+    });
+    expect(report.verdict).toBe("NOT_DEPLOYMENT_SCOPED");
+  });
+
+  it("reports NOT_DEPLOYMENT_SCOPED when the claim hands back the deploy key itself", async () => {
+    const report = await diagnosePreviewKeyScope({
+      deployKey: DEPLOY_KEY,
+      previewNames: NAMES,
+      fetchImpl: fakeConvex(
+        { ...CLAIMS, [NAMES[0]]: { ...CLAIMS[NAMES[0]], adminKey: DEPLOY_KEY } },
+        { "dep-a.convex.cloud": [DEPLOY_KEY], "dep-b.convex.cloud": [KEY_B] },
+      ) as typeof fetch,
+    });
+    expect(report.previews[0].keyEqualsDeployKey).toBe(true);
+    expect(report.verdict).toBe("NOT_DEPLOYMENT_SCOPED");
+  });
+
+  it("stops before probing when a claim created a preview instead of reusing one", async () => {
+    const fetchImpl = fakeConvex(
+      { ...CLAIMS, [NAMES[1]]: { ...CLAIMS[NAMES[1]], isNewDeployment: true } },
+      { "dep-a.convex.cloud": [KEY_A], "dep-b.convex.cloud": [KEY_B] },
+    );
+    const report = await diagnosePreviewKeyScope({
+      deployKey: DEPLOY_KEY,
+      previewNames: NAMES,
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+    expect(report.verdict).toBe("INCONCLUSIVE_PREVIEW_MISSING");
+    expect(report.probes).toBeNull();
+    const probed = fetchImpl.mock.calls.some(([url]) =>
+      String(url).includes("get_config_hashes"),
+    );
+    expect(probed).toBe(false);
+  });
+
+  it.each([
+    ["created", true],
+    ["did not say whether it reused", undefined],
+  ])("claims no further preview once the first claim %s one", async (_label, isNew) => {
+    const fetchImpl = fakeConvex(
+      { ...CLAIMS, [NAMES[0]]: { ...CLAIMS[NAMES[0]], isNewDeployment: isNew } },
+      { "dep-a.convex.cloud": [KEY_A], "dep-b.convex.cloud": [KEY_B] },
+    );
+    const report = await diagnosePreviewKeyScope({
+      deployKey: DEPLOY_KEY,
+      previewNames: NAMES,
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+    expect(report.verdict).toBe("INCONCLUSIVE_PREVIEW_MISSING");
+    // A second claim could create a second empty preview for nothing.
+    const claimed = fetchImpl.mock.calls.filter(([url]) =>
+      String(url).includes("claim_preview_deployment"),
+    );
+    expect(claimed).toHaveLength(1);
+    expect(report.previews).toHaveLength(1);
+    // With one key there is nothing to compare, so the report must not say
+    // the keys differ.
+    expect(report.keyAEqualsKeyB).toBeNull();
+  });
+
+  it("never lets key or secret bytes into the report", async () => {
+    const masked: string[] = [];
+    const report = await diagnosePreviewKeyScope({
+      deployKey: DEPLOY_KEY,
+      previewNames: NAMES,
+      fetchImpl: fakeConvex(CLAIMS, {
+        "dep-a.convex.cloud": [KEY_A],
+        "dep-b.convex.cloud": [KEY_B],
+      }) as typeof fetch,
+      onAdminKeys: (keys: string[]) => masked.push(...keys),
+    });
+    // The claimed keys leave only through the masking callback.
+    expect(masked).toEqual(expect.arrayContaining([KEY_A, KEY_B]));
+    const serialized = JSON.stringify(report);
+    for (const secret of [
+      DEPLOY_KEY,
+      KEY_A,
+      KEY_B,
+      "deploy-key-secret",
+      "secret-for-a",
+      "secret-for-b",
+    ]) {
+      expect(serialized).not.toContain(secret);
+    }
+  });
+
+  it("never counts a non-auth status on a cross-probe as a rejection", async () => {
+    // Only 401/403 prove the other preview refused the key. A 400/404/500 says
+    // nothing about scope, so it must never yield DEPLOYMENT_SCOPED.
+    for (const status of [400, 404, 500]) {
+      const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        const target = new URL(String(url));
+        if (target.pathname === "/api/claim_preview_deployment") {
+          const body = JSON.parse(String(init?.body));
+          return new Response(JSON.stringify(CLAIMS[body.identifier]), { status: 200 });
+        }
+        const key = (new Headers(init?.headers).get("authorization") ?? "").replace(/^Convex /, "");
+        const own =
+          (target.hostname === "dep-a.convex.cloud" && key === KEY_A) ||
+          (target.hostname === "dep-b.convex.cloud" && key === KEY_B);
+        return new Response("{}", { status: own ? 200 : status });
+      });
+      const report = await diagnosePreviewKeyScope({
+        deployKey: DEPLOY_KEY,
+        previewNames: NAMES,
+        fetchImpl: fetchImpl as typeof fetch,
+      });
+      expect(report.verdict, "cross-probe status " + status).toBe(
+        "INCONCLUSIVE_UNEXPECTED_STATUS",
+      );
+    }
+  });
+
+  it("refuses to probe unless the claims name two distinct, valid previews", async () => {
+    const contradictions: Array<[string, Claims]> = [
+      [
+        "same deployment under both names",
+        { ...CLAIMS, [NAMES[1]]: { ...CLAIMS[NAMES[0]], adminKey: KEY_B } },
+      ],
+      ["non-preview type", { ...CLAIMS, [NAMES[0]]: { ...CLAIMS[NAMES[0]], deploymentType: "prod" } }],
+      [
+        "name and URL disagree",
+        { ...CLAIMS, [NAMES[0]]: { ...CLAIMS[NAMES[0]], deploymentName: "dep-z" } },
+      ],
+      ["missing admin key", { ...CLAIMS, [NAMES[1]]: { ...CLAIMS[NAMES[1]], adminKey: undefined } }],
+    ];
+    for (const [label, claims] of contradictions) {
+      const fetchImpl = fakeConvex(claims, {
+        "dep-a.convex.cloud": [KEY_A, KEY_B],
+        "dep-b.convex.cloud": [KEY_A, KEY_B],
+      });
+      const report = await diagnosePreviewKeyScope({
+        deployKey: DEPLOY_KEY,
+        previewNames: NAMES,
+        fetchImpl: fetchImpl as typeof fetch,
+      });
+      expect(report.verdict, label).toBe("INCONCLUSIVE_INVALID_IDENTITY");
+      expect(report.probes, label).toBeNull();
+      expect(
+        fetchImpl.mock.calls.some(([url]) => String(url).includes("get_config_hashes")),
+        label,
+      ).toBe(false);
+    }
+  });
+
+  it("reflects no control-plane strings into the report", async () => {
+    const hostile = "secret-for-a";
+    const report = await diagnosePreviewKeyScope({
+      deployKey: DEPLOY_KEY,
+      previewNames: NAMES,
+      fetchImpl: fakeConvex(
+        {
+          ...CLAIMS,
+          [NAMES[0]]: {
+            ...CLAIMS[NAMES[0]],
+            deploymentName: hostile,
+            [hostile]: true,
+          },
+        },
+        { "dep-a.convex.cloud": [KEY_A], "dep-b.convex.cloud": [KEY_B] },
+      ) as typeof fetch,
+    });
+    expect(JSON.stringify(report)).not.toContain(hostile);
+    expect(report.previews[0].unknownResponseFieldCount).toBe(1);
+  });
+
+  it("hands every key and secret part to the mask callback before reporting", async () => {
+    const masked: string[] = [];
+    await diagnosePreviewKeyScope({
+      deployKey: DEPLOY_KEY,
+      previewNames: NAMES,
+      fetchImpl: fakeConvex(CLAIMS, {
+        "dep-a.convex.cloud": [KEY_A],
+        "dep-b.convex.cloud": [KEY_B],
+      }) as typeof fetch,
+      onAdminKeys: (values: string[]) => masked.push(...values),
+    });
+    for (const value of [KEY_A, KEY_B, "secret-for-a", "secret-for-b"]) {
+      expect(masked).toContain(value);
+    }
+  });
+
+  it("emits mask commands that a newline, CR or % in the value cannot split", () => {
+    const value = "preview:t:p|first\nEXPOSED_SECOND\r\nTHIRD%0A";
+    const output = workflowMaskCommands(value);
+    // Every emitted line is a mask command; no raw fragment becomes its own line.
+    for (const line of output.split("\n").filter(Boolean)) {
+      expect(line.startsWith("::add-mask::")).toBe(true);
+    }
+    expect(output).not.toMatch(/^EXPOSED_SECOND/m);
+    expect(output).toContain("::add-mask::preview:t:p|first%0AEXPOSED_SECOND%0D%0ATHIRD%250A\n");
+    // Each fragment is also masked on its own.
+    expect(output).toContain("::add-mask::EXPOSED_SECOND\n");
+    expect(workflowMaskCommands("")).toBe("");
+  });
+
+  it("refuses to probe a claimed key that carries control characters", async () => {
+    const report = await diagnosePreviewKeyScope({
+      deployKey: DEPLOY_KEY,
+      previewNames: NAMES,
+      fetchImpl: fakeConvex(
+        { ...CLAIMS, [NAMES[0]]: { ...CLAIMS[NAMES[0]], adminKey: KEY_A + "\nX" } },
+        { "dep-a.convex.cloud": [KEY_A], "dep-b.convex.cloud": [KEY_B] },
+      ) as typeof fetch,
+    });
+    expect(report.verdict).toBe("INCONCLUSIVE_INVALID_IDENTITY");
+    expect(report.probes).toBeNull();
+  });
+
+  it("records a network failure as a status label, never an error message", async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).includes("get_config_hashes")) {
+        throw new Error("connect failed with " + String(new Headers(init?.headers).get("authorization")));
+      }
+      const body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify(CLAIMS[body.identifier]), { status: 200 });
+    });
+    const report = await diagnosePreviewKeyScope({
+      deployKey: DEPLOY_KEY,
+      previewNames: NAMES,
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+    expect(report.probes?.keyAOnA).toBe("NETWORK_ERROR");
+    expect(report.verdict).toBe("INCONCLUSIVE_PROBE_FAILED");
+    expect(JSON.stringify(report)).not.toContain("secret-for-a");
+  });
+});
