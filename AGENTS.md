@@ -23,24 +23,25 @@ data-integrity invariant:
 1. **Fix the root cause, then search for siblings.** Structurally equivalent
    instances across the whole codebase, not only the file you were in. A fix that
    lands on one writer of a record and not on its siblings has closed nothing.
-2. **Route the lesson to the strongest cheap protection**, taking the first that
-   genuinely applies: regression test > deterministic script or hook >
-   type/schema shape > scoped instruction > nothing. A regression test must fail
-   first. A guard must fail closed on the dangerous case, and each conjunct of
-   its predicate must be mutated separately with every mutant dying — a
-   surviving mutant is either dead code or a missing assertion.
+2. **Choose the protection that enforces the defect class at the right
+   boundary.** Combine constraints, deterministic guards and regression tests
+   when they prove different things. Make a regression test fail on pre-fix
+   code whenever technically possible. Give structural guards negative or
+   mutation controls, and record any proof that is deferred or inapplicable.
 3. **A second occurrence of a class is evidence the previous guardrail failed,**
    not merely that the code did. Do not simply fix it again; ask why the earlier
    protection did not fire, and improve that layer. Classes that move money,
    auth, tenancy or production data are mechanized on the first occurrence.
 4. **Close it honestly — FIX VERIFIED is not DEFECT CLASS CLOSED.** Claim the
-   latter only when the reproduction fails before and passes after, siblings are
-   searched and fixed, the protection's mutants die, and any prose that survived
-   carries the condition that will delete it. Otherwise state what remains open.
+   defect class closed only when siblings have been addressed and the
+   applicable proof obligations are satisfied; otherwise state the remaining
+   gap.
 
-Prose is the last resort, not the default: it is the only protection that can be
-loaded and still not fire. Anything written down names the executable check that
-retires it, and when that check exists the prose is deleted rather than kept.
+Prefer executable protection wherever it can measure the property. Record what
+the evidence proves and what remains unverified. Keep instructions and runbooks
+needed for operator action or evidence boundaries; update them when checks
+change. Retire catalog invariants only through the documented retirement
+process in `docs/architecture/invariant-governance.md`.
 
 ## Deploying the Convex backend to production
 
