@@ -124,6 +124,28 @@ describe("Convex preview key-scope diagnostic", () => {
     expect(probed).toBe(false);
   });
 
+  it.each([
+    ["created", true],
+    ["did not say whether it reused", undefined],
+  ])("claims no further preview once the first claim %s one", async (_label, isNew) => {
+    const fetchImpl = fakeConvex(
+      { ...CLAIMS, [NAMES[0]]: { ...CLAIMS[NAMES[0]], isNewDeployment: isNew } },
+      { "dep-a.convex.cloud": [KEY_A], "dep-b.convex.cloud": [KEY_B] },
+    );
+    const report = await diagnosePreviewKeyScope({
+      deployKey: DEPLOY_KEY,
+      previewNames: NAMES,
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+    expect(report.verdict).toBe("INCONCLUSIVE_PREVIEW_MISSING");
+    // A second claim could create a second empty preview for nothing.
+    const claimed = fetchImpl.mock.calls.filter(([url]) =>
+      String(url).includes("claim_preview_deployment"),
+    );
+    expect(claimed).toHaveLength(1);
+    expect(report.previews).toHaveLength(1);
+  });
+
   it("never lets key or secret bytes into the report", async () => {
     const masked: string[] = [];
     const report = await diagnosePreviewKeyScope({

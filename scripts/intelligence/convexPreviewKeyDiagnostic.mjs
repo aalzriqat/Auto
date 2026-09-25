@@ -162,6 +162,9 @@ export async function diagnosePreviewKeyScope({
     onAdminKeys([key, splitKey(key).secret].filter(Boolean));
     claims.push(claim);
     keys.push(key);
+    // A claim that did not reuse a preview already fixes the verdict below;
+    // a further claim could only create another empty preview.
+    if (claim.isNewDeployment !== false) break;
   }
 
   // Control-plane strings are never reflected: only booleans, counts and the
