@@ -392,6 +392,20 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     }
   });
 
+  it("spends the paid Jev call only after the disposable preview exists, just before its one consumer (SCRUM-376)", () => {
+    // Every failed run between 2026-09-18 and 09-25 paid for a TypeSafe
+    // request and then died recreating the preview (Convex deployment quota).
+    const names = (job("prepare").steps ?? []).map((entry) => entry.name);
+    const jevIndex = names.indexOf("Generate bounded Jev browser exploration once");
+    const recreateIndex = names.indexOf("Recreate disposable Convex preview from trusted main");
+    const resolveIndex = names.indexOf("Resolve named Convex preview from trusted control plane");
+    const assembleIndex = names.indexOf("Assemble trusted run and fail closed on unsupported impact");
+    expect(recreateIndex).toBeGreaterThanOrEqual(0);
+    expect(resolveIndex).toBeGreaterThan(recreateIndex);
+    expect(jevIndex).toBeGreaterThan(resolveIndex);
+    expect(assembleIndex).toBe(jevIndex + 1);
+  });
+
   it("calls Jev once in the trusted prepare job and gives workers only sanitized additive suggestions", () => {
     const jev = step(
       "prepare",
