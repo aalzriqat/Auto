@@ -340,16 +340,20 @@ rather than restarting.
 
 ## Project invariants
 
-Rules that have each cost this project a real defect. Each one names the code
-that enforces or documents it on `main`.
+Rules that have each cost this project a real defect. Where code on `main`
+enforces or documents a rule, the rule names it.
 
 - **Tenant ownership.** A mutation that takes an `orgId` and a document id
   supplied by the caller must prove the document belongs to that org before
   writing it. The sanctioned form is
   `requireOwnedRow(ctx, orgId, table, id)` (`convex/utils/tenancy.ts`); an
   equivalent inline `.orgId` comparison, or `requireSuperAdmin` for the
-  deliberately cross-tenant `/admin` surface, also satisfies
-  `scripts/tenantWriteGuard.ts`, which fails CI on an unguarded write.
+  deliberately cross-tenant `/admin` surface, is also accepted.
+  `scripts/tenantWriteGuard.ts` fails CI only on the narrow shape it detects: a
+  `patch` / `delete` / `replace` of a caller-supplied id in a mutation with no
+  ownership proof anywhere in the handler. It does not catch a handler that
+  checks one id and writes a different one, or inserts, so passing it is not
+  proof of ownership.
 - **Sourced vehicles are consignment.** Their sale economics are agent-sale
   economics, never `salePrice - cost` (`convex/accounting/postingRules.ts`).
   Legacy gross-posted events are handled there pending restatement.
