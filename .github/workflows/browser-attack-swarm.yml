@@ -163,17 +163,6 @@ jobs:
           BASE_SHA: ${{ steps.provenance.outputs.base_sha }}
           HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
 
-      - name: Generate bounded Jev browser exploration once
-        working-directory: trusted
-        run: pnpm browser-swarm:jev-exploration
-        env:
-          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
-          BASE_SHA: ${{ steps.provenance.outputs.base_sha }}
-          HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
-          TESTED_SHA: ${{ steps.provenance.outputs.tested_sha }}
-          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
-          BROWSER_SWARM_RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
-
       - name: Download triggering E2E preview descriptor
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -249,6 +238,19 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
           CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+
+      # The one paid TypeSafe request, spent only once the disposable preview
+      # exists (SCRUM-376): a quota or preview failure must not pay for it first.
+      - name: Generate bounded Jev browser exploration once
+        working-directory: trusted
+        run: pnpm browser-swarm:jev-exploration
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          BASE_SHA: ${{ steps.provenance.outputs.base_sha }}
+          HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
+          TESTED_SHA: ${{ steps.provenance.outputs.tested_sha }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          BROWSER_SWARM_RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Assemble trusted run and fail closed on unsupported impact
         id: plan
