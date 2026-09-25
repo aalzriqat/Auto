@@ -115,7 +115,7 @@ describe("trusted Convex preview authority", () => {
     ).toThrow(/canonical/);
   });
 
-  it("resolves the named preview from the fixed Convex control-plane endpoint", async () => {
+  it("claims the existing named preview from the fixed Convex control-plane endpoint", async () => {
     let requestedUrl = "";
     let requestedInit: RequestInit | undefined;
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
@@ -124,11 +124,10 @@ describe("trusted Convex preview authority", () => {
       return new Response(
         JSON.stringify({
           deploymentName: "elegant-butterfly-952",
-          url: "https://elegant-butterfly-952.convex.cloud",
-          adminKey: "elegant-butterfly-952|must-not-persist",
-          deploymentType: "preview",
+          instanceUrl: "https://elegant-butterfly-952.convex.cloud",
+          adminKey: "preview:elegant-butterfly-952|must-not-persist",
+          isNewDeployment: false,
           reference: null,
-          isDefault: false,
         }),
         {
           status: 200,
@@ -143,8 +142,10 @@ describe("trusted Convex preview authority", () => {
       fetchImpl: fetchImpl as typeof fetch,
     });
 
+    // The Convex CLI deploys to a preview through claim_preview_deployment;
+    // authorize_preview answers with a project-scoped key (SCRUM-350 KEY-2).
     expect(requestedUrl).toBe(
-      "https://api.convex.dev/api/deployment/authorize_preview",
+      "https://api.convex.dev/api/claim_preview_deployment",
     );
     expect(requestedInit?.method).toBe("POST");
     expect(requestedInit?.redirect).toBe("error");
@@ -153,12 +154,13 @@ describe("trusted Convex preview authority", () => {
       "content-type": "application/json",
     });
     expect(JSON.parse(String(requestedInit?.body))).toEqual({
-      previewName: PREVIEW_NAME,
       projectSelection: {
         kind: "teamAndProjectSlugs",
         teamSlug: "team-one",
         projectSlug: "project-two",
       },
+      identifier: PREVIEW_NAME,
+      reuse: true,
     });
     expect(authority).toEqual({
       version: 1,
@@ -176,29 +178,69 @@ describe("trusted Convex preview authority", () => {
     });
     expect(credentials.authority).toEqual(authority);
     expect(credentials.adminKey).toBe(
-      "elegant-butterfly-952|must-not-persist",
+      "preview:elegant-butterfly-952|must-not-persist",
     );
   });
 
-  it("fails closed when the control plane resolves anything except a preview", async () => {
-    const fetchImpl = vi.fn(async () =>
+  function claimResponse(body: Record<string, unknown>) {
+    return vi.fn(async () =>
       new Response(
         JSON.stringify({
-          deploymentName: "prod-name",
-          url: "https://prod-name.convex.cloud",
-          deploymentType: "prod",
+          deploymentName: "elegant-butterfly-952",
+          instanceUrl: "https://elegant-butterfly-952.convex.cloud",
+          adminKey: "preview:elegant-butterfly-952|deployment-secret",
+          isNewDeployment: false,
+          ...body,
         }),
         { status: 200 },
       ),
     );
+  }
 
+  it("refuses a claim that created a new preview instead of reusing the bootstrapped one", async () => {
+    for (const isNewDeployment of [true, undefined, "false"]) {
+      await expect(
+        resolveConvexPreviewCredentials({
+          deployKey: DEPLOY_KEY,
+          previewName: PREVIEW_NAME,
+          fetchImpl: claimResponse({ isNewDeployment }) as typeof fetch,
+        }),
+      ).rejects.toThrow(/did not reuse the existing preview/);
+    }
+  });
+
+  it("fails closed when the control plane resolves anything except a preview", async () => {
     await expect(
       resolveConvexPreviewAuthority({
         deployKey: DEPLOY_KEY,
         previewName: PREVIEW_NAME,
-        fetchImpl: fetchImpl as typeof fetch,
+        fetchImpl: claimResponse({ deploymentType: "prod" }) as typeof fetch,
       }),
     ).rejects.toThrow(/non-preview/);
+  });
+
+  it("still refuses a project-scoped key returned by the claim", async () => {
+    await expect(
+      resolveConvexPreviewCredentials({
+        deployKey: DEPLOY_KEY,
+        previewName: PREVIEW_NAME,
+        fetchImpl: claimResponse({
+          adminKey: "preview:team-one:project-two|project-wide-secret",
+        }) as typeof fetch,
+      }),
+    ).rejects.toThrow(/not scoped.*3 prefix segments/);
+  });
+
+  it("refuses a claim whose instance URL is not the claimed deployment", async () => {
+    await expect(
+      resolveConvexPreviewCredentials({
+        deployKey: DEPLOY_KEY,
+        previewName: PREVIEW_NAME,
+        fetchImpl: claimResponse({
+          instanceUrl: "https://different-deployment-123.convex.cloud",
+        }) as typeof fetch,
+      }),
+    ).rejects.toThrow(/does not match its deployment URL/);
   });
 
   it("rejects forged or decorated authority artifacts", () => {

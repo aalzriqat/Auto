@@ -4,8 +4,11 @@ import { fileURLToPath } from "node:url";
 import { previewNameForRef } from "../e2ePreviewBootstrap.mjs";
 
 const CONVEX_PROVISION_ORIGIN = "https://api.convex.dev";
-const AUTHORIZE_PREVIEW_URL =
-  CONVEX_PROVISION_ORIGIN + "/api/deployment/authorize_preview";
+// The Convex CLI deploys to a preview through claim_preview_deployment and uses
+// the admin key it returns. authorize_preview answers a preview deploy key with a
+// project-scoped key, which must never reach candidate-adjacent steps (SCRUM-350
+// KEY-2). reuse:true claims the preview the trusted step already created.
+const CLAIM_PREVIEW_URL = CONVEX_PROVISION_ORIGIN + "/api/claim_preview_deployment";
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const REQUEST_TIMEOUT_MS = 30_000;
 const CONVEX_CLIENT_HEADER = "npm-cli-1.42.1";
@@ -224,7 +227,7 @@ export async function resolveConvexPreviewCredentials({
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   let response;
   try {
-    response = await fetchImpl(AUTHORIZE_PREVIEW_URL, {
+    response = await fetchImpl(CLAIM_PREVIEW_URL, {
       method: "POST",
       headers: {
         authorization: "Bearer " + deployKey,
@@ -233,12 +236,13 @@ export async function resolveConvexPreviewCredentials({
         "convex-client": CONVEX_CLIENT_HEADER,
       },
       body: JSON.stringify({
-        previewName,
         projectSelection: {
           kind: "teamAndProjectSlugs",
           teamSlug,
           projectSlug,
         },
+        identifier: previewName,
+        reuse: true,
       }),
       redirect: "error",
       signal: controller.signal,
@@ -272,6 +276,14 @@ export async function resolveConvexPreviewCredentials({
       "Convex control plane resolved a non-preview deployment.",
     );
   }
+  // Every caller runs after a trusted step created and bootstrapped this
+  // preview. A claim that created one instead would hand back a blank
+  // deployment, so anything but an explicit reuse is refused.
+  if (responseObject.isNewDeployment !== false) {
+    throw new Error(
+      "Convex control plane did not reuse the existing preview deployment.",
+    );
+  }
 
   const artifact = validateConvexPreviewAuthority(
     {
@@ -279,7 +291,9 @@ export async function resolveConvexPreviewCredentials({
       authority: "CONVEX_CONTROL_PLANE_AUTHORIZE_PREVIEW",
       previewName,
       convexCloudUrl: assertConvexCloudOrigin(
-        typeof responseObject.url === "string" ? responseObject.url : undefined,
+        typeof responseObject.instanceUrl === "string"
+          ? responseObject.instanceUrl
+          : undefined,
       ),
       deploymentName:
         typeof responseObject.deploymentName === "string"
