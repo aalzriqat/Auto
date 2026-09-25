@@ -273,8 +273,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     );
     const deployIndex = trustedSteps.findIndex(
       (entry) =>
-        entry.name ===
-        "Deploy exact candidate backend with disposable preview credential",
+        entry.name === "Deploy staged candidate backend with trusted Convex CLI",
     );
     expect(scrubIndex).toBeGreaterThanOrEqual(0);
     expect(deployIndex).toBeGreaterThan(scrubIndex);
@@ -307,19 +306,25 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(run).toContain('--admin-key "$ADMIN_KEY"');
   });
 
-  it("deploys candidate backend only with a deployment-scoped preview credential", () => {
+  it("deploys the candidate backend only as staged data through the trusted Convex CLI (SCRUM-350)", () => {
+    // The claim key is project-wide (run 36114902831), so it never reaches a
+    // candidate-controlled install or CLI. Mounts, flags and ordering across
+    // every workflow are pinned in convexCredentialBoundary.test.ts.
+    const stage = step("trusted-e2e", "Stage exact candidate backend as data");
+    expect(JSON.stringify(stage.env ?? {})).not.toContain("secrets.");
     const deploy = step(
       "trusted-e2e",
-      "Deploy exact candidate backend with disposable preview credential",
+      "Deploy staged candidate backend with trusted Convex CLI",
     );
     const deployRun = String(deploy.run ?? "");
     expect(deploy.env).toHaveProperty("CONVEX_PREVIEW_DEPLOY_KEY");
     expect(deployRun).toContain("resolveConvexPreviewCredentials");
-    expect(deployRun).toContain("--env CONVEX_PREVIEW_ADMIN_KEY=");
-    expect(deployRun).toContain('--admin-key "$CONVEX_PREVIEW_ADMIN_KEY"');
+    expect(deployRun).toContain('"$RUNNER_TEMP/candidate-backend:/app:ro"');
+    expect(deployRun).not.toContain("$GITHUB_WORKSPACE/candidate");
+    expect(deployRun).not.toMatch(/\bpnpm\b/);
+    expect(deployRun).toContain("--typecheck disable");
     expect(deployRun).not.toContain("--env CONVEX_PREVIEW_DEPLOY_KEY");
     expect(deployRun).not.toContain("--env CLERK_SECRET_KEY");
-    expect(deployRun).not.toContain("$GITHUB_WORKSPACE/trusted:/");
     expect(deployRun).toContain("--cap-drop ALL");
     expect(deployRun).toContain("--security-opt no-new-privileges");
   });

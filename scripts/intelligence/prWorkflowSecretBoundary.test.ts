@@ -125,17 +125,19 @@ describe("pull-request workflow secret boundary", () => {
     expect(source).not.toMatch(/candidate[^\n]*pnpm\s+(?:install|run|exec)/);
   });
 
-  it("gives candidate accounting backend only the disposable preview credential", () => {
+  it("deploys the candidate accounting backend only as staged data through the trusted CLI (SCRUM-350)", () => {
     const source = readFileSync(
       path.join(workflowsDir, "trusted-accounting-rehearsal.yml"),
       "utf8",
     );
     expect(source).toContain("ref: ${{ github.workflow_sha }}");
     expect(source).toContain("ref: ${{ steps.provenance.outputs.tested_sha }}");
-    expect(source).toContain("--env CONVEX_PREVIEW_ADMIN_KEY=\"$ADMIN_KEY\"");
+    expect(source).toContain("trusted/scripts/intelligence/stageCandidateBackend.mjs");
+    expect(source).toContain('"$RUNNER_TEMP/candidate-backend:/app:ro"');
     expect(source).not.toContain("--env CONVEX_PREVIEW_DEPLOY_KEY");
     expect(source).not.toContain("--env CLERK_SECRET_KEY");
-    expect(source).toContain("$GITHUB_WORKSPACE/candidate:/app");
+    // No container ever mounts the candidate checkout in this lane now.
+    expect(source).not.toContain("$GITHUB_WORKSPACE/candidate:/app");
     expect(source).not.toContain("$GITHUB_WORKSPACE/trusted:/");
     expect(source).toContain("Disposable rehearsal preview environment does not match the trusted allowlist.");
     expect(source).toContain("autoflow/trusted-accounting-rehearsal");

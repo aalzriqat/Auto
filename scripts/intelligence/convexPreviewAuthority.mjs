@@ -6,8 +6,9 @@ import { previewNameForRef } from "../e2ePreviewBootstrap.mjs";
 const CONVEX_PROVISION_ORIGIN = "https://api.convex.dev";
 // The Convex CLI deploys to a preview through claim_preview_deployment and uses
 // the admin key it returns. authorize_preview answers a preview deploy key with a
-// project-scoped key, which must never reach candidate-adjacent steps (SCRUM-350
-// KEY-2). reuse:true claims the preview the trusted step already created. If that
+// project-scoped key (SCRUM-350 KEY-2); claim_preview_deployment turned out to
+// return the project-wide key too (KEY-3), see classifyPreviewClaimAdminKey.
+// reuse:true claims the preview the trusted step already created. If that
 // preview is gone (a concurrent run deleted it), the claim provisions an empty
 // one; the isNewDeployment check below refuses to use it, but it is not undone.
 const CLAIM_PREVIEW_URL = CONVEX_PROVISION_ORIGIN + "/api/claim_preview_deployment";
@@ -167,52 +168,60 @@ async function readBoundedJsonObject(response) {
   return /** @type {Record<string, unknown>} */ (payload);
 }
 
-// Deployment admin keys are `<name>|<secret>` or `<type>:<name>|<secret>`, the
+// What claim_preview_deployment hands back, and what it may be used for.
+//
+// A deployment admin key is `<name>|<secret>` or `<type>:<name>|<secret>`, the
 // shapes the Convex CLI itself parses (deploymentNameFromAdminKey: the name is
-// the last `:` segment). A three-part `preview:<team>:<project>` key is a
-// project-wide preview DEPLOY key and `project:` keys span a project; neither is
-// scoped to one deployment, so both are refused.
+// the last `:` segment). Convex does not return one for previews: run
+// 36114902831 (SCRUM-350 KEY-3) proved the claim returns the project-wide
+// preview DEPLOY key itself, `preview:<team>:<project>|<secret>`, accepted by
+// every preview in the project. No check on its bytes can make it narrower.
+//
+// So the claim key is accepted in two shapes, and says which:
+// - DEPLOYMENT: scoped to the resolved preview, should Convex ever issue one;
+// - PROJECT_PREVIEW: the project-wide key, only when its team and project are
+//   the deploy key's own.
+// Either way it may reach TRUSTED code only. That is enforced where code runs,
+// not here: scripts/intelligence/convexCredentialBoundary.test.ts refuses any
+// workflow step that runs candidate code beside a Convex credential, and the
+// candidate backend is deployed by the trusted CLI from a staged copy.
 const ADMIN_KEY_DEPLOYMENT_TYPES = new Set(["prod", "dev", "preview"]);
-// Type literals the refusal may name. Anything else is reported without its
-// bytes: the refusal reaches public CI logs before any ::add-mask:: runs.
-const ADMIN_KEY_NAMEABLE_TYPES = new Set([...ADMIN_KEY_DEPLOYMENT_TYPES, "project"]);
 
-export function assertPreviewDeploymentAdminKey(value, expectedDeploymentName) {
+export function classifyPreviewClaimAdminKey(value, expectedDeploymentName, deployKey) {
   if (typeof value !== "string" || !value) {
-    throw new TypeError("Convex control plane did not return a preview deployment admin key.");
+    throw new TypeError("Convex control plane did not return a preview admin key.");
   }
   const separator = value.indexOf("|");
-  if (separator <= 0 || separator === value.length - 1) {
-    throw new Error("Convex preview deployment admin key is malformed.");
+  const secret = value.slice(separator + 1);
+  if (separator <= 0 || !secret || /\s/.test(secret)) {
+    // Fixed literal: the refusal reaches public CI logs before any ::add-mask::.
+    throw new Error("Convex preview admin key is malformed.");
   }
   const prefixParts = value.slice(0, separator).split(":");
-  const secret = value.slice(separator + 1);
-  const typed = prefixParts.length === 2;
+
   const deploymentName = prefixParts.at(-1);
-  const shapeOk =
+  const deploymentShape =
     prefixParts.length === 1 ||
-    (typed && ADMIN_KEY_DEPLOYMENT_TYPES.has(prefixParts[0]));
-  if (
-    !shapeOk ||
-    deploymentName !== expectedDeploymentName ||
-    /[\r\n]/.test(secret)
-  ) {
-    // Public CI logs: describe the key's shape using fixed literals only, never
-    // bytes taken from the key itself.
-    let shape = prefixParts.length + " prefix segments";
-    if (prefixParts.length === 1) shape = "untyped";
-    else if (typed && ADMIN_KEY_NAMEABLE_TYPES.has(prefixParts[0])) {
-      shape = "type '" + prefixParts[0] + "'";
-    } else if (typed) shape = "unrecognized type";
+    (prefixParts.length === 2 && ADMIN_KEY_DEPLOYMENT_TYPES.has(prefixParts[0]));
+  if (deploymentShape && deploymentName === expectedDeploymentName) {
+    return { adminKey: value, scope: "DEPLOYMENT" };
+  }
+
+  if (prefixParts.length === 3 && prefixParts[0] === "preview") {
+    const { teamSlug, projectSlug } = parsePreviewDeployKey(deployKey);
+    if (prefixParts[1] === teamSlug && prefixParts[2] === projectSlug) {
+      return { adminKey: value, scope: "PROJECT_PREVIEW" };
+    }
     throw new Error(
-      "Convex control plane returned an admin key that is not scoped to the resolved preview deployment (" +
-        shape +
-        ", deployment name " +
-        (deploymentName === expectedDeploymentName ? "matches" : "differs") +
-        ").",
+      "Convex control plane returned a preview key for a different team or project.",
     );
   }
-  return value;
+
+  throw new Error(
+    "Convex control plane returned an admin key for neither the resolved preview nor this project (" +
+      (deploymentShape ? "deployment name differs" : "unrecognized shape") +
+      ").",
+  );
 }
 
 /**
@@ -321,12 +330,13 @@ export async function resolveConvexPreviewCredentials({
     },
     previewName,
   );
-  const adminKey = assertPreviewDeploymentAdminKey(
+  const { adminKey, scope } = classifyPreviewClaimAdminKey(
     responseObject.adminKey,
     artifact.deploymentName,
+    deployKey,
   );
 
-  return { authority: artifact, adminKey };
+  return { authority: artifact, adminKey, scope };
 }
 
 export async function resolveConvexPreviewAuthority(options) {
