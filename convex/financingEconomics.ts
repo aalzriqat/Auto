@@ -162,10 +162,16 @@ async function recomputeAndPatchEconomics(
     ? await ctx.db.get(app.approvedPurchaseAppraisalId)
     : null;
 
-  const derived = deriveEconomics({
+  // An unknown first payment is not zero (SCRUM-373): deriving with 0 moved
+  // the whole payment into the dealer's contribution. Withhold the split the
+  // same way an unrecorded LTV basis does, below. Recording a quotation always
+  // persists a first payment now, so this is reached only by a legacy row.
+  const firstPaymentUnknown = app.customerFirstPaymentMinor === undefined;
+
+  const derived = firstPaymentUnknown ? null : deriveEconomics({
     approvedDealerPurchaseAmountMinor: app.approvedDealerPurchaseAmountMinor,
     appliedLtvPercent: app.appliedLtvPercent,
-    customerFirstPaymentMinor: app.customerFirstPaymentMinor ?? 0,
+    customerFirstPaymentMinor: app.customerFirstPaymentMinor as number,
     submittedQuotationMinor: app.submittedQuotationMinor,
     ltvBasis: snapshot.ltvBasis,
     ...(basisAppraisal && basisAppraisal.orgId === app.orgId
@@ -229,7 +235,9 @@ async function recomputeAndPatchEconomics(
       needsFinancingReconciliation: true,
       financingReconciliationReason: appendReconciliationReason(
         app.financingReconciliationReason,
-        `This finance company applies its LTV to the ${(snapshot.ltvBasis ?? "APPROVED_PURCHASE_AMOUNT").toLowerCase().replace(/_/g, " ")}, which has not been recorded on this deal. Record it before relying on the funding split.`
+        firstPaymentUnknown
+          ? "The customer's first payment is not recorded on this deal. Record it before relying on the funding split."
+          : `This finance company applies its LTV to the ${(snapshot.ltvBasis ?? "APPROVED_PURCHASE_AMOUNT").toLowerCase().replace(/_/g, " ")}, which has not been recorded on this deal. Record it before relying on the funding split.`
       ),
       updatedAt: Date.now(),
     });
@@ -450,6 +458,51 @@ interface QuotationSolverOverrides {
   ltvPercent?: number;
 }
 
+type CustomerFirstPaymentSource = "EXPLICIT" | "STORED" | "QUOTE_SEED";
+
+/**
+ * The customer first payment a quotation is solved with, and where it came
+ * from (SCRUM-373).
+ *
+ * An absent first payment is UNKNOWN, never zero. This replaced
+ * `override ?? stored ?? 0`, which persisted a confident zero onto every
+ * application created before `createFromQuote` seeded the field — seven of ten
+ * production deals, one of them showing 0 beside a quote that said 700.
+ *
+ * Order: an explicit argument; else the value already on the application (a
+ * stored zero included — refusing to trust it is the historical correction's
+ * job, not this resolver's); else the originating quote's down payment, the
+ * same seed `createFromQuote` writes, read only from a quote owned by the
+ * deal's own org. Undefined when none exists: the caller refuses rather than
+ * solving with a substitute.
+ */
+async function resolveCustomerFirstPayment(
+  ctx: QueryCtx | MutationCtx,
+  app: Doc<"financeApplications">,
+  override: number | undefined
+): Promise<{ minor: number; source: CustomerFirstPaymentSource } | undefined> {
+  if (override !== undefined) return { minor: override, source: "EXPLICIT" };
+  if (app.customerFirstPaymentMinor !== undefined) {
+    return { minor: app.customerFirstPaymentMinor, source: "STORED" };
+  }
+  const quote = await ctx.db.get(app.quoteId);
+  if (!quote || quote.orgId !== app.orgId) return undefined;
+  if (typeof quote.downPayment !== "number" || !Number.isFinite(quote.downPayment)) {
+    return undefined;
+  }
+  const currency = await resolveDealCurrency(ctx, app, "seeding the customer's first payment");
+  const minor = toMinorUnits(quote.downPayment, currency);
+  if (!Number.isSafeInteger(minor) || minor < 0) return undefined;
+  return { minor, source: "QUOTE_SEED" };
+}
+
+/**
+ * Stable, figure-free: safe for a caller who may not read finance economics
+ * (the query forwards ConvexError text only to finance readers anyway).
+ */
+const CUSTOMER_FIRST_PAYMENT_UNKNOWN =
+  "The customer's first payment is not recorded on this deal and its originating quote does not carry one. Record it before the quotation.";
+
 /**
  * Runs the solver for an EXISTING application, under the rules that govern it.
  *
@@ -474,6 +527,7 @@ async function solveQuotationForApplication(
   snapshot: FinanceCompanyRuleSnapshot;
   appliedLtvPercent: number;
   customerFirstPaymentMinor: number;
+  customerFirstPaymentSource: CustomerFirstPaymentSource;
   targetForSolver: number | undefined;
   expensesForSolver: number | undefined;
   bufferForSolver: number | undefined;
@@ -485,8 +539,15 @@ async function solveQuotationForApplication(
     overrides.ltvPercent ?? app.appliedLtvPercent
   );
 
-  const customerFirstPaymentMinor =
-    overrides.customerFirstPaymentMinor ?? app.customerFirstPaymentMinor ?? 0;
+  const firstPayment = await resolveCustomerFirstPayment(
+    ctx,
+    app,
+    overrides.customerFirstPaymentMinor
+  );
+  if (firstPayment === undefined) {
+    throw new ConvexError(CUSTOMER_FIRST_PAYMENT_UNKNOWN);
+  }
+  const customerFirstPaymentMinor = firstPayment.minor;
   if (
     snapshot.minimumCustomerFirstPaymentMinor !== undefined &&
     customerFirstPaymentMinor < snapshot.minimumCustomerFirstPaymentMinor
@@ -521,6 +582,7 @@ async function solveQuotationForApplication(
     snapshot,
     appliedLtvPercent,
     customerFirstPaymentMinor,
+    customerFirstPaymentSource: firstPayment.source,
     targetForSolver,
     expensesForSolver,
     bufferForSolver,
@@ -1266,6 +1328,7 @@ export const recordSubmittedQuotation = mutation({
       snapshot,
       appliedLtvPercent,
       customerFirstPaymentMinor,
+      customerFirstPaymentSource,
       targetForSolver,
       expensesForSolver,
       bufferForSolver,
@@ -1549,6 +1612,7 @@ export const recordSubmittedQuotation = mutation({
         estimatedDealerBorneExpensesMinor: expensesForSolver,
         quotationBufferMinor: bufferForSolver,
         customerFirstPaymentMinor,
+        customerFirstPaymentSource,
         appliedLtvPercent,
         customerFirstPaymentOffsetsUnfinancedShare:
           snapshot.customerFirstPaymentOffsetsUnfinancedShare,
@@ -1591,6 +1655,21 @@ export const recordSubmittedQuotation = mutation({
         : {}),
       updatedAt: now,
     });
+
+    // A seeded first payment is a value this write CHOSE, not one anybody
+    // entered: record where it came from (SCRUM-373). It seeds only while the
+    // application holds no value, so a retry finds it STORED and adds no row.
+    if (customerFirstPaymentSource === "QUOTE_SEED") {
+      await recordOverride(ctx, {
+        orgId: args.orgId,
+        applicationId: args.applicationId,
+        field: "customerFirstPaymentMinor",
+        previousValue: undefined,
+        newValue: customerFirstPaymentMinor,
+        reason: `Seeded from the originating quote ${app.quoteId}'s down payment when the quotation was recorded.`,
+        changedBy: user._id,
+      });
+    }
 
     const updated = await ctx.db.get(args.applicationId);
     if (updated) await recomputeAndPatchEconomics(ctx, updated);

@@ -5483,3 +5483,182 @@ describe("advancing a deal whose appraisal gap is unsettled (SCRUM-116)", () => 
     expect((await readApp(seed, applicationId)).vehicleHandoverAt).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+
+/**
+ * SCRUM-373 — an absent first payment is UNKNOWN, never zero.
+ *
+ * Every case starts from the legacy shape production actually holds: an
+ * application whose `customerFirstPaymentMinor` was never written. The happy
+ * path (createFromQuote seeds it) cannot reach the fallback these guard, so the
+ * field is cleared by hand to reproduce the rows that were zeroed.
+ */
+describe("the customer's first payment is never assumed to be zero (SCRUM-373)", () => {
+  async function legacyApplication(
+    seed: Seed,
+    options: { quoteDownPaymentMajor?: number; quoteDeleted?: boolean } = {}
+  ): Promise<Id<"financeApplications">> {
+    const applicationId = await createApplication(seed);
+    await seed.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      if (!app?.quoteId) throw new Error("fixture: application has no quote");
+      if (options.quoteDownPaymentMajor !== undefined) {
+        await ctx.db.patch(app.quoteId, { downPayment: options.quoteDownPaymentMajor });
+      }
+      if (options.quoteDeleted) await ctx.db.delete(app.quoteId);
+      await ctx.db.patch(applicationId, { customerFirstPaymentMinor: undefined });
+    });
+    return applicationId;
+  }
+
+  async function recordWithoutFirstPayment(
+    seed: Seed,
+    applicationId: Id<"financeApplications">
+  ): Promise<void> {
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "MANUAL_ENTRY",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+    });
+  }
+
+  async function approveAtQuotation(
+    seed: Seed,
+    applicationId: Id<"financeApplications">
+  ): Promise<void> {
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(DEAL.quotation),
+      providerType: "FINANCE_COMPANY",
+      providerName: "Jordan Finance Appraisals",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(DEAL.quotation),
+      basis: "APPRAISAL",
+    });
+  }
+
+  async function firstPaymentOverrides(seed: Seed, applicationId: Id<"financeApplications">) {
+    return await seed.t.run(async (ctx) =>
+      (await ctx.db.query("financeApplicationOverrides").collect()).filter(
+        (row) => row.applicationId === applicationId && row.field === "customerFirstPaymentMinor"
+      )
+    );
+  }
+
+  test("a legacy row takes its first payment from the originating quote, audited, not zero", async () => {
+    const seed = await seedDealer();
+    const applicationId = await legacyApplication(seed);
+
+    await recordWithoutFirstPayment(seed, applicationId);
+
+    const app = await readApp(seed, applicationId);
+    expect(app.customerFirstPaymentMinor).toBe(jod(DEAL.customerFirstPayment));
+    expect(app.quotationCalculationSnapshot?.customerFirstPaymentMinor).toBe(
+      jod(DEAL.customerFirstPayment)
+    );
+    expect(app.quotationCalculationSnapshot?.customerFirstPaymentSource).toBe("QUOTE_SEED");
+
+    const audit = await firstPaymentOverrides(seed, applicationId);
+    expect(audit).toHaveLength(1);
+    expect(audit[0]?.newValue).toBe(String(jod(DEAL.customerFirstPayment)));
+    expect(audit[0]?.reason).toMatch(/seeded from the originating quote/i);
+
+    // …and the split that follows is the dealer's confirmed 1,375, not 1,875.
+    await approveAtQuotation(seed, applicationId);
+    const approved = await readApp(seed, applicationId);
+    expect(approved.dealerContributionMinor).toBe(jod(1_375));
+    expect(approved.financeCompanyFundedPortionMinor).toBe(jod(10_625));
+  });
+
+  test("with no first payment and no quote left to take it from, recording the quotation is refused", async () => {
+    const seed = await seedDealer();
+    const applicationId = await legacyApplication(seed, { quoteDeleted: true });
+
+    await expect(recordWithoutFirstPayment(seed, applicationId)).rejects.toThrow(
+      /first payment is not recorded/i
+    );
+    const app = await readApp(seed, applicationId);
+    expect(app.customerFirstPaymentMinor).toBeUndefined();
+    expect(app.submittedQuotationMinor).toBeUndefined();
+
+    // The screen's suggestion answers "unavailable" rather than solving with 0.
+    const suggestion = await seed.asUser.query(
+      api.financingEconomics.suggestQuotationForApplication,
+      { orgId: seed.orgId, applicationId }
+    );
+    expect(suggestion.available).toBe(false);
+  });
+
+  test("an explicit zero is honoured as a fact and is not replaced by the quote", async () => {
+    const seed = await seedDealer();
+    const applicationId = await legacyApplication(seed);
+
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "MANUAL_ENTRY",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+      customerFirstPaymentMinor: 0,
+    });
+
+    const app = await readApp(seed, applicationId);
+    expect(app.customerFirstPaymentMinor).toBe(0);
+    expect(app.quotationCalculationSnapshot?.customerFirstPaymentSource).toBe("EXPLICIT");
+    expect(await firstPaymentOverrides(seed, applicationId)).toHaveLength(0);
+  });
+
+  test("a stored first payment is used as stored and labelled so", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+
+    await recordWithoutFirstPayment(seed, applicationId);
+
+    const app = await readApp(seed, applicationId);
+    expect(app.customerFirstPaymentMinor).toBe(jod(DEAL.customerFirstPayment));
+    expect(app.quotationCalculationSnapshot?.customerFirstPaymentSource).toBe("STORED");
+    expect(await firstPaymentOverrides(seed, applicationId)).toHaveLength(0);
+  });
+
+  test("a seeded payment above the unfinanced slice lowers the funded portion (capped path)", async () => {
+    const seed = await seedDealer();
+    const applicationId = await legacyApplication(seed, { quoteDownPaymentMajor: 2_500 });
+
+    await recordWithoutFirstPayment(seed, applicationId);
+    await approveAtQuotation(seed, applicationId);
+
+    const app = await readApp(seed, applicationId);
+    expect(app.customerFirstPaymentMinor).toBe(jod(2_500));
+    // approved 12,500 · max fundable 10,625 · customer 2,500 → funded 10,000, dealer 0
+    expect(app.financeCompanyFundedPortionMinor).toBe(jod(10_000));
+    expect(app.dealerContributionMinor).toBe(0);
+  });
+
+  test("a recompute over an unknown first payment withholds the split instead of deriving it from zero", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordManualBaseline(seed, applicationId);
+    // A payment that is absent by the time the deal is approved.
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { customerFirstPaymentMinor: undefined })
+    );
+
+    await approveAtQuotation(seed, applicationId);
+
+    const app = await readApp(seed, applicationId);
+    expect(app.dealerContributionMinor).toBeUndefined();
+    expect(app.financeCompanyFundedPortionMinor).toBeUndefined();
+    expect(app.needsFinancingReconciliation).toBe(true);
+    expect(app.financingReconciliationReason).toMatch(/first payment is not recorded/i);
+  });
+});
