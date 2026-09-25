@@ -135,7 +135,7 @@ describe("Convex preview key-scope diagnostic", () => {
       onAdminKeys: (keys: string[]) => masked.push(...keys),
     });
     // The claimed keys leave only through the masking callback.
-    expect(masked).toEqual([KEY_A, KEY_B]);
+    expect(masked).toEqual(expect.arrayContaining([KEY_A, KEY_B]));
     const serialized = JSON.stringify(report);
     for (const secret of [
       DEPLOY_KEY,
@@ -146,6 +146,102 @@ describe("Convex preview key-scope diagnostic", () => {
       "secret-for-b",
     ]) {
       expect(serialized).not.toContain(secret);
+    }
+  });
+
+  it("never counts a non-auth status on a cross-probe as a rejection", async () => {
+    // Only 401/403 prove the other preview refused the key. A 400/404/500 says
+    // nothing about scope, so it must never yield DEPLOYMENT_SCOPED.
+    for (const status of [400, 404, 500]) {
+      const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        const target = new URL(String(url));
+        if (target.pathname === "/api/claim_preview_deployment") {
+          const body = JSON.parse(String(init?.body));
+          return new Response(JSON.stringify(CLAIMS[body.identifier]), { status: 200 });
+        }
+        const key = (new Headers(init?.headers).get("authorization") ?? "").replace(/^Convex /, "");
+        const own =
+          (target.hostname === "dep-a.convex.cloud" && key === KEY_A) ||
+          (target.hostname === "dep-b.convex.cloud" && key === KEY_B);
+        return new Response("{}", { status: own ? 200 : status });
+      });
+      const report = await diagnosePreviewKeyScope({
+        deployKey: DEPLOY_KEY,
+        previewNames: NAMES,
+        fetchImpl: fetchImpl as typeof fetch,
+      });
+      expect(report.verdict, "cross-probe status " + status).toBe(
+        "INCONCLUSIVE_UNEXPECTED_STATUS",
+      );
+    }
+  });
+
+  it("refuses to probe unless the claims name two distinct, valid previews", async () => {
+    const contradictions: Array<[string, Claims]> = [
+      [
+        "same deployment under both names",
+        { ...CLAIMS, [NAMES[1]]: { ...CLAIMS[NAMES[0]], adminKey: KEY_B } },
+      ],
+      ["non-preview type", { ...CLAIMS, [NAMES[0]]: { ...CLAIMS[NAMES[0]], deploymentType: "prod" } }],
+      [
+        "name and URL disagree",
+        { ...CLAIMS, [NAMES[0]]: { ...CLAIMS[NAMES[0]], deploymentName: "dep-z" } },
+      ],
+      ["missing admin key", { ...CLAIMS, [NAMES[1]]: { ...CLAIMS[NAMES[1]], adminKey: undefined } }],
+    ];
+    for (const [label, claims] of contradictions) {
+      const fetchImpl = fakeConvex(claims, {
+        "dep-a.convex.cloud": [KEY_A, KEY_B],
+        "dep-b.convex.cloud": [KEY_A, KEY_B],
+      });
+      const report = await diagnosePreviewKeyScope({
+        deployKey: DEPLOY_KEY,
+        previewNames: NAMES,
+        fetchImpl: fetchImpl as typeof fetch,
+      });
+      expect(report.verdict, label).toBe("INCONCLUSIVE_INVALID_IDENTITY");
+      expect(report.probes, label).toBeNull();
+      expect(
+        fetchImpl.mock.calls.some(([url]) => String(url).includes("get_config_hashes")),
+        label,
+      ).toBe(false);
+    }
+  });
+
+  it("reflects no control-plane strings into the report", async () => {
+    const hostile = "secret-for-a";
+    const report = await diagnosePreviewKeyScope({
+      deployKey: DEPLOY_KEY,
+      previewNames: NAMES,
+      fetchImpl: fakeConvex(
+        {
+          ...CLAIMS,
+          [NAMES[0]]: {
+            ...CLAIMS[NAMES[0]],
+            deploymentName: hostile,
+            [hostile]: true,
+          },
+        },
+        { "dep-a.convex.cloud": [KEY_A], "dep-b.convex.cloud": [KEY_B] },
+      ) as typeof fetch,
+    });
+    expect(JSON.stringify(report)).not.toContain(hostile);
+    expect(report.previews[0].unknownResponseFieldCount).toBe(1);
+  });
+
+  it("hands every key and secret part to the mask callback before reporting", async () => {
+    const masked: string[] = [];
+    await diagnosePreviewKeyScope({
+      deployKey: DEPLOY_KEY,
+      previewNames: NAMES,
+      fetchImpl: fakeConvex(CLAIMS, {
+        "dep-a.convex.cloud": [KEY_A],
+        "dep-b.convex.cloud": [KEY_B],
+      }) as typeof fetch,
+      onAdminKeys: (values: string[]) => masked.push(...values),
+    });
+    for (const value of [KEY_A, KEY_B, "secret-for-a", "secret-for-b"]) {
+      expect(masked).toContain(value);
     }
   });
 

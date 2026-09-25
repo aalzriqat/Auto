@@ -3,6 +3,12 @@ name: Convex Preview Key-Scope Diagnostic
 # SCRUM-350 KEY-3. One-off, manually dispatched from main only. Claims the two
 # previews the trusted rehearsal and browser swarm already created for a PR and
 # probes which keys each preview accepts. Prints booleans and HTTP statuses only.
+#
+# Run it only while that PR's trusted previews exist (right after its trusted
+# rehearsal and swarm ran). A claim for a missing preview provisions an empty
+# one before the diagnostic stops with INCONCLUSIVE_PREVIEW_MISSING (SCRUM-362).
+# The preview deploy key is a repository secret, so any writer can already read
+# it from a branch workflow; the main-only guard below is not that boundary.
 
 on:
   workflow_dispatch:

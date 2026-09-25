@@ -17,6 +17,23 @@ import {
 const CONVEX_CLI_VERSION = "1.42.1";
 const PROBE_TIMEOUT_MS = 15_000;
 const REJECTED = new Set([401, 403]);
+const DEPLOYMENT_NAME = /^[a-z0-9][a-z0-9-]{0,100}$/;
+const KNOWN_RESPONSE_FIELDS = new Set([
+  "adminKey",
+  "deploymentName",
+  "deploymentType",
+  "instanceUrl",
+  "isNewDeployment",
+  "reference",
+]);
+
+function safeOrigin(value) {
+  try {
+    return assertConvexCloudOrigin(typeof value === "string" ? value : undefined);
+  } catch {
+    return null;
+  }
+}
 
 export function previewNamesForPr(prNumber) {
   const pr = String(prNumber ?? "");
@@ -122,35 +139,46 @@ export async function diagnosePreviewKeyScope({
   const deploy = { teamSlug, projectSlug, ...splitKey(deployKey) };
 
   const claims = [];
+  const keys = [];
   for (const previewName of previewNames) {
-    claims.push(await requestPreviewClaim({ deployKey, previewName, fetchImpl }));
+    const claim = await requestPreviewClaim({ deployKey, previewName, fetchImpl });
+    const key = typeof claim.adminKey === "string" ? claim.adminKey : "";
+    // Mask each key and its secret part as soon as it exists: GitHub masks
+    // exact strings, so the whole key does not cover its secret on its own.
+    onAdminKeys([key, splitKey(key).secret].filter(Boolean));
+    claims.push(claim);
+    keys.push(key);
   }
-  const keys = claims.map((claim) =>
-    typeof claim.adminKey === "string" ? claim.adminKey : "",
-  );
-  onAdminKeys(keys.filter(Boolean));
 
+  // Control-plane strings are never reflected: only booleans, counts and the
+  // names of fields this diagnostic already knows.
   const previews = claims.map((claim, index) => {
-    const origin = assertConvexCloudOrigin(
-      typeof claim.instanceUrl === "string" ? claim.instanceUrl : undefined,
-    );
+    const origin = safeOrigin(claim.instanceUrl);
+    const name = claim.deploymentName;
+    const fields = Object.keys(claim);
     return {
       previewName: previewNames[index],
-      deploymentName:
-        typeof claim.deploymentName === "string" ? claim.deploymentName : null,
+      hasAdminKey: keys[index] !== "",
+      deploymentNameValid: typeof name === "string" && DEPLOYMENT_NAME.test(name),
       deploymentNameMatchesUrl:
-        new URL(origin).hostname === claim.deploymentName + ".convex.cloud",
-      isNewDeployment: claim.isNewDeployment ?? null,
-      responseFields: Object.keys(claim).sort(),
+        origin !== null && new URL(origin).hostname === name + ".convex.cloud",
+      deploymentTypeIsPreviewOrAbsent:
+        claim.deploymentType === undefined || claim.deploymentType === "preview",
+      isNewDeployment:
+        typeof claim.isNewDeployment === "boolean" ? claim.isNewDeployment : null,
+      responseFields: fields.filter((field) => KNOWN_RESPONSE_FIELDS.has(field)).sort(),
+      unknownResponseFieldCount: fields.filter((field) => !KNOWN_RESPONSE_FIELDS.has(field))
+        .length,
       ...describeKey(keys[index], deployKey, deploy),
       origin,
+      name,
     };
   });
   const keyAEqualsKeyB = keys[0] === keys[1];
   const base = {
     version: 1,
     diagnostic: "SCRUM-350-KEY-3",
-    previews: previews.map(({ origin: _origin, ...rest }) => rest),
+    previews: previews.map(({ origin: _origin, name: _name, ...rest }) => rest),
     keyAEqualsKeyB,
   };
 
@@ -160,7 +188,22 @@ export async function diagnosePreviewKeyScope({
     return { ...base, probes: null, verdict: "INCONCLUSIVE_PREVIEW_MISSING" };
   }
 
+  // A scope verdict is only about two distinct, valid previews.
   const [a, b] = previews;
+  const identityValid =
+    previews.every(
+      (p) =>
+        p.hasAdminKey &&
+        p.deploymentNameValid &&
+        p.deploymentNameMatchesUrl &&
+        p.deploymentTypeIsPreviewOrAbsent,
+    ) &&
+    a.name !== b.name &&
+    a.origin !== b.origin;
+  if (!identityValid) {
+    return { ...base, probes: null, verdict: "INCONCLUSIVE_INVALID_IDENTITY" };
+  }
+
   const probes = {
     keyAOnA: await probe(fetchImpl, a.origin, keys[0]),
     keyAOnB: await probe(fetchImpl, b.origin, keys[0]),
@@ -175,22 +218,30 @@ const invokedDirectly =
   Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (invokedDirectly) {
-  const names = previewNamesForPr(process.env.PR_NUMBER);
-  const report = await diagnosePreviewKeyScope({
-    deployKey: process.env.CONVEX_PREVIEW_DEPLOY_KEY,
-    previewNames: [names.swarm, names.rehearsal],
-    // Mask before any report line is written, in case a later change ever
-    // prints something derived from these keys.
-    onAdminKeys: (keys) => {
-      for (const key of keys) process.stdout.write("::add-mask::" + key + "\n");
-    },
-  });
-  const text = JSON.stringify(report, null, 2);
-  process.stdout.write(text + "\n");
-  if (process.env.GITHUB_STEP_SUMMARY) {
-    appendFileSync(
-      process.env.GITHUB_STEP_SUMMARY,
-      "## Convex preview key-scope diagnostic\n\n```json\n" + text + "\n```\n",
-    );
+  const mask = (value) => {
+    if (value) process.stdout.write("::add-mask::" + value + "\n");
+  };
+  try {
+    const deployKey = process.env.CONVEX_PREVIEW_DEPLOY_KEY ?? "";
+    mask(splitKey(deployKey).secret);
+    const names = previewNamesForPr(process.env.PR_NUMBER);
+    const report = await diagnosePreviewKeyScope({
+      deployKey,
+      previewNames: [names.swarm, names.rehearsal],
+      onAdminKeys: (values) => values.forEach(mask),
+    });
+    const text = JSON.stringify(report, null, 2);
+    process.stdout.write(text + "\n");
+    if (process.env.GITHUB_STEP_SUMMARY) {
+      appendFileSync(
+        process.env.GITHUB_STEP_SUMMARY,
+        "## Convex preview key-scope diagnostic\n\n```json\n" + text + "\n```\n",
+      );
+    }
+  } catch {
+    // Claim and parse errors can carry request or response text; this public
+    // workflow prints only that it failed.
+    process.stderr.write("Convex preview key-scope diagnostic failed before producing a report.\n");
+    process.exitCode = 1;
   }
 }
