@@ -543,6 +543,9 @@ jobs:
             deployKey: process.env.CONVEX_PREVIEW_DEPLOY_KEY,
             previewName: process.env.CONVEX_PREVIEW_NAME,
           });
+          if (resolved.authority.convexCloudUrl !== process.env.NEXT_PUBLIC_CONVEX_URL) {
+            throw new Error("Swarm preview was recreated after planning; refusing to deploy.");
+          }
           process.stdout.write(resolved.adminKey);
           NODE
           )"

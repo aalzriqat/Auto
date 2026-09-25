@@ -78,6 +78,11 @@ function executesCandidate(step: Step): boolean {
   const workingDirectory = String(step["working-directory"] ?? "");
   if (/^candidate(\/|$)/.test(workingDirectory)) return true;
   if (/(^|\s|;|&&)cd\s+"?candidate\b/.test(run)) return true;
+  // A direct invocation of anything under the candidate checkout, with no cd
+  // and no container (Sonnet F-2 on PR #341).
+  if (/\b(node|bash|sh|python3?|pnpm|npm|npx|tsx|deno|bun)\b[^\n]*?[\s"'=/]candidate\//.test(run)) {
+    return true;
+  }
   if (!/\bdocker\s+run\b/.test(run)) return false;
   return dockerVolumes(run).some(
     (volume) =>
@@ -114,6 +119,26 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
     // Swarm: build, trusted-e2e frontend, one per worker; rehearsal: none after
     // the staged deploy. A classifier that matched nothing would pass anything.
     expect(candidateSteps.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("recognises every way a step can run candidate code, and not trusted code that merely names it", () => {
+    for (const run of [
+      "node candidate/scripts/x.mjs",
+      "bash candidate/x.sh",
+      'pnpm --dir "$GITHUB_WORKSPACE" exec tsx candidate/y.ts',
+      "cd candidate && pnpm test",
+      'docker run --volume "$GITHUB_WORKSPACE/candidate:/app" img',
+    ]) {
+      expect(executesCandidate({ name: "synthetic", run }), run).toBe(true);
+    }
+    expect(executesCandidate({ name: "synthetic", "working-directory": "candidate", run: "ls" })).toBe(true);
+    for (const run of [
+      "node trusted/scripts/intelligence/stageCandidateBackend.mjs",
+      "node trusted/scripts/intelligence/browserSwarmBuildArtifact.mjs verify",
+      'echo "candidate backend staged"',
+    ]) {
+      expect(executesCandidate({ name: "synthetic", run }), run).toBe(false);
+    }
   });
 
   it("never sets a Convex credential at workflow or job level, where every step would inherit it", () => {
