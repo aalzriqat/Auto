@@ -5598,6 +5598,26 @@ describe("the customer's first payment is never assumed to be zero (SCRUM-373)",
     expect(suggestion.available).toBe(false);
   });
 
+  test("a quote owned by another organization is never a seed", async () => {
+    const seed = await seedDealer();
+    const applicationId = await legacyApplication(seed);
+    await seed.t.run(async (ctx) => {
+      const otherOrgId = await ctx.db.insert("organizations", {
+        name: "Another Dealer",
+        createdAt: Date.now(),
+      });
+      const app = await ctx.db.get(applicationId);
+      if (!app) throw new Error("fixture: application vanished");
+      await ctx.db.patch(app.quoteId, { orgId: otherOrgId });
+    });
+
+    await expect(recordWithoutFirstPayment(seed, applicationId)).rejects.toThrow(
+      /first payment is not recorded/i
+    );
+    expect((await readApp(seed, applicationId)).customerFirstPaymentMinor).toBeUndefined();
+    expect(await firstPaymentOverrides(seed, applicationId)).toHaveLength(0);
+  });
+
   test("an explicit zero is honoured as a fact and is not replaced by the quote", async () => {
     const seed = await seedDealer();
     const applicationId = await legacyApplication(seed);
