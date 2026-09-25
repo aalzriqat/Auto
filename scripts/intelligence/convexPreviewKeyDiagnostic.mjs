@@ -180,7 +180,9 @@ export async function diagnosePreviewKeyScope({
         claim.deploymentType === undefined || claim.deploymentType === "preview",
       isNewDeployment:
         typeof claim.isNewDeployment === "boolean" ? claim.isNewDeployment : null,
-      responseFields: fields.filter((field) => KNOWN_RESPONSE_FIELDS.has(field)).sort(),
+      responseFields: fields
+        .filter((field) => KNOWN_RESPONSE_FIELDS.has(field))
+        .sort((left, right) => left.localeCompare(right)),
       unknownResponseFieldCount: fields.filter((field) => !KNOWN_RESPONSE_FIELDS.has(field))
         .length,
       ...describeKey(keys[index], deployKey, deploy),
