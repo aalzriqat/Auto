@@ -27,7 +27,12 @@ import {
   isConsignedAgentSale,
 } from "./utils/vehicleOwnership";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
-import { toMinorUnits, assertSupportedDenomination, denominationOf } from "./utils/money";
+import {
+  toMinorUnits,
+  toMinorSameCurrencyOrUndefined,
+  assertSupportedDenomination,
+  denominationOf,
+} from "./utils/money";
 import {
   assertGapResolutionValid,
   assertMinorAmount,
@@ -491,8 +496,11 @@ async function resolveCustomerFirstPayment(
     return undefined;
   }
   const currency = await resolveDealCurrency(ctx, app, "seeding the customer's first payment");
-  const minor = toMinorUnits(quote.downPayment, currency);
-  if (!Number.isSafeInteger(minor) || minor < 0) return undefined;
+  // The non-throwing conversion: `toMinorUnits` throws on overflow, which
+  // would surface its own text instead of CUSTOMER_FIRST_PAYMENT_UNKNOWN. A
+  // quote saved today cannot hold such an amount; a legacy or hand-edited one can.
+  const minor = toMinorSameCurrencyOrUndefined(quote.downPayment, currency, currency);
+  if (minor === undefined || minor < 0) return undefined;
   return { minor, source: "QUOTE_SEED" };
 }
 

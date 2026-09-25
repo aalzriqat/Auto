@@ -5618,6 +5618,19 @@ describe("the customer's first payment is never assumed to be zero (SCRUM-373)",
     expect(await firstPaymentOverrides(seed, applicationId)).toHaveLength(0);
   });
 
+  test("a legacy quote whose down payment overflows minor units is an unknown seed, not an overflow error", async () => {
+    // Saving a quote refuses this amount today; a row written before that check,
+    // or edited by hand, still holds it (CodeRabbit on PR #339).
+    const seed = await seedDealer();
+    const applicationId = await legacyApplication(seed, { quoteDownPaymentMajor: 1e16 });
+
+    await expect(recordWithoutFirstPayment(seed, applicationId)).rejects.toThrow(
+      /first payment is not recorded/i
+    );
+    expect((await readApp(seed, applicationId)).customerFirstPaymentMinor).toBeUndefined();
+    expect(await firstPaymentOverrides(seed, applicationId)).toHaveLength(0);
+  });
+
   test("an explicit zero is honoured as a fact and is not replaced by the quote", async () => {
     const seed = await seedDealer();
     const applicationId = await legacyApplication(seed);
