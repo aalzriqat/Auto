@@ -193,7 +193,8 @@ export async function diagnosePreviewKeyScope({
       name,
     };
   });
-  const keyAEqualsKeyB = keys[0] === keys[1];
+  // Unmeasured when a claim stopped the loop early: null, never "different".
+  const keyAEqualsKeyB = keys.length === 2 ? keys[0] === keys[1] : null;
   const base = {
     version: 1,
     diagnostic: "SCRUM-350-KEY-3",

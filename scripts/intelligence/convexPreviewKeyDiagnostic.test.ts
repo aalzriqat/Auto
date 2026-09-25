@@ -144,6 +144,9 @@ describe("Convex preview key-scope diagnostic", () => {
     );
     expect(claimed).toHaveLength(1);
     expect(report.previews).toHaveLength(1);
+    // With one key there is nothing to compare, so the report must not say
+    // the keys differ.
+    expect(report.keyAEqualsKeyB).toBeNull();
   });
 
   it("never lets key or secret bytes into the report", async () => {
