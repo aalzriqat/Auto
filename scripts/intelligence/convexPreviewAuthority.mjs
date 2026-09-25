@@ -215,7 +215,12 @@ export function assertPreviewDeploymentAdminKey(value, expectedDeploymentName) {
   return value;
 }
 
-export async function resolveConvexPreviewCredentials({
+/**
+ * The raw claim_preview_deployment call, shared by the resolver and the
+ * key-scope diagnostic so both send exactly the same request. Returns the
+ * unvalidated response object; callers own every check on it.
+ */
+export async function requestPreviewClaim({
   deployKey,
   previewName,
   fetchImpl = fetch,
@@ -269,7 +274,19 @@ export async function resolveConvexPreviewCredentials({
     );
   }
 
-  const responseObject = await readBoundedJsonObject(response);
+  return readBoundedJsonObject(response);
+}
+
+export async function resolveConvexPreviewCredentials({
+  deployKey,
+  previewName,
+  fetchImpl = fetch,
+}) {
+  const responseObject = await requestPreviewClaim({
+    deployKey,
+    previewName,
+    fetchImpl,
+  });
   if (
     responseObject.deploymentType !== undefined &&
     responseObject.deploymentType !== "preview"
