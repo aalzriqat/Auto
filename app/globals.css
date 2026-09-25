@@ -58,7 +58,7 @@
      colour is a second channel, not the only one. Red is not a cost colour:
      it is reserved for loss, errors and blockers. */
   --money-in: hsl(174 72% 30%); /* actual receipts — teal */
-  --money-out: hsl(32 90% 38%); /* cost / outlay — amber */
+  --money-out: hsl(32 90% 35%); /* cost / outlay — amber; 4.85:1 on the white card */
   --dealer-side: hsl(243 60% 52%); /* dealer commitments — indigo */
   --profit-positive: hsl(145 63% 32%);
   --profit-negative: hsl(348 83% 45%);

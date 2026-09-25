@@ -48,6 +48,20 @@ describe("DealVehicleCard (SCRUM-372)", () => {
     expect(screen.getByText("OwnershipWithSupplier")).toBeTruthy();
   });
 
+  it("tries a NEW photo after an earlier one failed, without a remount", () => {
+    const vehicle = (photoUrl: string) => ({
+      label: "Toyota Corolla 2023",
+      consigned: false,
+      profile: { make: "Toyota", model: "Corolla", year: 2023, color: "", mileage: 0, photoUrl },
+    });
+    const { rerender } = render(<DealVehicleCard t={t} vehicle={vehicle("https://files.example/broken.jpg")} />);
+    fireEvent.error(screen.getByTestId("deal-vehicle-photo"));
+    expect(screen.queryByTestId("deal-vehicle-photo")).toBeNull();
+
+    rerender(<DealVehicleCard t={t} vehicle={vehicle("https://files.example/new.jpg")} />);
+    expect(screen.getByTestId("deal-vehicle-photo").getAttribute("src")).toBe("https://files.example/new.jpg");
+  });
+
   it("degrades to the label alone when the server withheld the profile", () => {
     render(<DealVehicleCard t={t} vehicle={{ label: "Kia Rio 2019", consigned: false, profile: null }} />);
     expect(screen.getByText("Kia Rio 2019")).toBeTruthy();

@@ -42,8 +42,9 @@ export function DealVehicleCard({
   children?: React.ReactNode;
 }>) {
   const profile = vehicle.profile ?? null;
-  const [photoFailed, setPhotoFailed] = useState(false);
-  const photoUrl = profile?.photoUrl && !photoFailed ? profile.photoUrl : null;
+  // The URL that failed, not "a photo failed": a newer photo still gets its load attempt.
+  const [failedPhotoUrl, setFailedPhotoUrl] = useState<string | null>(null);
+  const photoUrl = profile?.photoUrl && profile.photoUrl !== failedPhotoUrl ? profile.photoUrl : null;
   const title = profile
     ? `${profile.make} ${profile.model} ${profile.year}`.trim()
     : vehicle.label;
@@ -65,7 +66,7 @@ export function DealVehicleCard({
               alt={title}
               loading="lazy"
               className="h-full w-full object-cover"
-              onError={() => setPhotoFailed(true)}
+              onError={() => setFailedPhotoUrl(photoUrl)}
               data-testid="deal-vehicle-photo"
             />
           ) : (
