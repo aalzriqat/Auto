@@ -340,20 +340,23 @@ rather than restarting.
 
 ## Project invariants
 
-Rules that have each cost this project a real defect. Where code on `main`
-enforces or documents a rule, the rule names it.
+A quick reference, not a registry. The canonical, machine-readable catalog is
+`scripts/autoflowInvariantCatalog.ts` (see
+`docs/architecture/invariant-governance.md`, which forbids parallel
+registries); a rule here that has a catalog entry should be read through it.
+Each rule below has cost this project a real defect, and where code on `main`
+enforces or documents it, the rule names that code.
 
 - **Tenant ownership.** A mutation that takes an `orgId` and a document id
   supplied by the caller must prove the document belongs to that org before
-  writing it. The sanctioned form is
-  `requireOwnedRow(ctx, orgId, table, id)` (`convex/utils/tenancy.ts`); an
-  equivalent inline `.orgId` comparison, or `requireSuperAdmin` for the
-  deliberately cross-tenant `/admin` surface, is also accepted.
-  `scripts/tenantWriteGuard.ts` fails CI only on the narrow shape it detects: a
-  `patch` / `delete` / `replace` of a caller-supplied id in a mutation with no
-  ownership proof anywhere in the handler. It does not catch a handler that
-  checks one id and writes a different one, or inserts, so passing it is not
-  proof of ownership.
+  writing it. New code uses `requireOwnedRow(ctx, orgId, table, id)`
+  (`convex/utils/tenancy.ts`). `scripts/tenantWriteGuard.ts` flags the write
+  shapes it recognizes when the handler contains none of the proof patterns it
+  recognizes; today those patterns also include an inline `.orgId` comparison
+  and `requireSuperAdmin` (the deliberately cross-tenant `/admin` surface),
+  which describes existing code the guard accepts, not a licence for new code.
+  The match is on source text anywhere in the handler — a comment, or a check
+  of a different id, satisfies it — so a pass does not prove ownership.
 - **Sourced vehicles are consignment.** Their sale economics are agent-sale
   economics, never `salePrice - cost` (`convex/accounting/postingRules.ts`).
   Legacy gross-posted events are handled there pending restatement.
@@ -369,27 +372,35 @@ enforces or documents a rule, the rule names it.
   its writes.
 - **The deploy key decides where `npx convex deploy` goes.** A production key
   deploys to production; a preview key builds a preview deployment. Confirm
-  which key is in scope before running it (see the production deploy section
-  above).
+  which key is in scope before running it, and that it addresses the exact
+  deployment name expected — a valid production key for the wrong project
+  deploys there just as confidently (`scripts/assertReleaseCredentials.mjs`;
+  see the production deploy section above).
 - **Merged, deployed and production-verified are three different states.** The
   Convex backend production deploy is manual (`deploy-production.yml` runs on
   `workflow_dispatch` only), so a merge to `main` never ships backend changes on
   its own. Record which of the three states a change has actually reached.
 - **A validator never passes a property it did not measure.** Absent, empty or
-  unparseable evidence must produce a non-passing status (for example
-  `UNPROVEN` in `scripts/accountingPreviewRehearsal.mjs`).
+  unparseable evidence must produce a non-passing status. The rehearsal's
+  `UNPROVEN` status in `scripts/accountingPreviewRehearsal.mjs` is one instance
+  of this for a step that throws it — not proof that the script refuses every
+  form of empty evidence (an empty summary still exits zero).
 - **A guard against a dangerous command matches invocations, not mentions.**
   Documentation, fixtures, comments and quoted strings must be able to name the
-  command without tripping the guard (see how
-  `scripts/releaseEntrypoints.test.ts` strips comments first).
+  command without tripping the guard. `scripts/releaseEntrypoints.test.ts` is
+  partial protection only: it strips full-line comments and then searches the
+  rest with a regex, so it still cannot tell a quoted string from an
+  invocation.
 
 ### Evidence rules for your own claims
 
 - A passing `convex-test` suite proves the code runs **in the harness**. It
   does not prove it runs on the Convex platform, and proves nothing about
   concurrency: the harness serializes calls and models no OCC.
-- The root `npx tsc --noEmit` excludes `convex/`; `typecheck:convex` covers it.
-  Name which typecheck you ran and what it left out.
+- The root `tsconfig.json` excludes `convex/` as a root directory, but root
+  files that import Convex modules (and `convex/_generated/api.d.ts`) still pull
+  Convex files into the root check. Run `typecheck:convex` for the dedicated
+  Convex project, and name which typecheck you ran and what it left out.
 - An absence claim ("nothing else writes this", "there is no such caller")
   must carry its enumeration and that enumeration's scope. A grep returning
   nothing is not a search of the space.
