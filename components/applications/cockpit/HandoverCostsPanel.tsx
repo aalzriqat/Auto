@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, Pencil, Plus, Trash2, CheckCheck } from "lucide-react";
+import { Loader2, Pencil, Plus, Trash2, CheckCheck, Receipt } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -523,7 +523,10 @@ export function HandoverCostsPanel({
     <Card data-testid="deal-handover-costs">
       <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-2 pb-3">
         <div className="space-y-1">
-          <CardTitle className="text-base">{t("HandoverCostsHeading")}</CardTitle>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Receipt className="h-4 w-4 shrink-0 text-money-out" aria-hidden />
+            {t("HandoverCostsHeading")}
+          </CardTitle>
           <p className="text-xs text-muted-foreground">{t("HandoverCostsNote")}</p>
           {/* Said at panel level, because the controls it explains are absent:
               once the sale is recognized the server refuses every edit that
@@ -676,6 +679,7 @@ export function HandoverCostsPanel({
                     {t("HandoverExpectedNote")}
                   </p>
                 </div>
+                <CostColumnHeadings expectedLabel={t("CostExpected")} t={t} />
                 <ul className="space-y-1.5">
                     {checklist.rows.map((row) => (
                       <li
@@ -699,7 +703,7 @@ export function HandoverCostsPanel({
                             }}
                           />
                         ) : (
-                          <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+                          <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 md:grid md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
                             <div className="min-w-0 space-y-1">
                               <p className="font-medium">
                                 {t(FEE_TYPE_LABEL[row.feeType] ?? row.feeType)}
@@ -725,9 +729,9 @@ export function HandoverCostsPanel({
                                 )}
                               </div>
                             </div>
-                            <div className="flex items-start gap-3">
-                              <dl className="grid grid-cols-[auto_auto] gap-x-3 text-end text-xs">
-                                <dt className="text-muted-foreground">{t("CostExpected")}</dt>
+                            <div className="flex items-start gap-3 md:flex-row-reverse md:items-center">
+                              <dl className="grid grid-cols-[auto_auto] gap-x-3 text-end text-xs md:w-56 md:grid-flow-col md:grid-cols-2 md:grid-rows-[auto_auto]">
+                                <dt className="text-muted-foreground md:sr-only">{t("CostExpected")}</dt>
                                 <dd className="tabular-nums">
                                   {row.expectedAmountMinor === null ? (
                                     <span className="font-normal text-amber-700 dark:text-amber-400" data-testid={`deal-handover-expected-${row.templateIndex}-unreadable`}>
@@ -737,8 +741,8 @@ export function HandoverCostsPanel({
                                     <bdi dir="ltr">{money(row.expectedAmountMinor, checklist.currency)}</bdi>
                                   )}
                                 </dd>
-                                <dt className="text-muted-foreground">{t("CostActual")}</dt>
-                                <dd className="font-semibold tabular-nums">
+                                <dt className="text-muted-foreground md:sr-only">{t("CostActual")}</dt>
+                                <dd className="font-semibold tabular-nums text-money-out">
                                   {row.actual?.actualAmountMinor === undefined ? (
                                     <span className="font-normal text-muted-foreground">{t("FactUnavailable")}</span>
                                   ) : (
@@ -874,6 +878,7 @@ export function HandoverCostsPanel({
               <p className="text-sm text-muted-foreground">{t("NoHandoverCosts")}</p>
             )}
 
+            {live.length > 0 && <CostColumnHeadings expectedLabel={t("CostEstimated")} t={t} />}
             <ul className="space-y-2">
               {live.map((line) => (
                 <li
@@ -913,7 +918,7 @@ export function HandoverCostsPanel({
                       }}
                     />
                   ) : (
-                    <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+                    <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 md:grid md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
                       <div className="min-w-0 space-y-1">
                         <p className="font-medium">
                           {t(FEE_TYPE_LABEL[line.feeType] ?? line.feeType)}
@@ -936,9 +941,9 @@ export function HandoverCostsPanel({
                           )}
                         </div>
                       </div>
-                      <div className="flex items-start gap-3">
-                        <dl className="grid grid-cols-[auto_auto] gap-x-3 text-end text-xs">
-                          <dt className="text-muted-foreground">{t("CostEstimated")}</dt>
+                      <div className="flex items-start gap-3 md:flex-row-reverse md:items-center">
+                        <dl className="grid grid-cols-[auto_auto] gap-x-3 text-end text-xs md:w-56 md:grid-flow-col md:grid-cols-2 md:grid-rows-[auto_auto]">
+                          <dt className="text-muted-foreground md:sr-only">{t("CostEstimated")}</dt>
                           <dd className="tabular-nums">
                             {line.estimatedAmountMinor === undefined ? (
                               <span className="text-muted-foreground">{t("FactUnavailable")}</span>
@@ -946,8 +951,8 @@ export function HandoverCostsPanel({
                               <bdi dir="ltr">{money(line.estimatedAmountMinor, line.currency)}</bdi>
                             )}
                           </dd>
-                          <dt className="text-muted-foreground">{t("CostActual")}</dt>
-                          <dd className="font-semibold tabular-nums">
+                          <dt className="text-muted-foreground md:sr-only">{t("CostActual")}</dt>
+                          <dd className="font-semibold tabular-nums text-money-out">
                             {line.actualAmountMinor === undefined ? (
                               <span className="font-normal text-muted-foreground">{t("FactUnavailable")}</span>
                             ) : (
@@ -1038,6 +1043,27 @@ export function HandoverCostsPanel({
  * complexity budget (S3776, 20 > 15 on the nested ternary this replaces);
  * what is shown, and when, did not move.
  */
+/**
+ * Desktop column headings over a cost list (SCRUM-372). Hidden from assistive
+ * technology because every row still carries its own (visually hidden) labels:
+ * a screen reader hears "Expected · 250.000" per row, not a table it has to
+ * map back. Below `md` the rows are cards with visible labels and this is gone.
+ */
+function CostColumnHeadings({ expectedLabel, t }: Readonly<{ expectedLabel: string; t: (key: string) => string }>) {
+  return (
+    <div
+      aria-hidden
+      className="hidden gap-x-4 px-3 text-xs font-medium text-muted-foreground md:grid md:grid-cols-[minmax(0,1fr)_auto]"
+    >
+      <span>{t("CostTypeLabel")}</span>
+      <span className="grid w-56 grid-cols-2 gap-x-3 text-end">
+        <span>{expectedLabel}</span>
+        <span>{t("CostActual")}</span>
+      </span>
+    </div>
+  );
+}
+
 function ExpectedTotal({
   expected,
   estimatedTotalMinor,

@@ -20,11 +20,27 @@ type T = (key: string) => string;
  * two-column tile grid wrapped every Arabic label under its own figure. A
  * `null` figure is a dash with the reason under the label — never a zero.
  */
+/**
+ * Money semantics as a SECOND channel (SCRUM-372): the label already says what
+ * the figure is; the tone only lets the eye group receipts, outlays, dealer
+ * commitments and the result. Teal is for money actually received, never for a
+ * plan; red is for a loss, never for an ordinary cost.
+ */
+export type FactTone = "in" | "out" | "dealer" | "profit" | "loss";
+const TONE_CLASS: Record<FactTone, string> = {
+  in: "text-money-in",
+  out: "text-money-out",
+  dealer: "text-dealer-side",
+  profit: "text-profit-positive",
+  loss: "text-profit-negative",
+};
+
 function Fact({
   label,
   value,
   note,
   emphasis,
+  tone,
   testId,
 }: Readonly<{
   label: string;
@@ -32,6 +48,7 @@ function Fact({
   value: string | null;
   note?: string;
   emphasis?: boolean;
+  tone?: FactTone;
   testId: string;
 }>) {
   return (
@@ -44,7 +61,11 @@ function Fact({
         {value === null ? (
           <span className="text-sm text-muted-foreground">—</span>
         ) : (
-          <bdi dir="ltr" className={`tabular-nums ${emphasis ? "text-base font-semibold" : "text-sm font-medium"}`}>
+          <bdi
+            dir="ltr"
+            className={`tabular-nums ${emphasis ? "text-base font-semibold" : "text-sm font-medium"} ${tone ? TONE_CLASS[tone] : ""}`}
+            data-tone={tone}
+          >
             {value}
           </bdi>
         )}
@@ -202,6 +223,7 @@ export function DealFinancialOverview({
           testId="overview-customer-paid"
           label={t("OverviewCustomerPaid")}
           value={m(summary.customerPaidToDealer?.totalMinor ?? null)}
+          tone="in"
           note={
             summary.customerPaidToDealer
               ? t("OverviewCustomerPaidNote")
@@ -253,23 +275,27 @@ export function DealFinancialOverview({
           label={financierLabel}
           value={balance.value}
           note={balance.note}
+          tone={summary.financier.outstanding.state === "COLLECTED" ? "in" : undefined}
         />
         <Fact
           testId="overview-dealer-contribution"
           label={t("OverviewDealerContribution")}
           value={m(outlay.plannedContributionMinor)}
+          tone="dealer"
           note={outlay.plannedContributionMinor === null ? absentNote("plannedContribution") : t("OverviewDealerContributionNote")}
         />
         <Fact
           testId="overview-costs"
           label={t("OverviewCostsToDate")}
           value={m(outlay.recordedCostsMinor)}
+          tone="out"
           note={recordedNote}
         />
         <Fact
           testId="overview-known-committed"
           label={t("OverviewKnownCommitted")}
           value={m(outlay.knownCommittedMinor)}
+          tone="out"
           note={
             outlay.knownCommittedMinor !== null
               ? t("OverviewKnownCommittedNote")
@@ -282,12 +308,14 @@ export function DealFinancialOverview({
           testId="overview-expected-remaining"
           label={t("OverviewCostsExpectedRemaining")}
           value={m(outlay.expectedCostsRemainingMinor)}
+          tone="out"
           note={outlay.expectedCostsRemainingMinor === null ? expectedUnknownNote : undefined}
         />
         <Fact
           testId="overview-dealer-paid"
           label={t("OverviewDealerPaidTotal")}
           value={m(outlay.totalExpectedMinor)}
+          tone="out"
           note={
             outlay.totalExpectedMinor !== null
               ? t("OverviewDealerPaidNote")
@@ -312,6 +340,7 @@ export function DealFinancialOverview({
               : t("OverviewNetProfit")
           }
           value={summary.profit.available ? money(summary.profit.amountMinor, cur) : null}
+          tone={summary.profit.available ? (summary.profit.amountMinor < 0 ? "loss" : "profit") : undefined}
           note={summary.profit.available ? undefined : t("ProfitNotCalculable")}
           emphasis
         />
