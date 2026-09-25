@@ -274,6 +274,10 @@ const dealRailMessages = defineBilingualMessages({
   /** The two panes under the money on the Deal. */
   DealTabDocuments: ["Documents", "المستندات"],
   DealTabActivity: ["Activity", "السجل"],
+  /** Under the outstanding documents on the live step: the way to where they are uploaded. */
+  GoToDocuments: ["Go to documents", "الانتقال إلى المستندات"],
+  /** The status history before the deal has recorded any transition. */
+  StatusLogEmpty: ["No status changes recorded yet.", "لم تُسجَّل أي تغييرات على الحالة بعد."],
 
   /** The compact deal header, stage rail and six-fact money summary. */
   BackToDeals: ["Deals", "الصفقات"],
