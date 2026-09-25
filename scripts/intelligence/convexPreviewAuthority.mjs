@@ -7,7 +7,9 @@ const CONVEX_PROVISION_ORIGIN = "https://api.convex.dev";
 // The Convex CLI deploys to a preview through claim_preview_deployment and uses
 // the admin key it returns. authorize_preview answers a preview deploy key with a
 // project-scoped key, which must never reach candidate-adjacent steps (SCRUM-350
-// KEY-2). reuse:true claims the preview the trusted step already created.
+// KEY-2). reuse:true claims the preview the trusted step already created. If that
+// preview is gone (a concurrent run deleted it), the claim provisions an empty
+// one; the isNewDeployment check below refuses to use it, but it is not undone.
 const CLAIM_PREVIEW_URL = CONVEX_PROVISION_ORIGIN + "/api/claim_preview_deployment";
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const REQUEST_TIMEOUT_MS = 30_000;
