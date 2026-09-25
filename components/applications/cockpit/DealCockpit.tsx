@@ -434,7 +434,7 @@ function Money({ children }: Readonly<{ children: React.ReactNode }>) {
 
 /**
  * The record's full opaque id with a copy control (SCRUM-372). Shown whole so
- * an operator can quote it to support; truncated visually, never in the copy.
+ * an operator can quote it to support; long ids wrap rather than truncate.
  * A clipboard the browser refuses is not an error worth a toast — the id is
  * still on screen to select by hand.
  */

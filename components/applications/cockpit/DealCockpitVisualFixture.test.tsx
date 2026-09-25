@@ -412,9 +412,12 @@ const EXPECTED_STAGE_OWNERS: Readonly<Record<"en" | "ar", ReadonlyArray<string>>
   ],
 };
 
-/** What the customer agreed to pay — so the render shows the plan in the working column. */
+/**
+ * What the customer agreed to pay — so the render shows the plan in the working
+ * column. The financier is the deal's own (production derives it from the deal).
+ */
 const FINANCING_PLAN = {
-  financierName: "Capital Auto Finance",
+  financierName: "شركة التمويل الوطني",
   currency: "JOD",
   vehiclePrice: 13_200,
   downPayment: 1_200,
@@ -425,9 +428,11 @@ const FINANCING_PLAN = {
 } as const;
 
 /**
- * A costed handover: two policy fees with DISTINCT expected and actual amounts
- * (one recorded, one not) and one additional line — so the desktop render
- * proves each figure sits under its own Expected / Actual heading.
+ * The costed handover for the SAME two lines the money payload and the overview
+ * carry: ownership transfer (90 expected, 90 recorded) and insurance (250
+ * expected, no actual) — so recorded 90, awaiting 1, expected remaining 250
+ * agree on every surface. Each row has a figure in both columns, so the desktop
+ * render shows each one under its own Expected / Actual heading.
  */
 function handoverCostsWiring() {
   return {
@@ -435,32 +440,33 @@ function handoverCostsWiring() {
     costs: {
       lines: [
         {
-          _id: "fee_tpl0",
-          feeType: "FINANCE_COMPANY_FEE",
+          _id: "fee_transfer",
+          feeType: "OWNERSHIP_TRANSFER",
           currency: "JOD",
-          actualAmountMinor: 90_000,
-          paidBy: "DEALER",
-          paidTo: "OTHER",
-          status: "ACTUAL_RECORDED",
-        },
-        {
-          _id: "fee_extra",
-          feeType: "LICENSING",
-          currency: "JOD",
-          description: "Plates",
-          estimatedAmountMinor: 40_000,
-          actualAmountMinor: 35_500,
+          description: "رسوم نقل الملكية",
+          estimatedAmountMinor: 90 * SCALE,
+          actualAmountMinor: 90 * SCALE,
           paidBy: "DEALER",
           paidTo: "GOVERNMENT",
           status: "ACTUAL_RECORDED",
         },
+        {
+          _id: "fee_insurance",
+          feeType: "INSURANCE",
+          currency: "JOD",
+          description: "تأمين",
+          estimatedAmountMinor: 250 * SCALE,
+          paidBy: "DEALER",
+          paidTo: "INSURER",
+          status: "ESTIMATED_ONLY",
+        },
       ],
       summary: {
         lineCount: 2,
-        estimatedTotalMinor: 40_000,
-        actualTotalMinor: 125_500,
-        linesAwaitingActual: 0,
-        linesAwaitingReconciliation: 2,
+        estimatedTotalMinor: 340 * SCALE,
+        actualTotalMinor: 90 * SCALE,
+        linesAwaitingActual: 1,
+        linesAwaitingReconciliation: 1,
       },
       summaryUnavailable: null,
       expected: {
@@ -469,28 +475,28 @@ function handoverCostsWiring() {
         rows: [
           {
             templateIndex: 0,
-            feeType: "FINANCE_COMPANY_FEE" as const,
-            description: undefined,
-            expectedAmountMinor: 250_000,
+            feeType: "OWNERSHIP_TRANSFER" as const,
+            description: "رسوم نقل الملكية",
+            expectedAmountMinor: 90 * SCALE,
             expectedAmountReason: null,
             duplicateIdentity: false,
-            actual: { feeId: "fee_tpl0", actualAmountMinor: 90_000, currency: "JOD", status: "ACTUAL_RECORDED" },
+            actual: { feeId: "fee_transfer", actualAmountMinor: 90 * SCALE, currency: "JOD", status: "ACTUAL_RECORDED" },
           },
           {
             templateIndex: 1,
-            feeType: "STAMPS" as const,
-            description: undefined,
-            expectedAmountMinor: 15_000,
+            feeType: "INSURANCE" as const,
+            description: "تأمين",
+            expectedAmountMinor: 250 * SCALE,
             expectedAmountReason: null,
             duplicateIdentity: false,
-            actual: null,
+            actual: { feeId: "fee_insurance", actualAmountMinor: undefined, currency: "JOD", status: "ESTIMATED_ONLY" },
           },
         ],
-        expectedTotalMinor: 265_000,
+        expectedTotalMinor: 340 * SCALE,
         expectedTotalReason: null,
-        actualTotalMinor: 125_500,
-        differenceMinor: 139_500,
-        unplannedLineIds: ["fee_extra"],
+        actualTotalMinor: 90 * SCALE,
+        differenceMinor: 250 * SCALE,
+        unplannedLineIds: [],
       },
     },
     denomination: { code: "JOD" },
@@ -544,7 +550,7 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
     // SCRUM-372: the working column carries the plan and the costed handover
     // list, so the render shows expected/actual columns under their headings.
     expect(html).toContain("data-testid=\"deal-handover-expected-0\"");
-    expect(html).toContain("data-testid=\"deal-handover-cost-fee_extra\"");
+    expect(html).toContain("data-testid=\"deal-handover-expected-1\"");
     // Not an empty render: the headline, the rail, the overview and the
     // custody section are all in the markup.
     expect(html).toContain("data-testid=\"deal-header\"");
