@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   diagnosePreviewKeyScope,
   previewNamesForPr,
+  workflowMaskCommands,
 } from "./convexPreviewKeyDiagnostic.mjs";
 
 const DEPLOY_KEY = "preview:team-one:project-two|deploy-key-secret";
@@ -243,6 +244,33 @@ describe("Convex preview key-scope diagnostic", () => {
     for (const value of [KEY_A, KEY_B, "secret-for-a", "secret-for-b"]) {
       expect(masked).toContain(value);
     }
+  });
+
+  it("emits mask commands that a newline, CR or % in the value cannot split", () => {
+    const value = "preview:t:p|first\nEXPOSED_SECOND\r\nTHIRD%0A";
+    const output = workflowMaskCommands(value);
+    // Every emitted line is a mask command; no raw fragment becomes its own line.
+    for (const line of output.split("\n").filter(Boolean)) {
+      expect(line.startsWith("::add-mask::")).toBe(true);
+    }
+    expect(output).not.toMatch(/^EXPOSED_SECOND/m);
+    expect(output).toContain("::add-mask::preview:t:p|first%0AEXPOSED_SECOND%0D%0ATHIRD%250A\n");
+    // Each fragment is also masked on its own.
+    expect(output).toContain("::add-mask::EXPOSED_SECOND\n");
+    expect(workflowMaskCommands("")).toBe("");
+  });
+
+  it("refuses to probe a claimed key that carries control characters", async () => {
+    const report = await diagnosePreviewKeyScope({
+      deployKey: DEPLOY_KEY,
+      previewNames: NAMES,
+      fetchImpl: fakeConvex(
+        { ...CLAIMS, [NAMES[0]]: { ...CLAIMS[NAMES[0]], adminKey: KEY_A + "\nX" } },
+        { "dep-a.convex.cloud": [KEY_A], "dep-b.convex.cloud": [KEY_B] },
+      ) as typeof fetch,
+    });
+    expect(report.verdict).toBe("INCONCLUSIVE_INVALID_IDENTITY");
+    expect(report.probes).toBeNull();
   });
 
   it("records a network failure as a status label, never an error message", async () => {

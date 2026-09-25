@@ -27,6 +27,20 @@ const KNOWN_RESPONSE_FIELDS = new Set([
   "reference",
 ]);
 
+/**
+ * `::add-mask::` lines for a value, safe against a value that carries `%`, CR
+ * or LF: the command data is escaped the way the Actions toolkit escapes it, so
+ * the value cannot split the command and print a fragment as a plain log line,
+ * and every line of a multi-line value is also masked on its own.
+ */
+export function workflowMaskCommands(value) {
+  if (!value) return "";
+  const escape = (text) =>
+    text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+  const parts = [value, ...value.split(/\r?\n|\r/)].filter(Boolean);
+  return [...new Set(parts)].map((part) => "::add-mask::" + escape(part) + "\n").join("");
+}
+
 function safeOrigin(value) {
   try {
     return assertConvexCloudOrigin(typeof value === "string" ? value : undefined);
@@ -158,7 +172,7 @@ export async function diagnosePreviewKeyScope({
     const fields = Object.keys(claim);
     return {
       previewName: previewNames[index],
-      hasAdminKey: keys[index] !== "",
+      hasAdminKey: keys[index] !== "" && !/[\u0000-\u001f\u007f]/.test(keys[index]),
       deploymentNameValid: typeof name === "string" && DEPLOYMENT_NAME.test(name),
       deploymentNameMatchesUrl:
         origin !== null && new URL(origin).hostname === name + ".convex.cloud",
@@ -218,9 +232,7 @@ const invokedDirectly =
   Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (invokedDirectly) {
-  const mask = (value) => {
-    if (value) process.stdout.write("::add-mask::" + value + "\n");
-  };
+  const mask = (value) => process.stdout.write(workflowMaskCommands(value));
   try {
     const deployKey = process.env.CONVEX_PREVIEW_DEPLOY_KEY ?? "";
     mask(splitKey(deployKey).secret);
