@@ -451,7 +451,7 @@ function CopyableReference({ value, t }: Readonly<{ value: string; t: (key: stri
   };
   return (
     <>
-      <bdi dir="ltr" className="min-w-0 truncate font-mono text-xs" title={value}>
+      <bdi dir="ltr" className="min-w-0 break-all font-mono text-xs">
         {value}
       </bdi>
       <Button
@@ -2623,7 +2623,7 @@ function ProfitHeadline({
           <div className="flex flex-wrap items-baseline gap-3">
             <p
               className={`text-3xl font-semibold ${
-                isLoss ? "text-destructive font-bold" : profit.amountMinor > 0 ? "text-profit-positive" : ""
+                isLoss ? "text-profit-negative font-bold" : profit.amountMinor > 0 ? "text-profit-positive" : ""
               }`}
             >
               <Money>{money(profit.amountMinor)}</Money>
@@ -2908,7 +2908,7 @@ function MoneyPanel({
     <Card>
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
-            <Wallet className="h-4 w-4 shrink-0 text-money-in" aria-hidden />
+            <Wallet className="h-4 w-4 shrink-0 text-primary" aria-hidden />
             {t("FinancialSummaryHeading")}
           </CardTitle>
       </CardHeader>
@@ -4139,7 +4139,10 @@ export function DealCockpitView({
         )
       )}
 
-      <div className="grid gap-6 lg:grid-cols-3 xl:grid-cols-5">
+      {/* Split only at xl: at lg the money column is ~220px beside a 256px
+          sidebar — too narrow for its figures — so it stacks instead. Two of
+          five tracks, not a strict third: a third is ~300px at 1280. */}
+      <div className="grid gap-6 xl:grid-cols-5">
         {/* --- side column: the money ------------------------------------ */}
         {/* First in source so a phone reads the figures right after the
             step, and FIRST on a wide screen too (SCRUM-372, agreed with the
@@ -4283,22 +4286,10 @@ export function DealCockpitView({
               )}
             </>
           )}
-
-          {/* What the CUSTOMER agreed to pay, beside the dealer's money and
-              before the documents — the reading surface Review used to be for
-              this, and the one fact set the money panel deliberately does not
-              carry. */}
-          {financingPlan && (
-            <FinancingPlanPanel
-              plan={financingPlan.facts}
-              formatMajor={financingPlan.formatMajor}
-              t={t}
-            />
-          )}
         </div>
 
         {/* --- working column ------------------------------------------- */}
-        <div className="min-w-0 space-y-6 lg:col-span-2 xl:col-span-3">
+        <div className="min-w-0 space-y-6 xl:col-span-3">
           {/* --- the car ------------------------------------------------------ */}
           {/* Vehicle-first recognition (SCRUM-372). The settlement-route
               question hangs off its ownership badge: the car is the
@@ -4318,6 +4309,18 @@ export function DealCockpitView({
                 />
               )}
             </DealVehicleCard>
+          )}
+
+          {/* What the CUSTOMER agreed to pay — with the working panels, right
+              after the car it finances (SCRUM-372 frozen spec). The one fact
+              set the money panel deliberately does not carry; its visibility
+              is its own, not the money column's. */}
+          {financingPlan && (
+            <FinancingPlanPanel
+              plan={financingPlan.facts}
+              formatMajor={financingPlan.formatMajor}
+              t={t}
+            />
           )}
 
           {/* --- what the finance company told us ----------------------------- */}

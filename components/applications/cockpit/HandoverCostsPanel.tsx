@@ -730,7 +730,7 @@ export function HandoverCostsPanel({
                               </div>
                             </div>
                             <div className="flex items-start gap-3 md:flex-row-reverse md:items-center">
-                              <dl className="grid grid-cols-[auto_auto] gap-x-3 text-end text-xs md:w-56 md:grid-flow-col md:grid-cols-2 md:grid-rows-[auto_auto]">
+                              <dl className="grid grid-cols-[auto_auto] gap-x-3 text-end text-xs md:w-56 md:grid-cols-2">
                                 <dt className="text-muted-foreground md:sr-only">{t("CostExpected")}</dt>
                                 <dd className="tabular-nums">
                                   {row.expectedAmountMinor === null ? (
@@ -942,7 +942,7 @@ export function HandoverCostsPanel({
                         </div>
                       </div>
                       <div className="flex items-start gap-3 md:flex-row-reverse md:items-center">
-                        <dl className="grid grid-cols-[auto_auto] gap-x-3 text-end text-xs md:w-56 md:grid-flow-col md:grid-cols-2 md:grid-rows-[auto_auto]">
+                        <dl className="grid grid-cols-[auto_auto] gap-x-3 text-end text-xs md:w-56 md:grid-cols-2">
                           <dt className="text-muted-foreground md:sr-only">{t("CostEstimated")}</dt>
                           <dd className="tabular-nums">
                             {line.estimatedAmountMinor === undefined ? (

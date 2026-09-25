@@ -412,6 +412,99 @@ const EXPECTED_STAGE_OWNERS: Readonly<Record<"en" | "ar", ReadonlyArray<string>>
   ],
 };
 
+/** What the customer agreed to pay — so the render shows the plan in the working column. */
+const FINANCING_PLAN = {
+  financierName: "Capital Auto Finance",
+  currency: "JOD",
+  vehiclePrice: 13_200,
+  downPayment: 1_200,
+  termMonths: 60,
+  monthlyInstallment: 238.5,
+  totalFinancedAmount: 12_000,
+  nationalId: "9876543210",
+} as const;
+
+/**
+ * A costed handover: two policy fees with DISTINCT expected and actual amounts
+ * (one recorded, one not) and one additional line — so the desktop render
+ * proves each figure sits under its own Expected / Actual heading.
+ */
+function handoverCostsWiring() {
+  return {
+    loading: false,
+    costs: {
+      lines: [
+        {
+          _id: "fee_tpl0",
+          feeType: "FINANCE_COMPANY_FEE",
+          currency: "JOD",
+          actualAmountMinor: 90_000,
+          paidBy: "DEALER",
+          paidTo: "OTHER",
+          status: "ACTUAL_RECORDED",
+        },
+        {
+          _id: "fee_extra",
+          feeType: "LICENSING",
+          currency: "JOD",
+          description: "Plates",
+          estimatedAmountMinor: 40_000,
+          actualAmountMinor: 35_500,
+          paidBy: "DEALER",
+          paidTo: "GOVERNMENT",
+          status: "ACTUAL_RECORDED",
+        },
+      ],
+      summary: {
+        lineCount: 2,
+        estimatedTotalMinor: 40_000,
+        actualTotalMinor: 125_500,
+        linesAwaitingActual: 0,
+        linesAwaitingReconciliation: 2,
+      },
+      summaryUnavailable: null,
+      expected: {
+        source: "COMPANY_RULE_SNAPSHOT" as const,
+        currency: "JOD",
+        rows: [
+          {
+            templateIndex: 0,
+            feeType: "FINANCE_COMPANY_FEE" as const,
+            description: undefined,
+            expectedAmountMinor: 250_000,
+            expectedAmountReason: null,
+            duplicateIdentity: false,
+            actual: { feeId: "fee_tpl0", actualAmountMinor: 90_000, currency: "JOD", status: "ACTUAL_RECORDED" },
+          },
+          {
+            templateIndex: 1,
+            feeType: "STAMPS" as const,
+            description: undefined,
+            expectedAmountMinor: 15_000,
+            expectedAmountReason: null,
+            duplicateIdentity: false,
+            actual: null,
+          },
+        ],
+        expectedTotalMinor: 265_000,
+        expectedTotalReason: null,
+        actualTotalMinor: 125_500,
+        differenceMinor: 139_500,
+        unplannedLineIds: ["fee_extra"],
+      },
+    },
+    denomination: { code: "JOD" },
+    scaleOf: () => 3,
+    money: (minor: number, currency: string) => custodyMoney(minor, currency),
+    canManage: true,
+    dealClosed: false,
+    onAdd: async () => {},
+    onAbandonAdd: () => {},
+    onRecordActual: async () => {},
+    onVoid: async () => {},
+  };
+}
+
 /**
  * Generation is opted into with exactly `DEAL_COCKPIT_VISUAL_FIXTURE=1`; any
  * other value, including a stray truthy one, leaves the ordinary suite as the
@@ -444,8 +537,14 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
           onRecordLegalInvoice: () => {},
           onClassifyDealAccounting: () => {},
         }}
+        financingPlan={{ facts: FINANCING_PLAN, formatMajor: (major, currency) => `${major.toLocaleString()} ${currency}` }}
+        handoverCosts={handoverCostsWiring()}
       />
     );
+    // SCRUM-372: the working column carries the plan and the costed handover
+    // list, so the render shows expected/actual columns under their headings.
+    expect(html).toContain("data-testid=\"deal-handover-expected-0\"");
+    expect(html).toContain("data-testid=\"deal-handover-cost-fee_extra\"");
     // Not an empty render: the headline, the rail, the overview and the
     // custody section are all in the markup.
     expect(html).toContain("data-testid=\"deal-header\"");

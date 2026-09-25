@@ -275,7 +275,6 @@ export function DealFinancialOverview({
           label={financierLabel}
           value={balance.value}
           note={balance.note}
-          tone={summary.financier.outstanding.state === "COLLECTED" ? "in" : undefined}
         />
         <Fact
           testId="overview-dealer-contribution"
@@ -340,7 +339,7 @@ export function DealFinancialOverview({
               : t("OverviewNetProfit")
           }
           value={summary.profit.available ? money(summary.profit.amountMinor, cur) : null}
-          tone={summary.profit.available ? (summary.profit.amountMinor < 0 ? "loss" : "profit") : undefined}
+          tone={summary.profit.available ? (summary.profit.amountMinor < 0 ? "loss" : summary.profit.amountMinor > 0 ? "profit" : undefined) : undefined}
           note={summary.profit.available ? undefined : t("ProfitNotCalculable")}
           emphasis
         />
