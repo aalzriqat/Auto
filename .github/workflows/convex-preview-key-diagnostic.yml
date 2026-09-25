@@ -1,0 +1,51 @@
+name: Convex Preview Key-Scope Diagnostic
+
+# SCRUM-350 KEY-3. One-off, manually dispatched from main only. Claims the two
+# previews the trusted rehearsal and browser swarm already created for a PR and
+# probes which keys each preview accepts. Prints booleans and HTTP statuses only.
+#
+# Run it only while that PR's trusted previews exist (right after its trusted
+# rehearsal and swarm ran). A claim for a missing preview provisions an empty
+# one before the diagnostic stops with INCONCLUSIVE_PREVIEW_MISSING (SCRUM-362).
+# The preview deploy key is a repository secret, so any writer can already read
+# it from a branch workflow; the main-only guard below is not that boundary.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR whose trusted rehearsal and swarm previews already exist
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: convex-preview-key-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+
+      - name: Probe preview admin-key scope
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$CONVEX_PREVIEW_DEPLOY_KEY"
+          node scripts/intelligence/convexPreviewKeyDiagnostic.mjs

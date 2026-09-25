@@ -1783,3 +1783,90 @@ describe("the current stage has exactly one working surface, beneath the rail", 
     expect(screen.queryByText("StageReadyToProceed")).toBeNull();
   });
 });
+
+/**
+ * SCRUM-364. The live step names the outstanding documents, while the tab
+ * where they are uploaded sits at the foot of the page (about 3000px below on
+ * a phone). The step now offers the way there. The tabs are controlled for it,
+ * and none of that may take away the operator's own switch to Activity.
+ */
+describe("the live step leads to the documents it is waiting on", () => {
+  const lowerPane = (name: "documents" | "activity") =>
+    within(screen.getByTestId("deal-lower-tabs"))
+      .getAllByRole("tabpanel", { hidden: true })
+      .find((panel) => panel.id.endsWith(`-content-${name}`));
+
+  test("the link is offered under the outstanding documents", () => {
+    renderCockpit();
+    const step = screen.getByTestId("deal-next-step");
+    expect(within(step).getByTestId("deal-go-to-documents").textContent).toContain("GoToDocuments");
+  });
+
+  test("it brings the documents tab back after the operator moved to Activity, and focuses it", async () => {
+    renderCockpit();
+    const activity = screen.getByRole("tab", { name: "DealTabActivity" });
+    fireEvent.mouseDown(activity, { button: 0 });
+    expect(lowerPane("activity")?.getAttribute("data-state")).toBe("active");
+    expect(lowerPane("documents")?.getAttribute("data-state")).toBe("inactive");
+
+    fireEvent.click(screen.getByTestId("deal-go-to-documents"));
+    expect(lowerPane("documents")?.getAttribute("data-state")).toBe("active");
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "DealTabDocuments" }));
+  });
+
+  test("the tabs still open on Documents and switch by hand", () => {
+    renderCockpit();
+    expect(lowerPane("documents")?.getAttribute("data-state")).toBe("active");
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "DealTabActivity" }), { button: 0 });
+    expect(lowerPane("activity")?.getAttribute("data-state")).toBe("active");
+  });
+
+  test("no link when the step is not waiting on documents", () => {
+    renderCockpit(
+      dealFixture({
+        stages: [{ key: "DELIVERY_ACTIONS", state: "CURRENT" }],
+        documents: [{ ruleId: "r1", name: "سند نقل الملكية", required: true, status: "VERIFIED" }],
+      })
+    );
+    expect(screen.queryByTestId("deal-go-to-documents")).toBeNull();
+  });
+
+  test("no link, and no tabs, when the deal has no documents to go to", () => {
+    renderCockpit(dealFixture({ documents: [] }));
+    expect(screen.queryByTestId("deal-lower-tabs")).toBeNull();
+    expect(screen.queryByTestId("deal-go-to-documents")).toBeNull();
+  });
+});
+
+describe("an empty status history says so", () => {
+  test("a deal with no recorded transition shows one quiet line", () => {
+    renderCockpit(dealFixture({ timeline: [] }));
+    expect(screen.getByText("StatusLogEmpty")).toBeTruthy();
+  });
+
+  test("the line is absent once a transition exists", () => {
+    renderCockpit();
+    expect(screen.queryByText("StatusLogEmpty")).toBeNull();
+    expect(statusLogStatuses()).toEqual(["PendingDocs"]);
+  });
+});
+
+describe("last updated on a phone", () => {
+  test("leaves the sticky header below sm and is carried by the essentials instead", () => {
+    renderCockpit();
+    const headerStamp = Array.from(screen.getByTestId("deal-header").querySelectorAll("span")).find((s) =>
+      s.textContent?.startsWith("LastUpdated")
+    );
+    expect(headerStamp?.className).toMatch(/(^|\s)hidden(\s|$)/);
+    expect(headerStamp?.className).toContain("sm:inline");
+    const cell = screen.getByTestId("deal-essentials-last-updated");
+    expect(cell.className).toContain("sm:hidden");
+    expect(cell.textContent).toMatch(/LastUpdated.*Aug 2026/);
+  });
+
+  test("the essentials copy keeps the calm dash for a corrupt moment", () => {
+    renderCockpit(dealFixture({ createdAt: Number.NaN, updatedAt: undefined }));
+    expect(screen.getByTestId("deal-essentials-last-updated").textContent).toContain("—");
+  });
+});

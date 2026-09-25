@@ -35,6 +35,7 @@ import { getErrorMessage, isConvexError } from "@/lib/errors";
 import { format, isValid } from "date-fns";
 import {
   AlertTriangle,
+  ArrowDown,
   ArrowLeft,
   ChevronDown,
   Clock,
@@ -3289,6 +3290,27 @@ export function DealCockpitView({
   const [reopenSubmitting, setReopenSubmitting] = useState(false);
   const [reopenError, setReopenError] = useState<string | null>(null);
 
+  // The lower documents · activity tabs are controlled so the live step can
+  // send the operator to the documents it says are outstanding. The default is
+  // unchanged, and a manual switch to Activity still goes through.
+  const [lowerTab, setLowerTab] = useState<"documents" | "activity">("documents");
+  const lowerTabsRef = useRef<HTMLDivElement>(null);
+  const documentsTriggerRef = useRef<HTMLButtonElement>(null);
+  const hasDocumentsPane = documents !== undefined || (deal?.documents.length ?? 0) > 0;
+  const goToDocuments = () => {
+    setLowerTab("documents");
+    // After the switch has painted, so the scroll lands on the visible pane.
+    // The target's `scroll-mt-*` keeps it clear of the sticky header; focus
+    // moves to the Documents tab without a second, instant jump.
+    requestAnimationFrame(() => {
+      const reduceMotion =
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      lowerTabsRef.current?.scrollIntoView?.({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+      documentsTriggerRef.current?.focus({ preventScroll: true });
+    });
+  };
+
   // A claim to settle AND a caller the server would accept the receipt from.
   // The first four terms are the deal's state; the last is the operator's
   // authority, decided by the container from MANAGE_FINANCE and never here.
@@ -3774,7 +3796,9 @@ export function DealCockpitView({
               <bdi>{stageOwnerLabel(live, activeAppraisalProvider, t)}</bdi>
             </span>
           )}
-          <span className="text-xs text-muted-foreground">
+          {/* Off the sticky bar on a phone, where every row it takes is a row
+              of the deal hidden under it; the essentials carry it there. */}
+          <span className="hidden text-xs text-muted-foreground sm:inline">
             {t("LastUpdated")}: <bdi>{renderMoment(deal.updatedAt ?? deal.createdAt, "d MMM yyyy HH:mm")}</bdi>
           </span>
         </div>
@@ -3863,6 +3887,13 @@ export function DealCockpitView({
           <dd className="min-w-0 break-words font-medium">
             <bdi>{deal.salespersonName}</bdi>{" "}
             <bdi className="font-normal text-muted-foreground">{renderMoment(deal.createdAt, "d MMM yyyy")}</bdi>
+          </dd>
+        </div>
+        {/* The header's "last updated", in the flow on a phone only. */}
+        <div className="min-w-0 sm:hidden" data-testid="deal-essentials-last-updated">
+          <dt className="text-xs text-muted-foreground">{t("LastUpdated")}</dt>
+          <dd className="font-medium">
+            <bdi>{renderMoment(deal.updatedAt ?? deal.createdAt, "d MMM yyyy HH:mm")}</bdi>
           </dd>
         </div>
       </dl>
@@ -4038,6 +4069,7 @@ export function DealCockpitView({
                 )
               : []
           }
+          onGoToDocuments={hasDocumentsPane ? goToDocuments : undefined}
           t={t}
         >
           {/* The route IS the blocker on this step, so the control is on the
@@ -4263,8 +4295,8 @@ export function DealCockpitView({
           {/* --- الفاتورة القانونية وتصنيف محاسبة المعاملة ------------------ */}
           {closingChecklist && (
             <Card data-testid="deal-closing-checklist">
-              <CardHeader className="flex flex-row items-center justify-between pb-3">
-                <div>
+              <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0 pb-3">
+                <div className="min-w-0">
                   <CardTitle className="text-base">{t("ClosingChecklistHeading")}</CardTitle>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     {closingChecklist.accountingClassification === "CLASSIFIED"
@@ -4272,7 +4304,7 @@ export function DealCockpitView({
                       : t("AccountingStatusPending")}
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <Button
                     type="button"
                     size="sm"
@@ -4348,7 +4380,6 @@ export function DealCockpitView({
               opens on its history. Both panes stay mounted so a search or a
               test finds either without a click. */}
           {(() => {
-            const hasDocuments = documents !== undefined || deal.documents.length > 0;
             const documentsPane = documents ? (
               <DealDocumentsPanel
                 documents={documents.items}
@@ -4378,6 +4409,9 @@ export function DealCockpitView({
                   <CardTitle className="text-base">{t("StatusLogHeading")}</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
+                  {deal.timeline.length === 0 && (
+                    <p className="text-sm text-muted-foreground">{t("StatusLogEmpty")}</p>
+                  )}
                   {deal.timeline.map((entry, index) => (
                 <div key={`${entry.changedAt ?? "no-date"}-${index}`} className="flex gap-3 text-sm">
                   <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -4403,11 +4437,19 @@ export function DealCockpitView({
                 </CardContent>
               </Card>
             );
-            if (!hasDocuments) return activityPane;
+            if (!hasDocumentsPane) return activityPane;
             return (
-              <Tabs defaultValue="documents" className="space-y-3" data-testid="deal-lower-tabs">
+              <Tabs
+                ref={lowerTabsRef}
+                value={lowerTab}
+                onValueChange={(value) => setLowerTab(value === "activity" ? "activity" : "documents")}
+                className="scroll-mt-32 space-y-3 sm:scroll-mt-20"
+                data-testid="deal-lower-tabs"
+              >
                 <TabsList>
-                  <TabsTrigger value="documents">{t("DealTabDocuments")}</TabsTrigger>
+                  <TabsTrigger ref={documentsTriggerRef} value="documents">
+                    {t("DealTabDocuments")}
+                  </TabsTrigger>
                   <TabsTrigger value="activity">{t("DealTabActivity")}</TabsTrigger>
                 </TabsList>
                 <TabsContent value="documents" forceMount className="data-[state=inactive]:hidden">
@@ -4680,6 +4722,7 @@ function StageFocusRow({
   blocker,
   action,
   outstandingDocuments,
+  onGoToDocuments,
   t,
   children,
 }: Readonly<{
@@ -4702,6 +4745,8 @@ function StageFocusRow({
     unavailableDetail?: SettlementDenominationDetail;
   };
   outstandingDocuments: ReadonlyArray<{ ruleId: string; name: string }>;
+  /** Absent when the screen has no documents tab to go to. */
+  onGoToDocuments?: () => void;
   t: (key: string) => string;
 }>) {
   const icon = STAGE_ICON[state];
@@ -4753,6 +4798,20 @@ function StageFocusRow({
                       </li>
                     ))}
                   </ul>
+                )}
+                {/* The documents are uploaded in the tab at the foot of the
+                    page — far below this step on a phone. Offered only where
+                    that tab exists; the documents themselves do not move. */}
+                {outstandingDocuments.length > 0 && onGoToDocuments && (
+                  <button
+                    type="button"
+                    className="mt-1.5 inline-flex min-h-9 items-center gap-1 rounded-sm font-medium underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    data-testid="deal-go-to-documents"
+                    onClick={onGoToDocuments}
+                  >
+                    {t("GoToDocuments")}
+                    <ArrowDown className="h-3.5 w-3.5" aria-hidden />
+                  </button>
                 )}
               </div>
             ) : (

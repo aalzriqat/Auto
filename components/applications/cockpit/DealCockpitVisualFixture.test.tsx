@@ -157,7 +157,33 @@ function financedDeal(): FinancedDealCockpitData {
       routeKnown: true,
       profit,
       managementProfit: profit,
-      expenses: { lines: [], actualTotalMinor: 90 * SCALE, awaitingActuals: 1 },
+      // As the server builds it: the total is summed from live lines only, so
+      // a non-zero actual always has a line behind it, and the line still
+      // awaiting its actual is one of them.
+      expenses: {
+        lines: [
+          {
+            id: "fee_transfer" as Id<"financeDealFees">,
+            feeType: "OWNERSHIP_TRANSFER",
+            description: "رسوم نقل الملكية",
+            estimatedAmountMinor: 90 * SCALE,
+            actualAmountMinor: 90 * SCALE,
+            currency: "JOD",
+            reconciled: false,
+          },
+          {
+            id: "fee_insurance" as Id<"financeDealFees">,
+            feeType: "INSURANCE",
+            description: "تأمين",
+            estimatedAmountMinor: 250 * SCALE,
+            actualAmountMinor: undefined,
+            currency: "JOD",
+            reconciled: false,
+          },
+        ],
+        actualTotalMinor: 90 * SCALE,
+        awaitingActuals: 1,
+      },
       parties: [
         {
           party: "CUSTOMER",
@@ -337,8 +363,10 @@ function custodyWiring(): DealCustodyWiring {
   };
 }
 
+// Mirrors the container's custody formatter: the org currency's short marker —
+// the symbol in Arabic, the code in English — never the long Arabic name.
 const custodyMoney = (minor: number, currency: string) =>
-  `${(minor / SCALE).toLocaleString()} ${currency === "JOD" && language.locale === "ar" ? "دينار اردني" : currency}`;
+  `${(minor / SCALE).toLocaleString()} ${currency === "JOD" && language.locale === "ar" ? "د.أ" : currency}`;
 
 /**
  * Whose move each stage of the fixture is, as the SCREEN must say it — the
@@ -403,6 +431,11 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
         financialOverview={{ data: financedOverview(), loading: false }}
         custody={custodyWiring()}
         custodyMoney={custodyMoney}
+        closingChecklist={{
+          accountingClassification: "PENDING",
+          onRecordLegalInvoice: () => {},
+          onClassifyDealAccounting: () => {},
+        }}
       />
     );
     // Not an empty render: the headline, the rail, the overview and the
@@ -413,6 +446,8 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
     expect(html).toContain("data-testid=\"deal-cost-basis\"");
     expect(html).toContain("data-testid=\"deal-preparation\"");
     expect(html).toContain("data-testid=\"deal-custody\"");
+    // Both header actions, so the phone render shows how they wrap.
+    expect(html).toContain("data-testid=\"deal-closing-checklist\"");
     const expectedOwners = EXPECTED_STAGE_OWNERS[locale];
     // Positive control: one literal per stage, none blank, and — in the
     // language that shares no glyphs with the other — the Arabic list is
