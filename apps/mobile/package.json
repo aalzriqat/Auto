@@ -94,6 +94,7 @@
       "src/features/marketplace/savedVehiclesStore.ts",
       "src/features/marketplace/savedSearchesStore.ts",
       "src/features/workspace/mobileVinDecode.ts",
+      "src/features/workspace/modules/accounting.tsx",
       "src/providers/LocaleProvider.tsx",
       "src/navigation/*.ts",
       "src/security/*.ts",
