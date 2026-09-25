@@ -5663,6 +5663,31 @@ describe("the customer's first payment is never assumed to be zero (SCRUM-373)",
     expect(await firstPaymentOverrides(seed, applicationId)).toHaveLength(0);
   });
 
+  test("an explicit zero replaces a stored nonzero first payment (CodeRabbit on PR #339)", async () => {
+    // The correction path: a wrongly stored value is overridden by what the
+    // operator records, never kept because something is already on the row.
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    expect((await readApp(seed, applicationId)).customerFirstPaymentMinor).toBe(
+      jod(DEAL.customerFirstPayment)
+    );
+
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "MANUAL_ENTRY",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+      customerFirstPaymentMinor: 0,
+    });
+
+    const app = await readApp(seed, applicationId);
+    expect(app.customerFirstPaymentMinor).toBe(0);
+    expect(app.quotationCalculationSnapshot?.customerFirstPaymentMinor).toBe(0);
+    expect(app.quotationCalculationSnapshot?.customerFirstPaymentSource).toBe("EXPLICIT");
+  });
+
   test("a seeded payment above the unfinanced slice lowers the funded portion (capped path)", async () => {
     const seed = await seedDealer();
     const applicationId = await legacyApplication(seed, { quoteDownPaymentMajor: 2_500 });
