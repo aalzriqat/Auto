@@ -3749,6 +3749,20 @@ export const classifyDealAccounting = mutation({
     //
     // Ordered after the refusals deliberately: a deal that cannot be classified
     // must not have its stored economics moved on the way to being told so.
+    //
+    // A quoted, approved deal whose customer first payment is unknown would be
+    // recomputed into a WITHHELD split (SCRUM-373: unknown is never zero) and
+    // then stamped classified over figures that no longer exist. Refused here,
+    // before the recompute, so nothing about the deal moves.
+    if (
+      app.submittedQuotationMinor !== undefined &&
+      app.approvedDealerPurchaseAmountMinor !== undefined &&
+      app.customerFirstPaymentMinor === undefined
+    ) {
+      throw new ConvexError(
+        "The customer's first payment is not recorded on this deal, so its funding split cannot be established. Record it before classifying."
+      );
+    }
     await recomputeEconomicsForApplication(ctx, args.applicationId);
 
     const now = Date.now();
