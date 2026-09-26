@@ -171,6 +171,26 @@ describe("auditStagedBackendInputs (SCRUM-350 F1)", () => {
     expect(audit(real.stageRoot).status).toBe(0);
   });
 
+  it("refuses the environment shapes the CLI's determineEnvironment crashes on (Sonnet F1 on PR #341)", () => {
+    for (const file of ["convex/http.ts", "convex/crons.ts"]) {
+      const { stageRoot } = stage({ [file]: '"use node";\nexport const n = 1;\n' });
+      const result = audit(stageRoot);
+      expect(result.status, file).toBe(1);
+      expect(result.stderr, file).toContain('"use node" is not allowed in');
+    }
+    const actions = stage({ "convex/actions/send.ts": "export const s = 1;\n" });
+    const refused = audit(actions.stageRoot);
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain("is under actions/ without");
+
+    // Controls: the same files in the shape the CLI accepts pass.
+    const accepted = stage({
+      "convex/http.ts": "export const n = 1;\n",
+      "convex/actions/send.ts": '"use node";\nexport const s = 1;\n',
+    });
+    expect(audit(accepted.stageRoot).status).toBe(0);
+  });
+
   it("refuses to run anywhere but the stage, and without the trusted bundler", () => {
     const { root, stageRoot } = stage();
     rmSync(path.join(stageRoot, "node_modules/convex"), { recursive: true, force: true });

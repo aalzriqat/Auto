@@ -47,6 +47,11 @@ const ENTRY_POINT_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".
 // imports external. Bundling convex.config.ts here therefore reads what that
 // pass reads from the candidate's file (Sonnet C1 on PR #341).
 const CONFIG_ENTRIES = ["schema", "convex.config", "auth.config"];
+// The CLI's determineEnvironment crashes on "use node" in these, and on a file
+// under actions/ without it. The audit refuses the same shapes rather than
+// certify a partition the deploy never produces (Sonnet F1 on PR #341).
+const MUST_BE_ISOLATE = ["http", "crons", "schema", "auth.config"];
+const ACTIONS_PREFIX = "actions/";
 // The CLI's per-line fallback, used only when its parser rejects the source.
 const USE_NODE_LINE = /^\s*("|')use node("|');?\s*$/;
 
@@ -102,7 +107,14 @@ function entryPointSuperset(dir, parse) {
       const isConfig = relative === stem + extension && CONFIG_ENTRIES.includes(stem);
       // Test files and other multi-dot names are not entry points.
       if (!isConfig && stem.includes(".")) continue;
-      if (!isConfig && hasUseNodeDirective(parse, readFileSync(full, "utf8"))) node.push(full);
+      const useNode = hasUseNodeDirective(parse, readFileSync(full, "utf8"));
+      if (useNode && MUST_BE_ISOLATE.includes(relative.replace(/\.[^/.]+$/, ""))) {
+        throw new AuditRefusal('"use node" is not allowed in ' + JSON.stringify(relative) + "; the deploy refuses it too.");
+      }
+      if (!useNode && !isConfig && relative.startsWith(ACTIONS_PREFIX)) {
+        throw new AuditRefusal(JSON.stringify(relative) + ' is under actions/ without "use node"; the deploy refuses it too.');
+      }
+      if (!isConfig && useNode) node.push(full);
       else isolate.push(full);
     }
   };
