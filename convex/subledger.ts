@@ -428,11 +428,22 @@ export const listAllocations = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
     await requireFeature(ctx, args.orgId, "accounting");
+    // SCRUM-261: authorising args.orgId says nothing about the parent id the
+    // caller supplied. Prove the parent is this org's before reading a single
+    // child, and let only children stamped with this org leave. A foreign or
+    // missing parent reads exactly like one with no allocations, as in
+    // getReceivableBalance / getPaymentBalance.
     if (args.receivableDocumentId) {
-      return ctx.db.query("paymentAllocations").withIndex("by_receivable", (q) => q.eq("receivableDocumentId", args.receivableDocumentId!)).collect();
+      const receivable = await ctx.db.get(args.receivableDocumentId);
+      if (!receivable || receivable.orgId !== args.orgId) return [];
+      const rows = await ctx.db.query("paymentAllocations").withIndex("by_receivable", (q) => q.eq("receivableDocumentId", receivable._id)).collect();
+      return rows.filter((row) => row.orgId === args.orgId);
     }
     if (args.paymentId) {
-      return ctx.db.query("paymentAllocations").withIndex("by_payment", (q) => q.eq("paymentId", args.paymentId!)).collect();
+      const payment = await ctx.db.get(args.paymentId);
+      if (!payment || payment.orgId !== args.orgId) return [];
+      const rows = await ctx.db.query("paymentAllocations").withIndex("by_payment", (q) => q.eq("paymentId", payment._id)).collect();
+      return rows.filter((row) => row.orgId === args.orgId);
     }
     return [];
   },
