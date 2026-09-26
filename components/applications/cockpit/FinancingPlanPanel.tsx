@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, Landmark } from "lucide-react";
 
 /**
  * The CUSTOMER'S financing plan, as the quote recorded it.
@@ -66,7 +66,10 @@ export function FinancingPlanPanel({
   return (
     <Card data-testid="deal-financing-plan">
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">{t("FinancingPlanHeading")}</CardTitle>
+        <CardTitle className="flex items-center gap-2 text-base">
+            <Landmark className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+            {t("FinancingPlanHeading")}
+          </CardTitle>
         <p className="text-xs text-muted-foreground">{t("FinancingPlanNote")}</p>
       </CardHeader>
       <CardContent>

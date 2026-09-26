@@ -509,7 +509,10 @@ export function DealCustodyPanel({
   return (
     <Card data-testid="deal-custody">
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">{t("CustodyHeading")}</CardTitle>
+        <CardTitle className="flex items-center gap-2 text-base">
+            <HandCoins className="h-4 w-4 shrink-0 text-dealer-side" aria-hidden />
+            {t("CustodyHeading")}
+          </CardTitle>
         <p className="text-xs text-muted-foreground">{t("CustodyNote")}</p>
       </CardHeader>
       <CardContent className="space-y-4">
