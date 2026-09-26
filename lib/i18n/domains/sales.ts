@@ -12,6 +12,33 @@ import { defineBilingualMessages } from "../defineBilingualMessages";
  * Only the messages this change introduces are defined this way. Converting the
  * pre-existing catalogs is a separate job and not this PR's to do.
  */
+/**
+ * SCRUM-260: the minimum-profit approval outside the quote wizard — the direct
+ * sale dialog and the deal cockpit. An approval covers one exact price, so each
+ * message names the price rather than a profit figure.
+ */
+const profitApprovalMessages = defineBilingualMessages({
+  ProfitApprovalRequiredTitle: ["Below the vehicle's minimum profit", "أقل من الحد الأدنى لربح المركبة"],
+  ProfitApprovalRequiredBody: [
+    "At this price the profit over the list price is {margin}; this vehicle requires {minimum}. A manager must approve this exact price before the sale can be completed.",
+    "الربح عند هذا السعر فوق سعر القائمة هو {margin}، والحد الأدنى لهذه المركبة {minimum}. يجب أن يعتمد مدير هذا السعر بعينه قبل إتمام البيع.",
+  ],
+  ProfitApprovalRequestAction: ["Request approval for this price", "طلب اعتماد هذا السعر"],
+  ProfitApprovalRequesting: ["Requesting…", "جارٍ الإرسال…"],
+  ProfitApprovalPending: ["Waiting for a manager to approve this price.", "بانتظار اعتماد مدير لهذا السعر."],
+  ProfitApprovalRejected: [
+    "A manager rejected this price. Change the price or request again.",
+    "رفض المدير هذا السعر. عدّل السعر أو اطلب الاعتماد من جديد.",
+  ],
+  ProfitApprovalApproved: ["A manager approved this price.", "اعتمد المدير هذا السعر."],
+  ProfitApprovalRequestFailed: [
+    "Could not send the approval request. Please try again.",
+    "تعذّر إرسال طلب الاعتماد. حاول مرة أخرى.",
+  ],
+  ApprovalSalePrice: ["Sale price", "سعر البيع"],
+  ApprovalListPrice: ["List price", "سعر القائمة"],
+});
+
 const dealRailMessages = defineBilingualMessages({
   /**
    * Named for the money moving, not for a form being filled in. This is the
@@ -880,6 +907,7 @@ const dealOverviewMessages = defineBilingualMessages({
 
 export const salesEn = {
   ...dealRailMessages.en,
+  ...profitApprovalMessages.en,
   ...dealOverviewMessages.en,
   // Sales & F&I
   LogSale: "Log Sale",
@@ -1876,6 +1904,7 @@ export const salesEn = {
 
 export const salesAr = {
   ...dealRailMessages.ar,
+  ...profitApprovalMessages.ar,
   ...dealOverviewMessages.ar,
   // Sales & F&I
   LogSale: "تسجيل بيع",

@@ -176,18 +176,30 @@ export default function Step1QuoteSetup({
   // so the whole quote (make, VIN, price, minimum profit, notes) rendered empty.
   const selectedVehicle = allPickerVehicles.find((v: Doc<"vehicles">) => v._id === watchedVehicleId);
   const minimumProfit = selectedVehicle?.minimumProfit || 0;
-  const isProfitBelowMinimum = !isCash && watchedVehicleId && Number(watchedProfit) < minimumProfit;
 
-  const pendingApproval = useQuery(api.approvals.checkPendingApproval,
-    activeOrgId && watchedVehicleId
-      ? { orgId: activeOrgId, vehicleId: watchedVehicleId as Id<"vehicles"> }
+  // SCRUM-260: the server decides. The quote is saved at base + profit (see
+  // quotePayload.ts), and a manager approves exactly that price, so the gate
+  // asks the backend about that price rather than comparing profit figures
+  // locally. Until the verdict arrives, the same spread is computed here so
+  // Next never flickers enabled on a below-minimum deal.
+  const quotedPrice = (Number(watchedPrice) || 0) + (Number(watchedProfit) || 0);
+  const profitVerdict = useQuery(
+    api.approvals.profitApprovalStatus,
+    activeOrgId && watchedVehicleId && !isCash
+      ? { orgId: activeOrgId, vehicleId: watchedVehicleId as Id<"vehicles">, salePrice: quotedPrice }
       : "skip"
   );
+  const quotedMargin = profitVerdict && profitVerdict.status !== "INVALID"
+    ? profitVerdict.margin
+    : quotedPrice - (selectedVehicle?.sellingPrice ?? 0);
+  const isProfitBelowMinimum = !isCash && !!watchedVehicleId && (profitVerdict
+    ? profitVerdict.status !== "NOT_REQUIRED" && profitVerdict.status !== "INVALID"
+    : quotedMargin < minimumProfit);
 
   const requestProfitApproval = useMutation(api.approvals.requestProfitApproval);
   const [isRequesting, setIsRequesting] = useState(false);
 
-  const hasValidApproval = pendingApproval?.status === "APPROVED" && Number(watchedProfit) >= pendingApproval.requestedProfit;
+  const hasValidApproval = profitVerdict?.status === "APPROVED";
   const isBlockedByProfit = isProfitBelowMinimum && !hasValidApproval;
 
   const handleRequestApproval = async () => {
@@ -197,8 +209,7 @@ export default function Step1QuoteSetup({
       await requestProfitApproval({
         orgId: activeOrgId,
         vehicleId: watchedVehicleId as Id<"vehicles">,
-        requestedProfit: Number(watchedProfit) || 0,
-        minimumProfit: minimumProfit,
+        salePrice: quotedPrice,
         wizardSnapshot: {
           paymentType,
           vehiclePrice: Number(watchedPrice) || 0,
@@ -605,13 +616,13 @@ export default function Step1QuoteSetup({
             <ShieldAlert className="h-4 w-4" />
             <AlertTitle>Approval Required</AlertTitle>
             <AlertDescription className="mt-2 flex flex-col gap-3 items-start">
-              <p>The desired profit ({currency.format(Number(watchedProfit))}) is below the minimum required profit for this vehicle ({currency.format(minimumProfit)}).</p>
+              <p>The desired profit ({currency.format(quotedMargin)}) is below the minimum required profit for this vehicle ({currency.format(minimumProfit)}).</p>
 
-              {pendingApproval?.status === "PENDING" && pendingApproval.requestedProfit === Number(watchedProfit) ? (
+              {profitVerdict?.status === "PENDING" ? (
                 <div className="flex items-center gap-2 text-yellow-600 dark:text-yellow-400 bg-yellow-500/10 px-3 py-1.5 rounded-md text-sm font-medium">
                   Approval request is currently pending. Please wait for a manager.
                 </div>
-              ) : pendingApproval?.status === "REJECTED" && pendingApproval.requestedProfit === Number(watchedProfit) ? (
+              ) : profitVerdict?.status === "REJECTED" ? (
                 <div className="flex items-center gap-2 text-red-600 dark:text-red-400 bg-red-500/10 px-3 py-1.5 rounded-md text-sm font-medium">
                   Your request for this profit amount was rejected. Please increase the profit or request again.
                 </div>
@@ -634,7 +645,7 @@ export default function Step1QuoteSetup({
             <CheckCircle2 className="h-4 w-4 text-emerald-500" />
             <AlertTitle>Profit Approved</AlertTitle>
             <AlertDescription>
-              Your requested profit of {currency.format(pendingApproval.requestedProfit)} was approved by management. You may proceed.
+              Your requested profit of {currency.format(quotedMargin)} was approved by management. You may proceed.
             </AlertDescription>
           </Alert>
         )}

@@ -30,6 +30,7 @@ import {
 } from "../accounting/workflowHooks";
 import { computeResoldProductMargin, type FinancedSalePlanPayload } from "../accounting/postingRules";
 import { toMinorUnits, fromMinorUnits } from "./money";
+import { assertProfitApproved, saleRequiresMinimumProfit } from "./profitApproval";
 import { computeVehicleCapitalizedCost, vehicleHasCostBasis } from "./vehicleCost";
 import { computeConsignedSupplierPosition } from "../../lib/financingEconomics";
 import { openSupplierReceivable } from "../supplierReceivables";
@@ -222,8 +223,9 @@ async function prepareSaleCompletion(
   }
 
   let leadId: Id<"leads"> | undefined;
+  let quote: Doc<"quotes"> | null = null;
   if (args.quoteId) {
-    const quote = await ctx.db.get(args.quoteId);
+    quote = await ctx.db.get(args.quoteId);
     if (quote?.orgId !== args.orgId) {
       throwAppError(AppErrorCode.QUOTE_NOT_FOUND, "Quote not found in this organization.");
     }
@@ -357,6 +359,21 @@ async function prepareSaleCompletion(
       lineage: { quoteId: args.quoteId },
       actingCustomerId: args.customerId,
     });
+
+    // SCRUM-260: the minimum-profit approval, judged here for the same reason
+    // as the check above — every completion door reaches this line — and
+    // against the price this sale is about to persist, not a figure a door or
+    // client derived. After the commitment check so its refusal order holds;
+    // a DRAFT is not a sale and is not gated.
+    if (saleRequiresMinimumProfit({ financingType: args.financingType, quote })) {
+      await assertProfitApproved(ctx, {
+        orgId: args.orgId,
+        vehicle,
+        salePrice: args.salePrice,
+        currency,
+        subject: "sale",
+      });
+    }
   }
 
   return { vehicle, customer, leadId, commissionAmount, currency, accrueAtCompletion };

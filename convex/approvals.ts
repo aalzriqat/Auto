@@ -5,6 +5,9 @@ import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, notifyUser, getActorName } from "./utils/notifications";
+import { getOrgCurrency } from "./accounting/workflowHooks";
+import { fromMinorUnits } from "./utils/money";
+import { profitDecision, requestMatchesTerms, requestsForTerms } from "./utils/profitApproval";
 
 // Exported so requestProfitApprovalArgs.test.ts can assert it still matches
 // `profitApprovalRequests.wizardSnapshot` in convex/schema.ts. Accepting a field
@@ -25,12 +28,41 @@ export const wizardSnapshotValidator = v.optional(v.object({
   manualIncludesCommissionInDebt: v.optional(v.boolean()),
 }));
 
+/**
+ * The price a request asks approval for. `salePrice` is the SCRUM-260 argument.
+ * Clients released before it send only the profit they computed, which both the
+ * web and mobile wizards derive as `price − base`, with the base carried in the
+ * snapshot — so `base + profit` reconstructs the price they will later quote.
+ * Without a snapshot the base can only have been the list price.
+ */
+function requestedSalePrice(
+  args: { salePrice?: number; requestedProfit?: number; wizardSnapshot?: { vehiclePrice: number } },
+  listPrice: number
+): number {
+  if (args.salePrice !== undefined) return args.salePrice;
+  if (args.requestedProfit === undefined) {
+    throw new ConvexError("Enter the sale price you want approved.");
+  }
+  return (args.wizardSnapshot?.vehiclePrice ?? listPrice) + args.requestedProfit;
+}
+
+/** Key-order-independent comparison of two resume snapshots. */
+function sameSnapshot(a: object | undefined, b: object | undefined): boolean {
+  const canonical = (value: object | undefined) =>
+    value === undefined ? "" : JSON.stringify(Object.entries(value).sort(([x], [y]) => x.localeCompare(y)));
+  return canonical(a) === canonical(b);
+}
+
 export const requestProfitApproval = mutation({
   args: {
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
-    requestedProfit: v.number(),
-    minimumProfit: v.number(),
+    // SCRUM-260: the price to approve. `requestedProfit`/`minimumProfit` remain
+    // accepted for clients released before it, but are never authority — the
+    // server computes both from the price and the vehicle.
+    salePrice: v.optional(v.number()),
+    requestedProfit: v.optional(v.number()),
+    minimumProfit: v.optional(v.number()),
     wizardSnapshot: wizardSnapshotValidator,
   },
   handler: async (ctx, args) => {
@@ -42,7 +74,13 @@ export const requestProfitApproval = mutation({
       throw new ConvexError("Vehicle not found in this organization.");
     }
 
-    // Check if there is an existing pending request for this vehicle and user.
+    const currency = await getOrgCurrency(ctx, args.orgId);
+    const decision = profitDecision(vehicle, requestedSalePrice(args, vehicle.sellingPrice), currency);
+    if (!decision.required) {
+      throw new ConvexError("This price already meets the vehicle's minimum profit, so it needs no approval.");
+    }
+
+    // Existing pending requests for this vehicle and user.
     //
     // ⚠️ This is a dedup lookup whose result is PATCHED, so an unscoped read
     // here is a cross-tenant WRITE rather than a leak. `by_vehicle` keys on the
@@ -67,41 +105,46 @@ export const requestProfitApproval = mutation({
     // edit or a future writer that skips validation — not a live exploit. The
     // confirmed user-reachable defect on this ticket is the READ leak in
     // `listMyPendingApprovals`, which needs only ordinary two-org membership.
-    const existing = await ctx.db
-      .query("profitApprovalRequests")
-      .withIndex("by_org_vehicle_salesperson", (q) =>
-        q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId).eq("salespersonId", user._id)
-      )
-      .filter((q) => q.eq(q.field("status"), "PENDING"))
-      .first();
+    //
+    // SCRUM-260: a pending row is never edited. A manager approves a request
+    // by id, so rewriting its terms after the manager opened it would approve a
+    // price they never saw. An identical re-request returns the same row; any
+    // other replaces it, and the replaced row is closed as superseded — with no
+    // rejection notice, because nobody rejected it.
+    const pending = (
+      await ctx.db
+        .query("profitApprovalRequests")
+        .withIndex("by_org_vehicle_salesperson", (q) =>
+          q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId).eq("salespersonId", user._id)
+        )
+        .collect()
+    ).filter((request) => request.status === "PENDING");
+
+    const identical = pending.find(
+      (request) => requestMatchesTerms(request, decision) && sameSnapshot(request.wizardSnapshot, args.wizardSnapshot)
+    );
+    if (identical) return identical._id;
+
+    const now = Date.now();
+    for (const request of pending) {
+      await ctx.db.patch(request._id, { status: "REJECTED", supersededAt: now });
+    }
 
     const actorName = await getActorName(ctx);
     const saleLabel = `${vehicle.year} ${vehicle.make} ${vehicle.model}`;
 
-    if (existing) {
-      const result = await ctx.db.patch(existing._id, {
-        requestedProfit: args.requestedProfit,
-        minimumProfit: args.minimumProfit,
-        wizardSnapshot: args.wizardSnapshot,
-      });
-      await notifyManagers(
-        ctx,
-        args.orgId,
-        "approval.requested",
-        { actorName, saleLabel },
-        { link: `/${args.orgId}/approvals` }
-      );
-      return result;
-    }
-
     const requestId = await ctx.db.insert("profitApprovalRequests", {
       orgId: args.orgId,
       vehicleId: args.vehicleId,
-      requestedProfit: args.requestedProfit,
-      minimumProfit: args.minimumProfit,
+      requestedProfit: fromMinorUnits(decision.marginMinor, currency),
+      minimumProfit: fromMinorUnits(decision.minimumProfitMinor, currency),
+      salePriceMinor: decision.salePriceMinor,
+      listPriceMinor: decision.listPriceMinor,
+      minimumProfitMinor: decision.minimumProfitMinor,
+      currency,
       salespersonId: user._id,
       status: "PENDING",
-      createdAt: Date.now(),
+      createdAt: now,
       wizardSnapshot: args.wizardSnapshot,
     });
 
@@ -155,6 +198,50 @@ export const checkPendingApproval = query({
   },
 });
 
+/**
+ * SCRUM-260: the server's verdict on selling a vehicle at a price, for the
+ * screens that gate on it — computed by the same helper the mutations enforce
+ * with, so a screen cannot call a price approved that a save would refuse.
+ * Never throws: an amount that is not a valid price reads as INVALID.
+ */
+export const profitApprovalStatus = query({
+  args: {
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    salePrice: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle || vehicle.orgId !== args.orgId) return null;
+
+    const currency = await getOrgCurrency(ctx, args.orgId);
+    let decision;
+    try {
+      decision = profitDecision(vehicle, args.salePrice, currency);
+    } catch {
+      return { status: "INVALID" as const };
+    }
+    const figures = {
+      margin: fromMinorUnits(decision.marginMinor, currency),
+      minimumProfit: fromMinorUnits(decision.minimumProfitMinor, currency),
+      listPrice: fromMinorUnits(decision.listPriceMinor, currency),
+    };
+    if (!decision.required) return { status: "NOT_REQUIRED" as const, ...figures };
+
+    const matching = await requestsForTerms(ctx, args.orgId, vehicle._id, decision);
+    if (matching.some((request) => request.status === "APPROVED")) {
+      return { status: "APPROVED" as const, ...figures };
+    }
+    // The caller's newest request at exactly these terms. A superseded row was
+    // replaced by the caller, not refused by a manager, so it reports nothing.
+    const mine = matching.find((request) => request.salespersonId === user._id && request.supersededAt === undefined);
+    if (mine?.status === "PENDING") return { status: "PENDING" as const, requestId: mine._id, ...figures };
+    if (mine?.status === "REJECTED") return { status: "REJECTED" as const, ...figures };
+    return { status: "REQUIRED" as const, ...figures };
+  },
+});
+
 export const respondToApproval = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -179,6 +266,7 @@ export const respondToApproval = mutation({
       status: args.status,
       approvedBy: user._id,
       notes: args.notes,
+      respondedAt: Date.now(),
     });
 
     // The request is proven in-org above; the vehicle it references is not.

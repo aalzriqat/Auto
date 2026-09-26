@@ -86,8 +86,8 @@ export const saveQuote = mutation({
     mode: quoteModeValidator,
     leadId: v.optional(v.id("leads")),
     vehiclePrice: v.number(),
-    // The dealer margin the client is quoting. Absent is read as zero, so a
-    // caller that omits it can never slip a below-minimum deal past the check.
+    // The dealer margin the client is quoting, stored for display. It is not
+    // authority: the minimum-profit check derives the margin from the price.
     desiredProfit: v.optional(v.number()),
     downPayment: v.number(),
     termMonths: v.number(),
@@ -432,15 +432,27 @@ export const saveQuote = mutation({
 
     // The UI blocks a below-minimum financed quote unless a manager approved it;
     // enforce the same rule here so a direct API call, an older client, or the
-    // mobile app cannot write one. Financed quotes are single-vehicle, so this
-    // checks the resolved `vehicleId` rather than the line items.
+    // mobile app cannot write one. SCRUM-260: judged on the price each line is
+    // quoted at, never on the caller's `desiredProfit` — and per line, because
+    // a legacy quote with no mode can carry several cars and completes each at
+    // its own price.
     if (quoteModeRequiresMinimumProfit(args.mode)) {
-      await assertProfitApproved(ctx, {
-        orgId: args.orgId,
-        vehicleId,
-        desiredProfit: args.desiredProfit ?? 0,
-        subject: "quote",
-      });
+      const lines = args.vehicleItems?.length
+        ? args.vehicleItems.map((item) => ({ vehicleId: item.vehicleId, price: item.unitPrice }))
+        : [{ vehicleId, price: vehiclePrice }];
+      for (const line of lines) {
+        const lineVehicle = await ctx.db.get(line.vehicleId);
+        if (!lineVehicle || lineVehicle.orgId !== args.orgId) {
+          throw new ConvexError("Vehicle not found in this organization.");
+        }
+        await assertProfitApproved(ctx, {
+          orgId: args.orgId,
+          vehicle: lineVehicle,
+          salePrice: line.price,
+          currency: orgCurrency,
+          subject: "quote",
+        });
+      }
     }
 
     if (args.leadId) {

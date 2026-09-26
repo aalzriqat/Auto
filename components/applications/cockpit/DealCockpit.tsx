@@ -128,6 +128,7 @@ import {
 } from "./HandoverCostsPanel";
 import { RecordLegalInvoiceDialog, type RecordLegalInvoiceValues } from "./RecordLegalInvoiceDialog";
 import { ClassifyDealAccountingDialog } from "./ClassifyDealAccountingDialog";
+import { ProfitApprovalNotice, useProfitApproval } from "@/components/sales/ProfitApprovalNotice";
 
 /**
  * The financed-deal cockpit.
@@ -1533,6 +1534,17 @@ export function DealCockpit({
   // The same discipline for finalization, and it matters more here: the
   // operation this key protects creates the sale and posts its journals.
   const finalizeKeyRef = useRef<string | null>(null);
+  // SCRUM-260: finalizing sells at the quote's price, so that is the price
+  // whose minimum-profit approval `completeSale` re-proves. A change to the
+  // car's list price or minimum after the quote needs a fresh approval, and
+  // this is where the operator can ask for it.
+  const finalizeSalePrice = app?.quote?.vehiclePrice ?? 0;
+  const finalizeProfitApproval = useProfitApproval({
+    orgId,
+    vehicleId: app?.vehicleId,
+    salePrice: finalizeSalePrice,
+    enabled: !!app?.quote && app.quote.mode !== "CASH",
+  });
 
   // Below every hook, deliberately. An early return placed above `useRef` changes
   // the hook order between renders — eslint's rules-of-hooks caught exactly that
@@ -2190,6 +2202,19 @@ export function DealCockpit({
         submitting: finalizeSubmitting,
         error: finalizeError,
         onOpenChange: setConfirmingFinalize,
+        profitApproval: app?.vehicleId
+          ? {
+              blocked: finalizeProfitApproval.blocked,
+              notice: (
+                <ProfitApprovalNotice
+                  orgId={orgId}
+                  vehicleId={app.vehicleId}
+                  salePrice={finalizeSalePrice}
+                  verdict={finalizeProfitApproval.verdict}
+                />
+              ),
+            }
+          : undefined,
         onSubmit: async () => {
           setFinalizeSubmitting(true);
           setFinalizeError(null);
@@ -3266,6 +3291,7 @@ export function DealCockpitView({
     error: string | null;
     onOpenChange: (open: boolean) => void;
     onSubmit: () => void | Promise<void>;
+    profitApproval?: { notice: React.ReactNode; blocked: boolean };
   };
   /**
    * Whether this caller may amend a recorded settlement advice (MANAGE_FINANCE).
@@ -4694,6 +4720,7 @@ export function DealCockpitView({
           t={t}
           onOpenChange={finalize.onOpenChange}
           onSubmit={finalize.onSubmit}
+          profitApproval={finalize.profitApproval}
         />
       )}
 

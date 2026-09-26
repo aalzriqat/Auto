@@ -42,6 +42,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { saleSchema, SaleFormValues, SaleDialogProps } from "./sale.schema";
 import { getErrorMessage } from "@/lib/errors";
 import { ConsignedSettlementSection } from "./ConsignedSettlementSection";
+import { ProfitApprovalNotice, useProfitApproval } from "./ProfitApprovalNotice";
 
 
 export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
@@ -231,6 +232,17 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     // so there is nothing there to refuse.
     status: watchAll.status === "COMPLETED" ? "COMPLETED" : "PENDING",
   });
+
+  // SCRUM-260: a financed or lease sale below the vehicle's minimum profit
+  // completes only at a price a manager approved. Shown for a new sale or a
+  // draft; submitting is blocked only when this save would complete the sale.
+  const profitApproval = useProfitApproval({
+    orgId: activeOrgId,
+    vehicleId: selectedVehicleId as Id<"vehicles"> | undefined,
+    salePrice: Number(watchAll.salePrice) || 0,
+    enabled: (watchAll.financingType ?? "CASH") !== "CASH" && (!sale || sale.status === "PENDING"),
+  });
+  const blockedByProfit = watchAll.status === "COMPLETED" && profitApproval.blocked;
 
   // No settlement-route gate here any more. The direct route on a financed
   // consigned deal used to be refused because the finance company's side had
@@ -617,6 +629,14 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                     )}
                   />
                 </div>
+                {activeOrgId && selectedVehicleId ? (
+                  <ProfitApprovalNotice
+                    orgId={activeOrgId}
+                    vehicleId={selectedVehicleId as Id<"vehicles">}
+                    salePrice={Number(watchAll.salePrice) || 0}
+                    verdict={profitApproval.verdict}
+                  />
+                ) : null}
               </div>
             </div>
 
@@ -750,7 +770,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
               </Button>
               <Button
                 type="submit"
-                disabled={isSubmitting || taxRefusal !== null}
+                disabled={isSubmitting || taxRefusal !== null || blockedByProfit}
               >
                 {isSubmitting ? (t("Saving" as any)) : sale ? (t("SaveChanges" as any)) : (t("LogSale" as any))}
               </Button>

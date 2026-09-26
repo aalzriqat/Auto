@@ -5,6 +5,7 @@ import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
+import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -116,6 +117,24 @@ export default function ApprovalsPage() {
                       <p className="text-xs text-slate-500 font-medium">{t("MinimumAllowed")}</p>
                       <p className="text-sm font-semibold text-slate-600">{format(request.minimumProfit)}</p>
                     </div>
+                    {/* SCRUM-260: approving authorizes exactly this price
+                        against exactly this list price, so both are shown. */}
+                    {request.salePriceMinor !== undefined && request.listPriceMinor !== undefined && request.currency ? (
+                      <>
+                        <div>
+                          <p className="text-xs text-slate-500 font-medium">{t("ApprovalSalePrice" as any)}</p>
+                          <p className="text-sm font-semibold text-slate-900 tabular-nums">
+                            {format(request.salePriceMinor / 10 ** scaleForCurrency(request.currency))}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-slate-500 font-medium">{t("ApprovalListPrice" as any)}</p>
+                          <p className="text-sm font-semibold text-slate-600 tabular-nums">
+                            {format(request.listPriceMinor / 10 ** scaleForCurrency(request.currency))}
+                          </p>
+                        </div>
+                      </>
+                    ) : null}
                   </div>
 
                   <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 px-3 py-2 rounded-md border border-amber-100">
