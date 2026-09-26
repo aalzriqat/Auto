@@ -3349,12 +3349,25 @@ export const getLog = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    // SCRUM-37: membership of args.orgId said nothing about the application
+    // id, so a member of one dealership read another's status history, notes
+    // and actor names. Prove the parent first (a missing and a foreign one
+    // refuse identically), then return only rows stamped with this org.
+    const application = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId,
+      "Finance application not found in this organization."
+    );
 
-    const entries = await ctx.db
-      .query("applicationStatusLog")
-      .withIndex("by_application", (q) => q.eq("applicationId", args.applicationId))
-      .order("asc")
-      .collect();
+    const entries = (
+      await ctx.db
+        .query("applicationStatusLog")
+        .withIndex("by_application", (q) => q.eq("applicationId", application._id))
+        .order("asc")
+        .collect()
+    ).filter((entry) => entry.orgId === args.orgId);
 
     return Promise.all(
       entries.map(async (entry) => {
