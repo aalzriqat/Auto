@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -145,6 +146,61 @@ function executesCandidate(step: Step): boolean {
   );
 }
 
+function credentialStepFingerprint(step: Step): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        run: step.run ?? "",
+        env: step.env ?? {},
+        uses: step.uses ?? "",
+        with: step.with ?? {},
+        if: step.if ?? "",
+        wd: step["working-directory"] ?? "",
+      }),
+    )
+    .digest("hex");
+}
+
+// sha256 of each credential-holding step, keyed "workflow :: job :: step".
+const CREDENTIAL_STEP_PINS: Record<string, string> = {
+  "browser-attack-swarm.yml :: prepare :: Recreate disposable Convex preview from trusted main":
+    "e525bfea77832f20176eda3c464f45248ba98b76fbc024573cdc33d1cc35e3c9",
+  "browser-attack-swarm.yml :: prepare :: Resolve named Convex preview from trusted control plane":
+    "ff6e293c36d80f7c103a7ff61fb69035434f7d7e4570f6ce7c97cbfea5142a45",
+  "browser-attack-swarm.yml :: trusted-e2e :: Scrub disposable preview environment before candidate execution":
+    "d3c3ffd3818ce6c21d27e5d60a5e03429e1424f73e858290f30eff88b2ecf83a",
+  "browser-attack-swarm.yml :: trusted-e2e :: Deploy staged candidate backend with trusted Convex CLI":
+    "e5c6d6f50d3846f30b6cf775b6ac119ff633a3edf146e222f73ddbbb304c758f",
+  "browser-attack-swarm.yml :: trusted-e2e :: Seed and assert the QA dealership from trusted main":
+    "dddbfbb6e710751deaad78ce36a7c30054a3b1a15f4a6e9b3c949ba87b10c17e",
+  "browser-attack-swarm.yml :: attack-worker :: Assert seeded preview from trusted control plane":
+    "903ed9ee8db4b30e407a4459c41664270dd667cc6a719561765c1c821349c8f6",
+  "convex-preview-key-diagnostic.yml :: diagnose :: Probe preview admin-key scope":
+    "dff189abd5097ac541de44c461e031da00da04587a8db705617bdad920448e39",
+  "deploy-production.yml :: deploy :: Refuse credentials that do not address the expected deployment":
+    "7c54c0c4ce46bc9a79943ba67abe3e7ff9246006e30c5138992bbdd578309dee",
+  "deploy-production.yml :: deploy :: Deploy Convex backend":
+    "9e301f017f28b96abbca95b245ace52865af09c7871440030c6b728767d37533",
+  "deploy-production.yml :: deploy :: Verify zero-state (fresh launch checkpoint)":
+    "d8558bbcd24e1b57d08c54c6265378c6b8dc5d50f82cdcdd400f8e6973f4653a",
+  "deploy-production.yml :: deploy :: Roll out Social Inbox conversations and verify":
+    "b0c54ce29d710be6443e0783c25277554ffdd6e8eb05b4a851683b2b3eeb336f",
+  "trusted-accounting-rehearsal.yml :: rehearsal :: Name and recreate disposable rehearsal preview from trusted main":
+    "474fb5b15e1647adcacc0e47e9da389b22ea42d1444c41c04fd78fcccc924cf6",
+  "trusted-accounting-rehearsal.yml :: rehearsal :: Scrub disposable rehearsal preview environment":
+    "fe69a3f150ae30ad260ae32e096681fa261a97d2d05984ff1ad9008558b46f30",
+  "trusted-accounting-rehearsal.yml :: rehearsal :: Deploy staged candidate backend with trusted Convex CLI":
+    "ddf2e36d32c653187bf05a3e681ef2f420948dd3efb3b5bf0962c9e7a8e174b3",
+  "trusted-accounting-rehearsal.yml :: rehearsal :: Seed synthetic QA dealership from trusted main":
+    "9097260844d1c5beafa128926b5afc0921244441e909856acd238700b7b05291",
+  "trusted-accounting-rehearsal.yml :: rehearsal :: Run cloud accounting rehearsal from trusted main":
+    "60d0a94ee465aa315e405b5dcfdac3dfe77c11864586730bfaee5affe4f74ffa",
+  "trusted-main-e2e.yml :: playwright :: Recreate Convex E2E backend":
+    "fa46d803ccbbe2d693dbdc8a2d65a202d359885c8617014ac380ee1e29d920e6",
+  "trusted-main-e2e.yml :: playwright :: Seed the QA dealership":
+    "a635af26c0fb282d5d4d741484d443768f4c6b04202db7e6a51a39cd3811731e",
+};
+
 function everyJob(): Array<{ label: string; workflow: Workflow; job: Job }> {
   return workflows.flatMap(({ name, workflow }) =>
     Object.entries(workflow.jobs ?? {}).map(([jobName, job]) => ({
@@ -253,6 +309,29 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
     expect(
       CANDIDATE_PATH.test(residualRun({ name: STAGED_DEPLOY_STEP, run: canonical + "\nsource candidate/evil.sh" })),
     ).toBe(true);
+  });
+
+  it("pins the complete content of every credential-holding step, so no edit to one lands unreviewed (Sol R3 on PR #341)", () => {
+    // Text patterns cannot prove what a shell runs after expansion
+    // (`SLASH=/; source candidate${SLASH}x.sh`). So every step that holds a
+    // Convex credential is pinned whole: run, env, uses, with, if and
+    // working-directory. Changing one, or adding one, fails here until the
+    // pin below is updated in a reviewed change, and that review is the
+    // control. Regenerate a hash with credentialStepFingerprint.
+    const actual: Record<string, string> = {};
+    for (const { label, job } of everyJob()) {
+      for (const step of job.steps ?? []) {
+        if (!holdsConvexCredential(step)) continue;
+        actual[label + " :: " + String(step.name)] = credentialStepFingerprint(step);
+      }
+    }
+    expect(actual).toEqual(CREDENTIAL_STEP_PINS);
+
+    // Control: the assembled-path bypass changes the fingerprint.
+    const deploy = stagedDeploySteps()[0]?.step as Step;
+    expect(
+      credentialStepFingerprint({ ...deploy, run: String(deploy.run) + "\nSLASH=/; source candidate${SLASH}evil.sh\n" }),
+    ).not.toBe(credentialStepFingerprint(deploy));
   });
 
   it("never sets a Convex credential at workflow or job level, where every step would inherit it", () => {
