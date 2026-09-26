@@ -150,12 +150,29 @@ export const quotationSourceValidator = v.union(
  * company stays explainable after the company's rules, the vehicle's target or
  * the itemized fees have all moved on.
  */
+/**
+ * Where the first payment a quotation was computed with came from (SCRUM-373).
+ *
+ * `EXPLICIT` — supplied by the caller on this recording. `STORED` — the value
+ * already on the application (seeded at creation or recorded earlier).
+ * `QUOTE_SEED` — the application had none and it was seeded, on this
+ * recording, from the originating quote's down payment. Absent on snapshots
+ * written before this field existed: their zero may have been fabricated by the
+ * old `?? 0` fallback, so an absent source is never read as `EXPLICIT`.
+ */
+export const customerFirstPaymentSourceValidator = v.union(
+  v.literal("EXPLICIT"),
+  v.literal("STORED"),
+  v.literal("QUOTE_SEED")
+);
+
 export const quotationCalculationSnapshotValidator = v.object({
   mode: quotationSourceValidator,
   targetNetProceedsMinor: v.optional(v.number()),
   estimatedDealerBorneExpensesMinor: v.optional(v.number()),
   quotationBufferMinor: v.optional(v.number()),
   customerFirstPaymentMinor: v.optional(v.number()),
+  customerFirstPaymentSource: v.optional(customerFirstPaymentSourceValidator),
   appliedLtvPercent: v.optional(v.number()),
   customerFirstPaymentOffsetsUnfinancedShare: v.optional(v.boolean()),
   /** What the solver produced, when it was available. */
