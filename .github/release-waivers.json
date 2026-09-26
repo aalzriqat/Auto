@@ -40,7 +40,13 @@
     "ABSENT until the workflow is dispatched against that exact tip, and an",
     "absent required check refuses the release - by design. The release",
     "procedure dispatches it and verifies the run recorded tested SHA is the",
-    "tip being released. The PR green badge is never inherited. No waiver."
+    "tip being released. The PR green badge is never inherited. No waiver.",
+    "",
+    "SonarCloud Code Analysis (SCRUM-128, owner 2026-09-26): waived from",
+    "2026-08-17 while the quality gate was red on main (Security Rating on New",
+    "Code: C). The waiver was removed once its own condition was met: quality",
+    "gate OK on main, new-code security/reliability/maintainability all A. A",
+    "red quality gate now refuses the release."
   ],
   "required": [
     { "producer": "github-actions", "name": "unit-and-integration" },
@@ -58,15 +64,7 @@
     { "producer": "github-actions", "name": "playwright" },
     { "producer": "github-actions", "name": "rehearsal" }
   ],
-  "waivers": [
-    {
-      "producer": "sonarqubecloud",
-      "name": "SonarCloud Code Analysis",
-      "issue": "SCRUM-128",
-      "expires": "2027-02-17",
-      "reason": "Quality gate red on main: Security Rating on New Code below A. Pre-existing and repository-wide, so blocking every release on it is not a decision this workflow should make silently. Required rather than dropped, because it is the check that actually fails on a gate breach."
-    }
-  ],
+  "waivers": [],
   "informational": {
     "$comment": [
       "Deliberately NOT required, with the reason recorded so they are not",
