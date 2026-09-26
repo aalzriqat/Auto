@@ -224,6 +224,11 @@ describe("Finance lifecycle phase 3 deposit application hooks", () => {
           .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
           .take(1000)
       ).filter((event) => event.eventType === "DEPOSIT_APPLIED");
+      const applications = (await ctx.db.query("depositApplications").take(100))
+        .filter((row) => row.depositId === depositId)
+        .map((row) => ({ status: row.status, treatment: row.treatment, key: row.eventIdempotencyKey }));
+      const eventStates = events.map((event) => ({ status: event.status, key: event.idempotencyKey }));
+      const entryStatuses: string[] = [];
       const lines: Array<{ key: string | null; debit: number; credit: number }> = [];
       for (const event of events) {
         const entries = await ctx.db
@@ -231,6 +236,7 @@ describe("Finance lifecycle phase 3 deposit application hooks", () => {
           .withIndex("by_accounting_event", (q) => q.eq("accountingEventId", event._id))
           .take(10);
         for (const entry of entries) {
+          entryStatuses.push(entry.status);
           const entryLines = await ctx.db
             .query("journalLines")
             .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
@@ -241,11 +247,20 @@ describe("Finance lifecycle phase 3 deposit application hooks", () => {
           }
         }
       }
-      return { events: events.length, pending: pending.length, lines };
+      return { events: events.length, pending: pending.length, lines, applications, eventStates, entryStatuses };
     });
 
     expect(posted.pending).toBe(0);
     expect(posted.events).toBe(1);
+    // Posted is observed, not inferred from the lines (Sol D2-STATUS): the
+    // application is APPLIED, and the one event it names and that event's
+    // one journal entry are both POSTED. A DRAFT or PENDING leftover carrying
+    // the same two lines would satisfy every line assertion below.
+    expect(posted.applications).toEqual([
+      { status: "APPLIED", treatment: "CUSTOMER_RECEIVABLE", key: posted.eventStates[0]?.key },
+    ]);
+    expect(posted.eventStates.map((event) => event.status)).toEqual(["POSTED"]);
+    expect(posted.entryStatuses).toEqual(["POSTED"]);
     expect(posted.lines).toEqual(
       expect.arrayContaining([
         { key: "CUSTOMER_DEPOSITS_LIABILITY", debit: 150000, credit: 0 },
