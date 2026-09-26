@@ -527,6 +527,29 @@ jobs:
           STAGE_MANIFEST_PATH: ${{ runner.temp }}/candidate-backend-manifest.json
           TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
 
+      # SCRUM-350 F1: a candidate import is an instruction to the bundler to
+      # read a file, and in the deploy container /proc/self/environ holds the
+      # key. So the trusted CLI's own bundle calls run here first, with no
+      # credential and no network over the same read-only mounts, and every
+      # file they read must lie inside the stage or trusted node_modules.
+      - name: Audit staged backend inputs without credentials
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --name autoflow-staged-backend-input-audit \
+            --network none \
+            --read-only \
+            --tmpfs /tmp:rw,size=512m \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --volume "$RUNNER_TEMP/candidate-backend:/app:ro" \
+            --volume "$GITHUB_WORKSPACE/trusted/node_modules:/app/node_modules:ro" \
+            --volume "$GITHUB_WORKSPACE/trusted/scripts/intelligence/auditStagedBackendInputs.mjs:/audit/auditStagedBackendInputs.mjs:ro" \
+            --workdir /app \
+            --env HOME=/tmp/home \
+            node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
+            node /audit/auditStagedBackendInputs.mjs
+
       - name: Deploy staged candidate backend with trusted Convex CLI
         env:
           CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}

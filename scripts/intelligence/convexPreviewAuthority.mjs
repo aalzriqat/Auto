@@ -185,7 +185,9 @@ async function readBoundedJsonObject(response) {
 // not here: scripts/intelligence/convexCredentialBoundary.test.ts refuses any
 // workflow step that runs candidate code beside a Convex credential, and the
 // candidate backend is deployed by the trusted CLI from a staged copy.
-const ADMIN_KEY_DEPLOYMENT_TYPES = new Set(["prod", "dev", "preview"]);
+// A typed deployment key is accepted only as a PREVIEW key: a "prod:" or
+// "dev:" key naming the preview is not one this lane may hold (Sol on PR #341).
+const ADMIN_KEY_DEPLOYMENT_TYPES = new Set(["preview"]);
 
 export function classifyPreviewClaimAdminKey(value, expectedDeploymentName, deployKey) {
   if (typeof value !== "string" || !value) {

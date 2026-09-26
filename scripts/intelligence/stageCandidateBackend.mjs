@@ -20,13 +20,16 @@ import { fileURLToPath } from "node:url";
  * This runs with no credential at all and produces a directory the trusted CLI
  * deploys from inside a container that sees nothing else:
  *
- * - only `convex/` and `lib/` are taken from the candidate — the backend's
- *   measured import closure (every non-test import leaving convex/ lands in
- *   lib/). Anything else it reaches for is absent, so the bundle fails closed;
- * - every dependency and CLI-configuration file is TRUSTED's copy, and the
- *   candidate's must be byte-identical to it. A PR that changes dependencies
- *   cannot be deployed this way, because its lockfile would decide which code
- *   runs beside the key;
+ * - only `convex/`, `lib/` and `packages/shared/src/` are taken from the
+ *   candidate — the backend's import closure (convex/ reaches lib/, and lib/
+ *   reaches the `@autoflow/shared` workspace package through its trusted
+ *   node_modules link). Anything else it reaches for is absent, so the bundle
+ *   fails closed, and auditStagedBackendInputs.mjs proves no read escapes;
+ * - every dependency, CLI-configuration, package-metadata and tsconfig file is
+ *   TRUSTED's copy, and the candidate's must be byte-identical to it. A PR that
+ *   changes dependencies cannot be deployed this way, because its lockfile
+ *   would decide which code runs beside the key; and a tsconfig's `paths` can
+ *   point the bundler anywhere, so no other tsconfig or jsconfig is staged;
  * - symlinks, hard links and special files are refused (a link is how a file
  *   outside the stage gets read into the bundle), as are `.wasm` files (the
  *   Convex bundler loads them as raw bytes) and nested `package.json` files
@@ -36,15 +39,20 @@ import { fileURLToPath } from "node:url";
  * contents: the output reaches public Actions logs.
  */
 
-export const STAGED_DIRECTORIES = Object.freeze(["convex", "lib"]);
+export const STAGED_DIRECTORIES = Object.freeze(["convex", "lib", "packages/shared/src"]);
 export const DEPENDENCY_SURFACE = Object.freeze([
   "package.json",
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",
   "convex.json",
+  // Inside or beside the staged directories; esbuild reads them to resolve.
+  "convex/tsconfig.json",
+  "packages/shared/package.json",
+  "packages/shared/tsconfig.json",
 ]);
-// Trusted copies the CLI and esbuild read from the stage root.
+// Trusted copies the CLI and esbuild read from the stage.
 const TRUSTED_ROOT_FILES = Object.freeze([...DEPENDENCY_SURFACE, "tsconfig.json"]);
+const RESOLUTION_CONFIG = /^(ts|js)config.*\.json$/i;
 
 export class StageRefusal extends Error {
   constructor(message) {
@@ -110,6 +118,13 @@ function collectFiles(candidateRoot, relativeDir, files) {
     if (stat.nlink !== 1) {
       throw new StageRefusal("Candidate backend contains a hard link: " + relative);
     }
+    if (DEPENDENCY_SURFACE.includes(relative)) {
+      // Compared byte-for-byte above; trusted's copy is staged below.
+      continue;
+    }
+    if (RESOLUTION_CONFIG.test(entry.name)) {
+      throw new StageRefusal("Candidate backend contains a resolution config: " + relative);
+    }
     if (entry.name === "package.json") {
       throw new StageRefusal("Candidate backend contains a nested package.json: " + relative);
     }
@@ -160,7 +175,9 @@ export function stageCandidateBackend({ candidateRoot, trustedRoot, stageRoot, t
   }
   for (const name of TRUSTED_ROOT_FILES) {
     const trustedPath = path.join(trustedRoot, name);
-    if (existsSync(trustedPath)) copyFileSync(trustedPath, path.join(stageRoot, name));
+    if (!existsSync(trustedPath)) continue;
+    mkdirSync(path.dirname(path.join(stageRoot, name)), { recursive: true });
+    copyFileSync(trustedPath, path.join(stageRoot, name));
   }
   // The mount point for the trusted node_modules. Created here so docker never
   // has to create it inside a read-only bind.

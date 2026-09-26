@@ -18,7 +18,14 @@ import { parse as parseYaml } from "yaml";
  * - the one step that deploys the candidate backend runs the TRUSTED Convex
  *   CLI in a container that sees exactly the staged backend and the trusted
  *   node_modules, both read-only, with typecheck and codegen off, so no
- *   candidate package, binary or typescript ever runs beside the key.
+ *   candidate package, binary or typescript ever runs beside the key;
+ * - a credential-free audit before it proves every file that CLI's bundler
+ *   reads lies inside the stage (Sol F1 on PR #341).
+ *
+ * The two staged container steps are recognised by their EXACT canonical
+ * command, never by name: whatever else such a step runs is classified like
+ * any other step (Sol F3 on PR #341). This file runs in the trusted controller
+ * through `pnpm test:browser-swarm`, not only in candidate-controlled PR CI.
  */
 
 type Step = {
@@ -28,6 +35,7 @@ type Step = {
   env?: Record<string, unknown>;
   with?: Record<string, unknown>;
   "working-directory"?: string;
+  if?: string;
 };
 
 type Job = {
@@ -52,11 +60,51 @@ const CONVEX_SECRET = /secrets\.CONVEX_[A-Z0-9_]+/;
 const CREDENTIAL_NAME = /ADMIN_KEY|DEPLOY_KEY|OPERATOR_KEY|OBSERVER_KEY/;
 
 const STAGED_DEPLOY_STEP = "Deploy staged candidate backend with trusted Convex CLI";
+const AUDIT_STEP = "Audit staged backend inputs without credentials";
 const STAGE_STEP = "Stage exact candidate backend as data";
 const STAGED_DEPLOY_VOLUMES = [
   '"$RUNNER_TEMP/candidate-backend:/app:ro"',
   '"$GITHUB_WORKSPACE/trusted/node_modules:/app/node_modules:ro"',
 ];
+const NODE_IMAGE =
+  "node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5";
+const CONTAINER_HARDENING =
+  "--read-only --tmpfs /tmp:rw,size=512m --cap-drop ALL --security-opt no-new-privileges";
+
+// The only container commands a staged step may run, character for character
+// after joining continuation lines.
+const CANONICAL_STAGED_COMMAND: Record<string, string> = {
+  [STAGED_DEPLOY_STEP]:
+    "docker run --rm --name autoflow-trusted-staged-backend-deploy --network bridge " +
+    CONTAINER_HARDENING +
+    " --volume " + STAGED_DEPLOY_VOLUMES.join(" --volume ") +
+    ' --workdir /app --env HOME=/tmp/home --env NEXT_PUBLIC_CONVEX_URL --env CONVEX_PREVIEW_ADMIN_KEY="$ADMIN_KEY" ' +
+    NODE_IMAGE +
+    " sh -c 'exec node /app/node_modules/convex/bin/main.js deploy --url \"$NEXT_PUBLIC_CONVEX_URL\" --admin-key \"$CONVEX_PREVIEW_ADMIN_KEY\" --typecheck disable --codegen disable'",
+  [AUDIT_STEP]:
+    "docker run --rm --name autoflow-staged-backend-input-audit --network none " +
+    CONTAINER_HARDENING +
+    " --volume " + STAGED_DEPLOY_VOLUMES.join(" --volume ") +
+    ' --volume "$GITHUB_WORKSPACE/trusted/scripts/intelligence/auditStagedBackendInputs.mjs:/audit/auditStagedBackendInputs.mjs:ro"' +
+    " --workdir /app --env HOME=/tmp/home " +
+    NODE_IMAGE +
+    " node /audit/auditStagedBackendInputs.mjs",
+};
+
+function normalizeRun(run: string): string {
+  return run.replace(/\\\r?\n\s*/g, " ").replace(/[ \t]+/g, " ");
+}
+
+/**
+ * The part of a step's script that is NOT its canonical staged container
+ * command. For every other step, the whole script.
+ */
+function residualRun(step: Step): string {
+  const run = normalizeRun(String(step.run ?? ""));
+  const canonical = step.name ? CANONICAL_STAGED_COMMAND[step.name] : undefined;
+  if (!canonical || run.split(canonical).length !== 2) return run;
+  return run.replace(canonical, " ");
+}
 
 function holdsConvexCredential(step: Step): boolean {
   return CONVEX_SECRET.test(JSON.stringify(step.env ?? {}));
@@ -68,13 +116,13 @@ function dockerVolumes(run: string): string[] {
 
 /**
  * Candidate-controlled code runs in this step: a container over the candidate
- * checkout or its built runtime, a candidate working directory, or a direct
- * invocation from it. The staged deploy mounts the stage instead, and its
- * trusted CLI never executes candidate code, so it is classified separately.
+ * checkout, its built runtime or its staged backend, a candidate working
+ * directory, or a direct invocation from it. A staged step's exact canonical
+ * command parses candidate code without executing it, so only that command is
+ * set aside; the rest of the step is judged like any other.
  */
 function executesCandidate(step: Step): boolean {
-  if (step.name === STAGED_DEPLOY_STEP) return false;
-  const run = String(step.run ?? "");
+  const run = residualRun(step);
   const workingDirectory = String(step["working-directory"] ?? "");
   if (/^candidate(\/|$)/.test(workingDirectory)) return true;
   if (/(^|\s|;|&&)cd\s+"?candidate\b/.test(run)) return true;
@@ -141,6 +189,47 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
     }
   });
 
+  it("sets aside only a staged step's exact canonical command, never the step's name (Sol F3 on PR #341)", () => {
+    for (const name of [STAGED_DEPLOY_STEP, AUDIT_STEP]) {
+      const canonical = CANONICAL_STAGED_COMMAND[name] as string;
+      expect(executesCandidate({ name, run: canonical }), name).toBe(false);
+      // Candidate code appended to the named step.
+      expect(executesCandidate({ name, run: canonical + "\nnode candidate/scripts/exfil.mjs" }), name).toBe(true);
+      // The canonical command altered: the stage mount is then judged as a candidate container.
+      expect(
+        executesCandidate({ name, run: canonical.replace("--network", "--volume \"$RUNNER_TEMP/x:/x\" --network") }),
+        name,
+      ).toBe(true);
+      // The canonical command run twice is not the canonical step.
+      expect(executesCandidate({ name, run: canonical + "\n" + canonical }), name).toBe(true);
+    }
+    // Every real staged step is exactly canonical, with nothing container-shaped left over.
+    for (const { label, job } of everyJob()) {
+      for (const step of job.steps ?? []) {
+        if (!step.name || !(step.name in CANONICAL_STAGED_COMMAND)) continue;
+        const run = normalizeRun(String(step.run ?? ""));
+        expect(run.split(CANONICAL_STAGED_COMMAND[step.name] as string).length, label + " :: " + step.name).toBe(2);
+        expect(residualRun(step), label + " :: " + step.name).not.toMatch(/\bdocker\b/);
+      }
+    }
+  });
+
+  it("is run by the trusted controller, not only by candidate-controlled PR CI (Sol F3 on PR #341)", () => {
+    const pkg = JSON.parse(readFileSync(path.resolve(process.cwd(), "package.json"), "utf8")) as {
+      scripts: Record<string, string>;
+    };
+    const command = pkg.scripts["test:browser-swarm"] ?? "";
+    for (const file of [
+      "scripts/intelligence/convexCredentialBoundary.test.ts",
+      "scripts/intelligence/stageCandidateBackend.test.ts",
+      "scripts/intelligence/auditStagedBackendInputs.test.ts",
+    ]) {
+      expect(command).toContain(file);
+    }
+    const swarm = readFileSync(path.join(workflowsDir, "browser-attack-swarm.yml"), "utf8");
+    expect(swarm).toContain("pnpm test:browser-swarm");
+  });
+
   it("never sets a Convex credential at workflow or job level, where every step would inherit it", () => {
     for (const { label, workflow, job } of everyJob()) {
       expect(JSON.stringify(workflow.env ?? {}), label).not.toMatch(CONVEX_SECRET);
@@ -185,12 +274,13 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
     }
   });
 
-  it("runs docker beside a credential only in the staged candidate backend deploy", () => {
+  it("runs docker beside a credential only as the staged deploy's canonical command", () => {
     for (const { label, job } of everyJob()) {
       for (const step of job.steps ?? []) {
         if (!holdsConvexCredential(step)) continue;
-        if (!/\bdocker\s+run\b/.test(String(step.run ?? ""))) continue;
+        if (!/\bdocker\b/.test(String(step.run ?? ""))) continue;
         expect(step.name, label).toBe(STAGED_DEPLOY_STEP);
+        expect(residualRun(step), label).not.toMatch(/\bdocker\b/);
       }
     }
   });
@@ -227,14 +317,20 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
     }
   });
 
-  it("stages the candidate backend with no credential and before the deploy that consumes it", () => {
+  it("stages and audits the candidate backend with no credential, immediately before the deploy that consumes it", () => {
     for (const { label, job } of everyJob()) {
       const steps = job.steps ?? [];
       const deployIndex = steps.findIndex((step) => step.name === STAGED_DEPLOY_STEP);
       if (deployIndex < 0) continue;
       const stageIndex = steps.findIndex((step) => step.name === STAGE_STEP);
+      const auditIndex = steps.findIndex((step) => step.name === AUDIT_STEP);
       expect(stageIndex, label).toBeGreaterThanOrEqual(0);
-      expect(stageIndex, label).toBeLessThan(deployIndex);
+      // Nothing runs between the audit and the deploy it licenses.
+      expect([stageIndex, auditIndex, deployIndex], label).toEqual([deployIndex - 2, deployIndex - 1, deployIndex]);
+      const audit = steps[auditIndex] as Step;
+      expect(JSON.stringify(audit.env ?? {}), label).not.toMatch(/secrets\./);
+      expect(String(audit.run ?? ""), label).not.toMatch(CREDENTIAL_NAME);
+      expect(String(audit.if ?? ""), label).toBe(String((steps[deployIndex] as Step).if ?? ""));
       const stage = steps[stageIndex] as Step;
       expect(JSON.stringify(stage.env ?? {}), label).not.toMatch(/secrets\./);
       expect(String(stage.run ?? ""), label).toContain(

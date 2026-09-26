@@ -33,14 +33,24 @@ describe("trusted Convex preview authority", () => {
         DEPLOY_KEY,
       ),
     ).toEqual({ adminKey: "elegant-butterfly-952|deployment-secret", scope: "DEPLOYMENT" });
-    for (const type of ["prod", "dev", "preview"]) {
-      expect(
+    expect(
+      classifyPreviewClaimAdminKey(
+        "preview:elegant-butterfly-952|deployment-secret",
+        "elegant-butterfly-952",
+        DEPLOY_KEY,
+      ).scope,
+    ).toBe("DEPLOYMENT");
+  });
+
+  it("refuses a prod or dev typed key even when it names the resolved preview (Sol on PR #341)", () => {
+    for (const type of ["prod", "dev"]) {
+      expect(() =>
         classifyPreviewClaimAdminKey(
           type + ":elegant-butterfly-952|deployment-secret",
           "elegant-butterfly-952",
           DEPLOY_KEY,
-        ).scope,
-      ).toBe("DEPLOYMENT");
+        ),
+      ).toThrow(/unrecognized shape/);
     }
   });
 
