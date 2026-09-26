@@ -1510,6 +1510,134 @@ describe("applications logs, expected payment, and finalization guards", () => {
     expect(log.some((entry) => entry.changedByName === "Unknown")).toBe(true);
   });
 
+  // SCRUM-37: getLog authorised the org the caller named, then read the status
+  // log of whatever application id it was given.
+  async function seedForeignApplication(t: Awaited<ReturnType<typeof setup>>["t"]) {
+    const foreignOrgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() })
+    );
+    const foreignUserId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "foreign_log_owner", email: "foreign.owner@test.com", name: "Foreign Owner" })
+    );
+    const foreignRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId: foreignOrgId, name: "Admin", permissions: PERMISSIONS })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId: foreignOrgId, userId: foreignUserId, roleId: foreignRoleId }));
+    const asForeign = t.withIdentity({ subject: "foreign_log_owner", clerkId: "foreign_log_owner" });
+    const foreignVehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: foreignOrgId,
+        vin: "1HGCM82633A333333",
+        make: "Kia",
+        model: "Sportage",
+        year: 2023,
+        color: "Blue",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 1000,
+        sellingPrice: 20000,
+        status: "AVAILABLE",
+      })
+    );
+    const foreignCustomerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId: foreignOrgId, firstName: "Foreign", lastName: "Buyer" })
+    );
+    const foreignQuoteId = await asForeign.mutation(api.quotes.saveQuote, {
+      orgId: foreignOrgId,
+      customerId: foreignCustomerId,
+      vehicleId: foreignVehicleId,
+      vehiclePrice: 20000,
+      downPayment: 3000,
+      termMonths: 48,
+    });
+    const foreignApplicationId = await asForeign.mutation(api.applications.createFromQuote, {
+      orgId: foreignOrgId,
+      quoteId: foreignQuoteId,
+    });
+    return { foreignOrgId, foreignApplicationId, asForeign };
+  }
+
+  test("getLog refuses another org's application id (SCRUM-37)", async () => {
+    const { t, orgId, asUser } = await setup();
+    const { foreignOrgId, foreignApplicationId, asForeign } = await seedForeignApplication(t);
+
+    // Control: the foreign org's own history is real and non-empty.
+    const own = await asForeign.query(api.applications.getLog, { orgId: foreignOrgId, applicationId: foreignApplicationId });
+    expect(own.length).toBeGreaterThan(0);
+
+    await expect(
+      asUser.query(api.applications.getLog, { orgId, applicationId: foreignApplicationId })
+    ).rejects.toThrow("Finance application not found in this organization.");
+  });
+
+  test("getLog answers a missing application exactly as a foreign one (SCRUM-37)", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId, customerId, vehicleId, vehiclePrice: 20000, downPayment: 3000, termMonths: 48,
+    });
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+    await t.run((ctx) => ctx.db.delete(applicationId));
+
+    await expect(
+      asUser.query(api.applications.getLog, { orgId, applicationId })
+    ).rejects.toThrow("Finance application not found in this organization.");
+  });
+
+  test("getLog never returns a log row stamped with another org, even under an owned application (SCRUM-37)", async () => {
+    const { t, orgId, customerId, vehicleId, userId, asUser } = await setup();
+    const { foreignOrgId } = await seedForeignApplication(t);
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId, customerId, vehicleId, vehiclePrice: 20000, downPayment: 3000, termMonths: 48,
+    });
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+    const strayId = await t.run((ctx) =>
+      ctx.db.insert("applicationStatusLog", {
+        orgId: foreignOrgId,
+        applicationId,
+        fromStatus: "PENDING_DOCS",
+        toStatus: "UNDER_REVIEW",
+        changedBy: userId,
+        changedAt: Date.now(),
+        note: "foreign note",
+      })
+    );
+
+    const log = await asUser.query(api.applications.getLog, { orgId, applicationId });
+    expect(log.length).toBeGreaterThan(0);
+    expect(log.every((entry) => entry.orgId === orgId)).toBe(true);
+    expect(log.some((entry) => entry._id === strayId)).toBe(false);
+  });
+
+  test("dealCockpit's timeline never shows a log row stamped with another org (Sol on PR #343)", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const { foreignOrgId } = await seedForeignApplication(t);
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId, customerId, vehicleId, vehiclePrice: 20000, downPayment: 3000, termMonths: 48,
+    });
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+    const foreignActorId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "foreign_actor", email: "foreign.actor@test.com", name: "Foreign Actor" })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("applicationStatusLog", {
+        orgId: foreignOrgId,
+        applicationId,
+        fromStatus: "PENDING_DOCS",
+        toStatus: "UNDER_REVIEW",
+        changedBy: foreignActorId,
+        changedAt: Date.now(),
+        note: "foreign note",
+      })
+    );
+
+    const cockpit = await asUser.query(api.applications.dealCockpit, { orgId, applicationId });
+    const timeline = cockpit?.timeline ?? [];
+    // Control: the application's own creation entry is still there.
+    expect(timeline.length).toBeGreaterThan(0);
+    expect(timeline.some((entry) => entry.note === "foreign note")).toBe(false);
+    expect(timeline.some((entry) => entry.actorName === "Foreign Actor")).toBe(false);
+  });
+
   test("registerExpectedPayment requires cheque details and finalization requires handover and payment metadata", async () => {
     const { orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await asUser.mutation(api.quotes.saveQuote, {

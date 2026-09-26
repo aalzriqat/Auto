@@ -2060,10 +2060,15 @@ export const dealCockpit = query({
       supplierDisbursementConfirmedAt: app.supplierDisbursementConfirmedAt,
     });
 
-    const timeline = await ctx.db
-      .query("applicationStatusLog")
-      .withIndex("by_application", (q) => q.eq("applicationId", app._id))
-      .collect();
+    // Only rows stamped with this org, the same boundary getLog holds
+    // (SCRUM-37; Sol on PR #343): the parent is owned, but the schema does
+    // not force a log row's orgId to match its application's.
+    const timeline = (
+      await ctx.db
+        .query("applicationStatusLog")
+        .withIndex("by_application", (q) => q.eq("applicationId", app._id))
+        .collect()
+    ).filter((entry) => entry.orgId === args.orgId);
     const actorNames = new Map<string, string>();
     for (const entry of timeline) {
       if (actorNames.has(entry.changedBy)) continue;
@@ -3355,12 +3360,25 @@ export const getLog = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    // SCRUM-37: membership of args.orgId said nothing about the application
+    // id, so a member of one dealership read another's status history, notes
+    // and actor names. Prove the parent first (a missing and a foreign one
+    // refuse identically), then return only rows stamped with this org.
+    const application = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId,
+      "Finance application not found in this organization."
+    );
 
-    const entries = await ctx.db
-      .query("applicationStatusLog")
-      .withIndex("by_application", (q) => q.eq("applicationId", args.applicationId))
-      .order("asc")
-      .collect();
+    const entries = (
+      await ctx.db
+        .query("applicationStatusLog")
+        .withIndex("by_application", (q) => q.eq("applicationId", application._id))
+        .order("asc")
+        .collect()
+    ).filter((entry) => entry.orgId === args.orgId);
 
     return Promise.all(
       entries.map(async (entry) => {
