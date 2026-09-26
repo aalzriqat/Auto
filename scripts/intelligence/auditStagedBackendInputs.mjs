@@ -81,7 +81,9 @@ export class AuditRefusal extends Error {
 
 function isInside(root, candidate) {
   const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  // Compare the first segment: "..foo" is a child named "..foo", not a parent.
+  const escapes = relative === ".." || relative.startsWith(".." + path.sep);
+  return relative === "" || (!escapes && !path.isAbsolute(relative));
 }
 
 /**

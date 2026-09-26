@@ -37,6 +37,7 @@ type Step = {
   env?: Record<string, unknown>;
   with?: Record<string, unknown>;
   "working-directory"?: string;
+  shell?: string;
   if?: string;
 };
 
@@ -108,9 +109,10 @@ function residualRun(step: Step): string {
 }
 
 function holdsConvexCredential(step: Step): boolean {
-  // An action input carries a secret as surely as env does (Sol R3 on PR #341),
-  // and every spelling of the access counts (Sol R4).
-  return referencesConvexSecret({ env: step.env ?? {}, with: step.with ?? {} });
+  // Every field GitHub evaluates carries a secret: env and action inputs
+  // (Sol R3 on PR #341), and run, if, shell and working-directory too
+  // (CodeRabbit on PR #341). Every spelling of the access counts (Sol R4).
+  return referencesConvexSecret(step);
 }
 
 function dockerVolumes(run: string): string[] {
@@ -387,7 +389,18 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
       expect(holdsConvexCredential(step), expression).toBe(true);
       expect(reachesConvexCredential({ jobs: { j: { steps: [step] } } }), expression).toBe(true);
     }
+    // Every evaluated field of a step carries it, not only env and with
+    // (CodeRabbit on PR #341).
+    for (const step of [
+      { run: "node candidate/x.mjs '${{ toJSON(secrets) }}'" },
+      { run: "node candidate/x.mjs", "working-directory": "${{ secrets.CONVEX_X }}" },
+      { run: "node candidate/x.mjs", shell: "bash ${{ secrets.CONVEX_X }} {0}" },
+      { run: "node candidate/x.mjs", if: "secrets.CONVEX_X != ''" },
+    ] as Step[]) {
+      expect(holdsConvexCredential(step), JSON.stringify(step)).toBe(true);
+    }
     // Controls: another secret, and prose that merely mentions secrets, do not.
+    expect(holdsConvexCredential({ run: "echo '${{ secrets.GITHUB_TOKEN }}'" })).toBe(false);
     expect(holdsConvexCredential({ env: { T: "${{ secrets.GITHUB_TOKEN }}" } })).toBe(false);
     expect(holdsConvexCredential({ env: { NOTE: "no secrets.CONVEX_X outside an expression" } })).toBe(false);
 
