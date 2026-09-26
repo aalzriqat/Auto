@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { secretReferences } from "./workflowSecretReferences";
 
 type Workflow = {
   on?: Record<string, unknown> | string | string[];
@@ -36,11 +37,29 @@ describe("pull-request workflow secret boundary", () => {
     expect(direct.length).toBeGreaterThan(0);
 
     for (const workflow of direct) {
+      // Every spelling of a secret access, not just `${{ secrets.` (Sol R4 on PR #341).
+      const found = secretReferences(parseYaml(workflow.source));
       expect(
-        workflow.source,
+        found,
         workflow.path + " must be secretless because same-repository PR code controls this workflow revision.",
-      ).not.toMatch(/\$\{\{\s*secrets\./);
+      ).toEqual({ names: [], dynamic: false, inherits: false });
     }
+  });
+
+  it("recognises every spelling of a secret access that the old text check missed (Sol R4 on PR #341)", () => {
+    for (const expression of [
+      "${{ secrets.X }}",
+      "${{ secrets['X'] }}",
+      "${{ format('{0}', secrets.X) }}",
+      "${{ toJSON(secrets) }}",
+      "${{ Secrets.x }}",
+    ]) {
+      const found = secretReferences({ jobs: { j: { steps: [{ env: { K: expression } }] } } });
+      expect(found.names.length > 0 || found.dynamic, expression).toBe(true);
+    }
+    expect(secretReferences({ jobs: { j: { uses: "o/r/.github/workflows/x.yml@v1", secrets: "inherit" } } }).inherits).toBe(true);
+    // Control: github.token is not the secrets context.
+    expect(secretReferences({ env: { T: "${{ github.token }}" } })).toEqual({ names: [], dynamic: false, inherits: false });
   });
 
   it("does not retain obsolete PR-specific privileged bootstrap workflows", () => {

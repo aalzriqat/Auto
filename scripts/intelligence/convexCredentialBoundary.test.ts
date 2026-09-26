@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { referencesConvexSecret } from "./workflowSecretReferences";
 
 /**
  * SCRUM-350: the Convex preview credential is PROJECT-WIDE. Run 36114902831
@@ -56,7 +57,6 @@ const workflows = readdirSync(workflowsDir)
     workflow: parseYaml(readFileSync(path.join(workflowsDir, name), "utf8")) as Workflow,
   }));
 
-const CONVEX_SECRET = /secrets\.CONVEX_[A-Z0-9_]+/;
 // Anything a step could carry a resolved credential in, besides env.
 const CREDENTIAL_NAME = /ADMIN_KEY|DEPLOY_KEY|OPERATOR_KEY|OBSERVER_KEY/;
 
@@ -108,8 +108,9 @@ function residualRun(step: Step): string {
 }
 
 function holdsConvexCredential(step: Step): boolean {
-  // An action input carries a secret as surely as env does (Sol R3 on PR #341).
-  return CONVEX_SECRET.test(JSON.stringify({ env: step.env ?? {}, with: step.with ?? {} }));
+  // An action input carries a secret as surely as env does (Sol R3 on PR #341),
+  // and every spelling of the access counts (Sol R4).
+  return referencesConvexSecret({ env: step.env ?? {}, with: step.with ?? {} });
 }
 
 function dockerVolumes(run: string): string[] {
@@ -152,8 +153,7 @@ function executesCandidate(step: Step): boolean {
  * forwards every secret to a reusable workflow.
  */
 function reachesConvexCredential(workflow: unknown): boolean {
-  const text = JSON.stringify(workflow);
-  return CONVEX_SECRET.test(text) || /"secrets":"inherit"/.test(text);
+  return referencesConvexSecret(workflow);
 }
 
 /**
@@ -347,6 +347,12 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
       ["job container", (wf) => {
         wf.jobs["trusted-e2e"]!.container = { image: "node:22" };
       }],
+      ["job services", (wf) => {
+        wf.jobs["trusted-e2e"]!.services = { sidecar: { image: "node:22" } };
+      }],
+      ["workflow_call trigger", (wf) => {
+        (wf as Record<string, unknown>).on = { workflow_call: {} };
+      }],
       ["local action given the secret", (wf) => {
         wf.jobs["trusted-e2e"]!.steps!.push({
           uses: "./candidate/.github/actions/evil",
@@ -365,6 +371,23 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
     expect(reachesConvexCredential(viaWith)).toBe(true);
     expect(holdsConvexCredential(viaWith.jobs.j.steps[0] as Step)).toBe(true);
     expect(reachesConvexCredential({ jobs: { j: { uses: "o/r/.github/workflows/x.yml@v1", secrets: "inherit" } } })).toBe(true);
+    // Every spelling GitHub evaluates reaches the credential (Sol R4 on PR #341).
+    for (const expression of [
+      "${{ secrets['CONVEX_PREVIEW_DEPLOY_KEY'] }}",
+      '${{ secrets["CONVEX_PREVIEW_DEPLOY_KEY"] }}',
+      "${{ SECRETS.convex_preview_deploy_key }}",
+      "${{ format('{0}', secrets.CONVEX_PREVIEW_DEPLOY_KEY) }}",
+      "${{ toJSON(secrets) }}",
+      "${{ secrets[format('CONVEX_{0}', 'PREVIEW_DEPLOY_KEY')] }}",
+    ]) {
+      const step: Step = { run: "node candidate/evil.mjs", env: { KEY: expression } };
+      expect(holdsConvexCredential(step), expression).toBe(true);
+      expect(reachesConvexCredential({ jobs: { j: { steps: [step] } } }), expression).toBe(true);
+    }
+    // Controls: another secret, and prose that merely mentions secrets, do not.
+    expect(holdsConvexCredential({ env: { T: "${{ secrets.GITHUB_TOKEN }}" } })).toBe(false);
+    expect(holdsConvexCredential({ env: { NOTE: "no secrets.CONVEX_X outside an expression" } })).toBe(false);
+
     // And a local action inside such a workflow is refused outright.
     expect(localUses({ jobs: { j: { steps: [{ uses: "./candidate/.github/actions/evil" }] } } })).toEqual([
       "./candidate/.github/actions/evil",
@@ -373,8 +396,8 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
 
   it("never sets a Convex credential at workflow or job level, where every step would inherit it", () => {
     for (const { label, workflow, job } of everyJob()) {
-      expect(JSON.stringify(workflow.env ?? {}), label).not.toMatch(CONVEX_SECRET);
-      expect(JSON.stringify(job.env ?? {}), label).not.toMatch(CONVEX_SECRET);
+      expect(referencesConvexSecret(workflow.env ?? {}), label).toBe(false);
+      expect(referencesConvexSecret(job.env ?? {}), label).toBe(false);
     }
   });
 
@@ -404,7 +427,7 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
 
   it("never writes a credential into $GITHUB_ENV, $GITHUB_OUTPUT or a job output", () => {
     for (const { label, job } of everyJob()) {
-      expect(JSON.stringify(job.outputs ?? {}), label).not.toMatch(CONVEX_SECRET);
+      expect(referencesConvexSecret(job.outputs ?? {}), label).toBe(false);
       expect(JSON.stringify(job.outputs ?? {}), label).not.toMatch(CREDENTIAL_NAME);
       for (const step of job.steps ?? []) {
         for (const line of String(step.run ?? "").split("\n")) {
