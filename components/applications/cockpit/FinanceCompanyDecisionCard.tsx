@@ -1,5 +1,6 @@
 "use client";
 
+import { Building2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
@@ -303,7 +304,10 @@ export function FinanceCompanyDecisionCard({
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">{t("FinanceDecisionHeading")}</CardTitle>
+        <CardTitle className="flex items-center gap-2 text-base">
+            <Building2 className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+            {t("FinanceDecisionHeading")}
+          </CardTitle>
         {/* The hard business rule, stated on the screen and not only in the
             code: AutoFlow mirrors the finance company's decision, it does not
             make one. */}
