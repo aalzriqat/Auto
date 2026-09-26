@@ -83,7 +83,10 @@ export function DealDocumentsPanel({
     return (
       <Card data-testid="deal-documents">
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">{t("DocumentsHeading")}</CardTitle>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <FileText className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+            {t("DocumentsHeading")}
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
           {checklist.map((doc) => (
@@ -110,7 +113,10 @@ export function DealDocumentsPanel({
     <>
       <Card data-testid="deal-documents">
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">{t("DocumentsHeading")}</CardTitle>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <FileText className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+            {t("DocumentsHeading")}
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
           {documents.length === 0 ? (

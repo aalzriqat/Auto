@@ -52,6 +52,16 @@
   --sidebar-accent-foreground: hsl(240 5.9% 10%);
   --sidebar-border: hsl(220 13% 91%);
   --sidebar-ring: hsl(236 82% 58%);
+
+  /* Deal money semantics (SCRUM-372). Colour a VALUE or a narrow accent, never
+     a whole row, and always beside a label that says the same thing — the
+     colour is a second channel, not the only one. Red is not a cost colour:
+     it is reserved for loss, errors and blockers. */
+  --money-in: hsl(174 72% 30%); /* actual receipts — teal */
+  --money-out: hsl(32 90% 35%); /* cost / outlay — amber; 4.85:1 on the white card */
+  --dealer-side: hsl(243 60% 52%); /* dealer commitments — indigo */
+  --profit-positive: hsl(145 63% 32%);
+  --profit-negative: hsl(348 83% 45%);
 }
 
 .dark {
@@ -92,6 +102,12 @@
   --sidebar-accent-foreground: hsl(240 4.8% 95.9%);
   --sidebar-border: hsl(240 3.7% 15.9%);
   --sidebar-ring: hsl(236 82% 65%);
+
+  --money-in: hsl(172 60% 55%);
+  --money-out: hsl(38 92% 62%);
+  --dealer-side: hsl(243 85% 78%);
+  --profit-positive: hsl(145 55% 58%);
+  --profit-negative: hsl(350 90% 70%);
 }
 
 
@@ -151,6 +167,11 @@
 }
 
 @theme inline {
+  --color-money-in: var(--money-in);
+  --color-money-out: var(--money-out);
+  --color-dealer-side: var(--dealer-side);
+  --color-profit-positive: var(--profit-positive);
+  --color-profit-negative: var(--profit-negative);
   --color-on-primary-fixed: var(--on-primary-fixed);
   --color-secondary-fixed-dim: var(--secondary-fixed-dim);
   --color-inverse-primary: var(--inverse-primary);

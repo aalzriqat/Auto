@@ -164,6 +164,19 @@ describe("who can open a cash deal at all", () => {
     // The money is withheld by the SERVER, not hidden by the component.
     expect(deal!.money).toBeNull();
   });
+
+  test("the vehicle card follows view:vehicles, not view:sales (PR #338)", async () => {
+    const denied = await seed("salesonly", ["view:sales"]);
+    const deniedSale = await insertSale(denied, await ownedVehicle(denied, "SALESONLY0000001"));
+    const deniedDeal = await denied.asUser.query(api.sales.dealCockpit, { orgId: denied.orgId, saleId: deniedSale });
+    expect(deniedDeal).not.toBeNull();
+    expect(deniedDeal!.vehicle?.profile).toBeNull();
+
+    const allowed = await seed("salesveh", ["view:sales", "view:vehicles"]);
+    const allowedSale = await insertSale(allowed, await ownedVehicle(allowed, "SALESVEH00000001"));
+    const allowedDeal = await allowed.asUser.query(api.sales.dealCockpit, { orgId: allowed.orgId, saleId: allowedSale });
+    expect(allowedDeal!.vehicle?.profile).not.toBeNull();
+  });
 });
 
 describe("the cash headline is an ACCOUNTING result, and says so", () => {
