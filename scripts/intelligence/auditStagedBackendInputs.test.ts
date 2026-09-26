@@ -112,6 +112,33 @@ describe("auditStagedBackendInputs (SCRUM-350 F1)", () => {
     expect(result.stderr).toContain("The trusted bundler refused the staged backend.");
   });
 
+  it("refuses an outside read from convex.config.ts, which the CLI's component pass also bundles (Sonnet C1 on PR #341)", () => {
+    // The deploy's componentGraph/bundleDefinitions pass bundles convex.config.ts
+    // with platform "browser" and conditions ["convex", "module"], resolving
+    // through esbuild's own resolver; the audit bundles the same file the same way.
+    const { root, stageRoot } = stage();
+    write(root, { environ: "HOME=/x\0CONVEX_PREVIEW_ADMIN_KEY=preview:t:p|not-a-real-secret\0" });
+    write(stageRoot, {
+      "convex/convex.config.ts":
+        "import env from " + JSON.stringify(path.join(root, "environ").replaceAll("\\", "/")) +
+        ' with { type: "json" };\nexport default env;\n',
+    });
+    const result = audit(stageRoot);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("The trusted bundler refused the staged backend.");
+
+    const outside = stage();
+    write(outside.root, { "outside.ts": "export default {};\n" });
+    write(outside.stageRoot, {
+      "convex/convex.config.ts":
+        "import c from " + JSON.stringify(path.join(outside.root, "outside.ts").replaceAll("\\", "/")) +
+        ";\nexport default c;\n",
+    });
+    const read = audit(outside.stageRoot);
+    expect(read.status).toBe(1);
+    expect(read.stderr).toContain("A bundled input is outside the staged backend");
+  });
+
   it("refuses to run anywhere but the stage, and without the trusted bundler", () => {
     const { root, stageRoot } = stage();
     rmSync(path.join(stageRoot, "node_modules/convex"), { recursive: true, force: true });

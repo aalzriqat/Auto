@@ -39,7 +39,13 @@ export const AUDIT_ALLOWED_DIRECTORIES = Object.freeze([
 // The CLI's entry-point extensions (convex/dist/cjs/bundler/index.js).
 const ENTRY_POINT_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".jsx"];
 // Bundled by the CLI outside its function entry points: schema, component
-// definition and auth config (all with the default "browser" platform).
+// definition and auth config (all with the default "browser" platform). The
+// component pass (cli/lib/components/definition/bundle.js componentGraph and
+// bundleDefinitions) calls esbuild directly rather than innerEsbuild, but with
+// the same platform and conditions; its componentPlugin resolves through
+// build.resolve, esbuild's own resolver, and in bundle mode marks component
+// imports external. Bundling convex.config.ts here therefore reads what that
+// pass reads from the candidate's file (Sonnet C1 on PR #341).
 const CONFIG_ENTRIES = ["schema", "convex.config", "auth.config"];
 const USE_NODE = /^\s*("|')use node("|');?\s*$/m;
 
