@@ -109,9 +109,11 @@ function residualRun(step: Step): string {
 }
 
 function holdsConvexCredential(step: Step): boolean {
-  // Every field GitHub evaluates carries a secret: env and action inputs
-  // (Sol R3 on PR #341), and run, if, shell and working-directory too
-  // (CodeRabbit on PR #341). Every spelling of the access counts (Sol R4).
+  // Any evaluated field can carry a secret: env and action inputs (Sol R3 on
+  // PR #341), and run, shell and working-directory too (CodeRabbit on PR #341).
+  // The whole step is scanned, so an expression in a field that cannot carry
+  // one (`if`, `name`) over-refuses rather than under-refuses (Sol R8). Every
+  // spelling of the access counts (Sol R4).
   return referencesConvexSecret(step);
 }
 
@@ -395,10 +397,13 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
       { run: "node candidate/x.mjs '${{ toJSON(secrets) }}'" },
       { run: "node candidate/x.mjs", "working-directory": "${{ secrets.CONVEX_X }}" },
       { run: "node candidate/x.mjs", shell: "bash ${{ secrets.CONVEX_X }} {0}" },
-      { run: "node candidate/x.mjs", if: "secrets.CONVEX_X != ''" },
     ] as Step[]) {
       expect(holdsConvexCredential(step), JSON.stringify(step)).toBe(true);
     }
+    // GitHub refuses `secrets` in a step `if`, so this is no route to the
+    // credential. It is classified as holding one anyway: the scan is
+    // conservative, and over-refusing is the safe direction (Sol R8 on PR #341).
+    expect(holdsConvexCredential({ run: "node candidate/x.mjs", if: "secrets.CONVEX_X != ''" })).toBe(true);
     // Controls: another secret, and prose that merely mentions secrets, do not.
     expect(holdsConvexCredential({ run: "echo '${{ secrets.GITHUB_TOKEN }}'" })).toBe(false);
     expect(holdsConvexCredential({ env: { T: "${{ secrets.GITHUB_TOKEN }}" } })).toBe(false);

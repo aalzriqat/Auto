@@ -87,6 +87,16 @@ describe("auditStagedBackendInputs (SCRUM-350 F1)", () => {
     expect(result.stderr).toContain("A bundled input is outside the staged backend");
   });
 
+  it("passes a staged directory whose name merely starts with two dots (CodeRabbit on PR #341)", () => {
+    const { stageRoot } = stage({
+      "lib/..foo/helper.ts": "export const dotted = 4;\n",
+      "convex/dotted.ts": 'import { dotted } from "../lib/..foo/helper";\nexport const z = dotted;\n',
+    });
+    const result = audit(stageRoot);
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+  });
+
   it("refuses a relative import that climbs out of the stage", () => {
     const { root, stageRoot } = stage();
     write(root, { "outside.ts": "export const leaked = 'outside';\n" });
