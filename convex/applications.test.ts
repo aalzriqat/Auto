@@ -1608,6 +1608,36 @@ describe("applications logs, expected payment, and finalization guards", () => {
     expect(log.some((entry) => entry._id === strayId)).toBe(false);
   });
 
+  test("dealCockpit's timeline never shows a log row stamped with another org (Sol on PR #343)", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const { foreignOrgId } = await seedForeignApplication(t);
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId, customerId, vehicleId, vehiclePrice: 20000, downPayment: 3000, termMonths: 48,
+    });
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+    const foreignActorId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "foreign_actor", email: "foreign.actor@test.com", name: "Foreign Actor" })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("applicationStatusLog", {
+        orgId: foreignOrgId,
+        applicationId,
+        fromStatus: "PENDING_DOCS",
+        toStatus: "UNDER_REVIEW",
+        changedBy: foreignActorId,
+        changedAt: Date.now(),
+        note: "foreign note",
+      })
+    );
+
+    const cockpit = await asUser.query(api.applications.dealCockpit, { orgId, applicationId });
+    const timeline = cockpit?.timeline ?? [];
+    // Control: the application's own creation entry is still there.
+    expect(timeline.length).toBeGreaterThan(0);
+    expect(timeline.some((entry) => entry.note === "foreign note")).toBe(false);
+    expect(timeline.some((entry) => entry.actorName === "Foreign Actor")).toBe(false);
+  });
+
   test("registerExpectedPayment requires cheque details and finalization requires handover and payment metadata", async () => {
     const { orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await asUser.mutation(api.quotes.saveQuote, {

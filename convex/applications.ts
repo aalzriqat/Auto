@@ -2056,10 +2056,15 @@ export const dealCockpit = query({
       supplierDisbursementConfirmedAt: app.supplierDisbursementConfirmedAt,
     });
 
-    const timeline = await ctx.db
-      .query("applicationStatusLog")
-      .withIndex("by_application", (q) => q.eq("applicationId", app._id))
-      .collect();
+    // Only rows stamped with this org, the same boundary getLog holds
+    // (SCRUM-37; Sol on PR #343): the parent is owned, but the schema does
+    // not force a log row's orgId to match its application's.
+    const timeline = (
+      await ctx.db
+        .query("applicationStatusLog")
+        .withIndex("by_application", (q) => q.eq("applicationId", app._id))
+        .collect()
+    ).filter((entry) => entry.orgId === args.orgId);
     const actorNames = new Map<string, string>();
     for (const entry of timeline) {
       if (actorNames.has(entry.changedBy)) continue;
