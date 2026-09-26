@@ -1522,8 +1522,12 @@ describe("input validation", () => {
 });
 
 describe("classification establishes the remittance from what the company actually withholds", () => {
-  /** A deal with a financier and the inputs its funding split derives from. */
-  async function financedSeed(suffix: string) {
+  /**
+   * A deal with a financier and the inputs its funding split derives from.
+   * The first payment is an explicit 0 — a known fact — because an unknown one
+   * withholds the split and refuses classification (SCRUM-373).
+   */
+  async function financedSeed(suffix: string, options: { firstPaymentUnknown?: boolean } = {}) {
     const seed = await seedDeal(suffix);
     const companyId = await seed.t.run((ctx) =>
       ctx.db.insert("financeCompanies", {
@@ -1542,6 +1546,7 @@ describe("classification establishes the remittance from what the company actual
         approvedDealerPurchaseAmountMinor: jod(10_500),
         appliedLtvPercent: 100,
         economicsCurrency: "JOD",
+        ...(options.firstPaymentUnknown ? {} : { customerFirstPaymentMinor: 0 }),
       })
     );
     return seed;
@@ -1594,6 +1599,28 @@ describe("classification establishes the remittance from what the company actual
     // for money nobody was ever going to send, and the difference would surface
     // only as an unexplained shortfall at settlement.
     expect(app?.expectedDealerRemittanceMinor).toBe(jod(10_125));
+  });
+
+  test("an unknown first payment refuses classification and moves nothing (SCRUM-373)", async () => {
+    const seed = await financedSeed("fp_unknown", { firstPaymentUnknown: true });
+    await seed.t.run((ctx) =>
+      ctx.db.patch(seed.applicationId, {
+        financeCompanyFundedPortionMinor: jod(10_500),
+        dealerContributionMinor: 0,
+        expectedDealerRemittanceMinor: jod(10_500),
+        economicsRevision: 4,
+      })
+    );
+
+    await expect(
+      classifyWithFee(seed, { deductedFromSettlement: true, actualAmountMinor: jod(375) })
+    ).rejects.toThrow(/first payment is not recorded/i);
+
+    const app = await seed.t.run((ctx) => ctx.db.get(seed.applicationId));
+    expect(app?.accountingClassification).not.toBe("CLASSIFIED");
+    expect(app?.financeCompanyFundedPortionMinor).toBe(jod(10_500));
+    expect(app?.expectedDealerRemittanceMinor).toBe(jod(10_500));
+    expect(app?.economicsRevision).toBe(4);
   });
 
   test("a cost the company does NOT withhold leaves the remittance alone", async () => {
