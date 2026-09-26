@@ -45,13 +45,16 @@ export const DEPENDENCY_SURFACE = Object.freeze([
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",
   "convex.json",
+  // The root config resolves lib/'s "@/..." imports; a candidate change to it
+  // would deploy a backend resolved differently from the candidate's (Sol R2).
+  "tsconfig.json",
   // Inside or beside the staged directories; esbuild reads them to resolve.
   "convex/tsconfig.json",
   "packages/shared/package.json",
   "packages/shared/tsconfig.json",
 ]);
 // Trusted copies the CLI and esbuild read from the stage.
-const TRUSTED_ROOT_FILES = Object.freeze([...DEPENDENCY_SURFACE, "tsconfig.json"]);
+const TRUSTED_ROOT_FILES = DEPENDENCY_SURFACE;
 const RESOLUTION_CONFIG = /^(ts|js)config.*\.json$/i;
 
 export class StageRefusal extends Error {

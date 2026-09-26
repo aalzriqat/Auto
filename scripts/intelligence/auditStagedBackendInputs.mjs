@@ -47,7 +47,25 @@ const ENTRY_POINT_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".
 // imports external. Bundling convex.config.ts here therefore reads what that
 // pass reads from the candidate's file (Sonnet C1 on PR #341).
 const CONFIG_ENTRIES = ["schema", "convex.config", "auth.config"];
-const USE_NODE = /^\s*("|')use node("|');?\s*$/m;
+// The CLI's per-line fallback, used only when its parser rejects the source.
+const USE_NODE_LINE = /^\s*("|')use node("|');?\s*$/;
+
+/**
+ * The CLI's own "use node" test (bundler/index.js hasUseNodeDirective): a
+ * real module directive by its @babel/parser, else a whole-line match. The
+ * platform decides package resolution, so the audit must pick the same one
+ * the deploy does; a comment that merely contains the text is not a
+ * directive (Sol R1 on PR #341).
+ */
+function hasUseNodeDirective(parse, source) {
+  if (source.indexOf("use node") === -1) return false;
+  try {
+    const ast = parse(source, { sourceType: "module", plugins: ["jsx", "typescript"] });
+    return ast.program.directives.map((d) => d.value.value).includes("use node");
+  } catch {
+    return source.split("\n").some((line) => USE_NODE_LINE.test(line));
+  }
+}
 
 export class AuditRefusal extends Error {
   constructor(message) {
@@ -66,7 +84,7 @@ function isInside(root, candidate) {
  * directories are walked rather than skipped, and files the CLI would drop for
  * having no import or export are kept. A superset can only refuse more.
  */
-function entryPointSuperset(dir) {
+function entryPointSuperset(dir, parse) {
   const isolate = [];
   const node = [];
   const visit = (current) => {
@@ -84,7 +102,7 @@ function entryPointSuperset(dir) {
       const isConfig = relative === stem + extension && CONFIG_ENTRIES.includes(stem);
       // Test files and other multi-dot names are not entry points.
       if (!isConfig && stem.includes(".")) continue;
-      if (!isConfig && USE_NODE.test(readFileSync(full, "utf8"))) node.push(full);
+      if (!isConfig && hasUseNodeDirective(parse, readFileSync(full, "utf8"))) node.push(full);
       else isolate.push(full);
     }
   };
@@ -115,7 +133,11 @@ export async function auditStagedBackendInputs({ stageRoot }) {
   const { wasmPlugin } = load("wasm.js");
 
   const dir = path.join(stageRoot, "convex");
-  const { isolate, node } = entryPointSuperset(dir);
+  // The CLI's own parser, resolved from the trusted convex package.
+  const { parse } = createRequire(realpathSync(path.join(stageRoot, "node_modules/convex/package.json")))(
+    "@babel/parser",
+  );
+  const { isolate, node } = entryPointSuperset(dir, parse);
   if (isolate.length === 0) {
     throw new AuditRefusal("The staged backend has no entry points.");
   }

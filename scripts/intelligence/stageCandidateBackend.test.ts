@@ -26,16 +26,16 @@ const DEPENDENCIES = {
   "pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
   "pnpm-workspace.yaml": "packages: []\n",
   "convex.json": "{}",
+  "tsconfig.json": '{"compilerOptions":{"paths":{"@/*":["./*"]}}}',
   "convex/tsconfig.json": '{"compilerOptions":{"strict":true}}',
   "packages/shared/package.json": '{"name":"@autoflow/shared"}',
   "packages/shared/tsconfig.json": '{"compilerOptions":{}}',
 };
 
 function fixture(candidateExtra: Record<string, string> = {}) {
-  const trusted = tree({ ...DEPENDENCIES, "tsconfig.json": '{"trusted":true}', "convex/old.ts": "old" });
+  const trusted = tree({ ...DEPENDENCIES, "convex/old.ts": "old" });
   const candidate = tree({
     ...DEPENDENCIES,
-    "tsconfig.json": '{"candidate":true}',
     "convex/deals.ts": "export const x = 1;",
     "convex/_generated/api.d.ts": "export {};",
     "lib/money.ts": "export const m = 2;",
@@ -89,7 +89,9 @@ describe("stageCandidateBackend (SCRUM-350 Option C)", () => {
     // Frontend and candidate root config never reach the stage.
     expect(existsSync(path.join(fx.stageRoot, "components"))).toBe(false);
     // Root config is TRUSTED's, not the candidate's.
-    expect(readFileSync(path.join(fx.stageRoot, "tsconfig.json"), "utf8")).toBe('{"trusted":true}');
+    expect(readFileSync(path.join(fx.stageRoot, "tsconfig.json"), "utf8")).toBe(
+      '{"compilerOptions":{"paths":{"@/*":["./*"]}}}',
+    );
     // Trusted's own backend source is not mixed in.
     expect(existsSync(path.join(fx.stageRoot, "convex/old.ts"))).toBe(false);
     expect(existsSync(path.join(fx.stageRoot, "node_modules"))).toBe(true);

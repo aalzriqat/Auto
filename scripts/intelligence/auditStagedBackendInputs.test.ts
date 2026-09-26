@@ -139,6 +139,38 @@ describe("auditStagedBackendInputs (SCRUM-350 F1)", () => {
     expect(read.stderr).toContain("A bundled input is outside the staged backend");
   });
 
+  it("audits a file under the platform the CLI deploys it with, not a commented-out directive (Sol R1 on PR #341)", () => {
+    // The deploy bundles this for the browser (Convex parses directives), so
+    // the audit must resolve the package's browser branch, which reads outside.
+    const { root, stageRoot } = stage();
+    write(root, { "outside.js": "export const leaked = 1;\n" });
+    write(stageRoot, {
+      "node_modules/split-pkg/package.json": JSON.stringify({
+        name: "split-pkg",
+        exports: { ".": { browser: "./browser.js", default: "./node.js" } },
+      }),
+      "node_modules/split-pkg/node.js": "export const leaked = 0;\n",
+      "node_modules/split-pkg/browser.js":
+        "export { leaked } from " + JSON.stringify(path.join(root, "outside.js").replaceAll("\\", "/")) + ";\n",
+      "convex/split.ts": '/*\n"use node";\n*/\nimport { leaked } from "split-pkg";\nexport const z = leaked;\n',
+    });
+    const result = audit(stageRoot);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("A bundled input is outside the staged backend");
+
+    // Control: a real directive is Node in both, and takes the node branch.
+    const real = stage();
+    write(real.stageRoot, {
+      "node_modules/split-pkg/package.json": JSON.stringify({
+        name: "split-pkg",
+        exports: { ".": { browser: "./missing.js", default: "./node.js" } },
+      }),
+      "node_modules/split-pkg/node.js": "export const leaked = 0;\n",
+      "convex/split.ts": '"use node";\nimport { leaked } from "split-pkg";\nexport const z = leaked;\n',
+    });
+    expect(audit(real.stageRoot).status).toBe(0);
+  });
+
   it("refuses to run anywhere but the stage, and without the trusted bundler", () => {
     const { root, stageRoot } = stage();
     rmSync(path.join(stageRoot, "node_modules/convex"), { recursive: true, force: true });

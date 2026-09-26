@@ -131,6 +131,10 @@ function executesCandidate(step: Step): boolean {
   if (/\b(node|bash|sh|python3?|pnpm|npm|npx|tsx|deno|bun)\b[^\n]*?[\s"'=/]candidate\//.test(run)) {
     return true;
   }
+  // Shell builtins that run a file or a string (Sol R3 on PR #341).
+  if (/(^|[\s;&|(`])(source|\.|eval|exec)\s+[^\n]*candidate\//.test(run)) {
+    return true;
+  }
   if (!/\bdocker\s+run\b/.test(run)) return false;
   return dockerVolumes(run).some(
     (volume) =>
@@ -228,6 +232,27 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
     }
     const swarm = readFileSync(path.join(workflowsDir, "browser-attack-swarm.yml"), "utf8");
     expect(swarm).toContain("pnpm test:browser-swarm");
+  });
+
+  it("never lets a credential-holding step name the candidate tree outside its canonical command (Sol R3 on PR #341)", () => {
+    // Whatever shell syntax would run it, a candidate file must first be named.
+    // A path, not the word: messages may say "candidate". A bare `cd candidate`
+    // is caught by executesCandidate and the ordering test.
+    const CANDIDATE_PATH = /(^|[\s"'=/(`])candidate\/|\$GITHUB_WORKSPACE\/candidate|candidate-backend|candidate-build/;
+    for (const { label, job } of everyJob()) {
+      for (const step of job.steps ?? []) {
+        if (!holdsConvexCredential(step)) continue;
+        expect(residualRun(step), label + " :: " + String(step.name)).not.toMatch(CANDIDATE_PATH);
+      }
+    }
+    for (const run of ["source candidate/evil.sh", ". candidate/evil.sh", 'eval "$(cat candidate/x)"']) {
+      expect(executesCandidate({ name: "synthetic", run }), run).toBe(true);
+      expect(CANDIDATE_PATH.test(run), run).toBe(true);
+    }
+    const canonical = CANONICAL_STAGED_COMMAND[STAGED_DEPLOY_STEP] as string;
+    expect(
+      CANDIDATE_PATH.test(residualRun({ name: STAGED_DEPLOY_STEP, run: canonical + "\nsource candidate/evil.sh" })),
+    ).toBe(true);
   });
 
   it("never sets a Convex credential at workflow or job level, where every step would inherit it", () => {
