@@ -21,6 +21,7 @@ import {
   renderReleaseSummary,
   requireBoundProductionKeys,
   type CheckResult,
+  type Waiver,
   type OrgReport,
   type PlatformReport,
   type ReportWalk,
@@ -342,7 +343,10 @@ describe("CI must be green at the exact commit, and waivers expire", () => {
     // with itself; the matcher would still refuse, but for a confusing reason.
     expect(required.size).toBe(policy.required.length);
 
-    for (const w of policy.waivers) {
+    // Annotated, not cast: with no waivers the file infers `never[]`, and a
+    // waiver added later must still be assignable to the guard's own shape.
+    const waivers: Waiver[] = policy.waivers;
+    for (const w of waivers) {
       // A waiver for something that is not required protects nothing and hides
       // the fact that the check was never gated.
       expect([...required], key(w)).toContain(key(w));
@@ -408,7 +412,8 @@ describe("CI must be green at the exact commit, and waivers expire", () => {
       // move another one.
       expect(policy.required.map(id)).toContain("github-actions/playwright");
       expect(policy.required.map(id)).toContain("sonarqubecloud/SonarCloud Code Analysis");
-      expect(policy.waivers.map(id)).toEqual(["sonarqubecloud/SonarCloud Code Analysis"]);
+      // No waivers at all since SCRUM-128 removed the last one (Sonar).
+      expect(policy.waivers.map(id)).toEqual([]);
     });
 
     for (const [label, over] of [
@@ -513,9 +518,9 @@ describe("CI must be green at the exact commit, and waivers expire", () => {
       const waived = policy.waivers.map(id);
 
       expect(waived).not.toContain("github-actions/dependency-audit");
-      // ⚠️ Not decoration. Removing this would be a DIFFERENT change resting on
-      // a different premise; this one must not have touched it.
-      expect(waived).toContain("sonarqubecloud/SonarCloud Code Analysis");
+      // The SonarCloud waiver was removed by SCRUM-128 once its own removal
+      // condition was met; it is asserted in that suite's describe block below.
+      expect(waived).not.toContain("sonarqubecloud/SonarCloud Code Analysis");
       // The playwright waiver was removed by SCRUM-143 + SCRUM-248 once its own
       // stated removal condition was met; it is now asserted in that suite's
       // own describe block below, against the same real policy.
@@ -588,9 +593,9 @@ describe("CI must be green at the exact commit, and waivers expire", () => {
       expect(verdict.failures).toEqual([]);
       expect(verdict.ok).toBe(true);
       expect(verdict.passed).toContain("github-actions/dependency-audit");
-      // SonarCloud stays WAIVED, and a waived check is never passing.
-      expect(verdict.passed).not.toContain("sonarqubecloud/SonarCloud Code Analysis");
-      expect(verdict.waived.map((w) => w.name).sort()).toEqual(["SonarCloud Code Analysis"]);
+      // Nothing is waived any more (SCRUM-128), so a green Sonar is PASSED.
+      expect(verdict.passed).toContain("sonarqubecloud/SonarCloud Code Analysis");
+      expect(verdict.waived).toEqual([]);
     });
   });
 
@@ -644,9 +649,8 @@ describe("CI must be green at the exact commit, and waivers expire", () => {
       // waiver" while gating on nothing at all — the same shape of nothing,
       // reached from the other side.
       expect(policy.required.map(id)).toContain("github-actions/playwright");
-      // ⚠️ Not decoration. SonarCloud (SCRUM-128) rests on a different premise
-      // and this change must not have touched it.
-      expect(waived).toContain("sonarqubecloud/SonarCloud Code Analysis");
+      // SonarCloud's waiver was removed separately by SCRUM-128 (describe below).
+      expect(waived).not.toContain("sonarqubecloud/SonarCloud Code Analysis");
     });
 
     test("REGRESSION: a FAILED playwright is a refusal, never a waived result", async () => {
@@ -738,6 +742,124 @@ describe("CI must be green at the exact commit, and waivers expire", () => {
       // would not notice.
       expect(verdict.passed).toContain("github-actions/playwright");
       expect(verdict.waived.map((w) => w.name)).not.toContain("playwright");
+    });
+  });
+
+  // ─── SCRUM-128: the SonarCloud quality gate is enforced ────────────────────
+  //
+  // The Sonar waiver existed because the quality gate was red on main
+  // (Security Rating on New Code: C) when this release gate was first built,
+  // and blocking every release on a pre-existing, repository-wide red was not
+  // a decision to make silently. Its own removal condition was "bring the
+  // rating back to A on main, then delete the waiver". Measured 2026-09-26 on
+  // SonarCloud's public API for branch=main: quality gate OK, new-code
+  // security / reliability / maintainability all A, coverage 87.8%.
+  //
+  // ⚠️ Same hazard as playwright above: `evaluateRequiredChecks` honours a
+  // live waiver before it reads the conclusion, so while that entry existed a
+  // RED quality gate was recorded as waived and authorised the release.
+  //
+  // ⚠️ The requirement is producer-bound to `sonarqubecloud`. The
+  // `github-actions` job that uploads the scan exits without waiting on the
+  // gate, so its success means "uploaded", not "passed" — it must never be
+  // able to stand in for the gate result.
+  //
+  // What this does NOT claim: the OVERALL ratings on main are still C (one
+  // vulnerability, one bug, both older than the 0.2.0 new-code baseline).
+  // The release gate evaluates the quality gate, which is new-code scoped;
+  // those two findings are SCRUM-382.
+  describe("a failed SonarCloud quality gate refuses the release (SCRUM-128)", () => {
+    const loadPolicy = async () => (await import("../.github/release-waivers.json")).default;
+    const id = (c: { producer: string; name: string }) => `${c.producer}/${c.name}`;
+    const SONAR = "sonarqubecloud/SonarCloud Code Analysis";
+    const SONAR_NAME = "SonarCloud Code Analysis";
+
+    const observeAll = (
+      required: { producer: string; name: string }[],
+      over: Record<string, string> = {},
+      omit: string[] = []
+    ): CheckResult[] =>
+      required
+        .filter((c) => !omit.includes(c.name))
+        .map((c) => ({
+          producer: c.producer,
+          name: c.name,
+          status: "completed",
+          conclusion: c.name in over ? over[c.name] : "success",
+        }));
+
+    test("the policy carries NO SonarCloud waiver, and the quality gate stays REQUIRED", async () => {
+      const policy = await loadPolicy();
+      expect(policy.waivers.map(id)).not.toContain(SONAR);
+      // Dropping the requirement rather than the waiver would satisfy "no
+      // waiver" while gating on nothing at all.
+      expect(policy.required.map(id)).toContain(SONAR);
+    });
+
+    test("REGRESSION: a FAILED quality gate is a refusal, never a waived result", async () => {
+      const policy = await loadPolicy();
+      const verdict = evaluateRequiredChecks({
+        required: policy.required,
+        results: observeAll(policy.required, { [SONAR_NAME]: "failure" }),
+        waivers: policy.waivers,
+        now: NOW,
+      });
+
+      expect(verdict.ok).toBe(false);
+      expect(verdict.failures.join("\n")).toMatch(/sonarqubecloud\/SonarCloud Code Analysis: "failure"/);
+      expect(verdict.waived.map((w) => w.name)).not.toContain(SONAR_NAME);
+      expect(verdict.passed).not.toContain(SONAR);
+    });
+
+    test("REGRESSION: an ABSENT quality gate is a refusal — a missing analysis is not a pass", async () => {
+      const policy = await loadPolicy();
+      const verdict = evaluateRequiredChecks({
+        required: policy.required,
+        results: observeAll(policy.required, {}, [SONAR_NAME]),
+        waivers: policy.waivers,
+        now: NOW,
+      });
+
+      expect(verdict.ok).toBe(false);
+      expect(verdict.failures.join("\n")).toMatch(
+        /sonarqubecloud\/SonarCloud Code Analysis: no result at this commit/
+      );
+    });
+
+    test("the upload job's success cannot stand in for the quality gate", async () => {
+      const policy = await loadPolicy();
+      const results = observeAll(policy.required, {}, [SONAR_NAME]);
+      results.push({ producer: "github-actions", name: "sonarcloud", status: "completed", conclusion: "success" });
+      results.push({ producer: "github-actions", name: SONAR_NAME, status: "completed", conclusion: "success" });
+
+      const verdict = evaluateRequiredChecks({
+        required: policy.required,
+        results,
+        waivers: policy.waivers,
+        now: NOW,
+      });
+
+      expect(verdict.ok).toBe(false);
+      expect(verdict.failures.join("\n")).toMatch(
+        /sonarqubecloud\/SonarCloud Code Analysis: no result at this commit from that producer/
+      );
+    });
+
+    test("a GREEN quality gate is reported as PASSED — not WAIVED", async () => {
+      const policy = await loadPolicy();
+      const verdict = evaluateRequiredChecks({
+        required: policy.required,
+        results: observeAll(policy.required),
+        waivers: policy.waivers,
+        now: NOW,
+      });
+
+      expect(verdict.failures).toEqual([]);
+      expect(verdict.ok).toBe(true);
+      // The assertion that fails if the waiver comes back: a re-added waiver
+      // moves Sonar from `passed` to `waived` while leaving `ok` true.
+      expect(verdict.passed).toContain(SONAR);
+      expect(verdict.waived).toEqual([]);
     });
   });
 });
