@@ -322,11 +322,58 @@ describe("protected source content pins", () => {
        * bypassed, deleted, generalized or made vacuous. Both constants were
        * recomputed FROM THE FILE with this test's own normalization.
        * `convex/dealWorkspace.ts` is untouched.
+       *
+       * -- RENEWAL 2026-09-25 - SCRUM-372 vehicle card (PR #338) ------------
+       *
+       * Previous reviewed postimage, superseded by this entry (single fee
+       * authority renewal, S1-R3-H1..S1-R6-H1):
+       *
+       *   bytes:  236603
+       *   sha256: d8082f5de2e49bd535ab41ca5894c48076fc20db40da474b2dd6b50eccd100a4
+       *
+       * Renewed because the deal cockpit's vehicle card needs the car's
+       * identifying attributes. The delta is exactly two hunks, 4 insertions
+       * and 0 deletions: (1) one import, `projectDealVehicleProfile` from
+       * `./utils/dealVehicleProfile`; (2) in `dealCockpit`, one call to it
+       * after the existing `Promise.all` on the vehicle row ALREADY loaded
+       * there, and one additive payload field `profile` (with its comment)
+       * inside the existing `vehicle` object. The helper lives in its own file:
+       * it re-checks org and soft-delete and returns a six-field allowlist.
+       * No new `ctx.db` access, query, index, predicate, mutation or control
+       * flow in this file. Read the two hunks; do not take this note's word for
+       * their scope.
+       *
+       * Renewed under the owner's standing autonomous authorization of
+       * 2026-09-25; cross-lane notice posted BEFORE this change - Jira
+       * SCRUM-215 `c20752`. Same governance as the entries above: the pin is
+       * not weakened, bypassed, deleted, generalized or made vacuous. Both
+       * constants were recomputed FROM THE FILE with this test's own
+       * normalization.
+       *
+       * -- RENEWAL 2026-09-25 (2) - SCRUM-372 vehicle-card permission ------
+       *
+       * Previous reviewed postimage, superseded by this entry (the vehicle
+       * card renewal just above):
+       *
+       *   bytes:  236882
+       *   sha256: c46543e1803dff7d1e98bd4e377979c64eef8080e41f5f45d0fdc20bf955ef14
+       *
+       * Renewed because the card must follow VIEW_VEHICLES, not VIEW_SALES
+       * (CodeRabbit on PR #338, accepted: a custom role can hold VIEW_SALES
+       * without VIEW_VEHICLES). The delta is exactly one hunk in
+       * `dealCockpit`, 3 insertions and 1 deletion: `canViewVehicles` is
+       * derived from the `role` `requireTenantAuth` already returned, in the
+       * neighbouring `canSeeMoney` idiom, and passed to
+       * `projectDealVehicleProfile`, which returns null without it. It only
+       * narrows what is returned. No new `ctx.db` access, query, index,
+       * predicate, mutation or export. Cross-lane notice posted BEFORE this
+       * change - Jira SCRUM-215 `c20763`. Same governance; both constants
+       * recomputed FROM THE FILE with this test's own normalization.
        */
       file: "convex/applications.ts",
-      // Renewed for single fee authority: Execution Fees (financeCompanies.adminFees fail-closed invariant S1-R3-H1, canonical resolver S1-R4-H1, frozen quote authority S1-R5-H1, and server-authoritative quote pricing snapshot S1-R6-H1).
-      bytes: 236603,
-      sha256: "d8082f5de2e49bd535ab41ca5894c48076fc20db40da474b2dd6b50eccd100a4",
+      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25).
+      bytes: 237014,
+      sha256: "9c353ded4a1154f7cd9095b2de2d984c86b681168161153f216ec0bbfadd2fbc",
     },
     {
       /**

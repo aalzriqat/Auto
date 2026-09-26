@@ -52,6 +52,7 @@ import { planDepositSettlementApplication } from "./utils/depositSettlementPlan"
 import { checkPostingAllowed } from "./accountingPeriods";
 import { hasVerifiedFinancingApplication } from "./utils/financingProvenance";
 import { assertFinancedDepositsSurviveParentReversal } from "./utils/depositApplications";
+import { projectDealVehicleProfile } from "./utils/dealVehicleProfile";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -2300,6 +2301,9 @@ export const dealCockpit = query({
       ctx.db.get(sale.customerId),
       ctx.db.get(sale.salespersonId),
     ]);
+    const canViewVehicles =
+      isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_VEHICLES);
+    const vehicleProfile = await projectDealVehicleProfile(ctx, vehicle, args.orgId, canViewVehicles);
 
     // The currency the sale FROZE in when it is consigned, falling back to the
     // org's. Not the org's current setting on a consigned row: that field is what
@@ -2588,6 +2592,8 @@ export const dealCockpit = query({
         vin: vehicle.vin,
         consigned,
         supplierName: vehicle.sourcedFromName,
+        /** SCRUM-372 vehicle card. Allowlisted — see `projectDealVehicleProfile`. */
+        profile: vehicleProfile,
       },
       salespersonName: actorName,
       /** Empty on a cash deal, and the view renders no financier row at all. */

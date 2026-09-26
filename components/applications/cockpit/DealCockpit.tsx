@@ -44,7 +44,14 @@ import {
   Ban,
   FileText,
   CheckCircle2,
+  Check,
+  Copy,
+  Wallet,
+  Receipt,
+  ClipboardCheck,
+  History,
 } from "lucide-react";
+import { DealVehicleCard } from "./DealVehicleCard";
 import { DealStageRail, DealStagesComplete } from "./DealStageRail";
 import {
   isLiveStageState,
@@ -423,6 +430,46 @@ export function SettlementDenominationLine({
 /** A money run is Latin digits inside Arabic prose; `<bdi>` keeps it whole. */
 function Money({ children }: Readonly<{ children: React.ReactNode }>) {
   return <bdi className="tabular-nums">{children}</bdi>;
+}
+
+/**
+ * The record's full opaque id with a copy control (SCRUM-372). Shown whole so
+ * an operator can quote it to support; long ids wrap rather than truncate.
+ * A clipboard the browser refuses is not an error worth a toast — the id is
+ * still on screen to select by hand.
+ */
+function CopyableReference({ value, t }: Readonly<{ value: string; t: (key: string) => string }>) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch (error) {
+      console.error(error);
+    }
+  };
+  return (
+    <>
+      <bdi dir="ltr" className="min-w-0 break-all font-mono text-xs">
+        {value}
+      </bdi>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="h-7 w-7 shrink-0"
+        onClick={copy}
+        aria-label={t(copied ? "DealReferenceCopied" : "CopyDealReference")}
+        data-testid="deal-reference-copy"
+      >
+        {copied ? <Check className="h-3.5 w-3.5 text-profit-positive" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
+      </Button>
+      <span className="sr-only" aria-live="polite">
+        {copied ? t("DealReferenceCopied") : ""}
+      </span>
+    </>
+  );
 }
 
 /**
@@ -2574,7 +2621,11 @@ function ProfitHeadline({
       {profit.available ? (
         <>
           <div className="flex flex-wrap items-baseline gap-3">
-            <p className={`text-3xl font-semibold ${isLoss ? "text-destructive font-bold" : ""}`}>
+            <p
+              className={`text-3xl font-semibold ${
+                isLoss ? "text-profit-negative font-bold" : profit.amountMinor > 0 ? "text-profit-positive" : ""
+              }`}
+            >
               <Money>{money(profit.amountMinor)}</Money>
             </p>
             {/* The qualifier is not decoration. It renders from the same
@@ -2856,7 +2907,10 @@ function MoneyPanel({
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">{t("FinancialSummaryHeading")}</CardTitle>
+        <CardTitle className="flex items-center gap-2 text-base">
+            <Wallet className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+            {t("FinancialSummaryHeading")}
+          </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {canonicalProfit === "LOADING" ? (
@@ -3823,13 +3877,30 @@ export function DealCockpitView({
       </div>
 
       {/* --- essentials --------------------------------------------------- */}
-      {/* Customer, vehicle, finance company, salesperson: the four facts that
-          identify the deal, in one quiet row under the header. Each cell is
-          absent rather than empty — a cash deal has no finance company. */}
+      {/* The identity strip (SCRUM-372): what kind of deal, which record, and
+          the people on it — customer, finance company, salesperson. Each cell
+          is absent rather than empty — a cash deal has no finance company.
+          The VEHICLE moved to its own card in the working column, with the
+          settlement-route question that hangs off its ownership. */}
       <dl
-        className="grid grid-cols-1 gap-x-6 gap-y-2 border-b pb-4 text-sm sm:grid-cols-2 lg:grid-cols-4"
+        className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-lg border bg-card p-4 text-sm shadow-sm sm:gap-x-6 lg:grid-cols-5"
         aria-label={t("DealEssentialsHeading")}
+        data-testid="deal-identity"
       >
+        <div className="min-w-0">
+          <dt className="text-xs text-muted-foreground">{t("DealTypeLabel")}</dt>
+          <dd className="font-medium">
+            {t(deal.dealKind === "CASH" ? "DealKindCash" : "DealKindFinanced")}
+          </dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="text-xs text-muted-foreground">
+            {t(deal.applicationId === null ? "DealReferenceSale" : "DealReferenceApplication")}
+          </dt>
+          <dd className="flex min-w-0 items-center gap-1 font-medium">
+            <CopyableReference value={String(deal.dealRef)} t={t} />
+          </dd>
+        </div>
         {deal.customer && (
           <div className="min-w-0">
             <dt className="text-xs text-muted-foreground">{t("Customer")}</dt>
@@ -3842,36 +3913,6 @@ export function DealCockpitView({
                 </>
               )}
             </dd>
-          </div>
-        )}
-        {deal.vehicle && (
-          <div className="min-w-0 space-y-1">
-            <dt className="text-xs text-muted-foreground">{t("Vehicle")}</dt>
-            <dd className="min-w-0 break-words font-medium">
-              <bdi>{deal.vehicle.label}</bdi>{" "}
-              <bdi className="font-normal text-muted-foreground">{deal.vehicle.vin}</bdi>
-            </dd>
-            <dd>
-              <Badge variant="outline" className="font-normal">
-                {deal.vehicle.consigned ? t("OwnershipWithSupplier") : t("OwnershipWithDealership")}
-              </Badge>
-            </dd>
-            {/* Beside the ownership badge that makes it a question: the car
-                is the supplier's, so who the finance company pays has to be
-                recorded here before the deal can close. Rendered on the live
-                step INSTEAD whenever it is what the close waits on. */}
-            {settlementRoute && !routeBlocksClose && (
-              <dd className="pt-1">
-                <SettlementRouteControl
-                  route={settlementRoute.route}
-                  canSettleDirectToSupplier={settlementRoute.canSettleDirectToSupplier}
-                  directRouteRefusal={settlementRoute.directRouteRefusal}
-                  supplierName={settlementRoute.supplierName}
-                  t={t}
-                  onChoose={settlementRoute.onChoose}
-                />
-              </dd>
-            )}
           </div>
         )}
         {deal.financeCompanyName && (
@@ -4098,11 +4139,19 @@ export function DealCockpitView({
         )
       )}
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      {/* Split only at xl: at lg the money column is ~220px beside a 256px
+          sidebar — too narrow for its figures — so it stacks instead. Two of
+          five tracks, not a strict third: a third is ~300px at 1280. */}
+      <div className="grid gap-6 xl:grid-cols-5">
         {/* --- side column: the money ------------------------------------ */}
         {/* First in source so a phone reads the figures right after the
-            step; last on a wide screen so the working column keeps the eye. */}
-        <div className="min-w-0 space-y-6 lg:order-last">
+            step, and FIRST on a wide screen too (SCRUM-372, agreed with the
+            owner's concept): the reading side — right in Arabic, left in
+            English. Not sticky: the column is long, and a sticky rail taller
+            than the viewport hides its own foot. The step and its one action
+            stay full-width ABOVE this grid, so the money gains prominence
+            without displacing the live task. */}
+        <div className="min-w-0 space-y-6 xl:col-span-2">
           {/* --- money ---------------------------------------------------- */}
           {/* Withheld before anything is spelled, because a figure in an
               unverifiable denomination is worse than no figure: the operator
@@ -4198,7 +4247,10 @@ export function DealCockpitView({
                 deal.money.expenses.actualTotalMinor !== 0) && (
               <Card>
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-base">{t("ActualExpensesHeading")}</CardTitle>
+                  <CardTitle className="flex items-center gap-2 text-base">
+            <Receipt className="h-4 w-4 shrink-0 text-money-out" aria-hidden />
+            {t("ActualExpensesHeading")}
+          </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-2">
                   {deal.money.expenses.lines.length === 0 ? (
@@ -4234,11 +4286,35 @@ export function DealCockpitView({
               )}
             </>
           )}
+        </div>
 
-          {/* What the CUSTOMER agreed to pay, beside the dealer's money and
-              before the documents — the reading surface Review used to be for
-              this, and the one fact set the money panel deliberately does not
-              carry. */}
+        {/* --- working column ------------------------------------------- */}
+        <div className="min-w-0 space-y-6 xl:col-span-3">
+          {/* --- the car ------------------------------------------------------ */}
+          {/* Vehicle-first recognition (SCRUM-372). The settlement-route
+              question hangs off its ownership badge: the car is the
+              supplier's, so who the finance company pays has to be recorded
+              here before the deal can close. Rendered on the live step
+              INSTEAD whenever it is what the close waits on. */}
+          {deal.vehicle && (
+            <DealVehicleCard vehicle={deal.vehicle} t={t}>
+              {settlementRoute && !routeBlocksClose && (
+                <SettlementRouteControl
+                  route={settlementRoute.route}
+                  canSettleDirectToSupplier={settlementRoute.canSettleDirectToSupplier}
+                  directRouteRefusal={settlementRoute.directRouteRefusal}
+                  supplierName={settlementRoute.supplierName}
+                  t={t}
+                  onChoose={settlementRoute.onChoose}
+                />
+              )}
+            </DealVehicleCard>
+          )}
+
+          {/* What the CUSTOMER agreed to pay — with the working panels, right
+              after the car it finances (SCRUM-372 frozen spec). The one fact
+              set the money panel deliberately does not carry; its visibility
+              is its own, not the money column's. */}
           {financingPlan && (
             <FinancingPlanPanel
               plan={financingPlan.facts}
@@ -4246,10 +4322,7 @@ export function DealCockpitView({
               t={t}
             />
           )}
-        </div>
 
-        {/* --- working column ------------------------------------------- */}
-        <div className="min-w-0 space-y-6 lg:col-span-2">
           {/* --- what the finance company told us ----------------------------- */}
           {/* Under the next step, not inside the money column: this is the ACTION
               on the stage the rail reports as blocked, and the money column is
@@ -4297,7 +4370,10 @@ export function DealCockpitView({
             <Card data-testid="deal-closing-checklist">
               <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0 pb-3">
                 <div className="min-w-0">
-                  <CardTitle className="text-base">{t("ClosingChecklistHeading")}</CardTitle>
+                  <CardTitle className="flex items-center gap-2 text-base">
+            <ClipboardCheck className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+            {t("ClosingChecklistHeading")}
+          </CardTitle>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     {closingChecklist.accountingClassification === "CLASSIFIED"
                       ? t("AccountingStatusClassified")
@@ -4406,7 +4482,10 @@ export function DealCockpitView({
             const activityPane = (
               <Card>
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-base">{t("StatusLogHeading")}</CardTitle>
+                  <CardTitle className="flex items-center gap-2 text-base">
+            <History className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+            {t("StatusLogHeading")}
+          </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
                   {deal.timeline.length === 0 && (
