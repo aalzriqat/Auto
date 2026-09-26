@@ -91,6 +91,7 @@ import {
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { auditLog } from "./financialAudit";
 import { assertFinancedDepositsSurviveParentReversal } from "./utils/depositApplications";
+import { projectDealVehicleProfile } from "./utils/dealVehicleProfile";
 
 /** sourceType used for the canonical finance-company receivable opened at finalizeDeal. */
 const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
@@ -1960,6 +1961,9 @@ export const dealCockpit = query({
       ctx.db.get(app.quoteId),
       app.finalizedSaleId ? ctx.db.get(app.finalizedSaleId) : Promise.resolve(null),
     ]);
+    const canViewVehicles =
+      isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_VEHICLES);
+    const vehicleProfile = await projectDealVehicleProfile(ctx, vehicle, args.orgId, canViewVehicles);
 
     /**
      * The sale this deal should be READ at — or null when there is no sale that
@@ -2148,6 +2152,8 @@ export const dealCockpit = query({
         /** `لدى المورد` vs dealership-owned. The screen says whose car this is. */
         consigned: isConsignedAgentSale(vehicle),
         supplierName: vehicle.sourcedFromName,
+        /** SCRUM-372 vehicle card. Allowlisted — see `projectDealVehicleProfile`. */
+        profile: vehicleProfile,
       },
       salespersonName: salesperson?.name ?? "",
       financeCompanyName: company?.name ?? app.manualFinanceSnapshot?.providerName ?? "",

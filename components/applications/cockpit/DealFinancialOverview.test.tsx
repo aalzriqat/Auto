@@ -471,3 +471,52 @@ describe("VehicleCostBasisSection", () => {
     expect(screen.getByText(salesEn.CostBasisMixedDenomination)).toBeTruthy();
   });
 });
+
+/** The fixture profit, re-served at another amount: same basis and classification. */
+const profitOf = (amountMinor: number): FinancialSummaryData["profit"] => ({
+  available: true,
+  basis: "MANAGEMENT_ESTIMATE",
+  amountMinor,
+  currency: "JOD",
+  classification: "ESTIMATED_AWAITING_SETTLEMENT",
+  postable: false,
+  lines: [],
+});
+
+describe("DealFinancialOverview colour semantics (SCRUM-372)", () => {
+  const toneOf = (testId: string) =>
+    screen.getByTestId(testId).querySelector("[data-tone]")?.getAttribute("data-tone") ?? null;
+
+  test("teal marks money RECEIVED only — a collected, zero financier balance is neutral", () => {
+    render(
+      <DealFinancialOverview
+        summary={{
+          ...summary,
+          financier: { fundedPortionMinor: 9_350_000, outstanding: { state: "COLLECTED", amountMinor: 0, basis: "RECEIVABLE" } },
+        }}
+        money={money}
+        t={tEn}
+      />
+    );
+    expect(toneOf("overview-financier-balance")).toBeNull();
+    // Positive control: the receipt-backed figure keeps its money-in tone.
+    expect(toneOf("overview-customer-paid")).toBe("in");
+  });
+
+  test("break-even is neither profit nor loss — a zero net profit carries no tone", () => {
+    render(
+      <DealFinancialOverview summary={{ ...summary, profit: profitOf(0) }} money={money} t={tEn} />
+    );
+    expect(toneOf("overview-net-profit")).toBeNull();
+  });
+
+  test("a positive profit is profit-toned and a negative one loss-toned", () => {
+    render(<DealFinancialOverview summary={summary} money={money} t={tEn} />);
+    expect(toneOf("overview-net-profit")).toBe("profit");
+    cleanup();
+    render(
+      <DealFinancialOverview summary={{ ...summary, profit: profitOf(-10_000) }} money={money} t={tEn} />
+    );
+    expect(toneOf("overview-net-profit")).toBe("loss");
+  });
+});

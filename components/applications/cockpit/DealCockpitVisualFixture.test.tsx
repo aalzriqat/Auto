@@ -105,6 +105,14 @@ function financedDeal(): FinancedDealCockpitData {
       vin: "WVWZZZAUZLW901234",
       consigned: true,
       supplierName: "شركة عمّان للاستيراد",
+      profile: {
+        make: "Volkswagen",
+        model: "e-Golf",
+        year: 2020,
+        color: "أبيض",
+        mileage: 48250,
+        photoUrl: null,
+      },
     },
     salespersonName: "ليث العمري",
     financeCompanyName: "شركة التمويل الوطني",
@@ -405,6 +413,105 @@ const EXPECTED_STAGE_OWNERS: Readonly<Record<"en" | "ar", ReadonlyArray<string>>
 };
 
 /**
+ * What the customer agreed to pay — so the render shows the plan in the working
+ * column. The financier is the deal's own (production derives it from the deal).
+ */
+const FINANCING_PLAN = {
+  financierName: "شركة التمويل الوطني",
+  currency: "JOD",
+  vehiclePrice: 13_200,
+  downPayment: 1_200,
+  termMonths: 60,
+  monthlyInstallment: 238.5,
+  totalFinancedAmount: 12_000,
+  nationalId: "9876543210",
+} as const;
+
+/**
+ * The costed handover for the SAME two lines the money payload and the overview
+ * carry: ownership transfer (90 expected, 90 recorded) and insurance (250
+ * expected, no actual) — so recorded 90, awaiting 1, expected remaining 250
+ * agree on every surface. Each row has a figure in both columns, so the desktop
+ * render shows each one under its own Expected / Actual heading.
+ */
+function handoverCostsWiring() {
+  return {
+    loading: false,
+    costs: {
+      lines: [
+        {
+          _id: "fee_transfer",
+          feeType: "OWNERSHIP_TRANSFER",
+          currency: "JOD",
+          description: "رسوم نقل الملكية",
+          estimatedAmountMinor: 90 * SCALE,
+          actualAmountMinor: 90 * SCALE,
+          paidBy: "DEALER",
+          paidTo: "GOVERNMENT",
+          status: "ACTUAL_RECORDED",
+        },
+        {
+          _id: "fee_insurance",
+          feeType: "INSURANCE",
+          currency: "JOD",
+          description: "تأمين",
+          estimatedAmountMinor: 250 * SCALE,
+          paidBy: "DEALER",
+          paidTo: "INSURER",
+          status: "ESTIMATED_ONLY",
+        },
+      ],
+      summary: {
+        lineCount: 2,
+        estimatedTotalMinor: 340 * SCALE,
+        actualTotalMinor: 90 * SCALE,
+        linesAwaitingActual: 1,
+        linesAwaitingReconciliation: 1,
+      },
+      summaryUnavailable: null,
+      expected: {
+        source: "COMPANY_RULE_SNAPSHOT" as const,
+        currency: "JOD",
+        rows: [
+          {
+            templateIndex: 0,
+            feeType: "OWNERSHIP_TRANSFER" as const,
+            description: "رسوم نقل الملكية",
+            expectedAmountMinor: 90 * SCALE,
+            expectedAmountReason: null,
+            duplicateIdentity: false,
+            actual: { feeId: "fee_transfer", actualAmountMinor: 90 * SCALE, currency: "JOD", status: "ACTUAL_RECORDED" },
+          },
+          {
+            templateIndex: 1,
+            feeType: "INSURANCE" as const,
+            description: "تأمين",
+            expectedAmountMinor: 250 * SCALE,
+            expectedAmountReason: null,
+            duplicateIdentity: false,
+            actual: { feeId: "fee_insurance", actualAmountMinor: undefined, currency: "JOD", status: "ESTIMATED_ONLY" },
+          },
+        ],
+        expectedTotalMinor: 340 * SCALE,
+        expectedTotalReason: null,
+        actualTotalMinor: 90 * SCALE,
+        differenceMinor: 250 * SCALE,
+        unplannedLineIds: [],
+      },
+    },
+    denomination: { code: "JOD" },
+    scaleOf: () => 3,
+    money: (minor: number, currency: string) => custodyMoney(minor, currency),
+    canManage: true,
+    dealClosed: false,
+    onAdd: async () => {},
+    onAbandonAdd: () => {},
+    onRecordActual: async () => {},
+    onVoid: async () => {},
+  };
+}
+
+/**
  * Generation is opted into with exactly `DEAL_COCKPIT_VISUAL_FIXTURE=1`; any
  * other value, including a stray truthy one, leaves the ordinary suite as the
  * ordinary suite. The output directory is NOT a fixed path: the Playwright
@@ -436,8 +543,14 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
           onRecordLegalInvoice: () => {},
           onClassifyDealAccounting: () => {},
         }}
+        financingPlan={{ facts: FINANCING_PLAN, formatMajor: (major, currency) => `${major.toLocaleString()} ${currency}` }}
+        handoverCosts={handoverCostsWiring()}
       />
     );
+    // SCRUM-372: the working column carries the plan and the costed handover
+    // list, so the render shows expected/actual columns under their headings.
+    expect(html).toContain("data-testid=\"deal-handover-expected-0\"");
+    expect(html).toContain("data-testid=\"deal-handover-expected-1\"");
     // Not an empty render: the headline, the rail, the overview and the
     // custody section are all in the markup.
     expect(html).toContain("data-testid=\"deal-header\"");

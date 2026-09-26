@@ -789,6 +789,19 @@ describe("dealOverview.financedDealOverview", () => {
     expect(view).toEqual({ financialSummary: null, vehicleCostBasis: null, dealerPreparation: null });
   });
 
+  test("the cockpit's vehicle card follows view:vehicles, not view:sales (PR #338)", async () => {
+    const s = await seed("4v");
+    const applicationId = await insertApplication(s);
+    const salesOnly = await callerWith(s, "salesOnly", [PERMISSIONS.VIEW_SALES]);
+    const withVehicles = await callerWith(s, "salesVeh", [PERMISSIONS.VIEW_SALES, PERMISSIONS.VIEW_VEHICLES]);
+
+    const denied = await salesOnly.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+    expect(denied?.vehicle?.profile).toBeNull();
+
+    const allowed = await withVehicles.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+    expect(allowed?.vehicle?.profile).not.toBeNull();
+  });
+
   test("view:finance reads the summary but not the vehicle's cost", async () => {
     const s = await seed("5");
     const applicationId = await insertApplication(s);

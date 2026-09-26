@@ -244,6 +244,23 @@ const dealRailMessages = defineBilingualMessages({
   /** A fact the record does not carry; never rendered as a zero. */
   FactUnavailable: ["Not recorded", "غير مسجّل"],
 
+  /**
+   * The Deal's identity strip and vehicle card (SCRUM-372). The reference is
+   * the record's own opaque id — labelled for the record it is, never a
+   * formatted "deal number" the system does not issue.
+   */
+  DealTypeLabel: ["Deal type", "نوع الصفقة"],
+  DealReferenceApplication: ["Application ID", "مرجع الطلب"],
+  DealReferenceSale: ["Sale ID", "مرجع البيع"],
+  CopyDealReference: ["Copy reference", "نسخ المرجع"],
+  DealReferenceCopied: ["Reference copied", "تم نسخ المرجع"],
+  DealVehicleCardHeading: ["Vehicle details", "معلومات المركبة"],
+  DealVehicleNoPhoto: ["No vehicle photo", "لا توجد صورة للمركبة"],
+  DealVehicleColor: ["Colour", "اللون"],
+  DealVehicleMileage: ["Mileage", "العداد"],
+  DealVehicleMileageUnit: ["km", "كم"],
+  DealVehicleOwnership: ["Ownership", "الملكية"],
+
   /** The Deals list — one entry per deal, the needs-action queue first. */
   DealsTitle: ["Deals", "الصفقات"],
   NewDeal: ["New deal", "صفقة جديدة"],
