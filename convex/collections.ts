@@ -1172,6 +1172,15 @@ export const recordPayment = mutation({
   },
   handler: async (ctx, args) => {
     const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // SCRUM-263: this is a receipt door, so it records only money that arrives.
+    // A deposit application moves deposit liability already held; recorded here
+    // it posted through the cash-on-hand default and invented cash, leaving the
+    // real deposit free to be applied again. Refused BEFORE the idempotency
+    // wrapper, because a replay of a call completed before this guard existed
+    // returns its stored result without ever reaching the body (Sol D1).
+    if (args.method === "DEPOSIT_APPLIED") {
+      throw new ConvexError("A deposit is applied from the deal, not recorded as a new payment.");
+    }
     return await runWithIdempotency(
       ctx,
       {

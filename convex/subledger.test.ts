@@ -229,3 +229,180 @@ describe("subledger balances", () => {
     expect(noFilterAllocations).toEqual([]);
   });
 });
+
+/**
+ * SCRUM-261: listAllocations authorised the org it was TOLD about, then read
+ * the allocations of whatever parent id it was handed. A member of one
+ * dealership holding another's receivable or payment id could read that
+ * dealership's allocation amounts. The parent must be proven to belong to the
+ * caller's org before any child row is read, and only same-org children leave.
+ */
+describe("SCRUM-261 listAllocations tenant boundary", () => {
+  async function seedForeignAllocation(t: Awaited<ReturnType<typeof setupSubledgerOrg>>["t"]) {
+    const now = Date.now();
+    const foreignOrgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Foreign Dealer", createdAt: now }),
+    );
+    const foreignUserId = await t.run((ctx) =>
+      ctx.db.insert("users", {
+        clerkId: "foreign_owner",
+        email: "foreign-owner@example.com",
+        name: "Foreign Owner",
+      }),
+    );
+    const foreignRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", {
+        orgId: foreignOrgId,
+        name: "OWNER",
+        permissions: ALL_PERMISSIONS,
+        isSystemOwnerRole: true,
+      }),
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("memberships", { orgId: foreignOrgId, userId: foreignUserId, roleId: foreignRoleId }),
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", {
+        orgId: foreignOrgId,
+        plan: "professional",
+        status: "active",
+        currentPeriodStart: now,
+        currentPeriodEnd: now + 30 * 24 * 60 * 60 * 1000,
+        createdAt: now,
+        updatedAt: now,
+      }),
+    );
+    const foreignCustomerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId: foreignOrgId, firstName: "Rana", lastName: "Saleh" }),
+    );
+    const asForeignOwner = t.withIdentity({ subject: "foreign_owner" });
+    const foreignReceivableId = await asForeignOwner.mutation(internal.subledger.createReceivable, {
+      orgId: foreignOrgId,
+      documentType: "INVOICE",
+      payerType: "CUSTOMER",
+      customerId: foreignCustomerId,
+      sourceType: "manual_invoice",
+      sourceId: "foreign-invoice-001",
+      originalAmountMinor: 900_000,
+      currency: "jod",
+      issueDate: now,
+      dueDate: now + 7 * 24 * 60 * 60 * 1000,
+    });
+    const foreignPaymentId = await asForeignOwner.mutation(internal.subledger.recordPayment, {
+      orgId: foreignOrgId,
+      direction: "IN",
+      customerId: foreignCustomerId,
+      method: "CASH",
+      amountMinor: 450_000,
+      currency: "JOD",
+      idempotencyKey: "foreign-payment-1",
+    });
+    const foreignAllocationId = await asForeignOwner.mutation(internal.subledger.allocate, {
+      orgId: foreignOrgId,
+      paymentId: foreignPaymentId,
+      receivableDocumentId: foreignReceivableId,
+      amountMinor: 450_000,
+    });
+    return { foreignOrgId, foreignReceivableId, foreignPaymentId, foreignAllocationId, asForeignOwner };
+  }
+
+  test("a foreign receivable id returns nothing to another org's member", async () => {
+    const { t, orgId, asManager } = await setupSubledgerOrg();
+    const { foreignReceivableId } = await seedForeignAllocation(t);
+
+    const leaked = await asManager.query(api.subledger.listAllocations, {
+      orgId,
+      receivableDocumentId: foreignReceivableId,
+    });
+    expect(leaked).toEqual([]);
+  });
+
+  test("a foreign payment id returns nothing to another org's member", async () => {
+    const { t, orgId, asManager } = await setupSubledgerOrg();
+    const { foreignPaymentId } = await seedForeignAllocation(t);
+
+    const leaked = await asManager.query(api.subledger.listAllocations, { orgId, paymentId: foreignPaymentId });
+    expect(leaked).toEqual([]);
+  });
+
+  test("control: the owning org still reads its allocations by receivable and by payment", async () => {
+    const { t } = await setupSubledgerOrg();
+    const { foreignOrgId, foreignReceivableId, foreignPaymentId, foreignAllocationId, asForeignOwner } =
+      await seedForeignAllocation(t);
+
+    const byReceivable = await asForeignOwner.query(api.subledger.listAllocations, {
+      orgId: foreignOrgId,
+      receivableDocumentId: foreignReceivableId,
+    });
+    expect(byReceivable.map((row) => row._id)).toEqual([foreignAllocationId]);
+    const byPayment = await asForeignOwner.query(api.subledger.listAllocations, {
+      orgId: foreignOrgId,
+      paymentId: foreignPaymentId,
+    });
+    expect(byPayment.map((row) => row._id)).toEqual([foreignAllocationId]);
+  });
+
+  test("an allocation row stamped with another org is never returned under an owned parent", async () => {
+    // Defence in depth: the parent check alone would trust every child of an
+    // owned parent. A child carrying another org's id must still not leave.
+    const { t, orgId, userId, customerId, asManager } = await setupSubledgerOrg();
+    const { foreignOrgId, foreignPaymentId } = await seedForeignAllocation(t);
+    const now = Date.now();
+    const ownReceivableId = await asManager.mutation(internal.subledger.createReceivable, {
+      orgId,
+      documentType: "INVOICE",
+      payerType: "CUSTOMER",
+      customerId,
+      sourceType: "manual_invoice",
+      sourceId: "own-invoice-001",
+      originalAmountMinor: 100_000,
+      currency: "jod",
+      issueDate: now,
+      dueDate: now + 7 * 24 * 60 * 60 * 1000,
+    });
+    await t.run((ctx) =>
+      ctx.db.insert("paymentAllocations", {
+        orgId: foreignOrgId,
+        paymentId: foreignPaymentId,
+        receivableDocumentId: ownReceivableId,
+        amountMinor: 1,
+        currency: "JOD",
+        scale: 3,
+        allocationDate: now,
+        status: "ACTIVE",
+        createdBy: userId,
+        createdAt: now,
+      }),
+    );
+
+    const rows = await asManager.query(api.subledger.listAllocations, { orgId, receivableDocumentId: ownReceivableId });
+    expect(rows).toEqual([]);
+  });
+
+  test("a foreign parent is refused even when its child carries the caller's org id", async () => {
+    // The mirror of the case above: only the PARENT check can refuse this, so
+    // each guard is proven on its own rather than one masking the other.
+    const { t, orgId, userId, asManager } = await setupSubledgerOrg();
+    const { foreignReceivableId, foreignPaymentId } = await seedForeignAllocation(t);
+    const now = Date.now();
+    await t.run((ctx) =>
+      ctx.db.insert("paymentAllocations", {
+        orgId,
+        paymentId: foreignPaymentId,
+        receivableDocumentId: foreignReceivableId,
+        amountMinor: 1,
+        currency: "JOD",
+        scale: 3,
+        allocationDate: now,
+        status: "ACTIVE",
+        createdBy: userId,
+        createdAt: now,
+      }),
+    );
+
+    expect(
+      await asManager.query(api.subledger.listAllocations, { orgId, receivableDocumentId: foreignReceivableId }),
+    ).toEqual([]);
+    expect(await asManager.query(api.subledger.listAllocations, { orgId, paymentId: foreignPaymentId })).toEqual([]);
+  });
+});
