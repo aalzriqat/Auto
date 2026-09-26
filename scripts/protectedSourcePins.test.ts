@@ -322,11 +322,41 @@ describe("protected source content pins", () => {
        * bypassed, deleted, generalized or made vacuous. Both constants were
        * recomputed FROM THE FILE with this test's own normalization.
        * `convex/dealWorkspace.ts` is untouched.
+       *
+       * -- RENEWAL 2026-09-26 - SCRUM-37 tenant read boundary (PR #343) ------
+       *
+       * Previous reviewed postimage, superseded by this entry:
+       *
+       *   bytes:  236603
+       *   sha256: d8082f5de2e49bd535ab41ca5894c48076fc20db40da474b2dd6b50eccd100a4
+       *
+       * Renewed because `getLog` read any organization's application status
+       * history: membership of `args.orgId` proved nothing about
+       * `args.applicationId`, so notes and actor names crossed tenants. The
+       * delta is exactly two hunks, 27 insertions and 9 deletions, against
+       * main `3866c8505`: (1) `getLog` proves the application with the
+       * existing `requireOwnedRow` (already imported; missing and foreign
+       * refuse identically) and keeps only log rows stamped with
+       * `args.orgId`; (2) `dealCockpit`'s timeline, whose parent was already
+       * owned, keeps only rows stamped with `args.orgId` before the actor
+       * lookup. No new import, export, write, permission check or query shape:
+       * the same `by_application` reads, narrowed in memory. Read the two
+       * hunks; do not take this note's word for their scope.
+       *
+       * Made under the owner's standing full-authority directive of
+       * 2026-09-26, with the cross-lane notice posted to the ratchet lane
+       * BEFORE the change (Jira SCRUM-215 c20828, #scrum-215). Sol 6 and
+       * Sonnet xhigh approved the code at `3d3443839`, whose CI failed only
+       * this pin. The pin is not weakened, bypassed, deleted, generalized or
+       * made vacuous: same exact byte + sha256 pin, same negative control,
+       * same normalization and bare-CR rejection. Both constants were
+       * recomputed FROM THE FILE with this test's own normalization.
+       * `convex/dealWorkspace.ts` is untouched.
        */
       file: "convex/applications.ts",
       // Renewed for single fee authority: Execution Fees (financeCompanies.adminFees fail-closed invariant S1-R3-H1, canonical resolver S1-R4-H1, frozen quote authority S1-R5-H1, and server-authoritative quote pricing snapshot S1-R6-H1).
-      bytes: 236603,
-      sha256: "d8082f5de2e49bd535ab41ca5894c48076fc20db40da474b2dd6b50eccd100a4",
+      bytes: 237446,
+      sha256: "c55a2dc00c83d2827e2aa77f6cb4536cd5264ba301985ea50175cb7c3478187a",
     },
     {
       /**
