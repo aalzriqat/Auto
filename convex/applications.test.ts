@@ -1583,52 +1583,46 @@ describe("applications logs, expected payment, and finalization guards", () => {
     ).rejects.toThrow("Finance application not found in this organization.");
   });
 
-  test("getLog never returns a log row stamped with another org, even under an owned application (SCRUM-37)", async () => {
-    const { t, orgId, customerId, vehicleId, userId, asUser } = await setup();
-    const { foreignOrgId } = await seedForeignApplication(t);
+  /** An owned application carrying one stray log row stamped with another org. */
+  async function seedStrayForeignLogRow(changedByName?: string) {
+    const fixture = await setup();
+    const { t, orgId, customerId, vehicleId, userId, asUser } = fixture;
+    const foreignOrgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() })
+    );
     const quoteId = await asUser.mutation(api.quotes.saveQuote, {
       orgId, customerId, vehicleId, vehiclePrice: 20000, downPayment: 3000, termMonths: 48,
     });
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
-    const strayId = await t.run((ctx) =>
-      ctx.db.insert("applicationStatusLog", {
-        orgId: foreignOrgId,
-        applicationId,
-        fromStatus: "PENDING_DOCS",
-        toStatus: "UNDER_REVIEW",
-        changedBy: userId,
-        changedAt: Date.now(),
-        note: "foreign note",
-      })
-    );
-
-    const log = await asUser.query(api.applications.getLog, { orgId, applicationId });
-    expect(log.length).toBeGreaterThan(0);
-    expect(log.every((entry) => entry.orgId === orgId)).toBe(true);
-    expect(log.some((entry) => entry._id === strayId)).toBe(false);
-  });
-
-  test("dealCockpit's timeline never shows a log row stamped with another org (Sol on PR #343)", async () => {
-    const { t, orgId, customerId, vehicleId, asUser } = await setup();
-    const { foreignOrgId } = await seedForeignApplication(t);
-    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
-      orgId, customerId, vehicleId, vehiclePrice: 20000, downPayment: 3000, termMonths: 48,
-    });
-    const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
-    const foreignActorId = await t.run((ctx) =>
-      ctx.db.insert("users", { clerkId: "foreign_actor", email: "foreign.actor@test.com", name: "Foreign Actor" })
-    );
+    const changedBy = changedByName
+      ? await t.run((ctx) =>
+          ctx.db.insert("users", { clerkId: "foreign_actor", email: "foreign.actor@test.com", name: changedByName })
+        )
+      : userId;
     await t.run((ctx) =>
       ctx.db.insert("applicationStatusLog", {
         orgId: foreignOrgId,
         applicationId,
         fromStatus: "PENDING_DOCS",
         toStatus: "UNDER_REVIEW",
-        changedBy: foreignActorId,
+        changedBy,
         changedAt: Date.now(),
         note: "foreign note",
       })
     );
+    return { ...fixture, applicationId };
+  }
+
+  test("getLog never returns a log row stamped with another org, even under an owned application (SCRUM-37)", async () => {
+    const { orgId, asUser, applicationId } = await seedStrayForeignLogRow();
+
+    const log = await asUser.query(api.applications.getLog, { orgId, applicationId });
+    expect(log.length).toBeGreaterThan(0);
+    expect(log.every((entry) => entry.orgId === orgId)).toBe(true);
+  });
+
+  test("dealCockpit's timeline never shows a log row stamped with another org (Sol on PR #343)", async () => {
+    const { orgId, asUser, applicationId } = await seedStrayForeignLogRow("Foreign Actor");
 
     const cockpit = await asUser.query(api.applications.dealCockpit, { orgId, applicationId });
     const timeline = cockpit?.timeline ?? [];

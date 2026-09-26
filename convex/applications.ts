@@ -2060,9 +2060,7 @@ export const dealCockpit = query({
       supplierDisbursementConfirmedAt: app.supplierDisbursementConfirmedAt,
     });
 
-    // Only rows stamped with this org, the same boundary getLog holds
-    // (SCRUM-37; Sol on PR #343): the parent is owned, but the schema does
-    // not force a log row's orgId to match its application's.
+    // SCRUM-37: a log row's orgId is not forced to match its application's.
     const timeline = (
       await ctx.db
         .query("applicationStatusLog")
@@ -3360,10 +3358,8 @@ export const getLog = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
-    // SCRUM-37: membership of args.orgId said nothing about the application
-    // id, so a member of one dealership read another's status history, notes
-    // and actor names. Prove the parent first (a missing and a foreign one
-    // refuse identically), then return only rows stamped with this org.
+    // SCRUM-37: prove the application is this org's (missing and foreign refuse
+    // alike), then return only log rows stamped with this org.
     const application = await requireOwnedRow(
       ctx,
       args.orgId,
