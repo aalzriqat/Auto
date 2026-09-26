@@ -1413,18 +1413,14 @@ describe("Collections", () => {
       paymentDate: Date.now(),
     })).rejects.toThrow("OTHER is not accepted");
 
-    const appliedDepositPaymentId = await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
+    // SCRUM-263: a deposit is applied from the deal; this receipt door refuses it.
+    await expect(asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       amount: 5,
       method: "DEPOSIT_APPLIED",
       paymentDate: Date.now(),
-    });
-    await t.run(async (ctx) => {
-      const payment = await ctx.db.get(appliedDepositPaymentId);
-      const canonical = payment?.canonicalPaymentId ? await ctx.db.get(payment.canonicalPaymentId) : null;
-      expect(canonical?.method).toBe("OTHER");
-    });
+    })).rejects.toThrow("A deposit is applied from the deal");
 
     await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
@@ -2352,5 +2348,177 @@ describe("refund eligibility", () => {
         status: "APPROVED",
       })
     ).rejects.toThrow(/cancelled/i);
+  });
+});
+
+/**
+ * SCRUM-263: recordPayment is a receipt door. It accepted DEPOSIT_APPLIED,
+ * stored a POSTED inbound payment, reduced the debt and posted it through the
+ * cash-on-hand default, so applying a deposit invented cash that never arrived
+ * and left the real deposit free to be applied a second time. A deposit is
+ * applied from the deal, by the typed path that moves deposit liability.
+ */
+describe("SCRUM-263 recordPayment refuses a deposit application", () => {
+  const REFUSAL = "A deposit is applied from the deal, not recorded as a new payment.";
+  const TRACKED = [
+    "collectionPayments",
+    "canonicalPayments",
+    "paymentAllocations",
+    "transactions",
+    "accountingEvents",
+    "pendingAccountingEvents",
+    "journalEntries",
+    "journalLines",
+    "commandIdempotency",
+  ] as const;
+
+  async function counts(t: ReturnType<typeof convexTestWithComponents>) {
+    return await t.run(async (ctx) => {
+      const out: Record<string, number> = {};
+      for (const table of TRACKED) out[table] = (await ctx.db.query(table).take(10_000)).length;
+      return out;
+    });
+  }
+
+  test("refuses DEPOSIT_APPLIED against a receivable and writes nothing", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId,
+      customerId,
+      sourceType: "INTERNAL_INSTALLMENT",
+      title: "Installment 1",
+      amount: 1000,
+      dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
+    });
+    const before = await counts(t);
+
+    await expect(
+      asFinance.mutation(api.collections.recordPayment, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId,
+        receivableId,
+        amount: 300,
+        method: "DEPOSIT_APPLIED",
+        paymentDate: Date.now(),
+      })
+    ).rejects.toThrow(REFUSAL);
+
+    expect(await counts(t)).toEqual(before);
+    const receivable = await t.run((ctx) => ctx.db.get(receivableId));
+    expect(receivable?.outstandingAmount).toBe(1000);
+    expect(receivable?.status).toBe("OPEN");
+  });
+
+  test("refuses DEPOSIT_APPLIED with no receivable and writes nothing", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const before = await counts(t);
+
+    await expect(
+      asFinance.mutation(api.collections.recordPayment, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId,
+        customerId,
+        amount: 5,
+        method: "DEPOSIT_APPLIED",
+        paymentDate: Date.now(),
+      })
+    ).rejects.toThrow(REFUSAL);
+
+    expect(await counts(t)).toEqual(before);
+  });
+
+  test("a refused attempt does not consume its idempotency key", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const idempotencyKey = crypto.randomUUID();
+
+    await expect(
+      asFinance.mutation(api.collections.recordPayment, {
+        idempotencyKey,
+        orgId,
+        customerId,
+        amount: 5,
+        method: "DEPOSIT_APPLIED",
+        paymentDate: Date.now(),
+      })
+    ).rejects.toThrow(REFUSAL);
+
+    // The same key, now carrying genuine cash, is a first attempt, not a
+    // conflicting replay of the refused one.
+    const paymentId = await asFinance.mutation(api.collections.recordPayment, {
+      idempotencyKey,
+      orgId,
+      customerId,
+      amount: 5,
+      method: "CASH",
+      paymentDate: Date.now(),
+    });
+    const payment = await t.run((ctx) => ctx.db.get(paymentId));
+    expect(payment?.method).toBe("CASH");
+  });
+
+  test("a replay of a DEPOSIT_APPLIED command completed before the fix is refused too (Sol D1)", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, userId, asFinance } = await seedFinanceMember(t);
+    const idempotencyKey = crypto.randomUUID();
+    const paymentDate = Date.now();
+    // Exactly what the pre-fix mutation left behind after a successful call:
+    // a COMPLETED command whose stored result the wrapper hands back on replay
+    // without running the body again.
+    await t.run((ctx) =>
+      ctx.db.insert("commandIdempotency", {
+        orgId,
+        operation: "collections.recordPayment",
+        idempotencyKey,
+        status: "COMPLETED",
+        fingerprint: JSON.stringify({
+          receivableId: null,
+          customerId,
+          vehicleId: null,
+          saleId: null,
+          amount: 5,
+          method: "DEPOSIT_APPLIED",
+          paymentDate,
+          reference: null,
+        }),
+        result: "stored-result-of-the-old-call",
+        createdBy: userId,
+        createdAt: paymentDate,
+        completedAt: paymentDate,
+      })
+    );
+
+    await expect(
+      asFinance.mutation(api.collections.recordPayment, {
+        idempotencyKey,
+        orgId,
+        customerId,
+        amount: 5,
+        method: "DEPOSIT_APPLIED",
+        paymentDate,
+      })
+    ).rejects.toThrow(REFUSAL);
+  });
+
+  test("genuine inbound methods still record (controls)", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    for (const method of ["CASH", "BANK_TRANSFER", "CARD", "PAYMENT_LINK"] as const) {
+      const paymentId = await asFinance.mutation(api.collections.recordPayment, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId,
+        customerId,
+        amount: 5,
+        method,
+        paymentDate: Date.now(),
+      });
+      const payment = await t.run((ctx) => ctx.db.get(paymentId));
+      expect(payment?.method, method).toBe(method);
+      expect(payment?.status, method).toBe("POSTED");
+    }
   });
 });
