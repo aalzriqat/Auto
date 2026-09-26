@@ -48,4 +48,13 @@ describe("Sonar coverage resource contract", () => {
       /NODE_OPTIONS:\s*--max-old-space-size=5632/,
     );
   });
+
+  // SCRUM-384: a normal main run needs ~17-20 min (coverage ~14.5 + scan 3-6).
+  // Since SCRUM-128 there is no Sonar waiver, so a cancelled run leaves the tip
+  // with no required result and the production release refuses.
+  test("main Sonar job budget covers a normal coverage + scan run", () => {
+    const match = source(SONAR_MAIN_WORKFLOW).match(/^\s*timeout-minutes:\s*(\d+)\s*$/m);
+    expect(match, "sonar-main.yml must declare a job timeout").not.toBeNull();
+    expect(Number(match?.[1])).toBeGreaterThanOrEqual(40);
+  });
 });

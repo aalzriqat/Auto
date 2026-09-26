@@ -12,7 +12,11 @@ jobs:
   scan:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # SCRUM-384: coverage alone takes ~14.5 min and the scan 3-6 min, so 20 min
+    # cancelled 3 of 8 runs. Since SCRUM-128 a missing Sonar result refuses the
+    # production release, so this budget must cover a normal run with headroom.
+    # It only bounds a runaway job; it changes nothing the scan measures.
+    timeout-minutes: 45
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 

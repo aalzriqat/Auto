@@ -333,8 +333,8 @@ to loosen the required list.
 **SonarCloud is enforced with no waiver (SCRUM-128, 2026-09-26).** The release
 needs `sonarqubecloud / SonarCloud Code Analysis` = success at the exact tip. That
 result comes from the **Sonar Main** workflow (`sonar-main.yml`), which runs on
-every push to `main` with a 20-minute timeout and is sometimes cancelled. Two
-separate problems:
+every push to `main`. Its timeout is 45 minutes (SCRUM-384): at 20 it cancelled 3
+of 8 runs, because coverage alone takes about 14.5 minutes. Two separate problems:
 
 - **Missing or cancelled at the tip:** the release refuses. Dispatch Sonar Main
   on `main`, then confirm the producer-bound result at that exact SHA before
