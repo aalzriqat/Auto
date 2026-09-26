@@ -8,11 +8,16 @@
  * through (Sol R4 on PR #341). Anything that is not a literal name — an
  * index computed at run time, or the whole context as in `toJSON(secrets)` —
  * is reported as dynamic, so a caller can fail closed on it.
+ *
+ * Where an expression ENDS is deliberately not decided here. A `}}` inside a
+ * quoted string ended the span early, hiding `${{ format('a}}b', secrets.X) }}`
+ * (Sonnet on PR #341), and matching GitHub's own lexer exactly is a bet on
+ * rules this file cannot observe. So a string is scanned from its first `${{`
+ * to its end: a superset of every span any terminator rule could produce.
  */
 
 export type SecretReferences = { names: string[]; dynamic: boolean; inherits: boolean };
 
-const EXPRESSION = /\$\{\{([\s\S]*?)\}\}/g;
 const SECRETS_TOKEN = /(^|[^A-Za-z0-9_.-])secrets(?![A-Za-z0-9_-])/gi;
 const PROPERTY = /^\s*\.\s*([A-Za-z_][A-Za-z0-9_-]*)/;
 const INDEX = /^\s*\[\s*(['"])([^'"]*)\1\s*\]/;
@@ -30,7 +35,7 @@ function visit(value: unknown, key: string | undefined, found: SecretReferences)
   if (typeof value === "string") {
     // `if:` is an expression even without `${{ }}`.
     if (key === "if") scanExpression(value, found);
-    else for (const match of value.matchAll(EXPRESSION)) scanExpression(match[1] ?? "", found);
+    else if (value.includes("${{")) scanExpression(value.slice(value.indexOf("${{") + 3), found);
     return;
   }
   if (Array.isArray(value)) {

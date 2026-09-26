@@ -53,6 +53,8 @@ describe("pull-request workflow secret boundary", () => {
       "${{ format('{0}', secrets.X) }}",
       "${{ toJSON(secrets) }}",
       "${{ Secrets.x }}",
+      "${{ format('a}}b', secrets.X) }}",
+      "${{ contains('}}', secrets['X']) }}",
     ]) {
       const found = secretReferences({ jobs: { j: { steps: [{ env: { K: expression } }] } } });
       expect(found.names.length > 0 || found.dynamic, expression).toBe(true);

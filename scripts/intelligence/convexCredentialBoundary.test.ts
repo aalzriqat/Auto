@@ -379,6 +379,9 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
       "${{ format('{0}', secrets.CONVEX_PREVIEW_DEPLOY_KEY) }}",
       "${{ toJSON(secrets) }}",
       "${{ secrets[format('CONVEX_{0}', 'PREVIEW_DEPLOY_KEY')] }}",
+      // A `}}` inside a quoted string must not end the scan (Sonnet on PR #341).
+      "${{ format('ignored}}text', secrets.CONVEX_PREVIEW_DEPLOY_KEY) }}",
+      "${{ contains('}}', secrets['CONVEX_PREVIEW_DEPLOY_KEY']) }}",
     ]) {
       const step: Step = { run: "node candidate/evil.mjs", env: { KEY: expression } };
       expect(holdsConvexCredential(step), expression).toBe(true);
