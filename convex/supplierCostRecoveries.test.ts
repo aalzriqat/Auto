@@ -215,6 +215,24 @@ describe("who may bear a cost", () => {
   });
 });
 
+describe("switching a PENDING expense to a supplier bearer", () => {
+  test("a taxed expense switches only when the cleared VAT (0) is sent", async () => {
+    const s = await seed("vatclear");
+    const expenseId = (await s.as.mutation(
+      api.expenses.create,
+      expenseArgs(s, { status: "PENDING", costBearer: "SHOWROOM", taxAmount: 16, paymentMethod: undefined })
+    )) as Id<"expenses">;
+    // What ExpenseDialog used to send (0 → undefined): the stored VAT survives and the bearer is refused.
+    await expect(
+      s.as.mutation(api.expenses.update, { orgId: s.orgId, expenseId, costBearer: "SUPPLIER" })
+    ).rejects.toThrow();
+    await s.as.mutation(api.expenses.update, { orgId: s.orgId, expenseId, taxAmount: 0, costBearer: "SUPPLIER" });
+    const row = await s.t.run((ctx) => ctx.db.get(expenseId));
+    expect(row!.costBearer).toBe("SUPPLIER");
+    expect(row!.taxAmount ?? 0).toBe(0);
+  });
+});
+
 describe("paying a supplier-borne cost", () => {
   test("posts Dr Receivable from Suppliers / Cr cash — no expense — and opens exactly one recovery", async () => {
     const s = await seed("post");
