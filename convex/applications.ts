@@ -44,7 +44,6 @@ import {
   denominationOf,
   assertSupportedDenomination,
 } from "./utils/money";
-import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
 import {
   assertAppraisalGapSettledToAdvance,
   buildRuleSnapshot,
@@ -3925,19 +3924,9 @@ export const finalizeDeal = mutation({
         // shared boundary in utils/saleCompletion.ts, which this door reaches
         // below. Four doors, one guard.
 
-        // Re-verify at the commit point, not just at quote time: the approval
-        // could have been rejected or the vehicle's minimum raised in between.
-        // Quotes written before `desiredProfit` existed carry no margin to check
-        // and are let through — the check binds from this deploy forward rather
-        // than stranding deals already in flight.
-        if (quote.desiredProfit !== undefined && quoteModeRequiresMinimumProfit(quote.mode)) {
-          await assertProfitApproved(ctx, {
-            orgId: args.orgId,
-            vehicleId: app.vehicleId,
-            desiredProfit: quote.desiredProfit,
-            subject: "deal",
-          });
-        }
+        // The minimum-profit approval is re-proved at the commit point by
+        // `completeSale`'s shared boundary (SCRUM-260), against the price this
+        // sale persists — `quote.vehiclePrice` below.
 
         const quoteMode: QuoteMode | undefined = app.quoteModeAtSubmission ?? quote.mode;
         const financingType =

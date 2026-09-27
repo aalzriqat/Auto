@@ -31,6 +31,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { VehicleCostBar } from "../components/VehicleCostBar";
+import { useProfitApproval } from "@/components/sales/ProfitApprovalNotice";
 import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
 import {
   isRequestedFinancingTermValid,
@@ -175,20 +176,23 @@ export default function Step1QuoteSetup({
   // `availableVehicles` alone left `selectedVehicle` undefined for sourced cars,
   // so the whole quote (make, VIN, price, minimum profit, notes) rendered empty.
   const selectedVehicle = allPickerVehicles.find((v: Doc<"vehicles">) => v._id === watchedVehicleId);
-  const minimumProfit = selectedVehicle?.minimumProfit || 0;
-  const isProfitBelowMinimum = !isCash && watchedVehicleId && Number(watchedProfit) < minimumProfit;
 
-  const pendingApproval = useQuery(api.approvals.checkPendingApproval,
-    activeOrgId && watchedVehicleId
-      ? { orgId: activeOrgId, vehicleId: watchedVehicleId as Id<"vehicles"> }
-      : "skip"
-  );
+  // SCRUM-260: the server decides. The quote is saved at base + profit (see
+  // quotePayload.ts), and a manager approves exactly that price, so the gate
+  // asks the backend about that price. `blocked` holds Next disabled while the
+  // verdict loads, so it never flickers enabled on a below-minimum deal.
+  const quotedPrice = (Number(watchedPrice) || 0) + (Number(watchedProfit) || 0);
+  const profitApproval = useProfitApproval({
+    orgId: activeOrgId,
+    vehicleId: watchedVehicleId as Id<"vehicles"> | undefined,
+    salePrice: quotedPrice,
+    enabled: !isCash,
+  });
+  const profitVerdict = profitApproval.verdict?.status === "INVALID" ? undefined : profitApproval.verdict;
+  const isBlockedByProfit = profitApproval.blocked;
 
   const requestProfitApproval = useMutation(api.approvals.requestProfitApproval);
   const [isRequesting, setIsRequesting] = useState(false);
-
-  const hasValidApproval = pendingApproval?.status === "APPROVED" && Number(watchedProfit) >= pendingApproval.requestedProfit;
-  const isBlockedByProfit = isProfitBelowMinimum && !hasValidApproval;
 
   const handleRequestApproval = async () => {
     if (!activeOrgId || !watchedVehicleId) return;
@@ -197,8 +201,7 @@ export default function Step1QuoteSetup({
       await requestProfitApproval({
         orgId: activeOrgId,
         vehicleId: watchedVehicleId as Id<"vehicles">,
-        requestedProfit: Number(watchedProfit) || 0,
-        minimumProfit: minimumProfit,
+        salePrice: quotedPrice,
         wizardSnapshot: {
           paymentType,
           vehiclePrice: Number(watchedPrice) || 0,
@@ -600,48 +603,53 @@ export default function Step1QuoteSetup({
         )}
 
         {/* Approval Alert */}
-        {isBlockedByProfit && (
+        {profitVerdict && (profitVerdict.status === "REQUIRED" || profitVerdict.status === "PENDING" || profitVerdict.status === "REJECTED") && (
           <Alert variant="destructive" className="bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400">
             <ShieldAlert className="h-4 w-4" />
             <AlertTitle>Approval Required</AlertTitle>
             <AlertDescription className="mt-2 flex flex-col gap-3 items-start">
-              <p>The desired profit ({currency.format(Number(watchedProfit))}) is below the minimum required profit for this vehicle ({currency.format(minimumProfit)}).</p>
+              <p>At this price the profit over the list price ({currency.format(profitVerdict.margin)}) is below the minimum required profit for this vehicle ({currency.format(profitVerdict.minimumProfit)}).</p>
 
-              {pendingApproval?.status === "PENDING" && pendingApproval.requestedProfit === Number(watchedProfit) ? (
+              {profitVerdict.status === "PENDING" ? (
                 <div className="flex items-center gap-2 text-yellow-600 dark:text-yellow-400 bg-yellow-500/10 px-3 py-1.5 rounded-md text-sm font-medium">
                   Approval request is currently pending. Please wait for a manager.
                 </div>
-              ) : pendingApproval?.status === "REJECTED" && pendingApproval.requestedProfit === Number(watchedProfit) ? (
-                <div className="flex items-center gap-2 text-red-600 dark:text-red-400 bg-red-500/10 px-3 py-1.5 rounded-md text-sm font-medium">
-                  Your request for this profit amount was rejected. Please increase the profit or request again.
-                </div>
               ) : (
-                <Button
-                  type="button"
-                  variant="destructive"
-                  size="sm"
-                  onClick={handleRequestApproval}
-                  disabled={isRequesting}
-                >
-                  {isRequesting ? "Requesting..." : "Request Profit Approval"}
-                </Button>
+                <>
+                  {/* A rejection closes that request, not the price: the
+                      salesperson may change the price or ask again. */}
+                  {profitVerdict.status === "REJECTED" ? (
+                    <div className="flex items-center gap-2 text-red-600 dark:text-red-400 bg-red-500/10 px-3 py-1.5 rounded-md text-sm font-medium">
+                      Your request for this profit amount was rejected. Please increase the profit or request again.
+                    </div>
+                  ) : null}
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    onClick={handleRequestApproval}
+                    disabled={isRequesting}
+                  >
+                    {isRequesting ? "Requesting..." : "Request Profit Approval"}
+                  </Button>
+                </>
               )}
             </AlertDescription>
           </Alert>
         )}
-        {hasValidApproval && isProfitBelowMinimum && (
+        {profitVerdict?.status === "APPROVED" && (
           <Alert className="bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400">
             <CheckCircle2 className="h-4 w-4 text-emerald-500" />
             <AlertTitle>Profit Approved</AlertTitle>
             <AlertDescription>
-              Your requested profit of {currency.format(pendingApproval.requestedProfit)} was approved by management. You may proceed.
+              Management approved this sale price (profit over the list price: {currency.format(profitVerdict.margin)}). You may proceed.
             </AlertDescription>
           </Alert>
         )}
 
         {/* Footer */}
         <div className="flex justify-end pt-4 border-t">
-          <Button type="submit" disabled={!!isBlockedByProfit} className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white shadow-md hover:shadow-lg transition-all rounded-full px-8 h-12">
+          <Button type="submit" disabled={isBlockedByProfit} className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white shadow-md hover:shadow-lg transition-all rounded-full px-8 h-12">
             {t("Next" as any)}
             <ArrowRight className="w-4 h-4 ms-2" />
           </Button>
