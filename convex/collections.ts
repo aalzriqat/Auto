@@ -2765,8 +2765,12 @@ export const respondToApproval = mutation({
 /**
  * Unreconciled POSTED drawer payments (CASH and REFUND) one cashier can have on
  * one business day before the reconciliation refuses rather than certifies.
+ *
+ * Also the read budget: at most LIMIT + 1 full documents across both methods,
+ * the same exposure as the 500-row read this replaced. Payment `notes` are
+ * uncapped, so no row count is byte-safe on its own (capping them: SCRUM-398).
  */
-const RECONCILIATION_DAY_LIMIT = 1000;
+const RECONCILIATION_DAY_LIMIT = 500;
 const RECONCILIATION_DAY_TOO_LARGE =
   "This business day has too many unreconciled payments to reconcile in one step. Contact support.";
 
@@ -2790,7 +2794,7 @@ async function readCashierDayCashPayments(
   | { complete: false }
   | { complete: true; payments: Doc<"collectionPayments">[]; expectedCash: number }
 > {
-  const readMethod = (method: "CASH" | "REFUND") =>
+  const readMethod = (method: "CASH" | "REFUND", budget: number) =>
     ctx.db
       .query("collectionPayments")
       .withIndex("by_org_cashier_unreconciled_method_date", (q) =>
@@ -2803,8 +2807,12 @@ async function readCashierDayCashPayments(
           .gte("paymentDate", start)
           .lte("paymentDate", end)
       )
-      .take(RECONCILIATION_DAY_LIMIT + 1);
-  const payments = (await Promise.all([readMethod("CASH"), readMethod("REFUND")])).flat();
+      .take(budget);
+  // Sequential on purpose: the second read gets only what the first left over.
+  const cash = await readMethod("CASH", RECONCILIATION_DAY_LIMIT + 1);
+  if (cash.length > RECONCILIATION_DAY_LIMIT) return { complete: false };
+  const refunds = await readMethod("REFUND", RECONCILIATION_DAY_LIMIT + 1 - cash.length);
+  const payments = [...cash, ...refunds];
   if (payments.length > RECONCILIATION_DAY_LIMIT) return { complete: false };
   const expectedCash = payments.reduce(
     (sum, payment) => sum + (payment.direction === "IN" ? payment.amount : -payment.amount),

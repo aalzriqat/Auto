@@ -2183,7 +2183,7 @@ describe("Collections", () => {
     const { orgId, asFinance } = seed;
     const now = Date.now();
     // Split across both drawer methods: the limit is on what is certified.
-    await seedCashierPayments(t, seed, 1000, { paymentDate: now });
+    await seedCashierPayments(t, seed, 500, { paymentDate: now });
     await seedCashierPayments(t, seed, 1, { paymentDate: now, method: "REFUND", direction: "OUT" });
 
     const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
@@ -2199,6 +2199,17 @@ describe("Collections", () => {
     });
   });
 
+  test("cashier_reconciliation_certifies_exactly_the_limit_across_both_methods", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const seed = await seedFinanceMember(t);
+    const { orgId, asFinance } = seed;
+    const now = Date.now();
+    await seedCashierPayments(t, seed, 450, { paymentDate: now });
+    await seedCashierPayments(t, seed, 50, { paymentDate: now, method: "REFUND", direction: "OUT" });
+
+    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
+    expect(draft).toMatchObject({ complete: true, expectedCash: 400, paymentCount: 500 });
+  });
   test("cashier_reconciliation_limit_ignores_reconciled_voided_and_non_cash_rows", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const seed = await seedFinanceMember(t);
@@ -2209,9 +2220,9 @@ describe("Collections", () => {
     const earlierId = await asFinance.mutation(api.collections.submitCashierReconciliation, {
       orgId, businessDate: now, countedCash: 0, idempotencyKey: crypto.randomUUID(),
     });
-    await seedCashierPayments(t, seed, 1001, { paymentDate: now, reconciliationId: earlierId });
-    await seedCashierPayments(t, seed, 1001, { paymentDate: now, status: "VOIDED" });
-    await seedCashierPayments(t, seed, 1001, { paymentDate: now, method: "BANK_TRANSFER" });
+    await seedCashierPayments(t, seed, 501, { paymentDate: now, reconciliationId: earlierId });
+    await seedCashierPayments(t, seed, 501, { paymentDate: now, status: "VOIDED" });
+    await seedCashierPayments(t, seed, 501, { paymentDate: now, method: "BANK_TRANSFER" });
     await seedCashierPayments(t, seed, 1, { paymentDate: now, amount: 40 });
 
     const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
