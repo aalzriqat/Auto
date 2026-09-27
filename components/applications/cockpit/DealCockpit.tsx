@@ -389,12 +389,17 @@ const LEGAL_INVOICE_ISSUED_TO_LABEL: Record<string, string> = {
  * Extracted rather than left as a nested ternary so the combinations are
  * enumerable, and testable, one line each.
  */
-function finalizeUnavailableReasonKey(
-  routeRequired: boolean,
-  canRecordRoute: boolean,
-  readinessBlocksClose: boolean,
-  canClose: boolean
-): string | undefined {
+function finalizeUnavailableReasonKey({
+  routeRequired,
+  canRecordRoute,
+  readinessBlocksClose,
+  canClose,
+}: Readonly<{
+  routeRequired: boolean;
+  canRecordRoute: boolean;
+  readinessBlocksClose: boolean;
+  canClose: boolean;
+}>): string | undefined {
   if (routeRequired && !canRecordRoute) return "FinalizeNeedsRouteAndPermission";
   if (routeRequired) return "FinalizeNeedsSettlementRoute";
   if (readinessBlocksClose) return "FinalizeNeedsClosingReadiness";
@@ -1526,12 +1531,13 @@ export function DealCockpit({
        */
       unavailableReasonKey: finalizeDenominationBlock
         ? FINALIZE_DENOMINATION_REASON[finalizeDenominationBlock]
-        : finalizeUnavailableReasonKey(
-            settlementRouteRequired,
-            canFinalizeApplication,
-            closingReadiness !== undefined && closingReadiness.open && closingReadiness.state !== "READY",
-            canCloseDeal
-          ),
+        : finalizeUnavailableReasonKey({
+            routeRequired: settlementRouteRequired,
+            canRecordRoute: canFinalizeApplication,
+            readinessBlocksClose:
+              closingReadiness !== undefined && closingReadiness.open && closingReadiness.state !== "READY",
+            canClose: canCloseDeal,
+          }),
       unavailableDetail: finalizeDenominationDetail,
     };
   }
