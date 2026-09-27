@@ -87,12 +87,3 @@ export const FIRST_PAYMENT_CORRECTION_REFUSALS: Record<FirstPaymentCorrectionBlo
     "The quote's down payment is larger than the part of the approved amount the finance company does not fund. Ask the finance manager how this deal was agreed.",
 };
 
-/**
- * The stored reason with the first-payment sentence removed, or undefined when
- * nothing else remains. Other reasons are left exactly as they were.
- */
-export function withoutFirstPaymentReason(reason: string | undefined): string | undefined {
-  if (!reason) return reason;
-  const rest = reason.split(FIRST_PAYMENT_NOT_RECORDED_REASON).map((s) => s.trim()).filter(Boolean).join(" ");
-  return rest || undefined;
-}

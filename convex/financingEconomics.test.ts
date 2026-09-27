@@ -5825,7 +5825,7 @@ describe("applying the quote's down payment to an approved zero first payment (S
     const before = await readApp(seed, applicationId);
     expect(before.customerFirstPaymentMinor).toBe(0);
     expect(before.dealerContributionMinor).toBe(jod(1_875));
-    expect((await cockpitCapability(seed, applicationId))?.available).toBe(true);
+    expect((await cockpitCapability(seed, applicationId))?.block).toBeNull();
 
     const counts = await moneyRowCounts(seed);
     await apply(seed, applicationId);
@@ -6032,7 +6032,7 @@ describe("applying the quote's down payment to an approved zero first payment (S
       const counts = await moneyRowCounts(seed);
 
       const capability = await cockpitCapability(seed, applicationId);
-      expect(capability?.available).toBe(false);
+      expect(capability?.block).not.toBeNull();
       expect(capability?.block).toBe(refusal.block);
       await expect(apply(seed, applicationId)).rejects.toThrow(
         FIRST_PAYMENT_CORRECTION_REFUSALS[refusal.block as FirstPaymentCorrectionBlock]

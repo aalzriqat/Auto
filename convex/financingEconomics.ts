@@ -51,7 +51,6 @@ import {
   FIRST_PAYMENT_CORRECTION_REFUSALS,
   FIRST_PAYMENT_NOT_RECORDED_REASON,
   firstPaymentCorrectionBlock,
-  withoutFirstPaymentReason,
 } from "./utils/firstPaymentCorrection";
 
 /**
@@ -309,6 +308,20 @@ function appendReconciliationReason(existing: string | undefined, addition: stri
   if (!existing) return addition;
   if (existing.includes(addition)) return existing;
   return `${existing} ${addition}`;
+}
+
+/**
+ * The inverse of `appendReconciliationReason`, for a reason whose fact is no
+ * longer true: removes exactly that sentence and keeps every other one.
+ * Undefined when nothing remains.
+ */
+function withoutReconciliationReason(
+  existing: string | undefined,
+  sentence: string
+): string | undefined {
+  if (!existing) return existing;
+  const rest = existing.split(sentence).map((part) => part.trim()).filter(Boolean).join(" ");
+  return rest || undefined;
 }
 
 /**
@@ -2584,14 +2597,15 @@ export const applyQuoteFirstPayment = mutation({
 
     // Only the first-payment sentence is this correction's to retire; any
     // other reason stays, and so does the flag it raised.
-    const carriesFirstPaymentReason =
-      app.financingReconciliationReason?.includes(FIRST_PAYMENT_NOT_RECORDED_REASON) === true;
-    const remainingReason = withoutFirstPaymentReason(app.financingReconciliationReason);
+    const remainingReason = withoutReconciliationReason(
+      app.financingReconciliationReason,
+      FIRST_PAYMENT_NOT_RECORDED_REASON
+    );
     await ctx.db.patch(app._id, {
       customerFirstPaymentMinor: firstPaymentMinor,
       // See `economicsRevision` in the schema.
       economicsRevision: (app.economicsRevision ?? 0) + 1,
-      ...(carriesFirstPaymentReason
+      ...(remainingReason !== app.financingReconciliationReason
         ? {
             financingReconciliationReason: remainingReason,
             ...(remainingReason === undefined ? { needsFinancingReconciliation: false } : {}),

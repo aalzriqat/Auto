@@ -1691,7 +1691,7 @@ export function DealCockpit({
           },
           // SCRUM-373 D2: offered only on the server's own verdict.
           firstPaymentCorrection:
-            deal.firstPaymentCorrection?.available === true &&
+            deal.firstPaymentCorrection?.block === null &&
             deal.firstPaymentCorrection.quoteDownPaymentMinor !== null
               ? { quoteDownPaymentMinor: deal.firstPaymentCorrection.quoteDownPaymentMinor }
               : null,

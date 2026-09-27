@@ -16,7 +16,7 @@ import {
   // allowlist, not a blocklist. Every door that returns one of these rows
   // goes through it.
 } from "./utils/tenancy";
-import { projectFinanceApplication } from "./utils/financeApplicationProjection";
+import { mayEstablishAppliedLtv, projectFinanceApplication } from "./utils/financeApplicationProjection";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
@@ -2299,29 +2299,35 @@ export const dealCockpit = query({
     // must still render (it withholds money spelling there itself), so the
     // figure reads as unknown and the action is not offered. The mutation
     // refuses the same deal with the denomination's own message.
-    let quoteFirstPaymentMinor: number | undefined;
-    try {
-      quoteFirstPaymentMinor = await quoteDownPaymentMinor(ctx, app, quote);
-    } catch {
-      quoteFirstPaymentMinor = undefined;
-    }
-    const firstPaymentBlock = firstPaymentCorrectionBlock({
+    //
+    // The quote is read only once every cheaper condition passes — the
+    // predicate's first answer is then "no quote figure" — so the hot path for
+    // ordinary deals pays nothing for it.
+    const firstPaymentInput = {
       app,
       actorId: user._id,
-      mayApprove:
-        isSystemOwnerRole(role) ||
-        role.permissions.includes(PERMISSIONS.APPROVE_FINANCE_APPLICATION),
-      quoteDownPaymentMinor: quoteFirstPaymentMinor,
-    });
+      // Exactly the two permissions the mutation requires.
+      mayApprove: mayEstablishAppliedLtv(role),
+      quoteDownPaymentMinor: undefined as number | undefined,
+    };
+    let firstPaymentBlock = firstPaymentCorrectionBlock(firstPaymentInput);
+    if (firstPaymentBlock === "NO_QUOTE_DOWN_PAYMENT") {
+      try {
+        firstPaymentInput.quoteDownPaymentMinor = await quoteDownPaymentMinor(ctx, app, quote);
+      } catch {
+        firstPaymentInput.quoteDownPaymentMinor = undefined;
+      }
+      firstPaymentBlock = firstPaymentCorrectionBlock(firstPaymentInput);
+    }
 
     return {
       ...base,
       settlementAdviceDiscrepancy: settlementAdviceEvidence,
       money: await buildCockpitMoney(ctx, app, quote, settlementFacts),
       firstPaymentCorrection: {
-        available: firstPaymentBlock === null,
+        /** null when the server would accept the correction. */
         block: firstPaymentBlock,
-        quoteDownPaymentMinor: quoteFirstPaymentMinor ?? null,
+        quoteDownPaymentMinor: firstPaymentInput.quoteDownPaymentMinor ?? null,
       },
     };
   },
