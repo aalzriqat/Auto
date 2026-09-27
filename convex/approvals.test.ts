@@ -1102,6 +1102,9 @@ describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
         fuelType: "Petrol",
         transmission: "Automatic",
         sellingPrice: 21000,
+        // SCRUM-260 refuses a request for a price that needs no approval, so
+        // the vehicle needs a minimum for the request below to be written.
+        minimumProfit: 500,
       });
 
       // Org B's PENDING request against ORG A's vehicle, same salesperson, and
@@ -1142,13 +1145,20 @@ describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
     // requested profit and wizard snapshot land in Org B's record, and Org A
     // gets no approval at all. Worse in both directions than the leak this
     // ticket was opened for.
+    //
+    // SCRUM-260: a re-request now closes the pending rows it finds as
+    // superseded, so an unscoped lookup would also flip the foreign row's
+    // status — pinned below alongside its figures. Org A's row is found by
+    // org and vehicle, since the server now computes `requestedProfit` itself.
     const foreign = await t.run(async (ctx: any) => await ctx.db.get(foreignRequestId)) as any;
     expect(foreign.orgId).toBe(orgB);
     expect(foreign.requestedProfit).toBe(4242);
+    expect(foreign.status).toBe("PENDING");
+    expect(foreign.supersededAt).toBeUndefined();
 
     const orgARequests = await t.run(async (ctx: any) =>
       (await ctx.db.query("profitApprovalRequests").collect()).filter(
-        (r: any) => r.orgId === orgA && r.requestedProfit === 555
+        (r: any) => r.orgId === orgA && r.vehicleId === vehAId
       )
     );
     expect(orgARequests).toHaveLength(1);

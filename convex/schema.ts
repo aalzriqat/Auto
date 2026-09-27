@@ -2522,9 +2522,8 @@ export default defineSchema({
     // Core parameters
     vehiclePrice: v.number(),
     // The dealer's own margin on the deal, as the client that built the quote
-    // defines it. Checked against the vehicle's `minimumProfit` by
-    // convex/utils/profitApproval.ts. Optional only for quotes written before
-    // that check existed — new quotes always carry it (absent is read as 0).
+    // defines it. Display only (SCRUM-260): the minimum-profit check derives the
+    // margin from `vehiclePrice` itself, in convex/utils/profitApproval.ts.
     desiredProfit: v.optional(v.number()),
     downPayment: v.number(),
     termMonths: v.number(),
@@ -5772,6 +5771,18 @@ export default defineSchema({
     approvedBy: v.optional(v.id("users")),
     notes: v.optional(v.string()),
     createdAt: v.number(),
+    // SCRUM-260: the server-computed priced state this request asks approval
+    // for (see convex/utils/profitApproval.ts). An approval authorizes exactly
+    // these values; rows written before them carry none and authorize nothing.
+    salePriceMinor: v.optional(v.number()),
+    listPriceMinor: v.optional(v.number()),
+    minimumProfitMinor: v.optional(v.number()),
+    currency: v.optional(v.string()),
+    // Set when a newer request from the same salesperson replaced this one
+    // while it was still PENDING; the row is closed as REJECTED without a
+    // rejection notice.
+    supersededAt: v.optional(v.number()),
+    respondedAt: v.optional(v.number()),
     // Full wizard state snapshot so salesperson can resume after approval.
     // Must stay in step with `wizardSnapshotValidator` in convex/approvals.ts:
     // a field the args validator accepts but this object omits is an "extra
@@ -5796,6 +5807,9 @@ export default defineSchema({
     .index("by_vehicle", ["vehicleId"])
     .index("by_salesperson", ["salespersonId"])
     .index("by_status", ["status"])
+    // SCRUM-260: the approval lookup for one priced state. Rows written
+    // before SCRUM-260 carry no salePriceMinor and are never matched.
+    .index("by_org_vehicle_salePrice", ["orgId", "vehicleId", "salePriceMinor"])
     // SCRUM-100. `by_org` + a post-read `.filter(status === "PENDING")` reads
     // every request the org ever created and discards most of them; these rows
     // are fat (`wizardSnapshot` carries the whole sale wizard). Bound in the

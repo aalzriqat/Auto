@@ -405,11 +405,38 @@ describe("protected source content pins", () => {
        * A /simplify pass (owner rule 2026-09-27) then shortened only the two
        * hunks' comments (27 -> 23 insertions); every code line is unchanged.
        * Superseded pin for that step: 237857 / 7dfb02c2...0004674.
+       *
+       * -- RENEWAL 2026-09-27 - SCRUM-260 profit approval at the commit (PR #347)
+       *
+       * Previous reviewed postimage, superseded by this entry (the SCRUM-37
+       * renewal just above):
+       *
+       *   bytes:  237565
+       *   sha256: 0ed573139b3ba16ff5dee2d557ae3c6aab51b8ac385b102776545bfbd915b6d6
+       *
+       * Renewed because the minimum-profit approval moved from a quote-time
+       * re-check in `finalizeDeal` to `completeSale`'s shared boundary
+       * (utils/saleCompletion.ts), which proves it against the price the sale
+       * persists for all four sale doors. The delta is exactly two hunks, 3
+       * insertions and 14 deletions: (1) the now-unused import of
+       * `assertProfitApproved` / `quoteModeRequiresMinimumProfit` is removed;
+       * (2) the `finalizeDeal` block that re-checked `quote.desiredProfit` is
+       * replaced by a three-line comment pointing at the shared boundary. No
+       * new `ctx.db` access, query, index, mutation, import or export. Read
+       * the two hunks; do not take this note's word for their scope.
+       *
+       * Made under the owner's standing full-authority directive of
+       * 2026-09-26, with the cross-lane notice posted BEFORE the change (Jira
+       * SCRUM-215 c20962). The SCRUM-260 code was certified by Sol 6 at
+       * `4bcc1ea08` and rebased onto main `a1a0abd64` when #343 merged. Same
+       * governance: not weakened, bypassed, deleted, generalized or made
+       * vacuous. Both constants were recomputed FROM THE FILE with this
+       * test's own normalization. `convex/dealWorkspace.ts` is untouched.
        */
       file: "convex/applications.ts",
-      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26).
-      bytes: 237565,
-      sha256: "0ed573139b3ba16ff5dee2d557ae3c6aab51b8ac385b102776545bfbd915b6d6",
+      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval (RENEWAL 2026-09-27).
+      bytes: 236998,
+      sha256: "ec1c71d89d14d3ea9a545c1fe60ba76ecaa219504da113af3e975191f33132ed",
     },
     {
       /**
