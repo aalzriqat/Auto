@@ -2199,6 +2199,23 @@ describe("Collections", () => {
     });
   });
 
+  test("cashier_reconciliation_refuses_a_day_whose_cash_alone_fills_the_budget", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const seed = await seedFinanceMember(t);
+    const { orgId, asFinance } = seed;
+    const now = Date.now();
+    // CASH alone reaches the 500-document budget, so no REFUND read is issued.
+    await seedCashierPayments(t, seed, 500, { paymentDate: now });
+
+    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
+    expect(draft).toMatchObject({ complete: false, expectedCash: null, paymentCount: null });
+    await expect(asFinance.mutation(api.collections.submitCashierReconciliation, {
+      orgId, businessDate: now, countedCash: 0, idempotencyKey: "recon-cash-only-too-large",
+    })).rejects.toThrow("too many unreconciled payments");
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("cashierReconciliations").collect()).toHaveLength(0);
+    });
+  });
   test("cashier_reconciliation_certifies_exactly_the_limit_across_both_methods", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const seed = await seedFinanceMember(t);

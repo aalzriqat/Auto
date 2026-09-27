@@ -2810,7 +2810,9 @@ async function readCashierDayCashPayments(
       .take(budget);
   // Sequential on purpose: the second read gets only what the first left over.
   const cash = await readMethod("CASH", RECONCILIATION_DAY_LIMIT + 1);
-  const refunds = await readMethod("REFUND", RECONCILIATION_DAY_LIMIT + 1 - cash.length);
+  // Never issue a zero-budget read: CASH alone already proves the day incomplete.
+  const refundBudget = RECONCILIATION_DAY_LIMIT + 1 - cash.length;
+  const refunds = refundBudget > 0 ? await readMethod("REFUND", refundBudget) : [];
   const payments = [...cash, ...refunds];
   if (payments.length > RECONCILIATION_DAY_LIMIT) return { complete: false };
   const expectedCash = payments.reduce(
