@@ -2766,11 +2766,11 @@ export const respondToApproval = mutation({
  * Unreconciled POSTED drawer payments (CASH and REFUND) one cashier can have on
  * one business day before the reconciliation refuses rather than certifies.
  *
- * Also the read budget: at most LIMIT + 1 full documents across both methods.
- * Payment `notes` are uncapped, so no row count is byte-safe on its own
- * (SCRUM-398).
+ * LIMIT + 1 is the total read budget across both methods: 500 full documents,
+ * exactly the bound of the read this replaced. Payment `notes` are uncapped, so
+ * no row count is byte-safe on its own (SCRUM-398).
  */
-const RECONCILIATION_DAY_LIMIT = 500;
+const RECONCILIATION_DAY_LIMIT = 499;
 const RECONCILIATION_DAY_TOO_LARGE =
   "This business day has too many unreconciled payments to reconcile in one step. Contact support.";
 
