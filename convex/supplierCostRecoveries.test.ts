@@ -453,3 +453,61 @@ describe("work orders on a SOURCED vehicle", () => {
     expect(recoveries).toHaveLength(0);
   });
 });
+
+describe("seat R1 findings (SC-389-01/02/03)", () => {
+  test("SC-389-01: a receipt on a car converted to owned stock cannot be reversed back into an open claim", async () => {
+    const s = await seed("sc01");
+    const { recovery } = await paySupplierCost(s);
+    const { receiptId } = await s.as.mutation(
+      api.supplierCostRecoveries.recordReceipt,
+      receiptArgs(s, recovery._id, { amountMinor: SUPPLIER_COST * SCALE })
+    );
+    // Fully recovered: conversion is legitimately allowed (the dealer buys the car).
+    await s.as.mutation(api.vehicles.update, {
+      orgId: s.orgId, vehicleId: s.sourcedId, sourceType: "STOCK",
+      purchasePrice: 9_500, purchasePaymentMethod: "CASH",
+    } as any);
+    await expect(
+      s.as.mutation(api.supplierCostRecoveries.reverseReceipt, {
+        orgId: s.orgId, receiptId, reason: "Transfer bounced", idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(/no longer a sourced vehicle/);
+    const after = await s.t.run((ctx) => ctx.db.get(recovery._id));
+    expect(after!.status).toBe("RECOVERED");
+    const receipt = await s.t.run((ctx) => ctx.db.get(receiptId));
+    expect(receipt!.status).toBe("LIVE");
+    const gl = await ledger(s.t, s.orgId);
+    expect(gl[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS] ?? 0).toBe(0);
+  });
+
+  test("SC-389-02: a supplier-borne cost paid by cheque credits the bank, never Cheques in Hand", async () => {
+    const s = await seed("sc02");
+    await paySupplierCost(s, { paymentMethod: "CHEQUE" });
+    const gl = await ledger(s.t, s.orgId);
+    expect(gl[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS]).toBe(SUPPLIER_COST * SCALE);
+    expect(gl[SYSTEM_KEYS.CHEQUES_IN_HAND] ?? 0).toBe(0);
+    expect(gl[SYSTEM_KEYS.BANK_ACCOUNT]).toBe(-SUPPLIER_COST * SCALE);
+  });
+
+  test("SC-389-03: a receipt dated before its cost was posted is refused and records nothing", async () => {
+    const s = await seed("sc03");
+    const { recovery } = await paySupplierCost(s);
+    const source = await s.t.run(async (ctx) =>
+      (await ctx.db.query("accountingEvents").collect()).find((e) => e.eventType === "EXPENSE_POSTED")
+    );
+    await expect(
+      s.as.mutation(
+        api.supplierCostRecoveries.recordReceipt,
+        receiptArgs(s, recovery._id, { receivedDate: source!.accountingDate - 1 })
+      )
+    ).rejects.toThrow(/before the cost it recovers was posted/);
+    const receipts = await s.t.run((ctx) => ctx.db.query("supplierCostRecoveryReceipts").collect());
+    expect(receipts).toHaveLength(0);
+    // Control: the same receipt dated AT the source date is accepted.
+    const ok = await s.as.mutation(
+      api.supplierCostRecoveries.recordReceipt,
+      receiptArgs(s, recovery._id, { receivedDate: source!.accountingDate })
+    );
+    expect(ok.status).toBe("PARTIALLY_RECOVERED");
+  });
+});

@@ -364,6 +364,12 @@ export const recordReceipt = mutation({
             "This cost has not been posted to the ledger yet. Receipts can be recorded once it has."
           );
         }
+        // A credit dated before its debit would show the receivable negative
+        // at any cutoff between the two dates.
+        const sourceEvent = source.eventId ? await ctx.db.get(source.eventId) : null;
+        if (!sourceEvent || args.receivedDate < sourceEvent.accountingDate) {
+          throw new ConvexError("A receipt cannot be dated before the cost it recovers was posted.");
+        }
         const remaining = recovery.amountDueMinor - recovery.amountRecoveredMinor;
         if (args.amountMinor > remaining) {
           throw new ConvexError("That is more than the supplier still owes on this cost.");
@@ -500,6 +506,15 @@ export const reverseReceipt = mutation({
           receipt.recoveryId,
           "Supplier cost recovery not found."
         );
+        // Conversion to owned stock is allowed once nothing is owed; reversing a
+        // receipt afterwards would reopen a claim against a supplier on a car
+        // the dealership now owns.
+        const vehicle = await ctx.db.get(recovery.vehicleId);
+        if (vehicle?.sourceType !== "SOURCED") {
+          throw new ConvexError(
+            "This car is no longer a sourced vehicle, so its supplier cost recoveries are closed and cannot be reversed."
+          );
+        }
         const posting = await postingStateForKey(ctx, args.orgId, supplierCostRecoveryReceiptKey(receipt._id));
         if (posting.state !== "POSTED" || !posting.eventId) {
           throw new ConvexError("This receipt's ledger entry is not in a state that can be reversed.");

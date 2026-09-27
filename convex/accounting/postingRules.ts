@@ -1726,7 +1726,9 @@ export function ruleExpensePosted(p: ExpensePostedPayload): RuleResult {
     return {
       lines: [
         line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, p.amountMinor, 0, "Supplier-borne vehicle cost recoverable", { vehicleId: p.vehicleId }),
-        line(cashKey, 0, p.amountMinor, "Cash payment"),
+        // Outbound: a CHEQUE here is one the dealership ISSUED, so it credits
+        // the bank — never Cheques in Hand, which holds customers' cheques.
+        line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor, "Cash payment"),
       ],
       memo: "Supplier-borne vehicle cost paid — recoverable from the supplier",
       category: "SYSTEM",
