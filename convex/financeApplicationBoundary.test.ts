@@ -487,6 +487,20 @@ async function allDoors(seeded: Seeded, caller: Caller) {
         customerFirstPaymentMinor: 0,
       })
     ),
+    /**
+     * SCRUM-404's creation-time preview, on this deal's own quote. It reads the
+     * QUOTE and its company, never the application, so none of the row's
+     * sentinels are among its inputs — a hit here would still be a leak.
+     */
+    await call("financingEconomics.previewCreationQuotation", async () => {
+      const quoteId = await seeded.t.run(
+        async (ctx) => (await ctx.db.get(applicationId))!.quoteId
+      );
+      return await caller.query(api.financingEconomics.previewCreationQuotation, {
+        orgId,
+        quoteId,
+      });
+    }),
   ];
 
   const publicQueriesOf = (module: string, mod: Record<string, unknown>) =>

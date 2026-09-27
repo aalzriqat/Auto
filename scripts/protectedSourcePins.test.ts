@@ -465,11 +465,47 @@ describe("protected source content pins", () => {
        * Same governance: not weakened, bypassed, deleted, generalized or made
        * vacuous. Both constants were recomputed FROM THE FILE with this test's
        * own normalization.
+       *
+       * -- RENEWAL 2026-09-27 (3) - SCRUM-404 record the calculated quotation at creation
+       *
+       * Previous reviewed postimage, superseded by this entry (the SCRUM-373 D2
+       * renewal just above, as amended):
+       *
+       *   bytes:  238609
+       *   sha256: fd9e75cde3446c86aea41878b9a3280d894ba39c431546bc1277f66477b1af8a
+       *
+       * Renewed so starting a finance application from a configured-company
+       * quote can record the AutoFlow-calculated quotation the operator was
+       * shown, in the same transaction. The delta, 84 insertions and 96
+       * deletions: (1) imports — `allows` from the projection,
+       * `applySubmittedQuotation` / `assertQuotationRecordAuthority` from
+       * `./financingEconomics`, the three `./utils/creationEconomics` helpers;
+       * the now-unused `buildRuleSnapshot` / `assertFeeTemplatesWithinLimit`
+       * imports dropped; (2) `resolveExpectedExecutionFeesMinor` MOVED unchanged
+       * to `convex/utils/creationEconomics.ts` and re-exported from here, so
+       * every existing importer is untouched; (3) `createFromQuote` takes an
+       * optional `confirmedCalculatedQuotationMinor`, refused up front unless
+       * the caller holds `create:finance_application` and would pass the
+       * recorder's own authority check; (4) the rule snapshot and the
+       * target / first payment / fees inputs now come from the shared
+       * `resolveCreationRuleSnapshot` / `resolveCreationEconomicsInputs`, the
+       * same helpers the new `previewCreationQuotation` query reads, so the
+       * preview and the creation cannot compute different inputs; (5) after
+       * the application and its side effects are written, a confirmed figure is
+       * recorded through `applySubmittedQuotation` (`recordedVia:
+       * "DEAL_CREATION"`), whose refusal rolls the whole creation back. Without
+       * the new argument the mutation behaves exactly as before. No index,
+       * schema table or permission change. Read the hunks; do not take this
+       * note's word for their scope.
+       *
+       * Same governance: not weakened, bypassed, deleted, generalized or made
+       * vacuous. Both constants were recomputed FROM THE FILE with this test's
+       * own normalization.
        */
       file: "convex/applications.ts",
-      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27).
-      bytes: 238609,
-      sha256: "fd9e75cde3446c86aea41878b9a3280d894ba39c431546bc1277f66477b1af8a",
+      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)).
+      bytes: 238261,
+      sha256: "0ba908587a5dbd96f8da173dfe06e7494400fa98aab550cc122632d56b8e2f6b",
     },
     {
       /**

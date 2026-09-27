@@ -16,14 +16,13 @@ import {
   // allowlist, not a blocklist. Every door that returns one of these rows
   // goes through it.
 } from "./utils/tenancy";
-import { projectFinanceApplication } from "./utils/financeApplicationProjection";
+import { allows, projectFinanceApplication } from "./utils/financeApplicationProjection";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
 import { depositMethodValidator, type DepositMethod } from "./utils/depositRecording";
 import { completeSale } from "./utils/saleCompletion";
 import { resolveFinancedSalePlan, financedSaleRecognitionDate } from "./utils/financedSaleRecognition";
-import { assertFeeTemplatesWithinLimit } from "./utils/dealCostLimits";
 import { loadCustodyRecords } from "./utils/settlementDeductions";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
@@ -46,7 +45,6 @@ import {
 } from "./utils/money";
 import {
   assertAppraisalGapSettledToAdvance,
-  buildRuleSnapshot,
   composeCustomerGapToDealer,
   creditDecisionForStatus,
   defaultAppraisalFeeResponsibility,
@@ -66,7 +64,12 @@ import {
 } from "./utils/financingEconomics";
 // The anomaly verdict, from the module that owns it. Both handover
 // confirmations must warn about the same deals; see the helper's own note.
-import { approvedAmountIsFarFromEvidenceFor, quoteDownPaymentMinor } from "./financingEconomics";
+import {
+  applySubmittedQuotation,
+  approvedAmountIsFarFromEvidenceFor,
+  assertQuotationRecordAuthority,
+  quoteDownPaymentMinor,
+} from "./financingEconomics";
 import { firstPaymentCorrectionBlock, mayCorrectFirstPayment } from "./utils/firstPaymentCorrection";
 import {
   allocatePaymentToReceivable,
@@ -92,82 +95,21 @@ import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { auditLog } from "./financialAudit";
 import { assertFinancedDepositsSurviveParentReversal } from "./utils/depositApplications";
 import { projectDealVehicleProfile } from "./utils/dealVehicleProfile";
+import {
+  resolveCreationEconomicsInputs,
+  resolveCreationRuleSnapshot,
+  resolveExpectedExecutionFeesMinor,
+} from "./utils/creationEconomics";
 
 /** sourceType used for the canonical finance-company receivable opened at finalizeDeal. */
 const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
 
 /**
- * Canonical resolver for a deal's expected execution-fee authority.
- * Enforces the route-wide single-authority invariants across createFromQuote
- * and repairQuoteEconomicsLineage:
- * - CONFIGURED_FINANCE_COMPANY requires companyRuleSnapshot.adminFees (or legacy feeTemplates)
- * - MANUAL_FINANCE_COMPANY requires quote.manualAdminFees
- * - Ambiguous quotes (e.g. companyId with missing/invalid mode) fail closed
- * - Explicit 0 is valid and resolves to 0
- * - Absent authority rejects and NEVER silently converts to 0
+ * Canonical resolver for a deal's expected execution-fee authority. Moved to
+ * `./utils/creationEconomics` (SCRUM-404) so the creation-time quotation preview
+ * shares it without a module cycle; re-exported here for existing importers.
  */
-export function resolveExpectedExecutionFeesMinor(args: {
-  quote: {
-    mode?: string;
-    companyId?: Id<"financeCompanies">;
-    manualAdminFees?: number;
-  };
-  companyRuleSnapshot?: FinanceCompanyRuleSnapshot;
-  currency: string;
-}): number {
-  const { quote, companyRuleSnapshot, currency } = args;
-
-  // Ambiguous quote: company is attached but mode is not CONFIGURED_FINANCE_COMPANY
-  if (quote.companyId !== undefined && quote.mode !== "CONFIGURED_FINANCE_COMPANY") {
-    throw new ConvexError(
-      "Finance company can only be set for configured finance company quotes."
-    );
-  }
-
-  if (quote.mode === "CONFIGURED_FINANCE_COMPANY") {
-    if (!quote.companyId || !companyRuleSnapshot) {
-      throw new ConvexError(
-        "The application's frozen finance-company policy is missing. Reconcile the policy snapshot before repairing quotation economics."
-      );
-    }
-    if (companyRuleSnapshot.adminFees !== undefined) {
-      const minor = toMinorUnits(companyRuleSnapshot.adminFees, currency);
-      assertValidMinorAmount(minor, "frozen admin fee total");
-      return minor;
-    }
-    // Historical legacy fallback: snapshot preserved feeTemplates from before single fee authority
-    if (companyRuleSnapshot.feeTemplates && companyRuleSnapshot.feeTemplates.length > 0) {
-      return companyRuleSnapshot.feeTemplates
-        .filter(
-          (template) =>
-            template.includedInQuotation &&
-            (template.paidBy === "DEALER" || template.paidBy === "EMPLOYEE")
-        )
-        .reduce((total, template) => {
-          assertValidMinorAmount(template.estimatedAmountMinor, "included fee estimate");
-          const next = total + template.estimatedAmountMinor;
-          assertValidMinorAmount(next, "included dealer-borne fee total");
-          return next;
-        }, 0);
-    }
-    throw new ConvexError(
-      "Execution Fees are not configured for this finance company. Enter the expected execution fee amount, or enter 0 if none are charged."
-    );
-  }
-
-  if (quote.mode === "MANUAL_FINANCE_COMPANY") {
-    if (quote.manualAdminFees === undefined) {
-      throw new ConvexError(
-        "Execution Fees are not configured for this manual finance company quote. Enter the expected execution fee amount, or enter 0 if none are charged."
-      );
-    }
-    const minor = toMinorUnits(quote.manualAdminFees, currency);
-    assertValidMinorAmount(minor, "manual admin fee total");
-    return minor;
-  }
-
-  return 0;
-}
+export { resolveExpectedExecutionFeesMinor };
 
 /**
  * Opens (or finds) the canonical receivable owed BY the finance company for a
@@ -2343,9 +2285,36 @@ export const createFromQuote = mutation({
      */
     adoptReservationId: v.optional(v.id("vehicleReservations")),
     notes: v.optional(v.string()),
+    /**
+     * SCRUM-404: the AutoFlow-calculated quotation the operator was SHOWN in the
+     * wizard and confirmed by starting the application. Present, the deal is
+     * created with that exact figure recorded as its SYSTEM_CALCULATED
+     * submitted quotation, in the same transaction — or not created at all.
+     * Absent, creation is exactly what it was before: no quotation recorded.
+     * Never inferred: only the wizard's explicit confirmation sends it.
+     */
+    confirmedCalculatedQuotationMinor: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
+
+    // Recording the quotation is `recordSubmittedQuotation`'s act, so a
+    // confirmation needs that door's authority too — asked of the role alone,
+    // before anything is read, so a refusal is independent of every row fact.
+    // Refused outright rather than silently creating without the quotation:
+    // the operator confirmed a figure and must not believe it was recorded.
+    const confirmedQuotationMinor = args.confirmedCalculatedQuotationMinor;
+    if (confirmedQuotationMinor !== undefined) {
+      if (!allows(auth.role, PERMISSIONS.CREATE_FINANCE_APPLICATION)) {
+        throw new ConvexError(
+          "Recording the finance company's quotation needs finance-application access. Start the application without it, and ask someone with that access to record the quotation on the deal page."
+        );
+      }
+      assertQuotationRecordAuthority(auth.role, {
+        submittedQuotationMinor: confirmedQuotationMinor,
+        source: "SYSTEM_CALCULATED",
+      });
+    }
 
     const quote = await ctx.db.get(args.quoteId);
     if (!quote || quote.orgId !== args.orgId) {
@@ -2532,21 +2501,14 @@ export const createFromQuote = mutation({
     // When the quote froze its rule snapshot at creation, that frozen authority
     // is preserved so subsequent edits to the finance company cannot silently
     // reinterpret the financial basis (installment, financed amount, DBR, LTV).
-    let companyRuleSnapshot: FinanceCompanyRuleSnapshot | undefined;
+    //
+    // The choice and the fee-template limit live in `resolveCreationRuleSnapshot`
+    // so the creation-time quotation preview resolves the SAME rules (SCRUM-404).
+    const companyRuleSnapshot: FinanceCompanyRuleSnapshot | undefined =
+      resolveCreationRuleSnapshot(quote, quoteCompany);
     let companyRuleVersionId: Id<"financeCompanyRuleVersions"> | undefined;
     if (quote.mode === "CONFIGURED_FINANCE_COMPANY") {
-      if (quote.companyRuleSnapshot) {
-        companyRuleSnapshot = quote.companyRuleSnapshot;
-      } else if (quoteCompany) {
-        companyRuleSnapshot = buildRuleSnapshot(quoteCompany);
-      }
       if (companyRuleSnapshot) {
-        if (companyRuleSnapshot.feeTemplates && companyRuleSnapshot.adminFees === undefined) {
-          assertFeeTemplatesWithinLimit(
-            companyRuleSnapshot.feeTemplates,
-            `Creating an application under ${quoteCompany?.name ?? companyRuleSnapshot.companyName}`
-          );
-        }
         const versionRow = await ctx.db
           .query("financeCompanyRuleVersions")
           .withIndex("by_company_version", (q) =>
@@ -2569,22 +2531,21 @@ export const createFromQuote = mutation({
     // denomination before any write, then convert once at this lineage
     // boundary. A corrupt NaN/negative legacy quote must fail closed rather
     // than seed unusable economics (Convex's v.number() accepts NaN).
-    const targetSellingAmountMinor = toMinorUnits(quote.vehiclePrice, economicsCurrency);
-    const customerFirstPaymentMinor = toMinorUnits(quote.downPayment, economicsCurrency);
-    assertValidMinorAmount(targetSellingAmountMinor, "quoted vehicle price");
-    assertValidMinorAmount(customerFirstPaymentMinor, "quoted customer first payment");
-
+    //
     // Only costs the frozen policy explicitly says are included in the
     // quotation belong in the solver input. Other expected handover costs
     // remain visible in the deal checklist, but adding them here would charge
     // the customer for a cost the policy explicitly excluded. EMPLOYEE means
     // the dealership advances/reimburses the money and is therefore
     // dealer-borne, matching the cockpit's financial summary classification.
-    const dealerBorneExpensesMinor = resolveExpectedExecutionFeesMinor({
-      quote,
-      companyRuleSnapshot,
-      currency: economicsCurrency,
-    });
+    //
+    // One resolver, shared with the creation-time quotation preview (SCRUM-404).
+    const { targetSellingAmountMinor, customerFirstPaymentMinor, dealerBorneExpensesMinor } =
+      resolveCreationEconomicsInputs({
+        quote,
+        companyRuleSnapshot,
+        currency: economicsCurrency,
+      });
 
     // SCRUM-195: a live finance application is per-vehicle commitment evidence
     // in its own right — no deposit required. So creating one is an
@@ -2683,6 +2644,33 @@ export const createFromQuote = mutation({
       { actorName, customerName: `${customer?.firstName} ${customer?.lastName}` },
       { link: `/${args.orgId}/applications` }
     );
+
+    // SCRUM-404: record the quotation the operator confirmed, through the SAME
+    // code `recordSubmittedQuotation` runs after its ownership check — the row
+    // is this mutation's own insert. SYSTEM_CALCULATED demands exact equality
+    // with the solver on the row's frozen inputs, so a figure that went stale
+    // between the preview and this click refuses, and the refusal rolls back
+    // everything above: the application, the acquisition, the status log, the
+    // documents and the notifications (all transactional writes).
+    if (confirmedQuotationMinor !== undefined) {
+      const inserted = await ctx.db.get(appId);
+      if (!inserted) {
+        throw new ConvexError("The new finance application could not be read back.");
+      }
+      await applySubmittedQuotation(ctx, {
+        user: auth.user,
+        role: auth.role,
+        app: inserted,
+        args: {
+          orgId: args.orgId,
+          applicationId: appId,
+          submittedQuotationMinor: confirmedQuotationMinor,
+          source: "SYSTEM_CALCULATED",
+        },
+        reason: undefined,
+        recordedVia: "DEAL_CREATION",
+      });
+    }
 
     return appId;
   },

@@ -322,7 +322,12 @@ const FIELD_VISIBILITY: Record<
   vehiclePurchaseCostMinor: "COST",
 };
 
-function allows(role: Doc<"roles">, permission: Permission): boolean {
+/**
+ * Whether a role holds one permission, the system OWNER holding all of them.
+ * Exported for `createFromQuote`'s quotation-confirmation gate (SCRUM-404),
+ * which must ask it of the role before any read, not through `requireTenantAuth`.
+ */
+export function allows(role: Doc<"roles">, permission: Permission): boolean {
   return isSystemOwnerRole(role) || role.permissions.includes(permission);
 }
 

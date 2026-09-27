@@ -156,6 +156,7 @@ import type * as utils_commitmentCutover from "../utils/commitmentCutover.js";
 import type * as utils_commitmentKernel from "../utils/commitmentKernel.js";
 import type * as utils_commitmentSources from "../utils/commitmentSources.js";
 import type * as utils_commitmentWriters from "../utils/commitmentWriters.js";
+import type * as utils_creationEconomics from "../utils/creationEconomics.js";
 import type * as utils_custodySourceLedger from "../utils/custodySourceLedger.js";
 import type * as utils_dealCostLimits from "../utils/dealCostLimits.js";
 import type * as utils_dealCustodyPosting from "../utils/dealCustodyPosting.js";
@@ -395,6 +396,7 @@ declare const fullApi: ApiFromModules<{
   "utils/commitmentKernel": typeof utils_commitmentKernel;
   "utils/commitmentSources": typeof utils_commitmentSources;
   "utils/commitmentWriters": typeof utils_commitmentWriters;
+  "utils/creationEconomics": typeof utils_creationEconomics;
   "utils/custodySourceLedger": typeof utils_custodySourceLedger;
   "utils/dealCostLimits": typeof utils_dealCostLimits;
   "utils/dealCustodyPosting": typeof utils_dealCustodyPosting;
