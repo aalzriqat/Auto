@@ -2210,6 +2210,7 @@ describe("Collections", () => {
     const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
     expect(draft).toMatchObject({ complete: true, expectedCash: 400, paymentCount: 500 });
   });
+
   test("cashier_reconciliation_limit_ignores_reconciled_voided_and_non_cash_rows", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const seed = await seedFinanceMember(t);

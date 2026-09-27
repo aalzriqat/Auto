@@ -2766,9 +2766,9 @@ export const respondToApproval = mutation({
  * Unreconciled POSTED drawer payments (CASH and REFUND) one cashier can have on
  * one business day before the reconciliation refuses rather than certifies.
  *
- * Also the read budget: at most LIMIT + 1 full documents across both methods,
- * the same exposure as the 500-row read this replaced. Payment `notes` are
- * uncapped, so no row count is byte-safe on its own (capping them: SCRUM-398).
+ * Also the read budget: at most LIMIT + 1 full documents across both methods.
+ * Payment `notes` are uncapped, so no row count is byte-safe on its own
+ * (SCRUM-398).
  */
 const RECONCILIATION_DAY_LIMIT = 500;
 const RECONCILIATION_DAY_TOO_LARGE =
@@ -2810,7 +2810,6 @@ async function readCashierDayCashPayments(
       .take(budget);
   // Sequential on purpose: the second read gets only what the first left over.
   const cash = await readMethod("CASH", RECONCILIATION_DAY_LIMIT + 1);
-  if (cash.length > RECONCILIATION_DAY_LIMIT) return { complete: false };
   const refunds = await readMethod("REFUND", RECONCILIATION_DAY_LIMIT + 1 - cash.length);
   const payments = [...cash, ...refunds];
   if (payments.length > RECONCILIATION_DAY_LIMIT) return { complete: false };
