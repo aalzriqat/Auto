@@ -432,11 +432,44 @@ describe("protected source content pins", () => {
        * governance: not weakened, bypassed, deleted, generalized or made
        * vacuous. Both constants were recomputed FROM THE FILE with this
        * test's own normalization. `convex/dealWorkspace.ts` is untouched.
+       *
+       * -- RENEWAL 2026-09-27 (2) - SCRUM-373 D2 quote first-payment correction
+       *
+       * Previous reviewed postimage, superseded by this entry (the SCRUM-260
+       * renewal just above):
+       *
+       *   bytes:  236998
+       *   sha256: ec1c71d89d14d3ea9a545c1fe60ba76ecaa219504da113af3e975191f33132ed
+       *
+       * Renewed so the cockpit can say whether the approver may apply the
+       * quote's first payment to a deal whose recorded split zeroed it. The
+       * delta is three hunks, 36 insertions and 4 deletions: (1) imports of
+       * `mayCorrectFirstPayment`, `quoteDownPaymentMinor` and
+       * `firstPaymentCorrectionBlock` (and `mayEstablishAppliedLtv` dropped from
+       * the projection import); (2) `dealCockpit` also destructures
+       * `user` from its existing `requireTenantAuth` call, permissions
+       * unchanged; (3) `dealCockpit` returns a money-gated
+       * `firstPaymentCorrection` (null when `!canSeeMoney`), reading the quote
+       * only once the cheaper conditions pass. No mutation, write, index or
+       * permission change. Read the three hunks; do not take this note's word
+       * for their scope.
+       *
+       * Amended once inside the same PR (CodeRabbit, #349): the cockpit's offer
+       * read `mayEstablishAppliedLtv` while the action renders only for holders of
+       * VIEW_FINANCE_APPLICATIONS, so the offer now reads `mayCorrectFirstPayment`,
+       * the same permission list the mutation requires. Superseded pin for that
+       * step: 238613 / 446e8979c307456bc4ae53dd26c50081c6654573a06a656c3aa8d74bd8782dca.
+       *
+       * Cross-lane notices posted BEFORE each change (Jira SCRUM-215 c20972, c20975),
+       * under the owner's standing full-authority directive of 2026-09-26.
+       * Same governance: not weakened, bypassed, deleted, generalized or made
+       * vacuous. Both constants were recomputed FROM THE FILE with this test's
+       * own normalization.
        */
       file: "convex/applications.ts",
-      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval (RENEWAL 2026-09-27).
-      bytes: 236998,
-      sha256: "ec1c71d89d14d3ea9a545c1fe60ba76ecaa219504da113af3e975191f33132ed",
+      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27).
+      bytes: 238609,
+      sha256: "fd9e75cde3446c86aea41878b9a3280d894ba39c431546bc1277f66477b1af8a",
     },
     {
       /**
