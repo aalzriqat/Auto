@@ -9,6 +9,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { economicsStamp } from "./utils/financingEconomics";
 import {
   FIRST_PAYMENT_CORRECTION_REFUSALS,
+  FIRST_PAYMENT_NOT_RECORDED_REASON,
   type FirstPaymentCorrectionBlock,
 } from "./utils/firstPaymentCorrection";
 
@@ -5743,9 +5744,25 @@ describe("applying the quote's down payment to an approved zero first payment (S
 
   /** An approved deal whose first payment was recorded as a confident zero — the production shape. */
   async function zeroedApprovedDeal(
-    options: { quoteDownPaymentMajor?: number; suffix?: string } = {}
+    options: { quoteDownPaymentMajor?: number; suffix?: string; lendsAgainstAppraisal?: boolean } = {}
   ): Promise<{ seed: Seed; applicationId: Id<"financeApplications"> }> {
     const seed = await seedDealer({}, options.suffix ?? "1");
+    if (options.lendsAgainstAppraisal) {
+      await seed.asUser.mutation(api.finance.updateCompany, {
+        expectedEditRevision: 1,
+        id: seed.companyId,
+        orgId: seed.orgId,
+        name: "Jordan Finance",
+        profitRate: 5,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        isActive: true,
+        maxFinancingLTV: 85,
+        defaultLtvPercent: 85,
+        customerFirstPaymentOffsetsUnfinancedShare: true,
+        ltvBasis: "INDEPENDENT_APPRAISAL",
+      });
+    }
     const applicationId = await createApplication(seed);
     if (options.quoteDownPaymentMajor !== undefined) {
       await seed.t.run(async (ctx) => {
@@ -5849,6 +5866,59 @@ describe("applying the quote's down payment to an approved zero first payment (S
     expect((await cockpitCapability(seed, applicationId))?.block).toBe("NOT_ZERO");
   });
 
+  test("a correction the recompute cannot re-split is refused and changes nothing", async () => {
+    const { seed, applicationId } = await zeroedApprovedDeal({ lendsAgainstAppraisal: true });
+    const before = await readApp(seed, applicationId);
+    expect(before.unfinancedPortionMinor).not.toBeUndefined();
+    // Orphan the basis appraisal: the stored split survives, a recompute cannot.
+    await seed.t.run(async (ctx) => {
+      for (const row of await ctx.db.query("financeAppraisals").collect()) await ctx.db.delete(row._id);
+    });
+    expect((await cockpitCapability(seed, applicationId))?.block).toBeNull();
+    const counts = await moneyRowCounts(seed);
+
+    await expect(apply(seed, applicationId)).rejects.toThrow("could not be recomputed");
+
+    const after = await readApp(seed, applicationId);
+    expect(after.customerFirstPaymentMinor).toBe(0);
+    expect(after.unfinancedPortionMinor).toBe(before.unfinancedPortionMinor);
+    expect(after.economicsRevision).toBe(before.economicsRevision);
+    expect(await firstPaymentAudit(seed, applicationId)).toHaveLength(0);
+    expect(await moneyRowCounts(seed)).toEqual(counts);
+  });
+
+  test("the retired sentence is removed only where it stands alone, not where another reason quotes it", async () => {
+    const quoted = `Company "${FIRST_PAYMENT_NOT_RECORDED_REASON}" retains customer funds.`;
+    const { seed, applicationId } = await zeroedApprovedDeal();
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        needsFinancingReconciliation: true,
+        financingReconciliationReason: `${quoted} ${FIRST_PAYMENT_NOT_RECORDED_REASON}`,
+      })
+    );
+
+    await apply(seed, applicationId);
+
+    const after = await readApp(seed, applicationId);
+    expect(after.financingReconciliationReason).toBe(quoted);
+    expect(after.needsFinancingReconciliation).toBe(true);
+  });
+
+  test("a quote down payment exactly equal to the unfinanced portion is accepted", async () => {
+    const probe = await zeroedApprovedDeal({ suffix: "probe" });
+    const unfinancedMinor = (await readApp(probe.seed, probe.applicationId)).unfinancedPortionMinor;
+    if (unfinancedMinor === undefined) throw new Error("fixture: no split");
+    const { seed, applicationId } = await zeroedApprovedDeal({
+      quoteDownPaymentMajor: unfinancedMinor / jod(1),
+      suffix: "edge",
+    });
+    expect((await readApp(seed, applicationId)).unfinancedPortionMinor).toBe(unfinancedMinor);
+    expect((await cockpitCapability(seed, applicationId))?.block).toBeNull();
+
+    await apply(seed, applicationId);
+
+    expect((await readApp(seed, applicationId)).customerFirstPaymentMinor).toBe(unfinancedMinor);
+  });
   test("a CLASSIFIED deal loses its classification, on the record", async () => {
     const { seed, applicationId } = await zeroedApprovedDeal();
     await seed.t.run((ctx) => ctx.db.patch(applicationId, { accountingClassification: "CLASSIFIED" }));

@@ -312,15 +312,21 @@ function appendReconciliationReason(existing: string | undefined, addition: stri
 
 /**
  * The inverse of `appendReconciliationReason`, for a reason whose fact is no
- * longer true: removes exactly that sentence and keeps every other one.
+ * longer true: removes that sentence and keeps every other one byte for byte.
  * Undefined when nothing remains.
+ *
+ * Only where it stands as a sentence of its own, at the start or after another
+ * sentence's full stop. The same words quoted inside another reason (a company
+ * name, say) are that reason's text and stay.
  */
 function withoutReconciliationReason(
   existing: string | undefined,
   sentence: string
 ): string | undefined {
   if (!existing) return existing;
-  const rest = existing.split(sentence).map((part) => part.trim()).filter(Boolean).join(" ");
+  const escaped = sentence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const standalone = new RegExp(`^${escaped}(?:\\s+|$)|(?<=[.!?])\\s+${escaped}(?=\\s|$)`, "g");
+  const rest = existing.replace(standalone, "").trim();
   return rest || undefined;
 }
 
@@ -2617,6 +2623,14 @@ export const applyQuoteFirstPayment = mutation({
     // Every figure derived from the first payment moves in this transaction.
     const corrected = await ctx.db.get(app._id);
     if (corrected) await recomputeAndPatchEconomics(ctx, corrected);
+    // The stored split this was judged against is not proof the recompute can
+    // re-derive one (an orphaned basis appraisal clears it). A correction that
+    // leaves the deal without a split is refused, and the throw undoes it all.
+    if ((await ctx.db.get(app._id))?.unfinancedPortionMinor === undefined) {
+      throw new ConvexError(
+        "The funding split could not be recomputed with the corrected first payment, so nothing was changed. Record the figure the finance company's rule needs first."
+      );
+    }
 
     return { customerFirstPaymentMinor: firstPaymentMinor };
   },

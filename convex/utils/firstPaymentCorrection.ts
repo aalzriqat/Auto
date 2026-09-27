@@ -79,7 +79,8 @@ export const FIRST_PAYMENT_CORRECTION_REFUSALS: Record<FirstPaymentCorrectionBlo
     "The vehicle has already been handed over on this deal, so its first payment can no longer be corrected here.",
   NOT_APPROVED:
     "This deal has no approved purchase amount yet. Record the first payment with the quotation instead.",
-  NOT_ZERO: "This deal already records a first payment other than zero. There is nothing to correct.",
+  NOT_ZERO:
+    "This deal's first payment is not recorded as exactly zero, so there is nothing to apply the quote's down payment onto.",
   NO_QUOTE_DOWN_PAYMENT: "The originating quote does not carry a down payment to apply.",
   SPLIT_UNKNOWN:
     "This deal's funding split is not established, so the down payment cannot be checked against it.",
