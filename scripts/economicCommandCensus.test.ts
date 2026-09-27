@@ -148,6 +148,8 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "sourcingPayables.recordPartialPayment": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "sourcingPayables.setDisputed": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "supplierReceivables.recordReceipt": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
+  "supplierCostRecoveries.recordReceipt": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; posts synchronously keyed by the receipt id (SCRUM-389)" },
+  "supplierCostRecoveries.reverseReceipt": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; reverses under its own per-receipt key (SCRUM-389)" },
   "supplierReceivables.setDisputed": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "vehicleEdits.resolve": { bucket: "STATE_GUARDED", mechanism: "refuses unless request.status === PENDING; the same mutation transitions it to APPROVED/REJECTED" },
   "vehicles.correctAcquisitionCost": { bucket: "STATE_GUARDED", mechanism: "convergent set-to-value: the retry re-reads the patched cost, delta === 0, and throws UNCAUGHT so Convex rolls back before the insert and the hook" },
@@ -277,7 +279,9 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // Fee-template adoption is classified RETIRED and therefore excluded from
     // the live population by construction; the live census remained 119 until:
     // 119 → 120: `financingEconomics.applyQuoteFirstPayment` (SCRUM-373 D2).
-    expect(population.length).toBe(120);
+    // 120 → 122: `supplierCostRecoveries.recordReceipt` and
+    // `supplierCostRecoveries.reverseReceipt` (SCRUM-389 supplier cost bearer).
+    expect(population.length).toBe(122);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {

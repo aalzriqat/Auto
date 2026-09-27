@@ -15,6 +15,9 @@ export const workOrderSchema = z.object({
   status: z.enum(["OPEN", "IN_PROGRESS", "COMPLETED"]),
   tasks: z.array(taskSchema).min(1, "At least one task is required"),
   notes: z.string().optional(),
+  // SCRUM-389. Only asked for on a SOURCED vehicle; the server requires it
+  // there before the work order can complete, and accepts SHOWROOM only.
+  costBearer: z.enum(["SHOWROOM", "SUPPLIER"]).optional(),
 });
 
 export type WorkOrderFormValues = z.infer<typeof workOrderSchema>;
@@ -23,5 +26,7 @@ export interface WorkOrderDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   vehicleId: Id<"vehicles">;
+  /** SCRUM-389: a SOURCED vehicle's completed work order needs an explicit cost bearer. */
+  vehicleSourceType?: "STOCK" | "SOURCED";
   workOrder?: any | null;
 }

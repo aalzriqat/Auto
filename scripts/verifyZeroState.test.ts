@@ -451,7 +451,11 @@ describe("deploy-key mode as the production runner actually sees it — the CLI'
     answer = asDeployKeyCli(deploymentAnswers({ nonEmpty: { cronHeartbeats: [HEARTBEAT_ROW, HEARTBEAT_ROW, HEARTBEAT_ROW, HEARTBEAT_ROW], webhookLogs: [CRON_REPORT_ROW] } }));
     const r = await deployKey();
     expect(r.stdout).toMatch(/marker AUTOFLOW_DEPLOYMENT_CLASS: VERIFIED_ABSENT/);
-    expect(r.summary).toMatch(/178 empty · 0 non-empty · 2 operational-diagnostic \(5 row\(s\) verified\)/);
+    // 178 at the time of that run; derived now (every listed schema + component
+    // table, less the two diagnostic ones) so a new table does not break it.
+    // SCRUM-389 added two (supplierCostRecoveries, supplierCostRecoveryReceipts).
+    const emptyTables = SCHEMA_TABLES.length + COMPONENT_TABLE_COUNT - 2;
+    expect(r.summary).toMatch(new RegExp(`${emptyTables} empty · 0 non-empty · 2 operational-diagnostic \\(5 row\\(s\\) verified\\)`));
     expect(r.summary).not.toMatch(/UNREADABLE|wrote to stderr|unexpected shape/);
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toMatch(/✔ ZERO on clever-mockingbird-719/);

@@ -348,7 +348,13 @@ describe("resetOrgFinancialData", () => {
     // tables and this file's own constant warns, from a previous round, that
     // fixing the destructive path that fired without asking which OTHER one has
     // the same gap is how the second gap survives.
-    expect(RESET_TABLES_FOR_TEST).toHaveLength(36);
+    //
+    // 36 -> 38: `supplierCostRecoveryReceipts` and `supplierCostRecoveries`
+    // (SCRUM-389). A recovery names the expense the reset clears, and a receipt
+    // names its recovery; leaving them would strand an open supplier receivable
+    // against an expense that no longer exists, on a fresh ledger. Listed before
+    // `expenses`, receipts first.
+    expect(RESET_TABLES_FOR_TEST).toHaveLength(38);
   });
 });
 

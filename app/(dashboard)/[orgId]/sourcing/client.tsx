@@ -16,6 +16,7 @@ import { Doc, Id } from "@/convex/_generated/dataModel";
 import { getErrorMessage } from "@/lib/errors";
 import { type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { SupplierPaymentDialog } from "@/components/sourcing/SupplierPaymentDialog";
+import { SupplierCostRecoveriesSection } from "@/components/sourcing/SupplierCostRecoveriesSection";
 
 type StatusFilter = "PENDING" | "PAID" | "CANCELLED" | "ALL";
 
@@ -418,6 +419,10 @@ export function SourcingClient() {
           </Table>
         </CardContent>
       </Card>
+
+      {/* SCRUM-389: what suppliers owe back for costs they bear. Renders
+          nothing for a caller without finance access. */}
+      <SupplierCostRecoveriesSection />
 
       <SupplierPaymentDialog
         payable={payDialogPayable}

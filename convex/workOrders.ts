@@ -9,6 +9,34 @@ import { toMinorUnits, assertFiniteNumber } from "./utils/money";
 import { Id } from "./_generated/dataModel";
 import { MutationCtx } from "./_generated/server";
 import { runWithIdempotency } from "./utils/idempotency";
+import { costBearerValidator, type CostBearer } from "./utils/costBearer";
+
+/**
+ * SCRUM-389 phase 1. Resolves the bearer a work-order expense is recorded
+ * under, refusing before anything is written. A SOURCED vehicle belongs to a
+ * supplier, so the choice cannot be defaulted there; SUPPLIER is refused
+ * outright until work orders open a supplier-cost recovery (SCRUM-402).
+ */
+async function resolveWorkOrderCostBearer(
+  ctx: MutationCtx,
+  args: { orgId: Id<"organizations">; vehicleId: Id<"vehicles">; costBearer: CostBearer | undefined }
+): Promise<CostBearer> {
+  const vehicle = await ctx.db.get(args.vehicleId);
+  if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
+    throw new ConvexError("Vehicle not found in this organization.");
+  }
+  if (args.costBearer === "SUPPLIER") {
+    throw new ConvexError(
+      "A work order cannot be charged to the supplier yet. Record it as a vehicle expense borne by the supplier instead."
+    );
+  }
+  if (vehicle.sourceType === "SOURCED" && args.costBearer === undefined) {
+    throw new ConvexError(
+      "This vehicle is sourced from a supplier. Choose who bears the work order's cost before completing it."
+    );
+  }
+  return "SHOWROOM";
+}
 
 async function createWorkOrderExpense(
   ctx: MutationCtx,
@@ -19,10 +47,13 @@ async function createWorkOrderExpense(
     amount: number;
     notes: string | undefined;
     actorId: Id<"users">;
+    costBearer: CostBearer | undefined;
   }
 ): Promise<Id<"expenses">> {
+  const costBearer = await resolveWorkOrderCostBearer(ctx, args);
   const now = Date.now();
   const expenseId = await ctx.db.insert("expenses", {
+    costBearer,
     orgId: args.orgId,
     vehicleId: args.vehicleId,
     title: args.title,
@@ -42,6 +73,7 @@ async function createWorkOrderExpense(
     description: args.title,
     vehicleId: args.vehicleId,
     expenseId,
+    costBearer,
   });
 
   const currency = await getOrgCurrency(ctx, args.orgId);
@@ -105,23 +137,36 @@ export const list = query({
   },
 });
 
+const workOrderTasksValidator = v.array(
+  v.object({
+    id: v.string(),
+    description: v.string(),
+    partsCost: v.number(),
+    laborCost: v.number(),
+    mechanicName: v.optional(v.string()),
+    completed: v.boolean(),
+  })
+);
+
+/**
+ * SCRUM-389 — who bears a completed work order's cost. Required when the
+ * vehicle is SOURCED (the showroom must say it is carrying a supplier's car's
+ * repair), and only SHOWROOM is accepted in phase 1: a supplier-borne work
+ * order needs its own recovery wiring (SCRUM-402).
+ */
+const workOrderCostBearerArg = v.optional(costBearerValidator);
+
 export const create = mutation({
   args: {
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
     title: v.string(),
     status: v.union(v.literal("OPEN"), v.literal("IN_PROGRESS"), v.literal("COMPLETED")),
-    tasks: v.array(
-      v.object({
-        id: v.string(),
-        description: v.string(),
-        partsCost: v.number(),
-        laborCost: v.number(),
-        mechanicName: v.optional(v.string()),
-        completed: v.boolean(),
-      })
-    ),
+    tasks: workOrderTasksValidator,
+
     notes: v.optional(v.string()),
+    costBearer: workOrderCostBearerArg,
+
     // SCRUM-313 census. A COMPLETED work order calls `createWorkOrderExpense`,
     // which mints an `expenses` id, writes a legacy `transactions` row and
     // posts EXPENSE_POSTED keyed on that fresh id — all BEFORE the work-order
@@ -152,6 +197,9 @@ export const create = mutation({
           title: args.title,
           status: args.status,
           totalCost,
+          // SCRUM-389. `undefined` is dropped by JSON.stringify, so a replay
+          // stored before the bearer existed still matches its own fingerprint.
+          costBearer: args.costBearer,
         }),
       },
       async () => {
@@ -166,6 +214,7 @@ export const create = mutation({
         amount: totalCost,
         notes: args.notes,
         actorId: user._id,
+        costBearer: args.costBearer,
       });
     }
 
@@ -201,17 +250,11 @@ export const update = mutation({
     workOrderId: v.id("workOrders"),
     title: v.string(),
     status: v.union(v.literal("OPEN"), v.literal("IN_PROGRESS"), v.literal("COMPLETED")),
-    tasks: v.array(
-      v.object({
-        id: v.string(),
-        description: v.string(),
-        partsCost: v.number(),
-        laborCost: v.number(),
-        mechanicName: v.optional(v.string()),
-        completed: v.boolean(),
-      })
-    ),
+    tasks: workOrderTasksValidator,
+
     notes: v.optional(v.string()),
+    costBearer: workOrderCostBearerArg,
+
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
@@ -238,6 +281,7 @@ export const update = mutation({
         amount: totalCost,
         notes: args.notes,
         actorId: user._id,
+        costBearer: args.costBearer,
       });
     }
 
