@@ -57,7 +57,11 @@ export type ProfitTerms = {
 
 export type ProfitDecision = ProfitTerms & {
   marginMinor: number;
-  /** True when the price is below the minimum and needs a manager's approval. */
+  /**
+   * True when the price is below a configured positive minimum and needs a
+   * manager's approval. A minimum of 0 or unset is no minimum — the vehicle
+   * form's default, and the rule's meaning before SCRUM-260.
+   */
   required: boolean;
 };
 

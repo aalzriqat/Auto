@@ -31,6 +31,8 @@ export function useProfitApproval(args: {
       ? { orgId: args.orgId as Id<"organizations">, vehicleId: args.vehicleId as Id<"vehicles">, salePrice: args.salePrice }
       : "skip"
   );
+  // INVALID is deliberately not blocking: the server refuses that price with an
+  // error naming the amount, which a silently disabled button would hide.
   const needsApproval =
     verdict?.status === "REQUIRED" || verdict?.status === "PENDING" || verdict?.status === "REJECTED";
   return {

@@ -465,6 +465,37 @@ describe("SCRUM-260: the server derives the margin from the price", () => {
   });
 });
 
+// Two policy boundaries the seats asked to have pinned rather than assumed.
+describe("SCRUM-260: what the rule does not cover", () => {
+  test("a minimum of zero is no minimum, as before SCRUM-260", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seedOrg(t, "zeromin", 0);
+
+    // The vehicle form defaults the minimum to 0; treating it as a floor would
+    // put every below-list financed deal behind a manager.
+    expect(
+      await ids.asOwner.query(api.approvals.profitApprovalStatus, {
+        orgId: ids.orgId,
+        vehicleId: ids.vehicleId,
+        salePrice: 19000,
+      })
+    ).toMatchObject({ status: "NOT_REQUIRED" });
+    expect(await ids.asOwner.mutation(api.quotes.saveQuote, { ...financedQuote(ids, 0), vehiclePrice: 19000 })).toBeTruthy();
+  });
+
+  test("a direct sale with no financingType is exempt exactly as an explicit CASH sale", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seedOrg(t, "omittedtype", 1000);
+    const { financingType: _omitted, ...cashByDefault } = directFinancedSale(ids, 20400);
+
+    // Persisted without a type, every reader treats the sale as not financed,
+    // so the omission grants nothing an explicit CASH would not.
+    await ids.asOwner.mutation(api.sales.create, { ...cashByDefault, status: "COMPLETED" });
+    const [sale]: any[] = await salesOf(t, ids);
+    expect(sale.financingType).toBeUndefined();
+  });
+});
+
 describe("SCRUM-260: an approval covers exactly the priced state approved", () => {
   test("an approval at one price does not authorize a different below-minimum price", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
