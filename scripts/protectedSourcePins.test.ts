@@ -369,11 +369,47 @@ describe("protected source content pins", () => {
        * predicate, mutation or export. Cross-lane notice posted BEFORE this
        * change - Jira SCRUM-215 `c20763`. Same governance; both constants
        * recomputed FROM THE FILE with this test's own normalization.
+       *
+       * -- RENEWAL 2026-09-26 - SCRUM-37 tenant read boundary (PR #343) ------
+       *
+       * Previous reviewed postimage, superseded by this entry (the SCRUM-372
+       * vehicle-card permission renewal just above):
+       *
+       *   bytes:  237014
+       *   sha256: 9c353ded4a1154f7cd9095b2de2d984c86b681168161153f216ec0bbfadd2fbc
+       *
+       * Renewed because `getLog` read any organization's application status
+       * history: membership of `args.orgId` proved nothing about
+       * `args.applicationId`, so notes and actor names crossed tenants. The
+       * delta is exactly two hunks, 23 insertions and 9 deletions: (1)
+       * `getLog` proves the application with the existing `requireOwnedRow`
+       * (already imported; missing and foreign refuse identically) and keeps
+       * only log rows stamped with `args.orgId`; (2) `dealCockpit`'s
+       * timeline, whose parent was already owned, keeps only rows stamped
+       * with `args.orgId` before the actor lookup. No new import, export,
+       * write, permission check or query shape: the same `by_application`
+       * reads, narrowed in memory. Read the two hunks; do not take this
+       * note's word for their scope.
+       *
+       * Made under the owner's standing full-authority directive of
+       * 2026-09-26, with the cross-lane notice posted to the ratchet lane
+       * BEFORE the change (Jira SCRUM-215 c20828, #scrum-215). Sol 6 and
+       * Sonnet xhigh approved the code at `3d3443839`; Sol certified this
+       * renewal against main `3866c8505` at `6af70d714`, and it was rebased
+       * onto the SCRUM-372 renewals when #338 merged. The pin is not
+       * weakened, bypassed, deleted, generalized or made vacuous: same exact
+       * byte + sha256 pin, same negative control, same normalization and
+       * bare-CR rejection. Both constants were recomputed FROM THE FILE with
+       * this test's own normalization. `convex/dealWorkspace.ts` is untouched.
+       *
+       * A /simplify pass (owner rule 2026-09-27) then shortened only the two
+       * hunks' comments (27 -> 23 insertions); every code line is unchanged.
+       * Superseded pin for that step: 237857 / 7dfb02c2...0004674.
        */
       file: "convex/applications.ts",
-      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25).
-      bytes: 237014,
-      sha256: "9c353ded4a1154f7cd9095b2de2d984c86b681168161153f216ec0bbfadd2fbc",
+      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26).
+      bytes: 237565,
+      sha256: "0ed573139b3ba16ff5dee2d557ae3c6aab51b8ac385b102776545bfbd915b6d6",
     },
     {
       /**
