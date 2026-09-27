@@ -1288,6 +1288,13 @@ function ReconciliationDialog({ open, onOpenChange }: { open: boolean; onOpenCha
   );
   const formatCurrency = useCurrencyFormatter();
 
+  let draftDescription: React.ReactNode = t("LoadingExpectedCash" as any);
+  if (draft?.complete) {
+    draftDescription = interpolate(t("CashierReconciliationDraftDesc" as any), { count: draft.paymentCount, amount: formatCurrency(draft.expectedCash) });
+  } else if (draft) {
+    draftDescription = <span role="alert" className="font-medium text-destructive">{t("CashierReconciliationIncomplete" as any)}</span>;
+  }
+
   async function submit() {
     if (!activeOrgId) return;
     setSubmitting(true);
@@ -1317,7 +1324,7 @@ function ReconciliationDialog({ open, onOpenChange }: { open: boolean; onOpenCha
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{t("CashierReconciliation" as any)}</DialogTitle>
-          <DialogDescription>{!draft ? t("LoadingExpectedCash" as any) : draft.complete ? interpolate(t("CashierReconciliationDraftDesc" as any), { count: draft.paymentCount, amount: formatCurrency(draft.expectedCash) }) : <span role="alert" className="font-medium text-destructive">{t("CashierReconciliationIncomplete" as any)}</span>}</DialogDescription>
+          <DialogDescription>{draftDescription}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
           <Input type="date" value={businessDate} onChange={(event) => setBusinessDate(event.target.value)} />
