@@ -2,6 +2,16 @@ import { ConvexError } from "convex/values";
 import { SYSTEM_KEYS, SystemKey } from "../utils/defaultChart";
 import { CUSTODY_CLEARING_KEY, custodyFeeExpenseKey } from "../utils/dealCustodyPosting";
 import type { FeeAccountingTreatment } from "../utils/financedSalePostingPlan";
+import type { Id } from "../_generated/dataModel";
+
+/**
+ * The one spelling of an expense's EXPENSE_POSTED idempotency key. Lives in
+ * this leaf module so `workflowHooks` can use it without an import cycle
+ * through `supplierCostRecoveryPosting` → `postingEngine`.
+ */
+export function expensePostedKey(expenseId: Id<"expenses">): string {
+  return `expense_posted_${expenseId}`;
+}
 
 export type EventType =
   | "DEPOSIT_RECEIVED"

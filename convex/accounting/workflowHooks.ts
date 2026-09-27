@@ -18,7 +18,7 @@ import {
   proveReservedReceiptAuthority,
   assertExistingRowIsSameOccurrence,
 } from "./postingEngine";
-import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting, simplePayloadHash, RECEIPT_CREDIT_APPLIED_EVENT_TYPE, RECEIPT_CREDIT_APPLIED_SOURCE_TYPE, type FinancedSalePlanPayload } from "./postingRules";
+import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting, expensePostedKey, simplePayloadHash, RECEIPT_CREDIT_APPLIED_EVENT_TYPE, RECEIPT_CREDIT_APPLIED_SOURCE_TYPE, type FinancedSalePlanPayload } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate, checkPostingAllowed } from "../accountingPeriods";
 import { SYSTEM_KEYS, type SystemKey } from "../utils/defaultChart";
@@ -1450,7 +1450,7 @@ export async function hookExpensePosted(
       eventType: "EXPENSE_POSTED",
       sourceType: "expenses",
       sourceId: args.expenseId.toString(),
-      idempotencyKey: `expense_posted_${args.expenseId}`,
+      idempotencyKey: expensePostedKey(args.expenseId),
       currency: args.currency,
       occurredAt: args.occurredAt,
       actorId: args.actorId,
@@ -1487,7 +1487,7 @@ export async function hookExpensePosted(
     eventType: "EXPENSE_POSTED",
     sourceType: "expenses",
     sourceId: args.expenseId.toString(),
-    idempotencyKey: `expense_posted_${args.expenseId}`,
+    idempotencyKey: expensePostedKey(args.expenseId),
     currency: args.currency,
     occurredAt: args.occurredAt,
     actorId: args.actorId,

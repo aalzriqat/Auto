@@ -36,6 +36,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { CostBearerSelect } from "@/components/expenses/CostBearerSelect";
 
 import { workOrderSchema, WorkOrderFormValues, WorkOrderDialogProps } from "./work_order.schema";
 import { getErrorMessage } from "@/lib/errors";
@@ -200,17 +201,15 @@ export function WorkOrderDialog({ open, onOpenChange, vehicleId, vehicleSourceTy
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t("CostBearerLabel" as any)}</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value ?? ""}>
-                      <FormControl>
-                        <SelectTrigger className="sm:max-w-xs" data-testid="work-order-cost-bearer">
-                          <SelectValue placeholder={t("CostBearerLabel" as any)} />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="SHOWROOM">{t("CostBearerShowroom" as any)}</SelectItem>
-                        <SelectItem value="SUPPLIER" disabled>{t("CostBearerSupplier" as any)}</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <CostBearerSelect
+                      t={t}
+                      testId="work-order-cost-bearer"
+                      value={field.value ?? ""}
+                      onValueChange={field.onChange}
+                      supplierDisabled
+                      placeholder={t("CostBearerLabel" as any)}
+                      triggerClassName="sm:max-w-xs"
+                    />
                     <p className="text-xs text-muted-foreground">{t("WorkOrderSupplierBearerUnavailable" as any)}</p>
                     <FormMessage />
                   </FormItem>

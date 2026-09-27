@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { PaymentMethodSelect } from "@/components/payments/PaymentMethodSelect";
 import { toast } from "@/components/ui/sonner";
 import { getErrorMessage } from "@/lib/errors";
 
@@ -38,6 +38,9 @@ const STATUS_CLASS: Record<Recovery["status"], string> = {
   RECOVERED: "text-green-600 border-green-400",
   REVERSED: "text-muted-foreground border-border",
 };
+
+type RecoveryMethod = "CASH" | "BANK_TRANSFER";
+const RECOVERY_METHODS: readonly RecoveryMethod[] = ["CASH", "BANK_TRANSFER"];
 
 function money(minor: number, currency: string): string {
   return `${fromMinorUnits(minor, currency).toLocaleString()} ${currency}`;
@@ -64,7 +67,7 @@ export function SupplierCostRecoveriesSection() {
 
   const [target, setTarget] = useState<Recovery | null>(null);
   const [amount, setAmount] = useState("");
-  const [method, setMethod] = useState<"CASH" | "BANK_TRANSFER">("CASH");
+  const [method, setMethod] = useState<RecoveryMethod>("CASH");
   const [receivedDate, setReceivedDate] = useState(() => new Date().toISOString().split("T")[0]);
   const [reference, setReference] = useState("");
   const [saving, setSaving] = useState(false);
@@ -88,14 +91,15 @@ export function SupplierCostRecoveriesSection() {
 
   const submit = async () => {
     if (!activeOrgId || !target) return;
-    const parsed = Number(amount);
-    let amountMinor = Number.NaN;
+    let amountMinor: number;
     try {
-      amountMinor = toMinorUnits(parsed, target.currency);
+      // Throws on anything that is not a safe integer in minor units (NaN included).
+      amountMinor = toMinorUnits(Number(amount), target.currency);
     } catch {
-      amountMinor = Number.NaN;
+      toast.error(t("RecoveryReceiptInvalidAmount" as any));
+      return;
     }
-    if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0 || amountMinor > target.remainingMinor) {
+    if (amountMinor <= 0 || amountMinor > target.remainingMinor) {
       toast.error(t("RecoveryReceiptInvalidAmount" as any));
       return;
     }
@@ -229,13 +233,7 @@ export function SupplierCostRecoveriesSection() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label>{t("RecoveryReceiptMethod" as any)}</Label>
-                  <Select value={method} onValueChange={(v) => setMethod(v as "CASH" | "BANK_TRANSFER")}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="CASH">{t("PaymentMethod_CASH" as any)}</SelectItem>
-                      <SelectItem value="BANK_TRANSFER">{t("PaymentMethod_BANK_TRANSFER" as any)}</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <PaymentMethodSelect t={t} value={method} onValueChange={setMethod} methods={RECOVERY_METHODS} />
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="recovery-date">{t("RecoveryReceiptDate" as any)}</Label>

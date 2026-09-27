@@ -37,6 +37,7 @@ import {
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import { CostBearerSelect } from "@/components/expenses/CostBearerSelect";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 
 import { expenseSchema, ExpenseFormValues, ExpenseDialogProps } from "./expense.schema";
@@ -368,7 +369,9 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                   render={({ field }) => (
                     <FormItem className="md:col-span-2">
                       <FormLabel>{t("CostBearerLabel" as any)}</FormLabel>
-                      <Select
+                      <CostBearerSelect
+                        t={t}
+                        testId="expense-cost-bearer"
                         value={field.value ?? "SHOWROOM"}
                         disabled={costBearerLocked}
                         onValueChange={(value) => {
@@ -381,17 +384,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                             form.setValue("amortizationMonths", undefined);
                           }
                         }}
-                      >
-                        <FormControl>
-                          <SelectTrigger data-testid="expense-cost-bearer">
-                            <SelectValue />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          <SelectItem value="SHOWROOM">{t("CostBearerShowroom" as any)}</SelectItem>
-                          <SelectItem value="SUPPLIER">{t("CostBearerSupplier" as any)}</SelectItem>
-                        </SelectContent>
-                      </Select>
+                      />
                       <p className="text-xs text-muted-foreground">
                         {costBearerLocked
                           ? t("CostBearerLockedHint" as any)

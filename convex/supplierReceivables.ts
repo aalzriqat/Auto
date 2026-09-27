@@ -213,10 +213,14 @@ export const outstandingSummary = query({
     }
 
     let costRecoveryOutstanding = 0;
-    for (const recovery of recoveriesFetched.slice(0, OUTSTANDING_SUMMARY_LIMIT)) {
-      if (recovery.status === "REVERSED") continue;
-      const source = await postingStateForKey(ctx, args.orgId, recovery.sourceEventKey);
-      if (source.state !== "POSTED") continue;
+    const liveRecoveries = recoveriesFetched
+      .slice(0, OUTSTANDING_SUMMARY_LIMIT)
+      .filter((recovery) => recovery.status !== "REVERSED");
+    const sourceStates = await Promise.all(
+      liveRecoveries.map((recovery) => postingStateForKey(ctx, args.orgId, recovery.sourceEventKey))
+    );
+    for (const [i, recovery] of liveRecoveries.entries()) {
+      if (sourceStates[i].state !== "POSTED") continue;
       const due = fromMinorUnits(recovery.amountDueMinor, recovery.currency);
       const received = fromMinorUnits(recovery.amountRecoveredMinor, recovery.currency);
       const remaining = fromMinorUnits(

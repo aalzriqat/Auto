@@ -13,11 +13,6 @@ import { isChartInitialized, ensureConsignmentAccounts } from "../chartOfAccount
  * receipt posting that never queues.
  */
 
-/** The one spelling of an expense's EXPENSE_POSTED idempotency key. */
-export function expensePostedKey(expenseId: Id<"expenses">): string {
-  return `expense_posted_${expenseId}`;
-}
-
 /** The one spelling of a recovery receipt's posting key. */
 export function supplierCostRecoveryReceiptKey(receiptId: Id<"supplierCostRecoveryReceipts">): string {
   return `supplier_cost_recovery_receipt_${receiptId}`;

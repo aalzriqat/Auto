@@ -8,8 +8,8 @@ import { PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
 import { toMinorUnits } from "./utils/money";
 import { reverseAccountingEvent } from "./accounting/reversals";
+import { expensePostedKey } from "./accounting/postingRules";
 import {
-  expensePostedKey,
   postingStateForKey,
   postSupplierCostRecoveryReceipt,
   supplierCostRecoveryReceiptKey,
@@ -125,11 +125,11 @@ export async function assertSupplierCostExpenseReversible(
     .withIndex("by_org_recovery", (q) => q.eq("orgId", orgId).eq("recoveryId", recovery._id))
     .take(MAX_RECEIPTS_PER_RECOVERY + 1);
   if (receipts.length > MAX_RECEIPTS_PER_RECOVERY) throw new ConvexError(refusal);
-  for (const receipt of receipts) {
-    if (receipt.status !== "REVERSED") throw new ConvexError(refusal);
-    const { state } = await postingStateForKey(ctx, orgId, supplierCostRecoveryReceiptKey(receipt._id));
-    if (state !== "REVERSED") throw new ConvexError(refusal);
-  }
+  if (receipts.some((receipt) => receipt.status !== "REVERSED")) throw new ConvexError(refusal);
+  const states = await Promise.all(
+    receipts.map((receipt) => postingStateForKey(ctx, orgId, supplierCostRecoveryReceiptKey(receipt._id)))
+  );
+  if (states.some(({ state }) => state !== "REVERSED")) throw new ConvexError(refusal);
   return recovery;
 }
 
