@@ -309,6 +309,7 @@ describe("cancel — applications.cancelApplication, from the header", () => {
   test("CLOSED needs the finalize permission, and the dialog carries the reversal warning", () => {
     permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
     permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED" }));
     queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
     renderCockpit();
@@ -320,6 +321,7 @@ describe("cancel — applications.cancelApplication, from the header", () => {
 describe("settlement route — applications.setSupplierSettlementRoute, beside the vehicle", () => {
   test("a consigned deal offers the route to a caller who can close, and records the choice", async () => {
     permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     queryResults.set(COCKPIT_QUERY, cockpit({ status: "APPROVED" }));
     queryResults.set(
       GET_QUERY,
@@ -346,6 +348,7 @@ describe("settlement route — applications.setSupplierSettlementRoute, beside t
 
   test("the direct route is shown disabled with the server's reason while a deposit is held", () => {
     permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     queryResults.set(COCKPIT_QUERY, cockpit({ status: "APPROVED" }));
     queryResults.set(
       GET_QUERY,
@@ -375,6 +378,7 @@ describe("settlement route — applications.setSupplierSettlementRoute, beside t
     cleanup();
 
     permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     queryResults.set(GET_QUERY, application({ status: "APPROVED" }));
     renderCockpit();
     expect(screen.queryByTestId("deal-settlement-route")).toBeNull();
@@ -767,6 +771,7 @@ describe("the close is withheld where the server would refuse the drifted pin �
   ];
   function closeable() {
     permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     permissions.add(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
     permissions.add(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
     queryResults.set(
@@ -822,6 +827,7 @@ describe("the close is withheld where the server would refuse the drifted pin �
 describe("the route control sits on the step that is waiting for it", () => {
   test("while the application facts are still loading, the step keeps its blocker and names no refusal it cannot yet back with a control", () => {
     permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     permissions.add(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
     permissions.add(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
     queryResults.set(
@@ -845,6 +851,7 @@ describe("the route control sits on the step that is waiting for it", () => {
 
   test("when the close is refused for want of the route, the control renders inside the focus row and not beside the vehicle", () => {
     permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     permissions.add(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
     permissions.add(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
     queryResults.set(

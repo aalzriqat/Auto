@@ -52,7 +52,6 @@ import {
   selectActiveAppraisal,
   type FinanceCompanyRuleSnapshot,
 } from "./utils/financingEconomics";
-import { invalidateClassification } from "./utils/classificationInvalidation";
 import {
   FIRST_PAYMENT_CORRECTION_PERMISSIONS,
   FIRST_PAYMENT_CORRECTION_REFUSALS,
@@ -121,10 +120,10 @@ async function resolveRuleSnapshot(
 /**
  * Re-derive one application's economics from whatever is on the record now.
  *
- * Exported so the step that ESTABLISHES a deal's accounting can also refresh
- * the figures it is establishing. The settlement costs feed the expected
- * remittance, and a cost recorded after the last recompute would otherwise
- * leave a stored figure that no longer follows from the deal's own rows.
+ * Exported so every settlement-input cost writer can refresh the stored
+ * figures after it writes (SCRUM-407 P1.3). The settlement costs feed the
+ * expected remittance, and a cost recorded after the last recompute would
+ * otherwise leave a stored figure that no longer follows from the deal's rows.
  *
  * Safe to call at any point: it is a pure re-derivation of stored inputs, and
  * it does nothing at all until the quotation, the approval and the applied LTV
@@ -138,9 +137,9 @@ export async function recomputeEconomicsForApplication(
   if (!app) return;
   // A deal with no configured financier has no dealer-side purchase rules to
   // derive anything from, and `resolveRuleSnapshot` refuses rather than
-  // inventing some. Classifying such a deal is still perfectly legitimate — it
-  // simply has no funding split — so this declines to run rather than turning a
-  // successful classification into a failure about rules the deal never had.
+  // inventing some. Recording a cost on such a deal is still perfectly
+  // legitimate — it simply has no funding split — so this declines to run
+  // rather than turning that write into a failure about rules the deal never had.
   if (!app.companyId) return;
   await recomputeAndPatchEconomics(ctx, app);
 }
@@ -224,9 +223,10 @@ async function recomputeAndPatchEconomics(
     // was invisible — there was nothing to compare it against.
     //
     // Recorded actuals only, and a line still awaiting one contributes nothing.
-    // That is not a claim it withholds nothing: `classifyDealAccounting` refuses
-    // while any line lacks an actual, and finalization refuses an unclassified
-    // deal, so no journal is ever posted from a partially-recorded settlement.
+    // That is not a claim it withholds nothing: finalization's automatic
+    // readiness check refuses while any line lacks a reconciled actual
+    // (`evaluateClosingReadiness`), so no journal is ever posted from a
+    // partially-recorded settlement.
     feeDeductionsMinor: await settlementDeductedTotalMinor(ctx, app._id, currency),
     customerDirectToDealerMinor: customerGapToDealer,
     dealerBorneExpensesMinor:
@@ -2809,14 +2809,6 @@ export const applyQuoteFirstPayment = mutation({
       reason: `Applied the originating quote's down payment (SCRUM-373): ${reason}`,
       changedBy: user._id,
     });
-    // The treatment was established against the old split.
-    await invalidateClassification(
-      ctx,
-      app,
-      user._id,
-      "The customer's first payment was corrected to the originating quote's down payment."
-    );
-
     // A reason that is only the first-payment sentence is this correction's to
     // retire, flag and all. Anything longer stays as written.
     const retireReason = reasonIsExactly(

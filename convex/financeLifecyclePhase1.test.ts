@@ -49,6 +49,7 @@ async function seedFinanceLifecycleDealer(): Promise<SetupResult> {
         "review:finance_application",
         "approve:finance_application",
         "finalize:financed_deal",
+        "confirm:finance_disbursement",
         "view:finance_applications",
         "view:customers",
         "register:vehicle_handover",

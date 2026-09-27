@@ -540,9 +540,36 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
         custody={custodyWiring()}
         custodyMoney={custodyMoney}
         closingChecklist={{
-          accountingClassification: "PENDING",
-          onRecordLegalInvoice: () => {},
-          onClassifyDealAccounting: () => {},
+          // SCRUM-407: the automatic readiness, in every status it can show.
+          readiness: {
+            state: "BLOCKED",
+            open: true,
+            moneyWithheld: false,
+            checks: [
+              { key: "REMITTANCE_KNOWN", status: "READY", reason: null },
+              { key: "CONFIGURED_FEES_RECORDED", status: "READY", reason: null },
+              { key: "CUSTODY_ON_LEDGER", status: "READY", reason: null },
+              {
+                key: "CUSTODY_SETTLED",
+                status: "BLOCKED",
+                reason: "A custody record on this deal is still open. Settle what that person holds or is owed before finalizing.",
+              },
+              {
+                key: "COSTS_CLOSABLE",
+                status: "BLOCKED",
+                reason: "1 cost(s) on this deal have no actual amount recorded. Estimates may be used to run the deal, but not to close it.",
+              },
+              { key: "FIRST_PAYMENT_RECORDED", status: "READY", reason: null },
+              { key: "LEGAL_INVOICE_RECORDED", status: "READY", reason: null },
+            ],
+          },
+          legalInvoice: {
+            amountMinor: 20_000_000,
+            number: "INV-2026-0142",
+            date: Date.UTC(2026, 8, 20),
+            issuedTo: "FINANCE_COMPANY",
+            onRecord: () => {},
+          },
         }}
         financingPlan={{ facts: FINANCING_PLAN, formatMajor: (major, currency) => `${major.toLocaleString()} ${currency}` }}
         handoverCosts={handoverCostsWiring()}

@@ -131,6 +131,7 @@ describe("the cockpit's profit-approval read", () => {
   test("a viewer without VIEW_VEHICLES never subscribes, so the cockpit still renders", () => {
     permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
     permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     seedFinancedDeal();
 
     render(<DealCockpit orgId={ORG} applicationId={APP} />);
@@ -154,6 +155,7 @@ describe("the cockpit's profit-approval read", () => {
     permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
     permissions.add(PERMISSIONS.VIEW_VEHICLES);
     permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     seedFinancedDeal();
 
     render(<DealCockpit orgId={ORG} applicationId={APP} />);

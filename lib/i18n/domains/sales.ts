@@ -758,19 +758,33 @@ const dealOverviewMessages = defineBilingualMessages({
   ReconcileNotesRequired: ["Record what was checked before reconciling this cost.", "سجّل ما تم التحقق منه قبل تسوية هذا المصروف."],
   ConfirmReconcile: ["Confirm reconciliation", "تأكيد التسوية"],
   HandoverCostReconciled: ["Cost reconciled", "تمت تسوية المصروف"],
-  ClassifyDealAccounting: ["Classify deal accounting", "تصنيف محاسبة المعاملة"],
-  ClassifyDealAccountingDesc: [
-    "Verify all cost lines and legal invoice to seal the deal's accounting classification.",
-    "التحقق من جميع بنود المصاريف والفاتورة القانونية لإتمام تصنيف محاسبة المعاملة.",
-  ],
-  ClassificationNotes: ["Classification notes", "ملاحظات التصنيف"],
-  ClassificationNotesPlaceholder: ["Record how this deal's accounting was established.", "سجّل كيف تم إثبات محاسبة هذه الصفقة."],
-  ConfirmClassify: ["Seal classification", "تثبيت التصنيف"],
-  DealAccountingClassified: ["Deal accounting classified", "تم تصنيف محاسبة المعاملة"],
-  ClosingChecklistHeading: ["Closing Checklist & Legal Invoicing", "قائمة إغلاق الصفقة والفواتير القانونية"],
   LegalInvoiceNotRecorded: ["No legal invoice recorded yet.", "لم يتم تسجيل فاتورة قانونية بعد."],
-  AccountingStatusClassified: ["Accounting Classified", "المحاسبة مصنفة"],
-  AccountingStatusPending: ["Pending Classification", "قيد انتظار التصنيف المحاسبي"],
+  // SCRUM-407 — the automatic closing readiness that replaced manual classification.
+  ClosingReadinessHeading: ["Closing readiness & legal invoice", "جاهزية إغلاق الصفقة والفاتورة القانونية"],
+  ClosingReadinessAuto: [
+    "Checked automatically from this deal's records, and checked again when it is closed.",
+    "تُفحص تلقائيًا من سجلات هذه الصفقة، ويُعاد فحصها عند إغلاقها.",
+  ],
+  ClosingReadinessStateReady: ["Ready to close", "جاهزة للإغلاق"],
+  ClosingReadinessStateBlocked: ["Not ready to close", "غير جاهزة للإغلاق"],
+  ClosingReadinessStateUnavailable: ["Readiness could not be checked", "تعذّر فحص الجاهزية"],
+  ClosingReadinessLoading: ["Checking readiness…", "جارٍ فحص الجاهزية…"],
+  ClosingReadinessClosed: ["This deal is no longer open to be closed.", "لم تعد هذه الصفقة مفتوحة للإغلاق."],
+  ClosingReadinessNoChecks: [
+    "The checks could not be run on this deal's records. Closing will refuse until they can.",
+    "تعذّر إجراء الفحوص على سجلات هذه الصفقة، وسيُرفض الإغلاق حتى يمكن إجراؤها.",
+  ],
+  ClosingCheckReady: ["Ready", "جاهز"],
+  ClosingCheckBlocked: ["Needs action", "يحتاج إجراء"],
+  ClosingCheckUnavailable: ["Cannot be checked", "تعذّر الفحص"],
+  ClosingCheckNotApplicable: ["Not needed on this deal", "غير مطلوب في هذه الصفقة"],
+  ClosingCheck_REMITTANCE_KNOWN: ["What the finance company remits is established", "المبلغ الذي تحوّله شركة التمويل محدَّد"],
+  ClosingCheck_CONFIGURED_FEES_RECORDED: ["Every fee the finance company configures is recorded", "كل رسم تضبطه شركة التمويل مسجَّل"],
+  ClosingCheck_CUSTODY_ON_LEDGER: ["Employee custody is on the books", "عهدة الموظفين مرحَّلة إلى الدفاتر"],
+  ClosingCheck_CUSTODY_SETTLED: ["Employee custody is settled", "عهدة الموظفين مسوّاة"],
+  ClosingCheck_COSTS_CLOSABLE: ["Deal costs are recorded and reconciled", "مصاريف الصفقة مسجَّلة ومسوّاة"],
+  ClosingCheck_FIRST_PAYMENT_RECORDED: ["The customer's first payment is recorded", "الدفعة الأولى للعميل مسجَّلة"],
+  ClosingCheck_LEGAL_INVOICE_RECORDED: ["The legal invoice is recorded", "الفاتورة القانونية مسجَّلة"],
   CustodyReversed: ["reversed", "معكوسة"],
   CustodyTruncated: [
     "More custody records exist on this deal than are shown here.",
@@ -1813,7 +1827,7 @@ export const salesEn = {
    * them to an empty screen.
    */
   FinalizeNeedsRouteAndPermission:
-    "This deal is waiting on who the finance company pays, and that is recorded by the same person who closes the deal. Someone with permission to close it completes both.",
+    "This deal is waiting on who the finance company pays, and you do not have permission to record it. Someone who does chooses it here; an accountant then closes the deal.",
   ConfirmFinalizeTitle: "Close the deal",
   ConfirmFinalizeDesc:
     "The handover and the expected payment are on file, so the deal can be closed.",
@@ -2731,7 +2745,7 @@ export const salesAr = {
   FinalizeNeedsSettlementRoute:
     "هذه المركبة تعود للمورد والصفقة ممولة، لذا يجب تسجيل الجهة التي تدفع لها شركة التمويل قبل إغلاق الصفقة. اختره هنا، في هذه الخطوة.",
   FinalizeNeedsRouteAndPermission:
-    "هذه الصفقة بانتظار تحديد الجهة التي تدفع لها شركة التمويل، ويُسجّل ذلك من يملك صلاحية إغلاق الصفقة نفسها. يُكمل الخطوتين من يملك تلك الصلاحية.",
+    "هذه الصفقة بانتظار تحديد الجهة التي تدفع لها شركة التمويل، ولا تملك صلاحية تسجيلها. يختارها هنا من يملك الصلاحية، ثم يُغلق المحاسب الصفقة.",
   ConfirmFinalizeTitle: "إغلاق الصفقة",
   ConfirmFinalizeDesc: "التسليم والدفعة المتوقعة مسجَّلان، ويمكن إغلاق الصفقة.",
   FinalizeCreatesTheSale:

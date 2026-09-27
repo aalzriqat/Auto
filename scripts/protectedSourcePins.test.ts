@@ -504,11 +504,44 @@ describe("protected source content pins", () => {
        * Same governance: not weakened, bypassed, deleted, generalized or made
        * vacuous. Both constants were recomputed FROM THE FILE with this test's
        * own normalization.
+       *
+       * -- RENEWAL 2026-09-28 - SCRUM-407 automatic closing readiness
+       *
+       * Previous reviewed postimage, superseded by this entry (the SCRUM-404
+       * renewal just above):
+       *
+       *   bytes:  237715
+       *   sha256: 530717160b2680b182a29f67a16d85853a4f9f16ec8e5a5f326fe16f2323ef5f
+       *
+       * Renewed for the owner's SCRUM-407 rulings: the manual closing
+       * checklist is removed and accounting readiness becomes an automatic
+       * check; finalizing a financed deal is for accountants only. The delta,
+       * 98 insertions and 70 deletions: (1) `assertFinancedFinalizationEvidence`
+       * — the `accountingClassification === "CLASSIFIED"` stamp gate and the
+       * remittance-known check beside it — is DELETED; finalization now re-runs
+       * the shared evaluator (`evaluateClosingReadiness`, inside
+       * `resolveFinancedSalePlan`), which carries the remittance check itself
+       * and adds the custody OPEN / closed-unbalanced checks for every route;
+       * (2) `finalizeDeal` requires `confirm:finance_disbursement` instead of
+       * `finalize:financed_deal`; (3) a new read-only query
+       * `getClosingReadiness` (view:finance_applications + `requireOwnedRow`)
+       * serves the same evaluator's verdict, with reasons and figures
+       * withheld below owner / view:finance (the SCRUM-117 boundary sweep
+       * covers it); (4) the import from `./utils/financedSaleRecognition`
+       * widened to the evaluator and its types. No schema, index or other
+       * mutation's permission changes. NOT yet reviewed by an independent
+       * seat at the time of this renewal — the renewal records the author's
+       * change, not a review verdict. Read the hunks; do not take this note's
+       * word for their scope.
+       *
+       * Same governance: not weakened, bypassed, deleted, generalized or made
+       * vacuous. Both constants were recomputed FROM THE FILE with this test's
+       * own normalization.
        */
       file: "convex/applications.ts",
-      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)).
-      bytes: 237715,
-      sha256: "530717160b2680b182a29f67a16d85853a4f9f16ec8e5a5f326fe16f2323ef5f",
+      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)), then for SCRUM-407 automatic closing readiness (RENEWAL 2026-09-28).
+      bytes: 238688,
+      sha256: "2f26139b5a495584db7597b6fdd0638a186649d78f47e105614d122208c8c8f6",
     },
     {
       /**

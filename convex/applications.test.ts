@@ -1255,11 +1255,7 @@ async function classifyFinancedDeal(
     feeId,
     notes: "Nothing to match.",
   });
-  await asUser.mutation(api.financeDealCosts.classifyDealAccounting, {
-    orgId,
-    applicationId,
-    notes: "Invoice and settlement advice on file.",
-  });
+  // SCRUM-407: no manual classification step — finalization checks readiness itself.
 }
 async function setupFinalizedFinancedDeal() {
   const base = await setup();

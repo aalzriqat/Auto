@@ -199,7 +199,11 @@ describe("the composition boundary at every real caller", () => {
     }
   });
 
-  test("the economics recomputation (via classification) refuses a cancelling pair before any write", async () => {
+  // SCRUM-407: the recomputation used to run inside the (retired) manual
+  // classification; it now runs on every write of a cost the company deducts
+  // from its settlement. The refusal must still precede every write — including
+  // the cost line itself, which rolls back with it.
+  test("the economics recomputation (via a deducted cost write) refuses a cancelling pair before any write", async () => {
     const s = await seed("recompute", "STOCK");
     const companyId = await s.t.run((ctx) =>
       ctx.db.insert("financeCompanies", {
@@ -228,14 +232,22 @@ describe("the composition boundary at every real caller", () => {
     await setGap(s, { cash: -100_000, installment: 200_000 });
     const before = (await s.t.run((ctx) => ctx.db.get(s.applicationId)))!;
 
+    const feesBefore = await s.t.run((ctx) =>
+      ctx.db.query("financeDealFees").withIndex("by_application", (q) => q.eq("applicationId", s.applicationId)).collect()
+    );
     await expect(
-      s.asOwner.mutation(api.financeDealCosts.classifyDealAccounting, {
-        orgId: s.orgId, applicationId: s.applicationId, notes: "all on file",
+      s.asOwner.mutation(api.financeDealCosts.recordDealFee, {
+        orgId: s.orgId, applicationId: s.applicationId, feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER",
+        paidTo: "FINANCE_COMPANY", accountingTreatment: "FINANCE_COMPANY_COMMISSION", deductedFromSettlement: true,
+        actualAmountMinor: 10_000, expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(),
       })
     ).rejects.toThrow(/gap contribution .* not a readable amount/);
 
     const after = (await s.t.run((ctx) => ctx.db.get(s.applicationId)))!;
-    expect(after.accountingClassification).not.toBe("CLASSIFIED");
+    const feesAfter = await s.t.run((ctx) =>
+      ctx.db.query("financeDealFees").withIndex("by_application", (q) => q.eq("applicationId", s.applicationId)).collect()
+    );
+    expect(feesAfter.length).toBe(feesBefore.length);
     expect(after.expectedDealerRemittanceMinor).toBe(before.expectedDealerRemittanceMinor);
     expect(after.dealerContributionMinor).toBe(before.dealerContributionMinor);
     expect(after.updatedAt).toBe(before.updatedAt);

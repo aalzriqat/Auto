@@ -154,7 +154,6 @@ function setupDeal() {
     expected: null,
     custody: [],
     custodyTruncated: false,
-    accountingClassification: "PENDING_CLASSIFICATION",
     legalInvoiceAmountMinor: undefined,
   });
 }
@@ -220,29 +219,66 @@ describe("DealCockpit closing bindings (TASK-DEAL-04)", () => {
     });
   });
 
-  test("renders Classify Deal Accounting trigger and binds classifyDealAccounting mutation", async () => {
+  // SCRUM-407: the manual classification is retired. The card shows the
+  // server's automatic readiness instead, and offers no way to "classify".
+  test("shows the server's closing readiness per check, and no classify action", async () => {
+    setupDeal();
+    queryResults.set("applications:getClosingReadiness", {
+      state: "BLOCKED",
+      open: true,
+      moneyWithheld: false,
+      checks: [
+        { key: "REMITTANCE_KNOWN", status: "READY", reason: null },
+        { key: "CUSTODY_SETTLED", status: "BLOCKED", reason: "A custody record on this deal is still open." },
+        { key: "COSTS_CLOSABLE", status: "UNAVAILABLE", reason: "This deal has more than 500 live cost lines." },
+        { key: "FIRST_PAYMENT_RECORDED", status: "NOT_APPLICABLE", reason: null },
+      ],
+      figures: { expectedDealerRemittanceMinor: null, legalInvoiceAmountMinor: null },
+    });
+    render(<DealCockpit orgId={ORG} applicationId={APP} />);
+
+    const card = await screen.findByTestId("deal-closing-checklist");
+    expect(within(card).getByTestId("closing-readiness").getAttribute("data-state")).toBe("BLOCKED");
+    expect(within(card).getByText("ClosingReadinessStateBlocked")).toBeTruthy();
+    const status = (key: string) => within(card).getByTestId(`closing-check-${key}`).getAttribute("data-status");
+    expect(status("REMITTANCE_KNOWN")).toBe("READY");
+    expect(status("CUSTODY_SETTLED")).toBe("BLOCKED");
+    expect(status("COSTS_CLOSABLE")).toBe("UNAVAILABLE");
+    expect(status("FIRST_PAYMENT_RECORDED")).toBe("NOT_APPLICABLE");
+    // The blocking reason is the server's own sentence, shown beside its check.
+    expect(
+      within(within(card).getByTestId("closing-check-CUSTODY_SETTLED")).getByText(
+        "A custody record on this deal is still open."
+      )
+    ).toBeTruthy();
+    expect(within(card).queryByRole("button", { name: /Classify/i })).toBeNull();
+    expect(mutationCalls.size).toBe(0);
+  });
+
+  test("shows a loading line while the readiness read is in flight, never an empty verdict", async () => {
     setupDeal();
     render(<DealCockpit orgId={ORG} applicationId={APP} />);
 
-    const classifyBtn = await screen.findByRole("button", { name: /ClassifyDealAccounting/i });
-    expect(classifyBtn).toBeTruthy();
+    const card = await screen.findByTestId("deal-closing-checklist");
+    expect(within(card).getByTestId("closing-readiness-loading")).toBeTruthy();
+    expect(within(card).queryByTestId("closing-readiness")).toBeNull();
+  });
 
-    fireEvent.click(classifyBtn);
-
-    const notesInput = screen.getByLabelText(/ClassificationNotes/i);
-    fireEvent.change(notesInput, { target: { value: "All invoices and fee receipts verified." } });
-
-    const confirmBtn = screen.getByRole("button", { name: /ConfirmClassify/i });
-    fireEvent.click(confirmBtn);
-
-    await waitFor(() => {
-      expect(mutationCalls.get("financeDealCosts:classifyDealAccounting")).toBeDefined();
+  test("a caller below the disbursement tier sees the readiness but is not offered the legal invoice", async () => {
+    setupDeal();
+    permissions.delete(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set("applications:getClosingReadiness", {
+      state: "READY",
+      open: true,
+      moneyWithheld: true,
+      checks: [{ key: "CUSTODY_SETTLED", status: "READY", reason: null }],
+      figures: { expectedDealerRemittanceMinor: null, legalInvoiceAmountMinor: null },
     });
+    render(<DealCockpit orgId={ORG} applicationId={APP} />);
 
-    expect(mutationCalls.get("financeDealCosts:classifyDealAccounting")![0]).toMatchObject({
-      orgId: ORG,
-      applicationId: APP,
-      notes: "All invoices and fee receipts verified.",
-    });
+    const card = await screen.findByTestId("deal-closing-checklist");
+    expect(within(card).getByText("ClosingReadinessStateReady")).toBeTruthy();
+    expect(within(card).queryByRole("button", { name: /RecordLegalInvoice/i })).toBeNull();
+    expect(within(card).queryByTestId("deal-legal-invoice")).toBeNull();
   });
 });

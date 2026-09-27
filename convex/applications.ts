@@ -25,7 +25,13 @@ import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifi
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
 import { depositMethodValidator, type DepositMethod } from "./utils/depositRecording";
 import { completeSale } from "./utils/saleCompletion";
-import { resolveFinancedSalePlan, financedSaleRecognitionDate } from "./utils/financedSaleRecognition";
+import {
+  resolveFinancedSalePlan,
+  financedSaleRecognitionDate,
+  evaluateClosingReadiness,
+  type ClosingReadiness,
+  type ClosingReadinessCheckKey,
+} from "./utils/financedSaleRecognition";
 import { loadCustodyRecords } from "./utils/settlementDeductions";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
@@ -285,70 +291,6 @@ function assertDealerEconomicsReady(
   // not only by the stage rail: a gap the handover stamps is sealed against the
   // one writer that can settle it, and finalization posts from the split.
   assertAppraisalGapSettledToAdvance(app, action);
-}
-
-/**
- * What finalization needs and handover does not.
- *
- * Handing a customer their car is an operational step: the dealership has
- * decided the deal is good and the vehicle goes out. Finalizing is the step that
- * writes money — it creates the sale, the receivables and the journal — so it is
- * the one that must refuse while the figures those postings come from are
- * unestablished. Widening either requirement to handover would strand cars on the
- * lot over a settlement figure nobody needs yet.
- *
- * Deliberately NOT folded into `assertDealerEconomicsReady`, for two separate
- * reasons.
- *
- * The first is the no-quotation carve-out. That exemption is right for the checks
- * it covers — a deal predating the funding-split model has nothing to check — but
- * it is not a licence to post a financed sale whose settlement nobody can name.
- * Those facts are unrelated, and letting the older exemption swallow the newer
- * requirement is how a guard stops guarding.
- *
- * The second is refusal precedence, and it is why this is a separate CALL rather
- * than a later branch of the same one. `assertDealerEconomicsReady` runs at the
- * top of finalization, ahead of the refusals for a missing settlement route, a
- * mismatched finance company, incomplete documents and unapproved profit. Asking
- * a deal for its remittance before telling the operator it has no settlement route
- * recorded answers a question they have not reached yet — the same principle the
- * handover site states, that the more specific refusal is the more useful one. So
- * this runs last, immediately before `completeSale`, after every other refusal has
- * had its say and still before the first write.
- *
- * Scoped to exactly the population the posting plan covers: a configured external
- * financier settling through the dealership. A cash deal, a deal with no named
- * company and a direct-route deal each post something different and none of them
- * raise a dealership-side finance receivable, so none are asked for evidence they
- * have no use for.
- */
-function assertFinancedFinalizationEvidence(
-  app: Doc<"financeApplications">,
-  opts: { settlesDirect: boolean }
-): void {
-  if (opts.settlesDirect) return;
-  if (!app.companyId) return;
-
-  // The single figure the finance-company receivable is opened from. Unknown
-  // means the server could not establish where the customer's money went, and
-  // the honest answer is to refuse rather than fall back to the approved amount,
-  // the quotation, or the customer's financing principal.
-  if (app.expectedDealerRemittanceMinor === undefined) {
-    throw new ConvexError(
-      "What this financing company will actually remit to the dealership is not known on this deal, so the amount it owes cannot be recorded. Resolve the reconciliation note on it before finalizing."
-    );
-  }
-
-  // Every settlement component must already carry an actual, reconciled amount
-  // and an explicit accounting treatment. `classifyDealAccounting` is the step
-  // that establishes all three and refuses while any is missing, so requiring its
-  // flag here asks for the evidence once rather than re-deriving the same
-  // three conditions beside the posting.
-  if (app.accountingClassification !== "CLASSIFIED") {
-    throw new ConvexError(
-      "This deal's accounting has not been classified, so what the financing company withholds cannot be posted to the right accounts. Record the legal invoice and classify the deal before finalizing."
-    );
-  }
 }
 
 /**
@@ -3751,6 +3693,84 @@ export const setSupplierSettlementRoute = mutation({
   },
 });
 
+/**
+ * Plain-language reasons shown in place of the evaluator's own text to a
+ * caller below the finance tier (ACC-10): the verdict is the same, the detail —
+ * which can name figures, currencies and ledger state — is not served.
+ */
+const WITHHELD_READINESS_REASON: Record<ClosingReadinessCheckKey, string> = {
+  REMITTANCE_KNOWN: "What the finance company will remit is not established yet.",
+  CONFIGURED_FEES_RECORDED: "A fee the finance company configures has no actual recorded yet.",
+  CUSTODY_ON_LEDGER: "Employee custody on this deal is not fully on the books yet.",
+  CUSTODY_SETTLED: "An employee custody record on this deal is not settled yet.",
+  COSTS_CLOSABLE: "The deal's costs are not all recorded and reconciled yet.",
+  FIRST_PAYMENT_RECORDED: "The customer's first payment is not recorded yet.",
+  LEGAL_INVOICE_RECORDED: "The legal invoice is not recorded yet.",
+};
+
+/**
+ * The deal's automatic closing readiness (SCRUM-407 P1.4): the SAME evaluator
+ * `finalizeDeal` re-runs internally, so what the screen shows and what the
+ * server enforces cannot disagree — and the server never trusts the screen.
+ *
+ * Read-only and never throws on the deal's own state: a verdict that cannot be
+ * formed is reported as UNAVAILABLE with its reason. Money-bearing detail is
+ * scoped to the accounting-economics tier (owner or VIEW_FINANCE) — the
+ * SCRUM-117 read boundary, under which the dealer remittance is a FINANCE-ONLY
+ * figure even for a role that confirms disbursements (the boundary sweep in
+ * `financeApplicationBoundary.test.ts` covers this door): below
+ * it every figure is null and every reason is a plain sentence, and
+ * `moneyWithheld` says so explicitly rather than letting an absence stand for a
+ * value (ACC-10).
+ */
+export const getClosingReadiness = query({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+  },
+  handler: async (ctx, args) => {
+    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
+    const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId);
+    const mayReadMoney =
+      isSystemOwnerRole(auth.role) ||
+      auth.role.permissions.includes(PERMISSIONS.VIEW_FINANCE);
+
+    let readiness: ClosingReadiness;
+    if (app.status === "CLOSED" || app.status === "CANCELLED" || app.status === "REJECTED") {
+      readiness = { state: "UNAVAILABLE", checks: [] };
+    } else {
+      try {
+        assertSupportedDenomination(app.economicsCurrency, "checking this deal's closing readiness");
+        const settlesDirect = await settlesDirectToSupplier(ctx, app);
+        readiness = await evaluateClosingReadiness(ctx, app, {
+          settlesDirect,
+          currency: app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId)),
+        });
+      } catch (error) {
+        if (!(error instanceof ConvexError)) throw error;
+        readiness = { state: "UNAVAILABLE", checks: [] };
+      }
+    }
+
+    return {
+      state: readiness.state,
+      /** Whether this deal is still open to be finalized at all. */
+      open: app.status !== "CLOSED" && app.status !== "CANCELLED" && app.status !== "REJECTED",
+      checks: readiness.checks.map((check) => ({
+        key: check.key,
+        status: check.status,
+        reason:
+          check.reason === null ? null : mayReadMoney ? check.reason : WITHHELD_READINESS_REASON[check.key],
+      })),
+      moneyWithheld: !mayReadMoney,
+      figures: {
+        expectedDealerRemittanceMinor: mayReadMoney ? app.expectedDealerRemittanceMinor ?? null : null,
+        legalInvoiceAmountMinor: mayReadMoney ? app.legalInvoiceAmountMinor ?? null : null,
+      },
+    };
+  },
+});
+
 export const finalizeDeal = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -3774,7 +3794,11 @@ export const finalizeDeal = mutation({
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
-    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.FINALIZE_FINANCED_DEAL]);
+    // Closing a financed deal is an ACCOUNTANT's act (owner ruling, SCRUM-407):
+    // it recognizes the sale, opens the receivables and posts the journal, so it
+    // takes the disbursement authority the accountant templates hold — not
+    // `FINALIZE_FINANCED_DEAL`, which the SALES template carries.
+    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
 
     return await runWithIdempotency(
       ctx,
@@ -3952,10 +3976,14 @@ export const finalizeDeal = mutation({
         // The last refusals before the first write. Everything above has had its
         // say, and nothing below can be undone by throwing: no sale row, no
         // application patch, no receivable, no journal, no outbox entry.
+        //
+        // `resolveFinancedSalePlan` first re-runs the automatic closing-readiness
+        // evaluator (`evaluateClosingReadiness`, SCRUM-407) — the same one the
+        // deal screen shows — and refuses on the first unmet accounting
+        // condition: a known remittance, configured fees recorded, the custody
+        // family on the books and settled, reconciled costs, the legal invoice.
+        // The retired `CLASSIFIED` stamp is never read.
         const settlesDirectAtFinalize = await settlesDirectToSupplier(ctx, app);
-        assertFinancedFinalizationEvidence(app, {
-          settlesDirect: settlesDirectAtFinalize,
-        });
 
         // How this financed sale will be recognised, frozen before anything is
         // written and derived entirely from the record: the legal invoice the car
@@ -4082,7 +4110,7 @@ export const finalizeDeal = mutation({
         // No reconciliation flag is raised, and now for a better reason than
         // before: there is no longer a knowingly-wrong figure to flag. A deal
         // whose settlement cannot be established refuses at
-        // `assertFinancedFinalizationEvidence` instead of posting and queueing.
+        // the closing-readiness check instead of posting and queueing.
 
         await ctx.db.patch(args.applicationId, {
           status: "CLOSED",

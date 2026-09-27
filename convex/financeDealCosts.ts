@@ -23,7 +23,6 @@ import { dealCustodyAccountingReadiness } from "./chartOfAccounts";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { custodyFeeExpenseKey } from "./utils/dealCustodyPosting";
 import {
-  assertCustodyLedgerFamilyComplete,
   assertStoredVersion,
   custodyEntryPostKey,
   custodyFeePostKey,
@@ -35,14 +34,22 @@ import {
   type CustodyLedgerDependency,
 } from "./utils/custodySourceLedger";
 import {
-  assertConfiguredFeesRecorded,
   assertExpectedCurrency,
   assertRoomForAnotherLine,
   exactTemplateLine,
   loadActiveFees,
   loadCustodyRecords,
   resolveDealCurrency,
+  assertFeeCustodyCurrency,
+  custodyActualExpensesMinor,
+  summarizeCustody,
+  summarizeReadableCustody,
+  unreadableCustodyAmounts,
 } from "./utils/settlementDeductions";
+// Re-exported from their new home (SCRUM-407): the finalization readiness
+// evaluator shares this one custody calculation with the writers below.
+export { summarizeCustody, unreadableCustodyAmounts };
+export type { CustodyAmountsUnreadableReason } from "./utils/settlementDeductions";
 import { assertSupportedDenomination } from "./utils/money";
 import {
   feeTemplatesExceedConfigurationLimit,
@@ -50,9 +57,7 @@ import {
   MAX_DEAL_CUSTODY_DECISION_RECORDS,
 } from "./utils/dealCostLimits";
 export { MAX_CUSTODY_ENTRIES, MAX_DEAL_CUSTODY_DECISION_RECORDS };
-import { reconcileEmployeeCustody } from "../lib/financingEconomics";
 import { recomputeEconomicsForApplication } from "./financingEconomics";
-import { invalidateClassification } from "./utils/classificationInvalidation";
 import {
   assertMinorAmount,
   isMinorAmount,
@@ -1088,137 +1093,6 @@ async function companyFor(
   return company !== null && company.orgId === app.orgId ? company : null;
 }
 
-/**
- * Where one custody record stands, using the shared engine for the arithmetic.
- *
- * Closure needs BOTH directions settled, which the engine alone does not tell
- * you: it computes what is *due*, and a debt that is owed but unpaid is not
- * settled. So `settled` requires the employee to hold nothing AND the
- * dealership to have actually paid back everything it owes.
- */
-export function summarizeCustody(
-  custody: Doc<"financeDealCustody">,
-  actualExpensesMinor: number
-) {
-  const reconciliation = reconcileEmployeeCustody({
-    advanceIssuedMinor: custody.issuedMinor,
-    actualExpensesMinor,
-    employeeReturnedMinor: custody.returnedMinor,
-    alreadyReimbursedMinor: custody.reimbursedMinor,
-  });
-
-  return {
-    ...reconciliation,
-    actualExpensesMinor,
-    reimbursedMinor: custody.reimbursedMinor,
-    // The engine decides `reconciled` across all three directions — money still
-    // held, money still owed, and money paid twice. Recomputing it here is how
-    // the two would drift.
-    settled: reconciliation.reconciled,
-  };
-}
-
-/**
- * Sum recorded actuals for one custody from the deal's already-bounded LIVE
- * fee set — or `null` when a linked actual is not a readable minor-unit
- * figure, or the sum leaves the safe range. Callers must pass the result of
- * `loadActiveFees`: querying by custody and filtering voids afterwards would
- * read an unbounded add/void history and could strand both reconciliation and
- * classification at the platform transaction limit even while the deal had
- * fewer than 500 live lines.
- */
-function custodyActualExpensesMinor(
-  liveFees: ReadonlyArray<Doc<"financeDealFees">>,
-  custodyId: Id<"financeDealCustody">
-): number | null {
-  let sum = 0;
-  for (const row of liveFees) {
-    if (row.voidedAt !== undefined || row.custodyId !== custodyId || row.actualAmountMinor === undefined) continue;
-    if (!isMinorAmount(row.actualAmountMinor)) return null;
-    sum += row.actualAmountMinor;
-  }
-  return Number.isSafeInteger(sum) ? sum : null;
-}
-
-/** The live line charged to this record that is not in the record's currency, if any (R5, F4). */
-function custodyForeignCurrencyLine(
-  liveFees: ReadonlyArray<Doc<"financeDealFees">>,
-  custody: Pick<Doc<"financeDealCustody">, "_id" | "currency">
-): Doc<"financeDealFees"> | undefined {
-  return liveFees.find((row) => row.voidedAt === undefined && row.custodyId === custody._id && row.currency !== custody.currency);
-}
-
-/** Why a custody record's balance cannot be stated from its stored totals and linked costs. */
-export type CustodyAmountsUnreadableReason = "UNSAFE_AMOUNT";
-
-/**
- * The readable-balance contract for one custody record: the three stored
- * totals and the linked actuals are each a readable minor-unit figure, and
- * the arithmetic the engine performs on them stays in the safe range. The
- * engine (`reconcileEmployeeCustody`) throws on a corrupt operand and does
- * not check its own results, and a NaN that reached a gate would compare as
- * neither owed nor settled — so no caller reaches it without passing here.
- */
-export function unreadableCustodyAmounts(
-  custody: Pick<Doc<"financeDealCustody">, "issuedMinor" | "returnedMinor" | "reimbursedMinor">,
-  actualExpensesMinor: number | null
-): CustodyAmountsUnreadableReason | null {
-  if (actualExpensesMinor === null) return "UNSAFE_AMOUNT";
-  const operands = [custody.issuedMinor, custody.returnedMinor, custody.reimbursedMinor, actualExpensesMinor];
-  if (!operands.every(isMinorAmount)) return "UNSAFE_AMOUNT";
-  // Every intermediate the engine forms is bounded in magnitude by the sum
-  // of the four operands, so one safe-range check covers them all.
-  return Number.isSafeInteger(operands.reduce((total, amount) => total + amount, 0)) ? null : "UNSAFE_AMOUNT";
-}
-
-/**
- * The custody summary a WRITER may act on, or a refusal. A closure,
- * reconciliation or classification gate that compared against a corrupt
- * balance would be deciding on a number that is not one; every such gate
- * calls this and fails closed with the reason instead.
- */
-function summarizeReadableCustody(
-  custody: Doc<"financeDealCustody">,
-  liveFees: ReadonlyArray<Doc<"financeDealFees">>,
-  action: string
-): ReturnType<typeof summarizeCustody> {
-  // Cents are not fils: a linked line in another currency makes the sum
-  // below a non-figure, and every writer that reads the position refuses
-  // before it is formed (R5, F4).
-  const foreign = custodyForeignCurrencyLine(liveFees, custody);
-  if (foreign !== undefined) assertFeeCustodyCurrency(foreign, custody, action);
-  const actualExpensesMinor = custodyActualExpensesMinor(liveFees, custody._id);
-  if (actualExpensesMinor === null || unreadableCustodyAmounts(custody, actualExpensesMinor) !== null) {
-    throw new ConvexError(
-      `A custody amount or a cost charged to this custody is not a readable figure, so ${action} is refused until the record is corrected.`
-    );
-  }
-  return summarizeCustody(custody, actualExpensesMinor);
-}
-
-/**
- * A cost line and the custody record it is charged to share ONE currency
- * (R5, F4). The record's balance is `issued − returned − custody-paid
- * lines + reimbursed`, summed in minor units — and minor units are not one
- * scale: a USD line is in cents, a JOD record in fils, so a cross-currency
- * charge sums cents into fils and states a position that is not a figure.
- * Refused BEFORE anything is written or posted on every path that links a
- * line to a record or re-posts a linked one, excluded from the screen's
- * eligibility, and refused again by every command that reads the record's
- * position while such a line sits on it. The exit for a legacy link is to
- * release the line (`setFeeCustody` with no record), which reverses its
- * charge without summing it.
- */
-function assertFeeCustodyCurrency(
-  line: Pick<Doc<"financeDealFees">, "currency">,
-  custody: Pick<Doc<"financeDealCustody">, "currency">,
-  action: string
-): void {
-  if (line.currency === custody.currency) return;
-  throw new ConvexError(
-    `This cost is recorded in ${line.currency} while the custody record is in ${custody.currency}; the two cannot be summed, so ${action} is refused. Correct the line's currency or release it from custody first; nothing has been changed.`
-  );
-}
 
 /**
  * Resolves the custody record a fee line may be charged against.
@@ -1773,6 +1647,35 @@ export const adoptCompanyFeeTemplates = mutation({
 // Cost lines
 // ---------------------------------------------------------------------------
 
+/**
+ * Re-derives the deal's stored economics once a SETTLEMENT INPUT has changed
+ * (SCRUM-407 P1.3) — in the same transaction, and only AFTER the fee row is
+ * written, so the expected remittance is derived from the line as it now
+ * stands rather than from the one it replaced.
+ *
+ * Material means a line the finance company withholds from its transfer
+ * (`deductedFromSettlement`): those are the only lines
+ * `settlementDeductedTotalMinor` sums into the remittance. A line the
+ * dealership pays separately changes no stored figure, so it does not bump
+ * `economicsRevision` under a confirmation somebody is looking at. Custody-
+ * only changes (charging a line to custody, opening or reopening a record)
+ * never reach here: they move no settlement input.
+ *
+ * This replaced the recompute `classifyDealAccounting` ran at the moment it
+ * stamped a deal: with the stamp retired, finalization's plan-time
+ * `REMITTANCE_STALE` check would otherwise refuse every deal whose deducted
+ * costs changed after its approval. A refusal inside the recompute is left
+ * uncaught, so it rolls the fee write back with it.
+ */
+async function recomputeAfterSettlementInputChange(
+  ctx: MutationCtx,
+  applicationId: Id<"financeApplications">,
+  deductedFromSettlement: boolean
+): Promise<void> {
+  if (!deductedFromSettlement) return;
+  await recomputeEconomicsForApplication(ctx, applicationId);
+}
+
 export const recordDealFee = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -1922,13 +1825,8 @@ export const recordDealFee = mutation({
         }
         // An exact replay of a line already recorded returns it above this,
         // and a NEW line on a deal already at the live-line cap is refused
-        // with the classification untouched and no command record kept.
+        // with nothing written and no command record kept.
         assertRoomForAnotherLine(await loadActiveFees(ctx, args.applicationId), "recording this cost");
-
-        await invalidateClassification(
-          ctx, app, user._id,
-          "A new cost was added to the deal after its accounting was classified."
-        );
 
         const now = Date.now();
         const feeId = await ctx.db.insert("financeDealFees", {
@@ -1957,6 +1855,9 @@ export const recordDealFee = mutation({
         // Inside the idempotent section with the insert: a replay returns the
         // stored id above and never posts a second time.
         if (custodyId) await syncCustodyFeePosting(ctx, feeId, user._id, "Handover cost recorded against custody.");
+        // AFTER the insert, so the stored remittance is derived from the line
+        // just written (SCRUM-407 P1.3).
+        await recomputeAfterSettlementInputChange(ctx, args.applicationId, args.deductedFromSettlement ?? false);
         return feeId;
       }
     );
@@ -1995,7 +1896,7 @@ export const recordDealFee = mutation({
  * Not a new way to spend. The row it writes is an ordinary `financeDealFees`
  * line with the same fates as every other: re-recorded through
  * `recordActualFeeAmount`, checked through `reconcileDealFee`, voided through
- * `voidDealFee`, invalidating the classification like any other cost, summed
+ * `voidDealFee`, recomputing the stored economics like any other cost, summed
  * by `summarizeFees` and by `settlementDeductedTotalMinor` under the template's
  * own `deductedFromSettlement` flag.
  */
@@ -2133,14 +2034,9 @@ export const recordTemplateFeeActual = mutation({
             "An actual is already recorded for this configured fee. Edit that line to change the amount, or remove it first."
           );
         }
-        // Same bound as `recordDealFee`, in the same place: before the
-        // classification is touched or the line exists.
+        // Same bound as `recordDealFee`, in the same place: before the line
+        // exists.
         assertRoomForAnotherLine(await loadActiveFees(ctx, args.applicationId), "recording this cost");
-
-        await invalidateClassification(
-          ctx, app, user._id,
-          "A new cost was added to the deal after its accounting was classified."
-        );
 
         const now = Date.now();
         const feeId = await ctx.db.insert("financeDealFees", {
@@ -2170,6 +2066,7 @@ export const recordTemplateFeeActual = mutation({
           updatedAt: now,
         });
         if (custodyId) await syncCustodyFeePosting(ctx, feeId, user._id, "Configured fee actual recorded against custody.");
+        await recomputeAfterSettlementInputChange(ctx, args.applicationId, template.deductedFromSettlement);
         return feeId;
       }
     );
@@ -2288,11 +2185,6 @@ export const recordActualFeeAmount = mutation({
     const nextStorageIds = args.documentStorageIds ?? fee.documentStorageIds;
     await deleteDroppedAttachments(ctx, fee.documentStorageIds, args.documentStorageIds);
 
-    await invalidateClassification(
-      ctx, parent, user._id,
-      "A recorded cost was changed after the deal's accounting was classified."
-    );
-
     await ctx.db.patch(args.feeId, {
       actualAmountMinor: args.actualAmountMinor,
       paidAt: args.paidAt ?? fee.paidAt,
@@ -2312,6 +2204,7 @@ export const recordActualFeeAmount = mutation({
     if (custodyId || fee.custodyPosted) {
       await syncCustodyFeePosting(ctx, args.feeId, user._id, "Handover cost actual re-recorded.");
     }
+    await recomputeAfterSettlementInputChange(ctx, fee.applicationId, fee.deductedFromSettlement);
     return args.feeId;
   },
 });
@@ -2422,11 +2315,6 @@ export const voidDealFee = mutation({
       assertCustodyOpen(custody);
     }
 
-    await invalidateClassification(
-      ctx, parent, user._id,
-      "A cost was removed from the deal after its accounting was classified."
-    );
-
     await ctx.db.patch(args.feeId, {
       voidedAt: Date.now(),
       voidedBy: user._id,
@@ -2439,6 +2327,7 @@ export const voidDealFee = mutation({
     if (fee.custodyPosted) {
       await syncCustodyFeePosting(ctx, args.feeId, user._id, `Handover cost removed: ${reason}`);
     }
+    await recomputeAfterSettlementInputChange(ctx, fee.applicationId, fee.deductedFromSettlement);
     return args.feeId;
   },
 });
@@ -2485,10 +2374,6 @@ export const setFeeCustody = mutation({
     const custodyId = args.custodyId
       ? await resolveFeeCustody(ctx, args.orgId, fee.applicationId, args.custodyId, fee, user._id)
       : undefined;
-    await invalidateClassification(
-      ctx, app, user._id,
-      "A cost was moved onto or off an employee's custody after the deal's accounting was classified."
-    );
     const now = Date.now();
     await ctx.db.patch(args.feeId, { custodyId, updatedAt: now });
     await syncCustodyFeePosting(
@@ -2642,10 +2527,6 @@ export const openDealCustody = mutation({
           );
         }
 
-        await invalidateClassification(
-          ctx, app, user._id,
-          "Custody was opened on the deal after its accounting was classified."
-        );
 
         const currency = await resolveDealCurrency(ctx, app, "opening custody on this deal");
         const now = Date.now();
@@ -3287,14 +3168,15 @@ export const reopenDealCustody = mutation({
     // The parent the stored row names is proven this org's BEFORE anything is
     // written (R8, F2): an owned custody row whose `applicationId` was
     // re-pointed at another tenant's deal would otherwise leave an audit row
-    // against that deal, reverse a posted write-off and withdraw the OTHER
-    // organization's classification. A missing or foreign parent refuses here,
-    // with the override, the reversal and the status patch all still unwritten.
-    const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", custody.applicationId, APPLICATION_NOT_FOUND);
+    // against that deal and reverse a posted write-off. A missing or foreign
+    // parent refuses here, with the override, the reversal and the status
+    // patch all still unwritten.
+    await requireOwnedRow(ctx, args.orgId, "financeApplications", custody.applicationId, APPLICATION_NOT_FOUND);
 
-    // Reopening undoes a reconciliation somebody signed off, so it leaves a row
-    // — and it withdraws the deal's classification, which may have been granted
-    // on the strength of this record being settled.
+    // Reopening undoes a reconciliation somebody signed off, so it leaves a
+    // row. (It no longer withdraws a classification: closing readiness is
+    // re-derived from the live rows, so the open record is seen at once —
+    // SCRUM-407.)
     await ctx.db.insert("financeApplicationOverrides", {
       orgId: args.orgId,
       applicationId: custody.applicationId,
@@ -3308,10 +3190,6 @@ export const reopenDealCustody = mutation({
       changedBy: user._id,
       changedAt: Date.now(),
     });
-    await invalidateClassification(
-      ctx, app, user._id,
-      "A custody record was reopened after the deal's accounting was classified."
-    );
 
     // A written-off shortage goes back onto the employee's clearing balance:
     // the loss was booked on the strength of a closure that is now withdrawn.
@@ -3457,7 +3335,7 @@ export const planCustodyHandler = mutation({
 });
 
 // ---------------------------------------------------------------------------
-// The legal invoice, and accounting classification
+// The legal invoice (and the retired accounting classification)
 // ---------------------------------------------------------------------------
 
 /**
@@ -3468,6 +3346,12 @@ export const planCustodyHandler = mutation({
  * finance company's approved purchase amount, because on a financed deal those
  * are three different numbers describing three different things — and only this
  * one is what the parties signed.
+ *
+ * KEPT while the v1 financed-sale posting plan is in force (SCRUM-407 Part 1):
+ * that plan still posts revenue from `legalInvoiceConsiderationMinor`, so a
+ * recorded invoice remains a required closing-readiness item and this action
+ * stays reachable from the deal's readiness panel. Replacing the invoice as the
+ * revenue source is SCRUM-411.
  */
 export const recordLegalInvoice = mutation({
   args: {
@@ -3566,10 +3450,6 @@ export const recordLegalInvoice = mutation({
       });
     }
 
-    await invalidateClassification(
-      ctx, app, user._id,
-      "The legal invoice was re-recorded after the deal's accounting was classified."
-    );
 
     await ctx.db.patch(args.applicationId, {
       legalInvoiceAmountMinor: args.legalInvoiceAmountMinor,
@@ -3586,17 +3466,21 @@ export const recordLegalInvoice = mutation({
 });
 
 /**
- * Marks a deal's accounting treatment as established.
+ * RETIRED (SCRUM-407 Part 1, owner ruling): closing readiness is an automatic
+ * check, not a manual stamp.
  *
- * The gate the user asked for: estimates are fine to work from operationally,
- * but closure requires reconciliation. So this refuses while any cost is
- * unquantified, unrecorded or unchecked, while any custody record is open, or
- * while the legal invoice — the only figure revenue may be posted from — is
- * missing.
+ * `finalizeDeal` re-derives every condition this command used to establish —
+ * reconciled costs, configured fees recorded, the custody family on the books,
+ * no open or unbalanced custody record, a known remittance, the legal invoice —
+ * from the live rows through `evaluateClosingReadiness`, and the deal screen
+ * shows the same evaluator's verdict (`applications.getClosingReadiness`). The
+ * stored economics are recomputed after every settlement-input fee change, so
+ * nothing is left for a stamp to "establish".
  *
- * It sets a flag and nothing else. No journal entry follows from it yet; that
- * design is deliberately unwritten until real documents confirm how a financed
- * sale is legally structured.
+ * The endpoint stays registered only so a stale client gets a clear refusal
+ * rather than a missing-function error; it writes nothing. Historical
+ * `accountingClassification*` fields and their override rows are history and
+ * are never read by live readiness.
  */
 export const classifyDealAccounting = mutation({
   args: {
@@ -3605,135 +3489,9 @@ export const classifyDealAccounting = mutation({
     notes: v.string(),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [
-      PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
-    ]);
-    const app = await requireOwnedRow(
-      ctx,
-      args.orgId,
-      "financeApplications",
-      args.applicationId,
-      APPLICATION_NOT_FOUND
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
+    throw new ConvexError(
+      "Classifying a deal's accounting has been retired: readiness is now checked automatically from the deal's own records when it is finalized. Nothing has been changed."
     );
-    const notes = args.notes.trim();
-    if (!notes) {
-      throw new ConvexError("Record how this deal's accounting was established.");
-    }
-
-    if (app.legalInvoiceAmountMinor === undefined) {
-      throw new ConvexError(
-        "Record the deal's legal invoice before classifying its accounting. The invoice amount is the only figure revenue may be posted from."
-      );
-    }
-
-    const fees = await loadActiveFees(ctx, args.applicationId);
-    const summary = summarizeFees(fees);
-    // A deal with no live cost lines is the state "nobody itemized anything",
-    // which `summarizeFees` deliberately reports as NOT fully reconciled —
-    // nothing to have reconciled and everything checking out are different
-    // claims. Reading only the awaiting-counts let it through, because both are
-    // zero for an empty list, so a financed deal with an invoice and no costs
-    // at all classified clean.
-    if (summary.lineCount === 0) {
-      throw new ConvexError(
-        "No costs have been itemized on this deal. Record them, or record a zero-cost line saying the dealership bore none, before classifying its accounting."
-      );
-    }
-    if (summary.linesAwaitingActual > 0) {
-      throw new ConvexError(
-        `${summary.linesAwaitingActual} cost(s) on this deal have no actual amount recorded. Estimates may be used to run the deal, but not to close it.`
-      );
-    }
-    if (summary.linesAwaitingReconciliation > 0) {
-      throw new ConvexError(
-        `${summary.linesAwaitingReconciliation} cost(s) on this deal have an amount but nobody has checked it. Reconcile them before closing.`
-      );
-    }
-    // The counts above are blind to WHAT was checked: a reconciled line whose
-    // amount is NaN, a fraction, a negative or an unsafe value (the writers
-    // refuse them, the rows do not) passes both, and the deal would classify
-    // clean on totals that are not figures. The summary's own verdict is the
-    // gate — it is false over any unreadable amount as well as over any
-    // unchecked line — and it is asked directly rather than reassembled.
-    if (summary.amountsUnreadable !== null) {
-      throw new ConvexError(
-        "A cost amount on this deal is not a readable figure, so its accounting cannot be classified until the line is corrected."
-      );
-    }
-    if (!summary.fullyReconciled) {
-      throw new ConvexError(
-        "This deal's costs are not fully reconciled, so its accounting cannot be classified."
-      );
-    }
-    // Every fee the finance company's FROZEN policy configures needs an actual
-    // on the record too — the counts above cannot see a configured fee nobody
-    // recorded. One rule for this door and for finalization's, judged on the
-    // rows already read above; see `assertConfiguredFeesRecorded`.
-    assertConfiguredFeesRecorded(app.companyRuleSnapshot, fees, "closing");
-
-    // Read the arithmetic, not the stored status. A record can be closed and
-    // still be unbalanced — a late receipt against a RECONCILED record is
-    // exactly the case — and a gate that trusts the flag it is meant to be
-    // guarding is not a gate.
-    const custodyRows = await custodyFor(ctx, args.applicationId, "classifying this deal's accounting");
-    // The whole custody FAMILY must be on the books before the deal's
-    // treatment is established on it: a record from before ledger posting,
-    // or a custody-paid line whose posting is missing or stale, is refused
-    // whatever its status says. Same predicate finalization asks; settled
-    // through `migrateLegacyCustodyToLedger`, never inferred here.
-    await assertCustodyLedgerFamilyComplete(ctx, args.orgId, args.applicationId, custodyRows, fees, "classifying this deal's accounting");
-    for (const row of custodyRows) {
-      if (row.status === "OPEN") {
-        throw new ConvexError(
-          "A custody record on this deal is still open. Settle what that person holds or is owed before classifying."
-        );
-      }
-      const custodySummary = summarizeReadableCustody(row, fees, "classifying this deal's accounting");
-      if (!custodySummary.settled && row.status !== "WRITTEN_OFF") {
-        throw new ConvexError(
-          "A closed custody record on this deal no longer balances — its costs changed after it was reconciled. Reopen it and settle it before classifying."
-        );
-      }
-    }
-
-    if (app.accountingClassification === "CLASSIFIED") {
-      throw new ConvexError(
-        "This deal's accounting has already been classified. Change what it was based on to reopen it."
-      );
-    }
-
-    // Establishing a deal's accounting means establishing the figures that
-    // follow from it, not just stamping a flag beside them. Every settlement
-    // cost above now has a checked actual, so this is the first moment the
-    // expected remittance can be derived from what the company actually
-    // withholds — and the last moment before finalization reads it.
-    //
-    // Ordered after the refusals deliberately: a deal that cannot be classified
-    // must not have its stored economics moved on the way to being told so.
-    //
-    // A quoted, approved deal whose customer first payment is unknown would be
-    // recomputed into a WITHHELD split (SCRUM-373: unknown is never zero) and
-    // then stamped classified over figures that no longer exist. Refused here,
-    // before the recompute, so nothing about the deal moves.
-    if (
-      app.submittedQuotationMinor !== undefined &&
-      app.approvedDealerPurchaseAmountMinor !== undefined &&
-      app.customerFirstPaymentMinor === undefined
-    ) {
-      throw new ConvexError(
-        "The customer's first payment is not recorded on this deal, so its funding split cannot be established. Record it before classifying."
-      );
-    }
-    await recomputeEconomicsForApplication(ctx, args.applicationId);
-
-    const now = Date.now();
-    await ctx.db.patch(args.applicationId, {
-      accountingClassification: "CLASSIFIED",
-      accountingClassifiedBy: user._id,
-      accountingClassifiedAt: now,
-      accountingClassificationNotes: notes,
-      updatedAt: now,
-    });
-    return args.applicationId;
   },
 });
