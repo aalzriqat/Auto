@@ -8479,6 +8479,25 @@ describe("SCRUM-407: automatic closing readiness", () => {
       const fee = (await s.t.run((ctx) => ctx.db.get(feeId)))!;
       expect(fee.receiptReference).not.toBe("R-2");
     });
+
+    test("a deducted cost whose treatment has no account BLOCKS readiness — the screen never says READY for a plan that refuses", async () => {
+      const { s, applicationId } = await approvedDeal("r407-unmapped");
+      const feeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, {
+        expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
+        feeType: "COMMISSION", paidBy: "DEALER", paidTo: "FINANCE_COMPANY", accountingTreatment: "REFUNDABLE_DEPOSIT",
+        deductedFromSettlement: true, actualAmountMinor: 120 * SCALE,
+      });
+      await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Matched." });
+
+      const readiness = await s.asUser.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
+      const costs = readiness.checks.find((check) => check.key === "COSTS_CLOSABLE");
+      expect(costs?.status).toBe("BLOCKED");
+      expect(costs?.reason).toMatch(/no account to post to/i);
+      expect(readiness.state).not.toBe("READY");
+      await expect(
+        s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId })
+      ).rejects.toThrow(/no account to post to/i);
+    });
   });
 
   describe("the readiness query", () => {

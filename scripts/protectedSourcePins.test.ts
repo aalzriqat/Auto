@@ -562,14 +562,29 @@ describe("protected source content pins", () => {
        * this renewal. Read the hunks; do not take this note's word for their
        * scope.
        *
+       * -- RENEWAL 2026-09-28 (3) - SCRUM-407 review round 1 (doc comment only)
+       *
+       * Previous postimage, superseded by this entry (the /simplify renewal
+       * just above; Sol 6 CERTIFIED the head carrying it, 13b5ee5b7):
+       *
+       *   bytes:  238873
+       *   sha256: 4de5f5712a57aad5f095d98bd95428e6205f0a157a340d2b3a358dae5d82f9be
+       *
+       * The delta is the `getClosingReadiness` doc comment ONLY (Sonnet F2):
+       * it no longer claims the screen and the server "cannot disagree"
+       * without qualification — it scopes that to the closing-evidence checks
+       * and names the finalize preconditions the query does not cover — and
+       * it drops the reference to the `figures` block /simplify removed. No
+       * code line changed. Read the hunk; do not take this note's word for it.
+       *
        * Same governance: not weakened, bypassed, deleted, generalized or made
        * vacuous. Both constants were recomputed FROM THE FILE with this test's
        * own normalization.
        */
       file: "convex/applications.ts",
-      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)), then for SCRUM-407 automatic closing readiness (RENEWALs 2026-09-28 and 2026-09-28 (2)).
-      bytes: 238873,
-      sha256: "4de5f5712a57aad5f095d98bd95428e6205f0a157a340d2b3a358dae5d82f9be",
+      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)), then for SCRUM-407 automatic closing readiness (RENEWALs 2026-09-28, 2026-09-28 (2) and 2026-09-28 (3)).
+      bytes: 239345,
+      sha256: "3a76a51eaea169d1cae957ac278f2fcba6e15c2aa60e46d38a2391ebeb52ca98",
     },
     {
       /**

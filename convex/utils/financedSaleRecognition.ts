@@ -5,6 +5,7 @@ import { computeExpectedRemittance } from "../../lib/financingEconomics";
 import {
   buildFinancedSalePostingPlan,
   checkLegalInvoice,
+  treatmentPosting,
   type FinancedSalePostingPlan,
   type SettlementComponentInput,
 } from "./financedSalePostingPlan";
@@ -79,6 +80,15 @@ function costsClosableRefusal(liveFees: ReadonlyArray<Doc<"financeDealFees">>, c
   }
   if (!summary.fullyReconciled) {
     return "This deal's costs are not fully reconciled, so its accounting cannot be finalized.";
+  }
+  // The plan posts every non-zero deducted line to its treatment's account and
+  // refuses a treatment that has none (TREATMENT_UNMAPPED) — asked here too, so
+  // the screen never reports READY for a deal the plan will refuse (Codex R407-2).
+  const unmapped = settlementDeductedFees(liveFees).find(
+    (fee) => fee.actualAmountMinor !== undefined && fee.actualAmountMinor !== 0 && treatmentPosting(fee.accountingTreatment) === null
+  );
+  if (unmapped !== undefined) {
+    return `"${unmapped.description?.trim() || humanizeFeeType(unmapped.feeType)}" is classified as ${unmapped.accountingTreatment}, which has no account to post to. Reclassify it before finalizing — it will not be posted to a general account instead.`;
   }
   return null;
 }

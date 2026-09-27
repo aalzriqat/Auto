@@ -3744,17 +3744,24 @@ async function closingReadinessInputs(
 }
 
 /**
- * The deal's automatic closing readiness (SCRUM-407 P1.4): the SAME evaluator
- * `finalizeDeal` re-runs internally, so what the screen shows and what the
- * server enforces cannot disagree — and the server never trusts the screen.
+ * The deal's automatic closing readiness (SCRUM-407 P1.4): the SAME evaluator,
+ * fed by the same `closingReadinessInputs`, that `finalizeDeal` re-runs
+ * internally — so on the closing-evidence checks listed here the screen and the
+ * server cannot disagree, and the server never trusts the screen.
+ *
+ * It is NOT the whole finalize gate. `finalizeDeal` also enforces the workflow
+ * preconditions the deal screen tracks elsewhere (handover, expected payment,
+ * supplier route, required documents, quote match) and judges the operator's
+ * deposit choice and the plan's own balance at the moment of finalizing; READY
+ * here means the accounting evidence is complete, not that all of those pass.
  *
  * Read-only and never throws on the deal's own state: a verdict that cannot be
- * formed is reported as UNAVAILABLE with its reason. Money-bearing detail is
- * scoped to the accounting-economics tier (owner or VIEW_FINANCE) — the
- * SCRUM-117 read boundary, under which the dealer remittance is a FINANCE-ONLY
- * figure even for a role that confirms disbursements (the boundary sweep in
- * `financeApplicationBoundary.test.ts` covers this door): below
- * it every figure is null and every reason is a plain sentence, and
+ * formed is reported as UNAVAILABLE with its reason. Money-bearing reasons are
+ * scoped to the accounting-economics tier (`mayReadFinanceEconomics`: owner or
+ * VIEW_FINANCE) — the SCRUM-117 read boundary, under which the dealer remittance
+ * is a FINANCE-ONLY figure even for a role that confirms disbursements (the
+ * boundary sweep in `financeApplicationBoundary.test.ts` covers this door):
+ * below it every reason is a plain sentence, and
  * `moneyWithheld` says so explicitly rather than letting an absence stand for a
  * value (ACC-10).
  */
