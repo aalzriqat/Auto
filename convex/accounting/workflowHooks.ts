@@ -1429,11 +1429,46 @@ export async function hookExpensePosted(
     vehicleId?: Id<"vehicles">;
     capitalizeToInventory?: boolean;
     isPrepaid?: boolean;
+    /** SCRUM-389. Absent means SHOWROOM; see ExpensePostedPayload.costBearer. */
+    costBearer?: "SHOWROOM" | "SUPPLIER";
   }
 ) {
   const { capitalize, prepaid } = classifyExpensePosting(args);
   if (args.taxMinor && args.taxMinor > 0) {
     await ensureVatReceivableAccountIfChartReady(ctx, args.orgId, args.actorId);
+  }
+  if (args.costBearer === "SUPPLIER") {
+    // A supplier-borne cost debits Receivable from Suppliers, which older
+    // charts lack. Self-healed here, and ALSO named as a required key below so
+    // that an org whose chart cannot take it queues the post instead of
+    // throwing inside the caller's transaction.
+    if (await isChartInitialized(ctx, args.orgId)) {
+      await ensureConsignmentAccounts(ctx, args.orgId, args.actorId);
+    }
+    await postDomainEvent(ctx, {
+      orgId: args.orgId,
+      eventType: "EXPENSE_POSTED",
+      sourceType: "expenses",
+      sourceId: args.expenseId.toString(),
+      idempotencyKey: `expense_posted_${args.expenseId}`,
+      currency: args.currency,
+      occurredAt: args.occurredAt,
+      actorId: args.actorId,
+      payload: {
+        expenseId: args.expenseId.toString(),
+        amountMinor: args.amountMinor,
+        taxMinor: args.taxMinor,
+        currency: args.currency,
+        category: args.category,
+        paymentMethod: args.paymentMethod,
+        vehicleId: args.vehicleId?.toString(),
+        capitalizeToInventory: args.capitalizeToInventory,
+        isPrepaid: prepaid,
+        costBearer: "SUPPLIER",
+      },
+      requiredSystemKeys: [SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS],
+    });
+    return;
   }
   if (!capitalize && await isChartInitialized(ctx, args.orgId)) {
     // A prepaid expense debits the Prepaid Expenses asset now and releases it

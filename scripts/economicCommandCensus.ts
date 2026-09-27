@@ -67,6 +67,7 @@ export const MONEY_TABLES: readonly string[] = [
   "receiptApplications", "receiptMovements", "receiptRetainedPositions", "postDatedCheques",
   "deposits", "depositApplications",
   "vehicleSupplierPayables", "vehicleSupplierReceivables", "paymentVouchers",
+  "supplierCostRecoveries", "supplierCostRecoveryReceipts",
   "payrollRuns", "payrollItems", "employeeAdvances", "employeeAdvanceRecoveries",
   "expenses", "prepaidExpenseSchedules", "prepaidScheduleCorrections",
   "fixedAssets", "fixedAssetEvents", "partnerEquity", "partnerEquityTransactions",

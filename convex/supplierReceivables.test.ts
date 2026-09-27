@@ -34,6 +34,7 @@ const PERMS = [
   "manage:finance", "view:finance",
   "view:commissions", "manage:commissions",
   "approve:requests",
+  "create:expenses",
 ];
 
 const SALE_PRICE = 12_500;
@@ -354,6 +355,30 @@ describe("what a supplier still owes", () => {
     ]);
 
     // And it reconciles with the ledger account it summarizes.
+    const gl = await ledger(s.t, s.orgId);
+    expect(gl[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS]).toBe(summary.totalOutstanding * SCALE);
+  });
+
+  test("it sums BOTH subledgers of the account: margin claims and supplier-borne costs (SCRUM-389)", async () => {
+    const s = await seed("summary-both");
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, { idempotencyKey: crypto.randomUUID(),
+      orgId: s.orgId, receivableId: s.receivable._id, amount: 1_000, receiptMethod: "CASH",
+    });
+    const SUPPLIER_COST = 300;
+    await s.asUser.mutation(api.expenses.create, {
+      orgId: s.orgId, vehicleId: s.vehicleId, title: "Transport, borne by the supplier",
+      amount: SUPPLIER_COST, date: Date.now() - 60_000, category: "TRANSPORT", status: "PAID",
+      paymentMethod: "CASH", costBearer: "SUPPLIER", idempotencyKey: crypto.randomUUID(),
+    });
+
+    const summary = await s.asUser.query(api.supplierReceivables.outstandingSummary, { orgId: s.orgId });
+    expect(summary.complete).toBe(true);
+    expect(summary.totalOutstanding).toBe(MARGIN - 1_000 + SUPPLIER_COST);
+    expect(summary.costRecoveryOutstanding).toBe(SUPPLIER_COST);
+    expect(summary.bySupplier).toEqual([
+      { sourcedFromName: "Amman Importer Co", outstanding: MARGIN - 1_000 + SUPPLIER_COST, claims: 2 },
+    ]);
+
     const gl = await ledger(s.t, s.orgId);
     expect(gl[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS]).toBe(summary.totalOutstanding * SCALE);
   });

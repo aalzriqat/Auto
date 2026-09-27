@@ -101,7 +101,11 @@ const RESET_TABLES = [
   "cashierReconciliations",
   "collectionApprovalRequests",
   "paymentVouchers",
-  // Expenses
+  // Expenses. SCRUM-389 supplier-cost recoveries first: a receipt names its
+  // recovery and a recovery names its expense, so neither may outlive what it
+  // points at (children before parents, plus the CHILD_TABLES edges).
+  "supplierCostRecoveryReceipts",
+  "supplierCostRecoveries",
   "expenses",
   // Payroll
   "payrollRuns",
@@ -172,6 +176,9 @@ const CHILD_TABLES: Partial<Record<(typeof RESET_TABLES)[number], readonly strin
   paymentAllocations: ["receiptApplications"],
   receivableDocuments: ["receiptApplications"],
   receivables: ["receiptApplications"],
+  // SCRUM-389 — the partial-drain half for the supplier-cost recovery chain.
+  supplierCostRecoveries: ["supplierCostRecoveryReceipts"],
+  expenses: ["supplierCostRecoveries"],
 };
 
 /**

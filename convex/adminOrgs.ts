@@ -82,6 +82,10 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "vehicleLandedCosts", index: "by_org_vehicle" },
   { kind: "orgRows", table: "vehicleSupplierPayables", index: "by_org" },
   { kind: "orgRows", table: "vehicleSupplierReceivables", index: "by_org" },
+  // SCRUM-389. Receipts before the recovery they belong to, and both before
+  // the expense and vehicle a recovery names — deepest first, as above.
+  { kind: "orgRows", table: "supplierCostRecoveryReceipts", index: "by_org" },
+  { kind: "orgRows", table: "supplierCostRecoveries", index: "by_org" },
   // Ordered before `sales` and `journalEntries` for the same reason as every
   // other child step: it holds ids into both, so removing it after them would
   // leave rows pointing at documents that no longer exist.

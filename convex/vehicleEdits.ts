@@ -18,6 +18,7 @@ import { assertVehicleImagesAllowed } from "./utils/storageValidation";
 import { acquisitionPaymentMethodValidator, type AcquisitionPaymentMethod } from "./utils/paymentMethods";
 import { postVehicleAcquisitionIfOwned, hasVehicleAcquisitionAccountingExposure } from "./vehicles";
 import { retroactiveOwnershipChangeRefusal } from "./utils/vehicleOwnership";
+import { supplierCostRecoveryConversionRefusal } from "./utils/costBearer";
 
 type VehicleEditPayload = {
   vin?: string;
@@ -214,6 +215,16 @@ export const requestUpdate = mutation({
       status: vehicle.status,
     });
     if (ownershipRefusal) throw new ConvexError(ownershipRefusal);
+    // SCRUM-389: a SOURCED car with an open supplier-cost recovery cannot become
+    // owned stock — the supplier would owe the showroom for costs on a car the
+    // showroom now owns, and nothing would ever settle it.
+    const recoveryRefusal = await supplierCostRecoveryConversionRefusal(ctx, {
+      orgId: vehicle.orgId,
+      vehicleId: vehicle._id,
+      currentSourceType: vehicle.sourceType,
+      requestedSourceType: payload.sourceType,
+    });
+    if (recoveryRefusal) throw new ConvexError(recoveryRefusal);
 
     // Mirrors vehicles.update's acquisition-posting guard: a SOURCED→STOCK
     // flip (or a purchase price set for the first time) requested here must
@@ -429,6 +440,14 @@ export const resolve = mutation({
           status: previousVehicle.status,
         });
         if (resolveOwnershipRefusal) throw new ConvexError(resolveOwnershipRefusal);
+        // SCRUM-389: re-checked at approval — a recovery can open in between.
+        const resolveRecoveryRefusal = await supplierCostRecoveryConversionRefusal(ctx, {
+          orgId: previousVehicle.orgId,
+          vehicleId: previousVehicle._id,
+          currentSourceType: previousVehicle.sourceType,
+          requestedSourceType: payload.sourceType as "STOCK" | "SOURCED" | undefined,
+        });
+        if (resolveRecoveryRefusal) throw new ConvexError(resolveRecoveryRefusal);
 
         const { purchasePaymentMethod: resolvePurchasePaymentMethod, ...vehiclePatchFields } = payload;
 
