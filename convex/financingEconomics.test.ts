@@ -7,6 +7,10 @@ import { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 import { PERMISSIONS } from "./utils/permissions";
 import { economicsStamp } from "./utils/financingEconomics";
+import {
+  FIRST_PAYMENT_CORRECTION_REFUSALS,
+  type FirstPaymentCorrectionBlock,
+} from "./utils/firstPaymentCorrection";
 
 type TestConvex = ConvexTestInstance<typeof schema>;
 type AuthenticatedTestConvex = ReturnType<TestConvex["withIdentity"]>;
@@ -5719,4 +5723,325 @@ describe("the customer's first payment is never assumed to be zero (SCRUM-373)",
     expect(app.needsFinancingReconciliation).toBe(true);
     expect(app.financingReconciliationReason).toMatch(/first payment is not recorded/i);
   });
+});
+
+
+describe("applying the quote's down payment to an approved zero first payment (SCRUM-373 D2)", () => {
+  const MONEY_TABLES = [
+    "accountingEvents",
+    "pendingAccountingEvents",
+    "journalEntries",
+    "journalLines",
+    "canonicalPayments",
+    "paymentAllocations",
+    "receiptMovements",
+    "receiptApplications",
+    "collectionPayments",
+    "receivables",
+    "transactions",
+  ] as const;
+
+  /** An approved deal whose first payment was recorded as a confident zero — the production shape. */
+  async function zeroedApprovedDeal(
+    options: { quoteDownPaymentMajor?: number; suffix?: string } = {}
+  ): Promise<{ seed: Seed; applicationId: Id<"financeApplications"> }> {
+    const seed = await seedDealer({}, options.suffix ?? "1");
+    const applicationId = await createApplication(seed);
+    if (options.quoteDownPaymentMajor !== undefined) {
+      await seed.t.run(async (ctx) => {
+        const app = await ctx.db.get(applicationId);
+        if (!app) throw new Error("fixture: application vanished");
+        await ctx.db.patch(app.quoteId, { downPayment: options.quoteDownPaymentMajor });
+      });
+    }
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "MANUAL_ENTRY",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+      customerFirstPaymentMinor: 0,
+    });
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(DEAL.quotation),
+      providerType: "FINANCE_COMPANY",
+      providerName: "Jordan Finance Appraisals",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(DEAL.quotation),
+      basis: "APPRAISAL",
+    });
+    return { seed, applicationId };
+  }
+
+  async function apply(
+    seed: Seed,
+    applicationId: Id<"financeApplications">,
+    as: AuthenticatedTestConvex = seed.asApprover,
+    reason = "Dealer ruling 2026-09-27: first payment is the quote's down payment"
+  ) {
+    return await as.mutation(api.financingEconomics.applyQuoteFirstPayment, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await servedStamp(seed, applicationId),
+      reason,
+    });
+  }
+
+  async function cockpitCapability(
+    seed: Seed,
+    applicationId: Id<"financeApplications">,
+    as: AuthenticatedTestConvex = seed.asApprover
+  ) {
+    const cockpit = await as.query(api.applications.dealCockpit, { orgId: seed.orgId, applicationId });
+    if (!cockpit) throw new Error("cockpit not served");
+    return cockpit.firstPaymentCorrection;
+  }
+
+  async function moneyRowCounts(seed: Seed): Promise<Record<string, number>> {
+    return await seed.t.run(async (ctx) => {
+      const counts: Record<string, number> = {};
+      for (const table of MONEY_TABLES) counts[table] = (await ctx.db.query(table).collect()).length;
+      return counts;
+    });
+  }
+
+  async function firstPaymentAudit(seed: Seed, applicationId: Id<"financeApplications">) {
+    return await seed.t.run(async (ctx) =>
+      (await ctx.db.query("financeApplicationOverrides").collect()).filter(
+        (row) => row.applicationId === applicationId && row.field === "customerFirstPaymentMinor"
+      )
+    );
+  }
+
+  test("the zeroed deal takes the quote's down payment and the split follows (1,375, not 1,875)", async () => {
+    const { seed, applicationId } = await zeroedApprovedDeal();
+    const before = await readApp(seed, applicationId);
+    expect(before.customerFirstPaymentMinor).toBe(0);
+    expect(before.dealerContributionMinor).toBe(jod(1_875));
+    expect((await cockpitCapability(seed, applicationId))?.available).toBe(true);
+
+    const counts = await moneyRowCounts(seed);
+    await apply(seed, applicationId);
+
+    const after = await readApp(seed, applicationId);
+    expect(after.customerFirstPaymentMinor).toBe(jod(DEAL.customerFirstPayment));
+    expect(after.dealerContributionMinor).toBe(jod(1_375));
+    expect(after.financeCompanyFundedPortionMinor).toBe(jod(10_625));
+    expect(after.approvedDealerPurchaseAmountMinor).toBe(before.approvedDealerPurchaseAmountMinor);
+    expect(after.economicsRevision ?? 0).toBeGreaterThan(before.economicsRevision ?? 0);
+    // A financing term only: no cash, receipt, receivable or journal appears.
+    expect(await moneyRowCounts(seed)).toEqual(counts);
+
+    const audit = await firstPaymentAudit(seed, applicationId);
+    const applied = audit.find((row) => row.reason.includes("originating quote's down payment"));
+    expect(applied?.previousValue).toBe("0");
+    expect(applied?.newValue).toBe(String(jod(DEAL.customerFirstPayment)));
+    expect(applied?.reason).toMatch(/Dealer ruling 2026-09-27/);
+
+    // Nothing left to correct, and the screen agrees.
+    expect((await cockpitCapability(seed, applicationId))?.block).toBe("NOT_ZERO");
+  });
+
+  test("a CLASSIFIED deal loses its classification, on the record", async () => {
+    const { seed, applicationId } = await zeroedApprovedDeal();
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { accountingClassification: "CLASSIFIED" }));
+
+    await apply(seed, applicationId);
+
+    expect((await readApp(seed, applicationId)).accountingClassification).toBe("PENDING_CLASSIFICATION");
+    const withdrawn = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("financeApplicationOverrides").collect()).filter(
+        (row) => row.applicationId === applicationId && row.field === "accountingClassification"
+      )
+    );
+    expect(withdrawn).toHaveLength(1);
+    expect(withdrawn[0]?.newValue).toBe("PENDING_CLASSIFICATION");
+  });
+
+  test("only the first-payment reason is retired; an unrelated reason and its flag survive", async () => {
+    const other = "Legacy migration: check the approval basis.";
+    const { seed, applicationId } = await zeroedApprovedDeal();
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        needsFinancingReconciliation: true,
+        financingReconciliationReason: `${other} The customer's first payment is not recorded on this deal. Record it before relying on the funding split.`,
+      })
+    );
+
+    await apply(seed, applicationId);
+
+    const app = await readApp(seed, applicationId);
+    expect(app.financingReconciliationReason).toBe(other);
+    expect(app.needsFinancingReconciliation).toBe(true);
+  });
+
+  test("a stale first-payment reason that was the only one clears the flag", async () => {
+    const { seed, applicationId } = await zeroedApprovedDeal();
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        needsFinancingReconciliation: true,
+        financingReconciliationReason:
+          "The customer's first payment is not recorded on this deal. Record it before relying on the funding split.",
+      })
+    );
+
+    await apply(seed, applicationId);
+
+    const app = await readApp(seed, applicationId);
+    expect(app.financingReconciliationReason).toBeUndefined();
+    expect(app.needsFinancingReconciliation).toBe(false);
+  });
+
+  test("the application's own salesperson is refused, and the screen says so", async () => {
+    const { seed, applicationId } = await zeroedApprovedDeal();
+    expect((await cockpitCapability(seed, applicationId, seed.asUser))?.block).toBe("OWN_APPLICATION");
+    await expect(apply(seed, applicationId, seed.asUser)).rejects.toThrow(/your own application/i);
+    expect((await readApp(seed, applicationId)).customerFirstPaymentMinor).toBe(0);
+  });
+
+  test("each permission is required; a caller without finance visibility is not even shown the figure", async () => {
+    const { seed, applicationId } = await zeroedApprovedDeal();
+    const sales = await addSalesUser(seed);
+    expect(await cockpitCapability(seed, applicationId, sales)).toBeNull();
+    await expect(apply(seed, applicationId, sales)).rejects.toThrow(/Missing required permissions/i);
+
+    for (const [clerk, permissions] of [
+      ["fp_view_only", [PERMISSIONS.VIEW_SALES, PERMISSIONS.VIEW_FINANCE]],
+      ["fp_approve_only", [PERMISSIONS.VIEW_SALES, PERMISSIONS.APPROVE_FINANCE_APPLICATION]],
+    ] as const) {
+      const userId = await seed.t.run((ctx) =>
+        ctx.db.insert("users", { clerkId: clerk, email: `${clerk}@example.com`, name: clerk })
+      );
+      const roleId = await seed.t.run((ctx) =>
+        ctx.db.insert("roles", { orgId: seed.orgId, name: clerk, permissions: [...permissions] })
+      );
+      await seed.t.run((ctx) => ctx.db.insert("memberships", { orgId: seed.orgId, userId, roleId }));
+      const caller = seed.t.withIdentity({ subject: clerk });
+      await expect(apply(seed, applicationId, caller)).rejects.toThrow(/Missing required permissions/i);
+    }
+    expect((await readApp(seed, applicationId)).customerFirstPaymentMinor).toBe(0);
+  });
+
+  test("a blank reason is refused on the server", async () => {
+    const { seed, applicationId } = await zeroedApprovedDeal();
+    await expect(apply(seed, applicationId, seed.asApprover, "   ")).rejects.toThrow(/must record why/i);
+  });
+
+  test("a confirmation taken against figures that have since moved is refused", async () => {
+    const { seed, applicationId } = await zeroedApprovedDeal();
+    const stale = await servedStamp(seed, applicationId);
+    await seed.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      await ctx.db.patch(applicationId, { economicsRevision: (app?.economicsRevision ?? 0) + 1 });
+    });
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.applyQuoteFirstPayment, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: stale,
+        reason: "retry",
+      })
+    ).rejects.toThrow(/changed since you opened it/i);
+  });
+
+  /**
+   * Every refusal state, driven through BOTH doors: the cockpit names a block
+   * and the mutation refuses with exactly that block's message, so the screen
+   * cannot offer what the server refuses.
+   */
+  const REFUSALS: Array<{
+    name: string;
+    block: string;
+    quoteDownPaymentMajor?: number;
+    mutate?: (seed: Seed, applicationId: Id<"financeApplications">) => Promise<void>;
+  }> = [
+    {
+      name: "handed over",
+      block: "HANDED_OVER",
+      mutate: (seed, id) => seed.t.run((ctx) => ctx.db.patch(id, { vehicleHandoverAt: Date.now() })),
+    },
+    {
+      name: "cancelled",
+      block: "TERMINAL",
+      mutate: (seed, id) => seed.t.run((ctx) => ctx.db.patch(id, { status: "CANCELLED" })),
+    },
+    {
+      name: "closed",
+      block: "TERMINAL",
+      mutate: (seed, id) => seed.t.run((ctx) => ctx.db.patch(id, { status: "CLOSED" })),
+    },
+    {
+      name: "not yet approved",
+      block: "NOT_APPROVED",
+      mutate: (seed, id) =>
+        seed.t.run((ctx) => ctx.db.patch(id, { approvedDealerPurchaseAmountMinor: undefined })),
+    },
+    {
+      name: "a nonzero stored payment",
+      block: "NOT_ZERO",
+      mutate: (seed, id) => seed.t.run((ctx) => ctx.db.patch(id, { customerFirstPaymentMinor: 1 })),
+    },
+    {
+      name: "an unknown stored payment",
+      block: "NOT_ZERO",
+      mutate: (seed, id) =>
+        seed.t.run((ctx) => ctx.db.patch(id, { customerFirstPaymentMinor: undefined })),
+    },
+    { name: "a zero quote down payment", block: "NO_QUOTE_DOWN_PAYMENT", quoteDownPaymentMajor: 0 },
+    {
+      name: "a deleted quote",
+      block: "NO_QUOTE_DOWN_PAYMENT",
+      mutate: (seed, id) =>
+        seed.t.run(async (ctx) => {
+          const app = await ctx.db.get(id);
+          if (app) await ctx.db.delete(app.quoteId);
+        }),
+    },
+    {
+      name: "a quote owned by another organization",
+      block: "NO_QUOTE_DOWN_PAYMENT",
+      mutate: (seed, id) =>
+        seed.t.run(async (ctx) => {
+          const app = await ctx.db.get(id);
+          const otherOrgId = await ctx.db.insert("organizations", { name: "Other", createdAt: Date.now() });
+          if (app) await ctx.db.patch(app.quoteId, { orgId: otherOrgId });
+        }),
+    },
+    {
+      name: "an unknown funding split",
+      block: "SPLIT_UNKNOWN",
+      mutate: (seed, id) => seed.t.run((ctx) => ctx.db.patch(id, { unfinancedPortionMinor: undefined })),
+    },
+    { name: "a down payment above the unfinanced portion", block: "EXCEEDS_UNFINANCED", quoteDownPaymentMajor: 2_500 },
+  ];
+
+  for (const refusal of REFUSALS) {
+    test(`refused: ${refusal.name} — the cockpit and the mutation agree`, async () => {
+      const { seed, applicationId } = await zeroedApprovedDeal({
+        quoteDownPaymentMajor: refusal.quoteDownPaymentMajor,
+      });
+      await refusal.mutate?.(seed, applicationId);
+      const before = await readApp(seed, applicationId);
+      const counts = await moneyRowCounts(seed);
+
+      const capability = await cockpitCapability(seed, applicationId);
+      expect(capability?.available).toBe(false);
+      expect(capability?.block).toBe(refusal.block);
+      await expect(apply(seed, applicationId)).rejects.toThrow(
+        FIRST_PAYMENT_CORRECTION_REFUSALS[refusal.block as FirstPaymentCorrectionBlock]
+      );
+
+      const after = await readApp(seed, applicationId);
+      expect(after.customerFirstPaymentMinor).toBe(before.customerFirstPaymentMinor);
+      expect(after.economicsRevision).toBe(before.economicsRevision);
+      expect(await moneyRowCounts(seed)).toEqual(counts);
+    });
+  }
 });

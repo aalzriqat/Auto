@@ -66,7 +66,8 @@ import {
 } from "./utils/financingEconomics";
 // The anomaly verdict, from the module that owns it. Both handover
 // confirmations must warn about the same deals; see the helper's own note.
-import { approvedAmountIsFarFromEvidenceFor } from "./financingEconomics";
+import { approvedAmountIsFarFromEvidenceFor, quoteDownPaymentMinor } from "./financingEconomics";
+import { firstPaymentCorrectionBlock } from "./utils/firstPaymentCorrection";
 import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
@@ -1940,7 +1941,7 @@ export const dealCockpit = query({
     applicationId: v.id("financeApplications"),
   },
   handler: async (ctx, args) => {
-    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
     const app = await ctx.db.get(args.applicationId);
     if (!app || app.orgId !== args.orgId) return null;
@@ -2291,12 +2292,28 @@ export const dealCockpit = query({
         })),
     };
 
-    if (!canSeeMoney) return { ...base, money: null };
+    if (!canSeeMoney) return { ...base, money: null, firstPaymentCorrection: null };
+
+    // SCRUM-373 D2. Money-gated with the rest: it carries the quote's figure.
+    const quoteFirstPaymentMinor = await quoteDownPaymentMinor(ctx, app, quote);
+    const firstPaymentBlock = firstPaymentCorrectionBlock({
+      app,
+      actorId: user._id,
+      mayApprove:
+        isSystemOwnerRole(role) ||
+        role.permissions.includes(PERMISSIONS.APPROVE_FINANCE_APPLICATION),
+      quoteDownPaymentMinor: quoteFirstPaymentMinor,
+    });
 
     return {
       ...base,
       settlementAdviceDiscrepancy: settlementAdviceEvidence,
       money: await buildCockpitMoney(ctx, app, quote, settlementFacts),
+      firstPaymentCorrection: {
+        available: firstPaymentBlock === null,
+        block: firstPaymentBlock,
+        quoteDownPaymentMinor: quoteFirstPaymentMinor ?? null,
+      },
     };
   },
 });

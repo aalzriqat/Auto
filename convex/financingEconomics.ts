@@ -46,6 +46,13 @@ import {
   selectActiveAppraisal,
   type FinanceCompanyRuleSnapshot,
 } from "./utils/financingEconomics";
+import { invalidateClassification } from "./utils/classificationInvalidation";
+import {
+  FIRST_PAYMENT_CORRECTION_REFUSALS,
+  FIRST_PAYMENT_NOT_RECORDED_REASON,
+  firstPaymentCorrectionBlock,
+  withoutFirstPaymentReason,
+} from "./utils/firstPaymentCorrection";
 
 /**
  * The dealer side of a financed vehicle sale: what we quoted the financing
@@ -241,7 +248,7 @@ async function recomputeAndPatchEconomics(
       financingReconciliationReason: appendReconciliationReason(
         app.financingReconciliationReason,
         firstPaymentUnknown
-          ? "The customer's first payment is not recorded on this deal. Record it before relying on the funding split."
+          ? FIRST_PAYMENT_NOT_RECORDED_REASON
           : `This finance company applies its LTV to the ${(snapshot.ltvBasis ?? "APPROVED_PURCHASE_AMOUNT").toLowerCase().replace(/_/g, " ")}, which has not been recorded on this deal. Record it before relying on the funding split.`
       ),
       updatedAt: Date.now(),
@@ -490,8 +497,21 @@ async function resolveCustomerFirstPayment(
   if (app.customerFirstPaymentMinor !== undefined) {
     return { minor: app.customerFirstPaymentMinor, source: "STORED" };
   }
-  const quote = await ctx.db.get(app.quoteId);
-  if (!quote || quote.orgId !== app.orgId) return undefined;
+  const minor = await quoteDownPaymentMinor(ctx, app, await ctx.db.get(app.quoteId));
+  return minor === undefined ? undefined : { minor, source: "QUOTE_SEED" };
+}
+
+/**
+ * The originating quote's down payment in the deal's minor units — the seed
+ * `createFromQuote` writes — read only from a quote owned by the deal's org.
+ * Undefined when there is no readable one.
+ */
+export async function quoteDownPaymentMinor(
+  ctx: QueryCtx | MutationCtx,
+  app: Doc<"financeApplications">,
+  quote: Doc<"quotes"> | null
+): Promise<number | undefined> {
+  if (!quote || quote._id !== app.quoteId || quote.orgId !== app.orgId) return undefined;
   if (typeof quote.downPayment !== "number" || !Number.isFinite(quote.downPayment)) {
     return undefined;
   }
@@ -501,7 +521,7 @@ async function resolveCustomerFirstPayment(
   // quote saved today cannot hold such an amount; a legacy or hand-edited one can.
   const minor = toMinorSameCurrencyOrUndefined(quote.downPayment, currency, currency);
   if (minor === undefined || minor < 0) return undefined;
-  return { minor, source: "QUOTE_SEED" };
+  return minor;
 }
 
 /**
@@ -2483,6 +2503,108 @@ export const reopenApproval = mutation({
     });
 
     return args.applicationId;
+  },
+});
+
+/**
+ * SCRUM-373 D2: sets an approved deal's zero first payment to exactly its
+ * originating quote's down payment.
+ *
+ * The dealer ruled (2026-09-27) that the quote's down payment is the correct
+ * first payment for the deals `recordSubmittedQuotation` zeroed. Once a
+ * purchase amount is approved that writer refuses, so without this the only
+ * route was reopening the approval — discarding a real financier decision to
+ * repair a term. This takes NO free value: it applies the quote's figure, the
+ * same one `finalizeDeal` puts on the sale, so the cockpit and the sale cannot
+ * disagree.
+ *
+ * A financing TERM only. It creates no receipt, payment, receivable, journal
+ * or outbox row — the first payment goes to the finance company, and whether
+ * it was paid is recorded elsewhere.
+ *
+ * Who and when is `firstPaymentCorrectionBlock`, shared with the cockpit.
+ */
+export const applyQuoteFirstPayment = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    /** The figures the operator reviewed; a stale confirmation is refused. */
+    economicsStamp: v.string(),
+    reason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.APPROVE_FINANCE_APPLICATION,
+      PERMISSIONS.VIEW_FINANCE,
+    ]);
+    const reason = args.reason.trim();
+    if (!reason) {
+      throw new ConvexError("Applying the quote's down payment must record why.");
+    }
+
+    const app = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId,
+      APPLICATION_NOT_FOUND
+    );
+    if (args.economicsStamp !== economicsStamp(app)) {
+      throw new ConvexError(
+        "This deal's figures changed since you opened it. Review them again before applying the down payment."
+      );
+    }
+
+    const quoteMinor = await quoteDownPaymentMinor(ctx, app, await ctx.db.get(app.quoteId));
+    const block = firstPaymentCorrectionBlock({
+      app,
+      actorId: user._id,
+      mayApprove: true,
+      quoteDownPaymentMinor: quoteMinor,
+    });
+    if (block) throw new ConvexError(FIRST_PAYMENT_CORRECTION_REFUSALS[block]);
+    const firstPaymentMinor = quoteMinor as number;
+
+    await recordOverride(ctx, {
+      orgId: args.orgId,
+      applicationId: args.applicationId,
+      field: "customerFirstPaymentMinor",
+      previousValue: app.customerFirstPaymentMinor,
+      newValue: firstPaymentMinor,
+      reason: `Applied the originating quote's down payment (SCRUM-373): ${reason}`,
+      changedBy: user._id,
+    });
+    // The treatment was established against the old split.
+    await invalidateClassification(
+      ctx,
+      app,
+      user._id,
+      "The customer's first payment was corrected to the originating quote's down payment."
+    );
+
+    // Only the first-payment sentence is this correction's to retire; any
+    // other reason stays, and so does the flag it raised.
+    const carriesFirstPaymentReason =
+      app.financingReconciliationReason?.includes(FIRST_PAYMENT_NOT_RECORDED_REASON) === true;
+    const remainingReason = withoutFirstPaymentReason(app.financingReconciliationReason);
+    await ctx.db.patch(app._id, {
+      customerFirstPaymentMinor: firstPaymentMinor,
+      // See `economicsRevision` in the schema.
+      economicsRevision: (app.economicsRevision ?? 0) + 1,
+      ...(carriesFirstPaymentReason
+        ? {
+            financingReconciliationReason: remainingReason,
+            ...(remainingReason === undefined ? { needsFinancingReconciliation: false } : {}),
+          }
+        : {}),
+      updatedAt: Date.now(),
+    });
+
+    // Every figure derived from the first payment moves in this transaction.
+    const corrected = await ctx.db.get(app._id);
+    if (corrected) await recomputeAndPatchEconomics(ctx, corrected);
+
+    return { customerFirstPaymentMinor: firstPaymentMinor };
   },
 });
 
