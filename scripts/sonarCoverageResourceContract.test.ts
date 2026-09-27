@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
+import { parse as parseYaml } from "yaml";
 
 const ROOT = path.resolve(__dirname, "..");
+const MIN_SCAN_BUDGET_MINUTES = 40;
 const TEST_WORKFLOW = path.join(ROOT, ".github", "workflows", "test.yml");
 const SONAR_MAIN_WORKFLOW = path.join(ROOT, ".github", "workflows", "sonar-main.yml");
 
@@ -47,5 +49,12 @@ describe("Sonar coverage resource contract", () => {
     expect(namedWorkflowStep(mainCoverage, "Generate coverage for Sonar")).toMatch(
       /NODE_OPTIONS:\s*--max-old-space-size=5632/,
     );
+  });
+
+  test("SCRUM-384: main Sonar job budget is about twice a normal ~20-min run", () => {
+    const workflow = parseYaml(source(SONAR_MAIN_WORKFLOW)) as {
+      jobs: { scan: { "timeout-minutes"?: number } };
+    };
+    expect(workflow.jobs.scan["timeout-minutes"]).toBeGreaterThanOrEqual(MIN_SCAN_BUDGET_MINUTES);
   });
 });
