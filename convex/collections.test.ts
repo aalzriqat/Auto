@@ -2,6 +2,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
+import { Doc, Id } from "./_generated/dataModel";
 import { ruleCollectionRefund } from "./accounting/postingRules";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import {
@@ -2129,23 +2130,36 @@ describe("Collections", () => {
   // SCRUM-259: the reconciliation read the cashier's first 500 payments of all
   // time and filtered afterwards, so a cash payment behind 500 older rows was
   // invisible and the day was certified from a hidden prefix.
-  test("cashier_reconciliation_includes_a_cash_payment_behind_500_older_rows", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, userId, asFinance } = await seedFinanceMember(t);
-    const now = Date.now();
-    const lastMonth = now - 30 * 24 * 60 * 60 * 1000;
+  async function seedCashierPayments(
+    t: ReturnType<typeof convexTestWithComponents>,
+    base: { orgId: Id<"organizations">; customerId: Id<"customers">; userId: Id<"users"> },
+    count: number,
+    over: Partial<Doc<"collectionPayments">> & { paymentDate: number }
+  ) {
     await t.run(async (ctx) => {
-      for (let i = 0; i < 500; i += 1) {
+      for (let i = 0; i < count; i += 1) {
         await ctx.db.insert("collectionPayments", {
-          orgId, customerId, direction: "IN", method: "CASH", amount: 1,
-          paymentDate: lastMonth, status: "POSTED", cashierId: userId, createdAt: lastMonth,
+          orgId: base.orgId,
+          customerId: base.customerId,
+          cashierId: base.userId,
+          direction: "IN",
+          method: "CASH",
+          amount: 1,
+          status: "POSTED",
+          createdAt: over.paymentDate,
+          ...over,
         });
       }
-      await ctx.db.insert("collectionPayments", {
-        orgId, customerId, direction: "IN", method: "CASH", amount: 250,
-        paymentDate: now, status: "POSTED", cashierId: userId, createdAt: now,
-      });
     });
+  }
+
+  test("cashier_reconciliation_includes_a_cash_payment_behind_500_older_rows", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const seed = await seedFinanceMember(t);
+    const { orgId, asFinance } = seed;
+    const now = Date.now();
+    await seedCashierPayments(t, seed, 500, { paymentDate: now - 30 * 24 * 60 * 60 * 1000 });
+    await seedCashierPayments(t, seed, 1, { paymentDate: now, amount: 250 });
 
     const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
     expect(draft).toMatchObject({ complete: true, expectedCash: 250, paymentCount: 1 });
@@ -2165,16 +2179,12 @@ describe("Collections", () => {
 
   test("cashier_reconciliation_refuses_a_day_it_cannot_read_completely", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, userId, asFinance } = await seedFinanceMember(t);
+    const seed = await seedFinanceMember(t);
+    const { orgId, asFinance } = seed;
     const now = Date.now();
-    await t.run(async (ctx) => {
-      for (let i = 0; i < 1001; i += 1) {
-        await ctx.db.insert("collectionPayments", {
-          orgId, customerId, direction: "IN", method: "BANK_TRANSFER", amount: 1,
-          paymentDate: now, status: "POSTED", cashierId: userId, createdAt: now,
-        });
-      }
-    });
+    // Split across both drawer methods: the limit is on what is certified.
+    await seedCashierPayments(t, seed, 1000, { paymentDate: now });
+    await seedCashierPayments(t, seed, 1, { paymentDate: now, method: "REFUND", direction: "OUT" });
 
     const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
     expect(draft).toMatchObject({ complete: false, expectedCash: null, paymentCount: null });
@@ -2189,31 +2199,20 @@ describe("Collections", () => {
     });
   });
 
-  test("cashier_reconciliation_limit_ignores_reconciled_and_voided_rows", async () => {
+  test("cashier_reconciliation_limit_ignores_reconciled_voided_and_non_cash_rows", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, userId, asFinance } = await seedFinanceMember(t);
+    const seed = await seedFinanceMember(t);
+    const { orgId, asFinance } = seed;
     const now = Date.now();
-    // A day already reconciled once must stay reconcilable: rows it linked, and
-    // rows since voided, no longer count toward what the next read must hold.
+    // A day already reconciled once must stay reconcilable: rows it linked, rows
+    // since voided, and payments that never enter the drawer do not count.
     const earlierId = await asFinance.mutation(api.collections.submitCashierReconciliation, {
       orgId, businessDate: now, countedCash: 0, idempotencyKey: crypto.randomUUID(),
     });
-    await t.run(async (ctx) => {
-      for (let i = 0; i < 600; i += 1) {
-        await ctx.db.insert("collectionPayments", {
-          orgId, customerId, direction: "IN", method: "CASH", amount: 1, reconciliationId: earlierId,
-          paymentDate: now, status: "POSTED", cashierId: userId, createdAt: now,
-        });
-        await ctx.db.insert("collectionPayments", {
-          orgId, customerId, direction: "IN", method: "CASH", amount: 1,
-          paymentDate: now, status: "VOIDED", cashierId: userId, createdAt: now,
-        });
-      }
-      await ctx.db.insert("collectionPayments", {
-        orgId, customerId, direction: "IN", method: "CASH", amount: 40,
-        paymentDate: now, status: "POSTED", cashierId: userId, createdAt: now,
-      });
-    });
+    await seedCashierPayments(t, seed, 1001, { paymentDate: now, reconciliationId: earlierId });
+    await seedCashierPayments(t, seed, 1001, { paymentDate: now, status: "VOIDED" });
+    await seedCashierPayments(t, seed, 1001, { paymentDate: now, method: "BANK_TRANSFER" });
+    await seedCashierPayments(t, seed, 1, { paymentDate: now, amount: 40 });
 
     const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
     expect(draft).toMatchObject({ complete: true, expectedCash: 40, paymentCount: 1 });

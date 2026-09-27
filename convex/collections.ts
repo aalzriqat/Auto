@@ -2763,9 +2763,8 @@ export const respondToApproval = mutation({
 });
 
 /**
- * Unreconciled POSTED payments one cashier can have on one business day before
- * the reconciliation refuses rather than certifies. Counts every method in that
- * range, not only cash, so it bounds what the transaction reads.
+ * Unreconciled POSTED drawer payments (CASH and REFUND) one cashier can have on
+ * one business day before the reconciliation refuses rather than certifies.
  */
 const RECONCILIATION_DAY_LIMIT = 1000;
 const RECONCILIATION_DAY_TOO_LARGE =
@@ -2791,20 +2790,22 @@ async function readCashierDayCashPayments(
   | { complete: false }
   | { complete: true; payments: Doc<"collectionPayments">[]; expectedCash: number }
 > {
-  const rows = await ctx.db
-    .query("collectionPayments")
-    .withIndex("by_org_cashier_unreconciled_date", (q) =>
-      q
-        .eq("orgId", orgId)
-        .eq("cashierId", cashierId)
-        .eq("reconciliationId", undefined)
-        .eq("status", "POSTED")
-        .gte("paymentDate", start)
-        .lte("paymentDate", end)
-    )
-    .take(RECONCILIATION_DAY_LIMIT + 1);
-  if (rows.length > RECONCILIATION_DAY_LIMIT) return { complete: false };
-  const payments = rows.filter((payment) => payment.method === "CASH" || payment.method === "REFUND");
+  const readMethod = (method: "CASH" | "REFUND") =>
+    ctx.db
+      .query("collectionPayments")
+      .withIndex("by_org_cashier_unreconciled_method_date", (q) =>
+        q
+          .eq("orgId", orgId)
+          .eq("cashierId", cashierId)
+          .eq("reconciliationId", undefined)
+          .eq("status", "POSTED")
+          .eq("method", method)
+          .gte("paymentDate", start)
+          .lte("paymentDate", end)
+      )
+      .take(RECONCILIATION_DAY_LIMIT + 1);
+  const payments = (await Promise.all([readMethod("CASH"), readMethod("REFUND")])).flat();
+  if (payments.length > RECONCILIATION_DAY_LIMIT) return { complete: false };
   const expectedCash = payments.reduce(
     (sum, payment) => sum + (payment.direction === "IN" ? payment.amount : -payment.amount),
     0
@@ -2870,7 +2871,6 @@ export const submitCashierReconciliation = mutation({
           // The throw also rolls back the idempotency record, so a retry is fresh.
           throw new ConvexError(RECONCILIATION_DAY_TOO_LARGE);
         }
-        const cashPayments = day.payments;
         const expectedCash = roundMoney(day.expectedCash, currency);
         const countedCash = roundMoney(args.countedCash, currency);
         const now = Date.now();
@@ -2889,7 +2889,7 @@ export const submitCashierReconciliation = mutation({
           updatedAt: now,
         });
 
-        for (const payment of cashPayments) {
+        for (const payment of day.payments) {
           await ctx.db.patch(payment._id, { reconciliationId });
         }
 

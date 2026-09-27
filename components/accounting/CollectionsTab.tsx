@@ -52,6 +52,7 @@ import { CashDrawerPanel } from "./collections/CashDrawerPanel";
 import { PaymentLinksPanel } from "./collections/PaymentLinksPanel";
 import { InstallmentCalendar } from "./collections/InstallmentCalendar";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
+import { interpolate } from "@/lib/i18n/interpolate";
 
 type ReceivableRow = Doc<"receivables"> & {
   customerName: string;
@@ -1316,11 +1317,8 @@ function ReconciliationDialog({ open, onOpenChange }: { open: boolean; onOpenCha
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{t("CashierReconciliation" as any)}</DialogTitle>
-          <DialogDescription>{!draft ? t("LoadingExpectedCash" as any) : draft.complete ? t("CashierReconciliationDraftDesc" as any).replace("{count}", String(draft.paymentCount)).replace("{amount}", formatCurrency(draft.expectedCash)) : null}</DialogDescription>
+          <DialogDescription>{!draft ? t("LoadingExpectedCash" as any) : draft.complete ? interpolate(t("CashierReconciliationDraftDesc" as any), { count: draft.paymentCount, amount: formatCurrency(draft.expectedCash) }) : <span role="alert" className="font-medium text-destructive">{t("CashierReconciliationIncomplete" as any)}</span>}</DialogDescription>
         </DialogHeader>
-        {draft?.complete === false && (
-          <p role="alert" className="text-sm font-medium text-destructive">{t("CashierReconciliationIncomplete" as any)}</p>
-        )}
         <div className="grid gap-4">
           <Input type="date" value={businessDate} onChange={(event) => setBusinessDate(event.target.value)} />
           <Input type="number" min="0" step="0.01" value={countedCash} onChange={(event) => setCountedCash(event.target.value)} placeholder={t("CountedCash" as any)} />
