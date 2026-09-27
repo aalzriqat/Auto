@@ -104,6 +104,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "financialAudit.approveManualJournal": { bucket: "STATE_GUARDED", mechanism: "refuses unless status === PENDING_APPROVAL; a second approval cannot produce a second journal (rehearsal R10)" },
   "financialAudit.createManualJournal": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "financialAudit.rejectManualJournal": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
+  "financingEconomics.applyQuoteFirstPayment": { bucket: "NON_ECONOMIC", mechanism: "patches the finance application's economics (first payment re-derived from the quote) only through the over-inclusive patch heuristic; no posting call is reachable from its own body. Replay-safe by the economics stamp: a retry carries a stale stamp and is refused before the application is written (an impersonated caller's access-audit row from requireTenantAuth may precede it; that row is not economic) (SCRUM-373)" },
   "financingEconomics.approveDealerPurchaseAmount": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "financingEconomics.recordAppraisal": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "financingEconomics.recordSubmittedQuotation": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
@@ -276,10 +277,11 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // 116 → 117: `applications.repairQuoteEconomicsLineage` (TASK-DEAL-01).
     // 117 → 119: `financeDealCosts.planCustodyHandler` and `financeDealCosts.setFeeCustody` (AF-80).
     // Fee-template adoption is classified RETIRED and therefore excluded from
-    // the live population by construction; the live census was 119.
-    // 119 → 121: `supplierCostRecoveries.recordReceipt` and
+    // the live population by construction; the live census remained 119 until:
+    // 119 → 120: `financingEconomics.applyQuoteFirstPayment` (SCRUM-373 D2).
+    // 120 → 122: `supplierCostRecoveries.recordReceipt` and
     // `supplierCostRecoveries.reverseReceipt` (SCRUM-389 supplier cost bearer).
-    expect(population.length).toBe(121);
+    expect(population.length).toBe(122);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {

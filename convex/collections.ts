@@ -2762,6 +2762,65 @@ export const respondToApproval = mutation({
   },
 });
 
+/**
+ * Unreconciled POSTED drawer payments (CASH and REFUND) one cashier can have on
+ * one business day before the reconciliation refuses rather than certifies.
+ *
+ * LIMIT + 1 is the total read budget across both methods: 500 full documents,
+ * exactly the bound of the read this replaced. Payment `notes` are uncapped, so
+ * no row count is byte-safe on its own (SCRUM-398).
+ */
+const RECONCILIATION_DAY_LIMIT = 499;
+const RECONCILIATION_DAY_TOO_LARGE =
+  "This business day has too many unreconciled payments to reconcile in one step. Contact support.";
+
+/**
+ * SCRUM-259: the drawer cash a reconciliation certifies, shared by the draft and
+ * the submit so the two cannot disagree.
+ *
+ * It used to read the cashier's first 500 payments of all time and filter
+ * afterwards, so once a cashier passed 500 rows every later payment was
+ * invisible and the reconciliation certified a subtotal of a hidden prefix. The
+ * index now narrows to exactly the unreconciled POSTED rows in the day, and a
+ * day that does not fit is reported as incomplete instead of truncated.
+ */
+async function readCashierDayCashPayments(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  cashierId: Id<"users">,
+  start: number,
+  end: number
+): Promise<
+  | { complete: false }
+  | { complete: true; payments: Doc<"collectionPayments">[]; expectedCash: number }
+> {
+  const readMethod = (method: "CASH" | "REFUND", budget: number) =>
+    ctx.db
+      .query("collectionPayments")
+      .withIndex("by_org_cashier_unreconciled_method_date", (q) =>
+        q
+          .eq("orgId", orgId)
+          .eq("cashierId", cashierId)
+          .eq("reconciliationId", undefined)
+          .eq("status", "POSTED")
+          .eq("method", method)
+          .gte("paymentDate", start)
+          .lte("paymentDate", end)
+      )
+      .take(budget);
+  // Sequential on purpose: the second read gets only what the first left over.
+  const cash = await readMethod("CASH", RECONCILIATION_DAY_LIMIT + 1);
+  // Never issue a zero-budget read: CASH alone already proves the day incomplete.
+  const refundBudget = RECONCILIATION_DAY_LIMIT + 1 - cash.length;
+  const refunds = refundBudget > 0 ? await readMethod("REFUND", refundBudget) : [];
+  const payments = [...cash, ...refunds];
+  if (payments.length > RECONCILIATION_DAY_LIMIT) return { complete: false };
+  const expectedCash = payments.reduce(
+    (sum, payment) => sum + (payment.direction === "IN" ? payment.amount : -payment.amount),
+    0
+  );
+  return { complete: true, payments, expectedCash };
+}
 export const getReconciliationDraft = query({
   args: {
     orgId: v.id("organizations"),
@@ -2771,26 +2830,15 @@ export const getReconciliationDraft = query({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const currency = await getOrgCurrency(ctx, args.orgId);
     const { start, end } = dayRange(args.businessDate);
-    const payments = await ctx.db
-      .query("collectionPayments")
-      .withIndex("by_org_cashier", (q) => q.eq("orgId", args.orgId).eq("cashierId", user._id))
-      .take(500);
-    const cashPayments = payments.filter(
-      (payment) =>
-        !payment.reconciliationId &&
-        payment.status === "POSTED" &&
-        payment.paymentDate >= start &&
-        payment.paymentDate <= end &&
-        (payment.method === "CASH" || payment.method === "REFUND")
-    );
-    const expectedCash = cashPayments.reduce(
-      (sum, payment) => sum + (payment.direction === "IN" ? payment.amount : -payment.amount),
-      0
-    );
+    const day = await readCashierDayCashPayments(ctx, args.orgId, user._id, start, end);
+    if (!day.complete) {
+      return { businessDate: start, complete: false as const, expectedCash: null, paymentCount: null };
+    }
     return {
       businessDate: start,
-      expectedCash: roundMoney(expectedCash, currency),
-      paymentCount: cashPayments.length,
+      complete: true as const,
+      expectedCash: roundMoney(day.expectedCash, currency),
+      paymentCount: day.payments.length,
     };
   },
 });
@@ -2826,22 +2874,13 @@ export const submitCashierReconciliation = mutation({
         }
         const currency = await getOrgCurrency(ctx, args.orgId);
         const { start, end } = dayRange(args.businessDate);
-        const payments = await ctx.db
-          .query("collectionPayments")
-          .withIndex("by_org_cashier", (q) => q.eq("orgId", args.orgId).eq("cashierId", user._id))
-          .take(500);
-        const cashPayments = payments.filter(
-          (payment) =>
-            !payment.reconciliationId &&
-            payment.status === "POSTED" &&
-            payment.paymentDate >= start &&
-            payment.paymentDate <= end &&
-            (payment.method === "CASH" || payment.method === "REFUND")
-        );
-        const expectedCash = roundMoney(cashPayments.reduce(
-          (sum, payment) => sum + (payment.direction === "IN" ? payment.amount : -payment.amount),
-          0
-        ), currency);
+        const day = await readCashierDayCashPayments(ctx, args.orgId, user._id, start, end);
+        if (!day.complete) {
+          // Certifying the part we could read would be the defect this replaced.
+          // The throw also rolls back the idempotency record, so a retry is fresh.
+          throw new ConvexError(RECONCILIATION_DAY_TOO_LARGE);
+        }
+        const expectedCash = roundMoney(day.expectedCash, currency);
         const countedCash = roundMoney(args.countedCash, currency);
         const now = Date.now();
         const reconciliationId = await ctx.db.insert("cashierReconciliations", {
@@ -2859,7 +2898,7 @@ export const submitCashierReconciliation = mutation({
           updatedAt: now,
         });
 
-        for (const payment of cashPayments) {
+        for (const payment of day.payments) {
           await ctx.db.patch(payment._id, { reconciliationId });
         }
 

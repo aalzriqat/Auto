@@ -1725,6 +1725,18 @@ export const salesEn = {
   ReopenApprovalWhatHappensNext:
     "The amount comes off the record along with the funding split worked out from it, and handover is blocked again until the correct amount is recorded.",
   ReopenApprovedPurchaseAction: "Reopen for correction",
+  // SCRUM-373 D2
+  ApplyQuoteFirstPaymentNotice:
+    "This deal records the customer's first payment as 0, but the originating quote carries a down payment.",
+  ApplyQuoteFirstPaymentAction: "Apply quote down payment",
+  ApplyQuoteFirstPaymentTitle: "Apply the quote's down payment",
+  ApplyQuoteFirstPaymentDesc:
+    "Sets the customer's first payment to the originating quote's down payment and recalculates the funding split. It records a financing term only: no payment or receipt is created.",
+  ApplyQuoteFirstPaymentCurrent: "Recorded now",
+  ApplyQuoteFirstPaymentNew: "Quote down payment",
+  ApplyQuoteFirstPaymentReasonLabel: "Reason",
+  ApplyQuoteFirstPaymentReasonRequired: "Say why the first payment is being corrected.",
+  ApplyQuoteFirstPaymentApplied: "The first payment was updated.",
 
   RegisterHandoverAction: "Register vehicle handover",
   HandoverNeedsPermission:
@@ -2668,6 +2680,18 @@ export const salesAr = {
   ReopenApprovalWhatHappensNext:
     "يُرفع المبلغ عن السجل مع تقسيم التمويل المحسوب منه، ويُمنع التسليم من جديد إلى أن يُسجَّل المبلغ الصحيح.",
   ReopenApprovedPurchaseAction: "إعادة الفتح للتصحيح",
+  // SCRUM-373 D2
+  ApplyQuoteFirstPaymentNotice:
+    "الدفعة الأولى للعميل مسجَّلة صفراً في هذه الصفقة، بينما يتضمن عرض السعر الأصلي دفعة أولى.",
+  ApplyQuoteFirstPaymentAction: "اعتماد دفعة عرض السعر",
+  ApplyQuoteFirstPaymentTitle: "اعتماد الدفعة الأولى من عرض السعر",
+  ApplyQuoteFirstPaymentDesc:
+    "تُسجَّل الدفعة الأولى للعميل بقيمة الدفعة الأولى في عرض السعر الأصلي، ويُعاد احتساب تقسيم التمويل. هذا شرط تمويلي فقط، ولا تُنشأ أي دفعة أو سند قبض.",
+  ApplyQuoteFirstPaymentCurrent: "المسجَّل حالياً",
+  ApplyQuoteFirstPaymentNew: "الدفعة الأولى في عرض السعر",
+  ApplyQuoteFirstPaymentReasonLabel: "السبب",
+  ApplyQuoteFirstPaymentReasonRequired: "اذكر سبب تصحيح الدفعة الأولى.",
+  ApplyQuoteFirstPaymentApplied: "تم تحديث الدفعة الأولى.",
 
   RegisterHandoverAction: "تسجيل تسليم المركبة",
   HandoverNeedsPermission: "لا تملك صلاحية تسجيل تسليم المركبة. يُكمل هذه الخطوة من يملكها.",

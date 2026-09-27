@@ -66,7 +66,8 @@ import {
 } from "./utils/financingEconomics";
 // The anomaly verdict, from the module that owns it. Both handover
 // confirmations must warn about the same deals; see the helper's own note.
-import { approvedAmountIsFarFromEvidenceFor } from "./financingEconomics";
+import { approvedAmountIsFarFromEvidenceFor, quoteDownPaymentMinor } from "./financingEconomics";
+import { firstPaymentCorrectionBlock, mayCorrectFirstPayment } from "./utils/firstPaymentCorrection";
 import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
@@ -1940,7 +1941,7 @@ export const dealCockpit = query({
     applicationId: v.id("financeApplications"),
   },
   handler: async (ctx, args) => {
-    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
     const app = await ctx.db.get(args.applicationId);
     if (!app || app.orgId !== args.orgId) return null;
@@ -2291,12 +2292,43 @@ export const dealCockpit = query({
         })),
     };
 
-    if (!canSeeMoney) return { ...base, money: null };
+    if (!canSeeMoney) return { ...base, money: null, firstPaymentCorrection: null };
+
+    // SCRUM-373 D2. Money-gated with the rest: it carries the quote's figure.
+    // A deal in an unusable denomination cannot state that figure; the cockpit
+    // must still render (it withholds money spelling there itself), so the
+    // figure reads as unknown and the action is not offered. The mutation
+    // refuses the same deal with the denomination's own message.
+    //
+    // The quote is read only once every cheaper condition passes — the
+    // predicate's first answer is then "no quote figure" — so the hot path for
+    // ordinary deals pays nothing for it.
+    const firstPaymentInput = {
+      app,
+      actorId: user._id,
+      // Exactly the permissions the mutation requires.
+      mayApprove: mayCorrectFirstPayment(role),
+      quoteDownPaymentMinor: undefined as number | undefined,
+    };
+    let firstPaymentBlock = firstPaymentCorrectionBlock(firstPaymentInput);
+    if (firstPaymentBlock === "NO_QUOTE_DOWN_PAYMENT") {
+      try {
+        firstPaymentInput.quoteDownPaymentMinor = await quoteDownPaymentMinor(ctx, app, quote);
+      } catch {
+        firstPaymentInput.quoteDownPaymentMinor = undefined;
+      }
+      firstPaymentBlock = firstPaymentCorrectionBlock(firstPaymentInput);
+    }
 
     return {
       ...base,
       settlementAdviceDiscrepancy: settlementAdviceEvidence,
       money: await buildCockpitMoney(ctx, app, quote, settlementFacts),
+      firstPaymentCorrection: {
+        /** null when the server would accept the correction. */
+        block: firstPaymentBlock,
+        quoteDownPaymentMinor: firstPaymentInput.quoteDownPaymentMinor ?? null,
+      },
     };
   },
 });

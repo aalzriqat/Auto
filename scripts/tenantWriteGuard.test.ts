@@ -594,16 +594,20 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // `financeDealCosts.migrateLegacyCustodyToLedger` (AF-80 employee cash custody accounting).
   // Total: 494 totalMutations, 322 analysed.
   //
+  // `financingEconomics.applyQuoteFirstPayment` (SCRUM-373 D2) — 495 → 496 total,
+  // 323 → 324 analysed. `orgId` plus a caller-supplied `applicationId`, read
+  // through `requireOwnedRow` after `requireTenantAuth`. Skipped counts unchanged.
+  //
   // `supplierCostRecoveries.recordReceipt` and `reverseReceipt` (SCRUM-389
-  // supplier cost bearer) — 495 → 497 total, 323 → 325 analysed. Same shape:
+  // supplier cost bearer) — 496 → 498 total, 324 → 326 analysed. Same shape:
   // `orgId` plus a caller-supplied recovery/receipt id, each read through
   // `requireOwnedRow` after `requireTenantAuth`. Skipped counts unchanged.
   // Re-measured FROM THE ANALYSER on this tree
-  // ({"totalMutations":497,"analysed":325,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
+  // ({"totalMutations":498,"analysed":326,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 497,
-      analysed: 325,
+      totalMutations: 498,
+      analysed: 326,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 157,
     });

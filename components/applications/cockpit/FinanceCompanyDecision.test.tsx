@@ -2025,3 +2025,38 @@ describe("the submitted quotation is prefilled from the calculation", () => {
     }
   });
 });
+
+
+/**
+ * SCRUM-373 D2. The server decides whether the quote's down payment may be
+ * applied; the screen offers the action only on that verdict, and sends only
+ * a reason — never an amount.
+ */
+describe("an approved deal whose first payment was recorded as zero", () => {
+  test("is not offered the correction unless the server says it would accept", () => {
+    renderCockpit(wiring({ firstPaymentCorrection: null }));
+    expect(screen.queryByText("ApplyQuoteFirstPaymentNotice", { exact: false })).toBeNull();
+    expect(screen.queryByRole("button", { name: "ApplyQuoteFirstPaymentAction" })).toBeNull();
+  });
+
+  test("shows the quote's figure and applies it with the operator's reason", async () => {
+    const onApplyQuoteFirstPayment = vi.fn(noopAsync);
+    renderCockpit(
+      wiring({ firstPaymentCorrection: { quoteDownPaymentMinor: 500 * JOD, economicsStamp: "rev-7" }, onApplyQuoteFirstPayment })
+    );
+
+    expect(screen.getByText("ApplyQuoteFirstPaymentNotice", { exact: false })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "ApplyQuoteFirstPaymentAction" }));
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain("500");
+
+    const submit = within(dialog).getByRole("button", { name: "ApplyQuoteFirstPaymentAction" });
+    expect(submit).toHaveProperty("disabled", true);
+    fireEvent.change(within(dialog).getByLabelText("ApplyQuoteFirstPaymentReasonLabel"), {
+      target: { value: "  dealer ruling  " },
+    });
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(onApplyQuoteFirstPayment).toHaveBeenCalledWith({ reason: "dealer ruling", economicsStamp: "rev-7" }));
+  });
+});

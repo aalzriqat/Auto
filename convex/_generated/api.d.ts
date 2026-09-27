@@ -151,6 +151,7 @@ import type * as transactions from "../transactions.js";
 import type * as users from "../users.js";
 import type * as utils_auditLog from "../utils/auditLog.js";
 import type * as utils_authorityDispatchScheduler from "../utils/authorityDispatchScheduler.js";
+import type * as utils_classificationInvalidation from "../utils/classificationInvalidation.js";
 import type * as utils_commission from "../utils/commission.js";
 import type * as utils_commissionSourceLedger from "../utils/commissionSourceLedger.js";
 import type * as utils_commitmentCutover from "../utils/commitmentCutover.js";
@@ -182,6 +183,7 @@ import type * as utils_financedSaleRecognition from "../utils/financedSaleRecogn
 import type * as utils_financialGuards from "../utils/financialGuards.js";
 import type * as utils_financingEconomics from "../utils/financingEconomics.js";
 import type * as utils_financingProvenance from "../utils/financingProvenance.js";
+import type * as utils_firstPaymentCorrection from "../utils/firstPaymentCorrection.js";
 import type * as utils_geoProvider from "../utils/geoProvider.js";
 import type * as utils_grossTransactionValue from "../utils/grossTransactionValue.js";
 import type * as utils_idempotency from "../utils/idempotency.js";
@@ -391,6 +393,7 @@ declare const fullApi: ApiFromModules<{
   users: typeof users;
   "utils/auditLog": typeof utils_auditLog;
   "utils/authorityDispatchScheduler": typeof utils_authorityDispatchScheduler;
+  "utils/classificationInvalidation": typeof utils_classificationInvalidation;
   "utils/commission": typeof utils_commission;
   "utils/commissionSourceLedger": typeof utils_commissionSourceLedger;
   "utils/commitmentCutover": typeof utils_commitmentCutover;
@@ -422,6 +425,7 @@ declare const fullApi: ApiFromModules<{
   "utils/financialGuards": typeof utils_financialGuards;
   "utils/financingEconomics": typeof utils_financingEconomics;
   "utils/financingProvenance": typeof utils_financingProvenance;
+  "utils/firstPaymentCorrection": typeof utils_firstPaymentCorrection;
   "utils/geoProvider": typeof utils_geoProvider;
   "utils/grossTransactionValue": typeof utils_grossTransactionValue;
   "utils/idempotency": typeof utils_idempotency;

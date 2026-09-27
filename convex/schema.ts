@@ -4316,7 +4316,10 @@ export default defineSchema({
     .index("by_org_paymentDate", ["orgId", "paymentDate"])
     .index("by_receivable", ["receivableId"])
     .index("by_org_customer", ["orgId", "customerId"])
-    .index("by_org_cashier", ["orgId", "cashierId"])
+    // SCRUM-259: a cashier's UNRECONCILED, POSTED payments of one method for a
+    // business day, read as a bounded range rather than a prefix of everything
+    // they ever took. Replaces by_org_cashier, whose only readers these were.
+    .index("by_org_cashier_unreconciled_method_date", ["orgId", "cashierId", "reconciliationId", "status", "method", "paymentDate"])
     .index("by_reconciliation", ["reconciliationId"])
     .index("by_cheque", ["chequeId"]),
 
