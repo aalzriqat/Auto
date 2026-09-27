@@ -1,4 +1,5 @@
 import { Doc, Id } from "../_generated/dataModel";
+import { PERMISSIONS, isSystemOwnerRole } from "./permissions";
 
 /**
  * SCRUM-373 D2 — applying the originating quote's down payment to an approved
@@ -23,6 +24,25 @@ import { Doc, Id } from "../_generated/dataModel";
  */
 export const FIRST_PAYMENT_NOT_RECORDED_REASON =
   "The customer's first payment is not recorded on this deal. Record it before relying on the funding split.";
+
+/**
+ * Who may apply it — one list, read by the mutation's door and by the cockpit's
+ * offer. VIEW_FINANCE_APPLICATIONS is on it because the cockpit shows the action
+ * inside the finance decision card, which that permission serves: without it a
+ * role would be accepted by the server and never shown the action.
+ */
+export const FIRST_PAYMENT_CORRECTION_PERMISSIONS = [
+  PERMISSIONS.APPROVE_FINANCE_APPLICATION,
+  PERMISSIONS.VIEW_FINANCE,
+  PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
+] as const;
+
+export function mayCorrectFirstPayment(role: Doc<"roles">): boolean {
+  return (
+    isSystemOwnerRole(role) ||
+    FIRST_PAYMENT_CORRECTION_PERMISSIONS.every((permission) => role.permissions.includes(permission))
+  );
+}
 
 export type FirstPaymentCorrectionBlock =
   | "NOT_PERMITTED"
@@ -71,7 +91,7 @@ export function firstPaymentCorrectionBlock(input: {
 
 export const FIRST_PAYMENT_CORRECTION_REFUSALS: Record<FirstPaymentCorrectionBlock, string> = {
   NOT_PERMITTED:
-    "Applying the quote's down payment needs both finance visibility and approval authority.",
+    "Applying the quote's down payment needs finance visibility, access to finance applications and approval authority.",
   OWN_APPLICATION:
     "You cannot correct the first payment on your own application. A manager or the dealership owner corrects it.",
   TERMINAL: "This application is closed. Its first payment can no longer be corrected here.",
@@ -87,4 +107,3 @@ export const FIRST_PAYMENT_CORRECTION_REFUSALS: Record<FirstPaymentCorrectionBlo
   EXCEEDS_UNFINANCED:
     "The quote's down payment is larger than the part of the approved amount the finance company does not fund. Ask the finance manager how this deal was agreed.",
 };
-

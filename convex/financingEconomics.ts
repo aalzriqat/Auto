@@ -48,6 +48,7 @@ import {
 } from "./utils/financingEconomics";
 import { invalidateClassification } from "./utils/classificationInvalidation";
 import {
+  FIRST_PAYMENT_CORRECTION_PERMISSIONS,
   FIRST_PAYMENT_CORRECTION_REFUSALS,
   FIRST_PAYMENT_NOT_RECORDED_REASON,
   firstPaymentCorrectionBlock,
@@ -2548,10 +2549,7 @@ export const applyQuoteFirstPayment = mutation({
     reason: v.string(),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [
-      PERMISSIONS.APPROVE_FINANCE_APPLICATION,
-      PERMISSIONS.VIEW_FINANCE,
-    ]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [...FIRST_PAYMENT_CORRECTION_PERMISSIONS]);
     const reason = args.reason.trim();
     if (!reason) {
       throw new ConvexError("Applying the quote's down payment must record why.");

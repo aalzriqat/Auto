@@ -4522,31 +4522,6 @@ describe("handover seals the approved amount, and the amount that was verified",
 
 
   /**
-   * A caller with EXACTLY the permissions named, so the visibility question is
-   * asked of a real role rather than of a convenient one.
-   */
-  async function callerWith(
-    seed: Seed,
-    tag: string,
-    permissions: string[]
-  ): Promise<AuthenticatedTestConvex> {
-    const userId = await seed.t.run((ctx) =>
-      ctx.db.insert("users", {
-        clerkId: `handover_${tag}`,
-        email: `${tag}@example.com`,
-        name: tag,
-      })
-    );
-    const roleId = await seed.t.run((ctx) =>
-      ctx.db.insert("roles", { orgId: seed.orgId, name: tag, permissions })
-    );
-    await seed.t.run((ctx) =>
-      ctx.db.insert("memberships", { orgId: seed.orgId, userId, roleId })
-    );
-    return seed.t.withIdentity({ subject: `handover_${tag}` });
-  }
-
-  /**
    * The bypass CX-9 named — asked of the DEFAULT role rather than a convenient
    * custom one, and asked by QUERYING the surface the operator really uses.
    *
@@ -5729,6 +5704,31 @@ describe("the customer's first payment is never assumed to be zero (SCRUM-373)",
 });
 
 
+/**
+ * A caller with EXACTLY the permissions named, so the visibility question is
+ * asked of a real role rather than of a convenient one.
+ */
+async function callerWith(
+  seed: Seed,
+  tag: string,
+  permissions: string[]
+): Promise<AuthenticatedTestConvex> {
+  const userId = await seed.t.run((ctx) =>
+    ctx.db.insert("users", {
+      clerkId: `handover_${tag}`,
+      email: `${tag}@example.com`,
+      name: tag,
+    })
+  );
+  const roleId = await seed.t.run((ctx) =>
+    ctx.db.insert("roles", { orgId: seed.orgId, name: tag, permissions })
+  );
+  await seed.t.run((ctx) =>
+    ctx.db.insert("memberships", { orgId: seed.orgId, userId, roleId })
+  );
+  return seed.t.withIdentity({ subject: `handover_${tag}` });
+}
+
 describe("applying the quote's down payment to an approved zero first payment (SCRUM-373 D2)", () => {
   const MONEY_TABLES = [
     "accountingEvents",
@@ -5976,16 +5976,29 @@ describe("applying the quote's down payment to an approved zero first payment (S
       ["fp_view_only", [PERMISSIONS.VIEW_SALES, PERMISSIONS.VIEW_FINANCE]],
       ["fp_approve_only", [PERMISSIONS.VIEW_SALES, PERMISSIONS.APPROVE_FINANCE_APPLICATION]],
     ] as const) {
-      const userId = await seed.t.run((ctx) =>
-        ctx.db.insert("users", { clerkId: clerk, email: `${clerk}@example.com`, name: clerk })
-      );
-      const roleId = await seed.t.run((ctx) =>
-        ctx.db.insert("roles", { orgId: seed.orgId, name: clerk, permissions: [...permissions] })
-      );
-      await seed.t.run((ctx) => ctx.db.insert("memberships", { orgId: seed.orgId, userId, roleId }));
-      const caller = seed.t.withIdentity({ subject: clerk });
+      const caller = await callerWith(seed, clerk, [...permissions]);
       await expect(apply(seed, applicationId, caller)).rejects.toThrow(/Missing required permissions/i);
     }
+    expect((await readApp(seed, applicationId)).customerFirstPaymentMinor).toBe(0);
+  });
+
+  /**
+   * CodeRabbit, PR #349: the cockpit renders this action inside the finance
+   * decision card, which is served by `getEconomics` and so needs
+   * VIEW_FINANCE_APPLICATIONS. A role holding everything else was offered the
+   * correction by the server and never shown it. Offer and acceptance follow
+   * one permission list, so that role is refused at both doors.
+   */
+  test("a role that cannot see the finance decision card is neither offered nor accepted", async () => {
+    const { seed, applicationId } = await zeroedApprovedDeal();
+    const caller = await callerWith(seed, "fp_no_applications", [
+      PERMISSIONS.VIEW_SALES,
+      PERMISSIONS.VIEW_FINANCE,
+      PERMISSIONS.APPROVE_FINANCE_APPLICATION,
+    ]);
+
+    expect((await cockpitCapability(seed, applicationId, caller))?.block).toBe("NOT_PERMITTED");
+    await expect(apply(seed, applicationId, caller)).rejects.toThrow(/Missing required permissions/i);
     expect((await readApp(seed, applicationId)).customerFirstPaymentMinor).toBe(0);
   });
 

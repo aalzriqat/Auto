@@ -28,10 +28,12 @@ type ApplyQuoteFirstPaymentDialogProps = {
   submitting: boolean;
   error: string | null;
   quoteDownPaymentMinor: number;
+  /** The figures on screen; captured when the dialog opens and submitted with it. */
+  economicsStamp: string;
   money: (minor: number) => string;
   t: (key: string) => string;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (values: { reason: string }) => void;
+  onSubmit: (values: { reason: string; economicsStamp: string }) => void;
 };
 
 export function ApplyQuoteFirstPaymentDialog({
@@ -39,20 +41,28 @@ export function ApplyQuoteFirstPaymentDialog({
   submitting,
   error,
   quoteDownPaymentMinor,
+  economicsStamp,
   money,
   t,
   onOpenChange,
   onSubmit,
 }: Readonly<ApplyQuoteFirstPaymentDialogProps>) {
   const [reason, setReason] = useState("");
+  const [attempt, setAttempt] = useState<{ quoteDownPaymentMinor: number; economicsStamp: string } | null>(null);
 
-  // Reset on the closed -> open transition only, like the sibling dialogs.
+  // Reset on the closed -> open transition only, and snapshot the figure with
+  // its stamp, like the sibling dialogs: the operator confirms the figure they
+  // were shown, and a change made meanwhile makes the server refuse the stamp.
   const wasOpenRef = useRef(false);
   useEffect(() => {
     const justOpened = open && !wasOpenRef.current;
     wasOpenRef.current = open;
-    if (justOpened) setReason("");
-  }, [open]);
+    if (!justOpened) return;
+    setReason("");
+    setAttempt({ quoteDownPaymentMinor, economicsStamp });
+  }, [open, quoteDownPaymentMinor, economicsStamp]);
+
+  const live = attempt ?? { quoteDownPaymentMinor, economicsStamp };
 
   const reasonMissing = reason.trim() === "";
 
@@ -75,7 +85,7 @@ export function ApplyQuoteFirstPaymentDialog({
             <div className="flex items-center justify-between gap-4 p-3">
               <dt className="text-muted-foreground">{t("ApplyQuoteFirstPaymentNew")}</dt>
               <dd>
-                <bdi className="tabular-nums font-semibold">{money(quoteDownPaymentMinor)}</bdi>
+                <bdi className="tabular-nums font-semibold">{money(live.quoteDownPaymentMinor)}</bdi>
               </dd>
             </div>
           </dl>
@@ -111,7 +121,7 @@ export function ApplyQuoteFirstPaymentDialog({
           </Button>
           <Button
             disabled={reasonMissing || submitting}
-            onClick={() => onSubmit({ reason: reason.trim() })}
+            onClick={() => onSubmit({ reason: reason.trim(), economicsStamp: live.economicsStamp })}
           >
             {submitting && <Loader2 className="h-4 w-4 me-2 animate-spin" />}
             {t("ApplyQuoteFirstPaymentAction")}

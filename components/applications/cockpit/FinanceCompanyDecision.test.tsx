@@ -2042,7 +2042,7 @@ describe("an approved deal whose first payment was recorded as zero", () => {
   test("shows the quote's figure and applies it with the operator's reason", async () => {
     const onApplyQuoteFirstPayment = vi.fn(noopAsync);
     renderCockpit(
-      wiring({ firstPaymentCorrection: { quoteDownPaymentMinor: 500 * JOD }, onApplyQuoteFirstPayment })
+      wiring({ firstPaymentCorrection: { quoteDownPaymentMinor: 500 * JOD, economicsStamp: "rev-7" }, onApplyQuoteFirstPayment })
     );
 
     expect(screen.getByText("ApplyQuoteFirstPaymentNotice", { exact: false })).toBeTruthy();
@@ -2057,6 +2057,6 @@ describe("an approved deal whose first payment was recorded as zero", () => {
     });
     fireEvent.click(submit);
 
-    await waitFor(() => expect(onApplyQuoteFirstPayment).toHaveBeenCalledWith({ reason: "dealer ruling" }));
+    await waitFor(() => expect(onApplyQuoteFirstPayment).toHaveBeenCalledWith({ reason: "dealer ruling", economicsStamp: "rev-7" }));
   });
 });

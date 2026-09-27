@@ -1693,13 +1693,16 @@ export function DealCockpit({
           firstPaymentCorrection:
             deal.firstPaymentCorrection?.block === null &&
             deal.firstPaymentCorrection.quoteDownPaymentMinor !== null
-              ? { quoteDownPaymentMinor: deal.firstPaymentCorrection.quoteDownPaymentMinor }
+              ? {
+                  quoteDownPaymentMinor: deal.firstPaymentCorrection.quoteDownPaymentMinor,
+                  economicsStamp: deal.economicsStamp,
+                }
               : null,
-          onApplyQuoteFirstPayment: async (values: { reason: string }) => {
+          onApplyQuoteFirstPayment: async (values: { reason: string; economicsStamp: string }) => {
             await applyQuoteFirstPayment({
               orgId,
               applicationId,
-              economicsStamp: deal.economicsStamp,
+              economicsStamp: values.economicsStamp,
               reason: values.reason,
             });
           },
@@ -3066,8 +3069,8 @@ export type FinanceDecisionWiring = {
    */
   onReopenApproved: (values: { reason: string }) => Promise<void>;
   /** SCRUM-373 D2: present only when the server would accept the correction. */
-  firstPaymentCorrection?: { quoteDownPaymentMinor: number } | null;
-  onApplyQuoteFirstPayment?: (values: { reason: string }) => Promise<void>;
+  firstPaymentCorrection?: { quoteDownPaymentMinor: number; economicsStamp: string } | null;
+  onApplyQuoteFirstPayment?: (values: { reason: string; economicsStamp: string }) => Promise<void>;
   onRecordAppraisal: (values: {
     appraisalAmountMinor: number;
     providerType: AppraisalProviderType;
@@ -3783,7 +3786,7 @@ export function DealCockpitView({
     }
   };
 
-  const handleApplyQuoteFirstPayment = async (values: { reason: string }) => {
+  const handleApplyQuoteFirstPayment = async (values: { reason: string; economicsStamp: string }) => {
     if (!financeDecision?.onApplyQuoteFirstPayment) return;
     setFirstPaymentSubmitting(true);
     setFirstPaymentError(null);
@@ -4706,6 +4709,7 @@ export function DealCockpitView({
               submitting={firstPaymentSubmitting}
               error={firstPaymentError}
               quoteDownPaymentMinor={financeDecision.firstPaymentCorrection.quoteDownPaymentMinor}
+              economicsStamp={financeDecision.firstPaymentCorrection.economicsStamp}
               money={decisionMoney}
               t={t}
               onOpenChange={setApplyingFirstPayment}

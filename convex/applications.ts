@@ -16,7 +16,7 @@ import {
   // allowlist, not a blocklist. Every door that returns one of these rows
   // goes through it.
 } from "./utils/tenancy";
-import { mayEstablishAppliedLtv, projectFinanceApplication } from "./utils/financeApplicationProjection";
+import { projectFinanceApplication } from "./utils/financeApplicationProjection";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
@@ -67,7 +67,7 @@ import {
 // The anomaly verdict, from the module that owns it. Both handover
 // confirmations must warn about the same deals; see the helper's own note.
 import { approvedAmountIsFarFromEvidenceFor, quoteDownPaymentMinor } from "./financingEconomics";
-import { firstPaymentCorrectionBlock } from "./utils/firstPaymentCorrection";
+import { firstPaymentCorrectionBlock, mayCorrectFirstPayment } from "./utils/firstPaymentCorrection";
 import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
@@ -2306,8 +2306,8 @@ export const dealCockpit = query({
     const firstPaymentInput = {
       app,
       actorId: user._id,
-      // Exactly the two permissions the mutation requires.
-      mayApprove: mayEstablishAppliedLtv(role),
+      // Exactly the permissions the mutation requires.
+      mayApprove: mayCorrectFirstPayment(role),
       quoteDownPaymentMinor: undefined as number | undefined,
     };
     let firstPaymentBlock = firstPaymentCorrectionBlock(firstPaymentInput);
