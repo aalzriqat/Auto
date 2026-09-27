@@ -8,6 +8,7 @@ import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import { toast } from "@/components/ui/sonner";
 import { Plus, Trash2 } from "lucide-react";
 import {
@@ -35,13 +36,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { CostBearerSelect } from "@/components/expenses/CostBearerSelect";
 
 import { workOrderSchema, WorkOrderFormValues, WorkOrderDialogProps } from "./work_order.schema";
 import { getErrorMessage } from "@/lib/errors";
 
 
-export function WorkOrderDialog({ open, onOpenChange, vehicleId, workOrder }: WorkOrderDialogProps) {
+export function WorkOrderDialog({ open, onOpenChange, vehicleId, vehicleSourceType, workOrder }: WorkOrderDialogProps) {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
+  const isSourcedVehicle = vehicleSourceType === "SOURCED";
 
   const createWO = useMutation(api.workOrders.create);
   // Minted at the user-intent boundary and held across attempts. A COMPLETED
@@ -74,6 +78,7 @@ export function WorkOrderDialog({ open, onOpenChange, vehicleId, workOrder }: Wo
         status: workOrder.status,
         tasks: workOrder.tasks?.length ? workOrder.tasks : [{ id: crypto.randomUUID(), description: "", partsCost: 0, laborCost: 0, mechanicName: "", completed: false }],
         notes: workOrder.notes || "",
+        costBearer: undefined,
       });
     } else if (open && !workOrder) {
       form.reset({
@@ -81,6 +86,7 @@ export function WorkOrderDialog({ open, onOpenChange, vehicleId, workOrder }: Wo
         status: "OPEN",
         tasks: [{ id: crypto.randomUUID(), description: "", partsCost: 0, laborCost: 0, mechanicName: "", completed: false }],
         notes: "",
+        costBearer: undefined,
       });
     }
   }, [workOrder, open, form]);
@@ -90,6 +96,13 @@ export function WorkOrderDialog({ open, onOpenChange, vehicleId, workOrder }: Wo
 
   const onSubmit = async (values: WorkOrderFormValues) => {
     if (!activeOrgId) return;
+    // SCRUM-389: the server refuses to complete a SOURCED vehicle's work order
+    // without an explicit bearer; say so on the field instead of as a toast.
+    if (isSourcedVehicle && values.status === "COMPLETED" && !values.costBearer) {
+      form.setError("costBearer", { message: t("CostBearerRequired" as any) });
+      return;
+    }
+    const costBearer = isSourcedVehicle ? values.costBearer : undefined;
     setIsSubmitting(true);
     try {
       if (workOrder) {
@@ -100,6 +113,7 @@ export function WorkOrderDialog({ open, onOpenChange, vehicleId, workOrder }: Wo
           status: values.status,
           tasks: values.tasks,
           notes: values.notes,
+          costBearer,
         });
         toast.success("Work order updated successfully");
       } else {
@@ -112,6 +126,7 @@ export function WorkOrderDialog({ open, onOpenChange, vehicleId, workOrder }: Wo
           status: values.status,
           tasks: values.tasks,
           notes: values.notes,
+          costBearer,
         });
         // Only a SUCCESS retires the identity.
         idempotencyKeyRef.current = null;
@@ -178,6 +193,29 @@ export function WorkOrderDialog({ open, onOpenChange, vehicleId, workOrder }: Wo
                 )}
               />
             </div>
+
+            {isSourcedVehicle && (
+              <FormField
+                control={form.control}
+                name="costBearer"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("CostBearerLabel" as any)}</FormLabel>
+                    <CostBearerSelect
+                      t={t}
+                      testId="work-order-cost-bearer"
+                      value={field.value ?? ""}
+                      onValueChange={field.onChange}
+                      supplierDisabled
+                      placeholder={t("CostBearerLabel" as any)}
+                      triggerClassName="sm:max-w-xs"
+                    />
+                    <p className="text-xs text-muted-foreground">{t("WorkOrderSupplierBearerUnavailable" as any)}</p>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
             <div className="bg-muted p-4 rounded-lg space-y-4">
               <div className="flex justify-between items-center mb-2">

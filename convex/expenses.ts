@@ -15,7 +15,13 @@ import { hookExpensePosted, getOrgCurrency, hookPrepaidExpenseAmortizationsRever
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { cancelPendingPostByKey } from "./accountingOutbox";
 import { requireFeature } from "./subscriptions";
-import { toMinorUnits } from "./utils/money";
+import { toMinorUnits, fromMinorUnits } from "./utils/money";
+import { costBearerValidator, isShowroomBorne, supplierBearerRefusal, type CostBearer } from "./utils/costBearer";
+import {
+  openSupplierCostRecovery,
+  assertSupplierCostExpenseReversible,
+  markSupplierCostRecoveryReversed,
+} from "./supplierCostRecoveries";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 import { CAPITALIZABLE_EXPENSE_CATEGORIES } from "./utils/vehicleCost";
 import { expenseAccountKeyForCategory } from "./accounting/postingRules";
@@ -108,6 +114,52 @@ async function hasExpenseAccountingExposure(
   return pendingPost !== null;
 }
 
+/**
+ * SCRUM-389 — THE gate for a SUPPLIER cost bearer. Throws unless the cost may
+ * be borne by the supplier; a SHOWROOM (or absent) bearer always passes.
+ *
+ * Called at create, at update and — the one that cannot be skipped — inside
+ * `recordPaidExpenseSideEffects` before any write, so every route that
+ * reaches PAID re-proves it against the vehicle as it is AT PAYMENT. A PENDING
+ * supplier cost on a car converted to stock in the meantime is refused there,
+ * and because nothing catches the throw the whole mutation — status patch
+ * included — rolls back and the expense stays unpaid.
+ *
+ * The org currency is the only currency an expense can be in (the row carries
+ * none), so "org currency" is satisfied by construction; what is checked is
+ * that the amount is exactly representable in it, so the recovery's due amount
+ * equals the ledger's debit.
+ */
+async function assertCostBearerAllowed(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    bearer: CostBearer | undefined;
+    vehicleId: Id<"vehicles"> | undefined;
+    category: string;
+    isPrepaid: boolean | undefined;
+    taxAmount: number | undefined;
+    amount: number;
+  }
+): Promise<Doc<"vehicles"> | null> {
+  if (args.bearer !== "SUPPLIER") return null;
+  const vehicle = args.vehicleId ? await ctx.db.get(args.vehicleId) : null;
+  const currency = await getOrgCurrency(ctx, args.orgId);
+  const refusal = supplierBearerRefusal({
+    orgId: args.orgId,
+    vehicle,
+    category: args.category,
+    isPrepaid: args.isPrepaid,
+    taxAmount: args.taxAmount,
+    amountRepresentable:
+      Number.isFinite(args.amount) &&
+      args.amount > 0 &&
+      fromMinorUnits(toMinorUnits(args.amount, currency), currency) === args.amount,
+  });
+  if (refusal) throw new ConvexError(refusal);
+  return vehicle;
+}
+
 async function recordPaidExpenseSideEffects(
   ctx: MutationCtx,
   args: {
@@ -116,6 +168,17 @@ async function recordPaidExpenseSideEffects(
     idempotencyKey?: string;
   }
 ) {
+  // Before ANY write — see assertCostBearerAllowed.
+  const supplierVehicle = await assertCostBearerAllowed(ctx, {
+    orgId: args.expense.orgId,
+    bearer: args.expense.costBearer,
+    vehicleId: args.expense.vehicleId,
+    category: args.expense.category,
+    isPrepaid: args.expense.isPrepaid,
+    taxAmount: args.expense.taxAmount,
+    amount: args.expense.amount,
+  });
+
   const existingTx = await ctx.db
     .query("transactions")
     .withIndex("by_org", (q) => q.eq("orgId", args.expense.orgId))
@@ -133,6 +196,9 @@ async function recordPaidExpenseSideEffects(
       vehicleId: args.expense.vehicleId,
       expenseId: args.expense._id,
       idempotencyKey: args.idempotencyKey,
+      // The P&L reads this row, not the expense — without the bearer here a
+      // supplier-borne cost would be counted as COGS.
+      costBearer: args.expense.costBearer,
     });
   }
 
@@ -183,7 +249,20 @@ async function recordPaidExpenseSideEffects(
     vehicleId: args.expense.vehicleId,
     capitalizeToInventory,
     isPrepaid,
+    costBearer: args.expense.costBearer,
   });
+
+  // SCRUM-389: the receivable the posting above just debited, as a subledger
+  // row the supplier's receipts can be recorded against. Same transaction, so
+  // the two cannot exist without each other.
+  if (supplierVehicle) {
+    await openSupplierCostRecovery(ctx, {
+      expense: args.expense,
+      vehicle: supplierVehicle,
+      currency,
+      actorId: args.actorId,
+    });
+  }
 
   // Set up the amortization schedule so the Prepaid Expenses asset booked above
   // is released to its expense account ratably (prepaidExpenses.ts). The NET
@@ -282,7 +361,9 @@ export const totalByVehicle = query({
       .filter((q) => q.neq(q.field("isDeleted"), true))
       .collect();
 
-    return expenses.reduce((sum, e) => sum + e.amount, 0);
+    // Shown to the salesperson as the vehicle's cost: a supplier-borne cost is
+    // owed back by the supplier and is not the showroom's (SCRUM-389).
+    return expenses.filter(isShowroomBorne).reduce((sum, e) => sum + e.amount, 0);
   },
 });
 
@@ -334,6 +415,11 @@ export const create = mutation({
     isPrepaid: v.optional(v.boolean()),
     amortizationMonths: v.optional(v.number()),
     amortizationStartDate: v.optional(v.number()),
+    /**
+     * SCRUM-389 — who bears this cost. Absent means SHOWROOM. SUPPLIER is
+     * allowed only on an owned SOURCED vehicle, non-prepaid, untaxed.
+     */
+    costBearer: v.optional(costBearerValidator),
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
@@ -387,6 +473,11 @@ export const create = mutation({
           isPrepaid: isPrepaid ?? null,
           amortizationMonths: amortizationMonths ?? null,
           amortizationStartDate: amortizationStartDate ?? null,
+          // SCRUM-389. Hashed only when SUPPLIER: absent and SHOWROOM mean the
+          // same thing, and `undefined` is dropped by JSON.stringify, so every
+          // fingerprint stored before the bearer existed still matches its own
+          // replay while a changed bearer under a reused key is refused.
+          costBearer: args.costBearer === "SUPPLIER" ? "SUPPLIER" : undefined,
         }),
       },
       async () => {
@@ -398,6 +489,18 @@ export const create = mutation({
             throw new ConvexError("Vehicle not found in this organization.");
           }
         }
+        // Refused before the insert, so a PENDING supplier cost that could
+        // never be paid as one is never recorded. A PAID one is re-proved
+        // inside recordPaidExpenseSideEffects.
+        await assertCostBearerAllowed(ctx, {
+          orgId: args.orgId,
+          bearer: args.costBearer,
+          vehicleId: args.vehicleId,
+          category: args.category,
+          isPrepaid,
+          taxAmount: args.taxAmount,
+          amount: args.amount,
+        });
 
         const id = await ctx.db.insert("expenses", {
           orgId: args.orgId,
@@ -416,6 +519,7 @@ export const create = mutation({
           isPrepaid,
           amortizationMonths,
           amortizationStartDate,
+          costBearer: args.costBearer,
         });
 
         if (status === "PAID") {
@@ -467,6 +571,8 @@ export const update = mutation({
     // start date back to "recognition begins the month the expense was paid" —
     // same null-means-clear convention as vehicleId/payerId below.
     amortizationStartDate: v.optional(v.union(v.number(), v.null())),
+    /** SCRUM-389. Changeable only while PENDING; immutable once PAID. */
+    costBearer: v.optional(costBearerValidator),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_EXPENSES]);
@@ -508,6 +614,16 @@ export const update = mutation({
     const currentStatus = expense.status ?? "PAID";
     const nextStatus = args.status ?? currentStatus;
     const willMarkPaid = currentStatus === "PENDING" && nextStatus === "PAID";
+    // SCRUM-389: the bearer decided which account the payment was debited to
+    // and whether a recovery was opened. Once PAID it is history, whatever the
+    // posting state — a queued post has already frozen it in its payload.
+    const currentBearer: CostBearer = expense.costBearer ?? "SHOWROOM";
+    const bearerChanges = args.costBearer !== undefined && args.costBearer !== currentBearer;
+    if (bearerChanges && currentStatus === "PAID") {
+      throw new ConvexError(
+        "Who bears a paid expense cannot be changed. Reverse the expense and record it again instead."
+      );
+    }
     const hasAccountingExposure = await hasExpenseAccountingExposure(ctx, args.orgId, args.expenseId);
     const hasMaterialAccountingChange =
       (args.vehicleId !== undefined && args.vehicleId !== (expense.vehicleId ?? null)) ||
@@ -520,7 +636,8 @@ export const update = mutation({
       (args.paymentMethod !== undefined && args.paymentMethod !== expense.paymentMethod) ||
       (args.isPrepaid !== undefined && (args.isPrepaid || false) !== (expense.isPrepaid || false)) ||
       (args.amortizationMonths !== undefined && args.amortizationMonths !== expense.amortizationMonths) ||
-      (args.amortizationStartDate !== undefined && args.amortizationStartDate !== (expense.amortizationStartDate ?? null));
+      (args.amortizationStartDate !== undefined && args.amortizationStartDate !== (expense.amortizationStartDate ?? null)) ||
+      bearerChanges;
     if (hasAccountingExposure && hasMaterialAccountingChange) {
       throw new ConvexError(
         "Posted expenses are locked. Use a correction or reversal workflow before changing accounting fields."
@@ -554,7 +671,21 @@ export const update = mutation({
       );
     }
 
+    // The bearer gate against the EFFECTIVE post-update values, so moving a
+    // PENDING supplier cost to a stock car, adding VAT or making it prepaid is
+    // refused here rather than only when it is finally paid.
+    await assertCostBearerAllowed(ctx, {
+      orgId: args.orgId,
+      bearer: args.costBearer ?? expense.costBearer,
+      vehicleId: args.vehicleId === null ? undefined : (args.vehicleId ?? expense.vehicleId),
+      category: args.category ?? expense.category,
+      isPrepaid: normalizedPrepaid ? normalizedPrepaid.isPrepaid : expense.isPrepaid,
+      taxAmount: effectiveTaxAmount,
+      amount: effectiveAmount,
+    });
+
     const patch: Record<string, unknown> = {};
+    if (args.costBearer !== undefined) patch.costBearer = args.costBearer;
 
     if (args.vehicleId !== undefined) {
       if (args.vehicleId !== null) {
@@ -695,6 +826,16 @@ export const remove = mutation({
     if (await hasExpenseAccountingExposure(ctx, args.orgId, args.expenseId)) {
       throw new ConvexError("Posted expenses cannot be deleted. Use a reversal workflow instead.");
     }
+    // SCRUM-389, defence in depth: a live supplier-cost recovery means the
+    // expense was paid as a supplier cost. Deleting it would orphan the
+    // receivable, whatever the exposure probe above concluded.
+    const recovery = await ctx.db
+      .query("supplierCostRecoveries")
+      .withIndex("by_org_expense", (q) => q.eq("orgId", args.orgId).eq("expenseId", args.expenseId))
+      .first();
+    if (recovery && recovery.status !== "REVERSED") {
+      throw new ConvexError("Posted expenses cannot be deleted. Use a reversal workflow instead.");
+    }
 
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new ConvexError("Unauthenticated");
@@ -744,6 +885,11 @@ export const reverseExpense = mutation({
     if (!expense || expense.isDeleted || expense.orgId !== args.orgId) {
       throw new ConvexError("Expense not found.");
     }
+
+    // SCRUM-389: a supplier-borne cost can be reversed only once nothing has
+    // been recovered on it. Re-read here, inside this transaction; the recovery
+    // row is patched below, so a concurrent receipt conflicts and serializes.
+    const supplierRecovery = await assertSupplierCostExpenseReversible(ctx, args.orgId, args.expenseId);
 
     const now = Date.now();
     const postedEvent = await ctx.db
@@ -801,6 +947,10 @@ export const reverseExpense = mutation({
         reversalDate: now,
       });
       if (reversedAmortizations > 0) reversedPostedGl = true;
+    }
+
+    if (supplierRecovery) {
+      await markSupplierCostRecoveryReversed(ctx, supplierRecovery, user._id, now);
     }
 
     const identity = await ctx.auth.getUserIdentity();

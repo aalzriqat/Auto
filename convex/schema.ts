@@ -1,6 +1,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { paymentMethodValidator, acquisitionPaymentMethodValidator } from "./utils/paymentMethods";
+import { costBearerValidator } from "./utils/costBearer";
 import { trustPassportFieldValidators } from "./utils/vehicleStatusGuards";
 import {
   appraisalStatusValidator,
@@ -1429,6 +1430,92 @@ export default defineSchema({
     .index("by_org_vehicle", ["orgId", "vehicleId"])
     .index("by_sale", ["saleId"]),
 
+  /**
+   * SCRUM-389 — a paid SUPPLIER-borne vehicle cost, owed back by the supplier.
+   *
+   * Opened in the SAME transaction as the expense's EXPENSE_POSTED (which, for
+   * a SUPPLIER bearer, debits Receivable from Suppliers rather than an expense
+   * account). Deliberately NOT linked to any sale: recovery has its own
+   * lifecycle, so cancelling a sale can never strand it and settling one can
+   * never absorb it into margin.
+   *
+   * Amounts are integer MINOR units in `currency`. `amountRecoveredMinor` is
+   * the sum of LIVE receipts, maintained in the same mutation that writes or
+   * reverses a receipt; `status` is re-derived from due, recovered and
+   * reversal at every such write (`recoveryStatusFor`), never set by hand.
+   *
+   * The source posting's STATE is not stored — it is derived from
+   * `sourceEventKey` across `accountingEvents` and the outbox, because the
+   * posting can drain, fail or be reversed in transactions that never touch
+   * this row.
+   */
+  supplierCostRecoveries: defineTable({
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    expenseId: v.id("expenses"),
+    /** Snapshot of the supplier at payment — there is no supplier master data. */
+    sourcedFromName: v.string(),
+    amountDueMinor: v.number(),
+    amountRecoveredMinor: v.number(),
+    currency: v.string(),
+    /** How many receipts have ever been recorded (LIVE or REVERSED). */
+    receiptSeq: v.number(),
+    /** Idempotency key of the source EXPENSE_POSTED post. */
+    sourceEventKey: v.string(),
+    status: v.union(
+      v.literal("OPEN"),
+      v.literal("PARTIALLY_RECOVERED"),
+      v.literal("RECOVERED"),
+      v.literal("REVERSED")
+    ),
+    reversedAt: v.optional(v.number()),
+    reversedBy: v.optional(v.id("users")),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_vehicle_status", ["orgId", "vehicleId", "status"])
+    .index("by_org_expense", ["orgId", "expenseId"]),
+
+  /**
+   * SCRUM-389 — money actually received from a supplier against one recovery.
+   *
+   * Immutable once LIVE except for its own reversal. Each receipt is its own
+   * posting source (`supplierCostRecoveryReceipts` / receipt id / version 1),
+   * posted SYNCHRONOUSLY — there is no queued receipt, so a LIVE row always has
+   * a POSTED event behind it. `POSTING` exists only inside the recording
+   * mutation (insert, post, patch LIVE); any throw rolls it back, so it is
+   * never persisted.
+   */
+  supplierCostRecoveryReceipts: defineTable({
+    orgId: v.id("organizations"),
+    recoveryId: v.id("supplierCostRecoveries"),
+    vehicleId: v.id("vehicles"),
+    seq: v.number(),
+    amountMinor: v.number(),
+    currency: v.string(),
+    method: v.union(v.literal("CASH"), v.literal("BANK_TRANSFER")),
+    receivedDate: v.number(),
+    reference: v.optional(v.string()),
+    notes: v.optional(v.string()),
+    /**
+     * The caller's command identity (runWithIdempotency). The POSTING's key is
+     * not stored: it is `supplierCostRecoveryReceiptKey(_id)`, one spelling.
+     */
+    idempotencyKey: v.string(),
+    status: v.union(v.literal("POSTING"), v.literal("LIVE"), v.literal("REVERSED")),
+    reversedAt: v.optional(v.number()),
+    reversedBy: v.optional(v.id("users")),
+    reversalReason: v.optional(v.string()),
+    reversalDate: v.optional(v.number()),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_recovery", ["orgId", "recoveryId"]),
+
   vehicleSupplierPayables: defineTable({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
@@ -2148,6 +2235,15 @@ export default defineSchema({
     // kept it. Absent on rows reversed before this field existed until
     // backfillExpenseReversedAt runs.
     reversedAt: v.optional(v.number()),
+    /**
+     * SCRUM-389 — who bears this cost. Absent means SHOWROOM, which is what
+     * every row written before this field meant. SUPPLIER is allowed only on
+     * an owned SOURCED vehicle, non-prepaid, with no tax, and is immutable once
+     * PAID: a paid SUPPLIER cost posts Dr Receivable from Suppliers (never an
+     * expense account) and opens one `supplierCostRecoveries` row. Enforced by
+     * `assertCostBearerAllowed` in expenses.ts, never by a reader.
+     */
+    costBearer: v.optional(costBearerValidator),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),
@@ -4496,6 +4592,12 @@ export default defineSchema({
     depositId: v.optional(v.id("deposits")),
     userId: v.optional(v.id("users")), // For partner draws/salaries
     expenseId: v.optional(v.id("expenses")),
+    /**
+     * SCRUM-389 — copied from the expense at the same write. The P&L reads
+     * this table, not `expenses`, so without it a supplier-borne cost would be
+     * counted as COGS. Absent means SHOWROOM (every row written before it).
+     */
+    costBearer: v.optional(costBearerValidator),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),

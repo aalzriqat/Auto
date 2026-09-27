@@ -1,5 +1,6 @@
 import type { Doc } from "../_generated/dataModel";
 import { denominationOf, type CurrencyScale } from "./money";
+import { isShowroomBorne } from "./costBearer";
 
 /**
  * A major-unit amount as minor units, ONLY when it is exactly representable
@@ -182,7 +183,9 @@ export function deriveDealerPreparationExpenses(args: {
       excluded.reversedCount += 1;
       continue;
     }
-    if (!PREPARATION_CATEGORIES.has(row.category)) {
+    // SCRUM-389: a supplier-borne cost is recovered from the supplier and is
+    // never the dealership's preparation spend.
+    if (!PREPARATION_CATEGORIES.has(row.category) || !isShowroomBorne(row)) {
       excluded.otherCount += 1;
       continue;
     }

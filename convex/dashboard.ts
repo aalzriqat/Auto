@@ -5,6 +5,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { isSystemOwnerRole, PERMISSIONS, type Permission } from "./utils/permissions";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { fromMinorUnits } from "./utils/money";
+import { isCashOutExpense, isShowroomBorne } from "./utils/costBearer";
 import { verifiedFinancingApplicationSaleIds } from "./utils/financingProvenance";
 import {
   recordedConsignedMargin,
@@ -382,10 +383,20 @@ export const stats = query({
 
     const generalExpensesByMonth: Record<string, number> = {};
     const totalExpensesByMonth: Record<string, number> = {};
+    // SCRUM-389: what left the till, whoever bears it. A supplier-borne cost is
+    // cash out but a receivable, not a showroom expense, so it is shown here and
+    // kept out of `Expenses` and of profit below.
+    const cashOutByMonth: Record<string, number> = {};
 
     for (const exp of allExpenses) {
 
       const key = getChartKey(exp.date);
+
+      if (canViewCostMetrics && isCashOutExpense(exp)) {
+        cashOutByMonth[key] = (cashOutByMonth[key] || 0) + exp.amount;
+      }
+
+      if (!isShowroomBorne(exp)) continue;
 
       if (canViewCostMetrics) {
         totalExpensesByMonth[key] = (totalExpensesByMonth[key] || 0) + exp.amount;
@@ -784,6 +795,7 @@ export const stats = query({
       Revenue: monthlySales[key] || 0,
       Profit: monthlyProfits[key] || 0,
       Expenses: totalExpensesByMonth[key] || 0,
+      CashOut: cashOutByMonth[key] || 0,
     })).sort((a, b) => {
       // Very basic sort by trying to parse date. In production, we'd use ISO strings for sorting.
       return new Date(a.name).getTime() - new Date(b.name).getTime();
@@ -1092,12 +1104,15 @@ export const stats = query({
           0
         );
 
-    const previousTotalExpenses = previousExpenses.reduce((acc, exp) => acc + exp.amount, 0);
+    // SCRUM-389: the same showroom-borne predicate as the current window, so
+    // the delta is never taken across two different bases.
+    const previousShowroomExpenses = previousExpenses.filter(isShowroomBorne);
+    const previousTotalExpenses = previousShowroomExpenses.reduce((acc, exp) => acc + exp.amount, 0);
 
     // Same split the current period makes: a reconditioning expense already
     // capitalized into a vehicle's cost basis is not a period expense, and
     // deducting it here too would charge it to profit twice.
-    const previousGeneralExpenses = previousExpenses.reduce(
+    const previousGeneralExpenses = previousShowroomExpenses.reduce(
       (acc, exp) =>
         exp.vehicleId && exp.accountingTreatment === "CAPITALIZED_INVENTORY" ? acc : acc + exp.amount,
       0,

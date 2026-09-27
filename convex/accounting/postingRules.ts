@@ -2,6 +2,16 @@ import { ConvexError } from "convex/values";
 import { SYSTEM_KEYS, SystemKey } from "../utils/defaultChart";
 import { CUSTODY_CLEARING_KEY, custodyFeeExpenseKey } from "../utils/dealCustodyPosting";
 import type { FeeAccountingTreatment } from "../utils/financedSalePostingPlan";
+import type { Id } from "../_generated/dataModel";
+
+/**
+ * The one spelling of an expense's EXPENSE_POSTED idempotency key. Lives in
+ * this leaf module so `workflowHooks` can use it without an import cycle
+ * through `supplierCostRecoveryPosting` → `postingEngine`.
+ */
+export function expensePostedKey(expenseId: Id<"expenses">): string {
+  return `expense_posted_${expenseId}`;
+}
 
 export type EventType =
   | "DEPOSIT_RECEIVED"
@@ -29,6 +39,10 @@ export type EventType =
   | "PAYMENT_LINK_RECEIVED"
   | "SUPPLIER_PAYMENT_SETTLED"
   | "SUPPLIER_RECEIVABLE_COLLECTED"
+  // SCRUM-389: money received from a supplier against a cost it bore on a
+  // consigned car. Its own family — NOT SUPPLIER_RECEIVABLE_COLLECTED, which
+  // is the agency-margin claim a sale opens, with a different source table.
+  | "SUPPLIER_COST_RECOVERY_RECEIVED"
   | "ASSET_CAPITALIZED"
   | "DEPRECIATION_POSTED"
   | "ASSET_IMPAIRED"
@@ -76,7 +90,7 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "CHEQUE_RECEIVED", "CHEQUE_DEPOSITED", "CHEQUE_CLEARED", "CHEQUE_RETURNED",
   "COMMISSION_ACCRUED", "COMMISSION_ADJUSTED", "COMMISSION_PAID",
   "FINANCE_DISBURSED", "FINANCE_CASH_RECEIVED", "PAYMENT_LINK_RECEIVED",
-  "SUPPLIER_PAYMENT_SETTLED", "SUPPLIER_RECEIVABLE_COLLECTED",
+  "SUPPLIER_PAYMENT_SETTLED", "SUPPLIER_RECEIVABLE_COLLECTED", "SUPPLIER_COST_RECOVERY_RECEIVED",
   "ASSET_CAPITALIZED", "DEPRECIATION_POSTED", "ASSET_IMPAIRED", "ASSET_DISPOSED",
   "CAPITAL_CONTRIBUTED", "PARTNER_DREW", "PROFIT_DISTRIBUTED",
   "CLAIM_SETTLED", "CLAIM_WRITTEN_OFF",
@@ -490,6 +504,12 @@ export interface ExpensePostedPayload {
    * mutually exclusive and prepaid only ever applies to non-vehicle expenses).
    */
   isPrepaid?: boolean;
+  /**
+   * SCRUM-389. Frozen at enqueue, so the rule branches on what was true when
+   * the expense was paid, never on the live row. Absent means SHOWROOM — the
+   * payload every EXPENSE_POSTED written before this field carries.
+   */
+  costBearer?: "SHOWROOM" | "SUPPLIER";
 }
 
 /**
@@ -1521,6 +1541,40 @@ export function ruleSupplierReceivableCollected(p: SupplierReceivableCollectedPa
   };
 }
 
+export interface SupplierCostRecoveryReceivedPayload {
+  receiptId: string;
+  recoveryId: string;
+  sourcedFromName: string;
+  amountMinor: number;
+  currency: string;
+  /** CASH or BANK_TRANSFER only — cheque receipts are SCRUM-400. */
+  paymentMethod: string;
+  vehicleId: string;
+}
+
+/**
+ * The supplier pays back a cost it bore on a consigned car (SCRUM-389).
+ *
+ * The exact reverse of the SUPPLIER branch of `ruleExpensePosted`: that debit
+ * is the only thing that raises this vehicle's recoverable, and this credit is
+ * the only thing that brings it down. Revenue and expense are untouched — the
+ * cost was never the showroom's, so recovering it earns nothing.
+ */
+export function ruleSupplierCostRecoveryReceived(p: SupplierCostRecoveryReceivedPayload): RuleResult {
+  if (p.paymentMethod !== "CASH" && p.paymentMethod !== "BANK_TRANSFER") {
+    throw new Error(`A supplier cost recovery cannot be received by ${p.paymentMethod}.`);
+  }
+  const cashKey = cashAccountKey(p.paymentMethod);
+  return {
+    lines: [
+      line(cashKey, p.amountMinor, 0, `Recovered from ${p.sourcedFromName}`, { vehicleId: p.vehicleId }),
+      line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, 0, p.amountMinor, `Supplier-borne cost recovered from ${p.sourcedFromName}`, { vehicleId: p.vehicleId }),
+    ],
+    memo: `Supplier-borne cost recovered — ${p.sourcedFromName}`,
+    category: "SYSTEM",
+  };
+}
+
 /**
  * Conservation, checked rather than trusted (SCRUM-218-C).
  *
@@ -1656,8 +1710,29 @@ export function classifyExpensePosting(args: {
 }
 
 export function ruleExpensePosted(p: ExpensePostedPayload): RuleResult {
-  const cashKey = cashAccountKey(p.paymentMethod);
   const { capitalize, prepaid } = classifyExpensePosting(p);
+  // SCRUM-389: a supplier-borne cost is money the supplier owes back, so it is
+  // a receivable, not an expense. The refusals below are a second line, not
+  // the enforcement — `assertCostBearerAllowed` refuses these shapes at the
+  // mutation boundary before anything is written (ACC-5). They exist so a
+  // payload that somehow carries one can never be booked half-right.
+  if (p.costBearer === "SUPPLIER") {
+    if (capitalize || prepaid || (p.taxMinor ?? 0) !== 0 || !p.vehicleId) {
+      throw new Error(
+        "A supplier-borne EXPENSE_POSTED must be vehicle-linked, untaxed and neither capitalized nor prepaid. Refusing to post it."
+      );
+    }
+    return {
+      lines: [
+        line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, p.amountMinor, 0, "Supplier-borne vehicle cost recoverable", { vehicleId: p.vehicleId }),
+        // Outbound: a CHEQUE here is one the dealership ISSUED, so it credits
+        // the bank — never Cheques in Hand, which holds customers' cheques.
+        line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor, "Cash payment"),
+      ],
+      memo: "Supplier-borne vehicle cost paid — recoverable from the supplier",
+      category: "SYSTEM",
+    };
+  }
   const debitKey = capitalize
     ? SYSTEM_KEYS.VEHICLE_INVENTORY
     : prepaid
@@ -1680,7 +1755,7 @@ export function ruleExpensePosted(p: ExpensePostedPayload): RuleResult {
   if (p.taxMinor && p.taxMinor > 0) {
     lines.push(line(SYSTEM_KEYS.VAT_RECEIVABLE, p.taxMinor, 0, "Input VAT paid"));
   }
-  lines.push(line(cashKey, 0, p.amountMinor, "Cash payment"));
+  lines.push(line(cashAccountKey(p.paymentMethod), 0, p.amountMinor, "Cash payment"));
   return {
     lines,
     memo: capitalize
@@ -2806,6 +2881,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "PAYMENT_LINK_RECEIVED": return rulePaymentLinkReceived(payload as unknown as PaymentLinkReceivedPayload);
     case "SUPPLIER_PAYMENT_SETTLED": return ruleSupplierPaymentSettled(payload as unknown as SupplierPaymentSettledPayload);
     case "SUPPLIER_RECEIVABLE_COLLECTED": return ruleSupplierReceivableCollected(payload as unknown as SupplierReceivableCollectedPayload);
+    case "SUPPLIER_COST_RECOVERY_RECEIVED": return ruleSupplierCostRecoveryReceived(payload as unknown as SupplierCostRecoveryReceivedPayload);
     case "ASSET_CAPITALIZED": return ruleAssetCapitalized(payload as unknown as AssetCapitalizedPayload);
     case "DEPRECIATION_POSTED": return ruleDepreciationPosted(payload as unknown as DepreciationPostedPayload);
     case "FI_COMMISSION_RECOGNIZED": return ruleFiCommissionRecognized(payload as unknown as FiCommissionRecognizedPayload);

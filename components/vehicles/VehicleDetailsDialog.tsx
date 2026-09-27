@@ -1039,6 +1039,7 @@ export function VehicleDetailsDialog({
             open={workOrderOpen}
             onOpenChange={setWorkOrderOpen}
             vehicleId={vehicle._id}
+            vehicleSourceType={vehicle.sourceType}
             workOrder={selectedWorkOrder}
           />
         </>

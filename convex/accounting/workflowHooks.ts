@@ -18,7 +18,7 @@ import {
   proveReservedReceiptAuthority,
   assertExistingRowIsSameOccurrence,
 } from "./postingEngine";
-import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting, simplePayloadHash, RECEIPT_CREDIT_APPLIED_EVENT_TYPE, RECEIPT_CREDIT_APPLIED_SOURCE_TYPE, type FinancedSalePlanPayload } from "./postingRules";
+import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting, expensePostedKey, simplePayloadHash, RECEIPT_CREDIT_APPLIED_EVENT_TYPE, RECEIPT_CREDIT_APPLIED_SOURCE_TYPE, type FinancedSalePlanPayload } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate, checkPostingAllowed } from "../accountingPeriods";
 import { SYSTEM_KEYS, type SystemKey } from "../utils/defaultChart";
@@ -1429,13 +1429,24 @@ export async function hookExpensePosted(
     vehicleId?: Id<"vehicles">;
     capitalizeToInventory?: boolean;
     isPrepaid?: boolean;
+    /** SCRUM-389. Absent means SHOWROOM; see ExpensePostedPayload.costBearer. */
+    costBearer?: "SHOWROOM" | "SUPPLIER";
   }
 ) {
   const { capitalize, prepaid } = classifyExpensePosting(args);
   if (args.taxMinor && args.taxMinor > 0) {
     await ensureVatReceivableAccountIfChartReady(ctx, args.orgId, args.actorId);
   }
-  if (!capitalize && await isChartInitialized(ctx, args.orgId)) {
+  const supplierBorne = args.costBearer === "SUPPLIER";
+  if (supplierBorne) {
+    // A supplier-borne cost debits Receivable from Suppliers, which older
+    // charts lack. Self-healed here, and ALSO named as a required key below so
+    // that an org whose chart cannot take it queues the post instead of
+    // throwing inside the caller's transaction.
+    if (await isChartInitialized(ctx, args.orgId)) {
+      await ensureConsignmentAccounts(ctx, args.orgId, args.actorId);
+    }
+  } else if (!capitalize && await isChartInitialized(ctx, args.orgId)) {
     // A prepaid expense debits the Prepaid Expenses asset now and releases it
     // to a per-category expense account later, so both must exist. A normal
     // expense resolves expenseAccountKeyForCategory, which can point at a
@@ -1452,7 +1463,7 @@ export async function hookExpensePosted(
     eventType: "EXPENSE_POSTED",
     sourceType: "expenses",
     sourceId: args.expenseId.toString(),
-    idempotencyKey: `expense_posted_${args.expenseId}`,
+    idempotencyKey: expensePostedKey(args.expenseId),
     currency: args.currency,
     occurredAt: args.occurredAt,
     actorId: args.actorId,
@@ -1466,7 +1477,11 @@ export async function hookExpensePosted(
       vehicleId: args.vehicleId?.toString(),
       capitalizeToInventory: args.capitalizeToInventory,
       isPrepaid: prepaid,
+      // A showroom-borne payload carries no bearer at all, exactly as before
+      // SCRUM-389, so its replay fingerprint is unchanged.
+      ...(supplierBorne ? { costBearer: "SUPPLIER" as const } : {}),
     },
+    ...(supplierBorne ? { requiredSystemKeys: [SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS] } : {}),
   });
 }
 

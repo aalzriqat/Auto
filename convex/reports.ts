@@ -25,6 +25,7 @@ import {
   recordedSupplierGrossReceipt,
 } from "./utils/vehicleOwnership";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
+import { isShowroomBorne } from "./utils/costBearer";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { verifiedFinancingApplicationSaleIds } from "./utils/financingProvenance";
 
@@ -153,7 +154,9 @@ export const getSalesAndProfitReport = query({
 
     const enrichedSales = salesInDateRange.map((sale) => {
       const vehicle = vehicleMap.get(sale.vehicleId);
-      const expenses = expensesByVehicle.get(sale.vehicleId) ?? [];
+      // SCRUM-389: a supplier-borne cost is the supplier's, owed back — not
+      // an expense this sale carried.
+      const expenses = (expensesByVehicle.get(sale.vehicleId) ?? []).filter(isShowroomBorne);
 
       const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
       const cost = capitalizedCostByVehicle.get(sale.vehicleId) ?? 0;
@@ -327,8 +330,9 @@ export const getInventoryReport = query({
       // Deleted and reversed expenses are not part of a vehicle's cost. The
       // previous sum took every row, so a mistake that was deleted or reversed
       // still inflated reported inventory investment.
+      // Supplier-borne costs (SCRUM-389) are a receivable, not investment.
       const expenses = (expensesByVehicle.get(vehicle._id) ?? []).filter(
-        (exp) => exp.isDeleted !== true && exp.reversedAt == null
+        (exp) => exp.isDeleted !== true && exp.reversedAt == null && isShowroomBorne(exp)
       );
       const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
 
@@ -587,7 +591,9 @@ export const getExpensesReport = query({
       priorById.set(exp._id, exp);
     }
 
-    const allExpenses: Doc<"expenses">[] = [...expensesInDateRange, ...priorById.values()];
+    // SCRUM-389: a supplier-borne cost posts Dr Receivable from Suppliers, not
+    // an expense account, so the ledger this report mirrors never holds it.
+    const allExpenses: Doc<"expenses">[] = [...expensesInDateRange, ...priorById.values()].filter(isShowroomBorne);
 
     let totalExpenses = 0;
 
@@ -1082,6 +1088,8 @@ export const getProfitAndLoss = query({
           grossTransactionValue += grossTransactionValueForTransaction(tx);
         }
       } else if (tx.type === "OUT") {
+        // SCRUM-389: a supplier-borne cost is money owed back, never COGS.
+        if (!isShowroomBorne(tx)) continue;
         if (tx.category === "VEHICLE_PURCHASE" || (tx.category === "EXPENSE" && tx.vehicleId)) {
           costOfGoodsSold += tx.amount;
         } else if (tx.category === "EXPENSE" && !tx.vehicleId) {

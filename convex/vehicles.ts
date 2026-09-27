@@ -78,6 +78,7 @@ const vehicleSourceType = v.optional(v.union(v.literal("STOCK"), v.literal("SOUR
 
 import { paginationOptsValidator } from "convex/server";
 import { retroactiveOwnershipChangeRefusal } from "./utils/vehicleOwnership";
+import { supplierCostRecoveryConversionRefusal } from "./utils/costBearer";
 import { runWithIdempotency } from "./utils/idempotency";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -1287,6 +1288,16 @@ export const update = mutation({
       status: vehicle.status,
     });
     if (ownershipRefusal) throw new ConvexError(ownershipRefusal);
+    // SCRUM-389: a SOURCED car with an open supplier-cost recovery cannot become
+    // owned stock — the supplier would owe the showroom for costs on a car the
+    // showroom now owns, and nothing would ever settle it.
+    const recoveryRefusal = await supplierCostRecoveryConversionRefusal(ctx, {
+      orgId: vehicle.orgId,
+      vehicleId: vehicle._id,
+      currentSourceType: vehicle.sourceType,
+      requestedSourceType: args.sourceType,
+    });
+    if (recoveryRefusal) throw new ConvexError(recoveryRefusal);
 
     // If VIN is being changed, check for duplicates
     if (args.vin) {

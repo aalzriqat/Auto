@@ -549,6 +549,7 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
   "./prepaidExpenses": ["correctSchedule"],
   "./sales": ["create", "completeFromQuote", "completeDraft", "markCommissionPaid"],
   "./sourcingPayables": ["markPaid", "recordPartialPayment"],
+  "./supplierCostRecoveries": ["recordReceipt", "reverseReceipt"],
   "./supplierReceivables": ["recordReceipt"],
   // ⚠️ `./transactions: ["add"]` was REMOVED during RC integration (SCRUM-313),
   // and the removal is NOT a relaxation — it is a retirement, guarded below.
@@ -612,7 +613,11 @@ describe("SCRUM-57 — classification ratchet", () => {
     // +financeDealCosts.reconcileDealCustody. Both are explicit economic
     // commands, so the idempotency manifest must measure them rather than
     // letting the source-to-manifest equality fail only in the full CI run.
-    expect(checked).toBe(40);
+    //
+    // 40 -> 42 by SCRUM-389 supplier cost bearer:
+    // +supplierCostRecoveries.recordReceipt and
+    // +supplierCostRecoveries.reverseReceipt.
+    expect(checked).toBe(42);
   });
 
   /**
@@ -673,9 +678,10 @@ describe("SCRUM-57 — classification ratchet", () => {
     expect(missingFromSource, "listed in the manifest but not economic in the source").toEqual([]);
 
     // The denominator, asserted rather than described.
-    expect(economicInSource.size).toBe(40);
+    // 40 -> 42 / 41 -> 43: SCRUM-389's two supplier-cost-recovery commands.
+    expect(economicInSource.size).toBe(42);
     expect([...nonEconomicInSource].sort()).toEqual(["sales.createDraft"]);
-    expect(economicInSource.size + nonEconomicInSource.size).toBe(41);
+    expect(economicInSource.size + nonEconomicInSource.size).toBe(43);
   });
 
   /**
