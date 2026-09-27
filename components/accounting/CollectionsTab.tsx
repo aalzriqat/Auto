@@ -52,6 +52,7 @@ import { CashDrawerPanel } from "./collections/CashDrawerPanel";
 import { PaymentLinksPanel } from "./collections/PaymentLinksPanel";
 import { InstallmentCalendar } from "./collections/InstallmentCalendar";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
+import { interpolate } from "@/lib/i18n/interpolate";
 
 type ReceivableRow = Doc<"receivables"> & {
   customerName: string;
@@ -1287,6 +1288,13 @@ function ReconciliationDialog({ open, onOpenChange }: { open: boolean; onOpenCha
   );
   const formatCurrency = useCurrencyFormatter();
 
+  let draftDescription: React.ReactNode = t("LoadingExpectedCash" as any);
+  if (draft?.complete) {
+    draftDescription = interpolate(t("CashierReconciliationDraftDesc" as any), { count: draft.paymentCount, amount: formatCurrency(draft.expectedCash) });
+  } else if (draft) {
+    draftDescription = <span role="alert" className="font-medium text-destructive">{t("CashierReconciliationIncomplete" as any)}</span>;
+  }
+
   async function submit() {
     if (!activeOrgId) return;
     setSubmitting(true);
@@ -1316,7 +1324,7 @@ function ReconciliationDialog({ open, onOpenChange }: { open: boolean; onOpenCha
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{t("CashierReconciliation" as any)}</DialogTitle>
-          <DialogDescription>{draft ? t("CashierReconciliationDraftDesc" as any).replace("{count}", String(draft.paymentCount)).replace("{amount}", formatCurrency(draft.expectedCash)) : t("LoadingExpectedCash" as any)}</DialogDescription>
+          <DialogDescription>{draftDescription}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
           <Input type="date" value={businessDate} onChange={(event) => setBusinessDate(event.target.value)} />
@@ -1325,7 +1333,7 @@ function ReconciliationDialog({ open, onOpenChange }: { open: boolean; onOpenCha
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
-          <Button onClick={submit} disabled={submitting || !countedCash}>{submitting ? t("Submitting" as any) : t("Submit" as any)}</Button>
+          <Button onClick={submit} disabled={submitting || !countedCash || draft?.complete !== true}>{submitting ? t("Submitting" as any) : t("Submit" as any)}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
