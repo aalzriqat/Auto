@@ -163,6 +163,10 @@ function receiptArgs(s: Seeded, recoveryId: Id<"supplierCostRecoveries">, overri
   } as any;
 }
 
+function reverseArgs(s: Seeded, receiptId: Id<"supplierCostRecoveryReceipts">, reason: string) {
+  return { orgId: s.orgId, receiptId, reason, idempotencyKey: crypto.randomUUID() };
+}
+
 describe("who may bear a cost", () => {
   test("SUPPLIER is refused on a vehicle that is not SOURCED", async () => {
     const s = await seed("stock");
@@ -323,9 +327,10 @@ describe("recovery receipts", () => {
     const s = await seed("reverse");
     const { recovery } = await paySupplierCost(s);
     const { receiptId } = await s.as.mutation(api.supplierCostRecoveries.recordReceipt, receiptArgs(s, recovery._id));
-    const result = await s.as.mutation(api.supplierCostRecoveries.reverseReceipt, {
-      orgId: s.orgId, receiptId, reason: "Recorded against the wrong car", idempotencyKey: crypto.randomUUID(),
-    });
+    const result = await s.as.mutation(
+      api.supplierCostRecoveries.reverseReceipt,
+      reverseArgs(s, receiptId, "Recorded against the wrong car")
+    );
     expect(result.amountRecoveredMinor).toBe(0);
     expect(result.status).toBe("OPEN");
     const receipt = await s.t.run((ctx) => ctx.db.get(receiptId));
@@ -454,7 +459,7 @@ describe("work orders on a SOURCED vehicle", () => {
   });
 });
 
-describe("seat R1 findings (SC-389-01/02/03)", () => {
+describe("receipt chronology, cheque payment and reversal after conversion", () => {
   test("SC-389-01: a receipt on a car converted to owned stock cannot be reversed back into an open claim", async () => {
     const s = await seed("sc01");
     const { recovery } = await paySupplierCost(s);
@@ -468,9 +473,7 @@ describe("seat R1 findings (SC-389-01/02/03)", () => {
       purchasePrice: 9_500, purchasePaymentMethod: "CASH",
     } as any);
     await expect(
-      s.as.mutation(api.supplierCostRecoveries.reverseReceipt, {
-        orgId: s.orgId, receiptId, reason: "Transfer bounced", idempotencyKey: crypto.randomUUID(),
-      })
+      s.as.mutation(api.supplierCostRecoveries.reverseReceipt, reverseArgs(s, receiptId, "Transfer bounced"))
     ).rejects.toThrow(/no longer a sourced vehicle/);
     const after = await s.t.run((ctx) => ctx.db.get(recovery._id));
     expect(after!.status).toBe("RECOVERED");
@@ -492,8 +495,11 @@ describe("seat R1 findings (SC-389-01/02/03)", () => {
   test("SC-389-03: a receipt dated before its cost was posted is refused and records nothing", async () => {
     const s = await seed("sc03");
     const { recovery } = await paySupplierCost(s);
-    const source = await s.t.run(async (ctx) =>
-      (await ctx.db.query("accountingEvents").collect()).find((e) => e.eventType === "EXPENSE_POSTED")
+    const source = await s.t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_idempotency", (q) => q.eq("orgId", s.orgId).eq("idempotencyKey", recovery.sourceEventKey))
+        .unique()
     );
     await expect(
       s.as.mutation(

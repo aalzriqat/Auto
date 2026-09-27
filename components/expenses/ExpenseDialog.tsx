@@ -181,7 +181,9 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           expenseId: expense._id,
           title: values.title,
           amount: values.amount,
-          taxAmount: values.taxAmount || undefined,
+          // 0 must reach the server: omitting it keeps the stored VAT, which
+          // blocks switching a PENDING expense to a SUPPLIER bearer.
+          taxAmount: values.taxAmount ?? 0,
           date: parsedDate,
           category: values.category as any,
           vehicleId: parsedVehicleId === undefined ? null : parsedVehicleId,

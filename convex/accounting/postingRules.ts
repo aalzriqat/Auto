@@ -1710,7 +1710,6 @@ export function classifyExpensePosting(args: {
 }
 
 export function ruleExpensePosted(p: ExpensePostedPayload): RuleResult {
-  const cashKey = cashAccountKey(p.paymentMethod);
   const { capitalize, prepaid } = classifyExpensePosting(p);
   // SCRUM-389: a supplier-borne cost is money the supplier owes back, so it is
   // a receivable, not an expense. The refusals below are a second line, not
@@ -1756,7 +1755,7 @@ export function ruleExpensePosted(p: ExpensePostedPayload): RuleResult {
   if (p.taxMinor && p.taxMinor > 0) {
     lines.push(line(SYSTEM_KEYS.VAT_RECEIVABLE, p.taxMinor, 0, "Input VAT paid"));
   }
-  lines.push(line(cashKey, 0, p.amountMinor, "Cash payment"));
+  lines.push(line(cashAccountKey(p.paymentMethod), 0, p.amountMinor, "Cash payment"));
   return {
     lines,
     memo: capitalize

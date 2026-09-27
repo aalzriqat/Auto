@@ -46,12 +46,12 @@ export async function postingStateForKey(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   idempotencyKey: string
-): Promise<{ state: PostingState; eventId: Id<"accountingEvents"> | null }> {
+): Promise<{ state: PostingState; eventId: Id<"accountingEvents"> | null; accountingDate?: number }> {
   const event = await ctx.db
     .query("accountingEvents")
     .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
     .unique();
-  if (event?.status === "POSTED") return { state: "POSTED", eventId: event._id };
+  if (event?.status === "POSTED") return { state: "POSTED", eventId: event._id, accountingDate: event.accountingDate };
   if (event?.status === "REVERSED") return { state: "REVERSED", eventId: event._id };
   const queued = await ctx.db
     .query("pendingAccountingEvents")

@@ -366,8 +366,7 @@ export const recordReceipt = mutation({
         }
         // A credit dated before its debit would show the receivable negative
         // at any cutoff between the two dates.
-        const sourceEvent = source.eventId ? await ctx.db.get(source.eventId) : null;
-        if (!sourceEvent || args.receivedDate < sourceEvent.accountingDate) {
+        if (source.accountingDate === undefined || args.receivedDate < source.accountingDate) {
           throw new ConvexError("A receipt cannot be dated before the cost it recovers was posted.");
         }
         const remaining = recovery.amountDueMinor - recovery.amountRecoveredMinor;
