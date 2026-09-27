@@ -5876,23 +5876,26 @@ describe("applying the quote's down payment to an approved zero first payment (S
     expect(await moneyRowCounts(seed)).toEqual(counts);
   });
 
-  test("the retired sentence is removed only where it stands alone, not where another reason quotes it", async () => {
-    const quoted = `Company "${FIRST_PAYMENT_NOT_RECORDED_REASON}" retains customer funds.`;
-    const { seed, applicationId } = await zeroedApprovedDeal();
-    await seed.t.run((ctx) =>
-      ctx.db.patch(applicationId, {
-        needsFinancingReconciliation: true,
-        financingReconciliationReason: `${quoted} ${FIRST_PAYMENT_NOT_RECORDED_REASON}`,
-      })
-    );
+  test("a finance company named like the stale sentence keeps its reason intact", async () => {
+    // Sol, round 2: a company whose name IS the sentence writes a reason that
+    // begins with it. That is not a stale first-payment reason and must survive.
+    const companyReason = `${FIRST_PAYMENT_NOT_RECORDED_REASON} keeps the customer's payment rather than passing it through.`;
+    for (const [suffix, reason] of [
+      ["start", companyReason],
+      ["quoted", `Company "${FIRST_PAYMENT_NOT_RECORDED_REASON}" retains customer funds. ${FIRST_PAYMENT_NOT_RECORDED_REASON}`],
+    ] as const) {
+      const { seed, applicationId } = await zeroedApprovedDeal({ suffix });
+      await seed.t.run((ctx) =>
+        ctx.db.patch(applicationId, { needsFinancingReconciliation: true, financingReconciliationReason: reason })
+      );
 
-    await apply(seed, applicationId);
+      await apply(seed, applicationId);
 
-    const after = await readApp(seed, applicationId);
-    expect(after.financingReconciliationReason).toBe(quoted);
-    expect(after.needsFinancingReconciliation).toBe(true);
+      const after = await readApp(seed, applicationId);
+      expect(after.financingReconciliationReason).toBe(reason);
+      expect(after.needsFinancingReconciliation).toBe(true);
+    }
   });
-
   test("a quote down payment exactly equal to the unfinanced portion is accepted", async () => {
     const { seed, applicationId } = await zeroedApprovedDeal();
     const app = await readApp(seed, applicationId);
@@ -5922,7 +5925,7 @@ describe("applying the quote's down payment to an approved zero first payment (S
     expect(withdrawn[0]?.newValue).toBe("PENDING_CLASSIFICATION");
   });
 
-  test("only the first-payment reason is retired; an unrelated reason and its flag survive", async () => {
+  test("a longer reason is left whole, flag raised: no text surgery on another reason", async () => {
     const other = "Legacy migration: check the approval basis.";
     const { seed, applicationId } = await zeroedApprovedDeal();
     await seed.t.run((ctx) =>
@@ -5935,7 +5938,9 @@ describe("applying the quote's down payment to an approved zero first payment (S
     await apply(seed, applicationId);
 
     const app = await readApp(seed, applicationId);
-    expect(app.financingReconciliationReason).toBe(other);
+    expect(app.financingReconciliationReason).toBe(
+      `${other} The customer's first payment is not recorded on this deal. Record it before relying on the funding split.`
+    );
     expect(app.needsFinancingReconciliation).toBe(true);
   });
 

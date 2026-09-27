@@ -47,7 +47,6 @@ import {
   type FinanceCompanyRuleSnapshot,
 } from "./utils/financingEconomics";
 import { invalidateClassification } from "./utils/classificationInvalidation";
-import { escapeRegex } from "./utils/vehicleTextMatch";
 import {
   FIRST_PAYMENT_CORRECTION_REFUSALS,
   FIRST_PAYMENT_NOT_RECORDED_REASON,
@@ -314,23 +313,17 @@ function appendReconciliationReason(existing: string | undefined, addition: stri
 }
 
 /**
- * The inverse of `appendReconciliationReason`, for a reason whose fact is no
- * longer true: removes that sentence and keeps every other one byte for byte.
- * Undefined when nothing remains.
+ * Whether a stored reason says nothing but `sentence`, i.e. it can be retired
+ * outright once its fact stops being true.
  *
- * Only where it stands as a sentence of its own, at the start or after another
- * sentence's full stop. The same words quoted inside another reason (a company
- * name, say) are that reason's text and stay.
+ * Deliberately no text surgery on a longer reason. The field is one free-text
+ * string with no provenance, and other reasons embed free text of their own (a
+ * finance company's name); two rounds of review found sentence matching that
+ * removed or garbled part of an unrelated reason. A longer reason is left
+ * whole, flag raised, for a person to resolve (structured reasons: SCRUM-395).
  */
-function withoutReconciliationReason(
-  existing: string | undefined,
-  sentence: string
-): string | undefined {
-  if (!existing) return existing;
-  const escaped = escapeRegex(sentence);
-  const standalone = new RegExp(`^${escaped}(?:\\s+|$)|(?<=[.!?])\\s+${escaped}(?=\\s|$)`, "g");
-  const rest = existing.replace(standalone, "").trim();
-  return rest || undefined;
+function reasonIsExactly(existing: string | undefined, sentence: string): boolean {
+  return existing?.trim() === sentence;
 }
 
 /**
@@ -2604,9 +2597,9 @@ export const applyQuoteFirstPayment = mutation({
       "The customer's first payment was corrected to the originating quote's down payment."
     );
 
-    // Only the first-payment sentence is this correction's to retire; any
-    // other reason stays, and so does the flag it raised.
-    const remainingReason = withoutReconciliationReason(
+    // A reason that is only the first-payment sentence is this correction's to
+    // retire, flag and all. Anything longer stays as written.
+    const retireReason = reasonIsExactly(
       app.financingReconciliationReason,
       FIRST_PAYMENT_NOT_RECORDED_REASON
     );
@@ -2614,11 +2607,8 @@ export const applyQuoteFirstPayment = mutation({
       customerFirstPaymentMinor: firstPaymentMinor,
       // See `economicsRevision` in the schema.
       economicsRevision: (app.economicsRevision ?? 0) + 1,
-      ...(remainingReason !== app.financingReconciliationReason
-        ? {
-            financingReconciliationReason: remainingReason,
-            ...(remainingReason === undefined ? { needsFinancingReconciliation: false } : {}),
-          }
+      ...(retireReason
+        ? { financingReconciliationReason: undefined, needsFinancingReconciliation: false }
         : {}),
       updatedAt: Date.now(),
     });

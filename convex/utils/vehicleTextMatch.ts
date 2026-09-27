@@ -37,7 +37,7 @@ function normalizeDigits(text: string): string {
     .replace(/[\u06f0-\u06f9]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0));
 }
 
-export function escapeRegex(text: string): string {
+function escapeRegex(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
