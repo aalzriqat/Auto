@@ -5938,9 +5938,7 @@ describe("applying the quote's down payment to an approved zero first payment (S
     await apply(seed, applicationId);
 
     const app = await readApp(seed, applicationId);
-    expect(app.financingReconciliationReason).toBe(
-      `${other} The customer's first payment is not recorded on this deal. Record it before relying on the funding split.`
-    );
+    expect(app.financingReconciliationReason).toBe(`${other} ${FIRST_PAYMENT_NOT_RECORDED_REASON}`);
     expect(app.needsFinancingReconciliation).toBe(true);
   });
 
