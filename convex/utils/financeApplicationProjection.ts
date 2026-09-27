@@ -322,12 +322,8 @@ const FIELD_VISIBILITY: Record<
   vehiclePurchaseCostMinor: "COST",
 };
 
-/**
- * Whether a role holds one permission, the system OWNER holding all of them.
- * Exported for `createFromQuote`'s quotation-confirmation gate (SCRUM-404),
- * which must ask it of the role before any read, not through `requireTenantAuth`.
- */
-export function allows(role: Doc<"roles">, permission: Permission): boolean {
+/** Whether a role holds one permission, the system OWNER holding all of them. */
+function allows(role: Doc<"roles">, permission: Permission): boolean {
   return isSystemOwnerRole(role) || role.permissions.includes(permission);
 }
 
@@ -376,6 +372,19 @@ export function mayReadQuotationWorkflow(role: Doc<"roles">): boolean {
  */
 export function mayReadFinanceEconomics(role: Doc<"roles">): boolean {
   return visibilityFor(role).FINANCE;
+}
+
+/**
+ * May this caller RECORD a submitted quotation (SCRUM-404)?
+ *
+ * The one statement of `recordSubmittedQuotation`'s door authority, asked of
+ * the role alone so a door that authenticates on something else —
+ * `createFromQuote` on `create:sales` — can ask it before any read, and the
+ * creation-time preview can refuse a figure the caller could not then record.
+ * A subset of `mayReadQuotationWorkflow`, so the preview discloses nothing new.
+ */
+export function mayRecordSubmittedQuotation(role: Doc<"roles">): boolean {
+  return allows(role, PERMISSIONS.CREATE_FINANCE_APPLICATION);
 }
 
 /**

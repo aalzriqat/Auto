@@ -1,4 +1,4 @@
-import { ConvexError, v } from "convex/values";
+import { ConvexError, v, type Value } from "convex/values";
 import { resolveDealCurrency, settlementDeductedTotalMinor } from "./utils/settlementDeductions";
 import { paginationOptsValidator } from "convex/server";
 import { query } from "./_generated/server";
@@ -10,6 +10,7 @@ import {
   mayEstablishAppliedLtv,
   mayReadFinanceEconomics,
   mayReadQuotationWorkflow,
+  mayRecordSubmittedQuotation,
   projectFinanceApplication,
   projectFinanceApplicationOverrides,
   requiresLtvPercentFor,
@@ -1016,11 +1017,7 @@ export const suggestQuotationForApplication = query({
         currency,
         ruleVersion: undefined,
         available: false as const,
-        reason: economicsVisible
-          ? typeof error.data === "string"
-            ? error.data
-            : "RULES_UNAVAILABLE"
-          : ("RULES_UNAVAILABLE" as const),
+        reason: rulesRefusalReason(error, economicsVisible),
       };
     }
 
@@ -1094,40 +1091,36 @@ export const suggestQuotationForApplication = query({
 });
 
 /**
+ * A caught rules/engine refusal as a reason: the message only for a caller who
+ * may read finance economics (it can carry the company's figures), otherwise
+ * the stable RULES_UNAVAILABLE.
+ */
+function rulesRefusalReason(
+  error: ConvexError<Value> | FinancingEconomicsError,
+  economicsVisible: boolean
+): string {
+  if (!economicsVisible) return "RULES_UNAVAILABLE";
+  if (error instanceof FinancingEconomicsError) return error.message;
+  return typeof error.data === "string" ? error.data : "RULES_UNAVAILABLE";
+}
+
+/**
  * The quotation a deal created from this quote RIGHT NOW would record — the
  * figure the sales wizard shows before "Start application & record quotation"
  * (SCRUM-404), and sends back as `createFromQuote`'s
  * `confirmedCalculatedQuotationMinor`.
  *
- * Same rules, same inputs, same solver as the recorder will run on the
- * freshly inserted row: the rule snapshot and the inputs come from the
- * resolvers `createFromQuote` itself uses, the LTV is the snapshot's own
- * default (a new row has none of its own), and there is no buffer. So "what
- * you were shown is what will be accepted", unless the quote or the company's
- * rules move in between — and then creation refuses rather than recording a
- * figure nobody saw.
+ * Same resolvers, same solver, the snapshot's default LTV and no buffer — what
+ * the recorder will run on the new row — so what was shown is what is
+ * accepted; if the quote or rules move in between, creation refuses.
  *
- * ## The read boundary (mirrors `suggestQuotationForApplication`)
- *
- *   • The door is `quotes.get`'s own (`view:customers`): the wizard already
- *     reads this quote through it.
- *   • The amount needs QUOTATION-WORKFLOW authority, the same predicate the
- *     projection classifies `submittedQuotationMinor` with. Without it the
- *     answer is NOT_AUTHORIZED, decided from the role alone BEFORE the quote
- *     or the company is read.
- *   • A missing or foreign quote or company THROWS, as it does everywhere
- *     else. Tenancy is never an "unavailable" answer.
- *   • Errors are outputs too. Rule resolution and the engine can refuse, and
- *     their messages can carry the company's figures (the minimum first
- *     payment, the LTV bounds). Only the two KNOWN kinds are caught —
- *     `ConvexError` and the engine's `FinancingEconomicsError` (an amount that
- *     overflows at a tiny LTV) — and a caller without `view:finance` gets the
- *     stable RULES_UNAVAILABLE instead of the message. Anything else rethrows.
- *     An answer rather than a throw because this is mounted in the wizard,
- *     where a query error during render would cost the operator the screen
- *     and with it the plain "start without a quotation" path.
- *   • Success carries the amount and its currency only — no composition, no
- *     LTV, no rule version.
+ * Read boundary: the door is `quotes.get`'s (`view:customers`); the amount
+ * needs the recorder's own permission (`mayRecordSubmittedQuotation`), decided
+ * from the role before any row is read. A missing or foreign quote/company
+ * throws. Only `ConvexError` and `FinancingEconomicsError` are caught, and
+ * become an answer rather than a throw so a refusal cannot take the wizard
+ * down; their text reaches only `view:finance` callers. Success carries the
+ * amount and currency only.
  */
 export const previewCreationQuotation = query({
   args: {
@@ -1142,7 +1135,7 @@ export const previewCreationQuotation = query({
     | { available: false; reason: string }
   > => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_CUSTOMERS]);
-    if (!mayReadQuotationWorkflow(role)) {
+    if (!mayRecordSubmittedQuotation(role)) {
       return { available: false, reason: "NOT_AUTHORIZED" };
     }
 
@@ -1192,14 +1185,7 @@ export const previewCreationQuotation = query({
       if (!(error instanceof ConvexError) && !(error instanceof FinancingEconomicsError)) {
         throw error;
       }
-      if (!economicsVisible) return { available: false, reason: "RULES_UNAVAILABLE" };
-      const message =
-        error instanceof ConvexError
-          ? typeof error.data === "string"
-            ? error.data
-            : "RULES_UNAVAILABLE"
-          : error.message;
-      return { available: false, reason: message };
+      return { available: false, reason: rulesRefusalReason(error, economicsVisible) };
     }
   },
 });
@@ -1319,7 +1305,8 @@ export interface SubmittedQuotationArgs {
 /**
  * Where the CURRENT material quotation record came from (SCRUM-404). Stored on
  * the calculation snapshot, which is rewritten only on a material change, so an
- * identical retry keeps the origin it had. Provenance only: nothing gates on it.
+ * identical retry keeps the origin it had. No authority gates on it; it only
+ * selects the refusal message when a confirmed figure has gone stale.
  */
 export type QuotationRecordedVia = "DEAL_CREATION" | "RECORD_DIALOG";
 

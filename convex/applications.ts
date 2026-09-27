@@ -16,7 +16,10 @@ import {
   // allowlist, not a blocklist. Every door that returns one of these rows
   // goes through it.
 } from "./utils/tenancy";
-import { allows, projectFinanceApplication } from "./utils/financeApplicationProjection";
+import {
+  mayRecordSubmittedQuotation,
+  projectFinanceApplication,
+} from "./utils/financeApplicationProjection";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
@@ -98,18 +101,10 @@ import { projectDealVehicleProfile } from "./utils/dealVehicleProfile";
 import {
   resolveCreationEconomicsInputs,
   resolveCreationRuleSnapshot,
-  resolveExpectedExecutionFeesMinor,
 } from "./utils/creationEconomics";
 
 /** sourceType used for the canonical finance-company receivable opened at finalizeDeal. */
 const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
-
-/**
- * Canonical resolver for a deal's expected execution-fee authority. Moved to
- * `./utils/creationEconomics` (SCRUM-404) so the creation-time quotation preview
- * shares it without a module cycle; re-exported here for existing importers.
- */
-export { resolveExpectedExecutionFeesMinor };
 
 /**
  * Opens (or finds) the canonical receivable owed BY the finance company for a
@@ -2303,17 +2298,21 @@ export const createFromQuote = mutation({
     // before anything is read, so a refusal is independent of every row fact.
     // Refused outright rather than silently creating without the quotation:
     // the operator confirmed a figure and must not believe it was recorded.
-    const confirmedQuotationMinor = args.confirmedCalculatedQuotationMinor;
-    if (confirmedQuotationMinor !== undefined) {
-      if (!allows(auth.role, PERMISSIONS.CREATE_FINANCE_APPLICATION)) {
+    const confirmedQuotation =
+      args.confirmedCalculatedQuotationMinor === undefined
+        ? undefined
+        : {
+            submittedQuotationMinor: args.confirmedCalculatedQuotationMinor,
+            source: "SYSTEM_CALCULATED" as const,
+          };
+    let confirmedQuotationReason: string | undefined;
+    if (confirmedQuotation) {
+      if (!mayRecordSubmittedQuotation(auth.role)) {
         throw new ConvexError(
           "Recording the finance company's quotation needs finance-application access. Start the application without it, and ask someone with that access to record the quotation on the deal page."
         );
       }
-      assertQuotationRecordAuthority(auth.role, {
-        submittedQuotationMinor: confirmedQuotationMinor,
-        source: "SYSTEM_CALCULATED",
-      });
+      confirmedQuotationReason = assertQuotationRecordAuthority(auth.role, confirmedQuotation);
     }
 
     const quote = await ctx.db.get(args.quoteId);
@@ -2652,7 +2651,7 @@ export const createFromQuote = mutation({
     // between the preview and this click refuses, and the refusal rolls back
     // everything above: the application, the acquisition, the status log, the
     // documents and the notifications (all transactional writes).
-    if (confirmedQuotationMinor !== undefined) {
+    if (confirmedQuotation) {
       const inserted = await ctx.db.get(appId);
       if (!inserted) {
         throw new ConvexError("The new finance application could not be read back.");
@@ -2661,13 +2660,8 @@ export const createFromQuote = mutation({
         user: auth.user,
         role: auth.role,
         app: inserted,
-        args: {
-          orgId: args.orgId,
-          applicationId: appId,
-          submittedQuotationMinor: confirmedQuotationMinor,
-          source: "SYSTEM_CALCULATED",
-        },
-        reason: undefined,
+        args: { orgId: args.orgId, applicationId: appId, ...confirmedQuotation },
+        reason: confirmedQuotationReason,
         recordedVia: "DEAL_CREATION",
       });
     }
@@ -2726,15 +2720,12 @@ export const repairQuoteEconomicsLineage = mutation({
     }
     assertSupportedDenomination(expectedCurrency, "repairing quote economics lineage");
 
-    const targetSellingAmountMinor = toMinorUnits(quote.vehiclePrice, expectedCurrency);
-    const customerFirstPaymentMinor = toMinorUnits(quote.downPayment, expectedCurrency);
-    const dealerBorneExpensesMinor = resolveExpectedExecutionFeesMinor({
-      quote,
-      companyRuleSnapshot: app.companyRuleSnapshot,
-      currency: expectedCurrency,
-    });
-    assertValidMinorAmount(targetSellingAmountMinor, "quoted vehicle price");
-    assertValidMinorAmount(customerFirstPaymentMinor, "quoted customer first payment");
+    const { targetSellingAmountMinor, customerFirstPaymentMinor, dealerBorneExpensesMinor } =
+      resolveCreationEconomicsInputs({
+        quote,
+        companyRuleSnapshot: app.companyRuleSnapshot,
+        currency: expectedCurrency,
+      });
     const expected = {
       economicsCurrency: expectedCurrency,
       targetSellingAmountMinor,

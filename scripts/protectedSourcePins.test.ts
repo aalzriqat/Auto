@@ -482,15 +482,17 @@ describe("protected source content pins", () => {
        * `./financingEconomics`, the three `./utils/creationEconomics` helpers;
        * the now-unused `buildRuleSnapshot` / `assertFeeTemplatesWithinLimit`
        * imports dropped; (2) `resolveExpectedExecutionFeesMinor` MOVED unchanged
-       * to `convex/utils/creationEconomics.ts` and re-exported from here, so
-       * every existing importer is untouched; (3) `createFromQuote` takes an
+       * to `convex/utils/creationEconomics.ts` (its one importer outside this
+       * file, a test, now imports it from there); (3) `createFromQuote` takes an
        * optional `confirmedCalculatedQuotationMinor`, refused up front unless
        * the caller holds `create:finance_application` and would pass the
        * recorder's own authority check; (4) the rule snapshot and the
        * target / first payment / fees inputs now come from the shared
        * `resolveCreationRuleSnapshot` / `resolveCreationEconomicsInputs`, the
        * same helpers the new `previewCreationQuotation` query reads, so the
-       * preview and the creation cannot compute different inputs; (5) after
+       * preview and the creation cannot compute different inputs, and
+       * `repairQuoteEconomicsLineage` reads the same resolver (its NaN price
+       * check now runs before the fee-authority check); (5) after
        * the application and its side effects are written, a confirmed figure is
        * recorded through `applySubmittedQuotation` (`recordedVia:
        * "DEAL_CREATION"`), whose refusal rolls the whole creation back. Without
@@ -504,8 +506,8 @@ describe("protected source content pins", () => {
        */
       file: "convex/applications.ts",
       // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)).
-      bytes: 238261,
-      sha256: "0ba908587a5dbd96f8da173dfe06e7494400fa98aab550cc122632d56b8e2f6b",
+      bytes: 237715,
+      sha256: "530717160b2680b182a29f67a16d85853a4f9f16ec8e5a5f326fe16f2323ef5f",
     },
     {
       /**

@@ -5,19 +5,11 @@ import { buildRuleSnapshot, type FinanceCompanyRuleSnapshot } from "./financingE
 import { assertValidMinorAmount, toMinorUnits } from "./money";
 
 /**
- * The dealer-side economics a financed deal is CREATED with, resolved from its
- * quote — shared by `applications.createFromQuote`, which writes them, and
- * `financingEconomics.previewCreationQuotation`, which shows the quotation they
- * produce before the deal exists (SCRUM-404).
- *
- * One copy on purpose. The wizard sends back the previewed figure as a
- * confirmation and the recorder demands exact equality with its own solver, so
- * a second hand-written resolution would turn every drift between the two into
- * a creation that always refuses.
- *
- * Lives in `utils/` rather than in `applications.ts` so the preview can import
- * it without `financingEconomics.ts` importing `applications.ts`, which already
- * imports it — a module-init cycle is the failure this placement avoids.
+ * The dealer-side economics a financed deal is created with, resolved from its
+ * quote. One copy shared by `createFromQuote` and `previewCreationQuotation`
+ * (SCRUM-404): the recorder demands exact equality with the previewed figure,
+ * so any drift between two copies would make every creation refuse. Kept in
+ * `utils/` to avoid a financingEconomics ⇄ applications import cycle.
  */
 
 /**
@@ -29,8 +21,6 @@ import { assertValidMinorAmount, toMinorUnits } from "./money";
  * - Ambiguous quotes (e.g. companyId with missing/invalid mode) fail closed
  * - Explicit 0 is valid and resolves to 0
  * - Absent authority rejects and NEVER silently converts to 0
- *
- * Moved here unchanged from `applications.ts`, which re-exports it.
  */
 export function resolveExpectedExecutionFeesMinor(args: {
   quote: {

@@ -20,7 +20,8 @@ import { toast } from "@/components/ui/sonner";
 import { downloadElementAsPdf } from "@/lib/htmlToPdf";
 import { getErrorMessage } from "@/lib/errors";
 import { decideDepositSubmission } from "@/lib/depositSettlementSubmission";
-import { supportedCurrencyScale } from "@/components/accounting/AccountingTabShared";
+import { supportedCurrencyScale } from "@/convex/utils/money";
+import { useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
 
 interface Step4QuoteSuccessProps {
   paymentType: PaymentType;
@@ -71,24 +72,24 @@ export function Step4QuoteSuccess({
    * not a failure: a manually-entered company, a role that may not record it,
    * or rules that cannot solve all start the application WITHOUT a quotation.
    */
+  const wantsCreationQuotation = paymentType === "INSTALLMENT" && !applicationId && !!activeOrgId;
   const creationQuotation = useQuery(
     api.financingEconomics.previewCreationQuotation,
-    paymentType === "INSTALLMENT" && !applicationId && activeOrgId
-      ? { orgId: activeOrgId, quoteId }
-      : "skip"
+    wantsCreationQuotation && activeOrgId ? { orgId: activeOrgId, quoteId } : "skip"
   );
-  const creationQuotationLoading =
-    paymentType === "INSTALLMENT" && !applicationId && !!activeOrgId && creationQuotation === undefined;
+  const creationQuotationLoading = wantsCreationQuotation && creationQuotation === undefined;
   const confirmedQuotation = creationQuotation?.available === true ? creationQuotation : null;
+  const formatInCurrency = useCurrencyFormatterInCurrency();
   const confirmedQuotationScale = confirmedQuotation
     ? supportedCurrencyScale(confirmedQuotation.currency)
     : null;
   const confirmedQuotationDisplay =
     confirmedQuotation && confirmedQuotationScale !== null
-      ? `${(confirmedQuotation.submittedQuotationMinor / 10 ** confirmedQuotationScale).toLocaleString(undefined, {
-          minimumFractionDigits: 0,
-          maximumFractionDigits: confirmedQuotationScale,
-        })} ${confirmedQuotation.currency}`
+      ? formatInCurrency(
+          confirmedQuotation.submittedQuotationMinor / 10 ** confirmedQuotationScale,
+          confirmedQuotation.currency,
+          confirmedQuotationScale
+        )
       : null;
 
   /**
@@ -510,7 +511,7 @@ export function Step4QuoteSuccess({
           {/* SCRUM-404: what starting the application will record, stated before
               the click. Its own full-width row so it reads as a note on the
               application button rather than a fifth button in the strip. */}
-          {paymentType === "INSTALLMENT" && !applicationId && creationQuotation ? (
+          {wantsCreationQuotation && creationQuotation ? (
             <div className="order-last w-full">
               {confirmedQuotation && confirmedQuotationDisplay ? (
                 <div className="mx-auto max-w-md space-y-0.5 text-start">
