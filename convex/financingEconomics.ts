@@ -1,4 +1,4 @@
-import { ConvexError, v } from "convex/values";
+import { ConvexError, v, type Value } from "convex/values";
 import { resolveDealCurrency, settlementDeductedTotalMinor } from "./utils/settlementDeductions";
 import { paginationOptsValidator } from "convex/server";
 import { query } from "./_generated/server";
@@ -10,6 +10,7 @@ import {
   mayEstablishAppliedLtv,
   mayReadFinanceEconomics,
   mayReadQuotationWorkflow,
+  mayRecordSubmittedQuotation,
   projectFinanceApplication,
   projectFinanceApplicationOverrides,
   requiresLtvPercentFor,
@@ -18,8 +19,13 @@ import { PERMISSIONS } from "./utils/permissions";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import {
   computeSubmittedQuotation,
+  FinancingEconomicsError,
   isApprovalFarFromEvidence,
 } from "../lib/financingEconomics";
+import {
+  resolveCreationEconomicsInputs,
+  resolveCreationRuleSnapshot,
+} from "./utils/creationEconomics";
 import {
   consignedSettlementRoute,
   dealershipCollectsGross,
@@ -548,6 +554,52 @@ const CUSTOMER_FIRST_PAYMENT_UNKNOWN =
   "The customer's first payment is not recorded on this deal and its originating quote does not carry one. Record it before the quotation.";
 
 /**
+ * The solver itself, once the rules, the applied LTV and every input are
+ * resolved: the company's minimum-first-payment rule, then the engine.
+ *
+ * Pure, and shared by `solveQuotationForApplication` (an existing deal) and
+ * `previewCreationQuotation` (a deal about to be created from a quote), so the
+ * figure the wizard shows is computed by the same code the recorder will
+ * demand equality with (SCRUM-404). The LTV is resolved by each caller BEFORE
+ * its own first-payment resolution, which keeps the existing refusal order.
+ *
+ * Throws a `ConvexError` for the minimum-first-payment rule and lets the
+ * engine's `FinancingEconomicsError` through (e.g. an amount that overflows at
+ * a tiny LTV). `undefined` when no target exists.
+ */
+function solveQuotationFromResolvedInputs(inputs: {
+  snapshot: FinanceCompanyRuleSnapshot;
+  appliedLtvPercent: number;
+  customerFirstPaymentMinor: number;
+  targetForSolver: number | undefined;
+  expensesForSolver: number | undefined;
+  bufferForSolver: number | undefined;
+}): ReturnType<typeof computeSubmittedQuotation> | undefined {
+  const { snapshot, customerFirstPaymentMinor, targetForSolver } = inputs;
+  if (
+    snapshot.minimumCustomerFirstPaymentMinor !== undefined &&
+    customerFirstPaymentMinor < snapshot.minimumCustomerFirstPaymentMinor
+  ) {
+    throw new ConvexError(
+      `${snapshot.companyName} requires a customer first payment of at least ${snapshot.minimumCustomerFirstPaymentMinor} minor units.`
+    );
+  }
+  if (targetForSolver === undefined) return undefined;
+  return computeSubmittedQuotation({
+    targetNetProceedsMinor: targetForSolver,
+    // Never back-solved from the quotation: with nothing itemized this is
+    // zero and the suggestion is correspondingly lower, which is the
+    // honest figure rather than a fabricated allowance.
+    estimatedDealerBorneExpensesMinor: inputs.expensesForSolver ?? 0,
+    quotationBufferMinor: inputs.bufferForSolver,
+    customerFirstPaymentMinor,
+    appliedLtvPercent: inputs.appliedLtvPercent,
+    customerFirstPaymentOffsetsUnfinancedShare:
+      snapshot.customerFirstPaymentOffsetsUnfinancedShare,
+  });
+}
+
+/**
  * Runs the solver for an EXISTING application, under the rules that govern it.
  *
  * One function, two callers — `suggestQuotationForApplication` and
@@ -592,35 +644,20 @@ async function solveQuotationForApplication(
     throw new ConvexError(CUSTOMER_FIRST_PAYMENT_UNKNOWN);
   }
   const customerFirstPaymentMinor = firstPayment.minor;
-  if (
-    snapshot.minimumCustomerFirstPaymentMinor !== undefined &&
-    customerFirstPaymentMinor < snapshot.minimumCustomerFirstPaymentMinor
-  ) {
-    throw new ConvexError(
-      `${snapshot.companyName} requires a customer first payment of at least ${snapshot.minimumCustomerFirstPaymentMinor} minor units.`
-    );
-  }
 
   const targetForSolver = overrides.targetSellingAmountMinor ?? app.targetNetProceedsMinor;
   const expensesForSolver =
     overrides.estimatedDealerBorneExpensesMinor ?? app.estimatedDealerBorneExpensesMinor;
   const bufferForSolver = overrides.quotationBufferMinor ?? app.quotationBufferMinor;
 
-  const result =
-    targetForSolver !== undefined
-      ? computeSubmittedQuotation({
-          targetNetProceedsMinor: targetForSolver,
-          // Never back-solved from the quotation: with nothing itemized this is
-          // zero and the suggestion is correspondingly lower, which is the
-          // honest figure rather than a fabricated allowance.
-          estimatedDealerBorneExpensesMinor: expensesForSolver ?? 0,
-          quotationBufferMinor: bufferForSolver,
-          customerFirstPaymentMinor,
-          appliedLtvPercent,
-          customerFirstPaymentOffsetsUnfinancedShare:
-            snapshot.customerFirstPaymentOffsetsUnfinancedShare,
-        })
-      : undefined;
+  const result = solveQuotationFromResolvedInputs({
+    snapshot,
+    appliedLtvPercent,
+    customerFirstPaymentMinor,
+    targetForSolver,
+    expensesForSolver,
+    bufferForSolver,
+  });
 
   return {
     snapshot,
@@ -980,11 +1017,7 @@ export const suggestQuotationForApplication = query({
         currency,
         ruleVersion: undefined,
         available: false as const,
-        reason: economicsVisible
-          ? typeof error.data === "string"
-            ? error.data
-            : "RULES_UNAVAILABLE"
-          : ("RULES_UNAVAILABLE" as const),
+        reason: rulesRefusalReason(error, economicsVisible),
       };
     }
 
@@ -1054,6 +1087,106 @@ export const suggestQuotationForApplication = query({
         : undefined,
       ltvBaseCapApplied: economicsVisible ? composition.ltvBaseCapApplied : undefined,
     };
+  },
+});
+
+/**
+ * A caught rules/engine refusal as a reason: the message only for a caller who
+ * may read finance economics (it can carry the company's figures), otherwise
+ * the stable RULES_UNAVAILABLE.
+ */
+function rulesRefusalReason(
+  error: ConvexError<Value> | FinancingEconomicsError,
+  economicsVisible: boolean
+): string {
+  if (!economicsVisible) return "RULES_UNAVAILABLE";
+  if (error instanceof FinancingEconomicsError) return error.message;
+  return typeof error.data === "string" ? error.data : "RULES_UNAVAILABLE";
+}
+
+/**
+ * The quotation a deal created from this quote RIGHT NOW would record — the
+ * figure the sales wizard shows before "Start application & record quotation"
+ * (SCRUM-404), and sends back as `createFromQuote`'s
+ * `confirmedCalculatedQuotationMinor`.
+ *
+ * Same resolvers, same solver, the snapshot's default LTV and no buffer — what
+ * the recorder will run on the new row — so what was shown is what is
+ * accepted; if the quote or rules move in between, creation refuses.
+ *
+ * Read boundary: the door is `quotes.get`'s (`view:customers`); the amount
+ * needs the recorder's own permission (`mayRecordSubmittedQuotation`), decided
+ * from the role before any row is read. A missing or foreign quote/company
+ * throws. Only `ConvexError` and `FinancingEconomicsError` are caught, and
+ * become an answer rather than a throw so a refusal cannot take the wizard
+ * down; their text reaches only `view:finance` callers. Success carries the
+ * amount and currency only.
+ */
+export const previewCreationQuotation = query({
+  args: {
+    orgId: v.id("organizations"),
+    quoteId: v.id("quotes"),
+  },
+  handler: async (
+    ctx,
+    args
+  ): Promise<
+    | { available: true; submittedQuotationMinor: number; currency: string }
+    | { available: false; reason: string }
+  > => {
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_CUSTOMERS]);
+    if (!mayRecordSubmittedQuotation(role)) {
+      return { available: false, reason: "NOT_AUTHORIZED" };
+    }
+
+    const quote = await requireOwnedRow(ctx, args.orgId, "quotes", args.quoteId, "Quote not found.");
+    if (quote.mode !== "CONFIGURED_FINANCE_COMPANY" || !quote.companyId) {
+      return { available: false, reason: "NOT_CONFIGURED_COMPANY" };
+    }
+    const company = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeCompanies",
+      quote.companyId,
+      "Quote finance company not found in this organization."
+    );
+
+    const economicsVisible = mayReadFinanceEconomics(role);
+    try {
+      const snapshot = resolveCreationRuleSnapshot(quote, company);
+      if (!snapshot) return { available: false, reason: "NOT_CONFIGURED_COMPANY" };
+      const currency = await getOrgCurrency(ctx, args.orgId);
+      assertSupportedDenomination(currency, "previewing the quotation");
+      const inputs = resolveCreationEconomicsInputs({
+        quote,
+        companyRuleSnapshot: snapshot,
+        currency,
+      });
+      // The recorder's order: the LTV first, then the first payment, then the
+      // solver (`solveQuotationForApplication`).
+      const appliedLtvPercent = resolveAppliedLtv(snapshot, undefined);
+      const result = solveQuotationFromResolvedInputs({
+        snapshot,
+        appliedLtvPercent,
+        customerFirstPaymentMinor: inputs.customerFirstPaymentMinor,
+        targetForSolver: inputs.targetSellingAmountMinor,
+        expensesForSolver: inputs.dealerBorneExpensesMinor,
+        bufferForSolver: undefined,
+      });
+      if (!result) return { available: false, reason: "NO_TARGET_RECORDED" };
+      // The solver's own fixed enumeration of rule states; carries no figure.
+      if (!result.available) return { available: false, reason: result.reason };
+      return {
+        available: true,
+        submittedQuotationMinor: result.submittedQuotationMinor,
+        currency,
+      };
+    } catch (error) {
+      if (!(error instanceof ConvexError) && !(error instanceof FinancingEconomicsError)) {
+        throw error;
+      }
+      return { available: false, reason: rulesRefusalReason(error, economicsVisible) };
+    }
   },
 });
 
@@ -1155,6 +1288,598 @@ export const getEconomics = query({
 // Mutations
 // ---------------------------------------------------------------------------
 
+/** The recorder's arguments: its public door's, and `createFromQuote`'s (SCRUM-404). */
+export interface SubmittedQuotationArgs {
+  orgId: Id<"organizations">;
+  applicationId: Id<"financeApplications">;
+  submittedQuotationMinor: number;
+  source: "SYSTEM_CALCULATED" | "MANUAL_ENTRY" | "CALCULATED_WITH_OVERRIDE";
+  overrideReason?: string;
+  targetSellingAmountMinor?: number;
+  estimatedDealerBorneExpensesMinor?: number;
+  quotationBufferMinor?: number;
+  customerFirstPaymentMinor?: number;
+  ltvPercent?: number;
+}
+
+/**
+ * Where the CURRENT material quotation record came from (SCRUM-404). Stored on
+ * the calculation snapshot, which is rewritten only on a material change, so an
+ * identical retry keeps the origin it had. No authority gates on it; it only
+ * selects the refusal message when a confirmed figure has gone stale.
+ */
+export type QuotationRecordedVia = "DEAL_CREATION" | "RECORD_DIALOG";
+
+/**
+ * Everything `recordSubmittedQuotation` decides BEFORE it reads the deal: the
+ * LTV authority, the amount validations and the override reason. Reads nothing
+ * — it takes the role and the arguments only — so every refusal here is
+ * independent of every row fact (SCRUM-117). Returns the trimmed reason.
+ *
+ * Extracted for SCRUM-404 so `createFromQuote` asks the same questions before
+ * ITS first read; the public handler calls it in exactly the place this code
+ * used to sit, so its refusal order is unchanged.
+ */
+export function assertQuotationRecordAuthority(
+  role: Doc<"roles">,
+  args: Omit<SubmittedQuotationArgs, "orgId" | "applicationId">
+): string | undefined {
+  /**
+   * THE AUTHORITY DECISION COMES FIRST, BEFORE ANYTHING IS READ ABOUT THE DEAL.
+   *
+   * The cross-family review round found this guard sitting after
+   * `requireOwnedRow` and the closed / already-approved lifecycle branches, so
+   * the refusal an unauthorized caller received varied with the row's state.
+   *
+   * I could not reproduce the disclosure that was said to create - the
+   * already-approved branch is unconditional and fires for the same caller
+   * sending no `ltvPercent` at all, so the endpoint's ordinary use already
+   * tells them that much - but the ordering is worth fixing on its own terms.
+   * Asking the authority question first makes the refusal independent of every
+   * row fact rather than of the stored RATE alone, mirrors the sibling
+   * `approveDealerPurchaseAmount`, and strictly REDUCES what an unauthorized
+   * caller learns.
+   *
+   * Tenancy is unaffected: `requireOwnedRow` still runs before every
+   * authorized read and write below, so a caller who passes this check still
+   * cannot reach another tenant's row.
+   */
+  /**
+   * Naming the rate this deal is financed at is an APPROVER's decision.
+   *
+   * Recording the quotation is a transcription — "this is the figure we sent"
+   * — and the SALES template may do it. `ltvPercent` is a different act. It is
+   * stored as `appliedLtvPercent` and scales the finance company's funded
+   * portion, which fixes the unfinanced portion and therefore the dealership's
+   * own contribution: a salesperson able to set it could move the dealer's
+   * money by typing a different number into the field beside the amount. The
+   * sibling `approveDealerPurchaseAmount` already takes this same rate behind
+   * `APPROVE_FINANCE_APPLICATION`; this door did not, so the weaker role
+   * reached the same figure by the earlier step.
+   *
+   * The guard fires only where the argument is LOAD-BEARING — where it
+   * establishes or moves the rate the deal already stands on:
+   *
+   *  - snapshot carries no default and none has been recorded → any rate is
+   *    the exceptional per-deal recovery, and needs an approver;
+   *  - the deal already has a rate and the caller re-sends the SAME one →
+   *    nothing moves, and re-recording a quotation stays ordinary sales work;
+   *  - the snapshot's own configured rate, sent explicitly → likewise a
+   *    no-op, so the normal configured path is untouched;
+   *  - a rate DIFFERENT from either → an override of the company's rules,
+   *    which moves exactly the money the recovery case does and gets exactly
+   *    the same authority.
+   *
+   * Checked before the solver runs and before anything is patched, so a
+   * refusal never leaves a recorded quotation standing on a rate the recorder
+   * was not entitled to set.
+   */
+  if (args.ltvPercent !== undefined) {
+    /**
+     * ONE authority question, asked before anything is read, compared,
+     * solved, audited or written.
+     *
+     * What stood here was a three-way test — approver, or finance-visible
+     * with an equal rate, or refuse — and the middle branch is what kept this
+     * subsystem leaking. It resolved the snapshot and compared the supplied
+     * rate against `app.appliedLtvPercent ?? snapshot.defaultLtvPercent`,
+     * both FINANCE-classified, so the accept/refuse outcome was itself a
+     * search oracle over the stored rate.
+     *
+     * The replacement asks nothing about the deal. `mayEstablishAppliedLtv`
+     * reads the ROLE and nothing else, so the refusal is independent of the
+     * stored rate and identical whether the supplied value is equal to it,
+     * different from it, or the deal has no rate at all. An equal value does
+     * not bypass — that allowance WAS the oracle.
+     *
+     * OMISSION is untouched: a deal whose rate is already established stays
+     * ordinary work for the roles that do that work. `DealCockpit` sends
+     * `ltvPercent` only while `requiresLtvPercent` is true, so no screen ever
+     * sends the argument this refuses unless the deal genuinely needs a rate
+     * established — which is precisely the decision that now needs both
+     * permissions.
+     */
+    if (!mayEstablishAppliedLtv(role)) {
+      throw new ConvexError(
+        "Setting the LTV this deal is financed at needs both finance visibility and approval authority. Ask a finance-authorized approver to record the rate the financing company confirmed."
+      );
+    }
+  }
+
+  assertMinorAmount(args.submittedQuotationMinor, "Submitted quotation");
+  if (args.targetSellingAmountMinor !== undefined) {
+    assertMinorAmount(args.targetSellingAmountMinor, "Target selling amount");
+  }
+  if (args.estimatedDealerBorneExpensesMinor !== undefined) {
+    assertMinorAmount(
+      args.estimatedDealerBorneExpensesMinor,
+      "Estimated dealer-borne expenses"
+    );
+  }
+  if (args.quotationBufferMinor !== undefined) {
+    assertMinorAmount(args.quotationBufferMinor, "Quotation buffer");
+  }
+  if (args.customerFirstPaymentMinor !== undefined) {
+    assertMinorAmount(args.customerFirstPaymentMinor, "Customer first payment");
+  }
+  if (args.submittedQuotationMinor <= 0) {
+    throw new ConvexError("The submitted quotation must be greater than zero.");
+  }
+
+  const reason = args.overrideReason?.trim();
+  if (args.source === "CALCULATED_WITH_OVERRIDE" && !reason) {
+    throw new ConvexError(
+      "Departing from the calculated quotation must record why."
+    );
+  }
+  return reason;
+}
+
+/**
+ * Everything `recordSubmittedQuotation` does AFTER its ownership check, in the
+ * same order: the closed/approved refusals, the calculation-input boundary, the
+ * solver, the audit, the provenance checks, the patch, the seed audit and the
+ * recompute.
+ *
+ * `app` must be a row the caller has already proved belongs to `args.orgId`:
+ * the public handler's inline `requireOwnedRow`, or `createFromQuote`'s own
+ * insert. `recordedVia` names which door recorded it.
+ */
+export async function applySubmittedQuotation(
+  ctx: MutationCtx,
+  {
+    user,
+    role,
+    app,
+    args,
+    reason,
+    recordedVia,
+  }: {
+    user: Doc<"users">;
+    role: Doc<"roles">;
+    app: Doc<"financeApplications">;
+    args: SubmittedQuotationArgs;
+    reason: string | undefined;
+    recordedVia: QuotationRecordedVia;
+  }
+): Promise<Id<"financeApplications">> {
+  if (app.status === "CLOSED" || app.status === "CANCELLED") {
+    throw new ConvexError(
+      "This application is closed. Its submitted quotation can no longer be changed."
+    );
+  }
+  if (app.approvedDealerPurchaseAmountMinor !== undefined) {
+    throw new ConvexError(
+      "The finance company has already approved a purchase amount on this application. Reopen the approval before changing the quotation it was based on."
+    );
+  }
+
+  /**
+   * THE INPUT BOUNDARY, on the WRITE side (same ruling).
+   *
+   * Fixing only the query would have left a write-then-read route, and this
+   * is the half I had missed: the patch below does not merely solve from
+   * these arguments, it PERSISTS them. `targetSellingAmountMinor` fans out
+   * into `targetSellingAmountMinor` AND `targetNetProceedsMinor`;
+   * `estimatedDealerBorneExpensesMinor` into two more; the resolved first
+   * payment and buffer are written as well. So a caller without VIEW_FINANCE
+   * could record a MANUAL_ENTRY carrying chosen inputs — no solver check
+   * applies to that mode — and then read the now-poisoned row back through
+   * the canonical, "safe", override-free query. The arithmetic that recovers
+   * the hidden figure is identical; only the timing changes.
+   *
+   * Hence REFUSED rather than ignored, and refused HERE: before the LTV
+   * guard, before the solver, before the audit rows and before `ctx.db.patch`.
+   * Ignoring them silently would be worse than refusing — the operator would
+   * believe they had recorded a target that was never stored.
+   *
+   * Applies to EVERY provenance mode, MANUAL_ENTRY included. The quotation
+   * amount, its source and the override reason remain ordinary operator
+   * inputs; only the calculation OPERANDS need finance authority.
+   *
+   * The code is stable and names no protected value. Nothing in the product
+   * sends these: `DealCockpit` calls the query argument-less and sends the
+   * mutation only `submittedQuotationMinor` / `source` / `overrideReason` /
+   * `ltvPercent`.
+   */
+  const financeVisible = mayReadFinanceEconomics(role);
+  if (!financeVisible) {
+    const suppliedCalculationInputs = [
+      args.targetSellingAmountMinor,
+      args.estimatedDealerBorneExpensesMinor,
+      args.quotationBufferMinor,
+      args.customerFirstPaymentMinor,
+    ].some((value) => value !== undefined);
+    if (suppliedCalculationInputs) {
+      throw new ConvexError("CALCULATION_INPUTS_REQUIRE_FINANCE");
+    }
+  }
+
+
+  // The same resolution `suggestQuotationForApplication` runs, so the figure
+  // the user was shown is the figure the guard below accepts. Two copies of
+  // this would drift the moment either gained an input.
+  const {
+    snapshot,
+    appliedLtvPercent,
+    customerFirstPaymentMinor,
+    customerFirstPaymentSource,
+    targetForSolver,
+    expensesForSolver,
+    bufferForSolver,
+    result: solverResult,
+  } = await solveQuotationForApplication(ctx, app, args);
+
+  const now = Date.now();
+  // Audit any change to an already-recorded quotation, whatever the source.
+  // Gating this on a reason meant a CALCULATED re-submission could rewrite
+  // 12,500 to 9,000 with no trace — the exact hole this table exists to
+  // close, reopened for the one figure the module calls a real external
+  // document.
+  //
+  // The amount is not the only thing worth a trace. The patch below rewrites
+  // the source label, the recorder, the timestamp, the override reason and
+  // the whole calculation snapshot unconditionally, and there is no history
+  // table for any of them. Keying the audit on the amount alone therefore let
+  // a re-record at the SAME figure erase why an override existed: submit
+  // 13,000 as CALCULATED_WITH_OVERRIDE with a reason, re-submit 13,000 as
+  // MANUAL_ENTRY with none, and the reason is deleted (an explicit undefined
+  // in a patch removes the field), the mode flips, the prior calculated
+  // figure vanishes with the snapshot — and the override table gets nothing,
+  // because the number did not move.
+  const quotationPreviouslyRecorded = app.submittedQuotationMinor !== undefined;
+  const amountChanged = app.submittedQuotationMinor !== args.submittedQuotationMinor;
+  const sourceChanged = app.submittedQuotationSource !== args.source;
+  const reasonChanged = (app.submittedQuotationOverrideReason ?? "") !== (reason ?? "");
+  // The RECORDER belongs in this set for the same reason the approver belongs
+  // in `approveDealerPurchaseAmount`'s: the patch below rewrites it
+  // unconditionally, and who sent the finance company its quotation is the
+  // provenance of a real external document. Without it, a colleague
+  // re-entering the same figure from the same paperwork — or a retry after a
+  // dropped response — became the recorder of record, with a new timestamp,
+  // and no row anywhere saying so. That sibling mutation learned this two
+  // rounds ago; this one had no caller outside tests until SCRUM-68 exposed
+  // it, so nobody could reach the case.
+  const recorderChanged = quotationPreviouslyRecorded && app.submittedQuotationBy !== user._id;
+  /**
+   * The CALCULATION INPUTS, which the patch below also rewrites.
+   *
+   * Comparing only the four headline fields let a re-record move the target,
+   * the dealer-borne expenses, the buffer, the customer's first payment or the
+   * applied LTV at an identical amount, source, reason and recorder — silently
+   * changing every derived figure the economics engine computes from them,
+   * with no audit row and no new submission stamp. The resolved values are
+   * compared rather than the raw arguments, because an omitted argument means
+   * "keep what the deal already has" and is not a change.
+   */
+  /**
+   * The two arguments the patch FANS OUT into more than one stored field.
+   *
+   * `targetSellingAmountMinor` writes both `targetSellingAmountMinor` and
+   * `targetNetProceedsMinor`; `estimatedDealerBorneExpensesMinor` writes both
+   * `estimatedDealerBorneExpensesMinor` and `estimatedClosingExpensesMinor`.
+   * They normally hold the same value, because the patch always writes them
+   * from one argument — but on a row where they have drifted apart, one
+   * argument moves one field and not the other.
+   *
+   * Stated once, as a table, and read by BOTH the gate below and the audit
+   * description further down. Three review rounds found three defects in the
+   * hand-written version of this rule — a move reported that never happened,
+   * a move missed that did, and then a field mutated with no audit row at all
+   * because the gate never opened — each in a different clause, each fixed
+   * separately, each fix leaving the next one wrong. Two fields, two readers
+   * and one hand-maintained rule is what kept producing them; the arithmetic
+   * was never the hard part.
+   */
+  const fannedOutInputs = [
+    {
+      supplied: args.targetSellingAmountMinor,
+      fields: [
+        ["target", app.targetSellingAmountMinor],
+        ["target net proceeds", app.targetNetProceedsMinor],
+      ],
+    },
+    {
+      supplied: args.estimatedDealerBorneExpensesMinor,
+      fields: [
+        ["expenses", app.estimatedDealerBorneExpensesMinor],
+        ["closing expenses", app.estimatedClosingExpensesMinor],
+      ],
+    },
+  ] as const satisfies ReadonlyArray<{
+    supplied: number | undefined;
+    fields: ReadonlyArray<readonly [string, number | undefined]>;
+  }>;
+
+  /**
+   * Every stored field a supplied argument would actually move — counted
+   * once per DISTINCT starting value.
+   *
+   * Fields of a pair that held the same value move identically, and naming
+   * both is one move described twice: an ordinary expenses change would have
+   * read "expenses 300000, closing expenses 300000". Only a field that stood
+   * somewhere else is a second, genuinely different move, which is exactly
+   * the drifted row this table exists for. So an ordinary re-record produces
+   * one entry per argument, as it always has, and a drifted row produces one
+   * per figure that was really there.
+   */
+  const fannedOutMoves = fannedOutInputs.flatMap(({ supplied, fields }) => {
+    if (supplied === undefined) return [];
+    const distinctStartingValues = new Set<number | undefined>();
+    return fields
+      .filter(([, before]) => before !== supplied)
+      .filter(([, before]) => {
+        if (distinctStartingValues.has(before)) return false;
+        distinctStartingValues.add(before);
+        return true;
+      })
+      .map(([label, before]) => [label, before, supplied] as const);
+  });
+
+  const inputsChanged =
+    quotationPreviouslyRecorded &&
+    (fannedOutMoves.length > 0 ||
+      (args.quotationBufferMinor !== undefined &&
+        args.quotationBufferMinor !== app.quotationBufferMinor) ||
+      customerFirstPaymentMinor !== app.customerFirstPaymentMinor ||
+      appliedLtvPercent !== app.appliedLtvPercent);
+  const materiallyChanged =
+    amountChanged || sourceChanged || reasonChanged || recorderChanged || inputsChanged;
+  if (quotationPreviouslyRecorded && materiallyChanged) {
+    /**
+     * Every input that MOVED, on both sides — not just the headline four.
+     *
+     * A row whose two value fields read identically is not a trace. That was
+     * the lesson the approver audit next door had to learn, and this writer
+     * repeated it one level down: when only a calculation input changed, the
+     * described values were byte-identical and the fallback reason claimed a
+     * source/reason/recorder change that had not happened — while the patch
+     * below overwrote the previous inputs and the whole snapshot, leaving the
+     * cause of every moved derived figure unrecoverable.
+     */
+    const movedInputs: Array<[string, unknown, unknown]> = [];
+    const noteMove = (label: string, before: unknown, after: unknown) => {
+      if (before !== after) movedInputs.push([label, before, after]);
+    };
+    // The same table the gate above read, so what opened the gate is exactly
+    // what the row describes. Nothing appears for an omitted argument,
+    // because then nothing was patched.
+    for (const [label, before, after] of fannedOutMoves) {
+      noteMove(label, before, after);
+    }
+    noteMove("buffer", app.quotationBufferMinor, bufferForSolver);
+    noteMove("first payment", app.customerFirstPaymentMinor, customerFirstPaymentMinor);
+    noteMove("LTV", app.appliedLtvPercent, appliedLtvPercent);
+
+    const describe = (
+      amountMinor: number | undefined,
+      source: string | undefined,
+      why: string | undefined,
+      recordedBy: Id<"users"> | undefined,
+      side: 0 | 1
+    ): string => {
+      const inputs = movedInputs
+        .map(([label, before, after]) => `${label} ${(side === 0 ? before : after) ?? "unset"}`)
+        .join(", ");
+      return `${amountMinor ?? "unset"} (${source ?? "unknown source"}${why ? `: ${why}` : ""}${
+        recordedBy ? ` by ${recordedBy}` : ""
+      }${inputs ? `; ${inputs}` : ""})`;
+    };
+
+    // Names what actually moved, so the row does not assert a change that did
+    // not happen. Only reached when the caller gave no reason of their own.
+    const changedFields = [
+      ...(amountChanged ? ["the amount"] : []),
+      ...(sourceChanged ? ["the source"] : []),
+      ...(reasonChanged ? ["the reason"] : []),
+      ...(recorderChanged ? ["the recorder"] : []),
+      ...movedInputs.map(([label]) => label),
+    ];
+    await recordOverride(ctx, {
+      orgId: args.orgId,
+      applicationId: args.applicationId,
+      field: "submittedQuotationMinor",
+      previousValue: describe(
+        app.submittedQuotationMinor,
+        app.submittedQuotationSource,
+        app.submittedQuotationOverrideReason,
+        app.submittedQuotationBy,
+        0
+      ),
+      newValue: describe(args.submittedQuotationMinor, args.source, reason, user._id, 1),
+      reason: reason ?? `Re-recorded; changed: ${changedFields.join(", ")}.`,
+      changedBy: user._id,
+    });
+  }
+
+  // The solver figure is recorded alongside the submitted one so an override
+  // is auditable against what it departed from. It is never used to fill in a
+  // missing input: when expenses or the buffer have not been entered they are
+  // zero, not back-solved from the quotation.
+  //
+  // Both calculated modes are claims about provenance, and the snapshot
+  // records `calculatedQuotationMinor` and `finalQuotationMinor`
+  // independently — so unchecked, either label could sit on an amount the
+  // solver never produced, or never ran to produce. SYSTEM_CALCULATED is the
+  // mode a later reader trusts *because* it says no human touched it;
+  // CALCULATED_WITH_OVERRIDE is the one they trust to name a real departure
+  // from a real calculation. Guarding only the first left the second as an
+  // open door to the same forgery, reached by supplying any reason at all.
+  //
+  // MANUAL_ENTRY is the honest label whenever no calculation stands behind
+  // the figure, and it is always available — nothing here blocks recording a
+  // negotiated number.
+  if (args.source === "SYSTEM_CALCULATED" || args.source === "CALCULATED_WITH_OVERRIDE") {
+    const modeLabel =
+      args.source === "SYSTEM_CALCULATED"
+        ? "calculated by the system"
+        : "calculated with an override";
+    if (!solverResult) {
+      throw new ConvexError(
+        `This quotation is recorded as ${modeLabel}, but no target selling amount is set, so the calculator never ran. Record the target, or submit it as a manual entry.`
+      );
+    }
+    if (!solverResult.available) {
+      // The reason is a fixed enumeration of RULE STATES (an unrecorded
+      // offset rule, and so on) and carries no figure, so it stays: it tells
+      // the operator which setting to fix. Ruling #4 is about computed
+      // NUMBERS, and removing this as well cost actionable guidance for no
+      // security gain.
+      throw new ConvexError(
+        `This quotation is recorded as ${modeLabel}, but the calculator could not run (${solverResult.reason}). Submit it as a manual entry instead.`
+      );
+    }
+    const matchesSolver =
+      solverResult.submittedQuotationMinor === args.submittedQuotationMinor;
+    /**
+     * NAMES NO FIGURE. The message used to read "...the calculator produced
+     * 10231041 minor units, not 1", which handed the computed value to
+     * anyone who could call this mutation — a third route to the same leak,
+     * through an error rather than a response, and one that no response-shape
+     * gate would ever have caught. The operator already sees the calculated
+     * figure on the screen they are submitting from, so nothing is lost.
+     */
+    if (args.source === "SYSTEM_CALCULATED" && !matchesSolver) {
+      // At deal creation the figure is the one the wizard previewed, so a
+      // mismatch means the rules or the quote moved since it was shown. Says
+      // so, and still names no figure (SCRUM-404).
+      if (recordedVia === "DEAL_CREATION") {
+        throw new ConvexError(
+          "The calculated quotation changed after it was shown, so the application was not started. Review the new figure and start the application again."
+        );
+      }
+      throw new ConvexError(
+        "This quotation is recorded as calculated by the system, but it does not match the calculated figure. Record it as a calculated quotation with an override and say why it differs, or submit it as a manual entry."
+      );
+    }
+    // An "override" that departs from nothing is not an override. Letting it
+    // through would put a departure on the record, complete with a reason
+    // explaining a difference that does not exist.
+    if (args.source === "CALCULATED_WITH_OVERRIDE" && matchesSolver) {
+      // Names no figure either: the caller supplied the amount, so saying it
+      // MATCHES the calculation discloses the calculation.
+      throw new ConvexError(
+        "This quotation is recorded as an override, but it matches the calculated figure exactly. Record it as calculated by the system instead."
+      );
+    }
+  }
+
+  // Same reason as the other writers: `??` preserves an unrecognised code
+  // rather than replacing it, so recording a quotation would carry it into
+  // every figure derived from this deal afterwards.
+  assertSupportedDenomination(app.economicsCurrency, "recording this quotation");
+  await ctx.db.patch(args.applicationId, {
+    economicsCurrency: await resolveDealCurrency(ctx, app, "recording this quotation"),
+    submittedQuotationMinor: args.submittedQuotationMinor,
+    submittedQuotationSource: args.source,
+    submittedQuotationOverrideReason: reason,
+    // A retry is not a new submission. Advancing these on an identical
+    // re-record made "when did we send this quotation, and who sent it"
+    // answer the retry rather than the send — the same rule
+    // `approveDealerPurchaseAmount` keeps for its own approval stamp.
+    ...(quotationPreviouslyRecorded && !materiallyChanged
+      ? {}
+      : { submittedQuotationAt: now, submittedQuotationBy: user._id }),
+    appliedLtvPercent,
+    customerFirstPaymentMinor,
+    // Rewritten only when something moved, for the same reason as the stamp
+    // above: on an identical retry the snapshot's own `recordedAt` used to
+    // creep forward while the submission stamp stayed frozen, leaving two
+    // provenance fields answering the same question differently.
+    ...(quotationPreviouslyRecorded && !materiallyChanged
+      ? {}
+      : {
+    quotationCalculationSnapshot: {
+      mode: args.source,
+      targetNetProceedsMinor: targetForSolver,
+      estimatedDealerBorneExpensesMinor: expensesForSolver,
+      quotationBufferMinor: bufferForSolver,
+      customerFirstPaymentMinor,
+      customerFirstPaymentSource,
+      appliedLtvPercent,
+      customerFirstPaymentOffsetsUnfinancedShare:
+        snapshot.customerFirstPaymentOffsetsUnfinancedShare,
+      ...(solverResult?.available
+        ? { calculatedQuotationMinor: solverResult.submittedQuotationMinor }
+        : {}),
+      ...(solverResult && !solverResult.available
+        ? { solverUnavailableReason: solverResult.reason }
+        : {}),
+      finalQuotationMinor: args.submittedQuotationMinor,
+      ...(reason ? { overrideReason: reason } : {}),
+      ruleVersion: snapshot.ruleVersion,
+      recordedBy: user._id,
+      recordedAt: now,
+      recordedVia,
+    },
+        }),
+    ...(args.targetSellingAmountMinor !== undefined
+      ? {
+          targetSellingAmountMinor: args.targetSellingAmountMinor,
+          targetNetProceedsMinor: args.targetSellingAmountMinor,
+        }
+      : {}),
+    ...(args.estimatedDealerBorneExpensesMinor !== undefined
+      ? {
+          estimatedDealerBorneExpensesMinor: args.estimatedDealerBorneExpensesMinor,
+          estimatedClosingExpensesMinor: args.estimatedDealerBorneExpensesMinor,
+        }
+      : {}),
+    ...(args.quotationBufferMinor !== undefined
+      ? { quotationBufferMinor: args.quotationBufferMinor }
+      : {}),
+    // Sending the quotation is what puts the appraisal in play. Covers
+    // NOT_REQUESTED as well as unset: createFromQuote seeds the former, so
+    // testing only for undefined left every new application's appraisal
+    // dimension stuck at "not requested" after the quotation had gone out.
+    // Never downgrades a later state — a completed or finalized appraisal
+    // must not be reopened by a quotation edit.
+    ...(app.appraisalStatus === undefined || app.appraisalStatus === "NOT_REQUESTED"
+      ? { appraisalStatus: "PENDING" as const }
+      : {}),
+    updatedAt: now,
+  });
+
+  // A seeded first payment is a value this write CHOSE, not one anybody
+  // entered: record where it came from (SCRUM-373). It seeds only while the
+  // application holds no value, so a retry finds it STORED and adds no row.
+  if (customerFirstPaymentSource === "QUOTE_SEED") {
+    await recordOverride(ctx, {
+      orgId: args.orgId,
+      applicationId: args.applicationId,
+      field: "customerFirstPaymentMinor",
+      previousValue: undefined,
+      newValue: customerFirstPaymentMinor,
+      reason: `Seeded from the originating quote ${app.quoteId}'s down payment when the quotation was recorded.`,
+      changedBy: user._id,
+    });
+  }
+
+  const updated = await ctx.db.get(args.applicationId);
+  if (updated) await recomputeAndPatchEconomics(ctx, updated);
+  return args.applicationId;
+}
+
 /**
  * Records the quotation the dealership actually sent the financing company.
  *
@@ -1193,114 +1918,9 @@ export const recordSubmittedQuotation = mutation({
     const { user, role } = await requireTenantAuth(ctx, args.orgId, [
       PERMISSIONS.CREATE_FINANCE_APPLICATION,
     ]);
-    /**
-     * THE AUTHORITY DECISION COMES FIRST, BEFORE ANYTHING IS READ ABOUT THE DEAL.
-     *
-     * The cross-family review round found this guard sitting after
-     * `requireOwnedRow` and the closed / already-approved lifecycle branches, so
-     * the refusal an unauthorized caller received varied with the row's state.
-     *
-     * I could not reproduce the disclosure that was said to create - the
-     * already-approved branch is unconditional and fires for the same caller
-     * sending no `ltvPercent` at all, so the endpoint's ordinary use already
-     * tells them that much - but the ordering is worth fixing on its own terms.
-     * Asking the authority question first makes the refusal independent of every
-     * row fact rather than of the stored RATE alone, mirrors the sibling
-     * `approveDealerPurchaseAmount`, and strictly REDUCES what an unauthorized
-     * caller learns.
-     *
-     * Tenancy is unaffected: `requireOwnedRow` still runs before every
-     * authorized read and write below, so a caller who passes this check still
-     * cannot reach another tenant's row.
-     */
-    /**
-     * Naming the rate this deal is financed at is an APPROVER's decision.
-     *
-     * Recording the quotation is a transcription — "this is the figure we sent"
-     * — and the SALES template may do it. `ltvPercent` is a different act. It is
-     * stored as `appliedLtvPercent` and scales the finance company's funded
-     * portion, which fixes the unfinanced portion and therefore the dealership's
-     * own contribution: a salesperson able to set it could move the dealer's
-     * money by typing a different number into the field beside the amount. The
-     * sibling `approveDealerPurchaseAmount` already takes this same rate behind
-     * `APPROVE_FINANCE_APPLICATION`; this door did not, so the weaker role
-     * reached the same figure by the earlier step.
-     *
-     * The guard fires only where the argument is LOAD-BEARING — where it
-     * establishes or moves the rate the deal already stands on:
-     *
-     *  - snapshot carries no default and none has been recorded → any rate is
-     *    the exceptional per-deal recovery, and needs an approver;
-     *  - the deal already has a rate and the caller re-sends the SAME one →
-     *    nothing moves, and re-recording a quotation stays ordinary sales work;
-     *  - the snapshot's own configured rate, sent explicitly → likewise a
-     *    no-op, so the normal configured path is untouched;
-     *  - a rate DIFFERENT from either → an override of the company's rules,
-     *    which moves exactly the money the recovery case does and gets exactly
-     *    the same authority.
-     *
-     * Checked before the solver runs and before anything is patched, so a
-     * refusal never leaves a recorded quotation standing on a rate the recorder
-     * was not entitled to set.
-     */
-    if (args.ltvPercent !== undefined) {
-      /**
-       * ONE authority question, asked before anything is read, compared,
-       * solved, audited or written.
-       *
-       * What stood here was a three-way test — approver, or finance-visible
-       * with an equal rate, or refuse — and the middle branch is what kept this
-       * subsystem leaking. It resolved the snapshot and compared the supplied
-       * rate against `app.appliedLtvPercent ?? snapshot.defaultLtvPercent`,
-       * both FINANCE-classified, so the accept/refuse outcome was itself a
-       * search oracle over the stored rate.
-       *
-       * The replacement asks nothing about the deal. `mayEstablishAppliedLtv`
-       * reads the ROLE and nothing else, so the refusal is independent of the
-       * stored rate and identical whether the supplied value is equal to it,
-       * different from it, or the deal has no rate at all. An equal value does
-       * not bypass — that allowance WAS the oracle.
-       *
-       * OMISSION is untouched: a deal whose rate is already established stays
-       * ordinary work for the roles that do that work. `DealCockpit` sends
-       * `ltvPercent` only while `requiresLtvPercent` is true, so no screen ever
-       * sends the argument this refuses unless the deal genuinely needs a rate
-       * established — which is precisely the decision that now needs both
-       * permissions.
-       */
-      if (!mayEstablishAppliedLtv(role)) {
-        throw new ConvexError(
-          "Setting the LTV this deal is financed at needs both finance visibility and approval authority. Ask a finance-authorized approver to record the rate the financing company confirmed."
-        );
-      }
-    }
-
-    assertMinorAmount(args.submittedQuotationMinor, "Submitted quotation");
-    if (args.targetSellingAmountMinor !== undefined) {
-      assertMinorAmount(args.targetSellingAmountMinor, "Target selling amount");
-    }
-    if (args.estimatedDealerBorneExpensesMinor !== undefined) {
-      assertMinorAmount(
-        args.estimatedDealerBorneExpensesMinor,
-        "Estimated dealer-borne expenses"
-      );
-    }
-    if (args.quotationBufferMinor !== undefined) {
-      assertMinorAmount(args.quotationBufferMinor, "Quotation buffer");
-    }
-    if (args.customerFirstPaymentMinor !== undefined) {
-      assertMinorAmount(args.customerFirstPaymentMinor, "Customer first payment");
-    }
-    if (args.submittedQuotationMinor <= 0) {
-      throw new ConvexError("The submitted quotation must be greater than zero.");
-    }
-
-    const reason = args.overrideReason?.trim();
-    if (args.source === "CALCULATED_WITH_OVERRIDE" && !reason) {
-      throw new ConvexError(
-        "Departing from the calculated quotation must record why."
-      );
-    }
+    // Every pre-read decision, in the place it always sat: before the
+    // ownership check below and before anything about the deal is read.
+    const reason = assertQuotationRecordAuthority(role, args);
 
     // Inline rather than behind a helper on purpose: scripts/tenantWriteGuard
     // only accepts proof it can see inside the handler, and "the ownership
@@ -1312,412 +1932,14 @@ export const recordSubmittedQuotation = mutation({
       args.applicationId,
       APPLICATION_NOT_FOUND
     );
-    if (app.status === "CLOSED" || app.status === "CANCELLED") {
-      throw new ConvexError(
-        "This application is closed. Its submitted quotation can no longer be changed."
-      );
-    }
-    if (app.approvedDealerPurchaseAmountMinor !== undefined) {
-      throw new ConvexError(
-        "The finance company has already approved a purchase amount on this application. Reopen the approval before changing the quotation it was based on."
-      );
-    }
-
-    /**
-     * THE INPUT BOUNDARY, on the WRITE side (same ruling).
-     *
-     * Fixing only the query would have left a write-then-read route, and this
-     * is the half I had missed: the patch below does not merely solve from
-     * these arguments, it PERSISTS them. `targetSellingAmountMinor` fans out
-     * into `targetSellingAmountMinor` AND `targetNetProceedsMinor`;
-     * `estimatedDealerBorneExpensesMinor` into two more; the resolved first
-     * payment and buffer are written as well. So a caller without VIEW_FINANCE
-     * could record a MANUAL_ENTRY carrying chosen inputs — no solver check
-     * applies to that mode — and then read the now-poisoned row back through
-     * the canonical, "safe", override-free query. The arithmetic that recovers
-     * the hidden figure is identical; only the timing changes.
-     *
-     * Hence REFUSED rather than ignored, and refused HERE: before the LTV
-     * guard, before the solver, before the audit rows and before `ctx.db.patch`.
-     * Ignoring them silently would be worse than refusing — the operator would
-     * believe they had recorded a target that was never stored.
-     *
-     * Applies to EVERY provenance mode, MANUAL_ENTRY included. The quotation
-     * amount, its source and the override reason remain ordinary operator
-     * inputs; only the calculation OPERANDS need finance authority.
-     *
-     * The code is stable and names no protected value. Nothing in the product
-     * sends these: `DealCockpit` calls the query argument-less and sends the
-     * mutation only `submittedQuotationMinor` / `source` / `overrideReason` /
-     * `ltvPercent`.
-     */
-    const financeVisible = mayReadFinanceEconomics(role);
-    if (!financeVisible) {
-      const suppliedCalculationInputs = [
-        args.targetSellingAmountMinor,
-        args.estimatedDealerBorneExpensesMinor,
-        args.quotationBufferMinor,
-        args.customerFirstPaymentMinor,
-      ].some((value) => value !== undefined);
-      if (suppliedCalculationInputs) {
-        throw new ConvexError("CALCULATION_INPUTS_REQUIRE_FINANCE");
-      }
-    }
-
-
-    // The same resolution `suggestQuotationForApplication` runs, so the figure
-    // the user was shown is the figure the guard below accepts. Two copies of
-    // this would drift the moment either gained an input.
-    const {
-      snapshot,
-      appliedLtvPercent,
-      customerFirstPaymentMinor,
-      customerFirstPaymentSource,
-      targetForSolver,
-      expensesForSolver,
-      bufferForSolver,
-      result: solverResult,
-    } = await solveQuotationForApplication(ctx, app, args);
-
-    const now = Date.now();
-    // Audit any change to an already-recorded quotation, whatever the source.
-    // Gating this on a reason meant a CALCULATED re-submission could rewrite
-    // 12,500 to 9,000 with no trace — the exact hole this table exists to
-    // close, reopened for the one figure the module calls a real external
-    // document.
-    //
-    // The amount is not the only thing worth a trace. The patch below rewrites
-    // the source label, the recorder, the timestamp, the override reason and
-    // the whole calculation snapshot unconditionally, and there is no history
-    // table for any of them. Keying the audit on the amount alone therefore let
-    // a re-record at the SAME figure erase why an override existed: submit
-    // 13,000 as CALCULATED_WITH_OVERRIDE with a reason, re-submit 13,000 as
-    // MANUAL_ENTRY with none, and the reason is deleted (an explicit undefined
-    // in a patch removes the field), the mode flips, the prior calculated
-    // figure vanishes with the snapshot — and the override table gets nothing,
-    // because the number did not move.
-    const quotationPreviouslyRecorded = app.submittedQuotationMinor !== undefined;
-    const amountChanged = app.submittedQuotationMinor !== args.submittedQuotationMinor;
-    const sourceChanged = app.submittedQuotationSource !== args.source;
-    const reasonChanged = (app.submittedQuotationOverrideReason ?? "") !== (reason ?? "");
-    // The RECORDER belongs in this set for the same reason the approver belongs
-    // in `approveDealerPurchaseAmount`'s: the patch below rewrites it
-    // unconditionally, and who sent the finance company its quotation is the
-    // provenance of a real external document. Without it, a colleague
-    // re-entering the same figure from the same paperwork — or a retry after a
-    // dropped response — became the recorder of record, with a new timestamp,
-    // and no row anywhere saying so. That sibling mutation learned this two
-    // rounds ago; this one had no caller outside tests until SCRUM-68 exposed
-    // it, so nobody could reach the case.
-    const recorderChanged = quotationPreviouslyRecorded && app.submittedQuotationBy !== user._id;
-    /**
-     * The CALCULATION INPUTS, which the patch below also rewrites.
-     *
-     * Comparing only the four headline fields let a re-record move the target,
-     * the dealer-borne expenses, the buffer, the customer's first payment or the
-     * applied LTV at an identical amount, source, reason and recorder — silently
-     * changing every derived figure the economics engine computes from them,
-     * with no audit row and no new submission stamp. The resolved values are
-     * compared rather than the raw arguments, because an omitted argument means
-     * "keep what the deal already has" and is not a change.
-     */
-    /**
-     * The two arguments the patch FANS OUT into more than one stored field.
-     *
-     * `targetSellingAmountMinor` writes both `targetSellingAmountMinor` and
-     * `targetNetProceedsMinor`; `estimatedDealerBorneExpensesMinor` writes both
-     * `estimatedDealerBorneExpensesMinor` and `estimatedClosingExpensesMinor`.
-     * They normally hold the same value, because the patch always writes them
-     * from one argument — but on a row where they have drifted apart, one
-     * argument moves one field and not the other.
-     *
-     * Stated once, as a table, and read by BOTH the gate below and the audit
-     * description further down. Three review rounds found three defects in the
-     * hand-written version of this rule — a move reported that never happened,
-     * a move missed that did, and then a field mutated with no audit row at all
-     * because the gate never opened — each in a different clause, each fixed
-     * separately, each fix leaving the next one wrong. Two fields, two readers
-     * and one hand-maintained rule is what kept producing them; the arithmetic
-     * was never the hard part.
-     */
-    const fannedOutInputs = [
-      {
-        supplied: args.targetSellingAmountMinor,
-        fields: [
-          ["target", app.targetSellingAmountMinor],
-          ["target net proceeds", app.targetNetProceedsMinor],
-        ],
-      },
-      {
-        supplied: args.estimatedDealerBorneExpensesMinor,
-        fields: [
-          ["expenses", app.estimatedDealerBorneExpensesMinor],
-          ["closing expenses", app.estimatedClosingExpensesMinor],
-        ],
-      },
-    ] as const satisfies ReadonlyArray<{
-      supplied: number | undefined;
-      fields: ReadonlyArray<readonly [string, number | undefined]>;
-    }>;
-
-    /**
-     * Every stored field a supplied argument would actually move — counted
-     * once per DISTINCT starting value.
-     *
-     * Fields of a pair that held the same value move identically, and naming
-     * both is one move described twice: an ordinary expenses change would have
-     * read "expenses 300000, closing expenses 300000". Only a field that stood
-     * somewhere else is a second, genuinely different move, which is exactly
-     * the drifted row this table exists for. So an ordinary re-record produces
-     * one entry per argument, as it always has, and a drifted row produces one
-     * per figure that was really there.
-     */
-    const fannedOutMoves = fannedOutInputs.flatMap(({ supplied, fields }) => {
-      if (supplied === undefined) return [];
-      const distinctStartingValues = new Set<number | undefined>();
-      return fields
-        .filter(([, before]) => before !== supplied)
-        .filter(([, before]) => {
-          if (distinctStartingValues.has(before)) return false;
-          distinctStartingValues.add(before);
-          return true;
-        })
-        .map(([label, before]) => [label, before, supplied] as const);
+    return await applySubmittedQuotation(ctx, {
+      user,
+      role,
+      app,
+      args,
+      reason,
+      recordedVia: "RECORD_DIALOG",
     });
-
-    const inputsChanged =
-      quotationPreviouslyRecorded &&
-      (fannedOutMoves.length > 0 ||
-        (args.quotationBufferMinor !== undefined &&
-          args.quotationBufferMinor !== app.quotationBufferMinor) ||
-        customerFirstPaymentMinor !== app.customerFirstPaymentMinor ||
-        appliedLtvPercent !== app.appliedLtvPercent);
-    const materiallyChanged =
-      amountChanged || sourceChanged || reasonChanged || recorderChanged || inputsChanged;
-    if (quotationPreviouslyRecorded && materiallyChanged) {
-      /**
-       * Every input that MOVED, on both sides — not just the headline four.
-       *
-       * A row whose two value fields read identically is not a trace. That was
-       * the lesson the approver audit next door had to learn, and this writer
-       * repeated it one level down: when only a calculation input changed, the
-       * described values were byte-identical and the fallback reason claimed a
-       * source/reason/recorder change that had not happened — while the patch
-       * below overwrote the previous inputs and the whole snapshot, leaving the
-       * cause of every moved derived figure unrecoverable.
-       */
-      const movedInputs: Array<[string, unknown, unknown]> = [];
-      const noteMove = (label: string, before: unknown, after: unknown) => {
-        if (before !== after) movedInputs.push([label, before, after]);
-      };
-      // The same table the gate above read, so what opened the gate is exactly
-      // what the row describes. Nothing appears for an omitted argument,
-      // because then nothing was patched.
-      for (const [label, before, after] of fannedOutMoves) {
-        noteMove(label, before, after);
-      }
-      noteMove("buffer", app.quotationBufferMinor, bufferForSolver);
-      noteMove("first payment", app.customerFirstPaymentMinor, customerFirstPaymentMinor);
-      noteMove("LTV", app.appliedLtvPercent, appliedLtvPercent);
-
-      const describe = (
-        amountMinor: number | undefined,
-        source: string | undefined,
-        why: string | undefined,
-        recordedBy: Id<"users"> | undefined,
-        side: 0 | 1
-      ): string => {
-        const inputs = movedInputs
-          .map(([label, before, after]) => `${label} ${(side === 0 ? before : after) ?? "unset"}`)
-          .join(", ");
-        return `${amountMinor ?? "unset"} (${source ?? "unknown source"}${why ? `: ${why}` : ""}${
-          recordedBy ? ` by ${recordedBy}` : ""
-        }${inputs ? `; ${inputs}` : ""})`;
-      };
-
-      // Names what actually moved, so the row does not assert a change that did
-      // not happen. Only reached when the caller gave no reason of their own.
-      const changedFields = [
-        ...(amountChanged ? ["the amount"] : []),
-        ...(sourceChanged ? ["the source"] : []),
-        ...(reasonChanged ? ["the reason"] : []),
-        ...(recorderChanged ? ["the recorder"] : []),
-        ...movedInputs.map(([label]) => label),
-      ];
-      await recordOverride(ctx, {
-        orgId: args.orgId,
-        applicationId: args.applicationId,
-        field: "submittedQuotationMinor",
-        previousValue: describe(
-          app.submittedQuotationMinor,
-          app.submittedQuotationSource,
-          app.submittedQuotationOverrideReason,
-          app.submittedQuotationBy,
-          0
-        ),
-        newValue: describe(args.submittedQuotationMinor, args.source, reason, user._id, 1),
-        reason: reason ?? `Re-recorded; changed: ${changedFields.join(", ")}.`,
-        changedBy: user._id,
-      });
-    }
-
-    // The solver figure is recorded alongside the submitted one so an override
-    // is auditable against what it departed from. It is never used to fill in a
-    // missing input: when expenses or the buffer have not been entered they are
-    // zero, not back-solved from the quotation.
-    //
-    // Both calculated modes are claims about provenance, and the snapshot
-    // records `calculatedQuotationMinor` and `finalQuotationMinor`
-    // independently — so unchecked, either label could sit on an amount the
-    // solver never produced, or never ran to produce. SYSTEM_CALCULATED is the
-    // mode a later reader trusts *because* it says no human touched it;
-    // CALCULATED_WITH_OVERRIDE is the one they trust to name a real departure
-    // from a real calculation. Guarding only the first left the second as an
-    // open door to the same forgery, reached by supplying any reason at all.
-    //
-    // MANUAL_ENTRY is the honest label whenever no calculation stands behind
-    // the figure, and it is always available — nothing here blocks recording a
-    // negotiated number.
-    if (args.source === "SYSTEM_CALCULATED" || args.source === "CALCULATED_WITH_OVERRIDE") {
-      const modeLabel =
-        args.source === "SYSTEM_CALCULATED"
-          ? "calculated by the system"
-          : "calculated with an override";
-      if (!solverResult) {
-        throw new ConvexError(
-          `This quotation is recorded as ${modeLabel}, but no target selling amount is set, so the calculator never ran. Record the target, or submit it as a manual entry.`
-        );
-      }
-      if (!solverResult.available) {
-        // The reason is a fixed enumeration of RULE STATES (an unrecorded
-        // offset rule, and so on) and carries no figure, so it stays: it tells
-        // the operator which setting to fix. Ruling #4 is about computed
-        // NUMBERS, and removing this as well cost actionable guidance for no
-        // security gain.
-        throw new ConvexError(
-          `This quotation is recorded as ${modeLabel}, but the calculator could not run (${solverResult.reason}). Submit it as a manual entry instead.`
-        );
-      }
-      const matchesSolver =
-        solverResult.submittedQuotationMinor === args.submittedQuotationMinor;
-      /**
-       * NAMES NO FIGURE. The message used to read "...the calculator produced
-       * 10231041 minor units, not 1", which handed the computed value to
-       * anyone who could call this mutation — a third route to the same leak,
-       * through an error rather than a response, and one that no response-shape
-       * gate would ever have caught. The operator already sees the calculated
-       * figure on the screen they are submitting from, so nothing is lost.
-       */
-      if (args.source === "SYSTEM_CALCULATED" && !matchesSolver) {
-        throw new ConvexError(
-          "This quotation is recorded as calculated by the system, but it does not match the calculated figure. Record it as a calculated quotation with an override and say why it differs, or submit it as a manual entry."
-        );
-      }
-      // An "override" that departs from nothing is not an override. Letting it
-      // through would put a departure on the record, complete with a reason
-      // explaining a difference that does not exist.
-      if (args.source === "CALCULATED_WITH_OVERRIDE" && matchesSolver) {
-        // Names no figure either: the caller supplied the amount, so saying it
-        // MATCHES the calculation discloses the calculation.
-        throw new ConvexError(
-          "This quotation is recorded as an override, but it matches the calculated figure exactly. Record it as calculated by the system instead."
-        );
-      }
-    }
-
-    // Same reason as the other writers: `??` preserves an unrecognised code
-    // rather than replacing it, so recording a quotation would carry it into
-    // every figure derived from this deal afterwards.
-    assertSupportedDenomination(app.economicsCurrency, "recording this quotation");
-    await ctx.db.patch(args.applicationId, {
-      economicsCurrency: await resolveDealCurrency(ctx, app, "recording this quotation"),
-      submittedQuotationMinor: args.submittedQuotationMinor,
-      submittedQuotationSource: args.source,
-      submittedQuotationOverrideReason: reason,
-      // A retry is not a new submission. Advancing these on an identical
-      // re-record made "when did we send this quotation, and who sent it"
-      // answer the retry rather than the send — the same rule
-      // `approveDealerPurchaseAmount` keeps for its own approval stamp.
-      ...(quotationPreviouslyRecorded && !materiallyChanged
-        ? {}
-        : { submittedQuotationAt: now, submittedQuotationBy: user._id }),
-      appliedLtvPercent,
-      customerFirstPaymentMinor,
-      // Rewritten only when something moved, for the same reason as the stamp
-      // above: on an identical retry the snapshot's own `recordedAt` used to
-      // creep forward while the submission stamp stayed frozen, leaving two
-      // provenance fields answering the same question differently.
-      ...(quotationPreviouslyRecorded && !materiallyChanged
-        ? {}
-        : {
-      quotationCalculationSnapshot: {
-        mode: args.source,
-        targetNetProceedsMinor: targetForSolver,
-        estimatedDealerBorneExpensesMinor: expensesForSolver,
-        quotationBufferMinor: bufferForSolver,
-        customerFirstPaymentMinor,
-        customerFirstPaymentSource,
-        appliedLtvPercent,
-        customerFirstPaymentOffsetsUnfinancedShare:
-          snapshot.customerFirstPaymentOffsetsUnfinancedShare,
-        ...(solverResult?.available
-          ? { calculatedQuotationMinor: solverResult.submittedQuotationMinor }
-          : {}),
-        ...(solverResult && !solverResult.available
-          ? { solverUnavailableReason: solverResult.reason }
-          : {}),
-        finalQuotationMinor: args.submittedQuotationMinor,
-        ...(reason ? { overrideReason: reason } : {}),
-        ruleVersion: snapshot.ruleVersion,
-        recordedBy: user._id,
-        recordedAt: now,
-      },
-          }),
-      ...(args.targetSellingAmountMinor !== undefined
-        ? {
-            targetSellingAmountMinor: args.targetSellingAmountMinor,
-            targetNetProceedsMinor: args.targetSellingAmountMinor,
-          }
-        : {}),
-      ...(args.estimatedDealerBorneExpensesMinor !== undefined
-        ? {
-            estimatedDealerBorneExpensesMinor: args.estimatedDealerBorneExpensesMinor,
-            estimatedClosingExpensesMinor: args.estimatedDealerBorneExpensesMinor,
-          }
-        : {}),
-      ...(args.quotationBufferMinor !== undefined
-        ? { quotationBufferMinor: args.quotationBufferMinor }
-        : {}),
-      // Sending the quotation is what puts the appraisal in play. Covers
-      // NOT_REQUESTED as well as unset: createFromQuote seeds the former, so
-      // testing only for undefined left every new application's appraisal
-      // dimension stuck at "not requested" after the quotation had gone out.
-      // Never downgrades a later state — a completed or finalized appraisal
-      // must not be reopened by a quotation edit.
-      ...(app.appraisalStatus === undefined || app.appraisalStatus === "NOT_REQUESTED"
-        ? { appraisalStatus: "PENDING" as const }
-        : {}),
-      updatedAt: now,
-    });
-
-    // A seeded first payment is a value this write CHOSE, not one anybody
-    // entered: record where it came from (SCRUM-373). It seeds only while the
-    // application holds no value, so a retry finds it STORED and adds no row.
-    if (customerFirstPaymentSource === "QUOTE_SEED") {
-      await recordOverride(ctx, {
-        orgId: args.orgId,
-        applicationId: args.applicationId,
-        field: "customerFirstPaymentMinor",
-        previousValue: undefined,
-        newValue: customerFirstPaymentMinor,
-        reason: `Seeded from the originating quote ${app.quoteId}'s down payment when the quotation was recorded.`,
-        changedBy: user._id,
-      });
-    }
-
-    const updated = await ctx.db.get(args.applicationId);
-    if (updated) await recomputeAndPatchEconomics(ctx, updated);
-    return args.applicationId;
   },
 });
 

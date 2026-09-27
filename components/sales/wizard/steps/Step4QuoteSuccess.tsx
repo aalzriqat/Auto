@@ -20,6 +20,8 @@ import { toast } from "@/components/ui/sonner";
 import { downloadElementAsPdf } from "@/lib/htmlToPdf";
 import { getErrorMessage } from "@/lib/errors";
 import { decideDepositSubmission } from "@/lib/depositSettlementSubmission";
+import { supportedCurrencyScale } from "@/convex/utils/money";
+import { useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
 
 interface Step4QuoteSuccessProps {
   paymentType: PaymentType;
@@ -64,6 +66,33 @@ export function Step4QuoteSuccess({
   const createApplication = useMutation(api.applications.createFromQuote);
 
   /**
+   * SCRUM-404: the finance company's quotation AutoFlow would record if the
+   * application were started now. Asked only while it can still matter — an
+   * INSTALLMENT quote with no application yet. `available: false` is an answer,
+   * not a failure: a manually-entered company, a role that may not record it,
+   * or rules that cannot solve all start the application WITHOUT a quotation.
+   */
+  const wantsCreationQuotation = paymentType === "INSTALLMENT" && !applicationId && !!activeOrgId;
+  const creationQuotation = useQuery(
+    api.financingEconomics.previewCreationQuotation,
+    wantsCreationQuotation && activeOrgId ? { orgId: activeOrgId, quoteId } : "skip"
+  );
+  const creationQuotationLoading = wantsCreationQuotation && creationQuotation === undefined;
+  const confirmedQuotation = creationQuotation?.available === true ? creationQuotation : null;
+  const formatInCurrency = useCurrencyFormatterInCurrency();
+  const confirmedQuotationScale = confirmedQuotation
+    ? supportedCurrencyScale(confirmedQuotation.currency)
+    : null;
+  const confirmedQuotationDisplay =
+    confirmedQuotation && confirmedQuotationScale !== null
+      ? formatInCurrency(
+          confirmedQuotation.submittedQuotationMinor / 10 ** confirmedQuotationScale,
+          confirmedQuotation.currency,
+          confirmedQuotationScale
+        )
+      : null;
+
+  /**
    * EVERY sale this quote produced, not just the first.
    *
    * A multi-vehicle quote completes one sale per car, so keeping only `ids[0]`
@@ -87,7 +116,17 @@ export function Step4QuoteSuccess({
     if (!activeOrgId) return;
     setIsStartingApplication(true);
     try {
-      const id = await createApplication({ orgId: activeOrgId, quoteId });
+      // The figure the operator was shown, sent back as the confirmation. The
+      // server recomputes it in the same transaction and refuses the whole
+      // creation if it no longer matches — nothing is started on a figure the
+      // operator did not see.
+      const id = await createApplication({
+        orgId: activeOrgId,
+        quoteId,
+        ...(confirmedQuotation
+          ? { confirmedCalculatedQuotationMinor: confirmedQuotation.submittedQuotationMinor }
+          : {}),
+      });
       setApplicationId(id);
       toast.success(t("ApplicationStartedSuccess" as any) ?? "Finance application started");
     } catch (error) {
@@ -426,7 +465,7 @@ export function Step4QuoteSuccess({
             ) : (
               <Button
                 onClick={handleStartApplication}
-                disabled={isStartingApplication}
+                disabled={isStartingApplication || creationQuotationLoading}
                 variant="outline"
                 size="lg"
                 className="min-w-[200px]"
@@ -434,7 +473,9 @@ export function Step4QuoteSuccess({
                 <FileText className="w-4 h-4 me-2" />
                 {isStartingApplication
                   ? (t("Saving" as any) || "Saving...")
-                  : (t("StartFinanceApplication" as any) ?? "Start Finance Application")}
+                  : confirmedQuotation
+                    ? (t("StartApplicationRecordQuotation") ?? "Start application & record quotation")
+                    : (t("StartFinanceApplication" as any) ?? "Start Finance Application")}
               </Button>
             )
           )}
@@ -466,6 +507,34 @@ export function Step4QuoteSuccess({
               </Button>
             )
           )}
+
+          {/* SCRUM-404: what starting the application will record, stated before
+              the click. Its own full-width row so it reads as a note on the
+              application button rather than a fifth button in the strip. */}
+          {wantsCreationQuotation && creationQuotation ? (
+            <div className="order-last w-full">
+              {confirmedQuotation && confirmedQuotationDisplay ? (
+                <div className="mx-auto max-w-md space-y-0.5 text-start">
+                  <p className="text-sm text-foreground">
+                    {(t("CreationQuotationTo") ?? "Quotation to {company}:").replace(
+                      "{company}",
+                      selectedCompany?.name ?? "—"
+                    )}{" "}
+                    <bdi className="font-semibold tabular-nums">{confirmedQuotationDisplay}</bdi>
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {t("CreationQuotationCalculated")}
+                  </p>
+                </div>
+              ) : (
+                <p className="mx-auto max-w-md text-start text-xs text-muted-foreground">
+                  {creationQuotation.available === false && creationQuotation.reason === "NOT_CONFIGURED_COMPANY"
+                    ? t("CreationQuotationManualCompany")
+                    : t("CreationQuotationNotRecorded")}
+                </p>
+              )}
+            </div>
+          ) : null}
 
           <Button onClick={onClose} variant="outline" size="lg" className="min-w-[200px]">
             <LogOut className="w-4 h-4 me-2" />

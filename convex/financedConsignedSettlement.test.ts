@@ -5077,6 +5077,20 @@ describe("a settlement advice that contradicts the approval", () => {
       api.financingEconomics.suggestQuotationForApplication,
       { orgId: s.orgId, applicationId }
     );
+    // SCRUM-404's creation-time preview. Its door is `quotes.get`'s
+    // (`view:customers`), which this sales-only fixture does not hold, so it
+    // refuses — and a refusal is swept like any other response.
+    const dealQuoteId = await s.t.run(
+      async (ctx) => (await ctx.db.get(applicationId as Id<"financeApplications">))!.quoteId
+    );
+    const creationPreview = await s.asUser
+      .query(api.financingEconomics.previewCreationQuotation, {
+        orgId: s.orgId,
+        quoteId: dealQuoteId,
+      })
+      .catch((error: unknown) => ({
+        refusal: error instanceof Error ? error.message : String(error),
+      }));
 
     // ANTI-VACUITY. Every door must have actually returned this deal. An empty
     // page or a null document contains no evidence for the trivial reason, and
@@ -5123,6 +5137,7 @@ describe("a settlement advice that contradicts the approval", () => {
       ["financingEconomics.listNeedingReconciliation", queue],
       ["financingEconomics.suggestQuotationForApplication", quotation],
       ["financingEconomics.suggestQuotation", suggestion],
+      ["financingEconomics.previewCreationQuotation", creationPreview],
     ];
 
     // COMPLETENESS, enforced rather than asserted in a comment. The list above

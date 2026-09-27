@@ -1,5 +1,14 @@
 import { expect, type Page } from "@playwright/test";
-import { createCustomer, createVehicle, gotoOrgRoute, testDataSuffix } from "../utils";
+import { api } from "../../convex/_generated/api";
+import type { Id } from "../../convex/_generated/dataModel";
+import { supportedCurrencyScale } from "../../convex/utils/money";
+import {
+  authenticatedConvexClient,
+  createCustomer,
+  createVehicle,
+  gotoOrgRoute,
+  testDataSuffix,
+} from "../utils";
 
 /**
  * Building a financed deal through the interface — the steps, without the
@@ -239,10 +248,16 @@ export async function createFinancedApplication(
   await page.getByRole("button", { name: "Generate Quote", exact: true }).click();
   await expect(page.getByText("Quote generated and saved!")).toBeVisible();
 
+  // SCRUM-404: a configured company's quotation is calculated before the
+  // application exists, stated above the button, and recorded by the same click
+  // that starts the application — the button's label says so. Waiting on THIS
+  // label (not the plain one) is what proves the preview answered available;
+  // the plain label is what the step shows while it is still asking.
+  await expect(page.getByText(/AutoFlow calculation/)).toBeVisible();
   const startApplication = page.getByRole("button", {
-    name: "Start Finance Application",
+    name: "Start application & record quotation",
   });
-  await expect(startApplication).toBeVisible();
+  await expect(startApplication).toBeEnabled();
   await startApplication.click();
 
   // Creating the application does not open it. The wizard swaps the button for
@@ -258,7 +273,47 @@ export async function createFinancedApplication(
   await row.locator('a[href$="/deal"]').first().click();
 
   await page.waitForURL(/\/applications\/[^/]+\/deal$/, { timeout: 60_000 });
-  return page.url();
+  const dealUrl = page.url();
+  await expectQuotationRecordedAtCreation(page, dealUrl);
+  return dealUrl;
+}
+
+/**
+ * Reads the application back from the backend — not off the screen — and
+ * asserts the creation click recorded the calculated quotation (SCRUM-404).
+ *
+ * A rendered figure proves the UI can DISPLAY a quotation; only the stored row
+ * proves which writer put it there. `recordedVia` is the one field that tells a
+ * creation-time record from a dialog record, so it is asserted here, before
+ * `recordQuotation` below re-records deliberately and rewrites the snapshot.
+ *
+ * Needs the snapshot to be visible to this caller (`view:finance`, SCRUM-117):
+ * the fixture's operator is the org owner, which holds it.
+ */
+async function expectQuotationRecordedAtCreation(page: Page, dealUrl: string): Promise<void> {
+  const match = /\/([^/]+)\/applications\/([^/]+)\/deal$/.exec(new URL(dealUrl).pathname);
+  if (!match) throw new Error(`Unexpected deal URL shape: ${dealUrl}`);
+  const orgId = match[1] as Id<"organizations">;
+  const applicationId = match[2] as Id<"financeApplications">;
+  const client = await authenticatedConvexClient(page);
+  const economics = await client.query(api.financingEconomics.getEconomics, {
+    orgId,
+    applicationId,
+  });
+  const app = economics.application;
+  const snapshot = app.quotationCalculationSnapshot;
+  expect(app.submittedQuotationSource).toBe("SYSTEM_CALCULATED");
+  expect(snapshot?.mode).toBe("SYSTEM_CALCULATED");
+  expect(snapshot?.recordedVia).toBe("DEAL_CREATION");
+  expect(snapshot?.calculatedQuotationMinor).toBe(app.submittedQuotationMinor);
+  expect(snapshot?.finalQuotationMinor).toBe(app.submittedQuotationMinor);
+  // The down payment covers the unfinanced share at this rate (3,000 against
+  // 10% of 15,000), so the solver's answer is the vehicle price itself. The
+  // scale comes from the deal's own currency, never assumed: JOD is three
+  // decimals, not two.
+  const scale = supportedCurrencyScale(app.economicsCurrency);
+  expect(scale).not.toBeNull();
+  expect(app.submittedQuotationMinor).toBe(Number(VEHICLE_PRICE) * 10 ** (scale ?? 0));
 }
 
 /**
@@ -301,6 +356,13 @@ export async function recordQuotation(page: Page, dealUrl: string): Promise<void
   await page.getByRole("button", { name: "Record quotation" }).click();
   const dialog = page.getByRole("dialog");
   await dialog.locator("#submitted-quotation-amount").fill(QUOTATION);
+  // SCRUM-404: creation already recorded the calculated figure, and this is a
+  // deliberate, audited change to the amount the dealership actually sent.
+  // Departing from the calculation is an override, which needs its reason —
+  // without one the dialog keeps its Record button disabled.
+  const reason = dialog.locator("#submitted-quotation-reason");
+  await expect(reason).toBeVisible();
+  await reason.fill("E2E: the finance company was sent the negotiated figure.");
   await dialog.getByRole("button", { name: "Record quotation" }).click();
   await expect(dialog).not.toBeVisible();
 }

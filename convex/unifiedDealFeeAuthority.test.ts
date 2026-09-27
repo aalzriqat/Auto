@@ -43,7 +43,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 import type { Doc, Id } from "./_generated/dataModel";
-import { resolveExpectedExecutionFeesMinor } from "./applications";
+import { resolveExpectedExecutionFeesMinor } from "./utils/creationEconomics";
 import { toMinorUnits, fromMinorUnits } from "./utils/money";
 
 const MODULES = import.meta.glob("./**/*.*s");

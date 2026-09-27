@@ -185,6 +185,14 @@ export const quotationCalculationSnapshotValidator = v.object({
   ruleVersion: v.optional(v.number()),
   recordedBy: v.id("users"),
   recordedAt: v.number(),
+  /**
+   * Which door recorded the CURRENT material quotation (SCRUM-404): the
+   * wizard's confirmed creation, or the deal page's Record dialog. Written only
+   * with this snapshot, which is rewritten only on a material change, so an
+   * identical retry keeps its origin. Absent on older rows, meaning unknown.
+   * Provenance only — nothing gates on it.
+   */
+  recordedVia: v.optional(v.union(v.literal("DEAL_CREATION"), v.literal("RECORD_DIALOG"))),
 });
 
 /**
