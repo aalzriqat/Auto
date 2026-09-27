@@ -3699,6 +3699,10 @@ export const setSupplierSettlementRoute = mutation({
  * caller below the finance tier (ACC-10): the verdict is the same, the detail —
  * which can name figures, currencies and ledger state — is not served.
  */
+/** Below the finance tier, in place of the evaluator's own refusal (which can name currencies and amounts). */
+const WITHHELD_UNAVAILABLE_READINESS_REASON =
+  "This deal's closing readiness cannot be determined from its current records. Someone with finance access can see why.";
+
 const WITHHELD_READINESS_REASON: Record<ClosingReadinessCheckKey, string> = {
   REMITTANCE_KNOWN: "What the finance company will remit is not established yet.",
   CONFIGURED_FEES_RECORDED: "A fee the finance company configures has no actual recorded yet.",
@@ -3778,6 +3782,8 @@ export const getClosingReadiness = query({
     const open = app.status !== "CLOSED" && app.status !== "CANCELLED" && app.status !== "REJECTED";
 
     let readiness: ClosingReadiness = { state: "UNAVAILABLE", checks: [] };
+    /** Why no verdict could be formed — set only when the evaluator refused. */
+    let unavailableReason: string | null = null;
     if (open) {
       try {
         readiness = (
@@ -3789,6 +3795,8 @@ export const getClosingReadiness = query({
         ).readiness;
       } catch (error) {
         if (!(error instanceof ConvexError)) throw error;
+        unavailableReason =
+          mayReadMoney && typeof error.data === "string" ? error.data : WITHHELD_UNAVAILABLE_READINESS_REASON;
       }
     }
 
@@ -3798,9 +3806,9 @@ export const getClosingReadiness = query({
       checks: readiness.checks.map((check) => ({
         key: check.key,
         status: check.status,
-        reason:
-          check.reason === null ? null : mayReadMoney ? check.reason : WITHHELD_READINESS_REASON[check.key],
+        reason: check.reason !== null && !mayReadMoney ? WITHHELD_READINESS_REASON[check.key] : check.reason,
       })),
+      unavailableReason,
       moneyWithheld: !mayReadMoney,
     };
   },

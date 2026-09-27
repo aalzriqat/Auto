@@ -86,7 +86,15 @@ export function DealClosingReadinessList({
         <span className="text-xs text-muted-foreground">{t("ClosingReadinessAuto")}</span>
       </div>
       {readiness.checks.length === 0 ? (
-        <p className="text-xs text-muted-foreground">{t("ClosingReadinessNoChecks")}</p>
+        <div className="space-y-1">
+          <p className="text-xs text-muted-foreground">{t("ClosingReadinessNoChecks")}</p>
+          {readiness.unavailableReason && (
+            // The server's own sentence, as finalizing would refuse with it.
+            <p className="break-words text-[11px] leading-snug text-muted-foreground" dir="auto" data-testid="closing-readiness-unavailable-reason">
+              {readiness.unavailableReason}
+            </p>
+          )}
+        </div>
       ) : (
         <ul className="divide-y divide-border rounded-md border">
           {[...applicable, ...notApplicable].map((check) => (

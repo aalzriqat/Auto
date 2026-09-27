@@ -544,6 +544,7 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
           readiness: {
             state: "BLOCKED",
             open: true,
+            unavailableReason: null,
             moneyWithheld: false,
             checks: [
               { key: "REMITTANCE_KNOWN", status: "READY", reason: null },

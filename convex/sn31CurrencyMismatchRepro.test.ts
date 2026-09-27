@@ -373,7 +373,28 @@ describe("SN3-1 — confirmDisbursement when the deal's pinned currency ≠ the 
     await expect(finalize(s, applicationId)).rejects.toThrow(/organization's currency is now USD/i);
 
     const readiness = () => s.asUser.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
-    expect((await readiness()).state).toBe("UNAVAILABLE");
+    const unavailable = await readiness();
+    expect(unavailable.state).toBe("UNAVAILABLE");
+    // CodeRabbit #352: the verdict that could not be formed keeps the reason
+    // finalizing refuses with, rather than an empty checklist.
+    expect(unavailable.checks).toHaveLength(0);
+    expect(unavailable.unavailableReason ?? "").toMatch(/organization's currency is now USD/i);
+
+    // Below the finance tier the refusal (which names currencies) is withheld
+    // for a plain sentence — the SCRUM-117 read boundary on this new field.
+    const viewerClerk = `${s.orgId}_viewer`;
+    await s.t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: viewerClerk, email: "viewer@example.com", name: "Viewer" });
+      const roleId = await ctx.db.insert("roles", { orgId: s.orgId, name: "VIEWER", permissions: ["view:finance_applications"] });
+      await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
+    });
+    const withheld = await s.t
+      .withIdentity({ subject: viewerClerk, clerkId: viewerClerk })
+      .query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
+    expect(withheld.state).toBe("UNAVAILABLE");
+    expect(withheld.moneyWithheld).toBe(true);
+    expect(withheld.unavailableReason).toMatch(/cannot be determined from its current records/);
+    expect(withheld.unavailableReason).not.toMatch(/USD|JOD/);
 
     // Restoring the setting is the only change, and the verdict follows it.
     await driftOrgCurrencyOutOfContract(s, "JOD");

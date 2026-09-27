@@ -247,7 +247,7 @@ describe("the composition boundary at every real caller", () => {
     const feesAfter = await s.t.run((ctx) =>
       ctx.db.query("financeDealFees").withIndex("by_application", (q) => q.eq("applicationId", s.applicationId)).collect()
     );
-    expect(feesAfter.length).toBe(feesBefore.length);
+    expect(feesAfter).toHaveLength(feesBefore.length);
     expect(after.expectedDealerRemittanceMinor).toBe(before.expectedDealerRemittanceMinor);
     expect(after.dealerContributionMinor).toBe(before.dealerContributionMinor);
     expect(after.updatedAt).toBe(before.updatedAt);

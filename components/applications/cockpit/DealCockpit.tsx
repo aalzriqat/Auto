@@ -381,16 +381,23 @@ const LEGAL_INVOICE_ISSUED_TO_LABEL: Record<string, string> = {
  * same one: the route is judged on who may RECORD it, the close on who may
  * CLOSE, each against the server's own gate.
  *
+ * A loaded closing-readiness verdict that is not READY is a prerequisite too:
+ * `finalizeDeal` re-runs the same evaluator and would refuse, so the action is
+ * withheld and the readiness list above names what is left. A verdict still
+ * loading withholds nothing — the server stays the gate.
+ *
  * Extracted rather than left as a nested ternary so the combinations are
  * enumerable, and testable, one line each.
  */
 function finalizeUnavailableReasonKey(
   routeRequired: boolean,
   canRecordRoute: boolean,
+  readinessBlocksClose: boolean,
   canClose: boolean
 ): string | undefined {
   if (routeRequired && !canRecordRoute) return "FinalizeNeedsRouteAndPermission";
   if (routeRequired) return "FinalizeNeedsSettlementRoute";
+  if (readinessBlocksClose) return "FinalizeNeedsClosingReadiness";
   if (!canClose) return "FinalizeNeedsPermission";
   return undefined;
 }
@@ -1519,7 +1526,12 @@ export function DealCockpit({
        */
       unavailableReasonKey: finalizeDenominationBlock
         ? FINALIZE_DENOMINATION_REASON[finalizeDenominationBlock]
-        : finalizeUnavailableReasonKey(settlementRouteRequired, canFinalizeApplication, canCloseDeal),
+        : finalizeUnavailableReasonKey(
+            settlementRouteRequired,
+            canFinalizeApplication,
+            closingReadiness !== undefined && closingReadiness.open && closingReadiness.state !== "READY",
+            canCloseDeal
+          ),
       unavailableDetail: finalizeDenominationDetail,
     };
   }

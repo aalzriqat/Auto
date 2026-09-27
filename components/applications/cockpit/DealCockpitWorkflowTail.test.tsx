@@ -319,6 +319,44 @@ describe("a step the server would refuse is not offered as a step", () => {
     expect(within(block).queryByText("FinalizeNeedsSettlementRoute")).toBeNull();
     expect(within(block).queryByText("FinalizeNeedsPermission")).toBeNull();
   });
+
+  // CodeRabbit #352: `finalizeDeal` re-runs the readiness evaluator, so a loaded
+  // verdict that is not READY is a guaranteed refusal — not a step.
+  function readinessVerdict(state: "READY" | "BLOCKED" | "UNAVAILABLE") {
+    return {
+      state,
+      open: true,
+      checks: [{ key: "CUSTODY_SETTLED", status: state === "READY" ? "READY" : state, reason: null }],
+      unavailableReason: null,
+      moneyWithheld: false,
+    };
+  }
+
+  test.each(["BLOCKED", "UNAVAILABLE"] as const)(
+    "the close is withheld while closing readiness is %s, and says so",
+    (state) => {
+      grantTheWholeTail();
+      queryResults.set(COCKPIT_QUERY, cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true }));
+      queryResults.set("applications:getClosingReadiness", readinessVerdict(state));
+
+      renderCockpit();
+
+      const block = nextStepBlock();
+      expect(within(block).queryByRole("button", { name: "FinalizeDealAction" })).toBeNull();
+      expect(within(block).getByText("FinalizeNeedsClosingReadiness")).toBeTruthy();
+    }
+  );
+
+  test("the close is offered once closing readiness is READY (control)", () => {
+    grantTheWholeTail();
+    queryResults.set(COCKPIT_QUERY, cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true }));
+    queryResults.set("applications:getClosingReadiness", readinessVerdict("READY"));
+
+    renderCockpit();
+
+    expect(within(nextStepBlock()).getByRole("button", { name: "FinalizeDealAction" })).toBeTruthy();
+    expect(within(nextStepBlock()).queryByText("FinalizeNeedsClosingReadiness")).toBeNull();
+  });
 });
 
 describe("the appraisal-gap stage", () => {

@@ -282,7 +282,7 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // `supplierCostRecoveries.reverseReceipt` (SCRUM-389 supplier cost bearer).
     // 122 → 121: `financeDealCosts.classifyDealAccounting` RETIRED (SCRUM-407),
     // then deleted outright with its classification entry.
-    expect(population.length).toBe(121);
+    expect(population).toHaveLength(121);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {

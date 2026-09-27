@@ -159,6 +159,13 @@ export type ClosingReadinessEvaluation =
   | { ready: true; readiness: ClosingReadiness; liveFees: Array<Doc<"financeDealFees">> }
   | { ready: false; readiness: ClosingReadiness };
 
+/** UNAVAILABLE wins over BLOCKED; READY only when neither appears. */
+function overallReadinessState(checks: ClosingReadinessCheck[]): ClosingReadiness["state"] {
+  if (checks.some((check) => check.status === "UNAVAILABLE")) return "UNAVAILABLE";
+  if (checks.some((check) => check.status === "BLOCKED")) return "BLOCKED";
+  return "READY";
+}
+
 function messageOf(error: unknown): string {
   if (error instanceof ConvexError && typeof error.data === "string") return error.data;
   throw error;
@@ -292,11 +299,7 @@ export async function evaluateClosingReadiness(
     return invoice.ok ? ["READY", null] : ["BLOCKED", invoice.refusal.message];
   });
 
-  const state = checks.some((check) => check.status === "UNAVAILABLE")
-    ? "UNAVAILABLE"
-    : checks.some((check) => check.status === "BLOCKED")
-      ? "BLOCKED"
-      : "READY";
+  const state = overallReadinessState(checks);
   const readiness: ClosingReadiness = { state, checks };
   // A READY verdict is one every row check passed, so the rows were read.
   return state === "READY" && rows !== null

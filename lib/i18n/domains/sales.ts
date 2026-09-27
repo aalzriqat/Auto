@@ -872,7 +872,7 @@ const dealOverviewMessages = defineBilingualMessages({
   CustodyWriteOffDesc: ["Posts the shortage to Cash Over/Short with the reason below. Money owed to the employee can never be written off.", "يُرحَّل العجز إلى زيادة/نقص النقدية مع السبب أدناه. لا يمكن أبدًا شطب مال مستحق للموظف."],
   CustodyWriteOffReason: ["Write-off reason", "سبب الشطب"],
   CustodyReopenTitle: ["Reopen this custody record", "إعادة فتح سجل العهدة"],
-  CustodyReopenDesc: ["Withdraws the closure. A written-off shortage returns to the employee's balance and the deal's classification is withdrawn.", "يسحب الإغلاق. يعود العجز المشطوب إلى رصيد الموظف ويُسحب تصنيف الصفقة المحاسبي."],
+  CustodyReopenDesc: ["Withdraws the closure. A written-off shortage returns to the employee's balance, and the deal cannot be closed until the custody is settled again.", "يسحب الإغلاق. يعود العجز المشطوب إلى رصيد الموظف، ولا يمكن إغلاق الصفقة حتى تُسوّى العهدة مجددًا."],
   CustodyReverseTitle: ["Reverse this movement", "عكس هذه الحركة"],
   CustodyReverseDesc: ["Cancels the whole movement and its journal with a correction dated today. The original stays visible.", "يلغي الحركة كاملة وقيدها بتصحيح مؤرَّخ اليوم. تبقى الحركة الأصلية ظاهرة."],
   CustodyReason: ["Reason", "السبب"],
@@ -1808,6 +1808,8 @@ export const salesEn = {
   FinalizeDealAction: "Close the deal",
   FinalizeNeedsPermission:
     "You do not have permission to close the deal. Someone who does completes this step.",
+  FinalizeNeedsClosingReadiness:
+    "The deal is not ready to close yet. Complete the items marked in the closing readiness list, then close it.",
   /**
    * The prerequisite, named before it becomes a refusal.
    *
@@ -2742,6 +2744,8 @@ export const salesAr = {
     "لا تملك صلاحية تسجيل الدفعة المتوقعة. يُكمل هذه الخطوة من يملكها.",
   FinalizeDealAction: "إغلاق الصفقة",
   FinalizeNeedsPermission: "لا تملك صلاحية إغلاق الصفقة. يُكمل هذه الخطوة من يملكها.",
+  FinalizeNeedsClosingReadiness:
+    "الصفقة غير جاهزة للإغلاق بعد. أكمل البنود المؤشَّر عليها في قائمة جاهزية الإغلاق، ثم أغلقها.",
   FinalizeNeedsSettlementRoute:
     "هذه المركبة تعود للمورد والصفقة ممولة، لذا يجب تسجيل الجهة التي تدفع لها شركة التمويل قبل إغلاق الصفقة. اختره هنا، في هذه الخطوة.",
   FinalizeNeedsRouteAndPermission:

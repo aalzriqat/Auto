@@ -8395,7 +8395,7 @@ describe("SCRUM-407: automatic closing readiness", () => {
     expect(String(refusedAsSales)).toMatch(/confirm:finance_disbursement/);
     // The accountant closed it inside the hook, so runDeal's own finalize replays the stored sale.
     expect(typeof saleId).toBe("string");
-    expect((await salesOf(through)).length).toBe(1);
+    expect(await salesOf(through)).toHaveLength(1);
   });
 
   describe("stored economics follow every settlement-input fee change, after the write", () => {
