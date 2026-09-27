@@ -1316,8 +1316,11 @@ function ReconciliationDialog({ open, onOpenChange }: { open: boolean; onOpenCha
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{t("CashierReconciliation" as any)}</DialogTitle>
-          <DialogDescription>{draft ? t("CashierReconciliationDraftDesc" as any).replace("{count}", String(draft.paymentCount)).replace("{amount}", formatCurrency(draft.expectedCash)) : t("LoadingExpectedCash" as any)}</DialogDescription>
+          <DialogDescription>{!draft ? t("LoadingExpectedCash" as any) : draft.complete ? t("CashierReconciliationDraftDesc" as any).replace("{count}", String(draft.paymentCount)).replace("{amount}", formatCurrency(draft.expectedCash)) : null}</DialogDescription>
         </DialogHeader>
+        {draft?.complete === false && (
+          <p role="alert" className="text-sm font-medium text-destructive">{t("CashierReconciliationIncomplete" as any)}</p>
+        )}
         <div className="grid gap-4">
           <Input type="date" value={businessDate} onChange={(event) => setBusinessDate(event.target.value)} />
           <Input type="number" min="0" step="0.01" value={countedCash} onChange={(event) => setCountedCash(event.target.value)} placeholder={t("CountedCash" as any)} />
@@ -1325,7 +1328,7 @@ function ReconciliationDialog({ open, onOpenChange }: { open: boolean; onOpenCha
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
-          <Button onClick={submit} disabled={submitting || !countedCash}>{submitting ? t("Submitting" as any) : t("Submit" as any)}</Button>
+          <Button onClick={submit} disabled={submitting || !countedCash || draft?.complete !== true}>{submitting ? t("Submitting" as any) : t("Submit" as any)}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

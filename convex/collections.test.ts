@@ -2126,6 +2126,98 @@ describe("Collections", () => {
     })).rejects.toThrow("Only submitted reconciliations can be reviewed");
   });
 
+  // SCRUM-259: the reconciliation read the cashier's first 500 payments of all
+  // time and filtered afterwards, so a cash payment behind 500 older rows was
+  // invisible and the day was certified from a hidden prefix.
+  test("cashier_reconciliation_includes_a_cash_payment_behind_500_older_rows", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, userId, asFinance } = await seedFinanceMember(t);
+    const now = Date.now();
+    const lastMonth = now - 30 * 24 * 60 * 60 * 1000;
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 500; i += 1) {
+        await ctx.db.insert("collectionPayments", {
+          orgId, customerId, direction: "IN", method: "CASH", amount: 1,
+          paymentDate: lastMonth, status: "POSTED", cashierId: userId, createdAt: lastMonth,
+        });
+      }
+      await ctx.db.insert("collectionPayments", {
+        orgId, customerId, direction: "IN", method: "CASH", amount: 250,
+        paymentDate: now, status: "POSTED", cashierId: userId, createdAt: now,
+      });
+    });
+
+    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
+    expect(draft).toMatchObject({ complete: true, expectedCash: 250, paymentCount: 1 });
+
+    const reconciliationId = await asFinance.mutation(api.collections.submitCashierReconciliation, {
+      orgId, businessDate: now, countedCash: 250, idempotencyKey: crypto.randomUUID(),
+    });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(reconciliationId)).toMatchObject({ expectedCash: 250, difference: 0 });
+      const linked = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_reconciliation", (q) => q.eq("reconciliationId", reconciliationId))
+        .collect();
+      expect(linked.map((payment) => payment.amount)).toEqual([250]);
+    });
+  });
+
+  test("cashier_reconciliation_refuses_a_day_it_cannot_read_completely", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, userId, asFinance } = await seedFinanceMember(t);
+    const now = Date.now();
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 1001; i += 1) {
+        await ctx.db.insert("collectionPayments", {
+          orgId, customerId, direction: "IN", method: "BANK_TRANSFER", amount: 1,
+          paymentDate: now, status: "POSTED", cashierId: userId, createdAt: now,
+        });
+      }
+    });
+
+    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
+    expect(draft).toMatchObject({ complete: false, expectedCash: null, paymentCount: null });
+
+    await expect(asFinance.mutation(api.collections.submitCashierReconciliation, {
+      orgId, businessDate: now, countedCash: 0, idempotencyKey: "recon-too-large",
+    })).rejects.toThrow("too many unreconciled payments");
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("cashierReconciliations").collect()).toHaveLength(0);
+      const linked = await ctx.db.query("collectionPayments").collect();
+      expect(linked.filter((payment) => payment.reconciliationId !== undefined)).toHaveLength(0);
+    });
+  });
+
+  test("cashier_reconciliation_limit_ignores_reconciled_and_voided_rows", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, userId, asFinance } = await seedFinanceMember(t);
+    const now = Date.now();
+    // A day already reconciled once must stay reconcilable: rows it linked, and
+    // rows since voided, no longer count toward what the next read must hold.
+    const earlierId = await asFinance.mutation(api.collections.submitCashierReconciliation, {
+      orgId, businessDate: now, countedCash: 0, idempotencyKey: crypto.randomUUID(),
+    });
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 600; i += 1) {
+        await ctx.db.insert("collectionPayments", {
+          orgId, customerId, direction: "IN", method: "CASH", amount: 1, reconciliationId: earlierId,
+          paymentDate: now, status: "POSTED", cashierId: userId, createdAt: now,
+        });
+        await ctx.db.insert("collectionPayments", {
+          orgId, customerId, direction: "IN", method: "CASH", amount: 1,
+          paymentDate: now, status: "VOIDED", cashierId: userId, createdAt: now,
+        });
+      }
+      await ctx.db.insert("collectionPayments", {
+        orgId, customerId, direction: "IN", method: "CASH", amount: 40,
+        paymentDate: now, status: "POSTED", cashierId: userId, createdAt: now,
+      });
+    });
+
+    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
+    expect(draft).toMatchObject({ complete: true, expectedCash: 40, paymentCount: 1 });
+  });
   test("daily_collection_reminders_queue_channels_dedupe_and_mark_results", async () => {
     // Installed before anything schedules: vitest fake timers only control
     // timers created after this call, so installing them at drain time leaves
