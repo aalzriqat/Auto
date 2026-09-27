@@ -608,26 +608,31 @@ export default function Step1QuoteSetup({
             <ShieldAlert className="h-4 w-4" />
             <AlertTitle>Approval Required</AlertTitle>
             <AlertDescription className="mt-2 flex flex-col gap-3 items-start">
-              <p>The desired profit ({currency.format(profitVerdict.margin)}) is below the minimum required profit for this vehicle ({currency.format(profitVerdict.minimumProfit)}).</p>
+              <p>At this price the profit over the list price ({currency.format(profitVerdict.margin)}) is below the minimum required profit for this vehicle ({currency.format(profitVerdict.minimumProfit)}).</p>
 
               {profitVerdict.status === "PENDING" ? (
                 <div className="flex items-center gap-2 text-yellow-600 dark:text-yellow-400 bg-yellow-500/10 px-3 py-1.5 rounded-md text-sm font-medium">
                   Approval request is currently pending. Please wait for a manager.
                 </div>
-              ) : profitVerdict.status === "REJECTED" ? (
-                <div className="flex items-center gap-2 text-red-600 dark:text-red-400 bg-red-500/10 px-3 py-1.5 rounded-md text-sm font-medium">
-                  Your request for this profit amount was rejected. Please increase the profit or request again.
-                </div>
               ) : (
-                <Button
-                  type="button"
-                  variant="destructive"
-                  size="sm"
-                  onClick={handleRequestApproval}
-                  disabled={isRequesting}
-                >
-                  {isRequesting ? "Requesting..." : "Request Profit Approval"}
-                </Button>
+                <>
+                  {/* A rejection closes that request, not the price: the
+                      salesperson may change the price or ask again. */}
+                  {profitVerdict.status === "REJECTED" ? (
+                    <div className="flex items-center gap-2 text-red-600 dark:text-red-400 bg-red-500/10 px-3 py-1.5 rounded-md text-sm font-medium">
+                      Your request for this profit amount was rejected. Please increase the profit or request again.
+                    </div>
+                  ) : null}
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    onClick={handleRequestApproval}
+                    disabled={isRequesting}
+                  >
+                    {isRequesting ? "Requesting..." : "Request Profit Approval"}
+                  </Button>
+                </>
               )}
             </AlertDescription>
           </Alert>
@@ -637,7 +642,7 @@ export default function Step1QuoteSetup({
             <CheckCircle2 className="h-4 w-4 text-emerald-500" />
             <AlertTitle>Profit Approved</AlertTitle>
             <AlertDescription>
-              Your requested profit of {currency.format(profitVerdict.margin)} was approved by management. You may proceed.
+              Management approved this sale price (profit over the list price: {currency.format(profitVerdict.margin)}). You may proceed.
             </AlertDescription>
           </Alert>
         )}

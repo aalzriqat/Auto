@@ -1543,7 +1543,14 @@ export function DealCockpit({
     orgId,
     vehicleId: app?.vehicleId,
     salePrice: finalizeSalePrice,
-    enabled: !!app?.quote && app.quote.mode !== "CASH",
+    // Only the finalizer acts on it, and the status read needs VIEW_VEHICLES: a
+    // viewer without both must not subscribe, or the thrown read takes the
+    // whole cockpit down. completeSale still re-proves the rule server-side.
+    enabled:
+      canFinalizeApplication &&
+      hasPermission(PERMISSIONS.VIEW_VEHICLES) &&
+      !!app?.quote &&
+      app.quote.mode !== "CASH",
   });
 
   // Below every hook, deliberately. An early return placed above `useRef` changes
