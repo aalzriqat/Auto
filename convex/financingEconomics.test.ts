@@ -83,6 +83,7 @@ async function seedDealer(
     allowsQuotationAboveAppraisal: boolean;
     lowerAppraisalTolerancePercent: number;
     minimumCustomerFirstPaymentMinor: number;
+    ltvBasis: "INDEPENDENT_APPRAISAL";
   }> = {},
   suffix = "1"
 ): Promise<Seed> {
@@ -169,6 +170,7 @@ async function seedDealer(
     ...(companyRules.lowerAppraisalTolerancePercent !== undefined
       ? { lowerAppraisalTolerancePercent: companyRules.lowerAppraisalTolerancePercent }
       : {}),
+    ...(companyRules.ltvBasis !== undefined ? { ltvBasis: companyRules.ltvBasis } : {}),
     ...(companyRules.minimumCustomerFirstPaymentMinor !== undefined
       ? { minimumCustomerFirstPaymentMinor: companyRules.minimumCustomerFirstPaymentMinor }
       : {}),
@@ -5746,23 +5748,10 @@ describe("applying the quote's down payment to an approved zero first payment (S
   async function zeroedApprovedDeal(
     options: { quoteDownPaymentMajor?: number; suffix?: string; lendsAgainstAppraisal?: boolean } = {}
   ): Promise<{ seed: Seed; applicationId: Id<"financeApplications"> }> {
-    const seed = await seedDealer({}, options.suffix ?? "1");
-    if (options.lendsAgainstAppraisal) {
-      await seed.asUser.mutation(api.finance.updateCompany, {
-        expectedEditRevision: 1,
-        id: seed.companyId,
-        orgId: seed.orgId,
-        name: "Jordan Finance",
-        profitRate: 5,
-        maxTermMonths: 60,
-        gracePeriodMonths: 0,
-        isActive: true,
-        maxFinancingLTV: 85,
-        defaultLtvPercent: 85,
-        customerFirstPaymentOffsetsUnfinancedShare: true,
-        ltvBasis: "INDEPENDENT_APPRAISAL",
-      });
-    }
+    const seed = await seedDealer(
+      options.lendsAgainstAppraisal ? { ltvBasis: "INDEPENDENT_APPRAISAL" } : {},
+      options.suffix ?? "1"
+    );
     const applicationId = await createApplication(seed);
     if (options.quoteDownPaymentMajor !== undefined) {
       await seed.t.run(async (ctx) => {
@@ -5905,14 +5894,12 @@ describe("applying the quote's down payment to an approved zero first payment (S
   });
 
   test("a quote down payment exactly equal to the unfinanced portion is accepted", async () => {
-    const probe = await zeroedApprovedDeal({ suffix: "probe" });
-    const unfinancedMinor = (await readApp(probe.seed, probe.applicationId)).unfinancedPortionMinor;
+    const { seed, applicationId } = await zeroedApprovedDeal();
+    const app = await readApp(seed, applicationId);
+    const unfinancedMinor = app.unfinancedPortionMinor;
     if (unfinancedMinor === undefined) throw new Error("fixture: no split");
-    const { seed, applicationId } = await zeroedApprovedDeal({
-      quoteDownPaymentMajor: unfinancedMinor / jod(1),
-      suffix: "edge",
-    });
-    expect((await readApp(seed, applicationId)).unfinancedPortionMinor).toBe(unfinancedMinor);
+    // The quote is read when the correction runs, so it can be moved to the edge now.
+    await seed.t.run((ctx) => ctx.db.patch(app.quoteId, { downPayment: unfinancedMinor / jod(1) }));
     expect((await cockpitCapability(seed, applicationId))?.block).toBeNull();
 
     await apply(seed, applicationId);

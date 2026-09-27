@@ -47,6 +47,7 @@ import {
   type FinanceCompanyRuleSnapshot,
 } from "./utils/financingEconomics";
 import { invalidateClassification } from "./utils/classificationInvalidation";
+import { escapeRegex } from "./utils/vehicleTextMatch";
 import {
   FIRST_PAYMENT_CORRECTION_REFUSALS,
   FIRST_PAYMENT_NOT_RECORDED_REASON,
@@ -138,10 +139,11 @@ export async function recomputeEconomicsForApplication(
   await recomputeAndPatchEconomics(ctx, app);
 }
 
+/** True when the split was derived and stored; false when it was withheld or the inputs are incomplete. */
 async function recomputeAndPatchEconomics(
   ctx: MutationCtx,
   app: Doc<"financeApplications">
-): Promise<void> {
+): Promise<boolean> {
   // Defense in depth. Every caller is guarded at its own handler top, but this
   // is the shared writer of the derived split — if a future mutation reaches it
   // without its own check, the bad denomination stops here rather than being
@@ -160,7 +162,7 @@ async function recomputeAndPatchEconomics(
     app.approvedDealerPurchaseAmountMinor === undefined ||
     app.appliedLtvPercent === undefined
   ) {
-    return;
+    return false;
   }
 
   // Refused before any write: a corrupt component must not be recomputed
@@ -252,7 +254,7 @@ async function recomputeAndPatchEconomics(
       ),
       updatedAt: Date.now(),
     });
-    return;
+    return false;
   }
 
   // Only meaningful once somebody has recorded where the customer's money
@@ -295,6 +297,7 @@ async function recomputeAndPatchEconomics(
         }),
     updatedAt: Date.now(),
   });
+  return true;
 }
 
 /**
@@ -324,7 +327,7 @@ function withoutReconciliationReason(
   sentence: string
 ): string | undefined {
   if (!existing) return existing;
-  const escaped = sentence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escaped = escapeRegex(sentence);
   const standalone = new RegExp(`^${escaped}(?:\\s+|$)|(?<=[.!?])\\s+${escaped}(?=\\s|$)`, "g");
   const rest = existing.replace(standalone, "").trim();
   return rest || undefined;
@@ -2622,11 +2625,11 @@ export const applyQuoteFirstPayment = mutation({
 
     // Every figure derived from the first payment moves in this transaction.
     const corrected = await ctx.db.get(app._id);
-    if (corrected) await recomputeAndPatchEconomics(ctx, corrected);
+    const splitDerived = corrected ? await recomputeAndPatchEconomics(ctx, corrected) : false;
     // The stored split this was judged against is not proof the recompute can
     // re-derive one (an orphaned basis appraisal clears it). A correction that
     // leaves the deal without a split is refused, and the throw undoes it all.
-    if ((await ctx.db.get(app._id))?.unfinancedPortionMinor === undefined) {
+    if (!splitDerived) {
       throw new ConvexError(
         "The funding split could not be recomputed with the corrected first payment, so nothing was changed. Record the figure the finance company's rule needs first."
       );
