@@ -87,7 +87,6 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "expenses.reverseExpense": { bucket: "STATE_GUARDED", mechanism: "posts only from pre-existing durable state, so its accounting idempotency key is stable across a retry and the posting engine dedupes it" },
   "expenses.update": { bucket: "STATE_GUARDED", mechanism: "reverses through hookPrepaidExpenseAmortizationsReversed, whose reversal key is derived from the original posted event, not from a fresh id" },
   "financeDealCosts.adoptCompanyFeeTemplates": { bucket: "RETIRED", mechanism: "public compatibility endpoint remains source-visible but always throws; fee-template adoption was retired when adminFees became the sole expected execution-fee authority" },
-  "financeDealCosts.classifyDealAccounting": { bucket: "RETIRED", mechanism: "public compatibility endpoint remains source-visible but always throws; the manual classification stamp was retired when closing readiness became an automatic check re-run by finalizeDeal (SCRUM-407)" },
   "financeDealCosts.openDealCustody": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; the ISSUED entry it mints posts under `custody_entry_${entryId}` INSIDE the idempotent section, so a replay returns the stored custody id and never reaches the hook" },
   "financeDealCosts.planCustodyHandler": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic (a `plannedCustody` patch on financeApplications); names who will handle the handover before any cash moves, audited, and posts nothing" },
   "financeDealCosts.migrateLegacyCustodyToLedger": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted on the custody id; every posting it makes is keyed on PRE-EXISTING entry, fee and custody ids through the same hooks the product uses, and a fresh key against a record already CANONICAL is refused inside the section" },
@@ -281,7 +280,8 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // 119 → 120: `financingEconomics.applyQuoteFirstPayment` (SCRUM-373 D2).
     // 120 → 122: `supplierCostRecoveries.recordReceipt` and
     // `supplierCostRecoveries.reverseReceipt` (SCRUM-389 supplier cost bearer).
-    // 122 → 121: `financeDealCosts.classifyDealAccounting` RETIRED (SCRUM-407).
+    // 122 → 121: `financeDealCosts.classifyDealAccounting` RETIRED (SCRUM-407),
+    // then deleted outright with its classification entry.
     expect(population.length).toBe(121);
   });
 

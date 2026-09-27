@@ -1300,9 +1300,9 @@ describe("the legal invoice and automatic closing readiness", () => {
     });
   });
 
-  test("a deal defaults to pending classification rather than looking settled", async () => {
+  test("the retired classification stamp is not served (SCRUM-407 P1.5)", async () => {
     const seed = await seedDeal();
-    expect((await readCosts(seed)).accountingClassification).toBe("PENDING_CLASSIFICATION");
+    expect(await readCosts(seed)).not.toHaveProperty("accountingClassification");
   });
 
   test("replacing a recorded invoice is audited", async () => {
@@ -1411,7 +1411,6 @@ describe("the legal invoice and automatic closing readiness", () => {
     // describing three different things.
     const costs = await readCosts(seed);
     expect(costs.legalInvoiceAmountMinor).toBeUndefined();
-    expect(costs.accountingClassification).toBe("PENDING_CLASSIFICATION");
   });
 });
 

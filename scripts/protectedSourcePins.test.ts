@@ -537,11 +537,39 @@ describe("protected source content pins", () => {
        * Same governance: not weakened, bypassed, deleted, generalized or made
        * vacuous. Both constants were recomputed FROM THE FILE with this test's
        * own normalization.
+       *
+       * -- RENEWAL 2026-09-28 (2) - SCRUM-407 /simplify cleanup
+       *
+       * Previous postimage, superseded by this entry (the SCRUM-407 renewal
+       * just above):
+       *
+       *   bytes:  238688
+       *   sha256: 2f26139b5a495584db7597b6fdd0638a186649d78f47e105614d122208c8c8f6
+       *
+       * The delta, 56 insertions and 43 deletions: (1) a new private helper
+       * `closingReadinessInputs` derives the settlement route and the currency
+       * for BOTH `getClosingReadiness` and `finalizeDeal`, and now carries
+       * `finalizeDeal`'s existing deal-currency vs org-currency refusal
+       * (SCRUM-241), moved verbatim, so the query reports that deal as
+       * UNAVAILABLE instead of READY while the door refuses it (P1.4 "one
+       * evaluator"; failing-first test in sn31CurrencyMismatchRepro.test.ts);
+       * (2) `getClosingReadiness` uses `mayReadFinanceEconomics` (the same
+       * owner-or-view:finance rule it spelled out by hand), computes the
+       * open/closed test once, and no longer returns the unused `figures`
+       * block; (3) the import gains `mayReadFinanceEconomics`. The door's
+       * permission, the order of its refusals and every refusal message are
+       * unchanged. NOT yet reviewed by an independent seat at the time of
+       * this renewal. Read the hunks; do not take this note's word for their
+       * scope.
+       *
+       * Same governance: not weakened, bypassed, deleted, generalized or made
+       * vacuous. Both constants were recomputed FROM THE FILE with this test's
+       * own normalization.
        */
       file: "convex/applications.ts",
-      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)), then for SCRUM-407 automatic closing readiness (RENEWAL 2026-09-28).
-      bytes: 238688,
-      sha256: "2f26139b5a495584db7597b6fdd0638a186649d78f47e105614d122208c8c8f6",
+      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)), then for SCRUM-407 automatic closing readiness (RENEWALs 2026-09-28 and 2026-09-28 (2)).
+      bytes: 238873,
+      sha256: "4de5f5712a57aad5f095d98bd95428e6205f0a157a340d2b3a358dae5d82f9be",
     },
     {
       /**

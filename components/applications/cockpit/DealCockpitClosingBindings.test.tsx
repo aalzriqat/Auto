@@ -233,7 +233,6 @@ describe("DealCockpit closing bindings (TASK-DEAL-04)", () => {
         { key: "COSTS_CLOSABLE", status: "UNAVAILABLE", reason: "This deal has more than 500 live cost lines." },
         { key: "FIRST_PAYMENT_RECORDED", status: "NOT_APPLICABLE", reason: null },
       ],
-      figures: { expectedDealerRemittanceMinor: null, legalInvoiceAmountMinor: null },
     });
     render(<DealCockpit orgId={ORG} applicationId={APP} />);
 
@@ -272,7 +271,6 @@ describe("DealCockpit closing bindings (TASK-DEAL-04)", () => {
       open: true,
       moneyWithheld: true,
       checks: [{ key: "CUSTODY_SETTLED", status: "READY", reason: null }],
-      figures: { expectedDealerRemittanceMinor: null, legalInvoiceAmountMinor: null },
     });
     render(<DealCockpit orgId={ORG} applicationId={APP} />);
 

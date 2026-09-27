@@ -359,6 +359,13 @@ const PROFIT_BLOCKED_REASON: Record<
   FinancedDirectUnverified: "ProfitFinancedDirectUnverified",
 };
 
+/** The same labels the legal-invoice dialog offers, so the record reads as it was entered. */
+const LEGAL_INVOICE_ISSUED_TO_LABEL: Record<string, string> = {
+  FINANCE_COMPANY: "PartyFinancier",
+  CUSTOMER: "Customer",
+  OTHER: "Other",
+};
+
 /**
  * Why the close cannot be taken — and it takes BOTH conditions, because the
  * two interact rather than merely coexisting.
@@ -377,13 +384,6 @@ const PROFIT_BLOCKED_REASON: Record<
  * Extracted rather than left as a nested ternary so the combinations are
  * enumerable, and testable, one line each.
  */
-/** The same labels the legal-invoice dialog offers, so the record reads as it was entered. */
-const LEGAL_INVOICE_ISSUED_TO_LABEL: Record<string, string> = {
-  FINANCE_COMPANY: "PartyFinancier",
-  CUSTOMER: "Customer",
-  OTHER: "Other",
-};
-
 function finalizeUnavailableReasonKey(
   routeRequired: boolean,
   canRecordRoute: boolean,
@@ -2329,7 +2329,7 @@ export function DealCockpit({
       closingChecklist={
         canViewApplications && deal
           ? {
-              readiness: closingReadiness as ClosingReadinessView | undefined,
+              readiness: closingReadiness,
               // The legal invoice is still recorded by hand while the v1
               // posting plan reads it (SCRUM-411 retires that dependency); it
               // is shown and recorded by the disbursement tier only, as before.

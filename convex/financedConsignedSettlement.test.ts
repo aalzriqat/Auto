@@ -8490,7 +8490,6 @@ describe("SCRUM-407: automatic closing readiness", () => {
       expect(full.state).toBe("BLOCKED");
       expect(full.moneyWithheld).toBe(false);
       expect(full.checks.find((check) => check.key === "CUSTODY_SETTLED")).toMatchObject({ status: "BLOCKED", reason: expect.stringMatching(/still open/) });
-      expect(full.figures).toEqual({ expectedDealerRemittanceMinor: VEHICLE_PRICE * SCALE, legalInvoiceAmountMinor: null });
 
       const viewerId = await s.t.run(async (ctx) => {
         const userId = await ctx.db.insert("users", { clerkId: "r407-q-viewer", email: "r407v@example.com", name: "Viewer" });
@@ -8503,19 +8502,9 @@ describe("SCRUM-407: automatic closing readiness", () => {
       const redacted = await asViewer.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
       expect(redacted.state).toBe("BLOCKED");
       expect(redacted.moneyWithheld).toBe(true);
-      expect(redacted.figures).toEqual({ expectedDealerRemittanceMinor: null, legalInvoiceAmountMinor: null });
       // The same checks, the same verdicts — only the money-bearing detail is withheld.
       expect(redacted.checks.map((check) => [check.key, check.status])).toEqual(full.checks.map((check) => [check.key, check.status]));
       expect(JSON.stringify(redacted)).not.toContain(String(VEHICLE_PRICE * SCALE));
     });
-  });
-
-  test("classifyDealAccounting is retired: it refuses and writes no stamp", async () => {
-    const s = await seedDealership("r407-classify");
-    const { applicationId } = await runDeal(s, { route: "THROUGH_DEALERSHIP", finalize: false });
-    await expect(
-      s.asUser.mutation(api.financeDealCosts.classifyDealAccounting, { orgId: s.orgId, applicationId, notes: "established" })
-    ).rejects.toThrow(/retired/);
-    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))!.accountingClassification).toBeUndefined();
   });
 });

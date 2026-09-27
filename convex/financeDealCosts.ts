@@ -46,10 +46,6 @@ import {
   summarizeReadableCustody,
   unreadableCustodyAmounts,
 } from "./utils/settlementDeductions";
-// Re-exported from their new home (SCRUM-407): the finalization readiness
-// evaluator shares this one custody calculation with the writers below.
-export { summarizeCustody, unreadableCustodyAmounts };
-export type { CustodyAmountsUnreadableReason } from "./utils/settlementDeductions";
 import { assertSupportedDenomination } from "./utils/money";
 import {
   feeTemplatesExceedConfigurationLimit,
@@ -1592,9 +1588,6 @@ export const listDealCosts = query({
       custody,
       /** More custody records exist than this read hydrates; the list above is a prefix. */
       custodyTruncated,
-      // Stated rather than derived: PENDING_CLASSIFICATION is what an unset
-      // value means, and saying so beats every caller re-deriving it.
-      accountingClassification: app.accountingClassification ?? "PENDING_CLASSIFICATION",
       legalInvoiceAmountMinor: app.legalInvoiceAmountMinor,
       legalInvoiceNumber: app.legalInvoiceNumber,
       legalInvoiceDate: app.legalInvoiceDate,
@@ -2204,7 +2197,11 @@ export const recordActualFeeAmount = mutation({
     if (custodyId || fee.custodyPosted) {
       await syncCustodyFeePosting(ctx, args.feeId, user._id, "Handover cost actual re-recorded.");
     }
-    await recomputeAfterSettlementInputChange(ctx, fee.applicationId, fee.deductedFromSettlement);
+    // Only the amount is a settlement input here; re-recording the same figure
+    // (a new receipt, a paid date) moves no stored economics.
+    if (args.actualAmountMinor !== fee.actualAmountMinor) {
+      await recomputeAfterSettlementInputChange(ctx, fee.applicationId, fee.deductedFromSettlement);
+    }
     return args.feeId;
   },
 });
@@ -3465,33 +3462,3 @@ export const recordLegalInvoice = mutation({
   },
 });
 
-/**
- * RETIRED (SCRUM-407 Part 1, owner ruling): closing readiness is an automatic
- * check, not a manual stamp.
- *
- * `finalizeDeal` re-derives every condition this command used to establish —
- * reconciled costs, configured fees recorded, the custody family on the books,
- * no open or unbalanced custody record, a known remittance, the legal invoice —
- * from the live rows through `evaluateClosingReadiness`, and the deal screen
- * shows the same evaluator's verdict (`applications.getClosingReadiness`). The
- * stored economics are recomputed after every settlement-input fee change, so
- * nothing is left for a stamp to "establish".
- *
- * The endpoint stays registered only so a stale client gets a clear refusal
- * rather than a missing-function error; it writes nothing. Historical
- * `accountingClassification*` fields and their override rows are history and
- * are never read by live readiness.
- */
-export const classifyDealAccounting = mutation({
-  args: {
-    orgId: v.id("organizations"),
-    applicationId: v.id("financeApplications"),
-    notes: v.string(),
-  },
-  handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
-    throw new ConvexError(
-      "Classifying a deal's accounting has been retired: readiness is now checked automatically from the deal's own records when it is finalized. Nothing has been changed."
-    );
-  },
-});

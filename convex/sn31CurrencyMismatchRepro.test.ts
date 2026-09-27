@@ -366,6 +366,20 @@ describe("SN3-1 — confirmDisbursement when the deal's pinned currency ≠ the 
     expect((await settlementDelta(s, applicationId)).receivable).toMatchObject({ currency: "JOD", status: "OPEN" });
   });
 
+  test("SCRUM-407 P1.4 — the readiness query never shows READY on a drifted pin that finalizeDeal refuses", async () => {
+    const s = await seedDealership("pre3");
+    const { applicationId } = await approvedDealWithPinnedEconomics(s);
+    await driftOrgCurrencyOutOfContract(s, "USD");
+    await expect(finalize(s, applicationId)).rejects.toThrow(/organization's currency is now USD/i);
+
+    const readiness = () => s.asUser.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
+    expect((await readiness()).state).toBe("UNAVAILABLE");
+
+    // Restoring the setting is the only change, and the verdict follows it.
+    await driftOrgCurrencyOutOfContract(s, "JOD");
+    expect((await readiness()).state).toBe("READY");
+  });
+
   test("MERGED INVARIANT — the OLD caller's figure (principal at the org's current scale) is still refused at the amount gate on a same-currency deal, zero delta", async () => {
     const s = await seedDealership("old");
     const { applicationId } = await approvedDealWithPinnedEconomics(s);

@@ -17,6 +17,7 @@ import {
   // goes through it.
 } from "./utils/tenancy";
 import {
+  mayReadFinanceEconomics,
   mayRecordSubmittedQuotation,
   projectFinanceApplication,
 } from "./utils/financeApplicationProjection";
@@ -3709,6 +3710,40 @@ const WITHHELD_READINESS_REASON: Record<ClosingReadinessCheckKey, string> = {
 };
 
 /**
+ * The deal-level inputs the closing-readiness evaluator is judged on — the
+ * settlement route and the currency — derived ONCE, by the same rule, for the
+ * deal screen and the finalize door (SCRUM-407 P1.4), so the screen cannot show
+ * READY on a deal the door refuses for its denomination.
+ *
+ * Refuses (ConvexError) when the deal's denomination cannot be established, or
+ * when its pinned `economicsCurrency` has drifted from the organization's
+ * current currency: the plan and the receivable take the pin while the sale's
+ * own journal posts in the org's CURRENT currency (completeSale), so finalizing
+ * would recognise the plan's integers under the wrong label and open a debt the
+ * receipt path settles in another currency (SCRUM-241). Pinning the economics
+ * does not lock the org setting, so the two can have drifted apart. Nothing is
+ * converted, relabelled or clipped; restoring the setting makes the same deal
+ * ready.
+ */
+async function closingReadinessInputs(
+  ctx: QueryCtx | MutationCtx,
+  app: Doc<"financeApplications">,
+  operation: string
+): Promise<{ settlesDirect: boolean; currency: string }> {
+  assertSupportedDenomination(app.economicsCurrency, operation);
+  const orgCurrencyNow = await getOrgCurrency(ctx, app.orgId);
+  if (app.economicsCurrency !== undefined && app.economicsCurrency !== orgCurrencyNow) {
+    throw new ConvexError(
+      `This deal's figures were recorded in ${app.economicsCurrency}, but the organization's currency is now ${orgCurrencyNow}. A deal is finalized in the currency its figures were recorded in — restore the organization's currency to ${app.economicsCurrency} before finalizing it.`
+    );
+  }
+  return {
+    settlesDirect: await settlesDirectToSupplier(ctx, app),
+    currency: app.economicsCurrency ?? orgCurrencyNow,
+  };
+}
+
+/**
  * The deal's automatic closing readiness (SCRUM-407 P1.4): the SAME evaluator
  * `finalizeDeal` re-runs internally, so what the screen shows and what the
  * server enforces cannot disagree — and the server never trusts the screen.
@@ -3731,31 +3766,28 @@ export const getClosingReadiness = query({
   handler: async (ctx, args) => {
     const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
     const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId);
-    const mayReadMoney =
-      isSystemOwnerRole(auth.role) ||
-      auth.role.permissions.includes(PERMISSIONS.VIEW_FINANCE);
+    const mayReadMoney = mayReadFinanceEconomics(auth.role);
+    /** Whether this deal is still open to be finalized at all. */
+    const open = app.status !== "CLOSED" && app.status !== "CANCELLED" && app.status !== "REJECTED";
 
-    let readiness: ClosingReadiness;
-    if (app.status === "CLOSED" || app.status === "CANCELLED" || app.status === "REJECTED") {
-      readiness = { state: "UNAVAILABLE", checks: [] };
-    } else {
+    let readiness: ClosingReadiness = { state: "UNAVAILABLE", checks: [] };
+    if (open) {
       try {
-        assertSupportedDenomination(app.economicsCurrency, "checking this deal's closing readiness");
-        const settlesDirect = await settlesDirectToSupplier(ctx, app);
-        readiness = await evaluateClosingReadiness(ctx, app, {
-          settlesDirect,
-          currency: app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId)),
-        });
+        readiness = (
+          await evaluateClosingReadiness(
+            ctx,
+            app,
+            await closingReadinessInputs(ctx, app, "checking this deal's closing readiness")
+          )
+        ).readiness;
       } catch (error) {
         if (!(error instanceof ConvexError)) throw error;
-        readiness = { state: "UNAVAILABLE", checks: [] };
       }
     }
 
     return {
       state: readiness.state,
-      /** Whether this deal is still open to be finalized at all. */
-      open: app.status !== "CLOSED" && app.status !== "CANCELLED" && app.status !== "REJECTED",
+      open,
       checks: readiness.checks.map((check) => ({
         key: check.key,
         status: check.status,
@@ -3763,10 +3795,6 @@ export const getClosingReadiness = query({
           check.reason === null ? null : mayReadMoney ? check.reason : WITHHELD_READINESS_REASON[check.key],
       })),
       moneyWithheld: !mayReadMoney,
-      figures: {
-        expectedDealerRemittanceMinor: mayReadMoney ? app.expectedDealerRemittanceMinor ?? null : null,
-        legalInvoiceAmountMinor: mayReadMoney ? app.legalInvoiceAmountMinor ?? null : null,
-      },
     };
   },
 });
@@ -3835,25 +3863,12 @@ export const finalizeDeal = mutation({
         // a SALE. A deal whose denomination cannot be established must not be
         // turned into money here either — otherwise every guard upstream is
         // just a longer road to the same wrong figure.
-        assertSupportedDenomination(app.economicsCurrency, "finalizing this deal");
-
-        // The plan and the receivable take the deal's pinned economicsCurrency;
-        // the sale's own journal posts in the organisation's CURRENT currency
-        // (completeSale). Pinning the economics does not lock the org setting —
-        // nothing financial exists yet — so the two can have drifted apart by
-        // now, and finalizing would then recognise the plan's integers under
-        // the wrong label and open a debt the receipt path settles in another
-        // currency. Refused before the sale exists (SCRUM-241): nothing is
-        // converted, relabelled or clipped. Restoring the setting makes the
-        // same deal finalize.
-        if (app.economicsCurrency !== undefined) {
-          const orgCurrencyNow = await getOrgCurrency(ctx, args.orgId);
-          if (app.economicsCurrency !== orgCurrencyNow) {
-            throw new ConvexError(
-              `This deal's figures were recorded in ${app.economicsCurrency}, but the organization's currency is now ${orgCurrencyNow}. A deal is finalized in the currency its figures were recorded in — restore the organization's currency to ${app.economicsCurrency} before finalizing it.`
-            );
-          }
-        }
+        //
+        // The same derivation the deal screen's readiness query uses, so the two
+        // cannot disagree about the denomination: an unsupported one, or a pin
+        // that has drifted from the org's current currency, is refused here,
+        // before the sale exists (SCRUM-241).
+        const readinessInputs = await closingReadinessInputs(ctx, app, "finalizing this deal");
 
         // On a consigned car financed by an external company, the route decides
         // opposite balance sheets from the same sale — a payable to the supplier
@@ -3983,8 +3998,7 @@ export const finalizeDeal = mutation({
         // condition: a known remittance, configured fees recorded, the custody
         // family on the books and settled, reconciled costs, the legal invoice.
         // The retired `CLASSIFIED` stamp is never read.
-        const settlesDirectAtFinalize = await settlesDirectToSupplier(ctx, app);
-
+        //
         // How this financed sale will be recognised, frozen before anything is
         // written and derived entirely from the record: the legal invoice the car
         // was sold under, what the company will actually remit, and each cost it
@@ -3996,8 +4010,7 @@ export const finalizeDeal = mutation({
         // derived, it throws here rather than returning nothing, so there is no
         // path where a missing plan quietly falls back to the old posting.
         const financedSalePlan = await resolveFinancedSalePlan(ctx, app, {
-          settlesDirect: settlesDirectAtFinalize,
-          currency: app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId)),
+          ...readinessInputs,
           // The same disposition completion will act on, so the plan and the
           // deposits it consumes cannot disagree about whether the money was
           // applied to this purchase at all.

@@ -1,6 +1,10 @@
 "use client";
 
+import type { FunctionReturnType } from "convex/server";
 import { AlertTriangle, CheckCircle2, CircleSlash, HelpCircle, Loader2 } from "lucide-react";
+import type { api } from "@/convex/_generated/api";
+import type { ClosingReadinessCheckStatus } from "@/convex/utils/financedSaleRecognition";
+import { Badge } from "@/components/ui/badge";
 
 /**
  * The deal's automatic closing readiness, as `applications.getClosingReadiness`
@@ -10,23 +14,7 @@ import { AlertTriangle, CheckCircle2, CircleSlash, HelpCircle, Loader2 } from "l
  * evaluator — so this list is a preview of the server's verdict, never a gate
  * the screen enforces.
  */
-export type ClosingReadinessStatus = "READY" | "BLOCKED" | "UNAVAILABLE" | "NOT_APPLICABLE";
-
-export type ClosingReadinessCheckKey =
-  | "REMITTANCE_KNOWN"
-  | "CONFIGURED_FEES_RECORDED"
-  | "CUSTODY_ON_LEDGER"
-  | "CUSTODY_SETTLED"
-  | "COSTS_CLOSABLE"
-  | "FIRST_PAYMENT_RECORDED"
-  | "LEGAL_INVOICE_RECORDED";
-
-export type ClosingReadinessView = {
-  state: "READY" | "BLOCKED" | "UNAVAILABLE";
-  open: boolean;
-  checks: { key: ClosingReadinessCheckKey; status: ClosingReadinessStatus; reason: string | null }[];
-  moneyWithheld: boolean;
-};
+export type ClosingReadinessView = FunctionReturnType<typeof api.applications.getClosingReadiness>;
 
 const STATE_LABEL: Record<ClosingReadinessView["state"], string> = {
   READY: "ClosingReadinessStateReady",
@@ -40,14 +28,14 @@ const STATE_TONE: Record<ClosingReadinessView["state"], string> = {
   UNAVAILABLE: "border-border bg-muted text-muted-foreground",
 };
 
-const STATUS_LABEL: Record<ClosingReadinessStatus, string> = {
+const STATUS_LABEL: Record<ClosingReadinessCheckStatus, string> = {
   READY: "ClosingCheckReady",
   BLOCKED: "ClosingCheckBlocked",
   UNAVAILABLE: "ClosingCheckUnavailable",
   NOT_APPLICABLE: "ClosingCheckNotApplicable",
 };
 
-function StatusIcon({ status }: Readonly<{ status: ClosingReadinessStatus }>) {
+function StatusIcon({ status }: Readonly<{ status: ClosingReadinessCheckStatus }>) {
   if (status === "READY") {
     return <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />;
   }
@@ -92,12 +80,9 @@ export function DealClosingReadinessList({
   return (
     <div className="space-y-2" data-testid="closing-readiness" data-state={readiness.state}>
       <div className="flex flex-wrap items-center gap-2">
-        <span
-          className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-semibold ${STATE_TONE[readiness.state]}`}
-          data-testid="closing-readiness-state"
-        >
+        <Badge variant="outline" className={`px-2 ${STATE_TONE[readiness.state]}`} data-testid="closing-readiness-state">
           {t(STATE_LABEL[readiness.state])}
-        </span>
+        </Badge>
         <span className="text-xs text-muted-foreground">{t("ClosingReadinessAuto")}</span>
       </div>
       {readiness.checks.length === 0 ? (

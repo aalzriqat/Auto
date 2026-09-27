@@ -144,7 +144,7 @@ export function summarizeCustody(
  * figure, or the sum leaves the safe range. Callers must pass the result of
  * `loadActiveFees`: querying by custody and filtering voids afterwards would
  * read an unbounded add/void history and could strand both reconciliation and
- * classification at the platform transaction limit even while the deal had
+ * finalization readiness at the platform transaction limit even while the deal had
  * fewer than 500 live lines.
  */
 export function custodyActualExpensesMinor(
@@ -161,7 +161,7 @@ export function custodyActualExpensesMinor(
 }
 
 /** The live line charged to this record that is not in the record's currency, if any (R5, F4). */
-export function custodyForeignCurrencyLine(
+function custodyForeignCurrencyLine(
   liveFees: ReadonlyArray<Doc<"financeDealFees">>,
   custody: Pick<Doc<"financeDealCustody">, "_id" | "currency">
 ): Doc<"financeDealFees"> | undefined {
@@ -193,7 +193,7 @@ export function unreadableCustodyAmounts(
 
 /**
  * The custody summary a WRITER may act on, or a refusal. A closure,
- * reconciliation or classification gate that compared against a corrupt
+ * reconciliation or finalization readiness gate that compared against a corrupt
  * balance would be deciding on a number that is not one; every such gate
  * calls this and fails closed with the reason instead.
  */

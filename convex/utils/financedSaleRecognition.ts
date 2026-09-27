@@ -4,7 +4,7 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { computeExpectedRemittance } from "../../lib/financingEconomics";
 import {
   buildFinancedSalePostingPlan,
-  legalInvoiceRefusal,
+  checkLegalInvoice,
   type FinancedSalePostingPlan,
   type SettlementComponentInput,
 } from "./financedSalePostingPlan";
@@ -141,6 +141,14 @@ export interface ClosingReadiness {
   checks: ClosingReadinessCheck[];
 }
 
+/**
+ * The evaluator's verdict. `ready` exactly when `readiness.state` is READY, and
+ * only then does it carry the live cost lines the verdict was judged on.
+ */
+export type ClosingReadinessEvaluation =
+  | { ready: true; readiness: ClosingReadiness; liveFees: Array<Doc<"financeDealFees">> }
+  | { ready: false; readiness: ClosingReadiness };
+
 function messageOf(error: unknown): string {
   if (error instanceof ConvexError && typeof error.data === "string") return error.data;
   throw error;
@@ -159,15 +167,16 @@ function messageOf(error: unknown): string {
  * check's reason; nothing here writes, so catching commits nothing. Anything
  * other than a ConvexError is rethrown.
  */
-export async function evaluateClosingReadinessWithRows(
+export async function evaluateClosingReadiness(
   ctx: QueryCtx | MutationCtx,
   app: Doc<"financeApplications">,
   opts: { settlesDirect: boolean; currency: string }
-): Promise<{ readiness: ClosingReadiness; liveFees: Array<Doc<"financeDealFees">> | null }> {
+): Promise<ClosingReadinessEvaluation> {
   const planCovered = financedSaleRecognitionApplies(app, opts);
   const checks: ClosingReadinessCheck[] = [];
-  const add = (key: ClosingReadinessCheckKey, status: ClosingReadinessCheckStatus, reason: string | null) =>
+  const add = (key: ClosingReadinessCheckKey, status: ClosingReadinessCheckStatus, reason: string | null) => {
     checks.push({ key, status, reason });
+  };
   const planOnly = (key: ClosingReadinessCheckKey, judge: () => [ClosingReadinessCheckStatus, string | null]) => {
     if (!planCovered) add(key, "NOT_APPLICABLE", null);
     else add(key, ...judge());
@@ -194,56 +203,61 @@ export async function evaluateClosingReadinessWithRows(
   // ONE bounded read of the deal's live cost lines and custody records serves
   // every rule below; past the bound nothing can be judged, and that is
   // UNAVAILABLE, never a pass.
-  let liveFees: Array<Doc<"financeDealFees">> | null = null;
-  let custodyRows: Array<Doc<"financeDealCustody">> | null = null;
+  // The two reads are independent; a failure of the cost-line read is reported
+  // ahead of the custody read's, as when they ran one after the other.
+  let rows: { fees: Array<Doc<"financeDealFees">>; custody: Array<Doc<"financeDealCustody">> } | null = null;
   let rowsUnavailable: string | null = null;
-  try {
-    liveFees = await loadActiveFees(ctx, app._id);
-    custodyRows = await loadCustodyRecords(ctx, app._id, "finalizing this deal");
-  } catch (error) {
-    rowsUnavailable = messageOf(error);
-  }
-  const fees = liveFees;
-  const custody = custodyRows;
-  const onRows = (key: ClosingReadinessCheckKey, judge: (fees: Array<Doc<"financeDealFees">>, custody: Array<Doc<"financeDealCustody">>) => string | null) => {
-    if (fees === null || custody === null) {
-      add(key, "UNAVAILABLE", rowsUnavailable);
-      return;
-    }
+  const [feesRead, custodyRead] = await Promise.allSettled([
+    loadActiveFees(ctx, app._id),
+    loadCustodyRecords(ctx, app._id, "finalizing this deal"),
+  ]);
+  if (feesRead.status === "rejected") rowsUnavailable = messageOf(feesRead.reason);
+  else if (custodyRead.status === "rejected") rowsUnavailable = messageOf(custodyRead.reason);
+  else rows = { fees: feesRead.value, custody: custodyRead.value };
+
+  /**
+   * One check judged on the rows just read: UNAVAILABLE when they could not be
+   * read; otherwise READY, or BLOCKED with the refusal. A ConvexError thrown
+   * while judging becomes `onThrow` with its message — stated per check, since
+   * a refusal (BLOCKED) and an unreadable input (UNAVAILABLE) are different
+   * verdicts. `planOnly` checks are NOT_APPLICABLE off the plan's route.
+   */
+  const onRows = async (
+    key: ClosingReadinessCheckKey,
+    spec: { onThrow: "BLOCKED" | "UNAVAILABLE"; planOnly?: boolean },
+    judge: (read: NonNullable<typeof rows>) => string | null | Promise<string | null>
+  ) => {
+    if (spec.planOnly && !planCovered) return add(key, "NOT_APPLICABLE", null);
+    if (rows === null) return add(key, "UNAVAILABLE", rowsUnavailable);
     try {
-      const refusal = judge(fees, custody);
+      const refusal = await judge(rows);
       add(key, refusal === null ? "READY" : "BLOCKED", refusal);
     } catch (error) {
-      add(key, "BLOCKED", messageOf(error));
+      add(key, spec.onThrow, messageOf(error));
     }
   };
 
   // Every fee the finance company's FROZEN policy configures must have an
   // actual on the record — on EVERY route. A deal whose snapshot configures
   // nothing passes through untouched.
-  onRows("CONFIGURED_FEES_RECORDED", (rows) => {
-    assertConfiguredFeesRecorded(app.companyRuleSnapshot, rows, "finalizing");
+  await onRows("CONFIGURED_FEES_RECORDED", { onThrow: "BLOCKED" }, ({ fees }) => {
+    assertConfiguredFeesRecorded(app.companyRuleSnapshot, fees, "finalizing");
     return null;
   });
 
   // Every custody record and custody-paid line must be on the books as a
-  // complete family — on EVERY route. Judged on the LEDGER as well as the rows.
-  if (fees === null || custody === null) {
-    add("CUSTODY_ON_LEDGER", "UNAVAILABLE", rowsUnavailable);
-  } else {
-    try {
-      const refusal = await custodyLedgerFamilyRefusal(ctx, app.orgId, app._id, custody, fees, "finalizing this deal");
-      add("CUSTODY_ON_LEDGER", refusal === null ? "READY" : "BLOCKED", refusal);
-    } catch (error) {
-      add("CUSTODY_ON_LEDGER", "UNAVAILABLE", messageOf(error));
-    }
-  }
+  // complete family — on EVERY route. Judged on the LEDGER as well as the rows;
+  // a ledger that cannot be read is UNAVAILABLE, not a refusal.
+  await onRows("CUSTODY_ON_LEDGER", { onThrow: "UNAVAILABLE" }, ({ fees, custody }) =>
+    custodyLedgerFamilyRefusal(ctx, app.orgId, app._id, custody, fees, "finalizing this deal")
+  );
 
-  onRows("CUSTODY_SETTLED", (rows, records) => custodySettledRefusal(records, rows));
+  await onRows("CUSTODY_SETTLED", { onThrow: "BLOCKED" }, ({ fees, custody }) => custodySettledRefusal(custody, fees));
 
   // The CURRENT state of the deal's costs, judged on the rows just read.
-  if (planCovered) onRows("COSTS_CLOSABLE", (rows) => costsClosableRefusal(rows, opts.currency));
-  else add("COSTS_CLOSABLE", "NOT_APPLICABLE", null);
+  await onRows("COSTS_CLOSABLE", { onThrow: "BLOCKED", planOnly: true }, ({ fees }) =>
+    costsClosableRefusal(fees, opts.currency)
+  );
 
   // An unknown first payment is not zero (SCRUM-373): a quoted, approved deal
   // without one has no funding split to post from.
@@ -259,12 +273,13 @@ export async function evaluateClosingReadinessWithRows(
   // legal invoice. Replacing that revenue source is SCRUM-411; until then the
   // invoice is a readiness item, and the panel offers the action that records it.
   planOnly("LEGAL_INVOICE_RECORDED", () => {
-    const refusal = legalInvoiceRefusal({
+    const invoice = checkLegalInvoice({
       legalInvoiceConsiderationMinor: app.legalInvoiceAmountMinor,
       legalInvoiceIssuedTo: app.legalInvoiceIssuedTo,
+      // Asked only on the plan's route, which requires a configured company.
       financierIsConfiguredExternal: true,
     });
-    return refusal === null ? ["READY", null] : ["BLOCKED", refusal.message];
+    return invoice.ok ? ["READY", null] : ["BLOCKED", invoice.refusal.message];
   });
 
   const state = checks.some((check) => check.status === "UNAVAILABLE")
@@ -272,24 +287,17 @@ export async function evaluateClosingReadinessWithRows(
     : checks.some((check) => check.status === "BLOCKED")
       ? "BLOCKED"
       : "READY";
-  return { readiness: { state, checks }, liveFees };
+  const readiness: ClosingReadiness = { state, checks };
+  // A READY verdict is one every row check passed, so the rows were read.
+  return state === "READY" && rows !== null
+    ? { ready: true, readiness, liveFees: rows.fees }
+    : { ready: false, readiness };
 }
 
-/** The read-only verdict alone, for the deal screen. */
-export async function evaluateClosingReadiness(
-  ctx: QueryCtx | MutationCtx,
-  app: Doc<"financeApplications">,
-  opts: { settlesDirect: boolean; currency: string }
-): Promise<ClosingReadiness> {
-  return (await evaluateClosingReadinessWithRows(ctx, app, opts)).readiness;
-}
-
-/** Refuses, uncaught and before the first write, on the first condition that is not met. */
-function assertClosingReady(readiness: ClosingReadiness): void {
+/** The refusal for the first condition that is not met, thrown uncaught before the first write. */
+function closingRefusal(readiness: ClosingReadiness): ConvexError<string> {
   const unmet = readiness.checks.find((check) => check.status === "BLOCKED" || check.status === "UNAVAILABLE");
-  if (unmet) {
-    throw new ConvexError(unmet.reason ?? "This deal is not ready to be finalized.");
-  }
+  return new ConvexError(unmet?.reason ?? "This deal is not ready to be finalized.");
 }
 
 export async function resolveFinancedSalePlan(
@@ -319,13 +327,12 @@ export async function resolveFinancedSalePlan(
   // The finalize door re-runs the SAME evaluator the deal screen shows — never
   // a client's verdict, never the retired stamp — and refuses on the first
   // unmet condition, before anything is written (SCRUM-407 P1.4).
-  const { readiness, liveFees: readRows } = await evaluateClosingReadinessWithRows(ctx, app, opts);
-  assertClosingReady(readiness);
+  const evaluation = await evaluateClosingReadiness(ctx, app, opts);
+  if (!evaluation.ready) throw closingRefusal(evaluation.readiness);
 
   if (!financedSaleRecognitionApplies(app, opts)) return undefined;
-  // A READY verdict read the rows; the plan is built from those same rows.
-  if (readRows === null) throw new ConvexError("This deal's costs could not be read, so it cannot be finalized.");
-  const liveFees = readRows;
+  // The plan is built from the same rows the READY verdict was judged on.
+  const liveFees = evaluation.liveFees;
 
   const fees = settlementDeductedFees(liveFees);
   // The plan settles in `opts.currency` (the deal's pinned denomination at

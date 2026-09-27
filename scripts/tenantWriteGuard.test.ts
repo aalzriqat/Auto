@@ -604,10 +604,15 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // `requireOwnedRow` after `requireTenantAuth`. Skipped counts unchanged.
   // Re-measured FROM THE ANALYSER on this tree
   // ({"totalMutations":498,"analysed":326,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
+  //
+  // `financeDealCosts.classifyDealAccounting` DELETED (SCRUM-407: the manual
+  // classification stamp is retired; readiness is automatic) — 498 → 497
+  // total, 326 → 325 analysed. Skipped counts unchanged. Re-measured FROM THE
+  // ANALYSER ({"totalMutations":497,"analysed":325,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 498,
-      analysed: 326,
+      totalMutations: 497,
+      analysed: 325,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 157,
     });

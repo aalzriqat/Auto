@@ -5,7 +5,8 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS } from "./utils/permissions";
-import { deriveExpectedFees, MAX_CUSTODY_ENTRIES, unreadableCustodyAmounts } from "./financeDealCosts";
+import { deriveExpectedFees, MAX_CUSTODY_ENTRIES } from "./financeDealCosts";
+import { unreadableCustodyAmounts } from "./utils/settlementDeductions";
 import { assertConfiguredFeesRecorded, loadActiveFees, unrecordedConfiguredFeePositions } from "./utils/settlementDeductions";
 
 /**
