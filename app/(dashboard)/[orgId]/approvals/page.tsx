@@ -26,7 +26,12 @@ type ApprovalRequest = Doc<"profitApprovalRequests"> & {
 export default function ApprovalsPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const { format } = useCurrency();
+  const { format, code: orgCurrency } = useCurrency();
+  // A request's amounts are in the currency it was raised in, which the org's
+  // currency lock does not freeze (profitApprovalRequests is not a lock row).
+  // Label them in that currency rather than restyling them as today's.
+  const formatIn = (amount: number, currency: string | undefined) =>
+    currency && currency !== orgCurrency ? `${amount.toLocaleString()} ${currency}` : format(amount);
 
   const pendingApprovals = useQuery(api.approvals.listPendingApprovals, activeOrgId ? { orgId: activeOrgId } : "skip");
   const respondToApproval = useMutation(api.approvals.respondToApproval);
@@ -112,11 +117,11 @@ export default function ApprovalsPage() {
                   <div className="grid grid-cols-2 gap-4 rounded-lg bg-slate-50 p-3 border border-slate-100">
                     <div>
                       <p className="text-xs text-slate-500 font-medium">{t("RequestedProfit")}</p>
-                      <p className="text-lg font-bold text-slate-900">{format(request.requestedProfit)}</p>
+                      <p className="text-lg font-bold text-slate-900">{formatIn(request.requestedProfit, request.currency)}</p>
                     </div>
                     <div>
                       <p className="text-xs text-slate-500 font-medium">{t("MinimumAllowed")}</p>
-                      <p className="text-sm font-semibold text-slate-600">{format(request.minimumProfit)}</p>
+                      <p className="text-sm font-semibold text-slate-600">{formatIn(request.minimumProfit, request.currency)}</p>
                     </div>
                     {/* SCRUM-260: approving authorizes exactly this price
                         against exactly this list price, so both are shown. */}
@@ -125,13 +130,13 @@ export default function ApprovalsPage() {
                         <div>
                           <p className="text-xs text-slate-500 font-medium">{t("ApprovalSalePrice" as any)}</p>
                           <p className="text-sm font-semibold text-slate-900 tabular-nums">
-                            {format(request.salePrice)}
+                            {formatIn(request.salePrice, request.currency)}
                           </p>
                         </div>
                         <div>
                           <p className="text-xs text-slate-500 font-medium">{t("ApprovalListPrice" as any)}</p>
                           <p className="text-sm font-semibold text-slate-600 tabular-nums">
-                            {format(request.listPrice)}
+                            {formatIn(request.listPrice, request.currency)}
                           </p>
                         </div>
                       </>
@@ -140,7 +145,7 @@ export default function ApprovalsPage() {
 
                   <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 px-3 py-2 rounded-md border border-amber-100">
                     <AlertCircle className="h-4 w-4 shrink-0" />
-                    <span>{t("ShortBy")} {format(request.minimumProfit - request.requestedProfit)}</span>
+                    <span>{t("ShortBy")} {formatIn(request.minimumProfit - request.requestedProfit, request.currency)}</span>
                   </div>
                 </div>
 

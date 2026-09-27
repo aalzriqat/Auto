@@ -23,6 +23,12 @@ export function useProfitApproval(args: {
   salePrice: number;
   /** False for cash sales and anything else the rule does not cover. */
   enabled: boolean;
+  /**
+   * True while the inputs that decide `enabled` are still loading. The hook is
+   * inactive then, and without this an inactive hook reports "not blocked", so a
+   * completion control would flicker enabled until the inputs resolve.
+   */
+  loading?: boolean;
 }) {
   const active = args.enabled && !!args.orgId && !!args.vehicleId && args.salePrice > 0;
   const verdict = useQuery(
@@ -37,7 +43,7 @@ export function useProfitApproval(args: {
     verdict?.status === "REQUIRED" || verdict?.status === "PENDING" || verdict?.status === "REJECTED";
   return {
     verdict: active ? verdict : undefined,
-    blocked: active && (verdict === undefined || needsApproval),
+    blocked: !!args.loading || (active && (verdict === undefined || needsApproval)),
     /** The request that approves exactly this price; null while inactive. */
     request: active
       ? { orgId: args.orgId as Id<"organizations">, vehicleId: args.vehicleId as Id<"vehicles">, salePrice: args.salePrice }

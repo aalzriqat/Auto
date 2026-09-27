@@ -1551,6 +1551,7 @@ export function DealCockpit({
       hasPermission(PERMISSIONS.VIEW_VEHICLES) &&
       !!app?.quote &&
       app.quote.mode !== "CASH",
+    loading: permissionsLoading || app === undefined,
   });
 
   // Below every hook, deliberately. An early return placed above `useRef` changes
