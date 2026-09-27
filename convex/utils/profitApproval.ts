@@ -121,10 +121,12 @@ export async function requestsForTerms(
 ): Promise<Doc<"profitApprovalRequests">[]> {
   const requests = await ctx.db
     .query("profitApprovalRequests")
-    .withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicleId))
+    .withIndex("by_org_vehicle_salePrice", (q) =>
+      q.eq("orgId", orgId).eq("vehicleId", vehicleId).eq("salePriceMinor", terms.salePriceMinor)
+    )
     .order("desc")
     .collect();
-  return requests.filter((request) => request.orgId === orgId && requestMatchesTerms(request, terms));
+  return requests.filter((request) => requestMatchesTerms(request, terms));
 }
 
 /**

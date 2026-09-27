@@ -31,10 +31,6 @@ const profitApprovalMessages = defineBilingualMessages({
     "رفض المدير هذا السعر. عدّل السعر أو اطلب الاعتماد من جديد.",
   ],
   ProfitApprovalApproved: ["A manager approved this price.", "اعتمد المدير هذا السعر."],
-  ProfitApprovalRequestFailed: [
-    "Could not send the approval request. Please try again.",
-    "تعذّر إرسال طلب الاعتماد. حاول مرة أخرى.",
-  ],
   ApprovalSalePrice: ["Sale price", "سعر البيع"],
   ApprovalListPrice: ["List price", "سعر القائمة"],
 });

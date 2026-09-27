@@ -5807,6 +5807,9 @@ export default defineSchema({
     .index("by_vehicle", ["vehicleId"])
     .index("by_salesperson", ["salespersonId"])
     .index("by_status", ["status"])
+    // SCRUM-260: the approval lookup for one priced state. Rows written
+    // before SCRUM-260 carry no salePriceMinor and are never matched.
+    .index("by_org_vehicle_salePrice", ["orgId", "vehicleId", "salePriceMinor"])
     // SCRUM-100. `by_org` + a post-read `.filter(status === "PENDING")` reads
     // every request the org ever created and discards most of them; these rows
     // are fat (`wizardSnapshot` carries the whole sale wizard). Bound in the

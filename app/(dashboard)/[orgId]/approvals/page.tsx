@@ -5,7 +5,6 @@ import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
-import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,6 +19,8 @@ type ApprovalRequest = Doc<"profitApprovalRequests"> & {
   salespersonName: string;
   vehicleMakeModel: string;
   vehicleVin: string;
+  salePrice?: number;
+  listPrice?: number;
 };
 
 export default function ApprovalsPage() {
@@ -119,18 +120,18 @@ export default function ApprovalsPage() {
                     </div>
                     {/* SCRUM-260: approving authorizes exactly this price
                         against exactly this list price, so both are shown. */}
-                    {request.salePriceMinor !== undefined && request.listPriceMinor !== undefined && request.currency ? (
+                    {request.salePrice !== undefined && request.listPrice !== undefined ? (
                       <>
                         <div>
                           <p className="text-xs text-slate-500 font-medium">{t("ApprovalSalePrice" as any)}</p>
                           <p className="text-sm font-semibold text-slate-900 tabular-nums">
-                            {format(request.salePriceMinor / 10 ** scaleForCurrency(request.currency))}
+                            {format(request.salePrice)}
                           </p>
                         </div>
                         <div>
                           <p className="text-xs text-slate-500 font-medium">{t("ApprovalListPrice" as any)}</p>
                           <p className="text-sm font-semibold text-slate-600 tabular-nums">
-                            {format(request.listPriceMinor / 10 ** scaleForCurrency(request.currency))}
+                            {format(request.listPrice)}
                           </p>
                         </div>
                       </>

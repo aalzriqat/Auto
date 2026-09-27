@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { ConvexError } from "convex/values";
 import { CheckCircle2, Clock, ShieldAlert } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
@@ -10,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/sonner";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
+import { getErrorMessage } from "@/lib/errors";
 
 /**
  * SCRUM-260: the minimum-profit approval for one vehicle at one price, read
@@ -36,26 +36,23 @@ export function useProfitApproval(args: {
   return {
     verdict: active ? verdict : undefined,
     blocked: active && (verdict === undefined || needsApproval),
+    /** The request that approves exactly this price; null while inactive. */
+    request: active
+      ? { orgId: args.orgId as Id<"organizations">, vehicleId: args.vehicleId as Id<"vehicles">, salePrice: args.salePrice }
+      : null,
   };
 }
 
-export function ProfitApprovalNotice({
-  orgId,
-  vehicleId,
-  salePrice,
-  verdict,
-}: {
-  orgId: Id<"organizations">;
-  vehicleId: Id<"vehicles">;
-  salePrice: number;
-  verdict: ReturnType<typeof useProfitApproval>["verdict"];
-}) {
+export type ProfitApproval = ReturnType<typeof useProfitApproval>;
+
+export function ProfitApprovalNotice({ approval }: { approval: ProfitApproval }) {
+  const { verdict, request } = approval;
   const { t } = useLanguage();
   const currency = useCurrency();
   const requestApproval = useMutation(api.approvals.requestProfitApproval);
   const [isRequesting, setIsRequesting] = useState(false);
 
-  if (!verdict || verdict.status === "NOT_REQUIRED" || verdict.status === "INVALID") return null;
+  if (!verdict || !request || verdict.status === "NOT_REQUIRED" || verdict.status === "INVALID") return null;
 
   if (verdict.status === "APPROVED") {
     return (
@@ -72,14 +69,11 @@ export function ProfitApprovalNotice({
   const handleRequest = async () => {
     setIsRequesting(true);
     try {
-      await requestApproval({ orgId, vehicleId, salePrice });
+      await requestApproval(request);
     } catch (error) {
       console.error("requestProfitApproval failed", error);
-      toast.error(
-        error instanceof ConvexError && typeof error.data === "string"
-          ? error.data
-          : t("ProfitApprovalRequestFailed" as any)
-      );
+      toast.error(getErrorMessage(error));
+
     } finally {
       setIsRequesting(false);
     }

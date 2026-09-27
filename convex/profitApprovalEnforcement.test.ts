@@ -154,22 +154,7 @@ describe("quotes.saveQuote enforces the minimum-profit approval", () => {
   test("accepts a below-minimum quote once a manager has approved it", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "approved", 1000);
-
-    await ids.asOwner.mutation(api.approvals.requestProfitApproval, {
-      orgId: ids.orgId,
-      vehicleId: ids.vehicleId,
-      requestedProfit: 400,
-      minimumProfit: 1000,
-    });
-    const pending: any = await ids.asOwner.query(api.approvals.checkPendingApproval, {
-      orgId: ids.orgId,
-      vehicleId: ids.vehicleId,
-    });
-    await ids.asOwner.mutation(api.approvals.respondToApproval, {
-      orgId: ids.orgId,
-      requestId: pending._id,
-      status: "APPROVED",
-    });
+    await approveLegacyRequest(t, ids, 400);
 
     const quoteId = await ids.asOwner.mutation(api.quotes.saveQuote, financedQuote(ids, 400));
     expect(quoteId).toBeTruthy();
@@ -178,22 +163,7 @@ describe("quotes.saveQuote enforces the minimum-profit approval", () => {
   test("an approval does not authorise a deeper discount than the one approved", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "deeper", 1000);
-
-    await ids.asOwner.mutation(api.approvals.requestProfitApproval, {
-      orgId: ids.orgId,
-      vehicleId: ids.vehicleId,
-      requestedProfit: 400,
-      minimumProfit: 1000,
-    });
-    const pending: any = await ids.asOwner.query(api.approvals.checkPendingApproval, {
-      orgId: ids.orgId,
-      vehicleId: ids.vehicleId,
-    });
-    await ids.asOwner.mutation(api.approvals.respondToApproval, {
-      orgId: ids.orgId,
-      requestId: pending._id,
-      status: "APPROVED",
-    });
+    await approveLegacyRequest(t, ids, 400);
 
     // The manager saw 400; 100 is a different, worse deal.
     await expect(
@@ -230,8 +200,8 @@ describe("quotes.saveQuote enforces the minimum-profit approval", () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "foreign", 1000);
 
-    // A stray APPROVED row carrying a different orgId must be ignored — the
-    // approval lookup enters by vehicle, so the org check is what scopes it.
+    // A stray APPROVED row carrying a different orgId must be ignored, even
+    // though it is recorded for exactly the terms being quoted.
     await t.run(async (ctx: any) => {
       const otherOrgId = await ctx.db.insert("organizations", {
         name: "Other",
@@ -240,8 +210,12 @@ describe("quotes.saveQuote enforces the minimum-profit approval", () => {
       await ctx.db.insert("profitApprovalRequests", {
         orgId: otherOrgId,
         vehicleId: ids.vehicleId,
-        requestedProfit: 0,
+        requestedProfit: 400,
         minimumProfit: 1000,
+        salePriceMinor: 20_400_000,
+        listPriceMinor: 20_000_000,
+        minimumProfitMinor: 1_000_000,
+        currency: "JOD",
         salespersonId: ids.userId,
         status: "APPROVED",
         createdAt: Date.now(),
@@ -385,7 +359,7 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
   // SCRUM-260 replaced the exemption this test used to assert: a quote with no
   // recorded margin let a below-minimum deal finalize. The server now derives
   // the margin from the price the sale persists, so there is always one to
-  // check. (Census, prod 2026-09-27: no in-flight deal could be stranded.)
+  // check.
   test("a quote written before the margin field existed is still checked at finalization", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "legacy", 1000);
@@ -685,7 +659,7 @@ describe("SCRUM-260: approvals.profitApprovalStatus is the same verdict the muta
     const requestId = await ids.asOwner.mutation(api.approvals.requestProfitApproval, {
       orgId: ids.orgId, vehicleId: ids.vehicleId, salePrice: 20400,
     });
-    expect(await status(20400)).toMatchObject({ status: "PENDING", requestId });
+    expect((await status(20400))?.status).toBe("PENDING");
     await ids.asOwner.mutation(api.approvals.respondToApproval, { orgId: ids.orgId, requestId, status: "APPROVED" });
     expect((await status(20400))?.status).toBe("APPROVED");
     expect((await status(20500))?.status).toBe("REQUIRED");

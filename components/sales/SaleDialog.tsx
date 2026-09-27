@@ -629,14 +629,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                     )}
                   />
                 </div>
-                {activeOrgId && selectedVehicleId ? (
-                  <ProfitApprovalNotice
-                    orgId={activeOrgId}
-                    vehicleId={selectedVehicleId as Id<"vehicles">}
-                    salePrice={Number(watchAll.salePrice) || 0}
-                    verdict={profitApproval.verdict}
-                  />
-                ) : null}
+                <ProfitApprovalNotice approval={profitApproval} />
               </div>
             </div>
 

@@ -2202,19 +2202,10 @@ export function DealCockpit({
         submitting: finalizeSubmitting,
         error: finalizeError,
         onOpenChange: setConfirmingFinalize,
-        profitApproval: app?.vehicleId
-          ? {
-              blocked: finalizeProfitApproval.blocked,
-              notice: (
-                <ProfitApprovalNotice
-                  orgId={orgId}
-                  vehicleId={app.vehicleId}
-                  salePrice={finalizeSalePrice}
-                  verdict={finalizeProfitApproval.verdict}
-                />
-              ),
-            }
-          : undefined,
+        profitApproval: {
+          blocked: finalizeProfitApproval.blocked,
+          notice: <ProfitApprovalNotice approval={finalizeProfitApproval} />,
+        },
         onSubmit: async () => {
           setFinalizeSubmitting(true);
           setFinalizeError(null);

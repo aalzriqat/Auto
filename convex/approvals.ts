@@ -1,7 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, notifyUser, getActorName } from "./utils/notifications";
@@ -225,7 +225,6 @@ export const profitApprovalStatus = query({
     const figures = {
       margin: fromMinorUnits(decision.marginMinor, currency),
       minimumProfit: fromMinorUnits(decision.minimumProfitMinor, currency),
-      listPrice: fromMinorUnits(decision.listPriceMinor, currency),
     };
     if (!decision.required) return { status: "NOT_REQUIRED" as const, ...figures };
 
@@ -236,7 +235,7 @@ export const profitApprovalStatus = query({
     // The caller's newest request at exactly these terms. A superseded row was
     // replaced by the caller, not refused by a manager, so it reports nothing.
     const mine = matching.find((request) => request.salespersonId === user._id && request.supersededAt === undefined);
-    if (mine?.status === "PENDING") return { status: "PENDING" as const, requestId: mine._id, ...figures };
+    if (mine?.status === "PENDING") return { status: "PENDING" as const, ...figures };
     if (mine?.status === "REJECTED") return { status: "REJECTED" as const, ...figures };
     return { status: "REQUIRED" as const, ...figures };
   },
@@ -324,6 +323,15 @@ export const listPendingApprovals = query({
       .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
       .collect();
 
+    // SCRUM-260: the priced state an approval authorizes, in major units.
+    const terms = (req: Doc<"profitApprovalRequests">) =>
+      req.salePriceMinor !== undefined && req.listPriceMinor !== undefined && req.currency
+        ? {
+            salePrice: fromMinorUnits(req.salePriceMinor, req.currency),
+            listPrice: fromMinorUnits(req.listPriceMinor, req.currency),
+          }
+        : {};
+
     // Map to include salesperson details and vehicle details
     const enriched = await Promise.all(
       requests.map(async (req) => {
@@ -365,6 +373,7 @@ export const listPendingApprovals = query({
           const { vehicleId: _foreign, ...safe } = req;
           return {
             ...safe,
+            ...terms(req),
             salespersonName: salesperson?.name || salesperson?.email || "Unknown",
             vehicleMakeModel: "Unknown Vehicle",
             vehicleVin: "N/A",
@@ -372,6 +381,7 @@ export const listPendingApprovals = query({
         }
         return {
           ...req,
+          ...terms(req),
           salespersonName: salesperson?.name || salesperson?.email || "Unknown",
           vehicleMakeModel: `${vehicle.make} ${vehicle.model} ${vehicle.year}`,
           vehicleVin: vehicle.vin,
