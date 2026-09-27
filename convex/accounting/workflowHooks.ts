@@ -1437,7 +1437,8 @@ export async function hookExpensePosted(
   if (args.taxMinor && args.taxMinor > 0) {
     await ensureVatReceivableAccountIfChartReady(ctx, args.orgId, args.actorId);
   }
-  if (args.costBearer === "SUPPLIER") {
+  const supplierBorne = args.costBearer === "SUPPLIER";
+  if (supplierBorne) {
     // A supplier-borne cost debits Receivable from Suppliers, which older
     // charts lack. Self-healed here, and ALSO named as a required key below so
     // that an org whose chart cannot take it queues the post instead of
@@ -1445,32 +1446,7 @@ export async function hookExpensePosted(
     if (await isChartInitialized(ctx, args.orgId)) {
       await ensureConsignmentAccounts(ctx, args.orgId, args.actorId);
     }
-    await postDomainEvent(ctx, {
-      orgId: args.orgId,
-      eventType: "EXPENSE_POSTED",
-      sourceType: "expenses",
-      sourceId: args.expenseId.toString(),
-      idempotencyKey: expensePostedKey(args.expenseId),
-      currency: args.currency,
-      occurredAt: args.occurredAt,
-      actorId: args.actorId,
-      payload: {
-        expenseId: args.expenseId.toString(),
-        amountMinor: args.amountMinor,
-        taxMinor: args.taxMinor,
-        currency: args.currency,
-        category: args.category,
-        paymentMethod: args.paymentMethod,
-        vehicleId: args.vehicleId?.toString(),
-        capitalizeToInventory: args.capitalizeToInventory,
-        isPrepaid: prepaid,
-        costBearer: "SUPPLIER",
-      },
-      requiredSystemKeys: [SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS],
-    });
-    return;
-  }
-  if (!capitalize && await isChartInitialized(ctx, args.orgId)) {
+  } else if (!capitalize && await isChartInitialized(ctx, args.orgId)) {
     // A prepaid expense debits the Prepaid Expenses asset now and releases it
     // to a per-category expense account later, so both must exist. A normal
     // expense resolves expenseAccountKeyForCategory, which can point at a
@@ -1501,7 +1477,11 @@ export async function hookExpensePosted(
       vehicleId: args.vehicleId?.toString(),
       capitalizeToInventory: args.capitalizeToInventory,
       isPrepaid: prepaid,
+      // A showroom-borne payload carries no bearer at all, exactly as before
+      // SCRUM-389, so its replay fingerprint is unchanged.
+      ...(supplierBorne ? { costBearer: "SUPPLIER" as const } : {}),
     },
+    ...(supplierBorne ? { requiredSystemKeys: [SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS] } : {}),
   });
 }
 

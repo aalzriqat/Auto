@@ -137,30 +137,36 @@ export const list = query({
   },
 });
 
+const workOrderTasksValidator = v.array(
+  v.object({
+    id: v.string(),
+    description: v.string(),
+    partsCost: v.number(),
+    laborCost: v.number(),
+    mechanicName: v.optional(v.string()),
+    completed: v.boolean(),
+  })
+);
+
+/**
+ * SCRUM-389 — who bears a completed work order's cost. Required when the
+ * vehicle is SOURCED (the showroom must say it is carrying a supplier's car's
+ * repair), and only SHOWROOM is accepted in phase 1: a supplier-borne work
+ * order needs its own recovery wiring (SCRUM-402).
+ */
+const workOrderCostBearerArg = v.optional(costBearerValidator);
+
 export const create = mutation({
   args: {
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
     title: v.string(),
     status: v.union(v.literal("OPEN"), v.literal("IN_PROGRESS"), v.literal("COMPLETED")),
-    tasks: v.array(
-      v.object({
-        id: v.string(),
-        description: v.string(),
-        partsCost: v.number(),
-        laborCost: v.number(),
-        mechanicName: v.optional(v.string()),
-        completed: v.boolean(),
-      })
-    ),
+    tasks: workOrderTasksValidator,
+
     notes: v.optional(v.string()),
-    /**
-     * SCRUM-389 — who bears the completed work order's cost. Required when the
-     * vehicle is SOURCED (the showroom must say it is carrying a supplier's
-     * car's repair), and only SHOWROOM is accepted in phase 1: a supplier-borne
-     * work order needs its own recovery wiring (SCRUM-402).
-     */
-    costBearer: v.optional(costBearerValidator),
+    costBearer: workOrderCostBearerArg,
+
     // SCRUM-313 census. A COMPLETED work order calls `createWorkOrderExpense`,
     // which mints an `expenses` id, writes a legacy `transactions` row and
     // posts EXPENSE_POSTED keyed on that fresh id — all BEFORE the work-order
@@ -244,24 +250,11 @@ export const update = mutation({
     workOrderId: v.id("workOrders"),
     title: v.string(),
     status: v.union(v.literal("OPEN"), v.literal("IN_PROGRESS"), v.literal("COMPLETED")),
-    tasks: v.array(
-      v.object({
-        id: v.string(),
-        description: v.string(),
-        partsCost: v.number(),
-        laborCost: v.number(),
-        mechanicName: v.optional(v.string()),
-        completed: v.boolean(),
-      })
-    ),
+    tasks: workOrderTasksValidator,
+
     notes: v.optional(v.string()),
-    /**
-     * SCRUM-389 — who bears the completed work order's cost. Required when the
-     * vehicle is SOURCED (the showroom must say it is carrying a supplier's
-     * car's repair), and only SHOWROOM is accepted in phase 1: a supplier-borne
-     * work order needs its own recovery wiring (SCRUM-402).
-     */
-    costBearer: v.optional(costBearerValidator),
+    costBearer: workOrderCostBearerArg,
+
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
