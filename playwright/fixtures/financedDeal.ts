@@ -1,6 +1,7 @@
 import { expect, type Page } from "@playwright/test";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { supportedCurrencyScale } from "../../convex/utils/money";
 import {
   authenticatedConvexClient,
   createCustomer,
@@ -308,10 +309,11 @@ async function expectQuotationRecordedAtCreation(page: Page, dealUrl: string): P
   expect(snapshot?.finalQuotationMinor).toBe(app.submittedQuotationMinor);
   // The down payment covers the unfinanced share at this rate (3,000 against
   // 10% of 15,000), so the solver's answer is the vehicle price itself. The
-  // scale is derived, never assumed: JOD is three decimals, not two.
-  const submitted = app.submittedQuotationMinor ?? 0;
-  const scale = Math.round(Math.log10(submitted / Number(VEHICLE_PRICE)));
-  expect(submitted).toBe(Number(VEHICLE_PRICE) * 10 ** scale);
+  // scale comes from the deal's own currency, never assumed: JOD is three
+  // decimals, not two.
+  const scale = supportedCurrencyScale(app.economicsCurrency);
+  expect(scale).not.toBeNull();
+  expect(app.submittedQuotationMinor).toBe(Number(VEHICLE_PRICE) * 10 ** (scale ?? 0));
 }
 
 /**
@@ -359,9 +361,8 @@ export async function recordQuotation(page: Page, dealUrl: string): Promise<void
   // Departing from the calculation is an override, which needs its reason —
   // without one the dialog keeps its Record button disabled.
   const reason = dialog.locator("#submitted-quotation-reason");
-  if (await reason.isVisible()) {
-    await reason.fill("E2E: the finance company was sent the negotiated figure.");
-  }
+  await expect(reason).toBeVisible();
+  await reason.fill("E2E: the finance company was sent the negotiated figure.");
   await dialog.getByRole("button", { name: "Record quotation" }).click();
   await expect(dialog).not.toBeVisible();
 }

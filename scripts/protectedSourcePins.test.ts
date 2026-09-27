@@ -476,10 +476,11 @@ describe("protected source content pins", () => {
        *
        * Renewed so starting a finance application from a configured-company
        * quote can record the AutoFlow-calculated quotation the operator was
-       * shown, in the same transaction. The delta, 84 insertions and 96
-       * deletions: (1) imports — `allows` from the projection,
-       * `applySubmittedQuotation` / `assertQuotationRecordAuthority` from
-       * `./financingEconomics`, the three `./utils/creationEconomics` helpers;
+       * shown, in the same transaction. The delta, 87 insertions and 108
+       * deletions: (1) imports — `mayRecordSubmittedQuotation` from the
+       * projection, `applySubmittedQuotation` / `assertQuotationRecordAuthority`
+       * from `./financingEconomics`, the two `./utils/creationEconomics`
+       * resolvers (`resolveCreationRuleSnapshot`, `resolveCreationEconomicsInputs`);
        * the now-unused `buildRuleSnapshot` / `assertFeeTemplatesWithinLimit`
        * imports dropped; (2) `resolveExpectedExecutionFeesMinor` MOVED unchanged
        * to `convex/utils/creationEconomics.ts` (its one importer outside this
