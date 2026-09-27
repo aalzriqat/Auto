@@ -73,6 +73,7 @@ import {
 import {
   ReopenApprovedPurchaseDialog,
 } from "./ReopenApprovedPurchaseDialog";
+import { ApplyQuoteFirstPaymentDialog } from "./ApplyQuoteFirstPaymentDialog";
 import { ConfirmHandoverDialog } from "./ConfirmHandoverDialog";
 import { ConfirmFinalizeDialog } from "./ConfirmFinalizeDialog";
 import {
@@ -539,6 +540,7 @@ export function DealCockpit({
   const amendAdvice = useMutation(api.applications.amendSupplierDisbursementAdvice);
   const recordSubmittedQuotation = useMutation(api.financingEconomics.recordSubmittedQuotation);
   const reopenApproval = useMutation(api.financingEconomics.reopenApproval);
+  const applyQuoteFirstPayment = useMutation(api.financingEconomics.applyQuoteFirstPayment);
   const registerVehicleHandover = useMutation(api.applications.registerVehicleHandover);
   const resolveAppraisalGap = useMutation(api.financingEconomics.resolveAppraisalGap);
   const registerExpectedPayment = useMutation(api.applications.registerExpectedPayment);
@@ -1686,6 +1688,20 @@ export function DealCockpit({
           },
           onReopenApproved: async (values: { reason: string }) => {
             await reopenApproval({ orgId, applicationId, reason: values.reason });
+          },
+          // SCRUM-373 D2: offered only on the server's own verdict.
+          firstPaymentCorrection:
+            deal.firstPaymentCorrection?.available === true &&
+            deal.firstPaymentCorrection.quoteDownPaymentMinor !== null
+              ? { quoteDownPaymentMinor: deal.firstPaymentCorrection.quoteDownPaymentMinor }
+              : null,
+          onApplyQuoteFirstPayment: async (values: { reason: string }) => {
+            await applyQuoteFirstPayment({
+              orgId,
+              applicationId,
+              economicsStamp: deal.economicsStamp,
+              reason: values.reason,
+            });
           },
         }
       : undefined;
@@ -3049,6 +3065,9 @@ export type FinanceDecisionWiring = {
    * the figure being replaced.
    */
   onReopenApproved: (values: { reason: string }) => Promise<void>;
+  /** SCRUM-373 D2: present only when the server would accept the correction. */
+  firstPaymentCorrection?: { quoteDownPaymentMinor: number } | null;
+  onApplyQuoteFirstPayment?: (values: { reason: string }) => Promise<void>;
   onRecordAppraisal: (values: {
     appraisalAmountMinor: number;
     providerType: AppraisalProviderType;
@@ -3368,6 +3387,9 @@ export function DealCockpitView({
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [reopenSubmitting, setReopenSubmitting] = useState(false);
   const [reopenError, setReopenError] = useState<string | null>(null);
+  const [applyingFirstPayment, setApplyingFirstPayment] = useState(false);
+  const [firstPaymentSubmitting, setFirstPaymentSubmitting] = useState(false);
+  const [firstPaymentError, setFirstPaymentError] = useState<string | null>(null);
 
   // The lower documents · activity tabs are controlled so the live step can
   // send the operator to the documents it says are outstanding. The default is
@@ -3758,6 +3780,23 @@ export function DealCockpitView({
       toast.error(message);
     } finally {
       setApprovalSubmitting(false);
+    }
+  };
+
+  const handleApplyQuoteFirstPayment = async (values: { reason: string }) => {
+    if (!financeDecision?.onApplyQuoteFirstPayment) return;
+    setFirstPaymentSubmitting(true);
+    setFirstPaymentError(null);
+    try {
+      await financeDecision.onApplyQuoteFirstPayment(values);
+      toast.success(t("ApplyQuoteFirstPaymentApplied"));
+      setApplyingFirstPayment(false);
+    } catch (error) {
+      const message = getErrorMessage(error);
+      setFirstPaymentError(message);
+      toast.error(message);
+    } finally {
+      setFirstPaymentSubmitting(false);
     }
   };
 
@@ -4381,6 +4420,31 @@ export function DealCockpitView({
             />
           )}
 
+          {/* SCRUM-373 D2 — only on the server's verdict that it would accept. */}
+          {financeDecision?.firstPaymentCorrection && (
+            <div
+              role="status"
+              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/40"
+            >
+              <p className="min-w-0 flex-1">
+                {t("ApplyQuoteFirstPaymentNotice")}{" "}
+                <bdi className="tabular-nums font-semibold">
+                  {decisionMoney(financeDecision.firstPaymentCorrection.quoteDownPaymentMinor)}
+                </bdi>
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setFirstPaymentError(null);
+                  setApplyingFirstPayment(true);
+                }}
+              >
+                {t("ApplyQuoteFirstPaymentAction")}
+              </Button>
+            </div>
+          )}
+
           {/* --- رسوم ومصاريف تسليم السيارة -------------------------------- */}
           {/* Outside the money branch on purpose: the cost RECORD is readable
               with view:finance_applications, which is not view:finance. A
@@ -4636,6 +4700,18 @@ export function DealCockpitView({
             onOpenChange={setReopeningApproval}
             onSubmit={handleReopenApproved}
           />
+          {financeDecision.firstPaymentCorrection && (
+            <ApplyQuoteFirstPaymentDialog
+              open={applyingFirstPayment}
+              submitting={firstPaymentSubmitting}
+              error={firstPaymentError}
+              quoteDownPaymentMinor={financeDecision.firstPaymentCorrection.quoteDownPaymentMinor}
+              money={decisionMoney}
+              t={t}
+              onOpenChange={setApplyingFirstPayment}
+              onSubmit={handleApplyQuoteFirstPayment}
+            />
+          )}
         </>
       )}
 

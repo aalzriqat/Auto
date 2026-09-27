@@ -2295,7 +2295,16 @@ export const dealCockpit = query({
     if (!canSeeMoney) return { ...base, money: null, firstPaymentCorrection: null };
 
     // SCRUM-373 D2. Money-gated with the rest: it carries the quote's figure.
-    const quoteFirstPaymentMinor = await quoteDownPaymentMinor(ctx, app, quote);
+    // A deal in an unusable denomination cannot state that figure; the cockpit
+    // must still render (it withholds money spelling there itself), so the
+    // figure reads as unknown and the action is not offered. The mutation
+    // refuses the same deal with the denomination's own message.
+    let quoteFirstPaymentMinor: number | undefined;
+    try {
+      quoteFirstPaymentMinor = await quoteDownPaymentMinor(ctx, app, quote);
+    } catch {
+      quoteFirstPaymentMinor = undefined;
+    }
     const firstPaymentBlock = firstPaymentCorrectionBlock({
       app,
       actorId: user._id,
