@@ -8457,6 +8457,28 @@ describe("SCRUM-407: automatic closing readiness", () => {
       });
       expect(await remittance()).toBe(base - 280 * SCALE);
     });
+
+    test("re-recording the SAME amount still re-derives the economics, so drifted inputs still refuse the edit", async () => {
+      const { s, applicationId } = await approvedDeal("r407-econ-same");
+      const feeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, {
+        expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
+        feeType: "COMMISSION", paidBy: "DEALER", paidTo: "FINANCE_COMPANY", accountingTreatment: "FINANCE_COMPANY_COMMISSION",
+        deductedFromSettlement: true, actualAmountMinor: 300 * SCALE,
+      });
+      const otherFeeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, {
+        expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
+        feeType: "COMMISSION", paidBy: "DEALER", paidTo: "FINANCE_COMPANY", accountingTreatment: "FINANCE_COMPANY_COMMISSION",
+        deductedFromSettlement: true, actualAmountMinor: 50 * SCALE,
+      });
+      // Out-of-contract drift on a DIFFERENT line: only the recompute's currency proof can see it.
+      await s.t.run((ctx) => ctx.db.patch(otherFeeId, { currency: "USD" }));
+
+      await expect(s.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+        orgId: s.orgId, feeId, actualAmountMinor: 300 * SCALE, expectedCurrency: "JOD", receiptReference: "R-2",
+      })).rejects.toThrow(/USD/);
+      const fee = (await s.t.run((ctx) => ctx.db.get(feeId)))!;
+      expect(fee.receiptReference).not.toBe("R-2");
+    });
   });
 
   describe("the readiness query", () => {

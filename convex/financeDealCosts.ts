@@ -2197,11 +2197,10 @@ export const recordActualFeeAmount = mutation({
     if (custodyId || fee.custodyPosted) {
       await syncCustodyFeePosting(ctx, args.feeId, user._id, "Handover cost actual re-recorded.");
     }
-    // Only the amount is a settlement input here; re-recording the same figure
-    // (a new receipt, a paid date) moves no stored economics.
-    if (args.actualAmountMinor !== fee.actualAmountMinor) {
-      await recomputeAfterSettlementInputChange(ctx, fee.applicationId, fee.deductedFromSettlement);
-    }
+    // Always re-derive, even when the amount is unchanged: the recompute also
+    // proves the deal's currency facts and company rules, and a drift there
+    // must refuse (and roll back) this edit rather than slip through.
+    await recomputeAfterSettlementInputChange(ctx, fee.applicationId, fee.deductedFromSettlement);
     return args.feeId;
   },
 });
