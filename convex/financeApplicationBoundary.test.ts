@@ -460,6 +460,11 @@ async function allDoors(seeded: Seeded, caller: Caller) {
     await call("applications.handoverStamp", () =>
       caller.query(api.applications.handoverStamp, { orgId, applicationId })
     ),
+    // SCRUM-407's automatic closing readiness: its reasons and figures are
+    // money-tier only, so it is swept like every other door.
+    await call("applications.getClosingReadiness", () =>
+      caller.query(api.applications.getClosingReadiness, { orgId, applicationId })
+    ),
     await call("financingEconomics.getEconomics", () =>
       caller.query(api.financingEconomics.getEconomics, { orgId, applicationId })
     ),

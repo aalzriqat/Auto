@@ -371,13 +371,8 @@ async function walkToFinalization(
         orgId: s.orgId, feeId, notes: "Nothing to match.",
       })
     )) ??
-    (await step("classifyDealAccounting", () =>
-      s.asManager.mutation(api.financeDealCosts.classifyDealAccounting, {
-        orgId: s.orgId,
-        applicationId,
-        notes: "Invoice and settlement advice on file.",
-      })
-    )) ??
+    // SCRUM-407: no manual classification step — finalizeDeal checks the
+    // deal's closing readiness itself.
     (await step("finalizeDeal", () =>
       s.asManager.mutation(api.applications.finalizeDeal, {
         idempotencyKey: crypto.randomUUID(),

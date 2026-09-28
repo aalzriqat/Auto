@@ -46,10 +46,19 @@ jobs:
         run: |
           set -euo pipefail
           pnpm run test:visual:deal-cockpit
-          SHOTS="$(find test-results/deal-cockpit-visual -mindepth 2 -maxdepth 2 -name 'deal-cockpit-*.png' | wc -l)"
-          echo "visual gate screenshots: $SHOTS"
-          if [ "$SHOTS" -ne 16 ]; then
-            echo "expected 16 screenshots (2 locales x 2 themes x 2 viewports x top/bottom), found $SHOTS" >&2
+          # Each class of frame is counted exactly, so a matrix that silently
+          # shrank cannot hide behind another class that grew.
+          count() { find test-results/deal-cockpit-visual -mindepth 2 -maxdepth 2 -name "$1" | wc -l; }
+          BASE="$(( $(count 'deal-cockpit-*-top.png') + $(count 'deal-cockpit-*-bottom.png') ))"
+          NEXT_STEP="$(count 'deal-cockpit-*-next-step.png')"
+          PANEL="$(count 'deal-cockpit-*-panel.png')"
+          echo "visual gate screenshots: base $BASE, withheld-close next-step $NEXT_STEP, panel $PANEL"
+          if [ "$BASE" -ne 16 ]; then
+            echo "expected 16 base screenshots (2 locales x 2 themes x 2 viewports x top/bottom), found $BASE" >&2
+            exit 1
+          fi
+          if [ "$NEXT_STEP" -ne 16 ] || [ "$PANEL" -ne 8 ]; then
+            echo "expected 16 withheld-close next-step (2 variants x 8) and 8 panel screenshots (SCRUM-414), found $NEXT_STEP and $PANEL" >&2
             exit 1
           fi
         env:

@@ -107,6 +107,8 @@ async function seedFinanceLifecycleDealer(tag = "fl4") {
       permissions: [
         FINANCE_LIFECYCLE_PERMISSIONS.VIEW,
         FINANCE_LIFECYCLE_PERMISSIONS.FINALIZE,
+        // SCRUM-407: finalizing a financed deal is an accountant's act.
+        FINANCE_LIFECYCLE_PERMISSIONS.CONFIRM_DISBURSEMENT,
         FINANCE_LIFECYCLE_PERMISSIONS.REGISTER_HANDOVER,
         FINANCE_LIFECYCLE_PERMISSIONS.REGISTER_EXPECTED_PAYMENT,
       ],
@@ -353,7 +355,7 @@ describe("Finance lifecycle Phase 4", () => {
     ).rejects.toThrow(/approve:finance_application/);
   });
 
-  test("finalizeDeal requires FINALIZE_FINANCED_DEAL permission", async () => {
+  test("finalizeDeal requires CONFIRM_FINANCE_DISBURSEMENT permission (SCRUM-407: accountants only)", async () => {
     const { t, orgId, salespersonId, customerId, asLimitedUser, asFinalizer } =
       await seedFinanceLifecycleDealer("finalize");
     const { applicationId } = await seedFinanceApplication(t, {
@@ -365,7 +367,7 @@ describe("Finance lifecycle Phase 4", () => {
 
     await expect(
       asLimitedUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId })
-    ).rejects.toThrow(/finalize:financed_deal/);
+    ).rejects.toThrow(/confirm:finance_disbursement/);
 
     await registerHandover(asFinalizer, api, orgId, applicationId);
     await asFinalizer.mutation(api.applications.registerExpectedPayment, {

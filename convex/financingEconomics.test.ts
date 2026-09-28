@@ -5163,10 +5163,11 @@ describe("resolving the appraisal gap", () => {
     expect((await gapFields(seed, applicationId)).gapResolution).toBe("DEALER_ABSORBS");
 
     // Past the SCRUM-116 gate now. This fixture carries no legal invoice and
-    // no accounting classification, so finalization must stop at THAT later
-    // precondition — the one the gate used to stand in front of — and not at
-    // the gap. Asserted on the refusal it does give, so a gate that still fired
-    // (or a finalization that quietly went through) both fail here.
+    // no itemized costs, so finalization must stop at THAT later precondition —
+    // the automatic closing readiness (SCRUM-407), which replaced the manual
+    // classification the gate used to stand in front of — and not at the gap.
+    // Asserted on the refusal it does give, so a gate that still fired (or a
+    // finalization that quietly went through) both fail here.
     let refusal: unknown;
     try {
       await seed.asUser.mutation(api.applications.finalizeDeal, {
@@ -5180,7 +5181,7 @@ describe("resolving the appraisal gap", () => {
     expect(refusal).toBeInstanceOf(Error);
     const message = String((refusal as Error).message);
     expect(message).not.toMatch(/appraisal gap/i);
-    expect(message).toMatch(/classif/i);
+    expect(message).toMatch(/No costs are itemized on this deal/i);
   });
 
   test("an approval and a handover in the SAME millisecond are admitted to the exception, ambiguity and all", async () => {
@@ -5909,20 +5910,22 @@ describe("applying the quote's down payment to an approved zero first payment (S
 
     expect((await readApp(seed, applicationId)).customerFirstPaymentMinor).toBe(unfinancedMinor);
   });
-  test("a CLASSIFIED deal loses its classification, on the record", async () => {
+  // SCRUM-407: the manual classification is retired and nothing reads a stored
+  // stamp any more, so correcting the first payment no longer withdraws one —
+  // a legacy stamp is inert, left as it was, and no withdrawal is audited.
+  test("a legacy CLASSIFIED stamp is left inert: nothing is withdrawn or audited", async () => {
     const { seed, applicationId } = await zeroedApprovedDeal();
     await seed.t.run((ctx) => ctx.db.patch(applicationId, { accountingClassification: "CLASSIFIED" }));
 
     await apply(seed, applicationId);
 
-    expect((await readApp(seed, applicationId)).accountingClassification).toBe("PENDING_CLASSIFICATION");
+    expect((await readApp(seed, applicationId)).accountingClassification).toBe("CLASSIFIED");
     const withdrawn = await seed.t.run(async (ctx) =>
       (await ctx.db.query("financeApplicationOverrides").collect()).filter(
         (row) => row.applicationId === applicationId && row.field === "accountingClassification"
       )
     );
-    expect(withdrawn).toHaveLength(1);
-    expect(withdrawn[0]?.newValue).toBe("PENDING_CLASSIFICATION");
+    expect(withdrawn).toHaveLength(0);
   });
 
   test("a longer reason is left whole, flag raised: no text surgery on another reason", async () => {

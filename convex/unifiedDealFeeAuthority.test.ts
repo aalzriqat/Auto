@@ -976,11 +976,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         notes: "Execution fees reconciled.",
       });
 
-      await asOwner.mutation(api.financeDealCosts.classifyDealAccounting, {
-        orgId,
-        applicationId,
-        notes: "Invoice on file, deal classified without requiring fee template actuals.",
-      });
+      // SCRUM-407: no manual classification step - finalization checks readiness itself.
 
       const saleId = await asOwner.mutation(api.applications.finalizeDeal, {
         orgId,

@@ -4,17 +4,32 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { computeExpectedRemittance } from "../../lib/financingEconomics";
 import {
   buildFinancedSalePostingPlan,
+  checkLegalInvoice,
+  treatmentPosting,
   type FinancedSalePostingPlan,
   type SettlementComponentInput,
 } from "./financedSalePostingPlan";
 import {
-  assertConfiguredFeesRecorded,
+  configuredFeesRefusal,
+  custodyReadabilityRefusal,
   loadActiveFees,
   loadCustodyRecords,
   settlementDeductedActualMinor,
   settlementDeductedFees,
+  summarizeReadableCustody,
 } from "./settlementDeductions";
-import { assertCustodyLedgerFamilyComplete } from "./custodySourceLedger";
+import { MAX_DEAL_CUSTODY_DECISION_RECORDS, MAX_LIVE_DEAL_FEE_LINES } from "./dealCostLimits";
+import {
+  reasonOf,
+  redactClosingRefusal,
+  type ClosingReadinessCheckKey,
+  type TaggedClosingRefusal,
+  type ClosingReadinessReason,
+  type ClosingReadinessReasonCode,
+  type ClosingReadinessReasonParams,
+} from "../../lib/closingReadinessReasonCodes";
+import type { AppErrorData } from "./errors";
+import { custodyLedgerFamilyRefusal } from "./custodySourceLedger";
 import { heldDepositRowsForVehicle } from "./saleCompletion";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { toMinorUnits } from "./money";
@@ -30,9 +45,10 @@ import { summarizeFees } from "./feeSummary";
  * result: either the whole plan is derivable or finalization stops before it has
  * written anything.
  *
- * One refusal here is NOT scoped to the deals the plan covers: a configured
- * fee with no actual recorded stops finalization on every route, before the
- * coverage question is asked. See `resolveFinancedSalePlan`.
+ * Several refusals here are NOT scoped to the deals the plan covers: a
+ * configured fee with no actual recorded, and custody that is not on the books
+ * or not settled, stop finalization on every route, before the coverage
+ * question is asked. See `evaluateClosingReadiness`.
  */
 
 /** Deals this model covers. Everything else posts the way it always did. */
@@ -49,47 +65,345 @@ export function financedSaleRecognitionApplies(
 
 /**
  * What "this deal's costs are closable" means, asked of the live rows at the
- * moment of finalization — the same five conditions `classifyDealAccounting`
- * establishes, re-established here because the stamp does not travel with
- * the rows: at least one live line; every live line in the deal's currency;
- * every live amount a readable figure (the summary's own verdict, which also
- * refuses an overflowing sum); every line carrying an actual; every actual
- * reconciled. An estimate-less line recorded against a configured position
- * passes — it carries a real, reconciled actual — and the configured
- * positions themselves are proven by `assertConfiguredFeesRecorded` above.
- * Throws uncaught, before the first write.
+ * moment of finalization: at least one live line; every live line in the
+ * deal's currency; every live amount a readable figure (the summary's own
+ * verdict, which also refuses an overflowing sum); every line carrying an
+ * actual; every actual reconciled. An estimate-less line recorded against a
+ * configured position passes — it carries a real, reconciled actual — and the
+ * configured positions themselves are proven by `assertConfiguredFeesRecorded`.
  */
-function assertCostsClosable(liveFees: ReadonlyArray<Doc<"financeDealFees">>, currency: string): void {
+function costsClosableRefusal(liveFees: ReadonlyArray<Doc<"financeDealFees">>, currency: string): ClosingReadinessReason | null {
   if (liveFees.length === 0) {
-    throw new ConvexError(
-      "No costs are itemized on this deal, so its accounting cannot be finalized. Record them, or a zero-cost line saying the dealership bore none, then classify the deal again."
+    return reasonOf(
+      "COSTS_NONE",
+      "No costs are itemized on this deal, so its accounting cannot be finalized. Record them, or a zero-cost line saying the dealership bore none, before finalizing."
     );
   }
   const foreign = liveFees.filter((fee) => fee.currency !== currency);
   if (foreign.length > 0) {
-    throw new ConvexError(
-      `${foreign.length} cost line(s) on this deal are not in ${currency}, so its costs cannot be finalized until the records agree.`
+    return reasonOf(
+      "COSTS_FOREIGN_CURRENCY",
+      `${foreign.length} cost line(s) on this deal are not in ${currency}, so its costs cannot be finalized until the records agree.`,
+      { count: foreign.length, currency }
     );
   }
   const summary = summarizeFees([...liveFees]);
   if (summary.amountsUnreadable !== null) {
-    throw new ConvexError(
-      "A cost amount on this deal is not a readable figure, so its accounting cannot be finalized until the line is corrected and the deal is classified again."
+    return reasonOf(
+      "COSTS_AMOUNT_UNREADABLE",
+      "A cost amount on this deal is not a readable figure, so its accounting cannot be finalized until the line is corrected."
     );
   }
   if (summary.linesAwaitingActual > 0) {
-    throw new ConvexError(
-      `${summary.linesAwaitingActual} cost(s) on this deal have no actual amount recorded, so its accounting cannot be finalized. Record them and classify the deal again.`
+    return reasonOf(
+      "COSTS_AWAITING_ACTUAL",
+      `${summary.linesAwaitingActual} cost(s) on this deal have no actual amount recorded, so its accounting cannot be finalized. Record them before finalizing.`,
+      { count: summary.linesAwaitingActual }
     );
   }
   if (summary.linesAwaitingReconciliation > 0) {
-    throw new ConvexError(
-      `${summary.linesAwaitingReconciliation} cost(s) on this deal have an amount nobody has checked, so its accounting cannot be finalized. Reconcile them and classify the deal again.`
+    return reasonOf(
+      "COSTS_AWAITING_RECONCILIATION",
+      `${summary.linesAwaitingReconciliation} cost(s) on this deal have an amount nobody has checked, so its accounting cannot be finalized. Reconcile them before finalizing.`,
+      { count: summary.linesAwaitingReconciliation }
     );
   }
   if (!summary.fullyReconciled) {
-    throw new ConvexError("This deal's costs are not fully reconciled, so its accounting cannot be finalized.");
+    return reasonOf("COSTS_NOT_RECONCILED", "This deal's costs are not fully reconciled, so its accounting cannot be finalized.");
   }
+  // The plan posts every non-zero deducted line to its treatment's account and
+  // refuses a treatment that has none (TREATMENT_UNMAPPED) — asked here too, so
+  // the screen never reports READY for a deal the plan will refuse (Codex R407-2).
+  const unmapped = settlementDeductedFees(liveFees).find(
+    (fee) => fee.actualAmountMinor !== undefined && fee.actualAmountMinor !== 0 && treatmentPosting(fee.accountingTreatment) === null
+  );
+  if (unmapped !== undefined) {
+    const feeLabel = unmapped.description?.trim() || humanizeFeeType(unmapped.feeType);
+    return reasonOf(
+      "COSTS_TREATMENT_UNMAPPED",
+      `"${feeLabel}" is classified as ${unmapped.accountingTreatment}, which has no account to post to. Reclassify it before finalizing — it will not be posted to a general account instead.`,
+      { feeLabel, treatment: unmapped.accountingTreatment }
+    );
+  }
+  return null;
+}
+
+/**
+ * Every custody record on the deal is settled: none still OPEN, and none
+ * closed while its arithmetic says somebody still holds or is owed money
+ * (SCRUM-407 P1.2). These are the two checks `classifyDealAccounting` made and
+ * finalization did not — asked on EVERY route, because cash an employee holds
+ * is a fact of the deal whatever the settlement route, and judged on the
+ * readable balance (`summarizeReadableCustody`), never on the stored status: a
+ * late cost against a RECONCILED record is exactly a closed record that no
+ * longer balances. A WRITTEN_OFF record's residual is the loss the write-off
+ * booked, so it is not asked to balance.
+ */
+function custodySettledRefusal(
+  custodyRows: ReadonlyArray<Doc<"financeDealCustody">>,
+  liveFees: ReadonlyArray<Doc<"financeDealFees">>
+): ClosingReadinessReason | null {
+  for (const row of custodyRows) {
+    if (row.status === "OPEN") {
+      return reasonOf(
+        "CUSTODY_OPEN",
+        "A custody record on this deal is still open. Settle what that person holds or is owed before finalizing."
+      );
+    }
+    const unreadable = custodyReadabilityRefusal(row, liveFees, "finalizing this deal");
+    if (unreadable !== null) return unreadable;
+    const summary = summarizeReadableCustody(row, liveFees, "finalizing this deal");
+    if (!summary.settled && row.status !== "WRITTEN_OFF") {
+      return reasonOf(
+        "CUSTODY_NO_LONGER_BALANCES",
+        "A closed custody record on this deal no longer balances — its costs changed after it was reconciled. Reopen it and settle it before finalizing."
+      );
+    }
+  }
+  return null;
+}
+
+/** One accounting condition a financed deal must meet before it can be finalized (the list lives beside the reason codes). */
+export type { ClosingReadinessCheckKey };
+
+/**
+ * READY — met. BLOCKED — not met, with the reason. UNAVAILABLE — cannot be
+ * judged because a required input is absent or unreadable; never read as met.
+ * NOT_APPLICABLE — the condition does not exist on this deal's route.
+ */
+export type ClosingReadinessCheckStatus = "READY" | "BLOCKED" | "UNAVAILABLE" | "NOT_APPLICABLE";
+
+export interface ClosingReadinessCheck {
+  key: ClosingReadinessCheckKey;
+  status: ClosingReadinessCheckStatus;
+  /**
+   * What is missing and what to do: the code the screen translates, its
+   * params, and the English sentence kept as the diagnostic (SCRUM-414).
+   * Null when READY or NOT_APPLICABLE.
+   */
+  reason: ClosingReadinessReason | null;
+}
+
+export interface ClosingReadiness {
+  /** UNAVAILABLE wins over BLOCKED: a verdict on missing inputs is not a verdict. */
+  state: "READY" | "BLOCKED" | "UNAVAILABLE";
+  /** In the order finalization asks them; finalization refuses on the first that is not met. */
+  checks: ClosingReadinessCheck[];
+}
+
+/**
+ * The evaluator's verdict. `ready` exactly when `readiness.state` is READY, and
+ * only then does it carry the live cost lines the verdict was judged on.
+ */
+export type ClosingReadinessEvaluation =
+  | { ready: true; readiness: ClosingReadiness; liveFees: Array<Doc<"financeDealFees">> }
+  | { ready: false; readiness: ClosingReadiness };
+
+/** UNAVAILABLE wins over BLOCKED; READY only when neither appears. */
+function overallReadinessState(checks: ClosingReadinessCheck[]): ClosingReadiness["state"] {
+  if (checks.some((check) => check.status === "UNAVAILABLE")) return "UNAVAILABLE";
+  if (checks.some((check) => check.status === "BLOCKED")) return "BLOCKED";
+  return "READY";
+}
+
+function messageOf(error: unknown): string {
+  if (error instanceof ConvexError && typeof error.data === "string") return error.data;
+  throw error;
+}
+
+/**
+ * Why the one bounded read of the deal's rows failed, as a code: each of the
+ * two reads refuses in exactly one way, its bound.
+ */
+function rowsUnavailableReason(read: "FEES" | "CUSTODY", error: unknown): ClosingReadinessReason {
+  const message = messageOf(error);
+  return read === "FEES"
+    ? reasonOf("DEAL_ROWS_TOO_MANY_COST_LINES", message, { max: MAX_LIVE_DEAL_FEE_LINES })
+    : reasonOf("DEAL_ROWS_TOO_MANY_CUSTODY_RECORDS", message, { max: MAX_DEAL_CUSTODY_DECISION_RECORDS });
+}
+
+/**
+ * THE accounting readiness of a deal for finalization — one read-only
+ * evaluator for the deal screen and the finalize door (SCRUM-407 P1.4).
+ *
+ * Accounting checks only: deposit treatment is an input to finalizing, not a
+ * property of the deal's accounting, and is judged by the plan itself. Never
+ * reads the retired `accountingClassification` stamp (P1.5). Every row is read
+ * ONCE, bounded, and the checks and the plan are judged on those same rows.
+ *
+ * A refusal thrown by a shared predicate is caught ONLY to be reported as that
+ * check's reason; nothing here writes, so catching commits nothing. Anything
+ * other than a ConvexError is rethrown.
+ */
+export async function evaluateClosingReadiness(
+  ctx: QueryCtx | MutationCtx,
+  app: Doc<"financeApplications">,
+  opts: { settlesDirect: boolean; currency: string }
+): Promise<ClosingReadinessEvaluation> {
+  const planCovered = financedSaleRecognitionApplies(app, opts);
+  const checks: ClosingReadinessCheck[] = [];
+  const add = (key: ClosingReadinessCheckKey, status: ClosingReadinessCheckStatus, reason: ClosingReadinessReason | null) => {
+    checks.push({ key, status, reason });
+  };
+  const planOnly = (key: ClosingReadinessCheckKey, judge: () => [ClosingReadinessCheckStatus, ClosingReadinessReason | null]) => {
+    if (!planCovered) add(key, "NOT_APPLICABLE", null);
+    else add(key, ...judge());
+  };
+
+  // The single figure the finance-company receivable is opened from. Unknown
+  // means the server could not establish where the customer's money went, and
+  // the honest answer is to refuse rather than fall back to the approved
+  // amount, the quotation, or the customer's financing principal.
+  planOnly("REMITTANCE_KNOWN", () => {
+    if (app.expectedDealerRemittanceMinor !== undefined) return ["READY", null];
+    if (app.approvedDealerPurchaseAmountMinor === undefined) {
+      return [
+        "UNAVAILABLE",
+        reasonOf(
+          "REMITTANCE_APPROVAL_MISSING",
+          "The finance company's approved purchase amount is not recorded on this deal yet, so what it will actually remit to the dealership is not known. Record the approval before finalizing."
+        ),
+      ];
+    }
+    return [
+      "BLOCKED",
+      reasonOf(
+        "REMITTANCE_UNKNOWN",
+        "What this financing company will actually remit to the dealership is not known on this deal, so the amount it owes cannot be recorded. Resolve the reconciliation note on it before finalizing."
+      ),
+    ];
+  });
+
+  // ONE bounded read of the deal's live cost lines and custody records serves
+  // every rule below; past the bound nothing can be judged, and that is
+  // UNAVAILABLE, never a pass.
+  // The two reads are independent; a failure of the cost-line read is reported
+  // ahead of the custody read's, as when they ran one after the other.
+  let rows: { fees: Array<Doc<"financeDealFees">>; custody: Array<Doc<"financeDealCustody">> } | null = null;
+  let rowsUnavailable: ClosingReadinessReason | null = null;
+  const [feesRead, custodyRead] = await Promise.allSettled([
+    loadActiveFees(ctx, app._id),
+    loadCustodyRecords(ctx, app._id, "finalizing this deal"),
+  ]);
+  if (feesRead.status === "rejected") rowsUnavailable = rowsUnavailableReason("FEES", feesRead.reason);
+  else if (custodyRead.status === "rejected") rowsUnavailable = rowsUnavailableReason("CUSTODY", custodyRead.reason);
+  else rows = { fees: feesRead.value, custody: custodyRead.value };
+
+  /**
+   * One check judged on the rows just read: UNAVAILABLE when they could not be
+   * read; otherwise READY, or BLOCKED with the refusal. A ConvexError thrown
+   * while judging becomes `onThrow` with its message, coded `throwCode` —
+   * stated per check, since a refusal (BLOCKED) and an unreadable input
+   * (UNAVAILABLE) are different verdicts. `planOnly` checks are
+   * NOT_APPLICABLE off the plan's route.
+   */
+  const onRows = async (
+    key: ClosingReadinessCheckKey,
+    spec: { onThrow: "BLOCKED" | "UNAVAILABLE"; throwCode?: "CUSTODY_LEDGER_UNVERIFIABLE"; planOnly?: boolean },
+    judge: (read: NonNullable<typeof rows>) => ClosingReadinessReason | null | Promise<ClosingReadinessReason | null>
+  ) => {
+    if (spec.planOnly && !planCovered) return add(key, "NOT_APPLICABLE", null);
+    if (rows === null) return add(key, "UNAVAILABLE", rowsUnavailable);
+    try {
+      const refusal = await judge(rows);
+      add(key, refusal === null ? "READY" : "BLOCKED", refusal);
+    } catch (error) {
+      add(key, spec.onThrow, reasonOf(spec.throwCode ?? "CHECK_REFUSED", messageOf(error)));
+    }
+  };
+
+  // Every fee the finance company's FROZEN policy configures must have an
+  // actual on the record — on EVERY route. A deal whose snapshot configures
+  // nothing passes through untouched.
+  await onRows("CONFIGURED_FEES_RECORDED", { onThrow: "BLOCKED" }, ({ fees }) =>
+    configuredFeesRefusal(app.companyRuleSnapshot, fees, "finalizing")
+  );
+
+  // Every custody record and custody-paid line must be on the books as a
+  // complete family — on EVERY route. Judged on the LEDGER as well as the rows;
+  // a ledger that cannot be read is UNAVAILABLE, not a refusal.
+  // The ledger proof has many refusals, whose detail (keys, versions, outbox
+  // errors) stays in the English diagnostic: one code for "not on the books",
+  // one for "could not be proven" (SCRUM-414).
+  await onRows(
+    "CUSTODY_ON_LEDGER",
+    { onThrow: "UNAVAILABLE", throwCode: "CUSTODY_LEDGER_UNVERIFIABLE" },
+    async ({ fees, custody }) => {
+      const refusal = await custodyLedgerFamilyRefusal(ctx, app.orgId, app._id, custody, fees, "finalizing this deal");
+      return refusal === null ? null : reasonOf("CUSTODY_NOT_ON_LEDGER", refusal);
+    }
+  );
+
+  await onRows("CUSTODY_SETTLED", { onThrow: "BLOCKED" }, ({ fees, custody }) => custodySettledRefusal(custody, fees));
+
+  // The CURRENT state of the deal's costs, judged on the rows just read.
+  await onRows("COSTS_CLOSABLE", { onThrow: "BLOCKED", planOnly: true }, ({ fees }) =>
+    costsClosableRefusal(fees, opts.currency)
+  );
+
+  // An unknown first payment is not zero (SCRUM-373): a quoted, approved deal
+  // without one has no funding split to post from.
+  planOnly("FIRST_PAYMENT_RECORDED", () =>
+    app.submittedQuotationMinor !== undefined &&
+    app.approvedDealerPurchaseAmountMinor !== undefined &&
+    app.customerFirstPaymentMinor === undefined
+      ? [
+          "BLOCKED",
+          reasonOf(
+            "FIRST_PAYMENT_MISSING",
+            "The customer's first payment is not recorded on this deal, so its funding split cannot be established. Record it before finalizing."
+          ),
+        ]
+      : ["READY", null]
+  );
+
+  // Required while the v1 posting plan is in force: it posts revenue from the
+  // legal invoice. Replacing that revenue source is SCRUM-411; until then the
+  // invoice is a readiness item, and the panel offers the action that records it.
+  planOnly("LEGAL_INVOICE_RECORDED", () => {
+    const invoice = checkLegalInvoice({
+      legalInvoiceConsiderationMinor: app.legalInvoiceAmountMinor,
+      legalInvoiceIssuedTo: app.legalInvoiceIssuedTo,
+      // Asked only on the plan's route, which requires a configured company.
+      financierIsConfiguredExternal: true,
+    });
+    // The plan's own code tells absent, unusable and wrong-recipient apart.
+    return invoice.ok ? ["READY", null] : ["BLOCKED", reasonOf(invoice.refusal.code, invoice.refusal.message)];
+  });
+
+  const state = overallReadinessState(checks);
+  const readiness: ClosingReadiness = { state, checks };
+  // A READY verdict is one every row check passed, so the rows were read.
+  return state === "READY" && rows !== null
+    ? { ready: true, readiness, liveFees: rows.fees }
+    : { ready: false, readiness };
+}
+
+/**
+ * What a refused finalize carries (SCRUM-414): the house `AppErrorData` shape —
+ * the English sentence as `message`, which `getErrorMessage` shows — with the
+ * readiness code, plus the params the deal screen translates it by.
+ */
+export type ClosingReadinessRefusalData = AppErrorData<ClosingReadinessReasonCode> & {
+  params?: ClosingReadinessReasonParams;
+};
+
+/** A closing-readiness reason thrown as a finalize refusal, with the same data the readiness panel is served. */
+export function closingRefusalError(reason: ClosingReadinessReason): ConvexError<ClosingReadinessRefusalData> {
+  return new ConvexError<ClosingReadinessRefusalData>(reason);
+}
+
+/**
+ * The first condition that is not met, tagged with its check key so the
+ * refusal can be redacted to that check's WITHHELD code (SCRUM-414 R1). With
+ * no unmet check to name, NOT_READY and no key.
+ */
+function firstUnmetRefusal(readiness: ClosingReadiness): TaggedClosingRefusal {
+  const unmet = readiness.checks.find((check) => check.status === "BLOCKED" || check.status === "UNAVAILABLE");
+  return {
+    key: unmet?.key ?? null,
+    reason: unmet?.reason ?? reasonOf("NOT_READY", "This deal is not ready to be finalized."),
+  };
 }
 
 export async function resolveFinancedSalePlan(
@@ -114,52 +428,29 @@ export async function resolveFinancedSalePlan(
      * company owes.
      */
     depositTreatment?: string;
+    /**
+     * May the caller read the deal's money (`mayReadFinanceEconomics`)? A
+     * readiness refusal is stated in full only when it may; below the finance
+     * tier it is thrown as its check's WITHHELD code with no params, exactly
+     * as `getClosingReadiness` serves it (SCRUM-414 R1). Required, so no
+     * caller can forget to decide.
+     */
+    mayReadMoney: boolean;
   }
 ): Promise<FinancedSalePostingPlan | undefined> {
-  // ONE bounded read of the deal's live cost lines serves every rule below;
-  // the rows are handed on, never read again, so the completeness gate and
-  // the deductions the plan posts from are judged on the same rows.
-  const liveFees = await loadActiveFees(ctx, app._id);
-
-  // Every fee the finance company's FROZEN policy configures must have an
-  // actual on the record before the deal can close — on EVERY route, which
-  // is why this runs before the coverage question below. A direct-route deal
-  // is never asked for a classification, so this is the only door its
-  // configured fees are checked at; a through-dealership deal was checked
-  // when it was classified, and is checked again here rather than trusted
-  // from the `CLASSIFIED` flag, because a deal classified before
-  // configured-fee completeness existed carries a flag that was valid under
-  // the older rule, and the plan reads recorded deductions only — it would
-  // have posted the sale with every configured position unrecorded
-  // (Codex-high MEDIUM on 229608039). A deal whose snapshot configures
-  // nothing — a cash sale, a manual financier, no company — passes through
-  // untouched. Before the first write, like every other refusal here.
-  assertConfiguredFeesRecorded(app.companyRuleSnapshot, liveFees, "finalizing");
-
-  // Every custody record and every custody-paid line on the deal must be on
-  // the books as a complete family before the sale is recognized on them —
-  // on EVERY route, like the configured-fee gate above, because cash an
-  // employee paid out is a fact of the deal whatever the settlement route.
-  // Judged on the rows, never on the `CLASSIFIED` stamp: a record migrated
-  // or raw-edited since classification carries the stamp just the same.
-  // Judged on the LEDGER as well as the rows: every posting the rows claim
-  // is proven POSTED (not queued, pending, failed or at a stale version).
-  await assertCustodyLedgerFamilyComplete(
-    ctx,
-    app.orgId,
-    app._id,
-    await loadCustodyRecords(ctx, app._id, "finalizing this deal"),
-    liveFees,
-    "finalizing this deal"
-  );
+  // The finalize door re-runs the SAME evaluator the deal screen shows — never
+  // a client's verdict, never the retired stamp — and refuses on the first
+  // unmet condition, before anything is written (SCRUM-407 P1.4).
+  const evaluation = await evaluateClosingReadiness(ctx, app, opts);
+  // Thrown uncaught, before the first write, and redacted by the SAME pure
+  // function the readiness query uses.
+  if (!evaluation.ready) {
+    throw closingRefusalError(redactClosingRefusal(firstUnmetRefusal(evaluation.readiness), opts.mayReadMoney));
+  }
 
   if (!financedSaleRecognitionApplies(app, opts)) return undefined;
-
-  // The CURRENT state of the deal's costs, judged on the rows just read —
-  // never on the stored `accountingClassification` stamp, which describes the
-  // moment it was written: lines added, re-recorded or raw-edited since, and
-  // legacy rows stamped before today's rules, carry it just the same.
-  assertCostsClosable(liveFees, opts.currency);
+  // The plan is built from the same rows the READY verdict was judged on.
+  const liveFees = evaluation.liveFees;
 
   const fees = settlementDeductedFees(liveFees);
   // The plan settles in `opts.currency` (the deal's pinned denomination at
