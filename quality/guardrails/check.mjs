@@ -26,10 +26,12 @@ import { fileURLToPath } from "node:url";
 import {
   BASELINE_PATH,
   CONFIG_PATH,
+  JUSTIFIED_LISTS,
   buildBaseline,
   canonicalJson,
   classify,
   compareCodeUnits,
+  enforcementScope,
   evaluate,
   importViolations,
   measureLines,
@@ -199,16 +201,12 @@ async function measureCommit(cwd, commit, config, prettierOptions, lineCache) {
 }
 
 /**
- * Files the PR brings into scope (production only under the proposed config)
- * whose text is identical to the target's — the only ones that may be adopted
- * with a new ceiling.
+ * Which of `paths` have text identical to the target's: files the PR brings into
+ * scope (the only ones that may be adopted with a new ceiling) and, on
+ * bootstrap, the excluded files (which the first PR may not edit).
  */
-function unchangedFromTarget(cwd, measured, trustedConfig, proposedConfig, targetBlobs, readDisk) {
-  const candidates = [...measured.counts.keys()].filter(
-    (p) => targetBlobs.has(p) &&
-      classify(p, trustedConfig) !== "production" &&
-      classify(p, proposedConfig) === "production",
-  );
+function unchangedFromTarget(cwd, paths, targetBlobs, readDisk) {
+  const candidates = [...new Set(paths)].filter((p) => targetBlobs.has(p));
   const texts = readBlobs(cwd, candidates.map((p) => targetBlobs.get(p)));
   const normalize = (text) => text.replaceAll("\r\n", "\n");
   return new Set(candidates.filter((p) => normalize(texts.get(targetBlobs.get(p))) === normalize(readDisk(p))));
@@ -246,7 +244,8 @@ async function verifyBootstrap(cwd, baseCommit, proposed, prettierOptions, lineC
 /**
  * @param {{ cwd: string, env?: Record<string, string | undefined>, base?: string,
  *   log?: (message: string) => void,
- *   bootstrapPolicy?: { maxLines: number, productionRoots: string[], extensions: string[] } }} options
+ *   bootstrapPolicy?: { maxLines: number, productionRoots: string[], extensions: string[],
+ *     nonDoors: string[] } }} options
  */
 export async function runGuardrails({ cwd, env = process.env, base, log = () => {}, bootstrapPolicy }) {
   const baseRef = resolveBaseRef(env, base);
@@ -278,13 +277,18 @@ export async function runGuardrails({ cwd, env = process.env, base, log = () => 
   const measured = await measure({
     files: inventory,
     readText: readDisk,
-    configs: [trusted.config, proposed.config],
+    configs: [trusted.config, proposed.config, enforcementScope(trusted.config, proposed.config)],
     prettierOptions,
     lineCache,
   });
   const targetBlobs = treeBlobs(cwd, baseCommit);
   measured.targetInventory = new Set(targetBlobs.keys());
-  measured.unchangedFromTarget = unchangedFromTarget(cwd, measured, trusted.config, proposed.config, targetBlobs, readDisk);
+  const onDisk = new Set(inventory);
+  const newlyScoped = [...measured.counts.keys()].filter((p) => classify(p, trusted.config) !== "production");
+  const excluded = bootstrap
+    ? JUSTIFIED_LISTS.flatMap((name) => proposed.config[name].map((entry) => entry.path)).filter((p) => onDisk.has(p))
+    : [];
+  measured.unchangedFromTarget = unchangedFromTarget(cwd, [...newlyScoped, ...excluded], targetBlobs, readDisk);
   const { errors, notices } = evaluate({ trusted, proposed, measured, bootstrap, bootstrapPolicy });
   for (const file of measured.unformatted) notices.push(`UNFORMATTABLE ${file}: counted unformatted`);
   if (bootstrap) {

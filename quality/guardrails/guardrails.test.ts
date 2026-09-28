@@ -133,7 +133,12 @@ async function check(root: string) {
 }
 
 /** The fixture's own scope stands in for the pinned owner policy on bootstrap. */
-const FIXTURE_POLICY = { maxLines: 600, productionRoots: ["components/", "convex/"], extensions: [".ts", ".tsx"] };
+const FIXTURE_POLICY = {
+  maxLines: 600,
+  productionRoots: ["components/", "convex/"],
+  extensions: [".ts", ".tsx"],
+  nonDoors: ["convex/schema.ts"],
+};
 
 async function bootstrapCheck(root: string) {
   return runGuardrails({ cwd: root, env: {}, base: "main", bootstrapPolicy: FIXTURE_POLICY });
@@ -344,6 +349,7 @@ describe("round-1 review findings (Sol S426-01..04, Codex 426-1..3)", () => {
       maxLines: 600,
       productionRoots: ["app/", "apps/", "components/", "convex/", "dealer-worker/src/", "hooks/", "lib/", "packages/"],
       extensions: [".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx"],
+      nonDoors: ["convex/schema.ts"],
     });
   });
 
@@ -416,6 +422,77 @@ describe("round-1 review findings (Sol S426-01..04, Codex 426-1..3)", () => {
   }, TIMEOUT);
 });
 
+describe("round-2 review findings (Sol S426-05, Codex 426-1 r2)", () => {
+  test("negative control (S426-05): a root added with its own exemption is still size-checked", async () => {
+    const root = fixtureRepo();
+    const config = baseConfig();
+    config.productionRoots.push("lib/");
+    config.exemptions.push({ path: "lib/new.ts", reason: "exempting a file in the root it adds" });
+    writeConfig(root, config);
+    write(root, "lib/new.ts", lines(700));
+    const result = await check(root);
+    expect(result.errors).toEqual(["SIZE-NEW lib/new.ts: 700 lines > limit 600 (not grandfathered)"]);
+  }, TIMEOUT);
+
+  test("negative control (S426-05): an extension added with its own exemption is still size-checked", async () => {
+    const root = fixtureRepo();
+    const config = baseConfig();
+    config.extensions.push(".js");
+    config.exemptions.push({ path: "convex/newScript.js", reason: "exempting a file of the extension it adds" });
+    writeConfig(root, config);
+    write(root, "convex/newScript.js", lines(700));
+    const result = await check(root);
+    expect(result.errors).toEqual(["SIZE-NEW convex/newScript.js: 700 lines > limit 600 (not grandfathered)"]);
+  }, TIMEOUT);
+
+  test("control (S426-05): an exemption in trusted scope is still not effective in its own PR, and trusted exemptions still hold", async () => {
+    const root = fixtureRepo();
+    const config = baseConfig();
+    config.exemptions.push({ path: "convex/newModule.ts", reason: "exempting its own new file" });
+    writeConfig(root, config);
+    write(root, "convex/newModule.ts", lines(700));
+    const result = await check(root);
+    // convex/data.ts (900 lines, trusted exemption) produces nothing.
+    expect(result.errors).toEqual(["SIZE-NEW convex/newModule.ts: 700 lines > limit 600 (not grandfathered)"]);
+  }, TIMEOUT);
+
+  test("positive control (S426-05): removing a trusted exemption still adopts the unchanged file with its exact ceiling", async () => {
+    const root = fixtureRepo();
+    const config = baseConfig();
+    config.exemptions = [];
+    writeConfig(root, config);
+    writeBaselineDoc(root, { ...baseBaseline(), sizeCeilings: { "convex/big.ts": 700, "convex/data.ts": 900 } });
+    const result = await check(root);
+    expect(result.errors).toEqual([]);
+    expect(result.notices).toContain("SCOPE-ADOPTED convex/data.ts: 900 lines, unchanged from the target");
+  }, TIMEOUT);
+
+  test("negative control (Codex 426-1 r2): bootstrap cannot exempt a target file and change it in the same PR", async () => {
+    const root = fixtureRepo({ withGuardrails: false });
+    const target = git(root, "rev-parse", "HEAD");
+    const config = baseConfig();
+    config.exemptions.push({ path: "convex/big.ts", reason: "exempting a file this PR enlarges" });
+    writeConfig(root, config);
+    write(root, "convex/big.ts", lines(900));
+    await writeBaseline(root, target, "main");
+    const result = await bootstrapCheck(root);
+    expectFailure(result.errors, /^BOOTSTRAP-CHANGED-ALLOWANCE exemptions: "convex\/big\.ts" differs from the target/);
+  }, TIMEOUT);
+
+  test("negative control (Codex 426-1 r2): bootstrap nonDoors are the pinned reviewed set", async () => {
+    const root = fixtureRepo({ withGuardrails: false });
+    const target = git(root, "rev-parse", "HEAD");
+    const config = baseConfig();
+    config.nonDoors.push({ path: "convex/applications.ts", reason: "a real door mislabelled as a non-door" });
+    writeConfig(root, config);
+    await writeBaseline(root, target, "main");
+    const result = await bootstrapCheck(root);
+    expect(result.errors).toEqual([
+      'BOOTSTRAP-POLICY nonDoors: "convex/applications.ts" is not a pinned reviewed non-door',
+    ]);
+  }, TIMEOUT);
+});
+
 describe("import boundaries", () => {
   test("negative control: a new components -> convex/utils import fails; the grandfathered one passes", async () => {
     const root = fixtureRepo();
@@ -469,6 +546,16 @@ describe("import boundaries", () => {
     // Controls: the canonical form is unchanged, and an alias escaping the repo is not a repo module.
     expect(to("components/A.tsx", "@/convex/utils/money")).toEqual(["components-no-convex-utils convex/utils/money"]);
     expect(to("components/A.tsx", "@/../outside/convex/utils/money")).toEqual([]);
+  });
+
+  test("negative control (Codex 426-2 r2): a doubled alias slash resolves to the same module and is judged as it", () => {
+    const config = parseConfig(json(baseConfig()), "fixture");
+    const to = (from: string, spec: string) =>
+      importViolations(from, `import { x } from "${spec}";\nexport const y = x;\n`, config).map((v: Grandfather) => `${v.rule} ${v.to}`);
+    expect(to("components/A.tsx", "@//convex/utils/money")).toEqual(["components-no-convex-utils convex/utils/money"]);
+    expect(to("convex/domains/d/commands/c.ts", "@///convex/applications")).toEqual(["domains-no-door convex/applications"]);
+    // Control: stripping the slashes must not let an escape pass as a repo path.
+    expect(to("components/A.tsx", "@//../outside/convex/utils/money")).toEqual([]);
   });
 
   test("import detection covers re-exports, dynamic import and require, but not comments or strings", () => {

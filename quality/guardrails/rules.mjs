@@ -11,12 +11,15 @@ export const BASELINE_PATH = "quality/guardrails/baseline.json";
 /**
  * The owner-approved policy (SCRUM-418 c21105) that the FIRST guardrail PR is
  * held to. On bootstrap the target has no config yet, so the PR's own config is
- * the only candidate; it may be tighter than this, never looser.
+ * the only candidate; it may be tighter than this, never looser. `nonDoors` is
+ * the reviewed set of top-level Convex modules that export no functions — path
+ * shape alone cannot prove that.
  */
 export const BOOTSTRAP_POLICY = Object.freeze({
   maxLines: 600,
   productionRoots: ["app/", "apps/", "components/", "convex/", "dealer-worker/src/", "hooks/", "lib/", "packages/"],
   extensions: [".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx"],
+  nonDoors: ["convex/schema.ts"],
 });
 
 /** Migration/seed modules whose names predate the `convex/migrate*` convention. */
@@ -69,7 +72,7 @@ const CONFIG_KEYS = [
   "migrations",
   "nonDoors",
 ];
-const JUSTIFIED_LISTS = ["exemptions", "generated", "migrations", "nonDoors"];
+export const JUSTIFIED_LISTS = ["exemptions", "generated", "migrations", "nonDoors"];
 
 function assertKeys(doc, allowed, label) {
   if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
@@ -224,6 +227,16 @@ export function classify(repoPath, config) {
   return "production";
 }
 
+/**
+ * The scope a PR is enforced in: the union of trusted and proposed roots and
+ * extensions, excluded only by the TRUSTED lists — a list entry the PR adds can
+ * never hide scope the same PR adds (Sol S426-05).
+ */
+export function enforcementScope(trustedConfig, proposedConfig) {
+  const union = (key) => [...new Set([...trustedConfig[key], ...proposedConfig[key]])];
+  return { ...trustedConfig, productionRoots: union("productionRoots"), extensions: union("extensions") };
+}
+
 // ------------------------------------------------------------------ counting
 
 export function countNonBlank(text) {
@@ -254,7 +267,9 @@ const SOURCE_SUFFIX = /\.(?:d\.ts|[cm]?[jt]sx?)$/u;
 /** Resolve one specifier to a repo module id (no extension, no /index). */
 export function resolveSpecifier(fromPath, specifier) {
   let target;
-  if (specifier.startsWith("@/")) target = path.posix.normalize(specifier.slice(2));
+  // `@//x` resolves like `@/x`; strip the extra slashes before normalizing so the
+  // escape check below still sees a leading "..".
+  if (specifier.startsWith("@/")) target = path.posix.normalize(specifier.slice(2).replace(/^\/+/u, ""));
   else if (specifier.startsWith("./") || specifier.startsWith("../")) {
     target = path.posix.normalize(path.posix.join(path.posix.dirname(fromPath), specifier));
   } else {
@@ -364,12 +379,15 @@ export function evaluate({ trusted, proposed, measured, bootstrap, bootstrapPoli
   const tMax = trusted.config.maxLines;
 
   // 1. File size against the trusted allowance. A file the PR brings into scope
-  //    (production only under the proposed config) is held to the same limit;
-  //    it may carry a new ceiling only when it is unchanged from the target.
+  //    (production under the proposed config or the enforcement scope) is held
+  //    to the same limit; it may carry a new ceiling only when it is unchanged
+  //    from the target.
   const adopted = new Set();
+  const scope = enforcementScope(trusted.config, proposed.config);
   for (const [filePath, lines] of [...counts].sort(([a], [b]) => compareCodeUnits(a, b))) {
     const trustedProduction = classify(filePath, trusted.config) === "production";
-    if (!trustedProduction && classify(filePath, proposed.config) !== "production") continue;
+    if (!trustedProduction && classify(filePath, scope) !== "production" &&
+      classify(filePath, proposed.config) !== "production") continue;
     const ceiling = trusted.baseline.sizeCeilings[filePath];
     if (ceiling !== undefined) {
       if (lines > ceiling) {
@@ -476,12 +494,20 @@ function bootstrapChecks(proposed, measured, policy, errors) {
       if (!p[key].includes(value)) errors.push(`BOOTSTRAP-POLICY ${key}: "${value}" missing`);
     }
   }
-  // The first PR may only exclude files that already existed on the target.
+  // The first PR may only exclude files that already existed on the target,
+  // unchanged: it cannot exempt a file and edit it in the same change.
   for (const listName of JUSTIFIED_LISTS) {
     for (const entry of p[listName]) {
       if (!measured.targetInventory?.has(entry.path)) {
         errors.push(`BOOTSTRAP-NEW-ALLOWANCE ${listName}: "${entry.path}" does not exist on the target`);
+      } else if (!measured.unchangedFromTarget?.has(entry.path)) {
+        errors.push(`BOOTSTRAP-CHANGED-ALLOWANCE ${listName}: "${entry.path}" differs from the target`);
       }
+    }
+  }
+  for (const entry of p.nonDoors) {
+    if (!policy.nonDoors.includes(entry.path)) {
+      errors.push(`BOOTSTRAP-POLICY nonDoors: "${entry.path}" is not a pinned reviewed non-door`);
     }
   }
 }
