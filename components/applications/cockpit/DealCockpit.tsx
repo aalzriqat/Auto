@@ -1302,6 +1302,9 @@ export function DealCockpit({
                 feeId: feeId as Id<"financeDealFees">,
                 method: values.method,
                 paidAt: values.paidAt,
+                // The amount the operator saw when they chose to pay: the
+                // server refuses if the line has changed since (R1).
+                expectedAmountMinor: values.expectedAmountMinor,
                 reference: values.reference,
                 idempotencyKey: commandId.for(intent),
               });
@@ -1319,6 +1322,13 @@ export function DealCockpit({
           onAbandonDirectPayment: (feeId: string, intentId: string) => {
             commandId.retire(`record-direct-payment:${applicationId}:${feeId}:${intentId}`);
           },
+          // The lines the server's own closing check names as waiting on the
+          // ledger: passed through, so a recorded-but-queued payment is never
+          // shown as paid. Only a blocked check names any.
+          postingHoldFeeIds: ((): string[] => {
+            const check = closingReadiness?.checks.find((c) => c.key === "HANDOVER_COSTS_PAID");
+            return check?.status === "BLOCKED" ? (check.feeIds ?? []) : [];
+          })(),
           onRecordActual: async (feeId: string, values: ActualHandoverCost) => {
             try {
               await recordActualFeeAmount({

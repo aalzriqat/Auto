@@ -222,6 +222,13 @@ export type DirectHandoverPayment = {
   method: DirectPaymentMethodChoice;
   paidAt: number;
   reference: string | undefined;
+  /**
+   * The amount, in minor units, the operator SAW on the form when they chose to
+   * pay (the line's rendered actual). The server pays the line's actual only
+   * while it is still exactly this, so an edit between render and submit is
+   * refused rather than paid at a figure nobody approved.
+   */
+  expectedAmountMinor: number;
 };
 
 export type HandoverCostsSummary = {
@@ -449,6 +456,7 @@ export function HandoverCostsPanel({
   canRecordDirectPayment = false,
   onRecordDirectPayment,
   onAbandonDirectPayment,
+  postingHoldFeeIds = [],
 }: Readonly<{
   /** `undefined` while loading or when this caller may not read the cost rows. */
   costs: HandoverCostsData | undefined;
@@ -503,6 +511,16 @@ export function HandoverCostsPanel({
   onRecordDirectPayment?: (feeId: string, values: DirectHandoverPayment) => Promise<void>;
   /** The form closed after an attempt whose result never arrived: that identity is over. */
   onAbandonDirectPayment?: (feeId: string, intentId: string) => void;
+  /**
+   * The lines the server's `HANDOVER_COSTS_PAID` check names as waiting on the
+   * LEDGER (`feeIds` of that check while it is blocked): a direct payment
+   * recorded but not yet posted (no open period for its date), or a payment
+   * taken back whose reversal has not posted. The row alone cannot say so, and
+   * a queued payment must never read as paid. Only lines already in a paid or
+   * zero state are affected — a line the check names for having no payment
+   * keeps its own row.
+   */
+  postingHoldFeeIds?: ReadonlyArray<string>;
 }>) {
   /** The line whose direct-payment form is open. */
   const [payingId, setPayingId] = useState<string | null>(null);
@@ -630,6 +648,7 @@ export function HandoverCostsPanel({
         denominationCode={denomination.code}
         dealClosed={dealClosed}
         canRecord={canRecordDirectPayment && onRecordDirectPayment !== undefined}
+        postingHold={postingHoldFeeIds.includes(line._id)}
         paying={payingId === line._id}
         busy={submittingAny}
         t={t}
@@ -2001,6 +2020,7 @@ function HandoverPaymentRow({
   denominationCode,
   dealClosed,
   canRecord,
+  postingHold,
   paying,
   busy,
   t,
@@ -2013,6 +2033,8 @@ function HandoverPaymentRow({
   denominationCode: string;
   dealClosed: boolean;
   canRecord: boolean;
+  /** The server's closing check names this line as waiting on the ledger. */
+  postingHold: boolean;
   paying: boolean;
   busy: boolean;
   t: (key: string) => string;
@@ -2021,8 +2043,19 @@ function HandoverPaymentRow({
   onSubmit: (values: DirectHandoverPayment) => Promise<void>;
 }>) {
   const state = line.handoverPayment;
-  if (state === undefined || state === "NOT_HANDOVER_LINE" || state === "ZERO_ACTUAL") return null;
+  if (state === undefined || state === "NOT_HANDOVER_LINE") return null;
   const testId = `deal-handover-payment-${line._id}`;
+
+  // A zero actual is exempt from payment — unless an earlier payment of it is
+  // still on the books because its reversal is waiting for a period to open.
+  if (state === "ZERO_ACTUAL") {
+    if (!postingHold) return null;
+    return (
+      <p className="mt-2 text-xs text-amber-700 dark:text-amber-400" data-testid={testId} data-state="REVERSAL_PENDING">
+        {t("HandoverPaymentReversalPending")}
+      </p>
+    );
+  }
 
   if (state === "PAID_CUSTODY") {
     return (
@@ -2035,10 +2068,20 @@ function HandoverPaymentRow({
   }
   if (state === "PAID_DIRECT") {
     const paid = line.directPayment;
+    // Recorded on the row is not on the books: while the server says the
+    // posting has not landed (no open period for its date, not yet processed),
+    // the line is shown as waiting, never as paid.
     return (
-      <div className="mt-2 space-y-1 text-xs" data-testid={testId} data-state={state}>
-        <Badge variant="outline" className="border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-400">
-          {t("HandoverPaymentPaidDirect")}
+      <div className="mt-2 space-y-1 text-xs" data-testid={testId} data-state={postingHold ? "PAID_DIRECT_QUEUED" : state}>
+        <Badge
+          variant="outline"
+          className={
+            postingHold
+              ? "border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-400"
+              : "border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-400"
+          }
+        >
+          {t(postingHold ? "HandoverPaymentQueued" : "HandoverPaymentPaidDirect")}
         </Badge>
         {paid && (
           <span className="ms-2 text-muted-foreground">
@@ -2055,6 +2098,7 @@ function HandoverPaymentRow({
             )}
           </span>
         )}
+        {postingHold && <p className="text-amber-700 dark:text-amber-400">{t("HandoverPaymentQueuedNote")}</p>}
         {!dealClosed && <p className="text-muted-foreground">{t("DirectPaymentChangeNote")}</p>}
       </div>
     );
@@ -2140,7 +2184,18 @@ function DirectPaymentForm({
         setError(t("DirectPaymentDateRequired"));
         return;
       }
-      values = { intentId, method, paidAt: economicDateInputToMs(paidOn), reference: reference.trim() || undefined };
+      // The figure on the screen at this moment is the figure being approved.
+      if (line.actualAmountMinor === undefined) {
+        setError(t("HandoverPaymentNoActual"));
+        return;
+      }
+      values = {
+        intentId,
+        method,
+        paidAt: economicDateInputToMs(paidOn),
+        reference: reference.trim() || undefined,
+        expectedAmountMinor: line.actualAmountMinor,
+      };
     }
     setSubmitting(true);
     setError(null);

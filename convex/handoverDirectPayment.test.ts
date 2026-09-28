@@ -9,7 +9,7 @@ import { MAX_CUSTODY_READ_BATCH } from "./utils/custodySourceLedger";
 import { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS, PERMISSIONS } from "./utils/permissions";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
-import { evaluateClosingReadiness } from "./utils/financedSaleRecognition";
+import { evaluateClosingReadiness, handoverDirectLedgerRefusal } from "./utils/financedSaleRecognition";
 import { handoverDirectPostKey, handoverPaymentState, type HandoverPaymentLine } from "./utils/handoverCostPayment";
 
 /**
@@ -112,14 +112,22 @@ async function dealerFee(
 
 type Method = "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD";
 
-function payDirect(
+/**
+ * Records a direct payment the way the screen does: the amount SENT is the
+ * amount the approver saw — the line's actual as it stands when this is called,
+ * unless the test says the form was rendered at another figure (`expected`).
+ */
+async function payDirect(
   seed: Seed,
   feeId: Id<"financeDealFees">,
-  extra: Partial<{ method: Method; paidAt: number; reference: string; idempotencyKey: string; as: Seed["asUser"] }> = {}
+  extra: Partial<{ method: Method; paidAt: number; reference: string; idempotencyKey: string; as: Seed["asUser"]; expected: number }> = {}
 ) {
-  return (extra.as ?? seed.asUser).mutation(api.financeDealCosts.recordDirectFeePayment, {
+  const expectedAmountMinor =
+    extra.expected ?? (await seed.t.run((ctx) => ctx.db.get("financeDealFees", feeId)))?.actualAmountMinor ?? 0;
+  return await (extra.as ?? seed.asUser).mutation(api.financeDealCosts.recordDirectFeePayment, {
     orgId: seed.orgId, feeId, method: extra.method ?? "BANK_TRANSFER",
     paidAt: extra.paidAt ?? Date.now() - DAY, reference: extra.reference,
+    expectedAmountMinor,
     idempotencyKey: extra.idempotencyKey ?? crypto.randomUUID(),
   });
 }
@@ -637,7 +645,10 @@ describe("HANDOVER_COSTS_PAID proves each direct payment on the ledger (SCRUM-44
     await seed.t.run((ctx) => ctx.db.patch(v1._id, { status: "POSTED" }));
     const check = await readiness(seed);
     expect(check.status).toBe("BLOCKED");
-    expect(check.reason?.code).toBe("HANDOVER_DIRECT_NOT_ON_LEDGER");
+    // The same condition as a voided line's pending reversal: money is still on
+    // the books that the row says was taken back, and the next step is the same.
+    expect(check.reason?.code).toBe("HANDOVER_DIRECT_REVERSAL_PENDING");
+    expect(check.feeIds).toEqual([feeId]);
     await seed.t.run((ctx) => ctx.db.patch(v1._id, { status: "REVERSED" }));
     expect((await readiness(seed)).status).toBe("READY");
   });
@@ -663,5 +674,229 @@ describe("HANDOVER_COSTS_PAID proves each direct payment on the ledger (SCRUM-44
     const seed = await seedDeal("ledger-custody");
     await dealerFee(seed, 0);
     expect((await readiness(seed)).status).toBe("READY");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCRUM-443 fix round 1 (FIX-1): a payment reversed on its line but still POSTED
+// is invisible to a gate that walks live lines only.
+
+describe("HANDOVER_COSTS_PAID: a reversed payment still POSTED behind a closed period blocks the deal", () => {
+  async function voidIt(seed: Seed, feeId: Id<"financeDealFees">) {
+    await seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "entered in error" });
+  }
+  async function zeroIt(seed: Seed, feeId: Id<"financeDealFees">) {
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+      orgId: seed.orgId, feeId, actualAmountMinor: 0, expectedCurrency: "JOD",
+    });
+  }
+
+  test("void after payment, period closed: BLOCKED with the reversal-pending code, the voided line named; open + drain -> READY", async () => {
+    const seed = await seedDeal("rev-void");
+    const feeId = await dealerFee(seed, jod(50));
+    await payDirect(seed, feeId);
+    expect((await readiness(seed)).status).toBe("READY");
+    await closePeriod(seed);
+    await voidIt(seed, feeId);
+    // The reversal deferred: v1 is STILL on the books while the row says nothing is paid.
+    expect((await directEvents(seed))[0].status).toBe("POSTED");
+    expect(expense(await ledger(seed))).toBe(jod(50));
+    expect(await lineOf(seed, feeId)).toBeUndefined();
+
+    const blocked = await readiness(seed);
+    expect(blocked.status).toBe("BLOCKED");
+    expect(blocked.reason?.code).toBe("HANDOVER_DIRECT_REVERSAL_PENDING");
+    expect(blocked.reason?.params).toEqual({ count: 1 });
+    expect(blocked.feeIds).toEqual([feeId]);
+    // R6: the reason names the next step.
+    expect(blocked.reason?.message).toMatch(/open the accounting period/i);
+
+    await openPeriod(seed);
+    await drainOnce(seed);
+    expect((await directEvents(seed))[0].status).toBe("REVERSED");
+    expect(expense(await ledger(seed))).toBe(0);
+    expect((await readiness(seed)).status).toBe("READY");
+  });
+
+  test("amount edited to zero after payment, period closed: BLOCKED; open + drain -> READY", async () => {
+    const seed = await seedDeal("rev-zero");
+    const feeId = await dealerFee(seed, jod(50));
+    await payDirect(seed, feeId);
+    await closePeriod(seed);
+    await zeroIt(seed, feeId);
+    expect((await directEvents(seed))[0].status).toBe("POSTED");
+    expect((await lineOf(seed, feeId))?.handoverPayment).toBe("ZERO_ACTUAL");
+
+    const blocked = await readiness(seed);
+    expect(blocked.status).toBe("BLOCKED");
+    expect(blocked.reason?.code).toBe("HANDOVER_DIRECT_REVERSAL_PENDING");
+    expect(blocked.feeIds).toEqual([feeId]);
+
+    await openPeriod(seed);
+    await drainOnce(seed);
+    expect(expense(await ledger(seed))).toBe(0);
+    expect((await readiness(seed)).status).toBe("READY");
+  });
+
+  test("finalizeDeal refuses with the reversal-pending code, and finalizes nothing", async () => {
+    const seed = await seedDeal("rev-finalize");
+    const feeId = await dealerFee(seed, jod(50));
+    await payDirect(seed, feeId);
+    await closePeriod(seed);
+    await voidIt(seed, feeId);
+    await registerHandover(seed.asUser, api, seed.orgId, seed.applicationId);
+    await seed.asUser.mutation(api.applications.registerExpectedPayment, {
+      orgId: seed.orgId, applicationId: seed.applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
+    });
+    let refusal: unknown;
+    try {
+      await seed.asUser.mutation(api.applications.finalizeDeal, { orgId: seed.orgId, applicationId: seed.applicationId, idempotencyKey: "fin-rev" });
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal).toBeInstanceOf(ConvexError);
+    expect((refusal as ConvexError<{ code: string }>).data.code).toBe("HANDOVER_DIRECT_REVERSAL_PENDING");
+    expect((await seed.t.run((ctx) => ctx.db.get("financeApplications", seed.applicationId)))?.status).toBe("APPROVED");
+  });
+
+  test("control: void / zero-edit with the period OPEN reverses at once, so the deal is READY immediately", async () => {
+    const voided = await seedDeal("rev-ctl-void");
+    const voidedFee = await dealerFee(voided, jod(50));
+    await payDirect(voided, voidedFee);
+    await voidIt(voided, voidedFee);
+    expect((await directEvents(voided))[0].status).toBe("REVERSED");
+    expect((await readiness(voided)).status).toBe("READY");
+
+    const zeroed = await seedDeal("rev-ctl-zero");
+    const zeroedFee = await dealerFee(zeroed, jod(50));
+    await payDirect(zeroed, zeroedFee);
+    await zeroIt(zeroed, zeroedFee);
+    expect((await directEvents(zeroed))[0].status).toBe("REVERSED");
+    expect((await readiness(zeroed)).status).toBe("READY");
+  });
+
+  test("an edit-then-void: the replaced payment's pending reversal is found on a line that is now voided", async () => {
+    const seed = await seedDeal("rev-edit-void");
+    const feeId = await dealerFee(seed, jod(50));
+    await payDirect(seed, feeId);
+    await closePeriod(seed);
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+      orgId: seed.orgId, feeId, actualAmountMinor: jod(65), expectedCurrency: "JOD",
+    });
+    await voidIt(seed, feeId);
+    const blocked = await readiness(seed);
+    expect(blocked.status).toBe("BLOCKED");
+    expect(blocked.reason?.code).toBe("HANDOVER_DIRECT_REVERSAL_PENDING");
+    await openPeriod(seed);
+    await drainOnce(seed);
+    expect((await readiness(seed)).status).toBe("READY");
+  });
+
+  test("a live queued payment beside a voided line's pending reversal: both named", async () => {
+    const seed = await seedDeal("rev-two");
+    const voidedFee = await dealerFee(seed, jod(50));
+    await payDirect(seed, voidedFee);
+    await closePeriod(seed);
+    await voidIt(seed, voidedFee);
+    const liveFee = await dealerFee(seed, jod(20));
+    await payDirect(seed, liveFee);
+    const blocked = await readiness(seed);
+    expect(blocked.status).toBe("BLOCKED");
+    expect(blocked.reason?.code).toBe("HANDOVER_DIRECT_REVERSAL_PENDING");
+    expect([...(blocked.feeIds ?? [])].sort()).toEqual([voidedFee, liveFee].sort());
+  });
+
+  test("over the cap on lines that ever carried a payment: UNAVAILABLE, never READY", async () => {
+    const seed = await seedDeal("rev-cap");
+    await seed.t.run(async (ctx) => {
+      for (let i = 0; i < 501; i += 1) {
+        await ctx.db.insert("financeDealFees", {
+          orgId: seed.orgId, applicationId: seed.applicationId, feeType: "LICENSING", paidBy: "DEALER", paidTo: "GOVERNMENT",
+          accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE", actualAmountMinor: jod(1), currency: "JOD",
+          includedInQuotation: false, deductedFromSettlement: false, refundable: false,
+          source: "MANUAL", createdBy: seed.userId, createdAt: Date.now(), updatedAt: Date.now(),
+          voidedAt: Date.now(), directPaymentVersion: 1,
+        } as never);
+      }
+    });
+    const check = await readiness(seed);
+    expect(check.status).toBe("UNAVAILABLE");
+    expect(check.reason?.code).toBe("HANDOVER_DIRECT_LEDGER_UNVERIFIABLE");
+  });
+
+  test("over the proof's document budget: a named ConvexError (so UNAVAILABLE), never a prefix judged READY", async () => {
+    const seed = await seedDeal("rev-budget");
+    const feeId = await dealerFee(seed, jod(50));
+    await payDirect(seed, feeId);
+    await closePeriod(seed);
+    await voidIt(seed, feeId);
+    const outcome = await seed.t.run(async (ctx) => {
+      const app = (await ctx.db.get("financeApplications", seed.applicationId))!;
+      const fees = await ctx.db.query("financeDealFees").withIndex("by_application", (q) => q.eq("applicationId", seed.applicationId)).take(10);
+      try {
+        await handoverDirectLedgerRefusal(ctx, app.orgId, app._id, fees, 1);
+        return "no refusal";
+      } catch (error) {
+        return error instanceof ConvexError ? "ConvexError" : `other: ${String(error)}`;
+      }
+    });
+    expect(outcome).toBe("ConvexError");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCRUM-443 fix round 1 (FIX-2): the payment posts the amount the approver saw.
+
+describe("recordDirectFeePayment pays the amount the approver saw, not the amount at submit time", () => {
+  test("a cost edited between render and submit is refused with the new figure, and nothing is posted", async () => {
+    const seed = await seedDeal("exp-edited");
+    const feeId = await dealerFee(seed, jod(50));
+    const rendered = jod(50);
+    // A concurrent edit lands after the form rendered and before it was submitted.
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+      orgId: seed.orgId, feeId, actualAmountMinor: jod(65), expectedCurrency: "JOD",
+    });
+    const journals = await journalCount(seed);
+    await expect(payDirect(seed, feeId, { expected: rendered })).rejects.toThrow(/changed to 65.*record the payment again/s);
+    expect(await journalCount(seed)).toBe(journals);
+    expect(await directEvents(seed)).toHaveLength(0);
+    const row = await seed.t.run((ctx) => ctx.db.get("financeDealFees", feeId));
+    expect(row?.directPayment).toBeUndefined();
+    expect(row?.directPaymentVersion).toBeUndefined();
+
+    // Reviewed and recorded again at the figure now on screen: posts once, at 65.
+    await payDirect(seed, feeId, { expected: jod(65) });
+    expect(expense(await ledger(seed))).toBe(jod(65));
+    expect(await directEvents(seed)).toHaveLength(1);
+  });
+
+  test("the same key and the same expected amount replays: one journal, one posting", async () => {
+    const seed = await seedDeal("exp-replay");
+    const feeId = await dealerFee(seed, jod(50));
+    const args = { method: "BANK_TRANSFER" as const, paidAt: Date.now() - DAY, idempotencyKey: "exp-key", expected: jod(50) };
+    const first = await payDirect(seed, feeId, args);
+    const journals = await journalCount(seed);
+    expect(await payDirect(seed, feeId, args)).toBe(first);
+    expect(await journalCount(seed)).toBe(journals);
+    expect(await directEvents(seed)).toHaveLength(1);
+  });
+
+  test("the same key for a DIFFERENT expected amount is a different intent, refused", async () => {
+    const seed = await seedDeal("exp-conflict");
+    const feeId = await dealerFee(seed, jod(50));
+    const paidAt = Date.now() - DAY;
+    await payDirect(seed, feeId, { paidAt, idempotencyKey: "exp-k", expected: jod(50) });
+    const journals = await journalCount(seed);
+    await expect(payDirect(seed, feeId, { paidAt, idempotencyKey: "exp-k", expected: jod(51) })).rejects.toThrow();
+    expect(await journalCount(seed)).toBe(journals);
+  });
+
+  test("an expected amount that is not a whole number of minor units is refused before anything is read", async () => {
+    const seed = await seedDeal("exp-bad");
+    const feeId = await dealerFee(seed, jod(50));
+    for (const bad of [1.5, -1, Number.NaN]) {
+      await expect(payDirect(seed, feeId, { expected: bad })).rejects.toThrow(/whole number/);
+    }
+    expect(await journalCount(seed)).toBe(0);
   });
 });

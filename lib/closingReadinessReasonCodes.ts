@@ -65,6 +65,10 @@ export const CLOSING_READINESS_REASON_PARAMS = {
   // its posting is queued (no open accounting period), failed, or an earlier
   // version's reversal has not landed.
   HANDOVER_DIRECT_NOT_ON_LEDGER: ["count"],
+  // A direct payment that was TAKEN BACK on its line (removed, set to zero,
+  // replaced) is still on the ledger: its reversal is waiting for an accounting
+  // period to open. The row no longer says it was paid; the ledger does.
+  HANDOVER_DIRECT_REVERSAL_PENDING: ["count"],
   // The ledger could not be read completely, so "on the books" cannot be proven.
   HANDOVER_DIRECT_LEDGER_UNVERIFIABLE: [],
   // FIRST_PAYMENT_RECORDED

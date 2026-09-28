@@ -490,6 +490,75 @@ export async function loadCustodyPostedLines(
   return rows;
 }
 
+/** How many lines that have EVER carried a direct payment one proof may read — same order as the live-line cap. */
+export const MAX_DIRECT_PAID_LINES = MAX_LIVE_DEAL_FEE_LINES;
+
+/**
+ * How many documents the direct-payment proof of a deal's closing check may
+ * read in all (SCRUM-443): the live lines it was handed, the ever-paid lines it
+ * enumerates and every ledger row each read returns. The same order as the
+ * custody proof's budget; past it the check is UNAVAILABLE, never a pass.
+ */
+export const MAX_HANDOVER_DIRECT_LEDGER_PROOFS = MAX_CUSTODY_LEDGER_PROOFS;
+
+/**
+ * Every line of a deal that has ever carried a DIRECT payment — live, zeroed
+ * or voided — from ONE bounded indexed read, or a refusal (SCRUM-443). The
+ * twin of `loadCustodyPostedLines`, for the direct-payment family:
+ * `directPaymentVersion` is set by `recordDirectFeePayment` and never unset,
+ * so the range `> 0` is exactly the population the closing gate must prove
+ * has no payment still on the books but the live one; a removed or zero-edited
+ * line stays in it, which is the point — its reversal may still be queued
+ * behind a closed period while the row no longer says it was ever paid.
+ */
+export async function loadDirectPaidLines(
+  ctx: QueryCtx | MutationCtx,
+  applicationId: Id<"financeApplications">,
+  action: string,
+  budget?: CustodyLedgerReadBudget
+): Promise<Array<Doc<"financeDealFees">>> {
+  const rows: Array<Doc<"financeDealFees">> = [];
+  let version = 0;
+  while (rows.length <= MAX_DIRECT_PAID_LINES) {
+    await budget?.assertHeadroom(ctx);
+    const next = await ctx.db
+      .query("financeDealFees")
+      .withIndex("by_application_directPaymentVersion", (q) =>
+        q.eq("applicationId", applicationId).gt("directPaymentVersion", version)
+      )
+      .take(1);
+    budget?.chargeRead(next);
+    if (next.length === 0) break;
+    const at = next[0].directPaymentVersion;
+    if (at === undefined || !(at > version) || !isStoredVersion(at)) {
+      throw new ConvexError(
+        `A cost line on this deal carries a direct-payment version that is not a positive whole number (${at}), so ${action} cannot enumerate the lines it must verify; nothing has been changed. Have the deal's accounting reviewed.`
+      );
+    }
+    version = at;
+    const atVersion = await readBatched(
+      ctx,
+      (after, take) =>
+        ctx.db
+          .query("financeDealFees")
+          .withIndex("by_application_directPaymentVersion", (q) => {
+            const range = q.eq("applicationId", applicationId).eq("directPaymentVersion", at);
+            return after === undefined ? range : range.gt("_creationTime", after);
+          })
+          .take(take),
+      MAX_DIRECT_PAID_LINES - rows.length,
+      budget
+    );
+    for (const row of atVersion) rows.push(row);
+  }
+  if (rows.length > MAX_DIRECT_PAID_LINES) {
+    throw new ConvexError(
+      `This deal has more than ${MAX_DIRECT_PAID_LINES} cost lines that have carried a direct payment, which is past what ${action} can verify completely; nothing has been changed. Have the deal's accounting reviewed.`
+    );
+  }
+  return rows;
+}
+
 /** The events of one source, in full or refused — never a prefix. */
 async function sourceEvents(
   ctx: QueryCtx | MutationCtx,
@@ -576,9 +645,10 @@ async function eventPosted(
 export async function ledgerEventPosted(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
-  idempotencyKey: string
+  idempotencyKey: string,
+  budget?: CustodyLedgerReadBudget
 ): Promise<boolean> {
-  return eventPosted(ctx, orgId, idempotencyKey);
+  return eventPosted(ctx, orgId, idempotencyKey, budget);
 }
 
 /** Whether version `version` of a record's payable reclassification is POSTED. */
@@ -732,10 +802,11 @@ export async function earlierVersionStillPosted(
   eventType: "CUSTODY_FEE_PAID" | "CUSTODY_WRITTEN_OFF" | "HANDOVER_COST_PAID_DIRECT",
   sourceType: "financeDealFees" | "financeDealCustody",
   sourceId: string,
-  version: number
+  version: number,
+  budget?: CustodyLedgerReadBudget
 ): Promise<number | null> {
   if (version <= 1) return null;
-  const rows = await sourceEvents(ctx, orgId, sourceType, sourceId, "posting this custody replacement");
+  const rows = await sourceEvents(ctx, orgId, sourceType, sourceId, budget?.forAction ?? "posting this custody replacement", budget);
   let earliest: number | null = null;
   for (const row of rows) {
     if (row.eventType !== eventType || row.status !== "POSTED" || row.eventVersion >= version) continue;

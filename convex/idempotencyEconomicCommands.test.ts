@@ -428,7 +428,8 @@ const REQUIRED_FINGERPRINT_FIELDS: Array<[string, string, string[]]> = [
   // Selects the credit account in hookEmployeeAdvancePaid.
   ["convex/payroll.ts", "payroll.recordAdvance", ["method"]],
   // Selects the credit account (cash on hand vs bank) a direct handover payment leaves.
-  ["convex/financeDealCosts.ts", "financeDealCosts.recordDirectFeePayment", ["method"]],
+  // …and the amount the approver SAW: the same key for another figure is another intent.
+  ["convex/financeDealCosts.ts", "financeDealCosts.recordDirectFeePayment", ["method", "expectedAmountMinor"]],
 ];
 
 describe("SCRUM-57 — fields whose omission was a reproduced defect stay hashed", () => {

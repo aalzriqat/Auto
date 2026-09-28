@@ -29,7 +29,15 @@ import {
   type ClosingReadinessReasonParams,
 } from "../../lib/closingReadinessReasonCodes";
 import type { AppErrorData } from "./errors";
-import { custodyLedgerFamilyRefusal, earlierVersionStillPosted, ledgerEventPosted } from "./custodySourceLedger";
+import {
+  assertStoredVersion,
+  CustodyLedgerReadBudget,
+  custodyLedgerFamilyRefusal,
+  earlierVersionStillPosted,
+  ledgerEventPosted,
+  loadDirectPaidLines,
+  MAX_HANDOVER_DIRECT_LEDGER_PROOFS,
+} from "./custodySourceLedger";
 import { heldDepositRowsForVehicle } from "./saleCompletion";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { toMinorUnits } from "./money";
@@ -210,39 +218,99 @@ function handoverCostsPaidRefusal(liveFees: ReadonlyArray<Doc<"financeDealFees">
 }
 
 /**
- * A direct payment is proven on the LEDGER, not on the row (SCRUM-443). For
- * each PAID_DIRECT line: (a) the forward event of the live version exists under
- * its exact key with status POSTED — queued in the outbox (no open period),
- * PENDING, FAILED or absent all mean not on the books; and (b) no EARLIER
- * version is still POSTED, i.e. every superseded version's reversal landed.
+ * A direct payment is proven on the LEDGER, not on the row (SCRUM-443), for
+ * EVERY line of the application that has ever carried one — live, zeroed or
+ * voided — enumerated through `by_application_directPaymentVersion`, never
+ * walked from the live lines alone. One rule, judged per line:
+ *
+ *   The only `HANDOVER_COST_PAID_DIRECT` version that may be POSTED is the
+ *   live direct payment's own — and for a live PAID_DIRECT line that version
+ *   MUST be POSTED. Every other version must not be POSTED.
+ *
+ * So (a) a live PAID_DIRECT line's forward event exists under its exact key
+ * with status POSTED (queued in the outbox for a period that is not open,
+ * PENDING, FAILED or absent all mean not on the books); and (b) every other
+ * version is off the books — an earlier version of a live line whose reversal
+ * has not landed, and ANY version of a line that is voided, zero-edited or
+ * otherwise no longer paid directly, whose reversal was deferred while the
+ * row was already cleared. (b) is `HANDOVER_DIRECT_REVERSAL_PENDING`: money
+ * is still on the books that the row says was taken back, and the next step
+ * is the accounting period, not the line.
+ *
  * Read by the custody family's own rules (`ledgerEventPosted`,
- * `earlierVersionStillPosted`). A ledger page that cannot be read completely
- * THROWS, which the caller turns into UNAVAILABLE — never a pass.
+ * `earlierVersionStillPosted`), every read charged to ONE budget; a ledger
+ * that cannot be read completely, or a proof past its budget or caps, THROWS a
+ * `ConvexError`, which the caller turns into UNAVAILABLE — never a pass.
+ * `feeIds` name every line either refusal is about, so the screen can point at
+ * the live ones.
  */
-async function handoverDirectLedgerRefusal(
+export async function handoverDirectLedgerRefusal(
   ctx: QueryCtx | MutationCtx,
   orgId: Doc<"financeApplications">["orgId"],
-  liveFees: ReadonlyArray<Doc<"financeDealFees">>
+  applicationId: Doc<"financeApplications">["_id"],
+  liveFees: ReadonlyArray<Doc<"financeDealFees">>,
+  budgetLimit: number = MAX_HANDOVER_DIRECT_LEDGER_PROOFS
 ): Promise<{ refusal: ClosingReadinessReason | null; feeIds: string[] }> {
-  const offBooks: string[] = [];
-  for (const fee of liveFees) {
-    if (handoverPaymentState(fee) !== "PAID_DIRECT" || fee.directPayment === undefined) continue;
-    const version = fee.directPayment.version;
-    const posted = await ledgerEventPosted(ctx, orgId, handoverDirectPostKey(fee._id, version));
-    const earlier = posted
-      ? await earlierVersionStillPosted(ctx, orgId, "HANDOVER_COST_PAID_DIRECT", "financeDealFees", fee._id.toString(), version)
-      : null;
-    if (!posted || earlier !== null) offBooks.push(fee._id as string);
+  const action = "finalizing this deal";
+  const budget = new CustodyLedgerReadBudget(budgetLimit, action);
+  budget.charge(liveFees);
+  const everPaid = await loadDirectPaidLines(ctx, applicationId, action, budget);
+  // A live line that carries a payment but was not enumerated (its version
+  // counter absent) is still judged: the row's own claim is never skipped.
+  const seen = new Set(everPaid.map((line) => line._id));
+  const lines = [
+    ...everPaid,
+    ...liveFees.filter((fee) => fee.directPayment !== undefined && !seen.has(fee._id)),
+  ];
+
+  const notOnLedger: string[] = [];
+  const reversalPending: string[] = [];
+  for (const line of lines) {
+    const live = handoverPaymentState(line) === "PAID_DIRECT" ? line.directPayment : undefined;
+    const highest = Math.max(line.directPaymentVersion ?? 0, live?.version ?? 0);
+    assertStoredVersion(highest, "A cost line's direct payment", action);
+    if (live !== undefined) {
+      assertStoredVersion(live.version, "A cost line's direct payment", action);
+      if (live.version !== highest) {
+        throw new ConvexError(
+          `A cost line's direct payment names version ${live.version} while ${highest} is the latest ever used, so ${action} cannot tell which posting is live; nothing has been changed. Have the deal's accounting reviewed.`
+        );
+      }
+    }
+    const sourceId = line._id.toString();
+    if (live !== undefined && !(await ledgerEventPosted(ctx, orgId, handoverDirectPostKey(line._id, live.version), budget))) {
+      notOnLedger.push(line._id as string);
+    }
+    // Versions BELOW the live one; for a line with no live payment, every
+    // version up to the highest ever used.
+    const stillPosted = await earlierVersionStillPosted(
+      ctx, orgId, "HANDOVER_COST_PAID_DIRECT", "financeDealFees", sourceId, live !== undefined ? live.version : highest + 1, budget
+    );
+    if (stillPosted !== null) reversalPending.push(line._id as string);
   }
-  if (offBooks.length === 0) return { refusal: null, feeIds: [] };
-  return {
-    feeIds: offBooks,
-    refusal: reasonOf(
-      "HANDOVER_DIRECT_NOT_ON_LEDGER",
-      `${offBooks.length} direct handover payment(s) are recorded but not on the ledger yet (the posting is queued because no accounting period is open for its date, has not posted, or an earlier version's reversal has not posted). Open the period and let the accounting queue process, then finalize.`,
-      { count: offBooks.length }
-    ),
-  };
+
+  const feeIds = [...reversalPending, ...notOnLedger.filter((id) => !reversalPending.includes(id))];
+  if (reversalPending.length > 0) {
+    return {
+      feeIds,
+      refusal: reasonOf(
+        "HANDOVER_DIRECT_REVERSAL_PENDING",
+        `${reversalPending.length} direct handover payment(s) that were taken back on the cost line (removed, set to zero, or replaced) are still on the ledger: their reversal is waiting for an accounting period to open. Open the accounting period for the payment date and let the accounting queue process, then finalize.`,
+        { count: reversalPending.length }
+      ),
+    };
+  }
+  if (notOnLedger.length > 0) {
+    return {
+      feeIds,
+      refusal: reasonOf(
+        "HANDOVER_DIRECT_NOT_ON_LEDGER",
+        `${notOnLedger.length} direct handover payment(s) are recorded but not on the ledger yet (the posting is queued because no accounting period is open for its date, or has not posted). Open the period and let the accounting queue process, then finalize.`,
+        { count: notOnLedger.length }
+      ),
+    };
+  }
+  return { refusal: null, feeIds: [] };
 }
 
 /** One accounting condition a financed deal must meet before it can be finalized (the list lives beside the reason codes). */
@@ -442,7 +510,7 @@ export async function evaluateClosingReadiness(
     async ({ fees }) => {
       const rowRefusal = handoverCostsPaidRefusal(fees);
       if (rowRefusal !== null) return rowRefusal;
-      const proof = await handoverDirectLedgerRefusal(ctx, app.orgId, fees);
+      const proof = await handoverDirectLedgerRefusal(ctx, app.orgId, app._id, fees);
       ledgerFeeIds = proof.feeIds;
       return proof.refusal;
     }

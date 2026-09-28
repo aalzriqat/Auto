@@ -61,7 +61,7 @@ import {
   summarizeReadableCustody,
   unreadableCustodyAmounts,
 } from "./utils/settlementDeductions";
-import { assertSupportedDenomination } from "./utils/money";
+import { assertSupportedDenomination, fromMinorUnits } from "./utils/money";
 import {
   feeTemplatesExceedConfigurationLimit,
   MAX_CUSTODY_ENTRIES,
@@ -2565,6 +2565,13 @@ export const recordDirectFeePayment = mutation({
     method: directPaymentMethodValidator,
     /** When the dealership paid it. Dates the posting. */
     paidAt: v.number(),
+    /**
+     * REQUIRED: the amount, in minor units, the approver SAW when they chose to
+     * pay (the line's actual as rendered). The payment posts the line's actual
+     * only when it is still exactly this — a concurrent edit between render and
+     * submit is refused, never paid at a figure nobody approved.
+     */
+    expectedAmountMinor: v.number(),
     reference: v.optional(v.string()),
     idempotencyKey: v.string(),
   },
@@ -2572,6 +2579,11 @@ export const recordDirectFeePayment = mutation({
     const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
     const user = auth.user;
     const fee = await requireOwnedRow(ctx, args.orgId, "financeDealFees", args.feeId, FEE_NOT_FOUND);
+    // `v.number()` admits NaN, ±Infinity and fractions: none is an amount
+    // anybody saw, and none may be fingerprinted or compared below.
+    if (!isMinorAmount(args.expectedAmountMinor)) {
+      throw new ConvexError("The amount to pay must be a whole number of minor units. Nothing has been recorded.");
+    }
     // The parent must exist in this org (R6, F3): a line whose deal is gone or
     // another tenant's is never put on the books.
     const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", fee.applicationId, APPLICATION_NOT_FOUND);
@@ -2592,14 +2604,14 @@ export const recordDirectFeePayment = mutation({
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
         // The WHOLE intent: the line, how it was paid, when, the reference,
-        // and the amount being paid (the line's actual at this moment) — the
-        // same key after the amount changed is a different intent.
+        // and the amount the approver saw — the same key for a different
+        // amount is a different intent, refused, never replayed.
         fingerprint: JSON.stringify({
           feeId: args.feeId,
           method: args.method,
           paidAt: args.paidAt,
           reference: reference ?? null,
-          amountMinor: fee.actualAmountMinor ?? null,
+          expectedAmountMinor: args.expectedAmountMinor,
         }),
       },
       async () => {
@@ -2617,6 +2629,14 @@ export const recordDirectFeePayment = mutation({
         if (fee.currency !== dealCurrency) {
           throw new ConvexError(
             `This cost is recorded in ${fee.currency} while the deal's costs are kept in ${dealCurrency}, so it cannot be posted with them. Correct the line first; nothing has been recorded.`
+          );
+        }
+        // Money authority (R1): what posts is the amount the approver SAW. A
+        // cost edited between the form rendering and this submit is refused
+        // with the new figure, so the payment is recorded again knowingly.
+        if (amountMinor !== args.expectedAmountMinor) {
+          throw new ConvexError(
+            `The amount of this cost changed to ${fromMinorUnits(amountMinor, fee.currency)} ${fee.currency} since you opened the form (you were about to pay ${fromMinorUnits(args.expectedAmountMinor, fee.currency)} ${fee.currency}). Review the cost and record the payment again. Nothing has been recorded.`
           );
         }
         const expense = custodyFeeExpenseKey(fee.accountingTreatment);

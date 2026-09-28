@@ -982,6 +982,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         feeId,
         method: "BANK_TRANSFER",
         paidAt: Date.now(),
+        expectedAmountMinor: 700 * 1000,
         idempotencyKey: `fee-direct-${applicationId}`,
       });
 

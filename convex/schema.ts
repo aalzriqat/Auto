@@ -3271,6 +3271,15 @@ export default defineSchema({
     // line whose reversal was deferred) — without the unbounded read of
     // every removed row the deal ever had.
     .index("by_application_custodyPostingVersion", ["applicationId", "custodyPostingVersion"])
+    // Every line of a deal that has EVER carried a direct dealership payment
+    // (SCRUM-443), live, zero-edited or removed: `directPaymentVersion` is set
+    // by the one writer that posts one (`recordDirectFeePayment`) and never
+    // unset, so `.gt("directPaymentVersion", 0)` after the application equality
+    // enumerates exactly the lines whose `HANDOVER_COST_PAID_DIRECT` family the
+    // closing gate must prove OFF the books — a voided or zeroed line's
+    // reversal may still be queued behind a closed period, and the row no
+    // longer says so.
+    .index("by_application_directPaymentVersion", ["applicationId", "directPaymentVersion"])
     // The one LIVE line per configured position. `recordTemplateFeeActual`
     // proves uniqueness against this index with every field an equality —
     // `voidedAt` last, so `undefined` (live) is the one value asked for — and
