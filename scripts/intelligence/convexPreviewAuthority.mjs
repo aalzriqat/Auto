@@ -277,11 +277,28 @@ export async function requestPreviewClaim({
   return readBoundedJsonObject(response);
 }
 
+/**
+ * The claim is keyed by preview NAME, so it returns whichever deployment holds
+ * that name now — a newer run's replacement included (SCRUM-377). So every
+ * caller must name the deployment its run created, and anything else is
+ * refused before its credential is used. The URL is required here rather than
+ * trusted to each call site: an omitted, commented-out or `undefined` argument
+ * fails at runtime, not only in the workflow guard. Both sides are compared as
+ * canonical origins, so `https://x.convex.cloud/` and `https://x.convex.cloud`
+ * agree.
+ */
 export async function resolveConvexPreviewCredentials({
   deployKey,
   previewName,
+  expectedConvexCloudUrl,
   fetchImpl = fetch,
 }) {
+  if (!expectedConvexCloudUrl) {
+    throw new Error(
+      "The URL of the preview deployment this run created is required.",
+    );
+  }
+  const expectedOrigin = assertConvexCloudOrigin(expectedConvexCloudUrl);
   const responseObject = await requestPreviewClaim({
     deployKey,
     previewName,
@@ -321,6 +338,11 @@ export async function resolveConvexPreviewCredentials({
     },
     previewName,
   );
+  if (artifact.convexCloudUrl !== expectedOrigin) {
+    throw new Error(
+      "Convex control plane resolved a preview deployment other than the one this run created.",
+    );
+  }
   const adminKey = assertPreviewDeploymentAdminKey(
     responseObject.adminKey,
     artifact.deploymentName,
@@ -345,9 +367,15 @@ export async function writeConvexPreviewAuthority({
     prNumber: String(prNumber),
   });
 
+  // The trusted step that created this preview recorded its URL (SCRUM-377);
+  // without it the authority could name a newer run's replacement.
+  if (!env.CONVEX_PREVIEW_URL) {
+    throw new Error("CONVEX_PREVIEW_URL (the preview this run created) is required.");
+  }
   const artifact = await resolveConvexPreviewAuthority({
     deployKey: env.CONVEX_PREVIEW_DEPLOY_KEY,
     previewName,
+    expectedConvexCloudUrl: env.CONVEX_PREVIEW_URL,
     fetchImpl,
   });
 

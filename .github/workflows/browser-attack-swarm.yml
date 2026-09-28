@@ -42,6 +42,9 @@ jobs:
       tested_sha: ${{ steps.provenance.outputs.tested_sha }}
       base_sha: ${{ steps.provenance.outputs.base_sha }}
       pr_number: ${{ steps.plan.outputs.pr_number }}
+      cleanup_preview_name: ${{ steps.pin.outputs.preview_name }}
+      cleanup_convex_url: ${{ steps.pin.outputs.convex_cloud_url }}
+      cleanup_preview_created_at: ${{ steps.pin.outputs.preview_created_at }}
 
     steps:
       - name: Checkout trusted control plane from immutable workflow revision
@@ -227,17 +230,43 @@ jobs:
             done
           }
 
+          echo "CLEANUP_PREVIEW_NAME=$PREVIEW_NAME" >> "$GITHUB_ENV"
+          # --cmd records the URL of the deployment THIS command created (SCRUM-377);
+          # it is the only identity the cleanup will ever act on.
           retry_convex pnpm exec convex deploy \
             --typecheck enable \
             --preview-create "$PREVIEW_NAME" \
-            --preview-run e2eBootstrap:markPreviewDeployment
+            --preview-run e2eBootstrap:markPreviewDeployment \
+            --cmd 'echo "CONVEX_PREVIEW_URL=$CREATED_CONVEX_URL" >> "$GITHUB_ENV"' \
+            --cmd-url-env-var-name CREATED_CONVEX_URL
 
+      # SCRUM-377: record which deployment this run owns and shorten its expiry,
+      # so the deployment quota is freed even if the run dies before cleanup.
+      # Its own outputs feed preview-cleanup, which must work even when a later
+      # prepare step fails and the plan outputs stay empty.
+      - name: Pin the disposable preview for cleanup
+        id: pin
+        if: always() && env.CONVEX_PREVIEW_URL != ''
+        working-directory: trusted
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ env.CLEANUP_PREVIEW_NAME }}
+        run: |
+          set -euo pipefail
+          echo "preview_name=$CONVEX_PREVIEW_NAME" >> "$GITHUB_OUTPUT"
+          echo "convex_cloud_url=$CONVEX_PREVIEW_URL" >> "$GITHUB_OUTPUT"
+          node scripts/previewDeploymentLifecycle.mjs pin
+
+      # The lookup is by preview name, so it can return a newer run's
+      # replacement; it refuses anything but CONVEX_PREVIEW_URL, the deployment
+      # this run created (SCRUM-377).
       - name: Resolve named Convex preview from trusted control plane
         working-directory: trusted
         run: node scripts/intelligence/convexPreviewAuthority.mjs
         env:
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
           CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_URL: ${{ env.CONVEX_PREVIEW_URL }}
 
       # The one paid TypeSafe request, spent only once the disposable preview
       # exists (SCRUM-376): a quota or preview failure must not pay for it first.
@@ -448,6 +477,7 @@ jobs:
           const resolved = await resolveConvexPreviewCredentials({
             deployKey: process.env.CONVEX_PREVIEW_DEPLOY_KEY,
             previewName: process.env.CONVEX_PREVIEW_NAME,
+            expectedConvexCloudUrl: process.env.NEXT_PUBLIC_CONVEX_URL,
           });
           process.stdout.write(resolved.adminKey);
           NODE
@@ -528,6 +558,7 @@ jobs:
           const resolved = await resolveConvexPreviewCredentials({
             deployKey: process.env.CONVEX_PREVIEW_DEPLOY_KEY,
             previewName: process.env.CONVEX_PREVIEW_NAME,
+            expectedConvexCloudUrl: process.env.NEXT_PUBLIC_CONVEX_URL,
           });
           process.stdout.write(resolved.adminKey);
           NODE
@@ -792,6 +823,7 @@ jobs:
           const authority = await resolveConvexPreviewAuthority({
             deployKey: process.env.CONVEX_DEPLOY_KEY,
             previewName: process.env.CONVEX_PREVIEW_NAME,
+            expectedConvexCloudUrl: process.env.NEXT_PUBLIC_CONVEX_URL,
           });
           process.stdout.write(authority.convexCloudUrl);
           NODE
@@ -977,3 +1009,43 @@ jobs:
           if [ "$STATE" != "success" ]; then
             exit 1
           fi
+
+  # SCRUM-377: every job above shares the disposable preview, so it is deleted
+  # only after all of them — whatever their outcome — have finished with it.
+  preview-cleanup:
+    name: disposable-preview-cleanup
+    needs: [prepare, candidate-build, trusted-e2e, attack-worker, verdict]
+    # The same-repository conditions repeat `prepare`'s own: only such a run can
+    # have created a preview, and they keep fork-triggered runs out of a job
+    # that holds the preview deploy key.
+    if: >-
+      always() &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      needs.prepare.outputs.cleanup_preview_created_at != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout trusted cleanup controller from immutable workflow revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: trusted-cleanup
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+
+      - name: Delete the disposable preview
+        working-directory: trusted-cleanup
+        run: node scripts/previewDeploymentLifecycle.mjs delete
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.cleanup_preview_name }}
+          CONVEX_PREVIEW_URL: ${{ needs.prepare.outputs.cleanup_convex_url }}
+          CONVEX_PREVIEW_CREATED_AT: ${{ needs.prepare.outputs.cleanup_preview_created_at }}
