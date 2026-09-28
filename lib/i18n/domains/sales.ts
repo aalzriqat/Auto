@@ -758,19 +758,172 @@ const dealOverviewMessages = defineBilingualMessages({
   ReconcileNotesRequired: ["Record what was checked before reconciling this cost.", "سجّل ما تم التحقق منه قبل تسوية هذا المصروف."],
   ConfirmReconcile: ["Confirm reconciliation", "تأكيد التسوية"],
   HandoverCostReconciled: ["Cost reconciled", "تمت تسوية المصروف"],
-  ClassifyDealAccounting: ["Classify deal accounting", "تصنيف محاسبة المعاملة"],
-  ClassifyDealAccountingDesc: [
-    "Verify all cost lines and legal invoice to seal the deal's accounting classification.",
-    "التحقق من جميع بنود المصاريف والفاتورة القانونية لإتمام تصنيف محاسبة المعاملة.",
-  ],
-  ClassificationNotes: ["Classification notes", "ملاحظات التصنيف"],
-  ClassificationNotesPlaceholder: ["Record how this deal's accounting was established.", "سجّل كيف تم إثبات محاسبة هذه الصفقة."],
-  ConfirmClassify: ["Seal classification", "تثبيت التصنيف"],
-  DealAccountingClassified: ["Deal accounting classified", "تم تصنيف محاسبة المعاملة"],
-  ClosingChecklistHeading: ["Closing Checklist & Legal Invoicing", "قائمة إغلاق الصفقة والفواتير القانونية"],
   LegalInvoiceNotRecorded: ["No legal invoice recorded yet.", "لم يتم تسجيل فاتورة قانونية بعد."],
-  AccountingStatusClassified: ["Accounting Classified", "المحاسبة مصنفة"],
-  AccountingStatusPending: ["Pending Classification", "قيد انتظار التصنيف المحاسبي"],
+  // SCRUM-407 — the automatic closing readiness that replaced manual classification.
+  ClosingReadinessHeading: ["Closing readiness & legal invoice", "جاهزية إغلاق الصفقة والفاتورة القانونية"],
+  ClosingReadinessAuto: [
+    "Checked automatically from this deal's records, and checked again when it is closed.",
+    "تُفحص تلقائيًا من سجلات هذه الصفقة، ويُعاد فحصها عند إغلاقها.",
+  ],
+  ClosingReadinessStateReady: ["Ready to close", "جاهزة للإغلاق"],
+  ClosingReadinessStateBlocked: ["Not ready to close", "غير جاهزة للإغلاق"],
+  ClosingReadinessStateUnavailable: ["Readiness could not be checked", "تعذّر فحص الجاهزية"],
+  ClosingReadinessLoading: ["Checking readiness…", "جارٍ فحص الجاهزية…"],
+  ClosingReadinessServiceUnavailable: [
+    "Readiness is unavailable right now. Everything else on this deal still works; closing waits until readiness can be checked.",
+    "الجاهزية غير متاحة حاليًا. تبقى بقية إجراءات الصفقة متاحة، أما الإغلاق فينتظر إلى أن يتسنّى فحصها.",
+  ],
+  ClosingReadinessClosed: ["This deal is no longer open to be closed.", "لم تعد هذه الصفقة مفتوحة للإغلاق."],
+  ClosingReadinessNoChecks: [
+    "The checks could not be run on this deal's records. Closing will refuse until they can.",
+    "تعذّر إجراء الفحوص على سجلات هذه الصفقة، وسيُرفض الإغلاق حتى يمكن إجراؤها.",
+  ],
+  ClosingCheckReady: ["Ready", "جاهز"],
+  ClosingCheckBlocked: ["Needs action", "يحتاج إجراء"],
+  ClosingCheckUnavailable: ["Cannot be checked", "تعذّر الفحص"],
+  ClosingCheckNotApplicable: ["Not needed on this deal", "غير مطلوب في هذه الصفقة"],
+  ClosingCheck_REMITTANCE_KNOWN: ["What the finance company remits is established", "المبلغ الذي تحوّله شركة التمويل محدَّد"],
+  ClosingCheck_CONFIGURED_FEES_RECORDED: ["Every fee the finance company configures is recorded", "كل رسم تضبطه شركة التمويل مسجَّل"],
+  ClosingCheck_CUSTODY_ON_LEDGER: ["Employee custody is on the books", "عهدة الموظفين مرحَّلة إلى الدفاتر"],
+  ClosingCheck_CUSTODY_SETTLED: ["Employee custody is settled", "عهدة الموظفين مسوّاة"],
+  ClosingCheck_COSTS_CLOSABLE: ["Deal costs are recorded and reconciled", "مصاريف الصفقة مسجَّلة ومسوّاة"],
+  ClosingCheck_FIRST_PAYMENT_RECORDED: ["The customer's first payment is recorded", "الدفعة الأولى للعميل مسجَّلة"],
+  ClosingCheck_LEGAL_INVOICE_RECORDED: ["The legal invoice is recorded", "الفاتورة القانونية مسجَّلة"],
+  // SCRUM-414 — why a check is not met, by the server's reason code (lib/closingReadinessReasonCodes.ts).
+  ClosingReason_REMITTANCE_APPROVAL_MISSING: [
+    "The finance company's approved purchase amount is not recorded yet, so what it will remit is not known. Record the approval before closing.",
+    "لم يُسجَّل بعد مبلغ الشراء الذي اعتمدته شركة التمويل، لذلك لا يُعرف ما ستحوّله إلى المعرض. سجِّل الاعتماد قبل الإغلاق.",
+  ],
+  ClosingReason_REMITTANCE_UNKNOWN: [
+    "What the finance company will actually remit is not known on this deal. Resolve its reconciliation note before closing.",
+    "المبلغ الذي ستحوّله شركة التمويل فعليًا غير معروف في هذه الصفقة. عالِج ملاحظة المطابقة عليها قبل الإغلاق.",
+  ],
+  ClosingReason_DEAL_ROWS_TOO_MANY_COST_LINES: [
+    "This deal has more than {max} live cost lines, more than one check can verify. Remove the lines that should not be there.",
+    "على هذه الصفقة أكثر من {max} بند مصروف قائم، وهذا أكثر مما يمكن التحقق منه دفعة واحدة. احذف البنود التي لا ينبغي وجودها.",
+  ],
+  ClosingReason_DEAL_ROWS_TOO_MANY_CUSTODY_RECORDS: [
+    "This deal carries more than {max} custody records, more than can be checked completely. Have the deal's custody reviewed.",
+    "على هذه الصفقة أكثر من {max} سجل عهدة، وهذا أكثر مما يمكن فحصه كاملًا. اطلب مراجعة عهدة الصفقة.",
+  ],
+  ClosingReason_CONFIGURED_FEES_POLICY_OVER_CAPACITY: [
+    "The finance company's frozen policy configures {templateCount} fees, more than the {max} cost lines a deal can carry. Correct the company's fee templates and re-create the application.",
+    "تضبط سياسة شركة التمويل المثبّتة على هذه الصفقة {templateCount} رسمًا، وهذا يتجاوز الحد الأقصى البالغ {max} بند مصروف للصفقة. صحّح قوالب رسوم الشركة وأعد إنشاء الطلب.",
+  ],
+  ClosingReason_CONFIGURED_FEES_MISSING: [
+    "{count} fee(s) configured by the finance company have no actual amount recorded. Record what was paid for each — zero if it was not charged.",
+    "يوجد {count} من الرسوم التي تضبطها شركة التمويل دون مبلغ فعلي مسجَّل. سجِّل ما دُفع فعلًا لكل منها، أو صفرًا إن لم يُحتسب.",
+  ],
+  ClosingReason_CUSTODY_NOT_ON_LEDGER: [
+    "A custody movement or custody-paid cost on this deal is not fully posted to the books yet. Wait for the posting to complete, or have the record reviewed.",
+    "توجد حركة عهدة أو مصروف مدفوع من العهدة على هذه الصفقة لم يُرحَّل بالكامل إلى الدفاتر بعد. انتظر اكتمال الترحيل أو اطلب مراجعة السجل.",
+  ],
+  ClosingReason_CUSTODY_LEDGER_UNVERIFIABLE: [
+    "Whether this deal's custody is on the books could not be verified. Have the deal's custody reviewed.",
+    "تعذّر التحقق من ترحيل عهدة هذه الصفقة إلى الدفاتر. اطلب مراجعة عهدة الصفقة.",
+  ],
+  ClosingReason_CUSTODY_OPEN: [
+    "A custody record on this deal is still open. Settle what that person holds or is owed before closing.",
+    "يوجد سجل عهدة مفتوح على هذه الصفقة. سوِّ ما بحوزة الموظف أو ما يستحقه قبل الإغلاق.",
+  ],
+  ClosingReason_CUSTODY_NO_LONGER_BALANCES: [
+    "A closed custody record no longer balances — its costs changed after it was reconciled. Reopen and settle it before closing.",
+    "سجل عهدة مغلق على هذه الصفقة لم يعد متوازنًا لأن مصاريفه تغيّرت بعد تسويته. أعد فتحه وسوِّه قبل الإغلاق.",
+  ],
+  ClosingReason_CUSTODY_CURRENCY_MISMATCH: [
+    "A cost in {lineCurrency} is charged to a custody record in {custodyCurrency}; the two cannot be summed. Correct the line's currency or release it from custody.",
+    "مصروف بعملة {lineCurrency} محمَّل على سجل عهدة بعملة {custodyCurrency}، ولا يمكن جمعهما. صحّح عملة البند أو افصله عن العهدة.",
+  ],
+  ClosingReason_CUSTODY_AMOUNT_UNREADABLE: [
+    "A custody amount, or a cost charged to custody, is not a readable figure. Correct the record before closing.",
+    "أحد مبالغ العهدة أو مصروف محمَّل عليها ليس رقمًا صالحًا. صحّح السجل قبل الإغلاق.",
+  ],
+  ClosingReason_COSTS_NONE: [
+    "No costs are itemized on this deal. Record them — or a zero-cost line saying the dealership bore none — before closing.",
+    "لا توجد مصاريف مفصّلة على هذه الصفقة. سجّلها، أو سجّل بندًا بقيمة صفر يبيّن أن المعرض لم يتحمّل أي مصروف، قبل الإغلاق.",
+  ],
+  ClosingReason_COSTS_FOREIGN_CURRENCY: [
+    "{count} cost line(s) on this deal are not in {currency}. Correct them before closing.",
+    "يوجد {count} من بنود المصاريف على هذه الصفقة بغير عملة {currency}. صحّحها قبل الإغلاق.",
+  ],
+  ClosingReason_COSTS_AMOUNT_UNREADABLE: [
+    "A cost amount on this deal is not a readable figure. Correct the line before closing.",
+    "أحد مبالغ المصاريف على هذه الصفقة ليس رقمًا صالحًا. صحّح البند قبل الإغلاق.",
+  ],
+  ClosingReason_COSTS_AWAITING_ACTUAL: [
+    "{count} cost(s) have no actual amount recorded. Record them before closing.",
+    "يوجد {count} من المصاريف دون مبلغ فعلي مسجَّل. سجّلها قبل الإغلاق.",
+  ],
+  ClosingReason_COSTS_AWAITING_RECONCILIATION: [
+    "{count} cost(s) have an amount nobody has checked. Reconcile them before closing.",
+    "يوجد {count} من المصاريف بمبالغ لم يتحقق منها أحد. سوِّها قبل الإغلاق.",
+  ],
+  ClosingReason_COSTS_NOT_RECONCILED: [
+    "This deal's costs are not fully reconciled.",
+    "مصاريف هذه الصفقة غير مسوّاة بالكامل.",
+  ],
+  ClosingReason_COSTS_TREATMENT_UNMAPPED: [
+    "\"{feeLabel}\" is classified as {treatment}, which has no account to post to. Reclassify it before closing.",
+    "البند «{feeLabel}» مصنّف على أنه {treatment}، ولا يوجد حساب يُرحَّل إليه. أعد تصنيفه قبل الإغلاق.",
+  ],
+  ClosingReason_FIRST_PAYMENT_MISSING: [
+    "The customer's first payment is not recorded, so the funding split cannot be established. Record it before closing.",
+    "لم تُسجَّل الدفعة الأولى للعميل، لذلك لا يمكن تحديد توزيع التمويل. سجّلها قبل الإغلاق.",
+  ],
+  ClosingReason_LEGAL_INVOICE_MISSING: [
+    "No legal invoice is recorded. Revenue is posted from its amount, so record it before closing.",
+    "لا توجد فاتورة قانونية مسجَّلة. يُرحَّل الإيراد من مبلغها، لذا سجّلها قبل الإغلاق.",
+  ],
+  ClosingReason_LEGAL_INVOICE_UNUSABLE: [
+    "The recorded legal invoice amount is not a usable figure. Record it again before closing.",
+    "مبلغ الفاتورة القانونية المسجَّل ليس رقمًا صالحًا. أعد تسجيله قبل الإغلاق.",
+  ],
+  ClosingReason_LEGAL_INVOICE_WRONG_RECIPIENT: [
+    "The finance company is the legal buyer, but the recorded invoice was not issued to it. Re-record the invoice before closing.",
+    "شركة التمويل هي المشتري القانوني، لكن الفاتورة المسجَّلة لم تصدر باسمها. أعد تسجيل الفاتورة قبل الإغلاق.",
+  ],
+  ClosingReason_CHECK_REFUSED: [
+    "This condition could not be confirmed from the deal's records. Have the deal reviewed before closing.",
+    "تعذّر تأكيد هذا الشرط من سجلات الصفقة. اطلب مراجعة الصفقة قبل الإغلاق.",
+  ],
+  ClosingReason_READINESS_CURRENCY_DRIFT: [
+    "This deal's figures were recorded in {recordedCurrency}, but the organization's currency is now {orgCurrency}. Restore it to {recordedCurrency} before closing.",
+    "سُجّلت أرقام هذه الصفقة بعملة {recordedCurrency}، لكن عملة المؤسسة أصبحت {orgCurrency}. أعِدها إلى {recordedCurrency} قبل الإغلاق.",
+  ],
+  ClosingReason_READINESS_INPUTS_UNAVAILABLE: [
+    "This deal's closing inputs could not be established from its records, so readiness cannot be checked.",
+    "تعذّر تحديد مدخلات إغلاق هذه الصفقة من سجلاتها، لذلك لا يمكن فحص الجاهزية.",
+  ],
+  ClosingReason_NOT_READY: ["This deal is not ready to be closed.", "هذه الصفقة غير جاهزة للإغلاق."],
+  ClosingReason_WITHHELD_REMITTANCE_KNOWN: [
+    "What the finance company will remit is not established yet.",
+    "لم يُحدَّد بعد المبلغ الذي ستحوّله شركة التمويل.",
+  ],
+  ClosingReason_WITHHELD_CONFIGURED_FEES_RECORDED: [
+    "A fee the finance company configures has no actual recorded yet.",
+    "يوجد رسم تضبطه شركة التمويل لم يُسجَّل مبلغه الفعلي بعد.",
+  ],
+  ClosingReason_WITHHELD_CUSTODY_ON_LEDGER: [
+    "Employee custody on this deal is not fully on the books yet.",
+    "عهدة الموظفين على هذه الصفقة لم تُرحَّل بالكامل إلى الدفاتر بعد.",
+  ],
+  ClosingReason_WITHHELD_CUSTODY_SETTLED: [
+    "An employee custody record on this deal is not settled yet.",
+    "يوجد سجل عهدة موظف على هذه الصفقة لم يُسوَّ بعد.",
+  ],
+  ClosingReason_WITHHELD_COSTS_CLOSABLE: [
+    "The deal's costs are not all recorded and reconciled yet.",
+    "لم تُسجَّل مصاريف الصفقة وتُسوَّ كلها بعد.",
+  ],
+  ClosingReason_WITHHELD_FIRST_PAYMENT_RECORDED: [
+    "The customer's first payment is not recorded yet.",
+    "لم تُسجَّل الدفعة الأولى للعميل بعد.",
+  ],
+  ClosingReason_WITHHELD_LEGAL_INVOICE_RECORDED: ["The legal invoice is not recorded yet.", "لم تُسجَّل الفاتورة القانونية بعد."],
+  ClosingReason_WITHHELD_UNAVAILABLE: [
+    "This deal's closing readiness cannot be determined from its current records. Someone with finance access can see why.",
+    "لا يمكن تحديد جاهزية إغلاق هذه الصفقة من سجلاتها الحالية. يمكن لمن لديه صلاحية الاطلاع على المالية معرفة السبب.",
+  ],
   CustodyReversed: ["reversed", "معكوسة"],
   CustodyTruncated: [
     "More custody records exist on this deal than are shown here.",
@@ -858,7 +1011,7 @@ const dealOverviewMessages = defineBilingualMessages({
   CustodyWriteOffDesc: ["Posts the shortage to Cash Over/Short with the reason below. Money owed to the employee can never be written off.", "يُرحَّل العجز إلى زيادة/نقص النقدية مع السبب أدناه. لا يمكن أبدًا شطب مال مستحق للموظف."],
   CustodyWriteOffReason: ["Write-off reason", "سبب الشطب"],
   CustodyReopenTitle: ["Reopen this custody record", "إعادة فتح سجل العهدة"],
-  CustodyReopenDesc: ["Withdraws the closure. A written-off shortage returns to the employee's balance and the deal's classification is withdrawn.", "يسحب الإغلاق. يعود العجز المشطوب إلى رصيد الموظف ويُسحب تصنيف الصفقة المحاسبي."],
+  CustodyReopenDesc: ["Withdraws the closure. A written-off shortage returns to the employee's balance, and the deal cannot be closed until the custody is settled again.", "يسحب الإغلاق. يعود العجز المشطوب إلى رصيد الموظف، ولا يمكن إغلاق الصفقة حتى تُسوّى العهدة مجددًا."],
   CustodyReverseTitle: ["Reverse this movement", "عكس هذه الحركة"],
   CustodyReverseDesc: ["Cancels the whole movement and its journal with a correction dated today. The original stays visible.", "يلغي الحركة كاملة وقيدها بتصحيح مؤرَّخ اليوم. تبقى الحركة الأصلية ظاهرة."],
   CustodyReason: ["Reason", "السبب"],
@@ -1014,6 +1167,7 @@ export const salesEn = {
   CreationQuotationCalculated: "AutoFlow calculation — starting the application records it as the quotation submitted",
   CreationQuotationManualCompany: "This finance company is entered manually, so AutoFlow doesn't calculate its quotation.",
   CreationQuotationNotRecorded: "Quotation not recorded now — it can be recorded on the deal page by someone with finance-application access.",
+  CreationQuotationOffsetRuleUnknown: "{company}'s first-payment rule wasn't confirmed in Finance Settings when this quote was created, so AutoFlow can't calculate it. It can be recorded on the deal page. Once the rule is set to Yes, new quotes can be calculated automatically when their other details are complete.",
   SmartQuoteComparison: "Smart Quote Comparison",
   ExecutionFeesNotConfigured: "Execution Fees are not configured for this finance company.",
   FeesNotConfigured: "Fees not configured",
@@ -1794,6 +1948,12 @@ export const salesEn = {
   FinalizeDealAction: "Close the deal",
   FinalizeNeedsPermission:
     "You do not have permission to close the deal. Someone who does completes this step.",
+  FinalizeWaitsForReadiness:
+    "Closing readiness could not be checked right now, so the deal can't be closed yet. Try again shortly.",
+  FinalizeNeedsReadinessAccess:
+    "Your role can close deals but cannot view finance applications, so this deal's closing readiness can't be checked for you. Ask an administrator to add finance-application view access to your role.",
+  FinalizeNeedsClosingReadiness:
+    "The deal is not ready to close yet. Complete the items marked in the closing readiness list, then close it.",
   /**
    * The prerequisite, named before it becomes a refusal.
    *
@@ -1807,13 +1967,14 @@ export const salesEn = {
   /**
    * Both blockers at once, and the pointer withheld on purpose.
    *
-   * `setSupplierSettlementRoute` takes the SAME permission as the close, so a
-   * caller who cannot close cannot record the route either — and the review
-   * dialog hides the selector from them. Sending them there would be sending
-   * them to an empty screen.
+   * Recording the route (`setSupplierSettlementRoute`) needs
+   * `finalize:financed_deal`; closing (`finalizeDeal`) needs
+   * `confirm:finance_disbursement`. Shown when the caller lacks the ROUTE
+   * permission — the review dialog hides the selector from them, so sending
+   * them there would be sending them to an empty screen.
    */
   FinalizeNeedsRouteAndPermission:
-    "This deal is waiting on who the finance company pays, and that is recorded by the same person who closes the deal. Someone with permission to close it completes both.",
+    "This deal is waiting on who the finance company pays, and you do not have permission to record it. Someone who does chooses it here; an accountant then closes the deal.",
   ConfirmFinalizeTitle: "Close the deal",
   ConfirmFinalizeDesc:
     "The handover and the expected payment are on file, so the deal can be closed.",
@@ -2018,6 +2179,7 @@ export const salesAr = {
   CreationQuotationCalculated: "حساب AutoFlow — بدء الطلب يسجّله كعرض السعر المقدَّم لشركة التمويل",
   CreationQuotationManualCompany: "شركة التمويل هذه مُدخلة يدويًا، لذلك لا يحسب AutoFlow عرض سعرها.",
   CreationQuotationNotRecorded: "لم يُسجَّل عرض السعر الآن — يمكن تسجيله من صفحة الصفقة بواسطة من لديه صلاحية طلبات التمويل.",
+  CreationQuotationOffsetRuleUnknown: "لم تكن قاعدة الدفعة الأولى لشركة {company} مؤكَّدة في إعدادات التمويل عند إنشاء عرض السعر هذا، لذلك لا يحسبه AutoFlow. يمكن تسجيله من صفحة الصفقة. بعد ضبط القاعدة على «نعم» يمكن حساب عروض الأسعار الجديدة تلقائيًا متى اكتملت بياناتها الأخرى.",
   QuoteSaveFail: "فشل في حفظ عرض السعر",
   SmartQuoteComparison: "مقارنة عروض الأسعار الذكية",
   ExecutionFeesNotConfigured: "مصاريف التنفيذ غير مُعدّة لشركة التمويل هذه.",
@@ -2728,10 +2890,16 @@ export const salesAr = {
     "لا تملك صلاحية تسجيل الدفعة المتوقعة. يُكمل هذه الخطوة من يملكها.",
   FinalizeDealAction: "إغلاق الصفقة",
   FinalizeNeedsPermission: "لا تملك صلاحية إغلاق الصفقة. يُكمل هذه الخطوة من يملكها.",
+  FinalizeWaitsForReadiness:
+    "تعذّر فحص جاهزية الإغلاق الآن، لذا لا يمكن إغلاق الصفقة بعد. حاول مجددًا بعد قليل.",
+  FinalizeNeedsReadinessAccess:
+    "دورك يسمح بإغلاق الصفقات لكنه لا يسمح بعرض طلبات التمويل، لذا لا يمكن فحص جاهزية إغلاق هذه الصفقة لك. اطلب من المسؤول إضافة صلاحية عرض طلبات التمويل إلى دورك.",
+  FinalizeNeedsClosingReadiness:
+    "الصفقة غير جاهزة للإغلاق بعد. أكمل البنود المؤشَّر عليها في قائمة جاهزية الإغلاق، ثم أغلقها.",
   FinalizeNeedsSettlementRoute:
     "هذه المركبة تعود للمورد والصفقة ممولة، لذا يجب تسجيل الجهة التي تدفع لها شركة التمويل قبل إغلاق الصفقة. اختره هنا، في هذه الخطوة.",
   FinalizeNeedsRouteAndPermission:
-    "هذه الصفقة بانتظار تحديد الجهة التي تدفع لها شركة التمويل، ويُسجّل ذلك من يملك صلاحية إغلاق الصفقة نفسها. يُكمل الخطوتين من يملك تلك الصلاحية.",
+    "هذه الصفقة بانتظار تحديد الجهة التي تدفع لها شركة التمويل، ولا تملك صلاحية تسجيلها. يختارها هنا من يملك الصلاحية، ثم يُغلق المحاسب الصفقة.",
   ConfirmFinalizeTitle: "إغلاق الصفقة",
   ConfirmFinalizeDesc: "التسليم والدفعة المتوقعة مسجَّلان، ويمكن إغلاق الصفقة.",
   FinalizeCreatesTheSale:

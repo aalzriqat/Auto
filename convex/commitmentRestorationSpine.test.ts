@@ -68,6 +68,7 @@ const PERMISSIONS = [
   "review:finance_application",
   "approve:finance_application",
   "finalize:financed_deal",
+  "confirm:finance_disbursement",
   "verify:finance_documents",
   "register:vehicle_handover",
   "register:expected_payment",

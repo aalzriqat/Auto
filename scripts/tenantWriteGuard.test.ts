@@ -615,10 +615,16 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // public entry point.
   // Re-measured FROM THE ANALYSER on this tree
   // ({"totalMutations":499,"analysed":327,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
+  //
+  // `financeDealCosts.classifyDealAccounting` DELETED (SCRUM-407: the manual
+  // classification stamp is retired; readiness is automatic) — one mutation
+  // fewer: 499 → 498 total, 327 → 326 analysed. Skipped counts unchanged.
+  // Re-measured FROM THE ANALYSER after merging main (SCRUM-413 PR-A) into
+  // SCRUM-407 ({"totalMutations":498,"analysed":326,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 499,
-      analysed: 327,
+      totalMutations: 498,
+      analysed: 326,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 157,
     });

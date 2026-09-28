@@ -233,6 +233,18 @@ async function costsOf(seed: Seed, applicationId: Id<"financeApplications">) {
   });
 }
 
+/**
+ * The deal's automatic closing readiness (SCRUM-407): the checks the retired
+ * manual classification ran, re-derived on every read and re-run by
+ * finalization.
+ */
+async function readinessOf(seed: Pick<Seed, "asUser" | "orgId">, applicationId: Id<"financeApplications">) {
+  return await seed.asUser.query(api.applications.getClosingReadiness, { orgId: seed.orgId, applicationId });
+}
+async function closingCheck(seed: Pick<Seed, "asUser" | "orgId">, applicationId: Id<"financeApplications">, key: string) {
+  return (await readinessOf(seed, applicationId)).checks.find((row) => row.key === key);
+}
+
 async function recordTemplateActual(
   seed: Seed,
   applicationId: Id<"financeApplications">,
@@ -702,6 +714,10 @@ describe("duplicate templates", () => {
  * classification no writer on this branch would grant, and finalization is
  * asked to post it. Failing-first: with the finalization re-check disabled the
  * sale was created; with it, finalization refuses before any write.
+ *
+ * SCRUM-407 retired the stamp: finalization no longer reads it at all and
+ * re-runs the whole readiness evaluator, so a legacy stamp is inert — kept
+ * here to prove it still buys nothing.
  */
 describe("finalization re-checks configured fees, whichever rule the deal was classified under", () => {
   const PRICE = 20_000;
@@ -909,9 +925,9 @@ describe("finalization re-checks configured fees, whichever rule the deal was cl
     // What the upgrade path leaves behind: a classification no writer on this
     // branch would grant. The line-based rules it was classified under are all
     // satisfied (one reconciled zero line); both configured fees are unrecorded.
-    await expect(
-      s.asUser.mutation(api.financeDealCosts.classifyDealAccounting, { orgId: s.orgId, applicationId, notes: "established" })
-    ).rejects.toThrow(/configured by this deal's finance company/i);
+    expect(await closingCheck(s, applicationId, "CONFIGURED_FEES_RECORDED")).toMatchObject({
+      status: "BLOCKED", reason: expect.stringMatching(/configured by this deal's finance company/i),
+    });
     await s.t.run((ctx) => ctx.db.patch(applicationId, { accountingClassification: "CLASSIFIED" }));
     const expected = (await costsOf(s as never, applicationId)).expected;
     expect(expected.rows.map((row) => row.actual)).toEqual([null, null]);
@@ -949,7 +965,7 @@ describe("finalization re-checks configured fees, whichever rule the deal was cl
     for (const feeId of [first, second]) {
       await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "checked" });
     }
-    await s.asUser.mutation(api.financeDealCosts.classifyDealAccounting, { orgId: s.orgId, applicationId, notes: "established" });
+    expect((await readinessOf(s, applicationId)).state).toBe("READY");
 
     const saleId = await finalize(s, applicationId);
     expect(saleId).toBeTruthy();
@@ -1000,11 +1016,11 @@ describe("the bounded fee read behind every closure rule", () => {
   const voidLine = (seed: Seed, feeId: Id<"financeDealFees">) =>
     seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "Recorded on the wrong deal." });
 
-  test("past the live-line cap the screen and the classification door refuse without writing; removing one line makes the deal readable again", async () => {
+  test("past the live-line cap the screen refuses and closing readiness is unavailable, without writing; removing one line makes the deal readable again", async () => {
     const seed = await seedDealer("cap");
     const companyId = await createCompany(seed, "Two Fees", COMPANY_B_TEMPLATES);
     const applicationId = await createApplicationFor(seed, companyId);
-    // Classification asks for the invoice before it reads a single line.
+    // An invoice on file, so nothing but the bound stands in the way.
     await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
       orgId: seed.orgId,
       applicationId,
@@ -1030,9 +1046,9 @@ describe("the bounded fee read behind every closure rule", () => {
     // configured fees the checklist still has unrecorded — and write nothing.
     const overflow = new RegExp(`more than ${MAX_LIVE_DEAL_FEE_LINES} live cost lines`);
     await expect(costsOf(seed, applicationId)).rejects.toThrow(overflow);
-    await expect(
-      seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, { orgId: seed.orgId, applicationId, notes: "x" })
-    ).rejects.toThrow(overflow);
+    const unreadable = await readinessOf(seed, applicationId);
+    expect(unreadable.state).toBe("UNAVAILABLE");
+    expect(JSON.stringify(unreadable.checks)).toMatch(overflow);
     expect(await snapshotOf()).toEqual(before);
 
     // The real void — a patch, not a delete — takes the deal back to the cap,
@@ -1047,8 +1063,8 @@ describe("the bounded fee read behind every closure rule", () => {
 
   /**
    * The product never creates the state the read refuses: AT the cap, both
-   * writers that create a line refuse the 501st — before the classification
-   * is touched and with no command record kept — and after one line is
+   * writers that create a line refuse the 501st — before anything is touched
+   * and with no command record kept — and after one line is
    * removed the same write goes through, whose exact replay then still wins
    * at the cap, because the bound is checked inside the idempotent section.
    */
@@ -1057,7 +1073,8 @@ describe("the bounded fee read behind every closure rule", () => {
     const companyId = await createCompany(seed, "Two Fees", COMPANY_B_TEMPLATES);
     const applicationId = await createApplicationFor(seed, companyId);
     const seeded = await seedLiveLines(seed, applicationId, MAX_LIVE_DEAL_FEE_LINES);
-    // A legacy classification: what a refused write must leave exactly as it is.
+    // A legacy classification: what a refused write must leave exactly as it is
+    // (and, since SCRUM-407, what an accepted one leaves too — it is inert).
     await seed.t.run((ctx) => ctx.db.patch(applicationId, { accountingClassification: "CLASSIFIED" }));
     const stateOf = () =>
       seed.t.run(async (ctx) => ({
@@ -1090,14 +1107,14 @@ describe("the bounded fee read behind every closure rule", () => {
     await expect(recordTemplateActual(seed, applicationId, 0, "APPRAISAL_FEE", jod(80))).rejects.toThrow(atCap);
     expect(await stateOf()).toEqual(before);
 
-    // One removal makes room; the configured actual is recorded, and THAT
-    // write is the one that clears the classification.
+    // One removal makes room; the configured actual is recorded. No write
+    // withdraws the legacy stamp any more: nothing reads it.
     await voidLine(seed, seeded[0]);
     const key = crypto.randomUUID();
     const feeId = await recordTemplateActual(seed, applicationId, 0, "APPRAISAL_FEE", jod(80), { idempotencyKey: key });
     const recorded = await stateOf();
     expect(recorded.live).toBe(MAX_LIVE_DEAL_FEE_LINES);
-    expect(recorded.app?.accountingClassification).toBe("PENDING_CLASSIFICATION");
+    expect(recorded.app?.accountingClassification).toBe("CLASSIFIED");
     expect(recorded.commands).toBe(before.commands + 1);
 
     // Full again — and the exact replay of the line just written still wins.
@@ -1221,10 +1238,10 @@ describe("the fee-template cap", () => {
     });
     const feeId = await recordTemplateActual(seed, applicationId, 0, "LICENSING", jod(250));
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "checked" });
-    const classify = () =>
-      seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, { orgId: seed.orgId, applicationId, notes: "x" });
+    const configuredReason = async () =>
+      (await closingCheck(seed, applicationId, "CONFIGURED_FEES_RECORDED"))?.reason ?? "";
 
-    await expect(classify()).rejects.toThrow(
+    expect(await configuredReason()).toMatch(
       new RegExp(`frozen finance-company policy configures ${MAX_LIVE_DEAL_FEE_LINES + 1} fees, more than the ${MAX_LIVE_DEAL_FEE_LINES} live cost lines`)
     );
 
@@ -1237,7 +1254,7 @@ describe("the fee-template cap", () => {
         companyRuleSnapshot: { ...app.companyRuleSnapshot, feeTemplates: templates(MAX_FEE_TEMPLATES + 1) },
       });
     });
-    await expect(classify()).rejects.toThrow(new RegExp(`^${MAX_FEE_TEMPLATES} fee\\(s\\) configured by this deal's finance company have no actual`));
+    expect(await configuredReason()).toMatch(new RegExp(`^${MAX_FEE_TEMPLATES} fee\\(s\\) configured by this deal's finance company have no actual`));
   });
 });
 
@@ -1259,12 +1276,8 @@ describe("closing the deal", () => {
       notes: "checked against the receipt",
     });
   }
-  const classify = (seed: Seed, applicationId: Id<"financeApplications">) =>
-    seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, {
-      orgId: seed.orgId,
-      applicationId,
-      notes: "established",
-    });
+  const configured = (seed: Seed, applicationId: Id<"financeApplications">) =>
+    closingCheck(seed, applicationId, "CONFIGURED_FEES_RECORDED");
 
   /**
    * The closure invariant the checklist alone cannot hold. Expected rows are
@@ -1273,7 +1286,7 @@ describe("closing the deal", () => {
    * saw one line, fully reconciled, and would have classified the deal with a
    * configured cost silently missing. The server asks the snapshot directly.
    */
-  test("two configured fees, one actual recorded: classification is refused until the second is recorded too", async () => {
+  test("two configured fees, one actual recorded: closing readiness is blocked until the second is recorded too", async () => {
     const seed = await seedDealer("close");
     const companyId = await createCompany(seed, "Two Fees", COMPANY_B_TEMPLATES);
     const applicationId = await createApplicationFor(seed, companyId);
@@ -1286,14 +1299,14 @@ describe("closing the deal", () => {
     expect(costs.summary?.linesAwaitingActual).toBe(0);
     expect(costs.summary?.linesAwaitingReconciliation).toBe(0);
 
-    await expect(classify(seed, applicationId)).rejects.toThrow(/configured by this deal's finance company/i);
-    expect((await seed.t.run((ctx) => ctx.db.get(applicationId)))?.accountingClassification).not.toBe("CLASSIFIED");
+    expect(await configured(seed, applicationId)).toMatchObject({
+      status: "BLOCKED", reason: expect.stringMatching(/configured by this deal's finance company/i),
+    });
 
     // Not charged is a fact too: zero, recorded, reconciled.
     const second = await recordTemplateActual(seed, applicationId, 1, "COMMISSION", 0);
     await reconcile(seed, second);
-    await classify(seed, applicationId);
-    expect((await seed.t.run((ctx) => ctx.db.get(applicationId)))?.accountingClassification).toBe("CLASSIFIED");
+    expect(await configured(seed, applicationId)).toMatchObject({ status: "READY", reason: null });
   });
 
   /**
@@ -1368,8 +1381,9 @@ describe("closing the deal", () => {
     const expected = (await costsOf(seed, applicationId)).expected;
     expect(expected.rows[1].actual).toBeNull();
     expect(expected.unplannedLineIds).toEqual([lookalike]);
-    await expect(classify(seed, applicationId)).rejects.toThrow(/configured by this deal's finance company/i);
-    expect((await seed.t.run((ctx) => ctx.db.get(applicationId)))?.accountingClassification).not.toBe("CLASSIFIED");
+    expect(await configured(seed, applicationId)).toMatchObject({
+      status: "BLOCKED", reason: expect.stringMatching(/configured by this deal's finance company/i),
+    });
 
     // The exact recording is still possible — the look-alike did not take the
     // position — and once reconciled the deal closes. Both lines count toward
@@ -1381,8 +1395,7 @@ describe("closing the deal", () => {
     expect(after.rows[1].actual).toMatchObject({ feeId: exactSecond });
     expect(after.unplannedLineIds).toEqual([lookalike]);
     expect(after.actualTotalMinor).toBe(jod(80) + jod(300) + jod(300));
-    await classify(seed, applicationId);
-    expect((await seed.t.run((ctx) => ctx.db.get(applicationId)))?.accountingClassification).toBe("CLASSIFIED");
+    expect(await configured(seed, applicationId)).toMatchObject({ status: "READY", reason: null });
   });
 
   test("paidAt on a configured actual must be a real timestamp", async () => {
@@ -1424,7 +1437,8 @@ describe("closing the deal", () => {
       idempotencyKey: crypto.randomUUID(),
     });
     await reconcile(seed, feeId);
-    await classify(seed, applicationId);
-    expect((await seed.t.run((ctx) => ctx.db.get(applicationId)))?.accountingClassification).toBe("CLASSIFIED");
+    for (const key of ["CONFIGURED_FEES_RECORDED", "COSTS_CLOSABLE", "LEGAL_INVOICE_RECORDED"]) {
+      expect(await closingCheck(seed, applicationId, key)).toMatchObject({ key, status: "READY", reason: null });
+    }
   });
 });

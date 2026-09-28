@@ -5,7 +5,8 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS } from "./utils/permissions";
-import { deriveExpectedFees, MAX_CUSTODY_ENTRIES, unreadableCustodyAmounts } from "./financeDealCosts";
+import { deriveExpectedFees, MAX_CUSTODY_ENTRIES } from "./financeDealCosts";
+import { unreadableCustodyAmounts } from "./utils/settlementDeductions";
 import { assertConfiguredFeesRecorded, loadActiveFees, unrecordedConfiguredFeePositions } from "./utils/settlementDeductions";
 
 /**
@@ -476,12 +477,27 @@ describe("custody balances fail closed on an unreadable amount, end to end", () 
 });
 
 // ---------------------------------------------------------------------------
-// 2. Accounting classification
+// 2. Closing readiness (SCRUM-407 — the retired manual classification's checks)
 // ---------------------------------------------------------------------------
 
-describe("accounting classification refuses a deal whose costs are not readable figures", () => {
+/**
+ * The closing-readiness cost checks apply where finalization recognises a
+ * finance-company receivable — a configured company on the dealership route —
+ * exactly the scope the retired classification stamp was required in.
+ */
+async function withCompany(seed: Seed) {
+  await seed.t.run(async (ctx) => {
+    const companyId = await ctx.db.insert("financeCompanies", {
+      orgId: seed.orgId, name: "Readiness Finance", profitRate: 5, maxTermMonths: 60, gracePeriodMonths: 0, isActive: true,
+    });
+    await ctx.db.patch(seed.applicationId, { companyId });
+  });
+  return seed;
+}
+
+describe("closing readiness blocks a deal whose costs are not readable figures", () => {
   async function invoiced(suffix: string) {
-    const seed = await seedDeal(suffix);
+    const seed = await withCompany(await seedDeal(suffix));
     await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
       orgId: seed.orgId, applicationId: seed.applicationId,
       legalInvoiceAmountMinor: jod(10_500), legalInvoiceNumber: "INV-1", legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
@@ -495,22 +511,15 @@ describe("accounting classification refuses a deal whose costs are not readable 
     return feeId;
   }
 
-  async function classify(seed: Seed) {
-    return seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, {
-      orgId: seed.orgId, applicationId: seed.applicationId, notes: "all on file",
+  async function costsCheck(seed: Seed) {
+    const readiness = await seed.asUser.query(api.applications.getClosingReadiness, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
     });
-  }
-
-  async function assertNotClassified(seed: Seed) {
-    const app = (await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))!;
-    expect(app.accountingClassification).not.toBe("CLASSIFIED");
-    expect(app.accountingClassifiedAt).toBeUndefined();
-    expect(app.accountingClassifiedBy).toBeUndefined();
-    expect(app.accountingClassificationNotes).toBeUndefined();
+    return readiness.checks.find((row) => row.key === "COSTS_CLOSABLE");
   }
 
   test.each(CORRUPT)(
-    "a RECONCILED same-currency line whose actual is %s (raw) refuses classification with no stamp and no partial write",
+    "a RECONCILED same-currency line whose actual is %s (raw) blocks closing readiness and writes nothing",
     async (label, corrupt) => {
       const seed = await invoiced(`k-${label}`);
       await reconciledFee(seed, jod(100));
@@ -518,30 +527,27 @@ describe("accounting classification refuses a deal whose costs are not readable 
       await corruptFee(seed, bad, corrupt);
       const appBefore = (await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))!;
 
-      await expect(classify(seed)).rejects.toThrow(/not a readable figure/);
+      expect(await costsCheck(seed)).toMatchObject({ status: "BLOCKED", reason: expect.stringMatching(/not a readable figure/) });
 
-      await assertNotClassified(seed);
       const appAfter = (await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))!;
       expect(appAfter.updatedAt).toBe(appBefore.updatedAt);
       expect(appAfter.expectedDealerRemittanceMinor).toBe(appBefore.expectedDealerRemittanceMinor);
     }
   );
 
-  test("two reconciled actuals that overflow between them refuse classification", async () => {
+  test("two reconciled actuals that overflow between them block closing readiness", async () => {
     const seed = await invoiced("k-overflow");
     const a = await reconciledFee(seed, 1);
     const b = await reconciledFee(seed, 1);
     await corruptFee(seed, a, Number.MAX_SAFE_INTEGER - 1);
     await corruptFee(seed, b, 2);
-    await expect(classify(seed)).rejects.toThrow(/not a readable figure/);
-    await assertNotClassified(seed);
+    expect(await costsCheck(seed)).toMatchObject({ status: "BLOCKED", reason: expect.stringMatching(/not a readable figure/) });
   });
 
-  test("readable, reconciled costs still classify", async () => {
+  test("readable, reconciled costs are closable", async () => {
     const seed = await invoiced("k-ok");
     await reconciledFee(seed, jod(137));
-    await classify(seed);
-    expect((await readCosts(seed)).accountingClassification).toBe("CLASSIFIED");
+    expect(await costsCheck(seed)).toMatchObject({ status: "READY", reason: null });
   });
 });
 
@@ -652,7 +658,7 @@ describe("a frozen snapshot template whose estimate is not readable withholds it
       });
 
       // And the configured-position gate is satisfied by the real actual:
-      // once every other real requirement is met, classification proceeds.
+      // once every other real requirement is met, closing readiness agrees.
       await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
         orgId: seed.orgId, applicationId: seed.applicationId,
         legalInvoiceAmountMinor: jod(10_500), legalInvoiceNumber: "INV-1", legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
@@ -669,10 +675,13 @@ describe("a frozen snapshot template whose estimate is not readable withholds it
         expect(unrecordedConfiguredFeePositions(app.companyRuleSnapshot, liveFees)).toEqual([]);
         expect(() => assertConfiguredFeesRecorded(app.companyRuleSnapshot, liveFees, "finalizing")).not.toThrow();
       });
-      await seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, {
-        orgId: seed.orgId, applicationId: seed.applicationId, notes: "all on file",
+      await withCompany(seed);
+      const readiness = await seed.asUser.query(api.applications.getClosingReadiness, {
+        orgId: seed.orgId, applicationId: seed.applicationId,
       });
-      expect((await readCosts(seed)).accountingClassification).toBe("CLASSIFIED");
+      for (const key of ["CONFIGURED_FEES_RECORDED", "COSTS_CLOSABLE", "LEGAL_INVOICE_RECORDED"]) {
+        expect(readiness.checks.find((row) => row.key === key)).toMatchObject({ key, status: "READY" });
+      }
     }
   );
 });

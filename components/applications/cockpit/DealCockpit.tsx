@@ -43,7 +43,6 @@ import {
   Minus,
   Ban,
   FileText,
-  CheckCircle2,
   Check,
   Copy,
   Wallet,
@@ -128,7 +127,9 @@ import {
   type NewHandoverCost,
 } from "./HandoverCostsPanel";
 import { RecordLegalInvoiceDialog, type RecordLegalInvoiceValues } from "./RecordLegalInvoiceDialog";
-import { ClassifyDealAccountingDialog } from "./ClassifyDealAccountingDialog";
+import { DealClosingReadinessList, closingReasonText, type ClosingReadinessView } from "./DealClosingReadinessList";
+import { useClosingReadiness } from "./useClosingReadiness";
+import { closingReadinessRefusalOf } from "@/lib/closingReadinessReasonCodes";
 import { ProfitApprovalNotice, useProfitApproval } from "@/components/sales/ProfitApprovalNotice";
 
 /**
@@ -360,26 +361,93 @@ const PROFIT_BLOCKED_REASON: Record<
   FinancedDirectUnverified: "ProfitFinancedDirectUnverified",
 };
 
+/** The same labels the legal-invoice dialog offers, so the record reads as it was entered. */
+const LEGAL_INVOICE_ISSUED_TO_LABEL: Record<string, string> = {
+  FINANCE_COMPANY: "PartyFinancier",
+  CUSTOMER: "Customer",
+  OTHER: "Other",
+};
+
 /**
  * Why the close cannot be taken — and it takes BOTH conditions, because the
  * two interact rather than merely coexisting.
  *
- * `setSupplierSettlementRoute` requires `finalize:financed_deal`, the same
- * permission as the close itself, and the review dialog hides its selector
- * without it. So telling a caller who lacks that permission to "record the
- * route in Review" sends them to a screen with nothing on it — the dead end
- * this issue exists to remove, rebuilt out of two correct sentences.
+ * `setSupplierSettlementRoute` requires `finalize:financed_deal`, and the
+ * review dialog hides its selector without it. So telling a caller who lacks
+ * that permission to "record the route" sends them to a screen with nothing
+ * on it — the dead end this issue exists to remove, rebuilt out of two correct
+ * sentences.
  *
- * Extracted rather than left as a nested ternary so the four combinations are
+ * Since SCRUM-407 the close itself is an accountant's act
+ * (`confirm:finance_disbursement`), so the two permissions are no longer the
+ * same one: the route is judged on who may RECORD it, the close on who may
+ * CLOSE, each against the server's own gate.
+ *
+ * A loaded closing-readiness verdict that is not READY is a prerequisite too:
+ * `finalizeDeal` re-runs the same evaluator and would refuse, so the action is
+ * withheld and the readiness list above names what is left.
+ *
+ * A readiness READ that failed withholds it as well (S414-R2-SKEW-1): most
+ * often that is a backend deployed before `getClosingReadiness`, and such a
+ * backend's `finalizeDeal` predates the redacted refusals — its currency-drift
+ * refusal names both currencies to a caller who may close but not read money.
+ * The close is offered only once a verdict has LOADED; a read still in flight
+ * is handled by the caller, which keeps the step at its blocker meanwhile.
+ *
+ * A caller who may close but may not READ the readiness has no verdict at all
+ * — the query is skipped — so the close is withheld from them too (S414-R3-1,
+ * Option A), named last: the route and the close permission are the more
+ * useful things to say when they also apply. Every default role holding
+ * `confirm:finance_disbursement` holds `view:finance_applications`, so this
+ * reaches only custom roles, and tells them which access is missing.
+ *
+ * Extracted rather than left as a nested ternary so the combinations are
  * enumerable, and testable, one line each.
  */
-function finalizeUnavailableReasonKey(
-  routeRequired: boolean,
-  canFinalize: boolean
-): string | undefined {
-  if (routeRequired && !canFinalize) return "FinalizeNeedsRouteAndPermission";
+function finalizeUnavailableReasonKey({
+  routeRequired,
+  canRecordRoute,
+  readinessBlocksClose,
+  readinessUnreadable,
+  canClose,
+  canReadReadiness,
+}: Readonly<{
+  routeRequired: boolean;
+  canRecordRoute: boolean;
+  readinessBlocksClose: boolean;
+  readinessUnreadable: boolean;
+  canClose: boolean;
+  canReadReadiness: boolean;
+}>): string | undefined {
+  if (routeRequired && !canRecordRoute) return "FinalizeNeedsRouteAndPermission";
   if (routeRequired) return "FinalizeNeedsSettlementRoute";
-  if (!canFinalize) return "FinalizeNeedsPermission";
+  if (readinessUnreadable) return "FinalizeWaitsForReadiness";
+  if (readinessBlocksClose) return "FinalizeNeedsClosingReadiness";
+  if (!canClose) return "FinalizeNeedsPermission";
+  if (!canReadReadiness) return "FinalizeNeedsReadinessAccess";
+  return undefined;
+}
+
+/**
+ * Why an already-open close confirmation may not be submitted — or `undefined`
+ * when the cockpit holds a loaded, open READY verdict (S414-R3-1).
+ *
+ * The dialog outlives the verdict it was opened on: a read that fails, or a
+ * verdict that turns BLOCKED, must stop the submit rather than let an older
+ * backend's detailed refusal through. Mirrors `finalizeAllowedByReadiness`.
+ */
+function finalizeReadinessHoldReasonKey({
+  canReadReadiness,
+  readiness,
+  readinessUnreadable,
+}: Readonly<{
+  canReadReadiness: boolean;
+  readiness: { open: boolean; state: string } | undefined;
+  readinessUnreadable: boolean;
+}>): string | undefined {
+  if (!canReadReadiness) return "FinalizeNeedsReadinessAccess";
+  if (readinessUnreadable || readiness === undefined || !readiness.open) return "FinalizeWaitsForReadiness";
+  if (readiness.state !== "READY") return "FinalizeNeedsClosingReadiness";
   return undefined;
 }
 
@@ -723,7 +791,28 @@ export function DealCockpit({
   const voidDealFee = useMutation(api.financeDealCosts.voidDealFee);
   const reconcileDealFee = useMutation(api.financeDealCosts.reconcileDealFee);
   const recordLegalInvoice = useMutation(api.financeDealCosts.recordLegalInvoice);
-  const classifyDealAccounting = useMutation(api.financeDealCosts.classifyDealAccounting);
+  // The deal's automatic closing readiness (SCRUM-407) — the same evaluator
+  // `finalizeDeal` re-runs, so the panel previews the server's verdict. Same
+  // read permission as the cost record; the server redacts the detail below
+  // the finance tier itself. Read without throwing: a backend deployed before
+  // this query existed costs the panel its verdict, not the screen its life
+  // (SCRUM-414 Codex R2).
+  const { readiness: closingReadiness, serviceUnavailable: closingReadinessServiceUnavailable } = useClosingReadiness(
+    canViewApplications && deal ? { orgId, applicationId } : "skip"
+  );
+  /**
+   * The ONE readiness condition the close is offered AND submitted under
+   * (S414-R2-SKEW-1, S414-R3-1): a successfully loaded, open READY verdict. A
+   * skipped, loading, failed, closed, BLOCKED or UNAVAILABLE read withholds it,
+   * so an older backend's detailed refusal never reaches a caller without
+   * money-read authority through this screen. The server re-checks regardless.
+   */
+  const finalizeReadinessHoldKey = finalizeReadinessHoldReasonKey({
+    canReadReadiness: canViewApplications,
+    readiness: closingReadiness,
+    readinessUnreadable: closingReadinessServiceUnavailable,
+  });
+  const finalizeAllowedByReadiness = finalizeReadinessHoldKey === undefined;
   const planCustodyHandler = useMutation(api.financeDealCosts.planCustodyHandler);
   const openDealCustody = useMutation(api.financeDealCosts.openDealCustody);
   const recordCustodyMovement = useMutation(api.financeDealCosts.recordCustodyMovement);
@@ -753,19 +842,22 @@ export function DealCockpit({
   const canReviewApplication = !permissionsLoading && hasPermission(PERMISSIONS.REVIEW_FINANCE_APPLICATION);
   const canApproveApplication = !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
   const canCreateApplication = !permissionsLoading && hasPermission(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+  // Recording the settlement route and cancelling a CLOSED deal are still
+  // gated server-side on `finalize:financed_deal`; closing the deal itself is
+  // not — see `canCloseDeal` below.
   const canFinalizeApplication = !permissionsLoading && hasPermission(PERMISSIONS.FINALIZE_FINANCED_DEAL);
   const canVerifyDocuments = !permissionsLoading && hasPermission(PERMISSIONS.VERIFY_FINANCE_DOCUMENTS);
   const canConfirmFinanceDisbursement =
     !permissionsLoading && hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
   const canResolveDeposits = !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_REQUESTS);
+  // SCRUM-407 owner ruling: finalizing a financed deal is for accountants only.
+  // Mirrors `finalizeDeal`, which requires `confirm:finance_disbursement`.
+  const canCloseDeal = canConfirmFinanceDisbursement;
 
   const [recordingLegalInvoice, setRecordingLegalInvoice] = useState(false);
   const [legalInvoiceSubmitting, setLegalInvoiceSubmitting] = useState(false);
   const [legalInvoiceError, setLegalInvoiceError] = useState<string | null>(null);
 
-  const [classifyingAccounting, setClassifyingAccounting] = useState(false);
-  const [classifyingSubmitting, setClassifyingSubmitting] = useState(false);
-  const [classifyingError, setClassifyingError] = useState<string | null>(null);
 
   const [decidingCredit, setDecidingCredit] = useState(false);
   const [creditSubmitting, setCreditSubmitting] = useState(false);
@@ -1471,6 +1563,24 @@ export function DealCockpit({
     // blocker until both facts are on hand.
     if (app === undefined) return undefined;
 
+    const finalizeReasonKey = finalizeDenominationBlock
+      ? FINALIZE_DENOMINATION_REASON[finalizeDenominationBlock]
+      : finalizeUnavailableReasonKey({
+          routeRequired: settlementRouteRequired,
+          canRecordRoute: canFinalizeApplication,
+          readinessBlocksClose:
+            closingReadiness !== undefined && closingReadiness.open && closingReadiness.state !== "READY",
+          readinessUnreadable: closingReadinessServiceUnavailable,
+          canClose: canCloseDeal,
+          canReadReadiness: canViewApplications,
+        });
+    // The same wait as `app` above, for the readiness verdict (S414-R2-SKEW-1,
+    // S414-R3-1): the close is offered only under `finalizeAllowedByReadiness`.
+    // With no reason to name — a read still in flight, or a verdict that says
+    // the deal is no longer open — the step keeps only its blocker meanwhile;
+    // a reason that withholds it anyway (a missing route) is shown instead.
+    if (finalizeReasonKey === undefined && !finalizeAllowedByReadiness) return undefined;
+
     return {
       stageKey: "SETTLEMENT",
       actionKey: "FinalizeDealAction",
@@ -1495,12 +1605,7 @@ export function DealCockpit({
        * is not a dead end — and bringing that control across is filed separately
        * rather than folded into this change.
        */
-      unavailableReasonKey: finalizeDenominationBlock
-        ? FINALIZE_DENOMINATION_REASON[finalizeDenominationBlock]
-        : finalizeUnavailableReasonKey(
-            settlementRouteRequired,
-            hasPermission(PERMISSIONS.FINALIZE_FINANCED_DEAL)
-          ),
+      unavailableReasonKey: finalizeReasonKey,
       unavailableDetail: finalizeDenominationDetail,
     };
   }
@@ -1549,7 +1654,7 @@ export function DealCockpit({
     // viewer without both must not subscribe, or the thrown read takes the
     // whole cockpit down. completeSale still re-proves the rule server-side.
     enabled:
-      canFinalizeApplication &&
+      canCloseDeal &&
       hasPermission(PERMISSIONS.VIEW_VEHICLES) &&
       !!app?.quote &&
       app.quote.mode !== "CASH",
@@ -2233,7 +2338,13 @@ export function DealCockpit({
           blocked: finalizeProfitApproval.blocked,
           notice: <ProfitApprovalNotice approval={finalizeProfitApproval} />,
         },
+        // The dialog outlives the READY verdict it was opened on (S414-R3-1):
+        // it names the current reason and its confirm is disabled meanwhile.
+        readinessHold: finalizeReadinessHoldKey ? t(finalizeReadinessHoldKey) : null,
         onSubmit: async () => {
+          // Same predicate as the offer, checked again at the moment of the
+          // write: nothing reaches `finalizeDeal` without a loaded READY verdict.
+          if (!finalizeAllowedByReadiness) return;
           setFinalizeSubmitting(true);
           setFinalizeError(null);
           try {
@@ -2256,8 +2367,13 @@ export function DealCockpit({
             // Deliberately keeps the key: every refusal here is actionable and
             // names what to change — an unrecorded settlement route, missing
             // economics, an unresolved عربون — so the next attempt is the same
-            // finalize with the same key, not a second one.
-            const message = getErrorMessage(error);
+            // finalize with the same key, not a second one. A closing-readiness
+            // refusal carries a code + params (SCRUM-414), translated exactly as
+            // the readiness panel translates it; anything else keeps its message.
+            const refusal = isConvexError(error) ? closingReadinessRefusalOf(error.data) : null;
+            const message = refusal
+              ? closingReasonText(t, refusal.code, refusal.params, refusal.message).text
+              : getErrorMessage(error);
             setFinalizeError(message);
             toast.error(message);
           } finally {
@@ -2308,21 +2424,26 @@ export function DealCockpit({
         });
       }}
       closingChecklist={
-        dealCosts && canConfirmFinanceDisbursement
+        canViewApplications && deal
           ? {
-              legalInvoiceAmountMinor: dealCosts.legalInvoiceAmountMinor,
-              legalInvoiceNumber: dealCosts.legalInvoiceNumber,
-              legalInvoiceDate: dealCosts.legalInvoiceDate,
-              legalInvoiceIssuedTo: dealCosts.legalInvoiceIssuedTo,
-              accountingClassification: dealCosts.accountingClassification,
-              onRecordLegalInvoice: () => {
-                setLegalInvoiceError(null);
-                setRecordingLegalInvoice(true);
-              },
-              onClassifyDealAccounting: () => {
-                setClassifyingError(null);
-                setClassifyingAccounting(true);
-              },
+              readiness: closingReadiness,
+              serviceUnavailable: closingReadinessServiceUnavailable,
+              // The legal invoice is still recorded by hand while the v1
+              // posting plan reads it (SCRUM-411 retires that dependency); it
+              // is shown and recorded by the disbursement tier only, as before.
+              legalInvoice:
+                dealCosts && canConfirmFinanceDisbursement
+                  ? {
+                      amountMinor: dealCosts.legalInvoiceAmountMinor,
+                      number: dealCosts.legalInvoiceNumber,
+                      date: dealCosts.legalInvoiceDate,
+                      issuedTo: dealCosts.legalInvoiceIssuedTo,
+                      onRecord: () => {
+                        setLegalInvoiceError(null);
+                        setRecordingLegalInvoice(true);
+                      },
+                    }
+                  : undefined,
             }
           : undefined
       }
@@ -2365,32 +2486,6 @@ export function DealCockpit({
               setLegalInvoiceError(getErrorMessage(err));
             } finally {
               setLegalInvoiceSubmitting(false);
-            }
-          }}
-        />
-      )}
-      {classifyingAccounting && (
-        <ClassifyDealAccountingDialog
-          open={classifyingAccounting}
-          submitting={classifyingSubmitting}
-          error={classifyingError}
-          t={t}
-          onOpenChange={setClassifyingAccounting}
-          onSubmit={async (notes) => {
-            setClassifyingSubmitting(true);
-            setClassifyingError(null);
-            try {
-              await classifyDealAccounting({
-                orgId,
-                applicationId,
-                notes,
-              });
-              toast.success(t("DealAccountingClassified"));
-              setClassifyingAccounting(false);
-            } catch (err) {
-              setClassifyingError(getErrorMessage(err));
-            } finally {
-              setClassifyingSubmitting(false);
             }
           }}
         />
@@ -3220,14 +3315,24 @@ export function DealCockpitView({
    * same canonical record, plus the controls.
    */
   handoverCosts?: Omit<React.ComponentProps<typeof HandoverCostsPanel>, "t">;
+  /**
+   * The deal's automatic closing readiness (SCRUM-407), which replaced the
+   * manual "classify deal accounting" step: every check is re-derived by the
+   * server and re-run by finalization. `readiness` is undefined while loading
+   * and when the read failed; `serviceUnavailable` says which.
+   * `legalInvoice` is present for the disbursement tier only — the invoice is
+   * still recorded by hand while the v1 posting plan reads it (SCRUM-411).
+   */
   closingChecklist?: {
-    legalInvoiceAmountMinor?: number;
-    legalInvoiceNumber?: string;
-    legalInvoiceDate?: number;
-    legalInvoiceIssuedTo?: string;
-    accountingClassification?: string;
-    onRecordLegalInvoice: () => void;
-    onClassifyDealAccounting: () => void;
+    readiness: ClosingReadinessView | undefined;
+    serviceUnavailable?: boolean;
+    legalInvoice?: {
+      amountMinor?: number;
+      number?: string;
+      date?: number;
+      issuedTo?: string;
+      onRecord: () => void;
+    };
   };
   /**
    * The server's financial overview and vehicle cost basis — financed deals
@@ -3313,6 +3418,8 @@ export function DealCockpitView({
     onOpenChange: (open: boolean) => void;
     onSubmit: () => void | Promise<void>;
     profitApproval?: { notice: React.ReactNode; blocked: boolean };
+    /** Why the close may not be submitted right now (S414-R3-1), or null. */
+    readinessHold?: string | null;
   };
   /**
    * Whether this caller may amend a recorded settlement advice (MANAGE_FINANCE).
@@ -4457,76 +4564,71 @@ export function DealCockpitView({
               listed twice. */}
           {handoverCosts && <HandoverCostsPanel {...handoverCosts} t={t} />}
 
-          {/* --- الفاتورة القانونية وتصنيف محاسبة المعاملة ------------------ */}
+          {/* --- جاهزية الإغلاق (تلقائية) والفاتورة القانونية ----------------- */}
+          {/* SCRUM-407: replaces the manual "classify deal accounting" step.
+              Nothing here is ticked by a person — every check is the server's,
+              re-run by finalizeDeal. The testid is kept for existing specs. */}
           {closingChecklist && (
             <Card data-testid="deal-closing-checklist">
               <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0 pb-3">
-                <div className="min-w-0">
-                  <CardTitle className="flex items-center gap-2 text-base">
-            <ClipboardCheck className="h-4 w-4 shrink-0 text-primary" aria-hidden />
-            {t("ClosingChecklistHeading")}
-          </CardTitle>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    {closingChecklist.accountingClassification === "CLASSIFIED"
-                      ? t("AccountingStatusClassified")
-                      : t("AccountingStatusPending")}
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
+                <CardTitle className="flex min-w-0 items-center gap-2 text-base">
+                  <ClipboardCheck className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+                  {t("ClosingReadinessHeading")}
+                </CardTitle>
+                {closingChecklist.legalInvoice && (
                   <Button
                     type="button"
                     size="sm"
                     variant="outline"
-                    onClick={closingChecklist.onRecordLegalInvoice}
+                    onClick={closingChecklist.legalInvoice.onRecord}
                   >
                     <FileText className="h-4 w-4 me-1.5" />
                     {t("RecordLegalInvoice")}
                   </Button>
-                  {closingChecklist.accountingClassification !== "CLASSIFIED" && (
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={closingChecklist.onClassifyDealAccounting}
-                    >
-                      <CheckCircle2 className="h-4 w-4 me-1.5" />
-                      {t("ClassifyDealAccounting")}
-                    </Button>
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-2 text-sm">
-                {closingChecklist.legalInvoiceAmountMinor !== undefined ? (
-                  <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4 text-xs">
-                    <div>
-                      <dt className="text-muted-foreground">{t("LegalInvoiceAmount")}</dt>
-                      <dd className="font-semibold tabular-nums">
-                        <bdi dir="ltr">{money(closingChecklist.legalInvoiceAmountMinor)}</bdi>
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-muted-foreground">{t("LegalInvoiceNumber")}</dt>
-                      <dd className="font-medium">{closingChecklist.legalInvoiceNumber ?? "-"}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-muted-foreground">{t("LegalInvoiceDate")}</dt>
-                      <dd className="font-medium">
-                        {closingChecklist.legalInvoiceDate
-                          ? format(closingChecklist.legalInvoiceDate, "d MMM yyyy")
-                          : "-"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-muted-foreground">{t("LegalInvoiceIssuedTo")}</dt>
-                      <dd className="font-medium">
-                        {closingChecklist.legalInvoiceIssuedTo ? t(closingChecklist.legalInvoiceIssuedTo) : "-"}
-                      </dd>
-                    </div>
-                  </dl>
-                ) : (
-                  <p className="text-xs text-muted-foreground">
-                    {t("LegalInvoiceNotRecorded")}
-                  </p>
                 )}
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                <DealClosingReadinessList
+                  readiness={closingChecklist.readiness}
+                  serviceUnavailable={closingChecklist.serviceUnavailable}
+                  t={t}
+                />
+                {closingChecklist.legalInvoice &&
+                  (closingChecklist.legalInvoice.amountMinor !== undefined ? (
+                    <dl
+                      className="grid grid-cols-2 gap-4 rounded-md bg-muted/40 p-3 text-xs sm:grid-cols-4"
+                      data-testid="deal-legal-invoice"
+                    >
+                      <div>
+                        <dt className="text-muted-foreground">{t("LegalInvoiceAmount")}</dt>
+                        <dd className="font-semibold tabular-nums">
+                          <bdi dir="ltr">{money(closingChecklist.legalInvoice.amountMinor)}</bdi>
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">{t("LegalInvoiceNumber")}</dt>
+                        <dd className="font-medium">{closingChecklist.legalInvoice.number ?? "-"}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">{t("LegalInvoiceDate")}</dt>
+                        <dd className="font-medium">
+                          {closingChecklist.legalInvoice.date
+                            ? format(closingChecklist.legalInvoice.date, "d MMM yyyy")
+                            : "-"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">{t("LegalInvoiceIssuedTo")}</dt>
+                        <dd className="font-medium">
+                          {closingChecklist.legalInvoice.issuedTo
+                            ? t(LEGAL_INVOICE_ISSUED_TO_LABEL[closingChecklist.legalInvoice.issuedTo] ?? closingChecklist.legalInvoice.issuedTo)
+                            : "-"}
+                        </dd>
+                      </div>
+                    </dl>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">{t("LegalInvoiceNotRecorded")}</p>
+                  ))}
               </CardContent>
             </Card>
           )}
@@ -4800,6 +4902,7 @@ export function DealCockpitView({
           onOpenChange={finalize.onOpenChange}
           onSubmit={finalize.onSubmit}
           profitApproval={finalize.profitApproval}
+          readinessHold={finalize.readinessHold}
         />
       )}
 

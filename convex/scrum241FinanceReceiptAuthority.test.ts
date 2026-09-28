@@ -212,11 +212,7 @@ async function prepareForFinalize(
   await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
     orgId: s.orgId, feeId, notes: "Matched.",
   });
-  await s.asUser.mutation(api.financeDealCosts.classifyDealAccounting, {
-    orgId: s.orgId,
-    applicationId,
-    notes: "Invoice and settlement advice on file.",
-  });
+  // SCRUM-407: no manual classification step - finalization checks readiness itself.
 }
 
 async function finalize(s: Seeded, applicationId: Id<"financeApplications">) {
@@ -301,7 +297,12 @@ async function driftOrgCurrencyOutOfContract(s: Seeded, currency: "USD" | "JOD" 
 }
 
 function messageOf(error: unknown) {
-  return String((error as { data?: unknown; message?: string })?.data ?? (error as Error)?.message ?? error);
+  const data = (error as { data?: unknown })?.data;
+  // A coded refusal (SCRUM-414) carries its sentence as `data.message`.
+  if (typeof data === "object" && data !== null && typeof (data as { message?: unknown }).message === "string") {
+    return (data as { message: string }).message;
+  }
+  return String(data ?? (error as Error)?.message ?? error);
 }
 
 async function refusalOf(promise: Promise<unknown>) {

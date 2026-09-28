@@ -151,7 +151,6 @@ import type * as transactions from "../transactions.js";
 import type * as users from "../users.js";
 import type * as utils_auditLog from "../utils/auditLog.js";
 import type * as utils_authorityDispatchScheduler from "../utils/authorityDispatchScheduler.js";
-import type * as utils_classificationInvalidation from "../utils/classificationInvalidation.js";
 import type * as utils_commission from "../utils/commission.js";
 import type * as utils_commissionSourceLedger from "../utils/commissionSourceLedger.js";
 import type * as utils_commitmentCutover from "../utils/commitmentCutover.js";
@@ -394,7 +393,6 @@ declare const fullApi: ApiFromModules<{
   users: typeof users;
   "utils/auditLog": typeof utils_auditLog;
   "utils/authorityDispatchScheduler": typeof utils_authorityDispatchScheduler;
-  "utils/classificationInvalidation": typeof utils_classificationInvalidation;
   "utils/commission": typeof utils_commission;
   "utils/commissionSourceLedger": typeof utils_commissionSourceLedger;
   "utils/commitmentCutover": typeof utils_commitmentCutover;

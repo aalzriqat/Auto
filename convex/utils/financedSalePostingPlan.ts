@@ -126,9 +126,11 @@ export function treatmentPosting(
   return TREATMENT_POSTING[treatment];
 }
 
+/** The legal-invoice refusals — absent, unusable, wrong recipient — each a distinct action for the operator. */
+export type LegalInvoiceRefusalCode = "LEGAL_INVOICE_MISSING" | "LEGAL_INVOICE_UNUSABLE" | "LEGAL_INVOICE_WRONG_RECIPIENT";
+
 export type PlanRefusalCode =
-  | "LEGAL_INVOICE_MISSING"
-  | "LEGAL_INVOICE_WRONG_RECIPIENT"
+  | LegalInvoiceRefusalCode
   | "GROSS_SETTLEMENT_UNKNOWN"
   | "REMITTANCE_UNKNOWN"
   | "REMITTANCE_STALE"
@@ -225,6 +227,53 @@ function isWholeMinorAmount(value: number): boolean {
 }
 
 /**
+ * The legal-invoice half of the plan's refusals, on its own so the automatic
+ * closing-readiness evaluator (SCRUM-407) asks exactly the question the plan
+ * asks. v1 posts revenue from the invoice; replacing that source is SCRUM-411.
+ * On success it returns the proven invoice amount the plan posts revenue from.
+ */
+export function checkLegalInvoice(
+  input: Pick<FinancedSalePlanInput, "legalInvoiceConsiderationMinor" | "legalInvoiceIssuedTo" | "financierIsConfiguredExternal">
+): { ok: true; amountMinor: number } | { ok: false; refusal: PlanRefusal & { code: LegalInvoiceRefusalCode } } {
+  const legalInvoiceMinor = input.legalInvoiceConsiderationMinor;
+  if (legalInvoiceMinor === undefined) {
+    return {
+      ok: false,
+      refusal: {
+        code: "LEGAL_INVOICE_MISSING",
+        message:
+          "This deal has no legal invoice recorded. The invoice amount is the only figure revenue may be posted from, so record it before finalizing.",
+      },
+    };
+  }
+  if (!isWholeMinorAmount(legalInvoiceMinor) || legalInvoiceMinor <= 0) {
+    return {
+      ok: false,
+      refusal: {
+        code: "LEGAL_INVOICE_UNUSABLE",
+        message: "The recorded legal invoice amount is not a usable figure. Record it again before finalizing.",
+      },
+    };
+  }
+  // On a configured external financier the company is the legal buyer, so an
+  // invoice made out to the customer describes a different transaction from the
+  // one about to be posted. Posting anyway would recognise revenue against a
+  // document that contradicts it.
+  if (input.financierIsConfiguredExternal && input.legalInvoiceIssuedTo !== "FINANCE_COMPANY") {
+    return {
+      ok: false,
+      refusal: {
+        code: "LEGAL_INVOICE_WRONG_RECIPIENT",
+        message: `The financing company is the legal buyer on this deal, but the recorded invoice was issued to ${
+          input.legalInvoiceIssuedTo?.toLowerCase().replace(/_/g, " ") ?? "nobody recorded"
+        }. Re-record the invoice before finalizing.`,
+      },
+    };
+  }
+  return { ok: true, amountMinor: legalInvoiceMinor };
+}
+
+/**
  * Builds the plan, or says exactly why it will not.
  *
  * Pure: it reads no database and writes nothing, so the caller can build it
@@ -236,36 +285,13 @@ export function buildFinancedSalePostingPlan(
   input: FinancedSalePlanInput
 ): BuildPlanResult {
   const {
-    legalInvoiceConsiderationMinor: legalInvoiceMinor,
     grossDealerSettlementMinor: grossMinor,
     storedExpectedDealerRemittanceMinor: storedRemittanceMinor,
   } = input;
 
-  if (legalInvoiceMinor === undefined) {
-    return refuse(
-      "LEGAL_INVOICE_MISSING",
-      "This deal has no legal invoice recorded. The invoice amount is the only figure revenue may be posted from, so record it before finalizing."
-    );
-  }
-  if (!isWholeMinorAmount(legalInvoiceMinor) || legalInvoiceMinor <= 0) {
-    return refuse(
-      "LEGAL_INVOICE_MISSING",
-      "The recorded legal invoice amount is not a usable figure. Record it again before finalizing."
-    );
-  }
-
-  // On a configured external financier the company is the legal buyer, so an
-  // invoice made out to the customer describes a different transaction from the
-  // one about to be posted. Posting anyway would recognise revenue against a
-  // document that contradicts it.
-  if (input.financierIsConfiguredExternal && input.legalInvoiceIssuedTo !== "FINANCE_COMPANY") {
-    return refuse(
-      "LEGAL_INVOICE_WRONG_RECIPIENT",
-      `The financing company is the legal buyer on this deal, but the recorded invoice was issued to ${
-        input.legalInvoiceIssuedTo?.toLowerCase().replace(/_/g, " ") ?? "nobody recorded"
-      }. Re-record the invoice before finalizing.`
-    );
-  }
+  const invoice = checkLegalInvoice(input);
+  if (!invoice.ok) return invoice;
+  const legalInvoiceMinor = invoice.amountMinor;
 
   if (grossMinor === undefined || !isWholeMinorAmount(grossMinor) || grossMinor < 0) {
     return refuse(

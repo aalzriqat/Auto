@@ -254,6 +254,22 @@ const payable = (l: Record<string, number>) => l[SYSTEM_KEYS.EMPLOYEE_REIMBURSEM
 const readCosts = (seed: Seed) =>
   seed.asUser.query(api.financeDealCosts.listDealCosts, { orgId: seed.orgId, applicationId: seed.applicationId });
 
+/**
+ * The custody half of the deal's automatic closing readiness (SCRUM-407) — the
+ * checks the retired manual classification ran, now re-run by finalization.
+ * Resolves when both custody checks are READY; otherwise rejects with the
+ * first one's reason, so a refusal reads exactly as finalization would give it.
+ */
+async function custodyClosingReady(seed: Seed): Promise<void> {
+  const readiness = await seed.asUser.query(api.applications.getClosingReadiness, {
+    orgId: seed.orgId, applicationId: seed.applicationId,
+  });
+  for (const key of ["CUSTODY_ON_LEDGER", "CUSTODY_SETTLED"] as const) {
+    const check = readiness.checks.find((row) => row.key === key);
+    if (check?.status !== "READY") throw new Error(`${key}: ${check?.reason ?? check?.status ?? "absent"}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 
 describe("the ledger boundary: no chart, no cash", () => {
@@ -528,13 +544,15 @@ describe("the reversal matrix (ACC-3): every movement's inverse is the canonical
     expect(clearing(await ledger(seed))).toBe(jod(400));
   });
 
-  test("the classification is withdrawn when a cost moves onto custody", async () => {
+  // SCRUM-407: there is no stored classification left to withdraw — closing
+  // readiness is re-derived from the live rows, so moving a cost onto custody
+  // is seen by the next read without any invalidation step.
+  test("closing readiness sees a cost moved onto an open custody record at once", async () => {
     const seed = await seedDeal("fee-attach-class");
     const custodyId = await openCustody(seed, jod(700));
     const feeId = await employeeFee(seed, undefined, jod(300));
-    await seed.t.run((ctx) => ctx.db.patch(seed.applicationId, { accountingClassification: "CLASSIFIED" }));
     await seed.asUser.mutation(api.financeDealCosts.setFeeCustody, { orgId: seed.orgId, feeId, custodyId });
-    expect((await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))?.accountingClassification).toBe("PENDING_CLASSIFICATION");
+    await expect(custodyClosingReady(seed)).rejects.toThrow(/CUSTODY_SETTLED: A custody record on this deal is still open/);
   });
 });
 
@@ -1451,8 +1469,7 @@ describe("B — a custody family is on the books completely, or the deal does no
       return { custodyId, issuedId, returnedId, feeId, t0 };
     });
   }
-  const classify = (seed: Seed) =>
-    seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, { orgId: seed.orgId, applicationId: seed.applicationId, notes: "established" });
+  const classify = (seed: Seed) => custodyClosingReady(seed);
   const migrate = (seed: Seed, custodyId: Id<"financeDealCustody">, idempotencyKey = crypto.randomUUID()) =>
     seed.asUser.mutation(api.financeDealCosts.migrateLegacyCustodyToLedger, { orgId: seed.orgId, custodyId, idempotencyKey });
 
@@ -1494,7 +1511,6 @@ describe("B — a custody family is on the books completely, or the deal does no
     expect(await pending(seed)).toHaveLength(0);
 
     await classify(seed);
-    expect((await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))?.accountingClassification).toBe("CLASSIFIED");
   });
 
   test("a legacy OPEN record with an out-of-pocket position migrates its payable too; a written-off one posts its shortage", async () => {
@@ -1859,17 +1875,14 @@ describe("G1 — the family gate proves the LEDGER, not the rows: only the exact
     await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
       orgId: seed.orgId, applicationId: seed.applicationId, legalInvoiceAmountMinor: jod(10_500), legalInvoiceNumber: "INV-G1", issuedTo: "FINANCE_COMPANY", legalInvoiceDate: Date.now() - DAY,
     });
-    const classify = () =>
-      seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, { orgId: seed.orgId, applicationId: seed.applicationId, notes: "established" });
+    const classify = () => custodyClosingReady(seed);
     await expect(classify()).rejects.toThrow(/not on the books/);
-    expect((await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))?.accountingClassification).not.toBe("CLASSIFIED");
 
     // The month reopens and the outbox posts the family; the same rows now pass.
     await reopenPeriod(seed, earlierId);
     expect(await drainUntilSettled(seed)).toEqual(["POSTED"]);
     expect(await familyRefusal(seed)).toBeNull();
     await classify();
-    expect((await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))?.accountingClassification).toBe("CLASSIFIED");
   }, 30_000);
 
   test("a posting that is PENDING, FAILED, absent, REVERSED, or at a version the row does not name is refused", async () => {
@@ -2104,10 +2117,8 @@ describe("G4 — a line that no longer carries a custody charge must be OFF the 
     // The live rows say nothing is charged; the ledger still carries the
     // charge. The gate reads the ledger through the ever-posted index.
     expect(await familyRefusal(seed)).toMatch(/no longer charged to an employee's custody on this deal .* still on the books/);
-    const classify = () =>
-      seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, { orgId: seed.orgId, applicationId: seed.applicationId, notes: "established" });
+    const classify = () => custodyClosingReady(seed);
     await expect(classify()).rejects.toThrow(/no longer charged to an employee's custody on this deal .* still on the books/);
-    expect((await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))?.accountingClassification).not.toBe("CLASSIFIED");
     // One real worker attempt with the period still closed changes nothing.
     await drainOnce(seed);
     expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => e.status)).toEqual(["POSTED"]);
@@ -2123,7 +2134,6 @@ describe("G4 — a line that no longer carries a custody charge must be OFF the 
     await move(seed, custodyId, "RETURNED", jod(700));
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, custodyId, notes: "all back" });
     await classify();
-    expect((await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))?.accountingClassification).toBe("CLASSIFIED");
   }, 30_000);
 
   test("an unlinked line is held to the same proof; the ever-posted read is bounded and refuses past its cap, never a prefix", async () => {

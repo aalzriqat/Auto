@@ -1947,16 +1947,3 @@ async function describeUnposted(
   const holding = row.dispatchState === "DISPATCHED" ? "an attempt is in flight" : row.lastError ?? "queued";
   return { what: `it is still waiting in the accounting outbox (${holding})`, until: UNTIL_POSTED };
 }
-
-/** Throws the family refusal, if any — the mutation-boundary form of the predicate above. */
-export async function assertCustodyLedgerFamilyComplete(
-  ctx: QueryCtx | MutationCtx,
-  orgId: Id<"organizations">,
-  applicationId: Id<"financeApplications">,
-  custodyRows: ReadonlyArray<Doc<"financeDealCustody">>,
-  liveFees: ReadonlyArray<Doc<"financeDealFees">>,
-  action: string
-): Promise<void> {
-  const refusal = await custodyLedgerFamilyRefusal(ctx, orgId, applicationId, custodyRows, liveFees, action);
-  if (refusal !== null) throw new ConvexError(refusal);
-}
