@@ -24,6 +24,7 @@ vi.mock("./rateLimit", () => ({
 }));
 
 const PERMISSIONS = [
+  "confirm:finance_disbursement",
   "create:expenses",
   "edit:expenses",
   "delete:expenses",
@@ -525,6 +526,9 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
     "submitCashierReconciliation",
   ],
   "./deposits": ["create", "release"],
+  // SCRUM-444: `request` writes no money but carries an identity and a canonical
+  // fingerprint like every deposit door; `confirm` is the money-moving one.
+  "./depositRequests": ["request", "confirm"],
   // ADDED by the SCRUM-313 CENSUS (owner ruling: scope A, mechanism C). These six
   // were outside the SCRUM-57 manifest because that manifest reasoned about
   // `runWithIdempotency` callers, which was only ever a SUBSET of the commands
@@ -617,7 +621,10 @@ describe("SCRUM-57 — classification ratchet", () => {
     // 40 -> 42 by SCRUM-389 supplier cost bearer:
     // +supplierCostRecoveries.recordReceipt and
     // +supplierCostRecoveries.reverseReceipt.
-    expect(checked).toBe(42);
+    //
+    // 42 -> 44 by SCRUM-444 deposit requests:
+    // +depositRequests.request and +depositRequests.confirm.
+    expect(checked).toBe(44);
   });
 
   /**
@@ -679,9 +686,10 @@ describe("SCRUM-57 — classification ratchet", () => {
 
     // The denominator, asserted rather than described.
     // 40 -> 42 / 41 -> 43: SCRUM-389's two supplier-cost-recovery commands.
-    expect(economicInSource.size).toBe(42);
+    // 42 -> 44 / 43 -> 45: SCRUM-444's `depositRequests.request` and `.confirm`.
+    expect(economicInSource.size).toBe(44);
     expect([...nonEconomicInSource].sort()).toEqual(["sales.createDraft"]);
-    expect(economicInSource.size + nonEconomicInSource.size).toBe(43);
+    expect(economicInSource.size + nonEconomicInSource.size).toBe(45);
   });
 
   /**

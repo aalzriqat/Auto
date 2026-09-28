@@ -3447,6 +3447,44 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_application", ["applicationId"]),
 
+  /**
+   * SCRUM-444 — a salesperson's REQUEST that the dealership take a deposit.
+   *
+   * ⚠️ THIS ROW IS NOT MONEY. It has no deposit, transaction, payment, journal,
+   * outbox event or vehicle commitment behind it, and nothing may read it as
+   * "paid". Money reaches the ledger only when an actor holding
+   * CONFIRM_FINANCE_DISBURSEMENT confirms receipt (`depositRequests.confirm`),
+   * which writes the `deposits` row and flips this one to CONFIRMED in the same
+   * transaction. A PENDING request does not hold the car either.
+   */
+  depositRequests: defineTable({
+    orgId: v.id("organizations"),
+    quoteId: v.id("quotes"),
+    customerId: v.id("customers"),
+    vehicleId: v.id("vehicles"),
+    /** Major units, in `currency`. Confirmation must equal this exactly. */
+    amount: v.number(),
+    amountMinor: v.number(),
+    currency: v.string(),
+    note: v.optional(v.string()),
+    status: v.union(
+      v.literal("PENDING"),
+      v.literal("CONFIRMED"),
+      v.literal("REJECTED"),
+      v.literal("WITHDRAWN")
+    ),
+    requestedBy: v.id("users"),
+    requestedAt: v.number(),
+    idempotencyKey: v.string(),
+    resolvedBy: v.optional(v.id("users")),
+    resolvedAt: v.optional(v.number()),
+    resolutionReason: v.optional(v.string()),
+    confirmedDepositId: v.optional(v.id("deposits")),
+  })
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_quote_status", ["quoteId", "status"])
+    .index("by_quote", ["quoteId"]),
+
   deposits: defineTable({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),

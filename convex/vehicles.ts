@@ -47,6 +47,7 @@ import {
   methodOrDefault,
   normalizeCurrency,
   recordHeldDeposit,
+  requireDepositMethod,
 } from "./utils/depositRecording";
 import {
   assertVehicleImagesAllowed,
@@ -1723,7 +1724,19 @@ export const createReservation = mutation({
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
-    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    // SCRUM-444 DA-01: a reservation that carries a deposit posts
+    // DEPOSIT_RECEIVED (via recordHeldDeposit) exactly as `deposits.create`
+    // does, so it needs the same authority — checked HERE, before any write,
+    // rather than the old VIEW_SALES check buried mid-handler. A reservation
+    // with no deposit moves no money and keeps the EDIT_VEHICLES bar.
+    const hasDepositAtEntry = args.depositAmount !== undefined;
+    const { user } = await requireTenantAuth(
+      ctx,
+      args.orgId,
+      hasDepositAtEntry
+        ? [PERMISSIONS.EDIT_VEHICLES, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]
+        : [PERMISSIONS.EDIT_VEHICLES]
+    );
     return await runWithIdempotency(
       ctx,
       {
@@ -1762,15 +1775,11 @@ export const createReservation = mutation({
     const resolvedExpiresAt = args.expiresAt ?? (await getDefaultReservationExpiry(ctx, args.orgId, now));
 
     const hasDeposit = args.depositAmount !== undefined;
-    if (
-      hasDeposit &&
-      !isSystemOwnerRole(role) &&
-      !role.permissions.includes(PERMISSIONS.VIEW_SALES)
-    ) {
-      throw new ConvexError(`Forbidden: Missing required permissions: ${PERMISSIONS.VIEW_SALES}`);
-    }
     const currency = hasDeposit ? normalizeCurrency(await getOrgCurrency(ctx, args.orgId)) : undefined;
-    const method = methodOrDefault(args.depositMethod);
+    // SCRUM-445: a deposit's method is asked, never defaulted to CASH.
+    const method = hasDeposit
+      ? requireDepositMethod(args.depositMethod)
+      : methodOrDefault(args.depositMethod);
     const amountMinor = hasDeposit
       ? amountToMinorOrThrow(args.depositAmount!, currency!, "Reservation deposit amount")
       : undefined;

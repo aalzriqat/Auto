@@ -626,7 +626,7 @@ describe("applications hold release and deposit resolution", () => {
       downPayment: 3000,
       termMonths: 48,
     });
-    const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
+    const depositId = await asUser.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId,
       quoteId,
       amount: 1000,
@@ -796,7 +796,7 @@ describe("applications hold release and deposit resolution", () => {
   test("cancelling a submitted application releases a same-customer reservation deposit hold", async () => {
     const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
 
-    const reservationId = await asUser.mutation(api.vehicles.createReservation, {
+    const reservationId = await asUser.mutation(api.vehicles.createReservation, { depositMethod: "CASH",
       idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
@@ -1291,7 +1291,7 @@ async function setupFinalizedFinancedDeal() {
     totalFinancedAmount: 17000,
   });
 
-  const depositId = await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
+  const depositId = await asUser.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(),
     orgId,
     quoteId,
     amount: 3000,

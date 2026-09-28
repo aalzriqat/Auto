@@ -25,6 +25,7 @@ import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
 import { depositMethodValidator, type DepositMethod } from "./utils/depositRecording";
+import { assertNoPendingDepositRequest } from "./utils/depositRequestGuards";
 import { completeSale } from "./utils/saleCompletion";
 import {
   resolveFinancedSalePlan,
@@ -2821,6 +2822,15 @@ export const updateStatus = mutation({
       await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.REVIEW_FINANCE_APPLICATION]);
     }
 
+    // SCRUM-444 DA-03: rejecting ends the deal like cancelling does.
+    if (args.status === "REJECTED" && app.status !== "REJECTED") {
+      await assertNoPendingDepositRequest(ctx, {
+        orgId: args.orgId,
+        quoteId: app.quoteId,
+        action: "reject this application",
+      });
+    }
+
     // SCRUM-195 PHASE-3 DEMOLITION MARKER — THIS DOOR FAILS CLOSED ON PURPOSE.
     //
     // Re-entering the in-flight set means the application is finance-LIVE again
@@ -2980,6 +2990,15 @@ export const cancelApplication = mutation({
           });
           return;
         }
+
+        // SCRUM-444 DA-03: cancelling ends the deal, and a deposit request still
+        // waiting on it would be orphaned. After the already-cancelled replay
+        // above, so a retry of a cancellation that succeeded is not refused.
+        await assertNoPendingDepositRequest(ctx, {
+          orgId: args.orgId,
+          quoteId: app.quoteId,
+          action: "cancel this application",
+        });
 
         // Cash in an employee's pocket does not stop being there because the
         // deal did. An OPEN custody record is refused here rather than
@@ -3905,6 +3924,14 @@ export const finalizeDeal = mutation({
         if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
         if (app.status === "CLOSED" && app.finalizedSaleId) return app.finalizedSaleId;
         if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before finalizing");
+        // SCRUM-444 DA-03: a waiting deposit request would be orphaned by the
+        // deal closing. Refused up front so the message is this one, not a
+        // later readiness refusal.
+        await assertNoPendingDepositRequest(ctx, {
+          orgId: args.orgId,
+          quoteId: app.quoteId,
+          action: "finalize the deal",
+        });
         if (!app.vehicleHandoverAt) {
           throw new ConvexError("Register the vehicle handover to the customer before finalizing the deal.");
         }

@@ -630,10 +630,13 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // write for it. Skipped counts unchanged. Re-measured FROM THE ANALYSER after
   // merging main and SCRUM-407 into SCRUM-417
   // ({"totalMutations":499,"analysed":327,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
+  // SCRUM-444: `depositRequests.request/confirm/reject/withdraw` - 499 -> 503 total,
+  // 327 -> 331 analysed. Each takes `orgId` plus caller ids read through an
+  // owned-row check after `requireTenantAuth`. Skipped counts unchanged.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 499,
-      analysed: 327,
+      totalMutations: 503,
+      analysed: 331,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 157,
     });

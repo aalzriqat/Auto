@@ -277,7 +277,7 @@ async function runDeal(
 
   if (opts.deposit) {
     const taker = opts.depositTakenBy === "approver" ? s.asApprover : s.asUser;
-    await taker.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
+    await taker.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       quoteId,
       amount: opts.deposit,
@@ -308,7 +308,7 @@ async function runDeal(
   }
 
   if (opts.depositAfterRoute) {
-    await s.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
+    await s.asUser.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       quoteId,
       amount: opts.depositAfterRoute,
@@ -7403,7 +7403,7 @@ describe("a deposit released inside a sale journal stays locked until that journ
       downPayment: 3_000,
       beforeHandover: async (appId) => {
         const app = await s.t.run((ctx) => ctx.db.get(appId));
-        await s.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
+        await s.asUser.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(),
           orgId: s.orgId,
           quoteId: app!.quoteId,
           amount: 1_000,

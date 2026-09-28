@@ -17,6 +17,7 @@ import {
 import type { DepositMethod } from "./depositRecording";
 import { throwAppError, AppErrorCode } from "./errors";
 import { requireOrgMember } from "./tenancy";
+import { assertNoPendingDepositRequest } from "./depositRequestGuards";
 import {
   assertSaleMayCompleteForVehicle,
   consumeRootForSale,
@@ -238,6 +239,19 @@ async function prepareSaleCompletion(
       throw new ConvexError("Quote does not match the sale customer and vehicle.");
     }
     leadId = quote.leadId;
+
+    // SCRUM-444 DA-03: the shared boundary of `sales.create`,
+    // `sales.completeFromQuote`, `sales.completeDraft` and
+    // `applications.finalizeDeal`. A deposit request still waiting on this deal
+    // would be orphaned by the sale closing it, so completion refuses first —
+    // before any write. A DRAFT commits nothing and is not gated.
+    if (intent === "COMPLETION") {
+      await assertNoPendingDepositRequest(ctx, {
+        orgId: args.orgId,
+        quoteId: args.quoteId,
+        action: "complete the sale",
+      });
+    }
   }
 
   if (args.applicationId) {
