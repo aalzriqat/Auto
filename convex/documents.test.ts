@@ -851,8 +851,9 @@ describe("history rows are immutable through the active-document commands", () =
  * Owner ruling (c21130): collecting late compliance documents on a CLOSED or
  * CANCELLED application is not a workflow. The three document commands refuse
  * there before any write, so a row, its stored file and the notifications stay
- * exactly as the deal left them. REJECTED is NOT settled — `updateStatus`
- * moves it back to PENDING_DOCS — so it stays writable, as a control.
+ * exactly as the deal left them. REJECTED is outside the ruling, so it stays
+ * writable, as a control. (Its return to PENDING_DOCS is refused by
+ * `updateStatus` today; this control does not claim a working way back.)
  */
 describe("SCRUM-422 — document commands on a settled deal", () => {
   const SETTLED = /closed or cancelled/i;
@@ -942,7 +943,7 @@ describe("SCRUM-422 — document commands on a settled deal", () => {
     }
   );
 
-  test("CONTROL — a REJECTED deal can re-enter the pipeline, so its documents stay writable", async () => {
+  test("CONTROL — a REJECTED deal is not settled, so its documents stay writable", async () => {
     const s = await setup();
     const { row } = await uploadedDealAt(s, "REJECTED");
     const url = await s.seller.as.mutation(api.documents.generateUploadUrl, {
@@ -973,6 +974,112 @@ describe("SCRUM-422 — document commands on a settled deal", () => {
     expect(
       typeof (await s.seller.as.mutation(api.documents.generateUploadUrl, { ...args, documentId: row._id }))
     ).toBe("string");
+  });
+
+  /** A second in-flight application, on its own car, with one required row. */
+  async function openSecondDeal(s: Setup) {
+    const vehicleId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId,
+        vin: "1HGCM82633A555555",
+        make: "Kia",
+        model: "Rio",
+        year: 2023,
+        color: "Red",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 1000,
+        sellingPrice: 20000,
+        status: "AVAILABLE",
+      })
+    );
+    const { applicationId } = await createApplication({ ...s, vehicleId });
+    return (await rowsForApplication(s, applicationId))[0];
+  }
+
+  test.each(["CLOSED", "CANCELLED"] as const)(
+    "%s: an open document cannot borrow the settled document's file, so replacing it cannot delete that file",
+    async (status) => {
+      const s = await setup();
+      const { row: settled, originalFileId } = await uploadedDealAt(s, status);
+      const open = await openSecondDeal(s);
+
+      await expect(
+        s.seller.as.mutation(api.documents.saveDocumentFile, { orgId: s.orgId, documentId: open._id, fileId: originalFileId })
+      ).rejects.toThrow(/already attached to another document/);
+      await s.seller.as.mutation(api.documents.saveDocumentFile, {
+        orgId: s.orgId,
+        documentId: open._id,
+        fileId: await storePdf(s),
+      });
+
+      expect(await s.t.run((ctx) => ctx.db.get(settled._id))).toEqual(settled);
+      expect(await storageExists(s, originalFileId)).toBe(true);
+    }
+  );
+
+  test("a file already shared by two rows (legacy) survives when one of them replaces it", async () => {
+    const s = await setup();
+    const { row: settled, originalFileId } = await uploadedDealAt(s, "CLOSED");
+    const open = await openSecondDeal(s);
+    // Historical alias written before the refusal existed.
+    await s.t.run((ctx) => ctx.db.patch(open._id, { fileId: originalFileId, status: "UPLOADED" }));
+
+    const replacement = await storePdf(s);
+    await s.seller.as.mutation(api.documents.saveDocumentFile, { orgId: s.orgId, documentId: open._id, fileId: replacement });
+
+    expect(await s.t.run((ctx) => ctx.db.get(open._id))).toMatchObject({ fileId: replacement });
+    expect(await s.t.run((ctx) => ctx.db.get(settled._id))).toEqual(settled);
+    expect(await storageExists(s, originalFileId)).toBe(true);
+  });
+
+  test("saving the file a row already holds is a no-op: the file is not deleted from under the row", async () => {
+    const s = await setup();
+    await addRule(s, "National ID");
+    const open = await openSecondDeal(s);
+    const fileId = await storePdf(s);
+    await s.seller.as.mutation(api.documents.saveDocumentFile, { orgId: s.orgId, documentId: open._id, fileId });
+    const before = await s.t.run((ctx) => ctx.db.get(open._id));
+
+    await s.seller.as.mutation(api.documents.saveDocumentFile, { orgId: s.orgId, documentId: open._id, fileId });
+
+    expect(await s.t.run((ctx) => ctx.db.get(open._id))).toEqual(before);
+    expect(await storageExists(s, fileId)).toBe(true);
+  });
+
+  test("another organization's attached file cannot be borrowed", async () => {
+    const s = await setup();
+    const { originalFileId } = await uploadedDealAt(s, "CANCELLED");
+    const otherOrg = await s.t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() })
+    );
+    const outsider = await s.mk("docs_outsider_alias", FULL, otherOrg);
+    const vehicleId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: otherOrg,
+        vin: "1HGCM82633A666666",
+        make: "Kia",
+        model: "Rio",
+        year: 2023,
+        color: "Red",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 1000,
+        sellingPrice: 20000,
+        status: "AVAILABLE",
+      })
+    );
+    const customerId = await s.t.run((ctx) => ctx.db.insert("customers", { orgId: otherOrg, firstName: "O", lastName: "X" }));
+    const ruleId = await s.t.run((ctx) =>
+      ctx.db.insert("companyDocumentRules", { orgId: otherOrg, documentName: "ID", isRequired: true })
+    );
+    const foreign = await createApplication({ ...s, orgId: otherOrg, seller: outsider, vehicleId, customerId });
+    const foreignRow = (await rowsForApplication(s, foreign.applicationId)).find((row) => row.ruleId === ruleId)!._id;
+
+    await expect(
+      outsider.as.mutation(api.documents.saveDocumentFile, { orgId: otherOrg, documentId: foreignRow, fileId: originalFileId })
+    ).rejects.toThrow(/already attached to another document/);
+    expect(await storageExists(s, originalFileId)).toBe(true);
   });
 
   test("a document of another organization is not found when named to generateUploadUrl", async () => {

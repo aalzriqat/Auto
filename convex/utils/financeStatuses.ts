@@ -31,7 +31,9 @@ export const IN_FLIGHT_FINANCE_STATUSES: readonly string[] = [
 /**
  * SCRUM-422 — statuses with no way out: `VALID_STATUS_TRANSITIONS` gives both
  * an empty list, and nothing reopens them. A deal here is settled record, so
- * its documents can no longer change. REJECTED is deliberately absent: it moves
- * back to PENDING_DOCS, and its documents are how it gets there.
+ * its documents can no longer change. REJECTED is deliberately absent: the
+ * owner's ruling (c21130) settles only CLOSED and CANCELLED. The transition map
+ * lists REJECTED → PENDING_DOCS, but `updateStatus` refuses that re-entry today,
+ * so a rejected deal's documents stay writable without a working way back yet.
  */
 export const SETTLED_FINANCE_STATUSES: readonly string[] = ["CLOSED", "CANCELLED"];

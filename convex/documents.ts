@@ -295,9 +295,9 @@ export const getHistoryForApplication = query({
  *
  * Only for a deal still in the finance pipeline (`IN_FLIGHT_FINANCE_STATUSES`,
  * the one shared definition): a late rule applies to in-flight deals, and a
- * cancelled, closed or rejected application is not one. A REJECTED deal can
- * return to PENDING_DOCS (`VALID_STATUS_TRANSITIONS`), and its late rows are
- * materialized then. Refused before any write.
+ * cancelled, closed or rejected application is not one. (The transition map
+ * lists REJECTED → PENDING_DOCS, but `updateStatus` refuses that re-entry
+ * today; if it opens, late rows are materialized then.) Refused before any write.
  * Ownership of the application, the rule and the deal's quote goes through
  * `requireOwnedRow` (TEN-1), with the messages the callers already surface.
  */
@@ -422,9 +422,28 @@ export const saveDocumentFile = mutation({
       label: "Finance document",
     });
 
-    // Remove old file if exists
+    // A stored file belongs to one document row. Deleting a replaced file must
+    // never pull evidence out from under another row, least of all a settled
+    // deal's (SCRUM-422), so a file another row holds is refused here, and a
+    // replaced file some other row still references (a legacy alias) is kept.
+    if (doc.fileId === args.fileId) return;
+    const holders = await ctx.db
+      .query("applicationDocuments")
+      .withIndex("by_file", (q) => q.eq("fileId", args.fileId))
+      .take(1);
+    if (holders.length > 0) {
+      throw new ConvexError("This file is already attached to another document. Upload it again for this document.");
+    }
+
     if (doc.fileId) {
-      await ctx.storage.delete(doc.fileId);
+      const oldFileId = doc.fileId;
+      const otherHolders = await ctx.db
+        .query("applicationDocuments")
+        .withIndex("by_file", (q) => q.eq("fileId", oldFileId))
+        .take(2);
+      if (!otherHolders.some((row) => row._id !== doc._id)) {
+        await ctx.storage.delete(oldFileId);
+      }
     }
 
     await ctx.db.patch(args.documentId, {

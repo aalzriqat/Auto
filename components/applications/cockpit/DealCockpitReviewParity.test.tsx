@@ -779,7 +779,7 @@ describe("documents — documents.updateDocumentStatus / upload, from the checkl
     expect(missing.querySelector('input[type="file"]')).toBeNull();
   });
 
-  test("CONTROL — a REJECTED deal keeps its document controls (it can return to PENDING_DOCS)", () => {
+  test("CONTROL — a REJECTED deal is not settled, so it keeps its document controls", () => {
     permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
     permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
     permissions.add(PERMISSIONS.VERIFY_FINANCE_DOCUMENTS);
