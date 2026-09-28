@@ -159,7 +159,6 @@ function prettierOptionsFrom(text, label) {
 async function measure({ files, readText, configs, prettierOptions, lineCache = new Map() }) {
   const prettier = (await import("prettier")).default;
   const counts = new Map();
-  const unformatted = [];
   const violations = [];
   const primary = configs[0];
   const wanted = files.filter((p) => configs.some((c) => classify(p, c) === "production"));
@@ -180,11 +179,10 @@ async function measure({ files, readText, configs, prettierOptions, lineCache = 
     );
     for (const { filePath, text, measured } of results) {
       counts.set(filePath, measured.lines);
-      if (!measured.formatted) unformatted.push(filePath);
       violations.push(...importViolations(filePath, text, primary));
     }
   }
-  return { inventory: files, counts, violations: sortViolations(violations), unformatted };
+  return { inventory: files, counts, violations: sortViolations(violations) };
 }
 
 async function measureCommit(cwd, commit, config, prettierOptions, lineCache) {
@@ -309,7 +307,6 @@ export async function runGuardrails({ cwd, env = process.env, base, log = () => 
     : [];
   measured.unchangedFromTarget = unchangedFromTarget(cwd, [...newlyScoped, ...excluded], targetBlobs, readDisk);
   const { errors, notices } = evaluate({ trusted, proposed, measured, bootstrap, bootstrapPolicy });
-  for (const file of measured.unformatted) notices.push(`UNFORMATTABLE ${file}: counted unformatted`);
   if (bootstrap) {
     notices.push("BOOTSTRAP: target has no guardrail files; PR-tree baseline verified by recomputation");
     await verifyBootstrap(cwd, baseCommit, proposed, prettierOptions, lineCache, errors);

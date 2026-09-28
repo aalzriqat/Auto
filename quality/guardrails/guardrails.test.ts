@@ -589,7 +589,7 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
     const source = Array.from({ length: 30 }, (_, i) =>
       `export const ${"v".repeat(i + 1)} = ["prettier-ignore", "prettier-ignore", "x"];`).join("\n") + "\n";
     const expected = countNonBlank(await prettier.format(source, { filepath: "a.ts" }));
-    expect(await measureLines("a.ts", source, {}, prettier)).toEqual({ lines: expected, formatted: true });
+    expect(await measureLines("a.ts", source, {}, prettier)).toEqual({ lines: expected });
   }, TIMEOUT);
 
   test("negative control (S426-07): prettier-ignore as ordinary CODE is counted as Prettier lays it out, never below", async () => {
@@ -601,6 +601,55 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
     write(root, "convex/expressions.ts", `const prettier = 1;\nconst ignore = 1;\n${declarations.join("\n")}\n`);
     const result = await check(root);
     expectFailure(result.errors, /^SIZE-NEW convex\/expressions\.ts: 757 lines/);
+  }, TIMEOUT);
+
+  test("negative control (Codex CR-3-INLINE-GQL): an inline GraphQL ignore comment cannot hide a crammed query", async () => {
+    // `query Q { # prettier-ignore` is honoured mid-line; a line-start grammar
+    // missed it and measured 601 lines as 7. No grammar is trusted any more.
+    const root = fixtureRepo();
+    const args = Array.from({ length: 593 }, (_, i) => `a${i}: "v${i}"`).join(", ");
+    write(
+      root,
+      "convex/inlineGql.ts",
+      `const gql = (parts: TemplateStringsArray) => parts[0];\nexport const q = gql\`\n  query Q { # prettier-ignore\n    field(${args}) }\n\`;\n`,
+    );
+    const result = await check(root);
+    expectFailure(result.errors, /^SIZE-NEW convex\/inlineGql\.ts/);
+  }, TIMEOUT);
+
+  test("negative control: a decoy mention before a real pragma does not shield the pragma", async () => {
+    const prettier = await import("prettier");
+    const items = Array.from({ length: 60 }, (_, i) => `"item-${i}"`).join(", ");
+    const source = `export const note = "prettier-ignore";\n// prettier-ignore\nexport const crammed = [${items}];\n`;
+    const unignored = countNonBlank(
+      await prettier.format(source.replaceAll("prettier-ignore", "prettier_ignore"), { filepath: "a.ts" }),
+    );
+    expect(unignored).toBeGreaterThan(countNonBlank(await prettier.format(source, { filepath: "a.ts" })));
+    expect(await measureLines("a.ts", source, {}, prettier)).toEqual({ lines: unignored });
+  }, TIMEOUT);
+
+  test("negative control (Sol S426-08): a count Prettier cannot produce fails closed, in either pass", async () => {
+    const plainFails = { format: async () => { throw new RangeError("Maximum call stack size exceeded"); } };
+    const neutralisedFails = {
+      format: async (text: string) => {
+        if (text.includes("prettier_ignore")) throw new RangeError("Maximum call stack size exceeded");
+        return text;
+      },
+    };
+    const source = "// prettier-ignore\nexport const x = 1;\n";
+    await expect(measureLines("lib/a.ts", source, {}, plainFails)).rejects.toThrow(/^COUNT-UNAVAILABLE lib\/a\.ts/);
+    await expect(measureLines("lib/a.ts", source, {}, neutralisedFails)).rejects.toThrow(/^COUNT-UNAVAILABLE lib\/a\.ts/);
+  }, TIMEOUT);
+
+  test("negative control (Sol S426-08): an unformattable file blocks the check and the baseline writer, never a notice", async () => {
+    const root = fixtureRepo();
+    write(root, "convex/broken.ts", "export const = ;\n");
+    await expect(check(root)).rejects.toThrow(/COUNT-UNAVAILABLE convex\/broken\.ts/);
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "broken");
+    await expect(writeBaseline(root, git(root, "rev-parse", "HEAD"), "main")).rejects.toThrow(
+      /COUNT-UNAVAILABLE convex\/broken\.ts/,
+    );
   }, TIMEOUT);
 
   test("the pragma grammar: every form Prettier honours is neutralised; forms it ignores change nothing", async () => {
@@ -626,7 +675,7 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
         await prettier.format(source.replaceAll("prettier-ignore", "prettier_ignore"), { filepath: file }),
       );
       expect(unignored, source).toBeGreaterThan(plain);
-      expect(await measureLines(file, source, {}, prettier), source).toEqual({ lines: unignored, formatted: true });
+      expect(await measureLines(file, source, {}, prettier), source).toEqual({ lines: unignored });
     }
     const ignored = [
       `// prettier-ignore because\n${code}\n`,
@@ -636,7 +685,7 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
     ];
     for (const source of ignored) {
       const plain = countNonBlank(await prettier.format(source, { filepath: "a.ts" }));
-      expect(await measureLines("a.ts", source, {}, prettier), source).toEqual({ lines: plain, formatted: true });
+      expect(await measureLines("a.ts", source, {}, prettier), source).toEqual({ lines: plain });
     }
   }, TIMEOUT);
 });

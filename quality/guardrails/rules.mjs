@@ -245,53 +245,35 @@ export function countNonBlank(text) {
   return count;
 }
 
-/**
- * A Prettier ignore pragma: a comment whose trimmed body is exactly the
- * directive — the forms Prettier 3.8.4 was measured to honour in TS/TSX:
- * `//`, `/* *\/` (JSX `{/* *\/}` included), and in embedded GraphQL and HTML
- * a line `#` and `<!-- -->`. Only the directive word is captured.
- */
-const INLINE_SPACE = "[^\\S\\n\\u2028\\u2029]*";
-const IGNORE_PRAGMA = new RegExp(
-  [
-    `(?<=\\/\\/${INLINE_SPACE})prettier-ignore(?=(?:-(?:start|end|attribute))?${INLINE_SPACE}$)`,
-    `(?<=^${INLINE_SPACE}#${INLINE_SPACE})prettier-ignore(?=(?:-(?:start|end|attribute))?${INLINE_SPACE}$)`,
-    `(?<=(?:\\/\\*|<!--)\\s*)prettier-ignore(?=(?:-(?:start|end|attribute))?\\s*(?:\\*\\/|-->))`,
-  ].join("|"),
-  "gm",
-);
+async function formattedCount(repoPath, text, options, prettier) {
+  try {
+    return countNonBlank(await prettier.format(text, options));
+  } catch (error) {
+    throw new Error(`COUNT-UNAVAILABLE ${repoPath}: Prettier could not format it (${error?.message ?? error})`);
+  }
+}
 
 /**
  * Formatter-consistent size: format in memory with the TRUSTED Prettier options
- * (read from the target branch), then count non-blank lines. A file Prettier
- * cannot parse is counted unformatted and flagged — still deterministic.
+ * (read from the target branch), then count non-blank lines.
  *
- * A real ignore pragma must not preserve a crammed layout, so a file carrying
- * one is also measured with its pragmas neutralised (a same-width word), and
- * the LARGER count wins. The plain count is exactly Prettier's layout of the
- * source, so the result can never fall below it whatever the rewrite touched
- * (S426-07); and only comment-shaped directives are rewritten, so ordinary
- * text never changes the count (S426-06 / CR-3-FP).
+ * An ignore pragma must not preserve a crammed layout. Rather than model which
+ * comment forms Prettier honours (every grammar tried missed one — CR-3,
+ * CR-3-INLINE-GQL), EVERY occurrence of the word is neutralised to a same-width
+ * token and the file is formatted again; the LARGER count wins, so a rewrite
+ * that touched a string or identifier can never lower the result below
+ * Prettier's own layout of the source (S426-07).
+ *
+ * Fail closed (S426-08): a file whose layout cannot be measured is an error,
+ * never a pass on a raw count.
  */
 export async function measureLines(repoPath, rawText, prettierOptions, prettier) {
   const text = rawText.replaceAll("\r\n", "\n");
   const options = { ...prettierOptions, filepath: repoPath };
-  let plain;
-  try {
-    plain = countNonBlank(await prettier.format(text, options));
-  } catch {
-    return { lines: countNonBlank(text), formatted: false };
-  }
-  const neutralised = text.replace(IGNORE_PRAGMA, "prettier_ignore");
-  if (neutralised === text) return { lines: plain, formatted: true };
-  try {
-    const withoutPragmas = countNonBlank(await prettier.format(neutralised, options));
-    return { lines: Math.max(plain, withoutPragmas), formatted: true };
-  } catch {
-    // Rewriting a comment body cannot break a parse; if it somehow did, flag
-    // it rather than trust the pragma-honouring count alone.
-    return { lines: plain, formatted: false };
-  }
+  const plain = await formattedCount(repoPath, text, options, prettier);
+  const neutralised = text.replaceAll("prettier-ignore", "prettier_ignore");
+  if (neutralised === text) return { lines: plain };
+  return { lines: Math.max(plain, await formattedCount(repoPath, neutralised, options, prettier)) };
 }
 
 // ------------------------------------------------------------------- imports
