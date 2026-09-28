@@ -482,13 +482,11 @@ async function directSale(
 
 /**
  * COMPLETION DOOR 3, part one. `sales.createDraft` takes the sale's own fields
- * rather than a quote — `quoteId` is optional and carried so the draft is still
- * tied to the deal whose deposit holds the car. Writing it as `{orgId, quoteId}`
- * would not compile, let alone exercise the door.
+ * and, since SCRUM-425, never a quote: a quote becomes a sale only through its
+ * own door. The draft is tied to the car and the customer, nothing else.
  */
 async function createDraftFor(
   seed: Seed,
-  quoteId: Id<"quotes">,
   vehicleId: Id<"vehicles">,
   customerId: Id<"customers">
 ) {
@@ -499,7 +497,6 @@ async function createDraftFor(
     salespersonId: seed.userId,
     salePrice: PRICE,
     saleDate: Date.now(),
-    quoteId,
   });
 }
 
@@ -1300,50 +1297,88 @@ describe("P2-F M3 finalization barrier — CONSUME", () => {
     expectTerminalRoot(root, { status: "CONSUMED", saleId: String(saleId), door: "completeFromQuote" });
   });
 
-  test("F.8c DOOR 3 sales.completeDraft terminalizes the root", async () => {
+  /**
+   * SCRUM-425 (owner ruling c21131). A draft no longer carries a quote, so
+   * door 3 cannot complete a car that a quote's deposit holds — that car
+   * becomes a sale through its own deal's door. The refusal names that deal,
+   * leaves the root OPEN and the draft PENDING, and the quote's door then
+   * consumes the root.
+   */
+  test("F.8c DOOR 3 sales.completeDraft refuses a car another deal holds; the holding deal completes it", async () => {
     const seed = await seedDealer("f8c");
     const v = await vehicle(seed);
     const quoteId = await quoteFor(seed, seed.customerA, [v]);
     await depositOn(seed, quoteId, 5_000);
-    const draftId = await createDraftFor(seed, quoteId, v, seed.customerA);
+    const draftId = await createDraftFor(seed, v, seed.customerA);
     expect(
       (await rootsOn(seed, v))[0]?.status,
       "precondition: a DRAFT is not a completion — the root is still open"
     ).toBe("OPEN");
 
-    await seed.asUser.mutation(api.sales.completeDraft, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, saleId: draftId });
+    await expect(
+      seed.asUser.mutation(api.sales.completeDraft, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, saleId: draftId })
+    ).rejects.toThrow(/complete the sale on the deal that holds it/);
+    expect((await rootsOn(seed, v))[0]?.status, "a refused door 3 leaves the root open").toBe("OPEN");
+    const draft = await seed.t.run(async (ctx) => await ctx.db.get(draftId));
+    expect(draft?.status, "a refused door 3 leaves the draft as it was").toBe("PENDING");
 
+    const saleId = await completeQuoteOne(seed, quoteId);
     expectTerminalRoot((await rootsOn(seed, v))[0], {
       status: "CONSUMED",
-      saleId: (await salesByVehicle(seed))[String(v)],
-      door: "completeDraft",
+      saleId: String(saleId),
+      door: "completeFromQuote",
     });
   });
 
   /**
-   * SCRUM-417 round 3 (Sonnet S417-R3-2). A quote-linked DRAFT (door 3, part
-   * one) and the quote's own completion door (door 2, what Step4QuoteSuccess
-   * calls) name the same car. The deal cockpit tells an operator holding such
-   * a draft to complete it elsewhere, so both doors must not each be able to
-   * produce a sale: completing the quote while its draft is still PENDING must
-   * either be refused or leave exactly one sale row for the car.
-   *
-   * ⚠️ MARKED `test.fails` — IT DOES NOT HOLD TODAY (pre-existing, not caused
-   * by SCRUM-417; tracked as SCRUM-425, deliberately NOT fixed here).
-   * Observed at 747e57b60: `completeFromQuote` SUCCEEDS beside the PENDING
-   * draft, so the car carries TWO sale rows — the draft, still PENDING, and a
-   * COMPLETED sale. A later `completeDraft` on the orphan draft is refused
-   * (`VEHICLE_ALREADY_SOLD`), so no second completion or posting was observed;
-   * the defect is a stale PENDING draft on a sold car that neither door
-   * reconciles. When the quote door starts refusing (or retires the draft),
-   * this flips red: drop `.fails` and keep it as the regression.
+   * SCRUM-425 (owner ruling c21131, option C). `sales.createDraft` no longer
+   * accepts `quoteId`, so a quote-linked draft — the second door that named
+   * the quote's car — cannot be created at all. The validator refuses it
+   * before anything is written. (This was `test.fails` F.8c2: a quote-linked
+   * draft and the quote's own door left TWO sale rows on the car.)
    */
-  test.fails("F.8c2 a quote-linked draft plus the quote's own completion door never yields two sales", async () => {
+  test("F.8c2 a draft can no longer be linked to a quote", async () => {
     const seed = await seedDealer("f8c2");
     const v = await vehicle(seed);
     const quoteId = await quoteFor(seed, seed.customerA, [v]);
     await depositOn(seed, quoteId, 5_000);
-    await createDraftFor(seed, quoteId, v, seed.customerA);
+
+    await expect(
+      seed.asUser.mutation(api.sales.createDraft, {
+        orgId: seed.orgId,
+        vehicleId: v,
+        customerId: seed.customerA,
+        salespersonId: seed.userId,
+        salePrice: PRICE,
+        saleDate: Date.now(),
+        quoteId,
+      } as never)
+    ).rejects.toThrow(/quoteId/);
+    const salesForCar = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("sales").collect()).filter((sale) => sale.vehicleId === v)
+    );
+    expect(salesForCar, "the refused draft wrote no sale row").toHaveLength(0);
+
+    // The quote's own door is the one way this car becomes a sale.
+    await completeQuoteOne(seed, quoteId);
+  });
+
+  /**
+   * ⚠️ MARKED `test.fails` — the remainder of the SCRUM-425 invariant ("a car
+   * has at most one live sale row"), OUTSIDE the option-C ruling and tracked
+   * separately as SCRUM-436. A draft with NO quote link (what SaleDialog has
+   * always created) for a car a quote holds still survives that quote's own
+   * completion as a stale PENDING row. No second completion or posting occurs
+   * — `completeDraft` refuses the car afterwards — but neither door retires
+   * the draft. When a door starts refusing or retiring it, this flips red:
+   * drop `.fails` and keep it as the regression.
+   */
+  test.fails("F.8c3 an unlinked draft plus the quote's own completion door never yields two sales", async () => {
+    const seed = await seedDealer("f8c3");
+    const v = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [v]);
+    await depositOn(seed, quoteId, 5_000);
+    await createDraftFor(seed, v, seed.customerA);
 
     let refused = false;
     try {
@@ -1448,7 +1483,7 @@ describe("P2-F M3 finalization barrier — CONSUME", () => {
     // required no later than completion, so the whole sequence is the assertion.
     await expect(
       (async () => {
-        const draftId = await createDraftFor(seed, rival, v, seed.customerB);
+        const draftId = await createDraftFor(seed, v, seed.customerB);
         return await seed.asUser.mutation(api.sales.completeDraft, { idempotencyKey: crypto.randomUUID(),
           orgId: seed.orgId,
           saleId: draftId,
@@ -2835,7 +2870,7 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
     await depositOn(seed, heldBy, 5_000);
 
     const rivalQuote = await quoteFor(seed, seed.customerB, [v]);
-    const draftId = await createDraftFor(seed, rivalQuote, v, seed.customerB);
+    const draftId = await createDraftFor(seed, v, seed.customerB);
     expect(draftId, "a draft is NOT gated on the commitment authority").toBeTruthy();
 
     await expect(
