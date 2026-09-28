@@ -1170,10 +1170,16 @@ export function DealCockpit({
             if (open.length === 0) return { kind: "NONE" };
             if (!custodyCommandsOffered) return { kind: "PENDING" };
             if (custodyCandidates === undefined) return { kind: "LOADING" };
-            const actor = custodyCandidates.candidates.find((member) => member.isActor);
-            const payers = dealCosts?.custodyAccounting?.ready === true
+            // The caller, named by the read itself: the member list is capped,
+            // so the operator may be past it. A backend that predates
+            // `actorId` answers through the list; with neither, the caller is
+            // unknown and no record is offered — the server refuses a holder
+            // charging their own custody, so a guess would be a dead end.
+            const actorId =
+              custodyCandidates.actorId ?? custodyCandidates.candidates.find((member) => member.isActor)?.userId;
+            const payers = dealCosts?.custodyAccounting?.ready === true && actorId !== undefined
               ? open
-                  .filter((record) => record.userId !== actor?.userId)
+                  .filter((record) => record.userId !== actorId)
                   .map((record) => ({ custodyId: record._id, holderName: record.userName || t("CustodyHandlerNone") }))
               : [];
             return payers.length > 0 ? { kind: "CHARGE", payers } : { kind: "PENDING" };

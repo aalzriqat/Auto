@@ -1185,17 +1185,19 @@ function AddForm({
   const [reference, setReference] = useState("");
   /**
    * Whose custody the cash came out of, when this caller charges it directly.
-   * An operator's explicit pick wins; with exactly one record on offer that
-   * one is the only possible answer and needs no pick. With several, the form
-   * asks — charging the wrong employee moves their balance, not the payer's.
+   * The answer is what the operator SAW: the one record on offer when the
+   * form opened, or their explicit pick. It is fixed at that moment, never
+   * re-derived from the live read — a record swapped, closed or newly opened
+   * under an open form would otherwise charge somebody else, or nobody,
+   * without anyone choosing it. With several on offer, the form asks.
    */
   const payers = costSource.kind === "CHARGE" ? costSource.payers : [];
-  const [chosenCustodyId, setChosenCustodyId] = useState<Id<"financeDealCustody"> | null>(null);
-  const effectiveCustodyId = chosenCustodyId ?? (payers.length === 1 ? payers[0].custodyId : null);
-  const payer = payers.find((option) => option.custodyId === effectiveCustodyId) ?? null;
-  // The chosen record stopped being offered while the form was open (closed,
-  // say), or custody stopped being open at all. Never re-point the cost on
-  // the operator's behalf: say so and let them choose again.
+  const [chosenCustodyId, setChosenCustodyId] = useState<Id<"financeDealCustody"> | null>(() =>
+    costSource.kind === "CHARGE" && costSource.payers.length === 1 ? costSource.payers[0].custodyId : null
+  );
+  const payer = payers.find((option) => option.custodyId === chosenCustodyId) ?? null;
+  // The answered record stopped being offered while the form was open, or
+  // custody stopped being open at all. Say so and let the operator decide.
   const payerGone = chosenCustodyId !== null && payer === null;
   const payerUnchosen = (costSource.kind === "CHARGE" && payer === null && !payerGone) || costSource.kind === "LOADING";
   const [validation, setValidation] = useState<string | null>(null);
@@ -1344,7 +1346,24 @@ function AddForm({
               {t("CostPaidFromCustodyHeading")}
             </p>
           )}
-          {payerGone ? (
+          {payerGone && payers.length === 0 ? (
+            // Nothing is left to choose from: say where the cost goes now and
+            // let the operator accept it explicitly, never by default.
+            <div className="space-y-1.5" data-testid="deal-handover-cost-paid-by-gone">
+              <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                {t("CostPaidFromCustodyGoneNone")}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                data-testid="deal-handover-cost-paid-by-release"
+                onClick={() => setChosenCustodyId(null)}
+              >
+                {t("CostPaidFromCustodyRelease")}
+              </Button>
+            </div>
+          ) : payerGone ? (
             <p className="text-xs font-medium text-amber-700 dark:text-amber-400" data-testid="deal-handover-cost-paid-by-gone">
               {t("CostPaidFromCustodyGone")}
             </p>

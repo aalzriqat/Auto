@@ -1179,6 +1179,31 @@ describe("who may be handed the cash (frozen-candidate finding 3)", () => {
     expect(theirs.candidates.find((c) => c.userId === seed.employeeId)?.isActor).toBe(true);
     expect(theirs.candidates.find((c) => c.userId === seed.userId)?.isActor).toBe(false);
   });
+
+  // SCRUM-439 review (Sol F4 / Sonnet R2): the list is capped, so a caller can
+  // fall outside it. The caller's own id comes back regardless, so the deal
+  // screen never reads "absent from the list" as "not the caller".
+  test("a caller past the member cap is still named by the read", async () => {
+    const seed = await seedDeal("candidates-cap");
+    const lateActor = await seed.t.run(async (ctx) => {
+      const ownerRole = await ctx.db.insert("roles", { orgId: seed.orgId, name: "OWNER2", permissions: ALL_PERMISSIONS });
+      const viewerRole = await ctx.db.insert("roles", { orgId: seed.orgId, name: "FILLER", permissions: [] });
+      for (let i = 0; i < 200; i++) {
+        const filler = await ctx.db.insert("users", { clerkId: `cu_fill_${i}`, email: `f${i}@x.com`, name: `F${i}` });
+        await ctx.db.insert("memberships", { orgId: seed.orgId, userId: filler, roleId: viewerRole });
+      }
+      const late = await ctx.db.insert("users", { clerkId: "cu_late_actor", email: "late@x.com", name: "Late" });
+      await ctx.db.insert("memberships", { orgId: seed.orgId, userId: late, roleId: ownerRole });
+      return late;
+    });
+    const asLate = seed.t.withIdentity({ subject: "cu_late_actor" });
+    const read = await asLate.query(api.financeDealCosts.listCustodyCandidates, { orgId: seed.orgId });
+    expect(read.truncated).toBe(true);
+    expect(read.candidates.some((c) => c.userId === lateActor)).toBe(false);
+    expect(read.actorId).toBe(lateActor);
+    const mine = await seed.asUser.query(api.financeDealCosts.listCustodyCandidates, { orgId: seed.orgId });
+    expect(mine.actorId).toBe(seed.userId);
+  });
 });
 
 describe("planned versus actual", () => {

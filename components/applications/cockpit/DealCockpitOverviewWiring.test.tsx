@@ -415,6 +415,87 @@ describe("the custody section", () => {
       fireEvent.submit(stillOpen);
       expect(recordCalls()).toBe(0);
     });
+
+    // Review round 1 on 4245ab0f8 (Sol F2 / Sonnet R1, same defect found
+    // independently): the ONE record a form opens with is the operator's
+    // answer, exactly as a pick is. It was re-derived on every render, so a
+    // swap under an open form charged somebody else — or nobody.
+    describe("the record the form opened with is the answer; any change is the operator's to decide", () => {
+      function openLive(custody: unknown[]) {
+        custodyTier(custody);
+        queryResults.set(COCKPIT_QUERY, cockpit());
+        queryResults.set(APP_QUERY, { _id: APP, status: "APPROVED", salespersonId: "user_sales", economicsCurrency: "JOD", quote: null });
+        const view = render(<DealCockpit orgId={ORG} applicationId={APP} />);
+        fireEvent.click(screen.getByRole("button", { name: salesEn.AddHandoverCost }));
+        const form = screen.getByTestId("deal-handover-cost-add");
+        fireEvent.change(within(form).getByLabelText(/Amount/), { target: { value: "300" } });
+        return {
+          swap(next: unknown[]) {
+            withCosts(next);
+            view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+            return screen.getByTestId("deal-handover-cost-add");
+          },
+        };
+      }
+
+      test("the only record is replaced by another: nothing is sent to the new holder until the operator picks", async () => {
+        const live = openLive([openCustody()]);
+        const form = live.swap([{ ...openCustody(), status: "RECONCILED" }, lina()]);
+        expect(within(form).getByTestId("deal-handover-cost-paid-by-gone").textContent).toBe(salesEn.CostPaidFromCustodyGone);
+        expect((within(form).getByTestId("deal-handover-cost-paid-by") as HTMLSelectElement).value).toBe("");
+        fireEvent.submit(form);
+        expect(recordCalls()).toBe(0);
+        fireEvent.change(within(form).getByTestId("deal-handover-cost-paid-by"), { target: { value: "cust2" } });
+        fireEvent.submit(form);
+        const record = mutations.get("financeDealCosts:recordDealFee")!;
+        await waitFor(() => expect(record).toHaveBeenCalledTimes(1));
+        expect(record.mock.calls[0][0]).toMatchObject({ paidBy: "EMPLOYEE", custodyId: "cust2" });
+      });
+
+      test("the only record closes and none is left: the charge is not silently dropped, and recording it unlinked is an explicit step", async () => {
+        const live = openLive([openCustody()]);
+        const form = live.swap([{ ...openCustody(), status: "RECONCILED" }]);
+        expect(within(form).getByTestId("deal-handover-cost-paid-by-gone").textContent).toContain(salesEn.CostPaidFromCustodyGoneNone);
+        fireEvent.submit(form);
+        expect(recordCalls()).toBe(0);
+        // Not a dead end: the operator accepts the unlinked line on purpose.
+        fireEvent.click(within(form).getByTestId("deal-handover-cost-paid-by-release"));
+        expect(within(form).queryByTestId("deal-handover-cost-paid-by-gone")).toBeNull();
+        fireEvent.submit(form);
+        const record = mutations.get("financeDealCosts:recordDealFee")!;
+        await waitFor(() => expect(record).toHaveBeenCalledTimes(1));
+        expect(record.mock.calls[0][0]).toMatchObject({ paidBy: "EMPLOYEE" });
+        expect(record.mock.calls[0][0]).not.toHaveProperty("custodyId");
+      });
+
+      test("a record that appears after the form opened is offered, never adopted without a pick", async () => {
+        const live = openLive([{ ...openCustody(), status: "RECONCILED" }]);
+        const form = live.swap([openCustody()]);
+        const paidFrom = within(form).getByTestId("deal-handover-cost-paid-by") as HTMLSelectElement;
+        expect(paidFrom.value).toBe("");
+        fireEvent.submit(form);
+        expect(recordCalls()).toBe(0);
+        fireEvent.change(paidFrom, { target: { value: "cust1" } });
+        fireEvent.submit(form);
+        const record = mutations.get("financeDealCosts:recordDealFee")!;
+        await waitFor(() => expect(record).toHaveBeenCalledTimes(1));
+        expect(record.mock.calls[0][0]).toMatchObject({ custodyId: "cust1" });
+      });
+    });
+
+    // Review round 1 (Sol F4 / Sonnet R2): the member list is capped, so the
+    // operator can fall outside it; their own record must still never be offered.
+    test("an operator missing from a truncated member list is still never offered their own record", () => {
+      custodyTier([{ ...openCustody(), _id: "mine", userId: "user_owner", userName: "Owner" }, lina()]);
+      queryResults.set(CANDIDATES_QUERY, {
+        actorId: "user_owner",
+        candidates: [{ userId: "user_lina", name: "Lina", isActor: false }],
+        truncated: true,
+      });
+      const form = openForm();
+      const options = Array.from((within(form).getByTestId("deal-handover-cost-paid-by") as HTMLSelectElement).options).map((o) => o.value);
+      expect(options).not.toContain("mine");
+    });
   });
 
   // Old business rule: adopting company fee templates was offered to the owner on the cockpit handover panel.

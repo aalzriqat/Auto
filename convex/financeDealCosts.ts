@@ -3247,7 +3247,10 @@ export const listCustodyCandidates = query({
       if (user === null) continue;
       candidates.push({ userId: membership.userId, name: user.name ?? "", isActor: membership.userId === actor._id });
     }
-    return { candidates, truncated: memberships.length > MAX_CUSTODY_CANDIDATES };
+    // The caller by id, independent of the cap: a caller past it is absent
+    // from `candidates`, and a reader deciding "is this record the caller's
+    // own?" must not read that absence as "not the caller" (SCRUM-439).
+    return { actorId: actor._id, candidates, truncated: memberships.length > MAX_CUSTODY_CANDIDATES };
   },
 });
 
