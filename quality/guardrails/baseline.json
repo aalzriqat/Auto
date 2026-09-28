@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sourceCommit": "e645ac6ff60f3a3e908481c5b7101973a7faa36b",
+  "sourceCommit": "8c1a32766c91962f9b70506e6928a4fcf26456f3",
   "sizeCeilings": {
     "app/(dashboard)/[orgId]/commissions/page.tsx": 868,
     "app/(dashboard)/[orgId]/dashboard/page.tsx": 922,
@@ -44,8 +44,8 @@
     "components/accounting/FixedAssetsTab.tsx": 722,
     "components/accounting/GeneralLedgerTab.tsx": 743,
     "components/accounting/PrepaidExpensesTab.tsx": 1307,
-    "components/applications/cockpit/DealCockpit.tsx": 5597,
-    "components/applications/cockpit/DealCustodyDialogs.tsx": 872,
+    "components/applications/cockpit/DealCockpit.tsx": 6168,
+    "components/applications/cockpit/DealCustodyDialogs.tsx": 877,
     "components/applications/cockpit/DealCustodyPanel.tsx": 1063,
     "components/applications/cockpit/DealFinancialOverview.tsx": 687,
     "components/applications/cockpit/HandoverCostsPanel.tsx": 1943,
@@ -59,7 +59,7 @@
     "components/sales/QuoteDialog.tsx": 620,
     "components/sales/SaleDialog.tsx": 887,
     "components/sales/wizard/steps/Step1QuoteSetup.tsx": 681,
-    "components/sales/wizard/steps/Step4QuoteSuccess.tsx": 707,
+    "components/sales/wizard/steps/Step4QuoteSuccess.tsx": 724,
     "components/ui/sidebar.tsx": 724,
     "components/vehicles/VehicleDetailsDialog.tsx": 1474,
     "components/vehicles/VehicleDialog.tsx": 1314,
