@@ -20,6 +20,7 @@ export const CLOSING_READINESS_CHECK_KEYS = [
   "CUSTODY_ON_LEDGER",
   "CUSTODY_SETTLED",
   "COSTS_CLOSABLE",
+  "HANDOVER_COSTS_PAID",
   "FIRST_PAYMENT_RECORDED",
   "LEGAL_INVOICE_RECORDED",
 ] as const;
@@ -54,6 +55,12 @@ export const CLOSING_READINESS_REASON_PARAMS = {
   COSTS_AWAITING_RECONCILIATION: ["count"],
   COSTS_NOT_RECONCILED: [],
   COSTS_TREATMENT_UNMAPPED: ["feeLabel", "treatment"],
+  // HANDOVER_COSTS_PAID (SCRUM-443) — every dealer-borne handover cost is
+  // either charged to the employee custody that paid it or paid directly by
+  // the dealership. Which lines is served beside the reason (`feeIds`).
+  HANDOVER_COSTS_NO_ACTUAL: ["count"],
+  HANDOVER_COSTS_UNPAID: ["count"],
+  HANDOVER_COSTS_CONFLICT: ["count"],
   // FIRST_PAYMENT_RECORDED
   FIRST_PAYMENT_MISSING: [],
   // LEGAL_INVOICE_RECORDED

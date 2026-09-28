@@ -427,6 +427,8 @@ const REQUIRED_FINGERPRINT_FIELDS: Array<[string, string, string[]]> = [
   ],
   // Selects the credit account in hookEmployeeAdvancePaid.
   ["convex/payroll.ts", "payroll.recordAdvance", ["method"]],
+  // Selects the credit account (cash on hand vs bank) a direct handover payment leaves.
+  ["convex/financeDealCosts.ts", "financeDealCosts.recordDirectFeePayment", ["method"]],
 ];
 
 describe("SCRUM-57 — fields whose omission was a reproduced defect stay hashed", () => {
@@ -543,6 +545,7 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
     "recordCustodyMovement",
     "migrateLegacyCustodyToLedger",
     "reconcileDealCustody",
+    "recordDirectFeePayment",
   ],
   "./paymentIntents": ["create", "markSettled"],
   "./payroll": ["recordAdvance", "recoverAdvance"],
@@ -617,7 +620,12 @@ describe("SCRUM-57 — classification ratchet", () => {
     // 40 -> 42 by SCRUM-389 supplier cost bearer:
     // +supplierCostRecoveries.recordReceipt and
     // +supplierCostRecoveries.reverseReceipt.
-    expect(checked).toBe(42);
+    //
+    // 42 -> 43 by SCRUM-443 handover costs paid:
+    // +financeDealCosts.recordDirectFeePayment, the dealership's own payment of
+    // a handover cost (HANDOVER_COST_PAID_DIRECT) — runWithIdempotency with
+    // economic: true, method/date/reference/actual in its fingerprint.
+    expect(checked).toBe(43);
   });
 
   /**
@@ -679,9 +687,9 @@ describe("SCRUM-57 — classification ratchet", () => {
 
     // The denominator, asserted rather than described.
     // 40 -> 42 / 41 -> 43: SCRUM-389's two supplier-cost-recovery commands.
-    expect(economicInSource.size).toBe(42);
+    expect(economicInSource.size).toBe(43);
     expect([...nonEconomicInSource].sort()).toEqual(["sales.createDraft"]);
-    expect(economicInSource.size + nonEconomicInSource.size).toBe(43);
+    expect(economicInSource.size + nonEconomicInSource.size).toBe(44);
   });
 
   /**

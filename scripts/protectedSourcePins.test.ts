@@ -696,11 +696,28 @@ describe("protected source content pins", () => {
        * independent seat at the time of this renewal. Read the hunks; do not
        * take this note's word for them. Same governance; both constants
        * recomputed FROM THE FILE with this test's own normalization.
+       *
+       * -- RENEWAL 2026-09-29 - SCRUM-443 handover costs paid (readiness carries line ids)
+       *
+       * Previous postimage, superseded by this entry (renewal (7) just above):
+       *
+       *   bytes:  241443
+       *   sha256: a3c4ff8ede8b112e0fdbb9748eff8daabc32e6829e7cd5a901570ab80e39c2dc
+       *
+       * The delta, 4 insertions and 1 deletion, passes the new check's
+       * `feeIds` through `getClosingReadiness`: the view type gains an optional
+       * `feeIds?: string[]` and the mapper forwards it when the evaluator set
+       * one (only `HANDOVER_COSTS_PAID` does). Ids only, never an amount or a
+       * param. No permission, schema, index, posting or idempotency change;
+       * `finalizeDeal` is untouched. NOT yet reviewed by an independent seat
+       * at the time of this renewal. Read the hunks; do not take this note's
+       * word for them. Same governance; both constants recomputed FROM THE
+       * FILE with this test's own normalization.
        */
       file: "convex/applications.ts",
-      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)), then for SCRUM-407 automatic closing readiness (RENEWALs 2026-09-28, 2026-09-28 (2), (3) and (4)), then for SCRUM-414 readiness reason codes (RENEWALs 2026-09-28 (5), (6) and (7)).
-      bytes: 241443,
-      sha256: "a3c4ff8ede8b112e0fdbb9748eff8daabc32e6829e7cd5a901570ab80e39c2dc",
+      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)), then for SCRUM-407 automatic closing readiness (RENEWALs 2026-09-28, 2026-09-28 (2), (3) and (4)), then for SCRUM-414 readiness reason codes (RENEWALs 2026-09-28 (5), (6) and (7)), then for SCRUM-443 handover costs paid (RENEWAL 2026-09-29).
+      bytes: 241662,
+      sha256: "d532f1c24bbb5e464c3261411bf78823b04b7e16ed8801e0e2312c4bb04ba6e4",
     },
     {
       /**

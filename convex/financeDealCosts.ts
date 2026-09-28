@@ -17,11 +17,26 @@ import {
   hookCustodyWrittenOff,
   hookCustodyWriteOffReversed,
   hookCustodyPayableReclassified,
+  hookHandoverCostPaidDirect,
+  hookHandoverCostPaidDirectReversed,
   type ReversalOutcome,
 } from "./accounting/workflowHooks";
-import { dealCustodyAccountingReadiness } from "./chartOfAccounts";
+import { disbursementAccountKey } from "./accounting/postingRules";
+import {
+  dealCustodyAccountingReadiness,
+  ensureFinancedSettlementAccounts,
+  isChartInitialized,
+  isSystemAccountMapped,
+} from "./chartOfAccounts";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { custodyFeeExpenseKey } from "./utils/dealCustodyPosting";
+import type { SystemKey } from "./utils/defaultChart";
+import {
+  blockingHandoverLines,
+  directPaymentMethodValidator,
+  directPaymentRefusal,
+  handoverPaymentState,
+} from "./utils/handoverCostPayment";
 import {
   assertStoredVersion,
   custodyEntryPostKey,
@@ -532,6 +547,88 @@ async function syncCustodyFeePosting(
   if (posted !== undefined && posted.custodyId !== target.custodyId) {
     await syncCustodyPayable(ctx, posted.custodyId, actorId, now, replacedOffBooks);
   }
+}
+
+/**
+ * A cost line that carries a DIRECT dealership payment (SCRUM-443) is a LEDGER
+ * command the moment it is changed or removed — it reverses a posted journal —
+ * so it carries the disbursement authority, not the cost-entry one. Only
+ * managers and accountants move money (owner ruling R1). Judged on the role
+ * already loaded, like `assertMayPostCustody`.
+ */
+function assertMayMoveDirectPayment(auth: { role: Doc<"roles"> }, action: string): void {
+  if (isSystemOwnerRole(auth.role)) return;
+  if (auth.role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT)) return;
+  throw new ConvexError(
+    `${action} needs the permission to confirm finance disbursements, because the dealership's direct payment of this cost is already on the books and this reverses it. Ask a manager or an accountant.`
+  );
+}
+
+/**
+ * The ledger must be able to take a direct payment BEFORE the line says it was
+ * paid: a payment recorded "operationally only" would let the deal finalize
+ * with the cost nowhere in the books. Refuses when the org has no chart, or
+ * when the treatment's expense account or the cash/bank account it is paid
+ * from cannot be resolved — naming the next step. A period that is not open
+ * yet is NOT a refusal: the posting queues to the outbox like every other
+ * event dated into one.
+ */
+async function assertDirectPaymentAccountingReady(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">,
+  expenseKey: SystemKey,
+  cashKey: SystemKey
+): Promise<void> {
+  if (!(await isChartInitialized(ctx, orgId))) {
+    throw new ConvexError(
+      "The chart of accounts has not been initialized for this organization, so the payment cannot be posted. Set up accounting (Accounting > Chart of Accounts) before recording it; nothing has been recorded."
+    );
+  }
+  // The expense accounts self-heal exactly as they do for a custody-paid cost.
+  await ensureFinancedSettlementAccounts(ctx, orgId, actorId);
+  for (const key of [expenseKey, cashKey]) {
+    if (!(await isSystemAccountMapped(ctx, orgId, key))) {
+      throw new ConvexError(
+        `The "${key}" system account is missing or inactive in the chart of accounts, so the payment cannot be posted. Restore it under Accounting > Chart of Accounts before recording the payment; nothing has been recorded.`
+      );
+    }
+  }
+}
+
+/**
+ * Takes a line's live direct payment OFF the books and off the row: reverses
+ * the stored version through the canonical reversal path (or cancels its
+ * still-queued post) and clears `directPayment`, leaving the line UNPAID. There
+ * is no automatic re-post — the operator records the payment again, at the
+ * right amount, as a new version (`directPaymentVersion` is never reused).
+ *
+ * Called AFTER the row's own change has been written, on the row as it now
+ * is. Returns what became of the reversal, or `undefined` when the line
+ * carried no direct payment (so a caller may call it unconditionally).
+ */
+async function reverseDirectFeePayment(
+  ctx: MutationCtx,
+  feeId: Id<"financeDealFees">,
+  actorId: Id<"users">,
+  reason: string
+): Promise<ReversalOutcome | undefined> {
+  const fee = await ctx.db.get(feeId);
+  if (fee === null) throw new ConvexError(FEE_NOT_FOUND);
+  const paid = fee.directPayment;
+  if (paid === undefined) return undefined;
+  assertStoredVersion(paid.version, "This cost line's direct payment", "reversing this direct payment");
+  const now = Date.now();
+  const outcome = await hookHandoverCostPaidDirectReversed(ctx, {
+    orgId: fee.orgId,
+    feeId: fee._id,
+    version: paid.version,
+    reason,
+    actorId,
+    reversalDate: now,
+  });
+  await ctx.db.patch(fee._id, { directPayment: undefined, updatedAt: now });
+  return outcome;
 }
 
 /**
@@ -1538,7 +1635,18 @@ export const listDealCosts = query({
           // Every custody record is opened in the deal's currency, so a line
           // in any other currency matches no record (R5, F4).
           fee.currency === currency,
+        /**
+         * Who paid this handover cost and whether it is on the books
+         * (SCRUM-443) — `handoverCostPayment`, the module the closing check
+         * and the mutation guards read, so the screen cannot disagree with
+         * them. NOT_HANDOVER_LINE for a line outside the invariant.
+         */
+        handoverPayment: handoverPaymentState(fee),
+        /** Whether a direct dealership payment may be recorded on this line now — the mutation's own predicate, in the deal's currency. */
+        directPaymentEligible: directPaymentRefusal(fee) === null && fee.currency === currency,
       })),
+      /** The live handover lines that stop the deal finalizing (no actual, or neither custody-paid nor direct-paid) — by id, for the screen to point at. */
+      handoverCostsBlockingFeeIds: blockingHandoverLines(fees).map((fee) => fee._id),
       /**
        * Whether the org's ledger can take a custody posting right now, with the
        * reason it cannot — the same predicate every custody money mutation
@@ -2159,6 +2267,21 @@ export const recordActualFeeAmount = mutation({
     if (args.custodyId || fee.custodyId) {
       assertMayPostCustody(auth, "Changing a cost charged to an employee's custody");
     }
+    // A line the dealership paid directly (SCRUM-443): a NEW amount takes the
+    // recorded payment off the books and leaves the line unpaid, so it is the
+    // disbursement authority's to do. An unchanged amount (a new receipt
+    // reference, say) moves no money and needs nothing more. Never attached to
+    // custody as well — that would put the one cost on the books twice.
+    if (fee.directPayment !== undefined) {
+      if (args.custodyId) {
+        throw new ConvexError(
+          "This cost was paid directly by the dealership, so it cannot also be charged to an employee's custody. Nothing has been changed."
+        );
+      }
+      if (fee.directPayment.amountMinor !== args.actualAmountMinor) {
+        assertMayMoveDirectPayment(auth, "Changing the amount of a cost the dealership paid directly");
+      }
+    }
     const custodyId = args.custodyId
       ? await resolveFeeCustody(ctx, args.orgId, fee.applicationId, args.custodyId, fee, user._id)
       : fee.custodyId;
@@ -2196,6 +2319,15 @@ export const recordActualFeeAmount = mutation({
     // was posted and posts the line again at its new figure.
     if (custodyId || fee.custodyPosted) {
       await syncCustodyFeePosting(ctx, args.feeId, user._id, "Handover cost actual re-recorded.");
+    }
+    // The same for a direct payment (SCRUM-443): a payment recorded at the
+    // OLD amount is reversed and the line is unpaid again until the operator
+    // records it at the new one. An unchanged amount keeps it.
+    if (fee.directPayment !== undefined && fee.directPayment.amountMinor !== args.actualAmountMinor) {
+      await reverseDirectFeePayment(
+        ctx, args.feeId, user._id,
+        "Handover cost amount changed after its direct payment was recorded."
+      );
     }
     // Always re-derive, even when the amount is unchanged: the recompute also
     // proves the deal's currency facts and company rules, and a drift there
@@ -2303,6 +2435,10 @@ export const voidDealFee = mutation({
     }
     // Voiding a custody-charged line reverses its journal (AF-CUST-04).
     if (fee.custodyId) assertMayPostCustody(auth, "Removing a cost charged to an employee's custody");
+    // So does voiding a line the dealership paid directly (SCRUM-443).
+    if (fee.directPayment !== undefined) {
+      assertMayMoveDirectPayment(auth, "Removing a cost the dealership paid directly");
+    }
     // The record the line sits on, proven this org's on this deal (R7, F3)
     // — a link nobody can load is refused, never skipped past.
     if (fee.custodyId) {
@@ -2322,6 +2458,12 @@ export const voidDealFee = mutation({
     // back by the amount — the same arithmetic the summary performs.
     if (fee.custodyPosted) {
       await syncCustodyFeePosting(ctx, args.feeId, user._id, `Handover cost removed: ${reason}`);
+    }
+    // And a directly paid line's payment is reversed exactly once (SCRUM-443):
+    // the second void returns above on `voidedAt`, and the helper is a no-op
+    // once `directPayment` is cleared.
+    if (fee.directPayment !== undefined) {
+      await reverseDirectFeePayment(ctx, args.feeId, user._id, `Handover cost removed: ${reason}`);
     }
     await recomputeAfterSettlementInputChange(ctx, fee.applicationId, fee.deductedFromSettlement);
     return args.feeId;
@@ -2358,6 +2500,13 @@ export const setFeeCustody = mutation({
       throw new ConvexError("This cost has been voided and cannot be charged to custody.");
     }
     if (fee.custodyId === args.custodyId) return args.feeId;
+    // A line the dealership paid directly is never also charged to custody
+    // (SCRUM-443): the one cost would reach the ledger twice.
+    if (args.custodyId !== undefined && fee.directPayment !== undefined) {
+      throw new ConvexError(
+        "This cost was paid directly by the dealership, so it cannot also be charged to an employee's custody. Change its amount or remove it first if that payment was wrong. Nothing has been changed."
+      );
+    }
     // The parent must exist in this org (R6, F3); see recordActualFeeAmount.
     const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", fee.applicationId, APPLICATION_NOT_FOUND);
     assertDealEconomicsOpen(app, "moving a cost onto or off custody");
@@ -2377,6 +2526,163 @@ export const setFeeCustody = mutation({
       custodyId ? "Handover cost charged to employee custody." : "Handover cost released from employee custody."
     );
     return args.feeId;
+  },
+});
+
+/** Past this many payment versions on one line the ledger proof refuses rather than judge a prefix. */
+const MAX_DIRECT_PAYMENT_VERSIONS = 100;
+
+/**
+ * Records that the DEALERSHIP itself paid a handover cost (SCRUM-443) — bank
+ * transfer, e-payment, cash or an issued cheque — rather than an employee out
+ * of custody cash. Posts `HANDOVER_COST_PAID_DIRECT`: DR the treatment's
+ * expense / CR the outbound cash or bank account, at the line's recorded
+ * actual, dated when it was paid.
+ *
+ * Why it exists: on an application-routed deal every dealer-borne handover
+ * cost must reach the ledger exactly once, from the cash that paid it, and
+ * the deal cannot finalize otherwise (`HANDOVER_COSTS_PAID`). Custody covers
+ * the employee's cash; this covers the dealership's own.
+ *
+ * Money authority only: `CONFIRM_FINANCE_DISBURSEMENT` (managers,
+ * accountants, owners). The method is REQUIRED — never defaulted — because it
+ * picks the account the money left from. Identity: `runWithIdempotency`,
+ * fingerprinted on the whole payload AND the actual it pays, so a replay
+ * returns the first result and posts nothing twice, and the same key for a
+ * different intent is refused. Atomic: the row patch and the posting are one
+ * mutation.
+ *
+ * A line that has already been paid is refused (no second payment); an amount
+ * edit or a void reverses it (see `recordActualFeeAmount`, `voidDealFee`), and
+ * the operator records it again. Deal cancellation never reverses it — the cash
+ * really left.
+ */
+export const recordDirectFeePayment = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    feeId: v.id("financeDealFees"),
+    /** REQUIRED, no default — it decides which account the money left. */
+    method: directPaymentMethodValidator,
+    /** When the dealership paid it. Dates the posting. */
+    paidAt: v.number(),
+    reference: v.optional(v.string()),
+    idempotencyKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
+    const user = auth.user;
+    const fee = await requireOwnedRow(ctx, args.orgId, "financeDealFees", args.feeId, FEE_NOT_FOUND);
+    // The parent must exist in this org (R6, F3): a line whose deal is gone or
+    // another tenant's is never put on the books.
+    const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", fee.applicationId, APPLICATION_NOT_FOUND);
+    // A real, past-or-present instant: a NaN or a future date is refused before
+    // it is fingerprinted or dated into a period.
+    if (!isTimestamp(args.paidAt)) {
+      throw new ConvexError(`The paid date must be a real timestamp (got ${args.paidAt}).`);
+    }
+    assertNotFuture(args.paidAt, Date.now(), "The paid date");
+    const reference = args.reference?.trim() || undefined;
+
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "financeDealCosts.recordDirectFeePayment",
+        economic: true,
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        // The WHOLE intent: the line, how it was paid, when, the reference,
+        // and the amount being paid (the line's actual at this moment) — the
+        // same key after the amount changed is a different intent.
+        fingerprint: JSON.stringify({
+          feeId: args.feeId,
+          method: args.method,
+          paidAt: args.paidAt,
+          reference: reference ?? null,
+          amountMinor: fee.actualAmountMinor ?? null,
+        }),
+      },
+      async () => {
+        // Mutable-state checks live inside the section: a replay of a payment
+        // that was recorded returns it even if the deal froze or the line
+        // changed since — those describe the world after the success.
+        assertDealEconomicsOpen(app, "recording a direct payment");
+        const refusal = directPaymentRefusal(fee);
+        if (refusal !== null) throw new ConvexError(refusal);
+        const amountMinor = fee.actualAmountMinor as number;
+        // The line is paid in its OWN denomination, which must be the deal's:
+        // a legacy line in another currency is never posted beside the rest.
+        assertSupportedDenomination(fee.currency, "recording this payment");
+        const dealCurrency = await resolveDealCurrency(ctx, app, "recording this payment");
+        if (fee.currency !== dealCurrency) {
+          throw new ConvexError(
+            `This cost is recorded in ${fee.currency} while the deal's costs are kept in ${dealCurrency}, so it cannot be posted with them. Correct the line first; nothing has been recorded.`
+          );
+        }
+        const expense = custodyFeeExpenseKey(fee.accountingTreatment);
+        if (expense.systemKey === null) throw new ConvexError(expense.refusal);
+        const cashKey = disbursementAccountKey(args.method);
+        await assertDirectPaymentAccountingReady(ctx, args.orgId, user._id, expense.systemKey, cashKey);
+
+        // A replacement never overtakes the version it replaces: while an
+        // earlier payment's reversal is still queued for a period that is not
+        // open, that payment is STILL on the books and a second one beside it
+        // would spend the cost twice. Judged on the LEDGER.
+        const action = "recording this payment";
+        const version = nextStoredVersion(fee.directPaymentVersion, "This cost line", action);
+        if (version > 1) {
+          const events = await ctx.db
+            .query("accountingEvents")
+            .withIndex("by_org_event_source_version", (q) =>
+              q
+                .eq("orgId", args.orgId)
+                .eq("eventType", "HANDOVER_COST_PAID_DIRECT")
+                .eq("sourceType", "financeDealFees")
+                .eq("sourceId", fee._id.toString())
+            )
+            .take(MAX_DIRECT_PAYMENT_VERSIONS + 1);
+          if (events.length > MAX_DIRECT_PAYMENT_VERSIONS) {
+            throw new ConvexError(
+              "This cost has been paid and corrected too many times to verify against the ledger here. Have the record reviewed; nothing has been recorded."
+            );
+          }
+          const stillPosted = events.find((event) => event.status === "POSTED");
+          if (stillPosted !== undefined) {
+            throw new ConvexError(
+              `An earlier payment of this cost (v${stillPosted.eventVersion}) is still on the books; its reversal is waiting for an accounting period to open. Open the period, let the reversal post, then record the payment again. Nothing has been recorded.`
+            );
+          }
+        }
+
+        const now = Date.now();
+        await hookHandoverCostPaidDirect(ctx, {
+          orgId: args.orgId,
+          fee,
+          vehicleId: app.vehicleId,
+          version,
+          amountMinor,
+          paymentMethod: args.method,
+          expenseKey: expense.systemKey,
+          cashKey,
+          actorId: user._id,
+          occurredAt: args.paidAt,
+        });
+        await ctx.db.patch(fee._id, {
+          directPayment: {
+            version,
+            amountMinor,
+            method: args.method,
+            paidAt: args.paidAt,
+            reference,
+            recordedBy: user._id,
+            recordedAt: now,
+          },
+          directPaymentVersion: version,
+          updatedAt: now,
+        });
+        return fee._id;
+      }
+    );
   },
 });
 

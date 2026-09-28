@@ -25,6 +25,7 @@ import {
   quotationSourceValidator,
   settlementStatusValidator,
 } from "./utils/financingEconomics";
+import { directPaymentValidator } from "./utils/handoverCostPayment";
 import { consignedSettlementRouteValidator } from "./utils/vehicleOwnership";
 
 const organizationDeletionRequestStatus = v.union(
@@ -3201,6 +3202,21 @@ export default defineSchema({
     ),
     /** The highest custody posting version ever used on this line — never reused after a reversal. */
     custodyPostingVersion: v.optional(v.number()),
+    /**
+     * SCRUM-443. What of this line is ON THE BOOKS as a DIRECT dealership
+     * payment right now, or absent when nothing is: the dealership itself paid
+     * the cost (cash, bank transfer, cheque issued, card), recorded by
+     * somebody who may confirm a finance disbursement. `HANDOVER_COST_PAID_DIRECT`
+     * posts once per version against `financeDealFees/<id>` (DR the treatment's
+     * expense / CR the outbound cash or bank account); an amount edit or a void
+     * reverses the live version and leaves the line unpaid again — there is no
+     * automatic re-post. Mutually exclusive with `custodyPosted`: no writer
+     * changes `paidBy`, and only a DEALER line can be paid this way.
+     * Legacy rows carry none and simply read as unpaid.
+     */
+    directPayment: v.optional(directPaymentValidator),
+    /** The highest direct-payment posting version ever used on this line — never reused after a reversal. */
+    directPaymentVersion: v.optional(v.number()),
     paidAt: v.optional(v.number()),
     receiptReference: v.optional(v.string()),
     documentStorageIds: v.optional(v.array(v.id("_storage"))),

@@ -185,6 +185,43 @@ export type HandoverCostLine = {
   status: string;
   paidAt?: number;
   receiptReference?: string;
+  /**
+   * Who paid this cost and whether it is on the books (SCRUM-443), as the
+   * server derives it from `convex/utils/handoverCostPayment` — the module the
+   * closing check reads, so this screen cannot disagree with the verdict.
+   * Absent on a payload that predates it: the line then shows no payment row.
+   */
+  handoverPayment?: HandoverPaymentView;
+  /** Whether a direct dealership payment would be accepted on this line right now. */
+  directPaymentEligible?: boolean;
+  /** The live direct payment, when there is one. */
+  directPayment?: {
+    method: string;
+    amountMinor: number;
+    paidAt: number;
+    reference?: string;
+  };
+};
+
+export type HandoverPaymentView =
+  | "NOT_HANDOVER_LINE"
+  | "NO_ACTUAL"
+  | "ZERO_ACTUAL"
+  | "PAID_CUSTODY"
+  | "PAID_DIRECT"
+  | "UNPAID"
+  | "CONFLICT";
+
+/** How the dealership itself paid — required, never defaulted (it decides which account the money left). */
+export const DIRECT_PAYMENT_METHODS = ["BANK_TRANSFER", "CARD", "CASH", "CHEQUE"] as const;
+export type DirectPaymentMethodChoice = (typeof DIRECT_PAYMENT_METHODS)[number];
+
+export type DirectHandoverPayment = {
+  /** Names THIS attempt — minted when the form opened, so a retry after a lost response replays it. */
+  intentId: string;
+  method: DirectPaymentMethodChoice;
+  paidAt: number;
+  reference: string | undefined;
 };
 
 export type HandoverCostsSummary = {
@@ -409,6 +446,9 @@ export function HandoverCostsPanel({
   onReconcile,
   onRecordTemplateActual,
   onAbandonTemplateActual,
+  canRecordDirectPayment = false,
+  onRecordDirectPayment,
+  onAbandonDirectPayment,
 }: Readonly<{
   /** `undefined` while loading or when this caller may not read the cost rows. */
   costs: HandoverCostsData | undefined;
@@ -453,7 +493,19 @@ export function HandoverCostsPanel({
    * identity is either the first to land, or refused because the lost one did.
    */
   onAbandonTemplateActual?: (row: ExpectedHandoverRow) => void;
+  /**
+   * `confirm:finance_disbursement` — the only permission that records a direct
+   * dealership payment (owner ruling R1: only managers and accountants move
+   * money). Everyone else is told who can, never offered a button that refuses.
+   */
+  canRecordDirectPayment?: boolean;
+  /** Records the dealership's own payment of a line. Rejects with `HandoverCostAttemptError`. */
+  onRecordDirectPayment?: (feeId: string, values: DirectHandoverPayment) => Promise<void>;
+  /** The form closed after an attempt whose result never arrived: that identity is over. */
+  onAbandonDirectPayment?: (feeId: string, intentId: string) => void;
 }>) {
+  /** The line whose direct-payment form is open. */
+  const [payingId, setPayingId] = useState<string | null>(null);
   /** The configured row whose record form is open, by position. */
   const [recordingTemplateIndex, setRecordingTemplateIndex] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -565,6 +617,40 @@ export function HandoverCostsPanel({
     row.actual === null ? undefined : costs?.lines.find((line) => line._id === row.actual?.feeId);
   const canAdd = canManage;
   const adding = openIntent !== null;
+  /**
+   * The payment state of one line (SCRUM-443), under the line's own row and
+   * hidden while that line's edit/remove/reconcile form is open — changing the
+   * amount reverses a direct payment, so the two are never offered together.
+   */
+  const paymentRow = (line: HandoverCostLine | undefined) =>
+    line && editingId !== line._id && voidingId !== line._id && reconcilingId !== line._id ? (
+      <HandoverPaymentRow
+        line={line}
+        money={money}
+        denominationCode={denomination.code}
+        dealClosed={dealClosed}
+        canRecord={canRecordDirectPayment && onRecordDirectPayment !== undefined}
+        paying={payingId === line._id}
+        busy={submittingAny}
+        t={t}
+        onOpen={() => {
+          if (!closeAddForm()) return;
+          setEditingId(null);
+          setVoidingId(null);
+          setReconcilingId(null);
+          setRecordingTemplateIndex(null);
+          setPayingId(line._id);
+        }}
+        onClose={(afterUnknown, intentId) => {
+          if (afterUnknown && intentId) onAbandonDirectPayment?.(line._id, intentId);
+          setPayingId(null);
+        }}
+        onSubmit={async (values) => {
+          await onRecordDirectPayment?.(line._id, values);
+          setPayingId(null);
+        }}
+      />
+    ) : null;
 
   return (
     <Card data-testid="deal-handover-costs">
@@ -881,6 +967,7 @@ export function HandoverCostsPanel({
                             </div>
                           </div>
                         )}
+                        {row.actual !== null && paymentRow(lineFor(row))}
                         {row.actual !== null && editingId === row.actual.feeId && lineFor(row) && (
                           <div className="mt-3">
                             <ActualForm
@@ -1076,6 +1163,7 @@ export function HandoverCostsPanel({
                       </div>
                     </div>
                   )}
+                  {paymentRow(line)}
                 </li>
               ))}
             </ul>
@@ -1898,3 +1986,258 @@ function ReconcileForm({
   );
 }
 
+/**
+ * One line's payment state (SCRUM-443): who paid it and whether it is on the
+ * books, and — for the one state that blocks the deal and that this caller may
+ * fix — the action. Every sentence is next-step copy (R6, no dead ends):
+ *   - unpaid, dealership's own: a manager/accountant records the payment here;
+ *     anyone else is told exactly that;
+ *   - unpaid, employee's: charge it to that employee's custody;
+ *   - no actual: record the amount first.
+ */
+function HandoverPaymentRow({
+  line,
+  money,
+  denominationCode,
+  dealClosed,
+  canRecord,
+  paying,
+  busy,
+  t,
+  onOpen,
+  onClose,
+  onSubmit,
+}: Readonly<{
+  line: HandoverCostLine;
+  money: (minor: number, currency: string) => string;
+  denominationCode: string;
+  dealClosed: boolean;
+  canRecord: boolean;
+  paying: boolean;
+  busy: boolean;
+  t: (key: string) => string;
+  onOpen: () => void;
+  onClose: (afterUnknown: boolean, intentId: string | null) => void;
+  onSubmit: (values: DirectHandoverPayment) => Promise<void>;
+}>) {
+  const state = line.handoverPayment;
+  if (state === undefined || state === "NOT_HANDOVER_LINE" || state === "ZERO_ACTUAL") return null;
+  const testId = `deal-handover-payment-${line._id}`;
+
+  if (state === "PAID_CUSTODY") {
+    return (
+      <div className="mt-2 text-xs" data-testid={testId} data-state={state}>
+        <Badge variant="outline" className="border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-400">
+          {t("HandoverPaymentPaidCustody")}
+        </Badge>
+      </div>
+    );
+  }
+  if (state === "PAID_DIRECT") {
+    const paid = line.directPayment;
+    return (
+      <div className="mt-2 space-y-1 text-xs" data-testid={testId} data-state={state}>
+        <Badge variant="outline" className="border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-400">
+          {t("HandoverPaymentPaidDirect")}
+        </Badge>
+        {paid && (
+          <span className="ms-2 text-muted-foreground">
+            {t(`PaymentMethod_${paid.method}`)}
+            {" · "}
+            <bdi dir="ltr" className="tabular-nums">
+              {new Date(paid.paidAt).toISOString().slice(0, 10)}
+            </bdi>
+            {paid.reference && (
+              <>
+                {" · "}
+                <bdi dir="ltr">{paid.reference}</bdi>
+              </>
+            )}
+          </span>
+        )}
+        {!dealClosed && <p className="text-muted-foreground">{t("DirectPaymentChangeNote")}</p>}
+      </div>
+    );
+  }
+  if (state === "NO_ACTUAL") {
+    return (
+      <p className="mt-2 text-xs text-amber-700 dark:text-amber-400" data-testid={testId} data-state={state}>
+        {t("HandoverPaymentNoActual")}
+      </p>
+    );
+  }
+  if (state === "CONFLICT") {
+    return (
+      <p role="alert" className="mt-2 text-xs font-medium text-destructive" data-testid={testId} data-state={state}>
+        {t("HandoverPaymentConflict")}
+      </p>
+    );
+  }
+
+  // UNPAID — the state that blocks the deal.
+  const payable = line.directPaymentEligible === true && line.currency === denominationCode;
+  return (
+    <div className="mt-2 space-y-2 text-xs" data-testid={testId} data-state={state}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <Badge variant="outline" className="border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-400">
+          {t("HandoverPaymentUnpaid")}
+        </Badge>
+        {payable && !dealClosed && canRecord && !paying && (
+          <Button type="button" size="sm" variant="outline" disabled={busy} onClick={onOpen} data-testid={`${testId}-record`}>
+            {t("RecordDirectPayment")}
+          </Button>
+        )}
+        {payable && !dealClosed && !canRecord && (
+          <span className="text-muted-foreground" data-testid={`${testId}-waiting`}>
+            {t("DirectPaymentWaiting")}
+          </span>
+        )}
+        {!payable && line.paidBy === "EMPLOYEE" && (
+          <span className="text-muted-foreground" data-testid={`${testId}-custody`}>
+            {t("HandoverPaymentNeedsCustody")}
+          </span>
+        )}
+      </div>
+      {paying && payable && canRecord && (
+        <DirectPaymentForm line={line} money={money} t={t} onCancel={onClose} onSubmit={onSubmit} />
+      )}
+    </div>
+  );
+}
+
+function DirectPaymentForm({
+  line,
+  money,
+  t,
+  onCancel,
+  onSubmit,
+}: Readonly<{
+  line: HandoverCostLine;
+  money: (minor: number, currency: string) => string;
+  t: (key: string) => string;
+  onCancel: (afterUnknown: boolean, intentId: string | null) => void;
+  onSubmit: (values: DirectHandoverPayment) => Promise<void>;
+}>) {
+  const [intentId, setIntentId] = useState(() => crypto.randomUUID());
+  const [method, setMethod] = useState<DirectPaymentMethodChoice | "">("");
+  const [paidOn, setPaidOn] = useState(economicTodayDateInput());
+  const [reference, setReference] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  /** The exact payload of an attempt whose response was lost — replayed verbatim, never re-read from the fields. */
+  const [unknownSent, setUnknownSent] = useState<DirectHandoverPayment | null>(null);
+  const frozen = unknownSent !== null;
+  const id = `direct-payment-${line._id}`;
+
+  const submit = async () => {
+    let values = unknownSent;
+    if (values === null) {
+      if (method === "") {
+        setError(t("DirectPaymentMethodRequired"));
+        return;
+      }
+      if (!paidOn) {
+        setError(t("DirectPaymentDateRequired"));
+        return;
+      }
+      values = { intentId, method, paidAt: economicDateInputToMs(paidOn), reference: reference.trim() || undefined };
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onSubmit(values);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : t("UnexpectedError");
+      if (caught instanceof HandoverCostAttemptError && caught.outcome === "UNKNOWN") {
+        // The payment may already be recorded: keep the identity, freeze the fields.
+        setUnknownSent(values);
+      } else {
+        // The server's own answer — nothing committed; the next attempt is a new command.
+        setUnknownSent(null);
+        setIntentId(crypto.randomUUID());
+      }
+      setError(message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <form
+      className="space-y-3 rounded-md border bg-muted/30 p-3"
+      data-testid={`${id}-form`}
+      onSubmit={(event) => {
+        event.preventDefault();
+        void submit();
+      }}
+    >
+      <p className="text-sm font-medium">
+        {t("RecordDirectPayment")} · {t(FEE_TYPE_LABEL[line.feeType] ?? line.feeType)}
+        {line.actualAmountMinor !== undefined && (
+          <>
+            {" · "}
+            <bdi dir="ltr" className="tabular-nums">
+              {money(line.actualAmountMinor, line.currency)}
+            </bdi>
+          </>
+        )}
+      </p>
+      <p className="text-muted-foreground">{t("DirectPaymentNote")}</p>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="space-y-1.5">
+          <Label htmlFor={`${id}-method`}>{t("DirectPaymentMethodLabel")}</Label>
+          <select
+            id={`${id}-method`}
+            className={selectClass}
+            value={method}
+            disabled={frozen || submitting}
+            required
+            onChange={(event) => setMethod(event.target.value as DirectPaymentMethodChoice | "")}
+          >
+            <option value="">{t("DirectPaymentMethodChoose")}</option>
+            {DIRECT_PAYMENT_METHODS.map((option) => (
+              <option key={option} value={option}>
+                {t(`PaymentMethod_${option}`)}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={`${id}-date`}>{t("CostPaidOnLabel")}</Label>
+          <Input
+            id={`${id}-date`}
+            type="date"
+            max={economicTodayDateInput()}
+            value={paidOn}
+            disabled={frozen || submitting}
+            required
+            onChange={(event) => setPaidOn(event.target.value)}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={`${id}-reference`}>{t("ReceiptReferenceLabel")}</Label>
+          <Input
+            id={`${id}-reference`}
+            value={reference}
+            disabled={frozen || submitting}
+            onChange={(event) => setReference(event.target.value)}
+          />
+        </div>
+      </div>
+      {error && (
+        <p role="alert" className="text-xs font-medium text-destructive">
+          {error}
+        </p>
+      )}
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" disabled={submitting} onClick={() => onCancel(frozen, frozen ? intentId : null)}>
+          {t("Cancel")}
+        </Button>
+        <Button type="submit" size="sm" disabled={submitting || (!frozen && method === "")}>
+          {submitting && <Loader2 className="h-4 w-4 me-1.5 animate-spin" />}
+          {t(frozen ? "RetryHandoverCost" : "SaveDirectPayment")}
+        </Button>
+      </div>
+    </form>
+  );
+}

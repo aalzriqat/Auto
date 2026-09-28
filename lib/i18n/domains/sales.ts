@@ -561,6 +561,35 @@ const dealRailMessages = defineBilingualMessages({
   CostStatusActual: ["Actual recorded", "فعلي مسجّل"],
   CostStatusReconciled: ["Reconciled", "مُطابَق"],
   CostStatusVoid: ["Void", "ملغى"],
+  // SCRUM-443 — who paid a handover cost, and how the dealership records paying one itself.
+  HandoverPaymentPaidCustody: ["Paid from custody", "مدفوع من العهدة"],
+  HandoverPaymentPaidDirect: ["Paid by the dealership", "دفعه المعرض مباشرةً"],
+  HandoverPaymentUnpaid: ["Payment not recorded", "الدفع غير مسجَّل"],
+  HandoverPaymentNoActual: ["Record its actual amount first", "سجّل مبلغه الفعلي أولًا"],
+  HandoverPaymentConflict: ["Recorded as paid twice — needs review", "مسجَّل كمدفوع مرتين — يحتاج مراجعة"],
+  HandoverPaymentNeedsCustody: [
+    "Paid by an employee: charge it to that employee's custody under Employee cash custody.",
+    "دفعه موظف: حمِّله على عهدة ذلك الموظف من قسم عهدة الموظف النقدية.",
+  ],
+  RecordDirectPayment: ["Record direct payment", "تسجيل دفع مباشر"],
+  DirectPaymentWaiting: [
+    "Waiting for a manager or an accountant to record the payment.",
+    "بانتظار مدير أو محاسب لتسجيل الدفع.",
+  ],
+  DirectPaymentNote: [
+    "Use this when the dealership itself paid the cost (bank transfer, e-payment, cash or an issued cheque) rather than an employee out of custody cash. It posts to the books now, from the account you choose.",
+    "استخدمه عندما دفع المعرض المصروف بنفسه (حوالة بنكية أو دفع إلكتروني أو نقدًا أو بشيك صادر) لا موظف من نقد العهدة. يُرحَّل إلى الدفاتر الآن من الحساب الذي تختاره.",
+  ],
+  DirectPaymentMethodLabel: ["Paid by", "طريقة الدفع"],
+  DirectPaymentMethodChoose: ["Choose how it was paid…", "اختر طريقة الدفع…"],
+  DirectPaymentMethodRequired: ["Choose how the dealership paid.", "اختر كيف دفع المعرض."],
+  DirectPaymentDateRequired: ["Choose the date it was paid.", "اختر تاريخ الدفع."],
+  SaveDirectPayment: ["Save payment", "حفظ الدفع"],
+  DirectPaymentSaved: ["Direct payment recorded", "تم تسجيل الدفع المباشر"],
+  DirectPaymentChangeNote: [
+    "Changing this cost's amount or removing it reverses this payment; record it again afterwards.",
+    "تغيير مبلغ هذا المصروف أو إزالته يعكس هذا الدفع؛ سجّله من جديد بعد ذلك.",
+  ],
   FeeTypeFinanceCompany: ["Finance company fee", "رسوم جهة التمويل"],
   FeeTypeAppraisal: ["Appraisal fee", "رسوم التقييم"],
   FeeTypeInsurance: ["Insurance", "التأمين"],
@@ -945,6 +974,7 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingCheck_CUSTODY_ON_LEDGER: ["Employee custody is on the books", "عهدة الموظفين مرحَّلة إلى الدفاتر"],
   ClosingCheck_CUSTODY_SETTLED: ["Employee custody is settled", "عهدة الموظفين مسوّاة"],
   ClosingCheck_COSTS_CLOSABLE: ["Deal costs are recorded and reconciled", "مصاريف الصفقة مسجَّلة ومسوّاة"],
+  ClosingCheck_HANDOVER_COSTS_PAID: ["Handover costs are paid", "مصاريف التسليم مدفوعة"],
   ClosingCheck_FIRST_PAYMENT_RECORDED: ["The customer's first payment is recorded", "الدفعة الأولى للعميل مسجَّلة"],
   ClosingCheck_LEGAL_INVOICE_RECORDED: ["The legal invoice is recorded", "الفاتورة القانونية مسجَّلة"],
   // SCRUM-414 — why a check is not met, by the server's reason code (lib/closingReadinessReasonCodes.ts).
@@ -1024,6 +1054,18 @@ const dealOverviewMessages = defineBilingualMessages({
     "\"{feeLabel}\" is classified as {treatment}, which has no account to post to. Reclassify it before closing.",
     "البند «{feeLabel}» مصنّف على أنه {treatment}، ولا يوجد حساب يُرحَّل إليه. أعد تصنيفه قبل الإغلاق.",
   ],
+  ClosingReason_HANDOVER_COSTS_NO_ACTUAL: [
+    "{count} handover cost(s) have no actual amount recorded. Record each one's actual (or zero if the dealership was charged nothing) in Handover costs before closing.",
+    "يوجد {count} من مصاريف التسليم دون مبلغ فعلي مسجَّل. سجّل الفعلي لكل منها (أو صفرًا إن لم يُحمَّل المعرض شيئًا) في مصاريف التسليم قبل الإغلاق.",
+  ],
+  ClosingReason_HANDOVER_COSTS_UNPAID: [
+    "{count} handover cost(s) have not been paid from a recorded source. In Handover costs, record the dealership's direct payment; or charge the cost to the employee custody that paid it under Employee cash custody. Then close.",
+    "يوجد {count} من مصاريف التسليم لم يُسجَّل لها مصدر دفع. في مصاريف التسليم سجّل دفع المعرض المباشر، أو حمِّل المصروف على عهدة الموظف التي دفعته من قسم عهدة الموظف النقدية، ثم أغلق.",
+  ],
+  ClosingReason_HANDOVER_COSTS_CONFLICT: [
+    "{count} handover cost(s) are recorded as paid both from employee custody and directly, which would count the cost twice. Have the line reviewed before closing.",
+    "يوجد {count} من مصاريف التسليم مسجَّلة كمدفوعة من عهدة الموظف ومباشرةً معًا، مما يحسب المصروف مرتين. اطلب مراجعة البند قبل الإغلاق.",
+  ],
   ClosingReason_FIRST_PAYMENT_MISSING: [
     "The customer's first payment is not recorded, so the funding split cannot be established. Record it before closing.",
     "لم تُسجَّل الدفعة الأولى للعميل، لذلك لا يمكن تحديد توزيع التمويل. سجّلها قبل الإغلاق.",
@@ -1072,6 +1114,10 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingReason_WITHHELD_COSTS_CLOSABLE: [
     "The deal's costs are not all recorded and reconciled yet.",
     "لم تُسجَّل مصاريف الصفقة وتُسوَّ كلها بعد.",
+  ],
+  ClosingReason_WITHHELD_HANDOVER_COSTS_PAID: [
+    "A handover cost on this deal has not been paid from a recorded source yet.",
+    "يوجد مصروف تسليم على هذه الصفقة لم يُسجَّل له مصدر دفع بعد.",
   ],
   ClosingReason_WITHHELD_FIRST_PAYMENT_RECORDED: [
     "The customer's first payment is not recorded yet.",

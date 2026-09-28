@@ -35,6 +35,7 @@ import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { toMinorUnits } from "./money";
 import { requireCustomerGapToDealer } from "./financingEconomics";
 import { summarizeFees } from "./feeSummary";
+import { blockingHandoverLines, handoverPaymentState, type HandoverPaymentState } from "./handoverCostPayment";
 
 /**
  * Turns one finance application into the plan its sale will post from, or
@@ -163,6 +164,46 @@ function custodySettledRefusal(
   return null;
 }
 
+/**
+ * Every live dealer-borne handover cost has a real payment on the books
+ * (SCRUM-443): charged to the employee custody that paid it, or paid directly
+ * by the dealership — `handoverCostPayment` is the one definition of both.
+ * Asked on EVERY route, like `CUSTODY_SETTLED`: cash left the dealership
+ * whatever the settlement route. A line with no actual is refused even off the
+ * plan's routes (an unknown cost is not a paid one); a zero actual is exempt.
+ * The first refusal names the most upstream problem — a line nobody has said
+ * the cost of, then a line that is unpaid, then a contradictory one.
+ */
+function handoverCostsPaidRefusal(liveFees: ReadonlyArray<Doc<"financeDealFees">>): ClosingReadinessReason | null {
+  const states = liveFees.map((fee) => handoverPaymentState(fee));
+  const count = (state: HandoverPaymentState) => states.filter((s) => s === state).length;
+  const noActual = count("NO_ACTUAL");
+  if (noActual > 0) {
+    return reasonOf(
+      "HANDOVER_COSTS_NO_ACTUAL",
+      `${noActual} handover cost(s) on this deal have no actual amount recorded, so what was paid cannot be established. Record each one's actual (or zero if the dealership was charged nothing) before finalizing.`,
+      { count: noActual }
+    );
+  }
+  const unpaid = count("UNPAID");
+  if (unpaid > 0) {
+    return reasonOf(
+      "HANDOVER_COSTS_UNPAID",
+      `${unpaid} handover cost(s) on this deal have not been paid from a recorded source. Charge each to the employee custody that paid it, or record the dealership's direct payment, before finalizing.`,
+      { count: unpaid }
+    );
+  }
+  const conflict = count("CONFLICT");
+  if (conflict > 0) {
+    return reasonOf(
+      "HANDOVER_COSTS_CONFLICT",
+      `${conflict} handover cost(s) on this deal are recorded as paid both from employee custody and directly, which would count the cost twice. Have the line reviewed before finalizing.`,
+      { count: conflict }
+    );
+  }
+  return null;
+}
+
 /** One accounting condition a financed deal must meet before it can be finalized (the list lives beside the reason codes). */
 export type { ClosingReadinessCheckKey };
 
@@ -182,6 +223,12 @@ export interface ClosingReadinessCheck {
    * Null when READY or NOT_APPLICABLE.
    */
   reason: ClosingReadinessReason | null;
+  /**
+   * The cost lines a BLOCKED check is about, by id — only `HANDOVER_COSTS_PAID`
+   * names any (SCRUM-443), so the screen can point at them. Ids, never amounts:
+   * served whole to a caller below the finance tier, whose reasons are withheld.
+   */
+  feeIds?: string[];
 }
 
 export interface ClosingReadiness {
@@ -340,6 +387,15 @@ export async function evaluateClosingReadiness(
   await onRows("COSTS_CLOSABLE", { onThrow: "BLOCKED", planOnly: true }, ({ fees }) =>
     costsClosableRefusal(fees, opts.currency)
   );
+
+  // Every dealer-borne handover cost is paid from a recorded source — on EVERY
+  // route, NOT `planOnly` (SCRUM-443). The blocking lines travel with the
+  // verdict so the screen can point at them.
+  await onRows("HANDOVER_COSTS_PAID", { onThrow: "BLOCKED" }, ({ fees }) => handoverCostsPaidRefusal(fees));
+  const handoverCheck = checks[checks.length - 1];
+  if (rows !== null && handoverCheck.status === "BLOCKED") {
+    handoverCheck.feeIds = blockingHandoverLines(rows.fees).map((fee) => fee._id as string);
+  }
 
   // An unknown first payment is not zero (SCRUM-373): a quoted, approved deal
   // without one has no funding split to post from.
