@@ -27,6 +27,7 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { WITHHELD_READINESS_REASON_FALLBACK } from "../lib/closingReadinessReasonCodes";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -343,7 +344,13 @@ describe("SN3-1 — confirmDisbursement when the deal's pinned currency ≠ the 
       refusal = error;
     }
     expect(refusal).toBeDefined();
-    const message = String((refusal as { data?: unknown; message?: string })?.data ?? (refusal as Error)?.message ?? refusal);
+    const data = (refusal as { data?: unknown })?.data;
+    // A coded refusal (SCRUM-414) carries its sentence as `data.message`.
+    const message = String(
+      (typeof data === "object" && data !== null ? (data as { message?: unknown }).message : data) ??
+        (refusal as Error)?.message ??
+        refusal
+    );
     console.log("SN3-1 refusal (merged backend, switch BEFORE finalize):", message);
     expect(message).toMatch(/recorded in JOD, but the organization's currency is now USD/i);
     expect(message).toMatch(/restore the organization's currency to JOD/i);
@@ -370,7 +377,15 @@ describe("SN3-1 — confirmDisbursement when the deal's pinned currency ≠ the 
     const s = await seedDealership("pre3");
     const { applicationId } = await approvedDealWithPinnedEconomics(s);
     await driftOrgCurrencyOutOfContract(s, "USD");
-    await expect(finalize(s, applicationId)).rejects.toThrow(/organization's currency is now USD/i);
+    const refused: unknown = await finalize(s, applicationId).then(() => null, (error: unknown) => error);
+    expect(refused).toBeInstanceOf(Error);
+    expect((refused as Error).message).toMatch(/organization's currency is now USD/i);
+    // SCRUM-414: the door refuses with the same coded payload as the evaluator's refusals.
+    expect((refused as { data?: unknown }).data).toMatchObject({
+      code: "READINESS_CURRENCY_DRIFT",
+      params: { recordedCurrency: "JOD", orgCurrency: "USD" },
+      message: expect.stringMatching(/organization's currency is now USD/),
+    });
 
     const readiness = () => s.asUser.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
     const unavailable = await readiness();
@@ -379,6 +394,9 @@ describe("SN3-1 — confirmDisbursement when the deal's pinned currency ≠ the 
     // finalizing refuses with, rather than an empty checklist.
     expect(unavailable.checks).toHaveLength(0);
     expect(unavailable.unavailableReason ?? "").toMatch(/organization's currency is now USD/i);
+    // SCRUM-414: the same refusal as a code + params the screen translates.
+    expect(unavailable.unavailableReasonCode).toBe("READINESS_CURRENCY_DRIFT");
+    expect(unavailable.unavailableReasonParams).toEqual({ recordedCurrency: "JOD", orgCurrency: "USD" });
 
     // Below the finance tier the refusal (which names currencies) is withheld
     // for a plain sentence — the SCRUM-117 read boundary on this new field.
@@ -393,8 +411,12 @@ describe("SN3-1 — confirmDisbursement when the deal's pinned currency ≠ the 
       .query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
     expect(withheld.state).toBe("UNAVAILABLE");
     expect(withheld.moneyWithheld).toBe(true);
-    expect(withheld.unavailableReason).toMatch(/cannot be determined from its current records/);
+    expect(withheld.unavailableReason).toBe(WITHHELD_READINESS_REASON_FALLBACK);
     expect(withheld.unavailableReason).not.toMatch(/USD|JOD/);
+    // SCRUM-414: a withheld code, and no params — the currencies are the detail withheld.
+    expect(withheld.unavailableReasonCode).toBe("WITHHELD_UNAVAILABLE");
+    expect(withheld).not.toHaveProperty("unavailableReasonParams");
+    expect(JSON.stringify(withheld)).not.toMatch(/USD|JOD/);
 
     // Restoring the setting is the only change, and the verdict follows it.
     await driftOrgCurrencyOutOfContract(s, "JOD");

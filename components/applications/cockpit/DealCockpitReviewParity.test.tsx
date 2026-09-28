@@ -55,6 +55,11 @@ vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
   const { ConvexError } = await import("convex/values");
   return {
+    // The cockpit reads closing readiness through the non-throwing useQueries (SCRUM-414 R2).
+    useQueries: (queries: Record<string, { query: never }>) =>
+      Object.fromEntries(
+        Object.entries(queries).map(([key, { query }]) => [key, stubs.queryResults.get(getFunctionName(query))])
+      ),
     useQuery: (reference: never, args: unknown) =>
       args === "skip" ? undefined : stubs.queryResults.get(getFunctionName(reference)),
     useMutation: (reference: never) => {
@@ -1066,6 +1071,16 @@ describe("the close is withheld where the server would refuse the drifted pin â€
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     permissions.add(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
     permissions.add(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
+    // S414-R3-1: the close is offered only on a loaded READY verdict, which a
+    // caller reads with view:finance_applications (every default closer has it).
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    queryResults.set("applications:getClosingReadiness", {
+      state: "READY",
+      open: true,
+      checks: [],
+      unavailableReason: null,
+      moneyWithheld: false,
+    });
     queryResults.set(
       COCKPIT_QUERY,
       cockpit({ status: "APPROVED", expectedPaymentRegistered: true, stages: settlementStages })

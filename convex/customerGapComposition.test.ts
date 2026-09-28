@@ -189,7 +189,7 @@ describe("the composition boundary at every real caller", () => {
       await setGap(s, pair);
       return await s.t.run(async (ctx) => {
         const app = (await ctx.db.get(s.applicationId))!;
-        return await resolveFinancedSalePlan(ctx, app, { settlesDirect: false, currency: "JOD" });
+        return await resolveFinancedSalePlan(ctx, app, { settlesDirect: false, currency: "JOD", mayReadMoney: true });
       });
     };
     const readable = await plan({ cash: 100_000, installment: 200_000 });

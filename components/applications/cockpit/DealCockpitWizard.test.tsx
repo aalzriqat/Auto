@@ -58,6 +58,16 @@ vi.mock("convex/react", async () => {
       // caller cannot make can never hand the screen data (round 2, W1).
       return args === "skip" ? undefined : stubs.queryResults.get(name);
     },
+    // The closing-readiness read (SCRUM-414) goes through `useQueries`; a
+    // skipped read is simply absent from the request, as with the real hook.
+    useQueries: (queries: Record<string, { query: never; args: unknown }>) =>
+      Object.fromEntries(
+        Object.entries(queries).map(([key, { query, args }]) => {
+          const name = getFunctionName(query);
+          stubs.queryArgs.set(name, args);
+          return [key, stubs.queryResults.get(name)];
+        }),
+      ),
     useMutation: (reference: never) => {
       const name = getFunctionName(reference);
       return async (args: unknown) => {
@@ -701,11 +711,30 @@ describe("G7 — the settlement step resolves the reconciliation flag, then name
     expect(step().textContent).not.toContain("FinalizeNeedsSettlementRoute");
   });
 
+  // SCRUM-414 (S414-R2-SKEW-1 / S414-R3-1): the close is offered only on a
+  // LOADED, open READY closing-readiness verdict, which a caller needs
+  // `view:finance_applications` to read.
   test("not flagged: the close is the step, unchanged", () => {
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
     queryResults.set(COCKPIT_QUERY, settlement());
+    queryResults.set("applications:getClosingReadiness", {
+      state: "READY",
+      open: true,
+      checks: [{ key: "CUSTODY_SETTLED", status: "READY", reason: null }],
+      unavailableReason: null,
+      moneyWithheld: false,
+    });
     renderCockpit();
     expect(stepButton()?.textContent).toBe("FinalizeDealAction");
+  });
+
+  test("not flagged, readiness not yet loaded: the close waits at its blocker", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    queryResults.set(COCKPIT_QUERY, settlement());
+    renderCockpit();
+    expect(stepButton()).toBeNull();
   });
 
   test("a held deposit on the direct route is named before the close is offered", () => {

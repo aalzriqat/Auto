@@ -131,7 +131,9 @@ import {
   type NewHandoverCost,
 } from "./HandoverCostsPanel";
 import { RecordLegalInvoiceDialog, type RecordLegalInvoiceValues } from "./RecordLegalInvoiceDialog";
-import { DealClosingReadinessList, type ClosingReadinessView } from "./DealClosingReadinessList";
+import { DealClosingReadinessList, closingReasonText, type ClosingReadinessView } from "./DealClosingReadinessList";
+import { useClosingReadiness } from "./useClosingReadiness";
+import { closingReadinessRefusalOf } from "@/lib/closingReadinessReasonCodes";
 import { ProfitApprovalNotice, useProfitApproval } from "@/components/sales/ProfitApprovalNotice";
 
 /**
@@ -387,8 +389,21 @@ const LEGAL_INVOICE_ISSUED_TO_LABEL: Record<string, string> = {
  *
  * A loaded closing-readiness verdict that is not READY is a prerequisite too:
  * `finalizeDeal` re-runs the same evaluator and would refuse, so the action is
- * withheld and the readiness list above names what is left. A verdict still
- * loading withholds nothing — the server stays the gate.
+ * withheld and the readiness list above names what is left.
+ *
+ * A readiness READ that failed withholds it as well (S414-R2-SKEW-1): most
+ * often that is a backend deployed before `getClosingReadiness`, and such a
+ * backend's `finalizeDeal` predates the redacted refusals — its currency-drift
+ * refusal names both currencies to a caller who may close but not read money.
+ * The close is offered only once a verdict has LOADED; a read still in flight
+ * is handled by the caller, which keeps the step at its blocker meanwhile.
+ *
+ * A caller who may close but may not READ the readiness has no verdict at all
+ * — the query is skipped — so the close is withheld from them too (S414-R3-1,
+ * Option A), named last: the route and the close permission are the more
+ * useful things to say when they also apply. Every default role holding
+ * `confirm:finance_disbursement` holds `view:finance_applications`, so this
+ * reaches only custom roles, and tells them which access is missing.
  *
  * Extracted rather than left as a nested ternary so the combinations are
  * enumerable, and testable, one line each.
@@ -398,7 +413,9 @@ function finalizeUnavailableReasonKey({
   canRecordRoute,
   heldDepositBlocksDirectClose,
   readinessBlocksClose,
+  readinessUnreadable,
   canClose,
+  canReadReadiness,
 }: Readonly<{
   routeRequired: boolean;
   canRecordRoute: boolean;
@@ -409,13 +426,40 @@ function finalizeUnavailableReasonKey({
    */
   heldDepositBlocksDirectClose: boolean;
   readinessBlocksClose: boolean;
+  readinessUnreadable: boolean;
   canClose: boolean;
+  canReadReadiness: boolean;
 }>): string | undefined {
   if (routeRequired && !canRecordRoute) return "FinalizeNeedsRouteAndPermission";
   if (routeRequired) return "FinalizeNeedsSettlementRoute";
   if (heldDepositBlocksDirectClose) return "FinalizeNeedsHeldDepositResolved";
+  if (readinessUnreadable) return "FinalizeWaitsForReadiness";
   if (readinessBlocksClose) return "FinalizeNeedsClosingReadiness";
   if (!canClose) return "FinalizeNeedsPermission";
+  if (!canReadReadiness) return "FinalizeNeedsReadinessAccess";
+  return undefined;
+}
+
+/**
+ * Why an already-open close confirmation may not be submitted — or `undefined`
+ * when the cockpit holds a loaded, open READY verdict (S414-R3-1).
+ *
+ * The dialog outlives the verdict it was opened on: a read that fails, or a
+ * verdict that turns BLOCKED, must stop the submit rather than let an older
+ * backend's detailed refusal through. Mirrors `finalizeAllowedByReadiness`.
+ */
+function finalizeReadinessHoldReasonKey({
+  canReadReadiness,
+  readiness,
+  readinessUnreadable,
+}: Readonly<{
+  canReadReadiness: boolean;
+  readiness: { open: boolean; state: string } | undefined;
+  readinessUnreadable: boolean;
+}>): string | undefined {
+  if (!canReadReadiness) return "FinalizeNeedsReadinessAccess";
+  if (readinessUnreadable || readiness === undefined || !readiness.open) return "FinalizeWaitsForReadiness";
+  if (readiness.state !== "READY") return "FinalizeNeedsClosingReadiness";
   return undefined;
 }
 
@@ -855,11 +899,25 @@ export function DealCockpit({
   // The deal's automatic closing readiness (SCRUM-407) — the same evaluator
   // `finalizeDeal` re-runs, so the panel previews the server's verdict. Same
   // read permission as the cost record; the server redacts the detail below
-  // the finance tier itself.
-  const closingReadiness = useQuery(
-    api.applications.getClosingReadiness,
+  // the finance tier itself. Read without throwing: a backend deployed before
+  // this query existed costs the panel its verdict, not the screen its life
+  // (SCRUM-414 Codex R2).
+  const { readiness: closingReadiness, serviceUnavailable: closingReadinessServiceUnavailable } = useClosingReadiness(
     canViewApplications && deal ? { orgId, applicationId } : "skip"
   );
+  /**
+   * The ONE readiness condition the close is offered AND submitted under
+   * (S414-R2-SKEW-1, S414-R3-1): a successfully loaded, open READY verdict. A
+   * skipped, loading, failed, closed, BLOCKED or UNAVAILABLE read withholds it,
+   * so an older backend's detailed refusal never reaches a caller without
+   * money-read authority through this screen. The server re-checks regardless.
+   */
+  const finalizeReadinessHoldKey = finalizeReadinessHoldReasonKey({
+    canReadReadiness: canViewApplications,
+    readiness: closingReadiness,
+    readinessUnreadable: closingReadinessServiceUnavailable,
+  });
+  const finalizeAllowedByReadiness = finalizeReadinessHoldKey === undefined;
   const planCustodyHandler = useMutation(api.financeDealCosts.planCustodyHandler);
   const openDealCustody = useMutation(api.financeDealCosts.openDealCustody);
   const recordCustodyMovement = useMutation(api.financeDealCosts.recordCustodyMovement);
@@ -1753,6 +1811,27 @@ export function DealCockpit({
       };
     }
 
+    const finalizeReasonKey = finalizeDenominationBlock
+      ? FINALIZE_DENOMINATION_REASON[finalizeDenominationBlock]
+      : finalizeUnavailableReasonKey({
+          routeRequired: settlementRouteRequired,
+          canRecordRoute: canFinalizeApplication,
+          heldDepositBlocksDirectClose:
+            app?.supplierSettlementRoute === "DIRECT_TO_SUPPLIER" &&
+            (app.deposits ?? []).some((deposit) => deposit.status === "HELD"),
+          readinessBlocksClose:
+            closingReadiness !== undefined && closingReadiness.open && closingReadiness.state !== "READY",
+          readinessUnreadable: closingReadinessServiceUnavailable,
+          canClose: canCloseDeal,
+          canReadReadiness: canViewApplications,
+        });
+    // The same wait as `app` above, for the readiness verdict (S414-R2-SKEW-1,
+    // S414-R3-1): the close is offered only under `finalizeAllowedByReadiness`.
+    // With no reason to name — a read still in flight, or a verdict that says
+    // the deal is no longer open — the step keeps only its blocker meanwhile;
+    // a reason that withholds it anyway (a missing route) is shown instead.
+    if (finalizeReasonKey === undefined && !finalizeAllowedByReadiness) return undefined;
+
     return {
       stageKey: "SETTLEMENT",
       actionKey: "FinalizeDealAction",
@@ -1777,18 +1856,7 @@ export function DealCockpit({
        * is not a dead end — and bringing that control across is filed separately
        * rather than folded into this change.
        */
-      unavailableReasonKey: finalizeDenominationBlock
-        ? FINALIZE_DENOMINATION_REASON[finalizeDenominationBlock]
-        : finalizeUnavailableReasonKey({
-            routeRequired: settlementRouteRequired,
-            canRecordRoute: canFinalizeApplication,
-            heldDepositBlocksDirectClose:
-              app?.supplierSettlementRoute === "DIRECT_TO_SUPPLIER" &&
-              (app.deposits ?? []).some((deposit) => deposit.status === "HELD"),
-            readinessBlocksClose:
-              closingReadiness !== undefined && closingReadiness.open && closingReadiness.state !== "READY",
-            canClose: canCloseDeal,
-          }),
+      unavailableReasonKey: finalizeReasonKey,
       unavailableDetail: finalizeDenominationDetail,
     };
   }
@@ -2552,7 +2620,13 @@ export function DealCockpit({
           blocked: finalizeProfitApproval.blocked,
           notice: <ProfitApprovalNotice approval={finalizeProfitApproval} />,
         },
+        // The dialog outlives the READY verdict it was opened on (S414-R3-1):
+        // it names the current reason and its confirm is disabled meanwhile.
+        readinessHold: finalizeReadinessHoldKey ? t(finalizeReadinessHoldKey) : null,
         onSubmit: async () => {
+          // Same predicate as the offer, checked again at the moment of the
+          // write: nothing reaches `finalizeDeal` without a loaded READY verdict.
+          if (!finalizeAllowedByReadiness) return;
           setFinalizeSubmitting(true);
           setFinalizeError(null);
           try {
@@ -2575,8 +2649,13 @@ export function DealCockpit({
             // Deliberately keeps the key: every refusal here is actionable and
             // names what to change — an unrecorded settlement route, missing
             // economics, an unresolved عربون — so the next attempt is the same
-            // finalize with the same key, not a second one.
-            const message = getErrorMessage(error);
+            // finalize with the same key, not a second one. A closing-readiness
+            // refusal carries a code + params (SCRUM-414), translated exactly as
+            // the readiness panel translates it; anything else keeps its message.
+            const refusal = isConvexError(error) ? closingReadinessRefusalOf(error.data) : null;
+            const message = refusal
+              ? closingReasonText(t, refusal.code, refusal.params, refusal.message).text
+              : getErrorMessage(error);
             setFinalizeError(message);
             toast.error(message);
           } finally {
@@ -2630,6 +2709,7 @@ export function DealCockpit({
         canViewApplications && deal
           ? {
               readiness: closingReadiness,
+              serviceUnavailable: closingReadinessServiceUnavailable,
               // The legal invoice is still recorded by hand while the v1
               // posting plan reads it (SCRUM-411 retires that dependency); it
               // is shown and recorded by the disbursement tier only, as before.
@@ -3658,12 +3738,14 @@ export function DealCockpitView({
   /**
    * The deal's automatic closing readiness (SCRUM-407), which replaced the
    * manual "classify deal accounting" step: every check is re-derived by the
-   * server and re-run by finalization. `readiness` is undefined while loading.
+   * server and re-run by finalization. `readiness` is undefined while loading
+   * and when the read failed; `serviceUnavailable` says which.
    * `legalInvoice` is present for the disbursement tier only — the invoice is
    * still recorded by hand while the v1 posting plan reads it (SCRUM-411).
    */
   closingChecklist?: {
     readiness: ClosingReadinessView | undefined;
+    serviceUnavailable?: boolean;
     legalInvoice?: {
       amountMinor?: number;
       number?: string;
@@ -3747,6 +3829,8 @@ export function DealCockpitView({
     onOpenChange: (open: boolean) => void;
     onSubmit: () => void | Promise<void>;
     profitApproval?: { notice: React.ReactNode; blocked: boolean };
+    /** Why the close may not be submitted right now (S414-R3-1), or null. */
+    readinessHold?: string | null;
   };
   /**
    * Whether this caller may amend a recorded settlement advice (MANAGE_FINANCE).
@@ -4961,7 +5045,11 @@ export function DealCockpitView({
                 )}
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
-                <DealClosingReadinessList readiness={closingChecklist.readiness} t={t} />
+                <DealClosingReadinessList
+                  readiness={closingChecklist.readiness}
+                  serviceUnavailable={closingChecklist.serviceUnavailable}
+                  t={t}
+                />
                 {closingChecklist.legalInvoice &&
                   (closingChecklist.legalInvoice.amountMinor !== undefined ? (
                     <dl
@@ -5272,6 +5360,7 @@ export function DealCockpitView({
           onOpenChange={finalize.onOpenChange}
           onSubmit={finalize.onSubmit}
           profitApproval={finalize.profitApproval}
+          readinessHold={finalize.readinessHold}
         />
       )}
 

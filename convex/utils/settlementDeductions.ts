@@ -10,6 +10,7 @@ import {
   MAX_LIVE_DEAL_FEE_LINES,
   frozenPolicyExceedsLiveCapacity,
 } from "./dealCostLimits";
+import { reasonOf, type ClosingReadinessReason } from "../../lib/closingReadinessReasonCodes";
 
 export function assertExpectedCurrency(expectedCurrency: string, action: string): void {
   if (expectedCurrency !== expectedCurrency.toUpperCase() || supportedCurrencyScale(expectedCurrency) === null) {
@@ -68,14 +69,37 @@ export function unrecordedConfiguredFeePositions(snapshot: Doc<"financeApplicati
   return missing;
 }
 
-export function assertConfiguredFeesRecorded(snapshot: Doc<"financeApplications">["companyRuleSnapshot"], liveFees: ReadonlyArray<Doc<"financeDealFees">>, action: string): void {
+/**
+ * Why the configured fee positions are not all recorded, as a coded reason —
+ * or null when they are. The non-throwing form of `assertConfiguredFeesRecorded`
+ * (the closing-readiness evaluator reports it; writers throw it).
+ */
+export function configuredFeesRefusal(snapshot: Doc<"financeApplications">["companyRuleSnapshot"], liveFees: ReadonlyArray<Doc<"financeDealFees">>, action: string): ClosingReadinessReason | null {
   // Single-fee authority wins even for mixed historical snapshots that still
   // contain retired feeTemplates. Only genuinely legacy snapshots (no
   // adminFees field) remain governed by template completeness/capacity rules.
-  if (snapshot?.adminFees !== undefined) return;
-  if (frozenPolicyExceedsLiveCapacity(snapshot?.feeTemplates)) throw new ConvexError(`This deal's frozen finance-company policy configures ${snapshot?.feeTemplates?.length} fees, more than the ${MAX_LIVE_DEAL_FEE_LINES} live cost lines a deal can carry, so it cannot be closed under that policy. A frozen policy is never rewritten: correct the company's fee templates and re-create this application.`);
+  if (snapshot?.adminFees !== undefined) return null;
+  if (frozenPolicyExceedsLiveCapacity(snapshot?.feeTemplates)) {
+    return reasonOf(
+      "CONFIGURED_FEES_POLICY_OVER_CAPACITY",
+      `This deal's frozen finance-company policy configures ${snapshot?.feeTemplates?.length} fees, more than the ${MAX_LIVE_DEAL_FEE_LINES} live cost lines a deal can carry, so it cannot be closed under that policy. A frozen policy is never rewritten: correct the company's fee templates and re-create this application.`,
+      { templateCount: snapshot?.feeTemplates?.length ?? 0, max: MAX_LIVE_DEAL_FEE_LINES }
+    );
+  }
   const missing = unrecordedConfiguredFeePositions(snapshot, liveFees);
-  if (missing.length > 0) throw new ConvexError(`${missing.length} fee(s) configured by this deal's finance company have no actual recorded. Record what was actually paid for each of them — zero if it was not charged — before ${action}.`);
+  if (missing.length > 0) {
+    return reasonOf(
+      "CONFIGURED_FEES_MISSING",
+      `${missing.length} fee(s) configured by this deal's finance company have no actual recorded. Record what was actually paid for each of them — zero if it was not charged — before ${action}.`,
+      { count: missing.length }
+    );
+  }
+  return null;
+}
+
+export function assertConfiguredFeesRecorded(snapshot: Doc<"financeApplications">["companyRuleSnapshot"], liveFees: ReadonlyArray<Doc<"financeDealFees">>, action: string): void {
+  const refusal = configuredFeesRefusal(snapshot, liveFees, action);
+  if (refusal !== null) throw new ConvexError(refusal.message);
 }
 
 export function settlementDeductedFees(liveFees: ReadonlyArray<Doc<"financeDealFees">>): Array<Doc<"financeDealFees">> {
@@ -202,18 +226,53 @@ export function summarizeReadableCustody(
   liveFees: ReadonlyArray<Doc<"financeDealFees">>,
   action: string
 ): ReturnType<typeof summarizeCustody> {
+  const readable = readableCustodyActual(custody, liveFees, action);
+  if (!readable.ok) throw new ConvexError(readable.refusal.message);
+  return summarizeCustody(custody, readable.actualExpensesMinor);
+}
+
+/**
+ * Why a custody record's balance cannot be read, as a coded reason — or null
+ * when it can. The non-throwing form of `summarizeReadableCustody`'s refusal.
+ */
+export function custodyReadabilityRefusal(
+  custody: Doc<"financeDealCustody">,
+  liveFees: ReadonlyArray<Doc<"financeDealFees">>,
+  action: string
+): ClosingReadinessReason | null {
+  const readable = readableCustodyActual(custody, liveFees, action);
+  return readable.ok ? null : readable.refusal;
+}
+
+function readableCustodyActual(
+  custody: Doc<"financeDealCustody">,
+  liveFees: ReadonlyArray<Doc<"financeDealFees">>,
+  action: string
+): { ok: true; actualExpensesMinor: number } | { ok: false; refusal: ClosingReadinessReason } {
   // Cents are not fils: a linked line in another currency makes the sum
   // below a non-figure, and every writer that reads the position refuses
   // before it is formed (R5, F4).
   const foreign = custodyForeignCurrencyLine(liveFees, custody);
-  if (foreign !== undefined) assertFeeCustodyCurrency(foreign, custody, action);
+  if (foreign !== undefined) {
+    return {
+      ok: false,
+      refusal: reasonOf("CUSTODY_CURRENCY_MISMATCH", feeCustodyCurrencyRefusal(foreign, custody, action), {
+        lineCurrency: foreign.currency,
+        custodyCurrency: custody.currency,
+      }),
+    };
+  }
   const actualExpensesMinor = custodyActualExpensesMinor(liveFees, custody._id);
   if (actualExpensesMinor === null || unreadableCustodyAmounts(custody, actualExpensesMinor) !== null) {
-    throw new ConvexError(
-      `A custody amount or a cost charged to this custody is not a readable figure, so ${action} is refused until the record is corrected.`
-    );
+    return {
+      ok: false,
+      refusal: reasonOf(
+        "CUSTODY_AMOUNT_UNREADABLE",
+        `A custody amount or a cost charged to this custody is not a readable figure, so ${action} is refused until the record is corrected.`
+      ),
+    };
   }
-  return summarizeCustody(custody, actualExpensesMinor);
+  return { ok: true, actualExpensesMinor };
 }
 
 /**
@@ -235,7 +294,14 @@ export function assertFeeCustodyCurrency(
   action: string
 ): void {
   if (line.currency === custody.currency) return;
-  throw new ConvexError(
-    `This cost is recorded in ${line.currency} while the custody record is in ${custody.currency}; the two cannot be summed, so ${action} is refused. Correct the line's currency or release it from custody first; nothing has been changed.`
-  );
+  throw new ConvexError(feeCustodyCurrencyRefusal(line, custody, action));
+}
+
+/** The one sentence a cross-currency custody charge is refused with. */
+function feeCustodyCurrencyRefusal(
+  line: Pick<Doc<"financeDealFees">, "currency">,
+  custody: Pick<Doc<"financeDealCustody">, "currency">,
+  action: string
+): string {
+  return `This cost is recorded in ${line.currency} while the custody record is in ${custody.currency}; the two cannot be summed, so ${action} is refused. Correct the line's currency or release it from custody first; nothing has been changed.`;
 }

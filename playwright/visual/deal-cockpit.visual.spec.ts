@@ -74,6 +74,49 @@ const VIEWPORTS = [
   { name: "1280", width: 1280, height: 900 },
 ] as const;
 
+/**
+ * S414-R2-SKEW-1: the same deal on its closing step with the readiness read
+ * failed — the close withheld with its own reason. The reason is checked
+ * against a hand-written literal, not the dictionary the render used.
+ */
+const READINESS_UNREADABLE = "-readiness-unreadable";
+const FINALIZE_WAITS_LITERAL: Readonly<Record<(typeof LOCALES)[number], string>> = {
+  en: "Closing readiness could not be checked right now, so the deal can't be closed yet. Try again shortly.",
+  ar: "تعذّر فحص جاهزية الإغلاق الآن، لذا لا يمكن إغلاق الصفقة بعد. حاول مجددًا بعد قليل.",
+};
+
+/**
+ * S414-R3-1: the same closing step for a custom closer who may close but not
+ * read the finance application — no readiness panel, the close withheld with
+ * the reason naming the missing access. Hand-written literal, as above.
+ */
+const READINESS_ACCESS = "-readiness-access";
+const FINALIZE_NEEDS_ACCESS_LITERAL: Readonly<Record<(typeof LOCALES)[number], string>> = {
+  en: "Your role can close deals but cannot view finance applications, so this deal's closing readiness can't be checked for you. Ask an administrator to add finance-application view access to your role.",
+  ar: "دورك يسمح بإغلاق الصفقات لكنه لا يسمح بعرض طلبات التمويل، لذا لا يمكن فحص جاهزية إغلاق هذه الصفقة لك. اطلب من المسؤول إضافة صلاحية عرض طلبات التمويل إلى دورك.",
+};
+
+/** The withheld-close states painted below: each reason, and whether a readiness panel is expected. */
+const WITHHELD_CLOSE_VARIANTS: ReadonlyArray<{
+  suffix: string;
+  title: string;
+  literal: Readonly<Record<(typeof LOCALES)[number], string>>;
+  panelTestId: string | null;
+}> = [
+  {
+    suffix: READINESS_UNREADABLE,
+    title: "readiness unreadable withholds the close with its reason",
+    literal: FINALIZE_WAITS_LITERAL,
+    panelTestId: "closing-readiness-service-unavailable",
+  },
+  {
+    suffix: READINESS_ACCESS,
+    title: "no readiness access withholds the close and names the missing access",
+    literal: FINALIZE_NEEDS_ACCESS_LITERAL,
+    panelTestId: null,
+  },
+];
+
 /** The desktop sidebar (`w-64`) at the default 16px root font size. */
 const SIDEBAR_WIDTH_PX = 256;
 /** Tailwind's `md` breakpoint, where the sidebar appears. */
@@ -122,6 +165,11 @@ test.beforeAll(async () => {
         `${file} predates this run — a stale artifact, not this bridge's output`,
       ).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
     }
+    for (const { suffix } of WITHHELD_CLOSE_VARIANTS) {
+      const variantFile = resolve(FIXTURES, `deal-cockpit-${locale}${suffix}.html`);
+      expect(existsSync(variantFile), `bridge did not write ${variantFile}`).toBe(true);
+      expect(statSync(variantFile).mtimeMs).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
+    }
   }
 
   // 2. The stylesheet, compiled exactly as the app compiles it: PostCSS with
@@ -150,9 +198,10 @@ function expectedFor(locale: (typeof LOCALES)[number]): { stageOwners: string[] 
 function documentFor(
   locale: (typeof LOCALES)[number],
   theme: (typeof THEMES)[number],
+  variant = "",
   fixture: "deal-cockpit" | "deal-focus-states" = "deal-cockpit",
 ): string {
-  const body = readFileSync(resolve(FIXTURES, `${fixture}-${locale}.html`), "utf8");
+  const body = readFileSync(resolve(FIXTURES, `${fixture}-${locale}${variant}.html`), "utf8");
   const dir = locale === "ar" ? "rtl" : "ltr";
   // `<html dir lang class>` and `<body class>` as `app/layout.tsx` and the
   // LanguageProvider set them (the body's background comes from the
@@ -176,9 +225,9 @@ function documentFor(
 </body></html>`;
 }
 
-async function paint(page: Page, locale: (typeof LOCALES)[number], theme: (typeof THEMES)[number]) {
-  const file = resolve(RUN_DIR, `page-${locale}-${theme}.html`);
-  writeFileSync(file, documentFor(locale, theme));
+async function paint(page: Page, locale: (typeof LOCALES)[number], theme: (typeof THEMES)[number], variant = "") {
+  const file = resolve(RUN_DIR, `page-${locale}-${theme}${variant}.html`);
+  writeFileSync(file, documentFor(locale, theme, variant));
   await page.goto(`file:///${file.replace(/\\/g, "/")}`);
   await expect(page.getByTestId("deal-header")).toBeVisible();
 }
@@ -412,7 +461,7 @@ for (const locale of LOCALES) {
         const page = await context.newPage();
         try {
           const file = resolve(RUN_DIR, `focus-${locale}-${theme}.html`);
-          writeFileSync(file, documentFor(locale, theme, "deal-focus-states"));
+          writeFileSync(file, documentFor(locale, theme, "", "deal-focus-states"));
           await page.goto(`file:///${file.replace(/\\/g, "/")}`);
           const main = page.getByTestId("shell-main");
           const mainBox = (await main.boundingBox())!;
@@ -479,6 +528,77 @@ for (const locale of LOCALES) {
           await context.close();
         }
       });
+    }
+  }
+}
+
+/**
+ * S414-R2-SKEW-1 and S414-R3-1, painted. The next-step block carries the
+ * withheld close's own reason and NO button; the readiness panel names a failed
+ * read, and is absent for a caller who cannot read it; nothing leaks sideways
+ * at 390px or 1280px. Screenshotted at the next-step block (and the panel,
+ * where there is one) so the reason's wrap and tone are judged in both
+ * directions.
+ */
+for (const variant of WITHHELD_CLOSE_VARIANTS) {
+  for (const locale of LOCALES) {
+    for (const theme of THEMES) {
+      for (const viewport of VIEWPORTS) {
+        test(`${locale} · ${theme} · ${viewport.name}px: ${variant.title}`, async ({
+          browser,
+        }) => {
+          const context = await browser.newContext({
+            viewport: { width: viewport.width, height: viewport.height },
+            colorScheme: theme,
+          });
+          const page = await context.newPage();
+          try {
+            await paint(page, locale, theme, variant.suffix);
+            const main = page.getByTestId("shell-main");
+            const mainBox = await main.boundingBox();
+            expect(mainBox).not.toBeNull();
+
+            const nextStep = page.getByTestId("deal-next-step");
+            await expect(nextStep).toBeVisible();
+            // Withheld: no button in the block, and the reason reads exactly the literal.
+            await expect(nextStep.getByRole("button")).toHaveCount(0);
+            const reason = nextStep.getByText(variant.literal[locale], { exact: true });
+            await expect(reason).toBeVisible();
+            const reasonBox = await reason.boundingBox();
+            expect(reasonBox).not.toBeNull();
+            expect(reasonBox!.x).toBeGreaterThanOrEqual(mainBox!.x - 0.5);
+            expect(reasonBox!.x + reasonBox!.width).toBeLessThanOrEqual(mainBox!.x + mainBox!.width + 0.5);
+            expect(await reason.evaluate((el) => getComputedStyle(el).direction)).toBe(
+              locale === "ar" ? "rtl" : "ltr",
+            );
+
+            if (variant.panelTestId) {
+              await expect(page.getByTestId(variant.panelTestId)).toBeVisible();
+            } else {
+              await expect(page.getByTestId("closing-readiness-service-unavailable")).toHaveCount(0);
+            }
+
+            const overflow = await main.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+            expect(
+              overflow.scrollWidth,
+              `main scrolls sideways at ${viewport.width}px (${JSON.stringify(overflow)})`,
+            ).toBeLessThanOrEqual(overflow.clientWidth);
+
+            await nextStep.scrollIntoViewIfNeeded();
+            await page.screenshot({
+              path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${variant.suffix}-next-step.png`),
+            });
+            if (variant.panelTestId) {
+              await page.getByTestId(variant.panelTestId).scrollIntoViewIfNeeded();
+              await page.screenshot({
+                path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${variant.suffix}-panel.png`),
+              });
+            }
+          } finally {
+            await context.close();
+          }
+        });
+      }
     }
   }
 }

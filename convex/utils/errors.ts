@@ -44,10 +44,16 @@ export const AppErrorCode = {
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];
 
-export interface AppErrorData {
-  code: AppErrorCode;
+/**
+ * The one structured `ConvexError` payload: a machine code plus the English
+ * message `lib/errors.ts` `getErrorMessage` shows. A domain with its own code
+ * vocabulary (e.g. the closing-readiness reasons, SCRUM-414) widens `C`
+ * rather than defining another shape.
+ */
+export type AppErrorData<C extends string = AppErrorCode> = {
+  code: C;
   message: string;
-}
+};
 
 export function throwAppError(code: AppErrorCode, message: string): never {
   throw new ConvexError({ code, message });
