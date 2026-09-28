@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sourceCommit": "a81b5124edce2a0126a479251f638424a077253e",
+  "sourceCommit": "e645ac6ff60f3a3e908481c5b7101973a7faa36b",
   "sizeCeilings": {
     "app/(dashboard)/[orgId]/commissions/page.tsx": 868,
     "app/(dashboard)/[orgId]/dashboard/page.tsx": 922,
@@ -44,7 +44,7 @@
     "components/accounting/FixedAssetsTab.tsx": 722,
     "components/accounting/GeneralLedgerTab.tsx": 743,
     "components/accounting/PrepaidExpensesTab.tsx": 1307,
-    "components/applications/cockpit/DealCockpit.tsx": 5475,
+    "components/applications/cockpit/DealCockpit.tsx": 5597,
     "components/applications/cockpit/DealCustodyDialogs.tsx": 872,
     "components/applications/cockpit/DealCustodyPanel.tsx": 1063,
     "components/applications/cockpit/DealFinancialOverview.tsx": 687,
@@ -76,7 +76,7 @@
     "convex/adminOrgs.ts": 1169,
     "convex/adminSystem.ts": 634,
     "convex/aggregates.ts": 1049,
-    "convex/applications.ts": 5132,
+    "convex/applications.ts": 5271,
     "convex/changelog.ts": 1648,
     "convex/chartOfAccounts.ts": 1268,
     "convex/collections.ts": 3615,
@@ -90,9 +90,9 @@
     "convex/email.ts": 909,
     "convex/expenses.ts": 1059,
     "convex/facebookEngagement.ts": 1179,
-    "convex/financeDealCosts.ts": 4287,
+    "convex/financeDealCosts.ts": 3984,
     "convex/financialAudit.ts": 651,
-    "convex/financingEconomics.ts": 3321,
+    "convex/financingEconomics.ts": 3314,
     "convex/http.ts": 2000,
     "convex/instagramEngagement.ts": 1128,
     "convex/liveChat.ts": 1194,
@@ -113,9 +113,10 @@
     "convex/subscriptions.ts": 807,
     "convex/supplierCostRecoveries.ts": 633,
     "convex/utils/commitmentKernel.ts": 617,
-    "convex/utils/custodySourceLedger.ts": 2326,
+    "convex/utils/custodySourceLedger.ts": 2307,
     "convex/utils/defaultChart.ts": 839,
     "convex/utils/depositHelpers.ts": 1168,
+    "convex/utils/financedSaleRecognition.ts": 768,
     "convex/utils/financingEconomics.ts": 2466,
     "convex/utils/saleCancellation.ts": 861,
     "convex/utils/saleCompletion.ts": 2103,
@@ -169,6 +170,16 @@
       "rule": "components-no-convex-utils",
       "from": "components/accounting/setup/OpeningBalanceCard.tsx",
       "to": "convex/utils/money"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/applications/cockpit/DealClosingReadinessList.tsx",
+      "to": "convex/utils/financedSalePostingPlan"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/applications/cockpit/DealClosingReadinessList.tsx",
+      "to": "convex/utils/financedSaleRecognition"
     },
     {
       "rule": "components-no-convex-utils",
