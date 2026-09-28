@@ -1,12 +1,17 @@
+import { v } from "convex/values";
 import { MutationCtx } from "./_generated/server";
 import { internalMutation } from "./functions";
-import { Doc } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import {
+  type DealAuthority,
   DEFAULT_ROLE_TEMPLATES,
   PERMISSIONS,
   SYSTEM_OWNER_ROLE_NAME,
   isSystemOwnerRole,
   normalizeRoleName,
+  dealAuthorityGainedAtCutover,
+  dealAuthorityLostAtCutover,
+  transitionalDealGrants,
 } from "./utils/permissions";
 
 export const fixExistingRoles = internalMutation({
@@ -42,9 +47,12 @@ export const fixExistingRoles = internalMutation({
  * row — explicitly sets `isSystemOwnerRole: true` if unset. That flag matters
  * beyond just the permissions array: `isSystemOwnerRole()`'s fallback check
  * (see utils/permissions.ts) requires the stored `permissions` array to
- * contain literally every currently-defined permission, so any row missing
- * the explicit flag fails closed on every future permission addition, not
- * just the one this particular backfill is fixing.
+ * contain the frozen pre-SCRUM-413 owner set, so a row missing the explicit
+ * flag depends on that legacy list forever. (It used to require every
+ * currently-defined permission, which failed closed on every addition.)
+ *
+ * `prepareSplitDealAuthorities` does not use this: it must NOT flag an
+ * OWNER-named row that fails the fallback, and it returns structured records.
  */
 async function patchRoleIfNeeded(
   ctx: MutationCtx,
@@ -386,5 +394,168 @@ export const backfillSeniorAccountantRole = internalMutation({
     }
 
     return { createdCount, created };
+  },
+});
+
+/** One stored role's part in the SCRUM-413 preparation, before and after. */
+interface SplitDealAuthorityRecord {
+  roleId: Id<"roles">;
+  orgId: Id<"organizations">;
+  name: string;
+  /** Recognised as the owner by `isSystemOwnerRole` (flag, or the frozen fallback). */
+  ownerQualified: boolean;
+  /** An unflagged row that qualifies through the fallback: the flag is stamped. */
+  stampOwnerFlag: boolean;
+  /** Named like the owner, unflagged, and NOT qualified: reported, never stamped. */
+  ownerFlagSkipped: boolean;
+  /** The authority the old doors gave it: route = FINALIZE; closed-cancel = FINALIZE + CREATE. */
+  priorRoute: boolean;
+  priorCancelClosed: boolean;
+  added: string[];
+  /**
+   * Its matching template now holds the route but the stored row does not
+   * and is not owed it (e.g. ACCOUNTANT: the owner ruled accountants may
+   * record the route, but they never held that authority, so it is a NEW
+   * grant — and a stored name cannot prove a row is the default ACCOUNTANT).
+   * Listed for the owner (template sync), never granted here.
+   */
+  pendingOwnerAction: boolean;
+  /** Old doors it can use now but would not keep at cutover, after `added`. */
+  lostAtCutover: DealAuthority[];
+  /** The owner acknowledged exactly this loss for this role ID (see `acknowledgedLosses`). */
+  lossAcknowledged: boolean;
+  /** New doors it would start using at cutover without holding the old one (inventory only). */
+  gainedAtCutover: DealAuthority[];
+}
+
+/**
+ * SCRUM-413, preparation (PR-A): give stored roles the split deal
+ * authorities BEFORE any door moves off `finalize:financed_deal`, so the
+ * cutover denies no one who could act before it.
+ *
+ * Dry-run unless `apply: true`. It only ever ADDS what
+ * `transitionalDealGrants` says a role is owed (the same function every role
+ * writer applies), stamps the owner flag only on rows that already qualify,
+ * and removes nothing — the legacy string is stripped at cutover.
+ *
+ * The audit is the returned records: this runs with no caller identity, so
+ * it writes no `adminAuditLog` row rather than invent an actor. The
+ * operator publishes the apply output and a post-apply dry-run to SCRUM-413
+ * against the deployed commit.
+ *
+ * `pending: 0` only means nothing is left to write. The cutover gate is
+ * `ready` on a dry-run taken just before it: also no `unresolved` role — one
+ * that would lose an old door with no matching owner decision. The owner
+ * resolves each by granting the replacement, removing the old string, or
+ * accepting the loss (e.g. SALES, per the owner's ruling) in SCRUM-413; the
+ * operator passes accepted losses as `acknowledgedLosses`. An acknowledgement
+ * waives only that role ID and exactly that loss set — never a name — so a
+ * later edit that changes the loss reopens it, and an acknowledgement that no
+ * longer matches a loss is returned as stale and also blocks `ready`. Hence
+ * the fresh dry-run. `gainedAtCutover` lists the reverse (new authority a
+ * role would start using) for the owner's inventory; it does not gate.
+ */
+export const prepareSplitDealAuthorities = internalMutation({
+  args: {
+    apply: v.optional(v.boolean()),
+    acknowledgedLosses: v.optional(
+      v.array(
+        v.object({
+          roleId: v.id("roles"),
+          orgId: v.id("organizations"),
+          lost: v.array(v.union(v.literal("route"), v.literal("cancelClosed"))),
+        })
+      )
+    ),
+  },
+  handler: async (ctx, args) => {
+    const apply = args.apply === true;
+    // One owner decision per role: a repeated role ID is ambiguous, and a Map
+    // would silently keep only the last entry (SCRUM-413-R2).
+    const acknowledgedLosses = args.acknowledgedLosses ?? [];
+    if (new Set(acknowledgedLosses.map((entry) => entry.roleId)).size !== acknowledgedLosses.length) {
+      throw new Error("acknowledgedLosses lists the same role more than once; give one decision per role");
+    }
+    const acknowledged = new Map(acknowledgedLosses.map((entry) => [entry.roleId as string, entry]));
+    // Set equality both ways, so a duplicated entry cannot stand in for a missing one.
+    const sameLoss = (a: DealAuthority[], b: DealAuthority[]) =>
+      a.every((authority) => b.includes(authority)) && b.every((authority) => a.includes(authority));
+    const roles = await ctx.db.query("roles").collect();
+    const records: SplitDealAuthorityRecord[] = [];
+    let pending = 0;
+    let unresolved = 0;
+    const matchedAcknowledgements = new Set<string>();
+
+    for (const role of roles) {
+      if (role.isDeleted) continue;
+      const held = new Set(role.permissions);
+      const ownerQualified = isSystemOwnerRole(role);
+      const unflagged = role.isSystemOwnerRole === undefined;
+      const stampOwnerFlag = unflagged && ownerQualified;
+      const ownerFlagSkipped =
+        unflagged && !ownerQualified && normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME;
+      const added = transitionalDealGrants(role);
+      const template = DEFAULT_ROLE_TEMPLATES.find((candidate) => candidate.name === role.name);
+      const pendingOwnerAction =
+        template !== undefined &&
+        template.permissions.includes(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT) &&
+        !held.has(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT) &&
+        !added.includes(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
+      const needsWrite = added.length > 0 || stampOwnerFlag;
+      const lostAtCutover = dealAuthorityLostAtCutover({ ...role, permissions: [...role.permissions, ...added] });
+      const ack = acknowledged.get(role._id);
+      // The decision must name this role's own organization (a mistyped or
+      // transposed role ID from another tenant stays stale).
+      const lossAcknowledged =
+        lostAtCutover.length > 0 && ack !== undefined && ack.orgId === role.orgId && sameLoss(ack.lost, lostAtCutover);
+      if (lossAcknowledged) matchedAcknowledgements.add(role._id);
+      const gainedAtCutover = dealAuthorityGainedAtCutover({ ...role, permissions: [...role.permissions, ...added] });
+
+      if (
+        !needsWrite &&
+        !ownerFlagSkipped &&
+        !pendingOwnerAction &&
+        lostAtCutover.length === 0 &&
+        gainedAtCutover.length === 0
+      ) {
+        continue;
+      }
+      if (needsWrite) pending++;
+      if (lostAtCutover.length > 0 && !lossAcknowledged) unresolved++;
+
+      records.push({
+        roleId: role._id,
+        orgId: role.orgId,
+        name: role.name,
+        ownerQualified,
+        stampOwnerFlag,
+        ownerFlagSkipped,
+        priorRoute: held.has(PERMISSIONS.FINALIZE_FINANCED_DEAL),
+        priorCancelClosed:
+          held.has(PERMISSIONS.FINALIZE_FINANCED_DEAL) && held.has(PERMISSIONS.CREATE_FINANCE_APPLICATION),
+        added,
+        pendingOwnerAction,
+        lostAtCutover,
+        lossAcknowledged,
+        gainedAtCutover,
+      });
+
+      if (apply && needsWrite) {
+        await ctx.db.patch(role._id, {
+          permissions: [...role.permissions, ...added],
+          ...(stampOwnerFlag ? { isSystemOwnerRole: true } : {}),
+        });
+      }
+    }
+
+    const staleAcknowledgements = [...acknowledged.keys()].filter((roleId) => !matchedAcknowledgements.has(roleId));
+    return {
+      apply,
+      pending,
+      unresolved,
+      staleAcknowledgements,
+      ready: pending === 0 && unresolved === 0 && staleAcknowledgements.length === 0,
+      records,
+    };
   },
 });

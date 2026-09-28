@@ -642,8 +642,10 @@ describe("memberships direct-account utilities", () => {
     ) as Id<"roles">;
     const asOwner = t.withIdentity({ subject: "user_sync_roles_owner" });
 
-    const updated = await asOwner.mutation(api.memberships.syncRolePermissionsToTemplate, { orgId });
-    expect(updated).toBeGreaterThanOrEqual(2);
+    const { changes } = await asOwner.mutation(api.memberships.syncRolePermissionsToTemplate, { orgId });
+    const changedNames = changes.map((change: { name: string }) => change.name);
+    expect(changedNames).toContain("MANAGER");
+    expect(changedNames).not.toContain("CUSTOM");
 
     await t.run(async (ctx: any) => {
       const managerRole = await ctx.db.get(managerRoleId);
