@@ -1355,7 +1355,30 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
             }
           : null,
       summaryUnavailable,
-      custody: [],
+      // Handover costs are paid out of custody cash (owner ruling 2026-09-28,
+      // SCRUM-439), so a deal whose costs are being recorded has an employee
+      // holding some: without an open record the add door is shut.
+      custody: [
+        {
+          _id: "cust_1",
+          userId: "user_holder",
+          userName: "Holder",
+          currency,
+          status: "OPEN",
+          issuedMinor: 500_000,
+          returnedMinor: 0,
+          reimbursedMinor: 0,
+          summary: {
+            actualExpensesMinor: 0,
+            employeeOwesDealerMinor: 500_000,
+            reimbursementOutstandingMinor: 0,
+            reimbursementOverpaidMinor: 0,
+            overReturnedMinor: 0,
+            settled: false,
+          },
+          summaryUnavailable: null,
+        },
+      ],
     };
   }
   const transferLine = {
@@ -1374,7 +1397,7 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     queryResults.set(GET_QUERY, application({ status: "APPROVED" }));
   }
 
-  test("ADD sends the handover line as dealer-borne with an explicit treatment and a RETAINED identity that survives an unknown result", async () => {
+  test("ADD sends the handover line as the employee's (paid from custody) with an explicit treatment and a RETAINED identity that survives an unknown result", async () => {
     readableDeal();
     permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
     queryResults.set(COSTS_QUERY, costsPayload());
@@ -1414,11 +1437,15 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
       expectedCurrency: "JOD",
       estimatedAmountMinor: undefined,
       actualAmountMinor: 150_000,
-      paidBy: "DEALER",
+      // Always paid out of custody cash (owner ruling 2026-09-28,
+      // SCRUM-439). This caller has no custody authority, so the line is
+      // sent unlinked and waits under "Charge a cost".
+      paidBy: "EMPLOYEE",
       paidTo: "GOVERNMENT",
       accountingTreatment: "SELLING_EXPENSE",
       source: "MANUAL",
     });
+    expect(first).not.toHaveProperty("custodyId");
     expect(first.idempotencyKey).toMatch(/^record-deal-fee:app_2048:[0-9a-f-]{36}:[0-9a-f-]{36}$/);
     expect(second.idempotencyKey).toBe(first.idempotencyKey);
     // The retry is the SAME request: same currency, same integer, same everything.

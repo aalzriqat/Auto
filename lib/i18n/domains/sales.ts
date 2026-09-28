@@ -468,6 +468,33 @@ const dealRailMessages = defineBilingualMessages({
   CostActual: ["Actual", "فعلي"],
   CostTypeLabel: ["Cost type", "نوع المصروف"],
   CostPayeeLabel: ["Paid to", "مدفوع إلى"],
+  // A handover cost is always paid out of an employee's custody cash (owner
+  // ruling 2026-09-28, SCRUM-439).
+  CostPaidFromCustodyLabel: ["Paid from the custody cash of", "مدفوع من نقد عهدة"],
+  CostPaidFromCustodyHeading: ["Paid from custody cash", "مدفوع من نقد العهدة"],
+  CostPaidByChoose: ["Choose the employee…", "اختر الموظف…"],
+  CostPaidFromCustodyNote: [
+    "Handover costs are paid from custody cash. This one is charged to that employee's custody now and counts toward what they account for when it is reconciled.",
+    "تُدفع مصاريف التسليم من نقد العهدة. يُحمَّل هذا المصروف على عهدة الموظف الآن، ويُحتسب ضمن ما يبرّره عند تسويتها.",
+  ],
+  CostPaidFromCustodyPendingNote: [
+    "Handover costs are paid from custody cash. This one is recorded as the employee's and waits under “Charge a cost” in Employee cash custody for a manager or accountant to charge it.",
+    "تُدفع مصاريف التسليم من نقد العهدة. يُسجَّل هذا المصروف باسم الموظف، وينتظر في «تحميل مصروف» ضمن عهدة الموظف النقدية ليحمّله مدير أو محاسب.",
+  ],
+  CostPaidByRequired: ["Choose whose custody paid this cost.", "اختر العهدة التي دُفع منها هذا المصروف."],
+  CostPaidFromCustodyGone: [
+    "That custody record can no longer take this cost from here. Choose the employee again.",
+    "لم يعد بالإمكان تحميل المصروف على سجل العهدة هذا من هنا. اختر الموظف مجددًا.",
+  ],
+  CostPaidFromCustodyGoneNone: [
+    "That custody record can no longer take this cost from here, and no other custody can take it now. Record it as the employee's cost for now; it can be charged to a custody from “Charge a cost” later.",
+    "لم يعد بالإمكان تحميل المصروف على سجل العهدة هذا من هنا، ولا توجد عهدة أخرى يمكن تحميله عليها الآن. سجّله مصروفًا على الموظف الآن، ويمكن تحميله على عهدة لاحقًا من «تحميل مصروف».",
+  ],
+  CostPaidFromCustodyRelease: ["Record without charging a custody", "سجّل دون تحميله على عهدة"],
+  HandoverCostNeedsCustody: [
+    "Handover costs are paid from custody cash, and no employee holds any for this deal yet. This cost is recorded as the employee's; hand them the cash under Employee cash custody, then charge it there with “Charge a cost”.",
+    "تُدفع مصاريف التسليم من نقد العهدة، ولا يحمل أي موظف نقدًا لهذه الصفقة بعد. يُسجَّل هذا المصروف باسم الموظف؛ سلِّمه النقد من قسم عهدة الموظف النقدية، ثم حمِّله عليها من «تحميل مصروف».",
+  ],
   CostDescriptionLabel: ["Description (optional)", "الوصف (اختياري)"],
   CostFigureLabel: ["Figure", "الرقم"],
   // The checklist the finance company's frozen policy implies (owner product
@@ -1134,6 +1161,20 @@ const dealOverviewMessages = defineBilingualMessages({
   ],
   CustodyAttachPick: ["Cost", "المصروف"],
   CustodyAttachNone: ["No eligible cost is waiting to be charged.", "لا مصروف مؤهَّل بانتظار التحميل."],
+  CustodyAttachHowTo: [
+    "Nothing waiting to be charged. Costs the employee paid are recorded under Vehicle handover fees and costs.",
+    "لا مصروف بانتظار التحميل. تُسجَّل المصاريف التي دفعها الموظف في رسوم ومصاريف تسليم السيارة.",
+  ],
+  CustodyCloseStillHeld: ["is still not accounted for.", "لم يُبرَّر بعد."],
+  CustodyCloseSettleSteps: [
+    "First record the costs the employee paid (Vehicle handover fees and costs) and the cash they returned (Record return). Write off only cash that is really lost.",
+    "سجِّل أولًا المصاريف التي دفعها الموظف (رسوم ومصاريف تسليم السيارة) والنقد الذي أعاده (تسجيل إعادة). لا تشطب إلا نقدًا مفقودًا فعلًا.",
+  ],
+  CustodyCloseOtherOutstanding: ["This custody is not settled yet.", "هذه العهدة غير مسوّاة بعد."],
+  CustodyCloseOtherSteps: [
+    "Something is still owed in one direction — reimburse the employee, or correct an over-return or over-reimbursement — before it can close.",
+    "ما زال هناك مبلغ مستحق في أحد الاتجاهين — عوِّض الموظف، أو صحِّح إعادة أو تعويضًا زائدًا — قبل أن تُغلق.",
+  ],
   CustodyRelease: ["Release from custody", "تحرير من العهدة"],
   CustodyCloseTitle: ["Reconcile and close this custody", "تسوية هذه العهدة وإغلاقها"],
   CustodyCloseDesc: ["Say what was checked. The record closes only when nothing is outstanding in either direction.", "اذكر ما تم التحقق منه. يُغلق السجل فقط عندما لا يبقى شيء مستحق في أي اتجاه."],

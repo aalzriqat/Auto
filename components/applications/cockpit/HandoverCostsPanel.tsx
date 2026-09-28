@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { economicDateInputToMs, economicTodayDateInput } from "@/lib/dateInput";
-import type { Doc } from "@/convex/_generated/dataModel";
+import type { Doc, Id } from "@/convex/_generated/dataModel";
 
 /** The fee-type union the server validates — the row carries it as such, so no cast is needed to send it back. */
 export type ServedFeeType = Doc<"financeDealFees">["feeType"];
@@ -70,14 +70,50 @@ export type HandoverFeeType = (typeof HANDOVER_FEE_TYPES)[number];
  * The accounting treatment the server REQUIRES to be stated (it refuses to
  * infer one). Offered pre-selected per type, and visible, so a different one
  * can be chosen deliberately.
+ *
+ * Only treatments the dealership expenses: a handover cost is always paid out
+ * of an employee's custody cash (owner ruling 2026-09-28, SCRUM-439), and the
+ * server posts only those against custody (`CUSTODY_POSTABLE_TREATMENTS`). A
+ * customer-recoverable treatment could never be charged there, so it is not
+ * offered.
  */
 export const HANDOVER_TREATMENTS = [
   "OWNERSHIP_TRANSFER_EXPENSE",
   "SELLING_EXPENSE",
   "INSURANCE_EXPENSE",
-  "CUSTOMER_RECEIVABLE",
 ] as const;
 export type HandoverTreatment = (typeof HANDOVER_TREATMENTS)[number];
+
+/**
+ * An open custody record a new cost may be charged to in the same command
+ * (SCRUM-439). The container offers only the records the server would accept
+ * from THIS caller: open, on the ledger, in the deal's currency, held by
+ * somebody other than the operator, to a caller who may post custody.
+ */
+export type HandoverCustodyPayer = Readonly<{ custodyId: Id<"financeDealCustody">; holderName: string }>;
+
+/**
+ * Where a new handover cost's cash comes from — always an employee's custody
+ * (owner ruling 2026-09-28, SCRUM-439):
+ *   CHARGE  — this caller may charge a record directly; the cost is written
+ *             as the employee's and charged to the chosen record together.
+ *   PENDING — custody is open on the deal but this caller may not charge it
+ *             (no custody authority, or they hold the cash themselves): the
+ *             cost is written as paid by the employee and waits under
+ *             "Charge a cost" for somebody who may.
+ *   NONE    — no custody is open yet. The cost is still written as the
+ *             employee's (never the dealership's), and the form says to hand
+ *             the cash over and charge it from "Charge a cost". Not a locked
+ *             door: a deal with no handover costs at all records its zero line
+ *             here, and an employee-paid line posts exactly as a dealer-borne
+ *             one does until it is charged (`feeSummary`, `dealOverview`).
+ */
+export type HandoverCostSource =
+  | Readonly<{ kind: "CHARGE"; payers: ReadonlyArray<HandoverCustodyPayer> }>
+  | Readonly<{ kind: "PENDING" }>
+  | Readonly<{ kind: "NONE" }>
+  /** The caller may charge custody, but the read naming them has not answered. */
+  | Readonly<{ kind: "LOADING" }>;
 
 export const HANDOVER_PAYEES = ["GOVERNMENT", "INSURER", "OTHER"] as const;
 export type HandoverPayee = (typeof HANDOVER_PAYEES)[number];
@@ -113,7 +149,6 @@ const TREATMENT_LABEL: Record<HandoverTreatment, string> = {
   OWNERSHIP_TRANSFER_EXPENSE: "TreatmentOwnershipTransferExpense",
   SELLING_EXPENSE: "TreatmentSellingExpense",
   INSURANCE_EXPENSE: "TreatmentInsuranceExpense",
-  CUSTOMER_RECEIVABLE: "TreatmentCustomerReceivable",
 };
 
 const PAYEE_LABEL: Record<HandoverPayee, string> = {
@@ -281,6 +316,15 @@ export type NewHandoverCost = {
   accountingTreatment: HandoverTreatment;
   paidAt: number | undefined;
   receiptReference: string | undefined;
+  /**
+   * A handover cost is always paid by an employee out of custody cash (owner
+   * ruling 2026-09-28, SCRUM-439). This names the record when the caller
+   * charges it in the same command — the line is written as that employee's
+   * and charged together, so the custody's expenses and the cost line can
+   * never disagree. Undefined when the caller may not charge custody: the
+   * line is still the employee's and waits under "Charge a cost".
+   */
+  custodyId: Id<"financeDealCustody"> | undefined;
 };
 
 export type ActualHandoverCost = {
@@ -356,6 +400,7 @@ export function HandoverCostsPanel({
   money,
   canManage,
   dealClosed,
+  costSource,
   t,
   onAdd,
   onAbandonAdd,
@@ -382,6 +427,8 @@ export function HandoverCostsPanel({
   canManage: boolean;
   /** Informational only; the server decides what a closed deal still accepts. */
   dealClosed: boolean;
+  /** Where a new cost's cash comes from — always an employee's custody. */
+  costSource: HandoverCostSource;
   t: (key: string) => string;
   onAdd: (values: NewHandoverCost) => Promise<void>;
   /** The operator cancelled a form that had already attempted once: its intent is over. */
@@ -538,7 +585,13 @@ export function HandoverCostsPanel({
           )}
         </div>
         {canAdd && costs && !adding && (
-          <Button type="button" size="sm" variant="outline" disabled={submittingAny} onClick={openAdd}>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={submittingAny || costSource.kind === "LOADING"}
+            onClick={openAdd}
+          >
             <Plus className="h-4 w-4 me-1.5" />
             {t("AddHandoverCost")}
           </Button>
@@ -596,6 +649,7 @@ export function HandoverCostsPanel({
             intent={openIntent}
             attempt={openAttempt}
             dealClosed={dealClosed}
+            costSource={costSource}
             t={t}
             onCancel={() => void closeAddForm()}
             onSubmit={(values) => submitAdd(openIntent, values)}
@@ -1103,10 +1157,118 @@ function ExpectedTotal({
   );
 }
 
+/** The add-cost form's "paid from custody" field: the payer choice and what it means now. */
+function PaidBySection({
+  costSource,
+  payers,
+  payer,
+  payerGone,
+  t,
+  onChoose,
+}: Readonly<{
+  costSource: HandoverCostSource;
+  payers: ReadonlyArray<HandoverCustodyPayer>;
+  payer: HandoverCustodyPayer | null;
+  payerGone: boolean;
+  t: (key: string) => string;
+  onChoose: (custodyId: Id<"financeDealCustody"> | null) => void;
+}>) {
+  return (
+    <div className="space-y-1.5 sm:col-span-2">
+      {costSource.kind === "CHARGE" && payers.length > 0 ? (
+        <>
+          <Label htmlFor="handover-cost-paid-by">{t("CostPaidFromCustodyLabel")}</Label>
+          <select
+            id="handover-cost-paid-by"
+            className={selectClass}
+            value={payer?.custodyId ?? ""}
+            aria-invalid={payerGone}
+            data-testid="deal-handover-cost-paid-by"
+            onChange={(event) =>
+              onChoose(payers.find((option) => option.custodyId === event.target.value)?.custodyId ?? null)
+            }
+          >
+            {payer === null && (
+              <option value="" disabled>
+                {t("CostPaidByChoose")}
+              </option>
+            )}
+            {payers.map((option) => (
+              <option key={option.custodyId} value={option.custodyId}>
+                {option.holderName}
+              </option>
+            ))}
+          </select>
+        </>
+      ) : (
+        <p className="text-sm font-medium" data-testid="deal-handover-cost-paid-by-fixed">
+          {t("CostPaidFromCustodyHeading")}
+        </p>
+      )}
+      <PaidByNotice costSource={costSource} payers={payers} payerGone={payerGone} t={t} onChoose={onChoose} />
+    </div>
+  );
+}
+
+function PaidByNotice({
+  costSource,
+  payers,
+  payerGone,
+  t,
+  onChoose,
+}: Readonly<{
+  costSource: HandoverCostSource;
+  payers: ReadonlyArray<HandoverCustodyPayer>;
+  payerGone: boolean;
+  t: (key: string) => string;
+  onChoose: (custodyId: Id<"financeDealCustody"> | null) => void;
+}>) {
+  if (payerGone && payers.length === 0) {
+    // Nothing is left to choose from: say where the cost goes now and
+    // let the operator accept it explicitly, never by default.
+    return (
+      <div className="space-y-1.5" data-testid="deal-handover-cost-paid-by-gone">
+        <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+          {t("CostPaidFromCustodyGoneNone")}
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          data-testid="deal-handover-cost-paid-by-release"
+          onClick={() => onChoose(null)}
+        >
+          {t("CostPaidFromCustodyRelease")}
+        </Button>
+      </div>
+    );
+  }
+  if (payerGone) {
+    return (
+      <p className="text-xs font-medium text-amber-700 dark:text-amber-400" data-testid="deal-handover-cost-paid-by-gone">
+        {t("CostPaidFromCustodyGone")}
+      </p>
+    );
+  }
+  if (costSource.kind === "NONE") {
+    return (
+      <p className="text-xs font-medium text-amber-700 dark:text-amber-400" data-testid="deal-handover-cost-needs-custody">
+        {t("HandoverCostNeedsCustody")}
+      </p>
+    );
+  }
+  return (
+    <p className="text-xs text-muted-foreground" data-testid="deal-handover-cost-paid-by-note">
+      {t(costSource.kind === "CHARGE" ? "CostPaidFromCustodyNote" : "CostPaidFromCustodyPendingNote")}
+    </p>
+  );
+}
+
 function AddForm({
   intent,
   attempt,
   dealClosed,
+  costSource,
   t,
   onCancel,
   onSubmit,
@@ -1116,6 +1278,7 @@ function AddForm({
   /** The panel's record of this intent's attempt, or null before the first one. */
   attempt: AddAttempt | null;
   dealClosed: boolean;
+  costSource: HandoverCostSource;
   t: (key: string) => string;
   onCancel: () => void;
   onSubmit: (values: NewHandoverCost) => Promise<void>;
@@ -1127,6 +1290,23 @@ function AddForm({
   const [amount, setAmount] = useState("");
   const [paidOn, setPaidOn] = useState("");
   const [reference, setReference] = useState("");
+  /**
+   * Whose custody the cash came out of, when this caller charges it directly.
+   * The answer is what the operator SAW: the one record on offer when the
+   * form opened, or their explicit pick. It is fixed at that moment, never
+   * re-derived from the live read — a record swapped, closed or newly opened
+   * under an open form would otherwise charge somebody else, or nobody,
+   * without anyone choosing it. With several on offer, the form asks.
+   */
+  const payers = costSource.kind === "CHARGE" ? costSource.payers : [];
+  const [chosenCustodyId, setChosenCustodyId] = useState<Id<"financeDealCustody"> | null>(() =>
+    costSource.kind === "CHARGE" && costSource.payers.length === 1 ? costSource.payers[0].custodyId : null
+  );
+  const payer = payers.find((option) => option.custodyId === chosenCustodyId) ?? null;
+  // The answered record stopped being offered while the form was open, or
+  // custody stopped being open at all. Say so and let the operator decide.
+  const payerGone = chosenCustodyId !== null && payer === null;
+  const payerUnchosen = (costSource.kind === "CHARGE" && payer === null && !payerGone) || costSource.kind === "LOADING";
   const [validation, setValidation] = useState<string | null>(null);
   /**
    * The denomination this form was OPENED under — captured by the panel with
@@ -1170,6 +1350,14 @@ function AddForm({
           setValidation(t("CostAmountRequired"));
           return;
         }
+        if (payerGone) {
+          setValidation(t("CostPaidFromCustodyGone"));
+          return;
+        }
+        if (payerUnchosen) {
+          setValidation(t("CostPaidByRequired"));
+          return;
+        }
         setValidation(null);
         // An ADDITIONAL cost is what was actually paid. There is no expected
         // figure to type: expectations are the finance company's, read from
@@ -1185,6 +1373,7 @@ function AddForm({
           accountingTreatment: treatment,
           paidAt: paidOn ? economicDateInputToMs(paidOn) : undefined,
           receiptReference: reference.trim() || undefined,
+          custodyId: payer?.custodyId,
         });
       }}
     >
@@ -1233,6 +1422,14 @@ function AddForm({
             ))}
           </select>
         </div>
+        <PaidBySection
+          costSource={costSource}
+          payers={payers}
+          payer={payer}
+          payerGone={payerGone}
+          t={t}
+          onChoose={setChosenCustodyId}
+        />
         <div className="space-y-1.5 sm:col-span-2">
           <Label htmlFor="handover-cost-description">{t("CostDescriptionLabel")}</Label>
           <Input
@@ -1299,7 +1496,7 @@ function AddForm({
         <Button type="button" variant="ghost" size="sm" disabled={submitting} onClick={onCancel}>
           {t("Cancel")}
         </Button>
-        <Button type="submit" size="sm" disabled={submitting || (!attempted && amountMinor === null)}>
+        <Button type="submit" size="sm" disabled={submitting || (!attempted && (amountMinor === null || payerGone || payerUnchosen))}>
           {submitting && <Loader2 className="h-4 w-4 me-1.5 animate-spin" />}
           {t(attempted ? "RetryHandoverCost" : "SaveHandoverCost")}
         </Button>

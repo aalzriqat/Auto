@@ -129,6 +129,7 @@ import {
   type ExpectedHandoverRow,
   type ActualHandoverCost,
   type HandoverCostsData,
+  type HandoverCostSource,
   type NewHandoverCost,
 } from "./HandoverCostsPanel";
 import { RecordLegalInvoiceDialog, type RecordLegalInvoiceValues } from "./RecordLegalInvoiceDialog";
@@ -1159,6 +1160,36 @@ export function DealCockpit({
           // panel says why at its head.
           canManage: canCreateApplication && !(dealCosts?.economicsFrozen?.frozen ?? app.status === "CLOSED"),
           dealClosed: dealCosts?.economicsFrozen?.frozen ?? app.status === "CLOSED",
+          // Where a new handover cost's cash comes from — always an employee's
+          // custody (owner ruling 2026-09-28, SCRUM-439). A record counts
+          // when it is open, on the ledger and in the deal's currency. It is
+          // CHARGED directly only where `recordDealFee` would accept its
+          // `custodyId` from this caller: custody authority, a ledger that
+          // can take the posting, and a record held by somebody else (the
+          // holder never charges their own). The candidate read is what names
+          // the operator, so an authorised caller waits for it rather than
+          // being handed the unlinked path by a loading flicker.
+          costSource: ((): HandoverCostSource => {
+            const open = (dealCosts?.custody ?? []).filter(
+              (record) => record.status === "OPEN" && !record.legacy && record.currency === dealCosts?.currency
+            );
+            if (open.length === 0) return { kind: "NONE" };
+            if (!custodyCommandsOffered) return { kind: "PENDING" };
+            if (custodyCandidates === undefined) return { kind: "LOADING" };
+            // The caller, named by the read itself: the member list is capped,
+            // so the operator may be past it. A backend that predates
+            // `actorId` answers through the list; with neither, the caller is
+            // unknown and no record is offered — the server refuses a holder
+            // charging their own custody, so a guess would be a dead end.
+            const actorId =
+              custodyCandidates.actorId ?? custodyCandidates.candidates.find((member) => member.isActor)?.userId;
+            const payers = dealCosts?.custodyAccounting?.ready === true && actorId !== undefined
+              ? open
+                  .filter((record) => record.userId !== actorId)
+                  .map((record) => ({ custodyId: record._id, holderName: record.userName || t("CustodyHandlerNone") }))
+              : [];
+            return payers.length > 0 ? { kind: "CHARGE", payers } : { kind: "PENDING" };
+          })(),
           onAdd: async (values: NewHandoverCost) => {
             const feeIntent = `record-deal-fee:${applicationId}:${values.intentId}`;
             try {
@@ -1175,7 +1206,12 @@ export function DealCockpit({
                 // deal's frozen snapshot (owner correction 2026-09-12 21:05).
                 estimatedAmountMinor: undefined,
                 actualAmountMinor: values.actualAmountMinor,
-                paidBy: "DEALER",
+                // Always the employee's, out of custody cash (owner ruling
+                // 2026-09-28, SCRUM-439); charged to the named record in the
+                // same command when this caller may, else it waits under
+                // "Charge a cost".
+                paidBy: "EMPLOYEE",
+                ...(values.custodyId ? { custodyId: values.custodyId } : {}),
                 paidTo: values.paidTo,
                 accountingTreatment: values.accountingTreatment,
                 paidAt: values.paidAt,
