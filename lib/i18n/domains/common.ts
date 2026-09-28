@@ -965,6 +965,7 @@ export const commonEn = {
   SyncRolePermissions: "Sync Role Permissions",
   SyncRolePermissionsDone: "Updated {count} role(s) to the latest permission templates: {roles}.",
   SyncRolePermissionsNone: "All standard roles already match the latest permission templates.",
+  SyncRolePermissionsSynced: "Role permissions synced to the latest templates.",
 
   // Tasks / common
   AllPriorities: "All priorities",
@@ -1910,6 +1911,7 @@ export const commonAr = {
   SyncRolePermissions: "مزامنة صلاحيات الأدوار",
   SyncRolePermissionsDone: "تم تحديث {count} من الأدوار إلى أحدث قوالب الصلاحيات: {roles}.",
   SyncRolePermissionsNone: "جميع الأدوار القياسية مطابقة لأحدث قوالب الصلاحيات.",
+  SyncRolePermissionsSynced: "تمت مزامنة صلاحيات الأدوار مع أحدث القوالب.",
 
   // Tasks / common
   AllPriorities: "جميع الأولويات",

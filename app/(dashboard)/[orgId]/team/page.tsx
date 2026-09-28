@@ -37,12 +37,12 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EditRoleDialog } from "@/components/team/EditRoleDialog";
+import { syncRolePermissionsMessage } from "@/components/team/syncRolePermissionsMessage";
 import { ChangeMemberRoleDialog } from "@/components/team/ChangeMemberRoleDialog";
 import { RoleGuard } from "@/components/auth/RoleGuard";
 import { useTableControls } from "@/hooks/useTableControls";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 import { getErrorMessage } from "@/lib/errors";
-import { interpolate } from "@/lib/i18n/interpolate";
 
 // lastSeenAt is throttled to a write at most every few minutes (see
 // memberships.touchLastSeen), so "active now" below lines up with that
@@ -181,16 +181,7 @@ export default function TeamPage() {
                     // deploys first); the sync has already written, so never fail here.
                     const result: Awaited<ReturnType<typeof syncRolePermissions>> | number =
                       await syncRolePermissions({ orgId: activeOrgId });
-                    const changes = typeof result === "number" ? [] : result.changes;
-                    const count = typeof result === "number" ? result : changes.length;
-                    toast.success(
-                      count === 0
-                        ? t("SyncRolePermissionsNone" as any)
-                        : interpolate(t("SyncRolePermissionsDone" as any), {
-                            count,
-                            roles: changes.map((change) => change.name).join(", "),
-                          })
-                    );
+                    toast.success(syncRolePermissionsMessage(result, (key) => t(key as any)));
                   } catch (e: any) {
                     toast.error(e);
                   }
