@@ -9,6 +9,7 @@ import {
   SYSTEM_OWNER_ROLE_NAME,
   isSystemOwnerRole,
   normalizeRoleName,
+  dealAuthorityGainedAtCutover,
   dealAuthorityLostAtCutover,
   transitionalDealGrants,
 } from "./utils/permissions";
@@ -421,8 +422,10 @@ interface SplitDealAuthorityRecord {
   pendingOwnerAction: boolean;
   /** Old doors it can use now but would not keep at cutover, after `added`. */
   lostAtCutover: DealAuthority[];
-  /** The loss is the owner's SCRUM-413 ruling (SALES loses all financed-deal authority). */
-  lossRuledByOwner: boolean;
+  /** The owner acknowledged exactly this loss for this role ID (see `acknowledgedLosses`). */
+  lossAcknowledged: boolean;
+  /** New doors it would start using at cutover without holding the old one (inventory only). */
+  gainedAtCutover: DealAuthority[];
 }
 
 /**
@@ -442,17 +445,41 @@ interface SplitDealAuthorityRecord {
  *
  * `pending: 0` only means nothing is left to write. The cutover gate is
  * `ready` on a dry-run taken just before it: also no `unresolved` role — one
- * that would lose an old door, is not SALES, and awaits the owner's grant or
- * removal. Role edits after this run can reopen it, hence the fresh dry-run.
+ * that would lose an old door with no matching owner decision. The owner
+ * resolves each by granting the replacement, removing the old string, or
+ * accepting the loss (e.g. SALES, per the owner's ruling) in SCRUM-413; the
+ * operator passes accepted losses as `acknowledgedLosses`. An acknowledgement
+ * waives only that role ID and exactly that loss set — never a name — so a
+ * later edit that changes the loss reopens it, and an acknowledgement that no
+ * longer matches a loss is returned as stale and also blocks `ready`. Hence
+ * the fresh dry-run. `gainedAtCutover` lists the reverse (new authority a
+ * role would start using) for the owner's inventory; it does not gate.
  */
 export const prepareSplitDealAuthorities = internalMutation({
-  args: { apply: v.optional(v.boolean()) },
+  args: {
+    apply: v.optional(v.boolean()),
+    acknowledgedLosses: v.optional(
+      v.array(
+        v.object({
+          roleId: v.id("roles"),
+          lost: v.array(v.union(v.literal("route"), v.literal("cancelClosed"))),
+        })
+      )
+    ),
+  },
   handler: async (ctx, args) => {
     const apply = args.apply === true;
+    const acknowledged = new Map<string, DealAuthority[]>(
+      (args.acknowledgedLosses ?? []).map((entry) => [entry.roleId, entry.lost])
+    );
+    // Set equality both ways, so a duplicated entry cannot stand in for a missing one.
+    const sameLoss = (a: DealAuthority[], b: DealAuthority[]) =>
+      a.every((authority) => b.includes(authority)) && b.every((authority) => a.includes(authority));
     const roles = await ctx.db.query("roles").collect();
     const records: SplitDealAuthorityRecord[] = [];
     let pending = 0;
     let unresolved = 0;
+    const matchedAcknowledgements = new Set<string>();
 
     for (const role of roles) {
       if (role.isDeleted) continue;
@@ -471,11 +498,22 @@ export const prepareSplitDealAuthorities = internalMutation({
         !added.includes(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
       const needsWrite = added.length > 0 || stampOwnerFlag;
       const lostAtCutover = dealAuthorityLostAtCutover({ ...role, permissions: [...role.permissions, ...added] });
-      const lossRuledByOwner = lostAtCutover.length > 0 && role.name === "SALES";
+      const ack = acknowledged.get(role._id);
+      const lossAcknowledged = lostAtCutover.length > 0 && ack !== undefined && sameLoss(ack, lostAtCutover);
+      if (lossAcknowledged) matchedAcknowledgements.add(role._id);
+      const gainedAtCutover = dealAuthorityGainedAtCutover({ ...role, permissions: [...role.permissions, ...added] });
 
-      if (!needsWrite && !ownerFlagSkipped && !pendingOwnerAction && lostAtCutover.length === 0) continue;
+      if (
+        !needsWrite &&
+        !ownerFlagSkipped &&
+        !pendingOwnerAction &&
+        lostAtCutover.length === 0 &&
+        gainedAtCutover.length === 0
+      ) {
+        continue;
+      }
       if (needsWrite) pending++;
-      if (lostAtCutover.length > 0 && !lossRuledByOwner) unresolved++;
+      if (lostAtCutover.length > 0 && !lossAcknowledged) unresolved++;
 
       records.push({
         roleId: role._id,
@@ -490,7 +528,8 @@ export const prepareSplitDealAuthorities = internalMutation({
         added,
         pendingOwnerAction,
         lostAtCutover,
-        lossRuledByOwner,
+        lossAcknowledged,
+        gainedAtCutover,
       });
 
       if (apply && needsWrite) {
@@ -501,6 +540,14 @@ export const prepareSplitDealAuthorities = internalMutation({
       }
     }
 
-    return { apply, pending, unresolved, ready: pending === 0 && unresolved === 0, records };
+    const staleAcknowledgements = [...acknowledged.keys()].filter((roleId) => !matchedAcknowledgements.has(roleId));
+    return {
+      apply,
+      pending,
+      unresolved,
+      staleAcknowledgements,
+      ready: pending === 0 && unresolved === 0 && staleAcknowledgements.length === 0,
+      records,
+    };
   },
 });

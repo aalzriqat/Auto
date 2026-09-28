@@ -272,6 +272,25 @@ export function dealAuthorityLostAtCutover(role: RoleLike): DealAuthority[] {
   return lost;
 }
 
+/**
+ * SCRUM-413 transition, the mirror of `dealAuthorityLostAtCutover`: new deal
+ * authorities a role holds that its old permissions do not give it today, so
+ * it would start using them at cutover (e.g. the ACCOUNTANT route the owner
+ * ruled, or a replacement kept after the old string was revoked). Reported for
+ * the owner's inventory; never removed here.
+ */
+export function dealAuthorityGainedAtCutover(role: RoleLike): DealAuthority[] {
+  if (role.isDeleted || isSystemOwnerRole(role)) return [];
+  const held = new Set(role.permissions);
+  const finalize = held.has(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+  const gained: DealAuthority[] = [];
+  if (held.has(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT) && !finalize) gained.push("route");
+  if (held.has(PERMISSIONS.CANCEL_CLOSED_DEAL) && !(finalize && held.has(PERMISSIONS.CREATE_FINANCE_APPLICATION))) {
+    gained.push("cancelClosed");
+  }
+  return gained;
+}
+
 export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }[] = [
   {
     name: SYSTEM_OWNER_ROLE_NAME,
