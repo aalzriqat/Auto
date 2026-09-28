@@ -22,6 +22,7 @@ import { getErrorMessage } from "@/lib/errors";
 import { decideDepositSubmission } from "@/lib/depositSettlementSubmission";
 import { supportedCurrencyScale } from "@/convex/utils/money";
 import { useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
+import { creationQuotationNoteKey } from "./creationQuotationNote";
 
 interface Step4QuoteSuccessProps {
   paymentType: PaymentType;
@@ -540,9 +541,10 @@ export function Step4QuoteSuccess({
                 </div>
               ) : (
                 <p className="mx-auto max-w-md text-start text-xs text-muted-foreground">
-                  {creationQuotation.available === false && creationQuotation.reason === "NOT_CONFIGURED_COMPANY"
-                    ? t("CreationQuotationManualCompany")
-                    : t("CreationQuotationNotRecorded")}
+                  {(t(creationQuotationNoteKey(creationQuotation)) ?? "").replace(
+                    "{company}",
+                    selectedCompany?.name ?? "—"
+                  )}
                 </p>
               )}
             </div>
