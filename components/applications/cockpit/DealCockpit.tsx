@@ -5270,7 +5270,9 @@ export function StageFocusRow({
                   </button>
                 )}
               </div>
-            ) : (
+            ) : action?.unavailableReasonKey ? null : (
+              // Not said above a refusal: "nothing is outstanding" over "this
+              // sale is still a draft" contradicts itself (SCRUM-417 visual gate).
               <p className="text-sm text-muted-foreground">
                 {action?.actionKey === "RegisterHandoverAction" || action?.actionKey === "ActionConfirmHandover"
                   ? t("StageReadyForHandoverAction")

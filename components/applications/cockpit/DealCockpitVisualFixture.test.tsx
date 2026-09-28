@@ -50,7 +50,7 @@ vi.mock("@/components/accounting/AccountingTabShared", () => ({
   scaleForCurrency: (code: string) => (code === "USD" ? 2 : 3),
 }));
 
-import { DealCockpitView } from "./DealCockpit";
+import { DealCockpitView, StageFocusRow } from "./DealCockpit";
 import type { FinancedDealOverviewData } from "./DealFinancialOverview";
 import type { DealCustodyWiring } from "./DealCustodyPanel";
 
@@ -513,6 +513,118 @@ function handoverCostsWiring() {
 }
 
 /**
+ * SCRUM-417 — the focus row in each of the states the wizard added, rendered
+ * through the REAL `StageFocusRow` with the real dictionaries. Each block is
+ * the row exactly as the view would pass it: a translated label, owner and
+ * blocker, and an action already resolved (a present `onStart` is a button, a
+ * reason key is a refusal). One gallery per locale, so a phone width shows how
+ * the note, the button and the secondary link wrap in Arabic and English.
+ */
+const FOCUS_STATES = [
+  {
+    id: "reconciliation-resolve",
+    state: "BLOCKED",
+    labelKey: "StageSettlement",
+    ownerKey: "StageOwnerDealership",
+    blocker: "AwaitingSettlement",
+    action: { actionKey: "ResolveReconciliationAction", noteKey: "ReconciliationBeforeClose", onStart: () => {} },
+  },
+  {
+    id: "reconciliation-no-permission",
+    state: "BLOCKED",
+    labelKey: "StageSettlement",
+    ownerKey: "StageOwnerDealership",
+    blocker: "AwaitingSettlement",
+    action: { actionKey: "ResolveReconciliationAction", unavailableReasonKey: "ReconciliationNeedsPermission" },
+  },
+  {
+    id: "appraisal-next",
+    state: "BLOCKED",
+    labelKey: "StageAppraisal",
+    ownerKey: "StageOwnerFinanceCompany",
+    blocker: "AwaitingAppraisal",
+    mirrorNote: true,
+    action: { actionKey: "RecordAppraisalAction", opens: "RECORD_APPRAISAL", onStart: () => {} },
+  },
+  {
+    id: "gap-failed",
+    state: "BLOCKED",
+    labelKey: "StageApprovedPurchase",
+    ownerKey: "StageOwnerDealership",
+    blocker: "GapNegotiationFailed",
+    action: { actionKey: "ResolveGapAction", onStart: () => {} },
+  },
+  {
+    id: "credit-documents-first",
+    state: "BLOCKED",
+    labelKey: "StageCreditDecision",
+    ownerKey: "StageOwnerFinanceCompany",
+    blocker: "AwaitingCreditDecision",
+    mirrorNote: true,
+    action: {
+      actionKey: "CompleteDocumentsFirstAction",
+      noteKey: "CreditApprovalNeedsDocuments",
+      opens: "DOCUMENTS",
+      secondary: { actionKey: "RecordCreditDecisionAction", onStart: () => {} },
+    },
+  },
+  {
+    id: "cash-handover",
+    state: "CURRENT",
+    labelKey: "StageHandover",
+    ownerKey: "StageOwnerDealership",
+    action: { actionKey: "CompleteCashSaleAction", unavailableReasonKey: "CashSaleCompletesInSales" },
+  },
+] as const;
+
+function focusStatesMarkup(locale: "en" | "ar"): string {
+  language.locale = locale;
+  const table = dictionaries[locale] as Record<string, string>;
+  const t = (key: string) => table[key] || (dictionaries.en as Record<string, string>)[key] || key;
+  const blocks = FOCUS_STATES.map((focus, index) => {
+    // Every key the gallery paints must exist in THIS locale's dictionary: a
+    // key falling through to English (or to itself) would paint a picture of
+    // a translation that does not exist.
+    const action = focus.action as Record<string, unknown>;
+    const keys = [
+      focus.labelKey,
+      focus.ownerKey,
+      action.actionKey,
+      action.noteKey,
+      action.unavailableReasonKey,
+      (action.secondary as { actionKey?: string } | undefined)?.actionKey,
+    ].filter((key): key is string => typeof key === "string");
+    for (const key of keys) expect(table[key], `${locale} dictionary lacks ${key}`).toBeTruthy();
+    return `<section data-testid="focus-state-${focus.id}" class="space-y-2">${renderToStaticMarkup(
+      <StageFocusRow
+        state={focus.state}
+        label={t(focus.labelKey)}
+        position={index + 3}
+        total={8}
+        owner={t(focus.ownerKey)}
+        mirrorNote={"mirrorNote" in focus ? focus.mirrorNote : false}
+        blocker={"blocker" in focus ? t(`Blocker${focus.blocker}`) : undefined}
+        action={focus.action}
+        outstandingDocuments={
+          focus.id === "credit-documents-first"
+            ? [
+                { ruleId: "r1", name: locale === "ar" ? "صورة الهوية" : "National ID copy" },
+                { ruleId: "r2", name: locale === "ar" ? "كشف راتب" : "Salary certificate" },
+              ]
+            : []
+        }
+        onGoToDocuments={() => {}}
+        t={t}
+      />
+    )}</section>`;
+  });
+  const html = `<div class="mx-auto max-w-3xl space-y-6" data-testid="deal-focus-states">${blocks.join("")}</div>`;
+  // Not an empty render: one block per state, each with the row in it.
+  expect(html.split('data-testid="deal-next-step"').length - 1).toBe(FOCUS_STATES.length);
+  return html;
+}
+
+/**
  * Generation is opted into with exactly `DEAL_COCKPIT_VISUAL_FIXTURE=1`; any
  * other value, including a stray truthy one, leaves the ordinary suite as the
  * ordinary suite. The output directory is NOT a fixed path: the Playwright
@@ -602,6 +714,8 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
     for (const owner of expectedOwners) expect(arabicLetters.test(owner)).toBe(locale === "ar");
     mkdirSync(outDir, { recursive: true });
     writeFileSync(resolve(outDir, `deal-cockpit-${locale}.html`), html);
+    // SCRUM-417: the next-step states the wizard added, painted side by side.
+    writeFileSync(resolve(outDir, `deal-focus-states-${locale}.html`), focusStatesMarkup(locale));
     writeFileSync(
       resolve(outDir, `deal-cockpit-${locale}.expected.json`),
       JSON.stringify({ stageOwners: expectedOwners }, null, 2)

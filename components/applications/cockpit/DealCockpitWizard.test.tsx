@@ -528,5 +528,7 @@ describe("G8 — the cash rail names its step too", () => {
     render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
     expect(stepButton()).toBeNull();
     expect(step().textContent).toContain("CashSaleCompletesInSales");
+    // Never "nothing is outstanding" above a refusal naming what is.
+    expect(step().textContent).not.toContain("StageReadyToProceed");
   });
 });
