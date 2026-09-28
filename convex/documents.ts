@@ -109,6 +109,29 @@ async function loadApplicationDocumentScope(
 ) {
   const application = await ctx.db.get(applicationId);
   if (!application || application.orgId !== orgId) return null;
+  const { rulesById, applicableRules, applicableById } = await loadApplicableRules(ctx, orgId, application);
+
+  const docs = await ctx.db
+    .query("applicationDocuments")
+    .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+    .filter((q) => q.eq(q.field("orgId"), orgId))
+    .collect();
+
+  return { application, rulesById, applicableRules, applicableById, docs };
+}
+
+/**
+ * The org's rules, and the subset that currently applies to this (already
+ * tenant-checked) application's deal — through `ruleAppliesToQuote`. The one
+ * applicability computation behind the active list, the history split and the
+ * active-document command guard below: a row is "active" exactly when its rule
+ * is in `applicableById`.
+ */
+async function loadApplicableRules(
+  ctx: Pick<QueryCtx, "db">,
+  orgId: Id<"organizations">,
+  application: Doc<"financeApplications">
+) {
   const quote = await ctx.db.get(application.quoteId);
   const dealQuote = quote && quote.orgId === orgId ? quote : null;
 
@@ -119,14 +142,29 @@ async function loadApplicationDocumentScope(
   const rulesById = new Map(rules.map((rule) => [rule._id, rule]));
   const applicableRules = rules.filter((rule) => ruleAppliesToQuote(rule, dealQuote));
   const applicableById = new Map(applicableRules.map((rule) => [rule._id, rule]));
+  return { rulesById, applicableRules, applicableById };
+}
 
-  const docs = await ctx.db
-    .query("applicationDocuments")
-    .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
-    .filter((q) => q.eq(q.field("orgId"), orgId))
-    .collect();
-
-  return { application, rulesById, applicableRules, applicableById, docs };
+/**
+ * SCRUM-417 round 4 (Codex S417-R4-1): stored evidence for a rule that no
+ * longer applies to the deal — removed, or scoped to another finance company —
+ * is history, shown view-only by `getHistoryForApplication`. It is immutable
+ * through the active-document commands: only a row on the live applicable
+ * list may be uploaded, replaced, verified, rejected or waived. Called after
+ * the tenant/row checks and before any storage delete, patch or notification,
+ * so a refusal changes nothing. Also stops an upload whose URL was issued
+ * before the rule was removed from landing after it.
+ */
+async function assertDocumentRowIsActive(
+  ctx: Pick<QueryCtx, "db">,
+  orgId: Id<"organizations">,
+  application: Doc<"financeApplications">,
+  doc: Doc<"applicationDocuments">
+) {
+  const { applicableById } = await loadApplicableRules(ctx, orgId, application);
+  if (!applicableById.has(doc.ruleId)) {
+    throw new ConvexError("This document is no longer required for this deal, so it can't be changed.");
+  }
 }
 
 export const getForApplication = query({
@@ -349,6 +387,7 @@ export const saveDocumentFile = mutation({
     if (!doc || doc.orgId !== args.orgId) throw new ConvexError("Document not found");
     const application = await ctx.db.get(doc.applicationId);
     if (!application || application.orgId !== args.orgId) throw new ConvexError("Application not found");
+    await assertDocumentRowIsActive(ctx, args.orgId, application, doc);
     await assertStoredFileAllowed(ctx, {
       storageId: args.fileId,
       allowedContentTypes: FINANCE_DOCUMENT_CONTENT_TYPES,
@@ -388,6 +427,7 @@ export const updateDocumentStatus = mutation({
     if (!doc || doc.orgId !== args.orgId) throw new ConvexError("Document not found");
     const application = await ctx.db.get(doc.applicationId);
     if (!application || application.orgId !== args.orgId) throw new ConvexError("Application not found");
+    await assertDocumentRowIsActive(ctx, args.orgId, application, doc);
 
     if (args.status === "VERIFIED" && !doc.fileId) {
       throw new ConvexError("A document file must be uploaded before it can be verified.");

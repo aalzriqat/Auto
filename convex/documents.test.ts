@@ -12,7 +12,7 @@
  * repair is lazy and idempotent — `documents.ensureApplicationDocument`
  * materializes the row on first use, under the same authority as an upload.
  */
-import { convexTestWithComponents } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -616,5 +616,231 @@ describe("a removed rule's uploaded file stays viewable as history", () => {
     expect(
       await outsider.as.query(api.documents.getHistoryForApplication, { orgId: otherOrg, applicationId })
     ).toEqual([]);
+  });
+});
+
+/**
+ * SCRUM-417 round 4 — Codex S417-R4-1: the history view (round 3) presents a
+ * row whose rule was removed, or no longer applies, as view-only — but the
+ * active-document commands did not check applicability, so that stored
+ * evidence could still be replaced (its old storage object deleted) or have
+ * its status rewritten and a notification sent.
+ *
+ * Invariant: stored evidence for a rule that no longer applies to the deal is
+ * immutable through the active-document commands; only rows on the live
+ * applicable list may be uploaded, replaced, verified, rejected or waived.
+ */
+describe("history rows are immutable through the active-document commands", () => {
+  const NO_LONGER_REQUIRED = /no longer required for this deal/i;
+
+  async function rowFor(s: Setup, applicationId: Id<"financeApplications">, ruleId: Id<"companyDocumentRules">) {
+    return (await rowsForApplication(s, applicationId)).find((row) => row.ruleId === ruleId)!;
+  }
+
+  function notificationCount(s: Setup) {
+    return s.t.run(async (ctx) => (await ctx.db.query("notifications").collect()).length);
+  }
+
+  function storageExists(s: Setup, storageId: Id<"_storage">) {
+    return s.t.run(async (ctx) => (await ctx.storage.getUrl(storageId)) !== null);
+  }
+
+  /** One live rule and one rule that is uploaded, then removed. */
+  async function uploadedThenRemoved(s: Setup) {
+    await addRule(s, "National ID");
+    const removed = await addRule(s, "Old Bank Letter");
+    const { applicationId } = await createApplication(s);
+    const originalFileId = await storePdf(s);
+    const removedRow = await rowFor(s, applicationId, removed);
+    await s.seller.as.mutation(api.documents.saveDocumentFile, {
+      orgId: s.orgId,
+      documentId: removedRow._id,
+      fileId: originalFileId,
+    });
+    // Exactly what `documents.removeRule` does after its owner check.
+    await s.t.run((ctx) => ctx.db.delete(removed));
+    return { removedRowId: removedRow._id, originalFileId, applicationId };
+  }
+
+  test("saveDocumentFile on a removed rule's row is refused: file, storage object and history are unchanged", async () => {
+    const s = await setup();
+    const { removedRowId, originalFileId, applicationId } = await uploadedThenRemoved(s);
+    const before = await s.t.run((ctx) => ctx.db.get(removedRowId));
+
+    await expect(
+      s.seller.as.mutation(api.documents.saveDocumentFile, {
+        orgId: s.orgId,
+        documentId: removedRowId,
+        fileId: await storePdf(s),
+      })
+    ).rejects.toThrow(NO_LONGER_REQUIRED);
+
+    const after = await s.t.run((ctx) => ctx.db.get(removedRowId));
+    expect(after).toEqual(before);
+    expect(after?.fileId).toBe(originalFileId);
+    expect(await storageExists(s, originalFileId)).toBe(true);
+    const history = await s.seller.as.query(api.documents.getHistoryForApplication, { orgId: s.orgId, applicationId });
+    expect(history.map((row) => row._id)).toEqual([removedRowId]);
+  });
+
+  test.each([
+    { status: "VERIFIED" as const },
+    { status: "REJECTED" as const, rejectionReason: "Blurry" },
+    { status: "WAIVED" as const, waiverReason: "Not needed" },
+  ])("updateDocumentStatus($status) on a removed rule's row is refused: status unchanged, no notification", async (change) => {
+    const s = await setup();
+    const { removedRowId } = await uploadedThenRemoved(s);
+    const before = await s.t.run((ctx) => ctx.db.get(removedRowId));
+    const notificationsBefore = await notificationCount(s);
+
+    await expect(
+      s.approver.as.mutation(api.documents.updateDocumentStatus, { orgId: s.orgId, documentId: removedRowId, ...change })
+    ).rejects.toThrow(NO_LONGER_REQUIRED);
+
+    const after = await s.t.run((ctx) => ctx.db.get(removedRowId));
+    expect(after).toEqual(before);
+    expect(after?.status).toBe("UPLOADED");
+    expect(await notificationCount(s)).toBe(notificationsBefore);
+  });
+
+  test("a rule that still exists but no longer applies to the deal's finance company is refused on both commands", async () => {
+    const s = await setup();
+    const ruleId = await addRule(s, "Company form");
+    const { quoteId, applicationId } = await createApplication(s);
+    const row = await rowFor(s, applicationId, ruleId);
+    const originalFileId = await storePdf(s);
+    await s.seller.as.mutation(api.documents.saveDocumentFile, {
+      orgId: s.orgId,
+      documentId: row._id,
+      fileId: originalFileId,
+    });
+
+    const [companyA, companyB] = await s.t.run(async (ctx) => {
+      const base = { orgId: s.orgId, profitRate: 6, maxTermMonths: 60, gracePeriodMonths: 0, isActive: true };
+      return [
+        await ctx.db.insert("financeCompanies", { ...base, name: "Company A" }),
+        await ctx.db.insert("financeCompanies", { ...base, name: "Company B" }),
+      ];
+    });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(quoteId, { companyId: companyA });
+      await ctx.db.patch(ruleId, { companyId: companyB });
+    });
+    expect(await s.t.run((ctx) => ctx.db.get(ruleId))).not.toBeNull();
+    const before = await s.t.run((ctx) => ctx.db.get(row._id));
+    const notificationsBefore = await notificationCount(s);
+
+    await expect(
+      s.seller.as.mutation(api.documents.saveDocumentFile, {
+        orgId: s.orgId,
+        documentId: row._id,
+        fileId: await storePdf(s),
+      })
+    ).rejects.toThrow(NO_LONGER_REQUIRED);
+    await expect(
+      s.approver.as.mutation(api.documents.updateDocumentStatus, {
+        orgId: s.orgId,
+        documentId: row._id,
+        status: "VERIFIED",
+      })
+    ).rejects.toThrow(NO_LONGER_REQUIRED);
+
+    expect(await s.t.run((ctx) => ctx.db.get(row._id))).toEqual(before);
+    expect(await storageExists(s, originalFileId)).toBe(true);
+    expect(await notificationCount(s)).toBe(notificationsBefore);
+  });
+
+  test("a stale upload — URL issued before the rule was removed — cannot land after removal", async () => {
+    const s = await setup();
+    const ruleId = await addRule(s, "Old Bank Letter");
+    const { applicationId } = await createApplication(s);
+    const row = await rowFor(s, applicationId, ruleId);
+    registerRateLimiter(s.t);
+
+    const uploadUrl = await s.seller.as.mutation(api.documents.generateUploadUrl, {
+      orgId: s.orgId,
+      mimeType: "application/pdf",
+      sizeInBytes: 1024,
+    });
+    expect(typeof uploadUrl).toBe("string");
+    const uploadedFileId = await storePdf(s); // the blob the client PUT to that URL
+    await s.t.run((ctx) => ctx.db.delete(ruleId));
+
+    await expect(
+      s.seller.as.mutation(api.documents.saveDocumentFile, {
+        orgId: s.orgId,
+        documentId: row._id,
+        fileId: uploadedFileId,
+      })
+    ).rejects.toThrow(NO_LONGER_REQUIRED);
+    const after = await s.t.run((ctx) => ctx.db.get(row._id));
+    expect(after?.fileId).toBeUndefined();
+    expect(after?.status).toBe("MISSING");
+  });
+
+  test("CONTROL — an active row can still be replaced, and the replaced storage object is removed", async () => {
+    const s = await setup();
+    const ruleId = await addRule(s, "National ID");
+    const { applicationId } = await createApplication(s);
+    const row = await rowFor(s, applicationId, ruleId);
+    const first = await storePdf(s);
+    await s.seller.as.mutation(api.documents.saveDocumentFile, { orgId: s.orgId, documentId: row._id, fileId: first });
+    const second = await storePdf(s);
+    await s.seller.as.mutation(api.documents.saveDocumentFile, { orgId: s.orgId, documentId: row._id, fileId: second });
+
+    const after = await s.t.run((ctx) => ctx.db.get(row._id));
+    expect(after).toMatchObject({ fileId: second, status: "UPLOADED" });
+    expect(await storageExists(s, first)).toBe(false);
+    expect(await storageExists(s, second)).toBe(true);
+  });
+
+  test.each([
+    { status: "VERIFIED" as const },
+    { status: "REJECTED" as const, rejectionReason: "Blurry" },
+    { status: "WAIVED" as const, waiverReason: "Not needed" },
+  ])("CONTROL — updateDocumentStatus($status) on an active row still works and notifies", async (change) => {
+    const s = await setup();
+    const ruleId = await addRule(s, "National ID");
+    const { applicationId } = await createApplication(s);
+    const row = await rowFor(s, applicationId, ruleId);
+    await s.seller.as.mutation(api.documents.saveDocumentFile, {
+      orgId: s.orgId,
+      documentId: row._id,
+      fileId: await storePdf(s),
+    });
+    const notificationsBefore = await notificationCount(s);
+
+    await s.approver.as.mutation(api.documents.updateDocumentStatus, { orgId: s.orgId, documentId: row._id, ...change });
+
+    expect((await s.t.run((ctx) => ctx.db.get(row._id)))?.status).toBe(change.status);
+    expect(await notificationCount(s)).toBe(notificationsBefore + 1);
+  });
+
+  test("CONTROL — a foreign tenant still cannot reach the row through either command", async () => {
+    const s = await setup();
+    const ruleId = await addRule(s, "National ID");
+    const { applicationId } = await createApplication(s);
+    const row = await rowFor(s, applicationId, ruleId);
+    const otherOrg = await s.t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() })
+    );
+    const outsider = await s.mk("docs_outsider_r4", FULL, otherOrg);
+
+    await expect(
+      outsider.as.mutation(api.documents.saveDocumentFile, {
+        orgId: otherOrg,
+        documentId: row._id,
+        fileId: await storePdf(s),
+      })
+    ).rejects.toThrow(/Document not found/);
+    await expect(
+      outsider.as.mutation(api.documents.updateDocumentStatus, {
+        orgId: otherOrg,
+        documentId: row._id,
+        status: "WAIVED",
+        waiverReason: "x",
+      })
+    ).rejects.toThrow(/Document not found/);
+    expect((await s.t.run((ctx) => ctx.db.get(row._id)))?.status).toBe("MISSING");
   });
 });
