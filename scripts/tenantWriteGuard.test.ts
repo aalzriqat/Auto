@@ -602,14 +602,21 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // supplier cost bearer) — 496 → 498 total, 324 → 326 analysed. Same shape:
   // `orgId` plus a caller-supplied recovery/receipt id, each read through
   // `requireOwnedRow` after `requireTenantAuth`. Skipped counts unchanged.
+  //
+  // `migrateRoles.prepareSplitDealAuthorities` (SCRUM-413 PR-A) — 498 → 499
+  // total, skippedNoOrgId 157 → 158, `analysed` unchanged at 326. It is an
+  // operator-run internalMutation that walks every `roles` row to add the two
+  // split deal permissions, so it deliberately takes no `orgId` and no
+  // caller-supplied document id — there is nothing for a caller to point at
+  // another tenant, and no public entry point.
   // Re-measured FROM THE ANALYSER on this tree
-  // ({"totalMutations":498,"analysed":326,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
+  // ({"totalMutations":499,"analysed":326,"skippedNoArgsBlock":15,"skippedNoOrgId":158}).
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 498,
+      totalMutations: 499,
       analysed: 326,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 157,
+      skippedNoOrgId: 158,
     });
   });
 });

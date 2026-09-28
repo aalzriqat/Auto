@@ -42,6 +42,7 @@ import { RoleGuard } from "@/components/auth/RoleGuard";
 import { useTableControls } from "@/hooks/useTableControls";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 import { getErrorMessage } from "@/lib/errors";
+import { interpolate } from "@/lib/i18n/interpolate";
 
 // lastSeenAt is throttled to a write at most every few minutes (see
 // memberships.touchLastSeen), so "active now" below lines up with that
@@ -176,8 +177,15 @@ export default function TeamPage() {
                 onClick={async () => {
                   if (!activeOrgId) return;
                   try {
-                    const n = await syncRolePermissions({ orgId: activeOrgId });
-                    toast.success(`Synced ${n} roles to latest permission templates.`);
+                    const { updated, changes } = await syncRolePermissions({ orgId: activeOrgId });
+                    toast.success(
+                      updated === 0
+                        ? t("SyncRolePermissionsNone" as any)
+                        : interpolate(t("SyncRolePermissionsDone" as any), {
+                            count: updated,
+                            roles: changes.map((change) => change.name).join(", "),
+                          })
+                    );
                   } catch (e: any) {
                     toast.error(e);
                   }

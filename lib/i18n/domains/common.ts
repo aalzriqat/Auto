@@ -963,6 +963,8 @@ export const commonEn = {
   // Team
   CommissionPct: "Commission %",
   SyncRolePermissions: "Sync Role Permissions",
+  SyncRolePermissionsDone: "Updated {count} role(s) to the latest permission templates: {roles}.",
+  SyncRolePermissionsNone: "All standard roles already match the latest permission templates.",
 
   // Tasks / common
   AllPriorities: "All priorities",
@@ -1906,6 +1908,8 @@ export const commonAr = {
   // Team
   CommissionPct: "نسبة العمولة %",
   SyncRolePermissions: "مزامنة صلاحيات الأدوار",
+  SyncRolePermissionsDone: "تم تحديث {count} من الأدوار إلى أحدث قوالب الصلاحيات: {roles}.",
+  SyncRolePermissionsNone: "جميع الأدوار القياسية مطابقة لأحدث قوالب الصلاحيات.",
 
   // Tasks / common
   AllPriorities: "جميع الأولويات",

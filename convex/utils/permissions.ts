@@ -119,6 +119,15 @@ export const PERMISSIONS = {
   REVIEW_FINANCE_APPLICATION: "review:finance_application",
   APPROVE_FINANCE_APPLICATION: "approve:finance_application",
   FINALIZE_FINANCED_DEAL: "finalize:financed_deal",
+  // SCRUM-413 (owner ruling 2026-09-28): the two authorities split out of
+  // FINALIZE_FINANCED_DEAL. Recording where the finance company pays the
+  // supplier on a financed deal, and reversing a financed deal that has
+  // already closed — the latter deliberately stronger. Neither is granted to
+  // SALES. Until the cutover (PR-B) no door checks them; they exist first so
+  // stored roles can be given them BEFORE the doors move (see
+  // `transitionalDealGrants`).
+  MANAGE_SUPPLIER_SETTLEMENT: "manage:supplier_settlement",
+  CANCEL_CLOSED_DEAL: "cancel:closed_deal",
   CONFIRM_FINANCE_DISBURSEMENT: "confirm:finance_disbursement",
   VERIFY_FINANCE_DOCUMENTS: "verify:finance_documents",
   REGISTER_VEHICLE_HANDOVER: "register:vehicle_handover",
@@ -161,9 +170,39 @@ export function dedupePermissions<T extends string>(permissions: readonly T[]): 
   return Array.from(new Set(permissions));
 }
 
-function hasEveryDefinedPermission(permissions: readonly string[]): boolean {
+/**
+ * The permission set an unflagged legacy OWNER row must hold to be recognised
+ * as the owner — FROZEN at the values `PERMISSIONS` held immediately before
+ * SCRUM-413, and never edited again.
+ *
+ * It used to be "every currently-defined permission", which made every new
+ * permission silently de-owner every unflagged OWNER row until a backfill ran
+ * — and retiring one would have silently promoted rows that never held it.
+ * Frozen, neither can happen: the rows that qualified before still qualify,
+ * and no row starts qualifying. `permissions.test.ts` pins this list.
+ */
+export const PRE_413_OWNER_FALLBACK_PERMISSIONS: readonly string[] = Object.freeze([
+  "view:org", "edit:org", "view:users", "manage:users", "manage:roles",
+  "view:vehicles", "create:vehicles", "create:vehicles:request", "edit:vehicles", "edit:vehicles:request",
+  "delete:vehicles", "view:vehicle_info", "view:vehicle_leads", "view:vehicle_expenses", "view:vehicle_tasks",
+  "view:vehicle_test_drives", "view:vehicle_work_orders", "view:vehicle_valuations", "edit:vehicle_valuations",
+  "view:customers", "create:customers", "create:customers:request", "edit:customers", "edit:customers:request",
+  "delete:customers", "view:leads", "create:leads", "create:leads:request", "edit:leads", "edit:leads:request",
+  "delete:leads", "view:sales", "create:sales", "create:sales:request", "edit:sales", "edit:sales:request",
+  "delete:sales", "view:expenses", "create:expenses", "create:expenses:request", "edit:expenses",
+  "edit:expenses:request", "delete:expenses", "view:tasks", "create:tasks", "edit:tasks", "delete:tasks",
+  "view:reports", "view:settings", "manage:settings", "website.view", "website.manage", "website.publish",
+  "website.domain.manage", "website.leads.manage", "website.analytics.view", "view:finance", "manage:finance",
+  "reopen:accounting_periods", "view:cost_price", "view:commissions", "manage:commissions", "view:payroll",
+  "manage:payroll", "approve:requests", "view:finance_applications", "create:finance_application",
+  "review:finance_application", "approve:finance_application", "finalize:financed_deal",
+  "confirm:finance_disbursement", "verify:finance_documents", "register:vehicle_handover",
+  "register:expected_payment", "marketplace:settings", "marketplace:respond", "marketplace:analytics",
+]);
+
+function holdsTheFrozenOwnerSet(permissions: readonly string[]): boolean {
   const permissionSet = new Set(permissions);
-  return ALL_PERMISSIONS.every((permission) => permissionSet.has(permission));
+  return PRE_413_OWNER_FALLBACK_PERMISSIONS.every((permission) => permissionSet.has(permission));
 }
 
 /**
@@ -174,7 +213,38 @@ export function isSystemOwnerRole(role: RoleLike | null | undefined): boolean {
   if (!role || role.isDeleted) return false;
   if (role.isSystemOwnerRole === true) return true;
   if (role.isSystemOwnerRole === false) return false;
-  return role.name === SYSTEM_OWNER_ROLE_NAME && hasEveryDefinedPermission(role.permissions);
+  return role.name === SYSTEM_OWNER_ROLE_NAME && holdsTheFrozenOwnerSet(role.permissions);
+}
+
+/**
+ * SCRUM-413 transition: the new deal authorities a stored role is owed so
+ * that moving the doors off `finalize:financed_deal` denies no one who could
+ * act before. It PRESERVES authority and never adds any:
+ *
+ * - an owner (already bypasses every check) gets both;
+ * - a role stored as exactly "MANAGER" gets each one only where it already
+ *   held the matching old authority — the route door took FINALIZE alone,
+ *   the closed-cancel door took FINALIZE plus CREATE_FINANCE_APPLICATION;
+ * - every other role gets nothing. A name is not provenance (a custom role
+ *   can be called "manager"), so no other name earns a grant here; the
+ *   ACCOUNTANT route grant the owner ruled is applied only by the owner.
+ *
+ * Pure. The migration and every role writer call this same function, so
+ * they cannot drift apart. Returns the permissions to ADD.
+ */
+export function transitionalDealGrants(role: RoleLike): Permission[] {
+  if (role.isDeleted) return [];
+  const owed: Permission[] = [];
+  if (isSystemOwnerRole(role)) {
+    owed.push(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT, PERMISSIONS.CANCEL_CLOSED_DEAL);
+  } else if (role.name === "MANAGER") {
+    const held = new Set(role.permissions);
+    if (held.has(PERMISSIONS.FINALIZE_FINANCED_DEAL)) {
+      owed.push(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
+      if (held.has(PERMISSIONS.CREATE_FINANCE_APPLICATION)) owed.push(PERMISSIONS.CANCEL_CLOSED_DEAL);
+    }
+  }
+  return owed.filter((permission) => !role.permissions.includes(permission));
 }
 
 export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }[] = [
@@ -238,6 +308,8 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.REVIEW_FINANCE_APPLICATION,
       PERMISSIONS.APPROVE_FINANCE_APPLICATION,
       PERMISSIONS.FINALIZE_FINANCED_DEAL,
+      PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT,
+      PERMISSIONS.CANCEL_CLOSED_DEAL,
       PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
       PERMISSIONS.VERIFY_FINANCE_DOCUMENTS,
       PERMISSIONS.REGISTER_VEHICLE_HANDOVER,
@@ -315,6 +387,7 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.MANAGE_FINANCE,
       PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
       PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+      PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT,
       PERMISSIONS.VIEW_PAYROLL,
       PERMISSIONS.MANAGE_PAYROLL,
     ],
@@ -343,6 +416,7 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.MANAGE_FINANCE,
       PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
       PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+      PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT,
       PERMISSIONS.VIEW_COST_PRICE,
       PERMISSIONS.VIEW_COMMISSIONS,
       PERMISSIONS.MANAGE_COMMISSIONS,

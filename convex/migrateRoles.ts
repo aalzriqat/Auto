@@ -1,12 +1,14 @@
+import { v } from "convex/values";
 import { MutationCtx } from "./_generated/server";
 import { internalMutation } from "./functions";
-import { Doc } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import {
   DEFAULT_ROLE_TEMPLATES,
   PERMISSIONS,
   SYSTEM_OWNER_ROLE_NAME,
   isSystemOwnerRole,
   normalizeRoleName,
+  transitionalDealGrants,
 } from "./utils/permissions";
 
 export const fixExistingRoles = internalMutation({
@@ -388,3 +390,93 @@ export const backfillSeniorAccountantRole = internalMutation({
     return { createdCount, created };
   },
 });
+
+/** One stored role's part in the SCRUM-413 preparation, before and after. */
+export interface SplitDealAuthorityRecord {
+  roleId: Id<"roles">;
+  orgId: Id<"organizations">;
+  name: string;
+  /** Recognised as the owner by `isSystemOwnerRole` (flag, or the frozen fallback). */
+  ownerQualified: boolean;
+  /** An unflagged row that qualifies through the fallback: the flag is stamped. */
+  stampOwnerFlag: boolean;
+  /** Named like the owner, unflagged, and NOT qualified: reported, never stamped. */
+  ownerFlagSkipped: boolean;
+  /** The authority the old doors gave it: route = FINALIZE; closed-cancel = FINALIZE + CREATE. */
+  priorRoute: boolean;
+  priorCancelClosed: boolean;
+  added: string[];
+  /**
+   * The owner ruled that accountants may record the route, but they never
+   * held that authority, so it is a NEW grant — and a stored name cannot
+   * prove a row is the default ACCOUNTANT. Listed for the owner (role editor
+   * or template sync), never granted here.
+   */
+  pendingOwnerAction: boolean;
+}
+
+/**
+ * SCRUM-413, preparation (PR-A): give stored roles the split deal
+ * authorities BEFORE any door moves off `finalize:financed_deal`, so the
+ * cutover denies no one who could act before it.
+ *
+ * Dry-run unless `apply: true`. It only ever ADDS what
+ * `transitionalDealGrants` says a role is owed (the same function every role
+ * writer applies), stamps the owner flag only on rows that already qualify,
+ * and removes nothing — the legacy string is stripped at cutover.
+ *
+ * The audit is the returned records: this runs with no caller identity, so
+ * it writes no `adminAuditLog` row rather than invent an actor. The
+ * operator publishes the apply output and a post-apply dry-run (`pending: 0`)
+ * to SCRUM-413 against the deployed commit.
+ */
+export const prepareSplitDealAuthorities = internalMutation({
+  args: { apply: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const apply = args.apply === true;
+    const roles = await ctx.db.query("roles").collect();
+    const records: SplitDealAuthorityRecord[] = [];
+    let pending = 0;
+
+    for (const role of roles) {
+      if (role.isDeleted) continue;
+      const held = new Set(role.permissions);
+      const ownerQualified = isSystemOwnerRole(role);
+      const unflagged = role.isSystemOwnerRole === undefined;
+      const stampOwnerFlag = unflagged && ownerQualified;
+      const ownerFlagSkipped =
+        unflagged && !ownerQualified && normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME;
+      const added = transitionalDealGrants(role);
+      const pendingOwnerAction =
+        (role.name === "ACCOUNTANT" || role.name === "SENIOR_ACCOUNTANT") &&
+        !held.has(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
+
+      if (added.length === 0 && !stampOwnerFlag && !ownerFlagSkipped && !pendingOwnerAction) continue;
+      if (added.length > 0 || stampOwnerFlag) pending++;
+
+      records.push({
+        roleId: role._id,
+        orgId: role.orgId,
+        name: role.name,
+        ownerQualified,
+        stampOwnerFlag,
+        ownerFlagSkipped,
+        priorRoute: held.has(PERMISSIONS.FINALIZE_FINANCED_DEAL),
+        priorCancelClosed:
+          held.has(PERMISSIONS.FINALIZE_FINANCED_DEAL) && held.has(PERMISSIONS.CREATE_FINANCE_APPLICATION),
+        added,
+        pendingOwnerAction,
+      });
+
+      if (apply && (added.length > 0 || stampOwnerFlag)) {
+        await ctx.db.patch(role._id, {
+          permissions: [...role.permissions, ...added],
+          ...(stampOwnerFlag ? { isSystemOwnerRole: true } : {}),
+        });
+      }
+    }
+
+    return { apply, pending, records };
+  },
+});
+

@@ -9,6 +9,7 @@ import {
   isReservedRoleName,
   isSystemOwnerRole,
   normalizeRoleName,
+  transitionalDealGrants,
 } from "./utils/permissions";
 import { notifyOwner, getActorName } from "./utils/notifications";
 import { requireFeature } from "./subscriptions";
@@ -81,6 +82,14 @@ export const create = mutation({
     const invalidPermissions = getInvalidPermissions(args.permissions);
     if (invalidPermissions.length > 0) {
       throw new ConvexError(`Invalid permissions: ${invalidPermissions.join(", ")}`);
+    }
+    // SCRUM-413: this authority is being split into manage:supplier_settlement
+    // and cancel:closed_deal, and is retired at cutover. A new role has no
+    // reason to start carrying it.
+    if (args.permissions.includes(PERMISSIONS.FINALIZE_FINANCED_DEAL)) {
+      throw new ConvexError(
+        "finalize:financed_deal is being retired. Grant manage:supplier_settlement or cancel:closed_deal instead."
+      );
     }
 
     // Prevent duplicate role names within the same org
@@ -178,6 +187,20 @@ export const update = mutation({
         throw new ConvexError(`Invalid permissions: ${invalidPermissions.join(", ")}`);
       }
       patch.permissions = dedupePermissions(args.permissions);
+    }
+
+    // SCRUM-413 transition: while the deal doors still check
+    // finalize:financed_deal, a role edited into holding it (or renamed to
+    // MANAGER while holding it) is given the matching split authority too, so
+    // the cutover cannot deny it. Same pure rule as the migration.
+    if (patch.permissions !== undefined || patch.name !== undefined) {
+      const next = {
+        ...role,
+        name: (patch.name as string | undefined) ?? role.name,
+        permissions: (patch.permissions as string[] | undefined) ?? role.permissions,
+      };
+      const owed = transitionalDealGrants(next);
+      if (owed.length > 0) patch.permissions = [...next.permissions, ...owed];
     }
 
     if (Object.keys(patch).length > 0) {
