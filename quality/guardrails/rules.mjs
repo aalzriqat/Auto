@@ -176,8 +176,15 @@ export function discoverMigrations(inventory) {
   return inventory.filter((p) => MIGRATION_FILE.test(p) && !isTestLike(p));
 }
 
+const listPathCache = new WeakMap();
+
+/** The set of paths in one justified list, built once per parsed config. */
 function listPaths(config, listName) {
-  return new Set(config[listName].map((entry) => entry.path));
+  let lists = listPathCache.get(config);
+  if (!lists) listPathCache.set(config, (lists = new Map()));
+  let paths = lists.get(listName);
+  if (!paths) lists.set(listName, (paths = new Set(config[listName].map((entry) => entry.path))));
+  return paths;
 }
 
 /**
@@ -297,6 +304,25 @@ export function sortViolations(violations) {
 }
 
 // ---------------------------------------------------------------- evaluation
+
+/**
+ * The baseline a measured tree implies. With a trusted baseline, nothing new is
+ * grandfathered and existing ceilings only fall.
+ */
+export function buildBaseline(sourceCommit, config, measured, trustedBaseline) {
+  const sizeCeilings = {};
+  for (const [filePath, lines] of [...measured.counts].sort(([a], [b]) => compareCodeUnits(a, b))) {
+    if (classify(filePath, config) !== "production" || lines <= config.maxLines) continue;
+    const was = trustedBaseline?.sizeCeilings[filePath];
+    if (trustedBaseline && was === undefined) continue; // a new oversized file is not grandfathered
+    sizeCeilings[filePath] = was === undefined ? lines : Math.min(was, lines);
+  }
+  const allowed = trustedBaseline ? new Set(trustedBaseline.importGrandfather.map(importKey)) : null;
+  const importGrandfather = measured.violations
+    .filter((v) => !allowed || allowed.has(importKey(v)))
+    .map(({ rule, from, to }) => ({ rule, from, to }));
+  return { schemaVersion: SCHEMA_VERSION, sourceCommit, sizeCeilings, importGrandfather };
+}
 
 /**
  * Decide pass/fail.

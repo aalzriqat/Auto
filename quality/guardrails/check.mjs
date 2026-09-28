@@ -13,6 +13,7 @@
 //
 // Usage: node quality/guardrails/check.mjs [--base <ref>] [--write-baseline [--source <ref>]]
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,12 +21,12 @@ import { fileURLToPath } from "node:url";
 import {
   BASELINE_PATH,
   CONFIG_PATH,
+  buildBaseline,
   canonicalJson,
   classify,
   compareCodeUnits,
   evaluate,
   importViolations,
-  inImportScope,
   measureLines,
   normalizeRepoPath,
   parseBaseline,
@@ -136,8 +137,11 @@ function prettierOptionsFrom(text, label) {
 /**
  * Measure a set of files: formatted line counts for every file that is
  * production under ANY of the given configs, and import violations.
+ * `lineCache` (path + content hash -> result) lets a run that measures two
+ * nearly identical trees (bootstrap) format each unchanged file once; it is
+ * only shared between calls that use the same Prettier options.
  */
-async function measure({ files, readText, configs, prettierOptions }) {
+async function measure({ files, readText, configs, prettierOptions, lineCache = new Map() }) {
   const prettier = (await import("prettier")).default;
   const counts = new Map();
   const unformatted = [];
@@ -150,20 +154,25 @@ async function measure({ files, readText, configs, prettierOptions }) {
     const results = await Promise.all(
       chunk.map(async (filePath) => {
         const text = readText(filePath);
-        const measured = await measureLines(filePath, text, prettierOptions, prettier);
+        const key = createHash("sha256").update(filePath).update("\0").update(text.replaceAll("\r\n", "\n")).digest("hex");
+        let measured = lineCache.get(key);
+        if (!measured) {
+          measured = await measureLines(filePath, text, prettierOptions, prettier);
+          lineCache.set(key, measured);
+        }
         return { filePath, text, measured };
       }),
     );
     for (const { filePath, text, measured } of results) {
       counts.set(filePath, measured.lines);
       if (!measured.formatted) unformatted.push(filePath);
-      if (inImportScope(filePath)) violations.push(...importViolations(filePath, text, primary));
+      violations.push(...importViolations(filePath, text, primary));
     }
   }
   return { inventory: files, counts, violations: sortViolations(violations), unformatted };
 }
 
-async function measureCommit(cwd, commit, config, prettierOptions) {
+async function measureCommit(cwd, commit, config, prettierOptions, lineCache) {
   const blobs = treeBlobs(cwd, commit);
   const files = [...blobs.keys()].sort(compareCodeUnits);
   const needed = files.filter((p) => classify(p, config) === "production");
@@ -173,24 +182,8 @@ async function measureCommit(cwd, commit, config, prettierOptions) {
     readText: (p) => texts.get(blobs.get(p)),
     configs: [config],
     prettierOptions,
+    lineCache,
   });
-}
-
-export function buildBaseline(sourceCommit, config, measured, trustedBaseline) {
-  const sizeCeilings = {};
-  for (const [filePath, lines] of [...measured.counts].sort(([a], [b]) => compareCodeUnits(a, b))) {
-    if (classify(filePath, config) !== "production" || lines <= config.maxLines) continue;
-    const was = trustedBaseline?.sizeCeilings[filePath];
-    if (trustedBaseline && was === undefined) continue; // a new oversized file is not grandfathered
-    sizeCeilings[filePath] = was === undefined ? lines : Math.min(was, lines);
-  }
-  const allowed = trustedBaseline
-    ? new Set(trustedBaseline.importGrandfather.map((v) => `${v.rule}|${v.from}|${v.to}`))
-    : null;
-  const importGrandfather = measured.violations
-    .filter((v) => !allowed || allowed.has(`${v.rule}|${v.from}|${v.to}`))
-    .map(({ rule, from, to }) => ({ rule, from, to }));
-  return { schemaVersion: 1, sourceCommit, sizeCeilings, importGrandfather };
 }
 
 function loadPair(configText, baselineText, label) {
@@ -205,14 +198,14 @@ function loadPair(configText, baselineText, label) {
  * introduces them): the proposed baseline is trusted only if it is EXACTLY the
  * recomputation of its sourceCommit, and that commit is an ancestor of the base.
  */
-async function verifyBootstrap(cwd, baseCommit, proposed, prettierOptions, errors) {
+async function verifyBootstrap(cwd, baseCommit, proposed, prettierOptions, lineCache, errors) {
   const source = proposed.baseline.sourceCommit;
   const ancestor = git(cwd, ["merge-base", "--is-ancestor", source, baseCommit]);
   if (ancestor.status !== 0) {
     errors.push(`BOOTSTRAP baseline sourceCommit ${source} is not an ancestor of the target base`);
     return;
   }
-  const measured = await measureCommit(cwd, source, proposed.config, prettierOptions);
+  const measured = await measureCommit(cwd, source, proposed.config, prettierOptions, lineCache);
   const expected = buildBaseline(source, proposed.config, measured, null);
   if (canonicalJson(expected) !== canonicalJson(proposed.baseline)) {
     errors.push(
@@ -250,17 +243,19 @@ export async function runGuardrails({ cwd, env = process.env, base, log = () => 
   log(`guardrails: trusted base ${baseRef} (${baseCommit.slice(0, 12)})${bootstrap ? " — BOOTSTRAP" : ""}`);
 
   const inventory = diskInventory(cwd);
+  const lineCache = new Map();
   const measured = await measure({
     files: inventory,
     readText: readDisk,
     configs: [trusted.config, proposed.config],
     prettierOptions,
+    lineCache,
   });
   const { errors, notices } = evaluate({ trusted, proposed, measured, bootstrap });
   for (const file of measured.unformatted) notices.push(`UNFORMATTABLE ${file}: counted unformatted`);
   if (bootstrap) {
     notices.push("BOOTSTRAP: target has no guardrail files; PR-tree baseline verified by recomputation");
-    await verifyBootstrap(cwd, baseCommit, proposed, prettierOptions, errors);
+    await verifyBootstrap(cwd, baseCommit, proposed, prettierOptions, lineCache, errors);
   }
   return { baseRef, baseCommit, bootstrap, errors, notices, measured };
 }
