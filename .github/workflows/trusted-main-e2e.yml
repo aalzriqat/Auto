@@ -45,9 +45,12 @@ jobs:
         run: |
           set -euo pipefail
           pnpm run test:visual:deal-cockpit
-          SHOTS="$(find test-results/deal-cockpit-visual -mindepth 2 -maxdepth 2 -name 'deal-cockpit-*.png' | wc -l)"
-          if [ "$SHOTS" -ne 16 ]; then
-            echo "expected 16 screenshots, found $SHOTS" >&2
+          count() { find test-results/deal-cockpit-visual -mindepth 2 -maxdepth 2 -name "$1" | wc -l; }
+          BASE="$(( $(count 'deal-cockpit-*-top.png') + $(count 'deal-cockpit-*-bottom.png') ))"
+          NEXT_STEP="$(count 'deal-cockpit-*-next-step.png')"
+          PANEL="$(count 'deal-cockpit-*-panel.png')"
+          if [ "$BASE" -ne 16 ] || [ "$NEXT_STEP" -ne 16 ] || [ "$PANEL" -ne 8 ]; then
+            echo "expected 16 base, 16 withheld-close next-step and 8 panel screenshots, found $BASE, $NEXT_STEP and $PANEL" >&2
             exit 1
           fi
         env:

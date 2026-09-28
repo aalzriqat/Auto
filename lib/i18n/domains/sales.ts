@@ -2094,10 +2094,11 @@ export const salesEn = {
   /**
    * Both blockers at once, and the pointer withheld on purpose.
    *
-   * `setSupplierSettlementRoute` takes the SAME permission as the close, so a
-   * caller who cannot close cannot record the route either — and the review
-   * dialog hides the selector from them. Sending them there would be sending
-   * them to an empty screen.
+   * Recording the route (`setSupplierSettlementRoute`) needs
+   * `finalize:financed_deal`; closing (`finalizeDeal`) needs
+   * `confirm:finance_disbursement`. Shown when the caller lacks the ROUTE
+   * permission — the review dialog hides the selector from them, so sending
+   * them there would be sending them to an empty screen.
    */
   FinalizeNeedsRouteAndPermission:
     "This deal is waiting on who the finance company pays, and you do not have permission to record it. Someone who does chooses it here; an accountant then closes the deal.",
