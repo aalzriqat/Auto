@@ -200,6 +200,38 @@ type Job = {
 };
 const KEY = "${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}";
 
+/**
+ * The argument object of every `resolveConvexPreview…({ … })` call in a script,
+ * with JavaScript comments removed and braces balanced, so a commented-out or
+ * nested-brace argument cannot hide from the check.
+ */
+function inlineResolverCalls(script: string): string[] {
+  const code = script.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const calls: string[] = [];
+  for (const match of code.matchAll(/resolveConvexPreview(?:Credentials|Authority)\(\{/g)) {
+    const start = match.index + match[0].length - 1;
+    let depth = 0;
+    let end = start;
+    for (; end < code.length; end++) {
+      if (code[end] === "{") depth++;
+      if (code[end] === "}" && --depth === 0) break;
+    }
+    calls.push(code.slice(start, end + 1));
+  }
+  return calls;
+}
+
+describe("inlineResolverCalls", () => {
+  it("sees through nesting and comments", () => {
+    const [call] = inlineResolverCalls(
+      "await resolveConvexPreviewCredentials({\n  fetchImpl: wrap({ n: 1 }),\n  // expectedConvexCloudUrl: process.env.X,\n  expectedConvexCloudUrl: undefined,\n});",
+    );
+    expect(call).toContain("expectedConvexCloudUrl: undefined");
+    expect(call).not.toContain("process.env.X");
+    expect(call.endsWith("}")).toBe(true);
+  });
+});
+
 describe("SCRUM-377 every preview-creating workflow retires its preview", () => {
   const dir = path.join(process.cwd(), ".github", "workflows");
   const creators = readdirSync(dir)
@@ -218,11 +250,13 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
   it.each(creators.map((w) => [w.file, w.text]))("%s pins what it created and deletes last", (_file, text) => {
     const jobs = (parse(text) as { jobs: Record<string, Job> }).jobs;
     const steps = Object.entries(jobs).flatMap(([id, job]) => (job.steps ?? []).map((s) => ({ id, s })));
-    // Shell comment lines do not execute; a commented-out command is no command.
+    // Shell comments do not execute, and neither do the arguments of the `:`
+    // no-op, so a commented-out or `: `-prefixed command is no command.
     const executable = (s: Step) =>
       (s.run ?? "")
         .split("\n")
-        .filter((line) => !line.trim().startsWith("#"))
+        .map((line) => line.replace(/(^|\s)#.*$/, ""))
+        .filter((line) => !/^\s*:(\s|$)/.test(line))
         .join("\n");
     const only = (needle: string) => {
       const hits = steps.flatMap(({ s }, i) => (executable(s).includes(needle) ? [i] : []));
@@ -239,9 +273,12 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
     // The identity comes from the creating command's own --cmd, and the pin
     // runs directly after it, even when that command failed.
     // ...and it is the variable the CLI actually fills with that URL.
-    const urlVar = /--cmd-url-env-var-name (\w+)/.exec(executable(creator))?.[1];
-    expect(urlVar, "--cmd-url-env-var-name").toBeTruthy();
-    const cmd = /--cmd '([^']*)'/.exec(executable(creator))?.[1] ?? "";
+    const urlVars = [...executable(creator).matchAll(/--cmd-url-env-var-name (\w+)/g)];
+    expect(urlVars, "exactly one --cmd-url-env-var-name").toHaveLength(1);
+    const urlVar = urlVars[0][1];
+    const cmds = [...executable(creator).matchAll(/--cmd '([^']*)'/g)];
+    expect(cmds, "exactly one --cmd").toHaveLength(1);
+    const cmd = cmds[0][1];
     expect(cmd).toContain(`echo "CONVEX_PREVIEW_URL=$${urlVar}" >> "$GITHUB_ENV"`);
     expect(steps[pin].id).toBe(steps[creates].id);
     expect(pin).toBe(creates + 1);
@@ -254,11 +291,15 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
 
     // Every lookup by preview name, in any job, can return a newer run's
     // replacement, so each one must name the deployment this run created.
+    // (The resolver also refuses a call without it at runtime; this catches a
+    // miswired variable before a run does.)
     for (const { s } of steps) {
       const run = executable(s);
-      const inline = run.match(/resolveConvexPreview(Credentials|Authority)\(\{[^}]*\}/g) ?? [];
+      const inline = inlineResolverCalls(run);
       for (const call of inline) {
-        expect(call, s.name).toMatch(/expectedConvexCloudUrl: process\.env\.(CONVEX_PREVIEW_URL|NEXT_PUBLIC_CONVEX_URL),/);
+        const named = [...call.matchAll(/expectedConvexCloudUrl\s*:\s*([^,}\n]+)/g)].map((m) => m[1].trim());
+        expect(named, s.name).toHaveLength(1);
+        expect(named[0], s.name).toMatch(/^process\.env\.(CONVEX_PREVIEW_URL|NEXT_PUBLIC_CONVEX_URL)$/);
       }
       if (run.includes("scripts/intelligence/convexPreviewAuthority.mjs") && inline.length === 0) {
         expect(s.env?.CONVEX_PREVIEW_URL, s.name).toBe("${{ env.CONVEX_PREVIEW_URL }}");

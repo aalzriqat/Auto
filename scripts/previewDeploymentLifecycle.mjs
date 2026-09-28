@@ -26,6 +26,11 @@
 // preview deployments, so production is out of reach by construction. The
 // checks below are defence in depth, not the only barrier.
 //
+// Known gap: the CLI claims the preview before its config/AuthKit checks and
+// canonical-URL lookup, and only then runs `--cmd`. A failure in that window
+// leaves no captured URL, so neither command can act, and that preview keeps
+// Convex's default expiry. Nothing here can name it safely without the URL.
+//
 // Both commands only ever warn: a cleanup problem must not fail the tests it
 // follows. Messages carry fixed literals and deployment names, never key bytes.
 import { appendFileSync } from "node:fs";

@@ -11,6 +11,7 @@ import {
 
 const DEPLOY_KEY = "preview:team-one:project-two|unit-test-secret";
 const PREVIEW_NAME = "e2e-pr-325-abcdef1234";
+const CREATED_URL = "https://elegant-butterfly-952.convex.cloud";
 
 describe("trusted Convex preview authority", () => {
   it("parses only a concrete preview deploy-key authority", () => {
@@ -140,6 +141,7 @@ describe("trusted Convex preview authority", () => {
     const authority = await resolveConvexPreviewAuthority({
       deployKey: DEPLOY_KEY,
       previewName: PREVIEW_NAME,
+      expectedConvexCloudUrl: CREATED_URL,
       fetchImpl: fetchImpl as typeof fetch,
     });
 
@@ -175,6 +177,7 @@ describe("trusted Convex preview authority", () => {
     const credentials = await resolveConvexPreviewCredentials({
       deployKey: DEPLOY_KEY,
       previewName: PREVIEW_NAME,
+      expectedConvexCloudUrl: CREATED_URL,
       fetchImpl: fetchImpl as typeof fetch,
     });
     expect(credentials.authority).toEqual(authority);
@@ -204,6 +207,7 @@ describe("trusted Convex preview authority", () => {
         resolveConvexPreviewCredentials({
           deployKey: DEPLOY_KEY,
           previewName: PREVIEW_NAME,
+          expectedConvexCloudUrl: CREATED_URL,
           fetchImpl: claimResponse({ isNewDeployment }) as typeof fetch,
         }),
       ).rejects.toThrow(/did not reuse the existing preview/);
@@ -215,6 +219,7 @@ describe("trusted Convex preview authority", () => {
       resolveConvexPreviewAuthority({
         deployKey: DEPLOY_KEY,
         previewName: PREVIEW_NAME,
+        expectedConvexCloudUrl: CREATED_URL,
         fetchImpl: claimResponse({ deploymentType: "prod" }) as typeof fetch,
       }),
     ).rejects.toThrow(/non-preview/);
@@ -225,6 +230,7 @@ describe("trusted Convex preview authority", () => {
       resolveConvexPreviewCredentials({
         deployKey: DEPLOY_KEY,
         previewName: PREVIEW_NAME,
+        expectedConvexCloudUrl: CREATED_URL,
         fetchImpl: claimResponse({
           adminKey: "preview:team-one:project-two|project-wide-secret",
         }) as typeof fetch,
@@ -280,6 +286,32 @@ describe("trusted Convex preview authority", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  // Sol R3-1 / Sonnet F4: a workflow guard over script text can be fooled by
+  // a commented-out argument or a later `undefined` duplicate key, so the
+  // resolver itself refuses a lookup that does not name the created deployment.
+  it("refuses a lookup that does not name the deployment this run created, before any request", async () => {
+    const fetchImpl = claimResponse({});
+    for (const expectedConvexCloudUrl of [undefined, null, ""]) {
+      await expect(
+        resolveConvexPreviewCredentials({
+          deployKey: DEPLOY_KEY,
+          previewName: PREVIEW_NAME,
+          expectedConvexCloudUrl: expectedConvexCloudUrl as unknown as string,
+          fetchImpl: fetchImpl as typeof fetch,
+        }),
+      ).rejects.toThrow(/this run created is required/);
+      await expect(
+        resolveConvexPreviewAuthority({
+          deployKey: DEPLOY_KEY,
+          previewName: PREVIEW_NAME,
+          expectedConvexCloudUrl: expectedConvexCloudUrl as unknown as string,
+          fetchImpl: fetchImpl as typeof fetch,
+        }),
+      ).rejects.toThrow(/this run created is required/);
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("refuses a malformed expected URL before any request", async () => {
     const fetchImpl = claimResponse({});
     await expect(
@@ -298,6 +330,7 @@ describe("trusted Convex preview authority", () => {
       resolveConvexPreviewCredentials({
         deployKey: DEPLOY_KEY,
         previewName: PREVIEW_NAME,
+        expectedConvexCloudUrl: CREATED_URL,
         fetchImpl: claimResponse({
           instanceUrl: "https://different-deployment-123.convex.cloud",
         }) as typeof fetch,
