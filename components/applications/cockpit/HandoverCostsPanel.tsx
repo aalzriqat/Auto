@@ -1157,6 +1157,113 @@ function ExpectedTotal({
   );
 }
 
+/** The add-cost form's "paid from custody" field: the payer choice and what it means now. */
+function PaidBySection({
+  costSource,
+  payers,
+  payer,
+  payerGone,
+  t,
+  onChoose,
+}: Readonly<{
+  costSource: HandoverCostSource;
+  payers: ReadonlyArray<HandoverCustodyPayer>;
+  payer: HandoverCustodyPayer | null;
+  payerGone: boolean;
+  t: (key: string) => string;
+  onChoose: (custodyId: Id<"financeDealCustody"> | null) => void;
+}>) {
+  return (
+    <div className="space-y-1.5 sm:col-span-2">
+      {costSource.kind === "CHARGE" && payers.length > 0 ? (
+        <>
+          <Label htmlFor="handover-cost-paid-by">{t("CostPaidFromCustodyLabel")}</Label>
+          <select
+            id="handover-cost-paid-by"
+            className={selectClass}
+            value={payer?.custodyId ?? ""}
+            aria-invalid={payerGone}
+            data-testid="deal-handover-cost-paid-by"
+            onChange={(event) =>
+              onChoose(payers.find((option) => option.custodyId === event.target.value)?.custodyId ?? null)
+            }
+          >
+            {payer === null && (
+              <option value="" disabled>
+                {t("CostPaidByChoose")}
+              </option>
+            )}
+            {payers.map((option) => (
+              <option key={option.custodyId} value={option.custodyId}>
+                {option.holderName}
+              </option>
+            ))}
+          </select>
+        </>
+      ) : (
+        <p className="text-sm font-medium" data-testid="deal-handover-cost-paid-by-fixed">
+          {t("CostPaidFromCustodyHeading")}
+        </p>
+      )}
+      <PaidByNotice costSource={costSource} payers={payers} payerGone={payerGone} t={t} onChoose={onChoose} />
+    </div>
+  );
+}
+
+function PaidByNotice({
+  costSource,
+  payers,
+  payerGone,
+  t,
+  onChoose,
+}: Readonly<{
+  costSource: HandoverCostSource;
+  payers: ReadonlyArray<HandoverCustodyPayer>;
+  payerGone: boolean;
+  t: (key: string) => string;
+  onChoose: (custodyId: Id<"financeDealCustody"> | null) => void;
+}>) {
+  if (payerGone && payers.length === 0) {
+    // Nothing is left to choose from: say where the cost goes now and
+    // let the operator accept it explicitly, never by default.
+    return (
+      <div className="space-y-1.5" data-testid="deal-handover-cost-paid-by-gone">
+        <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+          {t("CostPaidFromCustodyGoneNone")}
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          data-testid="deal-handover-cost-paid-by-release"
+          onClick={() => onChoose(null)}
+        >
+          {t("CostPaidFromCustodyRelease")}
+        </Button>
+      </div>
+    );
+  }
+  if (payerGone) {
+    return (
+      <p className="text-xs font-medium text-amber-700 dark:text-amber-400" data-testid="deal-handover-cost-paid-by-gone">
+        {t("CostPaidFromCustodyGone")}
+      </p>
+    );
+  }
+  if (costSource.kind === "NONE") {
+    return (
+      <p className="text-xs font-medium text-amber-700 dark:text-amber-400" data-testid="deal-handover-cost-needs-custody">
+        {t("HandoverCostNeedsCustody")}
+      </p>
+    );
+  }
+  return (
+    <p className="text-xs text-muted-foreground" data-testid="deal-handover-cost-paid-by-note">
+      {t(costSource.kind === "CHARGE" ? "CostPaidFromCustodyNote" : "CostPaidFromCustodyPendingNote")}
+    </p>
+  );
+}
+
 function AddForm({
   intent,
   attempt,
@@ -1315,68 +1422,14 @@ function AddForm({
             ))}
           </select>
         </div>
-        <div className="space-y-1.5 sm:col-span-2">
-          {costSource.kind === "CHARGE" && payers.length > 0 ? (
-            <>
-              <Label htmlFor="handover-cost-paid-by">{t("CostPaidFromCustodyLabel")}</Label>
-              <select
-                id="handover-cost-paid-by"
-                className={selectClass}
-                value={payer?.custodyId ?? ""}
-                aria-invalid={payerGone}
-                data-testid="deal-handover-cost-paid-by"
-                onChange={(event) =>
-                  setChosenCustodyId(payers.find((option) => option.custodyId === event.target.value)?.custodyId ?? null)
-                }
-              >
-                {payer === null && (
-                  <option value="" disabled>
-                    {t("CostPaidByChoose")}
-                  </option>
-                )}
-                {payers.map((option) => (
-                  <option key={option.custodyId} value={option.custodyId}>
-                    {option.holderName}
-                  </option>
-                ))}
-              </select>
-            </>
-          ) : (
-            <p className="text-sm font-medium" data-testid="deal-handover-cost-paid-by-fixed">
-              {t("CostPaidFromCustodyHeading")}
-            </p>
-          )}
-          {payerGone && payers.length === 0 ? (
-            // Nothing is left to choose from: say where the cost goes now and
-            // let the operator accept it explicitly, never by default.
-            <div className="space-y-1.5" data-testid="deal-handover-cost-paid-by-gone">
-              <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
-                {t("CostPaidFromCustodyGoneNone")}
-              </p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                data-testid="deal-handover-cost-paid-by-release"
-                onClick={() => setChosenCustodyId(null)}
-              >
-                {t("CostPaidFromCustodyRelease")}
-              </Button>
-            </div>
-          ) : payerGone ? (
-            <p className="text-xs font-medium text-amber-700 dark:text-amber-400" data-testid="deal-handover-cost-paid-by-gone">
-              {t("CostPaidFromCustodyGone")}
-            </p>
-          ) : costSource.kind === "NONE" ? (
-            <p className="text-xs font-medium text-amber-700 dark:text-amber-400" data-testid="deal-handover-cost-needs-custody">
-              {t("HandoverCostNeedsCustody")}
-            </p>
-          ) : (
-            <p className="text-xs text-muted-foreground" data-testid="deal-handover-cost-paid-by-note">
-              {t(costSource.kind === "CHARGE" ? "CostPaidFromCustodyNote" : "CostPaidFromCustodyPendingNote")}
-            </p>
-          )}
-        </div>
+        <PaidBySection
+          costSource={costSource}
+          payers={payers}
+          payer={payer}
+          payerGone={payerGone}
+          t={t}
+          onChoose={setChosenCustodyId}
+        />
         <div className="space-y-1.5 sm:col-span-2">
           <Label htmlFor="handover-cost-description">{t("CostDescriptionLabel")}</Label>
           <Input
