@@ -20,6 +20,14 @@ import { Doc, Id } from "@/convex/_generated/dataModel";
 import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
 import { getErrorMessage } from "@/lib/errors";
 
+/** The offset rule as the form holds it: "" = not confirmed, never false. */
+type OffsetChoice = "" | "yes" | "no";
+
+function offsetChoiceOf(rule: boolean | undefined): OffsetChoice {
+  if (rule === undefined) return "";
+  return rule ? "yes" : "no";
+}
+
 export function FinanceCompanyDialog({
   open,
   onOpenChange,
@@ -40,6 +48,8 @@ export function FinanceCompanyDialog({
     maxFinancingLTV?: number;
     /** The DEALER-side purchase rate — see the field below. */
     defaultLtvPercent?: number;
+    /** Unset = nobody has asked the company; the quotation solver then declines. */
+    customerFirstPaymentOffsetsUnfinancedShare?: boolean;
     isActive: boolean;
     acceptedStatuses?: string[];
     editRevision?: number;
@@ -85,6 +95,7 @@ export function FinanceCompanyDialog({
     // "nobody has told us" with a value that is always invalid.
     defaultLtvPercent:
       company?.defaultLtvPercent !== undefined ? String(company.defaultLtvPercent) : "",
+    firstPaymentOffset: offsetChoiceOf(company?.customerFirstPaymentOffsetsUnfinancedShare),
     isActive: company?.isActive ?? true,
     acceptedStatuses: company?.acceptedStatuses || [],
   });
@@ -105,11 +116,22 @@ export function FinanceCompanyDialog({
       maxFinancingLTV: company?.maxFinancingLTV || 100,
       defaultLtvPercent:
         company?.defaultLtvPercent !== undefined ? String(company.defaultLtvPercent) : "",
+      firstPaymentOffset: offsetChoiceOf(company?.customerFirstPaymentOffsetsUnfinancedShare),
       isActive: company?.isActive ?? true,
       acceptedStatuses: company?.acceptedStatuses || [],
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, company?._id]);
+
+  /**
+   * A stored answer cannot be withdrawn: `updateCompany` reads an omitted rule
+   * as "leave it alone", so "Not confirmed" is offered only while it is true.
+   * Also kept while the form itself holds "", so a rule saved elsewhere while
+   * this dialog is open cannot make the select display an answer it will not send.
+   */
+  const offerNotConfirmed =
+    company?.customerFirstPaymentOffsetsUnfinancedShare === undefined ||
+    formData.firstPaymentOffset === "";
 
   /** Blanking a stored rate is not a way to delete it — see `onSubmit`. */
   const clearingExistingLtv =
@@ -165,7 +187,12 @@ export function FinanceCompanyDialog({
         liveStatusIds.has(id as Id<"orgCustomerStatuses">)
       ) as Id<"orgCustomerStatuses">[];
 
-      const { defaultLtvPercent: defaultLtvInput, adminFees: adminFeesInput, ...rest } = formData;
+      const {
+        defaultLtvPercent: defaultLtvInput,
+        adminFees: adminFeesInput,
+        firstPaymentOffset,
+        ...rest
+      } = formData;
       const parsedDefaultLtv = Number(defaultLtvInput);
       const parsedAdminFees = Number(adminFeesInput);
       const payload = {
@@ -184,6 +211,10 @@ export function FinanceCompanyDialog({
           defaultLtvInput.trim() !== "" && Number.isFinite(parsedDefaultLtv)
             ? parsedDefaultLtv
             : undefined,
+        // Omitted while not confirmed: false is a real answer ("does not
+        // apply"), not a stand-in for "nobody has asked the company".
+        customerFirstPaymentOffsetsUnfinancedShare:
+          firstPaymentOffset === "" ? undefined : firstPaymentOffset === "yes",
       };
       if (company) {
         await updateCompany({
@@ -324,6 +355,27 @@ export function FinanceCompanyDialog({
             ) : (
               <p className="text-xs text-muted-foreground">{t("DefaultDealerLtvHint" as any)}</p>
             )}
+          </div>
+          {/* SCRUM-428: the schema and both mutations always carried this rule,
+              but no screen set it, so the quotation solver declined every quote
+              for a company created here (OFFSET_RULE_UNKNOWN). */}
+          <div className="grid gap-2">
+            <Label htmlFor="first-payment-offset-rule">{t("FirstPaymentOffsetRule")}</Label>
+            <select
+              id="first-payment-offset-rule"
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              value={formData.firstPaymentOffset}
+              onChange={(e) =>
+                setFormData({ ...formData, firstPaymentOffset: e.target.value as OffsetChoice })
+              }
+            >
+              {offerNotConfirmed ? (
+                <option value="">{t("FirstPaymentOffsetNotConfirmed")}</option>
+              ) : null}
+              <option value="yes">{t("FirstPaymentOffsetYes")}</option>
+              <option value="no">{t("FirstPaymentOffsetNo")}</option>
+            </select>
+            <p className="text-xs text-muted-foreground">{t("FirstPaymentOffsetHint")}</p>
           </div>
           <div className="grid gap-2">
             <Label>{t("ExecutionCommission" as any)}</Label>
