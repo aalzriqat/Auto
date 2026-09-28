@@ -1949,6 +1949,8 @@ export const salesEn = {
     "You do not have permission to close the deal. Someone who does completes this step.",
   FinalizeWaitsForReadiness:
     "Closing readiness could not be checked right now, so the deal can't be closed yet. Try again shortly.",
+  FinalizeNeedsReadinessAccess:
+    "Your role can close deals but cannot view finance applications, so this deal's closing readiness can't be checked for you. Ask an administrator to add finance-application view access to your role.",
   FinalizeNeedsClosingReadiness:
     "The deal is not ready to close yet. Complete the items marked in the closing readiness list, then close it.",
   /**
@@ -2887,6 +2889,8 @@ export const salesAr = {
   FinalizeNeedsPermission: "لا تملك صلاحية إغلاق الصفقة. يُكمل هذه الخطوة من يملكها.",
   FinalizeWaitsForReadiness:
     "تعذّر فحص جاهزية الإغلاق الآن، لذا لا يمكن إغلاق الصفقة بعد. حاول مجددًا بعد قليل.",
+  FinalizeNeedsReadinessAccess:
+    "دورك يسمح بإغلاق الصفقات لكنه لا يسمح بعرض طلبات التمويل، لذا لا يمكن فحص جاهزية إغلاق هذه الصفقة لك. اطلب من المسؤول إضافة صلاحية عرض طلبات التمويل إلى دورك.",
   FinalizeNeedsClosingReadiness:
     "الصفقة غير جاهزة للإغلاق بعد. أكمل البنود المؤشَّر عليها في قائمة جاهزية الإغلاق، ثم أغلقها.",
   FinalizeNeedsSettlementRoute:

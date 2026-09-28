@@ -655,4 +655,45 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
     mkdirSync(outDir, { recursive: true });
     writeFileSync(resolve(outDir, `deal-cockpit-${locale}-readiness-unreadable.html`), html);
   });
+
+  // S414-R3-1: the SAME closing step for a custom closer who may close but not
+  // read the finance application. No readiness panel (the read is skipped) and
+  // the close withheld with the reason naming the missing access.
+  test.each(["en", "ar"] as const)("writes the %s markup with no readiness access", (locale) => {
+    expect(OUT_DIR, "DEAL_COCKPIT_VISUAL_FIXTURE_DIR must name this run's fresh directory").toBeTruthy();
+    const outDir = resolve(OUT_DIR!);
+    language.locale = locale;
+    const base = financedDeal();
+    const deal: FinancedDealCockpitData = {
+      ...base,
+      stages: base.stages.map((stage) =>
+        stage.key === "SETTLEMENT"
+          ? { ...stage, state: "BLOCKED" as const, blocker: "AwaitingSettlement" }
+          : { ...stage, state: "COMPLETE" as const, blocker: undefined }
+      ),
+    };
+    const html = renderToStaticMarkup(
+      <DealCockpitView
+        deal={deal}
+        backHref="/org_1/deals"
+        activeAppraisalProvider={deal.activeAppraisalProvider}
+        onRecordSupplierReceipt={async () => {}}
+        financialOverview={{ data: financedOverview(), loading: false }}
+        custody={custodyWiring()}
+        custodyMoney={custodyMoney}
+        workflowAction={{
+          stageKey: "SETTLEMENT",
+          actionKey: "FinalizeDealAction",
+          onStart: () => {},
+          unavailableReasonKey: "FinalizeNeedsReadinessAccess",
+        }}
+        financingPlan={{ facts: FINANCING_PLAN, formatMajor: (major, currency) => `${major.toLocaleString()} ${currency}` }}
+        handoverCosts={handoverCostsWiring()}
+      />
+    );
+    expect(html).toContain("data-testid=\"deal-next-step\"");
+    expect(html).not.toContain("data-testid=\"closing-readiness-service-unavailable\"");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(resolve(outDir, `deal-cockpit-${locale}-readiness-access.html`), html);
+  });
 });
