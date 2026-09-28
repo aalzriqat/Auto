@@ -512,6 +512,7 @@ function handoverCostsWiring() {
     money: (minor: number, currency: string) => custodyMoney(minor, currency),
     canManage: true,
     dealClosed: false,
+    costSource: { kind: "PENDING" as const },
     onAdd: async () => {},
     onAbandonAdd: () => {},
     onRecordActual: async () => {},

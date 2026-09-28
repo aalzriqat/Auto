@@ -230,7 +230,14 @@ describe("DealCustodyPanel", () => {
       fireEvent.change(within(dialog).getByLabelText(salesEn.CustodyCloseNotes), { target: { value: "Counted." } });
       // Not settled and no write-off chosen: cannot submit.
       expect((within(dialog).getByTestId("custody-close-submit") as HTMLButtonElement).disabled).toBe(true);
-      expect(within(dialog).getByText("360 JOD")).toBeTruthy();
+      // The residual is named twice: once where the dialog says what still
+      // stops the close, once on the write-off offered as the last resort.
+      expect(within(dialog).getAllByText("360 JOD")).toHaveLength(2);
+      // SCRUM-439: before any write-off, the dialog names the steps that
+      // settle the record, so the write-off is not the only way out.
+      const unsettled = within(dialog).getByTestId("custody-close-unsettled");
+      expect(unsettled.textContent).toContain(salesEn.CustodyCloseStillHeld);
+      expect(unsettled.textContent).toContain(salesEn.CustodyCloseSettleSteps);
       fireEvent.click(within(dialog).getByTestId("custody-write-off-toggle"));
       fireEvent.change(within(dialog).getByLabelText(salesEn.CustodyWriteOffReason), { target: { value: "Untraceable" } });
       fireEvent.click(within(dialog).getByTestId("custody-close-submit"));
@@ -395,6 +402,13 @@ describe("DealCustodyPanel", () => {
       // Economics open: the same record offers it, live.
       renderPanel(wiring({ actions: a, accounting: { ready: true }, dealStopped: false }));
       expect((screen.getByTestId("custody-attach-cust1") as HTMLButtonElement).disabled).toBe(false);
+      expect(screen.queryByTestId("custody-attach-hint-cust1")).toBeNull();
+    });
+
+    test("with nothing to charge, 'charge a cost' is disabled AND says where a cost the employee paid is recorded (SCRUM-439)", () => {
+      renderPanel(wiring({ actions: actions(), accounting: { ready: true }, dealStopped: false }));
+      expect((screen.getByTestId("custody-attach-cust1") as HTMLButtonElement).disabled).toBe(true);
+      expect(screen.getByTestId("custody-attach-hint-cust1").textContent).toBe(salesEn.CustodyAttachHowTo);
     });
 
     test("the operator is never offered as the recipient of their own issuance — the server refuses self-issuance — while the plan may still name them", () => {

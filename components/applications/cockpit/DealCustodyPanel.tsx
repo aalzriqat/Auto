@@ -400,6 +400,14 @@ function CustodyRecord({
           )}
         </div>
       )}
+      {canAct && !record.legacy && open && canStart && !hasEligibleFees && (
+        // "Charge a cost" is disabled with nothing to charge; say where a
+        // cost the employee paid is recorded instead, so the disabled button
+        // is not a dead end (SCRUM-439, SCRUM-368).
+        <p className="text-xs text-muted-foreground" data-testid={`custody-attach-hint-${id}`}>
+          {t("CustodyAttachHowTo")}
+        </p>
+      )}
 
       <div className="space-y-1">
         <Button
