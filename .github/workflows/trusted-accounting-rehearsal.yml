@@ -203,6 +203,9 @@ jobs:
           const resolved = await resolveConvexPreviewCredentials({
             deployKey: process.env.CONVEX_PREVIEW_DEPLOY_KEY,
             previewName: process.env.CONVEX_PREVIEW_NAME,
+            // The lookup is by name, so it can return a newer run's
+            // replacement; only the deployment this run created is accepted.
+            expectedConvexCloudUrl: process.env.CONVEX_PREVIEW_URL,
           });
           process.stdout.write(JSON.stringify({
             url: resolved.authority.convexCloudUrl,
@@ -215,12 +218,6 @@ jobs:
           unset AUTH_JSON
           if [ -z "$NEXT_PUBLIC_CONVEX_URL" ] || [ -z "$ADMIN_KEY" ]; then
             echo "Trusted control plane did not return complete rehearsal preview credentials." >&2
-            exit 1
-          fi
-          # The lookup is by preview name, so it can return a newer run's
-          # replacement; this run must only ever test the deployment it created.
-          if [ "$NEXT_PUBLIC_CONVEX_URL" != "${CONVEX_PREVIEW_URL:-}" ]; then
-            echo "Resolved rehearsal preview is not the deployment this run created." >&2
             exit 1
           fi
           echo "::add-mask::$ADMIN_KEY"

@@ -218,8 +218,14 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
   it.each(creators.map((w) => [w.file, w.text]))("%s pins what it created and deletes last", (_file, text) => {
     const jobs = (parse(text) as { jobs: Record<string, Job> }).jobs;
     const steps = Object.entries(jobs).flatMap(([id, job]) => (job.steps ?? []).map((s) => ({ id, s })));
+    // Shell comment lines do not execute; a commented-out command is no command.
+    const executable = (s: Step) =>
+      (s.run ?? "")
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("#"))
+        .join("\n");
     const only = (needle: string) => {
-      const hits = steps.flatMap(({ s }, i) => ((s.run ?? "").includes(needle) ? [i] : []));
+      const hits = steps.flatMap(({ s }, i) => (executable(s).includes(needle) ? [i] : []));
       expect(hits, needle).toHaveLength(1);
       return hits[0];
     };
@@ -232,8 +238,11 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
 
     // The identity comes from the creating command's own --cmd, and the pin
     // runs directly after it, even when that command failed.
-    expect(creator.run).toMatch(/--cmd '[^']*CONVEX_PREVIEW_URL=\$\w+[^']*>> "\$GITHUB_ENV"'/);
-    expect(creator.run).toContain("--cmd-url-env-var-name");
+    // ...and it is the variable the CLI actually fills with that URL.
+    const urlVar = /--cmd-url-env-var-name (\w+)/.exec(executable(creator))?.[1];
+    expect(urlVar, "--cmd-url-env-var-name").toBeTruthy();
+    const cmd = /--cmd '([^']*)'/.exec(executable(creator))?.[1] ?? "";
+    expect(cmd).toContain(`echo "CONVEX_PREVIEW_URL=$${urlVar}" >> "$GITHUB_ENV"`);
     expect(steps[pin].id).toBe(steps[creates].id);
     expect(pin).toBe(creates + 1);
     expect(pinStep.if ?? "").toMatch(/^always\(\) && /);
@@ -243,14 +252,17 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
     expect(pinStep.env?.CONVEX_PREVIEW_DEPLOY_KEY).toBe(KEY);
     expect(delStep.env?.CONVEX_PREVIEW_DEPLOY_KEY).toBe(KEY);
 
-    // Any later lookup by preview name in the creating job must be checked
-    // against that identity (later jobs compare against its verified output).
-    for (let i = creates + 1; i < steps.length && steps[i].id === steps[creates].id; i++) {
-      if (!(steps[i].s.run ?? "").includes("convexPreviewAuthority")) continue;
-      const checked = steps
-        .slice(i)
-        .some(({ s }) => /if \[ "\$\w+" != "\$\{CONVEX_PREVIEW_URL:-\}" \]; then/.test(s.run ?? ""));
-      expect(checked, "resolver result compared with CONVEX_PREVIEW_URL").toBe(true);
+    // Every lookup by preview name, in any job, can return a newer run's
+    // replacement, so each one must name the deployment this run created.
+    for (const { s } of steps) {
+      const run = executable(s);
+      const inline = run.match(/resolveConvexPreview(Credentials|Authority)\(\{[^}]*\}/g) ?? [];
+      for (const call of inline) {
+        expect(call, s.name).toMatch(/expectedConvexCloudUrl: process\.env\.(CONVEX_PREVIEW_URL|NEXT_PUBLIC_CONVEX_URL),/);
+      }
+      if (run.includes("scripts/intelligence/convexPreviewAuthority.mjs") && inline.length === 0) {
+        expect(s.env?.CONVEX_PREVIEW_URL, s.name).toBe("${{ env.CONVEX_PREVIEW_URL }}");
+      }
     }
 
     const delJobId = steps[del].id;

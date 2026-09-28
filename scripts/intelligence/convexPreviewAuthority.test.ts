@@ -6,6 +6,7 @@ import {
   resolveConvexPreviewAuthority,
   resolveConvexPreviewCredentials,
   validateConvexPreviewAuthority,
+  writeConvexPreviewAuthority,
 } from "./convexPreviewAuthority.mjs";
 
 const DEPLOY_KEY = "preview:team-one:project-two|unit-test-secret";
@@ -229,6 +230,67 @@ describe("trusted Convex preview authority", () => {
         }) as typeof fetch,
       }),
     ).rejects.toThrow(/not scoped.*3 prefix segments/);
+  });
+
+  // SCRUM-377: the claim is keyed by name and can return a newer run's
+  // replacement; a run that knows what it created refuses anything else.
+  it("refuses a claim that resolved a deployment other than the one this run created", async () => {
+    await expect(
+      resolveConvexPreviewCredentials({
+        deployKey: DEPLOY_KEY,
+        previewName: PREVIEW_NAME,
+        expectedConvexCloudUrl: "https://newer-replacement-777.convex.cloud",
+        fetchImpl: claimResponse({}) as typeof fetch,
+      }),
+    ).rejects.toThrow(/other than the one this run created/);
+    await expect(
+      resolveConvexPreviewAuthority({
+        deployKey: DEPLOY_KEY,
+        previewName: PREVIEW_NAME,
+        expectedConvexCloudUrl: "https://newer-replacement-777.convex.cloud",
+        fetchImpl: claimResponse({}) as typeof fetch,
+      }),
+    ).rejects.toThrow(/other than the one this run created/);
+  });
+
+  it("accepts the deployment this run created, compared as a canonical origin", async () => {
+    for (const expected of [
+      "https://elegant-butterfly-952.convex.cloud",
+      "https://elegant-butterfly-952.convex.cloud/",
+    ]) {
+      const resolved = await resolveConvexPreviewCredentials({
+        deployKey: DEPLOY_KEY,
+        previewName: PREVIEW_NAME,
+        expectedConvexCloudUrl: expected,
+        fetchImpl: claimResponse({}) as typeof fetch,
+      });
+      expect(resolved.authority.deploymentName).toBe("elegant-butterfly-952");
+    }
+  });
+
+  it("the swarm authority step requires the URL its run created", async () => {
+    const fetchImpl = claimResponse({});
+    await expect(
+      writeConvexPreviewAuthority({
+        repoRoot: "unused-because-it-refuses-first",
+        env: { PR_NUMBER: "377", CONVEX_PREVIEW_DEPLOY_KEY: DEPLOY_KEY },
+        fetchImpl: fetchImpl as typeof fetch,
+      }),
+    ).rejects.toThrow(/CONVEX_PREVIEW_URL/);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("refuses a malformed expected URL before any request", async () => {
+    const fetchImpl = claimResponse({});
+    await expect(
+      resolveConvexPreviewCredentials({
+        deployKey: DEPLOY_KEY,
+        previewName: PREVIEW_NAME,
+        expectedConvexCloudUrl: "",
+        fetchImpl: fetchImpl as typeof fetch,
+      }),
+    ).rejects.toThrow();
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("refuses a claim whose instance URL is not the claimed deployment", async () => {

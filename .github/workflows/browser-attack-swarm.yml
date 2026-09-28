@@ -257,24 +257,16 @@ jobs:
           echo "convex_cloud_url=$CONVEX_PREVIEW_URL" >> "$GITHUB_OUTPUT"
           node scripts/previewDeploymentLifecycle.mjs pin
 
+      # The lookup is by preview name, so it can return a newer run's
+      # replacement; it refuses anything but CONVEX_PREVIEW_URL, the deployment
+      # this run created (SCRUM-377).
       - name: Resolve named Convex preview from trusted control plane
         working-directory: trusted
         run: node scripts/intelligence/convexPreviewAuthority.mjs
         env:
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
           CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
-
-      # The lookup above is by preview name, so it can return a newer run's
-      # replacement; this run must only ever test the deployment it created.
-      - name: Confirm the resolved preview is the one this run created
-        working-directory: trusted
-        run: |
-          set -euo pipefail
-          RESOLVED="$(jq -r '.convexCloudUrl' artifacts/browser-swarm-convex-authority.json)"
-          if [ "$RESOLVED" != "${CONVEX_PREVIEW_URL:-}" ]; then
-            echo "Resolved swarm preview is not the deployment this run created." >&2
-            exit 1
-          fi
+          CONVEX_PREVIEW_URL: ${{ env.CONVEX_PREVIEW_URL }}
 
       # The one paid TypeSafe request, spent only once the disposable preview
       # exists (SCRUM-376): a quota or preview failure must not pay for it first.
@@ -485,6 +477,7 @@ jobs:
           const resolved = await resolveConvexPreviewCredentials({
             deployKey: process.env.CONVEX_PREVIEW_DEPLOY_KEY,
             previewName: process.env.CONVEX_PREVIEW_NAME,
+            expectedConvexCloudUrl: process.env.NEXT_PUBLIC_CONVEX_URL,
           });
           process.stdout.write(resolved.adminKey);
           NODE
@@ -565,6 +558,7 @@ jobs:
           const resolved = await resolveConvexPreviewCredentials({
             deployKey: process.env.CONVEX_PREVIEW_DEPLOY_KEY,
             previewName: process.env.CONVEX_PREVIEW_NAME,
+            expectedConvexCloudUrl: process.env.NEXT_PUBLIC_CONVEX_URL,
           });
           process.stdout.write(resolved.adminKey);
           NODE
@@ -829,6 +823,7 @@ jobs:
           const authority = await resolveConvexPreviewAuthority({
             deployKey: process.env.CONVEX_DEPLOY_KEY,
             previewName: process.env.CONVEX_PREVIEW_NAME,
+            expectedConvexCloudUrl: process.env.NEXT_PUBLIC_CONVEX_URL,
           });
           process.stdout.write(authority.convexCloudUrl);
           NODE
