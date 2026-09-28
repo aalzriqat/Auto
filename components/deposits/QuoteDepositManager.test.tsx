@@ -96,6 +96,7 @@ vi.mock("@/hooks/use-permissions", () => ({
 }));
 
 const PERMS_MANAGER = [
+  "confirm:finance_disbursement",
   "view:sales", "create:sales", "edit:sales", "delete:sales",
   "view:vehicles", "create:vehicles", "edit:vehicles",
   "view:customers", "create:customers",
@@ -104,7 +105,9 @@ const PERMS_MANAGER = [
   "reopen:accounting_periods",
 ];
 /** The default SALES template's shape: it can sell, it cannot approve. */
-const PERMS_SALES = PERMS_MANAGER.filter((p) => p !== "approve:requests");
+const PERMS_SALES = PERMS_MANAGER.filter(
+  (p) => p !== "approve:requests" && p !== "confirm:finance_disbursement"
+);
 /** RECEPTION: customers, and nothing about sales. */
 const PERMS_RECEPTION = ["view:customers", "create:customers"];
 
@@ -461,29 +464,35 @@ describe("what each role can do with a released share", () => {
     return s;
   }
 
-  test("SALES sees the share but cannot refund or forfeit it", async () => {
-    // The bar is the server's: refund and forfeiture need approval, and
-    // `payOutDepositSlice` additionally refuses whoever took the deposit.
-    // Surfacing that as a rejected click is worse than not offering it.
+  test("SALES sees the share but can decide none of it, and is told who can", async () => {
+    // SCRUM-444: held deposit money moves only through a manager or accountant.
+    // Returning a share to the deal moves no cash, but it changes what is held
+    // against a customer's deposit, so it needs the same authority as recording
+    // the deposit. The bar is the server's; offering a control that would be
+    // refused is worse than saying who to ask.
     const s = await releasedShareFor("salesRole");
     await renderWith(s, PERMS_SALES);
 
     const [record] = screen.getAllByText("DepositRecordDecision");
     const button = record.closest("button") as HTMLButtonElement;
-    // The default treatment moves no money, so it is actionable.
-    expect(button.disabled).toBe(false);
-    expect(screen.queryAllByText("DepositDecisionNeedsApproval")).toHaveLength(0);
+    expect(button.disabled).toBe(true);
+    expect(screen.getAllByText("DepositAskManagerOrAccountant").length).toBeGreaterThan(0);
 
     const row = record.closest("div.space-y-2") as HTMLElement;
     chooseTreatment(row, "DepositTreatmentRefund");
 
     expect((screen.getAllByText("DepositRecordDecision")[0]!.closest("button") as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getAllByText("DepositDecisionNeedsApproval").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getAllByText("DepositRecordDecision")[0]!.closest("button")!);
+    expect(mutationCalls).toHaveLength(0);
   });
 
-  test("SALES can still return a share to the deal, which moves no money", async () => {
-    const s = await releasedShareFor("salesReturn");
-    const allocation = await renderWith(s, PERMS_SALES);
+  test("a confirmer without approval can return a share to the deal, which moves no money", async () => {
+    const s = await releasedShareFor("confirmReturn");
+    const allocation = await renderWith(
+      s,
+      PERMS_MANAGER.filter((p) => p !== "approve:requests")
+    );
     const holdId = allocation!.vehicles.find((v) => v.vehicleId === s.vehicleA)!
       .awaitingDecision[0]!.holdId;
 
@@ -498,7 +507,6 @@ describe("what each role can do with a released share", () => {
       treatment: "RETURN_TO_UNALLOCATED",
     });
   });
-
   test("MANAGER can record the decision, and it reaches the server as chosen", async () => {
     const s = await releasedShareFor("managerRole");
     const allocation = await renderWith(s, PERMS_MANAGER);

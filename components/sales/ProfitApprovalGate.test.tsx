@@ -39,6 +39,12 @@ vi.mock("@/hooks/useCurrency", () => ({
   }),
 }));
 
+// The deposit-request queue (SCRUM-444) shares this page but not this test: its
+// query would receive the approvals stub above, which is not its shape.
+vi.mock("@/components/deposits/DepositRequests", () => ({
+  PendingDepositRequestsQueue: () => null,
+}));
+
 vi.mock("@/components/ui/sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));

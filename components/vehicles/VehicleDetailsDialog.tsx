@@ -120,6 +120,11 @@ export function VehicleDetailsDialog({
   const [savingLandedCosts, setSavingLandedCosts] = useState(false);
   const [reservationCustomerId, setReservationCustomerId] = useState("");
   const [reservationDeposit, setReservationDeposit] = useState("");
+  const [reservationMethod, setReservationMethod] = useState<PaymentMethod | undefined>(undefined);
+  // A deposit taken at reservation is money in hand, so it needs the same
+  // authority as recording one (SCRUM-444). Reserving without a deposit does not.
+  const canRecordDeposit = !permissionsLoading && hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+  const reservationHasDeposit = reservationDeposit !== "";
   const [reservationExpiresAt, setReservationExpiresAt] = useState("");
   const [savingReservation, setSavingReservation] = useState(false);
   const [activeGroup, setActiveGroup] = useState<VehicleDetailsGroup>("overview");
@@ -197,12 +202,14 @@ export function VehicleDetailsDialog({
         vehicleId: vehicle._id,
         customerId: reservationCustomerId as any,
         depositAmount: reservationDeposit ? Number(reservationDeposit) : undefined,
+        depositMethod: reservationDeposit ? reservationMethod : undefined,
         expiresAt: reservationExpiresAt ? new Date(reservationExpiresAt).getTime() : undefined,
       });
       // Only a SUCCESS retires the identity.
       reservationKeyRef.current = null;
       setReservationCustomerId("");
       setReservationDeposit("");
+      setReservationMethod(undefined);
       setReservationExpiresAt("");
       toast.success(t("ReservationCreated" as any));
     } catch (error) {
@@ -918,6 +925,20 @@ export function VehicleDetailsDialog({
                         value={reservationDeposit}
                         onChange={(event) => setReservationDeposit(event.target.value)}
                       />
+                      {reservationHasDeposit && canRecordDeposit ? (
+                        <PaymentMethodSelect
+                          t={t as any}
+                          value={reservationMethod}
+                          onValueChange={setReservationMethod}
+                          ariaLabel={t("PaymentMethodLabel" as any)}
+                          placeholder={t("DepositChooseMethod" as any)}
+                        />
+                      ) : null}
+                      {reservationHasDeposit && !canRecordDeposit ? (
+                        <p className="text-xs text-muted-foreground" data-testid="reservation-deposit-needs-manager">
+                          {t("ReservationDepositNeedsManager" as any)}
+                        </p>
+                      ) : null}
                     </div>
                     <div className="space-y-1">
                       <Label>{t("ExpiresAt" as any)}</Label>
@@ -931,7 +952,11 @@ export function VehicleDetailsDialog({
                   <div className="flex justify-end">
                     <Button
                       onClick={handleCreateReservation}
-                      disabled={savingReservation || !reservationCustomerId}
+                      disabled={
+                        savingReservation ||
+                        !reservationCustomerId ||
+                        (reservationHasDeposit && (!canRecordDeposit || !reservationMethod))
+                      }
                     >
                       <Plus className="h-4 w-4 me-2" />
                       {t("CreateReservation" as any)}

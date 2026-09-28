@@ -14,6 +14,7 @@ import { toast } from "@/components/ui/sonner";
 import { Id, Doc } from "@/convex/_generated/dataModel";
 import { useTableControls } from "@/hooks/useTableControls";
 import { getErrorMessage } from "@/lib/errors";
+import { PendingDepositRequestsQueue } from "@/components/deposits/DepositRequests";
 
 type ApprovalRequest = Doc<"profitApprovalRequests"> & {
   salespersonName: string;
@@ -65,6 +66,10 @@ export default function ApprovalsPage() {
       <div className="flex items-center justify-between space-y-2">
         <h2 className="text-3xl font-bold tracking-tight">{t("Approvals")}</h2>
       </div>
+
+      {/* SCRUM-444: deposits a salesperson has asked to record. Nothing is held
+          until one is confirmed here. */}
+      <PendingDepositRequestsQueue orgId={activeOrgId} />
 
       {pendingApprovals && pendingApprovals.length > 0 && (
         <div className="flex items-center w-full max-w-sm space-x-2 relative">

@@ -243,6 +243,7 @@ function financedDeal(): FinancedDealCockpitData {
     economicsRecorded: true,
     economicsStamp: "fixture-economics-stamp",
     pendingDepositResolution: false,
+    pendingDepositRequests: [],
     firstPaymentCorrection: { block: "NOT_ZERO", quoteDownPaymentMinor: null },
   } satisfies FinancedDealCockpitData;
 }
