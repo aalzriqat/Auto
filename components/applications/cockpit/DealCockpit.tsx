@@ -2382,8 +2382,11 @@ export function DealCockpit({
                 applicationId,
                 ruleId: doc.ruleId as Id<"companyDocumentRules">,
               }));
+            // Named, so a deal that settled meanwhile gets no URL and no file
+            // is stored for a row the server would refuse (SCRUM-422).
             const postUrl = await generateUploadUrl({
               orgId,
+              documentId: documentId as Id<"applicationDocuments">,
               mimeType: file.type,
               sizeInBytes: file.size,
             });

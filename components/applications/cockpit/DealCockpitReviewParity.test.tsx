@@ -842,6 +842,11 @@ describe("documents — documents.updateDocumentStatus / upload, from the checkl
         documentId: "doc_new",
         fileId: "storage_1",
       });
+      // The URL is asked for against the row it will land on, so a settled
+      // deal is refused before any file is stored (CodeRabbit, PR #360).
+      expect(mutationCalls.get("documents:generateUploadUrl")).toEqual([
+        { orgId: ORG, documentId: "doc_new", mimeType: "application/pdf", sizeInBytes: 4 },
+      ]);
     });
 
     test("a REJECTED document offers a replacement upload, onto its own row", async () => {
@@ -866,6 +871,9 @@ describe("documents — documents.updateDocumentStatus / upload, from the checkl
         documentId: "doc_1",
         fileId: "storage_1",
       });
+      expect(mutationCalls.get("documents:generateUploadUrl")).toEqual([
+        { orgId: ORG, documentId: "doc_1", mimeType: "application/pdf", sizeInBytes: 4 },
+      ]);
     });
 
     test("an UPLOADED document offers no replacement — it waits for verification", () => {
