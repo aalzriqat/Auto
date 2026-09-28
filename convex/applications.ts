@@ -30,9 +30,19 @@ import {
   resolveFinancedSalePlan,
   financedSaleRecognitionDate,
   evaluateClosingReadiness,
+  closingRefusalError,
   type ClosingReadiness,
+  type ClosingReadinessCheck,
   type ClosingReadinessCheckKey,
 } from "./utils/financedSaleRecognition";
+import {
+  reasonOf,
+  redactClosingReason,
+  withheldReasonCode,
+  type ClosingReadinessReason,
+  type ClosingReadinessReasonCode,
+  type ClosingReadinessReasonParams,
+} from "../lib/closingReadinessReasonCodes";
 import { loadCustodyRecords } from "./utils/settlementDeductions";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
@@ -3695,61 +3705,85 @@ export const setSupplierSettlementRoute = mutation({
 });
 
 /**
- * Plain-language reasons shown in place of the evaluator's own text to a
- * caller below the finance tier (ACC-10): the verdict is the same, the detail —
- * which can name figures, currencies and ledger state — is not served.
- */
-/** Below the finance tier, in place of the evaluator's own refusal (which can name currencies and amounts). */
-const WITHHELD_UNAVAILABLE_READINESS_REASON =
-  "This deal's closing readiness cannot be determined from its current records. Someone with finance access can see why.";
-
-const WITHHELD_READINESS_REASON: Record<ClosingReadinessCheckKey, string> = {
-  REMITTANCE_KNOWN: "What the finance company will remit is not established yet.",
-  CONFIGURED_FEES_RECORDED: "A fee the finance company configures has no actual recorded yet.",
-  CUSTODY_ON_LEDGER: "Employee custody on this deal is not fully on the books yet.",
-  CUSTODY_SETTLED: "An employee custody record on this deal is not settled yet.",
-  COSTS_CLOSABLE: "The deal's costs are not all recorded and reconciled yet.",
-  FIRST_PAYMENT_RECORDED: "The customer's first payment is not recorded yet.",
-  LEGAL_INVOICE_RECORDED: "The legal invoice is not recorded yet.",
-};
-
-/**
  * The deal-level inputs the closing-readiness evaluator is judged on — the
  * settlement route and the currency — derived ONCE, by the same rule, for the
  * deal screen and the finalize door (SCRUM-407 P1.4), so the screen cannot show
  * READY on a deal the door refuses for its denomination.
  *
- * Refuses (ConvexError) when the deal's denomination cannot be established, or
- * when its pinned `economicsCurrency` has drifted from the organization's
- * current currency: the plan and the receivable take the pin while the sale's
- * own journal posts in the org's CURRENT currency (completeSale), so finalizing
+ * Refuses when the deal's denomination cannot be established, or when its
+ * pinned `economicsCurrency` has drifted from the organization's current
+ * currency: the plan and the receivable take the pin while the sale's own
+ * journal posts in the org's CURRENT currency (completeSale), so finalizing
  * would recognise the plan's integers under the wrong label and open a debt the
  * receipt path settles in another currency (SCRUM-241). Pinning the economics
  * does not lock the org setting, so the two can have drifted apart. Nothing is
  * converted, relabelled or clipped; restoring the setting makes the same deal
  * ready.
+ *
+ * The refusal is RETURNED as a coded reason (SCRUM-414): the readiness query
+ * serves it as `unavailableReason*`, and the finalize door throws it with
+ * `closingRefusalError` — the same payload shape as the evaluator's refusals.
  */
-async function closingReadinessInputs(
+async function closingReadinessInputsOrRefusal(
   ctx: QueryCtx | MutationCtx,
   app: Doc<"financeApplications">,
   operation: string
-): Promise<{ settlesDirect: boolean; currency: string }> {
-  assertSupportedDenomination(app.economicsCurrency, operation);
+): Promise<
+  | { ok: true; inputs: { settlesDirect: boolean; currency: string } }
+  | { ok: false; refusal: ClosingReadinessReason }
+> {
+  try {
+    assertSupportedDenomination(app.economicsCurrency, operation);
+  } catch (error) {
+    if (error instanceof ConvexError && typeof error.data === "string") {
+      return { ok: false, refusal: reasonOf("READINESS_INPUTS_UNAVAILABLE", error.data) };
+    }
+    throw error;
+  }
   const orgCurrencyNow = await getOrgCurrency(ctx, app.orgId);
   if (app.economicsCurrency !== undefined && app.economicsCurrency !== orgCurrencyNow) {
-    throw new ConvexError(
-      `This deal's figures were recorded in ${app.economicsCurrency}, but the organization's currency is now ${orgCurrencyNow}. A deal is finalized in the currency its figures were recorded in — restore the organization's currency to ${app.economicsCurrency} before finalizing it.`
-    );
+    return {
+      ok: false,
+      refusal: reasonOf(
+        "READINESS_CURRENCY_DRIFT",
+        `This deal's figures were recorded in ${app.economicsCurrency}, but the organization's currency is now ${orgCurrencyNow}. A deal is finalized in the currency its figures were recorded in — restore the organization's currency to ${app.economicsCurrency} before finalizing it.`,
+        { recordedCurrency: app.economicsCurrency, orgCurrency: orgCurrencyNow }
+      ),
+    };
   }
   return {
-    settlesDirect: await settlesDirectToSupplier(ctx, app),
-    currency: app.economicsCurrency ?? orgCurrencyNow,
+    ok: true,
+    inputs: {
+      settlesDirect: await settlesDirectToSupplier(ctx, app),
+      currency: app.economicsCurrency ?? orgCurrencyNow,
+    },
   };
 }
 
+/** A readiness reason flattened onto the wire: the English diagnostic, the code, and params only when there are any. */
+type ClosingReasonView = {
+  reason: string | null;
+  reasonCode: ClosingReadinessReasonCode | null;
+  reasonParams?: ClosingReadinessReasonParams;
+};
+
+function closingReasonView(reason: ClosingReadinessReason | null): ClosingReasonView {
+  return {
+    reason: reason?.message ?? null,
+    reasonCode: reason?.code ?? null,
+    ...(reason?.params === undefined ? {} : { reasonParams: reason.params }),
+  };
+}
+
+/** One readiness check as the deal screen is served it. */
+type ClosingReadinessCheckView = ClosingReasonView & {
+  key: ClosingReadinessCheckKey;
+  status: ClosingReadinessCheck["status"];
+};
+
 /**
  * The deal's automatic closing readiness (SCRUM-407 P1.4): the SAME evaluator,
- * fed by the same `closingReadinessInputs`, that `finalizeDeal` re-runs
+ * fed by the same `closingReadinessInputsOrRefusal`, that `finalizeDeal` re-runs
  * internally — so on the closing-evidence checks listed here the screen and the
  * server cannot disagree, and the server never trusts the screen.
  *
@@ -3783,32 +3817,35 @@ export const getClosingReadiness = query({
 
     let readiness: ClosingReadiness = { state: "UNAVAILABLE", checks: [] };
     /** Why no verdict could be formed — set only when the evaluator refused. */
-    let unavailableReason: string | null = null;
+    let unavailable: ClosingReadinessReason | null = null;
     if (open) {
       try {
-        readiness = (
-          await evaluateClosingReadiness(
-            ctx,
-            app,
-            await closingReadinessInputs(ctx, app, "checking this deal's closing readiness")
-          )
-        ).readiness;
+        const inputs = await closingReadinessInputsOrRefusal(ctx, app, "checking this deal's closing readiness");
+        if (inputs.ok) readiness = (await evaluateClosingReadiness(ctx, app, inputs.inputs)).readiness;
+        else unavailable = inputs.refusal;
       } catch (error) {
         if (!(error instanceof ConvexError)) throw error;
-        unavailableReason =
-          mayReadMoney && typeof error.data === "string" ? error.data : WITHHELD_UNAVAILABLE_READINESS_REASON;
+        unavailable = reasonOf(
+          "READINESS_INPUTS_UNAVAILABLE",
+          typeof error.data === "string" ? error.data : "This deal's closing readiness cannot be determined from its current records."
+        );
       }
     }
+
+    const checks: ClosingReadinessCheckView[] = readiness.checks.map(({ key, status, reason }) => ({
+      key,
+      status,
+      ...closingReasonView(redactClosingReason(reason, mayReadMoney, withheldReasonCode(key))),
+    }));
+    const why = closingReasonView(redactClosingReason(unavailable, mayReadMoney, "WITHHELD_UNAVAILABLE"));
 
     return {
       state: readiness.state,
       open,
-      checks: readiness.checks.map((check) => ({
-        key: check.key,
-        status: check.status,
-        reason: check.reason !== null && !mayReadMoney ? WITHHELD_READINESS_REASON[check.key] : check.reason,
-      })),
-      unavailableReason,
+      checks,
+      unavailableReason: why.reason,
+      unavailableReasonCode: why.reasonCode,
+      ...(why.reasonParams === undefined ? {} : { unavailableReasonParams: why.reasonParams }),
       moneyWithheld: !mayReadMoney,
     };
   },
@@ -3842,6 +3879,11 @@ export const finalizeDeal = mutation({
     // takes the disbursement authority the accountant templates hold — not
     // `FINALIZE_FINANCED_DEAL`, which the SALES template carries.
     const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
+    // The default MANAGER template confirms disbursements WITHOUT view:finance,
+    // so a refused finalize is redacted exactly as `getClosingReadiness`
+    // redacts for the same caller (SCRUM-414 R1): below the finance tier every
+    // readiness refusal is a WITHHELD_* code, no params, generic English.
+    const mayReadMoney = mayReadFinanceEconomics(auth.role);
 
     return await runWithIdempotency(
       ctx,
@@ -3883,7 +3925,9 @@ export const finalizeDeal = mutation({
         // cannot disagree about the denomination: an unsupported one, or a pin
         // that has drifted from the org's current currency, is refused here,
         // before the sale exists (SCRUM-241).
-        const readinessInputs = await closingReadinessInputs(ctx, app, "finalizing this deal");
+        const inputs = await closingReadinessInputsOrRefusal(ctx, app, "finalizing this deal");
+        if (!inputs.ok) throw closingRefusalError(redactClosingReason(inputs.refusal, mayReadMoney, "WITHHELD_UNAVAILABLE"));
+        const readinessInputs = inputs.inputs;
 
         // On a consigned car financed by an external company, the route decides
         // opposite balance sheets from the same sale — a payable to the supplier
@@ -4030,6 +4074,7 @@ export const finalizeDeal = mutation({
           // deposits it consumes cannot disagree about whether the money was
           // applied to this purchase at all.
           depositTreatment: args.depositResolution?.treatment,
+          mayReadMoney,
         });
 
 

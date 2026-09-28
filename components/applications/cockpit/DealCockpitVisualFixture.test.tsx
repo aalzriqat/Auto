@@ -545,23 +545,28 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
             state: "BLOCKED",
             open: true,
             unavailableReason: null,
+            unavailableReasonCode: null,
             moneyWithheld: false,
             checks: [
-              { key: "REMITTANCE_KNOWN", status: "READY", reason: null },
-              { key: "CONFIGURED_FEES_RECORDED", status: "READY", reason: null },
-              { key: "CUSTODY_ON_LEDGER", status: "READY", reason: null },
+              { key: "REMITTANCE_KNOWN", status: "READY", reason: null, reasonCode: null },
+              { key: "CONFIGURED_FEES_RECORDED", status: "READY", reason: null, reasonCode: null },
+              { key: "CUSTODY_ON_LEDGER", status: "READY", reason: null, reasonCode: null },
               {
                 key: "CUSTODY_SETTLED",
                 status: "BLOCKED",
                 reason: "A custody record on this deal is still open. Settle what that person holds or is owed before finalizing.",
+                // SCRUM-414: coded reasons render the localized text (AR/EN), not the English diagnostic.
+                reasonCode: "CUSTODY_OPEN",
               },
               {
                 key: "COSTS_CLOSABLE",
                 status: "BLOCKED",
                 reason: "1 cost(s) on this deal have no actual amount recorded. Estimates may be used to run the deal, but not to close it.",
+                reasonCode: "COSTS_AWAITING_ACTUAL",
+                reasonParams: { count: 1 },
               },
-              { key: "FIRST_PAYMENT_RECORDED", status: "READY", reason: null },
-              { key: "LEGAL_INVOICE_RECORDED", status: "READY", reason: null },
+              { key: "FIRST_PAYMENT_RECORDED", status: "READY", reason: null, reasonCode: null },
+              { key: "LEGAL_INVOICE_RECORDED", status: "READY", reason: null, reasonCode: null },
             ],
           },
           legalInvoice: {
@@ -606,5 +611,89 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
       resolve(outDir, `deal-cockpit-${locale}.expected.json`),
       JSON.stringify({ stageOwners: expectedOwners }, null, 2)
     );
+  });
+
+  // S414-R2-SKEW-1: the SAME deal on its closing step when the readiness read
+  // failed (a backend without `getClosingReadiness`). The panel says so and the
+  // close is withheld with its own reason — painted so the reason's wrap and
+  // tone are judged in both directions, not only asserted in jsdom.
+  test.each(["en", "ar"] as const)("writes the %s markup with readiness unreadable", (locale) => {
+    expect(OUT_DIR, "DEAL_COCKPIT_VISUAL_FIXTURE_DIR must name this run's fresh directory").toBeTruthy();
+    const outDir = resolve(OUT_DIR!);
+    language.locale = locale;
+    const base = financedDeal();
+    const deal: FinancedDealCockpitData = {
+      ...base,
+      stages: base.stages.map((stage) =>
+        stage.key === "SETTLEMENT"
+          ? { ...stage, state: "BLOCKED" as const, blocker: "AwaitingSettlement" }
+          : { ...stage, state: "COMPLETE" as const, blocker: undefined }
+      ),
+    };
+    const html = renderToStaticMarkup(
+      <DealCockpitView
+        deal={deal}
+        backHref="/org_1/deals"
+        activeAppraisalProvider={deal.activeAppraisalProvider}
+        onRecordSupplierReceipt={async () => {}}
+        financialOverview={{ data: financedOverview(), loading: false }}
+        custody={custodyWiring()}
+        custodyMoney={custodyMoney}
+        closingChecklist={{ readiness: undefined, serviceUnavailable: true }}
+        workflowAction={{
+          stageKey: "SETTLEMENT",
+          actionKey: "FinalizeDealAction",
+          onStart: () => {},
+          unavailableReasonKey: "FinalizeWaitsForReadiness",
+        }}
+        financingPlan={{ facts: FINANCING_PLAN, formatMajor: (major, currency) => `${major.toLocaleString()} ${currency}` }}
+        handoverCosts={handoverCostsWiring()}
+      />
+    );
+    expect(html).toContain("data-testid=\"deal-next-step\"");
+    expect(html).toContain("data-testid=\"closing-readiness-service-unavailable\"");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(resolve(outDir, `deal-cockpit-${locale}-readiness-unreadable.html`), html);
+  });
+
+  // S414-R3-1: the SAME closing step for a custom closer who may close but not
+  // read the finance application. No readiness panel (the read is skipped) and
+  // the close withheld with the reason naming the missing access.
+  test.each(["en", "ar"] as const)("writes the %s markup with no readiness access", (locale) => {
+    expect(OUT_DIR, "DEAL_COCKPIT_VISUAL_FIXTURE_DIR must name this run's fresh directory").toBeTruthy();
+    const outDir = resolve(OUT_DIR!);
+    language.locale = locale;
+    const base = financedDeal();
+    const deal: FinancedDealCockpitData = {
+      ...base,
+      stages: base.stages.map((stage) =>
+        stage.key === "SETTLEMENT"
+          ? { ...stage, state: "BLOCKED" as const, blocker: "AwaitingSettlement" }
+          : { ...stage, state: "COMPLETE" as const, blocker: undefined }
+      ),
+    };
+    const html = renderToStaticMarkup(
+      <DealCockpitView
+        deal={deal}
+        backHref="/org_1/deals"
+        activeAppraisalProvider={deal.activeAppraisalProvider}
+        onRecordSupplierReceipt={async () => {}}
+        financialOverview={{ data: financedOverview(), loading: false }}
+        custody={custodyWiring()}
+        custodyMoney={custodyMoney}
+        workflowAction={{
+          stageKey: "SETTLEMENT",
+          actionKey: "FinalizeDealAction",
+          onStart: () => {},
+          unavailableReasonKey: "FinalizeNeedsReadinessAccess",
+        }}
+        financingPlan={{ facts: FINANCING_PLAN, formatMajor: (major, currency) => `${major.toLocaleString()} ${currency}` }}
+        handoverCosts={handoverCostsWiring()}
+      />
+    );
+    expect(html).toContain("data-testid=\"deal-next-step\"");
+    expect(html).not.toContain("data-testid=\"closing-readiness-service-unavailable\"");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(resolve(outDir, `deal-cockpit-${locale}-readiness-access.html`), html);
   });
 });

@@ -126,9 +126,11 @@ export function treatmentPosting(
   return TREATMENT_POSTING[treatment];
 }
 
+/** The legal-invoice refusals — absent, unusable, wrong recipient — each a distinct action for the operator. */
+export type LegalInvoiceRefusalCode = "LEGAL_INVOICE_MISSING" | "LEGAL_INVOICE_UNUSABLE" | "LEGAL_INVOICE_WRONG_RECIPIENT";
+
 export type PlanRefusalCode =
-  | "LEGAL_INVOICE_MISSING"
-  | "LEGAL_INVOICE_WRONG_RECIPIENT"
+  | LegalInvoiceRefusalCode
   | "GROSS_SETTLEMENT_UNKNOWN"
   | "REMITTANCE_UNKNOWN"
   | "REMITTANCE_STALE"
@@ -232,7 +234,7 @@ function isWholeMinorAmount(value: number): boolean {
  */
 export function checkLegalInvoice(
   input: Pick<FinancedSalePlanInput, "legalInvoiceConsiderationMinor" | "legalInvoiceIssuedTo" | "financierIsConfiguredExternal">
-): { ok: true; amountMinor: number } | { ok: false; refusal: PlanRefusal } {
+): { ok: true; amountMinor: number } | { ok: false; refusal: PlanRefusal & { code: LegalInvoiceRefusalCode } } {
   const legalInvoiceMinor = input.legalInvoiceConsiderationMinor;
   if (legalInvoiceMinor === undefined) {
     return {
@@ -248,7 +250,7 @@ export function checkLegalInvoice(
     return {
       ok: false,
       refusal: {
-        code: "LEGAL_INVOICE_MISSING",
+        code: "LEGAL_INVOICE_UNUSABLE",
         message: "The recorded legal invoice amount is not a usable figure. Record it again before finalizing.",
       },
     };

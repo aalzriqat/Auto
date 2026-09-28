@@ -600,11 +600,107 @@ describe("protected source content pins", () => {
        * message changed. Read the hunks; do not take this note's word for
        * them. Same governance; both constants recomputed FROM THE FILE with
        * this test's own normalization.
+       *
+       * -- RENEWAL 2026-09-28 (5) - SCRUM-414 readiness reason codes
+       *
+       * Previous postimage, superseded by this entry (renewal (4) just above,
+       * PR #352 head 615dc7995):
+       *
+       *   bytes:  239908
+       *   sha256: c573d153b751c3b0e1860d0eebb2f294fc36aac0f91883cec4b51f2a530ad8b9
+       *
+       * The delta is confined to `getClosingReadiness` (read-only) and its
+       * private input helper: (1) `closingReadinessInputs` now delegates to a
+       * new private `closingReadinessInputsOrRefusal`, which returns the same
+       * two refusals as coded reasons instead of throwing; the wrapper throws
+       * the IDENTICAL English sentence, so `finalizeDeal`'s refusal text and
+       * order are unchanged; (2) each check is served through
+       * `closingReadinessCheckView`, adding `reasonCode` and (finance tier
+       * only) `reasonParams`; below the finance tier the reason is the
+       * per-check `WITHHELD_<KEY>` code with NO params and the existing plain
+       * sentence (redaction test in financedConsignedSettlement.test.ts,
+       * mutation-proven); (3) `unavailableReasonCode`/`unavailableReasonParams`
+       * beside `unavailableReason`, withheld the same way; (4) type imports
+       * from `../lib/closingReadinessReasonCodes`. No mutation, permission,
+       * schema or index changed. NOT yet reviewed by an independent seat at
+       * the time of this renewal. Read the hunks; do not take this note's
+       * word for them. Same governance; both constants recomputed FROM THE
+       * FILE with this test's own normalization.
+       *
+       * -- RENEWAL 2026-09-28 (6) - SCRUM-414 /simplify pass
+       *
+       * Previous postimage, superseded by this entry (renewal (5) just above,
+       * branch head af22ec428):
+       *
+       *   bytes:  243398
+       *   sha256: e1ce2d649656ca3cfe4e134acad649fef6a899bee387d4d976d706bde878c200
+       *
+       * The delta, 72 insertions and 91 deletions, is confined to
+       * `getClosingReadiness` (read-only), its private input helper, and ONE
+       * line of `finalizeDeal`: (1) the private `closingReadinessInputs`
+       * wrapper is deleted; `finalizeDeal` calls
+       * `closingReadinessInputsOrRefusal` and throws its refusal with
+       * `closingRefusalError`, so the two input refusals (unsupported
+       * denomination, currency drift) carry the same `{ message, code,
+       * params? }` payload as the evaluator's refusals instead of a plain
+       * string. The English `message` is the IDENTICAL sentence, thrown at
+       * the same point in the same order; the door's permission and every
+       * other refusal are unchanged (failing assertions updated in
+       * sn31CurrencyMismatchRepro / scrum241FinanceReceiptAuthority to read
+       * `data.message`); (2) the two redaction paths are one pure
+       * `redactClosingReason` + one flattening `closingReasonView`; the wire
+       * shape (`reason`/`reasonCode`/`reasonParams?`,
+       * `unavailableReason`/`unavailableReasonCode`/`unavailableReasonParams?`)
+       * is unchanged, the codes are now required in its type; (3) the
+       * per-check `WITHHELD_READINESS_REASON` sentences and
+       * `WITHHELD_UNAVAILABLE_READINESS_REASON` are deleted (the client
+       * translates the WITHHELD_* code; the English left below the finance
+       * tier is `WITHHELD_READINESS_REASON_FALLBACK`, which names nothing
+       * about the deal), with the orphaned stacked JSDoc above them.
+       * Redaction is unchanged in substance: below the finance tier no
+       * params and no evaluator text are served (leak mutant re-run: letting
+       * params through fails the redaction assertions in
+       * financedConsignedSettlement.test.ts and sn31CurrencyMismatchRepro.test.ts;
+       * file restored byte-identical). No mutation added, no permission,
+       * schema or index changed. NOT yet reviewed by an independent seat at
+       * the time of this renewal. Read the hunks; do not take this note's
+       * word for them. Same governance; both constants recomputed FROM THE
+       * FILE with this test's own normalization.
+       *
+       * -- RENEWAL 2026-09-28 (7) - SCRUM-414 round-1 review fixes (R1 / S414-RED-1)
+       *
+       * Previous postimage, superseded by this entry (renewal (6) just above,
+       * branch head f3560fdff):
+       *
+       *   bytes:  241762
+       *   sha256: 86230d7a5ccb5359c45faf3e88134a410bb95892b0f7238209e7880e060eb583
+       *
+       * The delta, 8 insertions and 19 deletions, applies the readiness
+       * redaction to `finalizeDeal`'s refusals: (1) the private
+       * `redactClosingReason` moves, unchanged in behaviour, to
+       * `lib/closingReadinessReasonCodes.ts` so the query and the mutation
+       * share ONE pure function (the now-unused `WITHHELD_READINESS_REASON_FALLBACK`
+       * / `WithheldClosingReadinessReasonCode` imports go with it);
+       * `getClosingReadiness` is otherwise untouched; (2) `finalizeDeal`
+       * computes `mayReadMoney = mayReadFinanceEconomics(auth.role)` once,
+       * after the unchanged `requireTenantAuth` and before
+       * `runWithIdempotency`, and projects the input refusal through
+       * `redactClosingReason(…, "WITHHELD_UNAVAILABLE")` before throwing
+       * it — still uncaught, at the same point, before any write; (3) it
+       * passes `mayReadMoney` to `resolveFinancedSalePlan`, which redacts the
+       * evaluator's refusal to its check's WITHHELD code. Finance-tier
+       * callers receive byte-identical code/params/English; refusal order and
+       * verdicts are unchanged. No permission, schema, index, posting or
+       * idempotency change (finalizeRefusalRedaction.test.ts, failing-first
+       * and mutation-proven per throw site). NOT yet reviewed by an
+       * independent seat at the time of this renewal. Read the hunks; do not
+       * take this note's word for them. Same governance; both constants
+       * recomputed FROM THE FILE with this test's own normalization.
        */
       file: "convex/applications.ts",
-      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)), then for SCRUM-407 automatic closing readiness (RENEWALs 2026-09-28, 2026-09-28 (2), (3) and (4)).
-      bytes: 239908,
-      sha256: "c573d153b751c3b0e1860d0eebb2f294fc36aac0f91883cec4b51f2a530ad8b9",
+      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)), then for SCRUM-407 automatic closing readiness (RENEWALs 2026-09-28, 2026-09-28 (2), (3) and (4)), then for SCRUM-414 readiness reason codes (RENEWALs 2026-09-28 (5), (6) and (7)).
+      bytes: 241443,
+      sha256: "a3c4ff8ede8b112e0fdbb9748eff8daabc32e6829e7cd5a901570ab80e39c2dc",
     },
     {
       /**
