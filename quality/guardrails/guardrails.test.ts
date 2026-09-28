@@ -591,6 +591,54 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
     const expected = countNonBlank(await prettier.format(source, { filepath: "a.ts" }));
     expect(await measureLines("a.ts", source, {}, prettier)).toEqual({ lines: expected, formatted: true });
   }, TIMEOUT);
+
+  test("negative control (S426-07): prettier-ignore as ordinary CODE is counted as Prettier lays it out, never below", async () => {
+    // `prettier-ignore` here is subtraction, which Prettier widens to
+    // `prettier - ignore`; turning it into one identifier measured 153, not 757.
+    const root = fixtureRepo();
+    const declarations = Array.from({ length: 151 }, (_, i) =>
+      `export const xxxxxxx${String(i).padStart(3, "0")} = [prettier-ignore, prettier-ignore, prettier-ignore];`);
+    write(root, "convex/expressions.ts", `const prettier = 1;\nconst ignore = 1;\n${declarations.join("\n")}\n`);
+    const result = await check(root);
+    expectFailure(result.errors, /^SIZE-NEW convex\/expressions\.ts: 757 lines/);
+  }, TIMEOUT);
+
+  test("the pragma grammar: every form Prettier honours is neutralised; forms it ignores change nothing", async () => {
+    const prettier = await import("prettier");
+    const items = Array.from({ length: 60 }, (_, i) => `"item-${i}"`).join(", ");
+    const code = `export const crammed = [${items}];`;
+    const jsx = (pragma: string) => `export const C = () => (\n  <div>\n    ${pragma}\n    <span>{[${items}]}</span>\n  </div>\n);\n`;
+    // Measured against Prettier 3.8.4 (E:\tmp\sol-372\scrum426\pragma-grammar.txt).
+    const honoured: Array<[string, string]> = [
+      ["a.ts", `// prettier-ignore\n${code}\n`],
+      ["a.ts", `//prettier-ignore\n${code}\n`],
+      ["a.ts", `/* prettier-ignore */\n${code}\n`],
+      ["a.ts", `/*prettier-ignore*/\n${code}\n`],
+      ["a.ts", `/*\n prettier-ignore\n*/\n${code}\n`],
+      ["a.tsx", jsx("{/* prettier-ignore */}")],
+      ["a.tsx", jsx("{\n      // prettier-ignore\n    }")],
+      ["a.ts", "export const q = gql`\n  # prettier-ignore\n  query Q { a { b c d e f g h i j k l m n o p q r s t u v w x y z aa bb cc dd ee ff } }\n`;\n"],
+      ["a.ts", "export const h = html`\n  <!-- prettier-ignore -->\n  <div><span>a</span><span>b</span><span>c</span><span>d</span><span>e</span><span>f</span><span>g</span></div>\n`;\n"],
+    ];
+    for (const [file, source] of honoured) {
+      const plain = countNonBlank(await prettier.format(source, { filepath: file }));
+      const unignored = countNonBlank(
+        await prettier.format(source.replaceAll("prettier-ignore", "prettier_ignore"), { filepath: file }),
+      );
+      expect(unignored, source).toBeGreaterThan(plain);
+      expect(await measureLines(file, source, {}, prettier), source).toEqual({ lines: unignored, formatted: true });
+    }
+    const ignored = [
+      `// prettier-ignore because\n${code}\n`,
+      `/** prettier-ignore */\n${code}\n`,
+      `export const a = 1; // prettier-ignore\n${code}\n`,
+      `export const s = "// prettier-ignore";\n${code}\n`,
+    ];
+    for (const source of ignored) {
+      const plain = countNonBlank(await prettier.format(source, { filepath: "a.ts" }));
+      expect(await measureLines("a.ts", source, {}, prettier), source).toEqual({ lines: plain, formatted: true });
+    }
+  }, TIMEOUT);
 });
 
 describe("import boundaries", () => {
