@@ -13,7 +13,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { resolveBaseRef, runGuardrails, writeBaseline } from "./check.mjs";
-import { importViolations, parseConfig } from "./rules.mjs";
+import { BOOTSTRAP_POLICY, LEGACY_MIGRATIONS, importViolations, parseConfig } from "./rules.mjs";
 
 const TIMEOUT = 60_000;
 const ZERO_SHA = "0".repeat(40);
@@ -132,6 +132,13 @@ async function check(root: string) {
   return runGuardrails({ cwd: root, env: {}, base: "main" });
 }
 
+/** The fixture's own scope stands in for the pinned owner policy on bootstrap. */
+const FIXTURE_POLICY = { maxLines: 600, productionRoots: ["components/", "convex/"], extensions: [".ts", ".tsx"] };
+
+async function bootstrapCheck(root: string) {
+  return runGuardrails({ cwd: root, env: {}, base: "main", bootstrapPolicy: FIXTURE_POLICY });
+}
+
 function expectFailure(errors: string[], pattern: RegExp): void {
   expect(errors.some((e) => pattern.test(e)), `expected ${pattern} in:\n${errors.join("\n")}`).toBe(true);
 }
@@ -224,7 +231,7 @@ describe("trusted target-branch allowance", () => {
 
   test("the base ref comes from CI context: PR target, push parent, local origin/main", () => {
     expect(resolveBaseRef({ GITHUB_BASE_REF: "main", GITHUB_EVENT_NAME: "pull_request" }, undefined)).toBe("origin/main");
-    expect(resolveBaseRef({ GITHUB_EVENT_NAME: "push" }, undefined)).toBe("HEAD^");
+    expect(resolveBaseRef({ GITHUB_EVENT_NAME: "push", GUARDRAILS_PUSH_BEFORE: "a".repeat(40) }, undefined)).toBe("a".repeat(40));
     expect(resolveBaseRef({}, undefined)).toBe("origin/main");
     expect(resolveBaseRef({ GITHUB_BASE_REF: "main" }, "abc123")).toBe("abc123");
   });
@@ -234,13 +241,13 @@ describe("trusted target-branch allowance", () => {
     const target = git(root, "rev-parse", "HEAD");
     writeConfig(root, baseConfig());
     await writeBaseline(root, target, "main");
-    const good = await check(root);
+    const good = await bootstrapCheck(root);
     expect(good.bootstrap).toBe(true);
     expect(good.errors).toEqual([]);
 
     const tampered = { ...baseBaseline(), sourceCommit: target, sizeCeilings: { "convex/big.ts": 900 } };
     writeBaselineDoc(root, tampered);
-    const bad = await check(root);
+    const bad = await bootstrapCheck(root);
     expectFailure(bad.errors, /^BOOTSTRAP baseline does not equal the recomputation/);
   }, TIMEOUT);
 });
@@ -272,6 +279,140 @@ describe("enumerated lists against independent discovery", () => {
     write(root, "convex/big.ts", lines(10));
     const result = await check(root);
     expectFailure(result.errors, /^STALE-CEILING convex\/big\.ts: 10 lines is within 600/);
+  }, TIMEOUT);
+});
+
+describe("round-1 review findings (Sol S426-01..04, Codex 426-1..3)", () => {
+  test("negative control (Codex 426-3): a root added by the PR is size-checked in the same PR", async () => {
+    const root = fixtureRepo();
+    const config = baseConfig();
+    config.productionRoots.push("lib/");
+    writeConfig(root, config);
+    write(root, "lib/big.ts", lines(700));
+    write(root, "lib/small.ts", lines(10));
+    const result = await check(root);
+    expect(result.errors).toEqual(["SIZE-NEW lib/big.ts: 700 lines > limit 600 (not grandfathered)"]);
+  }, TIMEOUT);
+
+  test("scope adoption: an UNCHANGED oversized file brought into scope may carry a ceiling; a changed one may not", async () => {
+    const root = fixtureRepo();
+    write(root, "lib/legacy.ts", lines(700, "l"));
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "legacy outside scope");
+    const config = baseConfig();
+    config.productionRoots.push("lib/");
+    writeConfig(root, config);
+    writeBaselineDoc(root, { ...baseBaseline(), sizeCeilings: { "convex/big.ts": 700, "lib/legacy.ts": 700 } });
+    const adopted = await check(root);
+    expect(adopted.errors).toEqual([]);
+    expect(adopted.notices).toContain("SCOPE-ADOPTED lib/legacy.ts: 700 lines, unchanged from the target");
+
+    write(root, "lib/legacy.ts", lines(701, "l"));
+    writeBaselineDoc(root, { ...baseBaseline(), sizeCeilings: { "convex/big.ts": 700, "lib/legacy.ts": 701 } });
+    const grown = await check(root);
+    expectFailure(grown.errors, /^SIZE-NEW lib\/legacy\.ts: 701 lines/);
+    expectFailure(grown.errors, /^RATCHET new size ceiling for lib\/legacy\.ts/);
+  }, TIMEOUT);
+
+  test("negative control (S426-low): removing a ceiling from a still-oversized file fails now, not on the next run", async () => {
+    const root = fixtureRepo();
+    writeBaselineDoc(root, { ...baseBaseline(), sizeCeilings: {} });
+    const result = await check(root);
+    expectFailure(result.errors, /^MISSING-CEILING convex\/big\.ts: 700 lines > 600/);
+  }, TIMEOUT);
+
+  test("negative control (S426-04): list entries must match independent discovery in both directions", async () => {
+    const root = fixtureRepo();
+    const config = baseConfig();
+    config.generated.push({ path: "convex/applications.ts", reason: "not actually generated code" });
+    config.migrations.push({ path: "convex/utils/money.ts", reason: "not actually a migration file" });
+    config.nonDoors.push({ path: "convex/utils/money.ts", reason: "not a top-level convex module" });
+    writeConfig(root, config);
+    const result = await check(root);
+    expectFailure(result.errors, /^UNDISCOVERED-GENERATED convex\/applications\.ts/);
+    expectFailure(result.errors, /^UNDISCOVERED-MIGRATION convex\/utils\/money\.ts/);
+    expectFailure(result.errors, /^INVALID-NONDOOR convex\/utils\/money\.ts/);
+  }, TIMEOUT);
+
+  test("pinned legacy migrations and the bootstrap policy are the reviewed values", () => {
+    expect([...LEGACY_MIGRATIONS]).toEqual([
+      "convex/accountingMigration.ts",
+      "convex/migrations.ts",
+      "convex/seedDocuments.ts",
+    ]);
+    expect(BOOTSTRAP_POLICY).toEqual({
+      maxLines: 600,
+      productionRoots: ["app/", "apps/", "components/", "convex/", "dealer-worker/src/", "hooks/", "lib/", "packages/"],
+      extensions: [".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx"],
+    });
+  });
+
+
+  test("negative control (S426-02 / Codex 426-1): bootstrap cannot raise the limit, narrow scope, or exempt a new file", async () => {
+    const root = fixtureRepo({ withGuardrails: false });
+    const target = git(root, "rev-parse", "HEAD");
+    const config = baseConfig();
+    config.maxLines = 5000;
+    config.productionRoots = ["convex/"];
+    config.exemptions.push({ path: "convex/newModule.ts", reason: "exempting its own new file" });
+    writeConfig(root, config);
+    write(root, "convex/newModule.ts", lines(700));
+    await writeBaseline(root, target, "main");
+    const result = await bootstrapCheck(root);
+    expect(result.bootstrap).toBe(true);
+    expectFailure(result.errors, /^BOOTSTRAP-POLICY maxLines 5000 > pinned 600/);
+    expectFailure(result.errors, /^BOOTSTRAP-POLICY productionRoots: "components\/" missing/);
+    expectFailure(result.errors, /^BOOTSTRAP-NEW-ALLOWANCE exemptions: "convex\/newModule\.ts" does not exist on the target/);
+  }, TIMEOUT);
+
+  test("negative control (S426-02): bootstrap formats with the TARGET's Prettier options, not the PR's", async () => {
+    const root = fixtureRepo({ withGuardrails: false });
+    const target = git(root, "rev-parse", "HEAD");
+    writeConfig(root, baseConfig());
+    write(root, ".prettierrc", json({ printWidth: 1000000 }));
+    const items = Array.from({ length: 700 }, (_, i) => `"item-number-${i}"`).join(", ");
+    write(root, "convex/wide.ts", `export const wide = [${items}];\n`);
+    await writeBaseline(root, target, "main");
+    const result = await bootstrapCheck(root);
+    expectFailure(result.errors, /^SIZE-NEW convex\/wide\.ts/);
+  }, TIMEOUT);
+
+  test("positive control: a faithful bootstrap still passes under the pinned policy", async () => {
+    const root = fixtureRepo({ withGuardrails: false });
+    const target = git(root, "rev-parse", "HEAD");
+    writeConfig(root, baseConfig());
+    await writeBaseline(root, target, "main");
+    const result = await bootstrapCheck(root);
+    expect(result.errors).toEqual([]);
+  }, TIMEOUT);
+
+  test("negative control (S426-03): a push is judged against the pre-push SHA, not HEAD^", async () => {
+    const root = fixtureRepo();
+    const before = git(root, "rev-parse", "HEAD");
+    writeConfig(root, { ...baseConfig(), maxLines: 5000 });
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "A: raise allowance");
+    write(root, "convex/newModule.ts", lines(700));
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "B: add debt");
+    const result = await runGuardrails({ cwd: root, env: { GITHUB_EVENT_NAME: "push", GUARDRAILS_PUSH_BEFORE: before } });
+    expect(result.baseCommit).toBe(before);
+    expectFailure(result.errors, /^SIZE-NEW convex\/newModule\.ts: 700 lines > limit 600/);
+  }, TIMEOUT);
+
+  test("a push without a usable pre-push SHA, or a non-fast-forward push, fails closed", async () => {
+    expect(() => resolveBaseRef({ GITHUB_EVENT_NAME: "push" }, undefined)).toThrow(/pre-push SHA/);
+    expect(() => resolveBaseRef({ GITHUB_EVENT_NAME: "push", GUARDRAILS_PUSH_BEFORE: ZERO_SHA }, undefined)).toThrow(/pre-push SHA/);
+    const root = fixtureRepo();
+    git(root, "checkout", "-q", "-b", "side");
+    write(root, "convex/side.ts", "export const s = 1;\n");
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "side");
+    const side = git(root, "rev-parse", "HEAD");
+    git(root, "checkout", "-q", "main");
+    await expect(
+      runGuardrails({ cwd: root, env: { GITHUB_EVENT_NAME: "push", GUARDRAILS_PUSH_BEFORE: side } }),
+    ).rejects.toThrow(/not an ancestor/);
   }, TIMEOUT);
 });
 
@@ -315,6 +456,20 @@ describe("import boundaries", () => {
       "IMPORT-NEW [policy-no-react] convex/domains/deals/policy/view.ts -> react",
     ]);
   }, TIMEOUT);
+
+  test("negative control (S426-01 / Codex 426-2): an equivalent alias spelling is judged as the file it resolves to", () => {
+    const config = parseConfig(json(baseConfig()), "fixture");
+    const to = (from: string, spec: string) =>
+      importViolations(from, `import { x } from "${spec}";\nexport const y = x;\n`, config).map((v: Grandfather) => `${v.rule} ${v.to}`);
+    expect(to("components/A.tsx", "@/convex/./utils/money")).toEqual(["components-no-convex-utils convex/utils/money"]);
+    expect(to("components/A.tsx", "@/convex/x/../utils/money")).toEqual(["components-no-convex-utils convex/utils/money"]);
+    expect(to("convex/domains/d/commands/c.ts", "@/convex/./applications")).toEqual(["domains-no-door convex/applications"]);
+    expect(to("convex/domains/d/policy/p.ts", "@/convex/_generated/./server")).toEqual(["policy-no-generated-server convex/_generated/server"]);
+    expect(to("convex/domains/d/policy/p.ts", "../../../../node_modules/react")).toEqual(["policy-no-react react"]);
+    // Controls: the canonical form is unchanged, and an alias escaping the repo is not a repo module.
+    expect(to("components/A.tsx", "@/convex/utils/money")).toEqual(["components-no-convex-utils convex/utils/money"]);
+    expect(to("components/A.tsx", "@/../outside/convex/utils/money")).toEqual([]);
+  });
 
   test("import detection covers re-exports, dynamic import and require, but not comments or strings", () => {
     const config = parseConfig(json(baseConfig()), "fixture");

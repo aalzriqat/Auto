@@ -8,6 +8,24 @@ export const SCHEMA_VERSION = 1;
 export const CONFIG_PATH = "quality/guardrails/config.json";
 export const BASELINE_PATH = "quality/guardrails/baseline.json";
 
+/**
+ * The owner-approved policy (SCRUM-418 c21105) that the FIRST guardrail PR is
+ * held to. On bootstrap the target has no config yet, so the PR's own config is
+ * the only candidate; it may be tighter than this, never looser.
+ */
+export const BOOTSTRAP_POLICY = Object.freeze({
+  maxLines: 600,
+  productionRoots: ["app/", "apps/", "components/", "convex/", "dealer-worker/src/", "hooks/", "lib/", "packages/"],
+  extensions: [".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx"],
+});
+
+/** Migration/seed modules whose names predate the `convex/migrate*` convention. */
+export const LEGACY_MIGRATIONS = Object.freeze([
+  "convex/accountingMigration.ts",
+  "convex/migrations.ts",
+  "convex/seedDocuments.ts",
+]);
+
 export const RULES = Object.freeze({
   componentsNoConvexUtils: "components-no-convex-utils",
   domainsNoDoor: "domains-no-door",
@@ -162,6 +180,7 @@ const TEST_LIKE = [
 ];
 const GENERATED_DIR = "convex/_generated/";
 const MIGRATION_FILE = /^convex\/migrate[^/]*\.[cm]?[jt]s$/u;
+const TOP_LEVEL_CONVEX_MODULE = /^convex\/[^/]+\.[cm]?[jt]sx?$/u;
 
 export function isTestLike(repoPath) {
   return TEST_LIKE.some((pattern) => pattern.test(repoPath));
@@ -235,13 +254,16 @@ const SOURCE_SUFFIX = /\.(?:d\.ts|[cm]?[jt]sx?)$/u;
 /** Resolve one specifier to a repo module id (no extension, no /index). */
 export function resolveSpecifier(fromPath, specifier) {
   let target;
-  if (specifier.startsWith("@/")) target = specifier.slice(2);
+  if (specifier.startsWith("@/")) target = path.posix.normalize(specifier.slice(2));
   else if (specifier.startsWith("./") || specifier.startsWith("../")) {
     target = path.posix.normalize(path.posix.join(path.posix.dirname(fromPath), specifier));
-    if (target.startsWith("../")) return { kind: "package", id: specifier };
   } else {
     return { kind: "package", id: specifier };
   }
+  if (target === ".." || target.startsWith("../")) return { kind: "package", id: specifier };
+  // A path into node_modules is that package, however it is spelled.
+  const inModules = /(?:^|\/)node_modules\/(.+)$/u.exec(target);
+  if (inModules) return { kind: "package", id: inModules[1] };
   target = target.replace(SOURCE_SUFFIX, "").replace(/\/index$/u, "");
   return { kind: "repo", id: target };
 }
@@ -329,18 +351,25 @@ export function buildBaseline(sourceCommit, config, measured, trustedBaseline) {
  *  trusted  — {config, baseline} from the TARGET branch: the only allowance.
  *  proposed — {config, baseline} from the PR tree: the next target, so it is
  *             checked for completeness against disk and may only tighten.
- *  measured — {inventory: string[], counts: Map, violations: [...]} of the PR tree.
+ *  measured — {inventory: string[], counts: Map, violations: [...]} of the PR tree,
+ *             plus targetInventory (paths on the target) and unchangedFromTarget
+ *             (files whose text equals the target's).
+ *  bootstrapPolicy — the pinned first-PR policy (defaults to BOOTSTRAP_POLICY).
  */
-export function evaluate({ trusted, proposed, measured, bootstrap }) {
+export function evaluate({ trusted, proposed, measured, bootstrap, bootstrapPolicy = BOOTSTRAP_POLICY }) {
   const errors = [];
   const notices = [];
   const inventory = new Set(measured.inventory);
   const { counts } = measured;
   const tMax = trusted.config.maxLines;
 
-  // 1. File size against the trusted allowance.
+  // 1. File size against the trusted allowance. A file the PR brings into scope
+  //    (production only under the proposed config) is held to the same limit;
+  //    it may carry a new ceiling only when it is unchanged from the target.
+  const adopted = new Set();
   for (const [filePath, lines] of [...counts].sort(([a], [b]) => compareCodeUnits(a, b))) {
-    if (classify(filePath, trusted.config) !== "production") continue;
+    const trustedProduction = classify(filePath, trusted.config) === "production";
+    if (!trustedProduction && classify(filePath, proposed.config) !== "production") continue;
     const ceiling = trusted.baseline.sizeCeilings[filePath];
     if (ceiling !== undefined) {
       if (lines > ceiling) {
@@ -349,7 +378,15 @@ export function evaluate({ trusted, proposed, measured, bootstrap }) {
         notices.push(`ceiling can ratchet down: ${filePath} ${ceiling} -> ${lines}`);
       }
     } else if (lines > tMax) {
-      errors.push(`SIZE-NEW ${filePath}: ${lines} lines > limit ${tMax} (not grandfathered)`);
+      const adoptable = !trustedProduction &&
+        measured.unchangedFromTarget?.has(filePath) === true &&
+        proposed.baseline.sizeCeilings[filePath] === lines;
+      if (adoptable) {
+        adopted.add(filePath);
+        notices.push(`SCOPE-ADOPTED ${filePath}: ${lines} lines, unchanged from the target`);
+      } else {
+        errors.push(`SIZE-NEW ${filePath}: ${lines} lines > limit ${tMax} (not grandfathered)`);
+      }
     }
   }
 
@@ -381,7 +418,31 @@ export function evaluate({ trusted, proposed, measured, bootstrap }) {
       errors.push(`UNLISTED-MIGRATION ${file}: add it to config.migrations with a reason`);
     }
   }
+  // Reverse direction: every listed entry must be what independent discovery says it is.
+  for (const entry of proposed.config.generated) {
+    if (!entry.path.startsWith(GENERATED_DIR)) {
+      errors.push(`UNDISCOVERED-GENERATED ${entry.path}: not under ${GENERATED_DIR}`);
+    }
+  }
+  for (const entry of proposed.config.migrations) {
+    const discovered = MIGRATION_FILE.test(entry.path) && !isTestLike(entry.path);
+    if (!discovered && !LEGACY_MIGRATIONS.includes(entry.path)) {
+      errors.push(`UNDISCOVERED-MIGRATION ${entry.path}: not a convex/migrate* file or a pinned legacy migration`);
+    }
+  }
+  for (const entry of proposed.config.nonDoors) {
+    if (!TOP_LEVEL_CONVEX_MODULE.test(entry.path)) {
+      errors.push(`INVALID-NONDOOR ${entry.path}: only a top-level convex/<module> can be a door`);
+    }
+  }
   const pMax = proposed.config.maxLines;
+  for (const [filePath, lines] of counts) {
+    if (lines <= pMax || classify(filePath, proposed.config) !== "production") continue;
+    const kept = proposed.baseline.sizeCeilings[filePath] !== undefined;
+    if (!kept && trusted.baseline.sizeCeilings[filePath] !== undefined) {
+      errors.push(`MISSING-CEILING ${filePath}: ${lines} lines > ${pMax}; keep its ceiling until it shrinks`);
+    }
+  }
   for (const [filePath, ceiling] of Object.entries(proposed.baseline.sizeCeilings)) {
     const lines = counts.get(filePath);
     if (lines === undefined || classify(filePath, proposed.config) !== "production") {
@@ -399,11 +460,33 @@ export function evaluate({ trusted, proposed, measured, bootstrap }) {
   }
 
   // 4. The proposed documents become the next target: they may only tighten.
-  if (!bootstrap) ratchetChecks(trusted, proposed, errors, notices);
+  //    On bootstrap there is no target config, so the pinned policy stands in.
+  if (bootstrap) bootstrapChecks(proposed, measured, bootstrapPolicy, errors);
+  else ratchetChecks(trusted, proposed, adopted, errors, notices);
   return { errors, notices };
 }
 
-function ratchetChecks(trusted, proposed, errors, notices) {
+function bootstrapChecks(proposed, measured, policy, errors) {
+  const p = proposed.config;
+  if (p.maxLines > policy.maxLines) {
+    errors.push(`BOOTSTRAP-POLICY maxLines ${p.maxLines} > pinned ${policy.maxLines}`);
+  }
+  for (const key of ["productionRoots", "extensions"]) {
+    for (const value of policy[key]) {
+      if (!p[key].includes(value)) errors.push(`BOOTSTRAP-POLICY ${key}: "${value}" missing`);
+    }
+  }
+  // The first PR may only exclude files that already existed on the target.
+  for (const listName of JUSTIFIED_LISTS) {
+    for (const entry of p[listName]) {
+      if (!measured.targetInventory?.has(entry.path)) {
+        errors.push(`BOOTSTRAP-NEW-ALLOWANCE ${listName}: "${entry.path}" does not exist on the target`);
+      }
+    }
+  }
+}
+
+function ratchetChecks(trusted, proposed, adopted, errors, notices) {
   const t = trusted.config;
   const p = proposed.config;
   if (p.maxLines > t.maxLines) {
@@ -416,7 +499,9 @@ function ratchetChecks(trusted, proposed, errors, notices) {
   }
   for (const [filePath, ceiling] of Object.entries(proposed.baseline.sizeCeilings)) {
     const was = trusted.baseline.sizeCeilings[filePath];
-    if (was === undefined) errors.push(`RATCHET new size ceiling for ${filePath} (ceilings only decrease)`);
+    if (was === undefined && !adopted.has(filePath)) {
+      errors.push(`RATCHET new size ceiling for ${filePath} (ceilings only decrease)`);
+    }
     else if (ceiling > was) errors.push(`RATCHET ceiling raised for ${filePath}: ${was} -> ${ceiling}`);
   }
   const trustedImports = new Set(trusted.baseline.importGrandfather.map(importKey));

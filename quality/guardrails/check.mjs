@@ -5,7 +5,12 @@
 // size ceilings, grandfathered imports) is read from the TARGET branch with
 // `git`, never from the PR tree, so a PR cannot raise its own allowance:
 //   pull_request : origin/$GITHUB_BASE_REF
-//   push         : HEAD^ (the parent commit)
+//   push         : the pre-push SHA (github.event.before via GUARDRAILS_PUSH_BEFORE);
+//                  a missing/zero SHA or a non-fast-forward push fails closed
+// On bootstrap (target has no guardrail files) the PR's config is checked
+// against the pinned owner policy (rules.mjs BOOTSTRAP_POLICY) and may exclude
+// only files that already exist on the target. Prettier options always come
+// from the target.
 //   local        : origin/main, or --base <ref>
 // The PR tree's config/baseline are the NEXT target: they are checked for
 // completeness against disk and may only tighten. Residual risk: a PR can edit
@@ -62,7 +67,14 @@ function gitText(cwd, args) {
 export function resolveBaseRef(env, explicit) {
   if (explicit) return explicit;
   if (env.GITHUB_BASE_REF) return `origin/${env.GITHUB_BASE_REF}`;
-  if (env.GITHUB_EVENT_NAME === "push") return "HEAD^";
+  if (env.GITHUB_EVENT_NAME === "push") {
+    // The target before THIS push — not HEAD^, which a multi-commit push controls.
+    const before = env.GUARDRAILS_PUSH_BEFORE ?? "";
+    if (!/^[0-9a-f]{40}$/u.test(before) || /^0+$/u.test(before)) {
+      throw new Error("A push run needs the pre-push SHA in GUARDRAILS_PUSH_BEFORE (github.event.before).");
+    }
+    return before;
+  }
   return "origin/main";
 }
 
@@ -186,6 +198,22 @@ async function measureCommit(cwd, commit, config, prettierOptions, lineCache) {
   });
 }
 
+/**
+ * Files the PR brings into scope (production only under the proposed config)
+ * whose text is identical to the target's — the only ones that may be adopted
+ * with a new ceiling.
+ */
+function unchangedFromTarget(cwd, measured, trustedConfig, proposedConfig, targetBlobs, readDisk) {
+  const candidates = [...measured.counts.keys()].filter(
+    (p) => targetBlobs.has(p) &&
+      classify(p, trustedConfig) !== "production" &&
+      classify(p, proposedConfig) === "production",
+  );
+  const texts = readBlobs(cwd, candidates.map((p) => targetBlobs.get(p)));
+  const normalize = (text) => text.replaceAll("\r\n", "\n");
+  return new Set(candidates.filter((p) => normalize(texts.get(targetBlobs.get(p))) === normalize(readDisk(p))));
+}
+
 function loadPair(configText, baselineText, label) {
   return {
     config: parseConfig(configText, `${label} ${CONFIG_PATH}`),
@@ -217,11 +245,16 @@ async function verifyBootstrap(cwd, baseCommit, proposed, prettierOptions, lineC
 
 /**
  * @param {{ cwd: string, env?: Record<string, string | undefined>, base?: string,
- *   log?: (message: string) => void }} options
+ *   log?: (message: string) => void,
+ *   bootstrapPolicy?: { maxLines: number, productionRoots: string[], extensions: string[] } }} options
  */
-export async function runGuardrails({ cwd, env = process.env, base, log = () => {} }) {
+export async function runGuardrails({ cwd, env = process.env, base, log = () => {}, bootstrapPolicy }) {
   const baseRef = resolveBaseRef(env, base);
   const baseCommit = resolveCommit(cwd, baseRef);
+  if (!base && env.GITHUB_EVENT_NAME === "push" &&
+    git(cwd, ["merge-base", "--is-ancestor", baseCommit, "HEAD"]).status !== 0) {
+    throw new Error(`Pre-push SHA ${baseCommit} is not an ancestor of HEAD (non-fast-forward push); refusing.`);
+  }
   const tConfig = readAtCommit(cwd, baseCommit, CONFIG_PATH);
   const tBaseline = readAtCommit(cwd, baseCommit, BASELINE_PATH);
   if ((tConfig === null) !== (tBaseline === null)) {
@@ -236,10 +269,8 @@ export async function runGuardrails({ cwd, env = process.env, base, log = () => 
   const proposed = loadPair(readDisk(CONFIG_PATH), readDisk(BASELINE_PATH), "PR-tree");
   const bootstrap = tConfig === null;
   const trusted = bootstrap ? proposed : loadPair(tConfig, tBaseline, `target(${baseRef})`);
-  const prettierSource = bootstrap
-    ? (existsSync(path.join(cwd, PRETTIER_RC)) ? readDisk(PRETTIER_RC) : null)
-    : readAtCommit(cwd, baseCommit, PRETTIER_RC);
-  const prettierOptions = prettierOptionsFrom(prettierSource, baseRef);
+  // Formatting options are part of the allowance: always the target's, bootstrap included.
+  const prettierOptions = prettierOptionsFrom(readAtCommit(cwd, baseCommit, PRETTIER_RC), baseRef);
   log(`guardrails: trusted base ${baseRef} (${baseCommit.slice(0, 12)})${bootstrap ? " — BOOTSTRAP" : ""}`);
 
   const inventory = diskInventory(cwd);
@@ -251,7 +282,10 @@ export async function runGuardrails({ cwd, env = process.env, base, log = () => 
     prettierOptions,
     lineCache,
   });
-  const { errors, notices } = evaluate({ trusted, proposed, measured, bootstrap });
+  const targetBlobs = treeBlobs(cwd, baseCommit);
+  measured.targetInventory = new Set(targetBlobs.keys());
+  measured.unchangedFromTarget = unchangedFromTarget(cwd, measured, trusted.config, proposed.config, targetBlobs, readDisk);
+  const { errors, notices } = evaluate({ trusted, proposed, measured, bootstrap, bootstrapPolicy });
   for (const file of measured.unformatted) notices.push(`UNFORMATTABLE ${file}: counted unformatted`);
   if (bootstrap) {
     notices.push("BOOTSTRAP: target has no guardrail files; PR-tree baseline verified by recomputation");

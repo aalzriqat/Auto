@@ -346,6 +346,9 @@ jobs:
     # SCRUM-426: blocking file-size + import-boundary guardrails. Allowance comes
     # from the target branch, never the PR tree (see quality/guardrails/check.mjs).
     - name: Size and import guardrails (trusted target baseline)
+      env:
+        # On push, the allowance is the target as it was BEFORE this push.
+        GUARDRAILS_PUSH_BEFORE: ${{ github.event.before }}
       run: pnpm guardrails
 
   dependency-audit:
