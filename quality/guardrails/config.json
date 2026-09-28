@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 1,
+  "maxLines": 600,
+  "productionRoots": [
+    "app/",
+    "apps/",
+    "components/",
+    "convex/",
+    "dealer-worker/src/",
+    "hooks/",
+    "lib/",
+    "packages/"
+  ],
+  "extensions": [
+    ".cjs",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".ts",
+    ".tsx"
+  ],
+  "exemptions": [
+    {
+      "path": "apps/mobile/src/convexApi.ts",
+      "reason": "Mobile registry of Convex function references (one line per door, no logic)."
+    },
+    {
+      "path": "apps/mobile/src/features/workspace/modules/moduleStyles.ts",
+      "reason": "React Native StyleSheet data for workspace modules (style tokens, no logic)."
+    },
+    {
+      "path": "convex/schema.ts",
+      "reason": "Single Convex schema; temporary until the SCRUM-282 mechanical split lands, then remove this entry."
+    },
+    {
+      "path": "lib/i18n/domains/common.ts",
+      "reason": "Translation dictionary (string data, no logic); grows with every UI string."
+    },
+    {
+      "path": "lib/i18n/domains/sales.ts",
+      "reason": "Translation dictionary (string data, no logic); grows with every UI string."
+    },
+    {
+      "path": "lib/i18n/domains/settings.ts",
+      "reason": "Translation dictionary (string data, no logic); grows with every UI string."
+    },
+    {
+      "path": "lib/i18n/domains/vehicles.ts",
+      "reason": "Translation dictionary (string data, no logic); grows with every UI string."
+    },
+    {
+      "path": "packages/shared/src/i18n.ts",
+      "reason": "Shared translation dictionary (string data, no logic)."
+    }
+  ],
+  "generated": [
+    {
+      "path": "convex/_generated/ai/ai-files.state.json",
+      "reason": "Convex AI-files state written by `convex codegen`; not hand-edited."
+    },
+    {
+      "path": "convex/_generated/ai/guidelines.md",
+      "reason": "Convex AI guidelines written by `convex codegen`; not hand-edited."
+    },
+    {
+      "path": "convex/_generated/api.d.ts",
+      "reason": "Convex codegen API types; regenerated, never hand-edited."
+    },
+    {
+      "path": "convex/_generated/api.js",
+      "reason": "Convex codegen API references; regenerated, never hand-edited."
+    },
+    {
+      "path": "convex/_generated/dataModel.d.ts",
+      "reason": "Convex codegen data-model types; regenerated, never hand-edited."
+    },
+    {
+      "path": "convex/_generated/server.d.ts",
+      "reason": "Convex codegen server builder types; regenerated, never hand-edited."
+    },
+    {
+      "path": "convex/_generated/server.js",
+      "reason": "Convex codegen server builders; regenerated, never hand-edited."
+    }
+  ],
+  "migrations": [
+    {
+      "path": "convex/accountingMigration.ts",
+      "reason": "Accounting data migration/backfill run once per deployment; retired after cutover, not feature code."
+    },
+    {
+      "path": "convex/migrateCommissionAccruals.ts",
+      "reason": "One-shot commission accrual data migration; not feature code."
+    },
+    {
+      "path": "convex/migrateConsignedSaleBasis.ts",
+      "reason": "One-shot consigned sale basis data migration; not feature code."
+    },
+    {
+      "path": "convex/migrateExpenseReversals.ts",
+      "reason": "One-shot expense reversal data migration; not feature code."
+    },
+    {
+      "path": "convex/migrateFinancingEconomics.ts",
+      "reason": "One-shot financing economics data migration; not feature code."
+    },
+    {
+      "path": "convex/migrateMarketplacePublicIds.ts",
+      "reason": "One-shot marketplace public id data migration; not feature code."
+    },
+    {
+      "path": "convex/migrateMarketplaceStatuses.ts",
+      "reason": "One-shot marketplace status data migration; not feature code."
+    },
+    {
+      "path": "convex/migrateRoles.ts",
+      "reason": "One-shot role data migration; not feature code."
+    },
+    {
+      "path": "convex/migrations.ts",
+      "reason": "Registry of Convex data migrations; not feature code."
+    },
+    {
+      "path": "convex/seedDocuments.ts",
+      "reason": "Seed data for document templates; data, not feature code."
+    }
+  ],
+  "nonDoors": [
+    {
+      "path": "convex/schema.ts",
+      "reason": "Table definitions only — no Convex functions, so it is not a door."
+    }
+  ]
+}
