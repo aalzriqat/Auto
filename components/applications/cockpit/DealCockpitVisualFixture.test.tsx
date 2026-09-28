@@ -555,14 +555,15 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
                 key: "CUSTODY_SETTLED",
                 status: "BLOCKED",
                 reason: "A custody record on this deal is still open. Settle what that person holds or is owed before finalizing.",
-                // No code: this fixture renders the English diagnostic, as before SCRUM-414.
-                reasonCode: null,
+                // SCRUM-414: coded reasons render the localized text (AR/EN), not the English diagnostic.
+                reasonCode: "CUSTODY_OPEN",
               },
               {
                 key: "COSTS_CLOSABLE",
                 status: "BLOCKED",
                 reason: "1 cost(s) on this deal have no actual amount recorded. Estimates may be used to run the deal, but not to close it.",
-                reasonCode: null,
+                reasonCode: "COSTS_AWAITING_ACTUAL",
+                reasonParams: { count: 1 },
               },
               { key: "FIRST_PAYMENT_RECORDED", status: "READY", reason: null, reasonCode: null },
               { key: "LEGAL_INVOICE_RECORDED", status: "READY", reason: null, reasonCode: null },
