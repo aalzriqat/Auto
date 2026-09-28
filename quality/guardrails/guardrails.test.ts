@@ -641,6 +641,18 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
     await expect(measureLines("lib/a.ts", source, {}, neutralisedFails)).rejects.toThrow(/^COUNT-UNAVAILABLE lib\/a\.ts/);
   }, TIMEOUT);
 
+  test("negative control (Sol S426-09): a count-unavailable error names the file and position, never its source", async () => {
+    const prettier = await import("prettier");
+    const source = 'const internalSecret = "SENTINEL_SECRET_426";\nexport const = ;\n';
+    const error = await measureLines("convex/broken.ts", source, {}, prettier).then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+    expect(error?.message).toMatch(/^COUNT-UNAVAILABLE convex\/broken\.ts: Prettier could not format it \(line 2, column \d+\)$/);
+    expect(error?.message).not.toContain("SENTINEL_SECRET_426");
+    expect(error?.message).not.toContain("export const");
+  }, TIMEOUT);
+
   test("negative control (Sol S426-08): an unformattable file blocks the check and the baseline writer, never a notice", async () => {
     const root = fixtureRepo();
     write(root, "convex/broken.ts", "export const = ;\n");
