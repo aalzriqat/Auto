@@ -517,10 +517,10 @@ export const createDraft = mutation({
     salePrice: v.number(),
     saleDate: v.number(),
     status: v.optional(v.literal("PENDING")),
-    // No `quoteId` (SCRUM-425, owner ruling c21131): a quote becomes a sale
-    // only through its own door, `completeFromQuote`, or its finance
-    // application. A quote-linked draft let a second door name the same car
-    // and left a stale PENDING row beside the quote's COMPLETED sale.
+    // No `quoteId` (SCRUM-425, owner ruling c21131): a draft never names a
+    // quote. A quote-linked draft let a second door name the same car and left
+    // a stale PENDING row beside the quote's COMPLETED sale. (A direct
+    // COMPLETED sale through `create` may still carry quote lineage.)
     taxRate: v.optional(v.number()),
     taxAmount: v.optional(v.number()),
     dealerFees: v.optional(v.number()),
