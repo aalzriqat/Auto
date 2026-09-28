@@ -769,6 +769,10 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingReadinessStateBlocked: ["Not ready to close", "غير جاهزة للإغلاق"],
   ClosingReadinessStateUnavailable: ["Readiness could not be checked", "تعذّر فحص الجاهزية"],
   ClosingReadinessLoading: ["Checking readiness…", "جارٍ فحص الجاهزية…"],
+  ClosingReadinessServiceUnavailable: [
+    "Readiness is unavailable right now. Everything else on this deal still works, and closing is checked again on the server.",
+    "الجاهزية غير متاحة حاليًا. تبقى بقية إجراءات الصفقة متاحة، ويُعاد الفحص على الخادم عند الإغلاق.",
+  ],
   ClosingReadinessClosed: ["This deal is no longer open to be closed.", "لم تعد هذه الصفقة مفتوحة للإغلاق."],
   ClosingReadinessNoChecks: [
     "The checks could not be run on this deal's records. Closing will refuse until they can.",

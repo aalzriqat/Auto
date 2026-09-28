@@ -36,13 +36,12 @@ import {
   type ClosingReadinessCheckKey,
 } from "./utils/financedSaleRecognition";
 import {
-  WITHHELD_READINESS_REASON_FALLBACK,
   reasonOf,
+  redactClosingReason,
   withheldReasonCode,
   type ClosingReadinessReason,
   type ClosingReadinessReasonCode,
   type ClosingReadinessReasonParams,
-  type WithheldClosingReadinessReasonCode,
 } from "../lib/closingReadinessReasonCodes";
 import { loadCustodyRecords } from "./utils/settlementDeductions";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
@@ -3761,22 +3760,6 @@ async function closingReadinessInputsOrRefusal(
   };
 }
 
-/**
- * THE redaction of a readiness reason (SCRUM-117, SCRUM-414). Below the finance
- * tier a reason becomes `withheldCode` with NO params and none of the
- * evaluator's text: a param can be a currency or an amount, so it is withheld
- * with the sentence it fills. The screen translates the WITHHELD code; the
- * English left in `message` is a fixed sentence that says nothing about the deal.
- */
-function redactClosingReason(
-  reason: ClosingReadinessReason | null,
-  mayReadMoney: boolean,
-  withheldCode: WithheldClosingReadinessReasonCode
-): ClosingReadinessReason | null {
-  if (reason === null || mayReadMoney) return reason;
-  return { code: withheldCode, message: WITHHELD_READINESS_REASON_FALLBACK };
-}
-
 /** A readiness reason flattened onto the wire: the English diagnostic, the code, and params only when there are any. */
 type ClosingReasonView = {
   reason: string | null;
@@ -3896,6 +3879,11 @@ export const finalizeDeal = mutation({
     // takes the disbursement authority the accountant templates hold — not
     // `FINALIZE_FINANCED_DEAL`, which the SALES template carries.
     const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
+    // The default MANAGER template confirms disbursements WITHOUT view:finance,
+    // so a refused finalize is redacted exactly as `getClosingReadiness`
+    // redacts for the same caller (SCRUM-414 R1): below the finance tier every
+    // readiness refusal is a WITHHELD_* code, no params, generic English.
+    const mayReadMoney = mayReadFinanceEconomics(auth.role);
 
     return await runWithIdempotency(
       ctx,
@@ -3938,7 +3926,7 @@ export const finalizeDeal = mutation({
         // that has drifted from the org's current currency, is refused here,
         // before the sale exists (SCRUM-241).
         const inputs = await closingReadinessInputsOrRefusal(ctx, app, "finalizing this deal");
-        if (!inputs.ok) throw closingRefusalError(inputs.refusal);
+        if (!inputs.ok) throw closingRefusalError(redactClosingReason(inputs.refusal, mayReadMoney, "WITHHELD_UNAVAILABLE"));
         const readinessInputs = inputs.inputs;
 
         // On a consigned car financed by an external company, the route decides
@@ -4086,6 +4074,7 @@ export const finalizeDeal = mutation({
           // deposits it consumes cannot disagree about whether the money was
           // applied to this purchase at all.
           depositTreatment: args.depositResolution?.treatment,
+          mayReadMoney,
         });
 
 

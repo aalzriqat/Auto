@@ -666,11 +666,41 @@ describe("protected source content pins", () => {
        * the time of this renewal. Read the hunks; do not take this note's
        * word for them. Same governance; both constants recomputed FROM THE
        * FILE with this test's own normalization.
+       *
+       * -- RENEWAL 2026-09-28 (7) - SCRUM-414 round-1 review fixes (R1 / S414-RED-1)
+       *
+       * Previous postimage, superseded by this entry (renewal (6) just above,
+       * branch head f3560fdff):
+       *
+       *   bytes:  241762
+       *   sha256: 86230d7a5ccb5359c45faf3e88134a410bb95892b0f7238209e7880e060eb583
+       *
+       * The delta, 8 insertions and 19 deletions, applies the readiness
+       * redaction to `finalizeDeal`'s refusals: (1) the private
+       * `redactClosingReason` moves, unchanged in behaviour, to
+       * `lib/closingReadinessReasonCodes.ts` so the query and the mutation
+       * share ONE pure function (the now-unused `WITHHELD_READINESS_REASON_FALLBACK`
+       * / `WithheldClosingReadinessReasonCode` imports go with it);
+       * `getClosingReadiness` is otherwise untouched; (2) `finalizeDeal`
+       * computes `mayReadMoney = mayReadFinanceEconomics(auth.role)` once,
+       * after the unchanged `requireTenantAuth` and before
+       * `runWithIdempotency`, and projects the input refusal through
+       * `redactClosingReason(…, "WITHHELD_UNAVAILABLE")` before throwing
+       * it — still uncaught, at the same point, before any write; (3) it
+       * passes `mayReadMoney` to `resolveFinancedSalePlan`, which redacts the
+       * evaluator's refusal to its check's WITHHELD code. Finance-tier
+       * callers receive byte-identical code/params/English; refusal order and
+       * verdicts are unchanged. No permission, schema, index, posting or
+       * idempotency change (finalizeRefusalRedaction.test.ts, failing-first
+       * and mutation-proven per throw site). NOT yet reviewed by an
+       * independent seat at the time of this renewal. Read the hunks; do not
+       * take this note's word for them. Same governance; both constants
+       * recomputed FROM THE FILE with this test's own normalization.
        */
       file: "convex/applications.ts",
-      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)), then for SCRUM-407 automatic closing readiness (RENEWALs 2026-09-28, 2026-09-28 (2), (3) and (4)), then for SCRUM-414 readiness reason codes (RENEWALs 2026-09-28 (5) and (6)).
-      bytes: 241762,
-      sha256: "86230d7a5ccb5359c45faf3e88134a410bb95892b0f7238209e7880e060eb583",
+      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)), then for SCRUM-407 automatic closing readiness (RENEWALs 2026-09-28, 2026-09-28 (2), (3) and (4)), then for SCRUM-414 readiness reason codes (RENEWALs 2026-09-28 (5), (6) and (7)).
+      bytes: 241443,
+      sha256: "a3c4ff8ede8b112e0fdbb9748eff8daabc32e6829e7cd5a901570ab80e39c2dc",
     },
     {
       /**

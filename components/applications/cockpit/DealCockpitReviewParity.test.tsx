@@ -53,6 +53,11 @@ vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
   const { ConvexError } = await import("convex/values");
   return {
+    // The cockpit reads closing readiness through the non-throwing useQueries (SCRUM-414 R2).
+    useQueries: (queries: Record<string, { query: never }>) =>
+      Object.fromEntries(
+        Object.entries(queries).map(([key, { query }]) => [key, stubs.queryResults.get(getFunctionName(query))])
+      ),
     useQuery: (reference: never, args: unknown) =>
       args === "skip" ? undefined : stubs.queryResults.get(getFunctionName(reference)),
     useMutation: (reference: never) => {

@@ -128,6 +128,7 @@ import {
 } from "./HandoverCostsPanel";
 import { RecordLegalInvoiceDialog, type RecordLegalInvoiceValues } from "./RecordLegalInvoiceDialog";
 import { DealClosingReadinessList, closingReasonText, type ClosingReadinessView } from "./DealClosingReadinessList";
+import { useClosingReadiness } from "./useClosingReadiness";
 import { closingReadinessRefusalOf } from "@/lib/closingReadinessReasonCodes";
 import { ProfitApprovalNotice, useProfitApproval } from "@/components/sales/ProfitApprovalNotice";
 
@@ -751,9 +752,10 @@ export function DealCockpit({
   // The deal's automatic closing readiness (SCRUM-407) — the same evaluator
   // `finalizeDeal` re-runs, so the panel previews the server's verdict. Same
   // read permission as the cost record; the server redacts the detail below
-  // the finance tier itself.
-  const closingReadiness = useQuery(
-    api.applications.getClosingReadiness,
+  // the finance tier itself. Read without throwing: a backend deployed before
+  // this query existed costs the panel its verdict, not the screen its life
+  // (SCRUM-414 Codex R2).
+  const { readiness: closingReadiness, serviceUnavailable: closingReadinessServiceUnavailable } = useClosingReadiness(
     canViewApplications && deal ? { orgId, applicationId } : "skip"
   );
   const planCustodyHandler = useMutation(api.financeDealCosts.planCustodyHandler);
@@ -2354,6 +2356,7 @@ export function DealCockpit({
         canViewApplications && deal
           ? {
               readiness: closingReadiness,
+              serviceUnavailable: closingReadinessServiceUnavailable,
               // The legal invoice is still recorded by hand while the v1
               // posting plan reads it (SCRUM-411 retires that dependency); it
               // is shown and recorded by the disbursement tier only, as before.
@@ -3244,12 +3247,14 @@ export function DealCockpitView({
   /**
    * The deal's automatic closing readiness (SCRUM-407), which replaced the
    * manual "classify deal accounting" step: every check is re-derived by the
-   * server and re-run by finalization. `readiness` is undefined while loading.
+   * server and re-run by finalization. `readiness` is undefined while loading
+   * and when the read failed; `serviceUnavailable` says which.
    * `legalInvoice` is present for the disbursement tier only — the invoice is
    * still recorded by hand while the v1 posting plan reads it (SCRUM-411).
    */
   closingChecklist?: {
     readiness: ClosingReadinessView | undefined;
+    serviceUnavailable?: boolean;
     legalInvoice?: {
       amountMinor?: number;
       number?: string;
@@ -4510,7 +4515,11 @@ export function DealCockpitView({
                 )}
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
-                <DealClosingReadinessList readiness={closingChecklist.readiness} t={t} />
+                <DealClosingReadinessList
+                  readiness={closingChecklist.readiness}
+                  serviceUnavailable={closingChecklist.serviceUnavailable}
+                  t={t}
+                />
                 {closingChecklist.legalInvoice &&
                   (closingChecklist.legalInvoice.amountMinor !== undefined ? (
                     <dl

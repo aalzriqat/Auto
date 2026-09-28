@@ -39,8 +39,8 @@ const stubs = vi.hoisted(() => ({
   permissions: new Set<string>(),
   /** Every mutation call this render made: name → the list of args it got. */
   mutationCalls: new Map<string, unknown[]>(),
-  /** Names whose next call should reject, and with what. */
-  mutationFailures: new Map<string, string>(),
+  /** Names whose next call should reject, and with what (a string becomes an Error). */
+  mutationFailures: new Map<string, string | Error>(),
 }));
 
 vi.mock("@/hooks/use-permissions", () => ({
@@ -53,8 +53,16 @@ vi.mock("@/hooks/use-permissions", () => ({
 
 vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
+  const resultOf = (reference: never) => stubs.queryResults.get(getFunctionName(reference));
   return {
-    useQuery: (reference: never) => stubs.queryResults.get(getFunctionName(reference)),
+    // As the real hook does: an Error result THROWS during render.
+    useQuery: (reference: never) => {
+      const result = resultOf(reference);
+      if (result instanceof Error) throw result;
+      return result;
+    },
+    useQueries: (queries: Record<string, { query: never }>) =>
+      Object.fromEntries(Object.entries(queries).map(([key, { query }]) => [key, resultOf(query)])),
     useMutation: (reference: never) => {
       const name = getFunctionName(reference);
       return async (args: unknown) => {
@@ -64,7 +72,7 @@ vi.mock("convex/react", async () => {
         const failure = stubs.mutationFailures.get(name);
         if (failure !== undefined) {
           stubs.mutationFailures.delete(name);
-          throw new Error(failure);
+          throw typeof failure === "string" ? new Error(failure) : failure;
         }
         return null;
       };
@@ -80,8 +88,11 @@ vi.mock("@/components/ui/sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
+import { ConvexError } from "convex/values";
 import { DealCockpit } from "./DealCockpit";
 import { PERMISSIONS } from "@/convex/utils/permissions";
+import { toast } from "@/components/ui/sonner";
+import { WITHHELD_READINESS_REASON_FALLBACK } from "@/lib/closingReadinessReasonCodes";
 
 const { queryResults, permissions, mutationCalls, mutationFailures } = stubs;
 
@@ -337,6 +348,8 @@ describe("a step the server would refuse is not offered as a step", () => {
     (state) => {
       grantTheWholeTail();
       queryResults.set(COCKPIT_QUERY, cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true }));
+      // A caller who may read the readiness; without it the query is skipped.
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
       queryResults.set("applications:getClosingReadiness", readinessVerdict(state));
 
       renderCockpit();
@@ -350,6 +363,7 @@ describe("a step the server would refuse is not offered as a step", () => {
   test("the close is offered once closing readiness is READY (control)", () => {
     grantTheWholeTail();
     queryResults.set(COCKPIT_QUERY, cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true }));
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
     queryResults.set("applications:getClosingReadiness", readinessVerdict("READY"));
 
     renderCockpit();
@@ -852,6 +866,51 @@ describe("the mutations behind the buttons", () => {
     // A second sale, a second set of journals and a second inventory movement
     // for one car is what a fresh key on retry buys.
     expect(calls[1].idempotencyKey).toBe(calls[0].idempotencyKey);
+  });
+
+  // SCRUM-414 R1: below the finance tier a refused close carries only a
+  // WITHHELD_* code and the generic fallback; the toast and the dialog show the
+  // code's own translation, never the fallback English.
+  test("a withheld finalize refusal is shown as its translated WITHHELD code", async () => {
+    grantTheWholeTail();
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true })
+    );
+    mutationFailures.set(
+      FINALIZE_MUTATION,
+      new ConvexError({ code: "WITHHELD_COSTS_CLOSABLE", message: WITHHELD_READINESS_REASON_FALLBACK })
+    );
+
+    renderCockpit();
+    fireEvent.click(screen.getByRole("button", { name: "FinalizeDealAction" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ConfirmFinalizeAction/ }));
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith("ClosingReason_WITHHELD_COSTS_CLOSABLE");
+    });
+    expect(await screen.findByText("ClosingReason_WITHHELD_COSTS_CLOSABLE")).toBeTruthy();
+    expect(screen.queryByText(WITHHELD_READINESS_REASON_FALLBACK)).toBeNull();
+  });
+
+  // SCRUM-414 Codex R2: a backend without the readiness query leaves the close
+  // offered — `finalizeDeal` re-checks on the server either way.
+  test("a backend without the readiness query still renders the tail and offers the close", () => {
+    grantTheWholeTail();
+    // A caller who reads the readiness, so the missing query IS subscribed.
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true })
+    );
+    queryResults.set(
+      "applications:getClosingReadiness",
+      new Error("Could not find public function for 'applications:getClosingReadiness'.")
+    );
+
+    renderCockpit();
+
+    expect(within(nextStepBlock()).getByRole("button", { name: "FinalizeDealAction" })).toBeTruthy();
   });
 
   test("a close that succeeded does not lend its key to the next one", async () => {

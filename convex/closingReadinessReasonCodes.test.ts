@@ -4,6 +4,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import schema from "./schema";
 import type { Doc, Id } from "./_generated/dataModel";
 import { evaluateClosingReadiness, resolveFinancedSalePlan } from "./utils/financedSaleRecognition";
+import { WITHHELD_READINESS_REASON_FALLBACK } from "../lib/closingReadinessReasonCodes";
 
 /**
  * SCRUM-414: the closing-readiness evaluator names every unmet check with a
@@ -190,7 +191,7 @@ describe("SCRUM-414 — the finalize door's refusal carries the same code", () =
     const error = await s.t.run(async (ctx) => {
       const app = (await ctx.db.get(s.applicationId))!;
       try {
-        await resolveFinancedSalePlan(ctx, app, { settlesDirect: false, currency: "JOD" });
+        await resolveFinancedSalePlan(ctx, app, { settlesDirect: false, currency: "JOD", mayReadMoney: true });
         return null;
       } catch (caught) {
         return caught instanceof ConvexError ? { data: caught.data as unknown, message: caught.message } : { data: "not a ConvexError", message: "" };
@@ -202,5 +203,23 @@ describe("SCRUM-414 — the finalize door's refusal carries the same code", () =
       message: expect.stringMatching(/not in JOD/),
     });
     expect(error?.message).toMatch(/cost line\(s\) on this deal are not in JOD/);
+  });
+});
+
+describe("SCRUM-414 R1 — below the finance tier the resolver throws only the check's WITHHELD code", () => {
+  test("mayReadMoney: false → WITHHELD_COSTS_CLOSABLE, no params, the fixed fallback sentence", async () => {
+    const s = await seed({ expectedDealerRemittanceMinor: jod(10_000) });
+    await fee(s, { currency: "USD", actualAmountMinor: 100 });
+    const data = await s.t.run(async (ctx) => {
+      const app = (await ctx.db.get(s.applicationId))!;
+      try {
+        await resolveFinancedSalePlan(ctx, app, { settlesDirect: false, currency: "JOD", mayReadMoney: false });
+        return null;
+      } catch (caught) {
+        return caught instanceof ConvexError ? (caught.data as unknown) : "not a ConvexError";
+      }
+    });
+    expect(data).toEqual({ code: "WITHHELD_COSTS_CLOSABLE", message: WITHHELD_READINESS_REASON_FALLBACK });
+    expect(JSON.stringify(data)).not.toMatch(/JOD|USD|count/);
   });
 });

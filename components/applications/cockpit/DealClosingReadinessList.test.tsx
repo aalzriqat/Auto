@@ -46,6 +46,32 @@ describe("DealClosingReadinessList — reason codes", () => {
     expect(reason.getAttribute("title")).toBe(ENGLISH);
   });
 
+  // S414-I18N-1: the server sends the internal treatment enum; the screen
+  // names it with the label the rest of the app already uses, in both locales.
+  test.each([
+    ["ar", tAr, "تأمين قابل للاسترداد"],
+    ["en", (key: string) => en[key] || key, "Refundable deposit"],
+  ] as const)("an unmapped treatment is named by its %s label, never the raw enum", (_locale, t, label) => {
+    render(
+      <DealClosingReadinessList
+        t={t}
+        readiness={view({
+          reasonCode: "COSTS_TREATMENT_UNMAPPED",
+          reasonParams: { feeLabel: "Refundable plate deposit", treatment: "REFUNDABLE_DEPOSIT" },
+        })}
+      />
+    );
+    const reason = screen.getByTestId("closing-check-reason-COSTS_CLOSABLE").textContent ?? "";
+    expect(reason).toContain(label);
+    expect(reason).toContain("Refundable plate deposit");
+    expect(reason).not.toContain("REFUNDABLE_DEPOSIT");
+  });
+
+  test("an unknown treatment value is shown as sent rather than dropped", () => {
+    const text = closingReasonText(tAr, "COSTS_TREATMENT_UNMAPPED", { feeLabel: "X", treatment: "FUTURE_TREATMENT" }, ENGLISH).text;
+    expect(text).toContain("FUTURE_TREATMENT");
+  });
+
   test("falls back to the server's English diagnostic for a reason with no code", () => {
     render(<DealClosingReadinessList t={tAr} readiness={view({ reasonCode: null })} />);
     expect(screen.getByTestId("closing-check-reason-COSTS_CLOSABLE").textContent).toBe(ENGLISH);

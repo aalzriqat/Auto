@@ -142,6 +142,53 @@ export function reasonOf<C extends ClosingReadinessReasonCode>(
  */
 export const WITHHELD_READINESS_REASON_FALLBACK = "Detail withheld: finance access is required to see it.";
 
+/**
+ * THE redaction of a readiness reason (SCRUM-117, SCRUM-414) — one pure
+ * function for every door that states one: `getClosingReadiness` and a refused
+ * `finalizeDeal` alike. Below the finance tier a reason becomes `withheldCode`
+ * with NO params and none of the evaluator's text: a param can be a currency
+ * or an amount, so it is withheld with the sentence it fills. The screen
+ * translates the WITHHELD code; the English left in `message` is a fixed
+ * sentence that says nothing about the deal.
+ */
+export function redactClosingReason(
+  reason: ClosingReadinessReason,
+  mayReadMoney: boolean,
+  withheldCode: WithheldClosingReadinessReasonCode
+): ClosingReadinessReason;
+export function redactClosingReason(
+  reason: ClosingReadinessReason | null,
+  mayReadMoney: boolean,
+  withheldCode: WithheldClosingReadinessReasonCode
+): ClosingReadinessReason | null;
+export function redactClosingReason(
+  reason: ClosingReadinessReason | null,
+  mayReadMoney: boolean,
+  withheldCode: WithheldClosingReadinessReasonCode
+): ClosingReadinessReason | null {
+  if (reason === null || mayReadMoney) return reason;
+  return { code: withheldCode, message: WITHHELD_READINESS_REASON_FALLBACK };
+}
+
+/**
+ * A refusal tagged with the check that refused, or `null` when no single check
+ * is named (no verdict could be formed). The key picks the WITHHELD code a
+ * caller below the finance tier is given instead.
+ */
+export type TaggedClosingRefusal = {
+  key: ClosingReadinessCheckKey | null;
+  reason: ClosingReadinessReason;
+};
+
+/** The reason a caller may be told for `refusal`: stated in full, or its WITHHELD code. */
+export function redactClosingRefusal(refusal: TaggedClosingRefusal, mayReadMoney: boolean): ClosingReadinessReason {
+  return redactClosingReason(
+    refusal.reason,
+    mayReadMoney,
+    refusal.key === null ? "WITHHELD_UNAVAILABLE" : withheldReasonCode(refusal.key)
+  );
+}
+
 const KNOWN = new Set<string>(CLOSING_READINESS_REASON_CODES);
 
 export function isClosingReadinessReasonCode(value: unknown): value is ClosingReadinessReasonCode {

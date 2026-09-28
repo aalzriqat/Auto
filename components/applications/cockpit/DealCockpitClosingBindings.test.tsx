@@ -35,8 +35,18 @@ vi.mock("@/hooks/use-permissions", () => ({
 
 vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
+  const resultOf = (reference: never) => stubs.queryResults.get(getFunctionName(reference));
   return {
-    useQuery: (reference: never) => stubs.queryResults.get(getFunctionName(reference)),
+    // As the real hook does: a query whose result is an Error (a function the
+    // deployed backend does not have) THROWS during render.
+    useQuery: (reference: never) => {
+      const result = resultOf(reference);
+      if (result instanceof Error) throw result;
+      return result;
+    },
+    // The non-throwing form: an Error comes back as a value.
+    useQueries: (queries: Record<string, { query: never }>) =>
+      Object.fromEntries(Object.entries(queries).map(([key, { query }]) => [key, resultOf(query)])),
     useMutation: (reference: never) => {
       const name = getFunctionName(reference);
       return async (args: unknown) => {
@@ -261,6 +271,30 @@ describe("DealCockpit closing bindings (TASK-DEAL-04)", () => {
     const card = await screen.findByTestId("deal-closing-checklist");
     expect(within(card).getByTestId("closing-readiness-loading")).toBeTruthy();
     expect(within(card).queryByTestId("closing-readiness")).toBeNull();
+  });
+
+  // SCRUM-414 Codex R2: the frontend auto-deploys from main while the Convex
+  // deploy is manual, so this screen can meet a backend that has no
+  // `getClosingReadiness`. That must cost the panel its verdict, not the deal
+  // screen its life.
+  test("a backend without the readiness query: the panel says so calmly and every other action stays", async () => {
+    setupDeal();
+    queryResults.set(
+      "applications:getClosingReadiness",
+      new Error("[CONVEX Q(applications:getClosingReadiness)] Could not find public function for 'applications:getClosingReadiness'.")
+    );
+    render(<DealCockpit orgId={ORG} applicationId={APP} />);
+
+    const card = await screen.findByTestId("deal-closing-checklist");
+    expect(within(card).getByTestId("closing-readiness-service-unavailable").textContent).toContain(
+      "ClosingReadinessServiceUnavailable"
+    );
+    expect(within(card).queryByTestId("closing-readiness-loading")).toBeNull();
+    expect(within(card).queryByTestId("closing-readiness")).toBeNull();
+    // The rest of the cockpit is intact.
+    expect(within(card).getByRole("button", { name: /RecordLegalInvoice/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /ReconcileDealFee/i })).toBeTruthy();
+    expect(mutationCalls.size).toBe(0);
   });
 
   test("a caller below the disbursement tier sees the readiness but is not offered the legal invoice", async () => {

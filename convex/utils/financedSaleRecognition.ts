@@ -21,7 +21,9 @@ import {
 import { MAX_DEAL_CUSTODY_DECISION_RECORDS, MAX_LIVE_DEAL_FEE_LINES } from "./dealCostLimits";
 import {
   reasonOf,
+  redactClosingRefusal,
   type ClosingReadinessCheckKey,
+  type TaggedClosingRefusal,
   type ClosingReadinessReason,
   type ClosingReadinessReasonCode,
   type ClosingReadinessReasonParams,
@@ -391,10 +393,17 @@ export function closingRefusalError(reason: ClosingReadinessReason): ConvexError
   return new ConvexError<ClosingReadinessRefusalData>(reason);
 }
 
-/** The refusal for the first condition that is not met, thrown uncaught before the first write. */
-function closingRefusal(readiness: ClosingReadiness): ConvexError<ClosingReadinessRefusalData> {
+/**
+ * The first condition that is not met, tagged with its check key so the
+ * refusal can be redacted to that check's WITHHELD code (SCRUM-414 R1). With
+ * no unmet check to name, NOT_READY and no key.
+ */
+function firstUnmetRefusal(readiness: ClosingReadiness): TaggedClosingRefusal {
   const unmet = readiness.checks.find((check) => check.status === "BLOCKED" || check.status === "UNAVAILABLE");
-  return closingRefusalError(unmet?.reason ?? reasonOf("NOT_READY", "This deal is not ready to be finalized."));
+  return {
+    key: unmet?.key ?? null,
+    reason: unmet?.reason ?? reasonOf("NOT_READY", "This deal is not ready to be finalized."),
+  };
 }
 
 export async function resolveFinancedSalePlan(
@@ -419,13 +428,25 @@ export async function resolveFinancedSalePlan(
      * company owes.
      */
     depositTreatment?: string;
+    /**
+     * May the caller read the deal's money (`mayReadFinanceEconomics`)? A
+     * readiness refusal is stated in full only when it may; below the finance
+     * tier it is thrown as its check's WITHHELD code with no params, exactly
+     * as `getClosingReadiness` serves it (SCRUM-414 R1). Required, so no
+     * caller can forget to decide.
+     */
+    mayReadMoney: boolean;
   }
 ): Promise<FinancedSalePostingPlan | undefined> {
   // The finalize door re-runs the SAME evaluator the deal screen shows — never
   // a client's verdict, never the retired stamp — and refuses on the first
   // unmet condition, before anything is written (SCRUM-407 P1.4).
   const evaluation = await evaluateClosingReadiness(ctx, app, opts);
-  if (!evaluation.ready) throw closingRefusal(evaluation.readiness);
+  // Thrown uncaught, before the first write, and redacted by the SAME pure
+  // function the readiness query uses.
+  if (!evaluation.ready) {
+    throw closingRefusalError(redactClosingRefusal(firstUnmetRefusal(evaluation.readiness), opts.mayReadMoney));
+  }
 
   if (!financedSaleRecognitionApplies(app, opts)) return undefined;
   // The plan is built from the same rows the READY verdict was judged on.
