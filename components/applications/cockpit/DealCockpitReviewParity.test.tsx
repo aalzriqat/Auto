@@ -38,6 +38,8 @@ const stubs = vi.hoisted(() => ({
   mutationFailures: new Map<string, string>(),
   /** A mutation held open until the test settles it — for in-flight and late-response cases. */
   mutationHolds: new Map<string, Promise<unknown>>(),
+  /** What a mutation resolves to, where the caller uses the result (default null). */
+  mutationReturns: new Map<string, unknown>(),
   membershipUserId: "user_manager",
 }));
 
@@ -79,7 +81,7 @@ vi.mock("convex/react", async () => {
           if (failure.startsWith("refused:")) throw new ConvexError(failure.slice("refused:".length));
           throw new Error(failure);
         }
-        return null;
+        return stubs.mutationReturns.get(name) ?? null;
       };
     },
   };
@@ -752,6 +754,225 @@ describe("documents — documents.updateDocumentStatus / upload, from the checkl
     expect(within(missing).getByText("Upload")).toBeTruthy();
   });
 
+  /**
+   * SCRUM-421 (W2 / S417-1): a required rule added after the application was
+   * created has no row. `getForApplication` lists it with `_id: null`; the
+   * upload first materializes the row through `ensureApplicationDocument`,
+   * then runs the ordinary upload on the id it returns.
+   */
+  describe("uploads — a row-less rule, a rejected file, an existing row", () => {
+    function pickFile(row: HTMLElement) {
+      const input = row.querySelector('input[type="file"]') as HTMLInputElement;
+      const file = new File(["%PDF"], "late.pdf", { type: "application/pdf" });
+      fireEvent.change(input, { target: { files: [file] } });
+    }
+    beforeEach(() => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => ({ json: async () => ({ storageId: "storage_1" }) }))
+      );
+      stubs.mutationReturns.set("documents:generateUploadUrl", "https://upload.test/post");
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      stubs.mutationReturns.clear();
+    });
+
+    test("a rule with no row: ensure the row, then upload onto the id it returns", async () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+      stubs.mutationReturns.set("documents:ensureApplicationDocument", "doc_new");
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      queryResults.set(DOCUMENTS_QUERY, [
+        { _id: null, ruleId: "rule_late", ruleName: "Late salary slip", status: "MISSING", isRequired: true, fileUrl: null },
+      ]);
+      renderCockpit();
+
+      const row = screen.getByTestId("deal-document-rule-rule_late");
+      expect(within(row).getByText("Upload")).toBeTruthy();
+      pickFile(row);
+      await waitFor(() => expect(mutationCalls.get("documents:saveDocumentFile")).toHaveLength(1));
+      expect(mutationCalls.get("documents:ensureApplicationDocument")).toEqual([
+        { orgId: ORG, applicationId: APP, ruleId: "rule_late" },
+      ]);
+      expect(mutationCalls.get("documents:saveDocumentFile")![0]).toEqual({
+        orgId: ORG,
+        documentId: "doc_new",
+        fileId: "storage_1",
+      });
+    });
+
+    test("a REJECTED document offers a replacement upload, onto its own row", async () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      queryResults.set(DOCUMENTS_QUERY, [
+        { _id: "doc_1", ruleId: "r1", ruleName: "National ID", status: "REJECTED", isRequired: true, fileUrl: "https://files/x.pdf" },
+      ]);
+      renderCockpit();
+
+      const row = screen.getByTestId("deal-document-doc_1");
+      // The rejected file stays viewable beside the control that replaces it.
+      expect(within(row).getByRole("button", { name: "ViewFile" })).toBeTruthy();
+      expect(within(row).getByText("ReplaceFile")).toBeTruthy();
+      pickFile(row);
+      await waitFor(() => expect(mutationCalls.get("documents:saveDocumentFile")).toHaveLength(1));
+      expect(mutationCalls.get("documents:ensureApplicationDocument")).toBeUndefined();
+      expect(mutationCalls.get("documents:saveDocumentFile")![0]).toEqual({
+        orgId: ORG,
+        documentId: "doc_1",
+        fileId: "storage_1",
+      });
+    });
+
+    test("an UPLOADED document offers no replacement — it waits for verification", () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      queryResults.set(DOCUMENTS_QUERY, [
+        { _id: "doc_1", ruleId: "r1", ruleName: "National ID", status: "UPLOADED", isRequired: true, fileUrl: "https://files/x.pdf" },
+      ]);
+      renderCockpit();
+      const row = screen.getByTestId("deal-document-doc_1");
+      expect(within(row).queryByText("ReplaceFile")).toBeNull();
+      expect(within(row).queryByText("Upload")).toBeNull();
+    });
+
+    /**
+     * Round 2 (Codex S417-R2-5): the controls follow the STATUS, not whether an
+     * older file is attached. `updateDocumentStatus(MISSING)` keeps the file, so
+     * a MISSING row can carry one; the step counts MISSING as uploadable, so
+     * the panel must offer the upload there too — as a replacement, beside a
+     * View of the old file. Swept over status × file × role.
+     */
+    describe("status × file × role: every MISSING or REJECTED row can be uploaded by whoever may upload", () => {
+      const ROLES = {
+        "create only": [PERMISSIONS.CREATE_FINANCE_APPLICATION],
+        "verify only": [PERMISSIONS.VERIFY_FINANCE_DOCUMENTS],
+      } as const;
+      const cases = (["MISSING", "REJECTED", "UPLOADED"] as const).flatMap((status) =>
+        ([true, false] as const).flatMap((hasFile) =>
+          (Object.keys(ROLES) as Array<keyof typeof ROLES>).map((role) => [status, hasFile, role] as const)
+        )
+      );
+
+      test.each(cases)("%s · file attached: %s · %s", (status, hasFile, role) => {
+        permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+        for (const permission of ROLES[role]) permissions.add(permission);
+        queryResults.set(COCKPIT_QUERY, cockpit());
+        queryResults.set(GET_QUERY, application());
+        queryResults.set(DOCUMENTS_QUERY, [
+          {
+            _id: "doc_1",
+            ruleId: "r1",
+            ruleName: "National ID",
+            status,
+            isRequired: true,
+            fileUrl: hasFile ? "https://files/old.pdf" : null,
+          },
+        ]);
+        renderCockpit();
+        const row = screen.getByTestId("deal-document-doc_1");
+
+        const needsFile = status === "MISSING" || status === "REJECTED";
+        let uploadLabel: string | null = null;
+        if (!hasFile) uploadLabel = "Upload";
+        else if (needsFile) uploadLabel = "ReplaceFile";
+        for (const label of ["Upload", "ReplaceFile"]) {
+          if (label === uploadLabel) expect(within(row).getByText(label)).toBeTruthy();
+          else expect(within(row).queryByText(label)).toBeNull();
+        }
+        // The old file stays viewable until a replacement lands.
+        expect(within(row).queryByRole("button", { name: "ViewFile" }) !== null).toBe(hasFile);
+        // Verifying is the verifier's, and needs a file.
+        expect(within(row).queryByRole("button", { name: "Verify" }) !== null).toBe(hasFile && role === "verify only");
+      });
+
+      test("replacing a MISSING row's old file saves onto that row", async () => {
+        permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+        permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+        queryResults.set(COCKPIT_QUERY, cockpit());
+        queryResults.set(GET_QUERY, application());
+        queryResults.set(DOCUMENTS_QUERY, [
+          { _id: "doc_1", ruleId: "r1", ruleName: "National ID", status: "MISSING", isRequired: true, fileUrl: "https://files/old.pdf" },
+        ]);
+        renderCockpit();
+        pickFile(screen.getByTestId("deal-document-doc_1"));
+        await waitFor(() => expect(mutationCalls.get("documents:saveDocumentFile")).toHaveLength(1));
+        expect(mutationCalls.get("documents:saveDocumentFile")![0]).toEqual({
+          orgId: ORG,
+          documentId: "doc_1",
+          fileId: "storage_1",
+        });
+      });
+    });
+
+    /**
+     * Round 2 (Sol S421-R2-2): a late rule's row appears MID-upload — the
+     * reactive query re-serves the line under its new document id while the
+     * file is still transferring. Busy must follow the RULE across that, and a
+     * second pick must not start a second save for the same rule.
+     */
+    test("a late rule stays busy while its row materializes: a second pick cannot start a second upload", async () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+      let releaseTransfer: () => void = () => {};
+      const transfer = new Promise<void>((resolve) => {
+        releaseTransfer = resolve;
+      });
+      const fetchMock = vi.fn(async () => {
+        await transfer;
+        return { json: async () => ({ storageId: "storage_1" }) };
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      stubs.mutationReturns.set("documents:ensureApplicationDocument", "doc_new");
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      const lateRow = { ruleId: "rule_late", ruleName: "Late salary slip", status: "MISSING", isRequired: true, fileUrl: null };
+      queryResults.set(DOCUMENTS_QUERY, [{ _id: null, ...lateRow }]);
+      const view = renderCockpit();
+
+      pickFile(screen.getByTestId("deal-document-rule-rule_late"));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+      // The ensure committed; the query now serves the same rule under its row id.
+      queryResults.set(DOCUMENTS_QUERY, [{ _id: "doc_new", ...lateRow }]);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      const materialized = screen.getByTestId("deal-document-doc_new");
+      expect((materialized.querySelector('input[type="file"]') as HTMLInputElement).disabled).toBe(true);
+      pickFile(materialized);
+
+      releaseTransfer();
+      await waitFor(() => expect(mutationCalls.get("documents:saveDocumentFile")).toHaveLength(1));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(mutationCalls.get("documents:saveDocumentFile")).toHaveLength(1);
+      expect(mutationCalls.get("documents:generateUploadUrl")).toHaveLength(1);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      // Settled: the rule is free again for a genuine next upload.
+      await waitFor(() =>
+        expect((screen.getByTestId("deal-document-doc_new").querySelector('input[type="file"]') as HTMLInputElement).disabled).toBe(false)
+      );
+    });
+
+    test("an existing MISSING row uploads directly, with no ensure call", async () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      queryResults.set(DOCUMENTS_QUERY, [
+        { _id: "doc_2", ruleId: "r2", ruleName: "Salary slip", status: "MISSING", isRequired: true, fileUrl: null },
+      ]);
+      renderCockpit();
+      pickFile(screen.getByTestId("deal-document-doc_2"));
+      await waitFor(() => expect(mutationCalls.get("documents:saveDocumentFile")).toHaveLength(1));
+      expect(mutationCalls.get("documents:ensureApplicationDocument")).toBeUndefined();
+      expect(mutationCalls.get("documents:saveDocumentFile")![0]).toMatchObject({ documentId: "doc_2" });
+    });
+  });
+
   test("a caller who may not read the document rows sees the read-only checklist and no controls", () => {
     queryResults.set(
       COCKPIT_QUERY,
@@ -766,6 +987,77 @@ describe("documents — documents.updateDocumentStatus / upload, from the checkl
     expect(panel.textContent).toContain("National ID");
     expect(within(panel).queryByRole("button")).toBeNull();
     expect(screen.queryByText("Upload")).toBeNull();
+    expect(screen.queryByTestId("deal-documents-history")).toBeNull();
+  });
+
+  /**
+   * Round 3 (Codex S417-R3-1): a file uploaded for a requirement removed later
+   * leaves the active checklist but stays viewable, from
+   * `documents.getHistoryForApplication`, in a "No longer required" section —
+   * View only, whatever the caller's document authority.
+   */
+  describe("no longer required — a removed requirement's file is View only, for every role", () => {
+    const HISTORY_QUERY = "documents:getHistoryForApplication";
+    const ROLES = {
+      "read only": [],
+      "create only": [PERMISSIONS.CREATE_FINANCE_APPLICATION],
+      "verify only": [PERMISSIONS.VERIFY_FINANCE_DOCUMENTS],
+      "create and verify": [PERMISSIONS.CREATE_FINANCE_APPLICATION, PERMISSIONS.VERIFY_FINANCE_DOCUMENTS],
+    } as const;
+
+    test.each(Object.keys(ROLES) as Array<keyof typeof ROLES>)("%s", (role) => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      for (const permission of ROLES[role]) permissions.add(permission);
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      queryResults.set(DOCUMENTS_QUERY, [
+        { _id: "doc_1", ruleId: "r1", ruleName: "National ID", status: "MISSING", isRequired: true, fileUrl: null },
+      ]);
+      queryResults.set(HISTORY_QUERY, [
+        { _id: "doc_old", ruleId: "r_gone", status: "UPLOADED", ruleName: null, uploadedAt: Date.UTC(2026, 7, 2), fileUrl: "https://files/old-letter.pdf" },
+        { _id: "doc_rejected", ruleId: "r_other", status: "REJECTED", ruleName: "Company letter", uploadedAt: null, fileUrl: "https://files/letter.png" },
+      ]);
+      renderCockpit();
+
+      const section = screen.getByTestId("deal-documents-history");
+      for (const id of ["doc_old", "doc_rejected"]) {
+        const row = within(section).getByTestId(`deal-document-history-${id}`);
+        const buttons = within(row).getAllByRole("button");
+        expect(buttons.map((button) => button.textContent)).toEqual(["ViewFile"]);
+        expect(row.querySelector('input[type="file"]')).toBeNull();
+      }
+      // A deleted rule is labelled, never blank; a surviving name is kept.
+      expect(within(section).getByTestId("deal-document-history-doc_old").textContent).toContain("RemovedRequirement");
+      expect(within(section).getByTestId("deal-document-history-doc_rejected").textContent).toContain("Company letter");
+      // History rows are not checklist rows: no active-row test id for them.
+      expect(screen.queryByTestId("deal-document-doc_old")).toBeNull();
+    });
+
+    test("View opens the kept file", () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      queryResults.set(DOCUMENTS_QUERY, []);
+      queryResults.set(HISTORY_QUERY, [
+        { _id: "doc_old", ruleId: "r_gone", status: "VERIFIED", ruleName: "Old bank letter", uploadedAt: null, fileUrl: "https://files/old-letter.pdf" },
+      ]);
+      renderCockpit();
+      fireEvent.click(within(screen.getByTestId("deal-document-history-doc_old")).getByRole("button", { name: "ViewFile" }));
+      const frame = document.querySelector('iframe[src="https://files/old-letter.pdf"]');
+      expect(frame).not.toBeNull();
+    });
+
+    test("CONTROL — no history rows, no section", () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      queryResults.set(DOCUMENTS_QUERY, [
+        { _id: "doc_1", ruleId: "r1", ruleName: "National ID", status: "MISSING", isRequired: true, fileUrl: null },
+      ]);
+      queryResults.set(HISTORY_QUERY, []);
+      renderCockpit();
+      expect(screen.queryByTestId("deal-documents-history")).toBeNull();
+    });
   });
 });
 

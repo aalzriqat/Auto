@@ -621,10 +621,19 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // fewer: 499 → 498 total, 327 → 326 analysed. Skipped counts unchanged.
   // Re-measured FROM THE ANALYSER after merging main (SCRUM-413 PR-A) into
   // SCRUM-407 ({"totalMutations":498,"analysed":326,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
+  //
+  // `documents.ensureApplicationDocument` (SCRUM-421: a required rule added
+  // after the application exists gets its per-deal row on first use) — 498 →
+  // 499 total, 326 → 327 analysed. `orgId` plus a caller-supplied
+  // `applicationId` and `ruleId`, each read and matched to `args.orgId` after
+  // `requireTenantAuth` before the insert; the analyser reports no unguarded
+  // write for it. Skipped counts unchanged. Re-measured FROM THE ANALYSER after
+  // merging main and SCRUM-407 into SCRUM-417
+  // ({"totalMutations":499,"analysed":327,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 498,
-      analysed: 326,
+      totalMutations: 499,
+      analysed: 327,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 157,
     });

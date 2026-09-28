@@ -1320,6 +1320,49 @@ describe("P2-F M3 finalization barrier — CONSUME", () => {
     });
   });
 
+  /**
+   * SCRUM-417 round 3 (Sonnet S417-R3-2). A quote-linked DRAFT (door 3, part
+   * one) and the quote's own completion door (door 2, what Step4QuoteSuccess
+   * calls) name the same car. The deal cockpit tells an operator holding such
+   * a draft to complete it elsewhere, so both doors must not each be able to
+   * produce a sale: completing the quote while its draft is still PENDING must
+   * either be refused or leave exactly one sale row for the car.
+   *
+   * ⚠️ MARKED `test.fails` — IT DOES NOT HOLD TODAY (pre-existing, not caused
+   * by SCRUM-417; tracked as SCRUM-425, deliberately NOT fixed here).
+   * Observed at 747e57b60: `completeFromQuote` SUCCEEDS beside the PENDING
+   * draft, so the car carries TWO sale rows — the draft, still PENDING, and a
+   * COMPLETED sale. A later `completeDraft` on the orphan draft is refused
+   * (`VEHICLE_ALREADY_SOLD`), so no second completion or posting was observed;
+   * the defect is a stale PENDING draft on a sold car that neither door
+   * reconciles. When the quote door starts refusing (or retires the draft),
+   * this flips red: drop `.fails` and keep it as the regression.
+   */
+  test.fails("F.8c2 a quote-linked draft plus the quote's own completion door never yields two sales", async () => {
+    const seed = await seedDealer("f8c2");
+    const v = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [v]);
+    await depositOn(seed, quoteId, 5_000);
+    await createDraftFor(seed, quoteId, v, seed.customerA);
+
+    let refused = false;
+    try {
+      await completeQuote(seed, quoteId);
+    } catch {
+      refused = true;
+    }
+
+    const salesForCar = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("sales").collect()).filter((sale) => sale.vehicleId === v)
+    );
+    if (refused) {
+      expect(salesForCar, "a refused completion leaves only the draft").toHaveLength(1);
+      expect(salesForCar[0].status).toBe("PENDING");
+    } else {
+      expect(salesForCar, "the quote's door must not add a second sale beside the draft").toHaveLength(1);
+    }
+  });
+
   test("F.8d DOOR 4 applications.finalizeDeal — the real financed close — terminalizes the root", async () => {
     const seed = await seedDealer("f8d");
     const v = await vehicle(seed);

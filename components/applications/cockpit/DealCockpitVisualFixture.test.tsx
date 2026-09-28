@@ -21,7 +21,13 @@ import { describe, expect, test, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Id } from "@/convex/_generated/dataModel";
 import { dictionaries } from "@/lib/i18n/dictionaries";
-import type { DealCockpitData } from "./DealStagePresentation";
+import type { DealCockpitData, DealStageState } from "./DealStagePresentation";
+import {
+  CASH_DEAL_STAGE_ORDER,
+  DEAL_STAGE_ORDER,
+  type CashDealStageKey,
+  type FinancedDealStageKey,
+} from "@/convex/utils/financingEconomics";
 
 const language = vi.hoisted(() => ({ locale: "ar" as "ar" | "en" }));
 
@@ -50,7 +56,8 @@ vi.mock("@/components/accounting/AccountingTabShared", () => ({
   scaleForCurrency: (code: string) => (code === "USD" ? 2 : 3),
 }));
 
-import { DealCockpitView } from "./DealCockpit";
+import { DealCockpitView, StageFocusRow, type WorkflowAction } from "./DealCockpit";
+import { DealDocumentsPanel } from "./DealDocumentsPanel";
 import type { FinancedDealOverviewData } from "./DealFinancialOverview";
 import type { DealCustodyWiring } from "./DealCustodyPanel";
 
@@ -513,6 +520,288 @@ function handoverCostsWiring() {
 }
 
 /**
+ * SCRUM-417 — the focus row in each of the states the wizard added, rendered
+ * through the REAL `StageFocusRow` with the real dictionaries. Each block is
+ * the row exactly as the view would pass it: a translated label, owner and
+ * blocker, and an action already resolved (a present `onStart` is a button, a
+ * reason key is a refusal). One gallery per locale, so a phone width shows how
+ * the note, the button and the secondary link wrap in Arabic and English.
+ *
+ * Each state names its real stage, so the "Stage n / total" kicker is the one
+ * the rail would print — its place in the deal kind's own stage order.
+ */
+type FocusState = Readonly<
+  {
+    id: string;
+    state: DealStageState;
+    labelKey: string;
+    ownerKey: string;
+    /** Suffix of the `Blocker…` key, as the rail carries it. */
+    blocker?: string;
+    mirrorNote?: boolean;
+    outstandingDocuments?: ReadonlyArray<{ ruleId: string; name: Readonly<Record<"en" | "ar", string>> }>;
+    /** Already resolved, as the view passes it: a present `onStart` is a working button. */
+    action: Omit<WorkflowAction, "stageKey">;
+  } & (
+    | { kind: "FINANCED"; stageKey: FinancedDealStageKey }
+    | { kind: "CASH"; stageKey: CashDealStageKey }
+  )
+>;
+
+function stagePosition(focus: FocusState): { position: number; total: number } {
+  const order: readonly string[] = focus.kind === "CASH" ? CASH_DEAL_STAGE_ORDER : DEAL_STAGE_ORDER;
+  const index = order.indexOf(focus.stageKey);
+  expect(index, `${focus.id}: ${focus.stageKey} is not a ${focus.kind} stage`).toBeGreaterThanOrEqual(0);
+  return { position: index + 1, total: order.length };
+}
+
+const FOCUS_STATES = [
+  {
+    id: "reconciliation-resolve",
+    kind: "FINANCED",
+    stageKey: "SETTLEMENT",
+    state: "BLOCKED",
+    labelKey: "StageSettlement",
+    ownerKey: "StageOwnerDealership",
+    blocker: "AwaitingSettlement",
+    action: { actionKey: "ResolveReconciliationAction", noteKey: "ReconciliationBeforeClose", onStart: () => {} },
+  },
+  {
+    id: "reconciliation-no-permission",
+    kind: "FINANCED",
+    stageKey: "SETTLEMENT",
+    state: "BLOCKED",
+    labelKey: "StageSettlement",
+    ownerKey: "StageOwnerDealership",
+    blocker: "AwaitingSettlement",
+    action: { actionKey: "ResolveReconciliationAction", unavailableReasonKey: "ReconciliationNeedsPermission" },
+  },
+  {
+    id: "appraisal-next",
+    kind: "FINANCED",
+    stageKey: "APPRAISAL",
+    state: "BLOCKED",
+    labelKey: "StageAppraisal",
+    ownerKey: "StageOwnerFinanceCompany",
+    blocker: "AwaitingAppraisal",
+    mirrorNote: true,
+    action: { actionKey: "RecordAppraisalAction", opens: "RECORD_APPRAISAL", onStart: () => {} },
+  },
+  {
+    id: "gap-failed",
+    kind: "FINANCED",
+    stageKey: "APPROVED_PURCHASE",
+    state: "BLOCKED",
+    labelKey: "StageApprovedPurchase",
+    ownerKey: "StageOwnerDealership",
+    blocker: "GapNegotiationFailed",
+    action: { actionKey: "ResolveGapAction", onStart: () => {} },
+  },
+  {
+    id: "credit-documents-first",
+    kind: "FINANCED",
+    stageKey: "CREDIT_DECISION",
+    state: "BLOCKED",
+    labelKey: "StageCreditDecision",
+    ownerKey: "StageOwnerFinanceCompany",
+    blocker: "AwaitingCreditDecision",
+    mirrorNote: true,
+    outstandingDocuments: [
+      { ruleId: "r1", name: { en: "National ID copy", ar: "صورة الهوية" } },
+      { ruleId: "r2", name: { en: "Salary certificate", ar: "كشف راتب" } },
+    ],
+    action: {
+      actionKey: "CompleteDocumentsFirstAction",
+      noteKey: "CreditApprovalNeedsDocuments",
+      opens: "DOCUMENTS",
+      secondary: { actionKey: "RecordCreditDecisionAction", onStart: () => {} },
+    },
+  },
+  {
+    // W1: an approver who cannot touch the documents is told who does, and
+    // keeps the rejection one click away under the reason.
+    id: "credit-documents-no-authority",
+    kind: "FINANCED",
+    stageKey: "CREDIT_DECISION",
+    state: "BLOCKED",
+    labelKey: "StageCreditDecision",
+    ownerKey: "StageOwnerFinanceCompany",
+    blocker: "AwaitingCreditDecision",
+    mirrorNote: true,
+    action: {
+      actionKey: "CompleteDocumentsFirstAction",
+      noteKey: "CreditApprovalNeedsDocuments",
+      opens: "DOCUMENTS",
+      unavailableReasonKey: "DocumentsNeedUploader",
+      secondary: { actionKey: "RecordCreditDecisionAction", onStart: () => {} },
+    },
+  },
+  {
+    // W1: everything outstanding is uploaded; an uploader waits on a verifier.
+    id: "delivery-documents-await-verifier",
+    kind: "FINANCED",
+    stageKey: "DELIVERY_ACTIONS",
+    state: "BLOCKED",
+    labelKey: "StageDeliveryActions",
+    ownerKey: "StageOwnerDealership",
+    blocker: "DocumentsIncomplete",
+    outstandingDocuments: [{ ruleId: "r1", name: { en: "National ID copy", ar: "صورة الهوية" } }],
+    action: { actionKey: "CompleteDocumentsAction", opens: "DOCUMENTS", unavailableReasonKey: "DocumentsAwaitVerifier" },
+  },
+  {
+    // Round 2 (S417-R2-1): may upload/verify, cannot read the rows the panel's
+    // controls sit on — the rejection stays one click away under the reason.
+    id: "credit-documents-need-read-access",
+    kind: "FINANCED",
+    stageKey: "CREDIT_DECISION",
+    state: "BLOCKED",
+    labelKey: "StageCreditDecision",
+    ownerKey: "StageOwnerFinanceCompany",
+    blocker: "AwaitingCreditDecision",
+    mirrorNote: true,
+    action: {
+      actionKey: "CompleteDocumentsFirstAction",
+      noteKey: "CreditApprovalNeedsDocuments",
+      opens: "DOCUMENTS",
+      unavailableReasonKey: "DocumentsNeedReadAccess",
+      secondary: { actionKey: "RecordCreditDecisionAction", onStart: () => {} },
+    },
+  },
+  {
+    id: "delivery-documents-need-read-access",
+    kind: "FINANCED",
+    stageKey: "DELIVERY_ACTIONS",
+    state: "BLOCKED",
+    labelKey: "StageDeliveryActions",
+    ownerKey: "StageOwnerDealership",
+    blocker: "DocumentsIncomplete",
+    outstandingDocuments: [{ ruleId: "r1", name: { en: "National ID copy", ar: "صورة الهوية" } }],
+    action: { actionKey: "CompleteDocumentsAction", opens: "DOCUMENTS", unavailableReasonKey: "DocumentsNeedReadAccess" },
+  },
+  {
+    // W3: the draft sale opens its own completion dialog.
+    id: "cash-handover",
+    kind: "CASH",
+    stageKey: "HANDOVER",
+    state: "CURRENT",
+    labelKey: "StageHandover",
+    ownerKey: "StageOwnerDealership",
+    action: { actionKey: "CompleteCashSaleAction", onStart: () => {} },
+  },
+  {
+    id: "cash-handover-no-permission",
+    kind: "CASH",
+    stageKey: "HANDOVER",
+    state: "CURRENT",
+    labelKey: "StageHandover",
+    ownerKey: "StageOwnerDealership",
+    action: { actionKey: "CompleteCashSaleAction", unavailableReasonKey: "CashSaleCompletionNeedsPermission" },
+  },
+  {
+    // Round 2 (S417-R2-2): the sale form's own reads are missing.
+    id: "cash-handover-needs-read-access",
+    kind: "CASH",
+    stageKey: "HANDOVER",
+    state: "CURRENT",
+    labelKey: "StageHandover",
+    ownerKey: "StageOwnerDealership",
+    action: { actionKey: "CompleteCashSaleAction", unavailableReasonKey: "CashSaleCompletionNeedsReadAccess" },
+  },
+  {
+    // Round 2 (S417-R2-3, contained); round 3 (Sonnet S417-R3-1/R3-2): the
+    // reason now says only what is true and points at the Sales page.
+    id: "cash-handover-deposit-decision",
+    kind: "CASH",
+    stageKey: "HANDOVER",
+    state: "CURRENT",
+    labelKey: "StageHandover",
+    ownerKey: "StageOwnerDealership",
+    action: { actionKey: "CompleteCashSaleAction", unavailableReasonKey: "CashSaleCompletionNeedsDepositDecision" },
+  },
+] satisfies readonly FocusState[];
+
+/**
+ * Round 2 (S417-R2-5): the documents panel with every control a row can carry
+ * at once — a MISSING row reset with its old file still attached shows View,
+ * Verify and the replacement upload side by side, the widest row the panel
+ * can paint. Rendered through the REAL panel for a verifier who may upload.
+ * Round 3 (S417-R3-1): with a "No longer required" history below it — a
+ * deleted rule's file and a long-named one, View only.
+ */
+function documentsPanelMarkup(locale: "en" | "ar"): string {
+  const table = dictionaries[locale] as Record<string, string>;
+  const t = (key: string) => table[key] || (dictionaries.en as Record<string, string>)[key] || key;
+  for (const key of ["ViewFile", "Verify", "ReplaceFile", "Upload", "DocMissing", "DocRejected", "DocUploaded", "DocVerified", "DocumentsNoLongerRequired", "DocumentsNoLongerRequiredNote", "RemovedRequirement"]) {
+    expect(table[key], `${locale} dictionary lacks ${key}`).toBeTruthy();
+  }
+  const name = (en: string, ar: string) => (locale === "ar" ? ar : en);
+  return `<section data-testid="documents-panel-controls">${renderToStaticMarkup(
+    <DealDocumentsPanel
+      documents={[
+        { _id: "d1", ruleId: "r1", ruleName: name("National ID copy", "صورة الهوية الشخصية"), status: "MISSING", fileUrl: "https://files.test/old.pdf" },
+        { _id: "d2", ruleId: "r2", ruleName: name("Salary certificate", "شهادة الراتب"), status: "REJECTED", fileUrl: "https://files.test/salary.pdf" },
+        { _id: null, ruleId: "r3", ruleName: name("Bank statement — last six months", "كشف حساب بنكي — آخر ستة أشهر"), status: "MISSING", fileUrl: null },
+      ]}
+      history={[
+        { _id: "h1", ruleName: null, status: "UPLOADED", fileUrl: "https://files.test/removed.pdf", uploadedLabel: "2 Aug 2026" },
+        { _id: "h2", ruleName: name("Employer letter addressed to the finance company", "خطاب جهة العمل موجّه إلى شركة التمويل"), status: "VERIFIED", fileUrl: "https://files.test/letter.pdf", uploadedLabel: null },
+      ]}
+      checklist={[]}
+      canUpload
+      canVerify
+      uploadingRuleIds={new Set()}
+      t={t}
+      onUpload={() => {}}
+      onVerify={() => {}}
+    />
+  )}</section>`;
+}
+
+function focusStatesMarkup(locale: "en" | "ar"): string {
+  language.locale = locale;
+  const table = dictionaries[locale] as Record<string, string>;
+  const t = (key: string) => table[key] || (dictionaries.en as Record<string, string>)[key] || key;
+  const blocks = FOCUS_STATES.map((focus: FocusState) => {
+    // Every key the gallery paints must exist in THIS locale's dictionary: a
+    // key falling through to English (or to itself) would paint a picture of
+    // a translation that does not exist.
+    const { action } = focus;
+    const keys = [
+      focus.labelKey,
+      focus.ownerKey,
+      action.actionKey,
+      action.noteKey,
+      action.unavailableReasonKey,
+      action.secondary?.actionKey,
+    ].filter((key): key is string => typeof key === "string");
+    for (const key of keys) expect(table[key], `${locale} dictionary lacks ${key}`).toBeTruthy();
+    const { position, total } = stagePosition(focus);
+    return `<section data-testid="focus-state-${focus.id}" class="space-y-2">${renderToStaticMarkup(
+      <StageFocusRow
+        state={focus.state}
+        label={t(focus.labelKey)}
+        position={position}
+        total={total}
+        owner={t(focus.ownerKey)}
+        mirrorNote={focus.mirrorNote ?? false}
+        blocker={focus.blocker ? t(`Blocker${focus.blocker}`) : undefined}
+        action={action}
+        outstandingDocuments={(focus.outstandingDocuments ?? []).map((doc) => ({
+          ruleId: doc.ruleId,
+          name: doc.name[locale],
+        }))}
+        onGoToDocuments={() => {}}
+        t={t}
+      />
+    )}</section>`;
+  });
+  const html = `<div class="mx-auto max-w-3xl space-y-6" data-testid="deal-focus-states">${blocks.join("")}${documentsPanelMarkup(locale)}</div>`;
+  // Not an empty render: one block per state, each with the row in it.
+  expect(html.split('data-testid="deal-next-step"').length - 1).toBe(FOCUS_STATES.length);
+  return html;
+}
+
+/**
  * Generation is opted into with exactly `DEAL_COCKPIT_VISUAL_FIXTURE=1`; any
  * other value, including a stray truthy one, leaves the ordinary suite as the
  * ordinary suite. The output directory is NOT a fixed path: the Playwright
@@ -607,6 +896,8 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
     for (const owner of expectedOwners) expect(arabicLetters.test(owner)).toBe(locale === "ar");
     mkdirSync(outDir, { recursive: true });
     writeFileSync(resolve(outDir, `deal-cockpit-${locale}.html`), html);
+    // SCRUM-417: the next-step states the wizard added, painted side by side.
+    writeFileSync(resolve(outDir, `deal-focus-states-${locale}.html`), focusStatesMarkup(locale));
     writeFileSync(
       resolve(outDir, `deal-cockpit-${locale}.expected.json`),
       JSON.stringify({ stageOwners: expectedOwners }, null, 2)

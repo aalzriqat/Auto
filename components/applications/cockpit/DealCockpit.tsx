@@ -62,8 +62,11 @@ import { SupplierSettlementDialog } from "./SupplierSettlementDialog";
 import { SettlementAdviceCorrectionDialog } from "./SettlementAdviceCorrectionDialog";
 import {
   FinanceCompanyDecisionCard,
+  nextFinanceDecisionStep,
+  type FinanceDecisionDialog,
   type FinanceDecisionFacts,
 } from "./FinanceCompanyDecisionCard";
+import { ResolveReconciliationDialog } from "./ResolveReconciliationDialog";
 import { ResolveGapDialog } from "./ResolveGapDialog";
 import {
   RecordSubmittedQuotationDialog,
@@ -100,7 +103,8 @@ import {
   type DirectRouteRefusal,
   type SupplierSettlementRoute,
 } from "./SettlementRouteControl";
-import { DealDocumentsPanel, type DealDocument } from "./DealDocumentsPanel";
+import { DealDocumentsPanel, type DealDocument, type DealDocumentHistoryItem } from "./DealDocumentsPanel";
+import { SaleDialog } from "@/components/sales/SaleDialog";
 import {
   StoppedDealDepositsPanel,
   type DealDeposit,
@@ -407,6 +411,7 @@ const LEGAL_INVOICE_ISSUED_TO_LABEL: Record<string, string> = {
 function finalizeUnavailableReasonKey({
   routeRequired,
   canRecordRoute,
+  heldDepositBlocksDirectClose,
   readinessBlocksClose,
   readinessUnreadable,
   canClose,
@@ -414,6 +419,12 @@ function finalizeUnavailableReasonKey({
 }: Readonly<{
   routeRequired: boolean;
   canRecordRoute: boolean;
+  /**
+   * `finalizeDeal` refuses a DIRECT_TO_SUPPLIER deal whose quote still holds a
+   * reservation deposit (SCRUM-417, G7) — the same refusal
+   * `setSupplierSettlementRoute` makes, by the other door.
+   */
+  heldDepositBlocksDirectClose: boolean;
   readinessBlocksClose: boolean;
   readinessUnreadable: boolean;
   canClose: boolean;
@@ -421,6 +432,7 @@ function finalizeUnavailableReasonKey({
 }>): string | undefined {
   if (routeRequired && !canRecordRoute) return "FinalizeNeedsRouteAndPermission";
   if (routeRequired) return "FinalizeNeedsSettlementRoute";
+  if (heldDepositBlocksDirectClose) return "FinalizeNeedsHeldDepositResolved";
   if (readinessUnreadable) return "FinalizeWaitsForReadiness";
   if (readinessBlocksClose) return "FinalizeNeedsClosingReadiness";
   if (!canClose) return "FinalizeNeedsPermission";
@@ -451,8 +463,92 @@ function finalizeReadinessHoldReasonKey({
   return undefined;
 }
 
+/**
+ * What a focus-row step opens when the dialog or pane it needs is owned by the
+ * VIEW rather than the container (SCRUM-417). The view resolves it to its own
+ * handler, so the focus row reuses the exact dialog the card or panel opens —
+ * never a second copy of it.
+ */
+export type WorkflowActionTarget = FinanceDecisionDialog | "DOCUMENTS" | "SETTLE_SUPPLIER";
+
+/** The one next step for the stage the rail names — see `DealCockpitView`. */
+export type WorkflowAction = {
+  stageKey: string;
+  /** i18n key for the button label — never a raw string. */
+  actionKey: string;
+  /** Absent when `opens` names a view-owned target instead. */
+  onStart?: () => void;
+  opens?: WorkflowActionTarget;
+  /** A sentence under the step saying why THIS is the next step. */
+  noteKey?: string;
+  /** A quieter alternative on the same step, where one must be preserved. */
+  secondary?: { actionKey: string; onStart: () => void };
+  /** Set when the step cannot be taken; the button is withheld and this is shown. */
+  unavailableReasonKey?: string;
+  /** The withheld figure in its own currency, shown under the reason. */
+  unavailableDetail?: SettlementDenominationDetail;
+};
+
+/**
+ * The cash rail's one next step per live stage (SCRUM-417, G8) — see
+ * `SaleDealCockpit`. A stage absent here offers no step. HANDOVER is not here:
+ * it opens the sale's own dialog, which needs this screen's state (W3).
+ */
+/** The read-only checklist's upload state: nothing is ever in flight there. */
+const NO_UPLOADS: ReadonlySet<string> = new Set();
+
+const CASH_STAGE_ACTION: Readonly<Partial<Record<string, WorkflowAction>>> = {
+  SETTLEMENT: { stageKey: "SETTLEMENT", actionKey: "SettleSupplierAction", opens: "SETTLE_SUPPLIER" },
+};
+
+/**
+ * Whether THIS caller can advance the documents step, and if not, why
+ * (SCRUM-417 round 1: Sol W1 = Codex S417-2).
+ *
+ * Keyed on the outstanding REQUIRED documents' own statuses and the server's
+ * own gates, never on the step existing:
+ *  - MISSING / REJECTED — uploaded (or replaced) through `generateUploadUrl` +
+ *    `saveDocumentFile`, which take `create:finance_application` OR
+ *    `verify:finance_documents`;
+ *  - UPLOADED — moved only by `updateDocumentStatus` (verify or reject), which
+ *    takes `verify:finance_documents`.
+ *
+ * The step is a working button when at least one outstanding document can be
+ * advanced by this caller. Otherwise the reason says which: everything is
+ * uploaded and waiting for a verifier, or this caller can touch no document
+ * at all. `outstanding` empty with the step still open means the rail and the
+ * checklist disagree; the capability alone decides, as it did before.
+ *
+ * Round 2 (Codex S417-R2-1 = Sol R2-1): the controls live on the rows
+ * `documents.getForApplication` serves, and that read takes
+ * `view:finance_applications` — a separate permission a custom role can omit.
+ * Without it the pane is the read-only checklist, so a caller who COULD
+ * advance a document is told the read is what is missing (`canRead`), on both
+ * stages. The write reasons outrank it: they would stand even with the read.
+ */
+export function documentsStepUnavailableReason({
+  outstanding,
+  canUpload,
+  canVerify,
+  canRead,
+}: Readonly<{
+  outstanding: ReadonlyArray<{ status: string }>;
+  canUpload: boolean;
+  canVerify: boolean;
+  canRead: boolean;
+}>): string | undefined {
+  const canAdvance = (status: string) => (status === "UPLOADED" ? canVerify : canUpload || canVerify);
+  const readReason = canRead ? undefined : "DocumentsNeedReadAccess";
+  if (outstanding.length === 0) return canUpload || canVerify ? readReason : "DocumentsNeedUploader";
+  if (outstanding.some((doc) => canAdvance(doc.status))) return readReason;
+  // Nothing this caller can move. Someone who may upload is only stopped when
+  // every outstanding document is already uploaded: it waits on a verifier.
+  return canUpload ? "DocumentsAwaitVerifier" : "DocumentsNeedUploader";
+}
+
 /** The toast for each credit-stage transition this screen can record. */
-const CREDIT_STATUS_SUCCESS: Record<"UNDER_REVIEW" | "APPROVED" | "REJECTED", string> = {
+const CREDIT_STATUS_SUCCESS: Record<"PENDING_DOCS" | "UNDER_REVIEW" | "APPROVED" | "REJECTED", string> = {
+  PENDING_DOCS: "AppSubmittedForDocumentsSuccess",
   UNDER_REVIEW: "AppUnderReviewSuccess",
   APPROVED: "AppApprovedSuccess",
   REJECTED: "AppRejectedSuccess",
@@ -617,6 +713,9 @@ export function DealCockpit({
     api.financingEconomics.approveDealerPurchaseAmount
   );
   const recordAppraisal = useMutation(api.financingEconomics.recordAppraisal);
+  const resolveFinancingReconciliation = useMutation(
+    api.financingEconomics.resolveFinancingReconciliation
+  );
   const { hasPermission, isLoading: permissionsLoading, membership, isOwner } = usePermissions();
   const router = useRouter();
 
@@ -757,6 +856,12 @@ export function DealCockpit({
     api.documents.getForApplication,
     canViewApplications && deal ? { orgId, applicationId } : "skip"
   );
+  // Round 3 (S417-R3-1): files kept for requirements removed after the upload,
+  // view only — the same permission and the same skip as the active list.
+  const documentHistory = useQuery(
+    api.documents.getHistoryForApplication,
+    canViewApplications && deal ? { orgId, applicationId } : "skip"
+  );
   // The deal's cost lines, same permission as the document rows; skipped rather
   // than thrown for a caller without it.
   const dealCosts = useQuery(
@@ -826,6 +931,7 @@ export function DealCockpit({
   const setSupplierSettlementRoute = useMutation(api.applications.setSupplierSettlementRoute);
   const releaseDeposit = useMutation(api.deposits.release);
   const updateDocStatus = useMutation(api.documents.updateDocumentStatus);
+  const ensureApplicationDocument = useMutation(api.documents.ensureApplicationDocument);
   const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
   const saveDocumentFile = useMutation(api.documents.saveDocumentFile);
   const orgCurrency = useCurrency();
@@ -868,7 +974,17 @@ export function DealCockpit({
   const [confirmingDisbursement, setConfirmingDisbursement] = useState(false);
   const [confirmingSupplierDisbursement, setConfirmingSupplierDisbursement] = useState(false);
   const [disbursementSubmitting, setDisbursementSubmitting] = useState(false);
-  const [uploadingDocId, setUploadingDocId] = useState<string | null>(null);
+  /**
+   * The RULES whose upload is in flight (Sol S421-R2-2). Keyed by rule, not by
+   * row: a late rule's line is served as `_id: null` and re-served under its
+   * new document id the moment `ensureApplicationDocument` commits — while the
+   * file is still transferring. A row-keyed busy flag went false at that
+   * moment and let a second pick race the first onto the same row. The state
+   * paints the control; the ref is the guard, synchronous, so a second pick
+   * cannot slip in before a re-render.
+   */
+  const [uploadingRuleIds, setUploadingRuleIds] = useState<ReadonlySet<string>>(() => new Set());
+  const uploadsInFlightRef = useRef(new Set<string>());
   const [resolvingDepositId, setResolvingDepositId] = useState<string | null>(null);
   // One key per attempt, held in a ref so a retry after a lost response is the
   // SAME command rather than a second one, and cleared only once the server
@@ -1305,6 +1421,9 @@ export function DealCockpit({
   const [confirmingFinalize, setConfirmingFinalize] = useState(false);
   const [finalizeSubmitting, setFinalizeSubmitting] = useState(false);
   const [finalizeError, setFinalizeError] = useState<string | null>(null);
+  const [resolvingReconciliation, setResolvingReconciliation] = useState(false);
+  const [reconciliationSubmitting, setReconciliationSubmitting] = useState(false);
+  const [reconciliationError, setReconciliationError] = useState<string | null>(null);
 
   /**
    * The action for the stage the rail is currently naming.
@@ -1361,7 +1480,31 @@ export function DealCockpit({
     (stage) => stage.state === "CURRENT" || stage.state === "BLOCKED"
   );
 
-  function buildWorkflowAction() {
+  /**
+   * Whether a required document is still neither verified nor waived — the
+   * SERVER's answer, read off the rail's DELIVERY_ACTIONS stage (derived with
+   * the same rule filter `assertRequiredApplicationDocumentsComplete` applies
+   * before a credit approval). Never recomputed from the checklist here.
+   */
+  const deliveryStage = deal?.stages.find((stage) => stage.key === "DELIVERY_ACTIONS");
+  const documentsIncomplete = deliveryStage !== undefined && deliveryStage.state !== "COMPLETE";
+  /**
+   * Whether this caller can take the documents step — see
+   * `documentsStepUnavailableReason`. Read off the cockpit payload's checklist,
+   * which lists a rule with no row yet as MISSING, exactly as the approval
+   * gate counts it.
+   */
+  const documentsStepReason = documentsStepUnavailableReason({
+    outstanding: (deal?.documents ?? []).filter(
+      (doc) => doc.required && doc.status !== "VERIFIED" && doc.status !== "WAIVED"
+    ),
+    canUpload: canCreateApplication || canVerifyDocuments,
+    canVerify: canVerifyDocuments,
+    // The exact predicate the `getForApplication` subscription above is gated on.
+    canRead: canViewApplications,
+  });
+
+  function buildWorkflowAction(): WorkflowAction | undefined {
     if (permissionsLoading || !deal) return undefined;
 
     /**
@@ -1399,7 +1542,11 @@ export function DealCockpit({
      * amounts, and a locally derived gap could disagree with the one the
      * mutation reconciles against.
      */
-    if (liveStage?.blocker === "GapUnresolved") {
+    // SCRUM-417 (G4): a FAILED negotiation on a live deal is settled through
+    // the same writer — `resolveAppraisalGap` refuses only a gap already
+    // CUSTOMER_ABSORBS / DEALER_ABSORBS / SPLIT, and the rail hands both
+    // blockers to the dealership for exactly this action.
+    if (liveStage?.blocker === "GapUnresolved" || liveStage?.blocker === "GapNegotiationFailed") {
       const gapVisible = typeof deal.money?.appraisalGapMinor === "number";
       const handedOverAt = app?.vehicleHandoverAt;
       // `>=`, as the mutation compares: equal timestamps are ambiguous (two
@@ -1431,6 +1578,23 @@ export function DealCockpit({
     }
 
     /**
+     * A DRAFT application (SCRUM-417, G1). The one legal move out of it is
+     * `updateStatus` DRAFT → PENDING_DOCS (`VALID_STATUS_TRANSITIONS`), which
+     * the server gates on `view:finance_applications` alone — so that is the
+     * gate here too, not a stricter one the server does not apply.
+     */
+    if (liveStage?.key === "APPLICATION" && deal.status === "DRAFT") {
+      return {
+        stageKey: "APPLICATION",
+        actionKey: "SubmitApplicationAction",
+        onStart: () => {
+          void recordCreditStatus("PENDING_DOCS");
+        },
+        unavailableReasonKey: canViewApplications ? undefined : "SubmitApplicationNeedsPermission",
+      };
+    }
+
+    /**
      * The finance company's credit decision — RECORDED here, never made.
      *
      * Two dealership moves on this stage, matching `updateStatus`'s legal
@@ -1452,18 +1616,81 @@ export function DealCockpit({
         };
       }
       if (deal.status === "UNDER_REVIEW") {
-        return {
-          stageKey: "CREDIT_DECISION",
+        const openCreditDialog = {
           actionKey: "RecordCreditDecisionAction",
           onStart: () => {
             setCreditError(null);
             setDecidingCredit(true);
           },
+        };
+        // SCRUM-417 (G6): the server refuses the APPROVAL while a required
+        // document is outstanding, so the next step is the documents — not a
+        // dialog whose main option is certain to be refused. A rejection does
+        // not need them, so recording it stays one quiet click away — also for
+        // an approver who cannot touch the documents themselves (W1), who is
+        // told who does instead of being sent to a pane with no control.
+        if ((canApproveApplication || canReviewApplication) && documentsIncomplete) {
+          return {
+            stageKey: "CREDIT_DECISION",
+            actionKey: "CompleteDocumentsFirstAction",
+            opens: "DOCUMENTS",
+            noteKey: "CreditApprovalNeedsDocuments",
+            secondary: openCreditDialog,
+            unavailableReasonKey: documentsStepReason,
+          };
+        }
+        return {
+          stageKey: "CREDIT_DECISION",
+          ...openCreditDialog,
           unavailableReasonKey:
             canApproveApplication || canReviewApplication ? undefined : "CreditDecisionNeedsPermission",
         };
       }
       return undefined;
+    }
+
+    /**
+     * What the finance company told the dealership (SCRUM-417, G3): the
+     * quotation, then the appraisal, then the approved amount — one at a time,
+     * through the SAME dialogs and the SAME availability predicates the
+     * decision card uses (`nextFinanceDecisionStep`).
+     */
+    if (
+      liveStage?.key === "APPRAISAL" ||
+      (liveStage?.key === "APPROVED_PURCHASE" && liveStage.blocker === "NoApprovedPurchaseAmount")
+    ) {
+      if (financeDecision) {
+        return {
+          stageKey: liveStage.key,
+          ...nextFinanceDecisionStep(financeDecision.facts, financeDecision, liveStage.key),
+        };
+      }
+      // The economics read is skipped for a caller without the permission it
+      // authorizes on; the card is absent for them too, so say who acts.
+      if (!canViewApplications) {
+        return {
+          stageKey: liveStage.key,
+          actionKey: "RecordApprovedPurchaseAction",
+          unavailableReasonKey: "FinanceDecisionNeedsAccess",
+        };
+      }
+      return undefined;
+    }
+
+    /**
+     * The paperwork (SCRUM-417, G5): an ACTION that opens the Documents tab and
+     * focuses it, rather than a passive pointer — offered only when this caller
+     * can advance an outstanding document (W1): an uploader facing documents
+     * that only await verification is told so, not sent to a pane with nothing
+     * for them to press.
+     */
+    if (liveStage?.key === "DELIVERY_ACTIONS") {
+      return {
+        stageKey: "DELIVERY_ACTIONS",
+        actionKey: "CompleteDocumentsAction",
+        opens: "DOCUMENTS",
+        unavailableReasonKey: documentsStepReason,
+      };
     }
 
     /**
@@ -1563,11 +1790,35 @@ export function DealCockpit({
     // blocker until both facts are on hand.
     if (app === undefined) return undefined;
 
+    /**
+     * A deal flagged for financing reconciliation (SCRUM-417, G7) — a figure on
+     * it could not be trusted when it was derived. `finalizeDeal` does NOT
+     * refuse on the flag itself (verified on this branch), but it is the one
+     * review the product records, and closing posts journals from those
+     * figures — so the review comes first. It takes the same permission as the
+     * close (`confirm:finance_disbursement`), so it never strands the closer.
+     */
+    if (app?.needsFinancingReconciliation === true) {
+      return {
+        stageKey: "SETTLEMENT",
+        actionKey: "ResolveReconciliationAction",
+        onStart: () => {
+          setReconciliationError(null);
+          setResolvingReconciliation(true);
+        },
+        noteKey: "ReconciliationBeforeClose",
+        unavailableReasonKey: canCloseDeal ? undefined : "ReconciliationNeedsPermission",
+      };
+    }
+
     const finalizeReasonKey = finalizeDenominationBlock
       ? FINALIZE_DENOMINATION_REASON[finalizeDenominationBlock]
       : finalizeUnavailableReasonKey({
           routeRequired: settlementRouteRequired,
           canRecordRoute: canFinalizeApplication,
+          heldDepositBlocksDirectClose:
+            app?.supplierSettlementRoute === "DIRECT_TO_SUPPLIER" &&
+            (app.deposits ?? []).some((deposit) => deposit.status === "HELD"),
           readinessBlocksClose:
             closingReadiness !== undefined && closingReadiness.open && closingReadiness.state !== "READY",
           readinessUnreadable: closingReadinessServiceUnavailable,
@@ -1615,7 +1866,7 @@ export function DealCockpit({
    * idempotency-keyed, exactly as in Review: the server refuses an illegal
    * transition, so a repeat is a refusal rather than a second effect.
    */
-  async function recordCreditStatus(status: "UNDER_REVIEW" | CreditDecision) {
+  async function recordCreditStatus(status: "PENDING_DOCS" | "UNDER_REVIEW" | CreditDecision) {
     setCreditSubmitting(true);
     setCreditError(null);
     try {
@@ -1634,7 +1885,6 @@ export function DealCockpit({
     }
   }
 
-  const workflowAction = buildWorkflowAction();
   // One key per correction attempt, so a retry after a lost response is the same
   // amendment rather than a second audited one.
   const correctionKeyRef = useRef<string | null>(null);
@@ -1991,6 +2241,9 @@ export function DealCockpit({
         }
       : undefined;
 
+  // Built here, after `financeDecision`, because the decision-card steps read it.
+  const workflowAction = buildWorkflowAction();
+
   return (
     <>
       <DealCockpitView
@@ -2015,6 +2268,7 @@ export function DealCockpit({
         canApprove: canApproveApplication,
         canReject: canReviewApplication,
         isOwnDeal: membership?.userId != null && membership.userId === app?.salespersonId,
+        documentsIncomplete,
         onOpenChange: setDecidingCredit,
         onSubmit: recordCreditStatus,
       }}
@@ -2078,18 +2332,45 @@ export function DealCockpit({
       documents={{
         items: documents?.map((doc) => ({
           _id: doc._id,
+          ruleId: doc.ruleId,
           ruleName: doc.ruleName,
           status: doc.status,
           fileUrl: doc.fileUrl,
         })),
+        history: documentHistory?.flatMap((doc) => {
+          const uploadedAt = doc.uploadedAt ?? undefined;
+          return doc.fileUrl
+            ? [
+                {
+                  _id: doc._id,
+                  ruleName: doc.ruleName,
+                  status: doc.status,
+                  fileUrl: doc.fileUrl,
+                  uploadedLabel: isRenderableMoment(uploadedAt) ? format(uploadedAt, "d MMM yyyy") : null,
+                },
+              ]
+            : [];
+        }),
         // The server accepts an upload from either permission; verifying is
         // the narrower one. Same gates as Review, read from the same server.
         canUpload: canCreateApplication || canVerifyDocuments,
         canVerify: canVerifyDocuments,
-        uploadingId: uploadingDocId,
-        onUpload: async (documentId, file) => {
-          setUploadingDocId(documentId);
+        uploadingRuleIds,
+        onUpload: async (doc, file) => {
+          if (uploadsInFlightRef.current.has(doc.ruleId)) return;
+          uploadsInFlightRef.current.add(doc.ruleId);
+          setUploadingRuleIds(new Set(uploadsInFlightRef.current));
           try {
+            // A rule added after the application was created has no row yet
+            // (SCRUM-421): create it first, under the same authority as the
+            // upload. Idempotent, so a retry lands on the same row.
+            const documentId =
+              doc._id ??
+              (await ensureApplicationDocument({
+                orgId,
+                applicationId,
+                ruleId: doc.ruleId as Id<"companyDocumentRules">,
+              }));
             const postUrl = await generateUploadUrl({
               orgId,
               mimeType: file.type,
@@ -2110,7 +2391,8 @@ export function DealCockpit({
           } catch (error) {
             toast.error(getErrorMessage(error));
           } finally {
-            setUploadingDocId(null);
+            uploadsInFlightRef.current.delete(doc.ruleId);
+            setUploadingRuleIds(new Set(uploadsInFlightRef.current));
           }
         },
         onVerify: async (documentId) => {
@@ -2448,6 +2730,33 @@ export function DealCockpit({
           : undefined
       }
     />
+      {app?.needsFinancingReconciliation === true && (
+        <ResolveReconciliationDialog
+          open={resolvingReconciliation}
+          submitting={reconciliationSubmitting}
+          error={reconciliationError}
+          reason={app.financingReconciliationReason ?? null}
+          t={t}
+          onOpenChange={setResolvingReconciliation}
+          onSubmit={async ({ note }) => {
+            setReconciliationSubmitting(true);
+            setReconciliationError(null);
+            try {
+              await resolveFinancingReconciliation({ orgId, applicationId, note });
+              toast.success(t("ReconciliationResolved"));
+              setResolvingReconciliation(false);
+            } catch (error) {
+              // "Record what was checked", "not flagged" — each names what to
+              // change, so it stays in the form that earned it.
+              const message = getErrorMessage(error);
+              setReconciliationError(message);
+              toast.error(message);
+            } finally {
+              setReconciliationSubmitting(false);
+            }
+          }}
+        />
+      )}
       {recordingLegalInvoice && (
         <RecordLegalInvoiceDialog
           open={recordingLegalInvoice}
@@ -2534,6 +2843,63 @@ export function SaleDealCockpit({
   const canSettleSupplier = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
 
   /**
+   * HANDOVER on a cash deal is the sale still being a draft (SCRUM-417 W3).
+   * Completing it is the sale's OWN dialog — the one the Sales page opens —
+   * which saves the draft through `sales.update` (edit:sales) and then
+   * completes it through `sales.completeDraft` (create:sales) with its
+   * idempotency key and deposit decision. So the step is offered to a caller
+   * holding both, and opens that dialog for THIS sale; nothing about
+   * completion is reimplemented here.
+   *
+   * The dialog edits a hydrated sale record, which the cockpit payload is not,
+   * so `sales.get` (view:sales, the cockpit's own read permission) is loaded —
+   * only while the step is live and usable. Until it arrives the step offers
+   * no button: the dialog opened with no sale is the NEW-sale form.
+   */
+  const cashLive = deal?.stages.find((stage) => stage.state === "CURRENT" || stage.state === "BLOCKED");
+  const canWriteSale =
+    !permissionsLoading && hasPermission(PERMISSIONS.CREATE_SALES) && hasPermission(PERMISSIONS.EDIT_SALES);
+  /**
+   * Round 2 (Codex S417-R2-2): the dialog also READS, unconditionally, on
+   * mount — `customers.list` (view:customers), `vehicles.listAll`
+   * (view:vehicles; also what `approvals.profitApprovalStatus` inside it
+   * takes) and `memberships.list` (view:users) — and convex/react rethrows a
+   * refused query during render. Its other read, `sales.consignedSalePreview`,
+   * takes view:sales, which this screen already requires. A caller missing any
+   * of the three is told so instead of being handed a form that throws.
+   */
+  const canReadSaleForm =
+    !permissionsLoading &&
+    hasPermission(PERMISSIONS.VIEW_CUSTOMERS) &&
+    hasPermission(PERMISSIONS.VIEW_VEHICLES) &&
+    hasPermission(PERMISSIONS.VIEW_USERS);
+  const canCompleteSale = canWriteSale && canReadSaleForm;
+  const handoverLive = cashLive?.key === "HANDOVER" && deal?.financingApplicationId == null;
+  const saleRecord = useQuery(api.sales.get, handoverLive && canCompleteSale ? { orgId, saleId } : "skip");
+  // The dialog completes a DRAFT (`completingDraft` in SaleDialog is
+  // `sale.status === "PENDING"`); any other loaded status is not this step.
+  const draftSale =
+    saleRecord && saleRecord._id === saleId && saleRecord.status === "PENDING" ? saleRecord : undefined;
+  /**
+   * Round 2 (Codex S417-R2-3), CONTAINED — not fixed — here. A draft linked to
+   * a quote completes through the reservation-deposit resolution, which
+   * refuses without a stated deposit treatment when the car's share exceeds
+   * what the dealership billed. SaleDialog calls `completeDraft` without one
+   * and has no control to state it. No server read answers "is a treatment
+   * required" (it turns on the bill, which the client must not rebuild), so
+   * the step is withheld for a quote-linked draft whose quote has RECEIVED a
+   * deposit — `deposits.quoteAllocation.totalReceivedMinor`, the server's own
+   * figure, on the view:sales this screen already requires — or whose
+   * allocation cannot be read. A draft with no quote carries no deposit
+   * resolution at all and is unaffected.
+   */
+  const quoteAllocation = useQuery(
+    api.deposits.quoteAllocation,
+    draftSale?.quoteId ? { orgId, quoteId: draftSale.quoteId } : "skip"
+  );
+  const [completingSale, setCompletingSale] = useState(false);
+
+  /**
    * A financed sale is rendered here, not sent elsewhere.
    *
    * `sales.dealCockpit` deliberately withholds money for a financed sale — there
@@ -2554,23 +2920,72 @@ export function SaleDealCockpit({
     );
   }
 
+  /**
+   * The cash rail's one next step (SCRUM-417, G8), from the handlers this
+   * screen already has — nothing new is invented for it.
+   *
+   * HANDOVER on a cash deal is the sale still being a draft: completing it is
+   * `sales.completeDraft`, an economic command with its own deposit decision
+   * that lives in the sale's own dialog, so the step names where it is done
+   * rather than growing a second completion path here. SETTLEMENT is the
+   * supplier's claim, settled through the same dialog the money panel opens;
+   * the view resolves it against the claim's state and this caller's authority.
+   */
+  let cashAction: WorkflowAction | undefined;
+  if (permissionsLoading || !cashLive) cashAction = undefined;
+  else if (cashLive.key === "HANDOVER") {
+    // Told apart in the order an operator can act on: the authority to
+    // complete at all, then the reads the form needs, then — once THIS draft
+    // is loaded — whether its completion needs a deposit decision the form
+    // cannot record. Until what decides it has loaded, no button.
+    let reason: string | undefined;
+    if (!canWriteSale) reason = "CashSaleCompletionNeedsPermission";
+    else if (!canReadSaleForm) reason = "CashSaleCompletionNeedsReadAccess";
+    else if (draftSale?.quoteId && quoteAllocation !== undefined) {
+      if (quoteAllocation === null || quoteAllocation.totalReceivedMinor > 0) {
+        reason = "CashSaleCompletionNeedsDepositDecision";
+      }
+    }
+    const decided = draftSale !== undefined && (!draftSale.quoteId || quoteAllocation !== undefined);
+    if (reason) {
+      cashAction = { stageKey: "HANDOVER", actionKey: "CompleteCashSaleAction", unavailableReasonKey: reason };
+    } else if (decided) {
+      cashAction = {
+        stageKey: "HANDOVER",
+        actionKey: "CompleteCashSaleAction",
+        onStart: () => setCompletingSale(true),
+      };
+    }
+  } else cashAction = CASH_STAGE_ACTION[cashLive.key];
+
   return (
-    <DealCockpitView
-      deal={deal}
-      backHref={`/${orgId}/deals`}
-      canSettleSupplier={canSettleSupplier}
-      onRecordSupplierReceipt={async (receivableId, receipt) => {
-        await recordReceipt({
-          orgId,
-          receivableId,
-          amount: receipt.amount,
-          receiptMethod: receipt.receiptMethod,
-          receiptReference: receipt.receiptReference,
-          receivedAt: receipt.receivedAt,
-          idempotencyKey: receipt.idempotencyKey,
-        });
-      }}
-    />
+    <>
+      <DealCockpitView
+        deal={deal}
+        backHref={`/${orgId}/deals`}
+        workflowAction={cashAction}
+        canSettleSupplier={canSettleSupplier}
+        onRecordSupplierReceipt={async (receivableId, receipt) => {
+          await recordReceipt({
+            orgId,
+            receivableId,
+            amount: receipt.amount,
+            receiptMethod: receipt.receiptMethod,
+            receiptReference: receipt.receiptReference,
+            receivedAt: receipt.receivedAt,
+            idempotencyKey: receipt.idempotencyKey,
+          });
+        }}
+      />
+      {/* Mounted only with THIS sale's record in hand: without one the dialog
+          is the new-sale form, which must never open from a deal. */}
+      {/* Offered only for a loaded DRAFT (`draftSale`); kept mounted on the
+          record while open, so the sale turning COMPLETED under its own
+          submit does not yank the form away mid-flow. */}
+      {completingSale && saleRecord && saleRecord._id === saleId && (
+        <SaleDialog open onOpenChange={setCompletingSale} sale={saleRecord} />
+      )}
+    </>
   );
 }
 
@@ -3215,6 +3630,8 @@ export function DealCockpitView({
     canApprove: boolean;
     canReject: boolean;
     isOwnDeal: boolean;
+    /** The server refuses the approval until the documents are complete. */
+    documentsIncomplete?: boolean;
     onOpenChange: (open: boolean) => void;
     onSubmit: (decision: CreditDecision) => void | Promise<void>;
   };
@@ -3242,10 +3659,13 @@ export function DealCockpitView({
    */
   documents?: {
     items: ReadonlyArray<DealDocument> | undefined;
+    /** Files kept for requirements that no longer apply — view only (round 3, S417-R3-1). */
+    history?: ReadonlyArray<DealDocumentHistoryItem>;
     canUpload: boolean;
     canVerify: boolean;
-    uploadingId: string | null;
-    onUpload: (documentId: string, file: File) => void | Promise<void>;
+    /** The rule ids whose upload is in flight — see `DealDocumentsPanel`. */
+    uploadingRuleIds: ReadonlySet<string>;
+    onUpload: (doc: DealDocument, file: File) => void | Promise<void>;
     onVerify: (documentId: string) => void | Promise<void>;
   };
   /** The deal's deposits, present only on a stopped deal that has any. */
@@ -3358,16 +3778,7 @@ export function DealCockpitView({
    * so. A named step with neither a button nor a reason is the dead end this
    * issue exists to remove.
    */
-  workflowAction?: {
-    stageKey: string;
-    /** i18n key for the button label — never a raw string. */
-    actionKey: string;
-    onStart: () => void;
-    /** Set when the step cannot be taken; the button is withheld and this is shown. */
-    unavailableReasonKey?: string;
-    /** The withheld figure in its own currency, shown under the reason. */
-    unavailableDetail?: SettlementDenominationDetail;
-  };
+  workflowAction?: WorkflowAction;
   /** The handover confirmation's own state — absent on a deal that cannot reach it. */
   handover?: {
     confirming: boolean;
@@ -3501,6 +3912,27 @@ export function DealCockpitView({
   const [firstPaymentSubmitting, setFirstPaymentSubmitting] = useState(false);
   const [firstPaymentError, setFirstPaymentError] = useState<string | null>(null);
 
+  // The ONE opener per finance-decision dialog, shared by the decision card and
+  // the focus row (SCRUM-417): both clear the dialog's last refusal and open
+  // the same dialog, so the two entry points cannot drift apart.
+  const openRecordQuotation = () => {
+    setQuotationError(null);
+    setRecordingQuotation(true);
+  };
+  const openRecordAppraisal = () => {
+    setAppraisalError(null);
+    setRecordingAppraisal(true);
+  };
+  const openRecordApproval = () => {
+    setApprovalError(null);
+    setRecordingApproval(true);
+  };
+  const openFinanceDecisionDialog: Record<FinanceDecisionDialog, () => void> = {
+    RECORD_QUOTATION: openRecordQuotation,
+    RECORD_APPRAISAL: openRecordAppraisal,
+    RECORD_APPROVAL: openRecordApproval,
+  };
+
   // The lower documents · activity tabs are controlled so the live step can
   // send the operator to the documents it says are outstanding. The default is
   // unchanged, and a manual switch to Activity still goes through.
@@ -3533,12 +3965,12 @@ export function DealCockpitView({
   // sight. The position stays truthful; the action follows the verdict.
   const supplierRow = deal?.money?.parties.find((p) => p.party === "SUPPLIER");
   const supplierReceipt = deal?.money?.supplierReceipt;
-  const canSettleSupplier =
-    callerMaySettleSupplier &&
+  const supplierClaimSettleable =
     deal?.money?.settlesDirectToSupplier === true &&
     deal.money.routeKnown &&
     supplierRow?.position === "OWED_TO_DEALERSHIP" &&
     supplierReceipt?.actionable === true;
+  const canSettleSupplier = callerMaySettleSupplier && supplierClaimSettleable;
   // Named guidance for the one refusal the operator can act on. Every other
   // reason simply withholds the button, as before.
   const supplierGuidance =
@@ -3961,6 +4393,40 @@ export function DealCockpitView({
     }
   };
 
+  /**
+   * The live step's action with any VIEW-owned target resolved to the view's
+   * own handler (SCRUM-417) — the same setter the decision card, the
+   * documents tab and the money panel use, so the focus row opens THE dialog,
+   * not a copy of it. A target the view cannot honour becomes a reason, never
+   * a button that does nothing.
+   */
+  const resolveFocusAction = (action: WorkflowAction): WorkflowAction => {
+    if (action.unavailableReasonKey || !action.opens) return action;
+    switch (action.opens) {
+      case "RECORD_QUOTATION":
+      case "RECORD_APPRAISAL":
+      case "RECORD_APPROVAL":
+        return { ...action, onStart: openFinanceDecisionDialog[action.opens] };
+      case "DOCUMENTS":
+        return hasDocumentsPane
+          ? // Wired in the row to its own `onGoToDocuments`: a handler that
+            // reads the tab ref must not be bound while rendering
+            // (react-hooks/refs refuses binding it in this render-time call).
+            action
+          : { ...action, unavailableReasonKey: "DocumentsNeedUploader" };
+      case "SETTLE_SUPPLIER": {
+        if (canSettleSupplier) return { ...action, onStart: () => setSettlingSupplier(true) };
+        // Told apart, in the order the operator can act on: a disputed claim
+        // (the money panel's own guidance), a claim this caller may not settle,
+        // and a balance that is not settled from this screen at all.
+        let reason = "CashSettlementNotRecordedHere";
+        if (supplierGuidance) reason = "SupplierClaimDisputedGuidance";
+        else if (supplierClaimSettleable || deal?.money == null) reason = "SupplierSettlementNeedsPermission";
+        return { ...action, unavailableReasonKey: reason };
+      }
+    }
+  };
+
   const overviewProfit = financialOverview?.data?.financialSummary?.profit;
   const handoverManagementProfit = {
     managementProfitMinor: overviewProfit?.available ? overviewProfit.amountMinor : null,
@@ -4276,7 +4742,7 @@ export function DealCockpitView({
           owner={stageOwnerLabel(live, activeAppraisalProvider, t)}
           mirrorNote={stageShowsMirrorNote(live, activeAppraisalProvider)}
           blocker={live.blocker ? t(`Blocker${live.blocker}`) : undefined}
-          action={workflowAction?.stageKey === live.key ? workflowAction : undefined}
+          action={workflowAction?.stageKey === live.key ? resolveFocusAction(workflowAction) : undefined}
           outstandingDocuments={
             live.blocker === "DocumentsIncomplete"
               ? deal.documents.filter(
@@ -4511,18 +4977,9 @@ export function DealCockpitView({
               isOwnDeal={financeDecision.isOwnDeal}
               money={decisionMoney}
               t={t}
-              onRecordQuotation={() => {
-                setQuotationError(null);
-                setRecordingQuotation(true);
-              }}
-              onRecordAppraisal={() => {
-                setAppraisalError(null);
-                setRecordingAppraisal(true);
-              }}
-              onRecordApproved={() => {
-                setApprovalError(null);
-                setRecordingApproval(true);
-              }}
+              onRecordQuotation={openRecordQuotation}
+              onRecordAppraisal={openRecordAppraisal}
+              onRecordApproved={openRecordApproval}
               onCorrectApproved={() => {
                 setReopenError(null);
                 setReopeningApproval(true);
@@ -4653,10 +5110,11 @@ export function DealCockpitView({
             const documentsPane = documents ? (
               <DealDocumentsPanel
                 documents={documents.items}
+                history={documents.history}
                 checklist={deal.documents}
                 canUpload={documents.canUpload}
                 canVerify={documents.canVerify}
-                uploadingId={documents.uploadingId}
+                uploadingRuleIds={documents.uploadingRuleIds}
                 t={t}
                 onUpload={documents.onUpload}
                 onVerify={documents.onVerify}
@@ -4667,7 +5125,7 @@ export function DealCockpitView({
                 checklist={deal.documents}
                 canUpload={false}
                 canVerify={false}
-                uploadingId={null}
+                uploadingRuleIds={NO_UPLOADS}
                 t={t}
                 onUpload={() => {}}
                 onVerify={() => {}}
@@ -4914,6 +5372,7 @@ export function DealCockpitView({
           canApprove={creditDecision.canApprove}
           canReject={creditDecision.canReject}
           isOwnDeal={creditDecision.isOwnDeal}
+          documentsIncomplete={creditDecision.documentsIncomplete}
           t={t}
           onOpenChange={creditDecision.onOpenChange}
           onSubmit={creditDecision.onSubmit}
@@ -5000,7 +5459,19 @@ export function DealCockpitView({
  * that carries the action, which is exactly what this is; a spec scoped to this
  * block cannot pass against a stage name rendered somewhere else.
  */
-function StageFocusRow({
+/**
+ * The sentence above a step with nothing blocking it. A cash sale still in
+ * draft is not "nothing outstanding" — it is the thing outstanding (W3).
+ */
+function stageReadyKey(actionKey: string | undefined): string {
+  if (actionKey === "RegisterHandoverAction" || actionKey === "ActionConfirmHandover") {
+    return "StageReadyForHandoverAction";
+  }
+  if (actionKey === "CompleteCashSaleAction") return "StageCashSaleIsDraft";
+  return "StageReadyToProceed";
+}
+
+export function StageFocusRow({
   state,
   label,
   position,
@@ -5026,18 +5497,20 @@ function StageFocusRow({
   /** Whether the "AutoFlow only records their decision" sentence is TRUE here. */
   mirrorNote: boolean;
   blocker?: string;
-  action?: {
-    actionKey: string;
-    onStart: () => void;
-    unavailableReasonKey?: string;
-    unavailableDetail?: SettlementDenominationDetail;
-  };
+  /** Already resolved by the view: a present `onStart` is a button that works. */
+  action?: Omit<WorkflowAction, "stageKey">;
   outstandingDocuments: ReadonlyArray<{ ruleId: string; name: string }>;
   /** Absent when the screen has no documents tab to go to. */
   onGoToDocuments?: () => void;
   t: (key: string) => string;
 }>) {
   const icon = STAGE_ICON[state];
+  const primary =
+    action && action.unavailableReasonKey === undefined
+      ? action.opens === "DOCUMENTS"
+        ? onGoToDocuments
+        : action.onStart
+      : undefined;
 
   return (
     <Card
@@ -5089,8 +5562,11 @@ function StageFocusRow({
                 )}
                 {/* The documents are uploaded in the tab at the foot of the
                     page — far below this step on a phone. Offered only where
-                    that tab exists; the documents themselves do not move. */}
-                {outstandingDocuments.length > 0 && onGoToDocuments && (
+                    that tab exists, and only when the step has no button of
+                    its own: the button already goes there, and a second
+                    pointer to the same place would be two ways to do one
+                    thing. The documents themselves do not move. */}
+                {outstandingDocuments.length > 0 && onGoToDocuments && !primary && (
                   <button
                     type="button"
                     className="mt-1.5 inline-flex min-h-9 items-center gap-1 rounded-sm font-medium underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -5102,22 +5578,48 @@ function StageFocusRow({
                   </button>
                 )}
               </div>
-            ) : (
+            ) : action?.unavailableReasonKey ? null : (
+              // Not said above a refusal: "nothing is outstanding" over "this
+              // sale is still a draft" contradicts itself (SCRUM-417 visual gate).
               <p className="text-sm text-muted-foreground">
-                {action?.actionKey === "RegisterHandoverAction" || action?.actionKey === "ActionConfirmHandover"
-                  ? t("StageReadyForHandoverAction")
-                  : t("StageReadyToProceed")}
+                {t(stageReadyKey(action?.actionKey))}
               </p>
             )}
 
             {/* The action for the step this block NAMES. A step worth naming
                 is a step worth doing here — the one recommended action, and
                 exactly one. */}
-            {action && action.unavailableReasonKey === undefined && (
-              <div className="flex flex-wrap pt-1">
-                <Button size="lg" className="w-full sm:w-auto" onClick={action.onStart}>
+            {/* Why THIS is the next step, when that is not obvious from the
+                stage — said once, right above the button it explains. */}
+            {(primary || (action?.unavailableReasonKey && action.secondary)) && action?.noteKey && (
+              <p className="text-sm text-muted-foreground" data-testid="deal-next-step-note">
+                {t(action.noteKey)}
+              </p>
+            )}
+            {primary && action && (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-1">
+                <Button
+                  size="lg"
+                  className="w-full sm:w-auto"
+                  data-testid="deal-next-step-action"
+                  onClick={primary}
+                >
                   {t(action.actionKey)}
                 </Button>
+                {/* The quieter alternative the step must keep (a rejection
+                    that needs no documents). Weighted as a link so the eye
+                    lands on the one recommended action first. */}
+                {action.secondary && (
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="h-9 px-0 text-muted-foreground"
+                    data-testid="deal-next-step-secondary"
+                    onClick={action.secondary.onStart}
+                  >
+                    {t(action.secondary.actionKey)}
+                  </Button>
+                )}
               </div>
             )}
 
@@ -5125,6 +5627,20 @@ function StageFocusRow({
               is the dead end this screen exists to remove. */}
           {action?.unavailableReasonKey && (
             <p className="text-sm text-muted-foreground">{t(action.unavailableReasonKey)}</p>
+          )}
+          {/* The quieter alternative survives a withheld main step: an
+              approver who cannot touch the documents can still record the
+              rejection, which needs none (SCRUM-417 W1). */}
+          {action?.unavailableReasonKey && action.secondary && (
+            <Button
+              variant="link"
+              size="sm"
+              className="h-9 px-0"
+              data-testid="deal-next-step-secondary"
+              onClick={action.secondary.onStart}
+            >
+              {t(action.secondary.actionKey)}
+            </Button>
           )}
           {/* The figure the refusal is about, in the currency it is recorded
               in. Each money run is its own LTR isolate, or under an RTL base
