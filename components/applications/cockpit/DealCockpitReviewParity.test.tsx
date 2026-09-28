@@ -755,6 +755,47 @@ describe("documents — documents.updateDocumentStatus / upload, from the checkl
   });
 
   /**
+   * SCRUM-422 (Sonnet SCRUM422-R1): the server refuses every document write on
+   * a CLOSED or CANCELLED deal, so the checklist offers none — no Upload and no
+   * Verify that can only fail — while the stored file stays viewable.
+   */
+  test.each(["CLOSED", "CANCELLED"])("%s deal: the checklist is view-only", (status) => {
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VERIFY_FINANCE_DOCUMENTS);
+    queryResults.set(COCKPIT_QUERY, cockpit({ status }));
+    queryResults.set(GET_QUERY, application({ status }));
+    queryResults.set(DOCUMENTS_QUERY, [
+      { _id: "doc_1", ruleName: "National ID", status: "UPLOADED", fileUrl: "https://files/x.pdf" },
+      { _id: "doc_2", ruleName: "Salary slip", status: "MISSING", fileUrl: null },
+    ]);
+    renderCockpit();
+
+    const uploaded = screen.getByTestId("deal-document-doc_1");
+    expect(within(uploaded).queryByRole("button", { name: "Verify" })).toBeNull();
+    expect(within(uploaded).getByRole("button", { name: "ViewFile" })).toBeTruthy();
+    const missing = screen.getByTestId("deal-document-doc_2");
+    expect(within(missing).queryByText("Upload")).toBeNull();
+    expect(missing.querySelector('input[type="file"]')).toBeNull();
+  });
+
+  test("CONTROL — a REJECTED deal keeps its document controls (it can return to PENDING_DOCS)", () => {
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VERIFY_FINANCE_DOCUMENTS);
+    queryResults.set(COCKPIT_QUERY, cockpit({ status: "REJECTED" }));
+    queryResults.set(GET_QUERY, application({ status: "REJECTED" }));
+    queryResults.set(DOCUMENTS_QUERY, [
+      { _id: "doc_1", ruleName: "National ID", status: "UPLOADED", fileUrl: "https://files/x.pdf" },
+      { _id: "doc_2", ruleName: "Salary slip", status: "MISSING", fileUrl: null },
+    ]);
+    renderCockpit();
+
+    expect(within(screen.getByTestId("deal-document-doc_1")).getByRole("button", { name: "Verify" })).toBeTruthy();
+    expect(within(screen.getByTestId("deal-document-doc_2")).getByText("Upload")).toBeTruthy();
+  });
+
+  /**
    * SCRUM-421 (W2 / S417-1): a required rule added after the application was
    * created has no row. `getForApplication` lists it with `_id: null`; the
    * upload first materializes the row through `ensureApplicationDocument`,

@@ -92,6 +92,7 @@ import {
 } from "./RecordAppraisalDialog";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
+import { SETTLED_FINANCE_STATUSES } from "@/convex/utils/financeStatuses";
 import type { PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 // The actions the Finance Applications → Review dialog used to own, moved here
 // on the SAME mutations. Each is its own file so the container stays a wiring
@@ -953,6 +954,7 @@ export function DealCockpit({
   // not — see `canCloseDeal` below.
   const canFinalizeApplication = !permissionsLoading && hasPermission(PERMISSIONS.FINALIZE_FINANCED_DEAL);
   const canVerifyDocuments = !permissionsLoading && hasPermission(PERMISSIONS.VERIFY_FINANCE_DOCUMENTS);
+  const documentsSettled = deal != null && SETTLED_FINANCE_STATUSES.includes(deal.status);
   const canConfirmFinanceDisbursement =
     !permissionsLoading && hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
   const canResolveDeposits = !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_REQUESTS);
@@ -2353,8 +2355,10 @@ export function DealCockpit({
         }),
         // The server accepts an upload from either permission; verifying is
         // the narrower one. Same gates as Review, read from the same server.
-        canUpload: canCreateApplication || canVerifyDocuments,
-        canVerify: canVerifyDocuments,
+        // A CLOSED or CANCELLED deal's documents are settled record (SCRUM-422):
+        // the server refuses every write there, so none is offered.
+        canUpload: !documentsSettled && (canCreateApplication || canVerifyDocuments),
+        canVerify: !documentsSettled && canVerifyDocuments,
         uploadingRuleIds,
         onUpload: async (doc, file) => {
           if (uploadsInFlightRef.current.has(doc.ruleId)) return;
