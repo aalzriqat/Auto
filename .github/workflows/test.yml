@@ -322,6 +322,9 @@ jobs:
     steps:
     - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       with:
+        # Full history: the guardrails read their allowance from the target
+        # branch (origin/$GITHUB_BASE_REF) or, on push, the parent commit.
+        fetch-depth: 0
         persist-credentials: false
 
     - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
@@ -339,6 +342,11 @@ jobs:
 
     - name: Lint
       run: pnpm lint
+
+    # SCRUM-426: blocking file-size + import-boundary guardrails. Allowance comes
+    # from the target branch, never the PR tree (see quality/guardrails/check.mjs).
+    - name: Size and import guardrails (trusted target baseline)
+      run: pnpm guardrails
 
   dependency-audit:
     runs-on: ubuntu-latest
