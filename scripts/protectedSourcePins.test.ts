@@ -600,11 +600,37 @@ describe("protected source content pins", () => {
        * message changed. Read the hunks; do not take this note's word for
        * them. Same governance; both constants recomputed FROM THE FILE with
        * this test's own normalization.
+       *
+       * -- RENEWAL 2026-09-28 (5) - SCRUM-414 readiness reason codes
+       *
+       * Previous postimage, superseded by this entry (renewal (4) just above,
+       * PR #352 head 615dc7995):
+       *
+       *   bytes:  239908
+       *   sha256: c573d153b751c3b0e1860d0eebb2f294fc36aac0f91883cec4b51f2a530ad8b9
+       *
+       * The delta is confined to `getClosingReadiness` (read-only) and its
+       * private input helper: (1) `closingReadinessInputs` now delegates to a
+       * new private `closingReadinessInputsOrRefusal`, which returns the same
+       * two refusals as coded reasons instead of throwing; the wrapper throws
+       * the IDENTICAL English sentence, so `finalizeDeal`'s refusal text and
+       * order are unchanged; (2) each check is served through
+       * `closingReadinessCheckView`, adding `reasonCode` and (finance tier
+       * only) `reasonParams`; below the finance tier the reason is the
+       * per-check `WITHHELD_<KEY>` code with NO params and the existing plain
+       * sentence (redaction test in financedConsignedSettlement.test.ts,
+       * mutation-proven); (3) `unavailableReasonCode`/`unavailableReasonParams`
+       * beside `unavailableReason`, withheld the same way; (4) type imports
+       * from `../lib/closingReadinessReasonCodes`. No mutation, permission,
+       * schema or index changed. NOT yet reviewed by an independent seat at
+       * the time of this renewal. Read the hunks; do not take this note's
+       * word for them. Same governance; both constants recomputed FROM THE
+       * FILE with this test's own normalization.
        */
       file: "convex/applications.ts",
-      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)), then for SCRUM-407 automatic closing readiness (RENEWALs 2026-09-28, 2026-09-28 (2), (3) and (4)).
-      bytes: 239908,
-      sha256: "c573d153b751c3b0e1860d0eebb2f294fc36aac0f91883cec4b51f2a530ad8b9",
+      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)), then for SCRUM-407 automatic closing readiness (RENEWALs 2026-09-28, 2026-09-28 (2), (3) and (4)), then for SCRUM-414 readiness reason codes (RENEWAL 2026-09-28 (5)).
+      bytes: 243398,
+      sha256: "e1ce2d649656ca3cfe4e134acad649fef6a899bee387d4d976d706bde878c200",
     },
     {
       /**

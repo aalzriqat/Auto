@@ -11,12 +11,24 @@ import {
 } from "./financedSalePostingPlan";
 import {
   assertConfiguredFeesRecorded,
+  custodyForeignCurrencyLine,
   loadActiveFees,
   loadCustodyRecords,
   settlementDeductedActualMinor,
   settlementDeductedFees,
   summarizeReadableCustody,
+  unrecordedConfiguredFeePositions,
 } from "./settlementDeductions";
+import {
+  frozenPolicyExceedsLiveCapacity,
+  MAX_DEAL_CUSTODY_DECISION_RECORDS,
+  MAX_LIVE_DEAL_FEE_LINES,
+} from "./dealCostLimits";
+import type {
+  ClosingReadinessReason,
+  ClosingReadinessReasonCode,
+  ClosingReadinessReasonParams,
+} from "../../lib/closingReadinessReasonCodes";
 import { custodyLedgerFamilyRefusal } from "./custodySourceLedger";
 import { heldDepositRowsForVehicle } from "./saleCompletion";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
@@ -60,26 +72,44 @@ export function financedSaleRecognitionApplies(
  * configured position passes — it carries a real, reconciled actual — and the
  * configured positions themselves are proven by `assertConfiguredFeesRecorded`.
  */
-function costsClosableRefusal(liveFees: ReadonlyArray<Doc<"financeDealFees">>, currency: string): string | null {
+function costsClosableRefusal(liveFees: ReadonlyArray<Doc<"financeDealFees">>, currency: string): ClosingReadinessReason | null {
   if (liveFees.length === 0) {
-    return "No costs are itemized on this deal, so its accounting cannot be finalized. Record them, or a zero-cost line saying the dealership bore none, before finalizing.";
+    return reasonOf(
+      "COSTS_NONE",
+      "No costs are itemized on this deal, so its accounting cannot be finalized. Record them, or a zero-cost line saying the dealership bore none, before finalizing."
+    );
   }
   const foreign = liveFees.filter((fee) => fee.currency !== currency);
   if (foreign.length > 0) {
-    return `${foreign.length} cost line(s) on this deal are not in ${currency}, so its costs cannot be finalized until the records agree.`;
+    return reasonOf(
+      "COSTS_FOREIGN_CURRENCY",
+      `${foreign.length} cost line(s) on this deal are not in ${currency}, so its costs cannot be finalized until the records agree.`,
+      { count: foreign.length, currency }
+    );
   }
   const summary = summarizeFees([...liveFees]);
   if (summary.amountsUnreadable !== null) {
-    return "A cost amount on this deal is not a readable figure, so its accounting cannot be finalized until the line is corrected.";
+    return reasonOf(
+      "COSTS_AMOUNT_UNREADABLE",
+      "A cost amount on this deal is not a readable figure, so its accounting cannot be finalized until the line is corrected."
+    );
   }
   if (summary.linesAwaitingActual > 0) {
-    return `${summary.linesAwaitingActual} cost(s) on this deal have no actual amount recorded, so its accounting cannot be finalized. Record them before finalizing.`;
+    return reasonOf(
+      "COSTS_AWAITING_ACTUAL",
+      `${summary.linesAwaitingActual} cost(s) on this deal have no actual amount recorded, so its accounting cannot be finalized. Record them before finalizing.`,
+      { count: summary.linesAwaitingActual }
+    );
   }
   if (summary.linesAwaitingReconciliation > 0) {
-    return `${summary.linesAwaitingReconciliation} cost(s) on this deal have an amount nobody has checked, so its accounting cannot be finalized. Reconcile them before finalizing.`;
+    return reasonOf(
+      "COSTS_AWAITING_RECONCILIATION",
+      `${summary.linesAwaitingReconciliation} cost(s) on this deal have an amount nobody has checked, so its accounting cannot be finalized. Reconcile them before finalizing.`,
+      { count: summary.linesAwaitingReconciliation }
+    );
   }
   if (!summary.fullyReconciled) {
-    return "This deal's costs are not fully reconciled, so its accounting cannot be finalized.";
+    return reasonOf("COSTS_NOT_RECONCILED", "This deal's costs are not fully reconciled, so its accounting cannot be finalized.");
   }
   // The plan posts every non-zero deducted line to its treatment's account and
   // refuses a treatment that has none (TREATMENT_UNMAPPED) — asked here too, so
@@ -88,7 +118,12 @@ function costsClosableRefusal(liveFees: ReadonlyArray<Doc<"financeDealFees">>, c
     (fee) => fee.actualAmountMinor !== undefined && fee.actualAmountMinor !== 0 && treatmentPosting(fee.accountingTreatment) === null
   );
   if (unmapped !== undefined) {
-    return `"${unmapped.description?.trim() || humanizeFeeType(unmapped.feeType)}" is classified as ${unmapped.accountingTreatment}, which has no account to post to. Reclassify it before finalizing — it will not be posted to a general account instead.`;
+    const feeLabel = unmapped.description?.trim() || humanizeFeeType(unmapped.feeType);
+    return reasonOf(
+      "COSTS_TREATMENT_UNMAPPED",
+      `"${feeLabel}" is classified as ${unmapped.accountingTreatment}, which has no account to post to. Reclassify it before finalizing — it will not be posted to a general account instead.`,
+      { feeLabel, treatment: unmapped.accountingTreatment }
+    );
   }
   return null;
 }
@@ -107,14 +142,31 @@ function costsClosableRefusal(liveFees: ReadonlyArray<Doc<"financeDealFees">>, c
 function custodySettledRefusal(
   custodyRows: ReadonlyArray<Doc<"financeDealCustody">>,
   liveFees: ReadonlyArray<Doc<"financeDealFees">>
-): string | null {
+): ClosingReadinessReason | null {
   for (const row of custodyRows) {
     if (row.status === "OPEN") {
-      return "A custody record on this deal is still open. Settle what that person holds or is owed before finalizing.";
+      return reasonOf(
+        "CUSTODY_OPEN",
+        "A custody record on this deal is still open. Settle what that person holds or is owed before finalizing."
+      );
     }
-    const summary = summarizeReadableCustody(row, liveFees, "finalizing this deal");
+    let summary: ReturnType<typeof summarizeReadableCustody>;
+    try {
+      summary = summarizeReadableCustody(row, liveFees, "finalizing this deal");
+    } catch (error) {
+      // The shared predicate refuses in two ways; which one is read from the
+      // same rows it judged, so the code names the refusal it threw.
+      const message = messageOf(error);
+      const foreign = custodyForeignCurrencyLine(liveFees, row);
+      return foreign === undefined
+        ? reasonOf("CUSTODY_AMOUNT_UNREADABLE", message)
+        : reasonOf("CUSTODY_CURRENCY_MISMATCH", message, { lineCurrency: foreign.currency, custodyCurrency: row.currency });
+    }
     if (!summary.settled && row.status !== "WRITTEN_OFF") {
-      return "A closed custody record on this deal no longer balances — its costs changed after it was reconciled. Reopen it and settle it before finalizing.";
+      return reasonOf(
+        "CUSTODY_NO_LONGER_BALANCES",
+        "A closed custody record on this deal no longer balances — its costs changed after it was reconciled. Reopen it and settle it before finalizing."
+      );
     }
   }
   return null;
@@ -140,8 +192,16 @@ export type ClosingReadinessCheckStatus = "READY" | "BLOCKED" | "UNAVAILABLE" | 
 export interface ClosingReadinessCheck {
   key: ClosingReadinessCheckKey;
   status: ClosingReadinessCheckStatus;
-  /** Operator-facing: what is missing and what to do. Null when READY or NOT_APPLICABLE. */
+  /**
+   * The English sentence: what is missing and what to do. Kept as the
+   * diagnostic and as the fallback for a client that does not know
+   * `reasonCode` (SCRUM-414). Null when READY or NOT_APPLICABLE.
+   */
   reason: string | null;
+  /** What the screen translates (`ClosingReason_<code>`). Null exactly when `reason` is. */
+  reasonCode: ClosingReadinessReasonCode | null;
+  /** Values the translation is filled with; null when the reason has none. */
+  reasonParams: ClosingReadinessReasonParams | null;
 }
 
 export interface ClosingReadiness {
@@ -171,6 +231,26 @@ function messageOf(error: unknown): string {
   throw error;
 }
 
+/** A coded readiness reason with its English diagnostic (SCRUM-414). */
+function reasonOf(
+  code: ClosingReadinessReasonCode,
+  message: string,
+  params?: ClosingReadinessReasonParams
+): ClosingReadinessReason {
+  return params === undefined ? { code, message } : { code, params, message };
+}
+
+/**
+ * Why the one bounded read of the deal's rows failed, as a code: each of the
+ * two reads refuses in exactly one way, its bound.
+ */
+function rowsUnavailableReason(read: "FEES" | "CUSTODY", error: unknown): ClosingReadinessReason {
+  const message = messageOf(error);
+  return read === "FEES"
+    ? reasonOf("DEAL_ROWS_TOO_MANY_COST_LINES", message, { max: MAX_LIVE_DEAL_FEE_LINES })
+    : reasonOf("DEAL_ROWS_TOO_MANY_CUSTODY_RECORDS", message, { max: MAX_DEAL_CUSTODY_DECISION_RECORDS });
+}
+
 /**
  * THE accounting readiness of a deal for finalization — one read-only
  * evaluator for the deal screen and the finalize door (SCRUM-407 P1.4).
@@ -191,10 +271,16 @@ export async function evaluateClosingReadiness(
 ): Promise<ClosingReadinessEvaluation> {
   const planCovered = financedSaleRecognitionApplies(app, opts);
   const checks: ClosingReadinessCheck[] = [];
-  const add = (key: ClosingReadinessCheckKey, status: ClosingReadinessCheckStatus, reason: string | null) => {
-    checks.push({ key, status, reason });
+  const add = (key: ClosingReadinessCheckKey, status: ClosingReadinessCheckStatus, reason: ClosingReadinessReason | null) => {
+    checks.push({
+      key,
+      status,
+      reason: reason?.message ?? null,
+      reasonCode: reason?.code ?? null,
+      reasonParams: reason?.params ?? null,
+    });
   };
-  const planOnly = (key: ClosingReadinessCheckKey, judge: () => [ClosingReadinessCheckStatus, string | null]) => {
+  const planOnly = (key: ClosingReadinessCheckKey, judge: () => [ClosingReadinessCheckStatus, ClosingReadinessReason | null]) => {
     if (!planCovered) add(key, "NOT_APPLICABLE", null);
     else add(key, ...judge());
   };
@@ -208,12 +294,18 @@ export async function evaluateClosingReadiness(
     if (app.approvedDealerPurchaseAmountMinor === undefined) {
       return [
         "UNAVAILABLE",
-        "The finance company's approved purchase amount is not recorded on this deal yet, so what it will actually remit to the dealership is not known. Record the approval before finalizing.",
+        reasonOf(
+          "REMITTANCE_APPROVAL_MISSING",
+          "The finance company's approved purchase amount is not recorded on this deal yet, so what it will actually remit to the dealership is not known. Record the approval before finalizing."
+        ),
       ];
     }
     return [
       "BLOCKED",
-      "What this financing company will actually remit to the dealership is not known on this deal, so the amount it owes cannot be recorded. Resolve the reconciliation note on it before finalizing.",
+      reasonOf(
+        "REMITTANCE_UNKNOWN",
+        "What this financing company will actually remit to the dealership is not known on this deal, so the amount it owes cannot be recorded. Resolve the reconciliation note on it before finalizing."
+      ),
     ];
   });
 
@@ -223,26 +315,27 @@ export async function evaluateClosingReadiness(
   // The two reads are independent; a failure of the cost-line read is reported
   // ahead of the custody read's, as when they ran one after the other.
   let rows: { fees: Array<Doc<"financeDealFees">>; custody: Array<Doc<"financeDealCustody">> } | null = null;
-  let rowsUnavailable: string | null = null;
+  let rowsUnavailable: ClosingReadinessReason | null = null;
   const [feesRead, custodyRead] = await Promise.allSettled([
     loadActiveFees(ctx, app._id),
     loadCustodyRecords(ctx, app._id, "finalizing this deal"),
   ]);
-  if (feesRead.status === "rejected") rowsUnavailable = messageOf(feesRead.reason);
-  else if (custodyRead.status === "rejected") rowsUnavailable = messageOf(custodyRead.reason);
+  if (feesRead.status === "rejected") rowsUnavailable = rowsUnavailableReason("FEES", feesRead.reason);
+  else if (custodyRead.status === "rejected") rowsUnavailable = rowsUnavailableReason("CUSTODY", custodyRead.reason);
   else rows = { fees: feesRead.value, custody: custodyRead.value };
 
   /**
    * One check judged on the rows just read: UNAVAILABLE when they could not be
    * read; otherwise READY, or BLOCKED with the refusal. A ConvexError thrown
-   * while judging becomes `onThrow` with its message — stated per check, since
-   * a refusal (BLOCKED) and an unreadable input (UNAVAILABLE) are different
-   * verdicts. `planOnly` checks are NOT_APPLICABLE off the plan's route.
+   * while judging becomes `onThrow` with its message, coded `throwCode` —
+   * stated per check, since a refusal (BLOCKED) and an unreadable input
+   * (UNAVAILABLE) are different verdicts. `planOnly` checks are
+   * NOT_APPLICABLE off the plan's route.
    */
   const onRows = async (
     key: ClosingReadinessCheckKey,
-    spec: { onThrow: "BLOCKED" | "UNAVAILABLE"; planOnly?: boolean },
-    judge: (read: NonNullable<typeof rows>) => string | null | Promise<string | null>
+    spec: { onThrow: "BLOCKED" | "UNAVAILABLE"; throwCode?: ClosingReadinessReasonCode; planOnly?: boolean },
+    judge: (read: NonNullable<typeof rows>) => ClosingReadinessReason | null | Promise<ClosingReadinessReason | null>
   ) => {
     if (spec.planOnly && !planCovered) return add(key, "NOT_APPLICABLE", null);
     if (rows === null) return add(key, "UNAVAILABLE", rowsUnavailable);
@@ -250,7 +343,7 @@ export async function evaluateClosingReadiness(
       const refusal = await judge(rows);
       add(key, refusal === null ? "READY" : "BLOCKED", refusal);
     } catch (error) {
-      add(key, spec.onThrow, messageOf(error));
+      add(key, spec.onThrow, reasonOf(spec.throwCode ?? "CHECK_REFUSED", messageOf(error)));
     }
   };
 
@@ -258,15 +351,38 @@ export async function evaluateClosingReadiness(
   // actual on the record — on EVERY route. A deal whose snapshot configures
   // nothing passes through untouched.
   await onRows("CONFIGURED_FEES_RECORDED", { onThrow: "BLOCKED" }, ({ fees }) => {
-    assertConfiguredFeesRecorded(app.companyRuleSnapshot, fees, "finalizing");
-    return null;
+    try {
+      assertConfiguredFeesRecorded(app.companyRuleSnapshot, fees, "finalizing");
+      return null;
+    } catch (error) {
+      // The predicate refuses in exactly two ways; which one is re-read from
+      // the same snapshot and rows it judged.
+      const message = messageOf(error);
+      const templates = app.companyRuleSnapshot?.feeTemplates;
+      return frozenPolicyExceedsLiveCapacity(templates)
+        ? reasonOf("CONFIGURED_FEES_POLICY_OVER_CAPACITY", message, {
+            templateCount: templates?.length ?? 0,
+            max: MAX_LIVE_DEAL_FEE_LINES,
+          })
+        : reasonOf("CONFIGURED_FEES_MISSING", message, {
+            count: unrecordedConfiguredFeePositions(app.companyRuleSnapshot, fees).length,
+          });
+    }
   });
 
   // Every custody record and custody-paid line must be on the books as a
   // complete family — on EVERY route. Judged on the LEDGER as well as the rows;
   // a ledger that cannot be read is UNAVAILABLE, not a refusal.
-  await onRows("CUSTODY_ON_LEDGER", { onThrow: "UNAVAILABLE" }, ({ fees, custody }) =>
-    custodyLedgerFamilyRefusal(ctx, app.orgId, app._id, custody, fees, "finalizing this deal")
+  // The ledger proof has many refusals, whose detail (keys, versions, outbox
+  // errors) stays in the English diagnostic: one code for "not on the books",
+  // one for "could not be proven" (SCRUM-414).
+  await onRows(
+    "CUSTODY_ON_LEDGER",
+    { onThrow: "UNAVAILABLE", throwCode: "CUSTODY_LEDGER_UNVERIFIABLE" },
+    async ({ fees, custody }) => {
+      const refusal = await custodyLedgerFamilyRefusal(ctx, app.orgId, app._id, custody, fees, "finalizing this deal");
+      return refusal === null ? null : reasonOf("CUSTODY_NOT_ON_LEDGER", refusal);
+    }
   );
 
   await onRows("CUSTODY_SETTLED", { onThrow: "BLOCKED" }, ({ fees, custody }) => custodySettledRefusal(custody, fees));
@@ -282,7 +398,13 @@ export async function evaluateClosingReadiness(
     app.submittedQuotationMinor !== undefined &&
     app.approvedDealerPurchaseAmountMinor !== undefined &&
     app.customerFirstPaymentMinor === undefined
-      ? ["BLOCKED", "The customer's first payment is not recorded on this deal, so its funding split cannot be established. Record it before finalizing."]
+      ? [
+          "BLOCKED",
+          reasonOf(
+            "FIRST_PAYMENT_MISSING",
+            "The customer's first payment is not recorded on this deal, so its funding split cannot be established. Record it before finalizing."
+          ),
+        ]
       : ["READY", null]
   );
 
@@ -296,7 +418,13 @@ export async function evaluateClosingReadiness(
       // Asked only on the plan's route, which requires a configured company.
       financierIsConfiguredExternal: true,
     });
-    return invoice.ok ? ["READY", null] : ["BLOCKED", invoice.refusal.message];
+    if (invoice.ok) return ["READY", null];
+    // The plan's own code says MISSING for an absent AND an unusable amount;
+    // the screen tells the two apart, since the action differs.
+    let code: ClosingReadinessReasonCode = "LEGAL_INVOICE_UNUSABLE";
+    if (invoice.refusal.code === "LEGAL_INVOICE_WRONG_RECIPIENT") code = "LEGAL_INVOICE_WRONG_RECIPIENT";
+    else if (app.legalInvoiceAmountMinor === undefined) code = "LEGAL_INVOICE_MISSING";
+    return ["BLOCKED", reasonOf(code, invoice.refusal.message)];
   });
 
   const state = overallReadinessState(checks);
@@ -307,10 +435,29 @@ export async function evaluateClosingReadiness(
     : { ready: false, readiness };
 }
 
-/** The refusal for the first condition that is not met, thrown uncaught before the first write. */
-function closingRefusal(readiness: ClosingReadiness): ConvexError<string> {
+/** What a refused finalize carries: the English sentence, and the code + params to translate it by (SCRUM-414). */
+export type ClosingReadinessRefusalData = {
+  message: string;
+  code: ClosingReadinessReasonCode;
+  params?: ClosingReadinessReasonParams;
+};
+
+/**
+ * The refusal for the first condition that is not met, thrown uncaught before
+ * the first write. Its data carries the English sentence as `message` — what
+ * `getErrorMessage` shows, and what the error's own message contains — plus
+ * the same code and params the readiness panel translates (SCRUM-414).
+ */
+function closingRefusal(readiness: ClosingReadiness): ConvexError<ClosingReadinessRefusalData> {
   const unmet = readiness.checks.find((check) => check.status === "BLOCKED" || check.status === "UNAVAILABLE");
-  return new ConvexError(unmet?.reason ?? "This deal is not ready to be finalized.");
+  if (unmet?.reason == null || unmet.reasonCode === null) {
+    return new ConvexError<ClosingReadinessRefusalData>({ message: "This deal is not ready to be finalized.", code: "NOT_READY" });
+  }
+  return new ConvexError<ClosingReadinessRefusalData>(
+    unmet.reasonParams === null
+      ? { message: unmet.reason, code: unmet.reasonCode }
+      : { message: unmet.reason, code: unmet.reasonCode, params: unmet.reasonParams }
+  );
 }
 
 export async function resolveFinancedSalePlan(

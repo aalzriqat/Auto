@@ -379,6 +379,9 @@ describe("SN3-1 — confirmDisbursement when the deal's pinned currency ≠ the 
     // finalizing refuses with, rather than an empty checklist.
     expect(unavailable.checks).toHaveLength(0);
     expect(unavailable.unavailableReason ?? "").toMatch(/organization's currency is now USD/i);
+    // SCRUM-414: the same refusal as a code + params the screen translates.
+    expect(unavailable.unavailableReasonCode).toBe("READINESS_CURRENCY_DRIFT");
+    expect(unavailable.unavailableReasonParams).toEqual({ recordedCurrency: "JOD", orgCurrency: "USD" });
 
     // Below the finance tier the refusal (which names currencies) is withheld
     // for a plain sentence — the SCRUM-117 read boundary on this new field.
@@ -395,6 +398,10 @@ describe("SN3-1 — confirmDisbursement when the deal's pinned currency ≠ the 
     expect(withheld.moneyWithheld).toBe(true);
     expect(withheld.unavailableReason).toMatch(/cannot be determined from its current records/);
     expect(withheld.unavailableReason).not.toMatch(/USD|JOD/);
+    // SCRUM-414: a withheld code, and no params — the currencies are the detail withheld.
+    expect(withheld.unavailableReasonCode).toBe("WITHHELD_UNAVAILABLE");
+    expect(withheld).not.toHaveProperty("unavailableReasonParams");
+    expect(JSON.stringify(withheld)).not.toMatch(/USD|JOD/);
 
     // Restoring the setting is the only change, and the verdict follows it.
     await driftOrgCurrencyOutOfContract(s, "JOD");

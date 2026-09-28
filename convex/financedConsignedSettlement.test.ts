@@ -8497,6 +8497,18 @@ describe("SCRUM-407: automatic closing readiness", () => {
       await expect(
         s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId })
       ).rejects.toThrow(/no account to post to/i);
+      // SCRUM-414: the finalize door's refusal names the same code the panel
+      // translates, alongside the English it has always carried.
+      expect(costs).toMatchObject({ reasonCode: "COSTS_TREATMENT_UNMAPPED", reasonParams: { treatment: "REFUNDABLE_DEPOSIT" } });
+      await expect(
+        s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId })
+      ).rejects.toMatchObject({
+        data: expect.objectContaining({
+          code: "COSTS_TREATMENT_UNMAPPED",
+          params: expect.objectContaining({ treatment: "REFUNDABLE_DEPOSIT" }),
+          message: expect.stringMatching(/no account to post to/i),
+        }),
+      });
     });
   });
 
@@ -8526,6 +8538,14 @@ describe("SCRUM-407: automatic closing readiness", () => {
         },
       });
       await openCustodyFor(s, applicationId, 700 * SCALE);
+      // SCRUM-414: a reason whose params name currencies, so the redaction
+      // below has params to withhold.
+      const foreignFeeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, {
+        expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
+        feeType: "LICENSING", paidBy: "DEALER", paidTo: "GOVERNMENT", accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+        actualAmountMinor: 40 * SCALE,
+      });
+      await s.t.run((ctx) => ctx.db.patch(foreignFeeId, { currency: "USD" }));
 
       const full = await s.asUser.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
       expect(full.state).toBe("BLOCKED");
@@ -8546,6 +8566,25 @@ describe("SCRUM-407: automatic closing readiness", () => {
       // The same checks, the same verdicts — only the money-bearing detail is withheld.
       expect(redacted.checks.map((check) => [check.key, check.status])).toEqual(full.checks.map((check) => [check.key, check.status]));
       expect(JSON.stringify(redacted)).not.toContain(String(VEHICLE_PRICE * SCALE));
+
+      // SCRUM-414: the finance caller gets codes, with params where the reason
+      // has figures; below the tier every reason is the per-check WITHHELD code
+      // with NO params and none of the evaluator's diagnostic text.
+      expect(full.checks.find((check) => check.key === "CUSTODY_SETTLED")).toMatchObject({ reasonCode: "CUSTODY_OPEN" });
+      expect(full.checks.find((check) => check.key === "COSTS_CLOSABLE")).toMatchObject({
+        reasonCode: "COSTS_FOREIGN_CURRENCY", reasonParams: { count: 1, currency: "JOD" },
+      });
+      for (const check of redacted.checks) {
+        const original = full.checks.find((row) => row.key === check.key)!;
+        expect(check).not.toHaveProperty("reasonParams");
+        if (original.reason === null) {
+          expect(check.reasonCode).toBeNull();
+          continue;
+        }
+        expect(check.reasonCode).toBe(`WITHHELD_${check.key}`);
+        expect(check.reason).not.toBe(original.reason);
+      }
+      expect(JSON.stringify(redacted)).not.toMatch(/reasonParams|USD|JOD/);
     });
   });
 });

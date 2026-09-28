@@ -31,8 +31,14 @@ import {
   financedSaleRecognitionDate,
   evaluateClosingReadiness,
   type ClosingReadiness,
+  type ClosingReadinessCheck,
   type ClosingReadinessCheckKey,
 } from "./utils/financedSaleRecognition";
+import type {
+  ClosingReadinessReason,
+  ClosingReadinessReasonCode,
+  ClosingReadinessReasonParams,
+} from "../lib/closingReadinessReasonCodes";
 import { loadCustodyRecords } from "./utils/settlementDeductions";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
@@ -3734,17 +3740,79 @@ async function closingReadinessInputs(
   app: Doc<"financeApplications">,
   operation: string
 ): Promise<{ settlesDirect: boolean; currency: string }> {
-  assertSupportedDenomination(app.economicsCurrency, operation);
+  const result = await closingReadinessInputsOrRefusal(ctx, app, operation);
+  if (!result.ok) throw new ConvexError(result.refusal.message);
+  return result.inputs;
+}
+
+/**
+ * `closingReadinessInputs`, with its refusal returned as a coded reason
+ * (SCRUM-414) rather than thrown, so the readiness query can name WHICH input
+ * is missing without re-deriving it. The English is the exact sentence the
+ * finalize door throws.
+ */
+async function closingReadinessInputsOrRefusal(
+  ctx: QueryCtx | MutationCtx,
+  app: Doc<"financeApplications">,
+  operation: string
+): Promise<
+  | { ok: true; inputs: { settlesDirect: boolean; currency: string } }
+  | { ok: false; refusal: ClosingReadinessReason }
+> {
+  try {
+    assertSupportedDenomination(app.economicsCurrency, operation);
+  } catch (error) {
+    if (error instanceof ConvexError && typeof error.data === "string") {
+      return { ok: false, refusal: { code: "READINESS_INPUTS_UNAVAILABLE", message: error.data } };
+    }
+    throw error;
+  }
   const orgCurrencyNow = await getOrgCurrency(ctx, app.orgId);
   if (app.economicsCurrency !== undefined && app.economicsCurrency !== orgCurrencyNow) {
-    throw new ConvexError(
-      `This deal's figures were recorded in ${app.economicsCurrency}, but the organization's currency is now ${orgCurrencyNow}. A deal is finalized in the currency its figures were recorded in — restore the organization's currency to ${app.economicsCurrency} before finalizing it.`
-    );
+    return {
+      ok: false,
+      refusal: {
+        code: "READINESS_CURRENCY_DRIFT",
+        params: { recordedCurrency: app.economicsCurrency, orgCurrency: orgCurrencyNow },
+        message: `This deal's figures were recorded in ${app.economicsCurrency}, but the organization's currency is now ${orgCurrencyNow}. A deal is finalized in the currency its figures were recorded in — restore the organization's currency to ${app.economicsCurrency} before finalizing it.`,
+      },
+    };
   }
   return {
-    settlesDirect: await settlesDirectToSupplier(ctx, app),
-    currency: app.economicsCurrency ?? orgCurrencyNow,
+    ok: true,
+    inputs: {
+      settlesDirect: await settlesDirectToSupplier(ctx, app),
+      currency: app.economicsCurrency ?? orgCurrencyNow,
+    },
   };
+}
+
+/** One readiness check as the deal screen is served it. */
+type ClosingReadinessCheckView = {
+  key: ClosingReadinessCheckKey;
+  status: ClosingReadinessCheck["status"];
+  /** The English diagnostic (or, below the finance tier, the plain withheld sentence). */
+  reason: string | null;
+  /** Optional in the type so a client built before SCRUM-414 still type-checks; the query always sets it. */
+  reasonCode?: ClosingReadinessReasonCode | null;
+  /** Present only to the finance tier, and only when the reason has figures. */
+  reasonParams?: ClosingReadinessReasonParams;
+};
+
+/**
+ * Below the finance tier every reason becomes the per-check WITHHELD code with
+ * NO params and none of the evaluator's text: a param can be a currency or an
+ * amount, so it is withheld with the sentence it fills (SCRUM-117, SCRUM-414).
+ */
+function closingReadinessCheckView(check: ClosingReadinessCheck, mayReadMoney: boolean): ClosingReadinessCheckView {
+  const { key, status } = check;
+  if (check.reason === null) return { key, status, reason: null, reasonCode: null };
+  if (!mayReadMoney) {
+    return { key, status, reason: WITHHELD_READINESS_REASON[key], reasonCode: `WITHHELD_${key}` };
+  }
+  return check.reasonParams === null
+    ? { key, status, reason: check.reason, reasonCode: check.reasonCode }
+    : { key, status, reason: check.reason, reasonCode: check.reasonCode, reasonParams: check.reasonParams };
 }
 
 /**
@@ -3783,32 +3851,39 @@ export const getClosingReadiness = query({
 
     let readiness: ClosingReadiness = { state: "UNAVAILABLE", checks: [] };
     /** Why no verdict could be formed — set only when the evaluator refused. */
-    let unavailableReason: string | null = null;
+    let unavailable: ClosingReadinessReason | null = null;
     if (open) {
       try {
-        readiness = (
-          await evaluateClosingReadiness(
-            ctx,
-            app,
-            await closingReadinessInputs(ctx, app, "checking this deal's closing readiness")
-          )
-        ).readiness;
+        const inputs = await closingReadinessInputsOrRefusal(ctx, app, "checking this deal's closing readiness");
+        if (inputs.ok) readiness = (await evaluateClosingReadiness(ctx, app, inputs.inputs)).readiness;
+        else unavailable = inputs.refusal;
       } catch (error) {
         if (!(error instanceof ConvexError)) throw error;
-        unavailableReason =
-          mayReadMoney && typeof error.data === "string" ? error.data : WITHHELD_UNAVAILABLE_READINESS_REASON;
+        unavailable = {
+          code: "READINESS_INPUTS_UNAVAILABLE",
+          message: typeof error.data === "string" ? error.data : WITHHELD_UNAVAILABLE_READINESS_REASON,
+        };
       }
+    }
+
+    let unavailableView: {
+      unavailableReason: string | null;
+      /** Optional in the type only, for clients built before SCRUM-414; always set. */
+      unavailableReasonCode?: ClosingReadinessReasonCode | null;
+      unavailableReasonParams?: ClosingReadinessReasonParams;
+    } = { unavailableReason: null, unavailableReasonCode: null };
+    if (unavailable !== null && !mayReadMoney) {
+      unavailableView = { unavailableReason: WITHHELD_UNAVAILABLE_READINESS_REASON, unavailableReasonCode: "WITHHELD_UNAVAILABLE" };
+    } else if (unavailable !== null) {
+      unavailableView = { unavailableReason: unavailable.message, unavailableReasonCode: unavailable.code };
+      if (unavailable.params !== undefined) unavailableView.unavailableReasonParams = unavailable.params;
     }
 
     return {
       state: readiness.state,
       open,
-      checks: readiness.checks.map((check) => ({
-        key: check.key,
-        status: check.status,
-        reason: check.reason !== null && !mayReadMoney ? WITHHELD_READINESS_REASON[check.key] : check.reason,
-      })),
-      unavailableReason,
+      checks: readiness.checks.map((check) => closingReadinessCheckView(check, mayReadMoney)),
+      ...unavailableView,
       moneyWithheld: !mayReadMoney,
     };
   },

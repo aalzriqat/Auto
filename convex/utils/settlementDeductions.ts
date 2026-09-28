@@ -161,7 +161,7 @@ export function custodyActualExpensesMinor(
 }
 
 /** The live line charged to this record that is not in the record's currency, if any (R5, F4). */
-function custodyForeignCurrencyLine(
+export function custodyForeignCurrencyLine(
   liveFees: ReadonlyArray<Doc<"financeDealFees">>,
   custody: Pick<Doc<"financeDealCustody">, "_id" | "currency">
 ): Doc<"financeDealFees"> | undefined {
