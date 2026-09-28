@@ -54,7 +54,9 @@ vi.mock("convex/react", async () => {
     useQuery: (reference: never, args: unknown) => {
       const name = getFunctionName(reference);
       stubs.queryArgs.set(name, args);
-      return stubs.queryResults.get(name);
+      // As the real hook: a skipped query returns undefined, so a read this
+      // caller cannot make can never hand the screen data (round 2, W1).
+      return args === "skip" ? undefined : stubs.queryResults.get(name);
     },
     useMutation: (reference: never) => {
       const name = getFunctionName(reference);
@@ -226,8 +228,10 @@ describe("G6 — credit approval waits on the documents the server requires", ()
     permissions.add(PERMISSIONS.REVIEW_FINANCE_APPLICATION);
     // This caller can also upload the missing document, so the documents step
     // is one they can take. Without it the step is withheld with a reason
-    // (W1) — see the status × capability matrix below.
+    // (W1) — see the status × capability matrix below. It also reads the
+    // document rows the panel's controls sit on (round 2, S417-R2-1).
     permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
     queryResults.set(COCKPIT_QUERY, underReview(false));
     renderCockpit();
 
@@ -377,6 +381,7 @@ describe("G5 — the documents step is an action that opens and focuses the chec
 
   test("the primary action switches to the Documents tab and focuses it", async () => {
     permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
     queryResults.set(COCKPIT_QUERY, delivery());
     renderCockpit();
 
@@ -417,11 +422,20 @@ describe("W1 — the documents step matches what this caller can do to the outst
   type Role = keyof typeof ROLES;
   const STATUSES = ["MISSING", "UPLOADED", "REJECTED", "VERIFIED", "WAIVED"] as const;
   type Status = (typeof STATUSES)[number];
+  /**
+   * Round 2 (Codex S417-R2-1 = Sol R2-1): the panel's controls sit on
+   * `documents.getForApplication`, which takes `view:finance_applications`
+   * and is SKIPPED without it — so a writer who cannot read the rows would be
+   * sent to a read-only checklist. Swept as its own dimension.
+   */
+  const READS = ["with view", "without view"] as const;
+  type Read = (typeof READS)[number];
 
   /** undefined = the step is a working button; a string = the reason shown instead. */
-  function expected(status: Status, role: Role): string | undefined {
+  function expected(status: Status, role: Role, read: Read): string | undefined {
     if (role === "neither") return "DocumentsNeedUploader";
     if (status === "UPLOADED" && role === "create only") return "DocumentsAwaitVerifier";
+    if (read === "without view") return "DocumentsNeedReadAccess";
     return undefined;
   }
 
@@ -452,10 +466,12 @@ describe("W1 — the documents step matches what this caller can do to the outst
   }
 
   const cases = (["CREDIT", "DELIVERY"] as const).flatMap((stage) =>
-    STATUSES.flatMap((status) => (Object.keys(ROLES) as Role[]).map((role) => [stage, status, role] as const))
+    STATUSES.flatMap((status) =>
+      (Object.keys(ROLES) as Role[]).flatMap((role) => READS.map((read) => [stage, status, role, read] as const))
+    )
   );
 
-  test.each(cases)("%s stage · document %s · caller %s", (stage, status, role) => {
+  test.each(cases)("%s stage · document %s · caller %s · %s", (stage, status, role, read) => {
     // The credit stage's caller always holds the credit permissions, so the
     // stage's own branch applies; the documents authority is what varies.
     if (stage === "CREDIT") {
@@ -463,6 +479,7 @@ describe("W1 — the documents step matches what this caller can do to the outst
       permissions.add(PERMISSIONS.REVIEW_FINANCE_APPLICATION);
     }
     for (const permission of ROLES[role]) permissions.add(permission);
+    if (read === "with view") permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
     queryResults.set(COCKPIT_QUERY, stagesFor(stage, status));
     renderCockpit();
     const text = step().textContent ?? "";
@@ -476,12 +493,16 @@ describe("W1 — the documents step matches what this caller can do to the outst
       return;
     }
 
-    const reason = expected(status, role);
+    const reason = expected(status, role, read);
     if (reason === undefined) {
       expect(stepButton()?.textContent).toBe(documentsKey);
     } else {
       expect(stepButton()).toBeNull();
       expect(text).toContain(reason);
+      // One reason, never two stacked: the read reason only when it is THE reason.
+      for (const other of ["DocumentsNeedUploader", "DocumentsAwaitVerifier", "DocumentsNeedReadAccess"]) {
+        if (other !== reason) expect(text).not.toContain(other);
+      }
     }
     if (stage === "CREDIT") {
       // Whatever happens to the documents step, a rejection needs no
@@ -494,6 +515,7 @@ describe("W1 — the documents step matches what this caller can do to the outst
 
   test("mixed: an uploaded document and a missing one — a create-only caller can still upload the missing one", () => {
     permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
     queryResults.set(
       COCKPIT_QUERY,
       cockpit(
@@ -529,6 +551,95 @@ describe("W1 — the documents step matches what this caller can do to the outst
     renderCockpit();
     expect(stepButton()).toBeNull();
     expect(step().textContent).toContain("DocumentsAwaitVerifier");
+  });
+});
+
+/**
+ * Round 2 (Codex S417-R2-1 = Sol R2-1): the DESTINATION, not just the button.
+ * A custom role may hold an upload or verify permission without
+ * `view:finance_applications`. `documents.getForApplication` needs that read,
+ * so for this role the documents pane is the read-only checklist — the step
+ * must say so instead of sending them there. With the read, clicking the step
+ * lands on a panel that carries the control.
+ */
+describe("W1 round 2 — the documents step lands on a panel with a control this caller can use", () => {
+  const DOCUMENTS_QUERY = "documents:getForApplication";
+  const MISSING_DOC = { _id: "doc_1", ruleId: "r1", ruleName: "National ID", status: "MISSING", fileUrl: null };
+
+  function atStage(stage: "CREDIT" | "DELIVERY") {
+    const documents = [{ ruleId: "r1", name: "National ID", required: true, status: "MISSING" }];
+    return stage === "CREDIT"
+      ? cockpit(
+          "UNDER_REVIEW",
+          [
+            { key: "APPLICATION", state: "COMPLETE", authority: "DEALER" },
+            { key: "CREDIT_DECISION", state: "BLOCKED", blocker: "AwaitingCreditDecision", authority: "MIRROR" },
+            { key: "DELIVERY_ACTIONS", state: "PENDING", authority: "DEALER" },
+          ],
+          { documents }
+        )
+      : cockpit(
+          "APPROVED",
+          [{ key: "DELIVERY_ACTIONS", state: "BLOCKED", blocker: "DocumentsIncomplete", authority: "DEALER" }],
+          { documents }
+        );
+  }
+
+  const ROLES = {
+    "create only": [PERMISSIONS.CREATE_FINANCE_APPLICATION],
+    "verify only": [PERMISSIONS.VERIFY_FINANCE_DOCUMENTS],
+  } as const;
+  const cases = (["CREDIT", "DELIVERY"] as const).flatMap((stage) =>
+    (Object.keys(ROLES) as Array<keyof typeof ROLES>).map((role) => [stage, role] as const)
+  );
+
+  function grant(stage: "CREDIT" | "DELIVERY", role: keyof typeof ROLES) {
+    if (stage === "CREDIT") {
+      permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+      permissions.add(PERMISSIONS.REVIEW_FINANCE_APPLICATION);
+    }
+    for (const permission of ROLES[role]) permissions.add(permission);
+  }
+
+  test.each(cases)("%s stage · %s WITHOUT view: the step names the missing read, and the panel really has no control", (stage, role) => {
+    grant(stage, role);
+    queryResults.set(COCKPIT_QUERY, atStage(stage));
+    // Served if asked — the real hook would never hand it to a skipped read.
+    queryResults.set(DOCUMENTS_QUERY, [MISSING_DOC]);
+    renderCockpit();
+
+    expect(stepButton()).toBeNull();
+    expect(step().textContent).toContain("DocumentsNeedReadAccess");
+    expect(queryArgs.get(DOCUMENTS_QUERY)).toBe("skip");
+    if (stage === "CREDIT") {
+      // Recording a rejection needs no documents: it stays one quiet click away.
+      expect(within(step()).getByTestId("deal-next-step-secondary").textContent).toBe("RecordCreditDecisionAction");
+    }
+    // The destination is exactly what the reason says: a checklist, no controls.
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "DealTabDocuments" }), { button: 0 });
+    const panel = screen.getByTestId("deal-documents");
+    expect(panel.textContent).toContain("National ID");
+    expect(within(panel).queryByText("Upload")).toBeNull();
+    expect(within(panel).queryByRole("button")).toBeNull();
+  });
+
+  test.each(cases)("%s stage · %s WITH view (control): the step opens the panel, and the panel offers the upload", async (stage, role) => {
+    grant(stage, role);
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    queryResults.set(COCKPIT_QUERY, atStage(stage));
+    queryResults.set(DOCUMENTS_QUERY, [MISSING_DOC]);
+    renderCockpit();
+
+    const documentsKey = stage === "CREDIT" ? "CompleteDocumentsFirstAction" : "CompleteDocumentsAction";
+    expect(stepButton()?.textContent).toBe(documentsKey);
+    expect(queryArgs.get(DOCUMENTS_QUERY)).toEqual({ orgId: ORG, applicationId: APP });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "DealTabActivity" }), { button: 0 });
+    fireEvent.click(stepButton()!);
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "DealTabDocuments" }).getAttribute("aria-selected")).toBe("true")
+    );
+    const row = within(screen.getByTestId("deal-documents")).getByTestId("deal-document-doc_1");
+    expect(within(row).getByText("Upload")).toBeTruthy();
   });
 });
 
@@ -703,9 +814,22 @@ describe("G8 — the cash rail names its step too", () => {
    */
   const SALE_RECORD = { _id: SALE, orgId: ORG, status: "PENDING", saleDate: Date.UTC(2026, 7, 1) };
 
+  /**
+   * Round 2 (Codex S417-R2-2): SaleDialog mounts `customers.list`
+   * (view:customers), `vehicles.listAll` (view:vehicles, also what
+   * `approvals.profitApprovalStatus` inside it takes) and `memberships.list`
+   * (view:users) unconditionally, and convex/react rethrows a refused query
+   * during render. The step is offered only to a caller holding every one.
+   */
+  const DIALOG_READS = [PERMISSIONS.VIEW_CUSTOMERS, PERMISSIONS.VIEW_VEHICLES, PERMISSIONS.VIEW_USERS] as const;
+  function grantCompletion(except?: string) {
+    for (const permission of [PERMISSIONS.CREATE_SALES, PERMISSIONS.EDIT_SALES, ...DIALOG_READS]) {
+      if (permission !== except) permissions.add(permission);
+    }
+  }
+
   test("HANDOVER on a draft sale: an authorized caller opens the sale's own dialog, for THIS sale", () => {
-    permissions.add(PERMISSIONS.CREATE_SALES);
-    permissions.add(PERMISSIONS.EDIT_SALES);
+    grantCompletion();
     queryResults.set("sales:dealCockpit", cash("PENDING"));
     queryResults.set("sales:get", SALE_RECORD);
     render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
@@ -721,8 +845,7 @@ describe("G8 — the cash rail names its step too", () => {
   });
 
   test("HANDOVER while the sale record is still loading: no button that could open a NEW sale", () => {
-    permissions.add(PERMISSIONS.CREATE_SALES);
-    permissions.add(PERMISSIONS.EDIT_SALES);
+    grantCompletion();
     queryResults.set("sales:dealCockpit", cash("PENDING"));
     render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
     expect(stepButton()).toBeNull();
@@ -744,5 +867,110 @@ describe("G8 — the cash rail names its step too", () => {
     expect(queryArgs.get("sales:get")).toBe("skip");
     // Never "nothing is outstanding" above a refusal naming what is.
     expect(step().textContent).not.toContain("StageReadyToProceed");
+  });
+  test.each(DIALOG_READS.map((permission) => [permission]))(
+    "HANDOVER on a draft sale, caller lacking %s (every write held): told which access the form needs, no button",
+    (missing) => {
+      grantCompletion(missing);
+      queryResults.set("sales:dealCockpit", cash("PENDING"));
+      queryResults.set("sales:get", SALE_RECORD);
+      render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
+      expect(stepButton()).toBeNull();
+      expect(step().textContent).toContain("CashSaleCompletionNeedsReadAccess");
+      expect(step().textContent).not.toContain("CashSaleCompletionNeedsPermission");
+      expect(step().textContent).not.toContain("StageReadyToProceed");
+      // The record is not read for a caller who could not open the form anyway.
+      expect(queryArgs.get("sales:get")).toBe("skip");
+      expect(screen.queryByTestId("sale-dialog")).toBeNull();
+    }
+  );
+
+  test("the missing write outranks a missing read: a caller who could not complete the sale anyway is told that", () => {
+    permissions.add(PERMISSIONS.EDIT_SALES);
+    queryResults.set("sales:dealCockpit", cash("PENDING"));
+    render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
+    expect(step().textContent).toContain("CashSaleCompletionNeedsPermission");
+    expect(step().textContent).not.toContain("CashSaleCompletionNeedsReadAccess");
+  });
+
+  test.each(["COMPLETED", "CANCELLED"])(
+    "HANDOVER on the rail but the loaded sale is %s: no completion button, never a dialog for a sale that is not a draft",
+    (status) => {
+      grantCompletion();
+      queryResults.set("sales:dealCockpit", cash("PENDING"));
+      queryResults.set("sales:get", { ...SALE_RECORD, status });
+      render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
+      expect(stepButton()).toBeNull();
+      expect(screen.queryByTestId("sale-dialog")).toBeNull();
+    }
+  );
+
+  /**
+   * Round 2 (Codex S417-R2-3), CONTAINED rather than fixed. A draft linked to a
+   * quote completes through `resolveReservationDeposits`, which refuses — when
+   * the car's deposit share exceeds what the dealership billed — unless a
+   * deposit treatment is stated. SaleDialog calls `completeDraft` WITHOUT one
+   * and has no control to state it, so for such a draft the step would open a
+   * form whose completion the server refuses. No server read answers "is a
+   * decision required" (it depends on the bill, which the client must not
+   * reconstruct), so the step is withheld for a quote-linked draft whose quote
+   * has RECEIVED a deposit (`deposits.quoteAllocation.totalReceivedMinor`, the
+   * server's own figure) — or whose allocation cannot be read at all.
+   */
+  const QUOTE = "quote_9";
+  function allocation(totalReceivedMinor: number) {
+    return { currency: "JOD", scale: 3, totalReceivedMinor, heldTotalMinor: totalReceivedMinor, vehicles: [] };
+  }
+
+  test("quote-linked draft whose quote received a deposit: the step says the deposit decision is made elsewhere, no button", () => {
+    grantCompletion();
+    queryResults.set("sales:dealCockpit", cash("PENDING"));
+    queryResults.set("sales:get", { ...SALE_RECORD, quoteId: QUOTE });
+    queryResults.set("deposits:quoteAllocation", allocation(2_000 * JOD));
+    render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
+    expect(queryArgs.get("deposits:quoteAllocation")).toEqual({ orgId: ORG, quoteId: QUOTE });
+    expect(stepButton()).toBeNull();
+    expect(step().textContent).toContain("CashSaleCompletionNeedsDepositDecision");
+    expect(step().textContent).not.toContain("StageReadyToProceed");
+    expect(screen.queryByTestId("sale-dialog")).toBeNull();
+  });
+
+  test("quote-linked draft whose allocation cannot be read: withheld the same way — never guessed as deposit-free", () => {
+    grantCompletion();
+    queryResults.set("sales:dealCockpit", cash("PENDING"));
+    queryResults.set("sales:get", { ...SALE_RECORD, quoteId: QUOTE });
+    queryResults.set("deposits:quoteAllocation", null);
+    render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
+    expect(stepButton()).toBeNull();
+    expect(step().textContent).toContain("CashSaleCompletionNeedsDepositDecision");
+  });
+
+  test("quote-linked draft while the allocation loads: no button yet", () => {
+    grantCompletion();
+    queryResults.set("sales:dealCockpit", cash("PENDING"));
+    queryResults.set("sales:get", { ...SALE_RECORD, quoteId: QUOTE });
+    render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
+    expect(stepButton()).toBeNull();
+    expect(screen.queryByTestId("sale-dialog")).toBeNull();
+  });
+
+  test("CONTROL — quote-linked draft whose quote received no deposit: the step opens the sale's dialog", () => {
+    grantCompletion();
+    queryResults.set("sales:dealCockpit", cash("PENDING"));
+    queryResults.set("sales:get", { ...SALE_RECORD, quoteId: QUOTE });
+    queryResults.set("deposits:quoteAllocation", allocation(0));
+    render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
+    expect(stepButton()?.textContent).toBe("CompleteCashSaleAction");
+    fireEvent.click(stepButton()!);
+    expect(screen.getByTestId("sale-dialog").textContent).toBe(SALE);
+  });
+
+  test("CONTROL — a draft with no quote never reads the allocation", () => {
+    grantCompletion();
+    queryResults.set("sales:dealCockpit", cash("PENDING"));
+    queryResults.set("sales:get", SALE_RECORD);
+    render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
+    expect(queryArgs.get("deposits:quoteAllocation") ?? "skip").toBe("skip");
+    expect(stepButton()?.textContent).toBe("CompleteCashSaleAction");
   });
 });

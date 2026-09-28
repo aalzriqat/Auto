@@ -345,3 +345,168 @@ describe("ensureApplicationDocument refusals", () => {
     expect((await rowsForApplication(s, applicationId)).map((row) => row._id)).toEqual([id]);
   });
 });
+
+/**
+ * SCRUM-417 round 2 — Codex S421-R2-4 = Sol S421-R2-3: the active panel and the
+ * approval guard read the SAME set of currently applicable rules. A row whose
+ * rule was removed stays in storage (its file is history, not garbage) but is
+ * not listed as work: the guard and the cockpit no longer require it, so an
+ * Upload/Verify control on it would act on a requirement nobody enforces.
+ */
+describe("the panel lists exactly the rules that currently apply — the guard's and the cockpit's set", () => {
+  /** What the panel and the cockpit each say applies, by rule id. */
+  async function surfaces(s: Setup, applicationId: Id<"financeApplications">) {
+    const panel = await s.seller.as.query(api.documents.getForApplication, { orgId: s.orgId, applicationId });
+    const cockpit = await s.seller.as.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+    return {
+      panel: panel.map((doc) => doc.ruleId).sort(),
+      cockpit: (cockpit?.documents ?? []).map((doc) => doc.ruleId).sort(),
+    };
+  }
+
+  test("a removed rule's row stays stored but leaves the panel, matching the cockpit and the guard", async () => {
+    const s = await setup();
+    const kept = await addRule(s, "National ID");
+    const removed = await addRule(s, "Old Bank Letter");
+    const { applicationId } = await createApplication(s);
+    const removedRow = (await rowsForApplication(s, applicationId)).find((row) => row.ruleId === removed);
+    expect(removedRow).toBeTruthy();
+
+    // Exactly what `documents.removeRule` does after its owner check.
+    await s.t.run((ctx) => ctx.db.delete(removed));
+
+    const after = await surfaces(s, applicationId);
+    expect(after.panel).toEqual([kept]);
+    expect(after.panel).toEqual(after.cockpit);
+    // Stored history is untouched: the row and its status are still there.
+    expect(await s.t.run((ctx) => ctx.db.get(removedRow!._id))).toMatchObject({ ruleId: removed, status: "MISSING" });
+
+    // The guard agrees: with the kept rule verified, approval passes even
+    // though the removed rule's row is still MISSING.
+    await toUnderReview(s, applicationId);
+    const keptRow = (await rowsForApplication(s, applicationId)).find((row) => row.ruleId === kept);
+    await s.seller.as.mutation(api.documents.saveDocumentFile, {
+      orgId: s.orgId,
+      documentId: keptRow!._id,
+      fileId: await storePdf(s),
+    });
+    await s.approver.as.mutation(api.documents.updateDocumentStatus, {
+      orgId: s.orgId,
+      documentId: keptRow!._id,
+      status: "VERIFIED",
+    });
+    await s.approver.as.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "APPROVED" });
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("APPROVED");
+  });
+
+  test("CONTROL — re-adding a rule of the same name is a NEW rule: listed row-less, the old row stays hidden", async () => {
+    const s = await setup();
+    const original = await addRule(s, "Salary Certificate");
+    const { applicationId } = await createApplication(s);
+    const oldRow = (await rowsForApplication(s, applicationId))[0];
+    await s.t.run((ctx) => ctx.db.delete(original));
+    const readded = await addRule(s, "Salary Certificate");
+
+    const listed = await s.seller.as.query(api.documents.getForApplication, { orgId: s.orgId, applicationId });
+    expect(listed).toEqual([
+      { _id: null, ruleId: readded, status: "MISSING", ruleName: "Salary Certificate", isRequired: true, fileUrl: null },
+    ]);
+    expect(listed.some((doc) => doc._id === oldRow._id)).toBe(false);
+    const { panel, cockpit } = await surfaces(s, applicationId);
+    expect(panel).toEqual(cockpit);
+  });
+
+  test("CONTROL — an active late rule and an active materialized rule are both listed, as the cockpit lists them", async () => {
+    const s = await setup();
+    const early = await addRule(s, "Passport");
+    const { applicationId } = await createApplication(s);
+    const late = await addRule(s, "Late Utility Bill");
+    const { panel, cockpit } = await surfaces(s, applicationId);
+    expect(panel).toEqual([early, late].sort());
+    expect(panel).toEqual(cockpit);
+  });
+});
+
+/**
+ * SCRUM-417 round 2 — Sonnet S417-R2-1 (HIGH): a late rule is materialized only
+ * for a deal still in the finance pipeline — `IN_FLIGHT_FINANCE_STATUSES`, the
+ * one shared definition. A CANCELLED, CLOSED or REJECTED application (REJECTED
+ * cannot re-enter the pipeline: `updateStatus` refuses REJECTED → PENDING_DOCS)
+ * gets no new row, and the panel does not synthesize one for it either.
+ */
+describe("ensureApplicationDocument only materializes rows for an in-flight deal", () => {
+  async function withStatus(s: Setup, applicationId: Id<"financeApplications">, status: string) {
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { status: status as never }));
+  }
+
+  test.each(["CANCELLED", "CLOSED", "REJECTED"])(
+    "%s: ensure is refused, nothing is inserted, and the panel offers no row-less line",
+    async (status) => {
+      const s = await setup();
+      const existing = await addRule(s, "Passport");
+      const { applicationId } = await createApplication(s);
+      const existingRow = (await rowsForApplication(s, applicationId))[0];
+      await withStatus(s, applicationId, status);
+      const late = await addRule(s, "Late Insurance Letter");
+
+      await expect(
+        s.seller.as.mutation(api.documents.ensureApplicationDocument, { orgId: s.orgId, applicationId, ruleId: late })
+      ).rejects.toThrow(/no longer in progress/i);
+      expect((await rowsForApplication(s, applicationId)).map((row) => row._id)).toEqual([existingRow._id]);
+
+      // Existing stored rows of applicable rules are still listed; the late
+      // rule is not synthesized, so no control offers to create it.
+      const listed = await s.seller.as.query(api.documents.getForApplication, { orgId: s.orgId, applicationId });
+      expect(listed.map((doc) => doc._id)).toEqual([existingRow._id]);
+      expect(listed.map((doc) => doc.ruleId)).toEqual([existing]);
+    }
+  );
+
+  test.each(["DRAFT", "PENDING_DOCS", "UNDER_REVIEW", "APPROVED"])(
+    "CONTROL — %s (in flight): the late rule is listed row-less and ensure creates its row",
+    async (status) => {
+      const s = await setup();
+      const { applicationId } = await createApplication(s);
+      await withStatus(s, applicationId, status);
+      const late = await addRule(s, "Late Insurance Letter");
+
+      const listed = await s.seller.as.query(api.documents.getForApplication, { orgId: s.orgId, applicationId });
+      expect(listed).toMatchObject([{ _id: null, ruleId: late }]);
+      const id = await s.seller.as.mutation(api.documents.ensureApplicationDocument, {
+        orgId: s.orgId,
+        applicationId,
+        ruleId: late,
+      });
+      expect((await rowsForApplication(s, applicationId)).map((row) => row._id)).toEqual([id]);
+    }
+  );
+});
+
+/**
+ * SCRUM-417 round 2 — Sonnet S417-R2-2: simultaneous first uploads converge.
+ *
+ * ⚠️ convex-test SERIALIZES mutations — there is no OCC in the harness — so this
+ * proves the handler CONVERGES when calls interleave at the transaction
+ * boundary (each later call sees the first's insert and returns its id). It
+ * does not, and cannot, prove real-runtime OCC behaviour; that rests on the
+ * handler reading the `by_application` range it then inserts into.
+ */
+describe("concurrent ensure calls", () => {
+  test("four simultaneous calls for the same rule return one id and leave exactly one row", async () => {
+    const s = await setup();
+    const { applicationId } = await createApplication(s);
+    const ruleId = await addRule(s, "Late Passport Copy");
+    const args = { orgId: s.orgId, applicationId, ruleId };
+
+    const ids = await Promise.all([
+      s.seller.as.mutation(api.documents.ensureApplicationDocument, args),
+      s.approver.as.mutation(api.documents.ensureApplicationDocument, args),
+      s.seller.as.mutation(api.documents.ensureApplicationDocument, args),
+      s.approver.as.mutation(api.documents.ensureApplicationDocument, args),
+    ]);
+    expect(new Set(ids).size).toBe(1);
+    const rows = await rowsForApplication(s, applicationId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]._id).toBe(ids[0]);
+  });
+});

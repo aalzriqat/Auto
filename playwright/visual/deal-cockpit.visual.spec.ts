@@ -381,8 +381,12 @@ const FOCUS_STATE_IDS = [
   "credit-documents-first",
   "credit-documents-no-authority",
   "delivery-documents-await-verifier",
+  "credit-documents-need-read-access",
+  "delivery-documents-need-read-access",
   "cash-handover",
   "cash-handover-no-permission",
+  "cash-handover-needs-read-access",
+  "cash-handover-deposit-decision",
 ] as const;
 const WITH_PRIMARY = new Set([
   "reconciliation-resolve",
@@ -399,7 +403,10 @@ for (const locale of LOCALES) {
         browser,
       }) => {
         const context = await browser.newContext({
-          viewport: { width: viewport.width, height: 2400 },
+          // Tall enough for the whole gallery at 390px (13 states plus the
+          // documents panel since round 2): `main` clips the screenshot to
+          // its own box, so a shorter frame silently drops the last states.
+          viewport: { width: viewport.width, height: 5200 },
           colorScheme: theme,
         });
         const page = await context.newPage();
@@ -425,6 +432,19 @@ for (const locale of LOCALES) {
               expect(box.x).toBeGreaterThanOrEqual(mainBox.x - 0.5);
               expect(box.x + box.width).toBeLessThanOrEqual(mainBox.x + mainBox.width + 0.5);
             }
+          }
+
+          // Round 2 (S417-R2-5): the widest document row — View, Verify and the
+          // replacement upload together — painted inside main, every control
+          // with a real box.
+          const panelRow = page.getByTestId("deal-document-d1");
+          await expect(panelRow).toBeVisible();
+          await expect(panelRow.locator("button, label")).toHaveCount(3);
+          for (const control of await panelRow.locator("button, label").all()) {
+            const box = (await control.boundingBox())!;
+            expect(box.width, "document control width").toBeGreaterThan(0);
+            expect(box.x).toBeGreaterThanOrEqual(mainBox.x - 0.5);
+            expect(box.x + box.width).toBeLessThanOrEqual(mainBox.x + mainBox.width + 0.5);
           }
 
           const overflow = await main.evaluate((el) => {

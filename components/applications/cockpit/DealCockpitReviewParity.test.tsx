@@ -836,6 +836,122 @@ describe("documents — documents.updateDocumentStatus / upload, from the checkl
       expect(within(row).queryByText("Upload")).toBeNull();
     });
 
+    /**
+     * Round 2 (Codex S417-R2-5): the controls follow the STATUS, not whether an
+     * older file is attached. `updateDocumentStatus(MISSING)` keeps the file, so
+     * a MISSING row can carry one; the step counts MISSING as uploadable, so
+     * the panel must offer the upload there too — as a replacement, beside a
+     * View of the old file. Swept over status × file × role.
+     */
+    describe("status × file × role: every MISSING or REJECTED row can be uploaded by whoever may upload", () => {
+      const ROLES = {
+        "create only": [PERMISSIONS.CREATE_FINANCE_APPLICATION],
+        "verify only": [PERMISSIONS.VERIFY_FINANCE_DOCUMENTS],
+      } as const;
+      const cases = (["MISSING", "REJECTED", "UPLOADED"] as const).flatMap((status) =>
+        ([true, false] as const).flatMap((hasFile) =>
+          (Object.keys(ROLES) as Array<keyof typeof ROLES>).map((role) => [status, hasFile, role] as const)
+        )
+      );
+
+      test.each(cases)("%s · file attached: %s · %s", (status, hasFile, role) => {
+        permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+        for (const permission of ROLES[role]) permissions.add(permission);
+        queryResults.set(COCKPIT_QUERY, cockpit());
+        queryResults.set(GET_QUERY, application());
+        queryResults.set(DOCUMENTS_QUERY, [
+          {
+            _id: "doc_1",
+            ruleId: "r1",
+            ruleName: "National ID",
+            status,
+            isRequired: true,
+            fileUrl: hasFile ? "https://files/old.pdf" : null,
+          },
+        ]);
+        renderCockpit();
+        const row = screen.getByTestId("deal-document-doc_1");
+
+        const needsFile = status === "MISSING" || status === "REJECTED";
+        let uploadLabel: string | null = null;
+        if (!hasFile) uploadLabel = "Upload";
+        else if (needsFile) uploadLabel = "ReplaceFile";
+        for (const label of ["Upload", "ReplaceFile"]) {
+          if (label === uploadLabel) expect(within(row).getByText(label)).toBeTruthy();
+          else expect(within(row).queryByText(label)).toBeNull();
+        }
+        // The old file stays viewable until a replacement lands.
+        expect(within(row).queryByRole("button", { name: "ViewFile" }) !== null).toBe(hasFile);
+        // Verifying is the verifier's, and needs a file.
+        expect(within(row).queryByRole("button", { name: "Verify" }) !== null).toBe(hasFile && role === "verify only");
+      });
+
+      test("replacing a MISSING row's old file saves onto that row", async () => {
+        permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+        permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+        queryResults.set(COCKPIT_QUERY, cockpit());
+        queryResults.set(GET_QUERY, application());
+        queryResults.set(DOCUMENTS_QUERY, [
+          { _id: "doc_1", ruleId: "r1", ruleName: "National ID", status: "MISSING", isRequired: true, fileUrl: "https://files/old.pdf" },
+        ]);
+        renderCockpit();
+        pickFile(screen.getByTestId("deal-document-doc_1"));
+        await waitFor(() => expect(mutationCalls.get("documents:saveDocumentFile")).toHaveLength(1));
+        expect(mutationCalls.get("documents:saveDocumentFile")![0]).toEqual({
+          orgId: ORG,
+          documentId: "doc_1",
+          fileId: "storage_1",
+        });
+      });
+    });
+
+    /**
+     * Round 2 (Sol S421-R2-2): a late rule's row appears MID-upload — the
+     * reactive query re-serves the line under its new document id while the
+     * file is still transferring. Busy must follow the RULE across that, and a
+     * second pick must not start a second save for the same rule.
+     */
+    test("a late rule stays busy while its row materializes: a second pick cannot start a second upload", async () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+      let releaseTransfer: () => void = () => {};
+      const transfer = new Promise<void>((resolve) => {
+        releaseTransfer = resolve;
+      });
+      const fetchMock = vi.fn(async () => {
+        await transfer;
+        return { json: async () => ({ storageId: "storage_1" }) };
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      stubs.mutationReturns.set("documents:ensureApplicationDocument", "doc_new");
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      const lateRow = { ruleId: "rule_late", ruleName: "Late salary slip", status: "MISSING", isRequired: true, fileUrl: null };
+      queryResults.set(DOCUMENTS_QUERY, [{ _id: null, ...lateRow }]);
+      const view = renderCockpit();
+
+      pickFile(screen.getByTestId("deal-document-rule-rule_late"));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+      // The ensure committed; the query now serves the same rule under its row id.
+      queryResults.set(DOCUMENTS_QUERY, [{ _id: "doc_new", ...lateRow }]);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      const materialized = screen.getByTestId("deal-document-doc_new");
+      expect((materialized.querySelector('input[type="file"]') as HTMLInputElement).disabled).toBe(true);
+      pickFile(materialized);
+
+      releaseTransfer();
+      await waitFor(() => expect(mutationCalls.get("documents:saveDocumentFile")).toHaveLength(1));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(mutationCalls.get("documents:saveDocumentFile")).toHaveLength(1);
+      expect(mutationCalls.get("documents:generateUploadUrl")).toHaveLength(1);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      // Settled: the rule is free again for a genuine next upload.
+      await waitFor(() =>
+        expect((screen.getByTestId("deal-document-doc_new").querySelector('input[type="file"]') as HTMLInputElement).disabled).toBe(false)
+      );
+    });
+
     test("an existing MISSING row uploads directly, with no ensure call", async () => {
       permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
       permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);

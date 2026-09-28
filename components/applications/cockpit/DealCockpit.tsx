@@ -103,7 +103,7 @@ import {
   type DirectRouteRefusal,
   type SupplierSettlementRoute,
 } from "./SettlementRouteControl";
-import { DealDocumentsPanel, documentRowKey, type DealDocument } from "./DealDocumentsPanel";
+import { DealDocumentsPanel, type DealDocument } from "./DealDocumentsPanel";
 import { SaleDialog } from "@/components/sales/SaleDialog";
 import {
   StoppedDealDepositsPanel,
@@ -450,6 +450,9 @@ export type WorkflowAction = {
  * `SaleDealCockpit`. A stage absent here offers no step. HANDOVER is not here:
  * it opens the sale's own dialog, which needs this screen's state (W3).
  */
+/** The read-only checklist's upload state: nothing is ever in flight there. */
+const NO_UPLOADS: ReadonlySet<string> = new Set();
+
 const CASH_STAGE_ACTION: Readonly<Partial<Record<string, WorkflowAction>>> = {
   SETTLEMENT: { stageKey: "SETTLEMENT", actionKey: "SettleSupplierAction", opens: "SETTLE_SUPPLIER" },
 };
@@ -471,19 +474,29 @@ const CASH_STAGE_ACTION: Readonly<Partial<Record<string, WorkflowAction>>> = {
  * uploaded and waiting for a verifier, or this caller can touch no document
  * at all. `outstanding` empty with the step still open means the rail and the
  * checklist disagree; the capability alone decides, as it did before.
+ *
+ * Round 2 (Codex S417-R2-1 = Sol R2-1): the controls live on the rows
+ * `documents.getForApplication` serves, and that read takes
+ * `view:finance_applications` — a separate permission a custom role can omit.
+ * Without it the pane is the read-only checklist, so a caller who COULD
+ * advance a document is told the read is what is missing (`canRead`), on both
+ * stages. The write reasons outrank it: they would stand even with the read.
  */
 export function documentsStepUnavailableReason({
   outstanding,
   canUpload,
   canVerify,
+  canRead,
 }: Readonly<{
   outstanding: ReadonlyArray<{ status: string }>;
   canUpload: boolean;
   canVerify: boolean;
+  canRead: boolean;
 }>): string | undefined {
   const canAdvance = (status: string) => (status === "UPLOADED" ? canVerify : canUpload || canVerify);
-  if (outstanding.length === 0) return canUpload || canVerify ? undefined : "DocumentsNeedUploader";
-  if (outstanding.some((doc) => canAdvance(doc.status))) return undefined;
+  const readReason = canRead ? undefined : "DocumentsNeedReadAccess";
+  if (outstanding.length === 0) return canUpload || canVerify ? readReason : "DocumentsNeedUploader";
+  if (outstanding.some((doc) => canAdvance(doc.status))) return readReason;
   // Nothing this caller can move. Someone who may upload is only stopped when
   // every outstanding document is already uploaded: it waits on a verifier.
   return canUpload ? "DocumentsAwaitVerifier" : "DocumentsNeedUploader";
@@ -897,7 +910,17 @@ export function DealCockpit({
   const [confirmingDisbursement, setConfirmingDisbursement] = useState(false);
   const [confirmingSupplierDisbursement, setConfirmingSupplierDisbursement] = useState(false);
   const [disbursementSubmitting, setDisbursementSubmitting] = useState(false);
-  const [uploadingDocId, setUploadingDocId] = useState<string | null>(null);
+  /**
+   * The RULES whose upload is in flight (Sol S421-R2-2). Keyed by rule, not by
+   * row: a late rule's line is served as `_id: null` and re-served under its
+   * new document id the moment `ensureApplicationDocument` commits — while the
+   * file is still transferring. A row-keyed busy flag went false at that
+   * moment and let a second pick race the first onto the same row. The state
+   * paints the control; the ref is the guard, synchronous, so a second pick
+   * cannot slip in before a re-render.
+   */
+  const [uploadingRuleIds, setUploadingRuleIds] = useState<ReadonlySet<string>>(() => new Set());
+  const uploadsInFlightRef = useRef(new Set<string>());
   const [resolvingDepositId, setResolvingDepositId] = useState<string | null>(null);
   // One key per attempt, held in a ref so a retry after a lost response is the
   // SAME command rather than a second one, and cleared only once the server
@@ -1413,6 +1436,8 @@ export function DealCockpit({
     ),
     canUpload: canCreateApplication || canVerifyDocuments,
     canVerify: canVerifyDocuments,
+    // The exact predicate the `getForApplication` subscription above is gated on.
+    canRead: canViewApplications,
   });
 
   function buildWorkflowAction(): WorkflowAction | undefined {
@@ -2242,9 +2267,11 @@ export function DealCockpit({
         // the narrower one. Same gates as Review, read from the same server.
         canUpload: canCreateApplication || canVerifyDocuments,
         canVerify: canVerifyDocuments,
-        uploadingId: uploadingDocId,
+        uploadingRuleIds,
         onUpload: async (doc, file) => {
-          setUploadingDocId(documentRowKey(doc));
+          if (uploadsInFlightRef.current.has(doc.ruleId)) return;
+          uploadsInFlightRef.current.add(doc.ruleId);
+          setUploadingRuleIds(new Set(uploadsInFlightRef.current));
           try {
             // A rule added after the application was created has no row yet
             // (SCRUM-421): create it first, under the same authority as the
@@ -2276,7 +2303,8 @@ export function DealCockpit({
           } catch (error) {
             toast.error(getErrorMessage(error));
           } finally {
-            setUploadingDocId(null);
+            uploadsInFlightRef.current.delete(doc.ruleId);
+            setUploadingRuleIds(new Set(uploadsInFlightRef.current));
           }
         },
         onVerify: async (documentId) => {
@@ -2729,10 +2757,46 @@ export function SaleDealCockpit({
    * no button: the dialog opened with no sale is the NEW-sale form.
    */
   const cashLive = deal?.stages.find((stage) => stage.state === "CURRENT" || stage.state === "BLOCKED");
-  const canCompleteSale =
+  const canWriteSale =
     !permissionsLoading && hasPermission(PERMISSIONS.CREATE_SALES) && hasPermission(PERMISSIONS.EDIT_SALES);
+  /**
+   * Round 2 (Codex S417-R2-2): the dialog also READS, unconditionally, on
+   * mount — `customers.list` (view:customers), `vehicles.listAll`
+   * (view:vehicles; also what `approvals.profitApprovalStatus` inside it
+   * takes) and `memberships.list` (view:users) — and convex/react rethrows a
+   * refused query during render. Its other read, `sales.consignedSalePreview`,
+   * takes view:sales, which this screen already requires. A caller missing any
+   * of the three is told so instead of being handed a form that throws.
+   */
+  const canReadSaleForm =
+    !permissionsLoading &&
+    hasPermission(PERMISSIONS.VIEW_CUSTOMERS) &&
+    hasPermission(PERMISSIONS.VIEW_VEHICLES) &&
+    hasPermission(PERMISSIONS.VIEW_USERS);
+  const canCompleteSale = canWriteSale && canReadSaleForm;
   const handoverLive = cashLive?.key === "HANDOVER" && deal?.financingApplicationId == null;
   const saleRecord = useQuery(api.sales.get, handoverLive && canCompleteSale ? { orgId, saleId } : "skip");
+  // The dialog completes a DRAFT (`completingDraft` in SaleDialog is
+  // `sale.status === "PENDING"`); any other loaded status is not this step.
+  const draftSale =
+    saleRecord && saleRecord._id === saleId && saleRecord.status === "PENDING" ? saleRecord : undefined;
+  /**
+   * Round 2 (Codex S417-R2-3), CONTAINED — not fixed — here. A draft linked to
+   * a quote completes through the reservation-deposit resolution, which
+   * refuses without a stated deposit treatment when the car's share exceeds
+   * what the dealership billed. SaleDialog calls `completeDraft` without one
+   * and has no control to state it. No server read answers "is a treatment
+   * required" (it turns on the bill, which the client must not rebuild), so
+   * the step is withheld for a quote-linked draft whose quote has RECEIVED a
+   * deposit — `deposits.quoteAllocation.totalReceivedMinor`, the server's own
+   * figure, on the view:sales this screen already requires — or whose
+   * allocation cannot be read. A draft with no quote carries no deposit
+   * resolution at all and is unaffected.
+   */
+  const quoteAllocation = useQuery(
+    api.deposits.quoteAllocation,
+    draftSale?.quoteId ? { orgId, quoteId: draftSale.quoteId } : "skip"
+  );
   const [completingSale, setCompletingSale] = useState(false);
 
   /**
@@ -2770,13 +2834,22 @@ export function SaleDealCockpit({
   let cashAction: WorkflowAction | undefined;
   if (permissionsLoading || !cashLive) cashAction = undefined;
   else if (cashLive.key === "HANDOVER") {
-    if (!canCompleteSale) {
-      cashAction = {
-        stageKey: "HANDOVER",
-        actionKey: "CompleteCashSaleAction",
-        unavailableReasonKey: "CashSaleCompletionNeedsPermission",
-      };
-    } else if (saleRecord && saleRecord._id === saleId) {
+    // Told apart in the order an operator can act on: the authority to
+    // complete at all, then the reads the form needs, then — once THIS draft
+    // is loaded — whether its completion needs a deposit decision the form
+    // cannot record. Until what decides it has loaded, no button.
+    let reason: string | undefined;
+    if (!canWriteSale) reason = "CashSaleCompletionNeedsPermission";
+    else if (!canReadSaleForm) reason = "CashSaleCompletionNeedsReadAccess";
+    else if (draftSale?.quoteId && quoteAllocation !== undefined) {
+      if (quoteAllocation === null || quoteAllocation.totalReceivedMinor > 0) {
+        reason = "CashSaleCompletionNeedsDepositDecision";
+      }
+    }
+    const decided = draftSale !== undefined && (!draftSale.quoteId || quoteAllocation !== undefined);
+    if (reason) {
+      cashAction = { stageKey: "HANDOVER", actionKey: "CompleteCashSaleAction", unavailableReasonKey: reason };
+    } else if (decided) {
       cashAction = {
         stageKey: "HANDOVER",
         actionKey: "CompleteCashSaleAction",
@@ -2806,6 +2879,9 @@ export function SaleDealCockpit({
       />
       {/* Mounted only with THIS sale's record in hand: without one the dialog
           is the new-sale form, which must never open from a deal. */}
+      {/* Offered only for a loaded DRAFT (`draftSale`); kept mounted on the
+          record while open, so the sale turning COMPLETED under its own
+          submit does not yank the form away mid-flow. */}
       {completingSale && saleRecord && saleRecord._id === saleId && (
         <SaleDialog open onOpenChange={setCompletingSale} sale={saleRecord} />
       )}
@@ -3485,7 +3561,8 @@ export function DealCockpitView({
     items: ReadonlyArray<DealDocument> | undefined;
     canUpload: boolean;
     canVerify: boolean;
-    uploadingId: string | null;
+    /** The rule ids whose upload is in flight — see `DealDocumentsPanel`. */
+    uploadingRuleIds: ReadonlySet<string>;
     onUpload: (doc: DealDocument, file: File) => void | Promise<void>;
     onVerify: (documentId: string) => void | Promise<void>;
   };
@@ -4926,7 +5003,7 @@ export function DealCockpitView({
                 checklist={deal.documents}
                 canUpload={documents.canUpload}
                 canVerify={documents.canVerify}
-                uploadingId={documents.uploadingId}
+                uploadingRuleIds={documents.uploadingRuleIds}
                 t={t}
                 onUpload={documents.onUpload}
                 onVerify={documents.onVerify}
@@ -4937,7 +5014,7 @@ export function DealCockpitView({
                 checklist={deal.documents}
                 canUpload={false}
                 canVerify={false}
-                uploadingId={null}
+                uploadingRuleIds={NO_UPLOADS}
                 t={t}
                 onUpload={() => {}}
                 onVerify={() => {}}

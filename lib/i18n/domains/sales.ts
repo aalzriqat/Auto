@@ -614,6 +614,11 @@ const dealWizardMessages = defineBilingualMessages({
     "Uploaded — waiting for someone who can verify finance documents.",
     "تم الرفع — بانتظار من يملك صلاحية التحقق من مستندات التمويل.",
   ],
+  // Round 2 (S417-R2-1): may upload or verify, but cannot read the rows the controls sit on.
+  DocumentsNeedReadAccess: [
+    "Your role can upload or verify documents but cannot open this deal's document list. Someone with access to finance applications completes them.",
+    "يتيح دورك رفع المستندات أو التحقق منها، لكنه لا يتيح فتح قائمة مستندات هذه الصفقة. يُكملها من يملك صلاحية الوصول إلى طلبات التمويل.",
+  ],
   // A rejected file is replaced in place; the server swaps the file on the same row.
   ReplaceFile: ["Upload a replacement", "رفع ملف بديل"],
   // G7 — the financing reconciliation review.
@@ -659,6 +664,16 @@ const dealWizardMessages = defineBilingualMessages({
   CashSaleCompletionNeedsPermission: [
     "This sale is still a draft. It is completed by someone who can both create and edit sales.",
     "هذا البيع ما زال مسودة. يُتمّه من يملك صلاحيتَي إنشاء المبيعات وتعديلها معاً.",
+  ],
+  // Round 2 (S417-R2-2): the sale form also reads customers, vehicles and team members.
+  CashSaleCompletionNeedsReadAccess: [
+    "This sale is still a draft. It is completed in the sale form, which also needs access to view customers, vehicles and team members.",
+    "هذا البيع ما زال مسودة. يُتمَّم من نموذج البيع، الذي يتطلب أيضاً صلاحية عرض العملاء والمركبات وأعضاء الفريق.",
+  ],
+  // Round 2 (S417-R2-3, contained): the sale form cannot record a deposit treatment.
+  CashSaleCompletionNeedsDepositDecision: [
+    "This draft came from a quotation that holds a customer deposit. Completing it needs a decision on that deposit, which the sale form cannot record. Complete it where the quotation is completed.",
+    "جاءت هذه المسودة من عرض سعر عليه عربون من العميل. يتطلب إتمامها قراراً بشأن هذا العربون، ونموذج البيع لا يسجّله. أتمّها من حيث يُتمَّم عرض السعر.",
   ],
   // SCRUM417-R1 — a legacy approval with no quotation: the approval freezes it.
   ApprovedPurchaseFreezesQuotation: [

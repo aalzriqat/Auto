@@ -99,7 +99,7 @@ export function DealDocumentsPanel({
   checklist,
   canUpload,
   canVerify,
-  uploadingId,
+  uploadingRuleIds,
   t,
   onUpload,
   onVerify,
@@ -109,8 +109,12 @@ export function DealDocumentsPanel({
   checklist: ReadonlyArray<{ ruleId: string; name: string; required: boolean; status: string }>;
   canUpload: boolean;
   canVerify: boolean;
-  /** The `documentRowKey` of the line whose upload is in flight. */
-  uploadingId: string | null;
+  /**
+   * The RULE ids whose upload is in flight. By rule, not by row key: a late
+   * rule's line changes key (`rule-<id>` → its new document id) mid-upload,
+   * and it must stay busy across that (SCRUM-417 round 2, S421-R2-2).
+   */
+  uploadingRuleIds: ReadonlySet<string>;
   t: (key: string) => string;
   onUpload: (doc: DealDocument, file: File) => void | Promise<void>;
   onVerify: (documentId: string) => void | Promise<void>;
@@ -174,6 +178,18 @@ export function DealDocumentsPanel({
               const verified = doc.status === "VERIFIED";
               const rowKey = documentRowKey(doc);
               const documentId = doc._id;
+              const busy = uploadingRuleIds.has(doc.ruleId);
+              /**
+               * The upload follows the STATUS, not whether an older file is
+               * attached (round 2, S417-R2-5): `updateDocumentStatus(MISSING)`
+               * keeps the file, and the step counts MISSING as uploadable. A
+               * row that still needs a file offers one — as a replacement when
+               * an old one is there, which stays viewable until
+               * `saveDocumentFile` swaps it. A row with no file offers the
+               * upload, as before.
+               */
+              const needsFile = doc.status === "MISSING" || doc.status === "REJECTED";
+              const offerUpload = canUpload && (doc.fileUrl ? needsFile : true);
               return (
                 <div
                   key={rowKey}
@@ -192,54 +208,44 @@ export function DealDocumentsPanel({
                     <bdi className="block break-words font-medium">{doc.ruleName}</bdi>
                     <span className="text-xs text-muted-foreground">{statusLabel(doc.status)}</span>
                   </div>
-                  <div className="flex shrink-0 items-center gap-1.5">
-                    {doc.fileUrl ? (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setPreviewFile({ url: doc.fileUrl!, name: doc.ruleName })}
-                        >
-                          <Eye className="h-4 w-4 me-1" />
-                          {t("ViewFile")}
-                        </Button>
-                        {/* Outline, not primary: the documents panel is a
-                            supporting surface. The one recommended action on
-                            this screen lives on the stage rail, and a second
-                            filled button here competed with it. */}
-                        {canVerify && documentId !== null && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={verified}
-                            onClick={() => void onVerify(documentId)}
-                          >
-                            {t("Verify")}
-                          </Button>
-                        )}
-                        {/* A REJECTED file is not the end of the line: whoever
-                            may upload may replace it, and `saveDocumentFile`
-                            swaps the file on the same row and puts it back to
-                            UPLOADED. Without this, "upload it again" had
-                            nowhere to go on this screen. */}
-                        {canUpload && doc.status === "REJECTED" && (
-                          <DocumentUploadControl
-                            rowKey={rowKey}
-                            label={t("ReplaceFile")}
-                            busy={uploadingId === rowKey}
-                            onPick={(file) => void onUpload(doc, file)}
-                          />
-                        )}
-                      </>
-                    ) : (
-                      canUpload && (
-                        <DocumentUploadControl
-                          rowKey={rowKey}
-                          label={t("Upload")}
-                          busy={uploadingId === rowKey}
-                          onPick={(file) => void onUpload(doc, file)}
-                        />
-                      )
+                  {/* Shrinkable and wrapping: a reset row can carry View,
+                      Verify and a replacement at once, wider than a phone. */}
+                  <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                    {doc.fileUrl && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setPreviewFile({ url: doc.fileUrl!, name: doc.ruleName })}
+                      >
+                        <Eye className="h-4 w-4 me-1" />
+                        {t("ViewFile")}
+                      </Button>
+                    )}
+                    {/* Outline, not primary: the documents panel is a
+                        supporting surface. The one recommended action on
+                        this screen lives on the stage rail, and a second
+                        filled button here competed with it. */}
+                    {doc.fileUrl && canVerify && documentId !== null && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={verified}
+                        onClick={() => void onVerify(documentId)}
+                      >
+                        {t("Verify")}
+                      </Button>
+                    )}
+                    {/* A rejected (or reset-to-missing) file is not the end of
+                        the line: whoever may upload may replace it, and
+                        `saveDocumentFile` swaps the file on the same row and
+                        puts it back to UPLOADED. */}
+                    {offerUpload && (
+                      <DocumentUploadControl
+                        rowKey={rowKey}
+                        label={t(doc.fileUrl ? "ReplaceFile" : "Upload")}
+                        busy={busy}
+                        onPick={(file) => void onUpload(doc, file)}
+                      />
                     )}
                   </div>
                 </div>

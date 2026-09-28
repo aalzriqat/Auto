@@ -2,7 +2,8 @@ import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { mutation } from "./functions";
-import { requireTenantAuth, requireOwner } from "./utils/tenancy";
+import { requireTenantAuth, requireOwner, requireOwnedRow } from "./utils/tenancy";
+import { IN_FLIGHT_FINANCE_STATUSES } from "./utils/financeStatuses";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { checkTenantWriteLimit } from "./rateLimit";
 import { notifyUser } from "./utils/notifications";
@@ -99,19 +100,38 @@ export const getForApplication = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
 
+    const application = await ctx.db.get(args.applicationId);
+    if (!application || application.orgId !== args.orgId) return [];
+    const quote = await ctx.db.get(application.quoteId);
+    const dealQuote = quote && quote.orgId === args.orgId ? quote : null;
+
+    /**
+     * SCRUM-421: the panel lists EXACTLY the rules that currently apply to this
+     * deal — live rules, through `ruleAppliesToQuote`, the set
+     * `assertRequiredApplicationDocumentsComplete` refuses approval on and
+     * `dealCockpit` counts. A stored row whose rule was removed (or no longer
+     * applies) is left in storage untouched — its file is history — but is not
+     * listed: an Upload or Verify control on it would act on a requirement the
+     * guard no longer enforces (SCRUM-417 round 2, S421-R2-3/R2-4).
+     */
+    const rules = await ctx.db
+      .query("companyDocumentRules")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    const applicableRules = rules.filter((rule) => ruleAppliesToQuote(rule, dealQuote));
+    const applicableById = new Map(applicableRules.map((rule) => [rule._id, rule]));
+
     const docs = await ctx.db
       .query("applicationDocuments")
       .withIndex("by_application", (q) => q.eq("applicationId", args.applicationId))
       .filter((q) => q.eq(q.field("orgId"), args.orgId))
       .collect();
+    const activeDocs = docs.filter((doc) => applicableById.has(doc.ruleId));
 
     const materialized = await Promise.all(
-      docs.map(async (doc) => {
-        const rule = await ctx.db.get(doc.ruleId);
-        let fileUrl = null;
-        if (doc.fileId) {
-          fileUrl = await ctx.storage.getUrl(doc.fileId);
-        }
+      activeDocs.map(async (doc) => {
+        const rule = applicableById.get(doc.ruleId);
+        const fileUrl = doc.fileId ? await ctx.storage.getUrl(doc.fileId) : null;
         return {
           ...doc,
           ruleName: rule?.documentName || "Unknown Document",
@@ -127,18 +147,15 @@ export const getForApplication = query({
      * gate reads live rules and counts it MISSING. It is listed here, row-less
      * (`_id: null`), so the checklist can offer its upload; the row itself is
      * created on first use by `ensureApplicationDocument`.
+     *
+     * Only while the deal is still in the finance pipeline: that mutation
+     * refuses anything else (S417-R2-1), so a row-less line on a cancelled,
+     * closed or rejected deal would be a control guaranteed to fail.
      */
-    const application = await ctx.db.get(args.applicationId);
-    if (!application || application.orgId !== args.orgId) return materialized;
-    const quote = await ctx.db.get(application.quoteId);
-    const dealQuote = quote && quote.orgId === args.orgId ? quote : null;
-    const rules = await ctx.db
-      .query("companyDocumentRules")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
+    if (!IN_FLIGHT_FINANCE_STATUSES.includes(application.status)) return materialized;
     const materializedRuleIds = new Set(docs.map((doc) => doc.ruleId));
-    const unmaterialized = rules
-      .filter((rule) => ruleAppliesToQuote(rule, dealQuote) && !materializedRuleIds.has(rule._id))
+    const unmaterialized = applicableRules
+      .filter((rule) => !materializedRuleIds.has(rule._id))
       .map((rule) => ({
         _id: null,
         ruleId: rule._id,
@@ -161,6 +178,13 @@ export const getForApplication = query({
  * the first's insert). Otherwise inserts exactly the row `createFromQuote`
  * inserts at creation. Authorized like an upload, because it exists only to
  * make an upload or a waiver possible: tenant membership plus create or verify.
+ *
+ * Only for a deal still in the finance pipeline (`IN_FLIGHT_FINANCE_STATUSES`,
+ * the one shared definition): a late rule applies to in-flight deals, and a
+ * cancelled, closed or rejected application is not one — REJECTED cannot
+ * re-enter the pipeline (`updateStatus` refuses it). Refused before any write.
+ * Ownership of the application, the rule and the deal's quote goes through
+ * `requireOwnedRow` (TEN-1), with the messages the callers already surface.
  */
 export const ensureApplicationDocument = mutation({
   args: {
@@ -174,12 +198,26 @@ export const ensureApplicationDocument = mutation({
       throw new ConvexError("Forbidden: Missing required finance document permissions.");
     }
 
-    const application = await ctx.db.get(args.applicationId);
-    if (!application || application.orgId !== args.orgId) throw new ConvexError("Application not found");
-    const rule = await ctx.db.get(args.ruleId);
-    if (!rule || rule.orgId !== args.orgId) throw new ConvexError("Rule not found.");
-    const quote = await ctx.db.get(application.quoteId);
-    if (!quote || quote.orgId !== args.orgId) throw new ConvexError("Application quote not found.");
+    const application = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId,
+      "Application not found"
+    );
+    if (!IN_FLIGHT_FINANCE_STATUSES.includes(application.status)) {
+      throw new ConvexError(
+        "This deal is no longer in progress, so a new document requirement cannot be added to it."
+      );
+    }
+    const rule = await requireOwnedRow(ctx, args.orgId, "companyDocumentRules", args.ruleId, "Rule not found.");
+    const quote = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "quotes",
+      application.quoteId,
+      "Application quote not found."
+    );
     if (!ruleAppliesToQuote(rule, quote)) {
       throw new ConvexError("This document rule does not apply to this deal's finance company.");
     }
