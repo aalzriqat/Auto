@@ -21,7 +21,13 @@ import { describe, expect, test, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Id } from "@/convex/_generated/dataModel";
 import { dictionaries } from "@/lib/i18n/dictionaries";
-import type { DealCockpitData } from "./DealStagePresentation";
+import type { DealCockpitData, DealStageState } from "./DealStagePresentation";
+import {
+  CASH_DEAL_STAGE_ORDER,
+  DEAL_STAGE_ORDER,
+  type CashDealStageKey,
+  type FinancedDealStageKey,
+} from "@/convex/utils/financingEconomics";
 
 const language = vi.hoisted(() => ({ locale: "ar" as "ar" | "en" }));
 
@@ -50,7 +56,7 @@ vi.mock("@/components/accounting/AccountingTabShared", () => ({
   scaleForCurrency: (code: string) => (code === "USD" ? 2 : 3),
 }));
 
-import { DealCockpitView, StageFocusRow } from "./DealCockpit";
+import { DealCockpitView, StageFocusRow, type WorkflowAction } from "./DealCockpit";
 import type { FinancedDealOverviewData } from "./DealFinancialOverview";
 import type { DealCustodyWiring } from "./DealCustodyPanel";
 
@@ -519,10 +525,40 @@ function handoverCostsWiring() {
  * blocker, and an action already resolved (a present `onStart` is a button, a
  * reason key is a refusal). One gallery per locale, so a phone width shows how
  * the note, the button and the secondary link wrap in Arabic and English.
+ *
+ * Each state names its real stage, so the "Stage n / total" kicker is the one
+ * the rail would print — its place in the deal kind's own stage order.
  */
+type FocusState = Readonly<
+  {
+    id: string;
+    state: DealStageState;
+    labelKey: string;
+    ownerKey: string;
+    /** Suffix of the `Blocker…` key, as the rail carries it. */
+    blocker?: string;
+    mirrorNote?: boolean;
+    outstandingDocuments?: ReadonlyArray<{ ruleId: string; name: Readonly<Record<"en" | "ar", string>> }>;
+    /** Already resolved, as the view passes it: a present `onStart` is a working button. */
+    action: Omit<WorkflowAction, "stageKey">;
+  } & (
+    | { kind: "FINANCED"; stageKey: FinancedDealStageKey }
+    | { kind: "CASH"; stageKey: CashDealStageKey }
+  )
+>;
+
+function stagePosition(focus: FocusState): { position: number; total: number } {
+  const order: readonly string[] = focus.kind === "CASH" ? CASH_DEAL_STAGE_ORDER : DEAL_STAGE_ORDER;
+  const index = order.indexOf(focus.stageKey);
+  expect(index, `${focus.id}: ${focus.stageKey} is not a ${focus.kind} stage`).toBeGreaterThanOrEqual(0);
+  return { position: index + 1, total: order.length };
+}
+
 const FOCUS_STATES = [
   {
     id: "reconciliation-resolve",
+    kind: "FINANCED",
+    stageKey: "SETTLEMENT",
     state: "BLOCKED",
     labelKey: "StageSettlement",
     ownerKey: "StageOwnerDealership",
@@ -531,6 +567,8 @@ const FOCUS_STATES = [
   },
   {
     id: "reconciliation-no-permission",
+    kind: "FINANCED",
+    stageKey: "SETTLEMENT",
     state: "BLOCKED",
     labelKey: "StageSettlement",
     ownerKey: "StageOwnerDealership",
@@ -539,6 +577,8 @@ const FOCUS_STATES = [
   },
   {
     id: "appraisal-next",
+    kind: "FINANCED",
+    stageKey: "APPRAISAL",
     state: "BLOCKED",
     labelKey: "StageAppraisal",
     ownerKey: "StageOwnerFinanceCompany",
@@ -548,6 +588,8 @@ const FOCUS_STATES = [
   },
   {
     id: "gap-failed",
+    kind: "FINANCED",
+    stageKey: "APPROVED_PURCHASE",
     state: "BLOCKED",
     labelKey: "StageApprovedPurchase",
     ownerKey: "StageOwnerDealership",
@@ -556,11 +598,17 @@ const FOCUS_STATES = [
   },
   {
     id: "credit-documents-first",
+    kind: "FINANCED",
+    stageKey: "CREDIT_DECISION",
     state: "BLOCKED",
     labelKey: "StageCreditDecision",
     ownerKey: "StageOwnerFinanceCompany",
     blocker: "AwaitingCreditDecision",
     mirrorNote: true,
+    outstandingDocuments: [
+      { ruleId: "r1", name: { en: "National ID copy", ar: "صورة الهوية" } },
+      { ruleId: "r2", name: { en: "Salary certificate", ar: "كشف راتب" } },
+    ],
     action: {
       actionKey: "CompleteDocumentsFirstAction",
       noteKey: "CreditApprovalNeedsDocuments",
@@ -570,49 +618,48 @@ const FOCUS_STATES = [
   },
   {
     id: "cash-handover",
+    kind: "CASH",
+    stageKey: "HANDOVER",
     state: "CURRENT",
     labelKey: "StageHandover",
     ownerKey: "StageOwnerDealership",
     action: { actionKey: "CompleteCashSaleAction", unavailableReasonKey: "CashSaleCompletesInSales" },
   },
-] as const;
+] satisfies readonly FocusState[];
 
 function focusStatesMarkup(locale: "en" | "ar"): string {
   language.locale = locale;
   const table = dictionaries[locale] as Record<string, string>;
   const t = (key: string) => table[key] || (dictionaries.en as Record<string, string>)[key] || key;
-  const blocks = FOCUS_STATES.map((focus, index) => {
+  const blocks = FOCUS_STATES.map((focus: FocusState) => {
     // Every key the gallery paints must exist in THIS locale's dictionary: a
     // key falling through to English (or to itself) would paint a picture of
     // a translation that does not exist.
-    const action = focus.action as Record<string, unknown>;
+    const { action } = focus;
     const keys = [
       focus.labelKey,
       focus.ownerKey,
       action.actionKey,
       action.noteKey,
       action.unavailableReasonKey,
-      (action.secondary as { actionKey?: string } | undefined)?.actionKey,
+      action.secondary?.actionKey,
     ].filter((key): key is string => typeof key === "string");
     for (const key of keys) expect(table[key], `${locale} dictionary lacks ${key}`).toBeTruthy();
+    const { position, total } = stagePosition(focus);
     return `<section data-testid="focus-state-${focus.id}" class="space-y-2">${renderToStaticMarkup(
       <StageFocusRow
         state={focus.state}
         label={t(focus.labelKey)}
-        position={index + 3}
-        total={8}
+        position={position}
+        total={total}
         owner={t(focus.ownerKey)}
-        mirrorNote={"mirrorNote" in focus ? focus.mirrorNote : false}
-        blocker={"blocker" in focus ? t(`Blocker${focus.blocker}`) : undefined}
-        action={focus.action}
-        outstandingDocuments={
-          focus.id === "credit-documents-first"
-            ? [
-                { ruleId: "r1", name: locale === "ar" ? "صورة الهوية" : "National ID copy" },
-                { ruleId: "r2", name: locale === "ar" ? "كشف راتب" : "Salary certificate" },
-              ]
-            : []
-        }
+        mirrorNote={focus.mirrorNote ?? false}
+        blocker={focus.blocker ? t(`Blocker${focus.blocker}`) : undefined}
+        action={action}
+        outstandingDocuments={(focus.outstandingDocuments ?? []).map((doc) => ({
+          ruleId: doc.ruleId,
+          name: doc.name[locale],
+        }))}
         onGoToDocuments={() => {}}
         t={t}
       />

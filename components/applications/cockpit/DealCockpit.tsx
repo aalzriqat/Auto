@@ -63,6 +63,7 @@ import { SettlementAdviceCorrectionDialog } from "./SettlementAdviceCorrectionDi
 import {
   FinanceCompanyDecisionCard,
   nextFinanceDecisionStep,
+  type FinanceDecisionDialog,
   type FinanceDecisionFacts,
 } from "./FinanceCompanyDecisionCard";
 import { ResolveReconciliationDialog } from "./ResolveReconciliationDialog";
@@ -394,7 +395,7 @@ const LEGAL_INVOICE_ISSUED_TO_LABEL: Record<string, string> = {
 function finalizeUnavailableReasonKey({
   routeRequired,
   canRecordRoute,
-  heldDepositBlocksDirectClose = false,
+  heldDepositBlocksDirectClose,
   readinessBlocksClose,
   canClose,
 }: Readonly<{
@@ -405,7 +406,7 @@ function finalizeUnavailableReasonKey({
    * reservation deposit (SCRUM-417, G7) — the same refusal
    * `setSupplierSettlementRoute` makes, by the other door.
    */
-  heldDepositBlocksDirectClose?: boolean;
+  heldDepositBlocksDirectClose: boolean;
   readinessBlocksClose: boolean;
   canClose: boolean;
 }>): string | undefined {
@@ -423,12 +424,7 @@ function finalizeUnavailableReasonKey({
  * handler, so the focus row reuses the exact dialog the card or panel opens —
  * never a second copy of it.
  */
-export type WorkflowActionTarget =
-  | "RECORD_QUOTATION"
-  | "RECORD_APPRAISAL"
-  | "RECORD_APPROVAL"
-  | "DOCUMENTS"
-  | "SETTLE_SUPPLIER";
+export type WorkflowActionTarget = FinanceDecisionDialog | "DOCUMENTS" | "SETTLE_SUPPLIER";
 
 /** The one next step for the stage the rail names — see `DealCockpitView`. */
 export type WorkflowAction = {
@@ -446,6 +442,19 @@ export type WorkflowAction = {
   unavailableReasonKey?: string;
   /** The withheld figure in its own currency, shown under the reason. */
   unavailableDetail?: SettlementDenominationDetail;
+};
+
+/**
+ * The cash rail's one next step per live stage (SCRUM-417, G8) — see
+ * `CashDealCockpit`. A stage absent here offers no step.
+ */
+const CASH_STAGE_ACTION: Readonly<Partial<Record<string, WorkflowAction>>> = {
+  HANDOVER: {
+    stageKey: "HANDOVER",
+    actionKey: "CompleteCashSaleAction",
+    unavailableReasonKey: "CashSaleCompletesInSales",
+  },
+  SETTLEMENT: { stageKey: "SETTLEMENT", actionKey: "SettleSupplierAction", opens: "SETTLE_SUPPLIER" },
 };
 
 /** The toast for each credit-stage transition this screen can record. */
@@ -1434,16 +1443,6 @@ export function DealCockpit({
     }
 
     /**
-     * The finance company's credit decision — RECORDED here, never made.
-     *
-     * Two dealership moves on this stage, matching `updateStatus`'s legal
-     * transitions exactly: PENDING_DOCS → UNDER_REVIEW says the application is
-     * with the finance company; UNDER_REVIEW → APPROVED | REJECTED writes down
-     * what they decided. APPROVED needs `approve:finance_application`,
-     * UNDER_REVIEW and REJECTED need `review:finance_application`; a caller
-     * holding neither is told so rather than shown nothing.
-     */
-    /**
      * A DRAFT application (SCRUM-417, G1). The one legal move out of it is
      * `updateStatus` DRAFT → PENDING_DOCS (`VALID_STATUS_TRANSITIONS`), which
      * the server gates on `view:finance_applications` alone — so that is the
@@ -1460,6 +1459,16 @@ export function DealCockpit({
       };
     }
 
+    /**
+     * The finance company's credit decision — RECORDED here, never made.
+     *
+     * Two dealership moves on this stage, matching `updateStatus`'s legal
+     * transitions exactly: PENDING_DOCS → UNDER_REVIEW says the application is
+     * with the finance company; UNDER_REVIEW → APPROVED | REJECTED writes down
+     * what they decided. APPROVED needs `approve:finance_application`,
+     * UNDER_REVIEW and REJECTED need `review:finance_application`; a caller
+     * holding neither is told so rather than shown nothing.
+     */
     if (liveStage?.key === "CREDIT_DECISION") {
       if (deal.status === "PENDING_DOCS") {
         return {
@@ -1472,6 +1481,13 @@ export function DealCockpit({
         };
       }
       if (deal.status === "UNDER_REVIEW") {
+        const openCreditDialog = {
+          actionKey: "RecordCreditDecisionAction",
+          onStart: () => {
+            setCreditError(null);
+            setDecidingCredit(true);
+          },
+        };
         // SCRUM-417 (G6): the server refuses the APPROVAL while a required
         // document is outstanding, so the next step is the documents — not a
         // dialog whose main option is certain to be refused. A rejection does
@@ -1482,22 +1498,12 @@ export function DealCockpit({
             actionKey: "CompleteDocumentsFirstAction",
             opens: "DOCUMENTS",
             noteKey: "CreditApprovalNeedsDocuments",
-            secondary: {
-              actionKey: "RecordCreditDecisionAction",
-              onStart: () => {
-                setCreditError(null);
-                setDecidingCredit(true);
-              },
-            },
+            secondary: openCreditDialog,
           };
         }
         return {
           stageKey: "CREDIT_DECISION",
-          actionKey: "RecordCreditDecisionAction",
-          onStart: () => {
-            setCreditError(null);
-            setDecidingCredit(true);
-          },
+          ...openCreditDialog,
           unavailableReasonKey:
             canApproveApplication || canReviewApplication ? undefined : "CreditDecisionNeedsPermission",
         };
@@ -2680,16 +2686,7 @@ export function SaleDealCockpit({
    * the view resolves it against the claim's state and this caller's authority.
    */
   const cashLive = deal?.stages.find((stage) => stage.state === "CURRENT" || stage.state === "BLOCKED");
-  let cashAction: WorkflowAction | undefined;
-  if (!permissionsLoading && cashLive?.key === "HANDOVER") {
-    cashAction = {
-      stageKey: "HANDOVER",
-      actionKey: "CompleteCashSaleAction",
-      unavailableReasonKey: "CashSaleCompletesInSales",
-    };
-  } else if (!permissionsLoading && cashLive?.key === "SETTLEMENT") {
-    cashAction = { stageKey: "SETTLEMENT", actionKey: "SettleSupplierAction", opens: "SETTLE_SUPPLIER" };
-  }
+  const cashAction = permissionsLoading || !cashLive ? undefined : CASH_STAGE_ACTION[cashLive.key];
 
   return (
     <DealCockpitView
@@ -3628,6 +3625,27 @@ export function DealCockpitView({
   const [firstPaymentSubmitting, setFirstPaymentSubmitting] = useState(false);
   const [firstPaymentError, setFirstPaymentError] = useState<string | null>(null);
 
+  // The ONE opener per finance-decision dialog, shared by the decision card and
+  // the focus row (SCRUM-417): both clear the dialog's last refusal and open
+  // the same dialog, so the two entry points cannot drift apart.
+  const openRecordQuotation = () => {
+    setQuotationError(null);
+    setRecordingQuotation(true);
+  };
+  const openRecordAppraisal = () => {
+    setAppraisalError(null);
+    setRecordingAppraisal(true);
+  };
+  const openRecordApproval = () => {
+    setApprovalError(null);
+    setRecordingApproval(true);
+  };
+  const openFinanceDecisionDialog: Record<FinanceDecisionDialog, () => void> = {
+    RECORD_QUOTATION: openRecordQuotation,
+    RECORD_APPRAISAL: openRecordAppraisal,
+    RECORD_APPROVAL: openRecordApproval,
+  };
+
   // The lower documents · activity tabs are controlled so the live step can
   // send the operator to the documents it says are outstanding. The default is
   // unchanged, and a manual switch to Activity still goes through.
@@ -3660,12 +3678,12 @@ export function DealCockpitView({
   // sight. The position stays truthful; the action follows the verdict.
   const supplierRow = deal?.money?.parties.find((p) => p.party === "SUPPLIER");
   const supplierReceipt = deal?.money?.supplierReceipt;
-  const canSettleSupplier =
-    callerMaySettleSupplier &&
+  const supplierClaimSettleable =
     deal?.money?.settlesDirectToSupplier === true &&
     deal.money.routeKnown &&
     supplierRow?.position === "OWED_TO_DEALERSHIP" &&
     supplierReceipt?.actionable === true;
+  const canSettleSupplier = callerMaySettleSupplier && supplierClaimSettleable;
   // Named guidance for the one refusal the operator can act on. Every other
   // reason simply withholds the button, as before.
   const supplierGuidance =
@@ -4099,15 +4117,14 @@ export function DealCockpitView({
     if (action.unavailableReasonKey || !action.opens) return action;
     switch (action.opens) {
       case "RECORD_QUOTATION":
-        return { ...action, onStart: () => { setQuotationError(null); setRecordingQuotation(true); } };
       case "RECORD_APPRAISAL":
-        return { ...action, onStart: () => { setAppraisalError(null); setRecordingAppraisal(true); } };
       case "RECORD_APPROVAL":
-        return { ...action, onStart: () => { setApprovalError(null); setRecordingApproval(true); } };
+        return { ...action, onStart: openFinanceDecisionDialog[action.opens] };
       case "DOCUMENTS":
         return hasDocumentsPane
           ? // Wired in the row to its own `onGoToDocuments`: a handler that
-            // reads the tab ref must not be bound while rendering.
+            // reads the tab ref must not be bound while rendering
+            // (react-hooks/refs refuses binding it in this render-time call).
             action
           : { ...action, unavailableReasonKey: "DocumentsNeedUploader" };
       case "SETTLE_SUPPLIER": {
@@ -4115,14 +4132,9 @@ export function DealCockpitView({
         // Told apart, in the order the operator can act on: a disputed claim
         // (the money panel's own guidance), a claim this caller may not settle,
         // and a balance that is not settled from this screen at all.
-        const claimSettleable =
-          deal?.money?.settlesDirectToSupplier === true &&
-          deal.money.routeKnown &&
-          supplierRow?.position === "OWED_TO_DEALERSHIP" &&
-          supplierReceipt?.actionable === true;
         let reason = "CashSettlementNotRecordedHere";
         if (supplierGuidance) reason = "SupplierClaimDisputedGuidance";
-        else if (claimSettleable || deal?.money == null) reason = "SupplierSettlementNeedsPermission";
+        else if (supplierClaimSettleable || deal?.money == null) reason = "SupplierSettlementNeedsPermission";
         return { ...action, unavailableReasonKey: reason };
       }
     }
@@ -4678,18 +4690,9 @@ export function DealCockpitView({
               isOwnDeal={financeDecision.isOwnDeal}
               money={decisionMoney}
               t={t}
-              onRecordQuotation={() => {
-                setQuotationError(null);
-                setRecordingQuotation(true);
-              }}
-              onRecordAppraisal={() => {
-                setAppraisalError(null);
-                setRecordingAppraisal(true);
-              }}
-              onRecordApproved={() => {
-                setApprovalError(null);
-                setRecordingApproval(true);
-              }}
+              onRecordQuotation={openRecordQuotation}
+              onRecordAppraisal={openRecordAppraisal}
+              onRecordApproved={openRecordApproval}
               onCorrectApproved={() => {
                 setReopenError(null);
                 setReopeningApproval(true);
@@ -5203,9 +5206,6 @@ export function StageFocusRow({
         ? onGoToDocuments
         : action.onStart
       : undefined;
-  // The step's own button already goes to the documents; a second pointer to
-  // the same place under the list would be two ways to do one thing.
-  const actionGoesToDocuments = primary !== undefined && action?.opens === "DOCUMENTS";
 
   return (
     <Card
@@ -5257,8 +5257,11 @@ export function StageFocusRow({
                 )}
                 {/* The documents are uploaded in the tab at the foot of the
                     page — far below this step on a phone. Offered only where
-                    that tab exists; the documents themselves do not move. */}
-                {outstandingDocuments.length > 0 && onGoToDocuments && !actionGoesToDocuments && (
+                    that tab exists, and only when the step has no button of
+                    its own: the button already goes there, and a second
+                    pointer to the same place would be two ways to do one
+                    thing. The documents themselves do not move. */}
+                {outstandingDocuments.length > 0 && onGoToDocuments && !primary && (
                   <button
                     type="button"
                     className="mt-1.5 inline-flex min-h-9 items-center gap-1 rounded-sm font-medium underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

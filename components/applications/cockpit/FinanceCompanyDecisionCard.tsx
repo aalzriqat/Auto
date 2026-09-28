@@ -155,26 +155,61 @@ export type FinanceDecisionCapabilities = Readonly<{
 }>;
 
 /**
- * Whether each of the card's three first-time actions may be offered.
+ * Whether one of the card's first-time actions may be offered and, when it may
+ * not, the i18n key of the reason. `reasonKey` is present exactly when the
+ * action is not available.
+ */
+export type DecisionActionAvailability = Readonly<{ available: boolean; reasonKey?: string }>;
+
+/**
+ * Whether each of the card's three first-time actions may be offered, and why
+ * not.
  *
- * ONE predicate per action, shared by the card and by the stage focus row
- * (SCRUM-417), so the one next step the focus row names can never be offered
- * to somebody the card would refuse, or withheld from somebody it would serve.
- * The reasoning behind each term is at the card, where the buttons live.
+ * ONE predicate AND one reason per action, shared by the card and by the stage
+ * focus row (SCRUM-417), so the one next step the focus row names can never be
+ * offered to somebody the card would refuse, withheld from somebody it would
+ * serve, or explained with a different sentence than the card writes beside
+ * the row. The reasoning behind each term is at the card, where the buttons
+ * live. Each reason list is ordered by what the operator can act on.
  */
 export function decisionActionAvailability(
   facts: FinanceDecisionFacts,
   caps: FinanceDecisionCapabilities
-): { quotation: boolean; approval: boolean; appraisal: boolean } {
+): Readonly<{
+  quotation: DecisionActionAvailability;
+  approval: DecisionActionAvailability;
+  appraisal: DecisionActionAvailability;
+}> {
   const quotationRecorded = facts.submittedQuotationMinor !== null;
+  const canRecordMissingRate = caps.canRecordQuotation && caps.canEstablishLtvPercent;
+
+  let quotationReason: string | undefined;
+  if (facts.closed) quotationReason = "FinanceDecisionClosed";
+  // The missing rate before the plain permission: its sentence names every
+  // permission recording it needs, so it is the more precise of the two for a
+  // caller who also lacks the create permission (SCRUM-322).
+  else if (facts.ltvMissing && !canRecordMissingRate) quotationReason = "DealPurchaseLtvNeedsApprover";
+  else if (!caps.canRecordQuotation) quotationReason = "QuotationNeedsPermission";
+  // An approval on the record freezes the quotation it was based on. Only the
+  // focus row can reach this with no quotation (a legacy row); it keeps the
+  // reason it has always given there.
+  else if (facts.approvedPurchaseRecorded) quotationReason = "DealPurchaseLtvNeedsApprover";
+
+  let approvalReason: string | undefined;
+  if (facts.closed) approvalReason = "FinanceDecisionClosed";
+  else if (!quotationRecorded) approvalReason = "QuotationNeededFirst";
+  else if (!caps.canRecordApproval) approvalReason = "ApprovedPurchaseNeedsApprover";
+  else if (caps.isOwnDeal) approvalReason = "ApprovedPurchaseNotOwnDeal";
+
+  let appraisalReason: string | undefined;
+  if (facts.closed) appraisalReason = "FinanceDecisionClosed";
+  else if (facts.handedOver) appraisalReason = "AppraisalClosedByHandover";
+  else if (!caps.canRecordAppraisal) appraisalReason = "AppraisalNeedsReviewer";
+
   return {
-    quotation:
-      caps.canRecordQuotation &&
-      !facts.closed &&
-      !facts.approvedPurchaseRecorded &&
-      (!facts.ltvMissing || caps.canEstablishLtvPercent),
-    approval: caps.canRecordApproval && !caps.isOwnDeal && !facts.closed && quotationRecorded,
-    appraisal: caps.canRecordAppraisal && !facts.closed && !facts.handedOver,
+    quotation: { available: quotationReason === undefined, reasonKey: quotationReason },
+    approval: { available: approvalReason === undefined, reasonKey: approvalReason },
+    appraisal: { available: appraisalReason === undefined, reasonKey: appraisalReason },
   };
 }
 
@@ -196,35 +231,25 @@ export function nextFinanceDecisionStep(
   caps: FinanceDecisionCapabilities,
   stage: "APPRAISAL" | "APPROVED_PURCHASE"
 ): { actionKey: string; opens: FinanceDecisionDialog; unavailableReasonKey?: string } {
-  const available = decisionActionAvailability(facts, caps);
+  const availability = decisionActionAvailability(facts, caps);
   if (facts.submittedQuotationMinor === null) {
-    let reason: string | undefined;
-    if (!available.quotation) {
-      if (facts.closed) reason = "FinanceDecisionClosed";
-      else if (!caps.canRecordQuotation) reason = "QuotationNeedsPermission";
-      else reason = "DealPurchaseLtvNeedsApprover";
-    }
-    return { actionKey: "RecordQuotationAction", opens: "RECORD_QUOTATION", unavailableReasonKey: reason };
+    return {
+      actionKey: "RecordQuotationAction",
+      opens: "RECORD_QUOTATION",
+      unavailableReasonKey: availability.quotation.reasonKey,
+    };
   }
   if (stage === "APPRAISAL" && facts.appraisalAmountMinor === null) {
-    let reason: string | undefined;
-    if (!available.appraisal) {
-      if (facts.closed) reason = "FinanceDecisionClosed";
-      else if (facts.handedOver) reason = "AppraisalClosedByHandover";
-      else reason = "AppraisalNeedsReviewer";
-    }
-    return { actionKey: "RecordAppraisalAction", opens: "RECORD_APPRAISAL", unavailableReasonKey: reason };
-  }
-  let reason: string | undefined;
-  if (!available.approval) {
-    if (facts.closed) reason = "FinanceDecisionClosed";
-    else if (!caps.canRecordApproval) reason = "ApprovedPurchaseNeedsApprover";
-    else reason = "ApprovedPurchaseNotOwnDeal";
+    return {
+      actionKey: "RecordAppraisalAction",
+      opens: "RECORD_APPRAISAL",
+      unavailableReasonKey: availability.appraisal.reasonKey,
+    };
   }
   return {
     actionKey: "RecordApprovedPurchaseAction",
     opens: "RECORD_APPROVAL",
-    unavailableReasonKey: reason,
+    unavailableReasonKey: availability.approval.reasonKey,
   };
 }
 
@@ -267,7 +292,7 @@ export function FinanceCompanyDecisionCard({
   // The capability moved and this condition moved with it: keyed on
   // `canRecordApproval` it would keep offering the action to a default MANAGER,
   // whose entry the server now refuses.
-  const quotationActionAvailable = availability.quotation;
+  const quotationActionAvailable = availability.quotation.available;
   // Who may record THIS deal's missing rate: the full callable capability, not
   // the rate authority alone (SCRUM-322). The rate is only ever written
   // together with the quotation, through `recordSubmittedQuotation`, whose door
@@ -280,20 +305,22 @@ export function FinanceCompanyDecisionCard({
   // note and the button are now keyed on the same predicate, so the self-service
   // instruction is only ever shown to someone who can carry it out; everyone
   // else is told who can. No backend check changes: both writers still refuse.
-  const canRecordMissingRate = canRecordQuotation && canEstablishLtvPercent;
+  //
   // Same fact, two audiences. Whoever can record the rate is told to record it
   // with the quotation; whoever cannot — a default SALES (no approval), a
   // default MANAGER (no finance visibility, SCRUM-117 2026-09-13 15:33), or the
   // SCRUM-322 custom role (rate authority without CREATE) — is told who can,
   // rather than being sent to a field that is not there and a server that would
-  // refuse them. Absent once a quotation exists or the deal is closed.
-  let missingRateNote: string | undefined;
-  if (facts.submittedQuotationMinor === null && facts.ltvMissing && !facts.closed) {
-    missingRateNote = canRecordMissingRate
-      ? t("FinanceCompanyLtvMissing")
-      : t("DealPurchaseLtvNeedsApprover");
+  // refuse them. That refusal, like every other one on this row, is the shared
+  // reason `decisionActionAvailability` also gives the focus row, so the step
+  // and the card never explain one withheld action two ways. Absent once a
+  // quotation exists.
+  let quotationNote: string | undefined;
+  if (facts.submittedQuotationMinor === null) {
+    if (availability.quotation.reasonKey) quotationNote = t(availability.quotation.reasonKey);
+    else if (facts.ltvMissing) quotationNote = t("FinanceCompanyLtvMissing");
   }
-  const approvalActionAvailable = availability.approval;
+  const approvalActionAvailable = availability.approval.available;
   // "Not in play until the quotation has gone out" is owned by the ROW's own
   // render condition below, not repeated here — a second copy of the rule read
   // as defence in depth but was untestable through this gate (the row hides the
@@ -304,7 +331,7 @@ export function FinanceCompanyDecisionCard({
   // one screen that can record one must also be able to correct it. The server
   // already handles the consequence: a replacement appraisal supersedes its
   // predecessor and clears the approval that was based on it, on the record.
-  const appraisalActionAvailable = availability.appraisal;
+  const appraisalActionAvailable = availability.appraisal.available;
 
   const derived: Array<{ key: string; label: string; value: string }> = [];
   if (facts.financeCompanyFundedPortionMinor !== null) {
@@ -344,11 +371,7 @@ export function FinanceCompanyDecisionCard({
    * step they can still take themselves comes before the ones somebody else has
    * to take.
    */
-  let approvalNote: string | undefined;
-  if (facts.closed) approvalNote = t("FinanceDecisionClosed");
-  else if (!quotationRecorded) approvalNote = t("QuotationNeededFirst");
-  else if (!canRecordApproval) approvalNote = t("ApprovedPurchaseNeedsApprover");
-  else if (isOwnDeal) approvalNote = t("ApprovedPurchaseNotOwnDeal");
+  const approvalNote = availability.approval.reasonKey ? t(availability.approval.reasonKey) : undefined;
 
   /**
    * Correcting an amount already on the record.
@@ -408,7 +431,7 @@ export function FinanceCompanyDecisionCard({
               <span className="text-muted-foreground">{t("NotRecordedYet")}</span>
             )
           }
-          note={missingRateNote}
+          note={quotationNote}
           action={
             quotationActionAvailable ? (
               <Button size="sm" variant={quotationRecorded ? "outline" : "default"} onClick={onRecordQuotation}>
@@ -433,20 +456,15 @@ export function FinanceCompanyDecisionCard({
               )
             }
             note={
-              facts.appraisalAmountMinor !== null || facts.closed
-                ? undefined
-                : // Withdrawn by the HANDOVER, not by the permission — and this
-                  // was the one withdrawal on this card that named no reason.
-                  // `recordAppraisal` refuses once the vehicle has gone out, so
-                  // the action is correctly gone, but the rail goes on asking
-                  // for the appraisal: on screen that reads as a deal stuck on a
-                  // step with no button, whoever you are. It says where the deal
-                  // actually goes from here instead.
-                  facts.handedOver
-                  ? t("AppraisalClosedByHandover")
-                  : !canRecordAppraisal
-                    ? t("AppraisalNeedsReviewer")
-                    : undefined
+              // Every withdrawal names its reason — the HANDOVER included, once
+              // the one withdrawal on this card that named none. `recordAppraisal`
+              // refuses once the vehicle has gone out, so the action is
+              // correctly gone, but the rail goes on asking for the appraisal:
+              // on screen that read as a deal stuck on a step with no button,
+              // whoever you are. The same reason the focus row gives.
+              facts.appraisalAmountMinor === null && availability.appraisal.reasonKey
+                ? t(availability.appraisal.reasonKey)
+                : undefined
             }
             action={
               appraisalActionAvailable ? (

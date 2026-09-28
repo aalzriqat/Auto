@@ -610,6 +610,7 @@ const dealWizardMessages = defineBilingualMessages({
     "يرفع المستندات ويتحقق منها فريق التمويل.",
   ],
   // G7 — the financing reconciliation review.
+  // Also the review dialog's title: the button and the dialog it opens say the same thing.
   ResolveReconciliationAction: ["Review the reconciliation note", "مراجعة ملاحظة التسوية"],
   ReconciliationBeforeClose: [
     "A figure on this deal was flagged as unreliable when it was calculated. Record what you checked before closing.",
@@ -619,7 +620,6 @@ const dealWizardMessages = defineBilingualMessages({
     "This deal's reconciliation note is reviewed by the accountant who closes deals.",
     "يراجع ملاحظة التسوية على هذه الصفقة المحاسبُ المخوّل بإغلاق الصفقات.",
   ],
-  ResolveReconciliationTitle: ["Review the reconciliation note", "مراجعة ملاحظة التسوية"],
   ResolveReconciliationDesc: [
     "Clearing the flag records that someone checked the figures. It changes no amount.",
     "إزالة الوسم تُثبت أن أحداً راجع الأرقام، ولا تغيّر أي مبلغ.",

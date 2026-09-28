@@ -17,8 +17,14 @@
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { renderToStaticMarkup } from "react-dom/server";
 import type { DealCockpitData, FinanceDecisionWiring } from "./DealCockpit";
-import type { FinanceDecisionFacts } from "./FinanceCompanyDecisionCard";
+import {
+  FinanceCompanyDecisionCard,
+  nextFinanceDecisionStep,
+  type FinanceDecisionCapabilities,
+  type FinanceDecisionFacts,
+} from "./FinanceCompanyDecisionCard";
 
 const language = vi.hoisted(() => ({ locale: "ar" as "ar" | "en" }));
 
@@ -503,9 +509,91 @@ describe("every unavailable action says why", () => {
       })
     );
 
-    expect(screen.getByText("FinanceDecisionClosed")).toBeTruthy();
+    // The appraisal row and the approval row each say so — the appraisal row
+    // is the one the focus row asks about on this deal, so it may not go silent.
+    expect(screen.getAllByText("FinanceDecisionClosed")).toHaveLength(2);
     expect(cardButton("RecordQuotationAction")).toBeUndefined();
     expect(cardButton("RecordApprovedPurchaseAction")).toBeUndefined();
+    expect(cardButton("RecordAppraisalAction")).toBeUndefined();
+  });
+
+  test("a closed deal with no quotation says so on the quotation row too", () => {
+    renderCockpit(wiring({ facts: { closed: true } }));
+
+    // Quotation row and approval row; the appraisal row is not in play yet.
+    expect(screen.getAllByText("FinanceDecisionClosed")).toHaveLength(2);
+    expect(cardButton("RecordQuotationAction")).toBeUndefined();
+  });
+
+  test("a caller who cannot create applications is told who records the quotation", () => {
+    renderCockpit(wiring({ canRecordQuotation: false }));
+
+    expect(cardButton("RecordQuotationAction")).toBeUndefined();
+    expect(screen.getByText("QuotationNeedsPermission")).toBeTruthy();
+  });
+});
+
+/**
+ * SCRUM-417 — the focus row's step and the card read ONE reason table
+ * (`decisionActionAvailability`), so whenever the step withholds an action and
+ * names why, the card names the same reason. Swept over every combination of
+ * the facts and capabilities the table reads, on both stages the step serves.
+ */
+describe("the focus row and the card never give different reasons", () => {
+  const flags = [
+    "closed",
+    "ltvMissing",
+    "handedOver",
+    "quotationRecorded",
+    "appraisalRecorded",
+    "canRecordQuotation",
+    "canRecordApproval",
+    "canEstablishLtvPercent",
+    "canRecordAppraisal",
+    "isOwnDeal",
+  ] as const;
+  type Combination = Record<(typeof flags)[number], boolean>;
+  const combinations: Combination[] = Array.from({ length: 2 ** flags.length }, (_, bits) =>
+    Object.fromEntries(flags.map((flag, i) => [flag, (bits & (1 << i)) !== 0])) as Combination
+  );
+
+  test.each(["APPRAISAL", "APPROVED_PURCHASE"] as const)("on %s", (stage) => {
+    let reasonsChecked = 0;
+    for (const c of combinations) {
+      const facts: FinanceDecisionFacts = {
+        ...wiring().facts,
+        closed: c.closed,
+        ltvMissing: c.ltvMissing,
+        handedOver: c.handedOver,
+        submittedQuotationMinor: c.quotationRecorded ? 12_500 * JOD : null,
+        appraisalAmountMinor: c.appraisalRecorded ? 11_000 * JOD : null,
+      };
+      const caps: FinanceDecisionCapabilities = {
+        canRecordQuotation: c.canRecordQuotation,
+        canRecordApproval: c.canRecordApproval,
+        canEstablishLtvPercent: c.canEstablishLtvPercent,
+        canRecordAppraisal: c.canRecordAppraisal,
+        isOwnDeal: c.isOwnDeal,
+      };
+      const step = nextFinanceDecisionStep(facts, caps, stage);
+      if (!step.unavailableReasonKey) continue;
+      const html = renderToStaticMarkup(
+        <FinanceCompanyDecisionCard
+          facts={facts}
+          {...caps}
+          money={(minor) => String(minor)}
+          t={(key) => key}
+          onRecordQuotation={() => {}}
+          onRecordAppraisal={() => {}}
+          onRecordApproved={() => {}}
+          onCorrectApproved={() => {}}
+        />
+      );
+      expect(html, `${stage} ${JSON.stringify(c)}`).toContain(step.unavailableReasonKey);
+      reasonsChecked += 1;
+    }
+    // Not vacuous: most combinations withhold the step's action.
+    expect(reasonsChecked).toBeGreaterThan(500);
   });
 });
 

@@ -313,7 +313,11 @@ describe("the facts the card is given", () => {
     renderCockpit();
 
     expect(screen.queryByText("FinanceCompanyLtvMissing")).toBeNull();
-    expect(screen.getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
+    // The card and the focus row give the SAME reason (SCRUM-417): one reason
+    // table, read by both.
+    const card = screen.getByTestId("deal-finance-decision");
+    expect(within(card).getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
+    expect(within(screen.getByTestId("deal-next-step")).getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "RecordQuotationAction" })).toBeNull();
   });
 

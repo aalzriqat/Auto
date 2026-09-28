@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { ClipboardCheck, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useResetOnOpen } from "./DealCustodyDialogs";
 
 /**
  * Clears a deal's financing-reconciliation flag, with a note saying what was
@@ -51,13 +52,7 @@ export function ResolveReconciliationDialog({
 }>) {
   const [note, setNote] = useState("");
 
-  // Reset on the closed -> open transition only, as the sibling dialogs do.
-  const wasOpenRef = useRef(false);
-  useEffect(() => {
-    const justOpened = open && !wasOpenRef.current;
-    wasOpenRef.current = open;
-    if (justOpened) setNote("");
-  }, [open]);
+  useResetOnOpen(open, () => setNote(""));
 
   const noteMissing = note.trim() === "";
 
@@ -65,7 +60,7 @@ export function ResolveReconciliationDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>{t("ResolveReconciliationTitle")}</DialogTitle>
+          <DialogTitle>{t("ResolveReconciliationAction")}</DialogTitle>
           <DialogDescription>{t("ResolveReconciliationDesc")}</DialogDescription>
         </DialogHeader>
 
