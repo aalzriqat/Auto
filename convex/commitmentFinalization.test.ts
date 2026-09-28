@@ -1329,7 +1329,7 @@ describe("P2-F M3 finalization barrier — CONSUME", () => {
    * either be refused or leave exactly one sale row for the car.
    *
    * ⚠️ MARKED `test.fails` — IT DOES NOT HOLD TODAY (pre-existing, not caused
-   * by SCRUM-417; reported for a separate issue, deliberately NOT fixed here).
+   * by SCRUM-417; tracked as SCRUM-425, deliberately NOT fixed here).
    * Observed at 747e57b60: `completeFromQuote` SUCCEEDS beside the PENDING
    * draft, so the car carries TWO sale rows — the draft, still PENDING, and a
    * COMPLETED sale. A later `completeDraft` on the orphan draft is refused

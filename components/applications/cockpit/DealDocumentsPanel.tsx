@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -51,8 +51,9 @@ export function documentRowKey(doc: Pick<DealDocument, "_id" | "ruleId">): strin
 
 /**
  * The file picker behind an Upload (or, for a rejected file, a replacement)
- * button. A hidden input driven by its label, so the button stays a real,
- * focusable control and the same file can be picked again after a failure.
+ * button. A native button opens a hidden input, so the control is in the tab
+ * order, answers Enter/Space and disables while busy; the input is reset after
+ * each pick so the same file can be chosen again after a failure.
  */
 function DocumentUploadControl({
   rowKey,
@@ -61,12 +62,15 @@ function DocumentUploadControl({
   onPick,
 }: Readonly<{ rowKey: string; label: string; busy: boolean; onPick: (file: File) => void }>) {
   const inputId = `deal-doc-file-${rowKey}`;
+  const inputRef = useRef<HTMLInputElement>(null);
   return (
     <>
       <input
+        ref={inputRef}
         type="file"
         id={inputId}
         className="hidden"
+        tabIndex={-1}
         disabled={busy}
         onChange={(e) => {
           const file = e.target.files?.[0];
@@ -76,11 +80,16 @@ function DocumentUploadControl({
           e.target.value = "";
         }}
       />
-      <Button size="sm" variant="outline" asChild disabled={busy}>
-        <label htmlFor={inputId} className="cursor-pointer">
-          <Upload className="h-4 w-4 me-1" />
-          {label}
-        </label>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={busy}
+        aria-controls={inputId}
+        onClick={() => inputRef.current?.click()}
+      >
+        <Upload className="h-4 w-4 me-1" />
+        {label}
       </Button>
     </>
   );
