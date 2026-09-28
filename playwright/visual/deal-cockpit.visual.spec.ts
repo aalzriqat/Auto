@@ -447,6 +447,19 @@ for (const locale of LOCALES) {
             expect(box.x + box.width).toBeLessThanOrEqual(mainBox.x + mainBox.width + 0.5);
           }
 
+          // Round 3 (S417-R3-1): the "No longer required" history — each row
+          // carries View and nothing else, inside main.
+          const history = page.getByTestId("deal-documents-history");
+          await expect(history).toBeVisible();
+          for (const id of ["h1", "h2"]) {
+            const row = history.getByTestId(`deal-document-history-${id}`);
+            await expect(row).toBeVisible();
+            await expect(row.locator("button, label, input")).toHaveCount(1);
+            const box = (await row.locator("button").boundingBox())!;
+            expect(box.x).toBeGreaterThanOrEqual(mainBox.x - 0.5);
+            expect(box.x + box.width).toBeLessThanOrEqual(mainBox.x + mainBox.width + 0.5);
+          }
+
           const overflow = await main.evaluate((el) => {
             const box = el.getBoundingClientRect();
             const culprits = Array.from(el.querySelectorAll<HTMLElement>("*"))

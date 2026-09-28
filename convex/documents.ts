@@ -1,6 +1,6 @@
 import { v, ConvexError } from "convex/values";
-import { query } from "./_generated/server";
-import type { Doc } from "./_generated/dataModel";
+import { query, type QueryCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
 import { mutation } from "./functions";
 import { requireTenantAuth, requireOwner, requireOwnedRow } from "./utils/tenancy";
 import { IN_FLIGHT_FINANCE_STATUSES } from "./utils/financeStatuses";
@@ -92,6 +92,43 @@ export const removeRule = mutation({
 
 // --- Application Documents ---
 
+/**
+ * The rows the deal-document reads split: the application (null when missing
+ * or foreign), the rules that currently apply to it, and every stored row.
+ *
+ * SCRUM-421: "applies" is EXACTLY the set
+ * `assertRequiredApplicationDocumentsComplete` refuses approval on and
+ * `dealCockpit` counts — live rules, through `ruleAppliesToQuote`. The active
+ * checklist (`getForApplication`) and the history (`getHistoryForApplication`)
+ * split the stored rows under this one predicate, so no row is in both.
+ */
+async function loadApplicationDocumentScope(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  applicationId: Id<"financeApplications">
+) {
+  const application = await ctx.db.get(applicationId);
+  if (!application || application.orgId !== orgId) return null;
+  const quote = await ctx.db.get(application.quoteId);
+  const dealQuote = quote && quote.orgId === orgId ? quote : null;
+
+  const rules = await ctx.db
+    .query("companyDocumentRules")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  const rulesById = new Map(rules.map((rule) => [rule._id, rule]));
+  const applicableRules = rules.filter((rule) => ruleAppliesToQuote(rule, dealQuote));
+  const applicableById = new Map(applicableRules.map((rule) => [rule._id, rule]));
+
+  const docs = await ctx.db
+    .query("applicationDocuments")
+    .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+    .filter((q) => q.eq(q.field("orgId"), orgId))
+    .collect();
+
+  return { application, rulesById, applicableRules, applicableById, docs };
+}
+
 export const getForApplication = query({
   args: {
     orgId: v.id("organizations"),
@@ -100,32 +137,18 @@ export const getForApplication = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
 
-    const application = await ctx.db.get(args.applicationId);
-    if (!application || application.orgId !== args.orgId) return [];
-    const quote = await ctx.db.get(application.quoteId);
-    const dealQuote = quote && quote.orgId === args.orgId ? quote : null;
+    const scope = await loadApplicationDocumentScope(ctx, args.orgId, args.applicationId);
+    if (!scope) return [];
+    const { application, applicableRules, applicableById, docs } = scope;
 
     /**
      * SCRUM-421: the panel lists EXACTLY the rules that currently apply to this
-     * deal — live rules, through `ruleAppliesToQuote`, the set
-     * `assertRequiredApplicationDocumentsComplete` refuses approval on and
-     * `dealCockpit` counts. A stored row whose rule was removed (or no longer
-     * applies) is left in storage untouched — its file is history — but is not
-     * listed: an Upload or Verify control on it would act on a requirement the
-     * guard no longer enforces (SCRUM-417 round 2, S421-R2-3/R2-4).
+     * deal. A stored row whose rule was removed (or no longer applies) is left
+     * in storage untouched but is not listed here: an Upload or Verify control
+     * on it would act on a requirement the guard no longer enforces (SCRUM-417
+     * round 2, S421-R2-3/R2-4). Its file stays reachable, view-only, through
+     * `getHistoryForApplication` (round 3, Codex S417-R3-1).
      */
-    const rules = await ctx.db
-      .query("companyDocumentRules")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
-    const applicableRules = rules.filter((rule) => ruleAppliesToQuote(rule, dealQuote));
-    const applicableById = new Map(applicableRules.map((rule) => [rule._id, rule]));
-
-    const docs = await ctx.db
-      .query("applicationDocuments")
-      .withIndex("by_application", (q) => q.eq("applicationId", args.applicationId))
-      .filter((q) => q.eq(q.field("orgId"), args.orgId))
-      .collect();
     const activeDocs = docs.filter((doc) => applicableById.has(doc.ruleId));
 
     const materialized = await Promise.all(
@@ -166,6 +189,48 @@ export const getForApplication = query({
       }));
 
     return [...materialized, ...unmaterialized];
+  },
+});
+
+/**
+ * Stored rows that are no longer on the active checklist and still carry a
+ * file — the evidence of a requirement removed (or no longer applying) after
+ * the upload (SCRUM-417 round 3, Codex S417-R3-1).
+ *
+ * Read-only history: nothing here is actionable, and nothing here counts
+ * toward approval — the checklist and the approval guard still read live
+ * applicable rules only. A row with no file is omitted: there is nothing to
+ * view. `ruleName` is null when the rule itself was deleted; the screen labels
+ * that line. A separate query rather than a new field on `getForApplication`,
+ * which returns an array: a client built against that shape keeps working
+ * unchanged. Same permission and tenancy as `getForApplication`.
+ */
+export const getHistoryForApplication = query({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
+
+    const scope = await loadApplicationDocumentScope(ctx, args.orgId, args.applicationId);
+    if (!scope) return [];
+    const { rulesById, applicableById, docs } = scope;
+
+    const history = await Promise.all(
+      docs
+        .filter((doc) => !applicableById.has(doc.ruleId) && doc.fileId !== undefined)
+        .map(async (doc) => ({
+          _id: doc._id,
+          ruleId: doc.ruleId,
+          status: doc.status,
+          ruleName: rulesById.get(doc.ruleId)?.documentName ?? null,
+          uploadedAt: doc.uploadedAt ?? null,
+          fileUrl: doc.fileId ? await ctx.storage.getUrl(doc.fileId) : null,
+        }))
+    );
+    // A storage object that is gone has nothing to show.
+    return history.filter((row) => row.fileUrl !== null);
   },
 });
 

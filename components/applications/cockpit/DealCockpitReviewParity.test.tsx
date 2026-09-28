@@ -982,6 +982,77 @@ describe("documents — documents.updateDocumentStatus / upload, from the checkl
     expect(panel.textContent).toContain("National ID");
     expect(within(panel).queryByRole("button")).toBeNull();
     expect(screen.queryByText("Upload")).toBeNull();
+    expect(screen.queryByTestId("deal-documents-history")).toBeNull();
+  });
+
+  /**
+   * Round 3 (Codex S417-R3-1): a file uploaded for a requirement removed later
+   * leaves the active checklist but stays viewable, from
+   * `documents.getHistoryForApplication`, in a "No longer required" section —
+   * View only, whatever the caller's document authority.
+   */
+  describe("no longer required — a removed requirement's file is View only, for every role", () => {
+    const HISTORY_QUERY = "documents:getHistoryForApplication";
+    const ROLES = {
+      "read only": [],
+      "create only": [PERMISSIONS.CREATE_FINANCE_APPLICATION],
+      "verify only": [PERMISSIONS.VERIFY_FINANCE_DOCUMENTS],
+      "create and verify": [PERMISSIONS.CREATE_FINANCE_APPLICATION, PERMISSIONS.VERIFY_FINANCE_DOCUMENTS],
+    } as const;
+
+    test.each(Object.keys(ROLES) as Array<keyof typeof ROLES>)("%s", (role) => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      for (const permission of ROLES[role]) permissions.add(permission);
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      queryResults.set(DOCUMENTS_QUERY, [
+        { _id: "doc_1", ruleId: "r1", ruleName: "National ID", status: "MISSING", isRequired: true, fileUrl: null },
+      ]);
+      queryResults.set(HISTORY_QUERY, [
+        { _id: "doc_old", ruleId: "r_gone", status: "UPLOADED", ruleName: null, uploadedAt: Date.UTC(2026, 7, 2), fileUrl: "https://files/old-letter.pdf" },
+        { _id: "doc_rejected", ruleId: "r_other", status: "REJECTED", ruleName: "Company letter", uploadedAt: null, fileUrl: "https://files/letter.png" },
+      ]);
+      renderCockpit();
+
+      const section = screen.getByTestId("deal-documents-history");
+      for (const id of ["doc_old", "doc_rejected"]) {
+        const row = within(section).getByTestId(`deal-document-history-${id}`);
+        const buttons = within(row).getAllByRole("button");
+        expect(buttons.map((button) => button.textContent)).toEqual(["ViewFile"]);
+        expect(row.querySelector('input[type="file"]')).toBeNull();
+      }
+      // A deleted rule is labelled, never blank; a surviving name is kept.
+      expect(within(section).getByTestId("deal-document-history-doc_old").textContent).toContain("RemovedRequirement");
+      expect(within(section).getByTestId("deal-document-history-doc_rejected").textContent).toContain("Company letter");
+      // History rows are not checklist rows: no active-row test id for them.
+      expect(screen.queryByTestId("deal-document-doc_old")).toBeNull();
+    });
+
+    test("View opens the kept file", () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      queryResults.set(DOCUMENTS_QUERY, []);
+      queryResults.set(HISTORY_QUERY, [
+        { _id: "doc_old", ruleId: "r_gone", status: "VERIFIED", ruleName: "Old bank letter", uploadedAt: null, fileUrl: "https://files/old-letter.pdf" },
+      ]);
+      renderCockpit();
+      fireEvent.click(within(screen.getByTestId("deal-document-history-doc_old")).getByRole("button", { name: "ViewFile" }));
+      const frame = document.querySelector('iframe[src="https://files/old-letter.pdf"]');
+      expect(frame).not.toBeNull();
+    });
+
+    test("CONTROL — no history rows, no section", () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      queryResults.set(DOCUMENTS_QUERY, [
+        { _id: "doc_1", ruleId: "r1", ruleName: "National ID", status: "MISSING", isRequired: true, fileUrl: null },
+      ]);
+      queryResults.set(HISTORY_QUERY, []);
+      renderCockpit();
+      expect(screen.queryByTestId("deal-documents-history")).toBeNull();
+    });
   });
 });
 

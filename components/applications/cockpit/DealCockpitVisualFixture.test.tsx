@@ -708,7 +708,8 @@ const FOCUS_STATES = [
     action: { actionKey: "CompleteCashSaleAction", unavailableReasonKey: "CashSaleCompletionNeedsReadAccess" },
   },
   {
-    // Round 2 (S417-R2-3, contained): a quote-linked draft holding a deposit.
+    // Round 2 (S417-R2-3, contained); round 3 (Sonnet S417-R3-1/R3-2): the
+    // reason now says only what is true and points at the Sales page.
     id: "cash-handover-deposit-decision",
     kind: "CASH",
     stageKey: "HANDOVER",
@@ -724,11 +725,13 @@ const FOCUS_STATES = [
  * at once — a MISSING row reset with its old file still attached shows View,
  * Verify and the replacement upload side by side, the widest row the panel
  * can paint. Rendered through the REAL panel for a verifier who may upload.
+ * Round 3 (S417-R3-1): with a "No longer required" history below it — a
+ * deleted rule's file and a long-named one, View only.
  */
 function documentsPanelMarkup(locale: "en" | "ar"): string {
   const table = dictionaries[locale] as Record<string, string>;
   const t = (key: string) => table[key] || (dictionaries.en as Record<string, string>)[key] || key;
-  for (const key of ["ViewFile", "Verify", "ReplaceFile", "Upload", "DocMissing", "DocRejected"]) {
+  for (const key of ["ViewFile", "Verify", "ReplaceFile", "Upload", "DocMissing", "DocRejected", "DocUploaded", "DocVerified", "DocumentsNoLongerRequired", "DocumentsNoLongerRequiredNote", "RemovedRequirement"]) {
     expect(table[key], `${locale} dictionary lacks ${key}`).toBeTruthy();
   }
   const name = (en: string, ar: string) => (locale === "ar" ? ar : en);
@@ -738,6 +741,10 @@ function documentsPanelMarkup(locale: "en" | "ar"): string {
         { _id: "d1", ruleId: "r1", ruleName: name("National ID copy", "صورة الهوية الشخصية"), status: "MISSING", fileUrl: "https://files.test/old.pdf" },
         { _id: "d2", ruleId: "r2", ruleName: name("Salary certificate", "شهادة الراتب"), status: "REJECTED", fileUrl: "https://files.test/salary.pdf" },
         { _id: null, ruleId: "r3", ruleName: name("Bank statement — last six months", "كشف حساب بنكي — آخر ستة أشهر"), status: "MISSING", fileUrl: null },
+      ]}
+      history={[
+        { _id: "h1", ruleName: null, status: "UPLOADED", fileUrl: "https://files.test/removed.pdf", uploadedLabel: "2 Aug 2026" },
+        { _id: "h2", ruleName: name("Employer letter addressed to the finance company", "خطاب جهة العمل موجّه إلى شركة التمويل"), status: "VERIFIED", fileUrl: "https://files.test/letter.pdf", uploadedLabel: null },
       ]}
       checklist={[]}
       canUpload

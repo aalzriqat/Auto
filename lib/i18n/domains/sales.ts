@@ -621,6 +621,13 @@ const dealWizardMessages = defineBilingualMessages({
   ],
   // A rejected file is replaced in place; the server swaps the file on the same row.
   ReplaceFile: ["Upload a replacement", "رفع ملف بديل"],
+  // Round 3 (S417-R3-1): files kept for requirements removed after the upload — view only.
+  DocumentsNoLongerRequired: ["No longer required", "لم تعد مطلوبة"],
+  DocumentsNoLongerRequiredNote: [
+    "Files uploaded for requirements that have since been removed. Kept for reference; they don't count toward approval.",
+    "ملفات رُفعت لمتطلبات أُزيلت لاحقاً. محفوظة للرجوع إليها، ولا تُحتسب في الاعتماد.",
+  ],
+  RemovedRequirement: ["Removed requirement", "متطلب محذوف"],
   // G7 — the financing reconciliation review.
   // Also the review dialog's title: the button and the dialog it opens say the same thing.
   ResolveReconciliationAction: ["Review the reconciliation note", "مراجعة ملاحظة التسوية"],
@@ -670,10 +677,12 @@ const dealWizardMessages = defineBilingualMessages({
     "This sale is still a draft. It is completed in the sale form, which also needs access to view customers, vehicles and team members.",
     "هذا البيع ما زال مسودة. يُتمَّم من نموذج البيع، الذي يتطلب أيضاً صلاحية عرض العملاء والمركبات وأعضاء الفريق.",
   ],
-  // Round 2 (S417-R2-3, contained): the sale form cannot record a deposit treatment.
+  // Round 2 (S417-R2-3, contained) — round 3 (Sonnet S417-R3-1/R3-2): the reason
+  // states only what is true (a quote-linked draft with a held reservation
+  // deposit) and where it is completed; no claim about the deposit decision.
   CashSaleCompletionNeedsDepositDecision: [
-    "This draft came from a quotation that holds a customer deposit. Completing it needs a decision on that deposit, which the sale form cannot record. Complete it where the quotation is completed.",
-    "جاءت هذه المسودة من عرض سعر عليه عربون من العميل. يتطلب إتمامها قراراً بشأن هذا العربون، ونموذج البيع لا يسجّله. أتمّها من حيث يُتمَّم عرض السعر.",
+    "This draft sale is linked to a quotation that holds a reservation deposit, so it can't be completed from the deal screen. Open it from the Sales page to complete it.",
+    "هذا البيع المسودّة مرتبط بعرض سعر عليه عربون حجز، لذا لا يمكن إتمامه من شاشة الصفقة. افتحه من صفحة المبيعات لإتمامه.",
   ],
   // SCRUM417-R1 — a legacy approval with no quotation: the approval freezes it.
   ApprovedPurchaseFreezesQuotation: [

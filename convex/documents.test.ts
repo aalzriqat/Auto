@@ -510,3 +510,111 @@ describe("concurrent ensure calls", () => {
     expect(rows[0]._id).toBe(ids[0]);
   });
 });
+
+/**
+ * SCRUM-417 round 3 — Codex S417-R3-1: filtering the active checklist to live
+ * rules (round 2) hid the FILE of a rule removed after its upload. The active
+ * list and the approval guard keep reading live rules; the stored evidence
+ * stays reachable, view-only, through `documents.getHistoryForApplication`.
+ */
+describe("a removed rule's uploaded file stays viewable as history", () => {
+  async function uploadedThenRemoved(s: Setup) {
+    const kept = await addRule(s, "National ID");
+    const removed = await addRule(s, "Old Bank Letter");
+    const { applicationId } = await createApplication(s);
+    const removedRow = (await rowsForApplication(s, applicationId)).find((row) => row.ruleId === removed)!;
+    await s.seller.as.mutation(api.documents.saveDocumentFile, {
+      orgId: s.orgId,
+      documentId: removedRow._id,
+      fileId: await storePdf(s),
+    });
+    // Exactly what `documents.removeRule` does after its owner check.
+    await s.t.run((ctx) => ctx.db.delete(removed));
+    return { kept, removed, removedRow, applicationId };
+  }
+
+  test("the active list omits it; the history lists it with its file, a null name and its upload time", async () => {
+    const s = await setup();
+    const { kept, removed, removedRow, applicationId } = await uploadedThenRemoved(s);
+
+    const active = await s.seller.as.query(api.documents.getForApplication, { orgId: s.orgId, applicationId });
+    expect(active.map((doc) => doc.ruleId)).toEqual([kept]);
+
+    const history = await s.seller.as.query(api.documents.getHistoryForApplication, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({ _id: removedRow._id, ruleId: removed, status: "UPLOADED", ruleName: null });
+    expect(typeof history[0].fileUrl).toBe("string");
+    expect(typeof history[0].uploadedAt).toBe("number");
+  });
+
+  test("CONTROL — a removed rule whose row never had a file is not history", async () => {
+    const s = await setup();
+    await addRule(s, "National ID");
+    const removed = await addRule(s, "Old Bank Letter");
+    const { applicationId } = await createApplication(s);
+    await s.t.run((ctx) => ctx.db.delete(removed));
+
+    const history = await s.seller.as.query(api.documents.getHistoryForApplication, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    expect(history).toEqual([]);
+  });
+
+  test("CONTROL — a live rule's uploaded file is active work, never history", async () => {
+    const s = await setup();
+    await addRule(s, "National ID");
+    const { applicationId } = await createApplication(s);
+    const row = (await rowsForApplication(s, applicationId))[0];
+    await s.seller.as.mutation(api.documents.saveDocumentFile, {
+      orgId: s.orgId,
+      documentId: row._id,
+      fileId: await storePdf(s),
+    });
+
+    const history = await s.seller.as.query(api.documents.getHistoryForApplication, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    expect(history).toEqual([]);
+  });
+
+  test("the approval guard is unchanged: the removed rule's history row does not block approval", async () => {
+    const s = await setup();
+    const { kept, applicationId } = await uploadedThenRemoved(s);
+    await toUnderReview(s, applicationId);
+    const keptRow = (await rowsForApplication(s, applicationId)).find((row) => row.ruleId === kept)!;
+    await s.seller.as.mutation(api.documents.saveDocumentFile, {
+      orgId: s.orgId,
+      documentId: keptRow._id,
+      fileId: await storePdf(s),
+    });
+    await s.approver.as.mutation(api.documents.updateDocumentStatus, {
+      orgId: s.orgId,
+      documentId: keptRow._id,
+      status: "VERIFIED",
+    });
+    await s.approver.as.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "APPROVED" });
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("APPROVED");
+  });
+
+  test("same gate as the active list: refused without view:finance_applications; another org sees nothing", async () => {
+    const s = await setup();
+    const { applicationId } = await uploadedThenRemoved(s);
+    const noView = await s.mk("docs_no_view", ["create:sales", "view:sales"]);
+    await expect(
+      noView.as.query(api.documents.getHistoryForApplication, { orgId: s.orgId, applicationId })
+    ).rejects.toThrow();
+
+    const otherOrg = await s.t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() })
+    );
+    const outsider = await s.mk("docs_outsider", FULL, otherOrg);
+    expect(
+      await outsider.as.query(api.documents.getHistoryForApplication, { orgId: otherOrg, applicationId })
+    ).toEqual([]);
+  });
+});

@@ -10,7 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Check, Download, Eye, FileText, Upload, X } from "lucide-react";
+import { Archive, Check, Download, Eye, FileText, Upload, X } from "lucide-react";
 
 /**
  * A document as `documents.getForApplication` serves it: the per-deal row with
@@ -27,6 +27,21 @@ export type DealDocument = {
   ruleName: string;
   status: string;
   fileUrl: string | null;
+};
+
+/**
+ * A stored file whose requirement no longer applies to this deal, as
+ * `documents.getHistoryForApplication` serves it (SCRUM-417 round 3,
+ * S417-R3-1). View only: it is neither work nor counted toward approval.
+ * `ruleName` is null when the rule itself was deleted; `uploadedLabel` is the
+ * upload moment already formatted, or null when none was recorded.
+ */
+export type DealDocumentHistoryItem = {
+  _id: string;
+  ruleName: string | null;
+  status: string;
+  fileUrl: string;
+  uploadedLabel: string | null;
 };
 
 /** One stable key per checklist line, whether or not its row exists yet. */
@@ -96,6 +111,7 @@ const DOCUMENT_STATUS_LABEL: Record<string, string> = {
  */
 export function DealDocumentsPanel({
   documents,
+  history,
   checklist,
   canUpload,
   canVerify,
@@ -105,6 +121,12 @@ export function DealDocumentsPanel({
   onVerify,
 }: Readonly<{
   documents: ReadonlyArray<DealDocument> | undefined;
+  /**
+   * Files kept for requirements that no longer apply — shown below the
+   * checklist, View only, for every role. Optional: absent (or still loading)
+   * renders nothing.
+   */
+  history?: ReadonlyArray<DealDocumentHistoryItem>;
   /** The cockpit payload's read-only checklist, the fallback when `documents` is withheld. */
   checklist: ReadonlyArray<{ ruleId: string; name: string; required: boolean; status: string }>;
   canUpload: boolean;
@@ -251,6 +273,58 @@ export function DealDocumentsPanel({
                 </div>
               );
             })
+          )}
+          {history && history.length > 0 && (
+            <section
+              className="mt-4 space-y-2 border-t border-dashed pt-3"
+              aria-labelledby="deal-documents-history-heading"
+              data-testid="deal-documents-history"
+            >
+              <div>
+                <h3
+                  id="deal-documents-history-heading"
+                  className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground"
+                >
+                  <Archive className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                  {t("DocumentsNoLongerRequired")}
+                </h3>
+                <p className="mt-0.5 text-xs text-muted-foreground">{t("DocumentsNoLongerRequiredNote")}</p>
+              </div>
+              {history.map((doc) => {
+                const name = doc.ruleName ?? t("RemovedRequirement");
+                return (
+                  <div
+                    key={doc._id}
+                    className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-dashed bg-muted/30 p-2 text-sm"
+                    data-testid={`deal-document-history-${doc._id}`}
+                  >
+                    <FileText className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                    <div className="min-w-0 flex-1">
+                      {/* Muted, never italic: Arabic has no true italic, and a
+                          synthetic slant breaks its joins. */}
+                      <bdi className="block break-words text-muted-foreground">{name}</bdi>
+                      <span className="text-xs text-muted-foreground">
+                        {statusLabel(doc.status)}
+                        {doc.uploadedLabel && (
+                          <>
+                            {" · "}
+                            <bdi>{doc.uploadedLabel}</bdi>
+                          </>
+                        )}
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setPreviewFile({ url: doc.fileUrl, name })}
+                    >
+                      <Eye className="h-4 w-4 me-1" />
+                      {t("ViewFile")}
+                    </Button>
+                  </div>
+                );
+              })}
+            </section>
           )}
         </CardContent>
       </Card>

@@ -103,7 +103,7 @@ import {
   type DirectRouteRefusal,
   type SupplierSettlementRoute,
 } from "./SettlementRouteControl";
-import { DealDocumentsPanel, type DealDocument } from "./DealDocumentsPanel";
+import { DealDocumentsPanel, type DealDocument, type DealDocumentHistoryItem } from "./DealDocumentsPanel";
 import { SaleDialog } from "@/components/sales/SaleDialog";
 import {
   StoppedDealDepositsPanel,
@@ -810,6 +810,12 @@ export function DealCockpit({
   const app = useQuery(api.applications.get, { orgId, applicationId });
   const documents = useQuery(
     api.documents.getForApplication,
+    canViewApplications && deal ? { orgId, applicationId } : "skip"
+  );
+  // Round 3 (S417-R3-1): files kept for requirements removed after the upload,
+  // view only — the same permission and the same skip as the active list.
+  const documentHistory = useQuery(
+    api.documents.getHistoryForApplication,
     canViewApplications && deal ? { orgId, applicationId } : "skip"
   );
   // The deal's cost lines, same permission as the document rows; skipped rather
@@ -2263,6 +2269,20 @@ export function DealCockpit({
           status: doc.status,
           fileUrl: doc.fileUrl,
         })),
+        history: documentHistory?.flatMap((doc) => {
+          const uploadedAt = doc.uploadedAt ?? undefined;
+          return doc.fileUrl
+            ? [
+                {
+                  _id: doc._id,
+                  ruleName: doc.ruleName,
+                  status: doc.status,
+                  fileUrl: doc.fileUrl,
+                  uploadedLabel: isRenderableMoment(uploadedAt) ? format(uploadedAt, "d MMM yyyy") : null,
+                },
+              ]
+            : [];
+        }),
         // The server accepts an upload from either permission; verifying is
         // the narrower one. Same gates as Review, read from the same server.
         canUpload: canCreateApplication || canVerifyDocuments,
@@ -3559,6 +3579,8 @@ export function DealCockpitView({
    */
   documents?: {
     items: ReadonlyArray<DealDocument> | undefined;
+    /** Files kept for requirements that no longer apply — view only (round 3, S417-R3-1). */
+    history?: ReadonlyArray<DealDocumentHistoryItem>;
     canUpload: boolean;
     canVerify: boolean;
     /** The rule ids whose upload is in flight — see `DealDocumentsPanel`. */
@@ -5000,6 +5022,7 @@ export function DealCockpitView({
             const documentsPane = documents ? (
               <DealDocumentsPanel
                 documents={documents.items}
+                history={documents.history}
                 checklist={deal.documents}
                 canUpload={documents.canUpload}
                 canVerify={documents.canVerify}
