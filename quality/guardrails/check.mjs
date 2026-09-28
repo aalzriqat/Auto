@@ -33,6 +33,7 @@ import {
   compareCodeUnits,
   enforcementScope,
   evaluate,
+  importKey,
   importViolations,
   measureLines,
   normalizeRepoPath,
@@ -239,6 +240,24 @@ async function verifyBootstrap(cwd, baseCommit, proposed, prettierOptions, lineC
         "regenerate with --write-baseline --source <that commit>",
     );
   }
+  // An older sourceCommit must not loosen what the target itself would allow:
+  // every allowance must also be derivable from the target (CodeRabbit #356).
+  const atTarget = source === baseCommit
+    ? measured
+    : await measureCommit(cwd, baseCommit, proposed.config, prettierOptions, lineCache);
+  const target = buildBaseline(baseCommit, proposed.config, atTarget, null);
+  for (const [filePath, ceiling] of Object.entries(proposed.baseline.sizeCeilings)) {
+    const onTarget = target.sizeCeilings[filePath];
+    if (onTarget === undefined || ceiling > onTarget) {
+      errors.push(`BOOTSTRAP-STALE-SOURCE ${filePath}: ceiling ${ceiling} exceeds the target's ${onTarget ?? "none"}`);
+    }
+  }
+  const targetImports = new Set(target.importGrandfather.map(importKey));
+  for (const entry of proposed.baseline.importGrandfather) {
+    if (!targetImports.has(importKey(entry))) {
+      errors.push(`BOOTSTRAP-STALE-SOURCE import [${entry.rule}] ${entry.from} -> ${entry.to} is not a violation on the target`);
+    }
+  }
 }
 
 /**
@@ -304,7 +323,8 @@ export async function writeBaseline(cwd, sourceRef, baseRef) {
   const baseCommit = resolveCommit(cwd, baseRef);
   const tBaseline = readAtCommit(cwd, baseCommit, BASELINE_PATH);
   const trusted = tBaseline === null ? null : parseBaseline(tBaseline, `target ${BASELINE_PATH}`);
-  const prettierOptions = prettierOptionsFrom(readAtCommit(cwd, sourceCommit, PRETTIER_RC), sourceRef);
+  // The checker's options: always the target's (see runGuardrails).
+  const prettierOptions = prettierOptionsFrom(readAtCommit(cwd, baseCommit, PRETTIER_RC), baseRef);
   const measured = await measureCommit(cwd, sourceCommit, config, prettierOptions);
   const baseline = buildBaseline(sourceCommit, config, measured, trusted);
   writeFileSync(path.join(cwd, BASELINE_PATH), canonicalJson(baseline));

@@ -493,6 +493,80 @@ describe("round-2 review findings (Sol S426-05, Codex 426-1 r2)", () => {
   }, TIMEOUT);
 });
 
+describe("CodeRabbit review on #356 (CR-1..3)", () => {
+  /** A target whose history has an OLDER commit, `old`, and the tip `main`. */
+  function repoWithHistory(atOld: (root: string) => void, atTarget: (root: string) => void) {
+    const root = fixtureRepo({ withGuardrails: false });
+    atOld(root);
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "old");
+    const old = git(root, "rev-parse", "HEAD");
+    atTarget(root);
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "target");
+    writeConfig(root, baseConfig());
+    return { root, old };
+  }
+
+  test("negative control (CR-1): bootstrap from an older commit cannot carry a ceiling above the target's size", async () => {
+    const { root, old } = repoWithHistory(
+      (r) => write(r, "convex/big.ts", lines(1000)),
+      (r) => write(r, "convex/big.ts", lines(700)),
+    );
+    await writeBaseline(root, old, "main");
+    const result = await bootstrapCheck(root);
+    expectFailure(result.errors, /^BOOTSTRAP-STALE-SOURCE convex\/big\.ts: ceiling 1000 exceeds the target's 700/);
+  }, TIMEOUT);
+
+  test("negative control (CR-1): a file deleted on the target cannot come back under the old ceiling", async () => {
+    const { root, old } = repoWithHistory(
+      (r) => write(r, "convex/gone.ts", lines(900, "g")),
+      (r) => remove(r, "convex/gone.ts"),
+    );
+    await writeBaseline(root, old, "main");
+    write(root, "convex/gone.ts", lines(900, "g"));
+    const result = await bootstrapCheck(root);
+    expectFailure(result.errors, /^BOOTSTRAP-STALE-SOURCE convex\/gone\.ts: ceiling 900 exceeds the target's none/);
+  }, TIMEOUT);
+
+  test("negative control (CR-1): an import removed on the target cannot come back grandfathered", async () => {
+    const legacy = 'import { toMinor } from "@/convex/utils/money";\nexport const y = toMinor(3);\n';
+    const { root, old } = repoWithHistory(
+      (r) => write(r, "components/Old.tsx", legacy),
+      (r) => remove(r, "components/Old.tsx"),
+    );
+    await writeBaseline(root, old, "main");
+    write(root, "components/Old.tsx", legacy);
+    const result = await bootstrapCheck(root);
+    expectFailure(
+      result.errors,
+      /^BOOTSTRAP-STALE-SOURCE import \[components-no-convex-utils\] components\/Old\.tsx -> convex\/utils\/money/,
+    );
+  }, TIMEOUT);
+
+  test("positive control (CR-1/CR-2): an older source whose allowances equal the target's passes, even when its Prettier options differed", async () => {
+    const items = Array.from({ length: 700 }, (_, i) => `"item-number-${i}"`).join(", ");
+    const { root, old } = repoWithHistory(
+      (r) => {
+        write(r, ".prettierrc", json({ printWidth: 1000000 }));
+        write(r, "convex/wide.ts", `export const wide = [${items}];\n`);
+      },
+      (r) => remove(r, ".prettierrc"),
+    );
+    await writeBaseline(root, old, "main");
+    const result = await bootstrapCheck(root);
+    expect(result.errors).toEqual([]);
+  }, TIMEOUT);
+
+  test("negative control (CR-3): a prettier-ignore pragma does not let a crammed file evade the size limit", async () => {
+    const root = fixtureRepo();
+    const items = Array.from({ length: 700 }, (_, i) => `"item-number-${i}"`).join(", ");
+    write(root, "convex/crammed.ts", `// prettier-ignore\nexport const crammed = [${items}];\n`);
+    const result = await check(root);
+    expectFailure(result.errors, /^SIZE-NEW convex\/crammed\.ts/);
+  }, TIMEOUT);
+});
+
 describe("import boundaries", () => {
   test("negative control: a new components -> convex/utils import fails; the grandfathered one passes", async () => {
     const root = fixtureRepo();

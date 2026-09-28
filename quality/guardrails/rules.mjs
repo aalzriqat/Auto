@@ -251,7 +251,8 @@ export function countNonBlank(text) {
  * cannot parse is counted unformatted and flagged — still deterministic.
  */
 export async function measureLines(repoPath, rawText, prettierOptions, prettier) {
-  const text = rawText.replaceAll("\r\n", "\n");
+  // Counting only: a prettier-ignore pragma must not preserve a crammed layout.
+  const text = rawText.replaceAll("\r\n", "\n").replaceAll("prettier-ignore", "prettier-counted");
   try {
     const formatted = await prettier.format(text, { ...prettierOptions, filepath: repoPath });
     return { lines: countNonBlank(formatted), formatted: true };
