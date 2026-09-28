@@ -240,8 +240,18 @@ const FINANCE_MANAGER = {
   permissions: [...FINANCE_READER.permissions, PERMISSIONS.MANAGE_FINANCE],
 };
 
+/**
+ * The MONEY PANEL's settle action. Since SCRUM-417 the cash SETTLEMENT step
+ * names the same action in the focus row too (it opens this same dialog), so
+ * the panel's own button is picked out explicitly; the focus row has its own
+ * suite (`DealCockpitWizard.test.tsx`).
+ */
 function settleButton() {
-  return screen.queryByRole("button", { name: "SettleSupplierAction" });
+  return (
+    screen
+      .queryAllByRole("button", { name: "SettleSupplierAction" })
+      .find((button) => !button.closest('[data-testid="deal-next-step"]')) ?? null
+  );
 }
 
 afterEach(() => {
@@ -450,7 +460,7 @@ describe.each(PATHS)("$path withholds the settlement on a DISPUTED claim, and sa
     tree.serveSupplierReceipt(DISPUTED);
     expect(screen.queryByText("SettleSupplierTitle")).toBeNull();
     expect(settleButton()).toBeNull();
-    expect(screen.getByText("SupplierClaimDisputedGuidance")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("SupplierClaimDisputedGuidance");
   });
 
   test("lifting the dispute restores the action without re-opening the form nobody re-requested", () => {
