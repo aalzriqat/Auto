@@ -172,10 +172,23 @@ jobs:
             done
           }
 
+          # --cmd records the URL of the deployment THIS command created (SCRUM-377);
+          # it is the only identity the cleanup below will ever act on.
           retry_convex pnpm exec convex deploy \
             --typecheck enable \
             --preview-create "$PREVIEW_NAME" \
-            --preview-run e2eBootstrap:markPreviewDeployment
+            --preview-run e2eBootstrap:markPreviewDeployment \
+            --cmd 'echo "CONVEX_PREVIEW_URL=$CREATED_CONVEX_URL" >> "$GITHUB_ENV"' \
+            --cmd-url-env-var-name CREATED_CONVEX_URL
+
+      # SCRUM-377: record which deployment this run owns and shorten its expiry,
+      # so the deployment quota is freed even if the run dies before cleanup.
+      - name: Pin the disposable rehearsal preview for cleanup
+        if: always() && steps.provenance.outputs.stale == 'false' && env.CONVEX_PREVIEW_URL != ''
+        working-directory: trusted
+        run: node scripts/previewDeploymentLifecycle.mjs pin
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
 
       - name: Scrub preview and deploy exact candidate backend with disposable credential
         if: steps.provenance.outputs.stale == 'false'
@@ -202,6 +215,12 @@ jobs:
           unset AUTH_JSON
           if [ -z "$NEXT_PUBLIC_CONVEX_URL" ] || [ -z "$ADMIN_KEY" ]; then
             echo "Trusted control plane did not return complete rehearsal preview credentials." >&2
+            exit 1
+          fi
+          # The lookup is by preview name, so it can return a newer run's
+          # replacement; this run must only ever test the deployment it created.
+          if [ "$NEXT_PUBLIC_CONVEX_URL" != "${CONVEX_PREVIEW_URL:-}" ]; then
+            echo "Resolved rehearsal preview is not the deployment this run created." >&2
             exit 1
           fi
           echo "::add-mask::$ADMIN_KEY"
@@ -266,15 +285,6 @@ jobs:
             --env CONVEX_PREVIEW_ADMIN_KEY="$ADMIN_KEY" \
             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
             sh -lc 'corepack enable && corepack prepare pnpm@11.13.0 --activate && pnpm install --frozen-lockfile --ignore-scripts && pnpm exec convex deploy --url "$NEXT_PUBLIC_CONVEX_URL" --admin-key "$CONVEX_PREVIEW_ADMIN_KEY" --typecheck enable'
-
-      # SCRUM-377: record which deployment this run owns and shorten its expiry,
-      # so the deployment quota is freed even if the run dies before cleanup.
-      - name: Pin the disposable rehearsal preview for cleanup
-        if: always() && steps.provenance.outputs.stale == 'false' && env.NEXT_PUBLIC_CONVEX_URL != ''
-        working-directory: trusted
-        run: node scripts/previewDeploymentLifecycle.mjs pin
-        env:
-          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
 
       - name: Seed synthetic QA dealership from trusted main
         if: steps.provenance.outputs.stale == 'false'

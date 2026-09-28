@@ -3,7 +3,9 @@
 // creates one therefore also retires it:
 //
 //   pin     right after `convex deploy --preview-create`: confirm the deployment
-//           this run just got is a preview carrying this run's identifier,
+//           that command handed back (CONVEX_PREVIEW_URL, written by its own
+//           `--cmd`, never by a later lookup) is a preview carrying this run's
+//           identifier,
 //           record its createTime, and shorten its expiry to PIN_TTL_MS so a run
 //           that crashes or is cancelled before `delete` still frees the slot
 //           within hours instead of days.
@@ -11,10 +13,14 @@
 //           and only if name, identifier AND createTime all still match.
 //
 // Invariant: a run deletes only the preview deployment it created itself —
-// named by the URL Convex handed this run, re-confirmed as a preview with this
-// run's identifier, and created at the instant `pin` recorded. `--preview-create`
-// replaces a same-named preview, so createTime is what tells this run's
-// deployment apart from a newer run's replacement.
+// named by the URL its own `--preview-create` returned, re-confirmed as a preview
+// with this run's identifier, and created at the instant `pin` recorded. A
+// `--preview-create` for the same identifier deletes the old deployment and makes
+// a NEW one under a new random name (observed on main: optimistic-panda-920,
+// lovely-dotterel-607, beloved-jackal-758, industrious-chickadee-155), so the
+// URL names this run's deployment alone; createTime is a second check on it.
+// A later lookup by preview identifier (claim_preview_deployment) may already
+// return a newer run's replacement, which is why it must never feed `pin`.
 //
 // The key is a project PREVIEW deploy key; the Management API allows it only on
 // preview deployments, so production is out of reach by construction. The
@@ -33,9 +39,10 @@ import {
 const MANAGEMENT_API = "https://api.convex.dev/v1";
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_RESPONSE_BYTES = 64 * 1024;
-// Longest preview-creating pipeline (browser attack swarm) chains ~120 minutes
-// of job timeouts; six hours leaves room for runner queueing.
-export const PIN_TTL_MS = 6 * 60 * 60 * 1000;
+// Only a backstop for runs that die before `delete`. The browser attack swarm
+// chains ~120 minutes of job timeouts, and runner queueing between its jobs is
+// unbounded; twelve hours keeps a live run's preview alive through long queues.
+export const PIN_TTL_MS = 12 * 60 * 60 * 1000;
 const SAFE_PREVIEW_NAME = /^[a-z0-9][a-z0-9._-]{0,60}$/;
 const DEPLOYMENT_NAME = /^[a-z]+-[a-z]+-\d+$/;
 // Production. The key cannot reach it; this list makes the refusal local too.
@@ -61,7 +68,7 @@ function readInputs(env) {
   parsePreviewDeployKey(deployKey);
   const previewName = env.CONVEX_PREVIEW_NAME ?? "";
   if (!SAFE_PREVIEW_NAME.test(previewName)) refuse("CONVEX_PREVIEW_NAME is missing or malformed.");
-  const deploymentName = deploymentNameFromUrl(env.NEXT_PUBLIC_CONVEX_URL);
+  const deploymentName = deploymentNameFromUrl(env.CONVEX_PREVIEW_URL);
   return { deployKey, previewName, deploymentName };
 }
 

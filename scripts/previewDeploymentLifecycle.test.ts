@@ -59,7 +59,7 @@ function env(overrides: Record<string, string | undefined> = {}) {
   return {
     CONVEX_PREVIEW_DEPLOY_KEY: DEPLOY_KEY,
     CONVEX_PREVIEW_NAME: PREVIEW_NAME,
-    NEXT_PUBLIC_CONVEX_URL: "https://" + DEPLOYMENT + ".convex.cloud",
+    CONVEX_PREVIEW_URL: "https://" + DEPLOYMENT + ".convex.cloud",
     CONVEX_PREVIEW_CREATED_AT: String(CREATED_AT),
     ...overrides,
   } as NodeJS.ProcessEnv;
@@ -106,7 +106,7 @@ describe("SCRUM-377 preview deployment lifecycle", () => {
       "",
     ]) {
       const { calls, fetchImpl } = api(preview());
-      await expect(deletePreview({ env: env({ NEXT_PUBLIC_CONVEX_URL: url }), fetchImpl })).rejects.toThrow();
+      await expect(deletePreview({ env: env({ CONVEX_PREVIEW_URL: url }), fetchImpl })).rejects.toThrow();
       expect(calls).toEqual([]);
     }
     expect(() => deploymentNameFromUrl("https://kindly-hound-172.convex.cloud")).toThrow(/protected/);
@@ -191,8 +191,14 @@ describe("SCRUM-377 preview deployment lifecycle", () => {
   });
 });
 
-type Step = { name?: string; if?: string; run?: string };
-type Job = { needs?: string | string[]; if?: string; steps?: Step[] };
+type Step = { name?: string; id?: string; if?: string; run?: string; env?: Record<string, string> };
+type Job = {
+  needs?: string | string[];
+  if?: string;
+  steps?: Step[];
+  outputs?: Record<string, string>;
+};
+const KEY = "${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}";
 
 describe("SCRUM-377 every preview-creating workflow retires its preview", () => {
   const dir = path.join(process.cwd(), ".github", "workflows");
@@ -209,27 +215,70 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
     ]);
   });
 
-  it.each(creators.map((w) => [w.file, w.text]))("%s pins after creating and deletes last", (_file, text) => {
+  it.each(creators.map((w) => [w.file, w.text]))("%s pins what it created and deletes last", (_file, text) => {
     const jobs = (parse(text) as { jobs: Record<string, Job> }).jobs;
     const steps = Object.entries(jobs).flatMap(([id, job]) => (job.steps ?? []).map((s) => ({ id, s })));
-    const runs = (needle: string) => steps.findIndex(({ s }) => (s.run ?? "").includes(needle));
-    const creates = runs("--preview-create");
-    const pin = runs("previewDeploymentLifecycle.mjs pin");
-    const del = runs("previewDeploymentLifecycle.mjs delete");
-    expect(pin).toBeGreaterThan(creates);
-    expect(steps[pin].s.if ?? "").toMatch(/^always\(\)/);
-    expect(del).toBeGreaterThan(pin);
+    const only = (needle: string) => {
+      const hits = steps.flatMap(({ s }, i) => ((s.run ?? "").includes(needle) ? [i] : []));
+      expect(hits, needle).toHaveLength(1);
+      return hits[0];
+    };
+    const creates = only("--preview-create");
+    const pin = only("previewDeploymentLifecycle.mjs pin");
+    const del = only("previewDeploymentLifecycle.mjs delete");
+    const creator = steps[creates].s;
+    const pinStep = steps[pin].s;
+    const delStep = steps[del].s;
+
+    // The identity comes from the creating command's own --cmd, and the pin
+    // runs directly after it, even when that command failed.
+    expect(creator.run).toMatch(/--cmd '[^']*CONVEX_PREVIEW_URL=\$\w+[^']*>> "\$GITHUB_ENV"'/);
+    expect(creator.run).toContain("--cmd-url-env-var-name");
+    expect(steps[pin].id).toBe(steps[creates].id);
+    expect(pin).toBe(creates + 1);
+    expect(pinStep.if ?? "").toMatch(/^always\(\) && /);
+    expect(pinStep.if).toContain("env.CONVEX_PREVIEW_URL != ''");
+    // No disjunction, and no literal `false` operand that could disable it.
+    expect(pinStep.if).not.toMatch(/\|\||(^|&&|\()\s*(false|0)\s*(&&|\)|$)/);
+    expect(pinStep.env?.CONVEX_PREVIEW_DEPLOY_KEY).toBe(KEY);
+    expect(delStep.env?.CONVEX_PREVIEW_DEPLOY_KEY).toBe(KEY);
+
+    // Any later lookup by preview name in the creating job must be checked
+    // against that identity (later jobs compare against its verified output).
+    for (let i = creates + 1; i < steps.length && steps[i].id === steps[creates].id; i++) {
+      if (!(steps[i].s.run ?? "").includes("convexPreviewAuthority")) continue;
+      const checked = steps
+        .slice(i)
+        .some(({ s }) => /if \[ "\$\w+" != "\$\{CONVEX_PREVIEW_URL:-\}" \]; then/.test(s.run ?? ""));
+      expect(checked, "resolver result compared with CONVEX_PREVIEW_URL").toBe(true);
+    }
 
     const delJobId = steps[del].id;
     if (delJobId === steps[creates].id) {
       // Same job: the delete is its final step and runs whatever came before.
-      expect(steps[del].s.if ?? "").toMatch(/^always\(\)/);
-      expect(jobs[delJobId].steps?.at(-1)).toBe(steps[del].s);
+      expect(del).toBeGreaterThan(pin);
+      expect(delStep.if).toBe("always() && env.CONVEX_PREVIEW_CREATED_AT != ''");
+      expect(jobs[delJobId].steps?.at(-1)).toBe(delStep);
     } else {
-      // Separate job: it waits for every other job, whatever their outcome.
-      expect(jobs[delJobId].if ?? "").toMatch(/^always\(\)/);
-      const needs = [jobs[delJobId].needs ?? []].flat().sort();
+      // Separate job: it waits for every other job, whatever their outcome,
+      // and receives exactly what the pin step published.
+      const delJob = jobs[delJobId];
+      const pinJob = jobs[steps[pin].id];
+      expect(delJob.if).toBe(`always() && needs.${steps[pin].id}.outputs.cleanup_preview_created_at != ''`);
+      expect(delJob.steps?.at(-1)).toBe(delStep);
+      const needs = [delJob.needs ?? []].flat().sort();
       expect(needs).toEqual(Object.keys(jobs).filter((id) => id !== delJobId).sort());
+      expect(pinJob.outputs).toMatchObject({
+        cleanup_preview_name: `\${{ steps.${pinStep.id}.outputs.preview_name }}`,
+        cleanup_convex_url: `\${{ steps.${pinStep.id}.outputs.convex_cloud_url }}`,
+        cleanup_preview_created_at: `\${{ steps.${pinStep.id}.outputs.preview_created_at }}`,
+      });
+      const from = `needs.${steps[pin].id}.outputs`;
+      expect(delStep.env).toMatchObject({
+        CONVEX_PREVIEW_NAME: `\${{ ${from}.cleanup_preview_name }}`,
+        CONVEX_PREVIEW_URL: `\${{ ${from}.cleanup_convex_url }}`,
+        CONVEX_PREVIEW_CREATED_AT: `\${{ ${from}.cleanup_preview_created_at }}`,
+      });
     }
   });
 });
