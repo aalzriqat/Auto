@@ -385,8 +385,14 @@ const LEGAL_INVOICE_ISSUED_TO_LABEL: Record<string, string> = {
  *
  * A loaded closing-readiness verdict that is not READY is a prerequisite too:
  * `finalizeDeal` re-runs the same evaluator and would refuse, so the action is
- * withheld and the readiness list above names what is left. A verdict still
- * loading withholds nothing — the server stays the gate.
+ * withheld and the readiness list above names what is left.
+ *
+ * A readiness READ that failed withholds it as well (S414-R2-SKEW-1): most
+ * often that is a backend deployed before `getClosingReadiness`, and such a
+ * backend's `finalizeDeal` predates the redacted refusals — its currency-drift
+ * refusal names both currencies to a caller who may close but not read money.
+ * The close is offered only once a verdict has LOADED; a read still in flight
+ * is handled by the caller, which keeps the step at its blocker meanwhile.
  *
  * Extracted rather than left as a nested ternary so the combinations are
  * enumerable, and testable, one line each.
@@ -395,15 +401,18 @@ function finalizeUnavailableReasonKey({
   routeRequired,
   canRecordRoute,
   readinessBlocksClose,
+  readinessUnreadable,
   canClose,
 }: Readonly<{
   routeRequired: boolean;
   canRecordRoute: boolean;
   readinessBlocksClose: boolean;
+  readinessUnreadable: boolean;
   canClose: boolean;
 }>): string | undefined {
   if (routeRequired && !canRecordRoute) return "FinalizeNeedsRouteAndPermission";
   if (routeRequired) return "FinalizeNeedsSettlementRoute";
+  if (readinessUnreadable) return "FinalizeWaitsForReadiness";
   if (readinessBlocksClose) return "FinalizeNeedsClosingReadiness";
   if (!canClose) return "FinalizeNeedsPermission";
   return undefined;
@@ -1508,6 +1517,25 @@ export function DealCockpit({
     // blocker until both facts are on hand.
     if (app === undefined) return undefined;
 
+    const finalizeReasonKey = finalizeDenominationBlock
+      ? FINALIZE_DENOMINATION_REASON[finalizeDenominationBlock]
+      : finalizeUnavailableReasonKey({
+          routeRequired: settlementRouteRequired,
+          canRecordRoute: canFinalizeApplication,
+          readinessBlocksClose:
+            closingReadiness !== undefined && closingReadiness.open && closingReadiness.state !== "READY",
+          readinessUnreadable: closingReadinessServiceUnavailable,
+          canClose: canCloseDeal,
+        });
+    // The same wait as `app` above, for the readiness verdict (S414-R2-SKEW-1):
+    // while a subscribed read is still in flight the close is not offered yet,
+    // so it can never be taken before a verdict has loaded. A reason that
+    // withholds it anyway (a missing route) is shown meanwhile. A caller who
+    // does not read the readiness has no subscription and is not held here.
+    const closingReadinessLoading =
+      canViewApplications && !closingReadinessServiceUnavailable && closingReadiness === undefined;
+    if (finalizeReasonKey === undefined && closingReadinessLoading) return undefined;
+
     return {
       stageKey: "SETTLEMENT",
       actionKey: "FinalizeDealAction",
@@ -1532,15 +1560,7 @@ export function DealCockpit({
        * is not a dead end — and bringing that control across is filed separately
        * rather than folded into this change.
        */
-      unavailableReasonKey: finalizeDenominationBlock
-        ? FINALIZE_DENOMINATION_REASON[finalizeDenominationBlock]
-        : finalizeUnavailableReasonKey({
-            routeRequired: settlementRouteRequired,
-            canRecordRoute: canFinalizeApplication,
-            readinessBlocksClose:
-              closingReadiness !== undefined && closingReadiness.open && closingReadiness.state !== "READY",
-            canClose: canCloseDeal,
-          }),
+      unavailableReasonKey: finalizeReasonKey,
       unavailableDetail: finalizeDenominationDetail,
     };
   }

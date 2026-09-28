@@ -770,8 +770,8 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingReadinessStateUnavailable: ["Readiness could not be checked", "تعذّر فحص الجاهزية"],
   ClosingReadinessLoading: ["Checking readiness…", "جارٍ فحص الجاهزية…"],
   ClosingReadinessServiceUnavailable: [
-    "Readiness is unavailable right now. Everything else on this deal still works, and closing is checked again on the server.",
-    "الجاهزية غير متاحة حاليًا. تبقى بقية إجراءات الصفقة متاحة، ويُعاد الفحص على الخادم عند الإغلاق.",
+    "Readiness is unavailable right now. Everything else on this deal still works; closing waits until readiness can be checked.",
+    "الجاهزية غير متاحة حاليًا. تبقى بقية إجراءات الصفقة متاحة، أما الإغلاق فينتظر إلى أن يتسنّى فحصها.",
   ],
   ClosingReadinessClosed: ["This deal is no longer open to be closed.", "لم تعد هذه الصفقة مفتوحة للإغلاق."],
   ClosingReadinessNoChecks: [
@@ -1947,6 +1947,8 @@ export const salesEn = {
   FinalizeDealAction: "Close the deal",
   FinalizeNeedsPermission:
     "You do not have permission to close the deal. Someone who does completes this step.",
+  FinalizeWaitsForReadiness:
+    "Closing readiness could not be checked right now, so the deal can't be closed yet. Try again shortly.",
   FinalizeNeedsClosingReadiness:
     "The deal is not ready to close yet. Complete the items marked in the closing readiness list, then close it.",
   /**
@@ -2883,6 +2885,8 @@ export const salesAr = {
     "لا تملك صلاحية تسجيل الدفعة المتوقعة. يُكمل هذه الخطوة من يملكها.",
   FinalizeDealAction: "إغلاق الصفقة",
   FinalizeNeedsPermission: "لا تملك صلاحية إغلاق الصفقة. يُكمل هذه الخطوة من يملكها.",
+  FinalizeWaitsForReadiness:
+    "تعذّر فحص جاهزية الإغلاق الآن، لذا لا يمكن إغلاق الصفقة بعد. حاول مجددًا بعد قليل.",
   FinalizeNeedsClosingReadiness:
     "الصفقة غير جاهزة للإغلاق بعد. أكمل البنود المؤشَّر عليها في قائمة جاهزية الإغلاق، ثم أغلقها.",
   FinalizeNeedsSettlementRoute:

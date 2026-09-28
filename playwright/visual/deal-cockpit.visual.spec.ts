@@ -74,6 +74,17 @@ const VIEWPORTS = [
   { name: "1280", width: 1280, height: 900 },
 ] as const;
 
+/**
+ * S414-R2-SKEW-1: the same deal on its closing step with the readiness read
+ * failed — the close withheld with its own reason. The reason is checked
+ * against a hand-written literal, not the dictionary the render used.
+ */
+const READINESS_UNREADABLE = "-readiness-unreadable";
+const FINALIZE_WAITS_LITERAL: Readonly<Record<(typeof LOCALES)[number], string>> = {
+  en: "Closing readiness could not be checked right now, so the deal can't be closed yet. Try again shortly.",
+  ar: "تعذّر فحص جاهزية الإغلاق الآن، لذا لا يمكن إغلاق الصفقة بعد. حاول مجددًا بعد قليل.",
+};
+
 /** The desktop sidebar (`w-64`) at the default 16px root font size. */
 const SIDEBAR_WIDTH_PX = 256;
 /** Tailwind's `md` breakpoint, where the sidebar appears. */
@@ -118,6 +129,9 @@ test.beforeAll(async () => {
         `${file} predates this run — a stale artifact, not this bridge's output`,
       ).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
     }
+    const unreadable = resolve(FIXTURES, `deal-cockpit-${locale}${READINESS_UNREADABLE}.html`);
+    expect(existsSync(unreadable), `bridge did not write ${unreadable}`).toBe(true);
+    expect(statSync(unreadable).mtimeMs).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
   }
 
   // 2. The stylesheet, compiled exactly as the app compiles it: PostCSS with
@@ -143,8 +157,8 @@ function expectedFor(locale: (typeof LOCALES)[number]): { stageOwners: string[] 
   return JSON.parse(readFileSync(resolve(FIXTURES, `deal-cockpit-${locale}.expected.json`), "utf8"));
 }
 
-function documentFor(locale: (typeof LOCALES)[number], theme: (typeof THEMES)[number]): string {
-  const body = readFileSync(resolve(FIXTURES, `deal-cockpit-${locale}.html`), "utf8");
+function documentFor(locale: (typeof LOCALES)[number], theme: (typeof THEMES)[number], variant = ""): string {
+  const body = readFileSync(resolve(FIXTURES, `deal-cockpit-${locale}${variant}.html`), "utf8");
   const dir = locale === "ar" ? "rtl" : "ltr";
   // `<html dir lang class>` and `<body class>` as `app/layout.tsx` and the
   // LanguageProvider set them (the body's background comes from the
@@ -168,9 +182,9 @@ function documentFor(locale: (typeof LOCALES)[number], theme: (typeof THEMES)[nu
 </body></html>`;
 }
 
-async function paint(page: Page, locale: (typeof LOCALES)[number], theme: (typeof THEMES)[number]) {
-  const file = resolve(RUN_DIR, `page-${locale}-${theme}.html`);
-  writeFileSync(file, documentFor(locale, theme));
+async function paint(page: Page, locale: (typeof LOCALES)[number], theme: (typeof THEMES)[number], variant = "") {
+  const file = resolve(RUN_DIR, `page-${locale}-${theme}${variant}.html`);
+  writeFileSync(file, documentFor(locale, theme, variant));
   await page.goto(`file:///${file.replace(/\\/g, "/")}`);
   await expect(page.getByTestId("deal-header")).toBeVisible();
 }
@@ -348,6 +362,68 @@ for (const locale of LOCALES) {
           await main.evaluate((el) => el.scrollTo({ top: el.scrollHeight }));
           await page.screenshot({
             path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}-bottom.png`),
+          });
+        } finally {
+          await context.close();
+        }
+      });
+    }
+  }
+}
+
+/**
+ * S414-R2-SKEW-1, painted. The panel names the failed read, the next-step block
+ * carries the withheld close's own reason and NO button, and neither leaks
+ * sideways at 390px or 1280px. Screenshotted at the next-step block and at the
+ * readiness panel so the reason's wrap and tone are judged in both directions.
+ */
+for (const locale of LOCALES) {
+  for (const theme of THEMES) {
+    for (const viewport of VIEWPORTS) {
+      test(`${locale} · ${theme} · ${viewport.name}px: readiness unreadable withholds the close with its reason`, async ({
+        browser,
+      }) => {
+        const context = await browser.newContext({
+          viewport: { width: viewport.width, height: viewport.height },
+          colorScheme: theme,
+        });
+        const page = await context.newPage();
+        try {
+          await paint(page, locale, theme, READINESS_UNREADABLE);
+          const main = page.getByTestId("shell-main");
+          const mainBox = await main.boundingBox();
+          expect(mainBox).not.toBeNull();
+
+          const nextStep = page.getByTestId("deal-next-step");
+          await expect(nextStep).toBeVisible();
+          // Withheld: no button in the block, and the reason reads exactly the literal.
+          await expect(nextStep.getByRole("button")).toHaveCount(0);
+          const reason = nextStep.getByText(FINALIZE_WAITS_LITERAL[locale], { exact: true });
+          await expect(reason).toBeVisible();
+          const reasonBox = await reason.boundingBox();
+          expect(reasonBox).not.toBeNull();
+          expect(reasonBox!.x).toBeGreaterThanOrEqual(mainBox!.x - 0.5);
+          expect(reasonBox!.x + reasonBox!.width).toBeLessThanOrEqual(mainBox!.x + mainBox!.width + 0.5);
+          expect(await reason.evaluate((el) => getComputedStyle(el).direction)).toBe(
+            locale === "ar" ? "rtl" : "ltr",
+          );
+
+          const panelLine = page.getByTestId("closing-readiness-service-unavailable");
+          await expect(panelLine).toBeVisible();
+
+          const overflow = await main.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+          expect(
+            overflow.scrollWidth,
+            `main scrolls sideways at ${viewport.width}px (${JSON.stringify(overflow)})`,
+          ).toBeLessThanOrEqual(overflow.clientWidth);
+
+          await nextStep.scrollIntoViewIfNeeded();
+          await page.screenshot({
+            path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${READINESS_UNREADABLE}-next-step.png`),
+          });
+          await panelLine.scrollIntoViewIfNeeded();
+          await page.screenshot({
+            path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${READINESS_UNREADABLE}-panel.png`),
           });
         } finally {
           await context.close();

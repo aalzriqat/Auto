@@ -612,4 +612,47 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
       JSON.stringify({ stageOwners: expectedOwners }, null, 2)
     );
   });
+
+  // S414-R2-SKEW-1: the SAME deal on its closing step when the readiness read
+  // failed (a backend without `getClosingReadiness`). The panel says so and the
+  // close is withheld with its own reason — painted so the reason's wrap and
+  // tone are judged in both directions, not only asserted in jsdom.
+  test.each(["en", "ar"] as const)("writes the %s markup with readiness unreadable", (locale) => {
+    expect(OUT_DIR, "DEAL_COCKPIT_VISUAL_FIXTURE_DIR must name this run's fresh directory").toBeTruthy();
+    const outDir = resolve(OUT_DIR!);
+    language.locale = locale;
+    const base = financedDeal();
+    const deal: FinancedDealCockpitData = {
+      ...base,
+      stages: base.stages.map((stage) =>
+        stage.key === "SETTLEMENT"
+          ? { ...stage, state: "BLOCKED" as const, blocker: "AwaitingSettlement" }
+          : { ...stage, state: "COMPLETE" as const, blocker: undefined }
+      ),
+    };
+    const html = renderToStaticMarkup(
+      <DealCockpitView
+        deal={deal}
+        backHref="/org_1/deals"
+        activeAppraisalProvider={deal.activeAppraisalProvider}
+        onRecordSupplierReceipt={async () => {}}
+        financialOverview={{ data: financedOverview(), loading: false }}
+        custody={custodyWiring()}
+        custodyMoney={custodyMoney}
+        closingChecklist={{ readiness: undefined, serviceUnavailable: true }}
+        workflowAction={{
+          stageKey: "SETTLEMENT",
+          actionKey: "FinalizeDealAction",
+          onStart: () => {},
+          unavailableReasonKey: "FinalizeWaitsForReadiness",
+        }}
+        financingPlan={{ facts: FINANCING_PLAN, formatMajor: (major, currency) => `${major.toLocaleString()} ${currency}` }}
+        handoverCosts={handoverCostsWiring()}
+      />
+    );
+    expect(html).toContain("data-testid=\"deal-next-step\"");
+    expect(html).toContain("data-testid=\"closing-readiness-service-unavailable\"");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(resolve(outDir, `deal-cockpit-${locale}-readiness-unreadable.html`), html);
+  });
 });
