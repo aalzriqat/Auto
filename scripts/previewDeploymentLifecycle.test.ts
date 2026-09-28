@@ -317,7 +317,19 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
       // and receives exactly what the pin step published.
       const delJob = jobs[delJobId];
       const pinJob = jobs[steps[pin].id];
-      expect(delJob.if).toBe(`always() && needs.${steps[pin].id}.outputs.cleanup_preview_created_at != ''`);
+      // `always()` first, the created-preview guard present, and nothing else
+      // beyond conditions the pin job itself ran under: whenever a preview was
+      // created those all held, so no extra clause can skip its deletion.
+      const conjuncts = (text: unknown) =>
+        String(text ?? "").split("&&").map((part) => part.trim()).filter(Boolean);
+      const delConjuncts = conjuncts(delJob.if);
+      const pinConjuncts = new Set(conjuncts(pinJob.if));
+      const createdGuard = `needs.${steps[pin].id}.outputs.cleanup_preview_created_at != ''`;
+      expect(delConjuncts[0]).toBe("always()");
+      expect(delConjuncts).toContain(createdGuard);
+      expect(
+        delConjuncts.filter((c) => c !== "always()" && c !== createdGuard && !pinConjuncts.has(c)),
+      ).toEqual([]);
       expect(delJob.steps?.at(-1)).toBe(delStep);
       const needs = [delJob.needs ?? []].flat().sort();
       expect(needs).toEqual(Object.keys(jobs).filter((id) => id !== delJobId).sort());
