@@ -10,7 +10,17 @@ import { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS, PERMISSIONS } from "./utils/permissions";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { evaluateClosingReadiness, handoverDirectLedgerRefusal } from "./utils/financedSaleRecognition";
-import { handoverDirectPostKey, handoverPaymentState, type HandoverPaymentLine } from "./utils/handoverCostPayment";
+import {
+  MAX_DIRECT_PAID_LINES,
+  MAX_DIRECT_PAYMENT_VERSIONS,
+  MAX_HANDOVER_DIRECT_LEDGER_PROOFS,
+} from "./utils/custodySourceLedger";
+import {
+  handoverDirectPostKey,
+  handoverDirectReversalKey,
+  handoverPaymentState,
+  type HandoverPaymentLine,
+} from "./utils/handoverCostPayment";
 
 /**
  * SCRUM-443 — a dealer-borne handover cost reaches the ledger exactly once,
@@ -899,4 +909,177 @@ describe("recordDirectFeePayment pays the amount the approver saw, not the amoun
     }
     expect(await journalCount(seed)).toBe(0);
   });
+});
+
+
+// ---------------------------------------------------------------------------
+// SCRUM-443 fix round 2.
+
+describe("R2-2: a reversal is dated when the payment is taken back, so THAT period is the one to open", () => {
+  test("paid in a past period; void with the current period closed; opening ONLY the current period is enough", async () => {
+    const seed = await seedDeal("r22");
+    const year = new Date().getUTCFullYear();
+    // The seeded period becomes the PAST one; the current year gets its own.
+    await seed.t.run(async (ctx) => {
+      for (const period of (await ctx.db.query("accountingPeriods").collect()).filter((x) => x.orgId === seed.orgId)) {
+        await ctx.db.patch(period._id, { endDate: Date.UTC(year - 1, 11, 31, 23, 59, 59, 999) });
+      }
+    });
+    await seed.asUser.mutation(api.accountingPeriods.create, {
+      orgId: seed.orgId, fiscalYear: year, periodNumber: 2,
+      startDate: Date.UTC(year, 0, 1), endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999), openImmediately: true,
+    });
+    const feeId = await dealerFee(seed, jod(50));
+    await payDirect(seed, feeId, { paidAt: Date.UTC(year - 1, 5, 15) });
+    expect((await directEvents(seed))[0].status).toBe("POSTED");
+    await closePeriod(seed); // both
+    await seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "entered in error" });
+    const blocked = await readiness(seed);
+    expect(blocked.status).toBe("BLOCKED");
+    expect(blocked.reason?.code).toBe("HANDOVER_DIRECT_REVERSAL_PENDING");
+    expect(blocked.reason?.message).toMatch(/taken back/i);
+    expect(blocked.reason?.message).toMatch(/not the payment date/i);
+
+    // Open ONLY the period covering today; the payment's own period stays closed.
+    await seed.t.run(async (ctx) => {
+      for (const period of (await ctx.db.query("accountingPeriods").collect()).filter((x) => x.orgId === seed.orgId)) {
+        if (period.startDate === Date.UTC(year, 0, 1)) {
+          await ctx.db.patch(period._id, { status: "OPEN", closedAt: undefined, closedBy: undefined });
+        }
+      }
+    });
+    await drainOnce(seed);
+    expect((await directEvents(seed))[0].status).toBe("REVERSED");
+    expect((await readiness(seed)).status).toBe("READY");
+  });
+});
+
+describe("R2-3: the admission envelope guarantees the closing proof always fits", () => {
+  const rawLine = (seed: Seed, extra: Record<string, unknown>) => ({
+    orgId: seed.orgId, applicationId: seed.applicationId, feeType: "LICENSING", paidBy: "DEALER", paidTo: "GOVERNMENT",
+    accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE", currency: "JOD",
+    includedInQuotation: false, deductedFromSettlement: false, refundable: false,
+    source: "MANUAL", createdBy: seed.userId, createdAt: Date.now(), updatedAt: Date.now(),
+    ...extra,
+  });
+  const seedEverPaid = (seed: Seed, count: number) =>
+    seed.t.run(async (ctx) => {
+      for (let i = 0; i < count; i += 1) {
+        await ctx.db.insert("financeDealFees", rawLine(seed, { actualAmountMinor: jod(1), voidedAt: Date.now(), directPaymentVersion: 1 }) as never);
+      }
+    });
+
+  test("the derived budget is the arithmetic in its comment", () => {
+    expect(MAX_HANDOVER_DIRECT_LEDGER_PROOFS).toBe(500 + (10 + 1) + 50 + (50 - 10 + 1) * 2 * 10 + 10 * 9);
+    expect(MAX_DIRECT_PAID_LINES).toBe(50);
+    expect(MAX_DIRECT_PAYMENT_VERSIONS).toBe(10);
+  });
+
+  test("at the line cap the next payment on a NEW line is refused, guided, with nothing written", async () => {
+    const seed = await seedDeal("adm-lines");
+    await seedEverPaid(seed, MAX_DIRECT_PAID_LINES);
+    const feeId = await dealerFee(seed, jod(50));
+    const journals = await journalCount(seed);
+    await expect(payDirect(seed, feeId)).rejects.toThrow(/already has 50 cost lines.*Nothing has been recorded/s);
+    expect(await journalCount(seed)).toBe(journals);
+    expect(await directEvents(seed)).toHaveLength(0);
+    expect((await seed.t.run((ctx) => ctx.db.get("financeDealFees", feeId)))?.directPayment).toBeUndefined();
+  });
+
+  test("one below the cap admits the payment, and that line may then be corrected and re-paid past the cap", async () => {
+    const seed = await seedDeal("adm-below");
+    await seedEverPaid(seed, MAX_DIRECT_PAID_LINES - 1);
+    const feeId = await dealerFee(seed, jod(50));
+    await payDirect(seed, feeId);
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+      orgId: seed.orgId, feeId, actualAmountMinor: jod(65), expectedCurrency: "JOD",
+    });
+    await payDirect(seed, feeId);
+    expect(expense(await ledger(seed))).toBe(jod(65));
+  });
+
+  test("a line's version cap: the 11th payment version is refused, the 10th is admitted", async () => {
+    const seed = await seedDeal("adm-versions");
+    const feeId = await dealerFee(seed, jod(50));
+    await seed.t.run((ctx) => ctx.db.patch(feeId, { directPaymentVersion: MAX_DIRECT_PAYMENT_VERSIONS }));
+    await expect(payDirect(seed, feeId)).rejects.toThrow(/10 times.*Nothing has been recorded/s);
+    expect(await journalCount(seed)).toBe(0);
+    await seed.t.run((ctx) => ctx.db.patch(feeId, { directPaymentVersion: MAX_DIRECT_PAYMENT_VERSIONS - 1 }));
+    await payDirect(seed, feeId);
+    expect((await directEvents(seed))[0].eventVersion).toBe(MAX_DIRECT_PAYMENT_VERSIONS);
+  });
+
+  /**
+   * The worst state the writers can reach: 500 live lines, 50 lines that ever
+   * carried a payment (nine at versions 1..9, the rest at version 10, every
+   * version reversed, each with a forward event AND a reversal row), all
+   * posted. The proof must judge it READY within its derived budget.
+   */
+  async function worstCase(name: string) {
+    const seed = await seedDeal(name);
+    await seed.t.run(async (ctx) => {
+      for (let i = 0; i < 500; i += 1) {
+        await ctx.db.insert("financeDealFees", rawLine(seed, { actualAmountMinor: 0 }) as never);
+      }
+      for (let i = 0; i < MAX_DIRECT_PAID_LINES; i += 1) {
+        const version = i < MAX_DIRECT_PAYMENT_VERSIONS - 1 ? i + 1 : MAX_DIRECT_PAYMENT_VERSIONS;
+        const feeId = await ctx.db.insert(
+          "financeDealFees",
+          rawLine(seed, { actualAmountMinor: jod(1), voidedAt: Date.now(), directPaymentVersion: version }) as never
+        );
+        for (let k = 1; k <= version; k += 1) {
+          const base = {
+            orgId: seed.orgId, sourceType: "financeDealFees", sourceId: feeId as string, eventVersion: k,
+            occurredAt: Date.now(), accountingDate: Date.now(), currency: "JOD", payload: {},
+            createdBy: seed.userId, createdAt: Date.now(),
+          };
+          await ctx.db.insert("accountingEvents", {
+            ...base, eventType: "HANDOVER_COST_PAID_DIRECT", idempotencyKey: handoverDirectPostKey(feeId, k), status: "REVERSED",
+          });
+          await ctx.db.insert("accountingEvents", {
+            ...base, eventType: "HANDOVER_COST_PAID_DIRECT_REVERSAL", idempotencyKey: handoverDirectReversalKey(feeId, k), status: "POSTED",
+          });
+        }
+      }
+    });
+    return seed;
+  }
+
+  test("the worst state at the caps is READY, not UNAVAILABLE, when everything is posted", async () => {
+    const seed = await worstCase("adm-worst");
+    const check = await readiness(seed);
+    expect(check.reason?.code).toBeUndefined();
+    expect(check.status).toBe("READY");
+  }, 120_000);
+
+  test("the same worst state with ONE reversal still POSTED blocks (the controls still bite at the caps)", async () => {
+    const seed = await worstCase("adm-worst-blocked");
+    await seed.t.run(async (ctx) => {
+      const event = (await ctx.db.query("accountingEvents").collect()).find(
+        (e) => e.eventType === "HANDOVER_COST_PAID_DIRECT" && e.eventVersion === 10
+      )!;
+      await ctx.db.patch(event._id, { status: "POSTED" });
+    });
+    const check = await readiness(seed);
+    expect(check.status).toBe("BLOCKED");
+    expect(check.reason?.code).toBe("HANDOVER_DIRECT_REVERSAL_PENDING");
+  }, 120_000);
+
+  test("one document under the derived budget the same worst state cannot be judged: UNAVAILABLE, never READY", async () => {
+    const seed = await worstCase("adm-worst-tight");
+    const verdict = await seed.t.run(async (ctx) => {
+      const app = (await ctx.db.get("financeApplications", seed.applicationId))!;
+      const fees = await ctx.db.query("financeDealFees").withIndex("by_application_voidedAt", (q) => q.eq("applicationId", seed.applicationId).eq("voidedAt", undefined)).take(501);
+      const run = async (limit: number) => {
+        try {
+          await handoverDirectLedgerRefusal(ctx, app.orgId, app._id, fees, limit);
+          return "judged";
+        } catch (error) {
+          return error instanceof ConvexError ? "refused" : `other: ${String(error)}`;
+        }
+      };
+      return { exact: await run(MAX_HANDOVER_DIRECT_LEDGER_PROOFS), oneLess: await run(MAX_HANDOVER_DIRECT_LEDGER_PROOFS - 1) };
+    });
+    expect(verdict).toEqual({ exact: "judged", oneLess: "refused" });
+  }, 120_000);
 });

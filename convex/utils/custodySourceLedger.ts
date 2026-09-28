@@ -490,17 +490,63 @@ export async function loadCustodyPostedLines(
   return rows;
 }
 
-/** How many lines that have EVER carried a direct payment one proof may read — same order as the live-line cap. */
-export const MAX_DIRECT_PAID_LINES = MAX_LIVE_DEAL_FEE_LINES;
+/**
+ * THE ADMISSION ENVELOPE of the direct-payment family (SCRUM-443). The closing
+ * proof reads every line that ever carried a direct payment and each one's
+ * whole event family; unbounded history would make that proof unfinishable
+ * (UNAVAILABLE for ever although the ledger is right). So the WRITER refuses,
+ * with a guided message and nothing written, anything that would take a deal
+ * past these two numbers, and the proof's budget below is DERIVED from them —
+ * every state the writers can reach fits, by construction.
+ *
+ *  - `MAX_DIRECT_PAID_LINES` = 50 lines per application that have EVER carried
+ *    a direct payment (live, zeroed or voided). A real handover has roughly
+ *    5-10 cost lines; 50 is five to ten times that, so no honest deal meets it,
+ *    while keeping the proof to a few dozen source families.
+ *  - `MAX_DIRECT_PAYMENT_VERSIONS` = 10 payment versions per line. A version is
+ *    a payment reversed by an amount edit or a void and re-recorded; ten is far
+ *    past any correction history a real cost line has.
+ */
+export const MAX_DIRECT_PAID_LINES = 50;
+export const MAX_DIRECT_PAYMENT_VERSIONS = 10;
 
 /**
  * How many documents the direct-payment proof of a deal's closing check may
- * read in all (SCRUM-443): the live lines it was handed, the ever-paid lines it
- * enumerates and every ledger row each read returns. The same order as the
- * custody proof's budget; past it the check is UNAVAILABLE, never a pass.
+ * read in all, DERIVED from the admission envelope above and the live-line cap
+ * (the proof is handed every live line and charges them first). With
+ * L = `MAX_LIVE_DEAL_FEE_LINES` (500), N = `MAX_DIRECT_PAID_LINES` (50) and
+ * V = `MAX_DIRECT_PAYMENT_VERSIONS` (10), the worst state the writers can reach
+ * costs:
+ *
+ *   L                    the live lines, charged up front
+ *   V + 1                one probe per distinct version value, plus the empty
+ *                        probe that ends the enumeration
+ *   N                    the ever-paid lines themselves
+ *   per line at version v, at most 2v: a live paid line reads its one keyed
+ *     forward event (1) plus its whole family (v forwards + v-1 reversal rows =
+ *     2v-1); a voided or zeroed line reads no keyed event but a family of at
+ *     most 2v (v forwards + v reversal rows — a reversal may add an event row,
+ *     counted for safety although the engine may not write one).
+ *   The sum over lines is largest with as many lines as possible at V and one
+ *   line at each lower version (so every probe is spent): (N-V+1)·2V +
+ *   Σ_{v=1..V-1} 2v = (N-V+1)·2V + V(V-1).
+ *
+ *   = 500 + 11 + 50 + 41·20 + 90 = 1471 documents.
+ *
+ * Assumed platform limits (docs.convex.dev/production/state/limits): 32,000
+ * documents and 16 MiB read per transaction. 1471 documents is under 5% of the
+ * first; the byte side is held by the budget's own 4 MiB cap, which 1471
+ * documents reach only if the average is above 2.8 KiB (a ledger event is
+ * about 1 KiB). `assertHeadroom` still refuses to fetch a batch the
+ * transaction could not take. Past this budget the check stays UNAVAILABLE —
+ * only a state the writers could not have produced (a raw edit) reaches it.
  */
-export const MAX_HANDOVER_DIRECT_LEDGER_PROOFS = MAX_CUSTODY_LEDGER_PROOFS;
-
+export const MAX_HANDOVER_DIRECT_LEDGER_PROOFS =
+  MAX_LIVE_DEAL_FEE_LINES +
+  (MAX_DIRECT_PAYMENT_VERSIONS + 1) +
+  MAX_DIRECT_PAID_LINES +
+  (MAX_DIRECT_PAID_LINES - MAX_DIRECT_PAYMENT_VERSIONS + 1) * 2 * MAX_DIRECT_PAYMENT_VERSIONS +
+  MAX_DIRECT_PAYMENT_VERSIONS * (MAX_DIRECT_PAYMENT_VERSIONS - 1);
 /**
  * Every line of a deal that has ever carried a DIRECT payment — live, zeroed
  * or voided — from ONE bounded indexed read, or a refusal (SCRUM-443). The

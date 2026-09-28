@@ -580,14 +580,23 @@ const dealRailMessages = defineBilingualMessages({
     "Use this when the dealership itself paid the cost (bank transfer, e-payment, cash or an issued cheque) rather than an employee out of custody cash. It posts to the books from the account you choose, dated the day it was paid; if no accounting period is open for that date it waits, and the line shows it as waiting.",
     "استخدمه عندما دفع المعرض المصروف بنفسه (حوالة بنكية أو دفع إلكتروني أو نقدًا أو بشيك صادر) لا موظف من نقد العهدة. يُرحَّل إلى الدفاتر من الحساب الذي تختاره بتاريخ الدفع؛ وإن لم تكن هناك فترة محاسبية مفتوحة لذلك التاريخ فإنه ينتظر، ويظهر البند على أنه بانتظار الترحيل.",
   ],
+  HandoverPaymentRecordedUnconfirmed: [
+    "Recorded — ledger status is confirmed at closing",
+    "مسجَّل — يُتأكد من حالته في الدفاتر عند الإغلاق",
+  ],
+  DirectPaymentAmountChanged: [
+    "The amount of this cost changed since you opened this form. It is now:",
+    "تغيّر مبلغ هذا المصروف منذ فتحت هذا النموذج. المبلغ الآن:",
+  ],
+  DirectPaymentUseNewAmount: ["Review and use the new amount", "راجعت المبلغ الجديد واعتمده"],
   HandoverPaymentQueued: ["Recorded — waiting to post to the books", "مسجَّل — بانتظار الترحيل إلى الدفاتر"],
   HandoverPaymentQueuedNote: [
     "This payment is not on the books yet — usually because no accounting period is open for its date. Open the period and let the accounting queue process; the deal cannot close until it posts.",
     "هذا الدفع لم يدخل الدفاتر بعد — غالبًا لأنه لا توجد فترة محاسبية مفتوحة لتاريخه. افتح الفترة واترك طابور المحاسبة يعالجه؛ لا يمكن إغلاق الصفقة قبل ترحيله.",
   ],
   HandoverPaymentReversalPending: [
-    "An earlier payment of this cost is still on the books: its reversal is waiting for an accounting period to open. Open the period (or wait for the reversal to post) before closing the deal.",
-    "دفعة سابقة لهذا المصروف ما زالت في الدفاتر: عكس قيدها بانتظار فتح فترة محاسبية. افتح الفترة (أو انتظر ترحيل عكس القيد) قبل إغلاق الصفقة.",
+    "An earlier payment of this cost is still on the books: its reversal is waiting for an accounting period to open for the date it was taken back (usually today). Open that period (or wait for the reversal to post) before closing the deal.",
+    "دفعة سابقة لهذا المصروف ما زالت في الدفاتر: عكس قيدها بانتظار فتح فترة محاسبية لتاريخ التراجع عنها (غالبًا اليوم). افتح تلك الفترة (أو انتظر ترحيل عكس القيد) قبل إغلاق الصفقة.",
   ],
   DirectPaymentMethodLabel: ["Paid by", "طريقة الدفع"],
   DirectPaymentMethodChoose: ["Choose how it was paid…", "اختر طريقة الدفع…"],
@@ -1080,8 +1089,8 @@ const dealOverviewMessages = defineBilingualMessages({
     "يوجد {count} من مدفوعات مصاريف التسليم المباشرة مسجَّلة لكنها لم تدخل الدفاتر بعد: القيد بانتظار فتح فترة محاسبية لتاريخ الدفع أو لم تتم معالجته. افتح الفترة المحاسبية لتاريخ الدفع واترك طابور المحاسبة يعالجه، ثم أغلق الصفقة.",
   ],
   ClosingReason_HANDOVER_DIRECT_REVERSAL_PENDING: [
-    "{count} direct handover payment(s) that were removed, set to zero or replaced on their cost line are still on the books: their reversal is waiting because no accounting period is open for the payment date. Open the accounting period (or wait for the reversal to post), then close the deal.",
-    "يوجد {count} من مدفوعات مصاريف التسليم المباشرة التي حُذفت أو صُفّرت أو استُبدلت في بند التكلفة ما زالت في الدفاتر: عكس القيد بانتظار فتح فترة محاسبية لتاريخ الدفع. افتح الفترة المحاسبية (أو انتظر ترحيل عكس القيد)، ثم أغلق الصفقة.",
+    "{count} direct handover payment(s) that were removed, set to zero or replaced on their cost line are still on the books: their reversal is waiting because no accounting period is open for the date the payment was taken back (the day it was removed, set to zero or replaced — usually today, not the payment date). Open the accounting period that covers that date (or wait for the reversal to post), then close the deal.",
+    "يوجد {count} من مدفوعات مصاريف التسليم المباشرة التي حُذفت أو صُفّرت أو استُبدلت في بند التكلفة ما زالت في الدفاتر: عكس القيد بانتظار فتح فترة محاسبية لتاريخ التراجع عن الدفع (يوم الحذف أو التصفير أو الاستبدال — غالبًا اليوم وليس تاريخ الدفع). افتح الفترة المحاسبية التي تشمل ذلك التاريخ (أو انتظر ترحيل عكس القيد)، ثم أغلق الصفقة.",
   ],
   ClosingReason_HANDOVER_DIRECT_LEDGER_UNVERIFIABLE: [
     "The ledger could not be read completely, so whether the direct handover payments are on the books cannot be confirmed. Try again shortly; if it persists, have the deal's accounting reviewed.",

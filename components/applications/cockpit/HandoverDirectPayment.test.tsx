@@ -54,6 +54,7 @@ function renderPanel(
     onAbandonDirectPayment?: (feeId: string, intentId: string) => void;
     dealClosed?: boolean;
     postingHoldFeeIds?: ReadonlyArray<string>;
+    handoverCostsCheck?: "READY" | "BLOCKED" | "UNAVAILABLE" | "NOT_APPLICABLE";
   } = {}
 ) {
   return render(
@@ -75,6 +76,32 @@ function renderPanel(
       onRecordDirectPayment={props.onRecordDirectPayment}
       onAbandonDirectPayment={props.onAbandonDirectPayment}
       postingHoldFeeIds={props.postingHoldFeeIds}
+      handoverCostsCheck={props.handoverCostsCheck}
+    />
+  );
+}
+
+function panelWith(
+  lines: HandoverCostLine[],
+  onRecord: (feeId: string, values: DirectHandoverPayment) => Promise<void>
+) {
+  return (
+    <HandoverCostsPanel
+      costs={data(lines)}
+      loading={false}
+      denomination={{ code: "JOD" }}
+      scaleOf={() => 3}
+      money={(minor) => `${minor / 1000} JOD`}
+      canManage={true}
+      dealClosed={false}
+      costSource={{ kind: "PENDING" }}
+      t={t}
+      onAdd={async () => {}}
+      onAbandonAdd={() => {}}
+      onRecordActual={async () => {}}
+      onVoid={async () => {}}
+      canRecordDirectPayment={true}
+      onRecordDirectPayment={onRecord}
     />
   );
 }
@@ -171,9 +198,26 @@ describe("the amount sent is the amount the approver saw", () => {
     expect(values.expectedAmountMinor).toBe(123_456);
   });
 
-  test("after a refusal the next attempt sends the figure now on screen, not the stale one", async () => {
+  test("an edit while the form is open is NOT adopted: Save still sends the pinned figure, and a notice offers an explicit re-pin", async () => {
+    const onRecord = vi.fn(async () => {});
+    const view = renderPanel([line({ actualAmountMinor: 50_000 })], { canRecordDirectPayment: true, onRecordDirectPayment: onRecord });
+    fireEvent.click(screen.getByRole("button", { name: salesEn.RecordDirectPayment }));
+    expect(screen.getByTestId("direct-payment-fee1-pinned").textContent).toContain("50");
+    // Somebody else edits the cost while this form is open (no server refusal yet).
+    view.rerender(panelWith([line({ actualAmountMinor: 65_000 })], onRecord));
+    expect(screen.getByTestId("direct-payment-fee1-changed").textContent).toContain("65");
+    // The header still shows what is being approved.
+    expect(screen.getByTestId("direct-payment-fee1-pinned").textContent).toContain("50");
+    fireEvent.change(screen.getByLabelText(salesEn.DirectPaymentMethodLabel), { target: { value: "CASH" } });
+    fireEvent.click(screen.getByRole("button", { name: salesEn.SaveDirectPayment }));
+    await waitFor(() => expect(onRecord).toHaveBeenCalledTimes(1));
+    expect((onRecord.mock.calls[0] as unknown as [string, DirectHandoverPayment])[1].expectedAmountMinor).toBe(50_000);
+  });
+
+  test("after a refusal the next attempt still sends the pinned figure until the operator re-pins explicitly", async () => {
     const onRecord = vi
       .fn<(feeId: string, values: DirectHandoverPayment) => Promise<void>>()
+      .mockRejectedValueOnce(new HandoverCostAttemptError("The amount of this cost changed to 65 JOD.", "REFUSED"))
       .mockRejectedValueOnce(new HandoverCostAttemptError("The amount of this cost changed to 65 JOD.", "REFUSED"))
       .mockResolvedValueOnce(undefined);
     const view = renderPanel([line({ actualAmountMinor: 50_000 })], { canRecordDirectPayment: true, onRecordDirectPayment: onRecord });
@@ -182,29 +226,17 @@ describe("the amount sent is the amount the approver saw", () => {
     fireEvent.click(screen.getByRole("button", { name: salesEn.SaveDirectPayment }));
     await screen.findByText("The amount of this cost changed to 65 JOD.");
     // The live query delivers the edited line; the form shows it and pays THAT.
-    view.rerender(
-      <HandoverCostsPanel
-        costs={data([line({ actualAmountMinor: 65_000 })])}
-        loading={false}
-        denomination={{ code: "JOD" }}
-        scaleOf={() => 3}
-        money={(minor) => `${minor / 1000} JOD`}
-        canManage={true}
-        dealClosed={false}
-        costSource={{ kind: "PENDING" }}
-        t={t}
-        onAdd={async () => {}}
-        onAbandonAdd={() => {}}
-        onRecordActual={async () => {}}
-        onVoid={async () => {}}
-        canRecordDirectPayment={true}
-        onRecordDirectPayment={onRecord}
-      />
-    );
+    view.rerender(panelWith([line({ actualAmountMinor: 65_000 })], onRecord));
     fireEvent.click(screen.getByRole("button", { name: salesEn.SaveDirectPayment }));
     await waitFor(() => expect(onRecord).toHaveBeenCalledTimes(2));
-    expect(onRecord.mock.calls[0][1].expectedAmountMinor).toBe(50_000);
-    expect(onRecord.mock.calls[1][1].expectedAmountMinor).toBe(65_000);
+    expect(onRecord.mock.calls[1][1].expectedAmountMinor).toBe(50_000);
+    // Explicit re-approval: the operator reviews the new figure and pins it.
+    fireEvent.click(screen.getByTestId("direct-payment-fee1-repin"));
+    expect(screen.getByTestId("direct-payment-fee1-pinned").textContent).toContain("65");
+    expect(screen.queryByTestId("direct-payment-fee1-changed")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: salesEn.SaveDirectPayment }));
+    await waitFor(() => expect(onRecord).toHaveBeenCalledTimes(3));
+    expect(onRecord.mock.calls[2][1].expectedAmountMinor).toBe(65_000);
   });
 });
 
@@ -229,7 +261,7 @@ describe("a queued payment is never shown as paid", () => {
   });
 
   test("the same payment, on the books, is the paid badge", () => {
-    renderPanel([paid()], { postingHoldFeeIds: [] });
+    renderPanel([paid()], { postingHoldFeeIds: [], handoverCostsCheck: "READY" });
     const row = screen.getByTestId("deal-handover-payment-fee1");
     expect(row.getAttribute("data-state")).toBe("PAID_DIRECT");
     expect(row.textContent).toContain(salesEn.HandoverPaymentPaidDirect);
@@ -237,9 +269,54 @@ describe("a queued payment is never shown as paid", () => {
   });
 
   test("only the named line is held: another paid line stays paid", () => {
-    renderPanel([paid({ _id: "held" }), paid({ _id: "clear" })], { postingHoldFeeIds: ["held"] });
+    renderPanel([paid({ _id: "held" }), paid({ _id: "clear" })], { postingHoldFeeIds: ["held"], handoverCostsCheck: "BLOCKED" });
     expect(screen.getByTestId("deal-handover-payment-held").getAttribute("data-state")).toBe("PAID_DIRECT_QUEUED");
-    expect(screen.getByTestId("deal-handover-payment-clear").getAttribute("data-state")).toBe("PAID_DIRECT");
+    // Not named by the blocked check and the check is not READY: recorded, not confirmed.
+    expect(screen.getByTestId("deal-handover-payment-clear").getAttribute("data-state")).toBe("PAID_DIRECT_UNCONFIRMED");
+  });
+
+  test("mixed: A queued on the ledger while B is unpaid — A is neutral, never green; B keeps its unpaid row", () => {
+    // Row refusals short-circuit the ledger proof, so the check names only B.
+    renderPanel([paid({ _id: "a" }), line({ _id: "b" })], {
+      canRecordDirectPayment: true, onRecordDirectPayment: async () => {}, handoverCostsCheck: "BLOCKED", postingHoldFeeIds: ["b"],
+    });
+    const a = screen.getByTestId("deal-handover-payment-a");
+    expect(a.getAttribute("data-state")).toBe("PAID_DIRECT_UNCONFIRMED");
+    expect(a.textContent).toContain(salesEn.HandoverPaymentRecordedUnconfirmed);
+    expect(a.textContent).not.toContain(salesEn.HandoverPaymentPaidDirect);
+    expect(screen.getByTestId("deal-handover-payment-b").getAttribute("data-state")).toBe("UNPAID");
+  });
+
+  test("B voided: the proof now runs and names A, so A is amber; once A posts and nothing blocks, A is green", () => {
+    const view = renderPanel([paid({ _id: "a" })], { handoverCostsCheck: "BLOCKED", postingHoldFeeIds: ["a"] });
+    expect(screen.getByTestId("deal-handover-payment-a").getAttribute("data-state")).toBe("PAID_DIRECT_QUEUED");
+    view.rerender(
+      <HandoverCostsPanel
+        costs={data([paid({ _id: "a" })])}
+        loading={false}
+        denomination={{ code: "JOD" }}
+        scaleOf={() => 3}
+        money={(minor) => `${minor / 1000} JOD`}
+        canManage={true}
+        dealClosed={false}
+        costSource={{ kind: "PENDING" }}
+        t={t}
+        onAdd={async () => {}}
+        onAbandonAdd={() => {}}
+        onRecordActual={async () => {}}
+        onVoid={async () => {}}
+        handoverCostsCheck="READY"
+        postingHoldFeeIds={[]}
+      />
+    );
+    expect(screen.getByTestId("deal-handover-payment-a").getAttribute("data-state")).toBe("PAID_DIRECT");
+  });
+
+  test.each([["UNAVAILABLE" as const], [undefined]])("readiness %s (unavailable / still loading): neutral, never green", (check) => {
+    renderPanel([paid()], { handoverCostsCheck: check });
+    const row = screen.getByTestId("deal-handover-payment-fee1");
+    expect(row.getAttribute("data-state")).toBe("PAID_DIRECT_UNCONFIRMED");
+    expect(row.textContent).toContain(salesEn.HandoverPaymentRecordedUnconfirmed);
   });
 
   test("a zero line whose earlier payment is still on the books says its reversal is waiting; a plain zero line shows nothing", () => {
@@ -270,7 +347,14 @@ describe("a queued payment is never shown as paid", () => {
   });
 
   test("the queued and reversal copy exists in both languages", () => {
-    for (const key of ["HandoverPaymentQueued", "HandoverPaymentQueuedNote", "HandoverPaymentReversalPending"] as const) {
+    for (const key of [
+      "HandoverPaymentQueued",
+      "HandoverPaymentQueuedNote",
+      "HandoverPaymentReversalPending",
+      "HandoverPaymentRecordedUnconfirmed",
+      "DirectPaymentAmountChanged",
+      "DirectPaymentUseNewAmount",
+    ] as const) {
       expect(salesEn[key]).toBeTruthy();
       expect(salesAr[key]).toMatch(/[؀-ۿ]/);
     }
@@ -315,7 +399,7 @@ describe("each state of the server's verdict is shown as it is", () => {
           directPayment: { method: "CHEQUE", amountMinor: 90_000, paidAt: Date.UTC(2026, 8, 20), reference: "CHQ-1" },
         }),
       ],
-      { canRecordDirectPayment: true, onRecordDirectPayment: async () => {} }
+      { canRecordDirectPayment: true, onRecordDirectPayment: async () => {}, handoverCostsCheck: "READY" }
     );
     expect(screen.getByTestId("deal-handover-payment-a").textContent).toBe(salesEn.HandoverPaymentPaidCustody);
     const direct = screen.getByTestId("deal-handover-payment-b").textContent ?? "";
@@ -375,10 +459,13 @@ describe("the readiness reasons point at the lines, in both languages", () => {
     expect(en).toContain("Handover costs");
   });
 
-  test("the reversal-pending reason names the next step: the accounting period", () => {
+  test("the reversal-pending reason names the next step: the period of the date it was taken back, not the payment date", () => {
     const en = closingReasonText(enT, "HANDOVER_DIRECT_REVERSAL_PENDING", { count: 1 }, "").text;
-    expect(en).toMatch(/open the accounting period/i);
-    expect(en).toMatch(/reversal/i);
+    expect(en).toMatch(/open the accounting period that covers that date/i);
+    expect(en).toMatch(/taken back/i);
+    expect(en).not.toMatch(/for the payment date\./i);
+    // The queued-forward reason is about the payment date and keeps saying so.
+    expect(closingReasonText(enT, "HANDOVER_DIRECT_NOT_ON_LEDGER", { count: 1 }, "").text).toMatch(/payment date/i);
   });
 
   test("below the finance tier the reason is the withheld sentence, with no count", () => {

@@ -1325,6 +1325,9 @@ export function DealCockpit({
           // The lines the server's own closing check names as waiting on the
           // ledger: passed through, so a recorded-but-queued payment is never
           // shown as paid. Only a blocked check names any.
+          // Undefined while readiness is loading or unavailable: nothing then
+          // says a recorded payment is on the books.
+          handoverCostsCheck: closingReadiness?.checks.find((c) => c.key === "HANDOVER_COSTS_PAID")?.status,
           postingHoldFeeIds: ((): string[] => {
             const check = closingReadiness?.checks.find((c) => c.key === "HANDOVER_COSTS_PAID");
             return check?.status === "BLOCKED" ? (check.feeIds ?? []) : [];

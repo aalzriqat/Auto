@@ -45,6 +45,8 @@ import {
   custodyPositionDependencies,
   foldAbandonedPayableDeltas,
   loadCustodyEntries,
+  MAX_DIRECT_PAID_LINES,
+  MAX_DIRECT_PAYMENT_VERSIONS,
   nextStoredVersion,
   type CustodyLedgerDependency,
 } from "./utils/custodySourceLedger";
@@ -2529,9 +2531,6 @@ export const setFeeCustody = mutation({
   },
 });
 
-/** Past this many payment versions on one line the ledger proof refuses rather than judge a prefix. */
-const MAX_DIRECT_PAYMENT_VERSIONS = 100;
-
 /**
  * Records that the DEALERSHIP itself paid a handover cost (SCRUM-443) — bank
  * transfer, e-payment, cash or an issued cheque — rather than an employee out
@@ -2546,11 +2545,20 @@ const MAX_DIRECT_PAYMENT_VERSIONS = 100;
  *
  * Money authority only: `CONFIRM_FINANCE_DISBURSEMENT` (managers,
  * accountants, owners). The method is REQUIRED — never defaulted — because it
- * picks the account the money left from. Identity: `runWithIdempotency`,
- * fingerprinted on the whole payload AND the actual it pays, so a replay
- * returns the first result and posts nothing twice, and the same key for a
- * different intent is refused. Atomic: the row patch and the posting are one
- * mutation.
+ * picks the account the money left from. The AMOUNT is required too
+ * (`expectedAmountMinor`): the figure the approver saw and PINNED when they
+ * opened the form. The line's actual is paid only while it is still exactly
+ * that; an edit in between is refused, never paid. Identity:
+ * `runWithIdempotency`, fingerprinted on the whole payload including that
+ * pinned figure, so a replay returns the first result and posts nothing
+ * twice, and the same key for a different intent is refused. Atomic: the row
+ * patch and the posting are one mutation.
+ *
+ * Admission envelope: a deal may carry at most `MAX_DIRECT_PAID_LINES` lines
+ * that ever carried a direct payment, and a line at most
+ * `MAX_DIRECT_PAYMENT_VERSIONS` payment versions — the numbers the closing
+ * proof's read budget is derived from, so anything admitted here can always be
+ * proven at closing.
  *
  * A line that has already been paid is refused (no second payment); an amount
  * edit or a void reverses it (see `recordActualFeeAmount`, `voidDealFee`), and
@@ -2566,10 +2574,11 @@ export const recordDirectFeePayment = mutation({
     /** When the dealership paid it. Dates the posting. */
     paidAt: v.number(),
     /**
-     * REQUIRED: the amount, in minor units, the approver SAW when they chose to
-     * pay (the line's actual as rendered). The payment posts the line's actual
-     * only when it is still exactly this — a concurrent edit between render and
-     * submit is refused, never paid at a figure nobody approved.
+     * REQUIRED: the amount, in minor units, the approver SAW and PINNED when
+     * they opened the payment form (the screen holds it fixed; a later edit
+     * raises a notice and needs an explicit re-approval). The payment posts the
+     * line's actual only when it is still exactly this — an edit at any point
+     * after the form opened is refused, never paid at a figure nobody approved.
      */
     expectedAmountMinor: v.number(),
     reference: v.optional(v.string()),
@@ -2631,8 +2640,8 @@ export const recordDirectFeePayment = mutation({
             `This cost is recorded in ${fee.currency} while the deal's costs are kept in ${dealCurrency}, so it cannot be posted with them. Correct the line first; nothing has been recorded.`
           );
         }
-        // Money authority (R1): what posts is the amount the approver SAW. A
-        // cost edited between the form rendering and this submit is refused
+        // Money authority (R1): what posts is the amount the approver SAW and
+        // pinned. A cost edited at any time since the form opened is refused
         // with the new figure, so the payment is recorded again knowingly.
         if (amountMinor !== args.expectedAmountMinor) {
           throw new ConvexError(
@@ -2650,6 +2659,28 @@ export const recordDirectFeePayment = mutation({
         // would spend the cost twice. Judged on the LEDGER.
         const action = "recording this payment";
         const version = nextStoredVersion(fee.directPaymentVersion, "This cost line", action);
+        // The admission envelope (see `MAX_DIRECT_PAYMENT_VERSIONS`): the
+        // closing proof's budget is derived from these two caps, so a payment
+        // that would leave the envelope is refused HERE, guided, and nothing is
+        // written — never admitted and then unprovable at closing.
+        if (version > MAX_DIRECT_PAYMENT_VERSIONS) {
+          throw new ConvexError(
+            `This cost has already been paid and corrected ${MAX_DIRECT_PAYMENT_VERSIONS} times, which is the most one cost line can carry. Remove it and add the cost again as a new line, then record the payment on that. Nothing has been recorded.`
+          );
+        }
+        if (fee.directPaymentVersion === undefined) {
+          const everPaid = await ctx.db
+            .query("financeDealFees")
+            .withIndex("by_application_directPaymentVersion", (q) =>
+              q.eq("applicationId", fee.applicationId).gt("directPaymentVersion", 0)
+            )
+            .take(MAX_DIRECT_PAID_LINES);
+          if (everPaid.length >= MAX_DIRECT_PAID_LINES) {
+            throw new ConvexError(
+              `This deal already has ${MAX_DIRECT_PAID_LINES} cost lines that have carried a direct payment (removed ones count), which is the most one deal can carry. Combine costs into fewer lines, or have the deal's accounting reviewed. Nothing has been recorded.`
+            );
+          }
+        }
         if (version > 1) {
           const events = await ctx.db
             .query("accountingEvents")
@@ -2669,7 +2700,7 @@ export const recordDirectFeePayment = mutation({
           const stillPosted = events.find((event) => event.status === "POSTED");
           if (stillPosted !== undefined) {
             throw new ConvexError(
-              `An earlier payment of this cost (v${stillPosted.eventVersion}) is still on the books; its reversal is waiting for an accounting period to open. Open the period, let the reversal post, then record the payment again. Nothing has been recorded.`
+              `An earlier payment of this cost (v${stillPosted.eventVersion}) is still on the books; its reversal is waiting for an accounting period to open (the reversal is dated the day the payment was taken back, so open the period that covers that date). Let the reversal post, then record the payment again. Nothing has been recorded.`
             );
           }
         }

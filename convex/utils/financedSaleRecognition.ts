@@ -295,7 +295,7 @@ export async function handoverDirectLedgerRefusal(
       feeIds,
       refusal: reasonOf(
         "HANDOVER_DIRECT_REVERSAL_PENDING",
-        `${reversalPending.length} direct handover payment(s) that were taken back on the cost line (removed, set to zero, or replaced) are still on the ledger: their reversal is waiting for an accounting period to open. Open the accounting period for the payment date and let the accounting queue process, then finalize.`,
+        `${reversalPending.length} direct handover payment(s) that were taken back on the cost line (removed, set to zero, or replaced) are still on the ledger: their reversal is waiting for an accounting period to open. A reversal is dated the day the payment was taken back (the void or amount change), not the payment date: open the accounting period that covers that date and let the accounting queue process, then finalize.`,
         { count: reversalPending.length }
       ),
     };

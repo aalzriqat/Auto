@@ -457,6 +457,7 @@ export function HandoverCostsPanel({
   onRecordDirectPayment,
   onAbandonDirectPayment,
   postingHoldFeeIds = [],
+  handoverCostsCheck,
 }: Readonly<{
   /** `undefined` while loading or when this caller may not read the cost rows. */
   costs: HandoverCostsData | undefined;
@@ -521,6 +522,14 @@ export function HandoverCostsPanel({
    * keeps its own row.
    */
   postingHoldFeeIds?: ReadonlyArray<string>;
+  /**
+   * The server's verdict on the `HANDOVER_COSTS_PAID` check, or undefined while
+   * readiness is loading or unavailable. The green "paid" badge is shown ONLY
+   * when this is READY — the one state in which the ledger proof has run over
+   * every line and passed. Any other state cannot say a recorded payment is on
+   * the books, so it is shown as recorded, not as paid.
+   */
+  handoverCostsCheck?: "READY" | "BLOCKED" | "UNAVAILABLE" | "NOT_APPLICABLE";
 }>) {
   /** The line whose direct-payment form is open. */
   const [payingId, setPayingId] = useState<string | null>(null);
@@ -649,6 +658,7 @@ export function HandoverCostsPanel({
         dealClosed={dealClosed}
         canRecord={canRecordDirectPayment && onRecordDirectPayment !== undefined}
         postingHold={postingHoldFeeIds.includes(line._id)}
+        proofConfirmed={handoverCostsCheck === "READY"}
         paying={payingId === line._id}
         busy={submittingAny}
         t={t}
@@ -2021,6 +2031,7 @@ function HandoverPaymentRow({
   dealClosed,
   canRecord,
   postingHold,
+  proofConfirmed,
   paying,
   busy,
   t,
@@ -2035,6 +2046,8 @@ function HandoverPaymentRow({
   canRecord: boolean;
   /** The server's closing check names this line as waiting on the ledger. */
   postingHold: boolean;
+  /** `HANDOVER_COSTS_PAID` is READY: every direct payment is proven on the ledger. */
+  proofConfirmed: boolean;
   paying: boolean;
   busy: boolean;
   t: (key: string) => string;
@@ -2072,16 +2085,18 @@ function HandoverPaymentRow({
     // posting has not landed (no open period for its date, not yet processed),
     // the line is shown as waiting, never as paid.
     return (
-      <div className="mt-2 space-y-1 text-xs" data-testid={testId} data-state={postingHold ? "PAID_DIRECT_QUEUED" : state}>
+      <div className="mt-2 space-y-1 text-xs" data-testid={testId} data-state={postingHold ? "PAID_DIRECT_QUEUED" : proofConfirmed ? state : "PAID_DIRECT_UNCONFIRMED"}>
         <Badge
           variant="outline"
           className={
             postingHold
               ? "border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-400"
-              : "border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-400"
+              : proofConfirmed
+                ? "border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-400"
+                : "text-muted-foreground"
           }
         >
-          {t(postingHold ? "HandoverPaymentQueued" : "HandoverPaymentPaidDirect")}
+          {t(postingHold ? "HandoverPaymentQueued" : proofConfirmed ? "HandoverPaymentPaidDirect" : "HandoverPaymentRecordedUnconfirmed")}
         </Badge>
         {paid && (
           <span className="ms-2 text-muted-foreground">
@@ -2170,6 +2185,15 @@ function DirectPaymentForm({
   const [error, setError] = useState<string | null>(null);
   /** The exact payload of an attempt whose response was lost — replayed verbatim, never re-read from the fields. */
   const [unknownSent, setUnknownSent] = useState<DirectHandoverPayment | null>(null);
+  /**
+   * The amount the operator is approving, PINNED when the form opened. It is
+   * what the header shows and what is sent; an edit by somebody else while the
+   * form is open is never adopted silently — it raises a notice, and only the
+   * operator's explicit re-pin changes what Save approves. The server refuses a
+   * pinned figure that no longer matches the line.
+   */
+  const [pinnedMinor, setPinnedMinor] = useState<number | undefined>(() => line.actualAmountMinor);
+  const changedTo = line.actualAmountMinor !== pinnedMinor ? line.actualAmountMinor : undefined;
   const frozen = unknownSent !== null;
   const id = `direct-payment-${line._id}`;
 
@@ -2184,8 +2208,8 @@ function DirectPaymentForm({
         setError(t("DirectPaymentDateRequired"));
         return;
       }
-      // The figure on the screen at this moment is the figure being approved.
-      if (line.actualAmountMinor === undefined) {
+      // The PINNED figure is the one being approved, never the live one.
+      if (pinnedMinor === undefined) {
         setError(t("HandoverPaymentNoActual"));
         return;
       }
@@ -2194,7 +2218,7 @@ function DirectPaymentForm({
         method,
         paidAt: economicDateInputToMs(paidOn),
         reference: reference.trim() || undefined,
-        expectedAmountMinor: line.actualAmountMinor,
+        expectedAmountMinor: pinnedMinor,
       };
     }
     setSubmitting(true);
@@ -2228,15 +2252,36 @@ function DirectPaymentForm({
     >
       <p className="text-sm font-medium">
         {t("RecordDirectPayment")} · {t(FEE_TYPE_LABEL[line.feeType] ?? line.feeType)}
-        {line.actualAmountMinor !== undefined && (
+        {pinnedMinor !== undefined && (
           <>
             {" · "}
-            <bdi dir="ltr" className="tabular-nums">
-              {money(line.actualAmountMinor, line.currency)}
+            <bdi dir="ltr" className="tabular-nums" data-testid={`${id}-pinned`}>
+              {money(pinnedMinor, line.currency)}
             </bdi>
           </>
         )}
       </p>
+      {changedTo !== undefined && !frozen && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+          data-testid={`${id}-changed`}
+        >
+          <span>
+            {t("DirectPaymentAmountChanged")} <bdi dir="ltr">{money(changedTo, line.currency)}</bdi>
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={submitting}
+            data-testid={`${id}-repin`}
+            onClick={() => setPinnedMinor(changedTo)}
+          >
+            {t("DirectPaymentUseNewAmount")}
+          </Button>
+        </div>
+      )}
       <p className="text-muted-foreground">{t("DirectPaymentNote")}</p>
       <div className="grid gap-3 sm:grid-cols-3">
         <div className="space-y-1.5">
