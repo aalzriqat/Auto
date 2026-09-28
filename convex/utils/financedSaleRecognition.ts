@@ -10,25 +10,23 @@ import {
   type SettlementComponentInput,
 } from "./financedSalePostingPlan";
 import {
-  assertConfiguredFeesRecorded,
-  custodyForeignCurrencyLine,
+  configuredFeesRefusal,
+  custodyReadabilityRefusal,
   loadActiveFees,
   loadCustodyRecords,
   settlementDeductedActualMinor,
   settlementDeductedFees,
   summarizeReadableCustody,
-  unrecordedConfiguredFeePositions,
 } from "./settlementDeductions";
+import { MAX_DEAL_CUSTODY_DECISION_RECORDS, MAX_LIVE_DEAL_FEE_LINES } from "./dealCostLimits";
 import {
-  frozenPolicyExceedsLiveCapacity,
-  MAX_DEAL_CUSTODY_DECISION_RECORDS,
-  MAX_LIVE_DEAL_FEE_LINES,
-} from "./dealCostLimits";
-import type {
-  ClosingReadinessReason,
-  ClosingReadinessReasonCode,
-  ClosingReadinessReasonParams,
+  reasonOf,
+  type ClosingReadinessCheckKey,
+  type ClosingReadinessReason,
+  type ClosingReadinessReasonCode,
+  type ClosingReadinessReasonParams,
 } from "../../lib/closingReadinessReasonCodes";
+import type { AppErrorData } from "./errors";
 import { custodyLedgerFamilyRefusal } from "./custodySourceLedger";
 import { heldDepositRowsForVehicle } from "./saleCompletion";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
@@ -150,18 +148,9 @@ function custodySettledRefusal(
         "A custody record on this deal is still open. Settle what that person holds or is owed before finalizing."
       );
     }
-    let summary: ReturnType<typeof summarizeReadableCustody>;
-    try {
-      summary = summarizeReadableCustody(row, liveFees, "finalizing this deal");
-    } catch (error) {
-      // The shared predicate refuses in two ways; which one is read from the
-      // same rows it judged, so the code names the refusal it threw.
-      const message = messageOf(error);
-      const foreign = custodyForeignCurrencyLine(liveFees, row);
-      return foreign === undefined
-        ? reasonOf("CUSTODY_AMOUNT_UNREADABLE", message)
-        : reasonOf("CUSTODY_CURRENCY_MISMATCH", message, { lineCurrency: foreign.currency, custodyCurrency: row.currency });
-    }
+    const unreadable = custodyReadabilityRefusal(row, liveFees, "finalizing this deal");
+    if (unreadable !== null) return unreadable;
+    const summary = summarizeReadableCustody(row, liveFees, "finalizing this deal");
     if (!summary.settled && row.status !== "WRITTEN_OFF") {
       return reasonOf(
         "CUSTODY_NO_LONGER_BALANCES",
@@ -172,15 +161,8 @@ function custodySettledRefusal(
   return null;
 }
 
-/** One accounting condition a financed deal must meet before it can be finalized. */
-export type ClosingReadinessCheckKey =
-  | "REMITTANCE_KNOWN"
-  | "CONFIGURED_FEES_RECORDED"
-  | "CUSTODY_ON_LEDGER"
-  | "CUSTODY_SETTLED"
-  | "COSTS_CLOSABLE"
-  | "FIRST_PAYMENT_RECORDED"
-  | "LEGAL_INVOICE_RECORDED";
+/** One accounting condition a financed deal must meet before it can be finalized (the list lives beside the reason codes). */
+export type { ClosingReadinessCheckKey };
 
 /**
  * READY — met. BLOCKED — not met, with the reason. UNAVAILABLE — cannot be
@@ -193,15 +175,11 @@ export interface ClosingReadinessCheck {
   key: ClosingReadinessCheckKey;
   status: ClosingReadinessCheckStatus;
   /**
-   * The English sentence: what is missing and what to do. Kept as the
-   * diagnostic and as the fallback for a client that does not know
-   * `reasonCode` (SCRUM-414). Null when READY or NOT_APPLICABLE.
+   * What is missing and what to do: the code the screen translates, its
+   * params, and the English sentence kept as the diagnostic (SCRUM-414).
+   * Null when READY or NOT_APPLICABLE.
    */
-  reason: string | null;
-  /** What the screen translates (`ClosingReason_<code>`). Null exactly when `reason` is. */
-  reasonCode: ClosingReadinessReasonCode | null;
-  /** Values the translation is filled with; null when the reason has none. */
-  reasonParams: ClosingReadinessReasonParams | null;
+  reason: ClosingReadinessReason | null;
 }
 
 export interface ClosingReadiness {
@@ -229,15 +207,6 @@ function overallReadinessState(checks: ClosingReadinessCheck[]): ClosingReadines
 function messageOf(error: unknown): string {
   if (error instanceof ConvexError && typeof error.data === "string") return error.data;
   throw error;
-}
-
-/** A coded readiness reason with its English diagnostic (SCRUM-414). */
-function reasonOf(
-  code: ClosingReadinessReasonCode,
-  message: string,
-  params?: ClosingReadinessReasonParams
-): ClosingReadinessReason {
-  return params === undefined ? { code, message } : { code, params, message };
 }
 
 /**
@@ -272,13 +241,7 @@ export async function evaluateClosingReadiness(
   const planCovered = financedSaleRecognitionApplies(app, opts);
   const checks: ClosingReadinessCheck[] = [];
   const add = (key: ClosingReadinessCheckKey, status: ClosingReadinessCheckStatus, reason: ClosingReadinessReason | null) => {
-    checks.push({
-      key,
-      status,
-      reason: reason?.message ?? null,
-      reasonCode: reason?.code ?? null,
-      reasonParams: reason?.params ?? null,
-    });
+    checks.push({ key, status, reason });
   };
   const planOnly = (key: ClosingReadinessCheckKey, judge: () => [ClosingReadinessCheckStatus, ClosingReadinessReason | null]) => {
     if (!planCovered) add(key, "NOT_APPLICABLE", null);
@@ -334,7 +297,7 @@ export async function evaluateClosingReadiness(
    */
   const onRows = async (
     key: ClosingReadinessCheckKey,
-    spec: { onThrow: "BLOCKED" | "UNAVAILABLE"; throwCode?: ClosingReadinessReasonCode; planOnly?: boolean },
+    spec: { onThrow: "BLOCKED" | "UNAVAILABLE"; throwCode?: "CUSTODY_LEDGER_UNVERIFIABLE"; planOnly?: boolean },
     judge: (read: NonNullable<typeof rows>) => ClosingReadinessReason | null | Promise<ClosingReadinessReason | null>
   ) => {
     if (spec.planOnly && !planCovered) return add(key, "NOT_APPLICABLE", null);
@@ -350,25 +313,9 @@ export async function evaluateClosingReadiness(
   // Every fee the finance company's FROZEN policy configures must have an
   // actual on the record — on EVERY route. A deal whose snapshot configures
   // nothing passes through untouched.
-  await onRows("CONFIGURED_FEES_RECORDED", { onThrow: "BLOCKED" }, ({ fees }) => {
-    try {
-      assertConfiguredFeesRecorded(app.companyRuleSnapshot, fees, "finalizing");
-      return null;
-    } catch (error) {
-      // The predicate refuses in exactly two ways; which one is re-read from
-      // the same snapshot and rows it judged.
-      const message = messageOf(error);
-      const templates = app.companyRuleSnapshot?.feeTemplates;
-      return frozenPolicyExceedsLiveCapacity(templates)
-        ? reasonOf("CONFIGURED_FEES_POLICY_OVER_CAPACITY", message, {
-            templateCount: templates?.length ?? 0,
-            max: MAX_LIVE_DEAL_FEE_LINES,
-          })
-        : reasonOf("CONFIGURED_FEES_MISSING", message, {
-            count: unrecordedConfiguredFeePositions(app.companyRuleSnapshot, fees).length,
-          });
-    }
-  });
+  await onRows("CONFIGURED_FEES_RECORDED", { onThrow: "BLOCKED" }, ({ fees }) =>
+    configuredFeesRefusal(app.companyRuleSnapshot, fees, "finalizing")
+  );
 
   // Every custody record and custody-paid line must be on the books as a
   // complete family — on EVERY route. Judged on the LEDGER as well as the rows;
@@ -418,13 +365,8 @@ export async function evaluateClosingReadiness(
       // Asked only on the plan's route, which requires a configured company.
       financierIsConfiguredExternal: true,
     });
-    if (invoice.ok) return ["READY", null];
-    // The plan's own code says MISSING for an absent AND an unusable amount;
-    // the screen tells the two apart, since the action differs.
-    let code: ClosingReadinessReasonCode = "LEGAL_INVOICE_UNUSABLE";
-    if (invoice.refusal.code === "LEGAL_INVOICE_WRONG_RECIPIENT") code = "LEGAL_INVOICE_WRONG_RECIPIENT";
-    else if (app.legalInvoiceAmountMinor === undefined) code = "LEGAL_INVOICE_MISSING";
-    return ["BLOCKED", reasonOf(code, invoice.refusal.message)];
+    // The plan's own code tells absent, unusable and wrong-recipient apart.
+    return invoice.ok ? ["READY", null] : ["BLOCKED", reasonOf(invoice.refusal.code, invoice.refusal.message)];
   });
 
   const state = overallReadinessState(checks);
@@ -435,29 +377,24 @@ export async function evaluateClosingReadiness(
     : { ready: false, readiness };
 }
 
-/** What a refused finalize carries: the English sentence, and the code + params to translate it by (SCRUM-414). */
-export type ClosingReadinessRefusalData = {
-  message: string;
-  code: ClosingReadinessReasonCode;
+/**
+ * What a refused finalize carries (SCRUM-414): the house `AppErrorData` shape —
+ * the English sentence as `message`, which `getErrorMessage` shows — with the
+ * readiness code, plus the params the deal screen translates it by.
+ */
+export type ClosingReadinessRefusalData = AppErrorData<ClosingReadinessReasonCode> & {
   params?: ClosingReadinessReasonParams;
 };
 
-/**
- * The refusal for the first condition that is not met, thrown uncaught before
- * the first write. Its data carries the English sentence as `message` — what
- * `getErrorMessage` shows, and what the error's own message contains — plus
- * the same code and params the readiness panel translates (SCRUM-414).
- */
+/** A closing-readiness reason thrown as a finalize refusal, with the same data the readiness panel is served. */
+export function closingRefusalError(reason: ClosingReadinessReason): ConvexError<ClosingReadinessRefusalData> {
+  return new ConvexError<ClosingReadinessRefusalData>(reason);
+}
+
+/** The refusal for the first condition that is not met, thrown uncaught before the first write. */
 function closingRefusal(readiness: ClosingReadiness): ConvexError<ClosingReadinessRefusalData> {
   const unmet = readiness.checks.find((check) => check.status === "BLOCKED" || check.status === "UNAVAILABLE");
-  if (unmet?.reason == null || unmet.reasonCode === null) {
-    return new ConvexError<ClosingReadinessRefusalData>({ message: "This deal is not ready to be finalized.", code: "NOT_READY" });
-  }
-  return new ConvexError<ClosingReadinessRefusalData>(
-    unmet.reasonParams === null
-      ? { message: unmet.reason, code: unmet.reasonCode }
-      : { message: unmet.reason, code: unmet.reasonCode, params: unmet.reasonParams }
-  );
+  return closingRefusalError(unmet?.reason ?? reasonOf("NOT_READY", "This deal is not ready to be finalized."));
 }
 
 export async function resolveFinancedSalePlan(

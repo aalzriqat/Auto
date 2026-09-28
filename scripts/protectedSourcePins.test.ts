@@ -626,11 +626,51 @@ describe("protected source content pins", () => {
        * the time of this renewal. Read the hunks; do not take this note's
        * word for them. Same governance; both constants recomputed FROM THE
        * FILE with this test's own normalization.
+       *
+       * -- RENEWAL 2026-09-28 (6) - SCRUM-414 /simplify pass
+       *
+       * Previous postimage, superseded by this entry (renewal (5) just above,
+       * branch head af22ec428):
+       *
+       *   bytes:  243398
+       *   sha256: e1ce2d649656ca3cfe4e134acad649fef6a899bee387d4d976d706bde878c200
+       *
+       * The delta, 72 insertions and 91 deletions, is confined to
+       * `getClosingReadiness` (read-only), its private input helper, and ONE
+       * line of `finalizeDeal`: (1) the private `closingReadinessInputs`
+       * wrapper is deleted; `finalizeDeal` calls
+       * `closingReadinessInputsOrRefusal` and throws its refusal with
+       * `closingRefusalError`, so the two input refusals (unsupported
+       * denomination, currency drift) carry the same `{ message, code,
+       * params? }` payload as the evaluator's refusals instead of a plain
+       * string. The English `message` is the IDENTICAL sentence, thrown at
+       * the same point in the same order; the door's permission and every
+       * other refusal are unchanged (failing assertions updated in
+       * sn31CurrencyMismatchRepro / scrum241FinanceReceiptAuthority to read
+       * `data.message`); (2) the two redaction paths are one pure
+       * `redactClosingReason` + one flattening `closingReasonView`; the wire
+       * shape (`reason`/`reasonCode`/`reasonParams?`,
+       * `unavailableReason`/`unavailableReasonCode`/`unavailableReasonParams?`)
+       * is unchanged, the codes are now required in its type; (3) the
+       * per-check `WITHHELD_READINESS_REASON` sentences and
+       * `WITHHELD_UNAVAILABLE_READINESS_REASON` are deleted (the client
+       * translates the WITHHELD_* code; the English left below the finance
+       * tier is `WITHHELD_READINESS_REASON_FALLBACK`, which names nothing
+       * about the deal), with the orphaned stacked JSDoc above them.
+       * Redaction is unchanged in substance: below the finance tier no
+       * params and no evaluator text are served (leak mutant re-run: letting
+       * params through fails the redaction assertions in
+       * financedConsignedSettlement.test.ts and sn31CurrencyMismatchRepro.test.ts;
+       * file restored byte-identical). No mutation added, no permission,
+       * schema or index changed. NOT yet reviewed by an independent seat at
+       * the time of this renewal. Read the hunks; do not take this note's
+       * word for them. Same governance; both constants recomputed FROM THE
+       * FILE with this test's own normalization.
        */
       file: "convex/applications.ts",
-      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)), then for SCRUM-407 automatic closing readiness (RENEWALs 2026-09-28, 2026-09-28 (2), (3) and (4)), then for SCRUM-414 readiness reason codes (RENEWAL 2026-09-28 (5)).
-      bytes: 243398,
-      sha256: "e1ce2d649656ca3cfe4e134acad649fef6a899bee387d4d976d706bde878c200",
+      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)), then for SCRUM-407 automatic closing readiness (RENEWALs 2026-09-28, 2026-09-28 (2), (3) and (4)), then for SCRUM-414 readiness reason codes (RENEWALs 2026-09-28 (5) and (6)).
+      bytes: 241762,
+      sha256: "86230d7a5ccb5359c45faf3e88134a410bb95892b0f7238209e7880e060eb583",
     },
     {
       /**

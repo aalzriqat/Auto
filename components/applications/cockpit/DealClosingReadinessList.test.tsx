@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { dictionaries } from "@/lib/i18n/dictionaries";
-import { DealClosingReadinessList, type ClosingReadinessView } from "./DealClosingReadinessList";
+import { WITHHELD_READINESS_REASON_FALLBACK, closingReadinessRefusalOf } from "@/lib/closingReadinessReasonCodes";
+import { DealClosingReadinessList, closingReasonText, type ClosingReadinessView } from "./DealClosingReadinessList";
 
 /**
  * SCRUM-414: the readiness panel translates the server's reason CODE (with its
  * params) instead of printing the server's English sentence, and falls back to
- * that sentence — never a blank, never a raw code — for a code it does not know.
+ * that sentence — never a blank, never a raw code — for a reason with no code.
  */
 afterEach(cleanup);
 
@@ -45,12 +46,12 @@ describe("DealClosingReadinessList — reason codes", () => {
     expect(reason.getAttribute("title")).toBe(ENGLISH);
   });
 
-  test("falls back to the server's English diagnostic for a code this build does not know", () => {
-    render(<DealClosingReadinessList t={tAr} readiness={view({ reasonCode: "SOME_FUTURE_CODE", reasonParams: { count: 3 } })} />);
+  test("falls back to the server's English diagnostic for a reason with no code", () => {
+    render(<DealClosingReadinessList t={tAr} readiness={view({ reasonCode: null })} />);
     expect(screen.getByTestId("closing-check-reason-COSTS_CLOSABLE").textContent).toBe(ENGLISH);
   });
 
-  test("an older server that sends no code still shows its sentence", () => {
+  test("an older server (deployed separately) that sends no code still shows its sentence", () => {
     render(<DealClosingReadinessList t={tAr} readiness={view({})} />);
     expect(screen.getByTestId("closing-check-reason-COSTS_CLOSABLE").textContent).toBe(ENGLISH);
   });
@@ -59,7 +60,7 @@ describe("DealClosingReadinessList — reason codes", () => {
     render(
       <DealClosingReadinessList
         t={tAr}
-        readiness={view({ reason: "The deal's costs are not all recorded and reconciled yet.", reasonCode: "WITHHELD_COSTS_CLOSABLE" })}
+        readiness={view({ reason: WITHHELD_READINESS_REASON_FALLBACK, reasonCode: "WITHHELD_COSTS_CLOSABLE" })}
       />
     );
     expect(screen.getByTestId("closing-check-reason-COSTS_CLOSABLE").textContent).toBe(ar.ClosingReason_WITHHELD_COSTS_CLOSABLE);
@@ -82,5 +83,23 @@ describe("DealClosingReadinessList — reason codes", () => {
     expect(reason.textContent).toMatch(/[؀-ۿ]/);
     expect(reason.textContent).toContain("USD");
     expect(reason.textContent).not.toContain("organization's currency");
+  });
+});
+
+describe("closingReasonText — the refused-finalize toast uses the panel's translation", () => {
+  test("a coded refusal payload is localized with its params", () => {
+    const refusal = closingReadinessRefusalOf({ code: "COSTS_FOREIGN_CURRENCY", params: { count: 3, currency: "JOD" }, message: ENGLISH });
+    expect(refusal).not.toBeNull();
+    const { text, translated } = closingReasonText(tAr, refusal!.code, refusal!.params, refusal!.message);
+    expect(translated).toBe(true);
+    expect(text).toMatch(/[؀-ۿ]/);
+    expect(text).toContain("JOD");
+    expect(text).not.toMatch(/\{\w+\}/);
+  });
+
+  test("a plain string or an unknown code is not a coded refusal (the toast keeps getErrorMessage)", () => {
+    expect(closingReadinessRefusalOf("Register how and when the payment is expected before finalizing the deal.")).toBeNull();
+    expect(closingReadinessRefusalOf({ code: "SOME_FUTURE_CODE", message: ENGLISH })).toBeNull();
+    expect(closingReadinessRefusalOf({ code: "UNAUTHORIZED", message: "No." })).toBeNull();
   });
 });

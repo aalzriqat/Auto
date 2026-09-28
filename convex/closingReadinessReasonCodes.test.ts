@@ -80,25 +80,25 @@ describe("SCRUM-414 — every unmet readiness check carries a code, its params a
   test("remittance: approval missing vs remittance unknown; first payment; legal invoice missing", async () => {
     const noApproval = await checks(await seed());
     expect(noApproval.get("REMITTANCE_KNOWN")).toMatchObject({
-      status: "UNAVAILABLE", reasonCode: "REMITTANCE_APPROVAL_MISSING", reason: expect.stringMatching(/approved purchase amount/),
+      status: "UNAVAILABLE", reason: { code: "REMITTANCE_APPROVAL_MISSING", message: expect.stringMatching(/approved purchase amount/) },
     });
     expect(noApproval.get("LEGAL_INVOICE_RECORDED")).toMatchObject({
-      status: "BLOCKED", reasonCode: "LEGAL_INVOICE_MISSING", reason: expect.stringMatching(/no legal invoice/),
+      status: "BLOCKED", reason: { code: "LEGAL_INVOICE_MISSING", message: expect.stringMatching(/no legal invoice/) },
     });
 
     const approved = await checks(
       await seed({ approvedDealerPurchaseAmountMinor: jod(10_000), submittedQuotationMinor: jod(10_000) })
     );
-    expect(approved.get("REMITTANCE_KNOWN")).toMatchObject({ status: "BLOCKED", reasonCode: "REMITTANCE_UNKNOWN" });
-    expect(approved.get("FIRST_PAYMENT_RECORDED")).toMatchObject({ status: "BLOCKED", reasonCode: "FIRST_PAYMENT_MISSING" });
+    expect(approved.get("REMITTANCE_KNOWN")).toMatchObject({ status: "BLOCKED", reason: { code: "REMITTANCE_UNKNOWN" } });
+    expect(approved.get("FIRST_PAYMENT_RECORDED")).toMatchObject({ status: "BLOCKED", reason: { code: "FIRST_PAYMENT_MISSING" } });
   });
 
   test("legal invoice: an unusable amount and a wrong recipient are distinct codes", async () => {
     const unusable = await checks(await seed({ legalInvoiceAmountMinor: -1, legalInvoiceIssuedTo: "FINANCE_COMPANY" }));
-    expect(unusable.get("LEGAL_INVOICE_RECORDED")).toMatchObject({ reasonCode: "LEGAL_INVOICE_UNUSABLE" });
+    expect(unusable.get("LEGAL_INVOICE_RECORDED")).toMatchObject({ reason: { code: "LEGAL_INVOICE_UNUSABLE" } });
     const wrong = await checks(await seed({ legalInvoiceAmountMinor: jod(10_000), legalInvoiceIssuedTo: "CUSTOMER" }));
     expect(wrong.get("LEGAL_INVOICE_RECORDED")).toMatchObject({
-      status: "BLOCKED", reasonCode: "LEGAL_INVOICE_WRONG_RECIPIENT", reason: expect.stringMatching(/issued to customer/),
+      status: "BLOCKED", reason: { code: "LEGAL_INVOICE_WRONG_RECIPIENT", message: expect.stringMatching(/issued to customer/) },
     });
   });
 
@@ -113,23 +113,23 @@ describe("SCRUM-414 — every unmet readiness check carries a code, its params a
       },
     });
     expect((await checks(s)).get("CONFIGURED_FEES_RECORDED")).toMatchObject({
-      status: "BLOCKED", reasonCode: "CONFIGURED_FEES_MISSING", reasonParams: { count: 1 }, reason: expect.stringMatching(/1 fee\(s\)/),
+      status: "BLOCKED", reason: { code: "CONFIGURED_FEES_MISSING", params: { count: 1 }, message: expect.stringMatching(/1 fee\(s\)/) },
     });
   });
 
   test("costs: none, foreign currency {count,currency}, awaiting actual {count}, unmapped treatment {feeLabel,treatment}", async () => {
-    expect((await checks(await seed())).get("COSTS_CLOSABLE")).toMatchObject({ status: "BLOCKED", reasonCode: "COSTS_NONE" });
+    expect((await checks(await seed())).get("COSTS_CLOSABLE")).toMatchObject({ status: "BLOCKED", reason: { code: "COSTS_NONE" } });
 
     const foreign = await seed();
     await fee(foreign, { currency: "USD", actualAmountMinor: 100 });
     expect((await checks(foreign)).get("COSTS_CLOSABLE")).toMatchObject({
-      reasonCode: "COSTS_FOREIGN_CURRENCY", reasonParams: { count: 1, currency: "JOD" }, reason: expect.stringMatching(/not in JOD/),
+      reason: { code: "COSTS_FOREIGN_CURRENCY", params: { count: 1, currency: "JOD" }, message: expect.stringMatching(/not in JOD/) },
     });
 
     const awaiting = await seed();
     await fee(awaiting);
     expect((await checks(awaiting)).get("COSTS_CLOSABLE")).toMatchObject({
-      reasonCode: "COSTS_AWAITING_ACTUAL", reasonParams: { count: 1 },
+      reason: { code: "COSTS_AWAITING_ACTUAL", params: { count: 1 } },
     });
 
     const unmapped = await seed();
@@ -138,9 +138,11 @@ describe("SCRUM-414 — every unmet readiness check carries a code, its params a
       actualAmountMinor: jod(120), reconciledAt: Date.now(), reconciledBy: unmapped.userId,
     });
     expect((await checks(unmapped)).get("COSTS_CLOSABLE")).toMatchObject({
-      reasonCode: "COSTS_TREATMENT_UNMAPPED",
-      reasonParams: { feeLabel: "Refundable plate deposit", treatment: "REFUNDABLE_DEPOSIT" },
-      reason: expect.stringMatching(/no account to post to/),
+      reason: {
+        code: "COSTS_TREATMENT_UNMAPPED",
+        params: { feeLabel: "Refundable plate deposit", treatment: "REFUNDABLE_DEPOSIT" },
+        message: expect.stringMatching(/no account to post to/),
+      },
     });
   });
 
@@ -148,19 +150,19 @@ describe("SCRUM-414 — every unmet readiness check carries a code, its params a
     const open = await seed();
     await custody(open);
     const openChecks = await checks(open);
-    expect(openChecks.get("CUSTODY_SETTLED")).toMatchObject({ status: "BLOCKED", reasonCode: "CUSTODY_OPEN" });
+    expect(openChecks.get("CUSTODY_SETTLED")).toMatchObject({ status: "BLOCKED", reason: { code: "CUSTODY_OPEN" } });
     // A record the ledger proof refuses is one coarse code; its detail stays the diagnostic.
     expect(openChecks.get("CUSTODY_ON_LEDGER")).toMatchObject({
-      status: "BLOCKED", reasonCode: "CUSTODY_NOT_ON_LEDGER", reason: expect.any(String),
+      status: "BLOCKED", reason: { code: "CUSTODY_NOT_ON_LEDGER", message: expect.any(String) },
     });
-    expect(openChecks.get("CUSTODY_ON_LEDGER")?.reasonParams ?? null).toBeNull();
+    expect(openChecks.get("CUSTODY_ON_LEDGER")?.reason).not.toHaveProperty("params");
 
     const mixed = await seed();
     const custodyId = await custody(mixed, { status: "RECONCILED" });
     await fee(mixed, { currency: "USD", paidBy: "EMPLOYEE", custodyId, actualAmountMinor: 100 });
     expect((await checks(mixed)).get("CUSTODY_SETTLED")).toMatchObject({
-      status: "BLOCKED", reasonCode: "CUSTODY_CURRENCY_MISMATCH",
-      reasonParams: { lineCurrency: "USD", custodyCurrency: "JOD" }, reason: expect.stringMatching(/recorded in USD/),
+      status: "BLOCKED",
+      reason: { code: "CUSTODY_CURRENCY_MISMATCH", params: { lineCurrency: "USD", custodyCurrency: "JOD" }, message: expect.stringMatching(/recorded in USD/) },
     });
   });
 
@@ -170,14 +172,14 @@ describe("SCRUM-414 — every unmet readiness check carries a code, its params a
     const byKey = await checks(s);
     for (const key of ["CONFIGURED_FEES_RECORDED", "CUSTODY_ON_LEDGER", "CUSTODY_SETTLED", "COSTS_CLOSABLE"] as const) {
       expect(byKey.get(key)).toMatchObject({
-        status: "UNAVAILABLE", reasonCode: "DEAL_ROWS_TOO_MANY_CUSTODY_RECORDS", reasonParams: { max: 100 },
+        status: "UNAVAILABLE", reason: { code: "DEAL_ROWS_TOO_MANY_CUSTODY_RECORDS", params: { max: 100 } },
       });
     }
   });
 
   test("a check that is met or not applicable carries no code", async () => {
     const byKey = await checks(await seed({ expectedDealerRemittanceMinor: jod(10_000) }));
-    expect(byKey.get("REMITTANCE_KNOWN")).toMatchObject({ status: "READY", reason: null, reasonCode: null, reasonParams: null });
+    expect(byKey.get("REMITTANCE_KNOWN")).toEqual({ key: "REMITTANCE_KNOWN", status: "READY", reason: null });
   });
 });
 

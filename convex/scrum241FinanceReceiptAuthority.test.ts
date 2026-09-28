@@ -297,7 +297,12 @@ async function driftOrgCurrencyOutOfContract(s: Seeded, currency: "USD" | "JOD" 
 }
 
 function messageOf(error: unknown) {
-  return String((error as { data?: unknown; message?: string })?.data ?? (error as Error)?.message ?? error);
+  const data = (error as { data?: unknown })?.data;
+  // A coded refusal (SCRUM-414) carries its sentence as `data.message`.
+  if (typeof data === "object" && data !== null && typeof (data as { message?: unknown }).message === "string") {
+    return (data as { message: string }).message;
+  }
+  return String(data ?? (error as Error)?.message ?? error);
 }
 
 async function refusalOf(promise: Promise<unknown>) {

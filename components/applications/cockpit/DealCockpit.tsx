@@ -127,7 +127,8 @@ import {
   type NewHandoverCost,
 } from "./HandoverCostsPanel";
 import { RecordLegalInvoiceDialog, type RecordLegalInvoiceValues } from "./RecordLegalInvoiceDialog";
-import { DealClosingReadinessList, type ClosingReadinessView } from "./DealClosingReadinessList";
+import { DealClosingReadinessList, closingReasonText, type ClosingReadinessView } from "./DealClosingReadinessList";
+import { closingReadinessRefusalOf } from "@/lib/closingReadinessReasonCodes";
 import { ProfitApprovalNotice, useProfitApproval } from "@/components/sales/ProfitApprovalNotice";
 
 /**
@@ -2293,8 +2294,13 @@ export function DealCockpit({
             // Deliberately keeps the key: every refusal here is actionable and
             // names what to change — an unrecorded settlement route, missing
             // economics, an unresolved عربون — so the next attempt is the same
-            // finalize with the same key, not a second one.
-            const message = getErrorMessage(error);
+            // finalize with the same key, not a second one. A closing-readiness
+            // refusal carries a code + params (SCRUM-414), translated exactly as
+            // the readiness panel translates it; anything else keeps its message.
+            const refusal = isConvexError(error) ? closingReadinessRefusalOf(error.data) : null;
+            const message = refusal
+              ? closingReasonText(t, refusal.code, refusal.params, refusal.message).text
+              : getErrorMessage(error);
             setFinalizeError(message);
             toast.error(message);
           } finally {
