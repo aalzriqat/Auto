@@ -567,6 +567,20 @@ async function eventPosted(
   return rows.some((row) => row.status === "POSTED");
 }
 
+/**
+ * `eventPosted`, exported for the one caller outside the custody family: the
+ * handover-cost closing check (SCRUM-443), which proves a direct payment is on
+ * the LEDGER by the same rule — POSTED under its exact key, the whole bounded
+ * page read, a full page refused as unverifiable. Custody behaviour is unchanged.
+ */
+export async function ledgerEventPosted(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  idempotencyKey: string
+): Promise<boolean> {
+  return eventPosted(ctx, orgId, idempotencyKey);
+}
+
 /** Whether version `version` of a record's payable reclassification is POSTED. */
 export async function custodyPayableReclassPosted(
   ctx: QueryCtx | MutationCtx,
@@ -715,7 +729,7 @@ export async function custodyDependencyBlockedReason(
 export async function earlierVersionStillPosted(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
-  eventType: "CUSTODY_FEE_PAID" | "CUSTODY_WRITTEN_OFF",
+  eventType: "CUSTODY_FEE_PAID" | "CUSTODY_WRITTEN_OFF" | "HANDOVER_COST_PAID_DIRECT",
   sourceType: "financeDealFees" | "financeDealCustody",
   sourceId: string,
   version: number

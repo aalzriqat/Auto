@@ -1066,6 +1066,14 @@ const dealOverviewMessages = defineBilingualMessages({
     "{count} handover cost(s) are recorded as paid both from employee custody and directly, which would count the cost twice. Have the line reviewed before closing.",
     "يوجد {count} من مصاريف التسليم مسجَّلة كمدفوعة من عهدة الموظف ومباشرةً معًا، مما يحسب المصروف مرتين. اطلب مراجعة البند قبل الإغلاق.",
   ],
+  ClosingReason_HANDOVER_DIRECT_NOT_ON_LEDGER: [
+    "{count} direct handover payment(s) are recorded but not on the books yet: the posting is waiting because no accounting period is open for its date, or has not been processed. Open the accounting period for the payment date and let the accounting queue process, then close the deal.",
+    "يوجد {count} من مدفوعات مصاريف التسليم المباشرة مسجَّلة لكنها لم تدخل الدفاتر بعد: القيد بانتظار فتح فترة محاسبية لتاريخ الدفع أو لم تتم معالجته. افتح الفترة المحاسبية لتاريخ الدفع واترك طابور المحاسبة يعالجه، ثم أغلق الصفقة.",
+  ],
+  ClosingReason_HANDOVER_DIRECT_LEDGER_UNVERIFIABLE: [
+    "The ledger could not be read completely, so whether the direct handover payments are on the books cannot be confirmed. Try again shortly; if it persists, have the deal's accounting reviewed.",
+    "تعذّرت قراءة الدفاتر كاملةً، فلا يمكن التأكد من دخول مدفوعات مصاريف التسليم المباشرة إليها. حاول مجدداً بعد قليل، وإن استمر ذلك فاطلب مراجعة محاسبة الصفقة.",
+  ],
   ClosingReason_FIRST_PAYMENT_MISSING: [
     "The customer's first payment is not recorded, so the funding split cannot be established. Record it before closing.",
     "لم تُسجَّل الدفعة الأولى للعميل، لذلك لا يمكن تحديد توزيع التمويل. سجّلها قبل الإغلاق.",

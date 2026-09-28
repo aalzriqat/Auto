@@ -61,6 +61,12 @@ export const CLOSING_READINESS_REASON_PARAMS = {
   HANDOVER_COSTS_NO_ACTUAL: ["count"],
   HANDOVER_COSTS_UNPAID: ["count"],
   HANDOVER_COSTS_CONFLICT: ["count"],
+  // A direct payment is recorded on the line but is not (yet) on the ledger:
+  // its posting is queued (no open accounting period), failed, or an earlier
+  // version's reversal has not landed.
+  HANDOVER_DIRECT_NOT_ON_LEDGER: ["count"],
+  // The ledger could not be read completely, so "on the books" cannot be proven.
+  HANDOVER_DIRECT_LEDGER_UNVERIFIABLE: [],
   // FIRST_PAYMENT_RECORDED
   FIRST_PAYMENT_MISSING: [],
   // LEGAL_INVOICE_RECORDED

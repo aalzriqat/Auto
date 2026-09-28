@@ -29,13 +29,18 @@ import {
   type ClosingReadinessReasonParams,
 } from "../../lib/closingReadinessReasonCodes";
 import type { AppErrorData } from "./errors";
-import { custodyLedgerFamilyRefusal } from "./custodySourceLedger";
+import { custodyLedgerFamilyRefusal, earlierVersionStillPosted, ledgerEventPosted } from "./custodySourceLedger";
 import { heldDepositRowsForVehicle } from "./saleCompletion";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { toMinorUnits } from "./money";
 import { requireCustomerGapToDealer } from "./financingEconomics";
 import { summarizeFees } from "./feeSummary";
-import { blockingHandoverLines, handoverPaymentState, type HandoverPaymentState } from "./handoverCostPayment";
+import {
+  blockingHandoverLines,
+  handoverDirectPostKey,
+  handoverPaymentState,
+  type HandoverPaymentState,
+} from "./handoverCostPayment";
 
 /**
  * Turns one finance application into the plan its sale will post from, or
@@ -204,6 +209,42 @@ function handoverCostsPaidRefusal(liveFees: ReadonlyArray<Doc<"financeDealFees">
   return null;
 }
 
+/**
+ * A direct payment is proven on the LEDGER, not on the row (SCRUM-443). For
+ * each PAID_DIRECT line: (a) the forward event of the live version exists under
+ * its exact key with status POSTED — queued in the outbox (no open period),
+ * PENDING, FAILED or absent all mean not on the books; and (b) no EARLIER
+ * version is still POSTED, i.e. every superseded version's reversal landed.
+ * Read by the custody family's own rules (`ledgerEventPosted`,
+ * `earlierVersionStillPosted`). A ledger page that cannot be read completely
+ * THROWS, which the caller turns into UNAVAILABLE — never a pass.
+ */
+async function handoverDirectLedgerRefusal(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Doc<"financeApplications">["orgId"],
+  liveFees: ReadonlyArray<Doc<"financeDealFees">>
+): Promise<{ refusal: ClosingReadinessReason | null; feeIds: string[] }> {
+  const offBooks: string[] = [];
+  for (const fee of liveFees) {
+    if (handoverPaymentState(fee) !== "PAID_DIRECT" || fee.directPayment === undefined) continue;
+    const version = fee.directPayment.version;
+    const posted = await ledgerEventPosted(ctx, orgId, handoverDirectPostKey(fee._id, version));
+    const earlier = posted
+      ? await earlierVersionStillPosted(ctx, orgId, "HANDOVER_COST_PAID_DIRECT", "financeDealFees", fee._id.toString(), version)
+      : null;
+    if (!posted || earlier !== null) offBooks.push(fee._id as string);
+  }
+  if (offBooks.length === 0) return { refusal: null, feeIds: [] };
+  return {
+    feeIds: offBooks,
+    refusal: reasonOf(
+      "HANDOVER_DIRECT_NOT_ON_LEDGER",
+      `${offBooks.length} direct handover payment(s) are recorded but not on the ledger yet (the posting is queued because no accounting period is open for its date, has not posted, or an earlier version's reversal has not posted). Open the period and let the accounting queue process, then finalize.`,
+      { count: offBooks.length }
+    ),
+  };
+}
+
 /** One accounting condition a financed deal must meet before it can be finalized (the list lives beside the reason codes). */
 export type { ClosingReadinessCheckKey };
 
@@ -346,7 +387,7 @@ export async function evaluateClosingReadiness(
    */
   const onRows = async (
     key: ClosingReadinessCheckKey,
-    spec: { onThrow: "BLOCKED" | "UNAVAILABLE"; throwCode?: "CUSTODY_LEDGER_UNVERIFIABLE"; planOnly?: boolean },
+    spec: { onThrow: "BLOCKED" | "UNAVAILABLE"; throwCode?: "CUSTODY_LEDGER_UNVERIFIABLE" | "HANDOVER_DIRECT_LEDGER_UNVERIFIABLE"; planOnly?: boolean },
     judge: (read: NonNullable<typeof rows>) => ClosingReadinessReason | null | Promise<ClosingReadinessReason | null>
   ) => {
     if (spec.planOnly && !planCovered) return add(key, "NOT_APPLICABLE", null);
@@ -391,10 +432,25 @@ export async function evaluateClosingReadiness(
   // Every dealer-borne handover cost is paid from a recorded source — on EVERY
   // route, NOT `planOnly` (SCRUM-443). The blocking lines travel with the
   // verdict so the screen can point at them.
-  await onRows("HANDOVER_COSTS_PAID", { onThrow: "BLOCKED" }, ({ fees }) => handoverCostsPaidRefusal(fees));
+  // Row verdicts first (a line with no source at all); only when every line
+  // has one is each direct payment proven on the LEDGER — a ledger that cannot
+  // be read is UNAVAILABLE, never READY.
+  let ledgerFeeIds: string[] = [];
+  await onRows(
+    "HANDOVER_COSTS_PAID",
+    { onThrow: "UNAVAILABLE", throwCode: "HANDOVER_DIRECT_LEDGER_UNVERIFIABLE" },
+    async ({ fees }) => {
+      const rowRefusal = handoverCostsPaidRefusal(fees);
+      if (rowRefusal !== null) return rowRefusal;
+      const proof = await handoverDirectLedgerRefusal(ctx, app.orgId, fees);
+      ledgerFeeIds = proof.feeIds;
+      return proof.refusal;
+    }
+  );
   const handoverCheck = checks[checks.length - 1];
   if (rows !== null && handoverCheck.status === "BLOCKED") {
-    handoverCheck.feeIds = blockingHandoverLines(rows.fees).map((fee) => fee._id as string);
+    handoverCheck.feeIds =
+      ledgerFeeIds.length > 0 ? ledgerFeeIds : blockingHandoverLines(rows.fees).map((fee) => fee._id as string);
   }
 
   // An unknown first payment is not zero (SCRUM-373): a quoted, approved deal

@@ -1,14 +1,16 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
 import { ConvexError } from "convex/values";
 import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
+import { drainEntries } from "./accountingOutbox";
+import { MAX_CUSTODY_READ_BATCH } from "./utils/custodySourceLedger";
 import { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS, PERMISSIONS } from "./utils/permissions";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { evaluateClosingReadiness } from "./utils/financedSaleRecognition";
-import { handoverPaymentState, type HandoverPaymentLine } from "./utils/handoverCostPayment";
+import { handoverDirectPostKey, handoverPaymentState, type HandoverPaymentLine } from "./utils/handoverCostPayment";
 
 /**
  * SCRUM-443 — a dealer-borne handover cost reaches the ledger exactly once,
@@ -513,5 +515,153 @@ describe("the shared verdict never trusts a payment that no longer matches the c
     for (const bad of [Number.NaN, 1.5, -5]) {
       expect(handoverPaymentState({ ...base, actualAmountMinor: bad })).toBe("UNPAID");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The closing check proves a direct payment on the LEDGER, not on the row.
+
+const closePeriod = (seed: Seed) =>
+  seed.t.run(async (ctx) => {
+    for (const p of (await ctx.db.query("accountingPeriods").collect()).filter((x) => x.orgId === seed.orgId)) {
+      await ctx.db.patch(p._id, { status: "CLOSED", closedAt: Date.now(), closedBy: seed.userId });
+    }
+  });
+const openPeriod = (seed: Seed) =>
+  seed.t.run(async (ctx) => {
+    for (const p of (await ctx.db.query("accountingPeriods").collect()).filter((x) => x.orgId === seed.orgId)) {
+      await ctx.db.patch(p._id, { status: "OPEN", closedAt: undefined, closedBy: undefined });
+    }
+  });
+
+async function pump(t: TestConvex) {
+  for (let pass = 0; pass < 10; pass += 1) {
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    const queued = (await t.run(async (ctx) => await ctx.db.system.query("_scheduled_functions").collect())).filter(
+      (f) => f.state.kind === "pending" || f.state.kind === "inProgress"
+    ).length;
+    if (queued === 0) break;
+  }
+}
+
+/** ONE real outbox attempt per due row, as the cron would drive it (mirrors dealCustodyAccounting's `drainOnce`). */
+async function drainOnce(seed: Seed) {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  try {
+    const pending = (ctx: import("./_generated/server").MutationCtx) =>
+      ctx.db.query("pendingAccountingEvents").withIndex("by_org_status", (q) => q.eq("orgId", seed.orgId).eq("status", "PENDING")).take(50);
+    await seed.t.run(async (ctx) => {
+      for (const row of await pending(ctx)) if (row.dispatchState === undefined) await ctx.db.patch(row._id, { nextActionAt: undefined });
+      return await drainEntries(ctx, await pending(ctx));
+    });
+    await pump(seed.t);
+    const claimed = await seed.t.run(async (ctx) => (await pending(ctx)).filter((r) => r.dispatchState === "DISPATCHED").map((r) => r._id));
+    for (const rowId of claimed) await seed.t.mutation(internal.accountingOutbox.observeOutboxAttempt, { rowId });
+    await pump(seed.t);
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+describe("HANDOVER_COSTS_PAID proves each direct payment on the ledger (SCRUM-443 gap 1)", () => {
+  test("no open period: the payment queues, the check is BLOCKED and finalizeDeal refuses; once posted it is READY", async () => {
+    const seed = await seedDeal("ledger-queued");
+    await closePeriod(seed);
+    const feeId = await dealerFee(seed, jod(50));
+    await payDirect(seed, feeId);
+    // The row says paid; the books do not have it.
+    expect((await lineOf(seed, feeId))?.handoverPayment).toBe("PAID_DIRECT");
+    expect(await directEvents(seed)).toHaveLength(0);
+    expect(expense(await ledger(seed))).toBe(0);
+    const blocked = await readiness(seed);
+    expect(blocked.status).toBe("BLOCKED");
+    expect(blocked.reason?.code).toBe("HANDOVER_DIRECT_NOT_ON_LEDGER");
+    expect(blocked.reason?.params).toEqual({ count: 1 });
+    expect(blocked.feeIds).toEqual([feeId]);
+
+    await registerHandover(seed.asUser, api, seed.orgId, seed.applicationId);
+    await seed.asUser.mutation(api.applications.registerExpectedPayment, {
+      orgId: seed.orgId, applicationId: seed.applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
+    });
+    let refusal: unknown;
+    try {
+      await seed.asUser.mutation(api.applications.finalizeDeal, { orgId: seed.orgId, applicationId: seed.applicationId, idempotencyKey: "fin-q" });
+    } catch (error) {
+      refusal = error;
+    }
+    expect((refusal as ConvexError<{ code: string }>).data.code).toBe("HANDOVER_DIRECT_NOT_ON_LEDGER");
+
+    await openPeriod(seed);
+    await drainOnce(seed);
+    expect(await directEvents(seed)).toHaveLength(1);
+    expect(expense(await ledger(seed))).toBe(jod(50));
+    expect((await readiness(seed)).status).toBe("READY");
+  });
+
+  test("amount edit then re-record: BLOCKED while the v1 reversal has not posted, READY once v2 is on the books", async () => {
+    const seed = await seedDeal("ledger-rerecord");
+    const feeId = await dealerFee(seed, jod(50));
+    await payDirect(seed, feeId);
+    expect((await readiness(seed)).status).toBe("READY");
+    // The period closes; the edit's reversal of v1 defers instead of posting.
+    await closePeriod(seed);
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+      orgId: seed.orgId, feeId, actualAmountMinor: jod(65), expectedCurrency: "JOD",
+    });
+    expect((await directEvents(seed))[0].status).toBe("POSTED");
+    expect((await readiness(seed)).status).toBe("BLOCKED");
+    // Re-recording is refused while v1 is still on the books (no double charge).
+    await expect(payDirect(seed, feeId)).rejects.toThrow();
+    expect(expense(await ledger(seed))).toBe(jod(50));
+
+    await openPeriod(seed);
+    await drainOnce(seed);
+    expect((await directEvents(seed))[0].status).toBe("REVERSED");
+    expect(expense(await ledger(seed))).toBe(0);
+    await payDirect(seed, feeId);
+    expect(expense(await ledger(seed))).toBe(jod(65));
+    expect((await readiness(seed)).status).toBe("READY");
+  });
+
+  test("defence in depth: a live v2 with an earlier version still POSTED is BLOCKED, never READY", async () => {
+    const seed = await seedDeal("ledger-earlier");
+    const feeId = await dealerFee(seed, jod(50));
+    await payDirect(seed, feeId);
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+      orgId: seed.orgId, feeId, actualAmountMinor: jod(65), expectedCurrency: "JOD",
+    });
+    await payDirect(seed, feeId);
+    expect((await readiness(seed)).status).toBe("READY");
+    // A raw edit puts v1 back on the books beside v2 (the mutation itself refuses to produce this).
+    const v1 = (await directEvents(seed)).find((e) => e.idempotencyKey === handoverDirectPostKey(feeId, 1))!;
+    await seed.t.run((ctx) => ctx.db.patch(v1._id, { status: "POSTED" }));
+    const check = await readiness(seed);
+    expect(check.status).toBe("BLOCKED");
+    expect(check.reason?.code).toBe("HANDOVER_DIRECT_NOT_ON_LEDGER");
+    await seed.t.run((ctx) => ctx.db.patch(v1._id, { status: "REVERSED" }));
+    expect((await readiness(seed)).status).toBe("READY");
+  });
+
+  test("a ledger page that cannot be read completely is UNAVAILABLE, not READY", async () => {
+    const seed = await seedDeal("ledger-unreadable");
+    const feeId = await dealerFee(seed, jod(50));
+    await payDirect(seed, feeId);
+    expect((await readiness(seed)).status).toBe("READY");
+    const posted = (await directEvents(seed))[0];
+    // A full page of rows under the one key is more than a posting can have: unverifiable.
+    await seed.t.run(async (ctx) => {
+      const { _id, _creationTime, ...copy } = posted;
+      void _id; void _creationTime;
+      for (let i = 0; i < MAX_CUSTODY_READ_BATCH; i += 1) await ctx.db.insert("accountingEvents", { ...copy });
+    });
+    const check = await readiness(seed);
+    expect(check.status).toBe("UNAVAILABLE");
+    expect(check.reason?.code).toBe("HANDOVER_DIRECT_LEDGER_UNVERIFIABLE");
+  });
+
+  test("custody-paid and zero-actual lines need no direct-payment proof", async () => {
+    const seed = await seedDeal("ledger-custody");
+    await dealerFee(seed, 0);
+    expect((await readiness(seed)).status).toBe("READY");
   });
 });
