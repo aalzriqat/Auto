@@ -145,6 +145,89 @@ function DecisionRow({
   );
 }
 
+/** The caller's four capabilities on the card, exactly as the card takes them. */
+export type FinanceDecisionCapabilities = Readonly<{
+  canRecordQuotation: boolean;
+  canRecordApproval: boolean;
+  canEstablishLtvPercent: boolean;
+  canRecordAppraisal: boolean;
+  isOwnDeal: boolean;
+}>;
+
+/**
+ * Whether each of the card's three first-time actions may be offered.
+ *
+ * ONE predicate per action, shared by the card and by the stage focus row
+ * (SCRUM-417), so the one next step the focus row names can never be offered
+ * to somebody the card would refuse, or withheld from somebody it would serve.
+ * The reasoning behind each term is at the card, where the buttons live.
+ */
+export function decisionActionAvailability(
+  facts: FinanceDecisionFacts,
+  caps: FinanceDecisionCapabilities
+): { quotation: boolean; approval: boolean; appraisal: boolean } {
+  const quotationRecorded = facts.submittedQuotationMinor !== null;
+  return {
+    quotation:
+      caps.canRecordQuotation &&
+      !facts.closed &&
+      !facts.approvedPurchaseRecorded &&
+      (!facts.ltvMissing || caps.canEstablishLtvPercent),
+    approval: caps.canRecordApproval && !caps.isOwnDeal && !facts.closed && quotationRecorded,
+    appraisal: caps.canRecordAppraisal && !facts.closed && !facts.handedOver,
+  };
+}
+
+/** Which of the card's dialogs a focus-row step opens. */
+export type FinanceDecisionDialog = "RECORD_QUOTATION" | "RECORD_APPRAISAL" | "RECORD_APPROVAL";
+
+/**
+ * The ONE next thing the finance company's decision needs, in the order the
+ * deal moves: the quotation goes out, the car is valued, the company answers
+ * with an amount (SCRUM-417, G3).
+ *
+ * Returns the action and, when this caller cannot take it, the same reason the
+ * card writes beside the row — never a different one. `stage` is the live
+ * stage: the appraisal is asked for only while the rail is waiting on it,
+ * because on APPROVED_PURCHASE a manually based approval needs none.
+ */
+export function nextFinanceDecisionStep(
+  facts: FinanceDecisionFacts,
+  caps: FinanceDecisionCapabilities,
+  stage: "APPRAISAL" | "APPROVED_PURCHASE"
+): { actionKey: string; opens: FinanceDecisionDialog; unavailableReasonKey?: string } {
+  const available = decisionActionAvailability(facts, caps);
+  if (facts.submittedQuotationMinor === null) {
+    let reason: string | undefined;
+    if (!available.quotation) {
+      if (facts.closed) reason = "FinanceDecisionClosed";
+      else if (!caps.canRecordQuotation) reason = "QuotationNeedsPermission";
+      else reason = "DealPurchaseLtvNeedsApprover";
+    }
+    return { actionKey: "RecordQuotationAction", opens: "RECORD_QUOTATION", unavailableReasonKey: reason };
+  }
+  if (stage === "APPRAISAL" && facts.appraisalAmountMinor === null) {
+    let reason: string | undefined;
+    if (!available.appraisal) {
+      if (facts.closed) reason = "FinanceDecisionClosed";
+      else if (facts.handedOver) reason = "AppraisalClosedByHandover";
+      else reason = "AppraisalNeedsReviewer";
+    }
+    return { actionKey: "RecordAppraisalAction", opens: "RECORD_APPRAISAL", unavailableReasonKey: reason };
+  }
+  let reason: string | undefined;
+  if (!available.approval) {
+    if (facts.closed) reason = "FinanceDecisionClosed";
+    else if (!caps.canRecordApproval) reason = "ApprovedPurchaseNeedsApprover";
+    else reason = "ApprovedPurchaseNotOwnDeal";
+  }
+  return {
+    actionKey: "RecordApprovedPurchaseAction",
+    opens: "RECORD_APPROVAL",
+    unavailableReasonKey: reason,
+  };
+}
+
 export function FinanceCompanyDecisionCard({
   facts,
   canRecordQuotation,
@@ -160,6 +243,13 @@ export function FinanceCompanyDecisionCard({
   onCorrectApproved,
 }: Readonly<FinanceCompanyDecisionCardProps>) {
   const quotationRecorded = facts.submittedQuotationMinor !== null;
+  const availability = decisionActionAvailability(facts, {
+    canRecordQuotation,
+    canRecordApproval,
+    canEstablishLtvPercent,
+    canRecordAppraisal,
+    isOwnDeal,
+  });
 
   // The quotation can only be recorded BEFORE an approval exists — the server
   // refuses to move the figure an approval was based on, and directs the caller
@@ -177,11 +267,7 @@ export function FinanceCompanyDecisionCard({
   // The capability moved and this condition moved with it: keyed on
   // `canRecordApproval` it would keep offering the action to a default MANAGER,
   // whose entry the server now refuses.
-  const quotationActionAvailable =
-    canRecordQuotation &&
-    !facts.closed &&
-    !facts.approvedPurchaseRecorded &&
-    (!facts.ltvMissing || canEstablishLtvPercent);
+  const quotationActionAvailable = availability.quotation;
   // Who may record THIS deal's missing rate: the full callable capability, not
   // the rate authority alone (SCRUM-322). The rate is only ever written
   // together with the quotation, through `recordSubmittedQuotation`, whose door
@@ -207,8 +293,7 @@ export function FinanceCompanyDecisionCard({
       ? t("FinanceCompanyLtvMissing")
       : t("DealPurchaseLtvNeedsApprover");
   }
-  const approvalActionAvailable =
-    canRecordApproval && !isOwnDeal && !facts.closed && quotationRecorded;
+  const approvalActionAvailable = availability.approval;
   // "Not in play until the quotation has gone out" is owned by the ROW's own
   // render condition below, not repeated here — a second copy of the rule read
   // as defence in depth but was untestable through this gate (the row hides the
@@ -219,7 +304,7 @@ export function FinanceCompanyDecisionCard({
   // one screen that can record one must also be able to correct it. The server
   // already handles the consequence: a replacement appraisal supersedes its
   // predecessor and clears the approval that was based on it, on the record.
-  const appraisalActionAvailable = canRecordAppraisal && !facts.closed && !facts.handedOver;
+  const appraisalActionAvailable = availability.appraisal;
 
   const derived: Array<{ key: string; label: string; value: string }> = [];
   if (facts.financeCompanyFundedPortionMinor !== null) {
@@ -302,7 +387,7 @@ export function FinanceCompanyDecisionCard({
   }
 
   return (
-    <Card>
+    <Card data-testid="deal-finance-decision">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
             <Building2 className="h-4 w-4 shrink-0 text-primary" aria-hidden />

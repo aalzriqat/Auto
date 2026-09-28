@@ -574,6 +574,89 @@ const dealRailMessages = defineBilingualMessages({
 });
 
 /**
+ * SCRUM-417: the deal as a wizard — the one next step on every stage, and the
+ * one precise reason when this caller cannot take it.
+ */
+const dealWizardMessages = defineBilingualMessages({
+  // G1 — a DRAFT application.
+  SubmitApplicationAction: ["Submit the application", "تقديم الطلب"],
+  SubmitApplicationNeedsPermission: [
+    "Submitting the application is done by someone with access to finance applications.",
+    "يقدّم الطلبَ من يملك صلاحية الوصول إلى طلبات التمويل.",
+  ],
+  AppSubmittedForDocumentsSuccess: [
+    "Application submitted. Collect the required documents next.",
+    "تم تقديم الطلب. الخطوة التالية جمع المستندات المطلوبة.",
+  ],
+  // G6 — the credit approval waits on the paperwork.
+  CompleteDocumentsFirstAction: ["Complete the documents first", "أكمل المستندات أولاً"],
+  CreditApprovalNeedsDocuments: [
+    "The finance company's approval can only be recorded once every required document is verified or waived. A rejection can still be recorded.",
+    "لا يمكن تسجيل موافقة شركة التمويل إلا بعد التحقق من كل المستندات المطلوبة أو الإعفاء منها. ويبقى تسجيل الرفض ممكناً.",
+  ],
+  // G3 — the finance company's decision, one step at a time.
+  QuotationNeedsPermission: [
+    "The submitted quotation is recorded by someone who can create finance applications.",
+    "يسجّل عرض السعر المُرسَل من يملك صلاحية إنشاء طلبات التمويل.",
+  ],
+  FinanceDecisionNeedsAccess: [
+    "The finance company's figures are recorded by someone with access to finance applications.",
+    "يسجّل أرقامَ شركة التمويل من يملك صلاحية الوصول إلى طلبات التمويل.",
+  ],
+  // G5 — the paperwork.
+  CompleteDocumentsAction: ["Complete the documents", "إكمال المستندات"],
+  DocumentsNeedUploader: [
+    "The documents are uploaded and verified by the finance team.",
+    "يرفع المستندات ويتحقق منها فريق التمويل.",
+  ],
+  // G7 — the financing reconciliation review.
+  ResolveReconciliationAction: ["Review the reconciliation note", "مراجعة ملاحظة التسوية"],
+  ReconciliationBeforeClose: [
+    "A figure on this deal was flagged as unreliable when it was calculated. Record what you checked before closing.",
+    "وُسم أحد أرقام هذه الصفقة بأنه غير موثوق عند احتسابه. سجّل ما راجعته قبل الإغلاق.",
+  ],
+  ReconciliationNeedsPermission: [
+    "This deal's reconciliation note is reviewed by the accountant who closes deals.",
+    "يراجع ملاحظة التسوية على هذه الصفقة المحاسبُ المخوّل بإغلاق الصفقات.",
+  ],
+  ResolveReconciliationTitle: ["Review the reconciliation note", "مراجعة ملاحظة التسوية"],
+  ResolveReconciliationDesc: [
+    "Clearing the flag records that someone checked the figures. It changes no amount.",
+    "إزالة الوسم تُثبت أن أحداً راجع الأرقام، ولا تغيّر أي مبلغ.",
+  ],
+  ReconciliationReasonLabel: ["Why it was flagged", "سبب الوسم"],
+  ReconciliationNoteLabel: ["What you checked", "ما الذي راجعته"],
+  ReconciliationNotePlaceholder: [
+    "e.g. Confirmed the approved amount against the finance company's letter",
+    "مثال: طابقتُ المبلغ المعتمد مع كتاب شركة التمويل",
+  ],
+  ReconciliationNoteRequired: [
+    "Required — it is the record that the review happened.",
+    "مطلوب — فهو السجل الذي يثبت إجراء المراجعة.",
+  ],
+  ResolveReconciliationConfirm: ["Record the review", "تسجيل المراجعة"],
+  ReconciliationResolved: ["Review recorded. The deal can be closed.", "سُجّلت المراجعة. يمكن الآن إغلاق الصفقة."],
+  FinalizeNeedsHeldDepositResolved: [
+    "The finance company pays the supplier directly on this deal, and a reservation deposit is still held. Resolve the deposit from the vehicle's deposit manager, then close.",
+    "تدفع شركة التمويل للمورد مباشرةً في هذه الصفقة، وما زال هناك عربون محتجز. عالج العربون من إدارة العربون في صفحة المركبة، ثم أغلق الصفقة.",
+  ],
+  // G8 — the cash rail.
+  CompleteCashSaleAction: ["Complete the sale", "إتمام البيع"],
+  CashSaleCompletesInSales: [
+    "This sale is still a draft. Complete it from Sales: open the sale, set its status to Completed and save.",
+    "هذا البيع ما زال مسودة. أتمّه من صفحة المبيعات: افتح البيع، واجعل حالته «مكتمل»، ثم احفظ.",
+  ],
+  SupplierSettlementNeedsPermission: [
+    "The supplier's settlement is recorded by someone who manages finance.",
+    "يسجّل تسوية المورد من يملك صلاحية إدارة المالية.",
+  ],
+  CashSettlementNotRecordedHere: [
+    "The supplier's balance on this sale is still open, and it is not settled from this screen. It closes when accounting records the payment.",
+    "رصيد المورد على هذا البيع ما زال مفتوحاً، ولا تتم تسويته من هذه الشاشة. يُغلق عندما تسجّل المحاسبة الدفعة.",
+  ],
+});
+
+/**
  * The deal overview, the vehicle's pre-deal cost basis, the employee cash
  * custody workflow and the fee-template adoption state — every message once.
  */
@@ -919,6 +1002,7 @@ export const salesEn = {
   ...dealRailMessages.en,
   ...profitApprovalMessages.en,
   ...dealOverviewMessages.en,
+  ...dealWizardMessages.en,
   // Sales & F&I
   LogSale: "Log Sale",
   SaleDetails: "Sale Details",
@@ -1936,6 +2020,7 @@ export const salesAr = {
   ...dealRailMessages.ar,
   ...profitApprovalMessages.ar,
   ...dealOverviewMessages.ar,
+  ...dealWizardMessages.ar,
   // Sales & F&I
   LogSale: "تسجيل بيع",
   SaleDetails: "تفاصيل البيع",
