@@ -214,18 +214,31 @@ test.describe("recording a financed deal's economics through the interface", () 
       await costs.getByRole("button", { name: "Confirm reconciliation" }).click();
       await expect(costs.getByRole("button", { name: "Reconcile fee" })).toHaveCount(0);
 
+      // The costs are closable now, and the close is STILL withheld — for the
+      // legal invoice alone. Without this the first withheld assertion could
+      // be satisfied by the costs, and a broken invoice gate would go unseen.
+      const checklist = managerPage.getByTestId("deal-closing-checklist");
+      await expect(checklist.getByTestId("closing-check-COSTS_CLOSABLE")).toHaveAttribute(
+        "data-status",
+        "READY",
+      );
+      await expect(
+        checklist.getByTestId("closing-check-LEGAL_INVOICE_RECORDED"),
+      ).toHaveAttribute("data-status", "BLOCKED");
+      await expect(close).toHaveCount(0);
+
       // The legal invoice, made out to the finance company (the dialog's
       // default). The plan must balance: with no deposit, no customer gap and
       // nothing deducted, revenue is exactly the 13,000 the company remits.
-      await managerPage
-        .getByTestId("deal-closing-checklist")
-        .getByRole("button", { name: "Record Legal Invoice" })
-        .click();
+      await checklist.getByRole("button", { name: "Record Legal Invoice" }).click();
       const invoiceDialog = managerPage.getByRole("dialog");
       await invoiceDialog.locator("#legal-invoice-amount").fill("13000");
       await invoiceDialog.locator("#legal-invoice-number").fill(`INV-E2E-${testDataSuffix()}`);
       await invoiceDialog.getByRole("button", { name: "Save Legal Invoice" }).click();
       await expect(invoiceDialog).not.toBeVisible();
+      await expect(
+        checklist.getByTestId("closing-check-LEGAL_INVOICE_RECORDED"),
+      ).toHaveAttribute("data-status", "READY");
 
       // And now — and only now — closing is the step the rail names.
       await expect(close).toBeVisible();
