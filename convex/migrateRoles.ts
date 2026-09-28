@@ -3,11 +3,13 @@ import { MutationCtx } from "./_generated/server";
 import { internalMutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import {
+  type DealAuthority,
   DEFAULT_ROLE_TEMPLATES,
   PERMISSIONS,
   SYSTEM_OWNER_ROLE_NAME,
   isSystemOwnerRole,
   normalizeRoleName,
+  dealAuthorityLostAtCutover,
   transitionalDealGrants,
 } from "./utils/permissions";
 
@@ -417,6 +419,10 @@ interface SplitDealAuthorityRecord {
    * Listed for the owner (template sync), never granted here.
    */
   pendingOwnerAction: boolean;
+  /** Old doors it can use now but would not keep at cutover, after `added`. */
+  lostAtCutover: DealAuthority[];
+  /** The loss is the owner's SCRUM-413 ruling (SALES loses all financed-deal authority). */
+  lossRuledByOwner: boolean;
 }
 
 /**
@@ -431,8 +437,13 @@ interface SplitDealAuthorityRecord {
  *
  * The audit is the returned records: this runs with no caller identity, so
  * it writes no `adminAuditLog` row rather than invent an actor. The
- * operator publishes the apply output and a post-apply dry-run (`pending: 0`)
- * to SCRUM-413 against the deployed commit.
+ * operator publishes the apply output and a post-apply dry-run to SCRUM-413
+ * against the deployed commit.
+ *
+ * `pending: 0` only means nothing is left to write. The cutover gate is
+ * `ready` on a dry-run taken just before it: also no `unresolved` role — one
+ * that would lose an old door, is not SALES, and awaits the owner's grant or
+ * removal. Role edits after this run can reopen it, hence the fresh dry-run.
  */
 export const prepareSplitDealAuthorities = internalMutation({
   args: { apply: v.optional(v.boolean()) },
@@ -441,6 +452,7 @@ export const prepareSplitDealAuthorities = internalMutation({
     const roles = await ctx.db.query("roles").collect();
     const records: SplitDealAuthorityRecord[] = [];
     let pending = 0;
+    let unresolved = 0;
 
     for (const role of roles) {
       if (role.isDeleted) continue;
@@ -458,9 +470,12 @@ export const prepareSplitDealAuthorities = internalMutation({
         !held.has(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT) &&
         !added.includes(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
       const needsWrite = added.length > 0 || stampOwnerFlag;
+      const lostAtCutover = dealAuthorityLostAtCutover({ ...role, permissions: [...role.permissions, ...added] });
+      const lossRuledByOwner = lostAtCutover.length > 0 && role.name === "SALES";
 
-      if (!needsWrite && !ownerFlagSkipped && !pendingOwnerAction) continue;
+      if (!needsWrite && !ownerFlagSkipped && !pendingOwnerAction && lostAtCutover.length === 0) continue;
       if (needsWrite) pending++;
+      if (lostAtCutover.length > 0 && !lossRuledByOwner) unresolved++;
 
       records.push({
         roleId: role._id,
@@ -474,6 +489,8 @@ export const prepareSplitDealAuthorities = internalMutation({
           held.has(PERMISSIONS.FINALIZE_FINANCED_DEAL) && held.has(PERMISSIONS.CREATE_FINANCE_APPLICATION),
         added,
         pendingOwnerAction,
+        lostAtCutover,
+        lossRuledByOwner,
       });
 
       if (apply && needsWrite) {
@@ -484,7 +501,6 @@ export const prepareSplitDealAuthorities = internalMutation({
       }
     }
 
-    return { apply, pending, records };
+    return { apply, pending, unresolved, ready: pending === 0 && unresolved === 0, records };
   },
 });
-

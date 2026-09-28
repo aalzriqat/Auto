@@ -8,6 +8,7 @@ import {
   DEFAULT_ROLE_TEMPLATES,
   PERMISSIONS,
   PRE_413_OWNER_FALLBACK_PERMISSIONS,
+  dealAuthorityLostAtCutover,
   isSystemOwnerRole,
   transitionalDealGrants,
 } from "./utils/permissions";
@@ -93,6 +94,25 @@ describe("SCRUM-413 transitionalDealGrants", () => {
   });
 });
 
+describe("SCRUM-413 dealAuthorityLostAtCutover", () => {
+  test.each([
+    ["custom role with FINALIZE and CREATE", { name: "Deal Desk", permissions: [FINALIZE, CREATE_APP] }, ["route", "cancelClosed"]],
+    // Sonnet NEW-1: the edit dialog used to save a stored MANAGER as its label.
+    ["MANAGER renamed to its English label", { name: "Manager", permissions: [FINALIZE, CREATE_APP] }, ["route", "cancelClosed"]],
+    ["MANAGER renamed to its Arabic label", { name: "المدير", permissions: [FINALIZE] }, ["route"]],
+    ["custom role with FINALIZE only",{ name: "Closer", permissions: [FINALIZE] }, ["route"]],
+    ["ACCOUNTANT backfilled with FINALIZE and CREATE", { name: "ACCOUNTANT", permissions: [FINALIZE, CREATE_APP] }, ["route", "cancelClosed"]],
+    ["SALES with FINALIZE and CREATE", { name: "SALES", permissions: [FINALIZE, CREATE_APP] }, ["route", "cancelClosed"]],
+    ["role already holding both replacements", { name: "Deal Desk", permissions: [FINALIZE, CREATE_APP, ROUTE, CANCEL_CLOSED] }, []],
+    ["role holding only the route replacement", { name: "Deal Desk", permissions: [FINALIZE, CREATE_APP, ROUTE] }, ["cancelClosed"]],
+    ["CREATE without FINALIZE never reached either door", { name: "Deal Desk", permissions: [CREATE_APP] }, []],
+    ["owner bypasses every door", { name: "Boss", permissions: [FINALIZE], isSystemOwnerRole: true }, []],
+    ["deleted role", { name: "Deal Desk", permissions: [FINALIZE, CREATE_APP], isDeleted: true }, []],
+  ])("%s", (_label, role, expected) => {
+    expect(dealAuthorityLostAtCutover(role)).toEqual(expected);
+  });
+});
+
 describe("SCRUM-413 default templates", () => {
   const template = (name: string) => DEFAULT_ROLE_TEMPLATES.find((r) => r.name === name)?.permissions ?? [];
 
@@ -121,6 +141,7 @@ describe("SCRUM-413 prepareSplitDealAuthorities", () => {
       manager: await insertRole(t, orgId, "MANAGER", [FINALIZE, CREATE_APP]),
       sales: await insertRole(t, orgId, "SALES", [FINALIZE, CREATE_APP]),
       accountant: await insertRole(t, orgId, "ACCOUNTANT", [PERMISSIONS.VIEW_FINANCE]),
+      dealDesk: await insertRole(t, orgId, "Deal Desk", [FINALIZE, CREATE_APP]),
     };
   }
 
@@ -138,8 +159,17 @@ describe("SCRUM-413 prepareSplitDealAuthorities", () => {
     expect(byId.get(ids.manager)).toMatchObject({ added: [ROUTE, CANCEL_CLOSED], priorRoute: true, priorCancelClosed: true });
     expect(byId.get(ids.legacyOwner)).toMatchObject({ stampOwnerFlag: true, added: [ROUTE, CANCEL_CLOSED] });
     expect(byId.get(ids.fakeOwner)).toMatchObject({ ownerFlagSkipped: true, stampOwnerFlag: false, added: [] });
-    expect(byId.get(ids.accountant)).toMatchObject({ pendingOwnerAction: true, added: [] });
-    expect(byId.has(ids.sales)).toBe(false);
+    expect(byId.get(ids.accountant)).toMatchObject({ pendingOwnerAction: true, added: [], lostAtCutover: [] });
+    expect(byId.get(ids.manager)).toMatchObject({ lostAtCutover: [] });
+    // SCRUM-413-A1: a role that would lose an old door is never dropped from the report.
+    expect(byId.get(ids.dealDesk)).toMatchObject({
+      added: [], priorRoute: true, priorCancelClosed: true,
+      lostAtCutover: ["route", "cancelClosed"], lossRuledByOwner: false,
+    });
+    expect(byId.get(ids.sales)).toMatchObject({ added: [], lostAtCutover: ["route", "cancelClosed"], lossRuledByOwner: true });
+    expect(byId.get(ids.fakeOwner)).toMatchObject({ lostAtCutover: ["route"], lossRuledByOwner: false });
+    expect(result.unresolved).toBe(2);
+    expect(result.ready).toBe(false);
   });
 
   test("apply grants preserved authority only, then a re-run has nothing pending", async () => {
@@ -165,6 +195,30 @@ describe("SCRUM-413 prepareSplitDealAuthorities", () => {
     expect(rerun.records.every((r: any) => r.added.length === 0 && !r.stampOwnerFlag)).toBe(true);
     // The accountant stays listed for the owner: the migration never grants it.
     expect(rerun.records.map((r: any) => r.roleId)).toContain(ids.accountant);
+    // Nothing pending to write is NOT readiness: the losses still await the owner.
+    expect(rerun.unresolved).toBe(2);
+    expect(rerun.ready).toBe(false);
+  });
+
+  test("ready only once every loss is resolved, and a later edit that re-creates one is caught", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const { orgId, asOwner } = await setupOwnerOrg(t, "scrum413_ready_owner");
+    const dealDesk = await insertRole(t, orgId, "Deal Desk", [FINALIZE, CREATE_APP]);
+    await insertRole(t, orgId, "SALES", [FINALIZE]);
+    const dryRun = () => t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, {});
+
+    expect(await dryRun()).toMatchObject({ pending: 0, unresolved: 1, ready: false });
+
+    // The owner resolves the loss by granting the replacements explicitly.
+    await asOwner.mutation(api.roles.update, { orgId, roleId: dealDesk, permissions: [FINALIZE, CREATE_APP, ROUTE, CANCEL_CLOSED] });
+    expect(await dryRun()).toMatchObject({ pending: 0, unresolved: 0, ready: true });
+
+    // After readiness, an owner edit that adds the old authority to another role reopens it.
+    const closer = await insertRole(t, orgId, "Closer", [CREATE_APP]);
+    await asOwner.mutation(api.roles.update, { orgId, roleId: closer, permissions: [CREATE_APP, FINALIZE] });
+    const reopened = await dryRun();
+    expect(reopened).toMatchObject({ unresolved: 1, ready: false });
+    expect(reopened.records.find((r: any) => r.roleId === closer)?.lostAtCutover).toEqual(["route", "cancelClosed"]);
   });
 });
 

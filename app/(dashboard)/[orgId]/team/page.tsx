@@ -177,12 +177,17 @@ export default function TeamPage() {
                 onClick={async () => {
                   if (!activeOrgId) return;
                   try {
-                    const { changes } = await syncRolePermissions({ orgId: activeOrgId });
+                    // A backend older than this page returns a bare count (the frontend
+                    // deploys first); the sync has already written, so never fail here.
+                    const result: Awaited<ReturnType<typeof syncRolePermissions>> | number =
+                      await syncRolePermissions({ orgId: activeOrgId });
+                    const changes = typeof result === "number" ? [] : result.changes;
+                    const count = typeof result === "number" ? result : changes.length;
                     toast.success(
-                      changes.length === 0
+                      count === 0
                         ? t("SyncRolePermissionsNone" as any)
                         : interpolate(t("SyncRolePermissionsDone" as any), {
-                            count: changes.length,
+                            count,
                             roles: changes.map((change) => change.name).join(", "),
                           })
                     );

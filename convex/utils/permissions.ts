@@ -230,6 +230,8 @@ export function isSystemOwnerRole(role: RoleLike | null | undefined): boolean {
  * - every other role gets nothing. A name is not provenance (a custom role
  *   can be called "manager"), so no other name earns a grant here; the
  *   ACCOUNTANT route grant the owner ruled is applied only by the owner.
+ *   Where such a role could use an old door, `dealAuthorityLostAtCutover`
+ *   reports it for the owner instead.
  *
  * Pure. The migration and every role writer call this same function, so
  * they cannot drift apart. Returns the permissions to ADD.
@@ -246,6 +248,28 @@ export function transitionalDealGrants(role: RoleLike): Permission[] {
     owed = held.has(PERMISSIONS.CREATE_FINANCE_APPLICATION) ? [ROUTE, CANCEL_CLOSED] : [ROUTE];
   }
   return owed.filter((permission) => !held.has(permission));
+}
+
+export type DealAuthority = "route" | "cancelClosed";
+
+/**
+ * SCRUM-413 transition: the old deal authorities a role can use today that it
+ * would NOT keep once the doors move to the split permissions — route took
+ * FINALIZE alone, closed-cancel took FINALIZE plus CREATE_FINANCE_APPLICATION.
+ * Nothing here is granted: the migration reports each loss and is not ready
+ * for cutover until the owner resolves it (grant the replacement, or remove
+ * the old string). Owners bypass every door, so they never lose one.
+ */
+export function dealAuthorityLostAtCutover(role: RoleLike): DealAuthority[] {
+  if (role.isDeleted || isSystemOwnerRole(role)) return [];
+  const held = new Set(role.permissions);
+  if (!held.has(PERMISSIONS.FINALIZE_FINANCED_DEAL)) return [];
+  const lost: DealAuthority[] = [];
+  if (!held.has(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT)) lost.push("route");
+  if (held.has(PERMISSIONS.CREATE_FINANCE_APPLICATION) && !held.has(PERMISSIONS.CANCEL_CLOSED_DEAL)) {
+    lost.push("cancelClosed");
+  }
+  return lost;
 }
 
 export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }[] = [
