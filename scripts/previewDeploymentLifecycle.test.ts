@@ -62,7 +62,7 @@ function env(overrides: Record<string, string | undefined> = {}) {
     CONVEX_PREVIEW_URL: "https://" + DEPLOYMENT + ".convex.cloud",
     CONVEX_PREVIEW_CREATED_AT: String(CREATED_AT),
     ...overrides,
-  } as NodeJS.ProcessEnv;
+  } as unknown as NodeJS.ProcessEnv;
 }
 
 const writes = (calls: Call[]) => calls.filter((c) => c.method !== "GET");

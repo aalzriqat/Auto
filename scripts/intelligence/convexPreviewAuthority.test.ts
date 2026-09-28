@@ -279,7 +279,7 @@ describe("trusted Convex preview authority", () => {
     await expect(
       writeConvexPreviewAuthority({
         repoRoot: "unused-because-it-refuses-first",
-        env: { PR_NUMBER: "377", CONVEX_PREVIEW_DEPLOY_KEY: DEPLOY_KEY },
+        env: { PR_NUMBER: "377", CONVEX_PREVIEW_DEPLOY_KEY: DEPLOY_KEY } as unknown as NodeJS.ProcessEnv,
         fetchImpl: fetchImpl as typeof fetch,
       }),
     ).rejects.toThrow(/CONVEX_PREVIEW_URL/);
