@@ -3,7 +3,7 @@ import { query, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation } from "./functions";
 import { requireTenantAuth, requireOwner, requireOwnedRow } from "./utils/tenancy";
-import { IN_FLIGHT_FINANCE_STATUSES } from "./utils/financeStatuses";
+import { IN_FLIGHT_FINANCE_STATUSES, SETTLED_FINANCE_STATUSES } from "./utils/financeStatuses";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { checkTenantWriteLimit } from "./rateLimit";
 import { notifyUser } from "./utils/notifications";
@@ -146,6 +146,17 @@ async function loadApplicableRules(
 }
 
 /**
+ * SCRUM-422: a CLOSED or CANCELLED deal is settled record (owner ruling), so no
+ * document command may change its rows, files or notifications. Checked right
+ * after the tenant checks, before anything else can write.
+ */
+function assertApplicationDocumentsOpen(application: Doc<"financeApplications">) {
+  if (SETTLED_FINANCE_STATUSES.includes(application.status)) {
+    throw new ConvexError("This deal is closed or cancelled, so its documents can no longer be changed.");
+  }
+}
+
+/**
  * SCRUM-417 round 4 (Codex S417-R4-1): stored evidence for a rule that no
  * longer applies to the deal — removed, or scoped to another finance company —
  * is history, shown view-only by `getHistoryForApplication`. It is immutable
@@ -284,8 +295,9 @@ export const getHistoryForApplication = query({
  *
  * Only for a deal still in the finance pipeline (`IN_FLIGHT_FINANCE_STATUSES`,
  * the one shared definition): a late rule applies to in-flight deals, and a
- * cancelled, closed or rejected application is not one — REJECTED cannot
- * re-enter the pipeline (`updateStatus` refuses it). Refused before any write.
+ * cancelled, closed or rejected application is not one. (The transition map
+ * lists REJECTED → PENDING_DOCS, but `updateStatus` refuses that re-entry
+ * today; if it opens, late rows are materialized then.) Refused before any write.
  * Ownership of the application, the rule and the deal's quote goes through
  * `requireOwnedRow` (TEN-1), with the messages the callers already surface.
  */
@@ -346,11 +358,25 @@ export const generateUploadUrl = mutation({
     orgId: v.id("organizations"),
     mimeType: v.string(),
     sizeInBytes: v.number(),
+    /**
+     * SCRUM-422: the document the URL is for. Optional only for release skew
+     * (the frontend deploys before the backend); when named, a settled deal
+     * gets no URL. The record itself is guarded by `saveDocumentFile` either way.
+     */
+    documentId: v.optional(v.id("applicationDocuments")),
   },
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId);
     if (!hasAnyPermission(role, [PERMISSIONS.CREATE_FINANCE_APPLICATION, PERMISSIONS.VERIFY_FINANCE_DOCUMENTS])) {
       throw new ConvexError("Forbidden: Missing required finance document permissions.");
+    }
+
+    if (args.documentId !== undefined) {
+      const doc = await ctx.db.get(args.documentId);
+      if (!doc || doc.orgId !== args.orgId) throw new ConvexError("Document not found");
+      const application = await ctx.db.get(doc.applicationId);
+      if (!application || application.orgId !== args.orgId) throw new ConvexError("Application not found");
+      assertApplicationDocumentsOpen(application);
     }
 
     const statusLimit = await checkTenantWriteLimit(ctx, "upload", args.orgId);
@@ -387,6 +413,7 @@ export const saveDocumentFile = mutation({
     if (!doc || doc.orgId !== args.orgId) throw new ConvexError("Document not found");
     const application = await ctx.db.get(doc.applicationId);
     if (!application || application.orgId !== args.orgId) throw new ConvexError("Application not found");
+    assertApplicationDocumentsOpen(application);
     await assertDocumentRowIsActive(ctx, args.orgId, application, doc);
     await assertStoredFileAllowed(ctx, {
       storageId: args.fileId,
@@ -395,9 +422,31 @@ export const saveDocumentFile = mutation({
       label: "Finance document",
     });
 
-    // Remove old file if exists
-    if (doc.fileId) {
-      await ctx.storage.delete(doc.fileId);
+    // A stored file belongs to one document row. Deleting a replaced file must
+    // never pull evidence out from under another row, least of all a settled
+    // deal's (SCRUM-422), so a file another row holds is refused here, and a
+    // replaced file some other row still references (a legacy alias) is kept.
+    // Re-saving the file this row already holds keeps it and only resubmits:
+    // the row still goes back to UPLOADED below.
+    if (doc.fileId !== args.fileId) {
+      const holders = await ctx.db
+        .query("applicationDocuments")
+        .withIndex("by_file", (q) => q.eq("fileId", args.fileId))
+        .take(1);
+      if (holders.length > 0) {
+        throw new ConvexError("This file is already attached to another document. Upload it again for this document.");
+      }
+    }
+
+    if (doc.fileId && doc.fileId !== args.fileId) {
+      const oldFileId = doc.fileId;
+      const otherHolders = await ctx.db
+        .query("applicationDocuments")
+        .withIndex("by_file", (q) => q.eq("fileId", oldFileId))
+        .take(2);
+      if (!otherHolders.some((row) => row._id !== doc._id)) {
+        await ctx.storage.delete(oldFileId);
+      }
     }
 
     await ctx.db.patch(args.documentId, {
@@ -427,6 +476,7 @@ export const updateDocumentStatus = mutation({
     if (!doc || doc.orgId !== args.orgId) throw new ConvexError("Document not found");
     const application = await ctx.db.get(doc.applicationId);
     if (!application || application.orgId !== args.orgId) throw new ConvexError("Application not found");
+    assertApplicationDocumentsOpen(application);
     await assertDocumentRowIsActive(ctx, args.orgId, application, doc);
 
     if (args.status === "VERIFIED" && !doc.fileId) {

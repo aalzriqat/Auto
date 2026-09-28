@@ -92,6 +92,7 @@ import {
 } from "./RecordAppraisalDialog";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
+import { SETTLED_FINANCE_STATUSES } from "@/convex/utils/financeStatuses";
 import type { PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 // The actions the Finance Applications → Review dialog used to own, moved here
 // on the SAME mutations. Each is its own file so the container stays a wiring
@@ -531,12 +532,16 @@ export function documentsStepUnavailableReason({
   canUpload,
   canVerify,
   canRead,
+  settled,
 }: Readonly<{
   outstanding: ReadonlyArray<{ status: string }>;
   canUpload: boolean;
   canVerify: boolean;
   canRead: boolean;
+  /** SCRUM-422: CLOSED or CANCELLED — the server refuses every document write. */
+  settled: boolean;
 }>): string | undefined {
+  if (settled) return "DocumentsSettled";
   const canAdvance = (status: string) => (status === "UPLOADED" ? canVerify : canUpload || canVerify);
   const readReason = canRead ? undefined : "DocumentsNeedReadAccess";
   if (outstanding.length === 0) return canUpload || canVerify ? readReason : "DocumentsNeedUploader";
@@ -953,6 +958,7 @@ export function DealCockpit({
   // not — see `canCloseDeal` below.
   const canFinalizeApplication = !permissionsLoading && hasPermission(PERMISSIONS.FINALIZE_FINANCED_DEAL);
   const canVerifyDocuments = !permissionsLoading && hasPermission(PERMISSIONS.VERIFY_FINANCE_DOCUMENTS);
+  const documentsSettled = deal != null && SETTLED_FINANCE_STATUSES.includes(deal.status);
   const canConfirmFinanceDisbursement =
     !permissionsLoading && hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
   const canResolveDeposits = !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_REQUESTS);
@@ -1502,6 +1508,9 @@ export function DealCockpit({
     canVerify: canVerifyDocuments,
     // The exact predicate the `getForApplication` subscription above is gated on.
     canRead: canViewApplications,
+    // A closed deal still derives DELIVERY_ACTIONS from the live rules, so a
+    // rule added after closing can re-open the stage (SCRUM-422 R1 follow-up).
+    settled: documentsSettled,
   });
 
   function buildWorkflowAction(): WorkflowAction | undefined {
@@ -2353,8 +2362,10 @@ export function DealCockpit({
         }),
         // The server accepts an upload from either permission; verifying is
         // the narrower one. Same gates as Review, read from the same server.
-        canUpload: canCreateApplication || canVerifyDocuments,
-        canVerify: canVerifyDocuments,
+        // A CLOSED or CANCELLED deal's documents are settled record (SCRUM-422):
+        // the server refuses every write there, so none is offered.
+        canUpload: !documentsSettled && (canCreateApplication || canVerifyDocuments),
+        canVerify: !documentsSettled && canVerifyDocuments,
         uploadingRuleIds,
         onUpload: async (doc, file) => {
           if (uploadsInFlightRef.current.has(doc.ruleId)) return;
@@ -2371,8 +2382,11 @@ export function DealCockpit({
                 applicationId,
                 ruleId: doc.ruleId as Id<"companyDocumentRules">,
               }));
+            // Named, so a deal that settled meanwhile gets no URL and no file
+            // is stored for a row the server would refuse (SCRUM-422).
             const postUrl = await generateUploadUrl({
               orgId,
+              documentId: documentId as Id<"applicationDocuments">,
               mimeType: file.type,
               sizeInBytes: file.size,
             });

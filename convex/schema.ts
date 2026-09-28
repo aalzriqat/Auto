@@ -4499,7 +4499,8 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_application", ["applicationId"])
-    .index("by_rule", ["ruleId"]),
+    .index("by_rule", ["ruleId"])
+    .index("by_file", ["fileId"]),
 
   branches: defineTable({
     orgId: v.id("organizations"),
