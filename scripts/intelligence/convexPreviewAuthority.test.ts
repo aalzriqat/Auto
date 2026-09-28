@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   assertConvexCloudOrigin,
-  assertPreviewDeploymentAdminKey,
+  classifyPreviewClaimAdminKey,
   parsePreviewDeployKey,
   resolveConvexPreviewAuthority,
   resolveConvexPreviewCredentials,
@@ -25,80 +25,122 @@ describe("trusted Convex preview authority", () => {
     ).toThrow(/preview:team:project/);
   });
 
-  it("accepts only a deployment-scoped preview admin key", () => {
+  it("classifies a deployment-scoped claim key as DEPLOYMENT", () => {
     expect(
-      assertPreviewDeploymentAdminKey(
+      classifyPreviewClaimAdminKey(
         "elegant-butterfly-952|deployment-secret",
         "elegant-butterfly-952",
+        DEPLOY_KEY,
       ),
-    ).toBe("elegant-butterfly-952|deployment-secret");
-    for (const type of ["prod", "dev", "preview"]) {
-      expect(
-        assertPreviewDeploymentAdminKey(
-          type + ":elegant-butterfly-952|deployment-secret",
-          "elegant-butterfly-952",
-        ),
-      ).toBe(type + ":elegant-butterfly-952|deployment-secret");
-    }
-    expect(() =>
-      assertPreviewDeploymentAdminKey(
-        "project:elegant-butterfly-952|project-secret",
+    ).toEqual({ adminKey: "elegant-butterfly-952|deployment-secret", scope: "DEPLOYMENT" });
+    expect(
+      classifyPreviewClaimAdminKey(
+        "preview:elegant-butterfly-952|deployment-secret",
         "elegant-butterfly-952",
-      ),
-    ).toThrow(/not scoped.*type 'project'/);
-    expect(() =>
-      assertPreviewDeploymentAdminKey(
-        "preview:another-deployment|deployment-secret",
-        "elegant-butterfly-952",
-      ),
-    ).toThrow(/not scoped.*differs/);
-    expect(() =>
-      assertPreviewDeploymentAdminKey(
-        "preview:x:elegant-butterfly-952|deployment-secret",
-        "elegant-butterfly-952",
-      ),
-    ).toThrow(/not scoped.*3 prefix segments/);
-    expect(() =>
-      assertPreviewDeploymentAdminKey(
-        "preview:team-one:project-two|project-wide-secret",
-        "elegant-butterfly-952",
-      ),
-    ).toThrow(/not scoped/);
-    expect(() =>
-      assertPreviewDeploymentAdminKey(
-        "another-deployment|deployment-secret",
-        "elegant-butterfly-952",
-      ),
-    ).toThrow(/not scoped/);
-    expect(() =>
-      assertPreviewDeploymentAdminKey(
-        "elegant-butterfly-952|line-one\nline-two",
-        "elegant-butterfly-952",
-      ),
-    ).toThrow(/not scoped/);
-    expect(() =>
-      assertPreviewDeploymentAdminKey(
-        "elegant-butterfly-952|",
-        "elegant-butterfly-952",
-      ),
-    ).toThrow(/malformed/);
+        DEPLOY_KEY,
+      ).scope,
+    ).toBe("DEPLOYMENT");
   });
 
-  it("never echoes unrecognized admin-key prefix bytes into the refusal", () => {
-    // The refusal reaches public CI logs before any ::add-mask:: runs, so only
-    // fixed, known type literals may be named.
-    let message = "";
-    try {
-      assertPreviewDeploymentAdminKey(
-        "sk_sensitive_example:elegant-butterfly-952|opaque-secret",
-        "elegant-butterfly-952",
-      );
-    } catch (error) {
-      message = (error as Error).message;
+  it("refuses a prod or dev typed key even when it names the resolved preview (Sol on PR #341)", () => {
+    for (const type of ["prod", "dev"]) {
+      expect(() =>
+        classifyPreviewClaimAdminKey(
+          type + ":elegant-butterfly-952|deployment-secret",
+          "elegant-butterfly-952",
+          DEPLOY_KEY,
+        ),
+      ).toThrow(/unrecognized shape/);
     }
-    expect(message).toMatch(/not scoped.*unrecognized type/);
-    expect(message).not.toContain("sk_sensitive_example");
-    expect(message).not.toContain("opaque-secret");
+  });
+
+  it("accepts the project-wide preview key Convex actually returns, and labels it PROJECT_PREVIEW (SCRUM-350 KEY-3)", () => {
+    // Run 36114902831: the claim returned the deploy key itself. Refusing it
+    // made both trusted PR lanes permanently red; the boundary now lives in
+    // which code may hold it (convexCredentialBoundary.test.ts).
+    expect(
+      classifyPreviewClaimAdminKey(
+        "preview:team-one:project-two|project-wide-secret",
+        "elegant-butterfly-952",
+        DEPLOY_KEY,
+      ),
+    ).toEqual({
+      adminKey: "preview:team-one:project-two|project-wide-secret",
+      scope: "PROJECT_PREVIEW",
+    });
+  });
+
+  it("refuses a claim key for another team, project or deployment, or of an unknown shape", () => {
+    expect(() =>
+      classifyPreviewClaimAdminKey(
+        "preview:x:elegant-butterfly-952|secret",
+        "elegant-butterfly-952",
+        DEPLOY_KEY,
+      ),
+    ).toThrow(/different team or project/);
+    expect(() =>
+      classifyPreviewClaimAdminKey(
+        "preview:team-one:another-project|secret",
+        "elegant-butterfly-952",
+        DEPLOY_KEY,
+      ),
+    ).toThrow(/different team or project/);
+    expect(() =>
+      classifyPreviewClaimAdminKey(
+        "project:elegant-butterfly-952|project-secret",
+        "elegant-butterfly-952",
+        DEPLOY_KEY,
+      ),
+    ).toThrow(/neither the resolved preview nor this project \(unrecognized shape\)/);
+    expect(() =>
+      classifyPreviewClaimAdminKey(
+        "preview:another-deployment|deployment-secret",
+        "elegant-butterfly-952",
+        DEPLOY_KEY,
+      ),
+    ).toThrow(/deployment name differs/);
+    expect(() =>
+      classifyPreviewClaimAdminKey(
+        "another-deployment|deployment-secret",
+        "elegant-butterfly-952",
+        DEPLOY_KEY,
+      ),
+    ).toThrow(/deployment name differs/);
+  });
+
+  it("refuses a malformed claim key", () => {
+    for (const value of [
+      "elegant-butterfly-952|",
+      "|secret",
+      "no-separator",
+      "elegant-butterfly-952|line-one\nline-two",
+      "elegant-butterfly-952|with space",
+    ]) {
+      expect(() =>
+        classifyPreviewClaimAdminKey(value, "elegant-butterfly-952", DEPLOY_KEY),
+      ).toThrow(/malformed/);
+    }
+    expect(() =>
+      classifyPreviewClaimAdminKey(undefined, "elegant-butterfly-952", DEPLOY_KEY),
+    ).toThrow(TypeError);
+  });
+
+  it("never echoes admin-key bytes into a refusal", () => {
+    // Refusals reach public CI logs before any ::add-mask:: runs.
+    for (const value of [
+      "sk_sensitive_example:elegant-butterfly-952|opaque-secret",
+      "preview:sk_sensitive_example:project-two|opaque-secret",
+    ]) {
+      let message = "";
+      try {
+        classifyPreviewClaimAdminKey(value, "elegant-butterfly-952", DEPLOY_KEY);
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message).not.toBe("");
+      expect(message).not.toContain("sk_sensitive_example");
+      expect(message).not.toContain("opaque-secret");
+    }
   });
 
   it("accepts only bare Convex cloud origins", () => {
@@ -219,16 +261,28 @@ describe("trusted Convex preview authority", () => {
     ).rejects.toThrow(/non-preview/);
   });
 
-  it("still refuses a project-scoped key returned by the claim", async () => {
+  it("resolves the project-wide key the claim really returns, labelled PROJECT_PREVIEW (SCRUM-350 KEY-3)", async () => {
+    const resolved = await resolveConvexPreviewCredentials({
+      deployKey: DEPLOY_KEY,
+      previewName: PREVIEW_NAME,
+      fetchImpl: claimResponse({
+        adminKey: "preview:team-one:project-two|project-wide-secret",
+      }) as typeof fetch,
+    });
+    expect(resolved.scope).toBe("PROJECT_PREVIEW");
+    expect(resolved.authority.deploymentName).toBe("elegant-butterfly-952");
+  });
+
+  it("refuses a project-wide key the claim returns for another project", async () => {
     await expect(
       resolveConvexPreviewCredentials({
         deployKey: DEPLOY_KEY,
         previewName: PREVIEW_NAME,
         fetchImpl: claimResponse({
-          adminKey: "preview:team-one:project-two|project-wide-secret",
+          adminKey: "preview:team-one:someone-elses-project|project-wide-secret",
         }) as typeof fetch,
       }),
-    ).rejects.toThrow(/not scoped.*3 prefix segments/);
+    ).rejects.toThrow(/different team or project/);
   });
 
   it("refuses a claim whose instance URL is not the claimed deployment", async () => {

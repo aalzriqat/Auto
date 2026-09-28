@@ -177,7 +177,7 @@ jobs:
             --preview-create "$PREVIEW_NAME" \
             --preview-run e2eBootstrap:markPreviewDeployment
 
-      - name: Scrub preview and deploy exact candidate backend with disposable credential
+      - name: Scrub disposable rehearsal preview environment
         if: steps.provenance.outputs.stale == 'false'
         working-directory: trusted
         env:
@@ -254,18 +254,94 @@ jobs:
             exit 1
           fi
 
+      # SCRUM-350: the preview credential is project-wide, so the candidate
+      # backend is never deployed by candidate code. This step holds no secret:
+      # it copies convex/ and lib/ as data, refuses links, .wasm and nested
+      # package.json, and requires the candidate's dependency files to be
+      # byte-identical to trusted's.
+      - name: Stage exact candidate backend as data
+        if: steps.provenance.outputs.stale == 'false'
+        run: node trusted/scripts/intelligence/stageCandidateBackend.mjs
+        env:
+          CANDIDATE_ROOT: ${{ github.workspace }}/candidate
+          TRUSTED_ROOT: ${{ github.workspace }}/trusted
+          STAGE_ROOT: ${{ runner.temp }}/candidate-backend
+          STAGE_MANIFEST_PATH: ${{ runner.temp }}/candidate-backend-manifest.json
+          TESTED_SHA: ${{ steps.provenance.outputs.tested_sha }}
+
+      # SCRUM-350 F1: a candidate import is an instruction to the bundler to
+      # read a file, and in the deploy container /proc/self/environ holds the
+      # key. So the trusted CLI's own bundle calls run here first, with no
+      # credential and no network over the same read-only mounts, and every
+      # file they read must lie inside the stage or trusted node_modules.
+      - name: Audit staged backend inputs without credentials
+        if: steps.provenance.outputs.stale == 'false'
+        run: |
+          set -euo pipefail
           docker run --rm \
-            --name autoflow-trusted-accounting-backend \
-            --network bridge \
+            --name autoflow-staged-backend-input-audit \
+            --network none \
+            --read-only \
+            --tmpfs /tmp:rw,size=512m \
             --cap-drop ALL \
             --security-opt no-new-privileges \
-            --volume "$GITHUB_WORKSPACE/candidate:/app" \
+            --volume "$RUNNER_TEMP/candidate-backend:/app:ro" \
+            --volume "$GITHUB_WORKSPACE/trusted/node_modules:/app/node_modules:ro" \
+            --volume "$GITHUB_WORKSPACE/trusted/scripts/intelligence/auditStagedBackendInputs.mjs:/audit/auditStagedBackendInputs.mjs:ro" \
+            --workdir /app \
+            --env HOME=/tmp/home \
+            node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
+            node /audit/auditStagedBackendInputs.mjs
+
+      - name: Deploy staged candidate backend with trusted Convex CLI
+        if: steps.provenance.outputs.stale == 'false'
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+
+          ADMIN_KEY="$(
+            cd trusted
+            node --input-type=module <<'NODE'
+          import { resolveConvexPreviewCredentials } from "./scripts/intelligence/convexPreviewAuthority.mjs";
+          const resolved = await resolveConvexPreviewCredentials({
+            deployKey: process.env.CONVEX_PREVIEW_DEPLOY_KEY,
+            previewName: process.env.CONVEX_PREVIEW_NAME,
+          });
+          if (resolved.authority.convexCloudUrl !== process.env.NEXT_PUBLIC_CONVEX_URL) {
+            throw new Error("Rehearsal preview was recreated after the scrub; refusing to deploy.");
+          }
+          process.stdout.write(resolved.adminKey);
+          NODE
+          )"
+          if [ -z "$ADMIN_KEY" ]; then
+            echo "Trusted control plane returned an empty preview credential." >&2
+            exit 1
+          fi
+          echo "::add-mask::$ADMIN_KEY"
+
+          # The TRUSTED Convex CLI from the trusted lockfile, in a container that
+          # sees exactly the staged backend and trusted node_modules, read-only.
+          # No package manager (it would read candidate-adjacent config), no
+          # typecheck (it would run the project's typescript), no codegen (it
+          # would write). Bundling parses candidate code; nothing of it executes.
+          # Residual, accepted (SCRUM-350 F1): the container needs egress to the
+          # Convex API, so this relies on that zero-execution property.
+          docker run --rm \
+            --name autoflow-trusted-staged-backend-deploy \
+            --network bridge \
+            --read-only \
+            --tmpfs /tmp:rw,size=512m \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --volume "$RUNNER_TEMP/candidate-backend:/app:ro" \
+            --volume "$GITHUB_WORKSPACE/trusted/node_modules:/app/node_modules:ro" \
             --workdir /app \
             --env HOME=/tmp/home \
             --env NEXT_PUBLIC_CONVEX_URL \
             --env CONVEX_PREVIEW_ADMIN_KEY="$ADMIN_KEY" \
             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
-            sh -lc 'corepack enable && corepack prepare pnpm@11.13.0 --activate && pnpm install --frozen-lockfile --ignore-scripts && pnpm exec convex deploy --url "$NEXT_PUBLIC_CONVEX_URL" --admin-key "$CONVEX_PREVIEW_ADMIN_KEY" --typecheck enable'
+            sh -c 'exec node /app/node_modules/convex/bin/main.js deploy --url "$NEXT_PUBLIC_CONVEX_URL" --admin-key "$CONVEX_PREVIEW_ADMIN_KEY" --typecheck disable --codegen disable'
 
       - name: Seed synthetic QA dealership from trusted main
         if: steps.provenance.outputs.stale == 'false'
