@@ -65,6 +65,8 @@ async function seedDealer(
     defaultLtvPercent: number;
     minimumCustomerFirstPaymentMinor: number;
     adminFees: number;
+    /** "unset" creates the company as the settings dialog did before SCRUM-428. */
+    offsetRule: boolean | "unset";
   }> = {},
   vehicleSellingPrice = DEAL.targetSelling
 ): Promise<Seed> {
@@ -124,7 +126,9 @@ async function seedDealer(
     adminFees: company.adminFees ?? DEAL.executionFees,
     maxFinancingLTV: 85,
     defaultLtvPercent: company.defaultLtvPercent ?? DEAL.ltvPercent,
-    customerFirstPaymentOffsetsUnfinancedShare: true,
+    ...(company.offsetRule === "unset"
+      ? {}
+      : { customerFirstPaymentOffsetsUnfinancedShare: company.offsetRule ?? true }),
     ...(company.minimumCustomerFirstPaymentMinor !== undefined
       ? { minimumCustomerFirstPaymentMinor: company.minimumCustomerFirstPaymentMinor }
       : {}),
@@ -219,6 +223,45 @@ async function availableFigure(caller: Caller, seed: Seed, quoteId: Id<"quotes">
 }
 
 // ---------------------------------------------------------------------------
+
+describe("the finance company's first-payment offset rule (SCRUM-428)", () => {
+  test("T11: a company created without the rule leaves the quotation uncalculated, as OFFSET_RULE_UNKNOWN", async () => {
+    const seed = await seedDealer({ offsetRule: "unset" });
+    const answer = await preview(seed.asOwner, seed, await saveQuote(seed));
+    expect(answer).toEqual({ available: false, reason: "OFFSET_RULE_UNKNOWN" });
+  });
+
+  test("T12: confirming the rule later applies to quotes created after it, never to one already frozen", async () => {
+    // The Step4 note promises exactly this: the quote froze the company's rules
+    // when it was created, so only a new quote picks the confirmed rule up.
+    const seed = await seedDealer({ offsetRule: "unset" });
+    const before = await saveQuote(seed);
+    const company = await seed.t.run((ctx) => ctx.db.get(seed.companyId));
+    if (!company) throw new Error("company vanished");
+    await seed.asOwner.mutation(api.finance.updateCompany, {
+      id: seed.companyId,
+      orgId: seed.orgId,
+      name: company.name,
+      profitRate: company.profitRate,
+      maxTermMonths: company.maxTermMonths,
+      gracePeriodMonths: company.gracePeriodMonths,
+      isActive: company.isActive,
+      expectedEditRevision: company.editRevision ?? 1,
+      customerFirstPaymentOffsetsUnfinancedShare: true,
+    });
+    expect(await preview(seed.asOwner, seed, before)).toEqual({
+      available: false,
+      reason: "OFFSET_RULE_UNKNOWN",
+    });
+    expect((await preview(seed.asOwner, seed, await saveQuote(seed))).available).toBe(true);
+  });
+
+  test("T13: No is a real answer, OFFSET_RULE_DOES_NOT_APPLY, not the unknown refusal", async () => {
+    const seed = await seedDealer({ offsetRule: false });
+    const answer = await preview(seed.asOwner, seed, await saveQuote(seed));
+    expect(answer).toEqual({ available: false, reason: "OFFSET_RULE_DOES_NOT_APPLY" });
+  });
+});
 
 describe("creating a financed deal with the confirmed calculated quotation (SCRUM-404)", () => {
   test("T1: records exactly the previewed figure as the creator's SYSTEM_CALCULATED quotation", async () => {

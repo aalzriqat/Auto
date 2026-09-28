@@ -146,9 +146,15 @@ export async function ensureFinanceCompany(page: Page): Promise<void> {
     await existingCompanyRow.getByRole("button").first().click();
     const dialog = page.getByRole("dialog");
     const adminFees = dialog.locator("#admin-fees");
+    const offsetRule = dialog.locator("#first-payment-offset-rule");
     await expect(adminFees).toBeVisible();
-    if ((await adminFees.inputValue()).trim() === "") {
-      await adminFees.fill("0");
+    // A company left by an earlier run may predate either field (SCRUM-428):
+    // without the offset rule every quote below stays uncalculated.
+    const needsFees = (await adminFees.inputValue()).trim() === "";
+    const needsRule = (await offsetRule.inputValue()) !== "yes";
+    if (needsFees) await adminFees.fill("0");
+    if (needsRule) await offsetRule.selectOption("yes");
+    if (needsFees || needsRule) {
       await adminFees.press("Enter");
       await expect(dialog).not.toBeVisible();
     } else {
@@ -175,6 +181,9 @@ export async function ensureFinanceCompany(page: Page): Promise<void> {
   // such a company. Make the E2E lender explicitly zero-fee so the fixture
   // exercises the configured-finance path without inventing hidden costs.
   await dialog.locator("#admin-fees").fill("0");
+  // SCRUM-428: the quotation solver declines while this rule is unconfirmed,
+  // and the "AutoFlow calculation" assertion below depends on it.
+  await dialog.locator("#first-payment-offset-rule").selectOption("yes");
   // `.first()`: a deployment someone has been experimenting on can carry more
   // than one status of the same name, and this only needs the company to accept
   // the one the wizard will offer.

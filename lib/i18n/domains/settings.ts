@@ -215,6 +215,12 @@ export const settingsEn = {
     "The share of the vehicle this company normally buys from the dealership. Without it the quotation calculator cannot run and the funding split cannot be worked out.",
   DefaultDealerLtvCannotClear:
     "A purchase LTV cannot be removed once it is set — enter the new rate instead.",
+  FirstPaymentOffsetRule: "Customer's first payment offsets the unfinanced share",
+  FirstPaymentOffsetNotConfirmed: "Not confirmed with the company",
+  FirstPaymentOffsetYes: "Yes",
+  FirstPaymentOffsetNo: "No",
+  FirstPaymentOffsetHint:
+    "Ask the finance company. AutoFlow calculates the quotation to submit only when this is Yes, and applies it to quotes created after you save. Once answered it can be changed, not removed.",
   ExecutionFeesCannotClear:
     "Execution fees cannot be cleared once configured. Enter 0 if no execution fees are charged.",
   CapitalizesCommissionIntoDebt: "Add execution commission as a flat amount (no profit accrues on it)",
@@ -934,6 +940,12 @@ export const settingsAr = {
     "نسبة قيمة المركبة التي تشتريها هذه الشركة من المعرض عادةً. بدونها لا يعمل احتساب عرض السعر ولا يمكن استخراج توزيع التمويل.",
   DefaultDealerLtvCannotClear:
     "لا يمكن حذف نسبة الشراء بعد تسجيلها — أدخِل النسبة الجديدة بدلاً من تركها فارغة.",
+  FirstPaymentOffsetRule: "الدفعة الأولى للعميل تُخصم من الحصة غير المموَّلة",
+  FirstPaymentOffsetNotConfirmed: "غير مؤكَّد مع الشركة",
+  FirstPaymentOffsetYes: "نعم",
+  FirstPaymentOffsetNo: "لا",
+  FirstPaymentOffsetHint:
+    "اسأل شركة التمويل. يحسب AutoFlow عرض السعر المقدَّم فقط عندما تكون الإجابة نعم، ويُطبَّق ذلك على العروض التي تُنشأ بعد الحفظ. بعد الإجابة يمكن تغييرها لا حذفها.",
   ExecutionFeesCannotClear:
     "لا يمكن إفراغ رسوم التنفيذ بعد ضبطها — أدخل 0 إذا لم تكن هناك رسوم تنفيذ مطلوبة.",
   CapitalizesCommissionIntoDebt: "تُضاف عمولات تنفيذ كمبلغ مقطوع دون احتساب مرابحة عليها",
