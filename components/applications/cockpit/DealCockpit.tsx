@@ -4106,7 +4106,9 @@ export function DealCockpitView({
         return { ...action, onStart: () => { setApprovalError(null); setRecordingApproval(true); } };
       case "DOCUMENTS":
         return hasDocumentsPane
-          ? { ...action, onStart: goToDocuments }
+          ? // Wired in the row to its own `onGoToDocuments`: a handler that
+            // reads the tab ref must not be bound while rendering.
+            action
           : { ...action, unavailableReasonKey: "DocumentsNeedUploader" };
       case "SETTLE_SUPPLIER": {
         if (canSettleSupplier) return { ...action, onStart: () => setSettlingSupplier(true) };
@@ -5195,7 +5197,12 @@ export function StageFocusRow({
   t: (key: string) => string;
 }>) {
   const icon = STAGE_ICON[state];
-  const primary = action && action.unavailableReasonKey === undefined ? action.onStart : undefined;
+  const primary =
+    action && action.unavailableReasonKey === undefined
+      ? action.opens === "DOCUMENTS"
+        ? onGoToDocuments
+        : action.onStart
+      : undefined;
   // The step's own button already goes to the documents; a second pointer to
   // the same place under the list would be two ways to do one thing.
   const actionGoesToDocuments = primary !== undefined && action?.opens === "DOCUMENTS";
