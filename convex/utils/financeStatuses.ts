@@ -27,3 +27,11 @@ export const IN_FLIGHT_FINANCE_STATUSES: readonly string[] = [
   "UNDER_REVIEW",
   "APPROVED",
 ];
+
+/**
+ * SCRUM-422 — statuses with no way out: `VALID_STATUS_TRANSITIONS` gives both
+ * an empty list, and nothing reopens them. A deal here is settled record, so
+ * its documents can no longer change. REJECTED is deliberately absent: it moves
+ * back to PENDING_DOCS, and its documents are how it gets there.
+ */
+export const SETTLED_FINANCE_STATUSES: readonly string[] = ["CLOSED", "CANCELLED"];
