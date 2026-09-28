@@ -37,6 +37,10 @@ describe("document upload control is a real, keyboard-operable button", () => {
   test("Upload is a focusable button that opens the hidden file picker", () => {
     renderPanel([missing]);
     const button = screen.getByRole("button", { name: "Upload" });
+    // A native, tab-order button: the browser gives it Enter/Space activation.
+    // (Sol T-1: `.focus()` alone would also pass with tabIndex={-1}.)
+    expect(button.tagName).toBe("BUTTON");
+    expect(button.tabIndex).toBe(0);
     button.focus();
     expect(document.activeElement).toBe(button);
 
