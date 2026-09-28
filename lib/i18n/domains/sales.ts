@@ -483,12 +483,12 @@ const dealRailMessages = defineBilingualMessages({
   ],
   CostPaidByRequired: ["Choose whose custody paid this cost.", "اختر العهدة التي دُفع منها هذا المصروف."],
   CostPaidFromCustodyGone: [
-    "That custody record is no longer open, so the cost cannot be charged to it. Choose the employee again.",
-    "لم يعد سجل العهدة هذا مفتوحًا، فلا يمكن تحميل المصروف عليه. اختر الموظف مجددًا.",
+    "That custody record can no longer take this cost from here. Choose the employee again.",
+    "لم يعد بالإمكان تحميل المصروف على سجل العهدة هذا من هنا. اختر الموظف مجددًا.",
   ],
   CostPaidFromCustodyGoneNone: [
-    "That custody record is no longer open and no other custody can take this cost now. Record it as the employee's cost for now; it can be charged to a custody from “Charge a cost” later.",
-    "لم يعد سجل العهدة هذا مفتوحًا، ولا توجد عهدة أخرى يمكن تحميل المصروف عليها الآن. سجّله مصروفًا على الموظف الآن، ويمكن تحميله على عهدة لاحقًا من «تحميل مصروف».",
+    "That custody record can no longer take this cost from here, and no other custody can take it now. Record it as the employee's cost for now; it can be charged to a custody from “Charge a cost” later.",
+    "لم يعد بالإمكان تحميل المصروف على سجل العهدة هذا من هنا، ولا توجد عهدة أخرى يمكن تحميله عليها الآن. سجّله مصروفًا على الموظف الآن، ويمكن تحميله على عهدة لاحقًا من «تحميل مصروف».",
   ],
   CostPaidFromCustodyRelease: ["Record without charging a custody", "سجّل دون تحميله على عهدة"],
   HandoverCostNeedsCustody: [
