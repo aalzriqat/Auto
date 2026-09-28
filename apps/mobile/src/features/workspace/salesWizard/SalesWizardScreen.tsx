@@ -27,7 +27,7 @@ import { useLocale } from "../../../providers/LocaleProvider";
 import { type AppTheme } from "../../../theme";
 import { useAppTheme, useThemedStyles } from "../../../providers/ThemeProvider";
 import { compactInitials } from "../nativeModules";
-import { useCommandIdentity, money, parseOptionalNumber, useGenericError, SearchInput } from "../modules/moduleShared";
+import { useCommandIdentity, money, parseOptionalNumber, useGenericError, SearchInput, SelectField } from "../modules/moduleShared";
 import {
   calculateUnifiedMurabaha,
   minimumDownPaymentForFinancingLimit,
@@ -185,6 +185,10 @@ export function SalesWizardScreen({
   const [depositOpen, setDepositOpen] = useState(false);
   const [depositAmount, setDepositAmount] = useState("");
   const [depositDone, setDepositDone] = useState(false);
+  // SCRUM-444: a salesperson REQUESTS a deposit; a manager or accountant
+  // records it. Nothing is held until a request is confirmed.
+  const [depositRequested, setDepositRequested] = useState(false);
+  const [depositMethod, setDepositMethod] = useState("");
   const [depositId, setDepositId] = useState<string | null>(null);
   const [resumeChecked, setResumeChecked] = useState(false);
   const [resumePromptVisible, setResumePromptVisible] = useState(false);
@@ -215,6 +219,11 @@ export function SalesWizardScreen({
   const saveQuote = useMutation(api.quotes.saveQuote);
   const updateQuoteStatus = useMutation(api.quotes.updateQuoteStatus);
   const createDeposit = useMutation(api.deposits.create);
+  const requestDeposit = useMutation(api.depositRequests.request);
+  const myMembership = useQuery(api.memberships.getMyMembership, { orgId });
+  const canRecordDeposit =
+    myMembership?.roleName?.toUpperCase() === "OWNER" ||
+    (myMembership?.permissions ?? []).includes("confirm:finance_disbursement");
   const commandId = useCommandIdentity();
   const saveDraft = useMutation(api.wizardDrafts.saveDraft);
   const clearDraft = useMutation(api.wizardDrafts.clearDraft);
@@ -628,12 +637,26 @@ export function SalesWizardScreen({
     setSaving(true);
     // Scoped to the QUOTE this wizard is building, so a lost response and a
     // second tap take the customer's deposit ONCE. Retired only on success.
-    const depositIntent = `wizard-deposit:${String(quoteId)}`;
+    const depositIntent = `wizard-deposit:${String(quoteId)}:${amount}:${depositMethod}`;
     try {
+      if (!canRecordDeposit) {
+        await requestDeposit({
+          orgId,
+          quoteId,
+          amount,
+          idempotencyKey: commandId.for(`wizard-deposit-request:${String(quoteId)}:${amount}`),
+        });
+        commandId.retire(`wizard-deposit-request:${String(quoteId)}:${amount}`);
+        setDepositRequested(true);
+        setDepositOpen(false);
+        return;
+      }
+      if (!depositMethod) return;
       const newDepositId = await createDeposit({
         orgId,
         quoteId,
         amount,
+        method: depositMethod as "CASH" | "BANK_TRANSFER" | "CARD" | "CHEQUE",
         idempotencyKey: commandId.for(depositIntent),
       });
       commandId.retire(depositIntent);
@@ -1265,18 +1288,37 @@ export function SalesWizardScreen({
                   value={depositAmount}
                   onChangeText={setDepositAmount}
                 />
+                {canRecordDeposit ? (
+                  <SelectField
+                    label={locale === "ar" ? "طريقة استلام العربون" : "How was the deposit received?"}
+                    value={depositMethod}
+                    options={[
+                      { label: locale === "ar" ? "نقداً" : "Cash", value: "CASH" },
+                      { label: locale === "ar" ? "تحويل بنكي" : "Bank transfer", value: "BANK_TRANSFER" },
+                      { label: locale === "ar" ? "بطاقة" : "Card", value: "CARD" },
+                      { label: locale === "ar" ? "شيك" : "Cheque", value: "CHEQUE" },
+                    ]}
+                    onChange={setDepositMethod}
+                  />
+                ) : (
+                  <Text style={styles.successMonthly}>
+                    {locale === "ar"
+                      ? "سيؤكد المدير أو المحاسب الاستلام. لن يُحجز شيء قبل التأكيد."
+                      : "A manager or accountant will confirm receipt. Nothing is held until they do."}
+                  </Text>
+                )}
                 <View style={styles.rowButtons}>
                   <Pressable accessibilityRole="button" style={({ pressed }) => [styles.ghostButton, pressed && styles.pressed]} onPress={() => setDepositOpen(false)}>
                     <Text style={styles.ghostButtonText}>{locale === "ar" ? "إلغاء" : "Cancel"}</Text>
                   </Pressable>
                   <Pressable
                     accessibilityRole="button"
-                    disabled={saving}
+                    disabled={saving || (canRecordDeposit && !depositMethod)}
                     style={({ pressed }) => [styles.nextButton, { backgroundColor: accent, flex: 1 }, pressed && styles.pressed]}
                     onPress={handleRecordDeposit}
                   >
                     <Text style={styles.nextButtonText}>
-                      {saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "تسجيل العربون" : "Record deposit")}
+                      {saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (canRecordDeposit ? (locale === "ar" ? "تسجيل العربون" : "Record deposit") : (locale === "ar" ? "إرسال طلب العربون" : "Request deposit"))}
                     </Text>
                   </Pressable>
                 </View>
@@ -1284,14 +1326,18 @@ export function SalesWizardScreen({
             ) : (
               <Pressable
                 accessibilityRole="button"
-                disabled={depositDone}
+                disabled={depositDone || depositRequested}
                 style={({ pressed }) => [styles.outlineButton, { borderColor: accent }, depositDone && styles.disabled, pressed && styles.pressed]}
                 onPress={() => setDepositOpen(true)}
               >
                 <Text style={[styles.outlineButtonText, { color: accent }]}>
                   {depositDone
                     ? locale === "ar" ? "تم تسجيل العربون ✓" : "Deposit recorded ✓"
-                    : locale === "ar" ? "تسجيل عربون" : "Record deposit"}
+                    : depositRequested
+                      ? locale === "ar" ? "تم طلب العربون — بانتظار التأكيد" : "Deposit requested — awaiting confirmation"
+                      : canRecordDeposit
+                        ? locale === "ar" ? "تسجيل عربون" : "Record deposit"
+                        : locale === "ar" ? "طلب تسجيل عربون" : "Request deposit"}
                 </Text>
               </Pressable>
             )}
