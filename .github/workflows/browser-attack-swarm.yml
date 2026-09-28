@@ -42,6 +42,9 @@ jobs:
       tested_sha: ${{ steps.provenance.outputs.tested_sha }}
       base_sha: ${{ steps.provenance.outputs.base_sha }}
       pr_number: ${{ steps.plan.outputs.pr_number }}
+      cleanup_preview_name: ${{ steps.pin.outputs.preview_name }}
+      cleanup_convex_url: ${{ steps.pin.outputs.convex_cloud_url }}
+      cleanup_preview_created_at: ${{ steps.pin.outputs.preview_created_at }}
 
     steps:
       - name: Checkout trusted control plane from immutable workflow revision
@@ -238,6 +241,26 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
           CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+
+      # SCRUM-377: record which deployment this run owns and shorten its expiry,
+      # so the deployment quota is freed even if the run dies before cleanup.
+      # Its own outputs feed preview-cleanup, which must work even when a later
+      # prepare step fails and the plan outputs stay empty.
+      - name: Pin the disposable preview for cleanup
+        id: pin
+        if: always() && hashFiles('trusted/artifacts/browser-swarm-convex-authority.json') != ''
+        working-directory: trusted
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          AUTHORITY=artifacts/browser-swarm-convex-authority.json
+          CONVEX_PREVIEW_NAME="$(jq -r '.previewName' "$AUTHORITY")"
+          NEXT_PUBLIC_CONVEX_URL="$(jq -r '.convexCloudUrl' "$AUTHORITY")"
+          export CONVEX_PREVIEW_NAME NEXT_PUBLIC_CONVEX_URL
+          echo "preview_name=$CONVEX_PREVIEW_NAME" >> "$GITHUB_OUTPUT"
+          echo "convex_cloud_url=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_OUTPUT"
+          node scripts/previewDeploymentLifecycle.mjs pin
 
       # The one paid TypeSafe request, spent only once the disposable preview
       # exists (SCRUM-376): a quota or preview failure must not pay for it first.
@@ -977,3 +1000,36 @@ jobs:
           if [ "$STATE" != "success" ]; then
             exit 1
           fi
+
+  # SCRUM-377: every job above shares the disposable preview, so it is deleted
+  # only after all of them — whatever their outcome — have finished with it.
+  preview-cleanup:
+    name: disposable-preview-cleanup
+    needs: [prepare, candidate-build, trusted-e2e, attack-worker, verdict]
+    if: always() && needs.prepare.outputs.cleanup_preview_created_at != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout trusted cleanup controller from immutable workflow revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: trusted-cleanup
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+
+      - name: Delete the disposable preview
+        working-directory: trusted-cleanup
+        run: node scripts/previewDeploymentLifecycle.mjs delete
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.cleanup_preview_name }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.cleanup_convex_url }}
+          CONVEX_PREVIEW_CREATED_AT: ${{ needs.prepare.outputs.cleanup_preview_created_at }}

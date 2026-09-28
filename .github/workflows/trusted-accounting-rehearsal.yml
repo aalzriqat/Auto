@@ -267,6 +267,15 @@ jobs:
             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
             sh -lc 'corepack enable && corepack prepare pnpm@11.13.0 --activate && pnpm install --frozen-lockfile --ignore-scripts && pnpm exec convex deploy --url "$NEXT_PUBLIC_CONVEX_URL" --admin-key "$CONVEX_PREVIEW_ADMIN_KEY" --typecheck enable'
 
+      # SCRUM-377: record which deployment this run owns and shorten its expiry,
+      # so the deployment quota is freed even if the run dies before cleanup.
+      - name: Pin the disposable rehearsal preview for cleanup
+        if: always() && steps.provenance.outputs.stale == 'false' && env.NEXT_PUBLIC_CONVEX_URL != ''
+        working-directory: trusted
+        run: node scripts/previewDeploymentLifecycle.mjs pin
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+
       - name: Seed synthetic QA dealership from trusted main
         if: steps.provenance.outputs.stale == 'false'
         working-directory: trusted
@@ -298,6 +307,13 @@ jobs:
           path: trusted/rehearsal-evidence.json
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Delete the disposable rehearsal preview
+        if: always() && env.CONVEX_PREVIEW_CREATED_AT != ''
+        working-directory: trusted
+        run: node scripts/previewDeploymentLifecycle.mjs delete
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
 
   verdict:
     name: trusted-accounting-rehearsal-verdict

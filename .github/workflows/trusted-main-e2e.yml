@@ -85,6 +85,14 @@ jobs:
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
 
+      # SCRUM-377: record which deployment this run owns and shorten its expiry,
+      # so the deployment quota is freed even if the run dies before cleanup.
+      - name: Pin the disposable preview for cleanup
+        if: always() && env.NEXT_PUBLIC_CONVEX_URL != ''
+        run: node scripts/previewDeploymentLifecycle.mjs pin
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+
       - name: Seed the QA dealership
         run: node scripts/e2ePreviewBootstrap.mjs
         env:
@@ -117,3 +125,9 @@ jobs:
           name: trusted-main-playwright-report
           path: playwright-report/
           retention-days: 14
+
+      - name: Delete the disposable preview
+        if: always() && env.CONVEX_PREVIEW_CREATED_AT != ''
+        run: node scripts/previewDeploymentLifecycle.mjs delete
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
