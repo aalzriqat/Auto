@@ -44,9 +44,12 @@ export const fixExistingRoles = internalMutation({
  * row — explicitly sets `isSystemOwnerRole: true` if unset. That flag matters
  * beyond just the permissions array: `isSystemOwnerRole()`'s fallback check
  * (see utils/permissions.ts) requires the stored `permissions` array to
- * contain literally every currently-defined permission, so any row missing
- * the explicit flag fails closed on every future permission addition, not
- * just the one this particular backfill is fixing.
+ * contain the frozen pre-SCRUM-413 owner set, so a row missing the explicit
+ * flag depends on that legacy list forever. (It used to require every
+ * currently-defined permission, which failed closed on every addition.)
+ *
+ * `prepareSplitDealAuthorities` does not use this: it must NOT flag an
+ * OWNER-named row that fails the fallback, and it returns structured records.
  */
 async function patchRoleIfNeeded(
   ctx: MutationCtx,
@@ -392,7 +395,7 @@ export const backfillSeniorAccountantRole = internalMutation({
 });
 
 /** One stored role's part in the SCRUM-413 preparation, before and after. */
-export interface SplitDealAuthorityRecord {
+interface SplitDealAuthorityRecord {
   roleId: Id<"roles">;
   orgId: Id<"organizations">;
   name: string;
@@ -407,10 +410,11 @@ export interface SplitDealAuthorityRecord {
   priorCancelClosed: boolean;
   added: string[];
   /**
-   * The owner ruled that accountants may record the route, but they never
-   * held that authority, so it is a NEW grant — and a stored name cannot
-   * prove a row is the default ACCOUNTANT. Listed for the owner (role editor
-   * or template sync), never granted here.
+   * Its matching template now holds the route but the stored row does not
+   * and is not owed it (e.g. ACCOUNTANT: the owner ruled accountants may
+   * record the route, but they never held that authority, so it is a NEW
+   * grant — and a stored name cannot prove a row is the default ACCOUNTANT).
+   * Listed for the owner (template sync), never granted here.
    */
   pendingOwnerAction: boolean;
 }
@@ -447,12 +451,16 @@ export const prepareSplitDealAuthorities = internalMutation({
       const ownerFlagSkipped =
         unflagged && !ownerQualified && normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME;
       const added = transitionalDealGrants(role);
+      const template = DEFAULT_ROLE_TEMPLATES.find((candidate) => candidate.name === role.name);
       const pendingOwnerAction =
-        (role.name === "ACCOUNTANT" || role.name === "SENIOR_ACCOUNTANT") &&
-        !held.has(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
+        template !== undefined &&
+        template.permissions.includes(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT) &&
+        !held.has(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT) &&
+        !added.includes(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
+      const needsWrite = added.length > 0 || stampOwnerFlag;
 
-      if (added.length === 0 && !stampOwnerFlag && !ownerFlagSkipped && !pendingOwnerAction) continue;
-      if (added.length > 0 || stampOwnerFlag) pending++;
+      if (!needsWrite && !ownerFlagSkipped && !pendingOwnerAction) continue;
+      if (needsWrite) pending++;
 
       records.push({
         roleId: role._id,
@@ -468,7 +476,7 @@ export const prepareSplitDealAuthorities = internalMutation({
         pendingOwnerAction,
       });
 
-      if (apply && (added.length > 0 || stampOwnerFlag)) {
+      if (apply && needsWrite) {
         await ctx.db.patch(role._id, {
           permissions: [...role.permissions, ...added],
           ...(stampOwnerFlag ? { isSystemOwnerRole: true } : {}),

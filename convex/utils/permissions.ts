@@ -179,7 +179,8 @@ export function dedupePermissions<T extends string>(permissions: readonly T[]): 
  * permission silently de-owner every unflagged OWNER row until a backfill ran
  * — and retiring one would have silently promoted rows that never held it.
  * Frozen, neither can happen: the rows that qualified before still qualify,
- * and no row starts qualifying. `permissions.test.ts` pins this list.
+ * and no row starts qualifying. `scrum413PrepareDealAuthorities.test.ts` pins
+ * this list by hash.
  */
 export const PRE_413_OWNER_FALLBACK_PERMISSIONS: readonly string[] = Object.freeze([
   "view:org", "edit:org", "view:users", "manage:users", "manage:roles",
@@ -201,6 +202,7 @@ export const PRE_413_OWNER_FALLBACK_PERMISSIONS: readonly string[] = Object.free
 ]);
 
 function holdsTheFrozenOwnerSet(permissions: readonly string[]): boolean {
+  if (permissions.length < PRE_413_OWNER_FALLBACK_PERMISSIONS.length) return false;
   const permissionSet = new Set(permissions);
   return PRE_413_OWNER_FALLBACK_PERMISSIONS.every((permission) => permissionSet.has(permission));
 }
@@ -234,17 +236,16 @@ export function isSystemOwnerRole(role: RoleLike | null | undefined): boolean {
  */
 export function transitionalDealGrants(role: RoleLike): Permission[] {
   if (role.isDeleted) return [];
-  const owed: Permission[] = [];
+  const held = new Set(role.permissions);
+  const ROUTE = PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT;
+  const CANCEL_CLOSED = PERMISSIONS.CANCEL_CLOSED_DEAL;
+  let owed: Permission[] = [];
   if (isSystemOwnerRole(role)) {
-    owed.push(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT, PERMISSIONS.CANCEL_CLOSED_DEAL);
-  } else if (role.name === "MANAGER") {
-    const held = new Set(role.permissions);
-    if (held.has(PERMISSIONS.FINALIZE_FINANCED_DEAL)) {
-      owed.push(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
-      if (held.has(PERMISSIONS.CREATE_FINANCE_APPLICATION)) owed.push(PERMISSIONS.CANCEL_CLOSED_DEAL);
-    }
+    owed = [ROUTE, CANCEL_CLOSED];
+  } else if (role.name === "MANAGER" && held.has(PERMISSIONS.FINALIZE_FINANCED_DEAL)) {
+    owed = held.has(PERMISSIONS.CREATE_FINANCE_APPLICATION) ? [ROUTE, CANCEL_CLOSED] : [ROUTE];
   }
-  return owed.filter((permission) => !role.permissions.includes(permission));
+  return owed.filter((permission) => !held.has(permission));
 }
 
 export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }[] = [

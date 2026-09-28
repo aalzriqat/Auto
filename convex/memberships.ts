@@ -10,7 +10,6 @@ import {
   ALL_PERMISSIONS,
   DEFAULT_ROLE_TEMPLATES,
   isSystemOwnerRole,
-  transitionalDealGrants,
 } from "./utils/permissions";
 import { writeAuditLog } from "./utils/auditLog";
 import { notifyUser, notifyManagers } from "./utils/notifications";
@@ -1427,8 +1426,6 @@ export const syncRolePermissionsToTemplate = mutation({
       const template = DEFAULT_ROLE_TEMPLATES.find(t => t.name === role.name);
       if (!template) continue;
       const synced: string[] = [...template.permissions];
-      // SCRUM-413 transition: never let a sync take away what the cutover owes.
-      synced.push(...transitionalDealGrants({ ...role, permissions: synced }));
       const before = new Set(role.permissions);
       const after = new Set(synced);
       const added = synced.filter((p) => !before.has(p));
@@ -1445,7 +1442,7 @@ export const syncRolePermissionsToTemplate = mutation({
       });
       changes.push({ roleId: role._id, name: role.name, added, removed });
     }
-    return { updated: changes.length, changes };
+    return { changes };
   },
 });
 

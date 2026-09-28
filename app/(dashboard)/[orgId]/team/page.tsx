@@ -177,12 +177,12 @@ export default function TeamPage() {
                 onClick={async () => {
                   if (!activeOrgId) return;
                   try {
-                    const { updated, changes } = await syncRolePermissions({ orgId: activeOrgId });
+                    const { changes } = await syncRolePermissions({ orgId: activeOrgId });
                     toast.success(
-                      updated === 0
+                      changes.length === 0
                         ? t("SyncRolePermissionsNone" as any)
                         : interpolate(t("SyncRolePermissionsDone" as any), {
-                            count: updated,
+                            count: changes.length,
                             roles: changes.map((change) => change.name).join(", "),
                           })
                     );

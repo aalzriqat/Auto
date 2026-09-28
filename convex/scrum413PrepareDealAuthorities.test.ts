@@ -216,13 +216,13 @@ describe("SCRUM-413 role writers", () => {
     expect(first.changes.find((c: any) => c.roleId === accountantId)?.added).toContain(ROUTE);
     expect(first.changes.map((c: any) => c.name)).not.toContain("Custom Desk");
     const audits = await syncAudits();
-    expect(audits).toHaveLength(first.updated);
+    expect(audits).toHaveLength(first.changes.length);
     const accountantAudit = audits.find((a) => a.targetId === accountantId);
     expect(accountantAudit?.before).toEqual({ permissions: [PERMISSIONS.VIEW_FINANCE] });
     expect(accountantAudit?.after.permissions).toContain(ROUTE);
 
     const second = await asOwner.mutation(api.memberships.syncRolePermissionsToTemplate, { orgId });
-    expect(second).toEqual({ updated: 0, changes: [] });
+    expect(second).toEqual({ changes: [] });
     expect(await syncAudits()).toHaveLength(audits.length);
   });
 });
