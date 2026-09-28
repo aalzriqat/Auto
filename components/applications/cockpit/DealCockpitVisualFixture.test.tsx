@@ -617,13 +617,54 @@ const FOCUS_STATES = [
     },
   },
   {
+    // W1: an approver who cannot touch the documents is told who does, and
+    // keeps the rejection one click away under the reason.
+    id: "credit-documents-no-authority",
+    kind: "FINANCED",
+    stageKey: "CREDIT_DECISION",
+    state: "BLOCKED",
+    labelKey: "StageCreditDecision",
+    ownerKey: "StageOwnerFinanceCompany",
+    blocker: "AwaitingCreditDecision",
+    mirrorNote: true,
+    action: {
+      actionKey: "CompleteDocumentsFirstAction",
+      noteKey: "CreditApprovalNeedsDocuments",
+      opens: "DOCUMENTS",
+      unavailableReasonKey: "DocumentsNeedUploader",
+      secondary: { actionKey: "RecordCreditDecisionAction", onStart: () => {} },
+    },
+  },
+  {
+    // W1: everything outstanding is uploaded; an uploader waits on a verifier.
+    id: "delivery-documents-await-verifier",
+    kind: "FINANCED",
+    stageKey: "DELIVERY_ACTIONS",
+    state: "BLOCKED",
+    labelKey: "StageDeliveryActions",
+    ownerKey: "StageOwnerDealership",
+    blocker: "DocumentsIncomplete",
+    outstandingDocuments: [{ ruleId: "r1", name: { en: "National ID copy", ar: "صورة الهوية" } }],
+    action: { actionKey: "CompleteDocumentsAction", opens: "DOCUMENTS", unavailableReasonKey: "DocumentsAwaitVerifier" },
+  },
+  {
+    // W3: the draft sale opens its own completion dialog.
     id: "cash-handover",
     kind: "CASH",
     stageKey: "HANDOVER",
     state: "CURRENT",
     labelKey: "StageHandover",
     ownerKey: "StageOwnerDealership",
-    action: { actionKey: "CompleteCashSaleAction", unavailableReasonKey: "CashSaleCompletesInSales" },
+    action: { actionKey: "CompleteCashSaleAction", onStart: () => {} },
+  },
+  {
+    id: "cash-handover-no-permission",
+    kind: "CASH",
+    stageKey: "HANDOVER",
+    state: "CURRENT",
+    labelKey: "StageHandover",
+    ownerKey: "StageOwnerDealership",
+    action: { actionKey: "CompleteCashSaleAction", unavailableReasonKey: "CashSaleCompletionNeedsPermission" },
   },
 ] satisfies readonly FocusState[];
 

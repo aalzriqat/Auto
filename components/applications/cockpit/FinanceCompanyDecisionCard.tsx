@@ -190,10 +190,11 @@ export function decisionActionAvailability(
   // caller who also lacks the create permission (SCRUM-322).
   else if (facts.ltvMissing && !canRecordMissingRate) quotationReason = "DealPurchaseLtvNeedsApprover";
   else if (!caps.canRecordQuotation) quotationReason = "QuotationNeedsPermission";
-  // An approval on the record freezes the quotation it was based on. Only the
-  // focus row can reach this with no quotation (a legacy row); it keeps the
-  // reason it has always given there.
-  else if (facts.approvedPurchaseRecorded) quotationReason = "DealPurchaseLtvNeedsApprover";
+  // An approval on the record freezes the quotation it was based on — the
+  // server refuses to move it and directs the caller to reopen the approval.
+  // Only a legacy row reaches this with no quotation, and it is told THAT,
+  // not the missing-rate sentence it used to borrow (SCRUM417-R1).
+  else if (facts.approvedPurchaseRecorded) quotationReason = "ApprovedPurchaseFreezesQuotation";
 
   let approvalReason: string | undefined;
   if (facts.closed) approvalReason = "FinanceDecisionClosed";

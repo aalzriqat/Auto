@@ -33,6 +33,8 @@ vi.mock("@/components/accounting/AccountingTabShared", () => ({
 
 const stubs = vi.hoisted(() => ({
   queryResults: new Map<string, unknown>(),
+  /** The args each query was last mounted with, "skip" included. */
+  queryArgs: new Map<string, unknown>(),
   permissions: new Set<string>(),
   membershipUserId: "user_manager",
   mutationCalls: new Map<string, unknown[]>(),
@@ -49,7 +51,11 @@ vi.mock("@/hooks/use-permissions", () => ({
 vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
   return {
-    useQuery: (reference: never) => stubs.queryResults.get(getFunctionName(reference)),
+    useQuery: (reference: never, args: unknown) => {
+      const name = getFunctionName(reference);
+      stubs.queryArgs.set(name, args);
+      return stubs.queryResults.get(name);
+    },
     useMutation: (reference: never) => {
       const name = getFunctionName(reference);
       return async (args: unknown) => {
@@ -70,10 +76,19 @@ vi.mock("@/components/ui/sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
+// The sale's own completion dialog (W3). Stubbed to a marker naming the sale
+// it was opened for: the dialog's internals belong to the Sales page and are
+// tested there; what THIS suite proves is that the cash step opens it, for
+// this sale, and never as a blank new-sale form.
+vi.mock("@/components/sales/SaleDialog", () => ({
+  SaleDialog: ({ open, sale }: { open: boolean; sale?: { _id: string } | null }) =>
+    open ? <div data-testid="sale-dialog">{sale?._id ?? "NEW-SALE"}</div> : null,
+}));
+
 import { DealCockpit, SaleDealCockpit } from "./DealCockpit";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 
-const { queryResults, permissions, mutationCalls } = stubs;
+const { queryResults, queryArgs, permissions, mutationCalls } = stubs;
 
 const ORG = "org1" as Id<"organizations">;
 const APP = "app_2048" as Id<"financeApplications">;
@@ -156,6 +171,7 @@ const stepButton = () => within(step()).queryByTestId("deal-next-step-action");
 afterEach(() => {
   cleanup();
   queryResults.clear();
+  queryArgs.clear();
   permissions.clear();
   mutationCalls.clear();
   stubs.membershipUserId = "user_manager";
@@ -208,6 +224,10 @@ describe("G6 — credit approval waits on the documents the server requires", ()
   test("documents incomplete: the step goes to the documents, and the rejection stays one click away", () => {
     permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
     permissions.add(PERMISSIONS.REVIEW_FINANCE_APPLICATION);
+    // This caller can also upload the missing document, so the documents step
+    // is one they can take. Without it the step is withheld with a reason
+    // (W1) — see the status × capability matrix below.
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
     queryResults.set(COCKPIT_QUERY, underReview(false));
     renderCockpit();
 
@@ -377,6 +397,141 @@ describe("G5 — the documents step is an action that opens and focuses the chec
   });
 });
 
+/**
+ * W1 (Sol) = S417-2 (Codex): the documents step is a working step only for a
+ * caller who can ADVANCE an outstanding required document under the server's
+ * own gates — `generateUploadUrl` / `saveDocumentFile` take create OR verify
+ * (for a MISSING or REJECTED document), `updateDocumentStatus` takes verify
+ * (the only thing that moves an UPLOADED one). Everyone else is told why.
+ *
+ * Swept over every document status × every capability, on BOTH stages that
+ * offer the step: the credit decision (G6) and the delivery actions (G5).
+ */
+describe("W1 — the documents step matches what this caller can do to the outstanding documents", () => {
+  const ROLES = {
+    "create only": [PERMISSIONS.CREATE_FINANCE_APPLICATION],
+    "verify only": [PERMISSIONS.VERIFY_FINANCE_DOCUMENTS],
+    both: [PERMISSIONS.CREATE_FINANCE_APPLICATION, PERMISSIONS.VERIFY_FINANCE_DOCUMENTS],
+    neither: [] as string[],
+  } as const;
+  type Role = keyof typeof ROLES;
+  const STATUSES = ["MISSING", "UPLOADED", "REJECTED", "VERIFIED", "WAIVED"] as const;
+  type Status = (typeof STATUSES)[number];
+
+  /** undefined = the step is a working button; a string = the reason shown instead. */
+  function expected(status: Status, role: Role): string | undefined {
+    if (role === "neither") return "DocumentsNeedUploader";
+    if (status === "UPLOADED" && role === "create only") return "DocumentsAwaitVerifier";
+    return undefined;
+  }
+
+  function stagesFor(stage: "CREDIT" | "DELIVERY", status: Status) {
+    const done = status === "VERIFIED" || status === "WAIVED";
+    const documents = [{ ruleId: "r1", name: "هوية العميل", required: true, status }];
+    if (stage === "CREDIT") {
+      return cockpit(
+        "UNDER_REVIEW",
+        [
+          { key: "APPLICATION", state: "COMPLETE", authority: "DEALER" },
+          { key: "CREDIT_DECISION", state: "BLOCKED", blocker: "AwaitingCreditDecision", authority: "MIRROR" },
+          { key: "DELIVERY_ACTIONS", state: done ? "COMPLETE" : "PENDING", authority: "DEALER" },
+        ],
+        { documents }
+      );
+    }
+    return cockpit(
+      "APPROVED",
+      done
+        ? [
+            { key: "DELIVERY_ACTIONS", state: "COMPLETE", authority: "DEALER" },
+            { key: "HANDOVER", state: "CURRENT", authority: "DEALER" },
+          ]
+        : [{ key: "DELIVERY_ACTIONS", state: "BLOCKED", blocker: "DocumentsIncomplete", authority: "DEALER" }],
+      { documents }
+    );
+  }
+
+  const cases = (["CREDIT", "DELIVERY"] as const).flatMap((stage) =>
+    STATUSES.flatMap((status) => (Object.keys(ROLES) as Role[]).map((role) => [stage, status, role] as const))
+  );
+
+  test.each(cases)("%s stage · document %s · caller %s", (stage, status, role) => {
+    // The credit stage's caller always holds the credit permissions, so the
+    // stage's own branch applies; the documents authority is what varies.
+    if (stage === "CREDIT") {
+      permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+      permissions.add(PERMISSIONS.REVIEW_FINANCE_APPLICATION);
+    }
+    for (const permission of ROLES[role]) permissions.add(permission);
+    queryResults.set(COCKPIT_QUERY, stagesFor(stage, status));
+    renderCockpit();
+    const text = step().textContent ?? "";
+    const documentsKey = stage === "CREDIT" ? "CompleteDocumentsFirstAction" : "CompleteDocumentsAction";
+
+    if (status === "VERIFIED" || status === "WAIVED") {
+      // Nothing outstanding: the step has moved on past the documents.
+      expect(stepButton()?.textContent).not.toBe(documentsKey);
+      expect(text).not.toContain("DocumentsNeedUploader");
+      expect(text).not.toContain("DocumentsAwaitVerifier");
+      return;
+    }
+
+    const reason = expected(status, role);
+    if (reason === undefined) {
+      expect(stepButton()?.textContent).toBe(documentsKey);
+    } else {
+      expect(stepButton()).toBeNull();
+      expect(text).toContain(reason);
+    }
+    if (stage === "CREDIT") {
+      // Whatever happens to the documents step, a rejection needs no
+      // documents and stays one quiet click away (G6).
+      expect(within(step()).getByTestId("deal-next-step-secondary").textContent).toBe(
+        "RecordCreditDecisionAction"
+      );
+    }
+  });
+
+  test("mixed: an uploaded document and a missing one — a create-only caller can still upload the missing one", () => {
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit(
+        "APPROVED",
+        [{ key: "DELIVERY_ACTIONS", state: "BLOCKED", blocker: "DocumentsIncomplete", authority: "DEALER" }],
+        {
+          documents: [
+            { ruleId: "r1", name: "هوية العميل", required: true, status: "UPLOADED" },
+            { ruleId: "r2", name: "كشف الراتب", required: true, status: "MISSING" },
+          ],
+        }
+      )
+    );
+    renderCockpit();
+    expect(stepButton()?.textContent).toBe("CompleteDocumentsAction");
+  });
+
+  test("an optional document does not make the step look actionable", () => {
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit(
+        "APPROVED",
+        [{ key: "DELIVERY_ACTIONS", state: "BLOCKED", blocker: "DocumentsIncomplete", authority: "DEALER" }],
+        {
+          documents: [
+            { ruleId: "r1", name: "هوية العميل", required: true, status: "UPLOADED" },
+            { ruleId: "r2", name: "صورة إضافية", required: false, status: "MISSING" },
+          ],
+        }
+      )
+    );
+    renderCockpit();
+    expect(stepButton()).toBeNull();
+    expect(step().textContent).toContain("DocumentsAwaitVerifier");
+  });
+});
+
 describe("G7 — the settlement step resolves the reconciliation flag, then names every refusal", () => {
   const settlement = () =>
     cockpit(
@@ -419,6 +574,20 @@ describe("G7 — the settlement step resolves the reconciliation flag, then name
     renderCockpit();
     expect(stepButton()).toBeNull();
     expect(step().textContent).toContain("ReconciliationNeedsPermission");
+  });
+
+  // Sonnet SCRUM417 round 1: no coverage for a flagged deal whose settlement
+  // route is ALSO still required. The review comes first — it takes the
+  // closer's own permission and changes no amount — and the route is named
+  // after it, by the close.
+  test("flagged AND the settlement route still required: the review is the step", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    queryResults.set(COCKPIT_QUERY, { ...settlement(), supplierSettlementRouteRequired: true });
+    queryResults.set(APP_QUERY, application({ needsFinancingReconciliation: true }));
+    renderCockpit();
+    expect(stepButton()?.textContent).toBe("ResolveReconciliationAction");
+    expect(step().textContent).not.toContain("FinalizeNeedsSettlementRoute");
   });
 
   test("not flagged: the close is the step, unchanged", () => {
@@ -523,11 +692,56 @@ describe("G8 — the cash rail names its step too", () => {
     expect(step().textContent).toContain("SupplierSettlementNeedsPermission");
   });
 
-  test("HANDOVER on a draft sale: names where the sale is completed", () => {
+  /**
+   * W3: HANDOVER on a cash deal is the draft sale awaiting completion. The step
+   * OPENS the sale's own dialog — the one the Sales page opens, which saves
+   * through `sales.update` (edit:sales) and then completes through
+   * `sales.completeDraft` (create:sales) with its idempotency key and deposit
+   * decision — so it is offered to a caller holding both, and to nobody else.
+   * (This replaces a test that asserted the step had NO button: that
+   * expectation encoded the dead end.)
+   */
+  const SALE_RECORD = { _id: SALE, orgId: ORG, status: "PENDING", saleDate: Date.UTC(2026, 7, 1) };
+
+  test("HANDOVER on a draft sale: an authorized caller opens the sale's own dialog, for THIS sale", () => {
+    permissions.add(PERMISSIONS.CREATE_SALES);
+    permissions.add(PERMISSIONS.EDIT_SALES);
+    queryResults.set("sales:dealCockpit", cash("PENDING"));
+    queryResults.set("sales:get", SALE_RECORD);
+    render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
+
+    expect(queryArgs.get("sales:get")).toEqual({ orgId: ORG, saleId: SALE });
+    expect(stepButton()?.textContent).toBe("CompleteCashSaleAction");
+    // Above it: the draft IS what is outstanding — never "nothing is outstanding".
+    expect(step().textContent).toContain("StageCashSaleIsDraft");
+    expect(step().textContent).not.toContain("StageReadyToProceed");
+    expect(screen.queryByTestId("sale-dialog")).toBeNull();
+    fireEvent.click(stepButton()!);
+    expect(screen.getByTestId("sale-dialog").textContent).toBe(SALE);
+  });
+
+  test("HANDOVER while the sale record is still loading: no button that could open a NEW sale", () => {
+    permissions.add(PERMISSIONS.CREATE_SALES);
+    permissions.add(PERMISSIONS.EDIT_SALES);
     queryResults.set("sales:dealCockpit", cash("PENDING"));
     render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
     expect(stepButton()).toBeNull();
-    expect(step().textContent).toContain("CashSaleCompletesInSales");
+    expect(screen.queryByTestId("sale-dialog")).toBeNull();
+  });
+
+  test.each([
+    ["neither", [] as string[]],
+    ["create:sales only", [PERMISSIONS.CREATE_SALES]],
+    ["edit:sales only", [PERMISSIONS.EDIT_SALES]],
+  ])("HANDOVER on a draft sale, caller with %s: told who completes it, no button", (_label, held) => {
+    for (const permission of held) permissions.add(permission);
+    queryResults.set("sales:dealCockpit", cash("PENDING"));
+    queryResults.set("sales:get", SALE_RECORD);
+    render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
+    expect(stepButton()).toBeNull();
+    expect(step().textContent).toContain("CashSaleCompletionNeedsPermission");
+    // The sale record is not read for a caller who cannot use it.
+    expect(queryArgs.get("sales:get")).toBe("skip");
     // Never "nothing is outstanding" above a refusal naming what is.
     expect(step().textContent).not.toContain("StageReadyToProceed");
   });

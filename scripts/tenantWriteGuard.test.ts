@@ -609,10 +609,18 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // classification stamp is retired; readiness is automatic) — 498 → 497
   // total, 326 → 325 analysed. Skipped counts unchanged. Re-measured FROM THE
   // ANALYSER ({"totalMutations":497,"analysed":325,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
+  //
+  // `documents.ensureApplicationDocument` (SCRUM-421: a required rule added
+  // after the application exists gets its per-deal row on first use) — 497 →
+  // 498 total, 325 → 326 analysed. `orgId` plus a caller-supplied
+  // `applicationId` and `ruleId`, each read and matched to `args.orgId` after
+  // `requireTenantAuth` before the insert; the analyser reports no unguarded
+  // write for it. Skipped counts unchanged. Re-measured FROM THE ANALYSER
+  // ({"totalMutations":498,"analysed":326,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 497,
-      analysed: 325,
+      totalMutations: 498,
+      analysed: 326,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 157,
     });

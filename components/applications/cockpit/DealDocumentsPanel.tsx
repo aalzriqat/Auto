@@ -16,13 +16,60 @@ import { Check, Download, Eye, FileText, Upload, X } from "lucide-react";
  * A document as `documents.getForApplication` serves it: the per-deal row with
  * its rule name, status and a signed file URL when a file is on it. The same
  * query the Finance Applications → Review dialog reads.
+ *
+ * `_id` is null for a rule added after the application was created
+ * (SCRUM-421): the rule applies, the row does not exist yet, and the upload
+ * creates it first (`documents.ensureApplicationDocument`).
  */
 export type DealDocument = {
-  _id: string;
+  _id: string | null;
+  ruleId: string;
   ruleName: string;
   status: string;
   fileUrl: string | null;
 };
+
+/** One stable key per checklist line, whether or not its row exists yet. */
+export function documentRowKey(doc: Pick<DealDocument, "_id" | "ruleId">): string {
+  return doc._id ?? `rule-${doc.ruleId}`;
+}
+
+/**
+ * The file picker behind an Upload (or, for a rejected file, a replacement)
+ * button. A hidden input driven by its label, so the button stays a real,
+ * focusable control and the same file can be picked again after a failure.
+ */
+function DocumentUploadControl({
+  rowKey,
+  label,
+  busy,
+  onPick,
+}: Readonly<{ rowKey: string; label: string; busy: boolean; onPick: (file: File) => void }>) {
+  const inputId = `deal-doc-file-${rowKey}`;
+  return (
+    <>
+      <input
+        type="file"
+        id={inputId}
+        className="hidden"
+        disabled={busy}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) onPick(file);
+          // Let the same file be chosen again after a failed upload; a stale
+          // value blocks `change`.
+          e.target.value = "";
+        }}
+      />
+      <Button size="sm" variant="outline" asChild disabled={busy}>
+        <label htmlFor={inputId} className="cursor-pointer">
+          <Upload className="h-4 w-4 me-1" />
+          {label}
+        </label>
+      </Button>
+    </>
+  );
+}
 
 const DOCUMENT_STATUS_LABEL: Record<string, string> = {
   MISSING: "DocMissing",
@@ -62,9 +109,10 @@ export function DealDocumentsPanel({
   checklist: ReadonlyArray<{ ruleId: string; name: string; required: boolean; status: string }>;
   canUpload: boolean;
   canVerify: boolean;
+  /** The `documentRowKey` of the line whose upload is in flight. */
   uploadingId: string | null;
   t: (key: string) => string;
-  onUpload: (documentId: string, file: File) => void | Promise<void>;
+  onUpload: (doc: DealDocument, file: File) => void | Promise<void>;
   onVerify: (documentId: string) => void | Promise<void>;
 }>) {
   const [previewFile, setPreviewFile] = useState<{ url: string; name: string } | null>(null);
@@ -124,11 +172,13 @@ export function DealDocumentsPanel({
           ) : (
             documents.map((doc) => {
               const verified = doc.status === "VERIFIED";
+              const rowKey = documentRowKey(doc);
+              const documentId = doc._id;
               return (
                 <div
-                  key={doc._id}
+                  key={rowKey}
                   className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border p-2 text-sm"
-                  data-testid={`deal-document-${doc._id}`}
+                  data-testid={`deal-document-${rowKey}`}
                 >
                   {verified ? (
                     <Check className="h-4 w-4 shrink-0 text-emerald-600" />
@@ -157,40 +207,38 @@ export function DealDocumentsPanel({
                             supporting surface. The one recommended action on
                             this screen lives on the stage rail, and a second
                             filled button here competed with it. */}
-                        {canVerify && (
+                        {canVerify && documentId !== null && (
                           <Button
                             size="sm"
                             variant="outline"
                             disabled={verified}
-                            onClick={() => void onVerify(doc._id)}
+                            onClick={() => void onVerify(documentId)}
                           >
                             {t("Verify")}
                           </Button>
                         )}
+                        {/* A REJECTED file is not the end of the line: whoever
+                            may upload may replace it, and `saveDocumentFile`
+                            swaps the file on the same row and puts it back to
+                            UPLOADED. Without this, "upload it again" had
+                            nowhere to go on this screen. */}
+                        {canUpload && doc.status === "REJECTED" && (
+                          <DocumentUploadControl
+                            rowKey={rowKey}
+                            label={t("ReplaceFile")}
+                            busy={uploadingId === rowKey}
+                            onPick={(file) => void onUpload(doc, file)}
+                          />
+                        )}
                       </>
                     ) : (
                       canUpload && (
-                        <>
-                          <input
-                            type="file"
-                            id={`deal-doc-file-${doc._id}`}
-                            className="hidden"
-                            disabled={uploadingId === doc._id}
-                            onChange={(e) => {
-                              const file = e.target.files?.[0];
-                              if (file) void onUpload(doc._id, file);
-                              // Let the same file be chosen again after a
-                              // failed upload; a stale value blocks `change`.
-                              e.target.value = "";
-                            }}
-                          />
-                          <Button size="sm" variant="outline" asChild disabled={uploadingId === doc._id}>
-                            <label htmlFor={`deal-doc-file-${doc._id}`} className="cursor-pointer">
-                              <Upload className="h-4 w-4 me-1" />
-                              {t("Upload")}
-                            </label>
-                          </Button>
-                        </>
+                        <DocumentUploadControl
+                          rowKey={rowKey}
+                          label={t("Upload")}
+                          busy={uploadingId === rowKey}
+                          onPick={(file) => void onUpload(doc, file)}
+                        />
                       )
                     )}
                   </div>

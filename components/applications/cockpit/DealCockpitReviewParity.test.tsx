@@ -38,6 +38,8 @@ const stubs = vi.hoisted(() => ({
   mutationFailures: new Map<string, string>(),
   /** A mutation held open until the test settles it — for in-flight and late-response cases. */
   mutationHolds: new Map<string, Promise<unknown>>(),
+  /** What a mutation resolves to, where the caller uses the result (default null). */
+  mutationReturns: new Map<string, unknown>(),
   membershipUserId: "user_manager",
 }));
 
@@ -74,7 +76,7 @@ vi.mock("convex/react", async () => {
           if (failure.startsWith("refused:")) throw new ConvexError(failure.slice("refused:".length));
           throw new Error(failure);
         }
-        return null;
+        return stubs.mutationReturns.get(name) ?? null;
       };
     },
   };
@@ -745,6 +747,109 @@ describe("documents — documents.updateDocumentStatus / upload, from the checkl
     const missing = screen.getByTestId("deal-document-doc_2");
     expect(within(missing).queryByRole("button", { name: "Verify" })).toBeNull();
     expect(within(missing).getByText("Upload")).toBeTruthy();
+  });
+
+  /**
+   * SCRUM-421 (W2 / S417-1): a required rule added after the application was
+   * created has no row. `getForApplication` lists it with `_id: null`; the
+   * upload first materializes the row through `ensureApplicationDocument`,
+   * then runs the ordinary upload on the id it returns.
+   */
+  describe("uploads — a row-less rule, a rejected file, an existing row", () => {
+    function pickFile(row: HTMLElement) {
+      const input = row.querySelector('input[type="file"]') as HTMLInputElement;
+      const file = new File(["%PDF"], "late.pdf", { type: "application/pdf" });
+      fireEvent.change(input, { target: { files: [file] } });
+    }
+    beforeEach(() => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => ({ json: async () => ({ storageId: "storage_1" }) }))
+      );
+      stubs.mutationReturns.set("documents:generateUploadUrl", "https://upload.test/post");
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      stubs.mutationReturns.clear();
+    });
+
+    test("a rule with no row: ensure the row, then upload onto the id it returns", async () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+      stubs.mutationReturns.set("documents:ensureApplicationDocument", "doc_new");
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      queryResults.set(DOCUMENTS_QUERY, [
+        { _id: null, ruleId: "rule_late", ruleName: "Late salary slip", status: "MISSING", isRequired: true, fileUrl: null },
+      ]);
+      renderCockpit();
+
+      const row = screen.getByTestId("deal-document-rule-rule_late");
+      expect(within(row).getByText("Upload")).toBeTruthy();
+      pickFile(row);
+      await waitFor(() => expect(mutationCalls.get("documents:saveDocumentFile")).toHaveLength(1));
+      expect(mutationCalls.get("documents:ensureApplicationDocument")).toEqual([
+        { orgId: ORG, applicationId: APP, ruleId: "rule_late" },
+      ]);
+      expect(mutationCalls.get("documents:saveDocumentFile")![0]).toEqual({
+        orgId: ORG,
+        documentId: "doc_new",
+        fileId: "storage_1",
+      });
+    });
+
+    test("a REJECTED document offers a replacement upload, onto its own row", async () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      queryResults.set(DOCUMENTS_QUERY, [
+        { _id: "doc_1", ruleId: "r1", ruleName: "National ID", status: "REJECTED", isRequired: true, fileUrl: "https://files/x.pdf" },
+      ]);
+      renderCockpit();
+
+      const row = screen.getByTestId("deal-document-doc_1");
+      // The rejected file stays viewable beside the control that replaces it.
+      expect(within(row).getByRole("button", { name: "ViewFile" })).toBeTruthy();
+      expect(within(row).getByText("ReplaceFile")).toBeTruthy();
+      pickFile(row);
+      await waitFor(() => expect(mutationCalls.get("documents:saveDocumentFile")).toHaveLength(1));
+      expect(mutationCalls.get("documents:ensureApplicationDocument")).toBeUndefined();
+      expect(mutationCalls.get("documents:saveDocumentFile")![0]).toEqual({
+        orgId: ORG,
+        documentId: "doc_1",
+        fileId: "storage_1",
+      });
+    });
+
+    test("an UPLOADED document offers no replacement — it waits for verification", () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      queryResults.set(DOCUMENTS_QUERY, [
+        { _id: "doc_1", ruleId: "r1", ruleName: "National ID", status: "UPLOADED", isRequired: true, fileUrl: "https://files/x.pdf" },
+      ]);
+      renderCockpit();
+      const row = screen.getByTestId("deal-document-doc_1");
+      expect(within(row).queryByText("ReplaceFile")).toBeNull();
+      expect(within(row).queryByText("Upload")).toBeNull();
+    });
+
+    test("an existing MISSING row uploads directly, with no ensure call", async () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      queryResults.set(DOCUMENTS_QUERY, [
+        { _id: "doc_2", ruleId: "r2", ruleName: "Salary slip", status: "MISSING", isRequired: true, fileUrl: null },
+      ]);
+      renderCockpit();
+      pickFile(screen.getByTestId("deal-document-doc_2"));
+      await waitFor(() => expect(mutationCalls.get("documents:saveDocumentFile")).toHaveLength(1));
+      expect(mutationCalls.get("documents:ensureApplicationDocument")).toBeUndefined();
+      expect(mutationCalls.get("documents:saveDocumentFile")![0]).toMatchObject({ documentId: "doc_2" });
+    });
   });
 
   test("a caller who may not read the document rows sees the read-only checklist and no controls", () => {

@@ -21,6 +21,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { DealCockpitData, FinanceDecisionWiring } from "./DealCockpit";
 import {
   FinanceCompanyDecisionCard,
+  decisionActionAvailability,
   nextFinanceDecisionStep,
   type FinanceDecisionCapabilities,
   type FinanceDecisionFacts,
@@ -594,6 +595,51 @@ describe("the focus row and the card never give different reasons", () => {
     }
     // Not vacuous: most combinations withhold the step's action.
     expect(reasonsChecked).toBeGreaterThan(500);
+  });
+});
+
+/**
+ * SCRUM417-R1 (Sonnet): a legacy row carries an approved amount and no
+ * quotation. The quotation is frozen by that approval — the server refuses to
+ * move it and directs the caller to reopen the approval — and the reason must
+ * say THAT, not the missing-rate sentence it used to borrow.
+ */
+describe("a legacy approval with no quotation names the approval, not the rate", () => {
+  const caps: FinanceDecisionCapabilities = {
+    canRecordQuotation: true,
+    canRecordApproval: true,
+    canEstablishLtvPercent: true,
+    canRecordAppraisal: true,
+    isOwnDeal: false,
+  };
+  const legacy: FinanceDecisionFacts = {
+    ...wiring().facts,
+    approvedPurchaseRecorded: true,
+    submittedQuotationMinor: null,
+    ltvMissing: false,
+  };
+
+  test("the reason table gives the frozen-quotation reason", () => {
+    expect(decisionActionAvailability(legacy, caps).quotation).toEqual({
+      available: false,
+      reasonKey: "ApprovedPurchaseFreezesQuotation",
+    });
+  });
+
+  test("the focus row's step carries the same reason, on both stages it serves", () => {
+    for (const stage of ["APPRAISAL", "APPROVED_PURCHASE"] as const) {
+      const step = nextFinanceDecisionStep(legacy, caps, stage);
+      expect(step.actionKey).toBe("RecordQuotationAction");
+      expect(step.unavailableReasonKey).toBe("ApprovedPurchaseFreezesQuotation");
+    }
+  });
+
+  test("CONTROL — a missing rate the caller cannot record still names the approver", () => {
+    const reason = decisionActionAvailability(
+      { ...legacy, ltvMissing: true },
+      { ...caps, canEstablishLtvPercent: false }
+    ).quotation.reasonKey;
+    expect(reason).toBe("DealPurchaseLtvNeedsApprover");
   });
 });
 

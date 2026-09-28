@@ -379,9 +379,18 @@ const FOCUS_STATE_IDS = [
   "appraisal-next",
   "gap-failed",
   "credit-documents-first",
+  "credit-documents-no-authority",
+  "delivery-documents-await-verifier",
   "cash-handover",
+  "cash-handover-no-permission",
 ] as const;
-const WITH_PRIMARY = new Set(["reconciliation-resolve", "appraisal-next", "gap-failed", "credit-documents-first"]);
+const WITH_PRIMARY = new Set([
+  "reconciliation-resolve",
+  "appraisal-next",
+  "gap-failed",
+  "credit-documents-first",
+  "cash-handover",
+]);
 
 for (const locale of LOCALES) {
   for (const theme of THEMES) {

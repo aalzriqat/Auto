@@ -1,5 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
 import { mutation } from "./functions";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
@@ -12,6 +13,20 @@ import {
 
 function hasAnyPermission(role: { permissions: string[]; isSystemOwnerRole?: boolean; name: string }, permissions: string[]) {
   return isSystemOwnerRole(role) || permissions.some((permission) => role.permissions.includes(permission));
+}
+
+/**
+ * Whether a document rule applies to a deal: an org-wide rule, or one for the
+ * deal's own finance company. The SAME predicate `createFromQuote` uses to
+ * materialize rows and `assertRequiredApplicationDocumentsComplete` uses to
+ * refuse approval — a checklist that counted a different set would name rows
+ * the gate ignores, or hide rows the gate demands.
+ */
+function ruleAppliesToQuote(
+  rule: Pick<Doc<"companyDocumentRules">, "companyId">,
+  quote: Pick<Doc<"quotes">, "companyId"> | null
+) {
+  return !rule.companyId || rule.companyId === quote?.companyId;
 }
 
 // --- Rules ---
@@ -90,7 +105,7 @@ export const getForApplication = query({
       .filter((q) => q.eq(q.field("orgId"), args.orgId))
       .collect();
 
-    return await Promise.all(
+    const materialized = await Promise.all(
       docs.map(async (doc) => {
         const rule = await ctx.db.get(doc.ruleId);
         let fileUrl = null;
@@ -105,6 +120,83 @@ export const getForApplication = query({
         };
       })
     );
+
+    /**
+     * SCRUM-421: a rule added AFTER the application was created has no row —
+     * `createFromQuote` materializes rows only at creation — yet the approval
+     * gate reads live rules and counts it MISSING. It is listed here, row-less
+     * (`_id: null`), so the checklist can offer its upload; the row itself is
+     * created on first use by `ensureApplicationDocument`.
+     */
+    const application = await ctx.db.get(args.applicationId);
+    if (!application || application.orgId !== args.orgId) return materialized;
+    const quote = await ctx.db.get(application.quoteId);
+    const dealQuote = quote && quote.orgId === args.orgId ? quote : null;
+    const rules = await ctx.db
+      .query("companyDocumentRules")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    const materializedRuleIds = new Set(docs.map((doc) => doc.ruleId));
+    const unmaterialized = rules
+      .filter((rule) => ruleAppliesToQuote(rule, dealQuote) && !materializedRuleIds.has(rule._id))
+      .map((rule) => ({
+        _id: null,
+        ruleId: rule._id,
+        status: "MISSING" as const,
+        ruleName: rule.documentName,
+        isRequired: rule.isRequired,
+        fileUrl: null,
+      }));
+
+    return [...materialized, ...unmaterialized];
+  },
+});
+
+/**
+ * The per-deal row for a rule, created on first use (SCRUM-421).
+ *
+ * Returns the existing row when there is one — so a retry, a double click or
+ * two operators at once converge on ONE row (two concurrent calls both read the
+ * `by_application` range, so Convex's OCC serializes them and the second sees
+ * the first's insert). Otherwise inserts exactly the row `createFromQuote`
+ * inserts at creation. Authorized like an upload, because it exists only to
+ * make an upload or a waiver possible: tenant membership plus create or verify.
+ */
+export const ensureApplicationDocument = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    ruleId: v.id("companyDocumentRules"),
+  },
+  handler: async (ctx, args) => {
+    const { role } = await requireTenantAuth(ctx, args.orgId);
+    if (!hasAnyPermission(role, [PERMISSIONS.CREATE_FINANCE_APPLICATION, PERMISSIONS.VERIFY_FINANCE_DOCUMENTS])) {
+      throw new ConvexError("Forbidden: Missing required finance document permissions.");
+    }
+
+    const application = await ctx.db.get(args.applicationId);
+    if (!application || application.orgId !== args.orgId) throw new ConvexError("Application not found");
+    const rule = await ctx.db.get(args.ruleId);
+    if (!rule || rule.orgId !== args.orgId) throw new ConvexError("Rule not found.");
+    const quote = await ctx.db.get(application.quoteId);
+    if (!quote || quote.orgId !== args.orgId) throw new ConvexError("Application quote not found.");
+    if (!ruleAppliesToQuote(rule, quote)) {
+      throw new ConvexError("This document rule does not apply to this deal's finance company.");
+    }
+
+    const rows = await ctx.db
+      .query("applicationDocuments")
+      .withIndex("by_application", (q) => q.eq("applicationId", args.applicationId))
+      .collect();
+    const existing = rows.find((row) => row.ruleId === args.ruleId && row.orgId === args.orgId);
+    if (existing) return existing._id;
+
+    return await ctx.db.insert("applicationDocuments", {
+      orgId: args.orgId,
+      applicationId: args.applicationId,
+      ruleId: args.ruleId,
+      status: "MISSING",
+    });
   },
 });
 

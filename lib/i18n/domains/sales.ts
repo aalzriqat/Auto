@@ -609,6 +609,13 @@ const dealWizardMessages = defineBilingualMessages({
     "The documents are uploaded and verified by the finance team.",
     "يرفع المستندات ويتحقق منها فريق التمويل.",
   ],
+  // W1 — every outstanding document is uploaded; only a verifier moves it now.
+  DocumentsAwaitVerifier: [
+    "Uploaded — waiting for someone who can verify finance documents.",
+    "تم الرفع — بانتظار من يملك صلاحية التحقق من مستندات التمويل.",
+  ],
+  // A rejected file is replaced in place; the server swaps the file on the same row.
+  ReplaceFile: ["Upload a replacement", "رفع ملف بديل"],
   // G7 — the financing reconciliation review.
   // Also the review dialog's title: the button and the dialog it opens say the same thing.
   ResolveReconciliationAction: ["Review the reconciliation note", "مراجعة ملاحظة التسوية"],
@@ -635,16 +642,28 @@ const dealWizardMessages = defineBilingualMessages({
     "مطلوب — فهو السجل الذي يثبت إجراء المراجعة.",
   ],
   ResolveReconciliationConfirm: ["Record the review", "تسجيل المراجعة"],
-  ReconciliationResolved: ["Review recorded. The deal can be closed.", "سُجّلت المراجعة. يمكن الآن إغلاق الصفقة."],
+  // Only what happened: other blockers (route, deposit, readiness, permission) may remain.
+  ReconciliationResolved: ["Review recorded.", "سُجّلت المراجعة."],
   FinalizeNeedsHeldDepositResolved: [
     "The finance company pays the supplier directly on this deal, and a reservation deposit is still held. Resolve the deposit from the vehicle's deposit manager, then close.",
     "تدفع شركة التمويل للمورد مباشرةً في هذه الصفقة، وما زال هناك عربون محتجز. عالج العربون من إدارة العربون في صفحة المركبة، ثم أغلق الصفقة.",
   ],
   // G8 — the cash rail.
   CompleteCashSaleAction: ["Complete the sale", "إتمام البيع"],
-  CashSaleCompletesInSales: [
-    "This sale is still a draft. Complete it from Sales: open the sale, set its status to Completed and save.",
-    "هذا البيع ما زال مسودة. أتمّه من صفحة المبيعات: افتح البيع، واجعل حالته «مكتمل»، ثم احفظ.",
+  // W3 — above the working step: what is outstanding, never "nothing is outstanding".
+  StageCashSaleIsDraft: [
+    "This sale is still a draft. Complete it to record the sale.",
+    "هذا البيع ما زال مسودة. أتمّه لتسجيل البيع.",
+  ],
+  // W3 — the sale's own dialog saves through edit:sales and completes through create:sales.
+  CashSaleCompletionNeedsPermission: [
+    "This sale is still a draft. It is completed by someone who can both create and edit sales.",
+    "هذا البيع ما زال مسودة. يُتمّه من يملك صلاحيتَي إنشاء المبيعات وتعديلها معاً.",
+  ],
+  // SCRUM417-R1 — a legacy approval with no quotation: the approval freezes it.
+  ApprovedPurchaseFreezesQuotation: [
+    "An approved amount is already recorded on this deal, so the quotation it was based on can no longer change. To change the quotation, reopen the approved amount for correction first.",
+    "سُجّل مبلغ معتمد على هذه الصفقة، فلم يعد بالإمكان تغيير عرض السعر الذي بُني عليه. لتغيير عرض السعر، أعد فتح المبلغ المعتمد للتصحيح أولاً.",
   ],
   SupplierSettlementNeedsPermission: [
     "The supplier's settlement is recorded by someone who manages finance.",
