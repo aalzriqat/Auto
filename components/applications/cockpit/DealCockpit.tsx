@@ -532,12 +532,16 @@ export function documentsStepUnavailableReason({
   canUpload,
   canVerify,
   canRead,
+  settled,
 }: Readonly<{
   outstanding: ReadonlyArray<{ status: string }>;
   canUpload: boolean;
   canVerify: boolean;
   canRead: boolean;
+  /** SCRUM-422: CLOSED or CANCELLED — the server refuses every document write. */
+  settled: boolean;
 }>): string | undefined {
+  if (settled) return "DocumentsSettled";
   const canAdvance = (status: string) => (status === "UPLOADED" ? canVerify : canUpload || canVerify);
   const readReason = canRead ? undefined : "DocumentsNeedReadAccess";
   if (outstanding.length === 0) return canUpload || canVerify ? readReason : "DocumentsNeedUploader";
@@ -1504,6 +1508,9 @@ export function DealCockpit({
     canVerify: canVerifyDocuments,
     // The exact predicate the `getForApplication` subscription above is gated on.
     canRead: canViewApplications,
+    // A closed deal still derives DELIVERY_ACTIONS from the live rules, so a
+    // rule added after closing can re-open the stage (SCRUM-422 R1 follow-up).
+    settled: documentsSettled,
   });
 
   function buildWorkflowAction(): WorkflowAction | undefined {

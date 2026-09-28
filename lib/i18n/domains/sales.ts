@@ -619,6 +619,11 @@ const dealWizardMessages = defineBilingualMessages({
     "Your role can upload or verify documents but cannot open this deal's document list. Someone with access to finance applications completes them.",
     "يتيح دورك رفع المستندات أو التحقق منها، لكنه لا يتيح فتح قائمة مستندات هذه الصفقة. يُكملها من يملك صلاحية الوصول إلى طلبات التمويل.",
   ],
+  // SCRUM-422: a closed or cancelled deal's documents are settled record.
+  DocumentsSettled: [
+    "This deal is closed or cancelled, so its documents can no longer be changed.",
+    "هذه الصفقة مغلقة أو ملغاة، لذا لم يعد بالإمكان تعديل مستنداتها.",
+  ],
   // A rejected file is replaced in place; the server swaps the file on the same row.
   ReplaceFile: ["Upload a replacement", "رفع ملف بديل"],
   // Round 3 (S417-R3-1): files kept for requirements removed after the upload — view only.
