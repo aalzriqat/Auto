@@ -261,9 +261,9 @@ export async function createFinancedApplication(
   await startApplication.click();
 
   // Creating the application does not open it. The wizard swaps the button for
-  // "View Application", and that goes to the Deals LIST — so the deal is
-  // reached the way an operator reaches it from there: by its own row on the
-  // needs-action queue (a fresh application is waiting on the dealership).
+  // "View Application", which links straight to the new deal (SCRUM-417); the
+  // fixture still reaches the deal through the Deals LIST, so that path — its
+  // own row on the needs-action queue — stays covered too.
   await expect(page.getByText(/View Application/)).toBeVisible();
 
   await gotoOrgRoute(page, "deals");
