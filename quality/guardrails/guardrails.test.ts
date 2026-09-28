@@ -653,6 +653,31 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
     expect(error?.message).not.toContain("export const");
   }, TIMEOUT);
 
+  test("negative control (Sol S426-09 residual): malformed or hostile error positions never reach the message", async () => {
+    const SECRET = "SENTINEL_SECRET_426";
+    const throwing = (value: unknown) => ({ format: async () => { throw value; } });
+    const hostileLoc = Object.defineProperty(new Error(SECRET), "loc", {
+      get() { throw new Error(SECRET); },
+    });
+    const cases: unknown[] = [
+      Object.assign(new Error(SECRET), { loc: { start: { line: 2, column: SECRET } } }),
+      Object.assign(new Error(SECRET), { loc: { start: { line: SECRET, column: 3 } } }),
+      hostileLoc,
+      SECRET,
+    ];
+    for (const thrown of cases) {
+      const message = await measureLines("convex/broken.ts", "x\n", {}, throwing(thrown)).then(
+        () => "resolved",
+        (e: Error) => e.message,
+      );
+      expect(message).toBe("COUNT-UNAVAILABLE convex/broken.ts: Prettier could not format it");
+    }
+    const numeric = Object.assign(new Error(SECRET), { loc: { start: { line: 2, column: 14 } } });
+    await expect(measureLines("convex/broken.ts", "x\n", {}, throwing(numeric))).rejects.toThrow(
+      /^COUNT-UNAVAILABLE convex\/broken\.ts: Prettier could not format it \(line 2, column 14\)$/,
+    );
+  }, TIMEOUT);
+
   test("negative control (Sol S426-08): an unformattable file blocks the check and the baseline writer, never a notice", async () => {
     const root = fixtureRepo();
     write(root, "convex/broken.ts", "export const = ;\n");

@@ -250,10 +250,18 @@ async function formattedCount(repoPath, text, options, prettier) {
     return countNonBlank(await prettier.format(text, options));
   } catch (error) {
     // Prettier's message carries a code frame of the source; CI logs are
-    // public, so only the position is reported (S426-09).
-    const start = error?.loc?.start;
-    const where = Number.isInteger(start?.line) ? ` (line ${start.line}, column ${start.column})` : "";
-    throw new Error(`COUNT-UNAVAILABLE ${repoPath}: Prettier could not format it${where}`);
+    // public, so only a validated integer position is reported (S426-09).
+    throw new Error(`COUNT-UNAVAILABLE ${repoPath}: Prettier could not format it${errorPosition(error)}`);
+  }
+}
+
+function errorPosition(error) {
+  try {
+    const line = error?.loc?.start?.line;
+    const column = error?.loc?.start?.column;
+    return Number.isInteger(line) && Number.isInteger(column) ? ` (line ${line}, column ${column})` : "";
+  } catch {
+    return "";
   }
 }
 
