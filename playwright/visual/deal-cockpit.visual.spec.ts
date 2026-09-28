@@ -153,7 +153,11 @@ test.beforeAll(async () => {
     },
   );
   for (const locale of LOCALES) {
-    for (const name of [`deal-cockpit-${locale}.html`, `deal-cockpit-${locale}.expected.json`]) {
+    for (const name of [
+      `deal-cockpit-${locale}.html`,
+      `deal-cockpit-${locale}.expected.json`,
+      `deal-focus-states-${locale}.html`,
+    ]) {
       const file = resolve(FIXTURES, name);
       expect(existsSync(file), `bridge did not write ${file}`).toBe(true);
       expect(
@@ -191,8 +195,13 @@ function expectedFor(locale: (typeof LOCALES)[number]): { stageOwners: string[] 
   return JSON.parse(readFileSync(resolve(FIXTURES, `deal-cockpit-${locale}.expected.json`), "utf8"));
 }
 
-function documentFor(locale: (typeof LOCALES)[number], theme: (typeof THEMES)[number], variant = ""): string {
-  const body = readFileSync(resolve(FIXTURES, `deal-cockpit-${locale}${variant}.html`), "utf8");
+function documentFor(
+  locale: (typeof LOCALES)[number],
+  theme: (typeof THEMES)[number],
+  variant = "",
+  fixture: "deal-cockpit" | "deal-focus-states" = "deal-cockpit",
+): string {
+  const body = readFileSync(resolve(FIXTURES, `${fixture}-${locale}${variant}.html`), "utf8");
   const dir = locale === "ar" ? "rtl" : "ltr";
   // `<html dir lang class>` and `<body class>` as `app/layout.tsx` and the
   // LanguageProvider set them (the body's background comes from the
@@ -396,6 +405,124 @@ for (const locale of LOCALES) {
           await main.evaluate((el) => el.scrollTo({ top: el.scrollHeight }));
           await page.screenshot({
             path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}-bottom.png`),
+          });
+        } finally {
+          await context.close();
+        }
+      });
+    }
+  }
+}
+
+/**
+ * SCRUM-417 — the next-step states the wizard added, painted in the same shell.
+ * The viewport is tall so the whole gallery is on screen at once and `main`
+ * never needs scrolling for the frame. Asserted: every state's row is painted
+ * inside main, its one primary button (where it has one) has a real box and
+ * sits inside main, and nothing scrolls sideways — the Arabic note and the
+ * secondary link are the likeliest to push a 390px row wide.
+ */
+const FOCUS_STATE_IDS = [
+  "reconciliation-resolve",
+  "reconciliation-no-permission",
+  "appraisal-next",
+  "gap-failed",
+  "credit-documents-first",
+  "credit-documents-no-authority",
+  "delivery-documents-await-verifier",
+  "credit-documents-need-read-access",
+  "delivery-documents-need-read-access",
+  "cash-handover",
+  "cash-handover-no-permission",
+  "cash-handover-needs-read-access",
+  "cash-handover-deposit-decision",
+] as const;
+const WITH_PRIMARY = new Set([
+  "reconciliation-resolve",
+  "appraisal-next",
+  "gap-failed",
+  "credit-documents-first",
+  "cash-handover",
+]);
+
+for (const locale of LOCALES) {
+  for (const theme of THEMES) {
+    for (const viewport of VIEWPORTS) {
+      test(`focus states · ${locale} · ${theme} · ${viewport.name}px: every next step painted, one button each, no sideways scroll`, async ({
+        browser,
+      }) => {
+        const context = await browser.newContext({
+          // Tall enough for the whole gallery at 390px (13 states plus the
+          // documents panel since round 2): `main` clips the screenshot to
+          // its own box, so a shorter frame silently drops the last states.
+          viewport: { width: viewport.width, height: 5200 },
+          colorScheme: theme,
+        });
+        const page = await context.newPage();
+        try {
+          const file = resolve(RUN_DIR, `focus-${locale}-${theme}.html`);
+          writeFileSync(file, documentFor(locale, theme, "", "deal-focus-states"));
+          await page.goto(`file:///${file.replace(/\\/g, "/")}`);
+          const main = page.getByTestId("shell-main");
+          const mainBox = (await main.boundingBox())!;
+          expect(mainBox).not.toBeNull();
+          expect(
+            await page.getByTestId("deal-focus-states").evaluate((el) => getComputedStyle(el).direction),
+          ).toBe(locale === "ar" ? "rtl" : "ltr");
+
+          for (const id of FOCUS_STATE_IDS) {
+            const block = page.getByTestId(`focus-state-${id}`);
+            await expect(block, id).toBeVisible();
+            const buttons = block.getByTestId("deal-next-step-action");
+            await expect(buttons, `${id} primary count`).toHaveCount(WITH_PRIMARY.has(id) ? 1 : 0);
+            if (WITH_PRIMARY.has(id)) {
+              const box = (await buttons.boundingBox())!;
+              expect(box.height, `${id} button height`).toBeGreaterThanOrEqual(36);
+              expect(box.x).toBeGreaterThanOrEqual(mainBox.x - 0.5);
+              expect(box.x + box.width).toBeLessThanOrEqual(mainBox.x + mainBox.width + 0.5);
+            }
+          }
+
+          // Round 2 (S417-R2-5): the widest document row — View, Verify and the
+          // replacement upload together — painted inside main, every control
+          // with a real box.
+          const panelRow = page.getByTestId("deal-document-d1");
+          await expect(panelRow).toBeVisible();
+          await expect(panelRow.locator("button, label")).toHaveCount(3);
+          for (const control of await panelRow.locator("button, label").all()) {
+            const box = (await control.boundingBox())!;
+            expect(box.width, "document control width").toBeGreaterThan(0);
+            expect(box.x).toBeGreaterThanOrEqual(mainBox.x - 0.5);
+            expect(box.x + box.width).toBeLessThanOrEqual(mainBox.x + mainBox.width + 0.5);
+          }
+
+          // Round 3 (S417-R3-1): the "No longer required" history — each row
+          // carries View and nothing else, inside main.
+          const history = page.getByTestId("deal-documents-history");
+          await expect(history).toBeVisible();
+          for (const id of ["h1", "h2"]) {
+            const row = history.getByTestId(`deal-document-history-${id}`);
+            await expect(row).toBeVisible();
+            await expect(row.locator("button, label, input")).toHaveCount(1);
+            const box = (await row.locator("button").boundingBox())!;
+            expect(box.x).toBeGreaterThanOrEqual(mainBox.x - 0.5);
+            expect(box.x + box.width).toBeLessThanOrEqual(mainBox.x + mainBox.width + 0.5);
+          }
+
+          const overflow = await main.evaluate((el) => {
+            const box = el.getBoundingClientRect();
+            const culprits = Array.from(el.querySelectorAll<HTMLElement>("*"))
+              .map((node) => ({ node, rect: node.getBoundingClientRect() }))
+              .filter(({ rect }) => rect.width > 0 && (rect.left < box.left - 1 || rect.right > box.right + 1))
+              .slice(0, 8)
+              .map(({ node, rect }) => `${node.tagName.toLowerCase()} [${Math.round(rect.left)}..${Math.round(rect.right)}]`);
+            return { scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, culprits };
+          });
+          expect(overflow.scrollWidth, JSON.stringify(overflow)).toBeLessThanOrEqual(overflow.clientWidth);
+          expect(overflow.culprits).toEqual([]);
+
+          await page.getByTestId("deal-focus-states").screenshot({
+            path: resolve(RUN_DIR, `deal-focus-states-${locale}-${theme}-${viewport.name}.png`),
           });
         } finally {
           await context.close();

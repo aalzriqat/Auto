@@ -423,7 +423,10 @@ export function Step4QuoteSuccess({
         <div className="pt-6 flex flex-wrap gap-4 justify-center items-center">
           <Button
             onClick={handleDownload}
-            className="bg-indigo-600 hover:bg-indigo-700 min-w-[200px]"
+            // Secondary once the deal exists: the one primary action is then
+            // opening it (SCRUM-417).
+            variant={applicationId ? "outline" : "default"}
+            className={applicationId ? "min-w-[200px]" : "bg-indigo-600 hover:bg-indigo-700 min-w-[200px]"}
             size="lg"
           >
             <FileDown className="w-4 h-4 me-2" />
@@ -457,8 +460,17 @@ export function Step4QuoteSuccess({
 
           {paymentType === "INSTALLMENT" && (
             applicationId ? (
-              <Button asChild variant="outline" size="lg" className="min-w-[200px] border-emerald-500/40 text-emerald-600 hover:bg-emerald-500/10">
-                <Link href={activeOrgId ? `/${activeOrgId}/deals` : "#"}>
+              // SCRUM-417: straight into the deal just created — the screen
+              // that names its next step — not the Deals list, where the
+              // operator had to find it again. The single primary action once
+              // the application exists; nothing navigates on its own.
+              <Button
+                asChild
+                size="lg"
+                className="order-first min-w-[200px] bg-emerald-600 hover:bg-emerald-700"
+                data-testid="wizard-open-application-deal"
+              >
+                <Link href={activeOrgId ? `/${activeOrgId}/applications/${applicationId}/deal` : "#"}>
                   <FileText className="w-4 h-4 me-2" />
                   {t("ViewApplication" as any) ?? "View Application →"}
                 </Link>
