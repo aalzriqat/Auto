@@ -13,7 +13,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { resolveBaseRef, runGuardrails, writeBaseline } from "./check.mjs";
-import { BOOTSTRAP_POLICY, LEGACY_MIGRATIONS, importViolations, parseConfig } from "./rules.mjs";
+import { BOOTSTRAP_POLICY, LEGACY_MIGRATIONS, countNonBlank, importViolations, measureLines, parseConfig } from "./rules.mjs";
 
 const TIMEOUT = 60_000;
 const ZERO_SHA = "0".repeat(40);
@@ -564,6 +564,32 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
     write(root, "convex/crammed.ts", `// prettier-ignore\nexport const crammed = [${items}];\n`);
     const result = await check(root);
     expectFailure(result.errors, /^SIZE-NEW convex\/crammed\.ts/);
+  }, TIMEOUT);
+
+  test("negative control (CR-3): a JSX prettier-ignore comment does not let a crammed file evade the size limit", async () => {
+    const root = fixtureRepo();
+    const items = Array.from({ length: 700 }, (_, i) => `"item-number-${i}"`).join(", ");
+    write(root, "components/Crammed.tsx", `export const C = () => (\n  <div>\n    {/* prettier-ignore */}\n    <span>{[${items}]}</span>\n  </div>\n);\n`);
+    const result = await check(root);
+    expectFailure(result.errors, /^SIZE-NEW components\/Crammed\.tsx/);
+  }, TIMEOUT);
+
+  test("positive control (S426-06 / CR-3-FP): the literal text prettier-ignore in ordinary strings does not inflate the count", async () => {
+    const root = fixtureRepo();
+    const declarations = Array.from({ length: 151 }, (_, i) =>
+      `export const x${String(i).padStart(3, "0")} = ["prettier-ignore", "prettier-ignore", "prettier-ignore"];`);
+    write(root, "convex/literals.ts", `${declarations.join("\n")}\n`);
+    const result = await check(root);
+    expect(result.errors).toEqual([]);
+  }, TIMEOUT);
+
+  test("positive control (S426-06): across the wrap boundary, ordinary prettier-ignore text is counted exactly as Prettier lays it out", async () => {
+    const prettier = await import("prettier");
+    // Identifier widths 1..30 carry each declaration across printWidth 80.
+    const source = Array.from({ length: 30 }, (_, i) =>
+      `export const ${"v".repeat(i + 1)} = ["prettier-ignore", "prettier-ignore", "x"];`).join("\n") + "\n";
+    const expected = countNonBlank(await prettier.format(source, { filepath: "a.ts" }));
+    expect(await measureLines("a.ts", source, {}, prettier)).toEqual({ lines: expected, formatted: true });
   }, TIMEOUT);
 });
 

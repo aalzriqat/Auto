@@ -252,7 +252,9 @@ export function countNonBlank(text) {
  */
 export async function measureLines(repoPath, rawText, prettierOptions, prettier) {
   // Counting only: a prettier-ignore pragma must not preserve a crammed layout.
-  const text = rawText.replaceAll("\r\n", "\n").replaceAll("prettier-ignore", "prettier-counted");
+  // The inert token is the SAME WIDTH, so ordinary text containing it wraps
+  // exactly as before (S426-06 / CR-3-FP).
+  const text = rawText.replaceAll("\r\n", "\n").replaceAll("prettier-ignore", "prettier_ignore");
   try {
     const formatted = await prettier.format(text, { ...prettierOptions, filepath: repoPath });
     return { lines: countNonBlank(formatted), formatted: true };
