@@ -462,6 +462,7 @@ export const prepareSplitDealAuthorities = internalMutation({
       v.array(
         v.object({
           roleId: v.id("roles"),
+          orgId: v.id("organizations"),
           lost: v.array(v.union(v.literal("route"), v.literal("cancelClosed"))),
         })
       )
@@ -469,9 +470,13 @@ export const prepareSplitDealAuthorities = internalMutation({
   },
   handler: async (ctx, args) => {
     const apply = args.apply === true;
-    const acknowledged = new Map<string, DealAuthority[]>(
-      (args.acknowledgedLosses ?? []).map((entry) => [entry.roleId, entry.lost])
-    );
+    // One owner decision per role: a repeated role ID is ambiguous, and a Map
+    // would silently keep only the last entry (SCRUM-413-R2).
+    const acknowledgedLosses = args.acknowledgedLosses ?? [];
+    if (new Set(acknowledgedLosses.map((entry) => entry.roleId)).size !== acknowledgedLosses.length) {
+      throw new Error("acknowledgedLosses lists the same role more than once; give one decision per role");
+    }
+    const acknowledged = new Map(acknowledgedLosses.map((entry) => [entry.roleId as string, entry]));
     // Set equality both ways, so a duplicated entry cannot stand in for a missing one.
     const sameLoss = (a: DealAuthority[], b: DealAuthority[]) =>
       a.every((authority) => b.includes(authority)) && b.every((authority) => a.includes(authority));
@@ -499,7 +504,10 @@ export const prepareSplitDealAuthorities = internalMutation({
       const needsWrite = added.length > 0 || stampOwnerFlag;
       const lostAtCutover = dealAuthorityLostAtCutover({ ...role, permissions: [...role.permissions, ...added] });
       const ack = acknowledged.get(role._id);
-      const lossAcknowledged = lostAtCutover.length > 0 && ack !== undefined && sameLoss(ack, lostAtCutover);
+      // The decision must name this role's own organization (a mistyped or
+      // transposed role ID from another tenant stays stale).
+      const lossAcknowledged =
+        lostAtCutover.length > 0 && ack !== undefined && ack.orgId === role.orgId && sameLoss(ack.lost, lostAtCutover);
       if (lossAcknowledged) matchedAcknowledgements.add(role._id);
       const gainedAtCutover = dealAuthorityGainedAtCutover({ ...role, permissions: [...role.permissions, ...added] });
 

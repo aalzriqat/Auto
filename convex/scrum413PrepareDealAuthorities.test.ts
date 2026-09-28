@@ -220,7 +220,7 @@ describe("SCRUM-413 prepareSplitDealAuthorities", () => {
     const { orgId, asOwner } = await setupOwnerOrg(t, "scrum413_ready_owner");
     const dealDesk = await insertRole(t, orgId, "Deal Desk", [FINALIZE, CREATE_APP]);
     const sales = await insertRole(t, orgId, "SALES", [FINALIZE]);
-    const acknowledgedLosses = [{ roleId: sales, lost: ["route" as const] }];
+    const acknowledgedLosses = [{ roleId: sales, orgId, lost: ["route" as const] }];
     const dryRun = () => t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, { acknowledgedLosses });
 
     // The SALES loss is acknowledged by role ID; Deal Desk's is not.
@@ -249,7 +249,10 @@ describe("SCRUM-413 prepareSplitDealAuthorities", () => {
     const desk = await insertRole(t, orgId, "Deal Desk", [FINALIZE, CREATE_APP]);
     await asOwner.mutation(api.roles.update, { orgId, roleId: desk, name: "SALES" });
     const run = (acknowledgedLosses?: { roleId: Id<"roles">; lost: ("route" | "cancelClosed")[] }[]) =>
-      t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, acknowledgedLosses ? { acknowledgedLosses } : {});
+      t.mutation(
+        internal.migrateRoles.prepareSplitDealAuthorities,
+        acknowledgedLosses ? { acknowledgedLosses: acknowledgedLosses.map((entry) => ({ ...entry, orgId })) } : {}
+      );
 
     expect(await run()).toMatchObject({ unresolved: 1, ready: false });
     // A partial acknowledgement does not cover the whole loss.
@@ -269,13 +272,66 @@ describe("SCRUM-413 prepareSplitDealAuthorities", () => {
     });
   });
 
+  test("a role acknowledged twice is refused in either order, before any write (SCRUM-413-R2)", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const { orgId } = await setupOwnerOrg(t, "scrum413_dup_ack_owner");
+    const desk = await insertRole(t, orgId, "Deal Desk", [FINALIZE, CREATE_APP]);
+    const stale = { roleId: desk, orgId, lost: ["route" as const] };
+    const exact = { roleId: desk, orgId, lost: ["route" as const, "cancelClosed" as const] };
+
+    for (const acknowledgedLosses of [[stale, exact], [exact, stale], [exact, exact]]) {
+      for (const apply of [false, true]) {
+        await expect(
+          t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, { apply, acknowledgedLosses })
+        ).rejects.toThrow(/same role more than once/);
+      }
+    }
+    const role = await t.run((ctx: any) => ctx.db.get(desk)) as any;
+    expect(role?.permissions).toEqual([FINALIZE, CREATE_APP]);
+
+    // Control: the single exact decision still clears the loss.
+    expect(
+      await t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, { acknowledgedLosses: [exact] })
+    ).toMatchObject({ unresolved: 0, ready: true });
+
+    // A decision for a deleted role matches no live loss: stale, blocks ready.
+    const gone = await insertRole(t, orgId, "Old Desk", [FINALIZE]);
+    await t.run((ctx: any) => ctx.db.patch(gone, { isDeleted: true }));
+    expect(
+      await t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, {
+        acknowledgedLosses: [exact, { roleId: gone, orgId, lost: ["route"] }],
+      })
+    ).toMatchObject({ unresolved: 0, staleAcknowledgements: [gone], ready: false });
+  });
+
+  test("a decision names its organization; a role in another organization is not waived (Sonnet R3-1)", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const { orgId: orgA } = await setupOwnerOrg(t, "scrum413_org_a_owner");
+    const { orgId: orgB } = await setupOwnerOrg(t, "scrum413_org_b_owner");
+    const deskB = await insertRole(t, orgB, "Deal Desk", [FINALIZE, CREATE_APP]);
+    const lost = ["route" as const, "cancelClosed" as const];
+
+    const wrongOrg = await t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, {
+      acknowledgedLosses: [{ roleId: deskB, orgId: orgA, lost }],
+    });
+    expect(wrongOrg).toMatchObject({ unresolved: 1, staleAcknowledgements: [deskB], ready: false });
+    expect(wrongOrg.records.find((r: any) => r.roleId === deskB)).toMatchObject({ lossAcknowledged: false });
+
+    // Control: the same decision naming the role's own organization clears it.
+    expect(
+      await t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, {
+        acknowledgedLosses: [{ roleId: deskB, orgId: orgB, lost }],
+      })
+    ).toMatchObject({ unresolved: 0, staleAcknowledgements: [], ready: true });
+  });
+
   test("a stale acknowledgement alone blocks ready (Sol A1: unknown or mismatched entries are not ignored)", async () => {
     const t = convexTestWithComponents(schema, MODULES);
     const { orgId } = await setupOwnerOrg(t, "scrum413_stale_owner");
     const plain = await insertRole(t, orgId, "Showroom", [CREATE_APP]);
 
     const result = await t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, {
-      acknowledgedLosses: [{ roleId: plain, lost: ["route"] }],
+      acknowledgedLosses: [{ roleId: plain, orgId, lost: ["route"] }],
     });
     expect(result).toMatchObject({ pending: 0, unresolved: 0, staleAcknowledgements: [plain], ready: false });
   });

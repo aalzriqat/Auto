@@ -604,19 +604,23 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // `requireOwnedRow` after `requireTenantAuth`. Skipped counts unchanged.
   //
   // `migrateRoles.prepareSplitDealAuthorities` (SCRUM-413 PR-A) — 498 → 499
-  // total, skippedNoOrgId 157 → 158, `analysed` unchanged at 326. It is an
+  // total, `analysed` 326 → 327, skippedNoOrgId unchanged at 157: the
+  // analyser enters it because `acknowledgedLosses` entries carry an
+  // `orgId`, and reports no unguarded write in it. It is an
   // operator-run internalMutation that walks every `roles` row to add the two
-  // split deal permissions, so it deliberately takes no `orgId` and no
-  // caller-supplied document id — there is nothing for a caller to point at
-  // another tenant, and no public entry point.
+  // split deal permissions, so it deliberately takes no top-level `orgId`.
+  // Its only caller-supplied ids are the owner's `acknowledgedLosses`
+  // (roleId + orgId), used read-only to match the report and never written
+  // through; an entry whose orgId is not the role's own stays stale. No
+  // public entry point.
   // Re-measured FROM THE ANALYSER on this tree
-  // ({"totalMutations":499,"analysed":326,"skippedNoArgsBlock":15,"skippedNoOrgId":158}).
+  // ({"totalMutations":499,"analysed":327,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
       totalMutations: 499,
-      analysed: 326,
+      analysed: 327,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 158,
+      skippedNoOrgId: 157,
     });
   });
 });
