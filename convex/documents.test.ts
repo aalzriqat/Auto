@@ -1033,18 +1033,49 @@ describe("SCRUM-422 — document commands on a settled deal", () => {
     expect(await storageExists(s, originalFileId)).toBe(true);
   });
 
-  test("saving the file a row already holds is a no-op: the file is not deleted from under the row", async () => {
+  test("re-saving the file a row already holds keeps the file and resubmits a rejected row", async () => {
     const s = await setup();
     await addRule(s, "National ID");
     const open = await openSecondDeal(s);
     const fileId = await storePdf(s);
     await s.seller.as.mutation(api.documents.saveDocumentFile, { orgId: s.orgId, documentId: open._id, fileId });
-    const before = await s.t.run((ctx) => ctx.db.get(open._id));
+    await s.approver.as.mutation(api.documents.updateDocumentStatus, {
+      orgId: s.orgId,
+      documentId: open._id,
+      status: "REJECTED",
+      rejectionReason: "Blurry",
+    });
 
     await s.seller.as.mutation(api.documents.saveDocumentFile, { orgId: s.orgId, documentId: open._id, fileId });
 
-    expect(await s.t.run((ctx) => ctx.db.get(open._id))).toEqual(before);
+    const after = await s.t.run((ctx) => ctx.db.get(open._id));
+    expect(after).toMatchObject({ fileId, status: "UPLOADED" });
+    expect(after?.rejectionReason).toBeUndefined();
     expect(await storageExists(s, fileId)).toBe(true);
+  });
+
+  test("two documents racing for the same new file: one gets it, the other is refused", async () => {
+    const s = await setup();
+    await addRule(s, "National ID");
+    await addRule(s, "Salary Certificate");
+    const [first, second] = await (async () => {
+      const open = await openSecondDeal(s);
+      return rowsForApplication(s, open.applicationId);
+    })();
+    const fileId = await storePdf(s);
+
+    const results = await Promise.allSettled(
+      [first, second].map((row) =>
+        s.seller.as.mutation(api.documents.saveDocumentFile, { orgId: s.orgId, documentId: row._id, fileId })
+      )
+    );
+
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(String((results.find((r) => r.status === "rejected") as PromiseRejectedResult).reason)).toMatch(
+      /already attached to another document/
+    );
+    const holders = (await rowsForApplication(s, first.applicationId)).filter((row) => row.fileId === fileId);
+    expect(holders).toHaveLength(1);
   });
 
   test("another organization's attached file cannot be borrowed", async () => {

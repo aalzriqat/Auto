@@ -16,10 +16,9 @@
  * Statuses in which an application can still progress toward finalization, and
  * therefore still holds every vehicle in its normalized set.
  *
- * ⚠️ REJECTED IS IN FLIGHT. `applications.ts` runs a repeatable
- * REJECTED ↔ PENDING_DOCS ↔ UNDER_REVIEW cycle, so a rejected application is
- * not necessarily finished — but it is not holding a car either, which is why
- * it is absent here while remaining a live business record.
+ * ⚠️ REJECTED IS ABSENT. The transition map lists REJECTED → PENDING_DOCS, but
+ * `updateStatus` refuses re-entry into this set today, so a rejected
+ * application holds no car. It stays a live business record all the same.
  */
 export const IN_FLIGHT_FINANCE_STATUSES: readonly string[] = [
   "DRAFT",

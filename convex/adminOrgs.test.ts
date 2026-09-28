@@ -531,6 +531,69 @@ describe("adminOrgs", () => {
     expect(stateRows[0].status).toBe("completed");
   });
 
+  // SCRUM-422 (Sol F2): a document blob another organization's row still holds
+  // (a legacy alias) is evidence of that org's deal, so a purge keeps it. A
+  // blob only the purged org held, shared or not, is still removed.
+  test("hardDeleteOrg keeps a document file another organization still references", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, ownerId } = await seedOrgWithOwner(t);
+    await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "dev_alias", email: "admin@autoflow.dev" }));
+    const asAdmin = t.withIdentity({ subject: "dev_alias" });
+    const otherOrgId = await t.run(async (ctx) =>
+      ctx.db.insert("organizations", { name: "Other Motors", createdAt: Date.now() })
+    );
+
+    const [aliased, unique, sameOrgShared] = await t.run(async (ctx) =>
+      Promise.all([
+        ctx.storage.store(new Blob(["aliased.pdf"])),
+        ctx.storage.store(new Blob(["unique.pdf"])),
+        ctx.storage.store(new Blob(["same-org-shared.pdf"])),
+      ])
+    );
+
+    const documentFor = (org: Id<"organizations">, vin: string) =>
+      t.run(async (ctx) => {
+        const vehicleId = await ctx.db.insert("vehicles", {
+          orgId: org, vin, make: "Kia", model: "Rio", year: 2024, mileage: 10,
+          color: "Red", fuelType: "Gas", transmission: "Auto", sellingPrice: 20000,
+          status: "AVAILABLE",
+        });
+        const customerId = await ctx.db.insert("customers", { orgId: org, firstName: "Doc", lastName: "Owner" });
+        const quoteId = await ctx.db.insert("quotes", {
+          orgId: org, customerId, vehicleId, vehiclePrice: 20000, downPayment: 2000,
+          termMonths: 48, status: "ACCEPTED", createdBy: ownerId, createdAt: Date.now(),
+        });
+        const applicationId = await ctx.db.insert("financeApplications", {
+          orgId: org, quoteId, customerId, vehicleId, salespersonId: ownerId,
+          status: "CLOSED", createdAt: Date.now(), updatedAt: Date.now(),
+        });
+        const ruleId = await ctx.db.insert("companyDocumentRules", { orgId: org, documentName: "ID", isRequired: true });
+        return { orgId: org, applicationId, ruleId };
+      });
+
+    const inA = await documentFor(orgId, "VINALIASA");
+    const inB = await documentFor(otherOrgId, "VINALIASB");
+    const survivorId = await t.run(async (ctx) => {
+      const insert = (at: typeof inA, fileId: Id<"_storage">) =>
+        ctx.db.insert("applicationDocuments", { ...at, fileId, status: "VERIFIED" });
+      // A legacy alias across orgs, written before saveDocumentFile refused one.
+      await insert(inA, aliased);
+      const survivor = await insert(inB, aliased);
+      await insert(inA, unique);
+      await insert(inA, sameOrgShared);
+      await insert(inA, sameOrgShared);
+      return survivor;
+    });
+
+    const result = await asAdmin.mutation(api.adminOrgs.hardDeleteOrg, { orgId, confirmName: "Acme Motors" });
+    expect((await runDeletionToCompletion(t, result.requestId))?.status).toBe("COMPLETED");
+
+    expect(await t.run(async (ctx) => ctx.db.get(survivorId))).toMatchObject({ fileId: aliased, status: "VERIFIED" });
+    expect(await t.run(async (ctx) => ctx.storage.getUrl(aliased))).not.toBeNull();
+    expect(await t.run(async (ctx) => ctx.storage.getUrl(unique))).toBeNull();
+    expect(await t.run(async (ctx) => ctx.storage.getUrl(sameOrgShared))).toBeNull();
+  });
+
   test("hardDeleteOrg removes a financed deal's appraisals, overrides, rule versions and appraisal blobs", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, ownerId } = await seedOrgWithOwner(t);

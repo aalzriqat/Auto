@@ -426,16 +426,19 @@ export const saveDocumentFile = mutation({
     // never pull evidence out from under another row, least of all a settled
     // deal's (SCRUM-422), so a file another row holds is refused here, and a
     // replaced file some other row still references (a legacy alias) is kept.
-    if (doc.fileId === args.fileId) return;
-    const holders = await ctx.db
-      .query("applicationDocuments")
-      .withIndex("by_file", (q) => q.eq("fileId", args.fileId))
-      .take(1);
-    if (holders.length > 0) {
-      throw new ConvexError("This file is already attached to another document. Upload it again for this document.");
+    // Re-saving the file this row already holds keeps it and only resubmits:
+    // the row still goes back to UPLOADED below.
+    if (doc.fileId !== args.fileId) {
+      const holders = await ctx.db
+        .query("applicationDocuments")
+        .withIndex("by_file", (q) => q.eq("fileId", args.fileId))
+        .take(1);
+      if (holders.length > 0) {
+        throw new ConvexError("This file is already attached to another document. Upload it again for this document.");
+      }
     }
 
-    if (doc.fileId) {
+    if (doc.fileId && doc.fileId !== args.fileId) {
       const oldFileId = doc.fileId;
       const otherHolders = await ctx.db
         .query("applicationDocuments")
