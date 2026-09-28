@@ -5,6 +5,8 @@ import { AlertTriangle, CheckCircle2, CircleSlash, HelpCircle, Loader2 } from "l
 import type { api } from "@/convex/_generated/api";
 import type { ClosingReadinessCheckStatus } from "@/convex/utils/financedSaleRecognition";
 import { Badge } from "@/components/ui/badge";
+import { interpolate } from "@/lib/i18n/interpolate";
+import { closingReasonMessageKey, isClosingReadinessReasonCode } from "@/lib/closingReadinessReasonCodes";
 
 /**
  * The deal's automatic closing readiness, as `applications.getClosingReadiness`
@@ -34,6 +36,50 @@ const STATUS_LABEL: Record<ClosingReadinessCheckStatus, string> = {
   UNAVAILABLE: "ClosingCheckUnavailable",
   NOT_APPLICABLE: "ClosingCheckNotApplicable",
 };
+
+/**
+ * The operator-facing text of a readiness reason (SCRUM-414): the server names
+ * it by CODE and params, and the screen translates it. A code this build does
+ * not know — or an older server that sent none — falls back to the server's
+ * English diagnostic; the reason is never blank and never a raw code.
+ */
+function reasonText(
+  t: (key: string) => string,
+  code: string | null | undefined,
+  params: Record<string, string | number> | undefined,
+  diagnostic: string
+): { text: string; translated: boolean } {
+  if (!isClosingReadinessReasonCode(code)) return { text: diagnostic, translated: false };
+  return { text: interpolate(t(closingReasonMessageKey(code)), params ?? {}), translated: true };
+}
+
+function ReasonLine({
+  t,
+  code,
+  params,
+  diagnostic,
+  testId,
+}: Readonly<{
+  t: (key: string) => string;
+  code: string | null | undefined;
+  params: Record<string, string | number> | undefined;
+  diagnostic: string;
+  testId: string;
+}>) {
+  const { text, translated } = reasonText(t, code, params, diagnostic);
+  return (
+    // dir="auto": a translated reason follows its script; the English fallback
+    // must not be mirrored in RTL. The English stays reachable as a tooltip.
+    <p
+      className="mt-0.5 break-words text-[11px] leading-snug text-muted-foreground"
+      dir="auto"
+      title={translated && text !== diagnostic ? diagnostic : undefined}
+      data-testid={testId}
+    >
+      {text}
+    </p>
+  );
+}
 
 function StatusIcon({ status }: Readonly<{ status: ClosingReadinessCheckStatus }>) {
   if (status === "READY") {
@@ -89,10 +135,14 @@ export function DealClosingReadinessList({
         <div className="space-y-1">
           <p className="text-xs text-muted-foreground">{t("ClosingReadinessNoChecks")}</p>
           {readiness.unavailableReason && (
-            // The server's own sentence, as finalizing would refuse with it.
-            <p className="break-words text-[11px] leading-snug text-muted-foreground" dir="auto" data-testid="closing-readiness-unavailable-reason">
-              {readiness.unavailableReason}
-            </p>
+            // Why no verdict could be formed — as finalizing would refuse with it.
+            <ReasonLine
+              t={t}
+              code={readiness.unavailableReasonCode}
+              params={readiness.unavailableReasonParams}
+              diagnostic={readiness.unavailableReason}
+              testId="closing-readiness-unavailable-reason"
+            />
           )}
         </div>
       ) : (
@@ -121,12 +171,14 @@ export function DealClosingReadinessList({
                   </span>
                 </div>
                 {check.reason && check.status !== "READY" && (
-                  // The server's own sentence — the exact cause, as finalizing
-                  // would refuse with it. Rendered with dir="auto" because it is
-                  // authored in English and must not be mirrored in RTL.
-                  <p className="mt-0.5 break-words text-[11px] leading-snug text-muted-foreground" dir="auto">
-                    {check.reason}
-                  </p>
+                  // The exact cause, as finalizing would refuse with it.
+                  <ReasonLine
+                    t={t}
+                    code={check.reasonCode}
+                    params={check.reasonParams}
+                    diagnostic={check.reason}
+                    testId={`closing-check-reason-${check.key}`}
+                  />
                 )}
               </div>
             </li>
