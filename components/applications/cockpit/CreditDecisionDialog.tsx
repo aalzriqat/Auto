@@ -39,6 +39,7 @@ export function CreditDecisionDialog({
   canApprove,
   canReject,
   isOwnDeal,
+  documentsIncomplete = false,
   t,
   onOpenChange,
   onSubmit,
@@ -50,6 +51,12 @@ export function CreditDecisionDialog({
   canReject: boolean;
   /** The server refuses the application's own salesperson approving it. */
   isOwnDeal: boolean;
+  /**
+   * The SERVER refuses an approval while a required document is neither
+   * verified nor waived (`assertRequiredApplicationDocumentsComplete`); read
+   * off the rail's DELIVERY_ACTIONS stage. The rejection stays available.
+   */
+  documentsIncomplete?: boolean;
   t: (key: string) => string;
   onOpenChange: (open: boolean) => void;
   onSubmit: (decision: CreditDecision) => void | Promise<void>;
@@ -66,6 +73,7 @@ export function CreditDecisionDialog({
           canApprove={canApprove}
           canReject={canReject}
           isOwnDeal={isOwnDeal}
+          documentsIncomplete={documentsIncomplete}
           t={t}
           onClose={() => onOpenChange(false)}
           onSubmit={onSubmit}
@@ -81,6 +89,7 @@ function CreditDecisionBody({
   canApprove,
   canReject,
   isOwnDeal,
+  documentsIncomplete,
   t,
   onClose,
   onSubmit,
@@ -90,15 +99,17 @@ function CreditDecisionBody({
   canApprove: boolean;
   canReject: boolean;
   isOwnDeal: boolean;
+  documentsIncomplete: boolean;
   t: (key: string) => string;
   onClose: () => void;
   onSubmit: (decision: CreditDecision) => void | Promise<void>;
 }>) {
   const [decision, setDecision] = useState<CreditDecision | null>(null);
-  const approveUnavailable = !canApprove || isOwnDeal;
+  const approveUnavailable = !canApprove || isOwnDeal || documentsIncomplete;
   let approveReason: string | null = null;
   if (!canApprove) approveReason = "CreditDecisionApproveNeedsPermission";
   else if (isOwnDeal) approveReason = "CreditDecisionOwnDeal";
+  else if (documentsIncomplete) approveReason = "CreditApprovalNeedsDocuments";
 
   return (
     <>

@@ -76,7 +76,12 @@ export function parseMajorToMinor(text: string, scale: number): number | null {
   return Number.isSafeInteger(minor) && minor > 0 ? minor : null;
 }
 
-function useResetOnOpen(open: boolean, reset: () => void): void {
+/**
+ * Runs `reset` on the closed -> open transition only — never on a re-render of
+ * an open dialog, which would wipe what the operator is typing. Shared with the
+ * other cockpit dialogs that reset their form the same way.
+ */
+export function useResetOnOpen(open: boolean, reset: () => void): void {
   const wasOpenRef = useRef(false);
   useEffect(() => {
     const justOpened = open && !wasOpenRef.current;
