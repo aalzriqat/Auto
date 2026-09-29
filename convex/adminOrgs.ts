@@ -141,6 +141,8 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // deposit, so it must not outlive the row it points at.
   { kind: "orgRows", table: "depositApplications", index: "by_org" },
   { kind: "orgRows", table: "deposits", index: "by_org" },
+  // SCRUM-444: pending/resolved deposit requests; points at quotes and deposits.
+  { kind: "orgRows", table: "depositRequests", index: "by_org_status" },
   { kind: "orgRows", table: "receivables", index: "by_org" },
   { kind: "orgRows", table: "collectionPayments", index: "by_org" },
   { kind: "orgRows", table: "postDatedCheques", index: "by_org" },

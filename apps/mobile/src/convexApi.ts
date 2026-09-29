@@ -2657,7 +2657,14 @@ export const api = {
   deposits: {
     create: makeFunctionReference<
       "mutation",
-      OrgScopedArgs & { quoteId: string; amount: number; notes?: string; idempotencyKey?: string },
+      OrgScopedArgs & {
+        quoteId: string;
+        amount: number;
+        /** Required by the backend (SCRUM-444): the method picks the account debited. */
+        method?: MobileDepositMethod;
+        notes?: string;
+        idempotencyKey?: string;
+      },
       string
     >("deposits:create"),
     listByVehicle: makeFunctionReference<
@@ -2666,6 +2673,13 @@ export const api = {
       MobileVehicleDeposit[]
     >("deposits:listByVehicle"),
     release: makeFunctionReference<"mutation", DepositReleaseArgs, unknown>("deposits:release"),
+  },
+  depositRequests: {
+    request: makeFunctionReference<
+      "mutation",
+      OrgScopedArgs & { quoteId: string; amount: number; note?: string; idempotencyKey: string },
+      string
+    >("depositRequests:request"),
   },
   approvals: {
     checkPendingApproval: makeFunctionReference<
@@ -3316,11 +3330,25 @@ export const api = {
     create: FunctionReference<
       "mutation",
       "public",
-      OrgScopedArgs & { quoteId: string; amount: number; notes?: string; idempotencyKey?: string },
+      OrgScopedArgs & {
+        quoteId: string;
+        amount: number;
+        method?: MobileDepositMethod;
+        notes?: string;
+        idempotencyKey?: string;
+      },
       string
     >;
     listByVehicle: FunctionReference<"query", "public", VehicleScopedArgs, MobileVehicleDeposit[]>;
     release: FunctionReference<"mutation", "public", DepositReleaseArgs, unknown>;
+  };
+  depositRequests: {
+    request: FunctionReference<
+      "mutation",
+      "public",
+      OrgScopedArgs & { quoteId: string; amount: number; note?: string; idempotencyKey: string },
+      string
+    >;
   };
   applications: {
     createFromQuote: FunctionReference<

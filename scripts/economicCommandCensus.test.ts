@@ -78,6 +78,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "collections.submitCashierReconciliation": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "customers.softDelete": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "deposits.create": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
+  "depositRequests.confirm": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; the request must still be PENDING, and only CONFIRM_FINANCE_DISBURSEMENT holders reach the posting (SCRUM-444)" },
   "deposits.release": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "deposits.releaseVehicleAllocation": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "deposits.resolveReleasedAllocation": { bucket: "STATE_GUARDED", mechanism: "operates on an existing deposit allocation; the application id it posts under pre-exists the call" },
@@ -283,7 +284,9 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // `supplierCostRecoveries.reverseReceipt` (SCRUM-389 supplier cost bearer).
     // 122 → 121: `financeDealCosts.classifyDealAccounting` RETIRED (SCRUM-407),
     // then deleted outright with its classification entry.
-    expect(population).toHaveLength(122);
+    // 121 → 122: `depositRequests.confirm` (SCRUM-444); `request` writes only a pending row and is not in the population.
+    // 122 → 123: `financeDealCosts.recordDirectFeePayment` (SCRUM-443).
+    expect(population).toHaveLength(123);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {

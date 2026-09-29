@@ -14,6 +14,9 @@ import { toast } from "@/components/ui/sonner";
 import { Id, Doc } from "@/convex/_generated/dataModel";
 import { useTableControls } from "@/hooks/useTableControls";
 import { getErrorMessage } from "@/lib/errors";
+import { PendingDepositRequestsQueue } from "@/components/deposits/DepositRequests";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 
 type ApprovalRequest = Doc<"profitApprovalRequests"> & {
   salespersonName: string;
@@ -33,7 +36,18 @@ export default function ApprovalsPage() {
   const formatIn = (amount: number, currency: string | undefined) =>
     currency && currency !== orgCurrency ? `${amount.toLocaleString()} ${currency}` : format(amount);
 
-  const pendingApprovals = useQuery(api.approvals.listPendingApprovals, activeOrgId ? { orgId: activeOrgId } : "skip");
+  // This page serves two queues to two different roles (SCRUM-444): profit
+  // approvals (`approve:requests`) and deposit requests
+  // (`confirm:finance_disbursement`, which accountants hold and approvers may
+  // not). A refused query throws into render, so each is asked only of someone
+  // the server will answer — an accountant otherwise saw an error page instead
+  // of the queue they came for.
+  const { hasPermission } = usePermissions();
+  const canApprove = hasPermission(PERMISSIONS.APPROVE_REQUESTS);
+  const pendingApprovals = useQuery(
+    api.approvals.listPendingApprovals,
+    activeOrgId && canApprove ? { orgId: activeOrgId } : "skip"
+  );
   const respondToApproval = useMutation(api.approvals.respondToApproval);
 
   const {
@@ -66,7 +80,11 @@ export default function ApprovalsPage() {
         <h2 className="text-3xl font-bold tracking-tight">{t("Approvals")}</h2>
       </div>
 
-      {pendingApprovals && pendingApprovals.length > 0 && (
+      {/* SCRUM-444: deposits a salesperson has asked to record. Nothing is held
+          until one is confirmed here. */}
+      <PendingDepositRequestsQueue orgId={activeOrgId} />
+
+      {canApprove && pendingApprovals && pendingApprovals.length > 0 && (
         <div className="flex items-center w-full max-w-sm space-x-2 relative">
           <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
           <Input
@@ -78,6 +96,7 @@ export default function ApprovalsPage() {
         </div>
       )}
 
+      {canApprove ? (
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {filteredApprovals === undefined ? (
           <div className="col-span-full flex justify-center p-8">
@@ -171,6 +190,7 @@ export default function ApprovalsPage() {
           ))
         )}
       </div>
+      ) : null}
     </div>
   );
 }

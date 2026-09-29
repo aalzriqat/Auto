@@ -11,6 +11,8 @@ import { toast } from "@/components/ui/sonner";
 import { getErrorMessage } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { AlertTriangle, Check } from "lucide-react";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 
 /**
  * Splitting one reservation deposit across the cars on a multi-vehicle quote.
@@ -49,6 +51,11 @@ export function DepositAllocationPanel({
   const { t, isRtl } = useLanguage();
   const allocation = useQuery(api.deposits.quoteAllocation, { orgId, quoteId });
   const allocate = useMutation(api.deposits.allocateToVehicles);
+  // Splitting held money across cars is the same authority as recording the
+  // deposit (SCRUM-444). Read before the early return below so hook order is
+  // stable.
+  const { hasPermission } = usePermissions();
+  const canConfirm = hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
 
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -197,6 +204,7 @@ export function DepositAllocationPanel({
                 aria-label={`${t("DepositAllocation" as any)} — ${v.label}`}
                 className="w-32 text-end tabular-nums"
                 value={draft[v.vehicleId] ?? ""}
+                disabled={!canConfirm}
                 onChange={(e) => setDraft((d) => ({ ...d, [v.vehicleId]: e.target.value }))}
               />
             )}
@@ -216,14 +224,25 @@ export function DepositAllocationPanel({
             : t("DepositAllocationRemaining" as any).replace("{amount}", money(remainingMinor))}
         </p>
         <div className="flex items-center gap-2">
-          <Button type="button" variant="ghost" size="sm" onClick={suggest}>
+          <Button type="button" variant="ghost" size="sm" onClick={suggest} disabled={!canConfirm}>
             {t("DepositAllocationSuggest" as any)}
           </Button>
-          <Button type="button" size="sm" onClick={save} disabled={saving || overAllocated}>
+          <Button
+            type="button"
+            size="sm"
+            onClick={save}
+            disabled={saving || overAllocated || !canConfirm}
+          >
             {t("DepositAllocationSave" as any)}
           </Button>
         </div>
       </div>
+
+      {!canConfirm ? (
+        <p className="text-xs leading-relaxed text-muted-foreground" data-testid="allocation-ask-manager">
+          {t("DepositAskManagerOrAccountant" as any)}
+        </p>
+      ) : null}
 
       {remainingMinor > 0 && !overAllocated ? (
         <p className="text-xs leading-relaxed text-muted-foreground">

@@ -430,7 +430,7 @@ async function quoteFor(seed: Seed, customerId: Id<"customers">, vehicles: Array
 }
 
 async function depositOn(seed: Seed, quoteId: Id<"quotes">, amount: number) {
-  return await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
+  return await seed.asUser.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(),
     orgId: seed.orgId,
     quoteId,
     amount,
@@ -586,6 +586,8 @@ async function reserve(
     orgId: seed.orgId,
     vehicleId,
     customerId,
+    // SCRUM-445: a deposit's method is asked, never defaulted.
+    ...(extra.depositAmount !== undefined ? { depositMethod: "CASH" } : {}),
     ...extra,
   });
   // `createReservation` returns the vehicleId, not the reservation. Reading the
@@ -2068,7 +2070,7 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
   test("F.24 releasing the reservation while the FINANCE application is live keeps the root OPEN", async () => {
     const seed = await seedDealer("f24");
     const v = await vehicle(seed);
-    const reservationId = await reserve(seed, v, seed.customerA, { depositAmount: 1_000 });
+    const reservationId = await reserve(seed, v, seed.customerA);
     const quoteId = await quoteFor(seed, seed.customerA, [v]);
     const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
       orgId: seed.orgId,
@@ -2522,7 +2524,7 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
   test("F.30 expiry does NOT release a root another live basis still holds", async () => {
     const seed = await seedDealer("f30");
     const v = await vehicle(seed);
-    const reservationId = await reserve(seed, v, seed.customerA, { depositAmount: 1_000 });
+    const reservationId = await reserve(seed, v, seed.customerA);
     const quoteId = await quoteFor(seed, seed.customerA, [v]);
     const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
       orgId: seed.orgId,
@@ -2608,7 +2610,7 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
   test("F.33 a rejection that releases BOTH a finance and a reservation basis at once still releases the root", async () => {
     const seed = await seedDealer("f33");
     const v = await vehicle(seed);
-    const reservationId = await reserve(seed, v, seed.customerA, { depositAmount: 1_000 });
+    const reservationId = await reserve(seed, v, seed.customerA);
     const quoteId = await quoteFor(seed, seed.customerA, [v]);
     const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
       orgId: seed.orgId,
@@ -2746,7 +2748,7 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
         expiresAt: realNow + 60_000,
       });
       const quoteId = await quoteFor(seed, seed.customerA, [v]);
-      const depositId = await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
+      const depositId = await seed.asUser.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         quoteId,
         amount: 5_000,
@@ -2792,7 +2794,7 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
     // The deal adopts the reservation, so the quote genuinely owns the root it
     // is about to complete against. Without this the sale is refused by the
     // ACQUISITION boundary and the contract never reaches its subject.
-    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
+    await seed.asUser.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       quoteId,
       amount: 5_000,

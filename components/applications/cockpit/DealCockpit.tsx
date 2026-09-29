@@ -91,6 +91,7 @@ import {
   type AppraisalProviderType,
 } from "./RecordAppraisalDialog";
 import { usePermissions } from "@/hooks/use-permissions";
+import { DealPendingDepositRequests } from "@/components/deposits/DepositRequests";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { SETTLED_FINANCE_STATUSES } from "@/convex/utils/financeStatuses";
 import type { PaymentMethod } from "@/components/payments/PaymentMethodSelect";
@@ -2373,6 +2374,11 @@ export function DealCockpit({
       // `deal` is `undefined` or `null` and the screen must not assert either.
       activeAppraisalProvider={deal?.activeAppraisalProvider ?? null}
       depositAwaitingResolution={deal?.pendingDepositResolution ?? false}
+      depositRequests={
+        deal && "pendingDepositRequests" in deal
+          ? { orgId, requests: deal.pendingDepositRequests }
+          : undefined
+      }
       creditDecision={{
         deciding: decidingCredit,
         submitting: creditSubmitting,
@@ -3727,6 +3733,7 @@ export function DealCockpitView({
   onRecordSupplierReceipt,
   activeAppraisalProvider = null,
   depositAwaitingResolution = false,
+  depositRequests,
   creditDecision,
   cancel,
   settlementRoute,
@@ -3737,6 +3744,11 @@ export function DealCockpitView({
 }: Readonly<{
   /** `undefined` while loading, `null` when the deal is not readable. */
   deal: DealCockpitData | null | undefined;
+  /** Deposit requests still waiting on this deal (SCRUM-444). Financed only. */
+  depositRequests?: {
+    orgId: Id<"organizations">;
+    requests: ReadonlyArray<{ _id: Id<"depositRequests">; amount: number; currency: string }>;
+  };
   /** Where the header's back link goes — the deals list. Absent, no link. */
   backHref?: string;
   /** The credit-decision dialog's own state. Financed only. */
@@ -4788,6 +4800,13 @@ export function DealCockpitView({
           still outstanding is real customer cash sitting in a liability with
           nobody's name on it. A single bordered strip rather than a card: at
           this density an alert earns its weight from colour and position. */}
+      {depositRequests && depositRequests.requests.length > 0 && (
+        <DealPendingDepositRequests
+          orgId={depositRequests.orgId}
+          requests={depositRequests.requests}
+        />
+      )}
+
       {(depositAwaitingResolution || deposits) && (
         <div
           className={

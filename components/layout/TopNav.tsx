@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
-import { mainNavigation, settingsNavigation, type NavItem } from "@/lib/navigation";
+import { mainNavigation, settingsNavigation, navItemPermitted, type NavItem } from "@/lib/navigation";
 
 // Flat list (main + settings) used only to resolve the current page title —
 // the drawer itself renders the two sections separately, same as the desktop Sidebar.
@@ -55,10 +55,7 @@ export function TopNav() {
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
 
-  const visibleMainNavigation = mainNavigation.filter(item => {
-    if (!item.permission) return true;
-    return permissions.includes(item.permission);
-  });
+  const visibleMainNavigation = mainNavigation.filter(item => navItemPermitted(item, permissions));
 
   const visibleSettingsNavigation = settingsNavigation.filter(item => {
     if (item.ownerOnly) return isOwner;

@@ -45,6 +45,7 @@ const PERMISSION = {
   viewCustomers: "view:customers",
   editVehicles: "edit:vehicles",
   approveRequests: "approve:requests",
+  confirmFinanceDisbursement: "confirm:finance_disbursement",
 } as const;
 
 type DetailTab =
@@ -157,6 +158,9 @@ function VehicleDetailContent({
   const can = (permission: string) => permissions.includes(permission);
   const canEdit = can(PERMISSION.editVehicles);
   const canResolveDeposits = can(PERMISSION.approveRequests);
+  // A deposit taken at reservation is money in hand; only a manager or
+  // accountant records it (SCRUM-444). Reserving with no deposit is unchanged.
+  const canRecordDeposit = can(PERMISSION.confirmFinanceDisbursement);
 
   const tabs: Array<{ label: string; value: DetailTab }> = [];
   if (can(PERMISSION.viewInfo)) tabs.push({ value: "overview", label: locale === "ar" ? "نظرة عامة" : "Overview" });
@@ -226,6 +230,7 @@ function VehicleDetailContent({
   const [savingCosts, setSavingCosts] = useState(false);
   const [reservationCustomerId, setReservationCustomerId] = useState("");
   const [reservationDeposit, setReservationDeposit] = useState("");
+  const [reservationMethod, setReservationMethod] = useState("");
   const [reservationHoldDays, setReservationHoldDays] = useState("");
   const [savingReservation, setSavingReservation] = useState(false);
 
@@ -247,6 +252,7 @@ function VehicleDetailContent({
   useEffect(() => {
     setReservationCustomerId("");
     setReservationDeposit("");
+    setReservationMethod("");
     setReservationHoldDays("");
     setRefundMethodByDeposit({});
   }, [vehicleId]);
@@ -383,12 +389,14 @@ function VehicleDetailContent({
         vehicleId,
         customerId: reservationCustomerId,
         depositAmount: parseOptionalNumber(reservationDeposit),
+        depositMethod: parseOptionalNumber(reservationDeposit) !== undefined ? (reservationMethod as "CASH" | "BANK_TRANSFER" | "CARD" | "CHEQUE") : undefined,
         expiresAt: holdDays !== undefined && holdDays > 0 ? Date.now() + holdDays * 24 * 60 * 60 * 1000 : undefined,
       });
       // Only a SUCCESS retires the identity.
       reservationKeyRef.current = null;
       setReservationCustomerId("");
       setReservationDeposit("");
+      setReservationMethod("");
       setReservationHoldDays("");
       Alert.alert(locale === "ar" ? "تم إنشاء الحجز." : "Reservation created.");
     } catch (error) {
@@ -927,6 +935,27 @@ function VehicleDetailContent({
                   value={reservationDeposit}
                   onChangeText={setReservationDeposit}
                 />
+                {parseOptionalNumber(reservationDeposit) !== undefined ? (
+                  canRecordDeposit ? (
+                    <SelectField
+                      label={locale === "ar" ? "طريقة استلام العربون" : "How was the deposit received?"}
+                      value={reservationMethod}
+                      options={[
+                        { label: locale === "ar" ? "نقداً" : "Cash", value: "CASH" },
+                        { label: locale === "ar" ? "تحويل بنكي" : "Bank transfer", value: "BANK_TRANSFER" },
+                        { label: locale === "ar" ? "بطاقة" : "Card", value: "CARD" },
+                        { label: locale === "ar" ? "شيك" : "Cheque", value: "CHEQUE" },
+                      ]}
+                      onChange={setReservationMethod}
+                    />
+                  ) : (
+                    <Text style={styles.mutedText}>
+                      {locale === "ar"
+                        ? "العربون عند الحجز مبلغ مستلم، لذا لا يسجّله إلا المدير أو المحاسب. امسح العربون للحجز بدونه، أو اطلب من المدير أو المحاسب."
+                        : "A deposit taken at reservation is money in hand, so only a manager or accountant can record it. Clear the deposit to reserve without one, or ask a manager or accountant."}
+                    </Text>
+                  )
+                ) : null}
                 <FormField
                   keyboardType="numeric"
                   label={locale === "ar" ? "مدة الحجز بالأيام (اختياري)" : "Hold days (optional)"}
@@ -935,7 +964,12 @@ function VehicleDetailContent({
                   onChangeText={setReservationHoldDays}
                 />
                 <PrimaryButton
-                  disabled={savingReservation || !reservationCustomerId}
+                  disabled={
+                    savingReservation ||
+                    !reservationCustomerId ||
+                    (parseOptionalNumber(reservationDeposit) !== undefined &&
+                      (!canRecordDeposit || !reservationMethod))
+                  }
                   label={savingReservation ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "إنشاء الحجز" : "Create reservation")}
                   onPress={handleCreateReservation}
                 />

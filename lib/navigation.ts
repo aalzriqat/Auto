@@ -35,6 +35,15 @@ export interface NavItem {
   icon: LucideIcon;
   /** Permission string required to see this item. Omit for always-visible items. */
   permission?: string;
+  /**
+   * Visible to a member holding ANY of these. Used where two different roles
+   * do different work on the same screen: Approvals is the profit-approval
+   * queue for `manage:users` AND the deposit-request queue for whoever may
+   * confirm receipt (`confirm:finance_disbursement`, i.e. accountants), and
+   * gating it on `manage:users` alone left accountants with no way in
+   * (SCRUM-444). When present it replaces `permission`.
+   */
+  anyPermission?: readonly string[];
   /** When true, only the OWNER role may see this item — overrides `permission`. */
   ownerOnly?: boolean;
 }
@@ -58,7 +67,12 @@ export const mainNavigation: NavItem[] = [
   { name: "Expenses", href: "/expenses", icon: Receipt, permission: "view:expenses" },
   { name: "Accounting", href: "/accounting", icon: BookOpen, permission: "view:finance" },
   { name: "Reports", href: "/reports", icon: LineChart, permission: "view:reports" },
-  { name: "Approvals", href: "/approvals", icon: Shield, permission: "manage:users" },
+  {
+    name: "Approvals",
+    href: "/approvals",
+    icon: Shield,
+    anyPermission: ["manage:users", "confirm:finance_disbursement"],
+  },
   { name: "MarketplaceRequests", href: "/marketplace/requests", icon: Handshake, permission: "marketplace:respond" },
 ];
 
@@ -83,3 +97,10 @@ export const settingsNavigation: NavItem[] = [
   { name: "FeedbackInbox", href: "/settings/feedback", icon: MessageSquarePlus, ownerOnly: true },
   { name: "Billing", href: "/settings/billing", icon: CreditCard, ownerOnly: true },
 ];
+
+/** Whether a member holding `permissions` may see `item` (ownerOnly is handled by callers). */
+export function navItemPermitted(item: NavItem, permissions: readonly string[]): boolean {
+  if (item.anyPermission) return item.anyPermission.some((p) => permissions.includes(p));
+  if (!item.permission) return true;
+  return permissions.includes(item.permission);
+}

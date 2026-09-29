@@ -24,6 +24,7 @@ vi.mock("./rateLimit", () => ({
 }));
 
 const PERMISSIONS = [
+  "confirm:finance_disbursement",
   "create:expenses",
   "edit:expenses",
   "delete:expenses",
@@ -528,6 +529,9 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
     "submitCashierReconciliation",
   ],
   "./deposits": ["create", "release"],
+  // SCRUM-444: `request` writes no money but carries an identity and a canonical
+  // fingerprint like every deposit door; `confirm` is the money-moving one.
+  "./depositRequests": ["request", "confirm"],
   // ADDED by the SCRUM-313 CENSUS (owner ruling: scope A, mechanism C). These six
   // were outside the SCRUM-57 manifest because that manifest reasoned about
   // `runWithIdempotency` callers, which was only ever a SUBSET of the commands
@@ -622,11 +626,13 @@ describe("SCRUM-57 — classification ratchet", () => {
     // +supplierCostRecoveries.recordReceipt and
     // +supplierCostRecoveries.reverseReceipt.
     //
-    // 42 -> 43 by SCRUM-443 handover costs paid:
+    // 42 -> 44 by SCRUM-444 deposit requests:
+    // +depositRequests.request and +depositRequests.confirm.
+    // 44 -> 45 by SCRUM-443 handover costs paid:
     // +financeDealCosts.recordDirectFeePayment, the dealership's own payment of
     // a handover cost (HANDOVER_COST_PAID_DIRECT) — runWithIdempotency with
     // economic: true, method/date/reference/actual in its fingerprint.
-    expect(checked).toBe(43);
+    expect(checked).toBe(45);
   });
 
   /**
@@ -688,9 +694,11 @@ describe("SCRUM-57 — classification ratchet", () => {
 
     // The denominator, asserted rather than described.
     // 40 -> 42 / 41 -> 43: SCRUM-389's two supplier-cost-recovery commands.
-    expect(economicInSource.size).toBe(43);
+    // 42 -> 44 / 43 -> 45: SCRUM-444's `depositRequests.request` and `.confirm`.
+    // 44 -> 45 / 45 -> 46: SCRUM-443's `financeDealCosts.recordDirectFeePayment`.
+    expect(economicInSource.size).toBe(45);
     expect([...nonEconomicInSource].sort()).toEqual(["sales.createDraft"]);
-    expect(economicInSource.size + nonEconomicInSource.size).toBe(44);
+    expect(economicInSource.size + nonEconomicInSource.size).toBe(46);
   });
 
   /**
