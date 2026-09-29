@@ -680,18 +680,69 @@ describe("a stopped (CANCELLED or REJECTED) deal never reads as settled or invit
     expect(row.textContent).toContain(salesEn.HandoverPaymentRecordedRejected);
   });
 
-  test.each(["CANCELLED", "REJECTED"] as const)("%s: unsupported-treatment guidance never tells the operator to remove, re-add and pay", (stopped) => {
-    for (const state of ["UNSUPPORTED_TREATMENT", "DEDUCTION_NOT_RECOGNISED"] as const) {
-      const view = renderPanel([line({ source: "MANUAL", handoverPayment: state, directPaymentEligible: false })], { dealStopped: stopped });
-      const text = screen.getByTestId("deal-handover-payment-fee1").textContent;
-      expect(text).toBe(salesEn.HandoverPaymentUntreatableStopped);
-      expect(text).not.toMatch(/add it again|remove it|then pay/i);
+  describe.each(["CANCELLED", "REJECTED"] as const)("%s: unsupported-treatment guidance follows what the server still allows (SCRUM-443 r3, L-b)", (stopped) => {
+    const states = ["UNSUPPORTED_TREATMENT", "DEDUCTION_NOT_RECOGNISED"] as const;
+
+    test("stopped AND closed/finalized: nothing is actionable, so the original wording stands", () => {
+      for (const state of states) {
+        const view = renderPanel([line({ source: "MANUAL", handoverPayment: state, directPaymentEligible: false })], { dealStopped: stopped, dealClosed: true });
+        expect(screen.getByTestId("deal-handover-payment-fee1").textContent).toBe(salesEn.HandoverPaymentUntreatableStopped);
+        view.unmount();
+      }
+    });
+
+    test("stopped, not frozen, employee-paid: remove and re-add as a custody-settled type; never claims nothing can be recorded", () => {
+      for (const state of states) {
+        const view = renderPanel([line({ source: "MANUAL", paidBy: "EMPLOYEE", handoverPayment: state, directPaymentEligible: false })], { dealStopped: stopped });
+        const text = screen.getByTestId("deal-handover-payment-fee1").textContent;
+        expect(text).toBe(salesEn.HandoverPaymentUntreatableStoppedEmployee);
+        expect(text).toMatch(/custody the employee already holds/i);
+        expect(text).not.toMatch(/no payment or settlement/i);
+        view.unmount();
+      }
+    });
+
+    test("stopped, not frozen, not employee-paid: remove it, no claim that everything is blocked", () => {
+      for (const state of states) {
+        const view = renderPanel([line({ source: "MANUAL", handoverPayment: state, directPaymentEligible: false })], { dealStopped: stopped });
+        const text = screen.getByTestId("deal-handover-payment-fee1").textContent;
+        expect(text).toBe(salesEn.HandoverPaymentUntreatableStoppedRemove);
+        expect(text).toMatch(/remove it/i);
+        expect(text).not.toMatch(/no payment or settlement|then pay/i);
+        view.unmount();
+      }
+    });
+
+    test("a legacy-template line keeps its review copy first, whatever the stop state", () => {
+      const view = renderPanel([line({ source: "COMPANY_TEMPLATE", handoverPayment: "UNSUPPORTED_TREATMENT", directPaymentEligible: false })], { dealStopped: stopped });
+      expect(screen.getByTestId("deal-handover-payment-fee1").textContent).toBe(salesEn.HandoverPaymentLegacyTemplateReview);
       view.unmount();
-    }
+    });
   });
 
+  test("an OPEN deal keeps the original unsupported-treatment copy (L-b control)", () => {
+    renderPanel([line({ source: "MANUAL", handoverPayment: "UNSUPPORTED_TREATMENT", directPaymentEligible: false })], { dealStopped: null });
+    expect(screen.getByTestId("deal-handover-payment-fee1").textContent).toBe(salesEn.HandoverPaymentUnsupportedTreatment);
+  });
+
+  test.each(["CANCELLED", "REJECTED"] as const)("%s: an UNPAID non-employee line says why no payment is offered, even when the payload calls it eligible (L-d)", (stopped) => {
+    renderPanel([line({ directPaymentEligible: true })], { canRecordDirectPayment: true, onRecordDirectPayment: async () => {}, dealStopped: stopped });
+    expect(screen.queryByRole("button", { name: salesEn.RecordDirectPayment })).toBeNull();
+    expect(screen.getByTestId("deal-handover-payment-fee1-stopped").textContent).toBe(salesEn.HandoverPaymentStoppedNoNewPayment);
+  });
+
+  test("a stopped deal's employee-paid UNPAID line keeps the custody note, not the no-new-payment note (L-d)", () => {
+    renderPanel([line({ paidBy: "EMPLOYEE", directPaymentEligible: false })], { canRecordDirectPayment: true, onRecordDirectPayment: async () => {}, dealStopped: "REJECTED" });
+    expect(screen.getByTestId("deal-handover-payment-fee1-custody").textContent).toBe(salesEn.HandoverPaymentNeedsCustody);
+    expect(screen.queryByTestId("deal-handover-payment-fee1-stopped")).toBeNull();
+  });
+
+  test("an OPEN deal shows no stopped note (L-d control)", () => {
+    renderPanel([line()], { canRecordDirectPayment: true, onRecordDirectPayment: async () => {} });
+    expect(screen.queryByTestId("deal-handover-payment-fee1-stopped")).toBeNull();
+  });
   test("the stopped-deal copy exists in both languages", () => {
-    for (const key of ["HandoverPaymentRecordedRejected", "HandoverPaymentUntreatableStopped", "DirectPaymentChangeNoteStopped"] as const) {
+    for (const key of ["HandoverPaymentRecordedRejected", "HandoverPaymentUntreatableStopped", "HandoverPaymentUntreatableStoppedEmployee", "HandoverPaymentUntreatableStoppedRemove", "HandoverPaymentStoppedNoNewPayment", "DirectPaymentChangeNoteStopped"] as const) {
       expect(salesEn[key]).toBeTruthy();
       expect(salesAr[key]).toMatch(/[؀-ۿ]/);
     }
@@ -751,5 +802,61 @@ describe("an in-flight or UNKNOWN direct payment is never dropped by another ope
     for (const opener of screen.queryAllByRole("button", { name: salesEn.RecordActualCost })) {
       expect(opener).toHaveProperty("disabled", false);
     }
+  });
+
+  describe("another line's direct-payment opener cannot unmount a pending attempt (SCRUM-443 r3, R2-1)", () => {
+    const two = () => [line({ _id: "a" }), line({ _id: "b" })];
+    const recordButton = (id: string) => screen.getByTestId(`deal-handover-payment-${id}-record`);
+
+    test("(a) A is UNKNOWN: B's record button is disabled and clicking it leaves A's form, notice and Retry", async () => {
+      await openUnknown(unknownOnce(), two());
+      const b = recordButton("b");
+      expect(b).toHaveProperty("disabled", true);
+      fireEvent.click(b);
+      expect(screen.getByTestId("direct-payment-a-form")).toBeTruthy();
+      expect(screen.queryByTestId("direct-payment-b-form")).toBeNull();
+      expect(screen.getByText("network dropped")).toBeTruthy();
+      expect(screen.getByRole("button", { name: salesEn.RetryHandoverCost })).toBeTruthy();
+    });
+
+    test("(b) A is in flight (promise unresolved): B's record button is disabled", async () => {
+      let release: () => void = () => {};
+      const held = vi.fn<(feeId: string, values: DirectHandoverPayment) => Promise<void>>(
+        () =>
+          new Promise<void>((resolve) => {
+            release = resolve;
+          })
+      );
+      render(panelWith(two(), held));
+      fireEvent.click(screen.getAllByRole("button", { name: salesEn.RecordDirectPayment })[0]);
+      fireEvent.change(screen.getByLabelText(salesEn.DirectPaymentMethodLabel), { target: { value: "CASH" } });
+      fireEvent.click(screen.getByRole("button", { name: salesEn.SaveDirectPayment }));
+      await waitFor(() => expect(held).toHaveBeenCalledTimes(1));
+      expect(recordButton("b")).toHaveProperty("disabled", true);
+      fireEvent.click(recordButton("b"));
+      expect(screen.getByTestId("direct-payment-a-form")).toBeTruthy();
+      expect(screen.queryByTestId("direct-payment-b-form")).toBeNull();
+      release();
+      await waitFor(() => expect(screen.queryByTestId("direct-payment-a-form")).toBeNull());
+    });
+
+    test("(c1) after Cancel on A's UNKNOWN form, B's record button is enabled and opens B", async () => {
+      await openUnknown(unknownOnce(), two());
+      fireEvent.click(screen.getByRole("button", { name: salesEn.Cancel }));
+      await waitFor(() => expect(screen.queryByTestId("direct-payment-a-form")).toBeNull());
+      const b = recordButton("b");
+      expect(b).toHaveProperty("disabled", false);
+      fireEvent.click(b);
+      expect(screen.getByTestId("direct-payment-b-form")).toBeTruthy();
+    });
+
+    test("(c2) idle switching A to B, with no attempt made, still works", () => {
+      render(panelWith(two(), async () => {}));
+      fireEvent.click(recordButton("a"));
+      expect(screen.getByTestId("direct-payment-a-form")).toBeTruthy();
+      fireEvent.click(recordButton("b"));
+      expect(screen.getByTestId("direct-payment-b-form")).toBeTruthy();
+      expect(screen.queryByTestId("direct-payment-a-form")).toBeNull();
+    });
   });
 });

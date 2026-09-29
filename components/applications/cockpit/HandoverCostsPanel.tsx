@@ -557,10 +557,13 @@ export function HandoverCostsPanel({
   /**
    * The deal is stopped: CANCELLED or REJECTED, derived by the cockpit from the
    * same app record the server's `dealAcceptsNewCustodyCash` reads (SCRUM-443).
-   * A stopped deal is never finalized, so no closing check will ever confirm its
-   * payments on the books: they are shown as recorded on a stopped deal — no
-   * green claim of a settled cost — and no new payment is offered. (A stop never
-   * reverses a direct payment: the money left.)
+   * A stopped deal is not closed by the normal path, so no closing check will
+   * confirm its payments on the books: they are shown as recorded on a stopped
+   * deal — no green claim of a settled cost — and no new payment is offered.
+   * Labels follow the app status, not finalization: `cancelApplication` can leave
+   * `finalizedSaleId` set on a CANCELLED deal, and `dealClosed` (the server's
+   * economics-frozen verdict) still suppresses the edit notes on such a deal.
+   * (A stop never reverses a direct payment: the money left.)
    */
   dealStopped?: DealStopped;
 }>) {
@@ -715,9 +718,11 @@ export function HandoverCostsPanel({
         proofConfirmed={handoverCostsCheck === "READY"}
         custodyConfirmed={custodyLedgerCheck === "READY"}
         paying={payingId === line._id && line.directPaymentEligible === true}
-        busy={submittingAny}
+        busy={submittingAny || paymentPending}
         t={t}
         onOpen={() => {
+          // An in-flight or UNKNOWN attempt keeps its form: no opener may swap it out.
+          if (paymentPending) return;
           if (!closeAddForm()) return;
           setEditingId(null);
           setVoidingId(null);
@@ -2147,7 +2152,8 @@ function HandoverPaymentRow({
 
   if (state === "PAID_CUSTODY") {
     // The row says a custody posting was made; only the ledger check says it
-    // landed. A CANCELLED deal is never finalized, so its cost is recorded, not
+    // landed. A stopped deal is shown by its app status (a cancel can leave
+    // `finalizedSaleId` set, so finalization is not the test), so its cost is recorded, not
     // settled; a CLOSED deal was proven before it could close (SCRUM-443 v6).
     const settled = dealStopped === null && (dealClosed || custodyConfirmed);
     const shown = dealStopped !== null ? `PAID_CUSTODY_${dealStopped}` : settled ? state : "PAID_CUSTODY_UNCONFIRMED";
@@ -2168,8 +2174,9 @@ function HandoverPaymentRow({
   }
   if (state === "PAID_DIRECT") {
     const paid = line.directPayment;
-    // A CANCELLED deal is never finalized: its payments are shown as recorded on
-    // a cancelled deal (the cash did leave), never as paid or settled. A CLOSED
+    // A stopped deal is labelled by its app status, whatever `finalizedSaleId`
+    // says: its payments are shown as recorded on a stopped deal (the cash did
+    // leave), never as paid or settled. A CLOSED
     // deal is finalized — the closing check proved every payment on the books
     // before it could close — and shows the settled state whatever a later read
     // of readiness says. Open deals keep the ledger-proof rules below.
@@ -2229,7 +2236,11 @@ function HandoverPaymentRow({
           line.source === "COMPANY_TEMPLATE"
             ? "HandoverPaymentLegacyTemplateReview"
             : dealStopped !== null
-              ? "HandoverPaymentUntreatableStopped"
+              ? dealClosed
+                ? "HandoverPaymentUntreatableStopped"
+                : line.paidBy === "EMPLOYEE"
+                  ? "HandoverPaymentUntreatableStoppedEmployee"
+                  : "HandoverPaymentUntreatableStoppedRemove"
               : state === "UNSUPPORTED_TREATMENT"
               ? "HandoverPaymentUnsupportedTreatment"
               : "HandoverPaymentDeductionNotRecognised"
@@ -2269,6 +2280,11 @@ function HandoverPaymentRow({
         {!payable && line.paidBy === "EMPLOYEE" && (
           <span className="text-muted-foreground" data-testid={`${testId}-custody`}>
             {t("HandoverPaymentNeedsCustody")}
+          </span>
+        )}
+        {dealStopped !== null && line.paidBy !== "EMPLOYEE" && (
+          <span className="text-muted-foreground" data-testid={`${testId}-stopped`}>
+            {t("HandoverPaymentStoppedNoNewPayment")}
           </span>
         )}
       </div>

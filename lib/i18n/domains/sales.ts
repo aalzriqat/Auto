@@ -607,11 +607,25 @@ const dealRailMessages = defineBilingualMessages({
     "Recorded — deal rejected",
     "مسجَّل — الصفقة مرفوضة",
   ],
-  // A CANCELLED or REJECTED deal accepts no new payment, so its handover lines
-  // carry no instruction to pay, remove and re-add, or settle.
+  // A stopped (CANCELLED or REJECTED) deal accepts no new custody cash or direct
+  // payment. Only when its economics are also frozen (finalized or CLOSED) is
+  // nothing actionable, so this wording is for that case; an unfrozen stopped
+  // deal can still remove a cost, so it gets the Employee / Remove variants below.
   HandoverPaymentUntreatableStopped: [
     "This cost's accounting treatment cannot be paid or posted as recorded. The deal is stopped, so no payment or settlement can be recorded for it now.",
     "المعالجة المحاسبية لهذا المصروف لا يمكن دفعها أو ترحيلها كما هي مسجّلة. الصفقة متوقفة، فلا يمكن تسجيل دفع أو تسوية له الآن.",
+  ],
+  HandoverPaymentUntreatableStoppedEmployee: [
+    "This cost's accounting treatment cannot be paid or posted as recorded. The deal is stopped, so no new cash can be handed out for it. Remove it and add it again as an ownership transfer, insurance or selling expense; it can then be settled from custody the employee already holds.",
+    "لا يمكن دفع المعالجة المحاسبية لهذا المصروف أو ترحيلها كما هي مسجّلة. الصفقة متوقفة، فلا يمكن صرف مبلغ نقدي جديد له. أزِله ثم أضِفه من جديد كنقل ملكية أو تأمين أو مصروف بيع؛ عندها يمكن تسويته من العهدة التي يحتفظ بها الموظف بالفعل.",
+  ],
+  HandoverPaymentUntreatableStoppedRemove: [
+    "This cost's accounting treatment cannot be paid or posted as recorded. The deal is stopped, so no new payment can be recorded for it. Remove it so it does not stay on the deal.",
+    "لا يمكن دفع المعالجة المحاسبية لهذا المصروف أو ترحيلها كما هي مسجّلة. الصفقة متوقفة، فلا يمكن تسجيل دفعة جديدة له. أزِله حتى لا يبقى على الصفقة.",
+  ],
+  HandoverPaymentStoppedNoNewPayment: [
+    "The deal is stopped, so no new payment is recorded for this cost.",
+    "الصفقة متوقفة، فلا تُسجَّل دفعة جديدة لهذا المصروف.",
   ],
   DirectPaymentAmountChanged: [
     "The amount of this cost changed since you opened this form. It is now:",
