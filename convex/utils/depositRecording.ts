@@ -42,13 +42,6 @@ export function amountToMinorOrThrow(amount: number, currency: string, label = "
   return amountMinor;
 }
 
-export function methodOrDefault(method?: DepositMethod): DepositMethod {
-  if (method === "OTHER") {
-    throw new ConvexError("Select a specific payment method — OTHER is not accepted for a deposit.");
-  }
-  return method ?? "CASH";
-}
-
 /**
  * SCRUM-445 — a deposit's payment method is ASKED, never defaulted. The method
  * picks the ledger account the money is debited to, so a silent CASH default
@@ -61,7 +54,10 @@ export function requireDepositMethod(method?: DepositMethod): DepositMethod {
       "Choose how the deposit was received (cash, bank transfer, card, cheque or payment link) and try again. If this screen does not offer a method, update the app."
     );
   }
-  return methodOrDefault(method);
+  if (method === "OTHER") {
+    throw new ConvexError("Select a specific payment method — OTHER is not accepted for a deposit.");
+  }
+  return method;
 }
 
 export async function recordHeldDeposit(
