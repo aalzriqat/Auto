@@ -10,7 +10,7 @@ import type { DealStageState } from "./DealStagePresentation";
  */
 export const STAGE_PARAM = "stage";
 
-export type StageViewMode = "live" | "past" | "future" | "stopped";
+export type StageViewMode = "live" | "past" | "future" | "stopped" | "notApplicable";
 
 /**
  * The `?stage=` deep link, owned by the route and handed down: the value as it
@@ -50,7 +50,25 @@ export function stageViewMode(state: DealStageState): StageViewMode {
   if (state === "CURRENT" || state === "BLOCKED") return "live";
   if (state === "COMPLETE") return "past";
   if (state === "STOPPED") return "stopped";
+  // Proven never to happen on this deal: not a preview (nothing is coming), not
+  // a stop (the deal did not fail) -- it says it is not needed, and why.
+  if (state === "NOT_APPLICABLE") return "notApplicable";
   return "future";
+}
+
+/**
+ * Why a stage the server marked NOT_APPLICABLE is not needed, per stage KEY.
+ * Only DISBURSEMENT is ever emitted today (SCRUM-446); a stage the server adds
+ * later says the generic sentence rather than a reason nobody verified.
+ */
+const NOT_APPLICABLE_REASON_KEY: Readonly<Record<string, string>> = {
+  DISBURSEMENT: "StageNotApplicableReasonDisbursement",
+};
+
+export function stageNotApplicableReasonKey(stageKey: string): string {
+  return Object.prototype.hasOwnProperty.call(NOT_APPLICABLE_REASON_KEY, stageKey)
+    ? NOT_APPLICABLE_REASON_KEY[stageKey]
+    : "StageViewNotApplicableNote";
 }
 
 /**
@@ -97,6 +115,7 @@ const NOTE_KEY: Readonly<Record<Exclude<StageViewMode, "live">, string>> = {
   past: "StageViewPastNote",
   future: "StageViewFutureNote",
   stopped: "StageViewStoppedNote",
+  notApplicable: "StageViewNotApplicableNote",
 };
 
 /**
@@ -117,6 +136,7 @@ export function stageViewCopy(
   if (mode === "future" && stageKey === "SETTLEMENT" && opts.path !== "SALE" && opts.closed === true) {
     return { noteKey: "StageViewSettlementClosedNote" };
   }
+  if (mode === "notApplicable") return { noteKey: stageNotApplicableReasonKey(stageKey) };
   return {
     noteKey: NOTE_KEY[mode],
     needsKey: mode === "future" ? stageNeedsKey(stageKey, opts.path) : undefined,

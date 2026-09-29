@@ -1134,11 +1134,37 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
   });
   // SCRUM-417 UX4 (O2/O3): the sub-step checklist on a live Handover, and the
   // read-only past / future step views a rail click (or ?stage=) opens.
-  const ux4Markup = (locale: "en" | "ar", variant: "settlement-checklist" | "view-past" | "view-future") => {
+  const ux4Markup = (
+    locale: "en" | "ar",
+    variant: "settlement-checklist" | "view-past" | "view-future" | "na-rail" | "na-view" | "na-finished"
+  ) => {
     language.locale = locale;
     const base = financedDeal();
+    // SCRUM-446: the server proved the finance company pays nothing on this deal.
+    // Every stage is done except a still-blocked Settlement; DISBURSEMENT is NOT_APPLICABLE.
+    const naStages = base.stages.map((stage) => ({
+      ...stage,
+      state:
+        stage.key === "SETTLEMENT"
+          ? ("BLOCKED" as const)
+          : stage.key === "DISBURSEMENT"
+            ? ("NOT_APPLICABLE" as const)
+            : ("COMPLETE" as const),
+      blocker: stage.key === "SETTLEMENT" ? ("AwaitingSettlement" as const) : undefined,
+    }));
     const deal: FinancedDealCockpitData =
-      variant === "settlement-checklist"
+      variant === "na-finished"
+        ? {
+            ...base,
+            expectedPaymentRegistered: true,
+            // Sol UI-446-1: every stage finished, one of them not needed: the collapsed summary.
+            stages: naStages.map((stage) =>
+              stage.key === "SETTLEMENT" ? { ...stage, state: "COMPLETE" as const, blocker: undefined } : stage
+            ),
+          }
+        : variant === "na-rail" || variant === "na-view"
+        ? { ...base, expectedPaymentRegistered: true, stages: naStages }
+        : variant === "settlement-checklist"
         ? {
             ...base,
             expectedPaymentRegistered: true,
@@ -1154,7 +1180,14 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
             })),
           }
         : base;
-    const viewed = variant === "view-past" ? "APPLICATION" : variant === "view-future" ? "SETTLEMENT" : null;
+    const viewed =
+      variant === "view-past"
+        ? "APPLICATION"
+        : variant === "view-future"
+          ? "SETTLEMENT"
+          : variant === "na-view"
+            ? "DISBURSEMENT"
+            : null;
     return renderToStaticMarkup(
       <DealCockpitView
         deal={deal}
@@ -1224,13 +1257,23 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
 
   test.each(
     (["en", "ar"] as const).flatMap((locale) =>
-      (["settlement-checklist", "view-past", "view-future"] as const).map((variant) => [locale, variant] as const)
+      (["settlement-checklist", "view-past", "view-future", "na-rail", "na-view", "na-finished"] as const).map(
+        (variant) => [locale, variant] as const
+      )
     )
   )("writes the %s markup for UX4 %s", (locale, variant) => {
     expect(OUT_DIR, "DEAL_COCKPIT_VISUAL_FIXTURE_DIR must name this run's fresh directory").toBeTruthy();
     const outDir = resolve(OUT_DIR!);
     const html = ux4Markup(locale, variant);
-    if (variant === "settlement-checklist") {
+    if (variant === "na-rail") {
+      expect(html).toContain("data-testid=\"deal-stage-node-DISBURSEMENT\"");
+      expect(html).not.toContain("data-testid=\"deal-stage-view\"");
+    } else if (variant === "na-finished") {
+      expect(html).toContain("data-testid=\"deal-stages-toggle\"");
+      expect(html).not.toContain("data-testid=\"deal-stage-rail\"");
+    } else if (variant === "na-view") {
+      expect(html).toContain("data-mode=\"notApplicable\"");
+    } else if (variant === "settlement-checklist") {
       expect(html).toContain("data-testid=\"deal-step-checklist\"");
       expect(html).not.toContain("data-testid=\"deal-stage-view\"");
     } else {

@@ -1311,7 +1311,20 @@ export const DEAL_STAGE_ORDER: FinancedDealStageKey[] = [
  * cancelled, where the remaining stages will never happen at all. Rendering
  * those as merely "pending" invites an operator to work a dead deal.
  */
-export type DealStageState = "COMPLETE" | "CURRENT" | "BLOCKED" | "PENDING" | "STOPPED";
+export type DealStageState =
+  | "COMPLETE"
+  | "CURRENT"
+  | "BLOCKED"
+  | "PENDING"
+  | "STOPPED"
+  /**
+   * The stage will never happen on this deal, and that is PROVEN rather than
+   * assumed (SCRUM-446): no finance company pays the dealership on it, so there
+   * is nothing to confirm. It is finished for the purpose of choosing the live
+   * stage, but it is not COMPLETE — nobody is claiming money arrived — and it is
+   * never BLOCKED, because nothing anyone does can clear it.
+   */
+  | "NOT_APPLICABLE";
 
 /**
  * Every blocker the rail can name, as VALUES rather than only as a type.

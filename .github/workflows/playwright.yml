@@ -77,8 +77,11 @@ jobs:
             echo "expected 16 forward-step screenshots (2 variants x 2 locales x 2 themes x 2 viewports, SCRUM-435), found $FORWARD" >&2
             exit 1
           fi
-          if [ "$UX4" -ne 24 ]; then
-            echo "expected 24 UX4 checklist / step-view screenshots (3 variants x 2 locales x 2 themes x 2 viewports, SCRUM-417 UX4), found $UX4" >&2
+          # 9 frames x 8 (2 locales x 2 themes x 2 viewports): the 3 SCRUM-417 UX4
+          # variants, plus SCRUM-446's na-rail (+rail frame), na-view (+rail frame)
+          # and na-finished (+summary frame).
+          if [ "$UX4" -ne 72 ]; then
+            echo "expected 72 UX4 checklist / step-view screenshots (9 frames x 2 locales x 2 themes x 2 viewports, SCRUM-417 UX4 + SCRUM-446), found $UX4" >&2
             exit 1
           fi
         env:
