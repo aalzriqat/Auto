@@ -134,6 +134,30 @@ const UX4_VARIANTS: ReadonlyArray<{
   { suffix: "-ux4-view-future", title: "a future step says what it needs and who acts", mode: "future", stage: "SETTLEMENT" },
 ];
 
+/**
+ * SCRUM-417 UX5 (O4): below `md` the stage rail is folded behind a disclosure
+ * (`deal-mobile-rail-toggle`). The page is static markup with no hydration, so
+ * opening it is APPLIED to the DOM the way the handler does it: aria-expanded
+ * on the toggle and the folded wrapper's `hidden` class removed. At `md` and
+ * above the rail is always shown, so this is a no-op there.
+ */
+async function openMobileRail(page: Page, width: number) {
+  if (width >= MD_BREAKPOINT_PX) return;
+  const toggle = page.getByTestId("deal-mobile-rail-toggle");
+  await expect(toggle).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await page.evaluate(() => {
+    document.querySelector('[data-testid="deal-mobile-rail-toggle"]')?.setAttribute("aria-expanded", "true");
+    document.getElementById("deal-stage-rail-panel")?.classList.remove("hidden");
+  });
+}
+/**
+ * SCRUM-417 UX5 (S7/O4): the cockpit with a step just recorded -- the
+ * persistent "Recorded. Next: ..." line -- and, below `md`, the compact step
+ * bar with the rail folded, then the same page with the rail opened. Suffixes
+ * deliberately do not contain `-ux4-`: the CI frame count for UX4 stays 24.
+ */
+const UX5_SUFFIX = "-ux5-recorded";
 /** The desktop sidebar (`w-64`) at the default 16px root font size. */
 const SIDEBAR_WIDTH_PX = 256;
 /** Tailwind's `md` breakpoint, where the sidebar appears. */
@@ -187,6 +211,9 @@ test.beforeAll(async () => {
       expect(existsSync(variantFile), `bridge did not write ${variantFile}`).toBe(true);
       expect(statSync(variantFile).mtimeMs).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
     }
+    const ux5File = resolve(FIXTURES, `deal-cockpit-${locale}${UX5_SUFFIX}.html`);
+    expect(existsSync(ux5File), `bridge did not write ${ux5File}`).toBe(true);
+    expect(statSync(ux5File).mtimeMs).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
     for (const { suffix } of WITHHELD_CLOSE_VARIANTS) {
       const variantFile = resolve(FIXTURES, `deal-cockpit-${locale}${suffix}.html`);
       expect(existsSync(variantFile), `bridge did not write ${variantFile}`).toBe(true);
@@ -467,6 +494,7 @@ for (const locale of LOCALES) {
           // Painted on screen: header, headline figure, stage rail — inside
           // main's box, not merely inside the viewport.
           await expect(page.locator(".text-3xl").first()).toBeVisible();
+          await openMobileRail(page, viewport.width);
           await expect(page.getByTestId("deal-stage-rail")).toBeVisible();
           const headline = await page.locator(".text-3xl").first().boundingBox();
           expect(headline).not.toBeNull();
@@ -540,6 +568,111 @@ for (const locale of LOCALES) {
   }
 }
 
+/**
+ * SCRUM-417 UX5, painted. At 390px: the compact "Step N of M" bar is shown and
+ * the rail is folded until the disclosure opens it; the step card comes before
+ * Deal details; nothing leaks sideways. At 1280px: the bar is absent and the
+ * rail is as before. The "Recorded. Next:" line is painted in both.
+ */
+for (const locale of LOCALES) {
+  for (const theme of THEMES) {
+    for (const viewport of VIEWPORTS) {
+      test(`${locale} · ${theme} · ${viewport.name}px: UX5 recorded line and mobile step bar`, async ({ browser }) => {
+        const context = await browser.newContext({
+          viewport: { width: viewport.width, height: viewport.height },
+          colorScheme: theme,
+        });
+        const page = await context.newPage();
+        try {
+          await paint(page, locale, theme, UX5_SUFFIX);
+          const main = page.getByTestId("shell-main");
+          const mainBox = await main.boundingBox();
+          expect(mainBox).not.toBeNull();
+          const mobile = viewport.width < MD_BREAKPOINT_PX;
+
+          const recorded = page.getByTestId("deal-recorded-feedback");
+          await expect(recorded).toBeVisible();
+          const recordedBox = await recorded.boundingBox();
+          expect(recordedBox!.x).toBeGreaterThanOrEqual(mainBox!.x - 0.5);
+          expect(recordedBox!.x + recordedBox!.width).toBeLessThanOrEqual(mainBox!.x + mainBox!.width + 0.5);
+          await expect(page.getByTestId("deal-recorded-feedback-dismiss")).toBeVisible();
+
+          const bar = page.getByTestId("deal-mobile-stepbar");
+          const rail = page.getByTestId("deal-stage-rail");
+          if (mobile) {
+            await expect(bar).toBeVisible();
+            // Position text: the current step never exceeds the total (SCRUM-468).
+            const nums = await page
+              .getByTestId("deal-mobile-step-position")
+              .locator("bdi")
+              .allInnerTexts();
+            expect(nums).toHaveLength(2);
+            expect(Number(nums[0])).toBeGreaterThanOrEqual(1);
+            expect(Number(nums[0])).toBeLessThanOrEqual(Number(nums[1]));
+            expect(await bar.evaluate((el) => getComputedStyle(el).direction)).toBe(locale === "ar" ? "rtl" : "ltr");
+            // Folded: the rail is not painted until the disclosure opens it.
+            await expect(rail).toBeHidden();
+            // The step card comes before Deal details, and starts on the first screen.
+            const nextStepBox = await page.getByTestId("deal-next-step").boundingBox();
+            const identityBox = await page.getByTestId("deal-identity-mobile").boundingBox();
+            expect(nextStepBox).not.toBeNull();
+            expect(identityBox).not.toBeNull();
+            expect(nextStepBox!.y, "the step card sits above Deal details").toBeLessThan(identityBox!.y);
+            expect(nextStepBox!.y, "the step card starts inside the first screen").toBeLessThan(viewport.height);
+            // Reading order = visual order: the identity strip follows the step in
+            // the DOM too, so Tab and a screen reader meet the step first.
+            const domOrder = await page.evaluate(() => {
+              const step = document.querySelector('[data-testid="deal-next-step"]')!;
+              const identity = document.querySelector('[data-testid="deal-identity-mobile"]')!;
+              return Boolean(step.compareDocumentPosition(identity) & Node.DOCUMENT_POSITION_FOLLOWING);
+            });
+            expect(domOrder, "identity follows the step in the DOM on a phone").toBe(true);
+            test.info().annotations.push({
+              type: "cta-first-screen",
+              description: `next-step y=${Math.round(nextStepBox!.y)} h=${Math.round(nextStepBox!.height)} viewport=${viewport.height}`,
+            });
+          } else {
+            await expect(bar).toBeHidden();
+            await expect(rail).toBeVisible();
+            // Desktop keeps its placement, and now by DOM position alone: the
+            // desktop copy of the identity strip sits right under the header, before
+            // the rail and the step, so Tab meets it where it is painted. The phone
+            // copy is display:none here, so it is not in the tab order or the a11y tree.
+            const identityBox = await page.getByTestId("deal-identity").boundingBox();
+            const nextStepBox = await page.getByTestId("deal-next-step").boundingBox();
+            expect(identityBox!.y, "desktop: identity strip stays above the step").toBeLessThan(nextStepBox!.y);
+            await expect(page.getByTestId("deal-identity-mobile")).toBeHidden();
+            const domOrder = await page.evaluate(() => {
+              const step = document.querySelector('[data-testid="deal-next-step"]')!;
+              const identity = document.querySelector('[data-testid="deal-identity"]')!;
+              return Boolean(identity.compareDocumentPosition(step) & Node.DOCUMENT_POSITION_FOLLOWING);
+            });
+            expect(domOrder, "identity precedes the step in the DOM on desktop").toBe(true);
+          }
+
+          const overflow = await main.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+          expect(overflow.scrollWidth, `main scrolls sideways at ${viewport.width}px`).toBeLessThanOrEqual(
+            overflow.clientWidth,
+          );
+          await page.screenshot({
+            path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${UX5_SUFFIX}.png`),
+          });
+
+          if (mobile) {
+            await openMobileRail(page, viewport.width);
+            await expect(rail).toBeVisible();
+            expect(await rail.getByRole("button").count()).toBe(8);
+            await page.screenshot({
+              path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}-ux5-rail-open.png`),
+            });
+          }
+        } finally {
+          await context.close();
+        }
+      });
+    }
+  }
+}
 /**
  * SCRUM-417 — the next-step states the wizard added, painted in the same shell.
  * The viewport is tall so the whole gallery is on screen at once and `main`
@@ -770,6 +903,7 @@ for (const variant of UX4_VARIANTS) {
             expect(mainBox).not.toBeNull();
 
             // The rail: eight real buttons, exactly one aria-current.
+            await openMobileRail(page, viewport.width);
             const rail = page.getByTestId("deal-stage-rail");
             await expect(rail).toBeVisible();
             expect(await rail.getByRole("button").count()).toBe(8);
