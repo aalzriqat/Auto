@@ -2580,6 +2580,9 @@ export function DealCockpit({
           if (uploadsInFlightRef.current.has(doc.ruleId)) return;
           uploadsInFlightRef.current.add(doc.ruleId);
           setUploadingRuleIds(new Set(uploadsInFlightRef.current));
+          // The stored file (`_storage` id) this upload produces: what identifies it
+          // on the documents read model, unlike a timestamp two uploads can share.
+          let storedFileId: string | undefined;
           try {
             // Tracked from the START, so a row the read model already moved
             // while the file was uploading still counts as reflected (S7).
@@ -2608,6 +2611,7 @@ export function DealCockpit({
               body: file,
             });
             const { storageId } = await result.json();
+            storedFileId = typeof storageId === "string" ? storageId : undefined;
             await saveDocumentFile({
               orgId,
               documentId: documentId as Id<"applicationDocuments">,
@@ -2619,7 +2623,7 @@ export function DealCockpit({
               // This rule's row carries the new file -- not "the list changed":
               // another operator's verify, or the rule list reordering when a
               // row-less rule is materialized, must not release the line.
-              reflectedWhen: uploadReflected(doc.ruleId),
+              reflectedWhen: uploadReflected(doc.ruleId, () => storedFileId),
             });
           } catch (error) {
             toast.error(getErrorMessage(error));
@@ -3072,10 +3076,12 @@ export function DealCockpit({
                   }),
                 "LegalInvoiceRecorded",
                 {
-                  reflectedWhen: legalInvoiceReflected(
-                    values.legalInvoiceNumber,
-                    values.legalInvoiceAmountMinor
-                  ),
+                  reflectedWhen: legalInvoiceReflected({
+                    number: values.legalInvoiceNumber,
+                    amountMinor: values.legalInvoiceAmountMinor,
+                    date: values.legalInvoiceDate,
+                    issuedTo: values.issuedTo,
+                  }),
                 }
               );
               setRecordingLegalInvoice(false);
@@ -4852,7 +4858,7 @@ export function DealCockpitView({
     setQuotationError(null);
     try {
       await trackStep(() => financeDecision.onRecordQuotation(values), "QuotationRecorded", {
-        reflectedWhen: quotationReflected(values.submittedQuotationMinor),
+        reflectedWhen: quotationReflected(values.submittedQuotationMinor, values.source),
       });
       setRecordingQuotation(false);
     } catch (error) {
@@ -4898,7 +4904,7 @@ export function DealCockpitView({
     setApprovalError(null);
     try {
       await trackStep(() => financeDecision.onRecordApproved(values), "ApprovedPurchaseRecorded", {
-        reflectedWhen: approvedPurchaseReflected(values.approvedAmountMinor),
+        reflectedWhen: approvedPurchaseReflected(values.approvedAmountMinor, values.basis),
       });
       setRecordingApproval(false);
     } catch (error) {
@@ -5460,21 +5466,34 @@ export function DealCockpitView({
         return live ? t(STAGE_LABEL[live.key] ?? live.key) : null;
       })()
     : null;
-  const recordedMessage = recordedStep
-    ? `${t("RecordedLead")} ${recordedNextLabel ? `${t("RecordedNextPrefix")} ${recordedNextLabel}` : t("RecordedAllDone")}`
-    : null;
+  // "Nothing left to do" is a claim about a FINISHED deal only. A stopped deal has
+  // no live step either, but work can remain on it (a held deposit still to be
+  // released or forfeited), so there it says only that it was recorded.
+  const recordedTail = recordedNextLabel
+    ? `${t("RecordedNextPrefix")} ${recordedNextLabel}`
+    : allComplete
+      ? t("RecordedAllDone")
+      : null;
+  const recordedMessage = recordedStep ? [t("RecordedLead"), recordedTail].filter(Boolean).join(" ") : null;
   // Dismissing removes the very button that had focus, which would drop it on
   // <body>. It goes to the step's heading instead (the step being looked at, or
   // the live one) -- and nothing is announced for it: the announcer speaks
-  // transitions of the view, not the removal of a line.
+  // transitions of the view, not the removal of a line. With no step on screen (a
+  // finished or stopped deal) it goes to what IS there: the stopped notice, else
+  // the toggle that opens the completed stages, else the deal header.
   const dismissRecorded = () => {
     recordedFeedback?.onDismiss();
-    const heading = document.querySelector<HTMLElement>(
-      '[data-testid="deal-stage-view"] h2, [data-testid="deal-next-step"] h2'
-    );
-    if (!heading) return;
-    heading.tabIndex = -1;
-    heading.focus();
+    const target =
+      document.querySelector<HTMLElement>(
+        '[data-testid="deal-stage-view"] h2, [data-testid="deal-next-step"] h2'
+      ) ??
+      document.querySelector<HTMLElement>('[data-testid="deal-stopped"]') ??
+      document.querySelector<HTMLElement>('[data-testid="deal-stages-toggle"]') ??
+      document.querySelector<HTMLElement>('[data-testid="deal-header"]');
+    if (!target) return;
+    // A button is already focusable; a heading, a paragraph or the header is not.
+    if (target.tabIndex < 0 && !target.matches("button, a[href], input, select, textarea")) target.tabIndex = -1;
+    target.focus();
   };
   // The step being looked at, when it is not the live one: a read-only card
   // ABOVE the live step. It is one more keyed sibling in the flow, so it comes
@@ -5672,6 +5691,77 @@ export function DealCockpitView({
   const mobileStageIndex = mobileStage ? stages.findIndex((stage) => stage.key === mobileStage.key) : -1;
   const railFolded = mobileStage !== undefined && !railOpen;
 
+  // The identity strip (SCRUM-372): what kind of deal, which record, and the
+  // people on it -- customer, finance company, salesperson. Each cell is absent
+  // rather than empty: a cash deal has no finance company.
+  // Drawn TWICE, one copy per breakpoint, and never both: `hidden` is display:none,
+  // which removes a copy from the tab order and the accessibility tree. The desktop
+  // copy sits in the DOM right under the header (where md and up paint it); the
+  // phone copy is the last node of the document (where a phone paints it, after
+  // the step). So Tab and a screen reader meet it in the order it is drawn, at
+  // either width, with no CSS `order` to make the two disagree (SCRUM-417 UX5 R2-2).
+  const identityStrip = (placement: "desktop" | "phone") => (
+      <dl
+        className={cn(
+          "grid-cols-2 gap-x-4 gap-y-3 rounded-lg border bg-card p-4 text-sm shadow-sm sm:gap-x-6 lg:grid-cols-5",
+          placement === "desktop" ? "hidden md:grid" : "grid md:hidden"
+        )}
+        aria-label={t("DealEssentialsHeading")}
+        data-testid={placement === "desktop" ? "deal-identity" : "deal-identity-mobile"}
+      >
+        <div className="min-w-0">
+          <dt className="text-xs text-muted-foreground">{t("DealTypeLabel")}</dt>
+          <dd className="font-medium">
+            {t(deal.dealKind === "CASH" ? "DealKindCash" : "DealKindFinanced")}
+          </dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="text-xs text-muted-foreground">
+            {t(deal.applicationId === null ? "DealReferenceSale" : "DealReferenceApplication")}
+          </dt>
+          <dd className="flex min-w-0 items-center gap-1 font-medium">
+            <CopyableReference value={String(deal.dealRef)} t={t} />
+          </dd>
+        </div>
+        {deal.customer && (
+          <div className="min-w-0">
+            <dt className="text-xs text-muted-foreground">{t("Customer")}</dt>
+            <dd className="min-w-0 break-words font-medium">
+              <bdi>{deal.customer.name}</bdi>
+              {deal.customer.phone && (
+                <>
+                  {" "}
+                  <bdi className="font-normal text-muted-foreground">{deal.customer.phone}</bdi>
+                </>
+              )}
+            </dd>
+          </div>
+        )}
+        {deal.financeCompanyName && (
+          <div className="min-w-0">
+            <dt className="text-xs text-muted-foreground">{t("PartyFinancier")}</dt>
+            <dd className="min-w-0 break-words font-medium">
+              <bdi>{deal.financeCompanyName}</bdi>
+            </dd>
+          </div>
+        )}
+        <div className="min-w-0">
+          <dt className="text-xs text-muted-foreground">{t("DealOwner")}</dt>
+          <dd className="min-w-0 break-words font-medium">
+            <bdi>{deal.salespersonName}</bdi>{" "}
+            <bdi className="font-normal text-muted-foreground">{renderMoment(deal.createdAt, "d MMM yyyy", locale)}</bdi>
+          </dd>
+        </div>
+        {/* The header's "last updated", in the flow on a phone only. */}
+        <div className="min-w-0 sm:hidden" data-testid="deal-essentials-last-updated">
+          <dt className="text-xs text-muted-foreground">{t("LastUpdated")}</dt>
+          <dd className="font-medium">
+            <bdi>{renderMoment(deal.updatedAt ?? deal.createdAt, "d MMM yyyy HH:mm", locale)}</bdi>
+          </dd>
+        </div>
+      </dl>
+  );
+
   return (
     <div className="flex flex-col gap-6">
       {/* --- header ------------------------------------------------------ */}
@@ -5690,7 +5780,7 @@ export function DealCockpitView({
           the bar. `playwright/visual/deal-cockpit.visual.spec.ts` measures
           this in a real engine. */}
       <div
-        className="sticky top-0 z-20 md:-order-2 -mx-3 flex flex-wrap items-center gap-x-4 gap-y-2 border-b bg-background/95 px-3 py-2.5 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:-mx-4 sm:px-4 md:-mx-6 md:px-6 lg:-mx-8 lg:px-8"
+        className="sticky top-0 z-20 -mx-3 flex flex-wrap items-center gap-x-4 gap-y-2 border-b bg-background/95 px-3 py-2.5 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:-mx-4 sm:px-4 md:-mx-6 md:px-6 lg:-mx-8 lg:px-8"
         data-testid="deal-header"
       >
         {backHref && (
@@ -5751,6 +5841,8 @@ export function DealCockpitView({
           </Button>
         )}
       </div>
+
+      {identityStrip("desktop")}
 
       {/* --- the two records that disagree -------------------------------- */}
       {/* Above the stage rail, not inside the money column. The rail tells the
@@ -5958,6 +6050,7 @@ export function DealCockpitView({
           whole. Nothing is removed and nothing is drawn twice. */}
       <StageViewAnnouncer
         recordedMessage={recordedMessage}
+        viewKey={otherStage?.key ?? null}
         message={
           otherStage
             ? `${t("StageViewAnnounceShowing")}: ${t(STAGE_LABEL[otherStage.key] ?? otherStage.key)}, ${t(STAGE_STATE_KEY[otherStage.state])}`
@@ -5981,9 +6074,9 @@ export function DealCockpitView({
               <>
                 {t("RecordedNextPrefix")} <bdi className="font-medium">{recordedNextLabel}</bdi>
               </>
-            ) : (
+            ) : allComplete ? (
               t("RecordedAllDone")
-            )}
+            ) : null}
           </p>
           <button
             type="button"
@@ -6028,72 +6121,10 @@ export function DealCockpitView({
         ))}
       </div>
 
-      {/* --- essentials --------------------------------------------------- */}
-      {/* The identity strip (SCRUM-372): what kind of deal, which record, and
-          the people on it — customer, finance company, salesperson. Each cell
-          is absent rather than empty — a cash deal has no finance company.
-          The VEHICLE moved to its own card in the working column, with the
-          settlement-route question that hangs off its ownership.
-          One node, LAST in the document: on a phone that is where it is drawn
-          (after the step), so Tab reaches it in the order it is read. From md
-          up the column is re-ordered by CSS (`md:-order-1`, right under the
-          header, which is `md:-order-2`), the position it has always had. */}
-      <dl
-        className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-lg border bg-card p-4 text-sm shadow-sm sm:gap-x-6 md:-order-1 lg:grid-cols-5"
-        aria-label={t("DealEssentialsHeading")}
-        data-testid="deal-identity"
-      >
-        <div className="min-w-0">
-          <dt className="text-xs text-muted-foreground">{t("DealTypeLabel")}</dt>
-          <dd className="font-medium">
-            {t(deal.dealKind === "CASH" ? "DealKindCash" : "DealKindFinanced")}
-          </dd>
-        </div>
-        <div className="min-w-0">
-          <dt className="text-xs text-muted-foreground">
-            {t(deal.applicationId === null ? "DealReferenceSale" : "DealReferenceApplication")}
-          </dt>
-          <dd className="flex min-w-0 items-center gap-1 font-medium">
-            <CopyableReference value={String(deal.dealRef)} t={t} />
-          </dd>
-        </div>
-        {deal.customer && (
-          <div className="min-w-0">
-            <dt className="text-xs text-muted-foreground">{t("Customer")}</dt>
-            <dd className="min-w-0 break-words font-medium">
-              <bdi>{deal.customer.name}</bdi>
-              {deal.customer.phone && (
-                <>
-                  {" "}
-                  <bdi className="font-normal text-muted-foreground">{deal.customer.phone}</bdi>
-                </>
-              )}
-            </dd>
-          </div>
-        )}
-        {deal.financeCompanyName && (
-          <div className="min-w-0">
-            <dt className="text-xs text-muted-foreground">{t("PartyFinancier")}</dt>
-            <dd className="min-w-0 break-words font-medium">
-              <bdi>{deal.financeCompanyName}</bdi>
-            </dd>
-          </div>
-        )}
-        <div className="min-w-0">
-          <dt className="text-xs text-muted-foreground">{t("DealOwner")}</dt>
-          <dd className="min-w-0 break-words font-medium">
-            <bdi>{deal.salespersonName}</bdi>{" "}
-            <bdi className="font-normal text-muted-foreground">{renderMoment(deal.createdAt, "d MMM yyyy", locale)}</bdi>
-          </dd>
-        </div>
-        {/* The header's "last updated", in the flow on a phone only. */}
-        <div className="min-w-0 sm:hidden" data-testid="deal-essentials-last-updated">
-          <dt className="text-xs text-muted-foreground">{t("LastUpdated")}</dt>
-          <dd className="font-medium">
-            <bdi>{renderMoment(deal.updatedAt ?? deal.createdAt, "d MMM yyyy HH:mm", locale)}</bdi>
-          </dd>
-        </div>
-      </dl>
+      {/* --- essentials, phone copy ---------------------------------------- */}
+      {/* Last in the document: on a phone it is drawn after the step. The copy
+          for md and up is right under the header (see `identityStrip`). */}
+      {identityStrip("phone")}
 
 
       {/* Mounted only while the action is offered: losing authority or the

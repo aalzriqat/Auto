@@ -614,7 +614,7 @@ for (const locale of LOCALES) {
             await expect(rail).toBeHidden();
             // The step card comes before Deal details, and starts on the first screen.
             const nextStepBox = await page.getByTestId("deal-next-step").boundingBox();
-            const identityBox = await page.getByTestId("deal-identity").boundingBox();
+            const identityBox = await page.getByTestId("deal-identity-mobile").boundingBox();
             expect(nextStepBox).not.toBeNull();
             expect(identityBox).not.toBeNull();
             expect(nextStepBox!.y, "the step card sits above Deal details").toBeLessThan(identityBox!.y);
@@ -623,7 +623,7 @@ for (const locale of LOCALES) {
             // the DOM too, so Tab and a screen reader meet the step first.
             const domOrder = await page.evaluate(() => {
               const step = document.querySelector('[data-testid="deal-next-step"]')!;
-              const identity = document.querySelector('[data-testid="deal-identity"]')!;
+              const identity = document.querySelector('[data-testid="deal-identity-mobile"]')!;
               return Boolean(step.compareDocumentPosition(identity) & Node.DOCUMENT_POSITION_FOLLOWING);
             });
             expect(domOrder, "identity follows the step in the DOM on a phone").toBe(true);
@@ -634,11 +634,20 @@ for (const locale of LOCALES) {
           } else {
             await expect(bar).toBeHidden();
             await expect(rail).toBeVisible();
-            // Desktop keeps its placement even though the DOM order changed: the
-            // identity strip is still above the workbench, by CSS order alone.
+            // Desktop keeps its placement, and now by DOM position alone: the
+            // desktop copy of the identity strip sits right under the header, before
+            // the rail and the step, so Tab meets it where it is painted. The phone
+            // copy is display:none here, so it is not in the tab order or the a11y tree.
             const identityBox = await page.getByTestId("deal-identity").boundingBox();
             const nextStepBox = await page.getByTestId("deal-next-step").boundingBox();
             expect(identityBox!.y, "desktop: identity strip stays above the step").toBeLessThan(nextStepBox!.y);
+            await expect(page.getByTestId("deal-identity-mobile")).toBeHidden();
+            const domOrder = await page.evaluate(() => {
+              const step = document.querySelector('[data-testid="deal-next-step"]')!;
+              const identity = document.querySelector('[data-testid="deal-identity"]')!;
+              return Boolean(identity.compareDocumentPosition(step) & Node.DOCUMENT_POSITION_FOLLOWING);
+            });
+            expect(domOrder, "identity precedes the step in the DOM on desktop").toBe(true);
           }
 
           const overflow = await main.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));

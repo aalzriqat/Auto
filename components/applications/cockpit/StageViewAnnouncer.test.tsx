@@ -76,6 +76,27 @@ describe("StageViewAnnouncer announces transitions only", () => {
   });
 });
 
+describe("StageViewAnnouncer -- a state change of the viewed step is not a transition (N5)", () => {
+  test("the viewed step's message carries its state; a state change under the same step says nothing", () => {
+    const at = (message: string) => (
+      <StageViewAnnouncer message={message} viewKey="CREDIT" restoreMessage="r" recordedMessage={null} />
+    );
+    const view = render(at("Showing step: Credit, Current"));
+    expect(said()).toBe("Showing step: Credit, Current");
+    view.rerender(at("Showing step: Credit, Complete"));
+    expect(said()).toBe("Showing step: Credit, Current");
+  });
+
+  test("moving to another step still announces it", () => {
+    const at = (message: string, viewKey: string) => (
+      <StageViewAnnouncer message={message} viewKey={viewKey} restoreMessage="r" recordedMessage={null} />
+    );
+    const view = render(at("Showing step: Credit, Current", "CREDIT"));
+    view.rerender(at("Showing step: Handover, Pending", "HANDOVER"));
+    expect(said()).toBe("Showing step: Handover, Pending");
+  });
+});
+
 describe("StagePosition", () => {
   const sentence = (locale: "en" | "ar", position: number, total: number) => {
     const table = dictionaries[locale] as Record<string, string>;

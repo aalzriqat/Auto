@@ -306,6 +306,49 @@ describe("S7 -- the success line waits for the read model", () => {
     expect(stubs.toastSuccess).toHaveBeenCalledTimes(1);
   });
 
+  // The recorded line is judged against a deal whose SHAPE changed under it: the
+  // credit predicate reads `applications:get`, the line's wording reads the stages.
+  async function recordedOn(stages: (base: ReturnType<typeof deriveDealStages>) => ReturnType<typeof deriveDealStages>) {
+    const view = await markUnderReview();
+    setDeal({ status: "UNDER_REVIEW", creditDecision: undefined, appraisalStatus: undefined });
+    const cockpit = queryResults.get(COCKPIT) as { stages: ReturnType<typeof deriveDealStages> };
+    queryResults.set(COCKPIT, { ...cockpit, stages: stages(cockpit.stages) });
+    view.rerender(ui());
+    return view;
+  }
+  const stopped = (base: ReturnType<typeof deriveDealStages>) => base.map((stage) => ({ ...stage, state: "STOPPED" as const }));
+  const complete = (base: ReturnType<typeof deriveDealStages>) => base.map((stage) => ({ ...stage, state: "COMPLETE" as const }));
+
+  test("N1: a stopped deal never says 'nothing left to do' -- work (held deposits) may remain", async () => {
+    await recordedOn(stopped);
+    const shown = screen.getByTestId("deal-recorded-feedback");
+    expect(shown.textContent).toContain("RecordedLead");
+    expect(shown.textContent).not.toContain("RecordedAllDone");
+    expect(shown.textContent).not.toContain("RecordedNextPrefix");
+    expect(screen.getByTestId("deal-stage-view-announcer").textContent).not.toContain("RecordedAllDone");
+  });
+
+  test("N1 control: a finished deal still says there is nothing left to do", async () => {
+    await recordedOn(complete);
+    expect(screen.getByTestId("deal-recorded-feedback").textContent).toContain("RecordedAllDone");
+  });
+
+  test("R2-3: dismissing on a finished deal lands on a real control, never <body>", async () => {
+    await recordedOn(complete);
+    fireEvent.click(screen.getByTestId("deal-recorded-feedback-dismiss"));
+    expect(line()).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(screen.getByTestId("deal-stages-toggle"));
+  });
+
+  test("R2-3: dismissing on a stopped deal lands on the stopped notice, never <body>", async () => {
+    await recordedOn(stopped);
+    fireEvent.click(screen.getByTestId("deal-recorded-feedback-dismiss"));
+    expect(line()).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(screen.getByTestId("deal-stopped"));
+  });
+
   test("nextOutstandingDocument skips the handled, verified and waived rows and wraps", () => {
     const docs = [
       { ruleId: "a", required: true, status: "UPLOADED" },
@@ -337,14 +380,31 @@ describe("O4 -- on a phone the step comes first and the rail folds", () => {
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(panel!.className).not.toMatch(/(^|\s)hidden(\s|$)/);
-    // The identity strip comes AFTER the step in the DOM (so Tab and a screen
-    // reader meet the step first) and is pulled back up on desktop by CSS order.
-    const identity = screen.getByTestId("deal-identity");
+  });
+
+  test("R2-2: the identity strip is in the DOM where each breakpoint draws it, and the other copy is display:none", () => {
+    setDeal({});
+    render(ui());
     const step = screen.getByTestId("deal-next-step");
-    expect(step.compareDocumentPosition(identity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(identity.className).toContain("md:-order-1");
-    expect(identity.className).not.toMatch(/(^|\s)order-1(\s|$)/);
-    expect(document.querySelectorAll("[data-testid=deal-identity]")).toHaveLength(1);
+    const header = screen.getByTestId("deal-header");
+    const rail = screen.getByTestId("deal-stage-rail");
+    const desktop = screen.getByTestId("deal-identity");
+    const phone = screen.getByTestId("deal-identity-mobile");
+    const FOLLOWING = Node.DOCUMENT_POSITION_FOLLOWING;
+    // md and up: right under the header, BEFORE the rail and the workbench -- no CSS `order` needed.
+    expect(header.compareDocumentPosition(desktop) & FOLLOWING).toBeTruthy();
+    expect(desktop.compareDocumentPosition(rail) & FOLLOWING).toBeTruthy();
+    expect(desktop.compareDocumentPosition(step) & FOLLOWING).toBeTruthy();
+    expect(desktop.className).toMatch(/(^|\s)hidden(\s|$)/);
+    expect(desktop.className).toContain("md:grid");
+    expect(desktop.className).not.toMatch(/order-/);
+    // Below md: after the step, as before; hidden from md up.
+    expect(step.compareDocumentPosition(phone) & FOLLOWING).toBeTruthy();
+    expect(phone.className).toContain("md:hidden");
+    expect(phone.className).not.toMatch(/order-/);
+    // Both name the same landmark, and only the visible one is ever reachable.
+    expect(desktop.getAttribute("aria-label")).toBe(phone.getAttribute("aria-label"));
+    expect(desktop.textContent).toBe(phone.textContent);
   });
 
   test("viewing a step other than the live one says so in the phone bar", () => {
@@ -353,8 +413,8 @@ describe("O4 -- on a phone the step comes first and the rail folds", () => {
     expect(screen.queryByTestId("deal-mobile-step-viewing")).toBeNull();
     const rail = screen.getByTestId("deal-stage-rail");
     const other = within(rail).getAllByRole("button").find((b) => b.getAttribute("aria-current") !== "step");
-    if (!other) return;
-    fireEvent.click(other);
+    expect(other, "the rail has a step other than the current one").toBeDefined();
+    fireEvent.click(other!);
     expect(screen.queryByTestId("deal-mobile-step-viewing")?.textContent).toBe("MobileStepViewing");
   });
 

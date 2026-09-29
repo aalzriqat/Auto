@@ -247,7 +247,8 @@ describe("a corrupt moment in the header or essentials never loses the screen", 
     const header = screen.getByTestId("deal-header");
     expect(header.textContent).toContain("DealCockpitTitle");
     expect(header.textContent).toContain("LastUpdated: —");
-    expect(screen.getByText("DealOwner").parentElement?.textContent).toContain("—");
+    // Both copies of the identity strip (desktop + phone) say the same thing.
+    for (const owner of screen.getAllByText("DealOwner")) expect(owner.parentElement?.textContent).toContain("—");
     // The rest of the screen is intact, not a blank error boundary.
     expect(screen.getByText(/2,410/)).toBeTruthy();
   });
@@ -255,7 +256,7 @@ describe("a corrupt moment in the header or essentials never loses the screen", 
   test("a corrupt updatedAt alone is guarded too, without touching a valid createdAt", () => {
     renderCockpit(dealFixture({ updatedAt: Number.NaN }));
     expect(screen.getByTestId("deal-header").textContent).toContain("LastUpdated: —");
-    expect(screen.getByText("DealOwner").parentElement?.textContent).toMatch(/يوليو 2026/);
+    for (const owner of screen.getAllByText("DealOwner")) expect(owner.parentElement?.textContent).toMatch(/يوليو 2026/);
   });
 });
 
@@ -1882,13 +1883,16 @@ describe("last updated on a phone", () => {
     );
     expect(headerStamp?.className).toMatch(/(^|\s)hidden(\s|$)/);
     expect(headerStamp?.className).toContain("sm:inline");
-    const cell = screen.getByTestId("deal-essentials-last-updated");
+    // The phone copy of the strip is the one visible below md; scope to it.
+    const cell = within(screen.getByTestId("deal-identity-mobile")).getByTestId("deal-essentials-last-updated");
     expect(cell.className).toContain("sm:hidden");
     expect(cell.textContent).toMatch(/LastUpdated.*أغسطس 2026/);
   });
 
   test("the essentials copy keeps the calm dash for a corrupt moment", () => {
     renderCockpit(dealFixture({ createdAt: Number.NaN, updatedAt: undefined }));
-    expect(screen.getByTestId("deal-essentials-last-updated").textContent).toContain("—");
+    expect(
+      within(screen.getByTestId("deal-identity-mobile")).getByTestId("deal-essentials-last-updated").textContent
+    ).toContain("—");
   });
 });
