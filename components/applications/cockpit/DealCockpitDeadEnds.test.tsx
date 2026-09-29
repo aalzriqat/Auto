@@ -480,6 +480,17 @@ describe("S4 -- a blocker on another page links to it, for the caller who can ac
       expect(linkNote()?.textContent).toBe("SupplierPayablesNeedFinanceRole");
     });
 
+    // Mutation guard (PR1 review L-A): pins the MANAGE half of the href gate.
+    // It passes on the code as it stands; it exists so dropping
+    // `canSettleSupplier &&` from the link condition would fail here.
+    test("VIEW_FINANCE without MANAGE_FINANCE cannot pay a payable, so no link and the note", () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE);
+      queryResults.set("sales:dealCockpit", withPosition("DEALERSHIP_OWES"));
+      render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
+      expect(link()).toBeNull();
+      expect(linkNote()?.textContent).toBe("SupplierPayablesNeedFinanceRole");
+    });
+
     test("a caller who cannot act on finance gets no link and is told who does", () => {
       queryResults.set("sales:dealCockpit", withPosition("DEALERSHIP_OWES"));
       render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
