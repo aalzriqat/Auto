@@ -5682,11 +5682,12 @@ export function DealCockpitView({
       ? ({ "--flow-rows": `repeat(${flow.length - 2}, auto) 1fr` } as CSSProperties)
       : undefined;
 
-  // SCRUM-417 UX5 (O4). Below md the step comes first: the identity strip is the
-  // LAST node of the document (one node -- nothing is drawn twice or remounted),
-  // so the order Tab walks is the order it is drawn, and the stage rail folds
-  // behind a "Step N of M" bar. From md up CSS `order` puts it back under the
-  // header: nothing moves there.
+  // SCRUM-417 UX5 (O4). Below md the step comes first: the identity strip is
+  // rendered as two copies (see `identityStrip` below), one per breakpoint and
+  // never both visible, so the phone copy can sit after the step in DOM order
+  // and the order Tab walks is the order it is drawn, and the stage rail folds
+  // behind a "Step N of M" bar. From md up the desktop copy sits under the
+  // header: nothing moves there. No CSS `order` is involved.
   const mobileStage = allComplete ? undefined : (otherStage ?? live);
   const mobileStageIndex = mobileStage ? stages.findIndex((stage) => stage.key === mobileStage.key) : -1;
   const railFolded = mobileStage !== undefined && !railOpen;

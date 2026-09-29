@@ -16,7 +16,7 @@
  * (another operator verifying a different document, the rule list reordering
  * when a row is materialized) is not evidence that THIS action landed.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 /** How long a committed mutation may go unreflected before the older notice takes over. */
 export const RECORDED_REFLECT_TIMEOUT_MS = 10_000;
@@ -328,9 +328,20 @@ export function useRecordedFeedback(
     });
   }
 
-  // The line is on screen: the outcome is no longer owed (the ref is retired in
-  // an effect, not during render, so a discarded render cannot lose it).
-  useEffect(() => {
+  // A released line is only as true as the fact it names. If, on the same deal,
+  // the read model later stops showing that fact (another operator changed the
+  // same value), the line is retracted. Retraction only removes the line: the
+  // outcome was already delivered, so it says nothing else and never toasts, and
+  // it is permanent (the value coming back does not revive it). It converges:
+  // once `released` is null this condition is false.
+  if (released !== null && model !== null && released.from.scope === scopeKey && !isReflected(released.from, model)) {
+    setReleased(null);
+  }
+
+  // The line is on screen: the outcome is no longer owed. The ref is retired in a
+  // layout effect (committed with the line, before any timer or overlapping track
+  // can run) and not during render, so a discarded render cannot lose it.
+  useLayoutEffect(() => {
     if (released !== null) settle(released.from);
   }, [released, settle]);
 

@@ -4,6 +4,7 @@
  * with no such fact gets an immediate outcome; the operator is never left
  * without one (timeout, unmount, another deal).
  */
+import { useLayoutEffect } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import {
@@ -386,5 +387,102 @@ describe("R2 batch fix -- a held outcome settles exactly once", () => {
     expect(onUnreflected).toHaveBeenCalledTimes(1);
     expect(onUnreflected).toHaveBeenCalledWith("LegalInvoiceRecorded");
     expect(result.current.recorded).toBeNull();
+  });
+});
+
+describe("Sol R3-1 -- a released line is retracted when the read model stops showing its fact", () => {
+  const setup = (initial: RecordedModel | null) => {
+    const onUnreflected = vi.fn();
+    const hook = renderHook(
+      ({ m, scope }: { m: RecordedModel | null; scope: string }) => useRecordedFeedback(m, onUnreflected, scope),
+      { initialProps: { m: initial, scope: "deal-1" } }
+    );
+    return { ...hook, onUnreflected };
+  };
+  const econ = (minor: number, source: string, extra: Partial<RecordedModel> = {}): RecordedModel => ({
+    deal: { stages: [] },
+    economics: { submittedQuotationMinor: minor, submittedQuotationSource: source },
+    ...extra,
+  });
+
+  test("quotation released, then another operator changes the amount: the line is gone, with no toast", async () => {
+    const { result, rerender, onUnreflected } = setup(econ(90, "MANUAL_ENTRY"));
+    await act(async () => {
+      await result.current.track(async () => "ok", "QuotationRecorded", {
+        reflectedWhen: quotationReflected(100, "MANUAL_ENTRY"),
+      });
+    });
+    rerender({ m: econ(100, "MANUAL_ENTRY"), scope: "deal-1" });
+    expect(result.current.recorded).not.toBeNull();
+    rerender({ m: econ(120, "MANUAL_ENTRY"), scope: "deal-1" });
+    expect(result.current.recorded).toBeNull();
+    expect(onUnreflected).not.toHaveBeenCalled();
+  });
+
+  test("retraction is permanent: the value coming back does not resurrect the line", async () => {
+    const { result, rerender } = setup(econ(90, "MANUAL_ENTRY"));
+    await act(async () => {
+      await result.current.track(async () => "ok", "QuotationRecorded", {
+        reflectedWhen: quotationReflected(100, "MANUAL_ENTRY"),
+      });
+    });
+    rerender({ m: econ(100, "MANUAL_ENTRY"), scope: "deal-1" });
+    rerender({ m: econ(120, "MANUAL_ENTRY"), scope: "deal-1" });
+    rerender({ m: econ(100, "MANUAL_ENTRY"), scope: "deal-1" });
+    expect(result.current.recorded).toBeNull();
+  });
+
+  test("upload released, then the same row becomes VERIFIED with the same file: the line stays", async () => {
+    const start = model([doc("A", "MISSING")]);
+    const { result, rerender, onUnreflected } = setup(start);
+    await act(async () => {
+      await result.current.track(async () => "ok", "UploadSuccess", {
+        reflectedWhen: uploadReflected("A", () => "file_a"),
+        isDocumentAction: true,
+        documentRuleId: "A",
+      });
+    });
+    rerender({ m: model([doc("A", "UPLOADED", { fileId: "file_a", uploadedAt: 5 })]), scope: "deal-1" });
+    expect(result.current.recorded).not.toBeNull();
+    rerender({ m: model([doc("A", "VERIFIED", { fileId: "file_a", uploadedAt: 5 })]), scope: "deal-1" });
+    expect(result.current.recorded).toEqual({ isDocumentAction: true, documentRuleId: "A" });
+    expect(onUnreflected).not.toHaveBeenCalled();
+  });
+
+  test("an unrelated field changing on the same deal keeps the line", async () => {
+    const { result, rerender } = setup(econ(90, "MANUAL_ENTRY"));
+    await act(async () => {
+      await result.current.track(async () => "ok", "QuotationRecorded", {
+        reflectedWhen: quotationReflected(100, "MANUAL_ENTRY"),
+      });
+    });
+    rerender({ m: econ(100, "MANUAL_ENTRY"), scope: "deal-1" });
+    rerender({ m: econ(100, "MANUAL_ENTRY", { application: { status: "UNDER_REVIEW" } }), scope: "deal-1" });
+    expect(result.current.recorded).not.toBeNull();
+  });
+});
+
+describe("Opus L1 -- the released line retires its owed outcome at commit, before any timer can run", () => {
+  test("a timer firing in the commit that shows the line does not add a toast", async () => {
+    vi.useFakeTimers();
+    const onUnreflected = vi.fn();
+    // The probe's layout effect runs right after the hook's own, in the same commit
+    // and before any passive effect: exactly the window a 10s timer could land in.
+    const { result, rerender } = renderHook(
+      ({ m }: { m: RecordedModel | null }) => {
+        const feedback = useRecordedFeedback(m, onUnreflected, "deal-1");
+        useLayoutEffect(() => {
+          if (feedback.recorded !== null) vi.advanceTimersByTime(RECORDED_REFLECT_TIMEOUT_MS);
+        }, [feedback.recorded]);
+        return feedback;
+      },
+      { initialProps: { m: model([doc("A", "UPLOADED")]) as RecordedModel | null } }
+    );
+    await act(async () => {
+      await result.current.track(async () => "ok", "DocVerified", { reflectedWhen: verifyReflected("A") });
+    });
+    rerender({ m: model([doc("A", "VERIFIED")]) });
+    expect(result.current.recorded).not.toBeNull();
+    expect(onUnreflected).not.toHaveBeenCalled();
   });
 });
