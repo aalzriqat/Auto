@@ -5495,6 +5495,12 @@ export function DealCockpitView({
       <details
         data-testid="deal-details"
         open={detailsOpen}
+        onToggle={(event) => {
+          // The browser can open a closed <details> itself (find-in-page,
+          // fragment links). Adopt that so the next click collapses it.
+          const isOpen = event.currentTarget.open;
+          if (isOpen !== detailsOpen) setDetailsChoice(isOpen);
+        }}
         className="group min-w-0 rounded-lg border bg-card"
       >
         <summary

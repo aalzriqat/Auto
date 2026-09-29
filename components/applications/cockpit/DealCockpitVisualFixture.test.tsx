@@ -1331,6 +1331,16 @@ describe("O1 -- the step workbench", () => {
     expect(details().open).toBe(false);
   });
 
+  test("a browser-driven open (find-in-page) is adopted, so the next click collapses it", () => {
+    renderStage("SETTLEMENT");
+    const el = details();
+    expect(el.open).toBe(false);
+    el.open = true;
+    fireEvent(el, new Event("toggle"));
+    fireEvent.click(within(el).getByTestId("deal-details-toggle"));
+    expect(el.open).toBe(false);
+  });
+
   test("a live step with no panel of its own (application) promotes nothing and opens the record", () => {
     renderStage("APPLICATION");
     expect(screen.queryByTestId("deal-workbench")).toBeNull();
