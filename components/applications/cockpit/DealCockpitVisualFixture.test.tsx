@@ -17,7 +17,8 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Id } from "@/convex/_generated/dataModel";
 import { dictionaries } from "@/lib/i18n/dictionaries";
@@ -988,5 +989,103 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
     expect(html).not.toContain("data-testid=\"closing-readiness-service-unavailable\"");
     mkdirSync(outDir, { recursive: true });
     writeFileSync(resolve(outDir, `deal-cockpit-${locale}-readiness-access.html`), html);
+  });
+});
+
+
+/**
+ * SCRUM-417 UX1 (S4): a failed readiness check opens its own panel. Not gated:
+ * this is behaviour, not paint. The fixtures are the ones the visual gate
+ * renders, so the destinations the operator sees are the ones proven here.
+ */
+describe("closing-readiness rows are destinations", () => {
+  afterEach(cleanup);
+
+  function renderWith(checks: Array<{ key: string; status: string }>, onRecord?: () => void, withPanels = true) {
+    language.locale = "en";
+    const deal = financedDeal();
+    return render(
+      <DealCockpitView
+        deal={deal}
+        backHref="/org_1/deals"
+        activeAppraisalProvider={deal.activeAppraisalProvider}
+        onRecordSupplierReceipt={async () => {}}
+        financialOverview={{ data: financedOverview(), loading: false }}
+        custody={withPanels ? custodyWiring() : undefined}
+        custodyMoney={withPanels ? custodyMoney : undefined}
+        handoverCosts={withPanels ? handoverCostsWiring() : undefined}
+        closingChecklist={{
+          readiness: {
+            state: "BLOCKED",
+            open: true,
+            unavailableReason: null,
+            unavailableReasonCode: null,
+            moneyWithheld: false,
+            checks: checks.map((check) => ({ ...check, reason: "blocked", reasonCode: null })),
+          } as unknown as NonNullable<React.ComponentProps<typeof DealCockpitView>["closingChecklist"]>["readiness"],
+          legalInvoice: onRecord ? { onRecord } : undefined,
+        }}
+      />
+    );
+  }
+
+  test("a blocked custody check scrolls to and focuses the custody panel", () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    renderWith([{ key: "CUSTODY_SETTLED", status: "BLOCKED" }]);
+    fireEvent.click(screen.getByTestId("closing-check-go-CUSTODY_SETTLED"));
+    return new Promise<void>((done) =>
+      requestAnimationFrame(() => {
+        expect(scroll).toHaveBeenCalled();
+        expect(document.activeElement).toBe(screen.getByTestId("deal-custody"));
+        done();
+      })
+    );
+  });
+
+  test("blocked cost checks open the handover costs panel", () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    renderWith([
+      { key: "COSTS_CLOSABLE", status: "BLOCKED" },
+      { key: "HANDOVER_COSTS_PAID", status: "BLOCKED" },
+    ]);
+    fireEvent.click(screen.getByTestId("closing-check-go-HANDOVER_COSTS_PAID"));
+    return new Promise<void>((done) =>
+      requestAnimationFrame(() => {
+        expect(document.activeElement).toBe(screen.getByTestId("deal-handover-costs"));
+        expect(screen.getByTestId("closing-check-go-COSTS_CLOSABLE")).toBeTruthy();
+        done();
+      })
+    );
+  });
+
+  test("a blocked legal-invoice check opens the existing record dialog", () => {
+    const onRecord = vi.fn();
+    renderWith([{ key: "LEGAL_INVOICE_RECORDED", status: "BLOCKED" }], onRecord);
+    fireEvent.click(screen.getByTestId("closing-check-go-LEGAL_INVOICE_RECORDED"));
+    expect(onRecord).toHaveBeenCalledTimes(1);
+  });
+
+  test("CONTROL -- no panel to open, no link: the reason stays, and checks with no home get none", () => {
+    renderWith(
+      [
+        { key: "CUSTODY_SETTLED", status: "BLOCKED" },
+        { key: "COSTS_CLOSABLE", status: "BLOCKED" },
+        { key: "LEGAL_INVOICE_RECORDED", status: "BLOCKED" },
+        { key: "REMITTANCE_KNOWN", status: "BLOCKED" },
+        { key: "FIRST_PAYMENT_RECORDED", status: "BLOCKED" },
+      ],
+      undefined,
+      false
+    );
+    for (const key of ["CUSTODY_SETTLED", "COSTS_CLOSABLE", "LEGAL_INVOICE_RECORDED", "REMITTANCE_KNOWN", "FIRST_PAYMENT_RECORDED"]) {
+      expect(screen.queryByTestId(`closing-check-go-${key}`)).toBeNull();
+      expect(screen.getByTestId(`closing-check-${key}`)).toBeTruthy();
+    }
+  });
+
+  test("CONTROL -- a satisfied check offers no link even with the panel present", () => {
+    renderWith([{ key: "CUSTODY_SETTLED", status: "READY" }]);
+    expect(screen.queryByTestId("closing-check-go-CUSTODY_SETTLED")).toBeNull();
   });
 });
