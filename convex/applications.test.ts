@@ -2518,6 +2518,48 @@ describe("SCRUM-447 D3 correcting the expected payment", () => {
     await expect(s.confirm()).rejects.toThrow(/already marked cleared but the disbursement was never confirmed/i);
   });
 
+  describe("SCRUM-447 N1-B: any CLEARED linked cheque is refused first, as an accounting review", () => {
+    async function withSecondRow(status: "HELD" | "RETURNED") {
+      const s = await setupApprovedDealWithCheque({ face: "20000" });
+      await s.finalize();
+      const [cheque] = await s.rows();
+      const { _id, _creationTime, ...rest } = cheque;
+      await s.t.run(async (ctx) => {
+        await ctx.db.patch(_id, { status: "CLEARED", clearedAt: Date.now() });
+        await ctx.db.insert("postDatedCheques", { ...rest, chequeNumber: "CHQ-447-2", status });
+      });
+      return s;
+    }
+    const snapshotOf = (s: Awaited<ReturnType<typeof withSecondRow>>) =>
+      s.t.run(async (ctx) => ({
+        cheques: await ctx.db.query("postDatedCheques").collect(),
+        payments: await ctx.db.query("canonicalPayments").collect(),
+        allocations: await ctx.db.query("paymentAllocations").collect(),
+        events: await ctx.db.query("accountingEvents").collect(),
+        app: await ctx.db.get(s.applicationId),
+      }));
+
+    test("CLEARED + a live HELD cheque: accounting-review message, zero writes", async () => {
+      const s = await withSecondRow("HELD");
+      const before = await snapshotOf(s);
+      await expect(s.confirm()).rejects.toThrow(/already marked cleared but the disbursement was never confirmed/i);
+      expect(await snapshotOf(s)).toEqual(before);
+    });
+
+    test("CLEARED + a RETURNED cheque: accounting-review message, not the correct-payment one", async () => {
+      const s = await withSecondRow("RETURNED");
+      const before = await snapshotOf(s);
+      await expect(s.confirm()).rejects.toThrow(/already marked cleared but the disbursement was never confirmed/i);
+      expect(await snapshotOf(s)).toEqual(before);
+    });
+
+    test("CONTROL: a single live HELD cheque still confirms", async () => {
+      const s = await setupApprovedDealWithCheque({ face: "20000" });
+      await s.finalize();
+      await s.confirm();
+      expect((await s.rows()).map((r) => r.status)).toEqual(["CLEARED"]);
+    });
+  });
   test("L-b: a legacy CLOSED row with a method but no registeredAt cannot be silently re-registered", async () => {
     const s = await setupApprovedDealWithCheque({ face: "20000" });
     await s.finalize();

@@ -53,6 +53,16 @@ export async function chequesForApplication(
   return rows.filter((row) => row.isDeleted !== true);
 }
 
+/**
+ * SCRUM-447 N1: a linked cheque reached CLEARED. On an undisbursed deal that is
+ * an accounting-review state (the cheque cleared outside the disbursement door),
+ * whatever else is linked beside it. The ONE predicate behind the cockpit's
+ * `chequeNeedsAccountingReview` and `confirmDisbursement`'s refusal, so the
+ * screen withholds exactly what the server refuses.
+ */
+export function hasClearedLinkedCheque(rows: ReadonlyArray<Pick<Doc<"postDatedCheques">, "status">>): boolean {
+  return rows.some((row) => row.status === "CLEARED");
+}
 /** The application's LIVE finance-company cheques. Never `.unique()`. */
 export async function liveChequesForApplication(
   ctx: QueryCtx,

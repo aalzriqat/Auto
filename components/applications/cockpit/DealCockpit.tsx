@@ -1521,7 +1521,22 @@ export function DealCockpit({
     isConsignedDeal &&
     app.status !== "CLOSED" &&
     app.status !== "CANCELLED";
-  // On the direct route the company pays the supplier, so there is no
+  /**
+   * SCRUM-447 N1-A: the cheque states in which `confirmDisbursement` REFUSES
+   * (a cleared cheque awaiting accounting review, a returned/cancelled one
+   * awaiting correction, or no payment registered on a closed deal). The rail
+   * withholds the confirmation exactly there and names the cheque panel's own
+   * notice, so it never offers a step the server would refuse. Review outranks
+   * correction, as on the server, where a CLEARED row is named first.
+   */
+  const chequeDisbursementBlockKey: string | undefined =
+    deal?.chequeNeedsAccountingReview === true
+      ? "FcAccountingReviewNotice"
+      : deal?.chequeNeedsCorrection === true
+        ? "FcCorrectNeededNotice"
+        : deal?.expectedPaymentReRegistrable === true
+          ? "FcReRegisterNotice"
+          : undefined;  // On the direct route the company pays the supplier, so there is no
   // dealership receipt to confirm — `confirmDisbursement` would invent cash.
   const canConfirmDisbursement =
     app != null &&
@@ -1530,7 +1545,8 @@ export function DealCockpit({
     expectsFinanceCompanyDisbursement &&
     !settlesDirectToSupplier &&
     !app.disbursedAt &&
-    disbursementDenominationBlock === undefined;
+    disbursementDenominationBlock === undefined &&
+    chequeDisbursementBlockKey === undefined;
   // Gated on the SERVER's own answer (`canSettleDirectToSupplier`), not on
   // `companyId`, which is unset on every MANUAL_FINANCE_COMPANY deal.
   const canConfirmSupplierDisbursement =
@@ -1902,7 +1918,16 @@ export function DealCockpit({
           ),
         };
       }
-      // The currency boundary is named before permission or applicability:
+      // A cheque state the server refuses is a fact about the deal, named
+      // before permission: the way forward is on the cheque panel above.
+      if (chequeDisbursementBlockKey && !app.disbursedAt) {
+        return {
+          stageKey: "DISBURSEMENT",
+          actionKey: "ConfirmDisbursement",
+          onStart: () => setConfirmingDisbursement(true),
+          unavailableReasonKey: chequeDisbursementBlockKey,
+        };
+      }      // The currency boundary is named before permission or applicability:
       // it is a fact about the deal that no caller can act on from here.
       if (disbursementDenominationBlock && !app.disbursedAt) {
         return {

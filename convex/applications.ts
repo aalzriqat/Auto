@@ -122,6 +122,7 @@ import { auditLog } from "./financialAudit";
 import {
   chequesForApplication,
   isLiveFcCheque,
+  hasClearedLinkedCheque,
   liveChequesForApplication,
   parseFaceAmountMinor,
   dealChequeCurrency,
@@ -2128,12 +2129,12 @@ export const dealCockpit = query({
       chequeNeedsCorrection:
         chequeMethodRegistered &&
         liveFcCheques.length === 0 &&
-        !linkedCheques.some((row) => row.status === "CLEARED") &&
+        !hasClearedLinkedCheque(linkedCheques) &&
         app.status !== "CANCELLED" &&
         !app.disbursedAt,
       chequeNeedsAccountingReview:
         chequeMethodRegistered &&
-        linkedCheques.some((row) => row.status === "CLEARED") &&
+        hasClearedLinkedCheque(linkedCheques) &&
         app.status !== "CANCELLED" &&
         !app.disbursedAt,
       chequeFaceAttested: liveFcCheques.some((row) => row.faceAttestedAt !== undefined),
@@ -4812,16 +4813,19 @@ export const confirmDisbursement = mutation({
           // (lineage is permanent, so retired rows stay linked and would make
           // a unique read throw). Exactly one live row must exist.
           const allRows = await chequesForApplication(ctx, args.applicationId);
+          // N1-B: a CLEARED linked row is an accounting review whatever sits
+          // beside it (live HELD, RETURNED), so it is named FIRST, before any
+          // write and before the correct-the-payment refusal.
+          if (hasClearedLinkedCheque(allRows)) {
+            throw new ConvexError(
+              "This deal's cheque is already marked cleared but the disbursement was never confirmed. Ask accounting to review it before confirming."
+            );
+          }
           const liveRows = allRows.filter(isLiveFcCheque);
           if (liveRows.length === 0) {
             if (allRows.some((row) => row.status === "RETURNED" || row.status === "CANCELLED")) {
               throw new ConvexError(
                 "This cheque was returned or cancelled. Correct the expected payment, then register the new payment, before confirming disbursement."
-              );
-            }
-            if (allRows.some((row) => row.status === "CLEARED")) {
-              throw new ConvexError(
-                "This deal's cheque is already marked cleared but the disbursement was never confirmed. Ask accounting to review it before confirming."
               );
             }
             throw new ConvexError("Expected cheque record not found for this application.");
