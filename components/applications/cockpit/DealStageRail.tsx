@@ -1,6 +1,6 @@
 "use client";
 
-import { Check } from "lucide-react";
+import { Check, Minus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   isLiveStageState,
@@ -149,25 +149,51 @@ export function DealStageRail({
  */
 export function DealStagesComplete({
   count,
+  notNeeded = 0,
   expanded,
   onToggle,
   t,
 }: Readonly<{
+  /** Stages that are COMPLETE. */
   count: number;
+  /** Stages the server proved are not needed. They are finished, never "complete". */
+  notNeeded?: number;
   expanded: boolean;
   onToggle: () => void;
   t: (key: string) => string;
 }>) {
+  // A not-needed stage is finished but was never completed, so the summary
+  // makes no completion claim and wears no success tick: a quiet dash and the
+  // two counts apart. An all-COMPLETE deal keeps its tick, copy and count.
+  const mixed = notNeeded > 0;
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-emerald-700 bg-emerald-500/15 text-emerald-800 dark:border-emerald-400 dark:bg-emerald-400/15 dark:text-emerald-200">
-        <Check className="h-4 w-4" aria-hidden />
-      </span>
-      <p className="min-w-0 flex-1 text-sm font-medium">
-        {t("DealAllStagesComplete")}{" "}
-        <span className="text-muted-foreground">
-          (<bdi dir="ltr">{count}</bdi>)
+      {mixed ? (
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-dotted border-border bg-transparent text-muted-foreground">
+          <Minus className="h-4 w-4" aria-hidden />
         </span>
+      ) : (
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-emerald-700 bg-emerald-500/15 text-emerald-800 dark:border-emerald-400 dark:bg-emerald-400/15 dark:text-emerald-200">
+          <Check className="h-4 w-4" aria-hidden />
+        </span>
+      )}
+      <p className="min-w-0 flex-1 text-sm font-medium">
+        {mixed ? (
+          <>
+            {t("DealStagesFinished")}{" "}
+            <span className="text-muted-foreground">
+              (<span className="whitespace-nowrap"><bdi dir="ltr">{count}</bdi> {t("DealStagesCompleteCount")}</span> ·{" "}
+              <span className="whitespace-nowrap"><bdi dir="ltr">{notNeeded}</bdi> {t("DealStagesNotNeededCount")}</span>)
+            </span>
+          </>
+        ) : (
+          <>
+            {t("DealAllStagesComplete")}{" "}
+            <span className="text-muted-foreground">
+              (<bdi dir="ltr">{count}</bdi>)
+            </span>
+          </>
+        )}
       </p>
       <Button
         type="button"

@@ -22,6 +22,8 @@ import { StagePosition } from "./StagePosition";
  *            rail and the live card use, resolved by the caller).
  *  - stopped: the deal was rejected or cancelled, so the step will never happen.
  *            No needs and no actor are promised -- only that it stopped.
+ *  - notApplicable: the server PROVED the step is not needed on this deal
+ *            (SCRUM-446). It says so, says why, and names nobody as acting.
  */
 export function DealStageView({
   mode,
@@ -90,7 +92,7 @@ export function DealStageView({
             {t(noteKey)}
           </p>
 
-          {owner && mode !== "stopped" && (
+          {owner && mode !== "stopped" && mode !== "notApplicable" && (
             <p className="text-sm" data-testid="deal-stage-view-owner">
               <span className="text-muted-foreground">{t("StageViewWhoActs")}: </span>
               <bdi className="font-medium">{owner}</bdi>

@@ -80,6 +80,15 @@ const dealStepMessages = defineBilingualMessages({
     "This step stopped when the deal was rejected or cancelled. Nothing more will happen here.",
     "توقفت هذه الخطوة عند رفض الصفقة أو إلغائها. لن يحدث شيء آخر هنا.",
   ],
+  // SCRUM-446: a step the server proved is not needed on this deal.
+  StageViewNotApplicableNote: [
+    "This step is not needed on this deal.",
+    "هذه الخطوة غير مطلوبة في هذه الصفقة.",
+  ],
+  StageNotApplicableReasonDisbursement: [
+    "No finance company pays the dealership on this deal.",
+    "لا توجد شركة تمويل تدفع للمعرض في هذه الصفقة.",
+  ],
   StageViewAnnounceShowing: ["Showing step", "عرض الخطوة"],
   StageViewAnnounceBack: ["Back to the current step", "العودة إلى الخطوة الحالية"],
   // ROUND 2 (SCRUM-417 UX4): the deal is closed and this step waits on the finance company.
@@ -448,6 +457,10 @@ const dealRailMessages = defineBilingualMessages({
   RecordedAllDone: ["Nothing left to do on this deal.", "لا يوجد ما تبقى للقيام به في هذه الصفقة."],
   DismissRecorded: ["Dismiss", "إغلاق"],
   DealAllStagesComplete: ["All stages complete", "اكتملت جميع المراحل"],
+  /** Every stage is finished but at least one was not needed: no "complete" claim. */
+  DealStagesFinished: ["All stages finished", "انتهت جميع المراحل"],
+  DealStagesCompleteCount: ["complete", "مكتملة"],
+  DealStagesNotNeededCount: ["not needed", "غير مطلوبة"],
   ShowStages: ["Show stages", "عرض المراحل"],
   HideStages: ["Hide stages", "إخفاء المراحل"],
   FinancialSummaryHeading: ["Financial summary", "الملخص المالي"],
@@ -460,6 +473,7 @@ const dealRailMessages = defineBilingualMessages({
   StageStateBlocked: ["Blocked", "متوقفة"],
   StageStatePending: ["Not started", "لم تبدأ"],
   StageStateStopped: ["Will not continue", "لن تستكمل"],
+  StageStateNotApplicable: ["Not needed", "غير مطلوبة"],
   ProfitBreakdownToggle: ["How this is calculated", "طريقة الاحتساب"],
   /** The headline is served but its working is not — distinct from "never recorded". */
   ProfitBreakdownUnavailable: ["Breakdown unavailable", "التفصيل غير متاح"],
