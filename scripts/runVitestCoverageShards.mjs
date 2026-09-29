@@ -46,6 +46,9 @@ const sonarCoverageArgs = [
   "--coverage.include=convex/**/*.ts",
   "--coverage.include=scripts/**/*.ts",
   "--coverage.include=scripts/**/*.mjs",
+  // CI helpers under .github/scripts are exercised by suites in scripts/, so
+  // they are measured rather than left outside the report (SCRUM-293).
+  "--coverage.include=.github/scripts/**/*.cjs",
   "--coverage.exclude=convex/_generated/**",
   "--coverage.exclude=**/*.test.ts",
   ...thresholdZeroArgs,

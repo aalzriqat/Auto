@@ -9,8 +9,9 @@
  * The artifact is untrusted data. It is refused when it:
  *  - contains a control character other than LF, CRLF or tab (a bare CR or NUL
  *    lets one physical line read as two records to a different parser);
- *  - names an SF source outside convex/, scripts/, apps/mobile/src/ or
- *    apps/mobile/app/ (exact directories - apps/mobile/appx/ is refused);
+ *  - names an SF source outside convex/, scripts/, .github/scripts/,
+ *    apps/mobile/src/ or apps/mobile/app/ (exact directories -
+ *    apps/mobile/appx/ and .github/workflows/ are refused);
  *  - names an absolute path, or a path with an empty, "." or ".." segment or
  *    trailing whitespace;
  *  - names a source that is not an existing regular, non-symlink file in the
@@ -21,7 +22,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-const ALLOWED_SOURCE = /^(convex|scripts|apps\/mobile\/(src|app))\//;
+const ALLOWED_SOURCE = /^(convex|scripts|\.github\/scripts|apps\/mobile\/(src|app))\//;
 // Any C0 control except TAB (0x09) and LF (0x0a), DEL, or a CR that is not part of CRLF.
 const FORBIDDEN_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]|\r(?!\n)/;
 

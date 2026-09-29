@@ -31,6 +31,9 @@ beforeEach(() => {
     "components/a.tsx",
     "lib/commission.ts",
     "Convex/a.ts",
+    ".github/scripts/v.cjs",
+    ".github/workflows/w.yml",
+    ".github/scriptsx/v.cjs",
   ]) {
     touch(f);
   }
@@ -41,7 +44,7 @@ afterEach(() => {
 });
 
 describe("validateLcovSources", () => {
-  test.each(["convex/a.ts", "apps/mobile/src/a.tsx", "apps/mobile/app/(app)/x.tsx"])("accepts %s", (sf) => {
+  test.each(["convex/a.ts", "apps/mobile/src/a.tsx", "apps/mobile/app/(app)/x.tsx", ".github/scripts/v.cjs"])("accepts %s", (sf) => {
     expect(validate(rec(sf))).toBe(1);
   });
 
@@ -52,6 +55,8 @@ describe("validateLcovSources", () => {
   test.each([
     "apps/mobile/appx/a.ts",
     "apps/mobile/jest.setup.ts",
+    ".github/workflows/w.yml",
+    ".github/scriptsx/v.cjs",
     "components/a.tsx",
     "/abs/convex/a.ts",
     "apps/mobile/src/../../x",
