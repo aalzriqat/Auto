@@ -339,6 +339,47 @@ for (const locale of LOCALES) {
             `header ${JSON.stringify(headerBox)} covers essentials ${JSON.stringify(essentialsBox)}`,
           ).toBeLessThanOrEqual(essentialsBox!.y + 0.5);
 
+          // SCRUM-417 UX3 (O1): what the operator sees on arrival. The live step
+          // (Documents) has its panel directly under the next-step card, painted
+          // and reachable, and the rest of the deal sits in a COLLAPSED record.
+          // Adjacency is asserted at every width. "Within the first screen" is
+          // asserted where it is true (desktop) and MEASURED at 390px, where the
+          // sticky header, identity strip and 8-node rail above the card (rail
+          // and identity are outside O1) take ~690px of an 844px screen; the
+          // measurement is recorded on the test so it is visible, not hidden.
+          const nextStepBox = await page.getByTestId("deal-next-step").boundingBox();
+          const workbenchBox = await page.getByTestId("deal-workbench").boundingBox();
+          expect(nextStepBox).not.toBeNull();
+          expect(workbenchBox).not.toBeNull();
+          expect(workbenchBox!.y, "the workbench sits under the next-step card").toBeGreaterThanOrEqual(
+            nextStepBox!.y + nextStepBox!.height - 0.5,
+          );
+          expect(workbenchBox!.y - (nextStepBox!.y + nextStepBox!.height), "gap between step and panel").toBeLessThan(40);
+          test.info().annotations.push({
+            type: "workbench-first-screen",
+            description: `next-step y=${Math.round(nextStepBox!.y)} workbench y=${Math.round(workbenchBox!.y)} viewport=${viewport.height}`,
+          });
+          if (desktop) {
+            expect(
+              workbenchBox!.y,
+              `workbench starts at ${workbenchBox!.y}, below the first screen (${viewport.height})`,
+            ).toBeLessThan(viewport.height);
+          }
+          await expect(page.getByTestId("deal-lower-tabs")).toBeVisible();
+          const record = page.getByTestId("deal-details");
+          expect(await record.evaluate((el) => (el as HTMLDetailsElement).open)).toBe(false);
+          await expect(page.getByTestId("deal-details-toggle")).toBeVisible();
+          // Collapsed means hidden, not removed: the money is in the record and
+          // is not painted until it is opened.
+          await expect(page.getByTestId("deal-money")).toBeHidden();
+          await page.screenshot({
+            path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}-top.png`),
+          });
+          // Open it with the real control: everything the record holds appears.
+          await page.getByTestId("deal-details-toggle").click();
+          expect(await record.evaluate((el) => (el as HTMLDetailsElement).open)).toBe(true);
+          await expect(page.getByTestId("deal-money")).toBeVisible();
+
           // Painted on screen: header, headline figure, stage rail — inside
           // main's box, not merely inside the viewport.
           await expect(page.locator(".text-3xl").first()).toBeVisible();
@@ -396,11 +437,12 @@ for (const locale of LOCALES) {
           ).toBeLessThanOrEqual(overflow.clientWidth);
           expect(overflow.culprits, `blocks painted outside main at ${viewport.width}px`).toEqual([]);
 
-          // Two frames per combination: what the operator sees on arrival, and
-          // the foot of the cockpit once `main` — not the document, which is
-          // `h-screen overflow-hidden` — is scrolled to its end.
+          // Frames per combination: what the operator sees on arrival (the
+          // collapsed record, taken above), the same screen with Deal details
+          // opened, and the foot of the cockpit once `main` — not the document,
+          // which is `h-screen overflow-hidden` — is scrolled to its end.
           await page.screenshot({
-            path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}-top.png`),
+            path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}-expanded-top.png`),
           });
           await main.evaluate((el) => el.scrollTo({ top: el.scrollHeight }));
           await page.screenshot({
