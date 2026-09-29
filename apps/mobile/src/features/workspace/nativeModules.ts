@@ -89,7 +89,7 @@ const nativeModuleRows = [
   ["tasks", "pipeline", "permission", "tasks", "view:tasks", "Tasks", "المهام", "Assign follow-ups and close work.", "تعيين المتابعات وإنهاء الأعمال."],
   ["sales", "finance", "permission", "sales", "view:sales", "Sales", "المبيعات", "Create drafts, complete deals, and cancel safely.", "إنشاء مسودات وإتمام الصفقات وإلغاؤها بأمان."],
   ["expenses", "finance", "permission", "expenses", "view:expenses", "Expenses", "المصاريف", "Record and review operational costs.", "تسجيل ومراجعة المصاريف التشغيلية."],
-  ["accounting", "finance", "permission", "accounting", "view:finance", "Accounting", "المحاسبة", "Manage ledger transactions and cash movement.", "إدارة قيود الدفتر وحركة النقد."],
+  ["accounting", "finance", "permission", "accounting", "view:finance", "Cash movements", "حركات نقدية", "View only, not the General Ledger.", "للعرض فقط، وليست دفتر الأستاذ العام."],
   ["sourcing", "finance", "permission", "sourcing", "view:finance", "Sourcing", "التوريد", "Track supplier payables for sourced vehicles.", "متابعة مستحقات الموردين للسيارات الموردة."],
   ["reports", "finance", "permission", "reports", "view:reports", "Reports", "التقارير", "Sales, inventory, expenses, and conversion.", "المبيعات والمخزون والمصاريف والتحويل."],
   ["commissions", "finance", "permission", "commissions", "view:commissions", "Commissions", "العمولات", "Review and mark commission payments.", "مراجعة وتسجيل دفعات العمولات."],

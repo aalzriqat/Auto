@@ -1,0 +1,293 @@
+/// <reference types="jest" />
+
+import { render, waitFor } from "@testing-library/react-native";
+import * as SecureStore from "expo-secure-store";
+import { StyleSheet } from "react-native";
+
+const mockPaginatedQuery = jest.fn();
+
+jest.mock("convex/react", () => ({
+  usePaginatedQuery: (...args: unknown[]) => mockPaginatedQuery(...args),
+}));
+
+jest.mock("expo-router", () => ({
+  useRouter: () => ({ push: jest.fn() }),
+}));
+
+import { getMobileFoundationString } from "@autoflow/shared";
+
+import { api, type MobileLedgerTransaction } from "../../../convexApi";
+import { LocaleProvider } from "../../../providers/LocaleProvider";
+import { ThemeProvider } from "../../../providers/ThemeProvider";
+import { getNativeModule } from "../nativeModules";
+import { AccountingModule } from "./accounting";
+
+const ORG_ID = "org_1";
+const AR_NOTICE = "حركات نقدية — للعرض فقط، وليست دفتر الأستاذ العام";
+const EN_NOTICE = "Cash movements — view only, not the General Ledger";
+
+// Every affordance that used to write the cashbook from a phone, in both
+// languages. Absence of these strings is the assertion this file exists for.
+const WRITE_AFFORDANCES = [
+  "Add entry",
+  "إضافة قيد",
+  "Edit",
+  "تعديل",
+  "Delete",
+  "حذف",
+  "Save",
+  "حفظ",
+];
+
+const mockGetItem = SecureStore.getItemAsync as jest.MockedFunction<typeof SecureStore.getItemAsync>;
+
+function makeRow(overrides: Partial<MobileLedgerTransaction> = {}): MobileLedgerTransaction {
+  return {
+    _id: "tx_1",
+    orgId: ORG_ID,
+    type: "IN",
+    amount: 250,
+    date: Date.UTC(2026, 0, 15),
+    category: "COLLECTION_PAYMENT",
+    description: "Down payment from Ahmad",
+    vehicleLabel: "Toyota Camry 2022",
+    customerName: "Ahmad",
+    ...overrides,
+  };
+}
+
+function renderModule() {
+  return render(
+    <ThemeProvider>
+      <LocaleProvider>
+        <AccountingModule orgId={ORG_ID} />
+      </LocaleProvider>
+    </ThemeProvider>,
+  );
+}
+
+describe("AccountingModule — cash movements are read-only", () => {
+  beforeEach(() => {
+    mockPaginatedQuery.mockReset();
+    mockGetItem.mockReset();
+    // jest.setup's default: no stored preference, so DEFAULT_LOCALE ("ar") wins.
+    mockGetItem.mockResolvedValue(null);
+  });
+
+  test("renders a real cash movement, and offers no way to change it", async () => {
+    mockPaginatedQuery.mockReturnValue({
+      results: [makeRow()],
+      status: "Exhausted",
+      loadMore: jest.fn(),
+      isLoading: false,
+    });
+
+    const screen = await renderModule();
+
+    // ── Anti-vacuous half. Assert the row actually reached the tree BEFORE
+    // asserting anything is absent. A FlatList that rendered nothing at all
+    // would satisfy every "no write control" assertion below while proving
+    // nothing, so the absence assertions are only meaningful once this passes.
+    expect(screen.getByTestId("cash-movement-tx_1")).toBeTruthy();
+    expect(screen.getByText("Down payment from Ahmad")).toBeTruthy();
+    expect(screen.getByText(/COLLECTION_PAYMENT/)).toBeTruthy();
+
+    // ── The property under test.
+    for (const label of WRITE_AFFORDANCES) {
+      expect(screen.queryByText(label)).toBeNull();
+    }
+    // Nothing pressable at all: not merely "no button with that label", but no
+    // mutation affordance reachable on the screen. `Exhausted` means the list
+    // footer contributes no Load-more button, so this count is the module's own.
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+  });
+
+  test("states in Arabic that this is not the General Ledger", async () => {
+    mockPaginatedQuery.mockReturnValue({
+      results: [makeRow()],
+      status: "Exhausted",
+      loadMore: jest.fn(),
+      isLoading: false,
+    });
+
+    const screen = await renderModule();
+
+    expect(screen.getByTestId("cash-movement-tx_1")).toBeTruthy();
+    expect(screen.getByTestId("cash-movements-notice")).toBeTruthy();
+    expect(screen.getByText(AR_NOTICE)).toBeTruthy();
+  });
+
+  test("states in English that this is not the General Ledger", async () => {
+    mockGetItem.mockResolvedValue("en");
+    mockPaginatedQuery.mockReturnValue({
+      results: [makeRow()],
+      status: "Exhausted",
+      loadMore: jest.fn(),
+      isLoading: false,
+    });
+
+    const screen = await renderModule();
+
+    // The locale arrives asynchronously from SecureStore, so the English copy
+    // replaces the Arabic default only after that promise resolves.
+    await waitFor(() => expect(screen.getByText(EN_NOTICE)).toBeTruthy());
+    expect(screen.getByTestId("cash-movement-tx_1")).toBeTruthy();
+    expect(screen.getByText("Down payment from Ahmad")).toBeTruthy();
+    for (const label of WRITE_AFFORDANCES) {
+      expect(screen.queryByText(label)).toBeNull();
+    }
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+  });
+
+  test("falls back to the customer when a movement has no vehicle", async () => {
+    mockPaginatedQuery.mockReturnValue({
+      results: [makeRow({ _id: "tx_2", vehicleLabel: undefined, customerName: "Layla", description: "Refund issued" })],
+      status: "Exhausted",
+      loadMore: jest.fn(),
+      isLoading: false,
+    });
+
+    const screen = await renderModule();
+
+    expect(screen.getByTestId("cash-movement-tx_2")).toBeTruthy();
+    expect(screen.getByText(/· Layla$/)).toBeTruthy();
+  });
+
+  test("shows a dash when a movement has neither vehicle nor customer", async () => {
+    mockPaginatedQuery.mockReturnValue({
+      results: [makeRow({ _id: "tx_3", vehicleLabel: undefined, customerName: undefined, description: "Unlinked movement" })],
+      status: "Exhausted",
+      loadMore: jest.fn(),
+      isLoading: false,
+    });
+
+    const screen = await renderModule();
+
+    expect(screen.getByTestId("cash-movement-tx_3")).toBeTruthy();
+    expect(screen.getByText(/· -$/)).toBeTruthy();
+  });
+
+  test("keeps the disclaimer visible when there is nothing to show", async () => {
+    mockPaginatedQuery.mockReturnValue({
+      results: [],
+      status: "Exhausted",
+      loadMore: jest.fn(),
+      isLoading: false,
+    });
+
+    const screen = await renderModule();
+
+    // An empty screen must still say what it is; the caveat is a property of
+    // the surface, not of the rows.
+    expect(screen.getByText(AR_NOTICE)).toBeTruthy();
+    expect(screen.getByText("لا توجد حركات نقدية.")).toBeTruthy();
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+  });
+
+  test("reads the cash movements scoped to the caller's org", async () => {
+    const loadMore = jest.fn();
+    mockPaginatedQuery.mockReturnValue({ results: [], status: "Exhausted", loadMore, isLoading: false });
+
+    await renderModule();
+
+    expect(mockPaginatedQuery).toHaveBeenCalledWith(
+      api.transactions.list,
+      { orgId: ORG_ID },
+      { initialNumItems: 25 },
+    );
+  });
+});
+
+describe("the caution rule leads the reading direction", () => {
+  // Neither a logical edge nor a physical one is sufficient alone, and each
+  // fails a different pair of the four locale/native-layout combinations:
+  //
+  //   * logical alone resolves against the NATIVE direction, and the app locale
+  //     can diverge from it (`allowRTL` without `forceRTL`; `homeModel.ts`
+  //     documents the same divergence). `DEFAULT_LOCALE` is "ar", so Arabic on
+  //     an English-locale phone is the first-run case.
+  //   * physical alone does not stay physical: under native RTL, React Native
+  //     rewrites authored left/right into start/end before Yoga runs
+  //     (`YogaLayoutableShadowNode::swapLeftAndRightInYogaStyleProps` and
+  //     `swapLeftAndRightInViewProps` in the shipped 0.86 source).
+  //
+  // So the banner declares its own `direction` from the app locale and uses a
+  // logical start edge. Jest runs no Yoga, so these assert those two properties
+  // — the ones that make the rendered edge correct in all four combinations —
+  // rather than the rendered edge itself, which still wants a device check.
+  async function noticeStyle(stored: string | null) {
+    mockGetItem.mockResolvedValue(stored);
+    mockPaginatedQuery.mockReturnValue({
+      results: [makeRow()],
+      status: "Exhausted",
+      loadMore: jest.fn(),
+      isLoading: false,
+    });
+    const screen = await renderModule();
+    await waitFor(() =>
+      expect(screen.getByText(stored === "en" ? EN_NOTICE : AR_NOTICE)).toBeTruthy(),
+    );
+    return StyleSheet.flatten(screen.getByTestId("cash-movements-notice").props.style);
+  }
+
+  test("carries the app locale's direction and a logical leading edge", async () => {
+    const ar = await noticeStyle(null);
+    const en = await noticeStyle("en");
+
+    // The node's own direction, so its start edge never consults I18nManager.
+    expect(ar.direction).toBe("rtl");
+    expect(en.direction).toBe("ltr");
+
+    // Logical, and no authored physical edge for the native swap to rewrite.
+    expect(ar.borderStartWidth).toBe(3);
+    expect(en.borderStartWidth).toBe(3);
+    for (const style of [ar, en]) {
+      expect(style.borderLeftWidth).toBeUndefined();
+      expect(style.borderRightWidth).toBeUndefined();
+      expect(style.borderLeftColor).toBeUndefined();
+      expect(style.borderRightColor).toBeUndefined();
+    }
+
+    // The control: the two must actually differ. A banner that ignores the
+    // locale produces an identical style object in both, which is the defect.
+    expect(ar).not.toEqual(en);
+  });
+});
+
+describe("every surface that opens this module tells the truth about it", () => {
+  // The accountant's dashboard role-start card routes straight to
+  // `moduleId: "accounting"` (OrgDashboardScreen `getRoleStart`), but its copy
+  // lives in `packages/shared`, outside `apps/mobile`. Renaming the module, its
+  // banner and its launcher tile therefore left that card behind, still
+  // promising ledger management for a destination that is now an explicitly
+  // read-only cash projection. A grep of the mobile app alone does not find it.
+  test("the accountant dashboard card does not promise ledger management", () => {
+    const en = getMobileFoundationString("en", "roleStartAccountantBody");
+    const ar = getMobileFoundationString("ar", "roleStartAccountantBody");
+
+    expect(en).not.toMatch(/manage/i);
+    expect(en).toMatch(/not the General Ledger/);
+    expect(ar).not.toContain("إدارة");
+    expect(ar).toContain("وليست دفتر الأستاذ العام");
+  });
+
+  test("the dashboard card and the launcher tile name the same destination", () => {
+    const accounting = getNativeModule("accounting");
+    if (!accounting) throw new Error("the accounting native module is missing");
+
+    // Two copies of the same name in two packages is how they drifted apart in
+    // the first place; this fails if either moves without the other.
+    expect(getMobileFoundationString("en", "roleStartAccountantTitle")).toBe(accounting.title.en);
+    expect(getMobileFoundationString("ar", "roleStartAccountantTitle")).toBe(accounting.title.ar);
+  });
+});
+
+describe("mobile Convex contract — the client holds no cashbook write", () => {
+  test("the client exposes only the read projection", () => {
+    // The runtime surface an installed build would actually address. The
+    // cross-surface source proof — that the client emits no "transactions:add"
+    // string while the backend still exports one during stage 53-A — lives in
+    // scripts/convexApiContract.test.ts, which can read both trees.
+    expect(Object.keys(api.transactions)).toEqual(["list"]);
+  });
+});
