@@ -199,6 +199,8 @@ export type HandoverCostLine = {
    * Absent on a payload that predates it: the line then shows no payment row.
    */
   handoverPayment?: HandoverPaymentView;
+  /** Where the line came from: the finance company's (legacy) fee template, or typed in by hand. Served with the row. */
+  source?: "COMPANY_TEMPLATE" | "MANUAL";
   /** Whether a direct dealership payment would be accepted on this line right now. */
   directPaymentEligible?: boolean;
   /** The live direct payment, when there is one. */
@@ -2192,7 +2194,13 @@ function HandoverPaymentRow({
   if (state === "UNSUPPORTED_TREATMENT" || state === "DEDUCTION_NOT_RECOGNISED") {
     return (
       <p role="alert" className="mt-2 text-xs font-medium text-destructive" data-testid={testId} data-state={state}>
-        {t(state === "UNSUPPORTED_TREATMENT" ? "HandoverPaymentUnsupportedTreatment" : "HandoverPaymentDeductionNotRecognised")}
+        {t(
+          line.source === "COMPANY_TEMPLATE"
+            ? "HandoverPaymentLegacyTemplateReview"
+            : state === "UNSUPPORTED_TREATMENT"
+              ? "HandoverPaymentUnsupportedTreatment"
+              : "HandoverPaymentDeductionNotRecognised"
+        )}
       </p>
     );
   }

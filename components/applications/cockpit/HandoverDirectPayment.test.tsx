@@ -478,6 +478,39 @@ describe("each state of the server's verdict is shown as it is", () => {
     expect(screen.queryByTestId("deal-handover-payment-z")).toBeNull();
   });
 
+  test.each(["UNSUPPORTED_TREATMENT", "DEDUCTION_NOT_RECOGNISED"] as const)(
+    "%s: a legacy-template line shows the review copy, never the remove-and-add-again advice; a manual line keeps the old copy (SCRUM-443 v7)",
+    (state) => {
+      renderPanel(
+        [
+          line({ _id: "tpl", source: "COMPANY_TEMPLATE", handoverPayment: state, directPaymentEligible: false }),
+          line({ _id: "man", source: "MANUAL", handoverPayment: state, directPaymentEligible: false }),
+        ],
+        { canRecordDirectPayment: true, onRecordDirectPayment: async () => {} }
+      );
+      const template = screen.getByTestId("deal-handover-payment-tpl").textContent;
+      expect(template).toBe(salesEn.HandoverPaymentLegacyTemplateReview);
+      expect(template).not.toMatch(/add it again|remove it/i);
+      const manual = screen.getByTestId("deal-handover-payment-man").textContent;
+      expect(manual).toBe(state === "UNSUPPORTED_TREATMENT" ? salesEn.HandoverPaymentUnsupportedTreatment : salesEn.HandoverPaymentDeductionNotRecognised);
+      expect(manual).toMatch(/add it again/i);
+    }
+  );
+
+  test("the legacy-template review copy exists in both languages and the reason code renders with its count", () => {
+    expect(salesAr.HandoverPaymentLegacyTemplateReview).toMatch(/[؀-ۿ]/);
+    const enT = (key: string) => (salesEn as Record<string, string>)[key] ?? key;
+    const arT = (key: string) => (salesAr as Record<string, string>)[key] ?? key;
+    const en = closingReasonText(enT, "HANDOVER_COSTS_LEGACY_TEMPLATE_REVIEW", { count: 2 }, "diagnostic");
+    const ar = closingReasonText(arT, "HANDOVER_COSTS_LEGACY_TEMPLATE_REVIEW", { count: 2 }, "diagnostic");
+    expect(en.translated).toBe(true);
+    expect(en.text).toContain("2");
+    expect(en.text).not.toMatch(/add it again|remove each/i);
+    expect(ar.translated).toBe(true);
+    expect(ar.text).toContain("2");
+    expect(ar.text).toMatch(/[؀-ۿ]/);
+  });
+
   test("a payload that predates the payment state renders no payment row at all", () => {
     renderPanel([line({ handoverPayment: undefined, directPaymentEligible: undefined })], { canRecordDirectPayment: true });
     expect(screen.queryByTestId("deal-handover-payment-fee1")).toBeNull();
@@ -492,6 +525,7 @@ describe("the readiness reasons point at the lines, in both languages", () => {
     "HANDOVER_COSTS_UNPAID",
     "HANDOVER_COSTS_NO_ACTUAL",
     "HANDOVER_COSTS_CONFLICT",
+    "HANDOVER_COSTS_LEGACY_TEMPLATE_REVIEW",
     "HANDOVER_DIRECT_NOT_ON_LEDGER",
     "HANDOVER_DIRECT_REVERSAL_PENDING",
   ] as const)(

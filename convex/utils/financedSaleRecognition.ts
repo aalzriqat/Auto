@@ -204,6 +204,14 @@ function handoverCostsPaidRefusal(
 ): ClosingReadinessReason | null {
   const states = liveFees.map((fee) => handoverPaymentState(fee, scope));
   const count = (state: HandoverPaymentState) => states.filter((s) => s === state).length;
+  // A blocked line recorded from the finance company's legacy fee template is
+  // counted apart from a manual one: nothing on the deal can correct it (a
+  // manual replacement cannot satisfy CONFIGURED_FEES_RECORDED, and re-recording
+  // the template copies the same frozen treatment), so the manual "remove and
+  // add again" advice would be a loop (SCRUM-443 v7).
+  const countBlockedBySource = (state: HandoverPaymentState, template: boolean) =>
+    states.filter((s, i) => s === state && (liveFees[i].source === "COMPANY_TEMPLATE") === template).length;
+  const legacyTemplate = countBlockedBySource("UNSUPPORTED_TREATMENT", true) + countBlockedBySource("DEDUCTION_NOT_RECOGNISED", true);
   const noActual = count("NO_ACTUAL");
   if (noActual > 0) {
     return reasonOf(
@@ -222,7 +230,14 @@ function handoverCostsPaidRefusal(
   }
   // A real cost no supported source can pay: it would reach no ledger account
   // (SCRUM-443 v6). Named with the door, in the deal's own words.
-  const unsupported = count("UNSUPPORTED_TREATMENT");
+  if (legacyTemplate > 0) {
+    return reasonOf(
+      "HANDOVER_COSTS_LEGACY_TEMPLATE_REVIEW",
+      `${legacyTemplate} handover cost(s) on this deal come from the finance company's older fee setup, and their accounting treatment cannot be paid or posted as recorded. They cannot be corrected from the deal. Ask an accountant or administrator to review them before finalizing.`,
+      { count: legacyTemplate }
+    );
+  }
+  const unsupported = countBlockedBySource("UNSUPPORTED_TREATMENT", false);
   if (unsupported > 0) {
     return reasonOf(
       "HANDOVER_COSTS_UNSUPPORTED_TREATMENT",
@@ -230,7 +245,7 @@ function handoverCostsPaidRefusal(
       { count: unsupported }
     );
   }
-  const notRecognised = count("DEDUCTION_NOT_RECOGNISED");
+  const notRecognised = countBlockedBySource("DEDUCTION_NOT_RECOGNISED", false);
   if (notRecognised > 0) {
     return reasonOf(
       "HANDOVER_COSTS_DEDUCTION_NOT_RECOGNISED",

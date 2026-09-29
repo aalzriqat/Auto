@@ -128,6 +128,49 @@ async function offPlanFee(
 
 const journals = (seed: Seed) => seed.t.run(async (ctx) => (await ctx.db.query("journalEntries").collect()).length);
 
+/** Records a fee the way the LEGACY finance-company template writer does: source COMPANY_TEMPLATE, treatment and deduction frozen from the snapshot. */
+async function templateFee(seed: Seed, over: Partial<{ accountingTreatment: string; deductedFromSettlement: boolean }> = {}) {
+  await seed.t.run((ctx) =>
+    ctx.db.patch(seed.applicationId, {
+      companyRuleSnapshot: {
+        ruleVersion: 1, companyName: "X",
+        feeTemplates: [{
+          feeType: "LICENSING", description: "Plates", estimatedAmountMinor: jod(50), paidBy: "DEALER", paidTo: "GOVERNMENT",
+          includedInQuotation: false, deductedFromSettlement: over.deductedFromSettlement ?? false, refundable: false,
+          accountingTreatment: over.accountingTreatment ?? ORDINARY,
+        }],
+      } as never,
+    })
+  );
+  const feeId = await seed.asUser.mutation(api.financeDealCosts.recordTemplateFeeActual, {
+    orgId: seed.orgId, applicationId: seed.applicationId, templateIndex: 0, feeType: "LICENSING",
+    actualAmountMinor: jod(50), expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(),
+  } as never);
+  expect((await seed.t.run((ctx) => ctx.db.get("financeDealFees", feeId)))?.source).toBe("COMPANY_TEMPLATE");
+  return feeId;
+}
+
+/** finalizeDeal is refused with `code`, nothing is journalled or queued for the line, and the deal stays APPROVED. */
+async function expectFinalizeRefusedWithNoGl(seed: Seed, feeId: Id<"financeDealFees">, code: string, key: string) {
+  await registerHandover(seed.asUser, api, seed.orgId, seed.applicationId);
+  await seed.asUser.mutation(api.applications.registerExpectedPayment, {
+    orgId: seed.orgId, applicationId: seed.applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
+  });
+  const before = await journals(seed);
+  let refusal: unknown;
+  try {
+    await seed.asUser.mutation(api.applications.finalizeDeal, { orgId: seed.orgId, applicationId: seed.applicationId, idempotencyKey: key });
+  } catch (error) {
+    refusal = error;
+  }
+  expect(refusal).toBeInstanceOf(ConvexError);
+  expect((refusal as ConvexError<{ code: string }>).data.code).toBe(code);
+  expect(await journals(seed)).toBe(before);
+  const events = await seed.t.run(async (ctx) => (await ctx.db.query("accountingEvents").collect()).filter((e) => e.sourceId === (feeId as string)));
+  expect(events).toEqual([]);
+  expect((await seed.t.run((ctx) => ctx.db.get("financeApplications", seed.applicationId)))?.status).toBe("APPROVED");
+}
+
 describe("b1 - an off-plan dealer-borne line no supported source can pay blocks the closing", () => {
   test("CAPITALIZED_TO_VEHICLE + positive actual: BLOCKED with UNSUPPORTED_TREATMENT; finalizeDeal refuses and posts nothing", async () => {
     const seed = await seedDeal("b1-cap");
@@ -214,26 +257,15 @@ describe("b1 - an off-plan dealer-borne line no supported source can pay blocks 
     expect((await readiness(seed)).reason?.code).toBe("HANDOVER_COSTS_UNSUPPORTED_TREATMENT");
   });
 
-  test("the other fee writer (recordTemplateFeeActual) is covered: a template whose treatment is CAPITALIZED_TO_VEHICLE blocks the same way", async () => {
+  test("the other fee writer (recordTemplateFeeActual) is covered: a legacy-template line whose treatment is CAPITALIZED_TO_VEHICLE blocks with the legacy-review reason (SCRUM-443 v7)", async () => {
     const seed = await seedDeal("b1-template");
-    await seed.t.run((ctx) =>
-      ctx.db.patch(seed.applicationId, {
-        companyRuleSnapshot: {
-          ruleVersion: 1, companyName: "X",
-          feeTemplates: [{
-            feeType: "LICENSING", description: "Plates", estimatedAmountMinor: jod(50), paidBy: "DEALER", paidTo: "GOVERNMENT",
-            includedInQuotation: false, deductedFromSettlement: false, refundable: false, accountingTreatment: "CAPITALIZED_TO_VEHICLE",
-          }],
-        } as never,
-      })
-    );
-    const feeId = await seed.asUser.mutation(api.financeDealCosts.recordTemplateFeeActual, {
-      orgId: seed.orgId, applicationId: seed.applicationId, templateIndex: 0, feeType: "LICENSING",
-      actualAmountMinor: jod(50), expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(),
-    } as never);
+    const feeId = await templateFee(seed, { accountingTreatment: "CAPITALIZED_TO_VEHICLE" });
     const check = await readiness(seed);
-    expect(check.reason?.code).toBe("HANDOVER_COSTS_UNSUPPORTED_TREATMENT");
+    expect(check.status).toBe("BLOCKED");
+    expect(check.reason?.code).toBe("HANDOVER_COSTS_LEGACY_TEMPLATE_REVIEW");
+    expect(check.reason?.params).toEqual({ count: 1 });
     expect(check.feeIds).toEqual([feeId]);
+    await expectFinalizeRefusedWithNoGl(seed, feeId, "HANDOVER_COSTS_LEGACY_TEMPLATE_REVIEW", "b1-template-fin");
   });
 
   test("the direct-payment door refuses an unsupported-treatment line with guidance naming remove-and-record-again", async () => {
@@ -247,6 +279,45 @@ describe("b1 - an off-plan dealer-borne line no supported source can pay blocks 
     }
     expect(message).toMatch(/remove/i);
     expect((await seed.t.run((ctx) => ctx.db.get("financeDealFees", feeId)))?.directPayment).toBeUndefined();
+  });
+});
+
+describe("b3 - a legacy-template line the deal cannot correct is not told to remove and re-add it (SCRUM-443 v7)", () => {
+  test("a legacy-template deducted line with no configured plan: LEGACY_TEMPLATE_REVIEW, finalizeDeal refused, no GL", async () => {
+    const seed = await seedDeal("b3-ded");
+    const feeId = await templateFee(seed, { deductedFromSettlement: true });
+    const check = await readiness(seed);
+    expect(check.status).toBe("BLOCKED");
+    expect(check.reason?.code).toBe("HANDOVER_COSTS_LEGACY_TEMPLATE_REVIEW");
+    expect(check.feeIds).toEqual([feeId]);
+    await expectFinalizeRefusedWithNoGl(seed, feeId, "HANDOVER_COSTS_LEGACY_TEMPLATE_REVIEW", "b3-ded-fin");
+  });
+
+  test("control: a MANUAL unsupported line keeps HANDOVER_COSTS_UNSUPPORTED_TREATMENT, a MANUAL deducted line keeps DEDUCTION_NOT_RECOGNISED", async () => {
+    const cap = await seedDeal("b3-manual-cap");
+    await offPlanFee(cap, { accountingTreatment: "CAPITALIZED_TO_VEHICLE" });
+    expect((await readiness(cap)).reason?.code).toBe("HANDOVER_COSTS_UNSUPPORTED_TREATMENT");
+    const ded = await seedDeal("b3-manual-ded");
+    await offPlanFee(ded, { deductedFromSettlement: true });
+    expect((await readiness(ded)).reason?.code).toBe("HANDOVER_COSTS_DEDUCTION_NOT_RECOGNISED");
+  });
+
+  test("mixed: one legacy-template and one manual unsupported line - the legacy reason comes first and counts only the template line", async () => {
+    const seed = await seedDeal("b3-mixed");
+    await offPlanFee(seed, { accountingTreatment: "CAPITALIZED_TO_VEHICLE" });
+    const templateId = await templateFee(seed, { accountingTreatment: "CAPITALIZED_TO_VEHICLE" });
+    const check = await readiness(seed);
+    expect(check.reason?.code).toBe("HANDOVER_COSTS_LEGACY_TEMPLATE_REVIEW");
+    expect(check.reason?.params).toEqual({ count: 1 });
+    expect(check.feeIds).toHaveLength(2);
+    expect(check.feeIds).toContain(templateId);
+  });
+
+  test("precedence is unchanged: an UNPAID line still comes before the legacy-template review", async () => {
+    const seed = await seedDeal("b3-unpaid");
+    await offPlanFee(seed);
+    await templateFee(seed, { accountingTreatment: "CAPITALIZED_TO_VEHICLE" });
+    expect((await readiness(seed)).reason?.code).toBe("HANDOVER_COSTS_UNPAID");
   });
 });
 

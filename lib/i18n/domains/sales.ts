@@ -574,6 +574,10 @@ const dealRailMessages = defineBilingualMessages({
     "This cost is marked as deducted from the finance company's settlement, but this deal has no configured financing plan to recognise it, so it would never reach the books. Remove it and add it again without the settlement deduction, then pay it.",
     "هذا المصروف معلَّم كمخصوم من تسوية شركة التمويل، لكن هذه الصفقة بلا خطة تمويل مُعدّة تعترف به، فلن يصل إلى الدفاتر أبدًا. احذفه وأضفه من جديد دون خصم التسوية، ثم سجّل دفعه.",
   ],
+  HandoverPaymentLegacyTemplateReview: [
+    "This cost comes from the finance company's older fee setup, and its accounting treatment cannot be paid or posted as recorded. It cannot be corrected from the deal — ask an accountant or administrator to review it.",
+    "هذا المصروف مصدره إعداد الرسوم القديم لشركة التمويل، ولا يمكن دفع معالجته المحاسبية أو ترحيلها كما هي مسجّلة. ولا يمكن تصحيحه من الصفقة — اطلب من المحاسب أو المسؤول مراجعته.",
+  ],
   HandoverPaymentPaidDirect: ["Paid by the dealership", "دفعه المعرض مباشرةً"],
   HandoverPaymentUnpaid: ["Payment not recorded", "الدفع غير مسجَّل"],
   HandoverPaymentNoActual: ["Record its actual amount first", "سجّل مبلغه الفعلي أولًا"],
@@ -1106,6 +1110,10 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingReason_HANDOVER_COSTS_DEDUCTION_NOT_RECOGNISED: [
     "{count} handover cost(s) are marked as deducted from the finance company's settlement, but this deal has no configured financing plan to recognise a deduction, so they would never reach the books. In Handover costs, remove each one and add it again without the settlement deduction, then pay it directly or charge it to custody. Then close.",
     "يوجد {count} من مصاريف التسليم معلَّمة كمخصومة من تسوية شركة التمويل، لكن هذه الصفقة بلا خطة تمويل مُعدّة تعترف بالخصم، فلن تصل إلى الدفاتر أبدًا. في مصاريف التسليم احذف كل بند منها وأضفه من جديد دون خصم التسوية، ثم سجّل دفعه مباشرةً أو حمِّله على العهدة. ثم أغلق.",
+  ],
+  ClosingReason_HANDOVER_COSTS_LEGACY_TEMPLATE_REVIEW: [
+    "{count} handover cost(s) come from the finance company's older fee setup, and their accounting treatment cannot be paid or posted as recorded. They cannot be corrected from the deal. Ask an accountant or administrator to review them before finalizing.",
+    "يوجد {count} من مصاريف التسليم مصدرها إعداد الرسوم القديم لشركة التمويل، ولا يمكن دفع معالجتها المحاسبية أو ترحيلها كما هي مسجّلة. ولا يمكن تصحيحها من الصفقة. اطلب من المحاسب أو المسؤول مراجعتها قبل إغلاق الصفقة.",
   ],
   ClosingReason_HANDOVER_DIRECT_NOT_ON_LEDGER: [
     "{count} direct handover payment(s) are recorded but not on the books yet: the posting is waiting because no accounting period is open for its date, or has not been processed. Open the accounting period for the payment date and let the accounting queue process, then close the deal.",
