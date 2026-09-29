@@ -2,14 +2,15 @@
  * SCRUM-417 UX PR 2 (S5) -- "who acts" names the permission group.
  *
  * Every note that tells a caller someone ELSE must act says which group that
- * is: Sales, Manager or Accountant. The group is not opinion: it is the set of
- * default role templates that actually hold the permission(s) the gate checks,
- * read from `DEFAULT_ROLE_TEMPLATES`, so a note cannot point a caller at a role
- * that could not do the thing (which would just be a new dead end). Owner
- * ruling: only managers and accountants move money.
+ * is: Sales, Manager, Accountant, or the dealership Owner when no default role
+ * can act. The group is not opinion: it is the set of default role templates
+ * that actually hold the permission(s) the SERVER guard checks, read from
+ * `DEFAULT_ROLE_TEMPLATES`, so a note cannot point a caller at a role that
+ * would be refused (which would just be a new dead end). Owner ruling: only
+ * managers and accountants move money.
  *
- * The permission column mirrors the client gate that selects each note in
- * `DealCockpit.tsx`; each entry is an ANY-OF list of ALL-OF sets.
+ * The permission column mirrors the server guard of the mutation behind each
+ * note (see NOTES below); each entry is an ANY-OF list of ALL-OF sets.
  */
 import { describe, expect, test } from "vitest";
 import { salesAr, salesEn } from "./domains/sales";

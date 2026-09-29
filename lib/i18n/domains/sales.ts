@@ -106,16 +106,16 @@ const dealRailMessages = defineBilingualMessages({
     "بانتظار صرف شركة التمويل",
   ],
 
-  /**
-   * Disbursement stage in rail ahead of handover: clarifies that disbursement
-   * confirmation occurs after handover and finalization.
-   */
   /** Settlement node while the payment step is live: it closes only once the money arrives. */
   BlockerSettlementAfterFinancePayment: [
     "Completes after the finance company pays",
     "تكتمل بعد صرف شركة التمويل",
   ],
 
+  /**
+   * Disbursement stage in rail ahead of handover: clarifies that disbursement
+   * confirmation occurs after handover and finalization.
+   */
   BlockerDisbursementAfterHandover: [
     "Recorded after vehicle handover and finalization",
     "يُسجَّل بعد تسليم المركبة وإتمام الصفقة",
