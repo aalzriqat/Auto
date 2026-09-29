@@ -129,7 +129,7 @@ const UX4_VARIANTS: ReadonlyArray<{
   mode: "past" | "future" | null;
   stage: string | null;
 }> = [
-  { suffix: "-ux4-handover-checklist", title: "the live Handover card lists its sub-steps", mode: null, stage: null },
+  { suffix: "-ux4-handover-checklist", title: "the live Handover card lists only its own gates", mode: null, stage: null },
   { suffix: "-ux4-view-past", title: "a past step opens read-only with a way back", mode: "past", stage: "APPLICATION" },
   { suffix: "-ux4-view-future", title: "a future step says what it needs and who acts", mode: "future", stage: "SETTLEMENT" },
 ];
@@ -785,7 +785,10 @@ for (const variant of UX4_VARIANTS) {
               await expect(list).toBeVisible();
               expect(await list.locator('[data-status="current"]').count()).toBe(1);
               expect(await list.locator('[data-status="done"]').count()).toBeGreaterThan(0);
-              expect(await list.locator('[data-status="pending"]').count()).toBeGreaterThan(0);
+              // Handover with no blocker: the server says nothing is outstanding, so the
+              // checklist must not leave anything pending (costs gate the close, not this step).
+              expect(await list.locator('[data-status="pending"]').count()).toBe(0);
+              await expect(list.getByTestId("deal-step-item-costs-paid")).toHaveCount(0);
               await expect(page.getByTestId("deal-stage-view")).toHaveCount(0);
               const box = await list.boundingBox();
               expect(box!.x).toBeGreaterThanOrEqual(mainBox!.x - 0.5);

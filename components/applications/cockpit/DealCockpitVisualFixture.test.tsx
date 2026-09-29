@@ -1157,18 +1157,27 @@ describe("closing-readiness rows are destinations", () => {
     checks: Array<{ key: string; status: string }>,
     onRecord?: () => void,
     withPanels = true,
-    atHandover = false
+    liveKey: string | null = null
   ) {
     language.locale = "en";
     const base = financedDeal();
-    // The fixture is live on Documents; UX4 tests move the live step to Handover.
-    const deal = atHandover
+    // The fixture is live on Documents; UX4 tests move the live step (`liveKey`).
+    const order = base.stages.map((stage) => stage.key);
+    const deal = liveKey
       ? {
           ...base,
           stages: base.stages.map((stage) => ({
             ...stage,
-            state: stage.key === "HANDOVER" ? ("CURRENT" as const) : stage.key === "DISBURSEMENT" || stage.key === "SETTLEMENT" ? ("PENDING" as const) : ("COMPLETE" as const),
-            blocker: undefined,
+            state:
+              stage.key === liveKey
+                ? liveKey === "HANDOVER"
+                  ? ("CURRENT" as const)
+                  : ("BLOCKED" as const)
+                : order.indexOf(stage.key) < order.indexOf(liveKey as (typeof order)[number])
+                  ? ("COMPLETE" as const)
+                  : ("PENDING" as const),
+            blocker:
+              stage.key === liveKey && liveKey !== "HANDOVER" ? ("AwaitingSettlement" as const) : undefined,
           })),
         }
       : base;
@@ -1227,7 +1236,7 @@ describe("closing-readiness rows are destinations", () => {
     );
   });
 
-  test("UX4 O2: the live Handover card lists its sub-steps from those same checks, and the current one goes to the costs panel", () => {
+  test("UX4 O2: handover costs are CLOSING gates -- the live Settlement card lists them, and the current one goes to the costs panel", () => {
     Element.prototype.scrollIntoView = vi.fn();
     renderWith(
       [
@@ -1236,13 +1245,13 @@ describe("closing-readiness rows are destinations", () => {
       ],
       undefined,
       true,
-      true
+      "SETTLEMENT"
     );
     const list = screen.getByTestId("deal-step-checklist");
     const status = (id: string) => within(list).getByTestId(`deal-step-item-${id}`).getAttribute("data-status");
     expect(status("costs-recorded")).toBe("done");
     expect(status("costs-paid")).toBe("current");
-    expect(status("register-handover")).toBe("pending");
+    expect(status("close-deal")).toBe("pending");
     // Exactly one item is the current one, and it is the only one that acts.
     const go = within(list).getByTestId("deal-step-item-go");
     expect(go.getAttribute("aria-current")).toBe("step");
@@ -1256,9 +1265,21 @@ describe("closing-readiness rows are destinations", () => {
     );
   });
 
-  test("UX4 O2: with no readiness visible there is no invented checklist", () => {
-    renderWith([], undefined, false, true);
-    expect(screen.queryByTestId("deal-step-checklist")).toBeNull();
+  test("UX4 O2 invariant: a Handover with unpaid costs says nothing is outstanding AND lists no costs and nothing pending", () => {
+    renderWith(
+      [
+        { key: "CONFIGURED_FEES_RECORDED", status: "BLOCKED" },
+        { key: "HANDOVER_COSTS_PAID", status: "BLOCKED" },
+      ],
+      undefined,
+      true,
+      "HANDOVER"
+    );
+    const list = screen.getByTestId("deal-step-checklist");
+    expect(within(list).queryByTestId("deal-step-item-costs-recorded")).toBeNull();
+    expect(within(list).queryByTestId("deal-step-item-costs-paid")).toBeNull();
+    expect(list.querySelectorAll('[data-status="pending"]').length).toBe(0);
+    expect(within(list).getByTestId("deal-step-item-register-handover").getAttribute("data-status")).toBe("current");
   });
 
   test("a blocked legal-invoice check opens the existing record dialog", () => {

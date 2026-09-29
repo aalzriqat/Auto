@@ -50,6 +50,7 @@ const dealStepMessages = defineBilingualMessages({
   ChecklistDocumentsVerified: ["Required documents verified", "التحقق من المستندات المطلوبة"],
   ChecklistCostsRecorded: ["Handover costs recorded", "تسجيل تكاليف التسليم"],
   ChecklistCostsPaid: ["Handover costs paid", "دفع تكاليف التسليم"],
+  ChecklistDealFiguresReady: ["Deal figures ready to hand over", "أرقام الصفقة جاهزة للتسليم"],
   ChecklistRegisterHandover: ["Register the handover", "تسجيل تسليم المركبة"],
   ChecklistRouteRecorded: ["Settlement route recorded", "تسجيل مسار التسوية"],
   ChecklistClosingChecksReady: ["Closing checks ready", "جاهزية فحوصات الإغلاق"],

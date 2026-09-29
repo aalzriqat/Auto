@@ -73,15 +73,26 @@ type Draft = Readonly<{
  *    is not is current, the rest are pending.
  *  - PENDING / STOPPED: nothing has started, so nothing is claimed done -- a
  *    preview of what the step will ask for, all pending.
+ *
+ * THE INVARIANT (SCRUM-417 UX4): an item under stage X is a gate the server
+ * enforces for completing or leaving X, and the checklist never contradicts the
+ * step's own status. A stage the server reports CURRENT has NO blocker -- it
+ * says nothing is outstanding -- so a fact-derived item cannot be pending
+ * there: only the step's own action (`primaryAction`) is left to do. Costs, for
+ * example, are closing-readiness checks: they gate SETTLEMENT, and registering
+ * the handover (`registerVehicleHandover`) does not read them, so they are not
+ * items of HANDOVER.
  */
 function settle(drafts: ReadonlyArray<Draft>, state: DealStageState): ChecklistItem[] {
   const live = state === "CURRENT" || state === "BLOCKED";
   let currentTaken = false;
+  const noBlocker = state === "CURRENT";
   return drafts.map((draft): ChecklistItem => {
     let status: ChecklistItemStatus;
     if (state === "COMPLETE") status = "done";
     else if (!live) status = "pending";
-    else if (draft.done) status = "done";
+    // No server blocker: every established gate reads done; only the action remains.
+    else if (draft.done || (noBlocker && draft.destination !== "primaryAction")) status = "done";
     else if (!currentTaken) {
       currentTaken = true;
       status = "current";
@@ -95,15 +106,13 @@ function settle(drafts: ReadonlyArray<Draft>, state: DealStageState): ChecklistI
 const UPLOADED = new Set(["UPLOADED", "VERIFIED", "WAIVED"]);
 const VERIFIED = new Set(["VERIFIED", "WAIVED"]);
 
-/** A closing check that applies to this deal. NOT_APPLICABLE is absent, not "done". */
-const applicable = (status: string | undefined) => status !== undefined && status !== "NOT_APPLICABLE";
-
 function approvedPurchase(f: ChecklistFacts): Draft[] {
   return [
     {
       id: "approved-amount",
       labelKey: "ChecklistApprovedAmountRecorded",
-      done: f.blocker !== "NoApprovedPurchaseAmount",
+      // Positively identified: a blocker key this code does not know is NOT read as "amount recorded".
+      done: f.blocker === "GapUnresolved" || f.blocker === "GapNegotiationFailed",
       destination: "financeDecision",
     },
     // The stage completes exactly when the shortfall is settled, so while it is
@@ -131,38 +140,49 @@ function deliveryActions(f: ChecklistFacts): Draft[] | null {
   ];
 }
 
-function handover(f: ChecklistFacts): Draft[] | null {
-  if (f.checks === undefined) return null;
-  const drafts: Draft[] = [];
-  if (applicable(f.checks.CONFIGURED_FEES_RECORDED)) {
-    drafts.push({
-      id: "costs-recorded",
-      labelKey: "ChecklistCostsRecorded",
-      done: f.checks.CONFIGURED_FEES_RECORDED === "READY",
-      destination: "handoverCosts",
-    });
-  }
-  if (applicable(f.checks.HANDOVER_COSTS_PAID)) {
-    drafts.push({
-      id: "costs-paid",
-      labelKey: "ChecklistCostsPaid",
-      done: f.checks.HANDOVER_COSTS_PAID === "READY",
-      destination: "handoverCosts",
-    });
-  }
-  drafts.push({
-    id: "register-handover",
-    labelKey: "ChecklistRegisterHandover",
-    done: false,
-    destination: "primaryAction",
-  });
-  return drafts;
+/**
+ * Registering the handover is refused (`registerVehicleHandover`) unless the
+ * deal is APPROVED with its economics ready (`assertDealerEconomicsReady`); the
+ * server reports the second as the HandoverBlocked blocker, which is the only
+ * thing the stage state says about it. Handover costs are NOT read there -- they
+ * gate the close, so they are SETTLEMENT items.
+ */
+function handover(f: ChecklistFacts): Draft[] {
+  return [
+    // Not "blocker !== HandoverBlocked": a stage that is BLOCKED for any reason is not ready.
+    { id: "economics-ready", labelKey: "ChecklistDealFiguresReady", done: f.stageState !== "BLOCKED" },
+    { id: "register-handover", labelKey: "ChecklistRegisterHandover", done: false, destination: "primaryAction" },
+  ];
+}
+
+/**
+ * A closing-readiness check as a sub-step. `NOT_APPLICABLE` is the server saying
+ * the check does not apply to this deal, so it is absent. A key that is simply
+ * not in the map is NOT that: it is a check this code expected and cannot see
+ * (renamed, or not reported), so it renders not-done -- never omitted, never done.
+ */
+function closingCheck(
+  checks: Readonly<Record<string, string>>,
+  key: string,
+  id: string,
+  labelKey: string
+): Draft | null {
+  const status = checks[key];
+  if (status === "NOT_APPLICABLE") return null;
+  return { id, labelKey, done: status === "READY", destination: "handoverCosts" };
 }
 
 function settlement(f: ChecklistFacts): Draft[] {
   const drafts: Draft[] = [];
   if (f.routeRecorded !== undefined) {
     drafts.push({ id: "route-recorded", labelKey: "ChecklistRouteRecorded", done: f.routeRecorded });
+  }
+  // Handover costs gate the CLOSE (finalizeDeal reads the readiness verdict), so they live here.
+  if (f.checks !== undefined) {
+    const recorded = closingCheck(f.checks, "CONFIGURED_FEES_RECORDED", "costs-recorded", "ChecklistCostsRecorded");
+    const paid = closingCheck(f.checks, "HANDOVER_COSTS_PAID", "costs-paid", "ChecklistCostsPaid");
+    if (recorded) drafts.push(recorded);
+    if (paid) drafts.push(paid);
   }
   if (f.readinessState !== undefined) {
     drafts.push({

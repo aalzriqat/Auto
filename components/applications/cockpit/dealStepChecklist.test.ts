@@ -26,9 +26,15 @@ describe("APPROVED_PURCHASE", () => {
     expect(view(items)).toEqual(["approved-amount:current", "gap-settled:pending"]);
     expect(items?.[0].destination).toBe("financeDecision");
   });
-  test("amount recorded: it is done and the shortfall is current", () => {
-    const items = deriveStepChecklist(facts({ stageKey: "APPROVED_PURCHASE", stageState: "CURRENT" }));
+  test.each(["GapUnresolved", "GapNegotiationFailed"])("amount recorded, %s: the shortfall is current", (blocker) => {
+    const items = deriveStepChecklist(facts({ stageKey: "APPROVED_PURCHASE", stageState: "BLOCKED", blocker }));
     expect(view(items)).toEqual(["approved-amount:done", "gap-settled:current"]);
+  });
+  test("a blocker key this code does not know is never read as 'amount recorded'", () => {
+    const items = deriveStepChecklist(
+      facts({ stageKey: "APPROVED_PURCHASE", stageState: "BLOCKED", blocker: "SomeRenamedBlocker" })
+    );
+    expect(view(items)).toEqual(["approved-amount:current", "gap-settled:pending"]);
   });
   test("complete: everything done; pending: nothing claimed", () => {
     expect(view(deriveStepChecklist(facts({ stageKey: "APPROVED_PURCHASE", stageState: "COMPLETE" })))).toEqual([
@@ -69,7 +75,7 @@ describe("DELIVERY_ACTIONS", () => {
     const items = deriveStepChecklist(
       facts({
         stageKey,
-        stageState: "CURRENT",
+        stageState: "BLOCKED",
         documents: [
           { required: true, status: "VERIFIED" },
           { required: true, status: "UPLOADED" },
@@ -89,60 +95,38 @@ describe("DELIVERY_ACTIONS", () => {
 
 describe("HANDOVER", () => {
   const stageKey = "HANDOVER";
-  test("readiness unseen: no checklist", () => {
-    expect(deriveStepChecklist(facts({ stageKey, stageState: "CURRENT" }))).toBeNull();
+  // registerVehicleHandover does not read handover costs -- they gate the close --
+  // so none of them is an item here.
+  test("ready (no blocker): the figures are done and registering is the one thing left", () => {
+    const items = deriveStepChecklist(facts({ stageKey, stageState: "CURRENT" }));
+    expect(view(items)).toEqual(["economics-ready:done", "register-handover:current"]);
+    expect(items?.[1].destination).toBe("primaryAction");
   });
-  test("costs recorded, paid, then register", () => {
+  test("HandoverBlocked: the figures are current, registering pending", () => {
+    const items = deriveStepChecklist(facts({ stageKey, stageState: "BLOCKED", blocker: "HandoverBlocked" }));
+    expect(view(items)).toEqual(["economics-ready:current", "register-handover:pending"]);
+  });
+  test("any blocked handover is not ready, whatever the blocker key is called", () => {
+    const items = deriveStepChecklist(facts({ stageKey, stageState: "BLOCKED", blocker: "Renamed" }));
+    expect(view(items)).toEqual(["economics-ready:current", "register-handover:pending"]);
+  });
+  test("costs never appear under Handover, even when readiness shows them unpaid", () => {
     const items = deriveStepChecklist(
       facts({
         stageKey,
         stageState: "CURRENT",
-        checks: { CONFIGURED_FEES_RECORDED: "READY", HANDOVER_COSTS_PAID: "BLOCKED" },
+        checks: { CONFIGURED_FEES_RECORDED: "BLOCKED", HANDOVER_COSTS_PAID: "BLOCKED" },
       })
     );
-    expect(view(items)).toEqual(["costs-recorded:done", "costs-paid:current", "register-handover:pending"]);
-    expect(items?.[1].destination).toBe("handoverCosts");
-    expect(items?.[2].destination).toBe("primaryAction");
-  });
-  test("all costs settled: register handover is current", () => {
-    const items = deriveStepChecklist(
-      facts({
-        stageKey,
-        stageState: "CURRENT",
-        checks: { CONFIGURED_FEES_RECORDED: "READY", HANDOVER_COSTS_PAID: "READY" },
-      })
-    );
-    expect(view(items)).toEqual(["costs-recorded:done", "costs-paid:done", "register-handover:current"]);
-  });
-  test("a not-applicable check is absent, not done; one item left is no checklist", () => {
-    const items = deriveStepChecklist(
-      facts({
-        stageKey,
-        stageState: "CURRENT",
-        checks: { CONFIGURED_FEES_RECORDED: "NOT_APPLICABLE", HANDOVER_COSTS_PAID: "READY" },
-      })
-    );
-    expect(view(items)).toEqual(["costs-paid:done", "register-handover:current"]);
-    expect(
-      deriveStepChecklist(
-        facts({
-          stageKey,
-          stageState: "CURRENT",
-          checks: { CONFIGURED_FEES_RECORDED: "NOT_APPLICABLE", HANDOVER_COSTS_PAID: "NOT_APPLICABLE" },
-        })
-      )
-    ).toBeNull();
+    expect(view(items)).toEqual(["economics-ready:done", "register-handover:current"]);
   });
   test("a pending handover previews everything as pending; a complete one as done", () => {
-    const checks = { CONFIGURED_FEES_RECORDED: "READY", HANDOVER_COSTS_PAID: "READY" };
-    expect(view(deriveStepChecklist(facts({ stageKey, stageState: "PENDING", checks })))).toEqual([
-      "costs-recorded:pending",
-      "costs-paid:pending",
+    expect(view(deriveStepChecklist(facts({ stageKey, stageState: "PENDING" })))).toEqual([
+      "economics-ready:pending",
       "register-handover:pending",
     ]);
-    expect(view(deriveStepChecklist(facts({ stageKey, stageState: "COMPLETE", checks })))).toEqual([
-      "costs-recorded:done",
-      "costs-paid:done",
+    expect(view(deriveStepChecklist(facts({ stageKey, stageState: "COMPLETE" })))).toEqual([
+      "economics-ready:done",
       "register-handover:done",
     ]);
   });
@@ -150,24 +134,98 @@ describe("HANDOVER", () => {
 
 describe("SETTLEMENT", () => {
   const stageKey = "SETTLEMENT";
+  const ready = { CONFIGURED_FEES_RECORDED: "READY", HANDOVER_COSTS_PAID: "READY" };
   test("route missing: the route is current", () => {
     const items = deriveStepChecklist(
-      facts({ stageKey, stageState: "BLOCKED", routeRecorded: false, readinessState: "NOT_READY" })
+      facts({ stageKey, stageState: "BLOCKED", routeRecorded: false, readinessState: "NOT_READY", checks: ready })
     );
-    expect(view(items)).toEqual(["route-recorded:current", "closing-checks:pending", "close-deal:pending"]);
+    expect(view(items)).toEqual([
+      "route-recorded:current",
+      "costs-recorded:done",
+      "costs-paid:done",
+      "closing-checks:pending",
+      "close-deal:pending",
+    ]);
   });
-  test("route recorded, checks not ready: the checks are current", () => {
+  test("handover costs are closing gates: unpaid costs are the current item, with a destination", () => {
     const items = deriveStepChecklist(
-      facts({ stageKey, stageState: "CURRENT", routeRecorded: true, readinessState: "NOT_READY" })
+      facts({
+        stageKey,
+        stageState: "BLOCKED",
+        blocker: "AwaitingSettlement",
+        routeRecorded: true,
+        readinessState: "NOT_READY",
+        checks: { CONFIGURED_FEES_RECORDED: "READY", HANDOVER_COSTS_PAID: "BLOCKED" },
+      })
     );
-    expect(view(items)).toEqual(["route-recorded:done", "closing-checks:current", "close-deal:pending"]);
-    expect(items?.[1].destination).toBe("closing");
+    expect(view(items)).toEqual([
+      "route-recorded:done",
+      "costs-recorded:done",
+      "costs-paid:current",
+      "closing-checks:pending",
+      "close-deal:pending",
+    ]);
+    expect(items?.[2].destination).toBe("handoverCosts");
+  });
+  test("costs done, other checks not ready: the checks are current", () => {
+    const items = deriveStepChecklist(
+      facts({ stageKey, stageState: "BLOCKED", routeRecorded: true, readinessState: "NOT_READY", checks: ready })
+    );
+    expect(view(items)).toEqual([
+      "route-recorded:done",
+      "costs-recorded:done",
+      "costs-paid:done",
+      "closing-checks:current",
+      "close-deal:pending",
+    ]);
+    expect(items?.find((i) => i.id === "closing-checks")?.destination).toBe("closing");
   });
   test("ready: close the deal is current", () => {
     const items = deriveStepChecklist(
-      facts({ stageKey, stageState: "CURRENT", routeRecorded: true, readinessState: "READY" })
+      facts({ stageKey, stageState: "BLOCKED", routeRecorded: true, readinessState: "READY", checks: ready })
     );
-    expect(view(items)).toEqual(["route-recorded:done", "closing-checks:done", "close-deal:current"]);
+    expect(view(items).at(-1)).toBe("close-deal:current");
+    expect(view(items).filter((s) => s.endsWith(":pending"))).toEqual([]);
+  });
+  test("a not-applicable cost check is absent, not done", () => {
+    const items = deriveStepChecklist(
+      facts({
+        stageKey,
+        stageState: "BLOCKED",
+        routeRecorded: true,
+        readinessState: "NOT_READY",
+        checks: { CONFIGURED_FEES_RECORDED: "NOT_APPLICABLE", HANDOVER_COSTS_PAID: "NOT_APPLICABLE" },
+      })
+    );
+    expect(view(items)).toEqual(["route-recorded:done", "closing-checks:current", "close-deal:pending"]);
+  });
+  test("RISK: an expected check key that is absent renders not-done -- never omitted, never done", () => {
+    const items = deriveStepChecklist(
+      facts({
+        stageKey,
+        stageState: "BLOCKED",
+        routeRecorded: true,
+        readinessState: "NOT_READY",
+        // both keys renamed by some future server change
+        checks: { FEES_RECORDED_V2: "READY", COSTS_PAID_V2: "READY" },
+      })
+    );
+    const byId = Object.fromEntries((items ?? []).map((item) => [item.id, item.status]));
+    expect(byId["costs-recorded"]).toBe("current");
+    expect(byId["costs-paid"]).toBe("pending");
+    for (const id of ["costs-recorded", "costs-paid"]) expect(byId[id]).not.toBe("done");
+  });
+  test("RISK: a check with an unrecognised status is not done either", () => {
+    const items = deriveStepChecklist(
+      facts({
+        stageKey,
+        stageState: "BLOCKED",
+        routeRecorded: true,
+        readinessState: "NOT_READY",
+        checks: { CONFIGURED_FEES_RECORDED: "SOMETHING_NEW", HANDOVER_COSTS_PAID: "READY" },
+      })
+    );
+    expect(items?.find((i) => i.id === "costs-recorded")?.status).toBe("current");
   });
   test("a caller who sees neither the route nor readiness gets no checklist", () => {
     expect(deriveStepChecklist(facts({ stageKey, stageState: "CURRENT" }))).toBeNull();
@@ -190,5 +248,36 @@ describe("DISBURSEMENT", () => {
       facts({ stageKey, stageState: "PENDING", stageStates: { HANDOVER: "CURRENT", SETTLEMENT: "PENDING" } })
     );
     expect(view(items)).toEqual(["handed-over:pending", "sale-closed:pending", "payment-confirmed:pending"]);
+  });
+});
+
+describe("INVARIANT: the checklist never contradicts the step's own status", () => {
+  // A stage the server reports CURRENT has no blocker -- "nothing is outstanding".
+  // Whatever facts the cockpit holds, no fact-derived item may then be pending or
+  // current: the step's own action is the only thing left.
+  const stageKeys = ["APPROVED_PURCHASE", "DELIVERY_ACTIONS", "HANDOVER", "SETTLEMENT", "DISBURSEMENT"];
+  const hostileFacts: Array<Partial<ChecklistFacts>> = [
+    {},
+    { documents: [{ required: true, status: "MISSING" }] },
+    { checks: { CONFIGURED_FEES_RECORDED: "BLOCKED", HANDOVER_COSTS_PAID: "BLOCKED" }, readinessState: "NOT_READY" },
+    { checks: {}, readinessState: "NOT_READY", routeRecorded: false },
+    { stageStates: { HANDOVER: "CURRENT", SETTLEMENT: "PENDING" } },
+  ];
+  test.each(stageKeys)("%s with no blocker: nothing is pending, at most the action is current", (stageKey) => {
+    for (const extra of hostileFacts) {
+      const items = deriveStepChecklist(facts({ stageKey, stageState: "CURRENT", ...extra }));
+      for (const item of items ?? []) {
+        expect(item.status, `${stageKey} ${item.id}`).not.toBe("pending");
+        if (item.status === "current") expect(item.destination).toBe("primaryAction");
+      }
+    }
+  });
+  test.each(stageKeys)("%s: at most one current item in any state", (stageKey) => {
+    for (const stageState of ["CURRENT", "BLOCKED", "PENDING", "COMPLETE", "STOPPED"] as const) {
+      for (const extra of hostileFacts) {
+        const items = deriveStepChecklist(facts({ stageKey, stageState, ...extra })) ?? [];
+        expect(items.filter((i) => i.status === "current").length).toBeLessThanOrEqual(1);
+      }
+    }
   });
 });
