@@ -845,7 +845,7 @@ describe("un-happening the deal itself", () => {
     ).rejects.toThrow(frozen);
     await expect(
       seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
-        idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.viewerId, issuedMinor: jod(1),
+        idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.viewerId, issuedMinor: jod(1), method: "CASH",
       })
     ).rejects.toThrow(frozen);
     await expect(
@@ -1090,7 +1090,7 @@ describe("the custodian never moves or closes their own custody", () => {
     // The employee holds the money AND the money permission (owner role in this seed).
     const asHolder = seed.t.withIdentity({ subject: "cu_emp_self" });
     const holderMove = (kind: "ISSUED" | "RETURNED" | "REIMBURSED") =>
-      asHolder.mutation(api.financeDealCosts.recordCustodyMovement, { orgId: seed.orgId, custodyId, kind, amountMinor: jod(10), idempotencyKey: crypto.randomUUID() });
+      asHolder.mutation(api.financeDealCosts.recordCustodyMovement, { orgId: seed.orgId, custodyId, kind, amountMinor: jod(10), method: "CASH", idempotencyKey: crypto.randomUUID() });
     const refusal = /somebody other than the person holding the cash/;
     await expect(holderMove("ISSUED")).rejects.toThrow(refusal);
     await expect(holderMove("REIMBURSED")).rejects.toThrow(refusal);
@@ -1104,7 +1104,7 @@ describe("the custodian never moves or closes their own custody", () => {
     ).rejects.toThrow(refusal);
     await expect(
       seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
-        idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.userId, issuedMinor: jod(1),
+        idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.userId, issuedMinor: jod(1), method: "CASH",
       })
     ).rejects.toThrow(/somebody other than the person receiving/);
     expect(await entries(seed, custodyId)).toHaveLength(1);
@@ -4910,5 +4910,75 @@ describe("R8-F3 — the worker proves a queued custody row IS the posting its ke
     expect(await familyRefusal(seed)).toMatch(/its accounting outbox row \(custody_fee_paid_.*_v1\) failed permanently after 10 attempts: .*, so closing is refused until that failure has been repaired and the row retried from the accounting outbox/);
     await seed.t.run((ctx) => ctx.db.delete(fee._id));
     expect(await familyRefusal(seed)).toMatch(/A cost paid out of an employee's custody on this deal is not on the books \(no ledger event and no outbox row exists for it\)/);
+  }, 60_000);
+});
+
+/**
+ * SCRUM-469 — a custody movement that moves cash must state the instrument it
+ * went through. An omitted method used to book to CASH_ON_HAND (a bank transfer
+ * recorded as drawer cash). Refused before anything is written; a provided
+ * method books exactly as before; a REVERSAL, which is the inverse of its
+ * target's journal, needs none.
+ */
+describe("custody movement method is required, never defaulted (SCRUM-469)", () => {
+  const REFUSAL = /Choose how the money moved/;
+
+  async function writes(seed: Seed) {
+    return await seed.t.run(async (ctx) => ({
+      custody: (await ctx.db.query("financeDealCustody").collect()).filter((r) => r.orgId === seed.orgId).length,
+      entries: (await ctx.db.query("financeDealCustodyEntries").collect()).filter((r) => r.orgId === seed.orgId).length,
+      journals: (await ctx.db.query("journalEntries").collect()).filter((r) => r.orgId === seed.orgId).length,
+      events: (await ctx.db.query("accountingEvents").collect()).filter((r) => r.orgId === seed.orgId).length,
+      pending: (await ctx.db.query("pendingAccountingEvents").collect()).filter((r) => r.orgId === seed.orgId).length,
+    }));
+  }
+
+  test("opening custody with no method is refused and writes nothing", async () => {
+    const seed = await seedDeal("m1");
+    const before = await writes(seed);
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.employeeId,
+        issuedMinor: jod(700),
+      })
+    ).rejects.toThrow(REFUSAL);
+    expect(await writes(seed)).toEqual(before);
+    expect(cash(await ledger(seed))).toBe(0);
+  }, 60_000);
+
+  test.each(["ISSUED", "RETURNED", "REIMBURSED"] as const)("a %s movement with no method is refused and writes nothing", async (kind) => {
+    const seed = await seedDeal(`m2${kind}`);
+    const custodyId = await openCustody(seed, jod(700));
+    const before = await writes(seed);
+    const ledgerBefore = await ledger(seed);
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+        orgId: seed.orgId, custodyId, kind, amountMinor: jod(10), idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(REFUSAL);
+    expect(await writes(seed)).toEqual(before);
+    expect(await ledger(seed)).toEqual(ledgerBefore);
+  }, 60_000);
+
+  test("control: a provided method books to the same accounts as before", async () => {
+    const seed = await seedDeal("m3");
+    const custodyId = await openCustody(seed, jod(700), { method: "BANK_TRANSFER" });
+    await move(seed, custodyId, "RETURNED", jod(100), { method: "CASH" });
+    const l = await ledger(seed);
+    expect(bank(l)).toBe(-jod(700));
+    expect(cash(l)).toBe(jod(100));
+    expect(clearing(l)).toBe(jod(600));
+  }, 60_000);
+
+  test("a REVERSAL needs no method of its own and still reverses the original leg", async () => {
+    const seed = await seedDeal("m4");
+    const custodyId = await openCustody(seed, jod(700), { method: "BANK_TRANSFER" });
+    const [issued] = await entries(seed, custodyId);
+    await reverse(seed, custodyId, issued._id, jod(700));
+    const l = await ledger(seed);
+    expect(bank(l)).toBe(0);
+    expect(cash(l)).toBe(0);
+    expect(clearing(l)).toBe(0);
   }, 60_000);
 });

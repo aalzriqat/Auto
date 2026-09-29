@@ -78,7 +78,7 @@ async function openCustody(seed: Seed, issued = jod(700)) {
 }
 
 async function move(seed: Seed, custodyId: Id<"financeDealCustody">, kind: "ISSUED" | "RETURNED" | "REIMBURSED", amountMinor: number) {
-  await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+  await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH",
     orgId: seed.orgId, custodyId, kind, amountMinor, idempotencyKey: crypto.randomUUID(),
   });
 }

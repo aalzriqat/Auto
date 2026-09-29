@@ -2830,6 +2830,29 @@ export const recordDirectFeePayment = mutation({
 // Employee custody
 // ---------------------------------------------------------------------------
 
+/**
+ * SCRUM-469 — a custody movement that moves cash must say which instrument it
+ * went through. The method picks the ledger account (`disbursementAccountKey`
+ * / `cashAccountKey`), and an omitted one used to fall through to CASH_ON_HAND
+ * — a bank transfer booked as drawer cash. Refused, with the next step, before
+ * anything is written. The validator stays optional so an older client gets this
+ * message rather than an argument-validation error.
+ *
+ * A REVERSAL is the one kind exempt: its whole accounting effect is the inverse
+ * of its target's journal, so it never reads a method of its own.
+ */
+function requireCustodyMethod<M extends string>(
+  method: M | undefined,
+  action: string
+): M {
+  if (method === undefined) {
+    throw new ConvexError(
+      `Choose how the money moved (cash, bank transfer, cheque or card) before ${action}. If this screen does not offer a method, update the app. Nothing has been recorded.`
+    );
+  }
+  return method;
+}
+
 /** Posts one freshly inserted cash entry (ISSUED / RETURNED / REIMBURSED) against its custody record. */
 async function postCustodyEntry(
   ctx: MutationCtx,
@@ -2901,6 +2924,7 @@ export const openDealCustody = mutation({
 
     assertTimestamp(args.occurredAt, "The movement date");
     assertNotFuture(args.occurredAt, Date.now(), "The movement date");
+    requireCustodyMethod(args.method, "handing cash to an employee");
 
     // The one-open-record rule stops a retry creating a second custody, so the
     // key is not what protects the money here — it is what makes the retry
@@ -3064,6 +3088,9 @@ export const recordCustodyMovement = mutation({
     // section below.
     if (args.kind !== "REVERSAL" && args.reversesEntryId) {
       throw new ConvexError("Only a reversal may name the movement it cancels.");
+    }
+    if (args.kind !== "REVERSAL") {
+      requireCustodyMethod(args.method, "recording this custody movement");
     }
 
     // The one that matters most: a retried REIMBURSED records the dealership

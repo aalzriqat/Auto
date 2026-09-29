@@ -214,7 +214,7 @@ describe("custody balances fail closed on an unreadable amount, end to end", () 
       expect(entriesBefore).toHaveLength(2);
 
       await expect(
-        seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+        seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH",
           orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: jod(100), idempotencyKey: crypto.randomUUID(),
         })
       ).rejects.toThrow(/not a readable amount/);
@@ -241,7 +241,7 @@ describe("custody balances fail closed on an unreadable amount, end to end", () 
       }
     });
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH",
         orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: 1, idempotencyKey: crypto.randomUUID(),
       })
     ).rejects.toThrow(/outside the readable range/);
@@ -268,7 +268,7 @@ describe("custody balances fail closed on an unreadable amount, end to end", () 
 
     // The (MAX + 1)th movement is the one that would make the log undecidable.
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH",
         orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: 1, idempotencyKey: crypto.randomUUID(),
       })
     ).rejects.toThrow(new RegExp(`more than ${MAX_CUSTODY_ENTRIES} movements`));
@@ -298,7 +298,7 @@ describe("custody balances fail closed on an unreadable amount, end to end", () 
         });
       }
     });
-    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH",
       orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: 2, idempotencyKey: crypto.randomUUID(),
     });
     expect(await custodyEntries(seed, custodyId)).toHaveLength(MAX_CUSTODY_ENTRIES);
@@ -306,7 +306,7 @@ describe("custody balances fail closed on an unreadable amount, end to end", () 
 
     const seed2 = await seedDeal("reversed-twice");
     const custody2 = await openCustody(seed2, jod(700));
-    await seed2.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+    await seed2.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH",
       orgId: seed2.orgId, custodyId: custody2, kind: "RETURNED", amountMinor: jod(100), idempotencyKey: crypto.randomUUID(),
     });
     const returnedEntry = (await custodyEntries(seed2, custody2)).find((entry) => entry.kind === "RETURNED")!;
@@ -323,7 +323,7 @@ describe("custody balances fail closed on an unreadable amount, end to end", () 
     async function custodyWithReturn(suffix: string) {
       const seed = await seedDeal(`rev-${suffix}`);
       const custodyId = await openCustody(seed, jod(700));
-      await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+      await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH",
         orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: jod(100), idempotencyKey: crypto.randomUUID(),
       });
       const entries = await custodyEntries(seed, custodyId);
@@ -352,7 +352,7 @@ describe("custody balances fail closed on an unreadable amount, end to end", () 
       const before = await custodyRow(seed, custodyId);
       const count = (await custodyEntries(seed, custodyId)).length;
       await expect(
-        seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+        seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH",
           orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: jod(50), idempotencyKey: crypto.randomUUID(),
         })
       ).rejects.toThrow(reason);
@@ -411,7 +411,7 @@ describe("custody balances fail closed on an unreadable amount, end to end", () 
       const otherCustody = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
         idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId, userId: otherUser, issuedMinor: jod(300), method: "CASH",
       });
-      await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+      await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH",
         orgId: seed.orgId, custodyId: otherCustody, kind: "RETURNED", amountMinor: jod(100), idempotencyKey: crypto.randomUUID(),
       });
       const otherReturned = (await custodyEntries(seed, otherCustody)).find((entry) => entry.kind === "RETURNED")!;
@@ -452,7 +452,7 @@ describe("custody balances fail closed on an unreadable amount, end to end", () 
     test("a well-formed historical reversal still cancels exactly its target, once", async () => {
       const { seed, custodyId, returned } = await custodyWithReturn("well-formed");
       await rawReversal(seed, custodyId, { amountMinor: jod(100), reversesEntryId: returned._id });
-      await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+      await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH",
         orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: jod(50), idempotencyKey: crypto.randomUUID(),
       });
       const row = await custodyRow(seed, custodyId);
@@ -465,7 +465,7 @@ describe("custody balances fail closed on an unreadable amount, end to end", () 
     const seed = await seedDeal("ok");
     const custodyId = await openCustody(seed, jod(700));
     await addFee(seed, { actualAmountMinor: jod(600), paidBy: "EMPLOYEE", custodyId });
-    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH",
       orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: jod(100), idempotencyKey: crypto.randomUUID(),
     });
     const record = (await readCosts(seed)).custody.find((row) => row._id === custodyId)!;
