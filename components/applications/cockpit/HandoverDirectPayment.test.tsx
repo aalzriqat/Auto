@@ -38,12 +38,34 @@ function line(over: Partial<HandoverCostLine> = {}): HandoverCostLine {
   };
 }
 
-function data(lines: HandoverCostLine[]): HandoverCostsData {
+function data(lines: HandoverCostLine[], expected: HandoverCostsData["expected"] = null): HandoverCostsData {
   return {
     lines,
     summary: { lineCount: lines.length, estimatedTotalMinor: 0, actualTotalMinor: 0, linesAwaitingActual: 0, linesAwaitingReconciliation: 0 },
     summaryUnavailable: null,
-    expected: null,
+    expected,
+  };
+}
+
+/** The policy checklist with one configured fee whose actual is `feeId`. */
+function checklistFor(feeId: string): HandoverCostsData["expected"] {
+  return {
+    source: "COMPANY_RULE_SNAPSHOT",
+    currency: "JOD",
+    rows: [{
+      templateIndex: 0,
+      feeType: "LICENSING",
+      description: "Plates",
+      expectedAmountMinor: 90_000,
+      expectedAmountReason: null,
+      duplicateIdentity: false,
+      actual: { feeId, actualAmountMinor: 90_000, currency: "JOD", status: "ACTUAL_RECORDED" },
+    }],
+    expectedTotalMinor: 90_000,
+    expectedTotalReason: null,
+    actualTotalMinor: 90_000,
+    differenceMinor: 0,
+    unplannedLineIds: [],
   };
 }
 
@@ -51,6 +73,8 @@ function renderPanel(
   lines: HandoverCostLine[],
   props: {
     canRecordDirectPayment?: boolean;
+    canManage?: boolean;
+    expected?: HandoverCostsData["expected"];
     canReconcile?: boolean;
     onReconcile?: (feeId: string, notes: string) => Promise<void>;
     onRecordDirectPayment?: (feeId: string, values: DirectHandoverPayment) => Promise<void>;
@@ -64,12 +88,12 @@ function renderPanel(
 ) {
   return render(
     <HandoverCostsPanel
-      costs={data(lines)}
+      costs={data(lines, props.expected ?? null)}
       loading={false}
       denomination={{ code: "JOD" }}
       scaleOf={() => 3}
       money={(minor) => `${minor / 1000} JOD`}
-      canManage={true}
+      canManage={props.canManage ?? true}
       dealClosed={props.dealClosed ?? false}
       dealStopped={props.dealStopped}
       costSource={{ kind: "PENDING" }}
@@ -451,6 +475,37 @@ describe("the reconcile action follows the permission the server checks (SCRUM-4
     renderPanel([line()], { canReconcile: true, onReconcile: async () => {} });
     expect(screen.getByRole("button", { name: reconcileName })).toBeTruthy();
     expect(screen.queryByTestId("deal-handover-reconcile-fee1-waiting")).toBeNull();
+  });
+
+  // The accountant tier holds confirm:finance_disbursement but not
+  // create:finance_application, so `canManage` is false for it. The hint above
+  // sends the dealer to exactly that tier, so it must be able to act here.
+  describe.each([
+    ["an additional line", undefined],
+    ["a configured checklist row", checklistFor("fee1")],
+  ])("on %s", (_where, expected) => {
+    test("a reconciler who may not edit costs is still offered Reconcile, and it submits", async () => {
+      const onReconcile = vi.fn<(feeId: string, notes: string) => Promise<void>>(async () => {});
+      renderPanel([line()], { canManage: false, canReconcile: true, onReconcile, expected });
+      expect(screen.queryByTestId("deal-handover-reconcile-fee1-waiting")).toBeNull();
+      expect(screen.queryByRole("button", { name: salesEn.RecordActualCost })).toBeNull();
+      expect(screen.queryByRole("button", { name: salesEn.RemoveHandoverCost })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: reconcileName }));
+      fireEvent.change(screen.getByRole("textbox"), { target: { value: "Receipt checked" } });
+      fireEvent.submit(screen.getByRole("textbox").closest("form") as HTMLFormElement);
+      await waitFor(() => expect(onReconcile).toHaveBeenCalledWith("fee1", "Receipt checked"));
+    });
+
+    test("once the deal is closed nobody is offered Reconcile", () => {
+      renderPanel([line()], { canManage: false, canReconcile: true, onReconcile: async () => {}, expected, dealClosed: true });
+      expect(screen.queryByRole("button", { name: reconcileName })).toBeNull();
+    });
+
+    test("a viewer with neither permission sees no action and no hand-off hint", () => {
+      renderPanel([line()], { canManage: false, canReconcile: false, onReconcile: async () => {}, expected });
+      expect(screen.queryByRole("button", { name: reconcileName })).toBeNull();
+      expect(screen.queryByTestId("deal-handover-reconcile-fee1-waiting")).toBeNull();
+    });
   });
 });
 
