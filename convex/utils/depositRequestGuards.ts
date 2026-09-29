@@ -117,11 +117,13 @@ export const RESERVATION_DEPOSIT_NEXT_STEP =
  *    (rows written before that refusal). 50 is far above any real quote.
  *
  * Database calls per probe (each `.first()` is one range, each `db.get` one
- * call): at most 100 x (1 seek + 3 gets: reservation, its deposit, the claim's
- * deposit) + 50 x (1 seek + 3 gets) + 2 terminal seeks = 602, about 600. The
- * confirm door runs the probe twice (once at request, once inside the shared
- * posting body), so about 1,200 against the platform's 4,096. It is a ceiling
- * on the SHAPE, not a measurement of a typical deal, which is a handful.
+ * call): Branch H is at most 100 x (1 seek + 1 reservation get + 1 deposit get)
+ * = 300; Branch T is at most 50 x (1 seek + 1 reservation get + 2 deposit gets)
+ * = 200 (a reservation is read once however many branches reach it, and a
+ * deposit id is read once); plus 2 terminal seeks, so at most about 500. The
+ * confirm door runs the probe twice (request, and inside the shared posting
+ * body), so about 1,000 against the platform's 4,096. It is a ceiling on the
+ * SHAPE, not a measurement of a typical deal, which is a handful.
  */
 export const RESERVATION_PROBE_MAX_ORIGINS_PER_QUOTE = 100;
 export const RESERVATION_PROBE_MAX_FUNDED_TAGGED_PER_QUOTE = 50;
@@ -188,13 +190,17 @@ async function liveReservationDeposit(
  *    `originReservationId`; restoration successors copy `headQuoteId` and
  *    `originReservationId`.
  *
- * A reservation joins a quote's deal by two doors, and the probe covers each:
- *  - Branch H, BY ROOT: every root whose `headQuoteId` is the quote — however
- *    the reservation joined (`dealQuoteId`, `dealDepositId`, adoption after the
- *    fact, historical rows) and whatever the root's status. The distinct
- *    `originReservationId` values of those roots are the reservations.
+ * Actual coverage:
+ *  - Branch H, BY ROOT: every ORIGIN-headed root whose `headQuoteId` is the
+ *    quote, in any root status. The distinct `originReservationId` values are
+ *    the reservations. It counts unfunded origins too (cap 100) and is
+ *    fail-closed: past the cap it refuses rather than reads a truncated set.
  *  - Branch T, BY TAG: the funded RESERVATION claims tagged with the quote,
  *    which names the reservation even when its root is headed elsewhere.
+ *  Not covered here: an untagged joiner (`dealDepositId` / `dealQuoteId`) onto
+ *  an ORIGINLESS quote-headed root. The writer refuses that shape (R-A,
+ *  vehicles.ts) and history is covered by the pre-deploy census (SCRUM
+ *  follow-up).
  *
  * ⚠️ SCOPED TO THE DEAL, NEVER THE CAR. Nothing reads `by_org_vehicle_status`:
  * a car's finished deals belong to other quotes and must never block this one.
@@ -230,17 +236,21 @@ export async function assertNoQuoteLinkedReservationDeposit(
     }
     candidates.push(claimDepositId);
 
-    const unchecked = candidates.filter((id) => {
-      if (!id || checkedDeposits.has(id)) return false;
+    // Every unchecked candidate is evaluated (at most two gets): a reservation's
+    // own deposit and its claim's deposit can differ, and either one alone being
+    // live and off-quote is enough to refuse.
+    for (const id of candidates) {
+      if (!id || checkedDeposits.has(id)) continue;
       checkedDeposits.add(id);
-      return true;
-    });
-    const deposit = await firstLiveDeposit(ctx, orgId, unchecked);
-    // A deposit already recorded ON this quote is visible to `by_quote`.
-    if (!deposit || deposit.quoteId === quote._id) return;
-    throw new ConvexError(
-      `A reservation deposit taken on this deal's vehicle is already holding money for it, and this quote cannot see it. ${RESERVATION_DEPOSIT_NEXT_STEP}`
-    );
+      const deposit = await ctx.db.get(id);
+      if (!deposit || deposit.orgId !== orgId || deposit.isDeleted === true) continue;
+      if (deposit.status !== "HELD" && deposit.status !== "APPLIED") continue;
+      // A deposit already recorded ON this quote is visible to `by_quote`.
+      if (deposit.quoteId === quote._id) continue;
+      throw new ConvexError(
+        `A reservation deposit taken on this deal's vehicle is already holding money for it, and this quote cannot see it. ${RESERVATION_DEPOSIT_NEXT_STEP}`
+      );
+    }
   };
 
   // Branch H — distinct reservation origins of the roots headed at this quote.
@@ -255,7 +265,10 @@ export async function assertNoQuoteLinkedReservationDeposit(
         q.eq("orgId", orgId).eq("headQuoteId", quote._id).gt("originReservationId", after)
       )
       .first();
-    if (!root?.originReservationId) break;
+    if (!root) break;
+    // The index contract (`gt` skips undefined) means a returned root always has
+    // an origin. If that ever stops holding, refuse rather than pass silently.
+    if (!root.originReservationId) throw new ConvexError(RESERVATION_PROBE_UNREADABLE_MESSAGE);
     if (origins >= RESERVATION_PROBE_MAX_ORIGINS_PER_QUOTE) {
       throw new ConvexError(RESERVATION_PROBE_OVERFLOW_MESSAGE);
     }
@@ -279,7 +292,9 @@ export async function assertNoQuoteLinkedReservationDeposit(
           .gt("depositId", after)
       )
       .first();
-    if (!claim?.depositId) break;
+    if (!claim) break;
+    // Same contract as Branch H: a returned claim always has a depositId.
+    if (!claim.depositId) throw new ConvexError(RESERVATION_PROBE_UNREADABLE_MESSAGE);
     if (funded >= RESERVATION_PROBE_MAX_FUNDED_TAGGED_PER_QUOTE) {
       throw new ConvexError(RESERVATION_PROBE_OVERFLOW_MESSAGE);
     }

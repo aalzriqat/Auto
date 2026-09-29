@@ -1832,7 +1832,8 @@ describe("R3 — unrelated history on the car never blocks a deal", () => {
 // origins / funded reservation deposits linked to Q.
 // ---------------------------------------------------------------------------
 
-const REVIEW_REFUSAL = /administrator/i;
+const UNREADABLE_REFUSAL = /could not be found.*administrator/i;
+const OVERFLOW_REFUSAL = /too many reservations.*administrator/i;
 
 async function seedCars(s: Ctx, count: number, prefix = "R5") {
   return await s.t.run(async (ctx) => {
@@ -2059,15 +2060,15 @@ describe("R5 T3 — restoration successors cost nothing", () => {
   }, 120_000);
 });
 
-describe("R5 T4/T7 — unfunded reservations never count", () => {
-  test("T4: 51 unfunded dealQuoteId reservation cycles (create + release) still pass request and deposits.create", async () => {
+describe("R5 T4/T7 — Branch T never counts unfunded reservations (Branch H counts unfunded origins, cap 100)", () => {
+  test("T4 (Branch T): 51 unfunded dealQuoteId reservation cycles (create + release) still pass request and deposits.create", async () => {
     const s = await setup();
     const quoteId = await makeQuote(s);
     await linkedUnfundedCycles(s, quoteId, 51);
     await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
   }, 240_000);
 
-  test("T4b: the same 51 cycles do not block deposits.create", async () => {
+  test("T4b (Branch T): the same 51 cycles do not block deposits.create", async () => {
     const s = await setup();
     const quoteId = await makeQuote(s);
     await linkedUnfundedCycles(s, quoteId, 51);
@@ -2078,7 +2079,7 @@ describe("R5 T4/T7 — unfunded reservations never count", () => {
     ).resolves.toBeTruthy();
   }, 240_000);
 
-  test("T7: a tagged UNFUNDED reservation passes", async () => {
+  test("T7 (Branch T): a tagged UNFUNDED reservation passes", async () => {
     const s = await setup();
     const quoteId = await makeQuote(s);
     await linkedUnfundedCycles(s, quoteId, 1);
@@ -2086,6 +2087,19 @@ describe("R5 T4/T7 — unfunded reservations never count", () => {
     expect(claims.some((c) => c.evidenceKind === "RESERVATION" && c.quoteId === quoteId)).toBe(true);
     await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
   });
+});
+
+describe("R5 T4c — pinned current behaviour: Branch H counts unfunded origins", () => {
+  // Documents the fail-closed cap, not a UI path: 101 real create -> release
+  // cycles that each carry dealQuoteId = Q open 101 distinct origins on Q.
+  test("101 real create->release cycles with dealQuoteId on Q -> guided overflow refusal", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    await linkedUnfundedCycles(s, quoteId, 101);
+    const before = await moneyFootprint(s);
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(OVERFLOW_REFUSAL);
+    expect(await moneyFootprint(s)).toEqual(before);
+  }, 300_000);
 });
 
 describe("R5 T5 — the origin and funded-tagged bounds fail closed", () => {
@@ -2102,7 +2116,7 @@ describe("R5 T5 — the origin and funded-tagged bounds fail closed", () => {
       s.manager.as.mutation(api.deposits.create, {
         orgId: s.orgId, quoteId, amount: 100, method: "CASH", idempotencyKey: crypto.randomUUID(),
       })
-    ).rejects.toThrow(/too many reservations.*administrator/i);
+    ).rejects.toThrow(OVERFLOW_REFUSAL);
     expect(await moneyFootprint(s)).toEqual(before);
   }, 120_000);
 
@@ -2127,7 +2141,7 @@ describe("R5 T5 — the origin and funded-tagged bounds fail closed", () => {
       s.manager.as.mutation(api.deposits.create, {
         orgId: s.orgId, quoteId, amount: 100, method: "CASH", idempotencyKey: crypto.randomUUID(),
       })
-    ).rejects.toThrow(/too many reservations.*administrator/i);
+    ).rejects.toThrow(OVERFLOW_REFUSAL);
   }, 120_000);
 
   test("Branch T: many tagged claims sharing ONE deposit count once", async () => {
@@ -2204,12 +2218,12 @@ describe("R5 T8 — a missing reservation fails closed", () => {
     await directRoot(s, { headQuoteId: quoteId, originReservationId: gone });
     await s.t.run((ctx) => ctx.db.delete(gone));
     const before = await moneyFootprint(s);
-    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(REVIEW_REFUSAL);
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(UNREADABLE_REFUSAL);
     await expect(
       s.manager.as.mutation(api.deposits.create, {
         orgId: s.orgId, quoteId, amount: 100, method: "CASH", idempotencyKey: crypto.randomUUID(),
       })
-    ).rejects.toThrow(REVIEW_REFUSAL);
+    ).rejects.toThrow(UNREADABLE_REFUSAL);
     expect(await moneyFootprint(s)).toEqual(before);
   });
 
@@ -2221,7 +2235,7 @@ describe("R5 T8 — a missing reservation fails closed", () => {
     const rootId = await directRoot(s, {});
     await directReservationClaim(s, { rootId, reservationId: gone, depositId: refunded, quoteId });
     await s.t.run((ctx) => ctx.db.delete(gone));
-    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(REVIEW_REFUSAL);
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(UNREADABLE_REFUSAL);
   });
 });
 
@@ -2231,7 +2245,7 @@ describe("R5 T9 — another organization's rows are never read as this one's", (
     const quoteId = await makeQuote(s);
     const foreign = await directReservation(s, { orgId: s.otherOrgId });
     await directRoot(s, { headQuoteId: quoteId, originReservationId: foreign });
-    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(REVIEW_REFUSAL);
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(UNREADABLE_REFUSAL);
   });
 
   test("a foreign-org ROOT headed at the same quote id is never seeked (the seek leads with orgId)", async () => {
@@ -2281,6 +2295,21 @@ describe("R5 T10/T11 — money that is not live does not block", () => {
     await headedOriginWithDeposit(s, quoteId, deleted);
     await taggedFundedClaim(s, quoteId, await directDeposit(s, { status: "HELD", isDeleted: true }));
     await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
+  });
+
+  test("an ordinary quote deposit (originless Q-headed root) does not hide a funded origin holding a HELD off-quote deposit", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    await s.manager.as.mutation(api.deposits.create, {
+      orgId: s.orgId, quoteId, amount: 100, method: "CASH", idempotencyKey: crypto.randomUUID(),
+    });
+    const rootsHeaded = await s.t.run((ctx) =>
+      ctx.db.query("commitmentRoots").filter((q) => q.eq(q.field("headQuoteId"), quoteId)).collect()
+    );
+    expect(rootsHeaded.length).toBeGreaterThan(0);
+    expect(rootsHeaded.every((r) => r.originReservationId === undefined)).toBe(true);
+    await headedOriginWithDeposit(s, quoteId, await directDeposit(s, { status: "HELD" }));
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(RESERVATION_MONEY);
   });
 
   test("controls: a headed root with NO origin is never visited", async () => {
@@ -2359,6 +2388,30 @@ describe("R5 dedupe — a reservation reached by BOTH branches is read once", ()
     });
     // Branch H: seek, reservation, deposit, terminal seek. Branch T: seek, (deduped), terminal seek.
     expect(calls).toBeLessThanOrEqual(6);
+  });
+
+  test("P1: BOTH candidates live — the reservation's own deposit is on-quote, the claim's is off-quote -> refused (no short-circuit)", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const da = await directDeposit(s, { status: "HELD", quoteId });
+    const db = await directDeposit(s, { status: "HELD" });
+    const reservationId = await directReservation(s, { depositId: da });
+    const rootId = await directRoot(s, {});
+    await directReservationClaim(s, { rootId, reservationId, depositId: db, quoteId });
+    const before = await moneyFootprint(s);
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(RESERVATION_MONEY);
+    expect(await moneyFootprint(s)).toEqual(before);
+  });
+
+  test("P1 control: the claim's off-quote deposit refunded -> passes", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const da = await directDeposit(s, { status: "HELD", quoteId });
+    const db = await directDeposit(s, { status: "REFUNDED" });
+    const reservationId = await directReservation(s, { depositId: da });
+    const rootId = await directRoot(s, {});
+    await directReservationClaim(s, { rootId, reservationId, depositId: db, quoteId });
+    await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
   });
 
   test("dedupe never hides a LIVE claim-side deposit that differs from the reservation's own", async () => {
