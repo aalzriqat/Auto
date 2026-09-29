@@ -83,6 +83,7 @@ import {
   settlementStatusForFacts,
   supplierReceiptActionability,
   type FinanceCompanyRuleSnapshot,
+  type FinancierLeg,
   type ObligationState,
   type SettlementObligations,
 } from "./utils/financingEconomics";
@@ -649,11 +650,54 @@ async function resolveSupplierObligation(
   });
 }
 
-/** What the finance company still owes. Extracted unchanged. */
+/**
+ * Whether a finance company pays the dealership on this deal (SCRUM-446).
+ *
+ * Invariant: `NONE` is returned only when the server can PROVE, from records
+ * that cannot drift under the deal, that no finance company ever pays the
+ * dealership on it — the application is CLOSED, its linked sale exists in this
+ * org and is COMPLETED, that sale settled through the dealership, and the
+ * application names no finance company (so `financedSaleRecognitionApplies`
+ * never opened a finance-company receivable). Every other shape of missing or
+ * unreadable evidence is `UNKNOWN`, which keeps today's behaviour; it is never
+ * read as `NONE`.
+ *
+ * Deliberately NOT `NONE`: a configured company with a zero net (SCRUM-315), a
+ * direct-to-supplier deal (the financier pays the supplier and its own stage
+ * evidence applies), a cancelled or missing sale, and a pre-close application.
+ *
+ * Pure, and fed the sale the caller has ALREADY loaded and org-checked, so the
+ * cockpit and `confirmDisbursement` cannot reach two different answers.
+ */
+function resolveFinancierLeg(
+  app: Doc<"financeApplications">,
+  route: { routeKnown: boolean; settlesDirect: boolean; saleCancelled: boolean },
+  sale: Doc<"sales"> | null
+): FinancierLeg {
+  if (
+    app.status === "CLOSED" &&
+    !app.companyId &&
+    app.finalizedSaleId !== undefined &&
+    sale !== null &&
+    sale.status === "COMPLETED" &&
+    route.routeKnown &&
+    !route.saleCancelled &&
+    !route.settlesDirect
+  ) {
+    return "NONE";
+  }
+  return app.companyId ? "EXPECTED" : "UNKNOWN";
+}
+
+/** What the finance company still owes. */
 function resolveFinancierObligation(
   app: Doc<"financeApplications">,
-  settlesDirect: boolean
+  settlesDirect: boolean,
+  financierLeg: FinancierLeg = "UNKNOWN"
 ): ObligationState {
+  // PROVEN that no finance company pays the dealership: there is no obligation
+  // on this leg to be open. The supplier leg is still judged on its own.
+  if (financierLeg === "NONE") return "NONE";
   if (settlesDirect) {
     // A contradicted advice cannot settle anything, whichever side of the
     // approval it falls on.
@@ -778,7 +822,8 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
     supplierClaim,
     margin,
   });
-  const financierObligation = resolveFinancierObligation(app, settlesDirect);
+  const financierLeg = resolveFinancierLeg(app, { routeKnown, settlesDirect, saleCancelled }, sale);
+  const financierObligation = resolveFinancierObligation(app, settlesDirect, financierLeg);
 
   const obligations: SettlementObligations = routeKnown
     ? { financier: financierObligation, supplier: supplierObligation }
@@ -790,13 +835,17 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
     routeKnown,
     settlesDirect,
     saleCancelled,
+    financierLeg,
     supplierClaim,
     /** The one resolution of the margin, so the headline cannot reach a second. */
     margin,
     /** The one resolution of what the supplier keeps, for the same reason. */
     supplierEntitlement,
     obligations,
-    moneySettled: settlementIsComplete(obligations),
+    // A cancelled sale's books were reversed: whatever the obligations say, the
+    // money on it is not "settled" (SCRUM-446). Without this a CLOSED application
+    // over a cancelled sale read SETTLEMENT as COMPLETE.
+    moneySettled: !saleCancelled && settlementIsComplete(obligations),
   };
 }
 
@@ -1924,6 +1973,7 @@ export const dealCockpit = query({
     const settlementFacts = await resolveSettlement(ctx, app);
     const stages = deriveDealStages({
       settlementComplete: settlementFacts.moneySettled,
+      financierLeg: settlementFacts.financierLeg,
       dealCancelled: settlementFacts.saleCancelled,
       status: app.status,
       vehicleHandoverAt: app.vehicleHandoverAt,
@@ -4389,7 +4439,19 @@ export const confirmDisbursement = mutation({
         if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found.");
         if (app.status !== "CLOSED") throw new ConvexError("Disbursement can only be confirmed on a closed application.");
         if (app.disbursedAt) throw new ConvexError("Disbursement has already been confirmed for this application.");
-        if (!app.companyId) throw new ConvexError("This application has no finance company — no disbursement expected.");
+        if (!app.companyId) {
+          // Same resolver as the cockpit, so the screen and this guard cannot
+          // disagree about whether a finance company pays on this deal.
+          const saleRow = app.finalizedSaleId ? await ctx.db.get(app.finalizedSaleId) : null;
+          const sale = saleRow && saleRow.orgId === app.orgId ? saleRow : null;
+          const route = resolveDealRoute(app, { vehicle: null, consigned: false, sale });
+          if (resolveFinancierLeg(app, route, sale) === "NONE") {
+            throw new ConvexError(
+              "No finance company pays the dealership on this deal, so there is no disbursement to confirm."
+            );
+          }
+          throw new ConvexError("This application has no finance company — no disbursement expected.");
+        }
         if (args.disbursedAmountMinor <= 0) throw new ConvexError("Disbursement amount must be positive.");
 
         // This mutation books DR Bank / CR AR-Finance Companies: money that

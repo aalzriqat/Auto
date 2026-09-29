@@ -1327,6 +1327,21 @@ export type DealStageState =
   | "NOT_APPLICABLE";
 
 /**
+ * Whether a finance company pays the dealership on this deal — the fact
+ * DISBURSEMENT turns on, resolved ONCE on the server from evidence.
+ *
+ * - `EXPECTED`: a payment from a finance company is part of this deal, so the
+ *   stage waits on the action that records it.
+ * - `NONE`: PROVEN that none is. The application is CLOSED, its linked sale
+ *   exists and is COMPLETED, that sale settled through the dealership, and the
+ *   application names no finance company, so no finance-company receivable was
+ *   ever opened.
+ * - `UNKNOWN`: the evidence is missing or unreadable. Behaves exactly as before
+ *   this fact existed. It is never read as `NONE`.
+ */
+export type FinancierLeg = "EXPECTED" | "NONE" | "UNKNOWN";
+
+/**
  * Every blocker the rail can name, as VALUES rather than only as a type.
  *
  * Enumerable on purpose. The deployed cockpit renders a blocker by building its
@@ -1465,6 +1480,12 @@ export interface DealStageFacts extends LifecycleFacts {
    * blocked forever on a finished deal.
    */
   supplierDisbursementConfirmedAt?: number;
+  /**
+   * Whether a finance company pays the dealership on this deal, resolved by the
+   * server (SCRUM-446). Absent means `UNKNOWN`: a caller that cannot answer
+   * keeps the old behaviour. Only `NONE` changes the rail.
+   */
+  financierLeg?: FinancierLeg;
   /**
    * The deal is over for a reason the credit dimension cannot express — the
    * sale itself was cancelled from the sales side, which reverses the GL and
@@ -1622,11 +1643,31 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
     SETTLEMENT: true,
   };
 
+  // DISBURSEMENT only, and only on PROVEN evidence (SCRUM-446). Evidence that
+  // the money actually moved wins (`complete` is checked first), and a stopped
+  // deal is stopped, not "not needed".
+  const notApplicable: Record<FinancedDealStageKey, boolean> = {
+    APPLICATION: false,
+    CREDIT_DECISION: false,
+    APPRAISAL: false,
+    APPROVED_PURCHASE: false,
+    DELIVERY_ACTIONS: false,
+    DISBURSEMENT: facts.financierLeg === "NONE" && !complete.DISBURSEMENT && !stopped,
+    HANDOVER: false,
+    SETTLEMENT: false,
+  };
+
   const order = DEAL_STAGE_ORDER;
-  const firstIncomplete = order.find((key) => !complete[key] && reachable[key]);
+  // A stage that will never happen is finished for this purpose: it must not be
+  // the live stage, or the rail would point the operator at nothing.
+  const firstIncomplete = order.find(
+    (key) => !complete[key] && !notApplicable[key] && reachable[key]
+  );
 
   return order.map((key): DealStage => {
     if (complete[key]) return { key, state: "COMPLETE", authority: STAGE_AUTHORITY[key] };
+    if (notApplicable[key])
+      return { key, state: "NOT_APPLICABLE", authority: STAGE_AUTHORITY[key] };
     if (stopped) return { key, state: "STOPPED", authority: STAGE_AUTHORITY[key] };
     if (key !== firstIncomplete) return { key, state: "PENDING", authority: STAGE_AUTHORITY[key] };
     const blocker = blockers[key];
