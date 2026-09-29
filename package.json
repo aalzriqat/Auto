@@ -20,6 +20,7 @@
     "mobile:ios": "pnpm --filter @autoflow/mobile ios",
     "mobile:typecheck": "pnpm --filter @autoflow/mobile typecheck",
     "mobile:test": "pnpm --filter @autoflow/mobile test",
+    "mobile:coverage:sonar": "pnpm --filter @autoflow/mobile test:coverage:sonar",
     "e2e:playwright": "playwright test",
     "test:visual:deal-cockpit": "playwright test -c playwright.visual.config.ts",
     "convex:codegen": "convex codegen --typecheck enable",
