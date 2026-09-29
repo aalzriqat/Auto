@@ -3872,11 +3872,21 @@ export default defineSchema({
     // tenant boundary part of the access path rather than a filter somebody has
     // to remember to apply.
     .index("by_org_consumed_sale", ["orgId", "consumedBySaleId"])
-    // SCRUM-444 R3 — "THE ROOTS OF THIS QUOTE'S DEAL", bounded by the deal and
-    // never by the car's history (`by_org_vehicle_status` grows for the life of
-    // a car). `headQuoteId` is optional: rows with none are simply absent from
-    // this index, which is the point. No backfill: Convex builds it on deploy.
-    .index("by_org_head_quote", ["orgId", "headQuoteId"]),
+    // SCRUM-444 R5 — "THE DISTINCT RESERVATION ORIGINS OF THIS QUOTE'S DEAL".
+    // The reservation-deposit probe seeks `(org, headQuoteId = Q)` and then
+    // steps `originReservationId` forward with `.gt(<last origin>).first()`, so
+    // it costs one seek per DISTINCT origin and skips every other root that
+    // shares one (restoration successors copy `headQuoteId` and
+    // `originReservationId`). It never scans the car's history
+    // (`by_org_vehicle_status` grows for the life of a car).
+    //
+    // Both fields are optional. Convex DOES index a row whose field is
+    // undefined, and it sorts BEFORE every defined value, so a root headed at Q
+    // with no origin sits at the very start of the `(org, Q)` range. The probe's
+    // first seek uses `.gt("originReservationId", undefined)` to step over
+    // those rows; a root with no `headQuoteId` is never in Q's range at all.
+    // No backfill: Convex builds the index on deploy.
+    .index("by_org_head_quote_origin", ["orgId", "headQuoteId", "originReservationId"]),
 
   /**
    * SCRUM-195 — ONE ACQUISITION EPISODE.
@@ -3971,10 +3981,15 @@ export default defineSchema({
     // share a deposit — an index here would only invite that search back.
     .index("by_application", ["applicationId"])
     .index("by_reservation", ["reservationId"])
-    // SCRUM-444 R3 — the claims that NAME a quote (`quoteId` is optional: an
-    // untagged claim is absent from this index). Answers "which roots does this
-    // quote's deal touch" by the deal, not by the car. No data migration.
-    .index("by_org_quote", ["orgId", "quoteId"]),
+    // SCRUM-444 R5 — the FUNDED reservation episodes that name a quote. Leading
+    // with `(org, quoteId, evidenceKind = "RESERVATION")` and stepping
+    // `depositId` forward with `.gt(<last deposit>).first()` costs one seek per
+    // DISTINCT funded deposit. `depositId` is undefined on an UNFUNDED
+    // reservation's claim (only a funded reservation stamps it) and undefined
+    // sorts before every defined value, so `.gt("depositId", undefined)` never
+    // returns, and never counts, an unfunded reservation. Claims of other
+    // evidence kinds are outside the `RESERVATION` range. No data migration.
+    .index("by_org_quote_kind_deposit", ["orgId", "quoteId", "evidenceKind", "depositId"]),
 
   /**
    * One immutable row per application of deposit money to a sale.

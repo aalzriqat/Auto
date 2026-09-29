@@ -5,9 +5,9 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { DEFAULT_ROLE_TEMPLATES, PERMISSIONS } from "./utils/permissions";
 import {
-  RESERVATION_PROBE_MAX_CLAIMS_PER_ROOT,
-  RESERVATION_PROBE_MAX_ROOTS_PER_QUOTE,
-  RESERVATION_PROBE_MAX_TAGGED_CLAIMS_PER_QUOTE,
+  RESERVATION_PROBE_MAX_FUNDED_TAGGED_PER_QUOTE,
+  RESERVATION_PROBE_MAX_ORIGINS_PER_QUOTE,
+  assertNoQuoteLinkedReservationDeposit,
 } from "./utils/depositRequestGuards";
 
 vi.mock("./rateLimit", () => ({
@@ -28,8 +28,8 @@ function templatePermissions(name: string): string[] {
   return [...template.permissions];
 }
 
-async function setup() {
-  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+async function setup(options: { transactionLimits?: boolean } = {}) {
+  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"), options);
   const now = Date.now();
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Dealer A", createdAt: now }));
   const otherOrgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Dealer B", createdAt: now }));
@@ -1668,31 +1668,23 @@ describe("R2 (vi) N2 — the probe fails closed, never open", () => {
     await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(RESERVATION_MONEY);
   });
 
-  test("a root of THIS deal carrying more claims than the probe's bound THROWS instead of concluding 'clear'", async () => {
+  // R5: the probe no longer walks a root's claims or counts tagged claims, so a
+  // root with hundreds of unrelated episodes, or hundreds of tagged
+  // non-reservation claims, is simply not read. (The round-3 versions of these
+  // three tests asserted an overflow that was itself the defect.)
+  test("R5: a root of THIS deal carrying 600 unrelated episodes is NOT walked, and does not overflow", async () => {
     const s = await setup();
     const quoteId = await makeQuote(s);
-    await insertRootHeadedAt(s, quoteId, RESERVATION_PROBE_MAX_CLAIMS_PER_ROOT + 1);
-    const before = await moneyFootprint(s);
-    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(/too many deal records/i);
-    expect(await moneyFootprint(s)).toEqual(before);
+    await insertRootHeadedAt(s, quoteId, 600);
+    await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
   });
 
-  test("more roots headed at ONE quote than the per-quote bound THROWS as well", async () => {
+  test("R5: 600 claims TAGGED with one quote (non-reservation evidence) do not overflow", async () => {
     const s = await setup();
     const quoteId = await makeQuote(s);
-    for (let i = 0; i <= RESERVATION_PROBE_MAX_ROOTS_PER_QUOTE; i++) {
-      await insertRootHeadedAt(s, quoteId, 0);
-    }
-    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(/too many deal records/i);
-  });
-
-  test("more claims TAGGED with ONE quote than the per-quote bound THROWS as well", async () => {
-    const s = await setup();
-    const quoteId = await makeQuote(s);
-    const half = Math.ceil((RESERVATION_PROBE_MAX_TAGGED_CLAIMS_PER_QUOTE + 1) / 2);
-    await insertRootHeadedAt(s, undefined, half, quoteId);
-    await insertRootHeadedAt(s, undefined, half, quoteId);
-    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(/too many deal records/i);
+    await insertRootHeadedAt(s, undefined, 300, quoteId);
+    await insertRootHeadedAt(s, undefined, 300, quoteId);
+    await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
   });
 
   test("control: a car with a few finished deals and no reservation money still takes a request", async () => {
@@ -1826,6 +1818,557 @@ describe("R3 — unrelated history on the car never blocks a deal", () => {
     );
     await fundedStandaloneReservation(s, 18000, car2);
     await rehead(s, quoteId, car2);
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(RESERVATION_MONEY);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FIX ROUND 5 — the probe is bounded by the deal's reservation ORIGINS and its
+// FUNDED tagged reservations, never by roots, episodes, cars or deposits.
+//
+// INVARIANT: every HELD/APPLIED receipt of a reservation that belongs to quote
+// Q's deal is visible to every door that posts money for Q, and the probe's
+// database calls are a small constant times the number of distinct reservation
+// origins / funded reservation deposits linked to Q.
+// ---------------------------------------------------------------------------
+
+const REVIEW_REFUSAL = /administrator/i;
+
+async function seedCars(s: Ctx, count: number, prefix = "R5") {
+  return await s.t.run(async (ctx) => {
+    const ids: Id<"vehicles">[] = [];
+    for (let i = 0; i < count; i++) {
+      ids.push(
+        await ctx.db.insert("vehicles", {
+          orgId: s.orgId, vin: `${prefix}${String(i).padStart(6, "0")}VIN`, make: "Kia", model: "Rio",
+          year: 2021, color: "Grey", fuelType: "Gasoline", transmission: "Automatic", mileage: 100 + i,
+          sellingPrice: 10000, status: "AVAILABLE",
+        })
+      );
+    }
+    return ids;
+  });
+}
+
+/** Rows written DIRECTLY (no writer): each helper is named at its call site. */
+async function directDeposit(
+  s: Ctx,
+  over: { status?: "HELD" | "APPLIED" | "REFUNDED" | "FORFEITED" | "VOIDED"; orgId?: Id<"organizations">; isDeleted?: boolean; quoteId?: Id<"quotes"> } = {}
+) {
+  return await s.t.run((ctx) =>
+    ctx.db.insert("deposits", {
+      orgId: over.orgId ?? s.orgId,
+      vehicleId: s.vehicleId,
+      customerId: s.customerId,
+      amount: 100,
+      status: over.status ?? "HELD",
+      holdActive: false,
+      createdBy: s.manager.userId,
+      createdAt: Date.now(),
+      ...(over.isDeleted ? { isDeleted: true } : {}),
+      ...(over.quoteId ? { quoteId: over.quoteId } : {}),
+    })
+  );
+}
+
+async function directReservation(
+  s: Ctx,
+  over: { depositId?: Id<"deposits">; orgId?: Id<"organizations"> } = {}
+) {
+  return await s.t.run((ctx) =>
+    ctx.db.insert("vehicleReservations", {
+      orgId: over.orgId ?? s.orgId,
+      vehicleId: s.vehicleId,
+      customerId: s.customerId,
+      status: "RELEASED",
+      reservedBy: s.manager.userId,
+      reservedAt: Date.now(),
+      ...(over.depositId ? { depositId: over.depositId } : {}),
+    })
+  );
+}
+
+async function directRoot(
+  s: Ctx,
+  over: {
+    headQuoteId?: Id<"quotes">;
+    originReservationId?: Id<"vehicleReservations">;
+    orgId?: Id<"organizations">;
+    status?: "OPEN" | "RELEASED" | "CONSUMED";
+  }
+) {
+  return await s.t.run((ctx) =>
+    ctx.db.insert("commitmentRoots", {
+      orgId: over.orgId ?? s.orgId,
+      vehicleId: s.vehicleId,
+      customerId: s.customerId,
+      status: over.status ?? "RELEASED",
+      openedAt: Date.now(),
+      openedBy: s.manager.userId,
+      closedAt: Date.now(),
+      ...(over.headQuoteId ? { headQuoteId: over.headQuoteId } : {}),
+      ...(over.originReservationId ? { originReservationId: over.originReservationId } : {}),
+    })
+  );
+}
+
+async function directReservationClaim(
+  s: Ctx,
+  over: {
+    rootId: Id<"commitmentRoots">;
+    reservationId: Id<"vehicleReservations">;
+    depositId?: Id<"deposits">;
+    quoteId?: Id<"quotes">;
+    orgId?: Id<"organizations">;
+    status?: "ACTIVE" | "RELEASED" | "CONSUMED";
+  }
+) {
+  return await s.t.run((ctx) =>
+    ctx.db.insert("vehicleCommitmentClaims", {
+      orgId: over.orgId ?? s.orgId,
+      rootId: over.rootId,
+      vehicleId: s.vehicleId,
+      evidenceKind: "RESERVATION",
+      status: over.status ?? "RELEASED",
+      reservationId: over.reservationId,
+      createdAt: Date.now(),
+      createdBy: s.manager.userId,
+      ...(over.depositId ? { depositId: over.depositId } : {}),
+      ...(over.quoteId ? { quoteId: over.quoteId } : {}),
+    })
+  );
+}
+
+/** A Q-headed root whose origin reservation carries `depositId` (Branch H shape). */
+async function headedOriginWithDeposit(
+  s: Ctx,
+  quoteId: Id<"quotes">,
+  depositId: Id<"deposits"> | undefined,
+  rootStatus: "OPEN" | "RELEASED" | "CONSUMED" = "RELEASED"
+) {
+  const reservationId = await directReservation(s, { depositId });
+  const rootId = await directRoot(s, { headQuoteId: quoteId, originReservationId: reservationId, status: rootStatus });
+  return { reservationId, rootId };
+}
+
+/** A tagged FUNDED reservation claim (Branch T shape). */
+async function taggedFundedClaim(s: Ctx, quoteId: Id<"quotes">, depositId: Id<"deposits">) {
+  const reservationId = await directReservation(s, { depositId });
+  const rootId = await directRoot(s, { originReservationId: reservationId });
+  await directReservationClaim(s, { rootId, reservationId, depositId, quoteId });
+  return { reservationId, rootId };
+}
+
+async function linkedUnfundedCycles(s: Ctx, quoteId: Id<"quotes">, count: number) {
+  for (let i = 0; i < count; i++) {
+    await s.manager.as.mutation(api.vehicles.createReservation, {
+      orgId: s.orgId,
+      vehicleId: s.vehicleId,
+      customerId: s.customerId,
+      dealQuoteId: quoteId,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const reservationId = await s.t.run(async (ctx) => {
+      const active = await ctx.db
+        .query("vehicleReservations")
+        .withIndex("by_status_expiresAt", (q) => q.eq("status", "ACTIVE"))
+        .take(5);
+      const mine = active.filter((r) => r.vehicleId === s.vehicleId);
+      if (mine.length !== 1) throw new Error("fixture: expected one ACTIVE reservation");
+      return mine[0]._id;
+    });
+    await s.manager.as.mutation(api.vehicles.releaseReservation, { orgId: s.orgId, reservationId });
+  }
+}
+
+async function confirmPending(s: Ctx, requestId: Id<"depositRequests">, amount = 100) {
+  return await s.manager.as.mutation(api.depositRequests.confirm, {
+    orgId: s.orgId, requestId, amount, method: "CASH", idempotencyKey: crypto.randomUUID(),
+  });
+}
+
+describe("R5 — the probe's bounds are the constants the design states", () => {
+  test("exported bounds", () => {
+    expect(RESERVATION_PROBE_MAX_ORIGINS_PER_QUOTE).toBe(100);
+    expect(RESERVATION_PROBE_MAX_FUNDED_TAGGED_PER_QUOTE).toBe(50);
+  });
+});
+
+describe("R5 T1 — a multi-car CASH quote is never a dead end (platform limits ENFORCED)", () => {
+  test.each([100, 101])(
+    "%i-car quote: deposits.create, then request, then confirm all succeed",
+    async (cars) => {
+      const s = await setup({ transactionLimits: true });
+      const extra = await seedCars(s, cars - 1);
+      const quoteId = await makeQuote(s);
+      await s.t.run((ctx) =>
+        ctx.db.patch(quoteId, {
+          vehicleItems: [s.vehicleId, ...extra].map((vehicleId) => ({ vehicleId, unitPrice: 200 })),
+        })
+      );
+      await s.manager.as.mutation(api.deposits.create, {
+        orgId: s.orgId, quoteId, amount: 100, method: "CASH", idempotencyKey: crypto.randomUUID(),
+      });
+      const requestId = await requestDeposit(s, quoteId, 100);
+      await expect(confirmPending(s, requestId, 100)).resolves.toBeTruthy();
+      expect((await moneyFootprint(s)).deposits).toBe(2);
+    },
+    240_000
+  );
+});
+
+describe("R5 T2 — many instalments on one quote across cars", () => {
+  test("200 deposits over a 3-car quote, then a request, still pass", async () => {
+    const s = await setup();
+    const extra = await seedCars(s, 2);
+    const quoteId = await makeQuote(s);
+    await s.t.run((ctx) =>
+      ctx.db.patch(quoteId, {
+        vehicleItems: [s.vehicleId, ...extra].map((vehicleId) => ({ vehicleId, unitPrice: 7000 })),
+      })
+    );
+    for (let i = 0; i < 200; i++) {
+      await s.manager.as.mutation(api.deposits.create, {
+        orgId: s.orgId, quoteId, amount: 10, method: "CASH", idempotencyKey: crypto.randomUUID(),
+      });
+    }
+    expect((await moneyFootprint(s)).deposits).toBe(200);
+    await expect(requestDeposit(s, quoteId, 10)).resolves.toBeTruthy();
+  }, 240_000);
+});
+
+describe("R5 T3 — restoration successors cost nothing", () => {
+  // Rows inserted DIRECTLY: the successor roots (one per restoration, copying
+  // headQuoteId + originReservationId exactly as restoration does). The funded
+  // reservation, its deposit, its original root and its claim are real.
+  test.each([60, 150])("one funded reservation's deal with %i restoration successors", async (successors) => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const reservationId = await fundedStandaloneReservation(s, 22000, s.vehicleId, "cashier");
+    await rehead(s, quoteId);
+    for (let i = 0; i < successors; i++) {
+      await directRoot(s, { headQuoteId: quoteId, originReservationId: reservationId });
+    }
+    // The deposit is still HELD and has no quote: refused, however many successors.
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(RESERVATION_MONEY);
+    const depositId = await s.t.run(async (ctx) => (await ctx.db.get(reservationId))!.depositId!);
+    await s.manager.as.mutation(api.deposits.release, {
+      orgId: s.orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH", idempotencyKey: crypto.randomUUID(),
+    });
+    await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
+  }, 120_000);
+});
+
+describe("R5 T4/T7 — unfunded reservations never count", () => {
+  test("T4: 51 unfunded dealQuoteId reservation cycles (create + release) still pass request and deposits.create", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    await linkedUnfundedCycles(s, quoteId, 51);
+    await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
+  }, 240_000);
+
+  test("T4b: the same 51 cycles do not block deposits.create", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    await linkedUnfundedCycles(s, quoteId, 51);
+    await expect(
+      s.manager.as.mutation(api.deposits.create, {
+        orgId: s.orgId, quoteId, amount: 100, method: "CASH", idempotencyKey: crypto.randomUUID(),
+      })
+    ).resolves.toBeTruthy();
+  }, 240_000);
+
+  test("T7: a tagged UNFUNDED reservation passes", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    await linkedUnfundedCycles(s, quoteId, 1);
+    const claims = await s.t.run((ctx) => ctx.db.query("vehicleCommitmentClaims").collect());
+    expect(claims.some((c) => c.evidenceKind === "RESERVATION" && c.quoteId === quoteId)).toBe(true);
+    await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
+  });
+});
+
+describe("R5 T5 — the origin and funded-tagged bounds fail closed", () => {
+  test("Branch H: 100 distinct origins pass, the 101st throws the guided overflow", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const refunded = await directDeposit(s, { status: "REFUNDED" });
+    for (let i = 0; i < 100; i++) await headedOriginWithDeposit(s, quoteId, refunded);
+    const atBound = await requestDeposit(s, quoteId, 100);
+    await s.sales.as.mutation(api.depositRequests.withdraw, { orgId: s.orgId, requestId: atBound });
+    await headedOriginWithDeposit(s, quoteId, refunded);
+    const before = await moneyFootprint(s);
+    await expect(
+      s.manager.as.mutation(api.deposits.create, {
+        orgId: s.orgId, quoteId, amount: 100, method: "CASH", idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(/too many reservations.*administrator/i);
+    expect(await moneyFootprint(s)).toEqual(before);
+  }, 120_000);
+
+  test("Branch H: many roots sharing ONE origin count once", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const reservationId = await directReservation(s, {});
+    for (let i = 0; i < 250; i++) await directRoot(s, { headQuoteId: quoteId, originReservationId: reservationId });
+    await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
+  }, 120_000);
+
+  test("Branch T: 50 distinct funded tagged deposits pass, the 51st throws the guided overflow", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    for (let i = 0; i < 50; i++) {
+      await taggedFundedClaim(s, quoteId, await directDeposit(s, { status: "REFUNDED" }));
+    }
+    const atBound = await requestDeposit(s, quoteId, 100);
+    await s.sales.as.mutation(api.depositRequests.withdraw, { orgId: s.orgId, requestId: atBound });
+    await taggedFundedClaim(s, quoteId, await directDeposit(s, { status: "REFUNDED" }));
+    await expect(
+      s.manager.as.mutation(api.deposits.create, {
+        orgId: s.orgId, quoteId, amount: 100, method: "CASH", idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(/too many reservations.*administrator/i);
+  }, 120_000);
+
+  test("Branch T: many tagged claims sharing ONE deposit count once", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const depositId = await directDeposit(s, { status: "REFUNDED" });
+    for (let i = 0; i < 120; i++) await taggedFundedClaim(s, quoteId, depositId);
+    await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
+  }, 120_000);
+});
+
+describe("R5 T6 — a live funded reservation is refused even when its root is finished", () => {
+  test("adopted funded reservation, root and claim RELEASED, deposit HELD with no quote", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const reservationId = await fundedStandaloneReservation(s, 22000, s.vehicleId, "cashier");
+    await rehead(s, quoteId);
+    await s.t.run(async (ctx) => {
+      const claim = (await ctx.db.query("vehicleCommitmentClaims").collect())[0];
+      await ctx.db.patch(claim.rootId, { status: "RELEASED", closedAt: Date.now() });
+      await ctx.db.patch(claim._id, { status: "RELEASED", resolvedAt: Date.now() });
+    });
+    void reservationId;
+    const before = await moneyFootprint(s);
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(RESERVATION_MONEY);
+    await expect(
+      s.manager.as.mutation(api.deposits.create, {
+        orgId: s.orgId, quoteId, amount: 100, method: "CASH", idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(RESERVATION_MONEY);
+    expect(await moneyFootprint(s)).toEqual(before);
+  });
+
+  test("a restoration successor (no claims of its own) on a HELD funded origin is refused", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const held = await directDeposit(s, { status: "HELD" });
+    await headedOriginWithDeposit(s, quoteId, held, "RELEASED");
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(RESERVATION_MONEY);
+  });
+
+  test("APPLIED counts as live too", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const applied = await directDeposit(s, { status: "APPLIED" });
+    await headedOriginWithDeposit(s, quoteId, applied, "CONSUMED");
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(RESERVATION_MONEY);
+  });
+
+  test("Branch T: a tagged funded claim whose reservation does not name the deposit (claim carries it) is refused", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const held = await directDeposit(s, { status: "HELD" });
+    const reservationId = await directReservation(s, {});
+    const rootId = await directRoot(s, {});
+    await directReservationClaim(s, { rootId, reservationId, depositId: held, quoteId });
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(RESERVATION_MONEY);
+  });
+
+  test("a deposit already recorded ON this quote is the quote's own (visible), so it does not refuse", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const own = await directDeposit(s, { status: "HELD", quoteId });
+    await headedOriginWithDeposit(s, quoteId, own);
+    await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
+  });
+});
+
+describe("R5 T8 — a missing reservation fails closed", () => {
+  test("a Q-headed origin naming a reservation that does not exist -> guided administrator refusal", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const gone = await directReservation(s, {});
+    await directRoot(s, { headQuoteId: quoteId, originReservationId: gone });
+    await s.t.run((ctx) => ctx.db.delete(gone));
+    const before = await moneyFootprint(s);
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(REVIEW_REFUSAL);
+    await expect(
+      s.manager.as.mutation(api.deposits.create, {
+        orgId: s.orgId, quoteId, amount: 100, method: "CASH", idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(REVIEW_REFUSAL);
+    expect(await moneyFootprint(s)).toEqual(before);
+  });
+
+  test("a tagged funded claim naming a reservation that does not exist -> guided administrator refusal", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const refunded = await directDeposit(s, { status: "REFUNDED" });
+    const gone = await directReservation(s, {});
+    const rootId = await directRoot(s, {});
+    await directReservationClaim(s, { rootId, reservationId: gone, depositId: refunded, quoteId });
+    await s.t.run((ctx) => ctx.db.delete(gone));
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(REVIEW_REFUSAL);
+  });
+});
+
+describe("R5 T9 — another organization's rows are never read as this one's", () => {
+  test("an origin reservation belonging to another org -> fail closed, not 'clear'", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const foreign = await directReservation(s, { orgId: s.otherOrgId });
+    await directRoot(s, { headQuoteId: quoteId, originReservationId: foreign });
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(REVIEW_REFUSAL);
+  });
+
+  test("a foreign-org ROOT headed at the same quote id is never seeked (the seek leads with orgId)", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const foreignDeposit = await directDeposit(s, { status: "HELD", orgId: s.otherOrgId });
+    const foreignReservation = await directReservation(s, { orgId: s.otherOrgId, depositId: foreignDeposit });
+    await directRoot(s, { orgId: s.otherOrgId, headQuoteId: quoteId, originReservationId: foreignReservation });
+    await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
+  });
+
+  test("a foreign-org tagged CLAIM naming the quote is never seeked", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const foreignDeposit = await directDeposit(s, { status: "HELD", orgId: s.otherOrgId });
+    const foreignReservation = await directReservation(s, { orgId: s.otherOrgId, depositId: foreignDeposit });
+    const rootId = await directRoot(s, { orgId: s.otherOrgId });
+    await directReservationClaim(s, {
+      orgId: s.otherOrgId, rootId, reservationId: foreignReservation, depositId: foreignDeposit, quoteId,
+    });
+    await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
+  });
+
+  test("an own-org reservation pointing at another org's HELD deposit is not counted as money", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const foreignDeposit = await directDeposit(s, { status: "HELD", orgId: s.otherOrgId });
+    await headedOriginWithDeposit(s, quoteId, foreignDeposit);
+    await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
+  });
+});
+
+describe("R5 T10/T11 — money that is not live does not block", () => {
+  test.each(["REFUNDED", "FORFEITED", "VOIDED"] as const)("%s deposit passes at both branches", async (status) => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const dead = await directDeposit(s, { status });
+    await headedOriginWithDeposit(s, quoteId, dead);
+    await taggedFundedClaim(s, quoteId, await directDeposit(s, { status }));
+    await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
+  });
+
+  test("T11: an isDeleted HELD deposit passes at both branches", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const deleted = await directDeposit(s, { status: "HELD", isDeleted: true });
+    await headedOriginWithDeposit(s, quoteId, deleted);
+    await taggedFundedClaim(s, quoteId, await directDeposit(s, { status: "HELD", isDeleted: true }));
+    await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
+  });
+
+  test("controls: a headed root with NO origin is never visited", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    for (let i = 0; i < 5; i++) await directRoot(s, { headQuoteId: quoteId });
+    await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
+  });
+});
+
+describe("R5 T12 — the probe's own database calls are bounded (platform limits ENFORCED)", () => {
+  test("at the maximum shape the probe alone makes <= 700 database calls, and confirm's double run fits", async () => {
+    const s = await setup({ transactionLimits: true });
+    const quoteId = await makeQuote(s);
+    // Maximum shape: 100 distinct Branch-H origins (each funded by a NON-live
+    // deposit, so every one is fully inspected) + 50 distinct funded tagged
+    // deposits. Everything is inspected; nothing refuses.
+    for (let i = 0; i < 100; i++) {
+      await headedOriginWithDeposit(s, quoteId, await directDeposit(s, { status: "REFUNDED" }));
+    }
+    for (let i = 0; i < 50; i++) {
+      await taggedFundedClaim(s, quoteId, await directDeposit(s, { status: "REFUNDED" }));
+    }
+    const used = await s.t.run(async (ctx) => {
+      const quote = (await ctx.db.get(quoteId))!;
+      const before = await ctx.meta.getTransactionMetrics();
+      await assertNoQuoteLinkedReservationDeposit(ctx, quote);
+      const mid = await ctx.meta.getTransactionMetrics();
+      await assertNoQuoteLinkedReservationDeposit(ctx, quote);
+      const after = await ctx.meta.getTransactionMetrics();
+      return {
+        one: mid.databaseQueries.used - before.databaseQueries.used,
+        two: after.databaseQueries.used - before.databaseQueries.used,
+      };
+    });
+    expect(used.one).toBeGreaterThan(300);
+    expect(used.one).toBeLessThanOrEqual(700);
+    expect(used.two).toBeLessThanOrEqual(1400);
+  }, 120_000);
+
+  test("the call count does not grow with roots, episodes or unfunded reservations", async () => {
+    const s = await setup({ transactionLimits: true });
+    const quoteId = await makeQuote(s);
+    const measure = async () =>
+      await s.t.run(async (ctx) => {
+        const quote = (await ctx.db.get(quoteId))!;
+        const before = await ctx.meta.getTransactionMetrics();
+        await assertNoQuoteLinkedReservationDeposit(ctx, quote);
+        const after = await ctx.meta.getTransactionMetrics();
+        return after.databaseQueries.used - before.databaseQueries.used;
+      });
+    const base = await measure();
+    const reservationId = await directReservation(s, {});
+    for (let i = 0; i < 300; i++) {
+      const rootId = await directRoot(s, { headQuoteId: quoteId });
+      await directReservationClaim(s, { rootId, reservationId, quoteId });
+    }
+    for (let i = 0; i < 200; i++) await directRoot(s, { headQuoteId: quoteId, originReservationId: reservationId });
+    expect(await measure()).toBeLessThanOrEqual(base + 4);
+  }, 120_000);
+});
+describe("R5 dedupe — a reservation reached by BOTH branches is read once", () => {
+  test("one funded reservation that is a Q-headed origin AND a tagged funded claim costs 6 calls, not 8", async () => {
+    const s = await setup({ transactionLimits: true });
+    const quoteId = await makeQuote(s);
+    const dead = await directDeposit(s, { status: "REFUNDED" });
+    const reservationId = await directReservation(s, { depositId: dead });
+    const rootId = await directRoot(s, { headQuoteId: quoteId, originReservationId: reservationId });
+    await directReservationClaim(s, { rootId, reservationId, depositId: dead, quoteId });
+    const calls = await s.t.run(async (ctx) => {
+      const quote = (await ctx.db.get(quoteId))!;
+      const before = await ctx.meta.getTransactionMetrics();
+      await assertNoQuoteLinkedReservationDeposit(ctx, quote);
+      const after = await ctx.meta.getTransactionMetrics();
+      return after.databaseQueries.used - before.databaseQueries.used;
+    });
+    // Branch H: seek, reservation, deposit, terminal seek. Branch T: seek, (deduped), terminal seek.
+    expect(calls).toBeLessThanOrEqual(6);
+  });
+
+  test("dedupe never hides a LIVE claim-side deposit that differs from the reservation's own", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const dead = await directDeposit(s, { status: "REFUNDED" });
+    const held = await directDeposit(s, { status: "HELD" });
+    const reservationId = await directReservation(s, { depositId: dead });
+    const rootId = await directRoot(s, { headQuoteId: quoteId, originReservationId: reservationId });
+    await directReservationClaim(s, { rootId, reservationId, depositId: held, quoteId });
     await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(RESERVATION_MONEY);
   });
 });

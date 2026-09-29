@@ -92,58 +92,62 @@ export const RESERVATION_DEPOSIT_NEXT_STEP =
   "Release or resolve that reservation deposit first (vehicle, Deposits section: refund or forfeit it, or cancel the sale it was applied to), then record or request the deposit on the quote.";
 
 /**
- * Bounds of the reservation-deposit probe. The probe FAILS CLOSED past any
+ * Bounds of the reservation-deposit probe. The probe FAILS CLOSED past either
  * bound (it throws) rather than reading a truncated window and concluding
  * "nothing there" — the SCRUM-444 N2 defect.
  *
- * ⚠️ EVERY BOUND IS PER QUOTE, NEVER PER CAR OR PER ORG (SCRUM-444 R3). A car's
- * commitment roots accumulate for its whole life, one terminal root per lapsed
- * hold, released reservation, refund or cancelled application, for every
- * customer that ever touched it. A bound on that range turns unrelated history
- * into a permanent dead end for every future quote on the car. The probe's read
- * set is therefore the DEAL's own records only.
+ * ⚠️ THE PROBE'S COST IS A FUNCTION OF ONE QUOTE'S RESERVATIONS, NOTHING ELSE.
+ * A car's roots accumulate for its whole life, and a quote's own deal can carry
+ * any number of cars, restoration successors, deposits and episodes. None of
+ * those is read. The two loops below step through DISTINCT values with a
+ * `.gt(<last>).first()` seek, so a thousand roots that share one origin, or a
+ * thousand claims that share one deposit, cost one seek. There is no per-root
+ * loop, no per-claim loop and no `.collect()` / `.take()` window anywhere.
  *
- *  - MAX_ROOTS_PER_QUOTE: distinct candidate roots of ONE quote's deal
- *    (`commitmentRoots.by_org_head_quote` plus the roots named by claims tagged
- *    with the quote). A deal owns one root per car, and each restoration after a
- *    sale reversal adds one successor that inherits `headQuoteId`; adoption
- *    re-heads at most one root per car. A 20-car quote restored four times is
- *    100. There is no schema cap on `quotes.vehicleItems`, so this is the
- *    "no real deal gets near it" figure, not a proven ceiling.
- *  - MAX_TAGGED_CLAIMS_PER_QUOTE: claims whose `quoteId` names the quote, in any
- *    status (`vehicleCommitmentClaims.by_org_quote`). Only `attachEpisode`
- *    (commitments.ts, the sole `vehicleCommitmentClaims` insert) stamps it: one
- *    per deposit / finance application / reservation episode the quote drives,
- *    per car. 500 is roughly 8x the busiest single root on record (60+
- *    episodes, commitmentFinalization G.13) spread over many cars.
- *  - MAX_CLAIMS_PER_ROOT: ACTIVE claims of ONE root (`by_root_status`). Claims
- *    are insert-only in production (nothing patches a claim status), so this is
- *    every episode the root ever opened; a busy deal legitimately carries 60+.
- *    500 is far above any real deal and still one bounded read.
+ *  - MAX_ORIGINS_PER_QUOTE (Branch H): distinct `originReservationId` values
+ *    across every root headed at the quote, in any root status. A deal opens a
+ *    root with an origin only when a RESERVATION starts it (`dealQuoteId` /
+ *    adoption re-heading); ordinary quote deposits open roots with none, which
+ *    the seek steps over. A quote reserved and released 100 times is already
+ *    far past any real deal.
+ *  - MAX_FUNDED_TAGGED_PER_QUOTE (Branch T): distinct deposits named by
+ *    RESERVATION claims tagged with the quote. Only a FUNDED reservation stamps
+ *    a `depositId` on its claim, and `createReservation` refuses a deposit on a
+ *    reservation that has deal lineage, so this is only the historical shape
+ *    (rows written before that refusal). 50 is far above any real quote.
+ *
+ * Database calls per probe (each `.first()` is one range, each `db.get` one
+ * call): at most 100 x (1 seek + 3 gets: reservation, its deposit, the claim's
+ * deposit) + 50 x (1 seek + 3 gets) + 2 terminal seeks = 602, about 600. The
+ * confirm door runs the probe twice (once at request, once inside the shared
+ * posting body), so about 1,200 against the platform's 4,096. It is a ceiling
+ * on the SHAPE, not a measurement of a typical deal, which is a handful.
  */
-export const RESERVATION_PROBE_MAX_ROOTS_PER_QUOTE = 100;
-export const RESERVATION_PROBE_MAX_TAGGED_CLAIMS_PER_QUOTE = 500;
-export const RESERVATION_PROBE_MAX_CLAIMS_PER_ROOT = 500;
+export const RESERVATION_PROBE_MAX_ORIGINS_PER_QUOTE = 100;
+export const RESERVATION_PROBE_MAX_FUNDED_TAGGED_PER_QUOTE = 50;
 
-// Unreachable in normal operation: every bound above is per QUOTE (the deal's
-// own records), far above what one deal can legitimately create. It exists so
-// that a corrupt or runaway deal fails CLOSED instead of being read truncated.
+// Unreachable in normal operation: both bounds are far above what one quote can
+// legitimately link. It exists so a corrupt or runaway deal fails CLOSED
+// instead of being read truncated.
 const RESERVATION_PROBE_OVERFLOW_MESSAGE =
-  "This quote's deal has too many deal records to confirm that no reservation deposit is holding money for it, so the deposit was not taken. Ask an administrator to review the deal's reservations.";
+  "This quote is linked to too many reservations to confirm that no reservation deposit is holding money for it, so the deposit was not taken. Ask an administrator to review the reservations linked to this deal.";
+
+// A reservation the deal points at that cannot be read as this organization's
+// is not evidence of "no money": the probe cannot tell, so it refuses.
+const RESERVATION_PROBE_UNREADABLE_MESSAGE =
+  "This quote's deal points at a reservation that could not be found, so it cannot be confirmed that no reservation deposit is holding money for it, and the deposit was not taken. Ask an administrator to review the reservations linked to this deal.";
 
 /**
- * A reservation whose deposit is still HELD or APPLIED, or null. This is the
- * one definition of "a reservation that is carrying money".
+ * The first of `depositIds` that is a live receipt of this organization
+ * (HELD or APPLIED, not deleted), or null. Missing, foreign-organization and
+ * deleted deposits are skipped — they are never this organization's money.
  */
-async function liveReservationDeposit(
+async function firstLiveDeposit(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
-  reservationId: Id<"vehicleReservations"> | undefined,
-  claimDepositId: Id<"deposits"> | undefined
+  depositIds: Array<Id<"deposits"> | undefined>
 ): Promise<Doc<"deposits"> | null> {
-  const reservation = reservationId ? await ctx.db.get(reservationId) : null;
-  if (reservation && reservation.orgId !== orgId) return null;
-  for (const depositId of [reservation?.depositId, claimDepositId]) {
+  for (const depositId of depositIds) {
     if (!depositId) continue;
     const deposit = await ctx.db.get(depositId);
     if (!deposit || deposit.orgId !== orgId || deposit.isDeleted === true) continue;
@@ -153,84 +157,139 @@ async function liveReservationDeposit(
 }
 
 /**
+ * A reservation whose deposit is still HELD or APPLIED, or null. This is the
+ * one definition of "a reservation that is carrying money" for adoption.
+ */
+async function liveReservationDeposit(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  reservationId: Id<"vehicleReservations"> | undefined,
+  claimDepositId: Id<"deposits"> | undefined
+): Promise<Doc<"deposits"> | null> {
+  const reservation = reservationId ? await ctx.db.get(reservationId) : null;
+  if (reservation && reservation.orgId !== orgId) return null;
+  return await firstLiveDeposit(ctx, orgId, [reservation?.depositId, claimDepositId]);
+}
+
+/**
  * A reservation that was taken WITH a deposit and belongs to this quote's deal
  * is a receipt the quote's own arithmetic cannot see: `deposits.by_quote` never
  * lists it, so the cap and the pending-request guard both read "nothing paid".
  * Every door that would receive more money against the quote fails CLOSED while
  * one is live.
  *
- * ⚠️ ROOT-BASED, NOT TAG-BASED. A reservation joins a quote's deal in more ways
- * than carrying the quote id on its claim — `dealDepositId`, adoption after the
- * fact, historical rows — and the claim tag is only written by some of them.
- * What every one of them has in common is the commitment ROOT, so the probe
- * treats a root as this deal's when `headQuoteId` names the quote (a claim
- * tagged with the quote counts too).
+ * The writers this relies on (verified, and not changed here):
+ *  - `vehicleReservations.depositId` is written only when the reservation is
+ *    created with a deposit.
+ *  - A RESERVATION claim's evidence carries `depositId` if and only if its
+ *    reservation was funded.
+ *  - A deposit is refused on a reservation that has deal lineage, so a FUNDED
+ *    reservation always opens its own root and is that root's
+ *    `originReservationId`; restoration successors copy `headQuoteId` and
+ *    `originReservationId`.
  *
- * ⚠️ SCOPED TO THE DEAL, NEVER THE CAR (SCRUM-444 R3). The candidate roots are
- * exactly (roots whose `headQuoteId` is the quote) ∪ (the root of every claim
- * tagged with the quote). Nothing reads `by_org_vehicle_status`: a car's
- * finished deals belong to other quotes and must never block this one.
+ * A reservation joins a quote's deal by two doors, and the probe covers each:
+ *  - Branch H, BY ROOT: every root whose `headQuoteId` is the quote — however
+ *    the reservation joined (`dealQuoteId`, `dealDepositId`, adoption after the
+ *    fact, historical rows) and whatever the root's status. The distinct
+ *    `originReservationId` values of those roots are the reservations.
+ *  - Branch T, BY TAG: the funded RESERVATION claims tagged with the quote,
+ *    which names the reservation even when its root is headed elsewhere.
  *
- * Indexes: `commitmentRoots.by_org_head_quote`, `vehicleCommitmentClaims
- * .by_org_quote`, then `vehicleCommitmentClaims.by_root_status` (ACTIVE) per
- * candidate root; bounds above, all per quote.
+ * ⚠️ SCOPED TO THE DEAL, NEVER THE CAR. Nothing reads `by_org_vehicle_status`:
+ * a car's finished deals belong to other quotes and must never block this one.
+ * Every seek leads with `orgId`, and every reservation and deposit is checked
+ * against the org before it counts.
+ *
+ * Indexes: `commitmentRoots.by_org_head_quote_origin` and
+ * `vehicleCommitmentClaims.by_org_quote_kind_deposit`; bounds above.
  */
 export async function assertNoQuoteLinkedReservationDeposit(
   ctx: QueryCtx,
   quote: Doc<"quotes">
 ): Promise<void> {
-  const headed = await ctx.db
-    .query("commitmentRoots")
-    .withIndex("by_org_head_quote", (q) =>
-      q.eq("orgId", quote.orgId).eq("headQuoteId", quote._id)
-    )
-    .take(RESERVATION_PROBE_MAX_ROOTS_PER_QUOTE + 1);
-  const tagged = await ctx.db
-    .query("vehicleCommitmentClaims")
-    .withIndex("by_org_quote", (q) => q.eq("orgId", quote.orgId).eq("quoteId", quote._id))
-    .take(RESERVATION_PROBE_MAX_TAGGED_CLAIMS_PER_QUOTE + 1);
-  if (
-    headed.length > RESERVATION_PROBE_MAX_ROOTS_PER_QUOTE ||
-    tagged.length > RESERVATION_PROBE_MAX_TAGGED_CLAIMS_PER_QUOTE
-  ) {
-    throw new ConvexError(RESERVATION_PROBE_OVERFLOW_MESSAGE);
-  }
+  const orgId = quote.orgId;
+  const visitedReservations = new Set<Id<"vehicleReservations">>();
+  const checkedDeposits = new Set<Id<"deposits">>();
 
-  const candidateRootIds = new Set<Id<"commitmentRoots">>([
-    ...headed.map((root) => root._id),
-    ...tagged.map((claim) => claim.rootId),
-  ]);
-  if (candidateRootIds.size > RESERVATION_PROBE_MAX_ROOTS_PER_QUOTE) {
-    throw new ConvexError(RESERVATION_PROBE_OVERFLOW_MESSAGE);
-  }
-  const headedRootIds = new Set<Id<"commitmentRoots">>(headed.map((root) => root._id));
+  const visit = async (
+    reservationId: Id<"vehicleReservations">,
+    claimDepositId: Id<"deposits"> | undefined
+  ): Promise<void> => {
+    const candidates: Array<Id<"deposits"> | undefined> = [];
+    // A reservation reached by both branches is read once.
+    if (!visitedReservations.has(reservationId)) {
+      visitedReservations.add(reservationId);
+      const reservation = await ctx.db.get(reservationId);
+      // Missing or foreign: the deal names a reservation this organization
+      // cannot read. That is not "no money", it is "cannot tell" — fail closed.
+      if (!reservation || reservation.orgId !== orgId) {
+        throw new ConvexError(RESERVATION_PROBE_UNREADABLE_MESSAGE);
+      }
+      candidates.push(reservation.depositId);
+    }
+    candidates.push(claimDepositId);
 
-  for (const rootId of candidateRootIds) {
-    const claims = await ctx.db
-      .query("vehicleCommitmentClaims")
-      .withIndex("by_root_status", (q) => q.eq("rootId", rootId).eq("status", "ACTIVE"))
-      .take(RESERVATION_PROBE_MAX_CLAIMS_PER_ROOT + 1);
-    if (claims.length > RESERVATION_PROBE_MAX_CLAIMS_PER_ROOT) {
+    const unchecked = candidates.filter((id) => {
+      if (!id || checkedDeposits.has(id)) return false;
+      checkedDeposits.add(id);
+      return true;
+    });
+    const deposit = await firstLiveDeposit(ctx, orgId, unchecked);
+    // A deposit already recorded ON this quote is visible to `by_quote`.
+    if (!deposit || deposit.quoteId === quote._id) return;
+    throw new ConvexError(
+      `A reservation deposit taken on this deal's vehicle is already holding money for it, and this quote cannot see it. ${RESERVATION_DEPOSIT_NEXT_STEP}`
+    );
+  };
+
+  // Branch H — distinct reservation origins of the roots headed at this quote.
+  // `.gt("originReservationId", undefined)` on the first seek steps over roots
+  // headed here with NO origin (undefined sorts before every defined value).
+  let lastOrigin: Id<"vehicleReservations"> | undefined = undefined;
+  for (let origins = 0; ; origins += 1) {
+    const after: Id<"vehicleReservations"> | undefined = lastOrigin;
+    const root: Doc<"commitmentRoots"> | null = await ctx.db
+      .query("commitmentRoots")
+      .withIndex("by_org_head_quote_origin", (q) =>
+        q.eq("orgId", orgId).eq("headQuoteId", quote._id).gt("originReservationId", after)
+      )
+      .first();
+    if (!root?.originReservationId) break;
+    if (origins >= RESERVATION_PROBE_MAX_ORIGINS_PER_QUOTE) {
       throw new ConvexError(RESERVATION_PROBE_OVERFLOW_MESSAGE);
     }
-    const rootIsThisDeal = headedRootIds.has(rootId);
-    for (const claim of claims) {
-      if (claim.evidenceKind !== "RESERVATION" || claim.orgId !== quote.orgId) continue;
-      if (!rootIsThisDeal && claim.quoteId !== quote._id) continue;
-      const deposit = await liveReservationDeposit(
-        ctx,
-        quote.orgId,
-        claim.reservationId,
-        claim.depositId
-      );
-      // A deposit already recorded ON this quote is visible to `by_quote`.
-      if (!deposit || deposit.quoteId === quote._id) continue;
-      throw new ConvexError(
-        `A reservation deposit taken on this deal's vehicle is already holding money for it, and this quote cannot see it. ${RESERVATION_DEPOSIT_NEXT_STEP}`
-      );
+    lastOrigin = root.originReservationId;
+    await visit(root.originReservationId, undefined);
+  }
+
+  // Branch T — distinct FUNDED deposits on RESERVATION claims tagged with the
+  // quote. An unfunded reservation's claim has no `depositId`, sorts first, and
+  // is stepped over by `.gt("depositId", undefined)`, so it is never counted.
+  let lastDeposit: Id<"deposits"> | undefined = undefined;
+  for (let funded = 0; ; funded += 1) {
+    const after: Id<"deposits"> | undefined = lastDeposit;
+    const claim: Doc<"vehicleCommitmentClaims"> | null = await ctx.db
+      .query("vehicleCommitmentClaims")
+      .withIndex("by_org_quote_kind_deposit", (q) =>
+        q
+          .eq("orgId", orgId)
+          .eq("quoteId", quote._id)
+          .eq("evidenceKind", "RESERVATION")
+          .gt("depositId", after)
+      )
+      .first();
+    if (!claim?.depositId) break;
+    if (funded >= RESERVATION_PROBE_MAX_FUNDED_TAGGED_PER_QUOTE) {
+      throw new ConvexError(RESERVATION_PROBE_OVERFLOW_MESSAGE);
     }
+    lastDeposit = claim.depositId;
+    // A tagged claim with no reservation cannot be read as anyone's: refuse.
+    if (!claim.reservationId) throw new ConvexError(RESERVATION_PROBE_UNREADABLE_MESSAGE);
+    await visit(claim.reservationId, claim.depositId);
   }
 }
+
 /**
  * SCRUM-444 R-B — adoption of a FUNDED reservation is refused.
  *

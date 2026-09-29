@@ -74,10 +74,18 @@ export function convexTestWithComponents<
 >(
   schema: Schema,
   modules: Record<string, () => Promise<unknown>>,
+  // Opt-in: `transactionLimits: true` makes convex-test ENFORCE the platform's
+  // per-transaction ceilings (4,096 index ranges/gets, 32,000 documents, 16 MiB).
+  // Default is off, exactly as before, so no existing suite changes behaviour.
+  options: { transactionLimits?: boolean } = {},
 ): TestConvex<Schema> & { runUnwrapped: TestConvex<Schema>["run"] } {
   // convexTest's own generic widens `Schema` here; re-pinning it keeps the
   // concrete table/index types that every caller's `t.run(ctx => ...)` needs.
-  const t = convexTest(schema, modules) as unknown as TestConvex<Schema>;
+  const t = (
+    options.transactionLimits
+      ? convexTest({ schema, modules, transactionLimits: true })
+      : convexTest(schema, modules)
+  ) as unknown as TestConvex<Schema>;
 
   for (const name of AGGREGATE_COMPONENTS) {
     t.registerComponent(name, aggregateComponentSchema, COMPONENT_MODULES);
