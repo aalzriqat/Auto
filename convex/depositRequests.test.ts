@@ -6,7 +6,8 @@ import type { Id } from "./_generated/dataModel";
 import { DEFAULT_ROLE_TEMPLATES, PERMISSIONS } from "./utils/permissions";
 import {
   RESERVATION_PROBE_MAX_CLAIMS_PER_ROOT,
-  RESERVATION_PROBE_MAX_ROOTS_PER_STATUS,
+  RESERVATION_PROBE_MAX_ROOTS_PER_QUOTE,
+  RESERVATION_PROBE_MAX_TAGGED_CLAIMS_PER_QUOTE,
 } from "./utils/depositRequestGuards";
 
 vi.mock("./rateLimit", () => ({
@@ -1591,6 +1592,39 @@ describe("R2 (vi) N2 — the probe fails closed, never open", () => {
     });
   }
 
+  /** A RELEASED root headed at `headQuoteId`, whose ACTIVE claims may carry `claimQuoteId`. */
+  async function insertRootHeadedAt(
+    s: Ctx,
+    headQuoteId: Id<"quotes"> | undefined,
+    claimCount: number,
+    claimQuoteId?: Id<"quotes">
+  ) {
+    await s.t.run(async (ctx) => {
+      const rootId = await ctx.db.insert("commitmentRoots", {
+        orgId: s.orgId,
+        vehicleId: s.vehicleId,
+        customerId: s.customerId,
+        status: "RELEASED",
+        openedAt: Date.now(),
+        openedBy: s.manager.userId,
+        closedAt: Date.now(),
+        ...(headQuoteId ? { headQuoteId } : {}),
+      });
+      for (let i = 0; i < claimCount; i++) {
+        await ctx.db.insert("vehicleCommitmentClaims", {
+          orgId: s.orgId,
+          rootId,
+          vehicleId: s.vehicleId,
+          evidenceKind: "FINANCE",
+          status: "ACTIVE",
+          createdAt: Date.now(),
+          createdBy: s.manager.userId,
+          ...(claimQuoteId ? { quoteId: claimQuoteId } : {}),
+        });
+      }
+    });
+  }
+
   test("more than 10 older ACTIVE claims on the car do not hide the match", async () => {
     const s = await setup();
     // Claims never leave ACTIVE in production, so finished deals pile up first.
@@ -1634,21 +1668,30 @@ describe("R2 (vi) N2 — the probe fails closed, never open", () => {
     await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(RESERVATION_MONEY);
   });
 
-  test("a root carrying more claims than the probe's bound THROWS instead of concluding 'clear'", async () => {
+  test("a root of THIS deal carrying more claims than the probe's bound THROWS instead of concluding 'clear'", async () => {
     const s = await setup();
     const quoteId = await makeQuote(s);
-    await insertTerminalRootWithActiveClaims(s, RESERVATION_PROBE_MAX_CLAIMS_PER_ROOT + 1);
+    await insertRootHeadedAt(s, quoteId, RESERVATION_PROBE_MAX_CLAIMS_PER_ROOT + 1);
     const before = await moneyFootprint(s);
     await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(/too many deal records/i);
     expect(await moneyFootprint(s)).toEqual(before);
   });
 
-  test("more roots on one car than the bound THROWS as well", async () => {
+  test("more roots headed at ONE quote than the per-quote bound THROWS as well", async () => {
     const s = await setup();
     const quoteId = await makeQuote(s);
-    for (let i = 0; i <= RESERVATION_PROBE_MAX_ROOTS_PER_STATUS; i++) {
-      await insertTerminalRootWithActiveClaims(s, 0);
+    for (let i = 0; i <= RESERVATION_PROBE_MAX_ROOTS_PER_QUOTE; i++) {
+      await insertRootHeadedAt(s, quoteId, 0);
     }
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(/too many deal records/i);
+  });
+
+  test("more claims TAGGED with ONE quote than the per-quote bound THROWS as well", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const half = Math.ceil((RESERVATION_PROBE_MAX_TAGGED_CLAIMS_PER_QUOTE + 1) / 2);
+    await insertRootHeadedAt(s, undefined, half, quoteId);
+    await insertRootHeadedAt(s, undefined, half, quoteId);
     await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(/too many deal records/i);
   });
 
@@ -1657,5 +1700,132 @@ describe("R2 (vi) N2 — the probe fails closed, never open", () => {
     await insertTerminalRootWithActiveClaims(s, 3);
     const quoteId = await makeQuote(s);
     await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
+  });
+});
+// ---------------------------------------------------------------------------
+// FIX ROUND 3 — the probe is scoped to THE QUOTE'S OWN deal, never the car's history
+// ---------------------------------------------------------------------------
+
+/**
+ * Finished deals pile up on a car for its whole life (a lapsed hold, a released
+ * reservation, a refund, a cancelled application each leave one terminal root).
+ * Built through the REAL mutations, not raw inserts, so the roots are exactly
+ * the ones production writes.
+ */
+async function churnReleasedRoots(s: Ctx, count: number) {
+  for (let i = 0; i < count; i++) {
+    await s.manager.as.mutation(api.vehicles.createReservation, {
+      orgId: s.orgId,
+      vehicleId: s.vehicleId,
+      customerId: s.customerId,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const reservationId = await s.t.run(async (ctx) => {
+      const active = await ctx.db
+        .query("vehicleReservations")
+        .withIndex("by_status_expiresAt", (q) => q.eq("status", "ACTIVE"))
+        .take(5);
+      const mine = active.filter((r) => r.vehicleId === s.vehicleId);
+      if (mine.length !== 1) throw new Error("fixture: expected one ACTIVE reservation");
+      return mine[0]._id;
+    });
+    await s.manager.as.mutation(api.vehicles.releaseReservation, { orgId: s.orgId, reservationId });
+  }
+}
+
+async function otherCustomerQuote(s: Ctx) {
+  const customerId = await s.t.run((ctx) =>
+    ctx.db.insert("customers", { orgId: s.orgId, firstName: "Omar", lastName: "Saad" })
+  );
+  return await makeQuote(s, { customerId });
+}
+
+const FOREIGN_ROOTS = 30;
+
+describe("R3 — unrelated history on the car never blocks a deal", () => {
+  test("the churn fixture really leaves many RELEASED roots on the car", async () => {
+    const s = await setup();
+    await churnReleasedRoots(s, FOREIGN_ROOTS);
+    const released = await s.t.run((ctx) =>
+      ctx.db
+        .query("commitmentRoots")
+        .withIndex("by_org_vehicle_status", (q) =>
+          q.eq("orgId", s.orgId).eq("vehicleId", s.vehicleId).eq("status", "RELEASED")
+        )
+        .take(100)
+    );
+    expect(released.length).toBeGreaterThanOrEqual(FOREIGN_ROOTS);
+  });
+
+  test("request succeeds for a new quote (different customer)", async () => {
+    const s = await setup();
+    await churnReleasedRoots(s, FOREIGN_ROOTS);
+    const quoteId = await otherCustomerQuote(s);
+    await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
+  });
+
+  test("confirm succeeds for a new quote (different customer)", async () => {
+    const s = await setup();
+    await churnReleasedRoots(s, FOREIGN_ROOTS);
+    const quoteId = await otherCustomerQuote(s);
+    const requestId = await requestDeposit(s, quoteId, 100);
+    await expect(
+      s.manager.as.mutation(api.depositRequests.confirm, {
+        orgId: s.orgId, requestId, amount: 100, method: "CASH", idempotencyKey: crypto.randomUUID(),
+      })
+    ).resolves.toBeTruthy();
+  });
+
+  test("deposits.create succeeds for a new quote (different customer)", async () => {
+    const s = await setup();
+    await churnReleasedRoots(s, FOREIGN_ROOTS);
+    const quoteId = await otherCustomerQuote(s);
+    await expect(
+      s.manager.as.mutation(api.deposits.create, {
+        orgId: s.orgId, quoteId, amount: 100, method: "CASH", idempotencyKey: crypto.randomUUID(),
+      })
+    ).resolves.toBeTruthy();
+  });
+
+  test("with the foreign roots present, a live funded reservation on THIS deal's root is still refused", async () => {
+    const s = await setup();
+    await churnReleasedRoots(s, FOREIGN_ROOTS);
+    const quoteId = await otherCustomerQuote(s);
+    await fundedStandaloneReservation(s);
+    await rehead(s, quoteId);
+    const before = await moneyFootprint(s);
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(RESERVATION_MONEY);
+    await expect(
+      s.manager.as.mutation(api.deposits.create, {
+        orgId: s.orgId, quoteId, amount: 100, method: "CASH", idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(RESERVATION_MONEY);
+    expect(await moneyFootprint(s)).toEqual(before);
+  });
+
+  test("with the foreign roots present, the TAGGED (round-1) shape is still refused", async () => {
+    const s = await setup();
+    await churnReleasedRoots(s, FOREIGN_ROOTS);
+    const quoteId = await otherCustomerQuote(s);
+    await seedQuoteLinkedReservationDeposit(s, quoteId);
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(RESERVATION_MONEY);
+  });
+
+  test("control: a multi-vehicle quote sees a funded reservation on either car, with foreign history on one", async () => {
+    const s = await setup();
+    const car2 = await seedAnotherCar(s, "1HGCM82633A888888");
+    await churnReleasedRoots(s, FOREIGN_ROOTS);
+    const quoteId = await otherCustomerQuote(s);
+    await s.t.run((ctx) =>
+      ctx.db.patch(quoteId, {
+        vehicleItems: [
+          { vehicleId: s.vehicleId, unitPrice: 22000 },
+          { vehicleId: car2, unitPrice: 18000 },
+        ],
+      })
+    );
+    await fundedStandaloneReservation(s, 18000, car2);
+    await rehead(s, quoteId, car2);
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(RESERVATION_MONEY);
   });
 });

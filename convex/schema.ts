@@ -3871,7 +3871,12 @@ export default defineSchema({
     // the answer is only ever wanted within one. Leading with orgId makes the
     // tenant boundary part of the access path rather than a filter somebody has
     // to remember to apply.
-    .index("by_org_consumed_sale", ["orgId", "consumedBySaleId"]),
+    .index("by_org_consumed_sale", ["orgId", "consumedBySaleId"])
+    // SCRUM-444 R3 — "THE ROOTS OF THIS QUOTE'S DEAL", bounded by the deal and
+    // never by the car's history (`by_org_vehicle_status` grows for the life of
+    // a car). `headQuoteId` is optional: rows with none are simply absent from
+    // this index, which is the point. No backfill: Convex builds it on deploy.
+    .index("by_org_head_quote", ["orgId", "headQuoteId"]),
 
   /**
    * SCRUM-195 — ONE ACQUISITION EPISODE.
@@ -3965,7 +3970,11 @@ export default defineSchema({
     // `depositVehicleHolds` row carries, not by searching the episodes that
     // share a deposit — an index here would only invite that search back.
     .index("by_application", ["applicationId"])
-    .index("by_reservation", ["reservationId"]),
+    .index("by_reservation", ["reservationId"])
+    // SCRUM-444 R3 — the claims that NAME a quote (`quoteId` is optional: an
+    // untagged claim is absent from this index). Answers "which roots does this
+    // quote's deal touch" by the deal, not by the car. No data migration.
+    .index("by_org_quote", ["orgId", "quoteId"]),
 
   /**
    * One immutable row per application of deposit money to a sale.
