@@ -839,10 +839,14 @@ const dealWizardMessages = defineBilingualMessages({
     "Completing this sale needs access to the Sales page. Ask a sales manager to complete it.",
     "إتمام هذا البيع يحتاج صلاحية الوصول إلى صفحة المبيعات. اطلب من مدير المبيعات إتمامه.",
   ],
-  OpenAccountingAction: ["Open accounting", "فتح المحاسبة"],
-  AccountingNeedsFinanceRole: [
-    "Only a user who manages finance can record this payment. Ask accounting to record it.",
-    "لا يسجّل هذه الدفعة إلا مستخدم يدير الشؤون المالية. اطلب من المحاسبة تسجيلها.",
+  SupplierPayableRecordedOnPayables: [
+    "The dealership collected the full sale price, so the supplier's share is a payable it owes. It is paid from the supplier payables page, not from this screen.",
+    "حصّل المعرض كامل سعر البيع، فحصة المورد مستحق عليه. تُدفع من صفحة مستحقات الموردين، لا من هذه الشاشة.",
+  ],
+  OpenSourcingPayablesAction: ["Open supplier payables", "فتح مستحقات الموردين"],
+  SupplierPayablesNeedFinanceRole: [
+    "Only a user who manages finance and can view it can pay a supplier payable. Ask them to record the payment.",
+    "لا يدفع مستحق المورد إلا مستخدم يدير الشؤون المالية ويملك صلاحية عرضها. اطلب منه تسجيل الدفعة.",
   ],
   ClosingCheckGoToCosts: ["Go to handover costs", "الانتقال إلى رسوم التسليم"],
   ClosingCheckGoToCustody: ["Go to custody", "الانتقال إلى العهدة"],});

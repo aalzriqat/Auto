@@ -1885,8 +1885,14 @@ export function DealCockpit({
         // register action is offered at all. The prerequisite is named before
         // the permission, as the close's reason does: telling a caller to ask
         // for a permission that would not help is a dead end too.
+        //
+        // Only while the application is NOT approved: the rail reads the STORED
+        // handover status, which re-appraisal and reopen-approval write as
+        // BLOCKED, while the server's `registerVehicleHandover` checks only
+        // `status === "APPROVED"`. An APPROVED deal with a stale BLOCKED keeps
+        // its door, subject to the permission below.
         unavailableReasonKey:
-          handoverStage.blocker === "HandoverBlocked"
+          handoverStage.blocker === "HandoverBlocked" && deal.status !== "APPROVED"
             ? "HandoverBlockedNeedsApproval"
             : hasPermission(PERMISSIONS.REGISTER_VEHICLE_HANDOVER)
               ? undefined
@@ -3131,7 +3137,9 @@ export function SaleDealCockpit({
         workflowAction={cashAction}
         canSettleSupplier={canSettleSupplier}
         supplierSettlementHref={
-          canSettleSupplier && hasPermission(PERMISSIONS.VIEW_FINANCE) ? `/${orgId}/accounting` : undefined
+          // Supplier payables are paid on the sourcing page (`sourcingPayables.markPaid`,
+          // MANAGE_FINANCE; its list needs VIEW_FINANCE).
+          canSettleSupplier && hasPermission(PERMISSIONS.VIEW_FINANCE) ? `/${orgId}/sourcing` : undefined
         }
         onRecordSupplierReceipt={async (receivableId, receipt) => {
           await recordReceipt({
@@ -4652,16 +4660,28 @@ export function DealCockpitView({
         let reason = "CashSettlementNotRecordedHere";
         if (supplierGuidance) reason = "SupplierClaimDisputedGuidance";
         else if (supplierClaimSettleable || deal?.money == null) reason = "SupplierSettlementNeedsPermission";
+        // S4: on the through-dealership route the supplier's share is a payable
+        // the dealership owes, paid from the supplier payables page. Only that
+        // position is a payable someone can pay; every other sub-case (an
+        // UNKNOWN obligation, a route not known) keeps its own reason and a note.
+        if (
+          reason === "CashSettlementNotRecordedHere" &&
+          deal?.money?.settlesDirectToSupplier === false &&
+          supplierRow?.position === "DEALERSHIP_OWES"
+        ) {
+          return {
+            ...action,
+            unavailableReasonKey: "SupplierPayableRecordedOnPayables",
+            ...(supplierSettlementHref
+              ? { unavailableLink: { href: supplierSettlementHref, labelKey: "OpenSourcingPayablesAction" } }
+              : { unavailableNoteKey: "SupplierPayablesNeedFinanceRole" }),
+          };
+        }
         return {
           ...action,
           unavailableReasonKey: reason,
-          // S4: accounting records a balance this screen does not settle. The
-          // container passes the href only for a caller who can act there;
-          // otherwise the reason already names accounting as who acts.
           ...(reason === "CashSettlementNotRecordedHere"
-            ? supplierSettlementHref
-              ? { unavailableLink: { href: supplierSettlementHref, labelKey: "OpenAccountingAction" } }
-              : { unavailableNoteKey: "AccountingNeedsFinanceRole" }
+            ? { unavailableNoteKey: "SupplierSettlementNeedsPermission" }
             : {}),
         };
       }

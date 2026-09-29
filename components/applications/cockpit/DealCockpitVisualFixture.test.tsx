@@ -1069,7 +1069,13 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
  * renders, so the destinations the operator sees are the ones proven here.
  */
 describe("closing-readiness rows are destinations", () => {
-  afterEach(cleanup);
+  // These tests stub the global prototype method; put it back so no other
+  // test in the worker inherits the stub.
+  const originalScrollIntoView = Element.prototype.scrollIntoView;
+  afterEach(() => {
+    cleanup();
+    Element.prototype.scrollIntoView = originalScrollIntoView;
+  });
 
   function renderWith(checks: Array<{ key: string; status: string }>, onRecord?: () => void, withPanels = true) {
     language.locale = "en";
