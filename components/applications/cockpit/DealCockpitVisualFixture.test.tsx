@@ -1387,6 +1387,7 @@ describe("O1 -- the step workbench", () => {
         activeAppraisalProvider={base.activeAppraisalProvider}
         onRecordSupplierReceipt={async () => {}}
         financeDecision={wired ? financeDecision() : undefined}
+        workbenchPending={!wired}
       />
     );
     const { rerender } = render(view(false));
@@ -1484,6 +1485,131 @@ describe("O1 -- the step workbench", () => {
 
     expect(screen.getByTestId("deal-custody")).toBe(panel);
     expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  // N1: a caller who is never given a panel (VIEW_SALES without
+  // VIEW_FINANCE_APPLICATIONS: the economics and closing queries are skipped, so
+  // financeDecision and closingChecklist stay undefined for good) is not "still
+  // loading". The container says so with `workbenchPending`; the view must not
+  // guess it from the stage map, or that caller gets an empty workbench over a
+  // collapsed record.
+  test.each(["APPRAISAL", "APPROVED_PURCHASE", "SETTLEMENT"] as const)(
+    "N1: %s for a caller who is never given its panel, loading finished: the record is open",
+    (stage) => {
+      language.locale = "en";
+      const base = financedDeal();
+      render(
+        <DealCockpitView
+          deal={{ ...base, stages: stagesWithLive(stage) } as FinancedDealCockpitData}
+          backHref="/org_1/deals"
+          activeAppraisalProvider={base.activeAppraisalProvider}
+          onRecordSupplierReceipt={async () => {}}
+          workbenchPending={false}
+        />
+      );
+      expect(workbenchWrappers()).toHaveLength(0);
+      expect(recordOpen()).toBe(true);
+      expect(recordHidden()).toBe(false);
+    }
+  );
+
+  test("N1 control: the same caller while the queries are still pending keeps the record closed", () => {
+    language.locale = "en";
+    const base = financedDeal();
+    render(
+      <DealCockpitView
+        deal={{ ...base, stages: stagesWithLive("SETTLEMENT") } as FinancedDealCockpitData}
+        backHref="/org_1/deals"
+        activeAppraisalProvider={base.activeAppraisalProvider}
+        onRecordSupplierReceipt={async () => {}}
+        workbenchPending
+      />
+    );
+    expect(recordOpen()).toBe(false);
+    expect(recordHidden()).toBe(true);
+  });
+
+  // Sol 417-1 / N2: a stage change that demotes a panel must not hide an active
+  // task. The form, its focus and its intent survive, and the operator can see it.
+  const insideHidden = (el: Element) => el.closest("[hidden]") !== null;
+
+  test("Sol 417-1: HANDOVER -> SETTLEMENT with focus in the add-cost form opens the record and keeps the focus and the intent", () => {
+    const { rerender } = renderStage("HANDOVER");
+    const panel = screen.getByTestId("deal-handover-costs");
+    fireEvent.click(within(panel).getByRole("button", { name: (dictionaries.en as Record<string, string>).AddHandoverCost }));
+    const form = screen.getByTestId("deal-handover-cost-add");
+    const intent = form.getAttribute("data-intent");
+    const field = form.querySelector("input, textarea, select") as HTMLElement;
+    field.focus();
+    expect(document.activeElement).toBe(field);
+
+    rerender(stageElement("SETTLEMENT"));
+
+    // It moved into the record, and the record opened rather than hiding it.
+    expect(zoneOf("deal-handover-costs")).toBe("record");
+    expect(recordOpen()).toBe(true);
+    expect(insideHidden(screen.getByTestId("deal-handover-cost-add"))).toBe(false);
+    expect(screen.getByTestId("deal-handover-cost-add")).toBe(form);
+    expect(document.activeElement).toBe(field);
+    expect(screen.getByTestId("deal-handover-cost-add").getAttribute("data-intent")).toBe(intent);
+  });
+
+  test("Sol 417-1 control (a): the same transition with no open form keeps the record collapsed", () => {
+    const { rerender } = renderStage("HANDOVER");
+    expect(screen.queryByTestId("deal-handover-cost-add")).toBeNull();
+    rerender(stageElement("SETTLEMENT"));
+    expect(zoneOf("deal-handover-costs")).toBe("record");
+    expect(recordOpen()).toBe(false);
+    expect(recordHidden()).toBe(true);
+  });
+
+  test("Sol 417-1 control (b): an open custody dialog stays visible across the transition, with its panel", () => {
+    const { rerender } = renderStage("HANDOVER");
+    const panel = screen.getByTestId("deal-custody");
+    fireEvent.click(within(panel).getByRole("button", { name: (dictionaries.en as Record<string, string>).CustodyRecordReturn }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    rerender(stageElement("SETTLEMENT"));
+
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.getByTestId("deal-custody")).toBe(panel);
+    expect(recordOpen()).toBe(true);
+    expect(insideHidden(screen.getByTestId("deal-custody"))).toBe(false);
+  });
+
+  // jsdom has no keyboard activation (no user-event here): `press` sends the
+  // key events to the focused control and, exactly as a browser does for a
+  // native button, activates it on Enter (keydown) and Space (keyup) UNLESS a
+  // handler called preventDefault. So the test fails if the toggle is not a
+  // native focusable button, or if anything swallows the key.
+  function press(el: HTMLElement, key: "Enter" | " ") {
+    const init = { key, code: key === " " ? "Space" : "Enter", bubbles: true, cancelable: true };
+    const down = fireEvent.keyDown(el, init);
+    if (key === "Enter" && down) fireEvent.click(el);
+    const up = fireEvent.keyUp(el, init);
+    if (key === " " && up) fireEvent.click(el);
+  }
+
+  test("Sol 417-2: Deal details opens and closes from the keyboard (Enter and Space on the focused button)", () => {
+    renderStage("SETTLEMENT");
+    expect(toggle().tagName).toBe("BUTTON");
+    expect(toggle().getAttribute("type")).toBe("button");
+    expect(toggle().tabIndex).toBeGreaterThanOrEqual(0);
+    toggle().focus();
+    expect(document.activeElement).toBe(toggle());
+    expect(recordOpen()).toBe(false);
+    press(toggle(), "Enter");
+    expect(recordOpen()).toBe(true);
+    expect(recordHidden()).toBe(false);
+    press(toggle(), " ");
+    expect(recordOpen()).toBe(false);
+    expect(recordHidden()).toBe(true);
+    press(toggle(), " ");
+    expect(recordOpen()).toBe(true);
+    press(toggle(), "Enter");
+    expect(recordOpen()).toBe(false);
+    // Focus never left the control.
+    expect(document.activeElement).toBe(toggle());
   });
 
   test("collapsing Deal details does not unmount what is in it", () => {
