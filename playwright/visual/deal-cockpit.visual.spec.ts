@@ -430,6 +430,10 @@ const FOCUS_STATE_IDS = [
   "credit-documents-first",
   "credit-documents-no-authority",
   "delivery-documents-await-verifier",
+  "delivery-documents-read-only-role",
+  "handover-blocked",
+  "held-deposit-link",
+  "held-deposit-no-access",
   "credit-documents-need-read-access",
   "delivery-documents-need-read-access",
   "cash-handover",
@@ -437,6 +441,8 @@ const FOCUS_STATE_IDS = [
   "cash-handover-needs-read-access",
   "cash-handover-deposit-decision",
 ] as const;
+/** S4: states whose reason carries a link to another existing page. */
+const WITH_LINK = new Set(["held-deposit-link", "cash-handover-deposit-decision"]);
 const WITH_PRIMARY = new Set([
   "reconciliation-resolve",
   "appraisal-next",
@@ -455,7 +461,7 @@ for (const locale of LOCALES) {
           // Tall enough for the whole gallery at 390px (13 states plus the
           // documents panel since round 2): `main` clips the screenshot to
           // its own box, so a shorter frame silently drops the last states.
-          viewport: { width: viewport.width, height: 5200 },
+          viewport: { width: viewport.width, height: 7600 },
           colorScheme: theme,
         });
         const page = await context.newPage();
@@ -475,6 +481,18 @@ for (const locale of LOCALES) {
             await expect(block, id).toBeVisible();
             const buttons = block.getByTestId("deal-next-step-action");
             await expect(buttons, `${id} primary count`).toHaveCount(WITH_PRIMARY.has(id) ? 1 : 0);
+            // S3/S4: a link only where the container gave one; never the passive
+            // documents link for a caller who cannot act on documents.
+            await expect(block.getByTestId("deal-next-step-link"), `${id} link count`).toHaveCount(WITH_LINK.has(id) ? 1 : 0);
+            if (id === "delivery-documents-read-only-role" || id === "delivery-documents-await-verifier") {
+              await expect(block.getByTestId("deal-go-to-documents"), `${id} passive link`).toHaveCount(0);
+            }
+            if (WITH_LINK.has(id)) {
+              const linkBox = (await block.getByTestId("deal-next-step-link").boundingBox())!;
+              expect(linkBox.height, `${id} link height`).toBeGreaterThanOrEqual(36);
+              expect(linkBox.x).toBeGreaterThanOrEqual(mainBox.x - 0.5);
+              expect(linkBox.x + linkBox.width).toBeLessThanOrEqual(mainBox.x + mainBox.width + 0.5);
+            }
             if (WITH_PRIMARY.has(id)) {
               const box = (await buttons.boundingBox())!;
               expect(box.height, `${id} button height`).toBeGreaterThanOrEqual(36);

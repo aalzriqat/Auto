@@ -37,6 +37,7 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowLeft,
+  ArrowUpRight,
   ChevronDown,
   Clock,
   Lock,
@@ -491,6 +492,17 @@ export type WorkflowAction = {
   unavailableReasonKey?: string;
   /** The withheld figure in its own currency, shown under the reason. */
   unavailableDetail?: SettlementDenominationDetail;
+  /**
+   * Where the blocker is resolved, when that is another EXISTING page (SCRUM-417
+   * UX1, S4). Set by the container only for a caller who can act there; the step
+   * shows it under the reason.
+   */
+  unavailableLink?: { href: string; labelKey: string };
+  /**
+   * Said instead of the link to a caller who cannot act at that destination:
+   * names who does (never a dead end, never a link to a refusal).
+   */
+  unavailableNoteKey?: string;
 };
 
 /**
@@ -1867,9 +1879,24 @@ export function DealCockpit({
         // failed submit: `registerVehicleHandover` requires an APPROVED
         // application. A blocked stage keeps its blocker text, which the block
         // already renders, so only the permission gap is added here.
-        unavailableReasonKey: hasPermission(PERMISSIONS.REGISTER_VEHICLE_HANDOVER)
-          ? undefined
-          : "HandoverNeedsPermission",
+        //
+        // SCRUM-417 UX1 (S2): a BLOCKED handover is the server's own verdict
+        // (`HandoverBlocked`) that the vehicle cannot be handed over yet, so no
+        // register action is offered at all. The prerequisite is named before
+        // the permission, as the close's reason does: telling a caller to ask
+        // for a permission that would not help is a dead end too.
+        //
+        // Only while the application is NOT approved: the rail reads the STORED
+        // handover status, which re-appraisal and reopen-approval write as
+        // BLOCKED, while the server's `registerVehicleHandover` checks only
+        // `status === "APPROVED"`. An APPROVED deal with a stale BLOCKED keeps
+        // its door, subject to the permission below.
+        unavailableReasonKey:
+          handoverStage.blocker === "HandoverBlocked" && deal.status !== "APPROVED"
+            ? "HandoverBlockedNeedsApproval"
+            : hasPermission(PERMISSIONS.REGISTER_VEHICLE_HANDOVER)
+              ? undefined
+              : "HandoverNeedsPermission",
       };
     }
 
@@ -1971,6 +1998,14 @@ export function DealCockpit({
        */
       unavailableReasonKey: finalizeReasonKey,
       unavailableDetail: finalizeDenominationDetail,
+      // SCRUM-417 UX1 (S4): the held deposit is resolved in the vehicle's
+      // deposit manager, on the vehicles page. Linked only for a caller who
+      // can resolve deposits AND open that page; everyone else is told who acts.
+      ...(finalizeReasonKey === "FinalizeNeedsHeldDepositResolved"
+        ? canResolveDeposits && hasPermission(PERMISSIONS.VIEW_VEHICLES)
+          ? { unavailableLink: { href: `/${orgId}/vehicles`, labelKey: "OpenDepositManagerAction" } }
+          : { unavailableNoteKey: "DepositManagerNeedsApprover" }
+        : {}),
     };
   }
 
@@ -2788,6 +2823,7 @@ export function DealCockpit({
       }}
       canCorrectAdvice={canCorrectAdvice}
       canSettleSupplier={canSettleSupplier}
+      documentsActionable={!permissionsLoading && documentsStepReason === undefined}
       onCorrectSettlementAdvice={async (correction) => {
         correctionKeyRef.current ??= `amend-supplier-advice:${crypto.randomUUID()}`;
         await amendAdvice({
@@ -3071,7 +3107,19 @@ export function SaleDealCockpit({
     }
     const decided = draftSale !== undefined && (!draftSale.quoteId || quoteAllocation !== undefined);
     if (reason) {
-      cashAction = { stageKey: "HANDOVER", actionKey: "CompleteCashSaleAction", unavailableReasonKey: reason };
+      cashAction = {
+        stageKey: "HANDOVER",
+        actionKey: "CompleteCashSaleAction",
+        unavailableReasonKey: reason,
+        // SCRUM-417 UX1 (S4): the deposit decision is made from the sale's own
+        // dialog on the Sales page. Linked only for a caller who can open it;
+        // the two permission reasons above already name who acts.
+        ...(reason === "CashSaleCompletionNeedsDepositDecision"
+          ? hasPermission(PERMISSIONS.VIEW_SALES)
+            ? { unavailableLink: { href: `/${orgId}/sales/sales`, labelKey: "OpenSalesPageAction" } }
+            : { unavailableNoteKey: "SalesPageNeedsAccess" }
+          : {}),
+      };
     } else if (decided) {
       cashAction = {
         stageKey: "HANDOVER",
@@ -3088,6 +3136,11 @@ export function SaleDealCockpit({
         backHref={`/${orgId}/deals`}
         workflowAction={cashAction}
         canSettleSupplier={canSettleSupplier}
+        supplierSettlementHref={
+          // Supplier payables are paid on the sourcing page (`sourcingPayables.markPaid`,
+          // MANAGE_FINANCE; its list needs VIEW_FINANCE).
+          canSettleSupplier && hasPermission(PERMISSIONS.VIEW_FINANCE) ? `/${orgId}/sourcing` : undefined
+        }
         onRecordSupplierReceipt={async (receivableId, receipt) => {
           await recordReceipt({
             orgId,
@@ -3729,6 +3782,8 @@ export function DealCockpitView({
   finalize,
   canCorrectAdvice = false,
   canSettleSupplier: callerMaySettleSupplier = false,
+  supplierSettlementHref,
+  documentsActionable = true,
   onCorrectSettlementAdvice,
   onRecordSupplierReceipt,
   activeAppraisalProvider = null,
@@ -3981,6 +4036,20 @@ export function DealCockpitView({
    * rather than offering one the server will refuse.
    */
   canSettleSupplier?: boolean;
+  /**
+   * Where accounting records a supplier balance this screen does not settle
+   * (SCRUM-417 UX1, S4). Passed only when the caller can act there
+   * (MANAGE_FINANCE to record, VIEW_FINANCE to open the page); absent, the
+   * step names accounting as who acts, without a link.
+   */
+  supplierSettlementHref?: string;
+  /**
+   * Whether this caller can act on the outstanding documents — the container's
+   * `documentsStepUnavailableReason` verdict (SCRUM-417 UX1, S3), never
+   * re-derived here. Gates the passive "Go to documents" link. Defaults to
+   * true so a view rendered without it keeps its link.
+   */
+  documentsActionable?: boolean;
   onCorrectSettlementAdvice?: (correction: {
     amountMajor: number;
     reference?: string;
@@ -4081,6 +4150,46 @@ export function DealCockpitView({
       lowerTabsRef.current?.scrollIntoView?.({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
       documentsTriggerRef.current?.focus({ preventScroll: true });
     });
+  };
+
+  // SCRUM-417 UX1 (S4): a failed closing check opens the panel that resolves
+  // it. Same scroll-then-focus contract as `goToDocuments`; the target is a
+  // panel this view renders itself, found by id at click time (never at render).
+  const goToPanel = (id: string) => {
+    requestAnimationFrame(() => {
+      const target = document.getElementById(id);
+      if (!target) return;
+      const reduceMotion =
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      target.scrollIntoView?.({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+      target.focus({ preventScroll: true });
+    });
+  };
+  const costsDestination = handoverCosts
+    ? { labelKey: "ClosingCheckGoToCosts", onGo: () => goToPanel("deal-handover-costs-panel") }
+    : undefined;
+  const custodyDestination =
+    custody && custodyMoney
+      ? { labelKey: "ClosingCheckGoToCustody", onGo: () => goToPanel("deal-custody-panel") }
+      : undefined;
+  const legalInvoiceRecord = closingChecklist?.legalInvoice?.onRecord;
+  // Only checks with a real home here. REMITTANCE_KNOWN and FIRST_PAYMENT_RECORDED
+  // have no panel of their own on this screen and keep their reason text.
+  const closingDestinations: Partial<Record<string, { labelKey: string; onGo: () => void }>> = {
+    ...(costsDestination
+      ? {
+          HANDOVER_COSTS_PAID: costsDestination,
+          CONFIGURED_FEES_RECORDED: costsDestination,
+          COSTS_CLOSABLE: costsDestination,
+        }
+      : {}),
+    ...(custodyDestination
+      ? { CUSTODY_ON_LEDGER: custodyDestination, CUSTODY_SETTLED: custodyDestination }
+      : {}),
+    ...(legalInvoiceRecord
+      ? { LEGAL_INVOICE_RECORDED: { labelKey: "RecordLegalInvoice", onGo: legalInvoiceRecord } }
+      : {}),
   };
 
   // A claim to settle AND a caller the server would accept the receipt from.
@@ -4551,7 +4660,30 @@ export function DealCockpitView({
         let reason = "CashSettlementNotRecordedHere";
         if (supplierGuidance) reason = "SupplierClaimDisputedGuidance";
         else if (supplierClaimSettleable || deal?.money == null) reason = "SupplierSettlementNeedsPermission";
-        return { ...action, unavailableReasonKey: reason };
+        // S4: on the through-dealership route the supplier's share is a payable
+        // the dealership owes, paid from the supplier payables page. Only that
+        // position is a payable someone can pay; every other sub-case (an
+        // UNKNOWN obligation, a route not known) keeps its own reason and a note.
+        if (
+          reason === "CashSettlementNotRecordedHere" &&
+          deal?.money?.settlesDirectToSupplier === false &&
+          supplierRow?.position === "DEALERSHIP_OWES"
+        ) {
+          return {
+            ...action,
+            unavailableReasonKey: "SupplierPayableRecordedOnPayables",
+            ...(supplierSettlementHref
+              ? { unavailableLink: { href: supplierSettlementHref, labelKey: "OpenSourcingPayablesAction" } }
+              : { unavailableNoteKey: "SupplierPayablesNeedFinanceRole" }),
+          };
+        }
+        return {
+          ...action,
+          unavailableReasonKey: reason,
+          ...(reason === "CashSettlementNotRecordedHere"
+            ? { unavailableNoteKey: "SupplierSettlementNeedsPermission" }
+            : {}),
+        };
       }
     }
   };
@@ -4887,6 +5019,7 @@ export function DealCockpitView({
               : []
           }
           onGoToDocuments={hasDocumentsPane ? goToDocuments : undefined}
+          documentsActionable={documentsActionable}
           t={t}
         >
           {/* The route IS the blocker on this step, so the control is on the
@@ -5184,6 +5317,7 @@ export function DealCockpitView({
                 <DealClosingReadinessList
                   readiness={closingChecklist.readiness}
                   serviceUnavailable={closingChecklist.serviceUnavailable}
+                  destinations={closingDestinations}
                   t={t}
                 />
                 {closingChecklist.legalInvoice &&
@@ -5618,6 +5752,7 @@ export function StageFocusRow({
   action,
   outstandingDocuments,
   onGoToDocuments,
+  documentsActionable = true,
   t,
   children,
 }: Readonly<{
@@ -5638,6 +5773,12 @@ export function StageFocusRow({
   outstandingDocuments: ReadonlyArray<{ ruleId: string; name: string }>;
   /** Absent when the screen has no documents tab to go to. */
   onGoToDocuments?: () => void;
+  /**
+   * False when the caller can neither upload nor verify (the container's own
+   * verdict): the passive link is then withheld, since the checklist it leads
+   * to has nothing this caller can press (SCRUM-417 UX1, S3).
+   */
+  documentsActionable?: boolean;
   t: (key: string) => string;
 }>) {
   const icon = STAGE_ICON[state];
@@ -5702,7 +5843,7 @@ export function StageFocusRow({
                     its own: the button already goes there, and a second
                     pointer to the same place would be two ways to do one
                     thing. The documents themselves do not move. */}
-                {outstandingDocuments.length > 0 && onGoToDocuments && !primary && (
+                {outstandingDocuments.length > 0 && onGoToDocuments && documentsActionable && !primary && (
                   <button
                     type="button"
                     className="mt-1.5 inline-flex min-h-9 items-center gap-1 rounded-sm font-medium underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -5763,6 +5904,24 @@ export function StageFocusRow({
               is the dead end this screen exists to remove. */}
           {action?.unavailableReasonKey && (
             <p className="text-sm text-muted-foreground">{t(action.unavailableReasonKey)}</p>
+          )}
+          {/* SCRUM-417 UX1 (S4): the blocker is resolved on another page. The
+              container links it only for a caller who can act there; every
+              other caller is told who does. Never both, never a bare refusal. */}
+          {action?.unavailableReasonKey && action.unavailableLink && (
+            <Link
+              href={action.unavailableLink.href}
+              className="inline-flex min-h-9 items-center gap-1 rounded-sm text-sm font-medium underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              data-testid="deal-next-step-link"
+            >
+              {t(action.unavailableLink.labelKey)}
+              <ArrowUpRight className="h-3.5 w-3.5 rtl:-scale-x-100" aria-hidden />
+            </Link>
+          )}
+          {action?.unavailableReasonKey && !action.unavailableLink && action.unavailableNoteKey && (
+            <p className="text-sm text-muted-foreground" data-testid="deal-next-step-link-note">
+              {t(action.unavailableNoteKey)}
+            </p>
           )}
           {/* The quieter alternative survives a withheld main step: an
               approver who cannot touch the documents can still record the

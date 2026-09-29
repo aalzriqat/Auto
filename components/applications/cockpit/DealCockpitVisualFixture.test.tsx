@@ -17,7 +17,8 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Id } from "@/convex/_generated/dataModel";
 import { dictionaries } from "@/lib/i18n/dictionaries";
@@ -544,6 +545,8 @@ type FocusState = Readonly<
     outstandingDocuments?: ReadonlyArray<{ ruleId: string; name: Readonly<Record<"en" | "ar", string>> }>;
     /** Already resolved, as the view passes it: a present `onStart` is a working button. */
     action: Omit<WorkflowAction, "stageKey">;
+    /** The container's verdict on documents (S3); false withholds the passive link. Default true. */
+    documentsActionable?: boolean;
   } & (
     | { kind: "FINANCED"; stageKey: FinancedDealStageKey }
     | { kind: "CASH"; stageKey: CashDealStageKey }
@@ -648,7 +651,67 @@ const FOCUS_STATES = [
     ownerKey: "StageOwnerDealership",
     blocker: "DocumentsIncomplete",
     outstandingDocuments: [{ ruleId: "r1", name: { en: "National ID copy", ar: "صورة الهوية" } }],
+    documentsActionable: false,
     action: { actionKey: "CompleteDocumentsAction", opens: "DOCUMENTS", unavailableReasonKey: "DocumentsAwaitVerifier" },
+  },
+  {
+    // SCRUM-417 UX1 (S3): a caller who can neither upload nor verify sees the
+    // outstanding documents and who acts, but no link into a checklist with
+    // nothing they can press.
+    id: "delivery-documents-read-only-role",
+    kind: "FINANCED",
+    stageKey: "DELIVERY_ACTIONS",
+    state: "BLOCKED",
+    labelKey: "StageDeliveryActions",
+    ownerKey: "StageOwnerDealership",
+    blocker: "DocumentsIncomplete",
+    outstandingDocuments: [
+      { ruleId: "r1", name: { en: "National ID copy", ar: "صورة الهوية" } },
+      { ruleId: "r2", name: { en: "Salary certificate", ar: "كشف راتب" } },
+    ],
+    documentsActionable: false,
+    action: { actionKey: "CompleteDocumentsAction", opens: "DOCUMENTS", unavailableReasonKey: "DocumentsNeedUploader" },
+  },
+  {
+    // SCRUM-417 UX1 (S2): the server says the vehicle cannot be handed over yet.
+    id: "handover-blocked",
+    kind: "FINANCED",
+    stageKey: "HANDOVER",
+    state: "BLOCKED",
+    labelKey: "StageHandover",
+    ownerKey: "StageOwnerDealership",
+    blocker: "HandoverBlocked",
+    action: { actionKey: "RegisterHandoverAction", unavailableReasonKey: "HandoverBlockedNeedsApproval" },
+  },
+  {
+    // SCRUM-417 UX1 (S4): a held vehicle deposit, with the way to resolve it.
+    id: "held-deposit-link",
+    kind: "FINANCED",
+    stageKey: "SETTLEMENT",
+    state: "BLOCKED",
+    labelKey: "StageSettlement",
+    ownerKey: "StageOwnerDealership",
+    blocker: "AwaitingSettlement",
+    action: {
+      actionKey: "FinalizeDealAction",
+      unavailableReasonKey: "FinalizeNeedsHeldDepositResolved",
+      unavailableLink: { href: "/org_1/vehicles", labelKey: "OpenDepositManagerAction" },
+    },
+  },
+  {
+    // The same blocker for a caller who cannot act there: told who does.
+    id: "held-deposit-no-access",
+    kind: "FINANCED",
+    stageKey: "SETTLEMENT",
+    state: "BLOCKED",
+    labelKey: "StageSettlement",
+    ownerKey: "StageOwnerDealership",
+    blocker: "AwaitingSettlement",
+    action: {
+      actionKey: "FinalizeDealAction",
+      unavailableReasonKey: "FinalizeNeedsHeldDepositResolved",
+      unavailableNoteKey: "DepositManagerNeedsApprover",
+    },
   },
   {
     // Round 2 (S417-R2-1): may upload/verify, cannot read the rows the panel's
@@ -678,6 +741,7 @@ const FOCUS_STATES = [
     ownerKey: "StageOwnerDealership",
     blocker: "DocumentsIncomplete",
     outstandingDocuments: [{ ruleId: "r1", name: { en: "National ID copy", ar: "صورة الهوية" } }],
+    documentsActionable: false,
     action: { actionKey: "CompleteDocumentsAction", opens: "DOCUMENTS", unavailableReasonKey: "DocumentsNeedReadAccess" },
   },
   {
@@ -718,7 +782,11 @@ const FOCUS_STATES = [
     state: "CURRENT",
     labelKey: "StageHandover",
     ownerKey: "StageOwnerDealership",
-    action: { actionKey: "CompleteCashSaleAction", unavailableReasonKey: "CashSaleCompletionNeedsDepositDecision" },
+    action: {
+      actionKey: "CompleteCashSaleAction",
+      unavailableReasonKey: "CashSaleCompletionNeedsDepositDecision",
+      unavailableLink: { href: "/org_1/sales/sales", labelKey: "OpenSalesPageAction" },
+    },
   },
 ] satisfies readonly FocusState[];
 
@@ -774,6 +842,8 @@ function focusStatesMarkup(locale: "en" | "ar"): string {
       action.actionKey,
       action.noteKey,
       action.unavailableReasonKey,
+      action.unavailableNoteKey,
+      action.unavailableLink?.labelKey,
       action.secondary?.actionKey,
     ].filter((key): key is string => typeof key === "string");
     for (const key of keys) expect(table[key], `${locale} dictionary lacks ${key}`).toBeTruthy();
@@ -793,6 +863,7 @@ function focusStatesMarkup(locale: "en" | "ar"): string {
           name: doc.name[locale],
         }))}
         onGoToDocuments={() => {}}
+        documentsActionable={focus.documentsActionable ?? true}
         t={t}
       />
     )}</section>`;
@@ -988,5 +1059,109 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
     expect(html).not.toContain("data-testid=\"closing-readiness-service-unavailable\"");
     mkdirSync(outDir, { recursive: true });
     writeFileSync(resolve(outDir, `deal-cockpit-${locale}-readiness-access.html`), html);
+  });
+});
+
+
+/**
+ * SCRUM-417 UX1 (S4): a failed readiness check opens its own panel. Not gated:
+ * this is behaviour, not paint. The fixtures are the ones the visual gate
+ * renders, so the destinations the operator sees are the ones proven here.
+ */
+describe("closing-readiness rows are destinations", () => {
+  // These tests stub the global prototype method; put it back so no other
+  // test in the worker inherits the stub.
+  const originalScrollIntoView = Element.prototype.scrollIntoView;
+  afterEach(() => {
+    cleanup();
+    Element.prototype.scrollIntoView = originalScrollIntoView;
+  });
+
+  function renderWith(checks: Array<{ key: string; status: string }>, onRecord?: () => void, withPanels = true) {
+    language.locale = "en";
+    const deal = financedDeal();
+    return render(
+      <DealCockpitView
+        deal={deal}
+        backHref="/org_1/deals"
+        activeAppraisalProvider={deal.activeAppraisalProvider}
+        onRecordSupplierReceipt={async () => {}}
+        financialOverview={{ data: financedOverview(), loading: false }}
+        custody={withPanels ? custodyWiring() : undefined}
+        custodyMoney={withPanels ? custodyMoney : undefined}
+        handoverCosts={withPanels ? handoverCostsWiring() : undefined}
+        closingChecklist={{
+          readiness: {
+            state: "BLOCKED",
+            open: true,
+            unavailableReason: null,
+            unavailableReasonCode: null,
+            moneyWithheld: false,
+            checks: checks.map((check) => ({ ...check, reason: "blocked", reasonCode: null })),
+          } as unknown as NonNullable<React.ComponentProps<typeof DealCockpitView>["closingChecklist"]>["readiness"],
+          legalInvoice: onRecord ? { onRecord } : undefined,
+        }}
+      />
+    );
+  }
+
+  test("a blocked custody check scrolls to and focuses the custody panel", () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    renderWith([{ key: "CUSTODY_SETTLED", status: "BLOCKED" }]);
+    fireEvent.click(screen.getByTestId("closing-check-go-CUSTODY_SETTLED"));
+    return new Promise<void>((done) =>
+      requestAnimationFrame(() => {
+        expect(scroll).toHaveBeenCalled();
+        expect(document.activeElement).toBe(screen.getByTestId("deal-custody"));
+        done();
+      })
+    );
+  });
+
+  test("blocked cost checks open the handover costs panel", () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    renderWith([
+      { key: "COSTS_CLOSABLE", status: "BLOCKED" },
+      { key: "HANDOVER_COSTS_PAID", status: "BLOCKED" },
+    ]);
+    fireEvent.click(screen.getByTestId("closing-check-go-HANDOVER_COSTS_PAID"));
+    return new Promise<void>((done) =>
+      requestAnimationFrame(() => {
+        expect(document.activeElement).toBe(screen.getByTestId("deal-handover-costs"));
+        expect(screen.getByTestId("closing-check-go-COSTS_CLOSABLE")).toBeTruthy();
+        done();
+      })
+    );
+  });
+
+  test("a blocked legal-invoice check opens the existing record dialog", () => {
+    const onRecord = vi.fn();
+    renderWith([{ key: "LEGAL_INVOICE_RECORDED", status: "BLOCKED" }], onRecord);
+    fireEvent.click(screen.getByTestId("closing-check-go-LEGAL_INVOICE_RECORDED"));
+    expect(onRecord).toHaveBeenCalledTimes(1);
+  });
+
+  test("CONTROL -- no panel to open, no link: the reason stays, and checks with no home get none", () => {
+    renderWith(
+      [
+        { key: "CUSTODY_SETTLED", status: "BLOCKED" },
+        { key: "COSTS_CLOSABLE", status: "BLOCKED" },
+        { key: "LEGAL_INVOICE_RECORDED", status: "BLOCKED" },
+        { key: "REMITTANCE_KNOWN", status: "BLOCKED" },
+        { key: "FIRST_PAYMENT_RECORDED", status: "BLOCKED" },
+      ],
+      undefined,
+      false
+    );
+    for (const key of ["CUSTODY_SETTLED", "COSTS_CLOSABLE", "LEGAL_INVOICE_RECORDED", "REMITTANCE_KNOWN", "FIRST_PAYMENT_RECORDED"]) {
+      expect(screen.queryByTestId(`closing-check-go-${key}`)).toBeNull();
+      expect(screen.getByTestId(`closing-check-${key}`)).toBeTruthy();
+    }
+  });
+
+  test("CONTROL -- a satisfied check offers no link even with the panel present", () => {
+    renderWith([{ key: "CUSTODY_SETTLED", status: "READY" }]);
+    expect(screen.queryByTestId("closing-check-go-CUSTODY_SETTLED")).toBeNull();
   });
 });

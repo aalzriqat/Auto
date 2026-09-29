@@ -1832,6 +1832,19 @@ describe("the live step leads to the documents it is waiting on", () => {
     expect(screen.queryByTestId("deal-go-to-documents")).toBeNull();
   });
 
+  // SCRUM-417 UX1 (S3): the container's verdict on whether THIS caller can act
+  // on documents. False withholds the passive link; true (and absent) keeps it.
+  test("no link when the container says the caller cannot act on documents", () => {
+    render(<DealCockpitView deal={dealFixture()} documentsActionable={false} onRecordSupplierReceipt={async () => {}} />);
+    expect(screen.getByTestId("deal-next-step").textContent).toContain("BlockerDocumentsIncomplete");
+    expect(screen.queryByTestId("deal-go-to-documents")).toBeNull();
+  });
+
+  test("CONTROL -- the link stays when the caller can act on documents", () => {
+    render(<DealCockpitView deal={dealFixture()} documentsActionable onRecordSupplierReceipt={async () => {}} />);
+    expect(screen.getByTestId("deal-go-to-documents")).toBeTruthy();
+  });
+
   test("no link, and no tabs, when the deal has no documents to go to", () => {
     renderCockpit(dealFixture({ documents: [] }));
     expect(screen.queryByTestId("deal-lower-tabs")).toBeNull();
