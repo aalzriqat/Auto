@@ -1080,9 +1080,25 @@ describe("closing-readiness rows are destinations", () => {
     Element.prototype.scrollIntoView = originalScrollIntoView;
   });
 
-  function renderWith(checks: Array<{ key: string; status: string }>, onRecord?: () => void, withPanels = true) {
+  function renderWith(
+    checks: Array<{ key: string; status: string }>,
+    onRecord?: () => void,
+    withPanels = true,
+    atHandover = false
+  ) {
     language.locale = "en";
-    const deal = financedDeal();
+    const base = financedDeal();
+    // The fixture is live on Documents; UX4 tests move the live step to Handover.
+    const deal = atHandover
+      ? {
+          ...base,
+          stages: base.stages.map((stage) => ({
+            ...stage,
+            state: stage.key === "HANDOVER" ? ("CURRENT" as const) : stage.key === "DISBURSEMENT" || stage.key === "SETTLEMENT" ? ("PENDING" as const) : ("COMPLETE" as const),
+            blocker: undefined,
+          })),
+        }
+      : base;
     return render(
       <DealCockpitView
         deal={deal}
@@ -1136,6 +1152,40 @@ describe("closing-readiness rows are destinations", () => {
         done();
       })
     );
+  });
+
+  test("UX4 O2: the live Handover card lists its sub-steps from those same checks, and the current one goes to the costs panel", () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    renderWith(
+      [
+        { key: "CONFIGURED_FEES_RECORDED", status: "READY" },
+        { key: "HANDOVER_COSTS_PAID", status: "BLOCKED" },
+      ],
+      undefined,
+      true,
+      true
+    );
+    const list = screen.getByTestId("deal-step-checklist");
+    const status = (id: string) => within(list).getByTestId(`deal-step-item-${id}`).getAttribute("data-status");
+    expect(status("costs-recorded")).toBe("done");
+    expect(status("costs-paid")).toBe("current");
+    expect(status("register-handover")).toBe("pending");
+    // Exactly one item is the current one, and it is the only one that acts.
+    const go = within(list).getByTestId("deal-step-item-go");
+    expect(go.getAttribute("aria-current")).toBe("step");
+    expect(within(list).getAllByTestId("deal-step-item-go")).toHaveLength(1);
+    fireEvent.click(go);
+    return new Promise<void>((done) =>
+      requestAnimationFrame(() => {
+        expect(document.activeElement).toBe(screen.getByTestId("deal-handover-costs"));
+        done();
+      })
+    );
+  });
+
+  test("UX4 O2: with no readiness visible there is no invented checklist", () => {
+    renderWith([], undefined, false, true);
+    expect(screen.queryByTestId("deal-step-checklist")).toBeNull();
   });
 
   test("a blocked legal-invoice check opens the existing record dialog", () => {
