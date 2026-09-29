@@ -7,12 +7,33 @@
  *   - the reservation deposit's method does not survive closing the dialog.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 
 const state = vi.hoisted(() => ({
   deposits: [] as Array<Record<string, unknown>>,
+  reservationCalls: [] as Array<Record<string, unknown>>,
+  /** Outcome of the next createReservation call: a lost response, or success. */
+  reservationOutcomes: [] as Array<"lost" | "ok" | "mismatch">,
+  toastError: [] as string[],
 }));
+
+vi.mock("@/components/ui/select", async () => {
+  const React = await import("react");
+  const Ctx = React.createContext<(v: string) => void>(() => undefined);
+  return {
+    Select: ({ onValueChange, children }: { onValueChange: (v: string) => void; children: React.ReactNode }) => (
+      <Ctx.Provider value={onValueChange}>{children}</Ctx.Provider>
+    ),
+    SelectTrigger: () => null,
+    SelectValue: () => null,
+    SelectContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    SelectItem: ({ value }: { value: string }) => {
+      const pick = React.useContext(Ctx);
+      return <button type="button" data-testid={`item-${value}`} onClick={() => pick(value)} />;
+    },
+  };
+});
 
 vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
@@ -21,11 +42,20 @@ vi.mock("convex/react", async () => {
       if (args === "skip") return undefined;
       const name = getFunctionName(reference);
       if (name === "deposits:listByVehicle") return state.deposits;
-      if (name === "customers:list") return { page: [] };
+      if (name === "customers:list") return { page: [{ _id: "cust_1", firstName: "Dana", lastName: "K" }] };
       if (name === "vehicles:getRelations") return { testDrives: [], workOrders: [], leads: [], sales: [], tasks: [], expenses: [] };
       return undefined;
     },
-    useMutation: () => async () => undefined,
+    useMutation: (reference: never) => async (args: Record<string, unknown>) => {
+      if (getFunctionName(reference) !== "vehicles:createReservation") return undefined;
+      state.reservationCalls.push(args);
+      const outcome = state.reservationOutcomes.shift();
+      if (outcome === "lost") throw new Error("Network error: response lost");
+      if (outcome === "mismatch") {
+        throw new Error("Idempotency key reused with different request content. Use a new key for a different operation.");
+      }
+      return undefined;
+    },
   };
 });
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => undefined }) }));
@@ -40,7 +70,9 @@ vi.mock("@/hooks/use-permissions", () => ({
 vi.mock("@/hooks/useCommandIdentity", () => ({
   useCommandIdentity: () => ({ for: (intent: string) => intent, retire: () => undefined }),
 }));
-vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("@/components/ui/sonner", () => ({
+  toast: { success: vi.fn(), error: (message: string) => state.toastError.push(message) },
+}));
 vi.mock("@/components/test_drives/TestDriveDialog", () => ({ TestDriveDialog: () => null }));
 vi.mock("@/components/work_orders/WorkOrderDialog", () => ({ WorkOrderDialog: () => null }));
 vi.mock("@/components/vehicles/VehicleValuationsTab", () => ({ VehicleValuationsTab: () => null }));
@@ -99,6 +131,9 @@ const refundButton = () => screen.getByRole("button", { name: "Refund", hidden: 
 
 beforeEach(() => {
   state.deposits = [deposit(0)];
+  state.reservationCalls = [];
+  state.reservationOutcomes = [];
+  state.toastError = [];
   Element.prototype.hasPointerCapture = () => false;
   Element.prototype.setPointerCapture = () => {};
   Element.prototype.releasePointerCapture = () => {};
@@ -144,5 +179,52 @@ describe("vehicle dialog: method is per money movement (SCRUM-469 round 1)", () 
     fireEvent.change(screen.getAllByRole("spinbutton", { hidden: true })[0]!, { target: { value: "50" } });
 
     expect(method().value).toBe("");
+  });
+
+  test("a reservation whose response was lost keeps its idempotency key across close/reopen; a confirmed success mints a new one", async () => {
+    state.reservationOutcomes = ["lost", "ok", "ok"];
+    const view = render(ui());
+    const method = () => screen.getByTestId("method-DepositChooseMethod") as HTMLSelectElement;
+    const fill = () => {
+      fireEvent.click(screen.getByTestId("item-cust_1"));
+      fireEvent.change(screen.getAllByRole("spinbutton", { hidden: true })[0]!, { target: { value: "50" } });
+      fireEvent.change(method(), { target: { value: "CASH" } });
+    };
+    const submitReservation = async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "CreateReservation", hidden: true }).at(-1)!);
+      await waitFor(() => expect(state.reservationCalls.length).toBeGreaterThan(0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    };
+
+    fill();
+    await submitReservation();
+    expect(state.reservationCalls).toHaveLength(1);
+    const firstKey = state.reservationCalls[0]!.idempotencyKey;
+
+    // Server state unknown (lost response). Close, reopen the SAME vehicle, retry.
+    view.rerender(ui(false));
+    view.rerender(ui(true));
+    expect(method().value).toBe("");
+    fireEvent.change(method(), { target: { value: "CASH" } });
+    await submitReservation();
+    await waitFor(() => expect(state.reservationCalls).toHaveLength(2));
+    expect(state.reservationCalls[1]!.idempotencyKey).toBe(firstKey);
+
+    // Confirmed success retires the identity: the NEXT reservation is a new command.
+    fill();
+    await submitReservation();
+    await waitFor(() => expect(state.reservationCalls).toHaveLength(3));
+    expect(state.reservationCalls[2]!.idempotencyKey).not.toBe(firstKey);
+  });
+
+  test("a changed request under a kept key is refused with a readable localized message, not the raw server text", async () => {
+    state.reservationOutcomes = ["mismatch"];
+    render(ui());
+    fireEvent.click(screen.getByTestId("item-cust_1"));
+    fireEvent.change(screen.getAllByRole("spinbutton", { hidden: true })[0]!, { target: { value: "50" } });
+    fireEvent.change(screen.getByTestId("method-DepositChooseMethod"), { target: { value: "BANK_TRANSFER" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "CreateReservation", hidden: true }).at(-1)!);
+    await waitFor(() => expect(state.toastError).toHaveLength(1));
+    expect(state.toastError[0]).toBe("ReservationAttemptChanged");
   });
 });

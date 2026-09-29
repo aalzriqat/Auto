@@ -112,7 +112,12 @@ export function VehicleDetailsDialog({
   // Minted at the user-intent boundary and held across attempts. With a deposit
   // this books real customer money, so a per-attempt key would take the deposit
   // twice on a lost response.
-  const reservationKeyRef = useRef<string | null>(null);
+  //
+  // PER VEHICLE, and cleared only by a CONFIRMED success for that vehicle: this
+  // dialog stays mounted across close/reopen and vehicle changes, and closing is
+  // not confirmation, so an attempt that may have committed keeps its identity
+  // (the server refuses a changed request under it rather than double-booking).
+  const reservationKeysRef = useRef<Map<string, string>>(new Map());
   const releaseReservation = useMutation(api.vehicles.releaseReservation);
   const [releasingDepositId, setReleasingDepositId] = useState<string | null>(null);
   // SCRUM-469: a refund method belongs to ONE payout. It is stored with the
@@ -138,15 +143,16 @@ export function VehicleDetailsDialog({
   const [savingReservation, setSavingReservation] = useState(false);
   const [activeGroup, setActiveGroup] = useState<VehicleDetailsGroup>("overview");
 
-  // Closing the dialog, or looking at another vehicle, ends the money intents
-  // begun here: the next open starts with no method chosen (SCRUM-469) and mints
-  // a new reservation identity, since the method is part of that command.
+  // Closing the dialog, or looking at another vehicle, clears the chosen
+  // methods: the next open starts with none chosen (SCRUM-469). It deliberately
+  // does NOT touch the reservation idempotency key — an unconfirmed attempt keeps
+  // its identity, so a different method chosen afterwards is refused by the
+  // server (fingerprint mismatch) instead of booking a second deposit.
   const detailsSessionId = open ? (vehicle?._id ?? null) : null;
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- A new open / vehicle is a new intent: clear the chosen methods.
     setReservationMethod(undefined);
     setRefundChoiceByDeposit({});
-    reservationKeyRef.current = null;
   }, [detailsSessionId]);
 
   // Prefill the expiry field from the org's configured hold period (falls
@@ -215,9 +221,14 @@ export function VehicleDetailsDialog({
     if (!activeOrgId || !vehicle || !reservationCustomerId) return;
     setSavingReservation(true);
     try {
-      reservationKeyRef.current ??= `vehicle-reservation:${crypto.randomUUID()}`;
+      const keys = reservationKeysRef.current;
+      let idempotencyKey = keys.get(vehicle._id);
+      if (!idempotencyKey) {
+        idempotencyKey = `vehicle-reservation:${crypto.randomUUID()}`;
+        keys.set(vehicle._id, idempotencyKey);
+      }
       await createReservation({
-        idempotencyKey: reservationKeyRef.current,
+        idempotencyKey,
         orgId: activeOrgId,
         vehicleId: vehicle._id,
         customerId: reservationCustomerId as any,
@@ -225,15 +236,22 @@ export function VehicleDetailsDialog({
         depositMethod: reservationDeposit ? reservationMethod : undefined,
         expiresAt: reservationExpiresAt ? new Date(reservationExpiresAt).getTime() : undefined,
       });
-      // Only a SUCCESS retires the identity.
-      reservationKeyRef.current = null;
+      // Only a CONFIRMED success retires this vehicle's identity.
+      keys.delete(vehicle._id);
       setReservationCustomerId("");
       setReservationDeposit("");
       setReservationMethod(undefined);
       setReservationExpiresAt("");
       toast.success(t("ReservationCreated" as any));
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      // The kept identity refuses a request that differs from the earlier,
+      // possibly-committed attempt. Say so in the user's language instead of
+      // surfacing the server's technical wording.
+      toast.error(
+        getErrorMessage(error).includes("Idempotency key reused with different request content")
+          ? t("ReservationAttemptChanged" as any)
+          : getErrorMessage(error)
+      );
     } finally {
       setSavingReservation(false);
     }

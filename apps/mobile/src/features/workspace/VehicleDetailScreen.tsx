@@ -225,7 +225,9 @@ function VehicleDetailContent({
   const createReservation = useMutation(api.vehicles.createReservation);
   // Minted at the user-intent boundary and held across attempts — with a
   // deposit this books real customer money.
-  const reservationKeyRef = useRef<string | null>(null);
+  // Per vehicle, cleared only by a CONFIRMED success: changing vehicle or
+  // leaving the tab is not confirmation of an attempt that may have committed.
+  const reservationKeysRef = useRef<Map<string, string>>(new Map());
   const releaseReservation = useMutation(api.vehicles.releaseReservation);
   const archiveVehicle = useMutation(api.vehicles.softDelete);
 
@@ -401,9 +403,14 @@ function VehicleDetailContent({
     const holdDays = parseOptionalNumber(reservationHoldDays);
     setSavingReservation(true);
     try {
-      reservationKeyRef.current ??= `vehicle-reservation:${crypto.randomUUID()}`;
+      const keys = reservationKeysRef.current;
+      let idempotencyKey = keys.get(vehicleId);
+      if (!idempotencyKey) {
+        idempotencyKey = `vehicle-reservation:${crypto.randomUUID()}`;
+        keys.set(vehicleId, idempotencyKey);
+      }
       await createReservation({
-        idempotencyKey: reservationKeyRef.current,
+        idempotencyKey,
         orgId,
         vehicleId,
         customerId: reservationCustomerId,
@@ -411,15 +418,27 @@ function VehicleDetailContent({
         depositMethod: parseOptionalNumber(reservationDeposit) !== undefined ? (reservationMethod as "CASH" | "BANK_TRANSFER" | "CARD" | "CHEQUE") : undefined,
         expiresAt: holdDays !== undefined && holdDays > 0 ? Date.now() + holdDays * 24 * 60 * 60 * 1000 : undefined,
       });
-      // Only a SUCCESS retires the identity.
-      reservationKeyRef.current = null;
+      // Only a CONFIRMED success retires this vehicle's identity.
+      keys.delete(vehicleId);
       setReservationCustomerId("");
       setReservationDeposit("");
       setReservationMethod("");
       setReservationHoldDays("");
       Alert.alert(locale === "ar" ? "تم إنشاء الحجز." : "Reservation created.");
     } catch (error) {
-      reportError("Mobile reservation create failed", error);
+      // The kept identity refuses a request that differs from an earlier,
+      // possibly-committed attempt; say so plainly instead of a generic failure.
+      const message = error instanceof Error ? error.message : "";
+      const data = typeof (error as { data?: unknown } | null)?.data === "string" ? (error as { data: string }).data : "";
+      if ((message + data).includes("Idempotency key reused with different request content")) {
+        Alert.alert(
+          locale === "ar"
+            ? "ربما تمت محاولة سابقة لإنشاء هذا الحجز بنجاح. راجع حجوزات السيارة، أو أعد إدخال العميل والعربون وطريقة الدفع نفسها كما كانت."
+            : "An earlier attempt to create this reservation may already have gone through. Check the vehicle's reservations, or re-enter the same customer, deposit and payment method as before.",
+        );
+      } else {
+        reportError("Mobile reservation create failed", error);
+      }
     } finally {
       setSavingReservation(false);
     }

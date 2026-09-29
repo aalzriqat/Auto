@@ -272,6 +272,8 @@ export const vehiclesEn = {
   ReservationDepositNeedsManager: "A deposit taken at reservation is money in hand, so only a manager or accountant can record it. Clear the deposit to reserve without one, or ask a manager or accountant.",
   ReleaseReservation: "Release Reservation",
   ReservationCreated: "Reservation created",
+  ReservationAttemptChanged:
+    "An earlier attempt to create this reservation may already have gone through. Check this vehicle's reservations, or re-enter the same customer, deposit and payment method as before.",
   ReservationReleased: "Reservation released",
   ReservationActionFailed: "Reservation action failed",
   SelectCustomer: "Select customer",
@@ -517,6 +519,8 @@ export const vehiclesAr = {
   ReservationDepositNeedsManager: "العربون عند الحجز مبلغ مستلم، لذا لا يسجّله إلا المدير أو المحاسب. امسح العربون للحجز بدونه، أو اطلب من المدير أو المحاسب.",
   ReleaseReservation: "إلغاء الحجز",
   ReservationCreated: "تم إنشاء الحجز",
+  ReservationAttemptChanged:
+    "ربما تمت محاولة سابقة لإنشاء هذا الحجز بنجاح. راجع حجوزات هذه السيارة، أو أعد إدخال العميل والعربون وطريقة الدفع نفسها كما كانت.",
   ReservationReleased: "تم إلغاء الحجز",
   ReservationActionFailed: "فشل إجراء الحجز",
   SelectCustomer: "اختر العميل",
