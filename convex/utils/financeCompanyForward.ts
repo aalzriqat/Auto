@@ -47,6 +47,8 @@ export interface ForwardVersionProof {
   version: number;
   state: ForwardVersionState;
   amountMinor: number;
+  /** The reversal INTENT on the row, when one was requested (VOID = taken back, RETURNED = reported returned). */
+  reversalKind?: "VOID" | "RETURNED";
 }
 
 export interface ForwardProof {
@@ -57,7 +59,11 @@ export interface ForwardProof {
   versions: ForwardVersionProof[];
   /** The version currently ON_BOOKS, if any. */
   onBooksForwardId: Id<"financeCompanyForwards"> | null;
-  /** True when a RETURNED version exists and no replacement is SETTLED. */
+  /**
+   * True from the moment a return is REPORTED (the row carries the RETURNED
+   * intent) until a replacement is SETTLED - whether its reversal is queued,
+   * failed or posted. A take-back before the transfer never opens it.
+   */
   returnedExceptionOpen: boolean;
 }
 
@@ -155,6 +161,14 @@ async function versionState(
   return "NEEDS_REPAIR";
 }
 
+/** A reported return whose money is owed again, whether or not its reversal has posted yet. */
+export function isReportedReturn(version: Pick<ForwardVersionProof, "state" | "reversalKind">): boolean {
+  return (
+    version.reversalKind === "RETURNED" &&
+    (version.state === "RETURNED" || version.state === "REVERSAL_PENDING" || version.state === "NEEDS_REPAIR")
+  );
+}
+
 /**
  * The forward proof for one application. See the module note; states are the
  * v3 state table:
@@ -192,6 +206,7 @@ export async function deriveForwardState(ctx: QueryCtx, app: ForwardApp): Promis
       version: row.version,
       state: await versionState(ctx, row),
       amountMinor: row.amountMinor,
+      reversalKind: row.reversalKind,
     });
   }
 
@@ -199,7 +214,7 @@ export async function deriveForwardState(ctx: QueryCtx, app: ForwardApp): Promis
   const blocking = versions.find(
     (v) => v.state === "POSTING_PENDING" || v.state === "POSTING_FAILED" || v.state === "REVERSAL_PENDING" || v.state === "NEEDS_REPAIR"
   );
-  const returned = versions.some((v) => v.state === "RETURNED");
+  const returned = versions.some(isReportedReturn);
 
   let state: ForwardState;
   if (blocking !== undefined) {

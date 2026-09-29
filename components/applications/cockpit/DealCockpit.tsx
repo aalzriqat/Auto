@@ -1939,7 +1939,9 @@ export function DealCockpit({
           stageKey: "DISBURSEMENT",
           actionKey: "RecordForwardToFinanceCompany",
           onStart: () => undefined,
-          unavailableReasonKey: "ForwardNotSettledReason",
+          // After the transfer only a reported return lands here: the copy must not
+          // talk about confirming a transfer that is already confirmed.
+          unavailableReasonKey: deal?.forward?.transferConfirmed ? "ForwardReturnedNotSettledReason" : "ForwardNotSettledReason",
         };
       }
       // The currency boundary is named before permission or applicability:

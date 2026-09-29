@@ -849,7 +849,25 @@ describe("disbursement - the payment to the finance company comes first", () => 
     queryResults.set(GET_QUERY, application({ status: "CLOSED", disbursedAt: Date.UTC(2026, 8, 1) }));
     renderCockpit();
     expect(within(focusRow()).queryByRole("button")).toBeNull();
-    expect(within(focusRow()).getByText("ForwardNotSettledReason")).toBeTruthy();
+    expect(within(focusRow()).getByText("ForwardReturnedNotSettledReason")).toBeTruthy();
+  });
+
+  test("disbursed with a reported return whose reversal is REVERSAL_PENDING: the live step names the accountant and offers no record action", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("ForwardNotSettled"),
+        forward: forward({ state: "REVERSAL_PENDING", returnedExceptionOpen: true, transferConfirmed: true }),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED", disbursedAt: Date.UTC(2026, 8, 1) }));
+    renderCockpit();
+    expect(within(focusRow()).queryByRole("button")).toBeNull();
+    expect(within(focusRow()).getByText("ForwardReturnedNotSettledReason")).toBeTruthy();
+    expect(screen.queryByText("ForwardNotSettledReason")).toBeNull();
   });
 
   test("disbursed and SETTLED: no forward action is offered", () => {

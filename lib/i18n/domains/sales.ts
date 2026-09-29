@@ -236,6 +236,10 @@ const dealRailMessages = defineBilingualMessages({
     "An accountant resolves the payment to the finance company before the transfer can be confirmed.",
     "يعالج المحاسب الدفع لشركة التمويل قبل أن يمكن تأكيد التحويل.",
   ],
+  ForwardReturnedNotSettledReason: [
+    "The finance company returned the payment. An accountant resolves its reversal before the replacement payment can be recorded.",
+    "أعادت شركة التمويل الدفعة. يعالج المحاسب عكسها قبل أن يمكن تسجيل الدفعة البديلة.",
+  ],
   ManagerCancelsFinalizedDeal: [
     "A manager cancels a finalized deal.",
     "يلغي المدير الصفقة المُنهاة.",

@@ -12,9 +12,9 @@
 import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { deriveForwardState } from "./utils/financeCompanyForward";
+import { deriveForwardState, isReportedReturn } from "./utils/financeCompanyForward";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -673,5 +673,130 @@ describe("SCRUM-435 - returned after the transfer: the replacement payment is re
     expect(await refusalOf(record(s, applicationId, { expectedAmountMinor: FORWARD - 1 }))).toMatch(/changed since you opened/i);
     expect(await refusalOf(record(s, applicationId, {}, s.sales.as))).not.toBeNull();
     expect(await s.t.run((ctx) => ctx.db.query("financeCompanyForwards").collect())).toHaveLength(1);
+  });
+});
+
+/**
+ * F2: a return reported while no period is open queues its reversal (or the
+ * queued reversal fails). The money is owed again from the moment the return is
+ * REPORTED, so the exception must be open in those states too - otherwise the
+ * stage rail shows COMPLETE while the finance company holds the money.
+ */
+describe("SCRUM-435 - a reported return with an unposted reversal keeps the exception open", () => {
+  const setPeriods = (s: Seeded, status: "OPEN" | "CLOSED") =>
+    s.t.run(async (ctx) => {
+      for (const period of await ctx.db.query("accountingPeriods").collect()) {
+        if (period.orgId === s.orgId) await ctx.db.patch(period._id, { status });
+      }
+    });
+  const drainOutbox = async (s: Seeded) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
+      for (let pass = 0; pass < 10; pass += 1) {
+        await s.t.finishAllScheduledFunctions(vi.runAllTimers);
+        const queued = (await s.t.run(async (ctx) => await ctx.db.system.query("_scheduled_functions").collect())).filter(
+          (f) => f.state.kind === "pending" || f.state.kind === "inProgress"
+        ).length;
+        if (queued === 0) break;
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  };
+  const cockpitOf = async (s: Seeded, applicationId: Id<"financeApplications">) =>
+    (await s.owner.as.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId }))!;
+  const disbursementOf = async (s: Seeded, applicationId: Id<"financeApplications">) =>
+    (await cockpitOf(s, applicationId)).stages.find((stage: { key: string }) => stage.key === "DISBURSEMENT");
+  const reportReturned = (s: Seeded, applicationId: Id<"financeApplications">, forwardId: Id<"financeCompanyForwards">) =>
+    s.owner.as.mutation(api.financeCompanyForward.reportFinanceCompanyForwardReturned, {
+      orgId: s.orgId, applicationId, forwardId, reason: "The company sent it back.", idempotencyKey: crypto.randomUUID(),
+    });
+
+  test("no period open: REVERSAL_PENDING keeps the exception and DISBURSEMENT live; replacement refused until the reversal posts", async () => {
+    const { s, applicationId } = await finalizedDeal("f2a");
+    const first = await record(s, applicationId);
+    await confirmTransfer(s, applicationId);
+    await setPeriods(s, "CLOSED");
+    await reportReturned(s, applicationId, first);
+
+    const pending = await proofOf(s, applicationId);
+    expect(pending.state).toBe("REVERSAL_PENDING");
+    expect(pending.versions[0].state).toBe("REVERSAL_PENDING");
+    expect(pending.returnedExceptionOpen).toBe(true);
+    const cockpit = await cockpitOf(s, applicationId);
+    expect(cockpit.forward).toMatchObject({ state: "REVERSAL_PENDING", returnedExceptionOpen: true, transferConfirmed: true });
+    const stage = await disbursementOf(s, applicationId);
+    expect(stage?.state).not.toBe("COMPLETE");
+    expect(stage?.blocker).toBe("ForwardNotSettled");
+    expect(await refusalOf(record(s, applicationId))).toMatch(/transfer is already confirmed/i);
+    expect(await s.t.run((ctx) => ctx.db.query("financeCompanyForwards").collect())).toHaveLength(1);
+
+    await setPeriods(s, "OPEN");
+    await drainOutbox(s);
+    const drained = await proofOf(s, applicationId);
+    expect(drained.versions[0].state).toBe("RETURNED");
+    expect(drained.state).toBe("DUE");
+    expect(drained.returnedExceptionOpen).toBe(true);
+    expect((await disbursementOf(s, applicationId))?.blocker).toBe("AwaitingForwardToFinanceCompany");
+
+    await record(s, applicationId);
+    const settled = await proofOf(s, applicationId);
+    expect(settled.state).toBe("SETTLED");
+    expect(settled.returnedExceptionOpen).toBe(false);
+    expect((await disbursementOf(s, applicationId))?.state).toBe("COMPLETE");
+  });
+
+  test("a failed queued return reversal is NEEDS_REPAIR and keeps the exception open", async () => {
+    const { s, applicationId } = await finalizedDeal("f2b");
+    const first = await record(s, applicationId);
+    await confirmTransfer(s, applicationId);
+    await setPeriods(s, "CLOSED");
+    await reportReturned(s, applicationId, first);
+    await s.t.run(async (ctx) => {
+      const row = (await ctx.db.query("pendingAccountingEvents").collect()).find((r) => r.kind === "REVERSE" && r.orgId === s.orgId)!;
+      await ctx.db.patch(row._id, { status: "FAILED" });
+    });
+    const proof = await proofOf(s, applicationId);
+    expect(proof.state).toBe("NEEDS_REPAIR");
+    expect(proof.returnedExceptionOpen).toBe(true);
+    const stage = await disbursementOf(s, applicationId);
+    expect(stage?.state).not.toBe("COMPLETE");
+    expect(stage?.blocker).toBe("ForwardNotSettled");
+  });
+
+  test("control: a take-back BEFORE the transfer with a queued reversal does not open the exception", async () => {
+    const { s, applicationId } = await finalizedDeal("f2c");
+    const forwardId = await record(s, applicationId);
+    await setPeriods(s, "CLOSED");
+    await s.owner.as.mutation(api.financeCompanyForward.reverseFinanceCompanyForward, {
+      orgId: s.orgId, applicationId, forwardId, reason: "Recorded in error.", idempotencyKey: crypto.randomUUID(),
+    });
+    const proof = await proofOf(s, applicationId);
+    expect(proof.state).toBe("REVERSAL_PENDING");
+    expect(proof.returnedExceptionOpen).toBe(false);
+  });
+
+  test("control: an open-period return is RETURNED / DUE with the exception open", async () => {
+    const { s, applicationId } = await finalizedDeal("f2d");
+    const first = await record(s, applicationId);
+    await confirmTransfer(s, applicationId);
+    await reportReturned(s, applicationId, first);
+    const proof = await proofOf(s, applicationId);
+    expect(proof.versions[0].state).toBe("RETURNED");
+    expect(proof.state).toBe("DUE");
+    expect(proof.returnedExceptionOpen).toBe(true);
+  });
+});
+describe("SCRUM-435 - isReportedReturn (pure)", () => {
+  test("a RETURNED intent counts in every unposted-or-posted state, never once settled or absent", () => {
+    for (const state of ["RETURNED", "REVERSAL_PENDING", "NEEDS_REPAIR"] as const) {
+      expect(isReportedReturn({ state, reversalKind: "RETURNED" })).toBe(true);
+      expect(isReportedReturn({ state, reversalKind: "VOID" })).toBe(false);
+      expect(isReportedReturn({ state, reversalKind: undefined })).toBe(false);
+    }
+    for (const state of ["ON_BOOKS", "REVERSED", "POSTING_PENDING", "POSTING_FAILED"] as const) {
+      expect(isReportedReturn({ state, reversalKind: "RETURNED" })).toBe(false);
+    }
   });
 });
