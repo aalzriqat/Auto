@@ -603,6 +603,16 @@ const dealRailMessages = defineBilingualMessages({
     "Recorded — deal cancelled",
     "مسجَّل — الصفقة ملغاة",
   ],
+  HandoverPaymentRecordedRejected: [
+    "Recorded — deal rejected",
+    "مسجَّل — الصفقة مرفوضة",
+  ],
+  // A CANCELLED or REJECTED deal accepts no new payment, so its handover lines
+  // carry no instruction to pay, remove and re-add, or settle.
+  HandoverPaymentUntreatableStopped: [
+    "This cost's accounting treatment cannot be paid or posted as recorded. The deal is stopped, so no payment or settlement can be recorded for it now.",
+    "المعالجة المحاسبية لهذا المصروف لا يمكن دفعها أو ترحيلها كما هي مسجّلة. الصفقة متوقفة، فلا يمكن تسجيل دفع أو تسوية له الآن.",
+  ],
   DirectPaymentAmountChanged: [
     "The amount of this cost changed since you opened this form. It is now:",
     "تغيّر مبلغ هذا المصروف منذ فتحت هذا النموذج. المبلغ الآن:",
@@ -626,6 +636,10 @@ const dealRailMessages = defineBilingualMessages({
   DirectPaymentChangeNote: [
     "Changing this cost's amount or removing it reverses this payment; record it again afterwards.",
     "تغيير مبلغ هذا المصروف أو إزالته يعكس هذا الدفع؛ سجّله من جديد بعد ذلك.",
+  ],
+  DirectPaymentChangeNoteStopped: [
+    "Changing this cost's amount or removing it still reverses this payment, but the deal is stopped, so it cannot be recorded again.",
+    "تغيير مبلغ هذا المصروف أو إزالته ما زال يعكس هذا الدفع، لكن الصفقة متوقفة، فلا يمكن تسجيله من جديد.",
   ],
   FeeTypeFinanceCompany: ["Finance company fee", "رسوم جهة التمويل"],
   FeeTypeAppraisal: ["Appraisal fee", "رسوم التقييم"],

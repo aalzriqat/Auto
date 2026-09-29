@@ -16,6 +16,7 @@ import {
   type DirectHandoverPayment,
   type HandoverCostLine,
   type HandoverCostsData,
+  type DealStopped,
 } from "./HandoverCostsPanel";
 import { closingReasonText } from "./DealClosingReadinessList";
 
@@ -53,7 +54,7 @@ function renderPanel(
     onRecordDirectPayment?: (feeId: string, values: DirectHandoverPayment) => Promise<void>;
     onAbandonDirectPayment?: (feeId: string, intentId: string) => void;
     dealClosed?: boolean;
-    dealCancelled?: boolean;
+    dealStopped?: DealStopped;
     postingHoldFeeIds?: ReadonlyArray<string>;
     handoverCostsCheck?: "READY" | "BLOCKED" | "UNAVAILABLE" | "NOT_APPLICABLE";
     custodyLedgerCheck?: "READY" | "BLOCKED" | "UNAVAILABLE" | "NOT_APPLICABLE";
@@ -68,7 +69,7 @@ function renderPanel(
       money={(minor) => `${minor / 1000} JOD`}
       canManage={true}
       dealClosed={props.dealClosed ?? false}
-      dealCancelled={props.dealCancelled}
+      dealStopped={props.dealStopped}
       costSource={{ kind: "PENDING" }}
       t={t}
       onAdd={async () => {}}
@@ -393,7 +394,7 @@ describe("a CLOSED or CANCELLED deal shows a settled or an honestly-recorded pay
 
   test("CANCELLED: an honest 'Recorded - deal cancelled' state, no green, never 'Paid', in either language", () => {
     for (const check of [undefined, "READY", "BLOCKED"] as const) {
-      const view = renderPanel([paid()], { dealClosed: true, dealCancelled: true, handoverCostsCheck: check, postingHoldFeeIds: check === "BLOCKED" ? ["fee1"] : [] });
+      const view = renderPanel([paid()], { dealClosed: true, dealStopped: "CANCELLED", handoverCostsCheck: check, postingHoldFeeIds: check === "BLOCKED" ? ["fee1"] : [] });
       const row = screen.getByTestId("deal-handover-payment-fee1");
       expect(row.getAttribute("data-state")).toBe("PAID_DIRECT_CANCELLED");
       expect(row.textContent).toContain(salesEn.HandoverPaymentRecordedCancelled);
@@ -438,9 +439,15 @@ describe("who is offered the action, and what everyone else is told", () => {
     expect(screen.queryByRole("button", { name: salesEn.RecordDirectPayment })).toBeNull();
   });
 
-  test("a cancelled deal offers nothing to record, even for a line the payload still calls eligible (T6)", () => {
-    renderPanel([line()], { canRecordDirectPayment: true, onRecordDirectPayment: async () => {}, dealCancelled: true });
+  test("a stopped deal offers nothing to record, even for a line the payload still calls eligible (T6)", () => {
+    renderPanel([line()], { canRecordDirectPayment: true, onRecordDirectPayment: async () => {}, dealStopped: "CANCELLED" });
     expect(screen.queryByRole("button", { name: salesEn.RecordDirectPayment })).toBeNull();
+  });
+
+  test("a REJECTED deal with a stale directPaymentEligible=true offers no pay button (Sol MEDIUM)", () => {
+    renderPanel([line({ directPaymentEligible: true })], { canRecordDirectPayment: true, onRecordDirectPayment: async () => {}, dealStopped: "REJECTED" });
+    expect(screen.queryByRole("button", { name: salesEn.RecordDirectPayment })).toBeNull();
+    expect(screen.queryByTestId("deal-handover-payment-fee1-waiting")).toBeNull();
   });
 
   test("a rejected deal is served directPaymentEligible=false and offers nothing to record (T6)", () => {
@@ -617,7 +624,7 @@ describe("a custody payment is shown as settled only once its ledger posting is 
   });
 
   test("CANCELLED takes precedence over every check: never confirmed", () => {
-    renderPanel([custody()], { dealClosed: true, dealCancelled: true, custodyLedgerCheck: "READY" });
+    renderPanel([custody()], { dealClosed: true, dealStopped: "CANCELLED", custodyLedgerCheck: "READY" });
     expect(stateOf().getAttribute("data-state")).toBe("PAID_CUSTODY_CANCELLED");
     expect(stateOf().textContent).toContain(salesEn.HandoverPaymentRecordedCancelled);
   });
@@ -625,5 +632,124 @@ describe("a custody payment is shown as settled only once its ledger posting is 
   test("the waiting copy exists in both languages", () => {
     expect(salesEn.HandoverPaymentCustodyRecorded.length).toBeGreaterThan(0);
     expect(salesAr.HandoverPaymentCustodyRecorded.length).toBeGreaterThan(0);
+  });
+});
+
+describe("a stopped (CANCELLED or REJECTED) deal never reads as settled or invites a payment it would refuse (SCRUM-443 r2)", () => {
+  const paid = (over: Partial<HandoverCostLine> = {}) =>
+    line({
+      handoverPayment: "PAID_DIRECT",
+      directPaymentEligible: false,
+      directPayment: { method: "CHEQUE", amountMinor: 90_000, paidAt: Date.UTC(2026, 8, 20), reference: "CHQ-1" },
+      ...over,
+    });
+
+  test.each(["CANCELLED", "REJECTED"] as const)("%s: a PAID_DIRECT line says the payment can be reversed but not recorded again", (stopped) => {
+    renderPanel([paid()], { dealStopped: stopped, handoverCostsCheck: "BLOCKED" });
+    const row = screen.getByTestId("deal-handover-payment-fee1");
+    expect(row.textContent).toContain(salesEn.DirectPaymentChangeNoteStopped);
+    expect(row.textContent).not.toContain(salesEn.DirectPaymentChangeNote);
+    expect(row.textContent).not.toMatch(/record it again afterwards/i);
+  });
+
+  test("an OPEN deal keeps the original 'record it again' note", () => {
+    renderPanel([paid()], { dealStopped: null });
+    const row = screen.getByTestId("deal-handover-payment-fee1");
+    expect(row.textContent).toContain(salesEn.DirectPaymentChangeNote);
+    expect(row.textContent).not.toContain(salesEn.DirectPaymentChangeNoteStopped);
+  });
+
+  test("REJECTED: a PAID_DIRECT row is recorded-on-a-rejected-deal, never 'confirmed at closing', never green", () => {
+    for (const check of [undefined, "READY", "BLOCKED"] as const) {
+      const view = renderPanel([paid()], { dealStopped: "REJECTED", handoverCostsCheck: check, postingHoldFeeIds: check === "BLOCKED" ? ["fee1"] : [] });
+      const row = screen.getByTestId("deal-handover-payment-fee1");
+      expect(row.getAttribute("data-state")).toBe("PAID_DIRECT_REJECTED");
+      expect(row.textContent).toContain(salesEn.HandoverPaymentRecordedRejected);
+      expect(row.textContent).not.toContain(salesEn.HandoverPaymentRecordedUnconfirmed);
+      expect(row.textContent).not.toContain(salesEn.HandoverPaymentPaidDirect);
+      expect(row.textContent).not.toContain(salesEn.HandoverPaymentQueuedNote);
+      expect(row.querySelector("[class*='emerald']")).toBeNull();
+      view.unmount();
+    }
+  });
+
+  test("REJECTED: a custody line is recorded on a rejected deal, never 'Paid from custody'", () => {
+    renderPanel([line({ handoverPayment: "PAID_CUSTODY", directPaymentEligible: false })], { dealStopped: "REJECTED", custodyLedgerCheck: "READY" });
+    const row = screen.getByTestId("deal-handover-payment-fee1");
+    expect(row.getAttribute("data-state")).toBe("PAID_CUSTODY_REJECTED");
+    expect(row.textContent).toContain(salesEn.HandoverPaymentRecordedRejected);
+  });
+
+  test.each(["CANCELLED", "REJECTED"] as const)("%s: unsupported-treatment guidance never tells the operator to remove, re-add and pay", (stopped) => {
+    for (const state of ["UNSUPPORTED_TREATMENT", "DEDUCTION_NOT_RECOGNISED"] as const) {
+      const view = renderPanel([line({ source: "MANUAL", handoverPayment: state, directPaymentEligible: false })], { dealStopped: stopped });
+      const text = screen.getByTestId("deal-handover-payment-fee1").textContent;
+      expect(text).toBe(salesEn.HandoverPaymentUntreatableStopped);
+      expect(text).not.toMatch(/add it again|remove it|then pay/i);
+      view.unmount();
+    }
+  });
+
+  test("the stopped-deal copy exists in both languages", () => {
+    for (const key of ["HandoverPaymentRecordedRejected", "HandoverPaymentUntreatableStopped", "DirectPaymentChangeNoteStopped"] as const) {
+      expect(salesEn[key]).toBeTruthy();
+      expect(salesAr[key]).toMatch(/[؀-ۿ]/);
+    }
+  });
+});
+
+describe("an in-flight or UNKNOWN direct payment is never dropped by another opener (SCRUM-443 r2, L2)", () => {
+  const unknownOnce = () =>
+    vi
+      .fn<(feeId: string, values: DirectHandoverPayment) => Promise<void>>()
+      .mockRejectedValue(new HandoverCostAttemptError("network dropped", "UNKNOWN"));
+
+  async function openUnknown(onRecord: ReturnType<typeof unknownOnce>, lines: HandoverCostLine[]) {
+    const view = render(panelWith(lines, onRecord));
+    fireEvent.click(screen.getAllByRole("button", { name: salesEn.RecordDirectPayment })[0]);
+    fireEvent.change(screen.getByLabelText(salesEn.DirectPaymentMethodLabel), { target: { value: "CASH" } });
+    fireEvent.click(screen.getByRole("button", { name: salesEn.SaveDirectPayment }));
+    await screen.findByText("network dropped");
+    return view;
+  }
+
+  test("while line A is UNKNOWN, the edit and remove openers are disabled and A's notice survives", async () => {
+    await openUnknown(unknownOnce(), [line({ _id: "a" }), line({ _id: "b" })]);
+    for (const name of [salesEn.RecordActualCost, salesEn.RemoveHandoverCost]) {
+      const openers = screen.getAllByRole("button", { name });
+      expect(openers.length).toBeGreaterThan(0);
+      for (const opener of openers) {
+        expect(opener).toHaveProperty("disabled", true);
+        fireEvent.click(opener);
+      }
+    }
+    expect(screen.getByTestId("direct-payment-a-form")).toBeTruthy();
+    expect(screen.getByText("network dropped")).toBeTruthy();
+    expect(screen.getByRole("button", { name: salesEn.RetryHandoverCost })).toBeTruthy();
+  });
+
+  test("an idle form (nothing pending) still yields to an edit opener, which stays enabled", () => {
+    render(panelWith([line({ _id: "a" }), line({ _id: "b" })], async () => {}));
+    fireEvent.click(screen.getAllByRole("button", { name: salesEn.RecordDirectPayment })[0]);
+    const edit = screen.getAllByRole("button", { name: salesEn.RecordActualCost })[0];
+    expect(edit).toHaveProperty("disabled", false);
+  });
+
+  test("UNKNOWN then the payment actually committed: the line is re-served PAID_DIRECT, the form closes, the row shows paid, no second pay button", async () => {
+    const onRecord = unknownOnce();
+    const view = await openUnknown(onRecord, [line()]);
+    view.rerender(
+      panelWith(
+        [line({ handoverPayment: "PAID_DIRECT", directPaymentEligible: false, directPayment: { method: "CASH", amountMinor: 90_000, paidAt: Date.UTC(2026, 8, 20) } })],
+        onRecord
+      )
+    );
+    expect(screen.queryByTestId("direct-payment-fee1-form")).toBeNull();
+    expect(screen.getByTestId("deal-handover-payment-fee1").getAttribute("data-state")).toMatch(/^PAID_DIRECT/);
+    expect(screen.queryByRole("button", { name: salesEn.RecordDirectPayment })).toBeNull();
+    // Pending was released with the form: the other openers work again.
+    for (const opener of screen.queryAllByRole("button", { name: salesEn.RecordActualCost })) {
+      expect(opener).toHaveProperty("disabled", false);
+    }
   });
 });

@@ -233,7 +233,7 @@ describe("b1 - an off-plan dealer-borne line no supported source can pay blocks 
     // The role that may remove the line still cannot pay it: no disbursement authority.
     const payable = await offPlanFee(seed);
     const before = await seed.t.run((ctx) => ctx.db.get("financeDealFees", payable));
-    await expect(payDirect(seed, payable, { as: seed.asSales })).rejects.toThrow();
+    await expect(payDirect(seed, payable, { as: seed.asSales })).rejects.toThrow(`Forbidden: Missing required permissions: ${PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT}`);
     expect(await seed.t.run((ctx) => ctx.db.get("financeDealFees", payable))).toEqual(before);
     // Control: the same payment by the owner (who holds the authority) is accepted.
     await payDirect(seed, payable);

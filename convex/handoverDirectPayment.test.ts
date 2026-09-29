@@ -259,7 +259,7 @@ describe("who and what may be paid this way", () => {
     const seed = await seedDeal("sales");
     const feeId = await dealerFee(seed, jod(50));
     const journals = await journalCount(seed);
-    await expect(payDirect(seed, feeId, { as: seed.asSales })).rejects.toThrow();
+    await expect(payDirect(seed, feeId, { as: seed.asSales })).rejects.toThrow(`Forbidden: Missing required permissions: ${PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT}`);
     expect(await journalCount(seed)).toBe(journals);
     expect((await lineOf(seed, feeId))?.handoverPayment).toBe("UNPAID");
   });
@@ -518,7 +518,7 @@ describe("the screen's projection agrees with the server's refusal", () => {
 });
 
 describe("a stopped deal takes no NEW direct payment (SCRUM-443 CodeRabbit item 1)", () => {
-  const stop = async (seed: Seed, status: "CANCELLED" | "REJECTED") =>
+  const stop = async (seed: Seed, status: "CANCELLED" | "REJECTED" | "CLOSED") =>
     await seed.t.run((ctx) => ctx.db.patch("financeApplications", seed.applicationId, { status }));
 
   test.each([
@@ -559,6 +559,43 @@ describe("a stopped deal takes no NEW direct payment (SCRUM-443 CodeRabbit item 
     expect(second).toBe(first);
     expect(await journalCount(seed)).toBe(journals);
     expect(await directEvents(seed)).toHaveLength(1);
+  });
+
+  test("T4 control: a same-key replay of a payment committed before the deal was REJECTED still returns its stored result", async () => {
+    const seed = await seedDeal("stopped-replay-rej");
+    const feeId = await dealerFee(seed, jod(50));
+    const args = { method: "BANK_TRANSFER" as const, paidAt: Date.now() - DAY, reference: "TRX-9", idempotencyKey: "replay-after-reject" };
+    const first = await payDirect(seed, feeId, args);
+    await stop(seed, "REJECTED");
+    const journals = await journalCount(seed);
+    const second = await payDirect(seed, feeId, args);
+    expect(second).toBe(first);
+    expect(await journalCount(seed)).toBe(journals);
+    expect(await directEvents(seed)).toHaveLength(1);
+  });
+
+  test("L6 precedence: a finalized deal is refused with the finalized text, never the cancelled text, even when it is also stopped", async () => {
+    const seed = await seedDeal("stopped-finalized");
+    const feeId = await dealerFee(seed, jod(50));
+    const saleId = await seed.t.run(async (ctx) => {
+      const app = await ctx.db.get(seed.applicationId);
+      return await ctx.db.insert("sales", {
+        orgId: seed.orgId, vehicleId: app!.vehicleId, customerId: app!.customerId,
+        salespersonId: seed.userId, salePrice: 10_500, saleDate: Date.now(), status: "COMPLETED",
+      } as never);
+    });
+    await seed.t.run((ctx) => ctx.db.patch("financeApplications", seed.applicationId, { status: "CANCELLED", finalizedSaleId: saleId }));
+    const journals = await journalCount(seed);
+    await expect(payDirect(seed, feeId)).rejects.toThrow(/has been finalized/);
+    expect(await journalCount(seed)).toBe(journals);
+    expect(await directEvents(seed)).toHaveLength(0);
+  });
+
+  test("L6 precedence: a CLOSED deal is refused with the finalized text, not a stopped-deal text", async () => {
+    const seed = await seedDeal("stopped-closed");
+    const feeId = await dealerFee(seed, jod(50));
+    await stop(seed, "CLOSED");
+    await expect(payDirect(seed, feeId)).rejects.toThrow(/has been finalized/);
   });
 
   test.each(["CANCELLED", "REJECTED"] as const)("T5: listDealCosts on a %s deal is not eligible where an open deal is", async (status) => {

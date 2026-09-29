@@ -1331,9 +1331,11 @@ export function DealCockpit({
           // The same discipline for a custody-paid line (SCRUM-443 v6): the row
           // says a posting was made; only this check says it is on the books.
           custodyLedgerCheck: closingReadiness?.checks.find((c) => c.key === "CUSTODY_ON_LEDGER")?.status,
-          // A cancelled deal is never finalized: its direct payments read as
-          // recorded on a cancelled deal, never as settled (SCRUM-443).
-          dealCancelled: app.status === "CANCELLED",
+          // A stopped (cancelled or rejected) deal is never finalized: its direct
+          // payments read as recorded, never as settled, and none is offered. Taken
+          // from the app record, not from a separately fetched eligibility flag
+          // (SCRUM-443).
+          dealStopped: app.status === "CANCELLED" || app.status === "REJECTED" ? app.status : null,
           postingHoldFeeIds: ((): string[] => {
             const check = closingReadiness?.checks.find((c) => c.key === "HANDOVER_COSTS_PAID");
             return check?.status === "BLOCKED" ? (check.feeIds ?? []) : [];
