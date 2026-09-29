@@ -11,7 +11,8 @@
  * however well it is tested. That is an instrumentation artifact, not a
  * coverage problem, and the fix is to instrument everything and keep no list.
  *
- * So: every non-test source file under `src/` is instrumented, thresholds are
+ * So: every non-test source file under `src/` (.ts/.tsx) and `app/` (.tsx, the
+ * expo-router screens) is instrumented, thresholds are
  * off (the gate is `mobile:test`'s job, not Sonar's), output goes to its own
  * directory so it can never collide with `mobile:test`, and `projectRoot`
  * makes the emitted `SF:` paths repo-root relative - `apps/mobile/src/...`
@@ -24,7 +25,12 @@ module.exports = {
   ...pkg.jest,
   rootDir: __dirname,
   collectCoverage: true,
-  collectCoverageFrom: ["src/**/*.{ts,tsx}", "!src/**/*.test.{ts,tsx}"],
+  collectCoverageFrom: [
+    "src/**/*.{ts,tsx}",
+    "!src/**/*.test.{ts,tsx}",
+    "app/**/*.tsx",
+    "!app/**/*.test.tsx",
+  ],
   coverageThreshold: undefined,
   coverageDirectory: "coverage-sonar",
   coverageReporters: [["lcovonly", { projectRoot: "../.." }], "text-summary"],

@@ -16,14 +16,18 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-const MOBILE_SOURCE_PREFIX = "apps/mobile/src/";
+const MOBILE_SOURCE_PREFIXES = ["apps/mobile/src/", "apps/mobile/app/"];
+const CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
 
-/** Repo-relative, forward-slash path under apps/mobile/src/, with no traversal. */
+/**
+ * Repo-relative, forward-slash path under apps/mobile/src/ or apps/mobile/app/
+ * (exact directories, so apps/mobile/appx/ is refused), with no control
+ * characters and no "", "." or ".." segment.
+ */
 export function isMobileSourcePath(source) {
-  return (
-    source.startsWith(MOBILE_SOURCE_PREFIX) &&
-    !source.split("/").includes("..")
-  );
+  if (CONTROL_CHAR.test(source)) return false;
+  if (!MOBILE_SOURCE_PREFIXES.some((prefix) => source.startsWith(prefix))) return false;
+  return !source.split("/").some((segment) => segment === "" || segment === "." || segment === "..");
 }
 
 export function appendMobileLcov({ mobileLcovPath, targetLcovPath }) {
@@ -45,7 +49,7 @@ export function appendMobileLcov({ mobileLcovPath, targetLcovPath }) {
   }
   const bad = sources.find((source) => !isMobileSourcePath(source));
   if (bad !== undefined) {
-    throw new Error(`Mobile LCOV has a source outside ${MOBILE_SOURCE_PREFIX}: ${bad}`);
+    throw new Error(`Mobile LCOV has a source outside apps/mobile/src/ or apps/mobile/app/: ${JSON.stringify(bad)}`);
   }
   if (!existsSync(targetLcovPath)) {
     throw new Error(`Target LCOV is missing: ${targetLcovPath}`);

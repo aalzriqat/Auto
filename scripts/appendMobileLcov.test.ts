@@ -25,6 +25,12 @@ const run = () => appendMobileLcov({ mobileLcovPath: mobile, targetLcovPath: tar
 describe("isMobileSourcePath", () => {
   test.each([
     ["apps/mobile/src/a.tsx", true],
+    ["apps/mobile/app/(app)/x.tsx", true],
+    ["apps/mobile/appx/x.ts", false],
+    ["apps/mobile/src/./a.ts", false],
+    ["apps/mobile/src//a.ts", false],
+    ["apps/mobile/src/a.ts\rSF:lib/x.ts", false],
+    ["apps/mobile/src/a\u0000.ts", false],
     ["apps/mobile/jest.setup.ts", false],
     ["apps/mobilex/src/a.ts", false],
     ["apps/mobile/src/../../x", false],
@@ -80,10 +86,33 @@ describe("appendMobileLcov", () => {
     (sf) => {
       fs.writeFileSync(target, "ORIGINAL\n");
       fs.writeFileSync(mobile, record("apps/mobile/src/ok.tsx") + record(sf));
-      expect(run).toThrow(/outside apps\/mobile\/src\//);
+      expect(run).toThrow(/outside apps\/mobile\/(src|app)\//);
       expect(fs.readFileSync(target, "utf8")).toBe("ORIGINAL\n");
     },
   );
+
+  test("accepts records under apps/mobile/app", () => {
+    fs.writeFileSync(target, "");
+    fs.writeFileSync(mobile, record("apps/mobile/app/(app)/x.tsx"));
+    expect(run()).toBe(1);
+  });
+
+  test.each(["apps/mobile/appx/x.ts", "apps/mobile/jest.setup.ts", "apps/mobile/src/./a.ts", "apps/mobile/src//a.ts"])(
+    "refuses source %s",
+    (sf) => {
+      fs.writeFileSync(target, "ORIGINAL\n");
+      fs.writeFileSync(mobile, record(sf));
+      expect(run).toThrow(/outside apps\/mobile\/(src|app)/);
+      expect(fs.readFileSync(target, "utf8")).toBe("ORIGINAL\n");
+    },
+  );
+
+  test("refuses an SF value with an embedded bare CR", () => {
+    fs.writeFileSync(target, "ORIGINAL\n");
+    fs.writeFileSync(mobile, "SF:apps/mobile/src/a.ts\rSF:lib/commission.ts\nend_of_record\n");
+    expect(run).toThrow(/outside apps\/mobile\/(src|app)/);
+    expect(fs.readFileSync(target, "utf8")).toBe("ORIGINAL\n");
+  });
 
   test("fails when the target report is missing", () => {
     fs.writeFileSync(mobile, record("apps/mobile/src/a.tsx"));
