@@ -139,7 +139,11 @@ export type PlanRefusalCode =
   | "TREATMENT_UNMAPPED"
   | "DEPOSIT_EXCEEDS_SETTLEMENT"
   | "DEPOSIT_WITH_NET_PAYABLE"
-  | "PLAN_UNBALANCED";
+  | "PLAN_UNBALANCED"
+  // v2 (SCRUM-435, finance-company forward)
+  | "SETTLEMENT_DEDUCTIONS_NOT_ALLOWED"
+  | "DEPOSIT_EXCEEDS_FIRST_PAYMENT"
+  | "CONTRIBUTION_INVALID";
 
 export interface PlanRefusal {
   code: PlanRefusalCode;
@@ -486,4 +490,168 @@ function fingerprintOf(parts: {
     `H${parts.depositLiabilityAppliedMinor}`,
     componentPart,
   ].join(";");
+}
+
+// ---------------------------------------------------------------------------
+// v2 — finance-company forward (SCRUM-435, owner ruling Option A, 2026-09-28)
+// ---------------------------------------------------------------------------
+//
+// The finance company transfers the FULL approved amount G. The customer's
+// deposit H is NOT netted off that receivable and is NOT the dealership's
+// consideration: the dealership forwards it to the company together with its
+// own contribution C. So on a v2 deal:
+//
+//     Dr AR-Finance G                 Cr Sales revenue L (legal invoice)
+//     Dr Deposit liability H          Cr AP-Finance H
+//     Dr Consideration reductions C   Cr AP-Finance C
+//     Dr Customer receivable (rest)
+//
+// and it balances exactly when G + customerReceivable == L. v1 (above) is left
+// byte-identical: stored v1 rows are never recomputed.
+
+export const FINANCED_SALE_PLAN_VERSION_V2 = 2 as const;
+
+export interface FinancedSalePlanV2Input {
+  currency: string;
+  legalInvoiceConsiderationMinor: number | undefined;
+  legalInvoiceIssuedTo: "CUSTOMER" | "FINANCE_COMPANY" | "OTHER" | undefined;
+  financierIsConfiguredExternal: boolean;
+  /** G — the approved dealer purchase amount the company transfers in full. */
+  approvedAmountMinor: number | undefined;
+  /** True when a settlement deduction (fee deducted from settlement) exists. */
+  hasSettlementComponents: boolean;
+  customerReceivableMinor: number;
+  /** H — deposit rows held against this vehicle that this deal consumes. */
+  depositLiabilityAppliedMinor: number;
+  /** C — the dealership's contribution to the finance company. */
+  dealerContributionMinor: number;
+  /** The customer's first payment; H may not exceed it. Undefined = not known. */
+  customerFirstPaymentMinor: number | undefined;
+}
+
+export interface FinancedSalePostingPlanV2 {
+  version: typeof FINANCED_SALE_PLAN_VERSION_V2;
+  currency: string;
+  legalInvoiceConsiderationMinor: number;
+  grossDealerSettlementMinor: number;
+  totalDeductionsMinor: 0;
+  /** G in full. */
+  financeCompanyReceivableMinor: number;
+  /** Always 0 under v2: the forward is tracked by the fields below. */
+  financeCompanyPayableMinor: 0;
+  customerReceivableMinor: number;
+  depositLiabilityAppliedMinor: number;
+  forwardDepositMinor: number;
+  forwardContributionMinor: number;
+  /** H + C — what the dealership owes the company. */
+  forwardDueMinor: number;
+  components: PlannedComponent[];
+  fingerprint: string;
+}
+
+export type BuildPlanV2Result =
+  | { ok: true; plan: FinancedSalePostingPlanV2 }
+  | { ok: false; refusal: PlanRefusal };
+
+/**
+ * The plan version an application was finalized under: its stored field, else
+ * the fingerprint prefix, else 0 (no plan: a pre-plan deal). One helper — no
+ * reader infers the version any other way.
+ */
+export function planVersionOf(app: {
+  financedSalePlanVersion?: number;
+  financedSaleRecognitionFingerprint?: string;
+}): 0 | 1 | 2 {
+  if (app.financedSalePlanVersion === 1 || app.financedSalePlanVersion === 2) {
+    return app.financedSalePlanVersion;
+  }
+  const fp = app.financedSaleRecognitionFingerprint;
+  if (typeof fp === "string") {
+    if (fp.startsWith("v2;")) return 2;
+    if (fp.startsWith("v1;")) return 1;
+  }
+  return 0;
+}
+
+export function buildFinancedSalePostingPlanV2(input: FinancedSalePlanV2Input): BuildPlanV2Result {
+  const refuseV2 = (code: PlanRefusalCode, message: string): BuildPlanV2Result => ({
+    ok: false,
+    refusal: { code, message },
+  });
+  const invoice = checkLegalInvoice({
+    legalInvoiceConsiderationMinor: input.legalInvoiceConsiderationMinor,
+    legalInvoiceIssuedTo: input.legalInvoiceIssuedTo,
+    financierIsConfiguredExternal: input.financierIsConfiguredExternal,
+  });
+  if (!invoice.ok) return invoice;
+  const legalInvoiceMinor = invoice.amountMinor;
+
+  const g = input.approvedAmountMinor;
+  if (g === undefined || !isWholeMinorAmount(g) || g < 0) {
+    return refuseV2(
+      "GROSS_SETTLEMENT_UNKNOWN",
+      "The amount the finance company approved for this deal is not recorded. Record the approved amount before finalizing."
+    );
+  }
+  if (input.hasSettlementComponents) {
+    return refuseV2(
+      "SETTLEMENT_DEDUCTIONS_NOT_ALLOWED",
+      "The finance company transfers the full approved amount, so a cost cannot be deducted from its transfer. Record the cost as a normal deal cost and finalize again."
+    );
+  }
+  const c = input.dealerContributionMinor;
+  if (!isWholeMinorAmount(c) || c < 0) {
+    return refuseV2(
+      "CONTRIBUTION_INVALID",
+      "The dealership contribution recorded on this deal is not a usable amount. Correct it before finalizing."
+    );
+  }
+  const h = input.depositLiabilityAppliedMinor;
+  if (!isWholeMinorAmount(h) || h < 0) {
+    return refuseV2(
+      "CONTRIBUTION_INVALID",
+      "The deposit held for this deal is not a usable amount. Have accounting review it before finalizing."
+    );
+  }
+  if (input.customerFirstPaymentMinor !== undefined && h > input.customerFirstPaymentMinor) {
+    return refuseV2(
+      "DEPOSIT_EXCEEDS_FIRST_PAYMENT",
+      "The deposit held on this deal is larger than the customer's first payment. Correct the first payment or resolve the deposit before finalizing."
+    );
+  }
+  if (g + input.customerReceivableMinor !== legalInvoiceMinor) {
+    return refuseV2(
+      "PLAN_UNBALANCED",
+      "This deal's legal invoice does not agree with the approved amount plus what the customer still owes the dealership. The difference has no account of its own, so resolve the figures before finalizing."
+    );
+  }
+  const forwardDueMinor = h + c;
+  return {
+    ok: true,
+    plan: {
+      version: FINANCED_SALE_PLAN_VERSION_V2,
+      currency: input.currency,
+      legalInvoiceConsiderationMinor: legalInvoiceMinor,
+      grossDealerSettlementMinor: g,
+      totalDeductionsMinor: 0,
+      financeCompanyReceivableMinor: g,
+      financeCompanyPayableMinor: 0,
+      customerReceivableMinor: input.customerReceivableMinor,
+      depositLiabilityAppliedMinor: h,
+      forwardDepositMinor: h,
+      forwardContributionMinor: c,
+      forwardDueMinor,
+      components: [],
+      fingerprint: [
+        "v2",
+        input.currency,
+        `L${legalInvoiceMinor}`,
+        `G${g}`,
+        `F${forwardDueMinor}`,
+        `D${h}`,
+        `C${c}`,
+        `R${input.customerReceivableMinor}`,
+      ].join(";"),
+    },
+  };
 }

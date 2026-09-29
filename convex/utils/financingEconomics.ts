@@ -1335,6 +1335,10 @@ export const DEAL_STAGE_BLOCKERS = [
   "DocumentsIncomplete",
   /** Waiting on the financing company to pay — never on the dealership. */
   "AwaitingDisbursement",
+  /** SCRUM-435: the dealership has not yet paid the deposit and its contribution onward. */
+  "AwaitingForwardToFinanceCompany",
+  /** SCRUM-435: that payment is recorded but not yet settled on the books. */
+  "ForwardNotSettled",
   "HandoverBlocked",
   "AwaitingSettlement",
 ] as const;
@@ -1469,6 +1473,19 @@ export interface DealStageFacts extends LifecycleFacts {
    * claim; this leaves room for it to say so.
    */
   settlementComplete?: boolean;
+  /**
+   * SCRUM-435 - the forward proof state (`deriveForwardState(...).state`).
+   * Absent, NOT_DUE and SETTLED mean nothing is owed first; anything else
+   * blocks the finance company transfer and is the DEALERSHIP's move.
+   */
+  forwardState?:
+    | "NOT_DUE"
+    | "DUE"
+    | "SETTLED"
+    | "POSTING_PENDING"
+    | "POSTING_FAILED"
+    | "REVERSAL_PENDING"
+    | "NEEDS_REPAIR";
 }
 
 /**
@@ -1566,7 +1583,14 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
           ? "GapNegotiationFailed"
           : "GapUnresolved",
     DELIVERY_ACTIONS: "DocumentsIncomplete",
-    DISBURSEMENT: "AwaitingDisbursement",
+    DISBURSEMENT:
+      facts.forwardState === undefined ||
+      facts.forwardState === "NOT_DUE" ||
+      facts.forwardState === "SETTLED"
+        ? "AwaitingDisbursement"
+        : facts.forwardState === "DUE"
+          ? "AwaitingForwardToFinanceCompany"
+          : "ForwardNotSettled",
     HANDOVER: handover === "BLOCKED" ? "HandoverBlocked" : undefined,
     SETTLEMENT: "AwaitingSettlement",
   };
@@ -1623,8 +1647,10 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
     // offers the dealership's ResolveGapAction on exactly these blockers —
     // so the rail must not say it is waiting on the finance company then.
     const authority: DealStageAuthority =
-      key === "APPROVED_PURCHASE" &&
-      (blocker === "GapUnresolved" || blocker === "GapNegotiationFailed")
+      (key === "APPROVED_PURCHASE" &&
+        (blocker === "GapUnresolved" || blocker === "GapNegotiationFailed")) ||
+      (key === "DISBURSEMENT" &&
+        (blocker === "AwaitingForwardToFinanceCompany" || blocker === "ForwardNotSettled"))
         ? "DEALER"
         : STAGE_AUTHORITY[key];
     return blocker

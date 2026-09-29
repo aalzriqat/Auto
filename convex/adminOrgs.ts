@@ -116,6 +116,9 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "financeApplicationOverrides", index: "by_org" },
   // Deal costs and custody, deepest first: entries reference a custody record,
   // fee lines reference both a custody record and the application.
+  // SCRUM-435: forward rows reference the application; gone before it. The
+  // index leads with orgId, so the org-scoped read is the same prefix scan.
+  { kind: "orgRows", table: "financeCompanyForwards", index: "by_org_application" },
   { kind: "orgRows", table: "financeDealCustodyEntries", index: "by_org" },
   { kind: "financeDealFeesWithStorage" },
   { kind: "orgRows", table: "financeDealCustody", index: "by_org" },

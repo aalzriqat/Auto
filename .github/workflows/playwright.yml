@@ -58,7 +58,9 @@ jobs:
           # SCRUM-417 UX4 frames end in the variant name (-ux4-<variant>.png), so no
           # other class's glob (-top, -bottom, -next-step, -panel) can match them.
           UX4="$(count 'deal-cockpit-*-ux4-*.png')"
-          echo "visual gate screenshots: base $BASE, expanded record $EXPANDED, withheld-close next-step $NEXT_STEP, panel $PANEL, ux4 $UX4"
+          # SCRUM-435 forward-step frames end in -forward-<variant>.png, likewise unmatched by the other globs.
+          FORWARD="$(count 'deal-cockpit-*-forward-*.png')"
+          echo "visual gate screenshots: base $BASE, expanded record $EXPANDED, withheld-close next-step $NEXT_STEP, panel $PANEL, ux4 $UX4, forward $FORWARD"
           if [ "$BASE" -ne 16 ]; then
             echo "expected 16 base screenshots (2 locales x 2 themes x 2 viewports x top/bottom), found $BASE" >&2
             exit 1
@@ -69,6 +71,10 @@ jobs:
           fi
           if [ "$NEXT_STEP" -ne 16 ] || [ "$PANEL" -ne 8 ]; then
             echo "expected 16 withheld-close next-step (2 variants x 8) and 8 panel screenshots (SCRUM-414), found $NEXT_STEP and $PANEL" >&2
+            exit 1
+          fi
+          if [ "$FORWARD" -ne 16 ]; then
+            echo "expected 16 forward-step screenshots (2 variants x 2 locales x 2 themes x 2 viewports, SCRUM-435), found $FORWARD" >&2
             exit 1
           fi
           if [ "$UX4" -ne 24 ]; then

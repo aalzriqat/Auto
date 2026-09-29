@@ -146,6 +146,11 @@ import {
   type DepositResolution,
 } from "./StoppedDealDepositsPanel";
 import { DisbursementConfirmationDialog } from "../DisbursementConfirmationDialog";
+import {
+  RecordForwardToFinanceCompanyDialog,
+  type ForwardPaymentValues,
+} from "../RecordForwardToFinanceCompanyDialog";
+import { ForwardCorrectionDialog, type ForwardCorrectionKind } from "../ForwardCorrectionDialog";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { FinancingPlanPanel, type FinancingPlanFacts } from "./FinancingPlanPanel";
 import {
@@ -1000,6 +1005,11 @@ export function DealCockpit({
   const updateStatus = useMutation(api.applications.updateStatus);
   const cancelApplication = useMutation(api.applications.cancelApplication);
   const confirmDisbursement = useMutation(api.applications.confirmDisbursement);
+  const recordFinanceCompanyForward = useMutation(api.financeCompanyForward.recordFinanceCompanyForward);
+  const reverseFinanceCompanyForward = useMutation(api.financeCompanyForward.reverseFinanceCompanyForward);
+  const reportFinanceCompanyForwardReturned = useMutation(
+    api.financeCompanyForward.reportFinanceCompanyForwardReturned
+  );
   const confirmSupplierDisbursement = useMutation(api.applications.confirmSupplierDisbursement);
   const setSupplierSettlementRoute = useMutation(api.applications.setSupplierSettlementRoute);
   const releaseDeposit = useMutation(api.deposits.release);
@@ -1046,6 +1056,10 @@ export function DealCockpit({
   const [cancelSubmitting, setCancelSubmitting] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [confirmingDisbursement, setConfirmingDisbursement] = useState(false);
+  const [recordingForward, setRecordingForward] = useState(false);
+  const [forwardSubmitting, setForwardSubmitting] = useState(false);
+  const [forwardCorrection, setForwardCorrection] = useState<ForwardCorrectionKind | null>(null);
+  const [forwardCorrectionSubmitting, setForwardCorrectionSubmitting] = useState(false);
   const [confirmingSupplierDisbursement, setConfirmingSupplierDisbursement] = useState(false);
   const [disbursementSubmitting, setDisbursementSubmitting] = useState(false);
   /**
@@ -1523,6 +1537,11 @@ export function DealCockpit({
     expectsFinanceCompanyDisbursement &&
     !settlesDirectToSupplier &&
     !app.disbursedAt &&
+    !(
+      deal?.forward?.applies === true &&
+      deal.forward.state !== "SETTLED" &&
+      deal.forward.state !== "NOT_DUE"
+    ) &&
     disbursementDenominationBlock === undefined;
   // Gated on the SERVER's own answer (`canSettleDirectToSupplier`), not on
   // `companyId`, which is unset on every MANUAL_FINANCE_COMPANY deal.
@@ -1539,7 +1558,12 @@ export function DealCockpit({
     app.status !== "CANCELLED" &&
     canCreateApplication &&
     (app.status === "APPROVED" ? canApproveApplication : true) &&
-    (app.status === "CLOSED" ? canFinalizeApplication : true);
+    (app.status === "CLOSED" ? canFinalizeApplication : true) &&
+    // SCRUM-435: a finalized v2 deal is cancelled by a manager; the server's own
+    // answer (`mayCancelFinalized`) is the only thing offered here.
+    (app.status === "CLOSED" && deal?.forward?.planV2 === true ? deal.forward.mayCancelFinalized === true : true);
+  const forwardBlocksTransfer =
+    deal?.forward?.applies === true && deal.forward.state !== "SETTLED" && deal.forward.state !== "NOT_DUE";
   const applicationDeposits: DealDeposit[] = (app?.deposits ?? []).map((deposit) => ({
     _id: deposit._id,
     amount: deposit.amount,
@@ -1893,6 +1917,27 @@ export function DealCockpit({
             canConfirmFinanceDisbursement,
             "SupplierDisbursementUnavailable"
           ),
+        };
+      }
+      // SCRUM-435: the finance company sends the FULL approved amount, and the
+      // dealership pays back the deposit and its contribution first. Until that
+      // is settled on the books the transfer is not offered (the server refuses
+      // it too); the step names who acts and, when the caller may, offers the
+      // recording instead of a dead end.
+      if (forwardBlocksTransfer && !app.disbursedAt) {
+        if (deal?.forward?.state === "DUE") {
+          return {
+            stageKey: "DISBURSEMENT",
+            actionKey: "RecordForwardToFinanceCompany",
+            onStart: () => setRecordingForward(true),
+            unavailableReasonKey: deal.forward.mayRecord ? undefined : "ForwardNeedsPermission",
+          };
+        }
+        return {
+          stageKey: "DISBURSEMENT",
+          actionKey: "RecordForwardToFinanceCompany",
+          onStart: () => undefined,
+          unavailableReasonKey: "ForwardNotSettledReason",
         };
       }
       // The currency boundary is named before permission or applicability:
@@ -2528,6 +2573,57 @@ export function DealCockpit({
             }
           : undefined
       }
+      forwardCorrection={
+        deal?.forward?.planV2 === true && deal.forward.mayRecord === true && deal.forward.onBooksForwardId
+          ? {
+              canVoid: deal.forward.transferConfirmed !== true,
+              open: forwardCorrection,
+              submitting: forwardCorrectionSubmitting,
+              onOpen: setForwardCorrection,
+              onClose: () => setForwardCorrection(null),
+              onConfirm: async (reason: string) => {
+                const forwardId = deal.forward?.onBooksForwardId;
+                const kind = forwardCorrection;
+                if (!forwardId || !kind) return;
+                setForwardCorrectionSubmitting(true);
+                const intent = `forward-correction:${kind}:${applicationId}:${forwardId}:${reason}`;
+                try {
+                  if (kind === "VOID") {
+                    await reverseFinanceCompanyForward({
+                      orgId,
+                      applicationId,
+                      forwardId,
+                      reason,
+                      idempotencyKey: commandId.for(intent),
+                    });
+                  } else {
+                    await reportFinanceCompanyForwardReturned({
+                      orgId,
+                      applicationId,
+                      forwardId,
+                      reason,
+                      idempotencyKey: commandId.for(intent),
+                    });
+                  }
+                  commandId.retire(intent);
+                  toast.success(t("ForwardCorrectionSuccess"));
+                  setForwardCorrection(null);
+                } catch (error) {
+                  if (isConvexError(error)) commandId.retire(intent);
+                  toast.error(getErrorMessage(error));
+                } finally {
+                  setForwardCorrectionSubmitting(false);
+                }
+              },
+            }
+          : undefined
+      }
+      cancelHint={
+        app?.status === "CLOSED" &&
+        deal?.forward?.planV2 === true &&
+        deal.forward.mayCancelFinalized !== true &&
+        canCreateApplication
+      }
       settlementRoute={
         canChooseSettlementRoute && app
           ? {
@@ -2727,6 +2823,44 @@ export function DealCockpit({
                   }
                 },
               },
+              forward:
+                deal?.forward?.applies === true && deal.money?.forward
+                  ? {
+                      confirming: recordingForward,
+                      submitting: forwardSubmitting,
+                      totalLabel: formatEconomics(deal.money.forward.dueMinor),
+                      depositLabel: formatEconomics(deal.money.forward.depositMinor),
+                      contributionLabel: formatEconomics(deal.money.forward.contributionMinor),
+                      onOpenChange: setRecordingForward,
+                      onConfirm: async (values) => {
+                        const dueMinor = deal.money?.forward?.dueMinor;
+                        if (!dueMinor) return;
+                        setForwardSubmitting(true);
+                        // One key per attempt: a retry after a lost response is the
+                        // SAME command, and a changed input is a new one.
+                        const intent = `record-forward:${applicationId}:${dueMinor}:${values.method}:${values.paidAt}:${values.reference ?? ""}`;
+                        try {
+                          await recordFinanceCompanyForward({
+                            orgId,
+                            applicationId,
+                            method: values.method,
+                            paidAt: values.paidAt,
+                            expectedAmountMinor: dueMinor,
+                            reference: values.reference,
+                            idempotencyKey: commandId.for(intent),
+                          });
+                          commandId.retire(intent);
+                          toast.success(t("ForwardRecordedSuccess"));
+                          setRecordingForward(false);
+                        } catch (error) {
+                          if (isConvexError(error)) commandId.retire(intent);
+                          toast.error(getErrorMessage(error));
+                        } finally {
+                          setForwardSubmitting(false);
+                        }
+                      },
+                    }
+                  : undefined,
               supplier: {
                 confirming: confirmingSupplierDisbursement,
                 submitting: disbursementSubmitting,
@@ -3932,6 +4066,8 @@ export function DealCockpitView({
   depositRequests,
   creditDecision,
   cancel,
+  cancelHint,
+  forwardCorrection,
   settlementRoute,
   documents,
   deposits,
@@ -3989,6 +4125,26 @@ export function DealCockpitView({
     onOpenChange: (open: boolean) => void;
     onSubmit: (values: CancelApplicationValues) => void | Promise<void>;
   };
+  /**
+   * SCRUM-435: shown where the cancel action would be when this caller may open
+   * a deal's cancellation in principle but a finalized v2 deal is cancelled by a
+   * manager. Names who acts instead of leaving the deal without an answer.
+   */
+  cancelHint?: boolean;
+  /**
+   * SCRUM-435: void or report-returned for the payment on the books. Present only
+   * for a caller the server would let do it, and only while a payment is on the
+   * books - so a manager is never told to report a return with nowhere to do it.
+   */
+  forwardCorrection?: {
+    /** Before the finance company's transfer is confirmed a payment can be voided. */
+    canVoid: boolean;
+    open: ForwardCorrectionKind | null;
+    submitting: boolean;
+    onOpen: (kind: ForwardCorrectionKind) => void;
+    onClose: () => void;
+    onConfirm: (reason: string) => void | Promise<void>;
+  };
   /** Present only while the route may still be chosen (consigned, not closed, finalize permission). */
   settlementRoute?: {
     route: SupplierSettlementRoute | undefined;
@@ -4035,6 +4191,16 @@ export function DealCockpitView({
       amountLabel: string;
       onOpenChange: (open: boolean) => void;
       onConfirm: () => void | Promise<void>;
+    };
+    /** SCRUM-435: the payment to the finance company that precedes the transfer. */
+    forward?: {
+      confirming: boolean;
+      submitting: boolean;
+      totalLabel: string;
+      depositLabel: string;
+      contributionLabel: string;
+      onOpenChange: (open: boolean) => void;
+      onConfirm: (values: ForwardPaymentValues) => void | Promise<void>;
     };
     supplier: {
       confirming: boolean;
@@ -5829,17 +5995,46 @@ export function DealCockpitView({
             accept it from this caller. Kept visible rather than folded into a
             menu: it would be the menu's only item, and a destructive action
             behind a one-item menu is hidden, not tidied. */}
+        {forwardCorrection && (
+          <div className="ms-auto flex flex-wrap items-center gap-1" data-testid="deal-forward-correction">
+            {forwardCorrection.canVoid && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-9"
+                data-testid="deal-forward-void"
+                onClick={() => forwardCorrection.onOpen("VOID")}
+              >
+                {t("ForwardVoidAction")}
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-9"
+              data-testid="deal-forward-returned"
+              onClick={() => forwardCorrection.onOpen("RETURNED")}
+            >
+              {t("ForwardReturnedAction")}
+            </Button>
+          </div>
+        )}
         {cancel && (
           <Button
             variant="ghost"
             size="sm"
-            className="ms-auto h-9 text-destructive hover:text-destructive"
+            className={forwardCorrection ? "h-9 text-destructive hover:text-destructive" : "ms-auto h-9 text-destructive hover:text-destructive"}
             data-testid="deal-cancel-application"
             onClick={() => cancel.onOpenChange(true)}
           >
             <Ban className="h-4 w-4" aria-hidden />
             {t("CancelApplication")}
           </Button>
+        )}
+        {!cancel && cancelHint && (
+          <span className="ms-auto text-xs text-muted-foreground" data-testid="deal-cancel-manager-hint">
+            {t("ManagerCancelsFinalizedDeal")}
+          </span>
         )}
       </div>
 
@@ -6312,6 +6507,18 @@ export function DealCockpitView({
         />
       )}
 
+      {forwardCorrection && (
+        <ForwardCorrectionDialog
+          open={forwardCorrection.open !== null}
+          kind={forwardCorrection.open ?? "RETURNED"}
+          submitting={forwardCorrection.submitting}
+          t={t}
+          onOpenChange={(next) => {
+            if (!next) forwardCorrection.onClose();
+          }}
+          onConfirm={forwardCorrection.onConfirm}
+        />
+      )}
       {cancel && (
         <CancelApplicationDialog
           open={cancel.confirming}
@@ -6330,6 +6537,18 @@ export function DealCockpitView({
           the supplier's advice moves no dealership money. */}
       {disbursement && (
         <>
+          {disbursement.forward && (
+            <RecordForwardToFinanceCompanyDialog
+              open={disbursement.forward.confirming}
+              submitting={disbursement.forward.submitting}
+              totalLabel={disbursement.forward.totalLabel}
+              depositLabel={disbursement.forward.depositLabel}
+              contributionLabel={disbursement.forward.contributionLabel}
+              t={t}
+              onOpenChange={disbursement.forward.onOpenChange}
+              onConfirm={disbursement.forward.onConfirm}
+            />
+          )}
           <DisbursementConfirmationDialog
             open={disbursement.financeCompany.confirming}
             withTrigger={false}
