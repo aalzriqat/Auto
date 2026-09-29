@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
@@ -4153,7 +4153,7 @@ export function DealCockpitView({
   // Looked up in the document, never through a ref, so nothing reads a ref while
   // rendering (the closing destinations below are built during render).
   const revealDetailsFor = (target: Element | null) => {
-    if (target && target.closest('[data-testid="deal-details"]')) setDetailsChoice(true);
+    if (target && target.closest('[data-zone="record"]')) setDetailsChoice(true);
   };
   const goToDocuments = () => {
     setLowerTab("documents");
@@ -5099,7 +5099,10 @@ export function DealCockpitView({
   const workbenchPanels = panelsForStage(live?.key).filter((panel) => panelNodes[panel] != null);
   // Nothing promoted: the record is the whole surface, so it starts open —
   // never a collapsed disclosure over an empty page.
-  const detailsOpen = detailsChoice ?? workbenchPanels.length === 0;
+  // ...and it also starts closed while the step's panel is only not there YET
+  // (its wiring still loading; a cash sale never wires them), so it never flashes open and then snaps shut.
+  const expectsPanel = deal.dealKind !== "CASH" && panelsForStage(live?.key).length > 0;
+  const detailsOpen = detailsChoice ?? (workbenchPanels.length === 0 && !expectsPanel);
   const inWorkbench = (panel: WorkbenchPanel) => workbenchPanels.includes(panel);
   // The record keeps its original order: the car, the plan, what the finance
   // company told us, the handover costs, the closing checks, custody, then the
@@ -5117,6 +5120,110 @@ export function DealCockpitView({
   ).filter(([, node]) => node != null);
   const recordMoneyColumn = !inWorkbench("money");
   const recordWorkingColumn = recordWorkingNodes.length > 0;
+  const recordItems: Array<[string, ReactNode]> = [
+    ...(recordMoneyColumn ? ([["money", moneyNode]] as Array<[string, ReactNode]>) : []),
+    ...recordWorkingNodes,
+  ];
+  // The next-step card (or, for a stopped deal, the muted fact that it stopped).
+  const stepNode: ReactNode = live ? (
+    <StageFocusRow
+      state={live.state}
+      label={t(STAGE_LABEL[live.key] ?? live.key)}
+      position={liveIndex + 1}
+      total={stages.length}
+      owner={stageOwnerLabel(live, activeAppraisalProvider, t)}
+      mirrorNote={stageShowsMirrorNote(live, activeAppraisalProvider)}
+      blocker={live.blocker ? t(`Blocker${live.blocker}`) : undefined}
+      action={workflowAction?.stageKey === live.key ? resolveFocusAction(workflowAction) : undefined}
+      outstandingDocuments={
+        live.blocker === "DocumentsIncomplete"
+          ? deal.documents.filter(
+              (doc) => doc.required && doc.status !== "VERIFIED" && doc.status !== "WAIVED"
+            )
+          : []
+      }
+      onGoToDocuments={hasDocumentsPane ? goToDocuments : undefined}
+      documentsActionable={documentsActionable}
+      t={t}
+    >
+      {/* The route IS the blocker on this step, so the control is on the
+          step — an operator told "record who the finance company pays"
+          must not have to hunt for where. Rendered here INSTEAD of beside
+          the vehicle, never in both places. */}
+      {routeBlocksClose && settlementRoute && (
+        <SettlementRouteControl
+          route={settlementRoute.route}
+          canSettleDirectToSupplier={settlementRoute.canSettleDirectToSupplier}
+          directRouteRefusal={settlementRoute.directRouteRefusal}
+          supplierName={settlementRoute.supplierName}
+          t={t}
+          onChoose={settlementRoute.onChoose}
+        />
+      )}
+    </StageFocusRow>
+  ) : !allComplete ? (
+      /* No live stage and not finished: the deal stopped. Said in the
+         muted register — a stopped deal is a fact, not an alarm; the
+         held-deposit strip above carries the alarm when there is one. */
+      <p className="text-sm text-muted-foreground" data-testid="deal-stopped">
+        {t("DealStopped")}
+      </p>
+  ) : null;
+
+  // ONE parent, one keyed list: the next-step card, every movable panel and the
+  // Deal-details toggle are siblings, and the stage only changes their ORDER.
+  // React moves a keyed sibling without remounting it, so a panel that changes
+  // place when the live stage changes keeps its local state — the add-cost
+  // form's intent, an open custody dialog and its identity, an UNKNOWN attempt.
+  // Collapsing is the 'hidden' attribute, never an unmount, for the same reason.
+  // DOM order equals visual order, so tab order follows what is on screen.
+  const recordIds = recordItems.map(([panel]) => "deal-record-" + panel);
+  const recordWorking = recordItems.filter(([panel]) => panel !== "money");
+  const flow: Array<{ key: string; zone: "step" | "workbench" | "toggle" | "record"; className: string; style?: CSSProperties; node: ReactNode }> = [];
+  if (stepNode != null) flow.push({ key: "next-step", zone: "step", className: "xl:col-span-5", node: stepNode });
+  for (const panel of workbenchPanels) {
+    flow.push({ key: panel, zone: "workbench", className: "xl:col-span-5", node: panelNodes[panel] });
+  }
+  if (recordItems.length > 0) flow.push({
+    key: "details-toggle",
+    zone: "toggle",
+    className: "xl:col-span-5",
+    node: (
+      <button
+        type="button"
+        data-testid="deal-details-toggle"
+        aria-expanded={detailsOpen}
+        aria-controls={recordIds.join(" ")}
+        onClick={() => setDetailsChoice(!detailsOpen)}
+        className="group flex min-h-11 w-full cursor-pointer items-center justify-between gap-3 rounded-lg border bg-card px-4 py-3 text-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <span className="min-w-0">
+          <span className="block text-base font-semibold">{t("DealDetailsHeading")}</span>
+          <span className="block text-xs text-muted-foreground">{t("DealDetailsHint")}</span>
+        </span>
+        <ChevronDown className="h-4 w-4 shrink-0 transition-transform group-aria-expanded:rotate-180" aria-hidden />
+      </button>
+    ),
+  });
+  // Split only at xl: at lg the money column is ~220px beside a 256px sidebar —
+  // too narrow for its figures — so it stacks instead. Two of five tracks, not
+  // a strict third: a third is ~300px at 1280. The money spans the rows of the
+  // working panels beside it (the reading side first, SCRUM-372).
+  for (const [panel, node] of recordItems) {
+    const isMoney = panel === "money";
+    flow.push({
+      key: panel,
+      zone: "record",
+      className: !recordMoneyColumn || !recordWorkingColumn
+        ? "xl:col-span-5"
+        : isMoney
+          ? "xl:col-span-2 xl:col-start-1 xl:[grid-row:span_var(--record-rows)]"
+          : "xl:col-span-3 xl:col-start-3",
+      style: isMoney && recordWorkingColumn ? ({ "--record-rows": recordWorking.length } as CSSProperties) : undefined,
+      node,
+    });
+  }
+
 
   return (
     <div className="space-y-6">
@@ -5417,128 +5524,24 @@ export function DealCockpitView({
         <DealStageRail stages={railStages} t={t} />
       )}
 
-      {/* --- the current stage: the primary surface ----------------------- */}
-      {/* Everything the operator needs for the step the deal is on — what it
-          is, whose move it is, what is being waited on, and the ONE action —
-          in one place. It keeps `data-testid="deal-next-step"`: the id names
-          the block that carries the action, and that is exactly this. */}
-      {live ? (
-        <StageFocusRow
-          state={live.state}
-          label={t(STAGE_LABEL[live.key] ?? live.key)}
-          position={liveIndex + 1}
-          total={stages.length}
-          owner={stageOwnerLabel(live, activeAppraisalProvider, t)}
-          mirrorNote={stageShowsMirrorNote(live, activeAppraisalProvider)}
-          blocker={live.blocker ? t(`Blocker${live.blocker}`) : undefined}
-          action={workflowAction?.stageKey === live.key ? resolveFocusAction(workflowAction) : undefined}
-          outstandingDocuments={
-            live.blocker === "DocumentsIncomplete"
-              ? deal.documents.filter(
-                  (doc) => doc.required && doc.status !== "VERIFIED" && doc.status !== "WAIVED"
-                )
-              : []
-          }
-          onGoToDocuments={hasDocumentsPane ? goToDocuments : undefined}
-          documentsActionable={documentsActionable}
-          t={t}
-        >
-          {/* The route IS the blocker on this step, so the control is on the
-              step — an operator told "record who the finance company pays"
-              must not have to hunt for where. Rendered here INSTEAD of beside
-              the vehicle, never in both places. */}
-          {routeBlocksClose && settlementRoute && (
-            <SettlementRouteControl
-              route={settlementRoute.route}
-              canSettleDirectToSupplier={settlementRoute.canSettleDirectToSupplier}
-              directRouteRefusal={settlementRoute.directRouteRefusal}
-              supplierName={settlementRoute.supplierName}
-              t={t}
-              onChoose={settlementRoute.onChoose}
-            />
-          )}
-        </StageFocusRow>
-      ) : (
-        !allComplete && (
-          /* No live stage and not finished: the deal stopped. Said in the
-             muted register — a stopped deal is a fact, not an alarm; the
-             held-deposit strip above carries the alarm when there is one. */
-          <p className="text-sm text-muted-foreground" data-testid="deal-stopped">
-            {t("DealStopped")}
-          </p>
-        )
-      )}
-
-      {/* --- the step's own panel: the workbench ------------------------- */}
-      {/* Directly under the next-step card, so the step and the thing it is
-          worked from are one unit. Absent when the live step has no panel of
-          its own (or none is wired for this caller): nothing is promoted and
-          the record below opens instead. */}
-      {workbenchPanels.length > 0 && (
-        <section
-          data-testid="deal-workbench"
-          aria-label={t("DealWorkbenchLabel")}
-          className="min-w-0 space-y-6"
-        >
-          {workbenchPanels.map((panel) => (
-            <Fragment key={panel}>{panelNodes[panel]}</Fragment>
-          ))}
-        </section>
-      )}
-
-      {/* --- Deal details: everything else, whole ----------------------------- */}
-      {/* A native disclosure, so the summary is keyboard-operable and the
-          content stays mounted while collapsed (findable, and the S4 scroll
-          targets exist). Controlled, so a blocker link can reveal it before it
-          scrolls. Nothing is removed: the money, the car, the plan, the
-          records and the activity are all here or in the workbench above. */}
-      <details
-        data-testid="deal-details"
-        open={detailsOpen}
-        onToggle={(event) => {
-          // The browser can open a closed <details> itself (find-in-page,
-          // fragment links). Adopt that so the next click collapses it.
-          const isOpen = event.currentTarget.open;
-          if (isOpen !== detailsOpen) setDetailsChoice(isOpen);
-        }}
-        className="group min-w-0 rounded-lg border bg-card"
-      >
-        <summary
-          data-testid="deal-details-toggle"
-          onClick={(event) => {
-            event.preventDefault();
-            setDetailsChoice(!detailsOpen);
-          }}
-          className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-4 py-3 text-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden"
-        >
-          <span className="min-w-0">
-            <span className="block text-base font-semibold">{t("DealDetailsHeading")}</span>
-            <span className="block text-xs text-muted-foreground">{t("DealDetailsHint")}</span>
-          </span>
-          <ChevronDown className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180" aria-hidden />
-        </summary>
-        {/* Split only at xl: at lg the money column is ~220px beside a 256px
-            sidebar — too narrow for its figures — so it stacks instead. Two of
-            five tracks, not a strict third: a third is ~300px at 1280. */}
-        <div className="grid gap-6 px-4 pb-4 pt-2 xl:grid-cols-5">
-          {/* First in source so a phone reads the figures first, and FIRST on a
-              wide screen too (SCRUM-372): the reading side. Not sticky: the
-              column is long and a sticky rail taller than the viewport hides
-              its own foot. */}
-          {recordMoneyColumn && (
-            <div className={cn("min-w-0 space-y-6", recordWorkingColumn ? "xl:col-span-2" : "xl:col-span-5")}>
-              {moneyNode}
-            </div>
-          )}
-          {recordWorkingColumn && (
-            <div className={cn("min-w-0 space-y-6", recordMoneyColumn ? "xl:col-span-3" : "xl:col-span-5")}>
-              {recordWorkingNodes.map(([panel, node]) => (
-                <Fragment key={panel}>{node}</Fragment>
-              ))}
-            </div>
-          )}
-        </div>
-      </details>
+      {/* --- the step, its panel, and the rest of the deal ---------------- */}
+      {/* The card carries `deal-next-step`; the live step's own panel follows it
+          directly; the rest of the deal sits behind the Deal-details toggle,
+          whole. Nothing is removed and nothing is drawn twice. */}
+      <div className="grid min-w-0 gap-6 xl:grid-cols-5">
+        {flow.map((item) => (
+          <div
+            key={item.key}
+            data-zone={item.zone}
+            id={item.zone === "record" ? "deal-record-" + item.key : undefined}
+            hidden={item.zone === "record" && !detailsOpen}
+            className={cn("min-w-0", item.className)}
+            style={item.style}
+          >
+            {item.node}
+          </div>
+        ))}
+      </div>
 
 
       {/* Mounted only while the action is offered: losing authority or the

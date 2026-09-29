@@ -153,7 +153,13 @@ function dealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
 }
 
 function renderCockpit(deal: DealCockpitData | null | undefined = dealFixture()) {
-  return render(<DealCockpitView deal={deal} onRecordSupplierReceipt={async () => {}} />);
+  const view = render(<DealCockpitView deal={deal} onRecordSupplierReceipt={async () => {}} />);
+  // The rest of the deal sits behind "Deal details", `hidden` (out of the
+  // accessibility tree) while collapsed; these tests read what is in it, so
+  // they open it the way an operator does.
+  const toggle = screen.queryByTestId("deal-details-toggle");
+  if (toggle?.getAttribute("aria-expanded") === "false") fireEvent.click(toggle);
+  return view;
 }
 
 /**

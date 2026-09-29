@@ -348,7 +348,7 @@ for (const locale of LOCALES) {
           // and identity are outside O1) take ~690px of an 844px screen; the
           // measurement is recorded on the test so it is visible, not hidden.
           const nextStepBox = await page.getByTestId("deal-next-step").boundingBox();
-          const workbenchBox = await page.getByTestId("deal-workbench").boundingBox();
+          const workbenchBox = await page.locator('[data-zone="workbench"]').first().boundingBox();
           expect(nextStepBox).not.toBeNull();
           expect(workbenchBox).not.toBeNull();
           expect(workbenchBox!.y, "the workbench sits under the next-step card").toBeGreaterThanOrEqual(
@@ -366,8 +366,11 @@ for (const locale of LOCALES) {
             ).toBeLessThan(viewport.height);
           }
           await expect(page.getByTestId("deal-lower-tabs")).toBeVisible();
-          const record = page.getByTestId("deal-details");
-          expect(await record.evaluate((el) => (el as HTMLDetailsElement).open)).toBe(false);
+          const toggle = page.getByTestId("deal-details-toggle");
+          await expect(toggle).toHaveAttribute("aria-expanded", "false");
+          // Hidden, not removed: every record wrapper is in the document.
+          expect(await page.locator('[data-zone="record"]:not([hidden])').count()).toBe(0);
+          expect(await page.locator('[data-zone="record"][hidden]').count()).toBeGreaterThan(0);
           await expect(page.getByTestId("deal-details-toggle")).toBeVisible();
           // Collapsed means hidden, not removed: the money is in the record and
           // is not painted until it is opened.
@@ -375,9 +378,14 @@ for (const locale of LOCALES) {
           await page.screenshot({
             path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}-top.png`),
           });
-          // Open it with the real control: everything the record holds appears.
-          await page.getByTestId("deal-details-toggle").click();
-          expect(await record.evaluate((el) => (el as HTMLDetailsElement).open)).toBe(true);
+          // Open it. The page is static markup (no React handlers), so the toggle
+          // is applied to the DOM the way its handler does: aria-expanded and the
+          // `hidden` attribute of every record wrapper. The handler itself is
+          // exercised in the jsdom suite (DealCockpitVisualFixture.test.tsx).
+          await page.evaluate(() => {
+            document.querySelector('[data-testid="deal-details-toggle"]')?.setAttribute("aria-expanded", "true");
+            document.querySelectorAll('[data-zone="record"]').forEach((el) => ((el as HTMLElement).hidden = false));
+          });
           await expect(page.getByTestId("deal-money")).toBeVisible();
 
           // Painted on screen: header, headline figure, stage rail — inside

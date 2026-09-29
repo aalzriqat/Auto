@@ -1285,9 +1285,17 @@ describe("O1 -- the step workbench", () => {
     );
   }
 
-  const workbench = () => screen.getByTestId("deal-workbench");
-  const details = () => screen.getByTestId("deal-details") as HTMLDetailsElement;
-  const inside = (root: HTMLElement, testId: string) => within(root).queryByTestId(testId) !== null;
+  // One parent, keyed siblings: the next-step card, every panel and the toggle
+  // are children of one grid, and each carries `data-zone` naming where it sits
+  // now. The zone is what the tests read; the DOM order is what a tab key walks.
+  const zoneOf = (testId: string) => screen.getByTestId(testId).closest("[data-zone]")?.getAttribute("data-zone") ?? null;
+  const wrapperOf = (testId: string) => screen.getByTestId(testId).closest("[data-zone]") as HTMLElement;
+  const toggle = () => screen.getByTestId("deal-details-toggle");
+  const recordOpen = () => toggle().getAttribute("aria-expanded") === "true";
+  /** Every record wrapper is hidden together: collapsed means hidden, never removed. */
+  const recordHidden = () =>
+    Array.from(document.querySelectorAll('[data-zone="record"]')).every((el) => (el as HTMLElement).hidden);
+  const workbenchWrappers = () => Array.from(document.querySelectorAll('[data-zone="workbench"]')) as HTMLElement[];
 
   test.each([
     ["CREDIT_DECISION", ["documents"]],
@@ -1301,89 +1309,101 @@ describe("O1 -- the step workbench", () => {
     "%s: its panel is in the workbench right under the next-step card, the rest are in Deal details",
     (stage, promoted) => {
       renderStage(stage);
-      // Directly after the card: nothing sits between the step and its panel.
-      expect(screen.getByTestId("deal-next-step").nextElementSibling).toBe(workbench());
       const promotedIds = promoted.map((key) => PANEL_TESTID[key]) as string[];
+      // Directly after the card: nothing sits between the step and its panel,
+      // and the workbench panels come in the map's order, before the toggle.
+      const step = wrapperOf("deal-next-step");
+      expect(step.getAttribute("data-zone")).toBe("step");
+      let cursor: Element | null = step.nextElementSibling;
+      for (const testId of promotedIds) {
+        expect(cursor?.querySelector(`[data-testid="${testId}"]`), `${testId} follows the card`).not.toBeNull();
+        expect(cursor?.getAttribute("data-zone")).toBe("workbench");
+        cursor = cursor?.nextElementSibling ?? null;
+      }
+      expect(cursor?.querySelector('[data-testid="deal-details-toggle"]')).not.toBeNull();
       for (const testId of ALL_PANEL_TESTIDS) {
-        if (promotedIds.includes(testId)) {
-          expect(inside(workbench(), testId), `${testId} in workbench`).toBe(true);
-          expect(inside(details(), testId), `${testId} not in details`).toBe(false);
-        } else {
-          expect(inside(details(), testId), `${testId} in details`).toBe(true);
-          expect(inside(workbench(), testId), `${testId} not in workbench`).toBe(false);
-        }
+        expect(zoneOf(testId), `${testId} zone`).toBe(promotedIds.includes(testId) ? "workbench" : "record");
       }
       // Nothing is dropped: every panel is in the document, exactly once.
       for (const testId of ALL_PANEL_TESTIDS) {
         expect(screen.getAllByTestId(testId), `${testId} rendered once`).toHaveLength(1);
       }
-      // With a live step the record starts collapsed.
-      expect(details().open).toBe(false);
+      // With a live step the record starts collapsed: hidden, still mounted.
+      expect(recordOpen()).toBe(false);
+      expect(recordHidden()).toBe(true);
+      for (const wrapper of workbenchWrappers()) expect(wrapper.hidden).toBe(false);
     }
   );
 
-  test("Deal details is a native disclosure: keyboard-operable summary, content stays mounted while collapsed", () => {
+  test("Deal details is a button disclosure: keyboard-operable, aria-expanded, and it controls the record", () => {
     renderStage("SETTLEMENT");
-    const summary = within(details()).getByTestId("deal-details-toggle");
-    expect(summary.tagName).toBe("SUMMARY");
-    // Collapsed but reachable in the tree (search, tests, screen-reader find).
-    expect(details().open).toBe(false);
-    expect(within(details()).getByTestId("deal-custody")).toBeTruthy();
-    fireEvent.click(summary);
-    expect(details().open).toBe(true);
-    fireEvent.click(summary);
-    expect(details().open).toBe(false);
-  });
-
-  test("a browser-driven open (find-in-page) is adopted, so the next click collapses it", () => {
-    renderStage("SETTLEMENT");
-    const el = details();
-    expect(el.open).toBe(false);
-    el.open = true;
-    fireEvent(el, new Event("toggle"));
-    fireEvent.click(within(el).getByTestId("deal-details-toggle"));
-    expect(el.open).toBe(false);
+    expect(toggle().tagName).toBe("BUTTON");
+    expect(recordOpen()).toBe(false);
+    // Every id it controls is a real record wrapper.
+    const controlled = (toggle().getAttribute("aria-controls") ?? "").split(" ");
+    expect(controlled.length).toBeGreaterThan(1);
+    for (const id of controlled) expect(document.getElementById(id)?.getAttribute("data-zone")).toBe("record");
+    // Collapsed but mounted and reachable in the tree.
+    expect(screen.getByTestId("deal-custody")).toBeTruthy();
+    fireEvent.click(toggle());
+    expect(recordOpen()).toBe(true);
+    expect(recordHidden()).toBe(false);
+    fireEvent.click(toggle());
+    expect(recordOpen()).toBe(false);
+    expect(recordHidden()).toBe(true);
   });
 
   test("a live step with no panel of its own (application) promotes nothing and opens the record", () => {
     renderStage("APPLICATION");
-    expect(screen.queryByTestId("deal-workbench")).toBeNull();
-    expect(details().open).toBe(true);
-    for (const testId of ALL_PANEL_TESTIDS) expect(inside(details(), testId)).toBe(true);
+    expect(workbenchWrappers()).toHaveLength(0);
+    expect(recordOpen()).toBe(true);
+    expect(recordHidden()).toBe(false);
+    for (const testId of ALL_PANEL_TESTIDS) expect(zoneOf(testId)).toBe("record");
   });
 
   test("a fully complete deal promotes nothing, so the record is open and nothing is hidden behind a click", () => {
     renderStage(null);
-    expect(screen.queryByTestId("deal-workbench")).toBeNull();
-    expect(details().open).toBe(true);
+    expect(workbenchWrappers()).toHaveLength(0);
+    expect(recordOpen()).toBe(true);
+    expect(recordHidden()).toBe(false);
     for (const testId of ALL_PANEL_TESTIDS) expect(screen.getAllByTestId(testId)).toHaveLength(1);
   });
 
   test("a stopped deal promotes nothing and opens the record", () => {
     renderStage(null, "STOPPED");
     expect(screen.getByTestId("deal-stopped")).toBeTruthy();
-    expect(screen.queryByTestId("deal-workbench")).toBeNull();
-    expect(details().open).toBe(true);
+    expect(workbenchWrappers()).toHaveLength(0);
+    expect(recordOpen()).toBe(true);
     for (const testId of ALL_PANEL_TESTIDS) expect(screen.getAllByTestId(testId)).toHaveLength(1);
   });
 
-  test("a live step whose promoted panel is not wired for this caller does not leave an empty workbench", () => {
+  test("a live step whose panel is not wired YET keeps the record closed, so it never flashes open and snaps shut", () => {
     language.locale = "en";
     const base = financedDeal();
-    const deal: FinancedDealCockpitData = { ...base, stages: stagesWithLive("APPRAISAL") };
-    render(
+    const view = (wired: boolean) => (
       <DealCockpitView
-        deal={deal}
+        deal={{ ...base, stages: stagesWithLive("APPRAISAL") } as FinancedDealCockpitData}
         backHref="/org_1/deals"
-        activeAppraisalProvider={deal.activeAppraisalProvider}
+        activeAppraisalProvider={base.activeAppraisalProvider}
         onRecordSupplierReceipt={async () => {}}
+        financeDecision={wired ? financeDecision() : undefined}
       />
     );
-    expect(screen.queryByTestId("deal-workbench")).toBeNull();
-    expect(details().open).toBe(true);
+    const { rerender } = render(view(false));
+    // No promoted panel yet: no empty workbench, and the record is not open.
+    expect(workbenchWrappers()).toHaveLength(0);
+    expect(recordOpen()).toBe(false);
+    // Everything is one click away, and nothing is lost while it loads.
+    expect(screen.getByTestId("deal-lower-tabs")).toBeTruthy();
+    rerender(view(true));
+    // The panel arrives into the workbench; the record never opened in between.
+    expect(zoneOf(PANEL_TESTID.financeDecision)).toBe("workbench");
+    expect(recordOpen()).toBe(false);
   });
 
-  test("a cash sale at handover promotes its costs; the money stays in Deal details", () => {
+  test("a cash sale at handover has no promoted panel of its own here: the record opens", () => {
+    // The cash container wires neither handover costs nor custody (see the
+    // SaleCockpit props), so nothing is promoted and the record is the surface.
     language.locale = "en";
     const base = financedDeal();
     const deal = {
@@ -1400,21 +1420,10 @@ describe("O1 -- the step workbench", () => {
         { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
       ],
     } as unknown as DealCockpitData;
-    render(
-      <DealCockpitView
-        deal={deal}
-        backHref="/org_1/deals"
-        onRecordSupplierReceipt={async () => {}}
-        handoverCosts={handoverCostsWiring()}
-        custody={custodyWiring()}
-        custodyMoney={custodyMoney}
-      />
-    );
-    expect(screen.getByTestId("deal-next-step").nextElementSibling).toBe(workbench());
-    expect(inside(workbench(), "deal-handover-costs")).toBe(true);
-    expect(inside(workbench(), "deal-custody")).toBe(true);
-    expect(inside(details(), "deal-money")).toBe(true);
-    expect(details().open).toBe(false);
+    render(<DealCockpitView deal={deal} backHref="/org_1/deals" onRecordSupplierReceipt={async () => {}} />);
+    expect(workbenchWrappers()).toHaveLength(0);
+    expect(recordOpen()).toBe(true);
+    expect(zoneOf("deal-money")).toBe("record");
   });
 
   test("a cash sale at the agreement step has no panel to promote: the record opens", () => {
@@ -1435,8 +1444,8 @@ describe("O1 -- the step workbench", () => {
       ],
     } as unknown as DealCockpitData;
     render(<DealCockpitView deal={deal} backHref="/org_1/deals" onRecordSupplierReceipt={async () => {}} />);
-    expect(screen.queryByTestId("deal-workbench")).toBeNull();
-    expect(details().open).toBe(true);
+    expect(workbenchWrappers()).toHaveLength(0);
+    expect(recordOpen()).toBe(true);
   });
 
   // A panel that changes place when the live stage changes must be MOVED, not
@@ -1450,7 +1459,7 @@ describe("O1 -- the step workbench", () => {
   ] as const)("a stage change %s -> %s keeps an open add-cost form and its intent", (from, to) => {
     const { rerender } = renderStage(from);
     const panel = screen.getByTestId("deal-handover-costs");
-    fireEvent.click(within(panel).getByRole("button", { name: (dictionaries.en as Record<string, string>).AddHandoverCost }));
+    fireEvent.click(within(panel).getByRole("button", { name: (dictionaries.en as Record<string, string>).AddHandoverCost, hidden: true }));
     const form = screen.getByTestId("deal-handover-cost-add");
     const intent = form.getAttribute("data-intent");
     expect(intent).toBeTruthy();
@@ -1468,7 +1477,7 @@ describe("O1 -- the step workbench", () => {
   ] as const)("a stage change %s -> %s keeps an open custody dialog", (from, to) => {
     const { rerender } = renderStage(from);
     const panel = screen.getByTestId("deal-custody");
-    fireEvent.click(within(panel).getByRole("button", { name: (dictionaries.en as Record<string, string>).CustodyRecordReturn }));
+    fireEvent.click(within(panel).getByRole("button", { name: (dictionaries.en as Record<string, string>).CustodyRecordReturn, hidden: true }));
     expect(screen.getByRole("dialog")).toBeTruthy();
 
     rerender(stageElement(to));
@@ -1490,11 +1499,12 @@ describe("O1 -- the step workbench", () => {
     Element.prototype.scrollIntoView = scroll;
     renderStage("SETTLEMENT");
     // The checklist is the step's panel; custody is in the collapsed record.
-    expect(details().open).toBe(false);
-    expect(inside(details(), "deal-custody")).toBe(true);
+    expect(recordOpen()).toBe(false);
+    expect(zoneOf("deal-custody")).toBe("record");
     fireEvent.click(screen.getByTestId("closing-check-go-CUSTODY_SETTLED"));
     // Revealed synchronously, before the frame in which the scroll happens.
-    expect(details().open).toBe(true);
+    expect(recordOpen()).toBe(true);
+    expect(recordHidden()).toBe(false);
     return new Promise<void>((done) =>
       requestAnimationFrame(() => {
         expect(scroll).toHaveBeenCalled();

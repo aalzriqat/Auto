@@ -202,8 +202,21 @@ afterEach(() => {
   stubs.membershipUserId = "user_manager";
 });
 
+/**
+ * The rest of the deal sits behind the "Deal details" toggle (collapsed while the
+ * live step has a panel of its own, and `hidden` — out of the accessibility
+ * tree — while collapsed). These tests exercise the panels in it, so they open
+ * it the way an operator does. Absent while the cockpit is still a skeleton.
+ */
+function openDealDetails() {
+  const toggle = screen.queryByTestId("deal-details-toggle");
+  if (toggle?.getAttribute("aria-expanded") === "false") fireEvent.click(toggle);
+}
+
 function renderCockpit() {
-  return render(<DealCockpit orgId={ORG} applicationId={APP} />);
+  const view = render(<DealCockpit orgId={ORG} applicationId={APP} />);
+  openDealDetails();
+  return view;
 }
 
 const focusRow = () => screen.getByTestId("deal-next-step");

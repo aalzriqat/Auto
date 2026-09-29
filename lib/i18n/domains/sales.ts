@@ -857,7 +857,6 @@ const dealWizardMessages = defineBilingualMessages({
   ClosingCheckGoToCosts: ["Go to handover costs", "الانتقال إلى رسوم التسليم"],
   ClosingCheckGoToCustody: ["Go to custody", "الانتقال إلى العهدة"],
   // SCRUM-417 UX3 (O1): the step workbench and the collapsed record beneath it.
-  DealWorkbenchLabel: ["Work on this step", "تنفيذ هذه الخطوة"],
   DealDetailsHeading: ["Deal details", "تفاصيل الصفقة"],
   DealDetailsHint: ["The rest of this deal's information", "بقية معلومات الصفقة"],
 });
