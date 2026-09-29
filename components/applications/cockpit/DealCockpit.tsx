@@ -5287,7 +5287,10 @@ export function DealCockpitView({
   // equally across every row it spans, which pushes the working cards apart.
   // Every row but the last is sized to its content and the last takes the
   // slack, so the cards stay together and the spare height sits under them.
-  // (One row per flow item except the money, which spans them.)
+  // (One row per flow item except the money, which spans them.) The template
+  // applies only while a record wrapper is shown (the has- variant on the
+  // grid): collapsed, the grid has just the card and the toggle, and rows
+  // sized for the hidden record would leave blank space under the toggle.
   const flowRows: CSSProperties | undefined =
     recordMoneyColumn && recordWorkingColumn
       ? ({ "--flow-rows": `repeat(${flow.length - 2}, auto) 1fr` } as CSSProperties)
@@ -5598,7 +5601,7 @@ export function DealCockpitView({
           whole. Nothing is removed and nothing is drawn twice. */}
       <div
         ref={flowRef}
-        className="grid min-w-0 gap-6 xl:grid-cols-5 xl:[grid-template-rows:var(--flow-rows)]"
+        className="grid min-w-0 gap-6 xl:grid-cols-5 xl:has-[>[data-zone=record]:not([hidden])]:[grid-template-rows:var(--flow-rows)]"
         style={flowRows}
         onFocus={(event) => {
           flowFocusRef.current = event.target as HTMLElement;
