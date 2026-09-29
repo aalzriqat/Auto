@@ -55,7 +55,10 @@ jobs:
           BASE="$(( $(count 'deal-cockpit-*-top.png') - EXPANDED + $(count 'deal-cockpit-*-bottom.png') ))"
           NEXT_STEP="$(count 'deal-cockpit-*-next-step.png')"
           PANEL="$(count 'deal-cockpit-*-panel.png')"
-          echo "visual gate screenshots: base $BASE, expanded record $EXPANDED, withheld-close next-step $NEXT_STEP, panel $PANEL"
+          # SCRUM-417 UX4 frames end in the variant name (-ux4-<variant>.png), so no
+          # other class's glob (-top, -bottom, -next-step, -panel) can match them.
+          UX4="$(count 'deal-cockpit-*-ux4-*.png')"
+          echo "visual gate screenshots: base $BASE, expanded record $EXPANDED, withheld-close next-step $NEXT_STEP, panel $PANEL, ux4 $UX4"
           if [ "$BASE" -ne 16 ]; then
             echo "expected 16 base screenshots (2 locales x 2 themes x 2 viewports x top/bottom), found $BASE" >&2
             exit 1
@@ -66,6 +69,10 @@ jobs:
           fi
           if [ "$NEXT_STEP" -ne 16 ] || [ "$PANEL" -ne 8 ]; then
             echo "expected 16 withheld-close next-step (2 variants x 8) and 8 panel screenshots (SCRUM-414), found $NEXT_STEP and $PANEL" >&2
+            exit 1
+          fi
+          if [ "$UX4" -ne 24 ]; then
+            echo "expected 24 UX4 checklist / step-view screenshots (3 variants x 2 locales x 2 themes x 2 viewports, SCRUM-417 UX4), found $UX4" >&2
             exit 1
           fi
         env:
