@@ -58,6 +58,7 @@ vi.mock("@/components/accounting/AccountingTabShared", () => ({
 }));
 
 import { DealCockpitView, StageFocusRow, type WorkflowAction } from "./DealCockpit";
+import { orderStagesForDisplay } from "./dealStageDisplayOrder";
 import { DealDocumentsPanel } from "./DealDocumentsPanel";
 import type { FinancedDealOverviewData } from "./DealFinancialOverview";
 import type { DealCustodyWiring } from "./DealCustodyPanel";
@@ -406,9 +407,9 @@ const EXPECTED_STAGE_OWNERS: Readonly<Record<"en" | "ar", ReadonlyArray<string>>
     "An independent appraiser", // APPRAISAL · MIRROR, provenance INDEPENDENT
     "Finance company", // APPROVED_PURCHASE · MIRROR
     "Dealership", // DELIVERY_ACTIONS · DEALER
-    "Finance company", // DISBURSEMENT · MIRROR
     "Dealership", // HANDOVER · DEALER
     "Dealership", // SETTLEMENT · DEALER
+    "Finance company", // DISBURSEMENT · MIRROR (shown last: the executable order)
   ],
   ar: [
     "المعرض", // APPLICATION · DEALER
@@ -416,9 +417,9 @@ const EXPECTED_STAGE_OWNERS: Readonly<Record<"en" | "ar", ReadonlyArray<string>>
     "مُخمِّن مستقل", // APPRAISAL · MIRROR, provenance INDEPENDENT
     "شركة التمويل", // APPROVED_PURCHASE · MIRROR
     "المعرض", // DELIVERY_ACTIONS · DEALER
-    "شركة التمويل", // DISBURSEMENT · MIRROR
     "المعرض", // HANDOVER · DEALER
     "المعرض", // SETTLEMENT · DEALER
+    "شركة التمويل", // DISBURSEMENT · MIRROR (shown last: the executable order)
   ],
 };
 
@@ -554,7 +555,9 @@ type FocusState = Readonly<
 >;
 
 function stagePosition(focus: FocusState): { position: number; total: number } {
-  const order: readonly string[] = focus.kind === "CASH" ? CASH_DEAL_STAGE_ORDER : DEAL_STAGE_ORDER;
+  // The rail (and so its "n / total" kicker) shows the executable order.
+  const serverOrder: readonly string[] = focus.kind === "CASH" ? CASH_DEAL_STAGE_ORDER : DEAL_STAGE_ORDER;
+  const order = orderStagesForDisplay(serverOrder.map((key) => ({ key }))).map((stage) => stage.key);
   const index = order.indexOf(focus.stageKey);
   expect(index, `${focus.id}: ${focus.stageKey} is not a ${focus.kind} stage`).toBeGreaterThanOrEqual(0);
   return { position: index + 1, total: order.length };

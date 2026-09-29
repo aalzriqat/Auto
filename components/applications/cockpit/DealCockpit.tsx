@@ -53,6 +53,7 @@ import {
 } from "lucide-react";
 import { DealVehicleCard } from "./DealVehicleCard";
 import { DealStageRail, DealStagesComplete } from "./DealStageRail";
+import { orderStagesForDisplay } from "./dealStageDisplayOrder";
 import {
   isLiveStageState,
   STAGE_ICON,
@@ -4422,7 +4423,10 @@ export function DealCockpitView({
     );
   }
 
-  const stages = deal.stages;
+  // The rail's DISPLAY order (S1): payment confirmation last, because it can
+  // only be confirmed after handover and close. The same stage objects, keyed
+  // re-sequenced; every "which step is this" number below reads this order.
+  const stages = orderStagesForDisplay(deal.stages);
   const live = stages.find((s) => isLiveStageState(s.state));
   // A finished deal gets one calm completion line instead of a rail of ticks;
   // the rail itself stays one click away. Every other deal — live, or stopped
@@ -4430,6 +4434,10 @@ export function DealCockpitView({
   // WHERE it stopped is the information.
   const allComplete = stages.length > 0 && stages.every((s) => s.state === "COMPLETE");
   const liveIndex = live ? stages.findIndex((s) => s.key === live.key) : -1;
+  // Settlement is shown ahead of a payment step that is live: every closed
+  // financed deal sits there until the finance company pays, so the node says
+  // what it is waiting on rather than reading as an unexplained PENDING.
+  const paymentIsLive = stages.some((s) => s.key === "DISBURSEMENT" && isLiveStageState(s.state));
   const railStages = stages.map((stage) => ({
     key: stage.key,
     state: stage.state,
@@ -4440,9 +4448,11 @@ export function DealCockpitView({
     blocker:
       stage.key === "DISBURSEMENT" && stage.state === "PENDING"
         ? t("BlockerDisbursementAfterHandover")
-        : stage.blocker
-          ? t(`Blocker${stage.blocker}`)
-          : undefined,
+        : stage.key === "SETTLEMENT" && stage.state === "PENDING" && paymentIsLive
+          ? t("BlockerSettlementAfterFinancePayment")
+          : stage.blocker
+            ? t(`Blocker${stage.blocker}`)
+            : undefined,
   }));
   // Whether the close is being refused for want of the settlement route — the
   // one case where the route control belongs on the live step itself.
