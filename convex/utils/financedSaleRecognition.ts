@@ -80,7 +80,7 @@ export async function dealSettlesDirect(ctx: QueryCtx | MutationCtx, app: Doc<"f
 export type DealMode = NonNullable<Doc<"financeApplications">["quoteModeAtSubmission"]>;
 
 /**
- * The deal's mode as inalizeDeal reads it: frozen at submission, else the
+ * The deal's mode as finalizeDeal reads it: frozen at submission, else the
  * quote's (same organization only).
  */
 export async function dealModeOf(ctx: QueryCtx | MutationCtx, app: Doc<"financeApplications">): Promise<DealMode | undefined> {
