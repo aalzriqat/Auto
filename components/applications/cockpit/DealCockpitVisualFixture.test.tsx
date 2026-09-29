@@ -1153,6 +1153,41 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
       />
     );
   };
+  // SCRUM-417 UX5 (S7/O4): a step just recorded, live on Documents. Static
+  // markup, so the recorded line is handed in as the container would hand it
+  // once the read model reflected the step; the mobile bar and folded rail come
+  // from the same markup and are shown/hidden by the responsive classes.
+  test.each(["en", "ar"] as const)("writes the %s markup for UX5 recorded", (locale) => {
+    expect(OUT_DIR, "DEAL_COCKPIT_VISUAL_FIXTURE_DIR must name this run's fresh directory").toBeTruthy();
+    language.locale = locale;
+    const deal = financedDeal();
+    const html = renderToStaticMarkup(
+      <DealCockpitView
+        deal={deal}
+        stageDeepLink={{ value: null, onChange: () => {} }}
+        backHref="/org_1/deals"
+        activeAppraisalProvider={deal.activeAppraisalProvider}
+        onRecordSupplierReceipt={async () => {}}
+        financialOverview={{ data: financedOverview(), loading: false }}
+        custody={custodyWiring()}
+        custodyMoney={custodyMoney}
+        financingPlan={{ facts: FINANCING_PLAN, formatMajor: (major, currency) => `${major.toLocaleString()} ${currency}` }}
+        handoverCosts={handoverCostsWiring()}
+        recordedFeedback={{
+          recorded: { isDocumentAction: false },
+          track: async (run) => run(),
+          onDismiss: () => {},
+        }}
+      />
+    );
+    expect(html).toContain("data-testid=\"deal-recorded-feedback\"");
+    expect(html).toContain("data-testid=\"deal-mobile-stepbar\"");
+    expect(html).toContain("data-testid=\"deal-mobile-rail-toggle\"");
+    const outDir = resolve(OUT_DIR!);
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(resolve(outDir, `deal-cockpit-${locale}-ux5-recorded.html`), html);
+  });
+
   test.each(
     (["en", "ar"] as const).flatMap((locale) =>
       (["settlement-checklist", "view-past", "view-future", "na-rail", "na-view", "na-finished"] as const).map(

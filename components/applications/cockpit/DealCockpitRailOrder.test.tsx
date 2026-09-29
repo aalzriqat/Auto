@@ -153,7 +153,7 @@ describe("S1 -- the rendered rail shows the executable order", () => {
     // The live node is Documents, at place 5 -- unchanged by the reorder.
     const live = nodes().filter((n) => n.getAttribute("aria-current") === "step");
     expect(live.map(label)).toEqual(["StageDeliveryActions"]);
-    expect(screen.getByTestId("deal-next-step").textContent).toContain("5 / 8");
+    expect(screen.getByTestId("deal-next-step").textContent).toContain("5 StageOfSeparator 8");
   });
 
   test("a deal at Handover: Handover is current and numbered 6, the payment is quiet and numbered 8", () => {
@@ -162,7 +162,7 @@ describe("S1 -- the rendered rail shows the executable order", () => {
     const live = nodes().filter((n) => n.getAttribute("aria-current") === "step");
     expect(live.map(label)).toEqual(["StageHandover"]);
     expect(number(live[0])).toBe("6");
-    expect(screen.getByTestId("deal-next-step").textContent).toContain("6 / 8");
+    expect(screen.getByTestId("deal-next-step").textContent).toContain("6 StageOfSeparator 8");
     const payment = nodes().at(-1)!;
     expect(number(payment)).toBe("8");
     expect(payment.getAttribute("aria-current")).toBeNull();
@@ -203,7 +203,7 @@ describe("S1 -- the rendered rail shows the executable order", () => {
     const live = nodes().filter((n) => n.getAttribute("aria-current") === "step");
     expect(live.map(label)).toEqual(["StageDisbursement"]);
     expect(live[0]).toBe(nodes().at(-1));
-    expect(screen.getByTestId("deal-next-step").textContent).toContain("8 / 8");
+    expect(screen.getByTestId("deal-next-step").textContent).toContain("8 StageOfSeparator 8");
   });
 
   test("UX2-F2b: the pending Settlement node says it completes after the finance company pays", () => {

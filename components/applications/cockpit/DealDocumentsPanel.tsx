@@ -230,8 +230,12 @@ export function DealDocumentsPanel({
               return (
                 <div
                   key={rowKey}
-                  className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border p-2 text-sm"
+                  className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border p-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   data-testid={`deal-document-${rowKey}`}
+                  data-rule-id={doc.ruleId}
+                  // Focusable by script only (S7): after a document is recorded,
+                  // focus lands on the next one that still needs work.
+                  tabIndex={-1}
                 >
                   {verified ? (
                     <Check className="h-4 w-4 shrink-0 text-emerald-600" />
