@@ -9,7 +9,7 @@
  *     can act there, and names who acts for everyone else.
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import type { Id } from "../../../convex/_generated/dataModel";
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
@@ -108,7 +108,6 @@ const SALE = "sale_7731" as Id<"sales">;
 const JOD = 1_000;
 
 const COCKPIT_QUERY = "dealWorkspace:financedDealCockpit";
-const ECONOMICS_QUERY = "financingEconomics:getEconomics";
 const APP_QUERY = "applications:get";
 
 type Stage = { key: string; state: string; blocker?: string; authority?: string };
@@ -136,21 +135,6 @@ function cockpit(status: string, stages: Stage[], overrides: Record<string, unkn
     timeline: [],
     money: null,
     ...overrides,
-  };
-}
-
-function economics(application: Record<string, unknown>, appraisals: unknown[] = []) {
-  return {
-    application: {
-      _id: APP,
-      status: "UNDER_REVIEW",
-      salespersonId: "user_sales",
-      economicsCurrency: "JOD",
-      ...application,
-    },
-    appraisals,
-    overrides: [],
-    requiresLtvPercent: false,
   };
 }
 

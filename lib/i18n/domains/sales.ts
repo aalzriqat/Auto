@@ -823,7 +823,29 @@ const dealWizardMessages = defineBilingualMessages({
     "The supplier's balance on this sale is still open, and it is not settled from this screen. It closes when accounting records the payment.",
     "رصيد المورد على هذا البيع ما زال مفتوحاً، ولا تتم تسويته من هذه الشاشة. يُغلق عندما تسجّل المحاسبة الدفعة.",
   ],
-});
+  // SCRUM-417 UX1 -- dead-end repairs. S2: a blocked handover names its blocker.
+  HandoverBlockedNeedsApproval: [
+    "Handover is blocked until the finance company's approval is recorded on this application. Whoever records the finance decision must do that first; then this step opens.",
+    "التسليم متوقف إلى أن يُسجَّل قرار موافقة شركة التمويل على هذا الطلب. على من يسجّل قرار التمويل أن يفعل ذلك أولاً، ثم تُفتح هذه الخطوة.",
+  ],
+  // S4: blockers that live on another page link to it, or say who acts.
+  OpenDepositManagerAction: ["Open vehicles to resolve the deposit", "فتح المركبات لمعالجة العربون"],
+  DepositManagerNeedsApprover: [
+    "Resolving the deposit needs a user who can approve requests and open the vehicles page. Ask a manager to resolve it.",
+    "معالجة العربون تحتاج مستخدماً يملك صلاحية الموافقة على الطلبات وفتح صفحة المركبات. اطلب من المدير معالجته.",
+  ],
+  OpenSalesPageAction: ["Open the Sales page", "فتح صفحة المبيعات"],
+  SalesPageNeedsAccess: [
+    "Completing this sale needs access to the Sales page. Ask a sales manager to complete it.",
+    "إتمام هذا البيع يحتاج صلاحية الوصول إلى صفحة المبيعات. اطلب من مدير المبيعات إتمامه.",
+  ],
+  OpenAccountingAction: ["Open accounting", "فتح المحاسبة"],
+  AccountingNeedsFinanceRole: [
+    "Only a user who manages finance can record this payment. Ask accounting to record it.",
+    "لا يسجّل هذه الدفعة إلا مستخدم يدير الشؤون المالية. اطلب من المحاسبة تسجيلها.",
+  ],
+  ClosingCheckGoToCosts: ["Go to handover costs", "الانتقال إلى رسوم التسليم"],
+  ClosingCheckGoToCustody: ["Go to custody", "الانتقال إلى العهدة"],});
 
 /**
  * The deal overview, the vehicle's pre-deal cost basis, the employee cash
