@@ -40,6 +40,10 @@ export default defineConfig([
     },
   },
   {
+    // The same files eslint-config-next registers the react plugins for; a
+    // .cjs file (the trusted .github/scripts validator) is outside that set,
+    // and an unscoped react/* rule on it crashes the whole lint run.
+    files: ["**/*.{js,jsx,mjs,ts,tsx,mts,cts}"],
     rules: {
       "@typescript-eslint/no-explicit-any": "warn",
       "react/no-unescaped-entities": "warn",
@@ -54,5 +58,10 @@ export default defineConfig([
       // exempts only bindings that sit alongside a rest property.
       "@typescript-eslint/no-unused-vars": ["warn", { ignoreRestSiblings: true }],
     },
+  },
+  // A .cjs file is CommonJS by definition: require() is its import syntax.
+  {
+    files: ["**/*.cjs"],
+    rules: { "@typescript-eslint/no-require-imports": "off" },
   },
 ]);
