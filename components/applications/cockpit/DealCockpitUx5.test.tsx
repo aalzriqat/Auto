@@ -87,7 +87,7 @@ vi.mock("@/components/ui/sonner", () => ({
 
 import { DealCockpit } from "./DealCockpit";
 import { PERMISSIONS } from "@/convex/utils/permissions";
-import { nextOutstandingDocument, readModelSignature } from "./recordedFeedback";
+import { nextOutstandingDocument } from "./recordedFeedback";
 import { formatLocalized } from "@/lib/dateLocale";
 
 const { queryResults, permissions, mutationCalls } = stubs;
@@ -250,6 +250,62 @@ describe("S7 -- the success line waits for the read model", () => {
     expect(screen.getByTestId("deal-document-doc_2").getAttribute("data-rule-id")).toBe("r2");
   });
 
+  test("S7-1: an UNRELATED document change does not release a pending verify; its own does", async () => {
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    permissions.add(PERMISSIONS.VERIFY_FINANCE_DOCUMENTS);
+    const dealDocs = (first: string, second: string) => [
+      { ruleId: "r1", name: "National ID", required: true, status: first },
+      { ruleId: "r2", name: "Salary slip", required: true, status: second },
+    ];
+    const rows = (first: string, second: string) => [
+      { _id: "doc_1", ruleId: "r1", ruleName: "National ID", status: first, fileUrl: "https://files/x.pdf" },
+      { _id: "doc_2", ruleId: "r2", ruleName: "Salary slip", status: second, fileUrl: "https://files/y.pdf" },
+    ];
+    setDeal({ status: "APPROVED" }, { documents: dealDocs("UPLOADED", "UPLOADED") });
+    queryResults.set(DOCUMENTS, rows("UPLOADED", "UPLOADED"));
+    const view = render(ui());
+    const toggle = screen.queryByTestId("deal-details-toggle");
+    if (toggle?.getAttribute("aria-expanded") === "false") fireEvent.click(toggle);
+
+    fireEvent.click(within(screen.getByTestId("deal-document-doc_1")).getByRole("button", { name: "Verify" }));
+    await waitFor(() => expect(mutationCalls.get("documents:updateDocumentStatus")).toHaveLength(1));
+
+    // Someone else verifies the OTHER document: the read model moved, our fact did not.
+    setDeal({ status: "APPROVED" }, { documents: dealDocs("UPLOADED", "VERIFIED") });
+    queryResults.set(DOCUMENTS, rows("UPLOADED", "VERIFIED"));
+    view.rerender(ui());
+    expect(line()).toBeNull();
+
+    setDeal({ status: "APPROVED" }, { documents: dealDocs("VERIFIED", "VERIFIED") });
+    queryResults.set(DOCUMENTS, rows("VERIFIED", "VERIFIED"));
+    view.rerender(ui());
+    expect(line()).not.toBeNull();
+  });
+
+  test("dismissing the line puts focus on the step heading and says nothing new", async () => {
+    const view = await markUnderReview();
+    setDeal({ status: "UNDER_REVIEW", creditDecision: undefined, appraisalStatus: undefined });
+    view.rerender(ui());
+    const announcer = screen.getByTestId("deal-stage-view-announcer");
+    expect(announcer.textContent).toContain("RecordedLead");
+    fireEvent.click(screen.getByTestId("deal-recorded-feedback-dismiss"));
+    expect(line()).toBeNull();
+    const heading = document.activeElement as HTMLElement;
+    expect(heading.tagName).toBe("H2");
+    expect(screen.getByTestId("deal-next-step").contains(heading)).toBe(true);
+    expect(announcer.textContent).toBe("");
+  });
+
+  test("leaving the cockpit while a success is still held says it (nothing swallowed by the unmount)", async () => {
+    const view = await markUnderReview();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(stubs.toastSuccess).not.toHaveBeenCalled();
+    view.unmount();
+    expect(stubs.toastSuccess).toHaveBeenCalledTimes(1);
+  });
+
   test("nextOutstandingDocument skips the handled, verified and waived rows and wraps", () => {
     const docs = [
       { ruleId: "a", required: true, status: "UPLOADED" },
@@ -262,14 +318,6 @@ describe("S7 -- the success line waits for the read model", () => {
     expect(nextOutstandingDocument([...docs, { ruleId: "e", required: true, status: "MISSING" }], "a")).toBe("e");
   });
 
-  test("the read-model fingerprint is null until loaded and moves when a stage does", () => {
-    expect(readModelSignature({ deal: undefined })).toBeNull();
-    const stage = (state: string) => ({ key: "APPLICATION", state });
-    const a = readModelSignature({ deal: { stages: [stage("CURRENT")], documents: [] } });
-    const b = readModelSignature({ deal: { stages: [stage("COMPLETE")], documents: [] } });
-    expect(a).not.toBeNull();
-    expect(a).not.toBe(b);
-  });
 });
 
 describe("O4 -- on a phone the step comes first and the rail folds", () => {
@@ -289,10 +337,25 @@ describe("O4 -- on a phone the step comes first and the rail folds", () => {
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(panel!.className).not.toMatch(/(^|\s)hidden(\s|$)/);
-    // The identity strip drops after the step on a phone only.
+    // The identity strip comes AFTER the step in the DOM (so Tab and a screen
+    // reader meet the step first) and is pulled back up on desktop by CSS order.
     const identity = screen.getByTestId("deal-identity");
-    expect(identity.className).toContain("order-1");
-    expect(identity.className).toContain("md:order-none");
+    const step = screen.getByTestId("deal-next-step");
+    expect(step.compareDocumentPosition(identity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(identity.className).toContain("md:-order-1");
+    expect(identity.className).not.toMatch(/(^|\s)order-1(\s|$)/);
+    expect(document.querySelectorAll("[data-testid=deal-identity]")).toHaveLength(1);
+  });
+
+  test("viewing a step other than the live one says so in the phone bar", () => {
+    setDeal({});
+    render(ui());
+    expect(screen.queryByTestId("deal-mobile-step-viewing")).toBeNull();
+    const rail = screen.getByTestId("deal-stage-rail");
+    const other = within(rail).getAllByRole("button").find((b) => b.getAttribute("aria-current") !== "step");
+    if (!other) return;
+    fireEvent.click(other);
+    expect(screen.queryByTestId("deal-mobile-step-viewing")?.textContent).toBe("MobileStepViewing");
   });
 
   test("the bar states the position as a sentence, current never above total", () => {

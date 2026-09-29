@@ -619,6 +619,14 @@ for (const locale of LOCALES) {
             expect(identityBox).not.toBeNull();
             expect(nextStepBox!.y, "the step card sits above Deal details").toBeLessThan(identityBox!.y);
             expect(nextStepBox!.y, "the step card starts inside the first screen").toBeLessThan(viewport.height);
+            // Reading order = visual order: the identity strip follows the step in
+            // the DOM too, so Tab and a screen reader meet the step first.
+            const domOrder = await page.evaluate(() => {
+              const step = document.querySelector('[data-testid="deal-next-step"]')!;
+              const identity = document.querySelector('[data-testid="deal-identity"]')!;
+              return Boolean(step.compareDocumentPosition(identity) & Node.DOCUMENT_POSITION_FOLLOWING);
+            });
+            expect(domOrder, "identity follows the step in the DOM on a phone").toBe(true);
             test.info().annotations.push({
               type: "cta-first-screen",
               description: `next-step y=${Math.round(nextStepBox!.y)} h=${Math.round(nextStepBox!.height)} viewport=${viewport.height}`,
@@ -626,6 +634,11 @@ for (const locale of LOCALES) {
           } else {
             await expect(bar).toBeHidden();
             await expect(rail).toBeVisible();
+            // Desktop keeps its placement even though the DOM order changed: the
+            // identity strip is still above the workbench, by CSS order alone.
+            const identityBox = await page.getByTestId("deal-identity").boundingBox();
+            const nextStepBox = await page.getByTestId("deal-next-step").boundingBox();
+            expect(identityBox!.y, "desktop: identity strip stays above the step").toBeLessThan(nextStepBox!.y);
           }
 
           const overflow = await main.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));

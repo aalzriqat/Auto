@@ -1153,7 +1153,9 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
     const outDir = resolve(OUT_DIR!);
     mkdirSync(outDir, { recursive: true });
     writeFileSync(resolve(outDir, `deal-cockpit-${locale}-ux5-recorded.html`), html);
-  });  test.each(
+  });
+
+  test.each(
     (["en", "ar"] as const).flatMap((locale) =>
       (["settlement-checklist", "view-past", "view-future"] as const).map((variant) => [locale, variant] as const)
     )
