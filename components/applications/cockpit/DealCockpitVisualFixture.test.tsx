@@ -1069,7 +1069,7 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
   // read-only past / future step views a rail click (or ?stage=) opens.
   const ux4Markup = (
     locale: "en" | "ar",
-    variant: "settlement-checklist" | "view-past" | "view-future" | "na-rail" | "na-view"
+    variant: "settlement-checklist" | "view-past" | "view-future" | "na-rail" | "na-view" | "na-finished"
   ) => {
     language.locale = locale;
     const base = financedDeal();
@@ -1086,7 +1086,16 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
       blocker: stage.key === "SETTLEMENT" ? ("AwaitingSettlement" as const) : undefined,
     }));
     const deal: FinancedDealCockpitData =
-      variant === "na-rail" || variant === "na-view"
+      variant === "na-finished"
+        ? {
+            ...base,
+            expectedPaymentRegistered: true,
+            // Sol UI-446-1: every stage finished, one of them not needed: the collapsed summary.
+            stages: naStages.map((stage) =>
+              stage.key === "SETTLEMENT" ? { ...stage, state: "COMPLETE" as const, blocker: undefined } : stage
+            ),
+          }
+        : variant === "na-rail" || variant === "na-view"
         ? { ...base, expectedPaymentRegistered: true, stages: naStages }
         : variant === "settlement-checklist"
         ? {
@@ -1146,7 +1155,7 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
   };
   test.each(
     (["en", "ar"] as const).flatMap((locale) =>
-      (["settlement-checklist", "view-past", "view-future", "na-rail", "na-view"] as const).map(
+      (["settlement-checklist", "view-past", "view-future", "na-rail", "na-view", "na-finished"] as const).map(
         (variant) => [locale, variant] as const
       )
     )
@@ -1157,6 +1166,9 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
     if (variant === "na-rail") {
       expect(html).toContain("data-testid=\"deal-stage-node-DISBURSEMENT\"");
       expect(html).not.toContain("data-testid=\"deal-stage-view\"");
+    } else if (variant === "na-finished") {
+      expect(html).toContain("data-testid=\"deal-stages-toggle\"");
+      expect(html).not.toContain("data-testid=\"deal-stage-rail\"");
     } else if (variant === "na-view") {
       expect(html).toContain("data-mode=\"notApplicable\"");
     } else if (variant === "settlement-checklist") {

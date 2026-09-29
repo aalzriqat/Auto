@@ -21,7 +21,7 @@ import {
 } from "./DealStagePresentation";
 import { stageNotApplicableReasonKey, stageViewCopy, stageViewMode } from "./dealStepView";
 import { deriveStepChecklist } from "./dealStepChecklist";
-import { DealStageRail } from "./DealStageRail";
+import { DealStageRail, DealStagesComplete } from "./DealStageRail";
 
 const ALL_STATES: DealStageState[] = ["COMPLETE", "CURRENT", "BLOCKED", "PENDING", "STOPPED", "NOT_APPLICABLE"];
 
@@ -110,7 +110,9 @@ describe("the step view says it is not needed, and why", () => {
       "StageStateNotApplicable",
       "StageViewNotApplicableNote",
       "StageNotApplicableReasonDisbursement",
-      "StageViewNobodyActs",
+      "DealStagesFinished",
+      "DealStagesCompleteCount",
+      "DealStagesNotNeededCount",
     ]) {
       expect(en[key], `en ${key}`).toBeTruthy();
       expect(ar[key], `ar ${key}`).toBeTruthy();
@@ -164,5 +166,37 @@ describe("the rail node", () => {
     render(<DealStageRail stages={stages} t={t} onSelect={onSelect} />);
     fireEvent.click(screen.getByTestId("deal-stage-node-DISBURSEMENT"));
     expect(onSelect).toHaveBeenCalledWith("DISBURSEMENT");
+  });
+});
+
+describe("DealStagesComplete: a finished summary that does not call a not-needed stage complete", () => {
+  const t = (key: string) => en[key] ?? key;
+
+  test("all COMPLETE (notNeeded omitted or 0): the original tick, copy and count, unchanged", () => {
+    const { container } = render(<DealStagesComplete count={8} expanded={false} onToggle={() => {}} t={t} />);
+    expect(container.textContent).toContain("All stages complete");
+    expect(container.textContent).toContain("(8)");
+    expect(container.querySelector("svg.lucide-check")).not.toBeNull();
+    expect(container.textContent).not.toContain("not needed");
+  });
+
+  test("with a not-needed stage: neutral wording, both counts, no tick, no completion claim", () => {
+    const { container } = render(<DealStagesComplete count={6} notNeeded={1} expanded={false} onToggle={() => {}} t={t} />);
+    expect(container.textContent).not.toContain("All stages complete");
+    expect(container.textContent).toContain("All stages finished");
+    expect(container.textContent).toContain("6 complete");
+    expect(container.textContent).toContain("1 not needed");
+    expect(container.querySelector("svg.lucide-check")).toBeNull();
+    expect(container.querySelector(".text-emerald-800")).toBeNull();
+    expect(container.querySelectorAll("bdi[dir=ltr]").length).toBe(2);
+  });
+
+  test("Arabic reads naturally with the same two counts", () => {
+    const tAr = (key: string) => ar[key] ?? key;
+    const { container } = render(<DealStagesComplete count={6} notNeeded={1} expanded={false} onToggle={() => {}} t={tAr} />);
+    expect(container.textContent).toContain("انتهت جميع المراحل");
+    expect(container.textContent).toContain("مكتملة");
+    expect(container.textContent).toContain("غير مطلوبة");
+    expect(container.textContent).not.toContain("اكتملت جميع المراحل");
   });
 });

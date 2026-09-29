@@ -138,6 +138,13 @@ const UX4_VARIANTS: ReadonlyArray<{
   { suffix: "-ux4-view-future", title: "a future step says what it needs and who acts", mode: "future", stage: "SETTLEMENT" },
 ];
 
+/** Sol UI-446-1: every stage finished, DISBURSEMENT not needed: the collapsed summary. */
+const NA_FINISHED_SUFFIX = "-ux4-na-finished";
+const NA_FINISHED_LITERAL: Readonly<Record<(typeof LOCALES)[number], { finished: string; complete: string; notNeeded: string }>> = {
+  en: { finished: "All stages finished", complete: "complete", notNeeded: "not needed" },
+  ar: { finished: "انتهت جميع المراحل", complete: "مكتملة", notNeeded: "غير مطلوبة" },
+};
+
 /** SCRUM-446: the one-line reason, hand-written for both languages. */
 const NA_REASON_LITERAL: Readonly<Record<(typeof LOCALES)[number], string>> = {
   en: "No finance company pays the dealership on this deal.",
@@ -193,6 +200,11 @@ test.beforeAll(async () => {
       ).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
     }
     for (const { suffix } of UX4_VARIANTS) {
+      const variantFile = resolve(FIXTURES, `deal-cockpit-${locale}${suffix}.html`);
+      expect(existsSync(variantFile), `bridge did not write ${variantFile}`).toBe(true);
+      expect(statSync(variantFile).mtimeMs).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
+    }
+    for (const suffix of [NA_FINISHED_SUFFIX]) {
       const variantFile = resolve(FIXTURES, `deal-cockpit-${locale}${suffix}.html`);
       expect(existsSync(variantFile), `bridge did not write ${variantFile}`).toBe(true);
       expect(statSync(variantFile).mtimeMs).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
@@ -845,12 +857,14 @@ for (const variant of UX4_VARIANTS) {
               const backBox = await back.boundingBox();
               expect(backBox!.x).toBeGreaterThanOrEqual(mainBox!.x - 0.5);
               expect(backBox!.x + backBox!.width).toBeLessThanOrEqual(mainBox!.x + mainBox!.width + 0.5);
-              await expect(page.getByTestId("deal-stage-view-owner")).toBeVisible();
+              // Sol UI-446-2: a not-needed step names no owner at all; real stages keep theirs.
+              if (variant.mode === "notApplicable") {
+                await expect(page.getByTestId("deal-stage-view-owner")).toHaveCount(0);
+              } else {
+                await expect(page.getByTestId("deal-stage-view-owner")).toBeVisible();
+              }
               if (variant.mode === "notApplicable") {
                 await expect(page.getByTestId("deal-stage-view-note")).toHaveText(NA_REASON_LITERAL[locale]);
-                await expect(page.getByTestId("deal-stage-view-owner")).toContainText(
-                  locale === "ar" ? "لا أحد" : "Nobody",
-                );
                 await expect(view.getByText(locale === "ar" ? "غير مطلوب" : "Not needed", { exact: true })).toBeVisible();
                 await expect(page.getByTestId("deal-stage-view-needs")).toHaveCount(0);
               }
@@ -879,6 +893,52 @@ for (const variant of UX4_VARIANTS) {
           }
         });
       }
+    }
+  }
+}
+// Sol UI-446-1: the collapsed summary of a finished deal with a not-needed stage.
+for (const locale of LOCALES) {
+  for (const theme of THEMES) {
+    for (const viewport of VIEWPORTS) {
+      test(`${locale} · ${theme} · ${viewport.name}px: a finished deal with a not-needed step is summarised neutrally, with no completion tick`, async ({ browser }) => {
+        const context = await browser.newContext({
+          viewport: { width: viewport.width, height: viewport.height },
+          colorScheme: theme,
+        });
+        const page = await context.newPage();
+        try {
+          await paint(page, locale, theme, NA_FINISHED_SUFFIX);
+          const main = page.getByTestId("shell-main");
+          const mainBox = await main.boundingBox();
+          expect(mainBox).not.toBeNull();
+          const toggle = page.getByTestId("deal-stages-toggle");
+          await expect(toggle).toBeVisible();
+          const summary = toggle.locator("xpath=..");
+          const lit = NA_FINISHED_LITERAL[locale];
+          await expect(summary).toContainText(lit.finished);
+          await expect(summary).toContainText(lit.complete);
+          await expect(summary).toContainText(lit.notNeeded);
+          expect(await summary.innerText()).not.toContain(locale === "ar" ? "اكتملت جميع المراحل" : "All stages complete");
+          expect(await summary.locator("svg.lucide-check, svg.lucide-circle-check").count()).toBe(0);
+          expect(await summary.locator("bdi[dir=ltr]").allInnerTexts()).toEqual(["7", "1"]);
+          await expect(page.getByTestId("deal-stage-rail")).toHaveCount(0);
+          const box = await summary.boundingBox();
+          expect(box!.x).toBeGreaterThanOrEqual(mainBox!.x - 0.5);
+          expect(box!.x + box!.width).toBeLessThanOrEqual(mainBox!.x + mainBox!.width + 0.5);
+          expect(await page.evaluate(() => getComputedStyle(document.body).direction)).toBe(locale === "ar" ? "rtl" : "ltr");
+          const overflow = await main.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+          expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth);
+          await summary.scrollIntoViewIfNeeded();
+          await page.screenshot({
+            path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${NA_FINISHED_SUFFIX}.png`),
+          });
+          await summary.screenshot({
+            path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${NA_FINISHED_SUFFIX}-summary.png`),
+          });
+        } finally {
+          await context.close();
+        }
+      });
     }
   }
 }

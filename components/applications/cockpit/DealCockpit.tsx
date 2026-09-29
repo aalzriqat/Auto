@@ -5786,7 +5786,8 @@ export function DealCockpitView({
       {allComplete ? (
         <div className="space-y-3">
           <DealStagesComplete
-            count={stages.length}
+            count={stages.filter((s) => s.state === "COMPLETE").length}
+            notNeeded={stages.filter((s) => s.state === "NOT_APPLICABLE").length}
             expanded={showCompleted}
             onToggle={() => setShowCompleted((open) => !open)}
             t={t}

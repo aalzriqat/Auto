@@ -159,6 +159,30 @@ describe("a CLOSED deal whose DISBURSEMENT stage is NOT_APPLICABLE", () => {
     expect(screen.queryByTestId("deal-stage-rail")).toBeNull();
   });
 
+  test("Sol UI-446-1: the collapsed summary is neutral: no completion claim, no success tick, complete and not-needed counted apart", () => {
+    arrange(FINISHED_NA_STAGES);
+    renderCockpit();
+    const summary = screen.getByTestId("deal-stages-toggle").parentElement as HTMLElement;
+    expect(summary.textContent).not.toContain("DealAllStagesComplete");
+    expect(summary.textContent).toContain("DealStagesFinished");
+    expect(summary.textContent).toContain("6");
+    expect(summary.textContent).toContain("DealStagesCompleteCount");
+    expect(summary.textContent).toContain("1");
+    expect(summary.textContent).toContain("DealStagesNotNeededCount");
+    expect(summary.querySelector("svg.lucide-check")).toBeNull();
+    expect(summary.querySelector(".text-emerald-800")).toBeNull();
+  });
+
+  test("control: an all-COMPLETE deal keeps the original completion line, tick and count", () => {
+    arrange(FINISHED_NA_STAGES.map((stage) => ({ ...stage, state: "COMPLETE" })));
+    renderCockpit();
+    const summary = screen.getByTestId("deal-stages-toggle").parentElement as HTMLElement;
+    expect(summary.textContent).toContain("DealAllStagesComplete");
+    expect(summary.textContent).toContain("(7)");
+    expect(summary.textContent).not.toContain("DealStagesFinished");
+    expect(summary.querySelector("svg.lucide-check")).not.toBeNull();
+  });
+
   test("the rail and the slot agree: not needed on the node, and NO payment action or refusal anywhere", () => {
     arrange(FINISHED_NA_STAGES);
     const { container } = renderCockpit();
@@ -186,7 +210,7 @@ describe("a CLOSED deal whose DISBURSEMENT stage is NOT_APPLICABLE", () => {
     );
   });
 
-  test("opening the step says it is not needed, why, and that nobody acts; it has no button but the way back", () => {
+  test("opening the step says it is not needed and why, names no owner; it has no button but the way back", () => {
     arrange(FINISHED_NA_STAGES);
     renderCockpit({ value: "DISBURSEMENT", onChange: () => {} });
 
@@ -195,7 +219,9 @@ describe("a CLOSED deal whose DISBURSEMENT stage is NOT_APPLICABLE", () => {
     expect(view.getAttribute("data-stage")).toBe("DISBURSEMENT");
     expect(within(view).getByText("StageStateNotApplicable")).toBeTruthy();
     expect(within(view).getByTestId("deal-stage-view-note").textContent).toBe("StageNotApplicableReasonDisbursement");
-    expect(within(view).getByTestId("deal-stage-view-owner").textContent).toContain("StageViewNobodyActs");
+    // Sol UI-446-2: a not-needed step never shows an owner, not even "nobody".
+    expect(within(view).queryByTestId("deal-stage-view-owner")).toBeNull();
+    expect(view.textContent).not.toContain("StageViewWhoActs");
     expect(within(view).queryByTestId("deal-stage-view-needs")).toBeNull();
     expect(within(view).queryByTestId("deal-stage-view-record")).toBeNull();
     // The back control is the only control.
@@ -211,6 +237,28 @@ describe("a CLOSED deal whose DISBURSEMENT stage is NOT_APPLICABLE", () => {
     expect(within(node).queryByTestId("deal-stage-owner")).toBeNull();
     // Every other node keeps its owner.
     expect(within(screen.getByTestId("deal-stage-node-HANDOVER")).getByTestId("deal-stage-owner")).toBeTruthy();
+  });
+});
+
+describe("controls: real stages still show their owner", () => {
+  test("a past step (Handover) shows who acted", () => {
+    arrange(FINISHED_NA_STAGES);
+    renderCockpit({ value: "HANDOVER", onChange: () => {} });
+    const view = screen.getByTestId("deal-stage-view");
+    expect(view.getAttribute("data-mode")).toBe("past");
+    expect(within(view).getByTestId("deal-stage-view-owner").textContent).toContain("StageOwnerDealership");
+  });
+
+  test("a future step shows who will act", () => {
+    arrange(
+      FINISHED_NA_STAGES.map((stage) =>
+        stage.key === "HANDOVER" ? { ...stage, state: "PENDING" } : stage.key === "SETTLEMENT" ? { ...stage, state: "PENDING" } : stage
+      )
+    );
+    renderCockpit({ value: "SETTLEMENT", onChange: () => {} });
+    const view = screen.getByTestId("deal-stage-view");
+    expect(view.getAttribute("data-mode")).toBe("future");
+    expect(within(view).getByTestId("deal-stage-view-owner").textContent).toContain("StageOwnerDealership");
   });
 });
 

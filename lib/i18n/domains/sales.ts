@@ -89,7 +89,6 @@ const dealStepMessages = defineBilingualMessages({
     "No finance company pays the dealership on this deal.",
     "لا توجد شركة تمويل تدفع للمعرض في هذه الصفقة.",
   ],
-  StageViewNobodyActs: ["Nobody, there is nothing to confirm", "لا أحد، لا يوجد ما يُؤكَّد"],
   StageViewAnnounceShowing: ["Showing step", "عرض الخطوة"],
   StageViewAnnounceBack: ["Back to the current step", "العودة إلى الخطوة الحالية"],
   // ROUND 2 (SCRUM-417 UX4): the deal is closed and this step waits on the finance company.
@@ -445,6 +444,10 @@ const dealRailMessages = defineBilingualMessages({
   /** "Stage 3 / 8" — the numbers are rendered beside it as their own LTR run. */
   StageOfLabel: ["Stage", "المرحلة"],
   DealAllStagesComplete: ["All stages complete", "اكتملت جميع المراحل"],
+  /** Every stage is finished but at least one was not needed: no "complete" claim. */
+  DealStagesFinished: ["All stages finished", "انتهت جميع المراحل"],
+  DealStagesCompleteCount: ["complete", "مكتملة"],
+  DealStagesNotNeededCount: ["not needed", "غير مطلوبة"],
   ShowStages: ["Show stages", "عرض المراحل"],
   HideStages: ["Hide stages", "إخفاء المراحل"],
   FinancialSummaryHeading: ["Financial summary", "الملخص المالي"],

@@ -94,13 +94,6 @@ export function DealStageView({
             {t(noteKey)}
           </p>
 
-          {mode === "notApplicable" && (
-            <p className="text-sm" data-testid="deal-stage-view-owner">
-              <span className="text-muted-foreground">{t("StageViewWhoActs")}: </span>
-              <span className="font-medium">{t("StageViewNobodyActs")}</span>
-            </p>
-          )}
-
           {owner && mode !== "stopped" && mode !== "notApplicable" && (
             <p className="text-sm" data-testid="deal-stage-view-owner">
               <span className="text-muted-foreground">{t("StageViewWhoActs")}: </span>
