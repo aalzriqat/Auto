@@ -2154,6 +2154,65 @@ describe("O1 -- the step workbench", () => {
     expect(status("close-deal")).toBe("pending");
   });
 
+  // SCRUM-417 UX4 round 3 (R3-A): the server keeps Settlement live on a CLOSED
+  // financed deal while money is still owed, but there is no close left to walk
+  // towards -- "closing checks -> close deal" must not be shown.
+  test.each(["en", "ar"] as const)(
+    "R3-A (%s): a CLOSED deal with a live Settlement shows no closing-checks or close-deal items",
+    (locale) => {
+      const el = stageElement("SETTLEMENT", "CURRENT", {
+        closingChecklist: {
+          readiness: { state: "BLOCKED", open: false, checks: [], unavailableReason: null, unavailableReasonCode: null, moneyWithheld: false },
+        } as unknown as NonNullable<React.ComponentProps<typeof DealCockpitView>["closingChecklist"]>,
+      });
+      renderIn(
+        locale,
+        restage(el, { HANDOVER: "COMPLETE", DISBURSEMENT: "COMPLETE", SETTLEMENT: "BLOCKED" }, { status: "CLOSED", expectedPaymentRegistered: true })
+      );
+      expect(screen.queryByTestId("deal-step-item-closing-checks")).toBeNull();
+      expect(screen.queryByTestId("deal-step-item-close-deal")).toBeNull();
+    }
+  );
+
+  test("R3-A control: the same deal, still APPROVED, keeps the closing checks", () => {
+    const el = stageElement("SETTLEMENT", "CURRENT", {
+      closingChecklist: {
+        readiness: { state: "BLOCKED", open: true, checks: [], unavailableReason: null, unavailableReasonCode: null, moneyWithheld: false },
+      } as unknown as NonNullable<React.ComponentProps<typeof DealCockpitView>["closingChecklist"]>,
+    });
+    renderIn("en", restage(el, { HANDOVER: "COMPLETE", DISBURSEMENT: "COMPLETE", SETTLEMENT: "BLOCKED" }, { status: "APPROVED", expectedPaymentRegistered: true }));
+    expect(screen.getByTestId("deal-step-item-closing-checks")).toBeTruthy();
+    expect(screen.getByTestId("deal-step-item-close-deal")).toBeTruthy();
+  });
+
+  // R3-B: the blocker names what is true for every viewer -- who resolves it and
+  // how -- and promises nothing beyond it.
+  describe.each(["en", "ar"] as const)("R3-B (%s): the waiting-deposit-request blocker copy", (locale) => {
+    test("the dictionary text is role-neutral and does not promise the next step", () => {
+      const text = (locale === "en" ? en : ar).FinalizeNeedsPendingDepositRequestResolved;
+      expect(text).toBeTruthy();
+      expect(text.toLowerCase()).not.toContain("cancel");
+      expect(text.toLowerCase()).not.toContain("then close");
+      expect(text).not.toContain("ألغِه");
+      expect(text).not.toContain("ثم أغلق");
+    });
+    test("rendered on the live Settlement step, the same text for every viewer", () => {
+      const el = stageElement("SETTLEMENT", "CURRENT", {
+        workflowAction: {
+          stageKey: "SETTLEMENT",
+          actionKey: "FinalizeDealAction",
+          onStart: () => {},
+          unavailableReasonKey: "FinalizeNeedsPendingDepositRequestResolved",
+        },
+      });
+      renderIn(locale, el);
+      const dict = locale === "en" ? en : ar;
+      const body = document.body.textContent ?? "";
+      expect(body).toContain(dict.FinalizeNeedsPendingDepositRequestResolved);
+      expect(body).not.toMatch(/cancel|then close/i);
+      expect(body).not.toContain("ثم أغلق");
+    });
+  });
   test.each(["en", "ar"] as const)(
     "R2 L5 (%s): Back on a finished deal with the rail collapsed lands on the show-stages toggle, and says so",
     (locale) => {

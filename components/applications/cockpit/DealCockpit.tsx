@@ -4615,6 +4615,7 @@ export function DealCockpitView({
           stageKey: stage.key,
           stageState: stage.state,
           path: dealPath,
+          closed: dealClosed,
           blocker: stage.blocker,
           stageStates,
           documents: deal.documents,

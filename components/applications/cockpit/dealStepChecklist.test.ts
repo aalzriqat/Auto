@@ -483,3 +483,45 @@ describe("ROUND 2 L4: a waiting deposit request is the current gate, and Close i
     expect(items?.some((i) => i.id === "deposit-request-resolved")).toBe(false);
   });
 });
+
+describe("ROUND 3 R3-A: a closed deal has no close to walk towards; an unread readiness is never the current step", () => {
+  const settled = {
+    stageKey: "SETTLEMENT",
+    stageState: "BLOCKED" as const,
+    path: "APPLICATION" as const,
+    expectedPaymentRegistered: true,
+  };
+  test("closed application-path Settlement lists nothing", () => {
+    expect(deriveStepChecklist(facts({ ...settled, closed: true }))).toBeNull();
+  });
+  test("control: the same facts on an open deal still list the items", () => {
+    expect(deriveStepChecklist(facts({ ...settled, closed: false }))).not.toBeNull();
+  });
+  test("readiness not read (undefined): closing-checks and close-deal are not current, and nothing is", () => {
+    const items = deriveStepChecklist(facts({ ...settled, closed: false, readinessState: undefined }));
+    expect(items?.find((i) => i.id === "closing-checks")?.status).not.toBe("current");
+    expect(items?.find((i) => i.id === "close-deal")?.status).not.toBe("current");
+    expect(items?.some((i) => i.status === "current")).toBe(false);
+  });
+});
+
+describe("ROUND 3 R3-C: items follow finalizeDeal's refusal order (a waiting deposit request first)", () => {
+  test("a waiting request comes before the route, and is current", () => {
+    const items = deriveStepChecklist(
+      facts({
+        stageKey: "SETTLEMENT",
+        stageState: "BLOCKED",
+        expectedPaymentRegistered: true,
+        routeRequired: true,
+        routeRecorded: false,
+        readinessState: "NOT_READY",
+        checks: {},
+        liveAction: { actionKey: "FinalizeDealAction", unavailableReasonKey: "FinalizeNeedsPendingDepositRequestResolved" },
+      })
+    );
+    const ids = (items ?? []).map((i) => i.id);
+    expect(ids.indexOf("deposit-request-resolved")).toBeGreaterThanOrEqual(0);
+    expect(ids.indexOf("deposit-request-resolved")).toBeLessThan(ids.indexOf("route-recorded"));
+    expect(items?.find((i) => i.id === "deposit-request-resolved")?.status).toBe("current");
+  });
+});

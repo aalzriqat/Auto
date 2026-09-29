@@ -91,8 +91,8 @@ const dealStepMessages = defineBilingualMessages({
   // A deposit request still waiting blocks the close (finalizeDeal refuses on it first).
   ChecklistDepositRequestResolved: ["Deposit request resolved", "معالجة طلب العربون"],
   FinalizeNeedsPendingDepositRequestResolved: [
-    "A deposit request is still waiting on this deal. Confirm or cancel it in the deposit requests on this page, then close.",
-    "ما زال طلب عربون بانتظار المعالجة على هذه الصفقة. أكّده أو ألغِه من طلبات العربون في هذه الصفحة، ثم أغلق الصفقة.",
+    "A deposit request on this deal is waiting for a manager or accountant to confirm receipt or reject it. The deal can't be closed until it is resolved.",
+    "طلب عربون على هذه الصفقة بانتظار أن يؤكّد مدير أو محاسب استلامه أو يرفضه. لا يمكن إغلاق الصفقة قبل معالجته.",
   ],
   StageViewNeedsHeading: ["What it will need", "ما تحتاجه"],
   StageViewWhoActs: ["Who acts", "الجهة المنفّذة"],

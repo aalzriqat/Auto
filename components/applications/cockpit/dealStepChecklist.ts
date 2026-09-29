@@ -94,6 +94,14 @@ export type ChecklistFacts = Readonly<{
   routeRequired?: boolean;
   /** Whether a settlement route is on record; undefined when the screen has no route control. */
   routeRecorded?: boolean;
+  /**
+   * The server reports the deal CLOSED (`status === "CLOSED"`). A closed financed
+   * deal can keep SETTLEMENT live for what is still owed after the close, and
+   * "closing checks -> close the deal" is then false: readiness is closed and no
+   * close control exists. Nothing is listed for it (the post-close list needs
+   * obligation facts the payload does not carry yet).
+   */
+  closed?: boolean;
   /** The live control of THIS stage; absent for a stage that is not the live one. */
   liveAction?: ChecklistLiveAction;
 }>;
@@ -241,6 +249,14 @@ function settlement(f: ChecklistFacts): Draft[] {
       destination: "primaryAction",
     },
   ];
+  // Gates the live control reports, none of which the facts above can see.
+  const reason = f.liveAction?.unavailableReasonKey;
+  // `finalizeDeal` refuses FIRST on a waiting deposit request (before the
+  // route), so it is listed first; the live control says so, and it is then what
+  // the operator has to resolve.
+  if (reason === "FinalizeNeedsPendingDepositRequestResolved") {
+    drafts.push({ id: "deposit-request-resolved", labelKey: "ChecklistDepositRequestResolved", done: false, gate: true });
+  }
   // Present only when the server says a route is required, or one is already on
   // record (so the tick survives recording it). Done only when the server no
   // longer requires it AND one is recorded.
@@ -250,13 +266,6 @@ function settlement(f: ChecklistFacts): Draft[] {
       labelKey: "ChecklistRouteRecorded",
       done: f.routeRequired === false && f.routeRecorded === true,
     });
-  }
-  // Gates the live control reports, none of which the facts above can see.
-  const reason = f.liveAction?.unavailableReasonKey;
-  // `finalizeDeal` refuses first on a waiting deposit request; the live control
-  // says so, and it is then what the operator has to resolve.
-  if (reason === "FinalizeNeedsPendingDepositRequestResolved") {
-    drafts.push({ id: "deposit-request-resolved", labelKey: "ChecklistDepositRequestResolved", done: false, gate: true });
   }
   if (reason === "FinalizeNeedsHeldDepositResolved") {
     drafts.push({ id: "deposit-resolved", labelKey: "ChecklistDepositResolved", done: false, gate: true });
@@ -273,13 +282,24 @@ function settlement(f: ChecklistFacts): Draft[] {
   const paid = closingCheck(checks, "HANDOVER_COSTS_PAID", "costs-paid", "ChecklistCostsPaid");
   if (recorded) drafts.push(recorded);
   if (paid) drafts.push(paid);
+  // No readiness verdict on hand (loading, unreadable, not permitted): the
+  // closing checks are unknown, and the close cannot be offered either, so
+  // neither is what the operator is sent to act on.
+  const readinessUnknown = f.readinessState === undefined;
   drafts.push({
     id: "closing-checks",
     labelKey: "ChecklistClosingChecksReady",
     done: f.readinessState === "READY",
     destination: "closing",
+    ...(readinessUnknown ? { unknown: true as const } : {}),
   });
-  drafts.push({ id: "close-deal", labelKey: "ChecklistCloseDeal", done: false, destination: "primaryAction" });
+  drafts.push({
+    id: "close-deal",
+    labelKey: "ChecklistCloseDeal",
+    done: false,
+    destination: "primaryAction",
+    ...(readinessUnknown ? { unknown: true as const } : {}),
+  });
   return drafts;
 }
 
@@ -323,7 +343,8 @@ export function deriveStepChecklist(facts: ChecklistFacts): ChecklistItem[] | nu
         drafts = handover();
         break;
       case "SETTLEMENT":
-        drafts = settlement(facts);
+        // A closed deal has no close to walk towards.
+        drafts = facts.closed === true ? null : settlement(facts);
         break;
       case "DISBURSEMENT":
         drafts = disbursement(facts);
