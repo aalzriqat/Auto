@@ -1166,6 +1166,8 @@ describe("closing-readiness rows are destinations", () => {
     const deal = liveKey
       ? {
           ...base,
+          // Settlement's first gate is the expected payment; these tests are about the cost items after it.
+          expectedPaymentRegistered: liveKey === "SETTLEMENT",
           stages: base.stages.map((stage) => ({
             ...stage,
             state:
@@ -1862,5 +1864,168 @@ describe("O1 -- the step workbench", () => {
         done();
       })
     );
+  });
+  // ---------------------------------------------------------------------------
+  // SCRUM-417 UX4 round 1 (F2, F4, F6, F7, F8): rendered, real dictionaries.
+  // ---------------------------------------------------------------------------
+  const viewLink = (value: string | null) => ({ value, onChange: vi.fn() });
+  const en = dictionaries.en as Record<string, string>;
+  const ar = dictionaries.ar as Record<string, string>;
+  /** Render with the locale set AFTER the element is built (stageElement pins "en"). */
+  function renderIn(locale: "en" | "ar", element: React.ReactElement) {
+    language.locale = locale;
+    return render(element);
+  }
+  const cashDealAt = (live: "SALE_AGREED" | "HANDOVER") =>
+    ({
+      ...financedDeal(),
+      dealKind: "CASH",
+      financingApplicationId: null,
+      applicationId: null,
+      saleId: "sale_7731",
+      dealRef: "sale_7731",
+      status: "PENDING",
+      stages: ["SALE_AGREED", "HANDOVER", "SETTLEMENT"].map((key) => ({
+        key,
+        state: key === live ? "CURRENT" : key === "SALE_AGREED" ? "COMPLETE" : "PENDING",
+        authority: "DEALER",
+      })),
+    }) as unknown as DealCockpitData;
+
+  test.each(["en", "ar"] as const)(
+    "F4 (%s): a FUTURE financed Handover says what it needs -- and costs are not a handover gate",
+    (locale) => {
+      const el = stageElement("DELIVERY_ACTIONS", "CURRENT", { stageDeepLink: viewLink("HANDOVER") });
+      renderIn(locale, el);
+      const dict = locale === "en" ? en : ar;
+      const needs = screen.getByTestId("deal-stage-view-needs").textContent ?? "";
+      expect(needs).toContain(dict.StageNeedsHandover);
+      expect(dict.StageNeedsHandover).not.toBe(dict.StageNeedsHandoverCash);
+      if (locale === "en") expect(needs).toMatch(/costs are settled later/i);
+    }
+  );
+
+  test.each(["en", "ar"] as const)("F4 (%s): a FUTURE financed Settlement includes the expected payment", (locale) => {
+    const el = stageElement("HANDOVER", "CURRENT", { stageDeepLink: viewLink("SETTLEMENT") });
+    renderIn(locale, el);
+    const dict = locale === "en" ? en : ar;
+    const needs = screen.getByTestId("deal-stage-view-needs").textContent ?? "";
+    expect(needs).toContain(dict.StageNeedsSettlement);
+    if (locale === "en") expect(needs).toMatch(/expected payment/i);
+  });
+
+  test.each(["en", "ar"] as const)(
+    "F4 (%s): a FUTURE cash Settlement has its own wording, not the financed one",
+    (locale) => {
+      language.locale = locale;
+      render(
+        <DealCockpitView
+          deal={cashDealAt("SALE_AGREED")}
+          backHref="/org_1/deals"
+          onRecordSupplierReceipt={async () => {}}
+          stageDeepLink={viewLink("SETTLEMENT")}
+        />
+      );
+      const dict = locale === "en" ? en : ar;
+      const needs = screen.getByTestId("deal-stage-view-needs").textContent ?? "";
+      expect(needs).toContain(dict.StageNeedsSettlementCash);
+      expect(dict.StageNeedsSettlementCash).not.toBe(dict.StageNeedsSettlement);
+      expect(needs).not.toContain(dict.StageNeedsSettlement);
+    }
+  );
+
+  test.each(["en", "ar"] as const)(
+    "F7 (%s): a STOPPED step is terminal -- no 'will need', no owner, no checklist",
+    (locale) => {
+      const order = orderStagesForDisplay(DEAL_STAGE_ORDER.map((key) => ({ key })));
+      const stopped = order[2].key;
+      const el = stageElement(null, "STOPPED", { stageDeepLink: viewLink(stopped) });
+      renderIn(locale, el);
+      const dict = locale === "en" ? en : ar;
+      const view = screen.getByTestId("deal-stage-view");
+      expect(view.getAttribute("data-mode")).toBe("stopped");
+      expect(view.textContent).toContain(dict.StageViewStoppedNote);
+      expect(within(view).queryByTestId("deal-stage-view-needs")).toBeNull();
+      expect(within(view).queryByTestId("deal-stage-view-owner")).toBeNull();
+      expect(within(view).queryByTestId("deal-step-checklist")).toBeNull();
+      expect(view.textContent).not.toContain(dict.StageViewWillNeed ?? "\u0000");
+    }
+  );
+
+  test("F6: Back puts focus on the live rail button and the live region says where the view went", () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    renderStage("HANDOVER");
+    const announcer = screen.getByTestId("deal-stage-view-announcer");
+    expect(announcer.getAttribute("aria-live")).toBe("polite");
+    expect(announcer.textContent).toBe("");
+    fireEvent.click(screen.getByTestId("deal-stage-node-SETTLEMENT"));
+    expect(announcer.textContent).toContain(en.StageViewAnnounceShowing);
+    const back = screen.getByTestId("deal-stage-view-back");
+    back.focus();
+    fireEvent.click(back);
+    // The chip unmounted with the card; focus is on a real control, not <body>.
+    expect(screen.queryByTestId("deal-stage-view-back")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId("deal-stage-node-HANDOVER"));
+    expect(announcer.textContent).toContain(en.StageViewAnnounceBack);
+    // The region persisted across the whole exchange (same node, never remounted).
+    expect(screen.getByTestId("deal-stage-view-announcer")).toBe(announcer);
+  });
+
+  test("F8: when the viewed step BECOMES the live one, the stale ?stage is cleared", () => {
+    const link = viewLink("HANDOVER");
+    const { rerender } = renderStage("DELIVERY_ACTIONS", "CURRENT", { stageDeepLink: link });
+    expect(screen.getByTestId("deal-stage-view").getAttribute("data-stage")).toBe("HANDOVER");
+    expect(link.onChange).not.toHaveBeenCalled();
+    rerender(stageElement("HANDOVER", "CURRENT", { stageDeepLink: link }));
+    expect(screen.queryByTestId("deal-stage-view")).toBeNull();
+    expect(link.onChange).toHaveBeenCalledWith(null);
+  });
+
+  // F2: an ANSWERED empty list must not read as "no answer".
+  describe("F2: readiness answered with no checks", () => {
+    const liveSettlement = (readiness: unknown) => {
+      const el = stageElement("SETTLEMENT", "CURRENT", {
+        closingChecklist: { readiness } as unknown as NonNullable<
+          React.ComponentProps<typeof DealCockpitView>["closingChecklist"]
+        >,
+      });
+      language.locale = "en";
+      return render({ ...el, props: { ...el.props, deal: { ...el.props.deal, expectedPaymentRegistered: true } } });
+    };
+    const statusOf = (id: string) =>
+      within(screen.getByTestId("deal-step-checklist")).queryByTestId(`deal-step-item-${id}`)?.getAttribute("data-status") ?? null;
+    const base = { open: true, unavailableReason: null, unavailableReasonCode: null, moneyWithheld: false };
+
+    test("UNAVAILABLE with checks: [] keeps the cost items on the list, NOT done", () => {
+      liveSettlement({ ...base, state: "UNAVAILABLE", checks: [] });
+      expect(statusOf("costs-recorded")).not.toBeNull();
+      expect(statusOf("costs-recorded")).not.toBe("done");
+      expect(statusOf("costs-paid")).not.toBe("done");
+      expect(statusOf("costs-paid")).not.toBeNull();
+    });
+
+    test("READY checks are done; NOT_APPLICABLE ones are omitted; a missing key is not done", () => {
+      liveSettlement({
+        ...base,
+        state: "BLOCKED",
+        checks: [
+          { key: "CONFIGURED_FEES_RECORDED", status: "READY", reason: null, reasonCode: null },
+          { key: "HANDOVER_COSTS_PAID", status: "NOT_APPLICABLE", reason: null, reasonCode: null },
+        ],
+      });
+      expect(statusOf("costs-recorded")).toBe("done");
+      expect(statusOf("costs-paid")).toBeNull();
+      cleanup();
+      liveSettlement({ ...base, state: "BLOCKED", checks: [{ key: "CONFIGURED_FEES_RECORDED", status: "READY", reason: null, reasonCode: null }] });
+      expect(statusOf("costs-paid")).not.toBe("done");
+      expect(statusOf("costs-paid")).not.toBeNull();
+    });
+
+    test("redaction (no readiness answer at all) shows the cost items as not done, never as done", () => {
+      liveSettlement(undefined);
+      for (const id of ["costs-recorded", "costs-paid", "closing-checks", "close-deal"]) {
+        expect(statusOf(id), id).not.toBe("done");
+      }
+    });
   });
 });

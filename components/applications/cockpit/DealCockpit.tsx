@@ -56,13 +56,16 @@ import { DealStageRail, DealStagesComplete } from "./DealStageRail";
 import { orderStagesForDisplay } from "./dealStageDisplayOrder";
 import { panelsForStage, type WorkbenchPanel } from "./dealWorkbenchPanels";
 import { DealStageView } from "./DealStageView";
+import { StageViewAnnouncer } from "./StageViewAnnouncer";
 import { DealStepChecklist } from "./DealStepChecklistList";
+import type { ClosingReadinessCheckKey } from "@/lib/closingReadinessReasonCodes";
 import { deriveStepChecklist, type ChecklistDestination, type ChecklistItem } from "./dealStepChecklist";
-import { resolveViewedStage, stageViewMode, type StageDeepLink } from "./dealStepView";
+import { resolveViewedStage, STAGE_PARAM, stageViewMode, type StageDeepLink } from "./dealStepView";
 import { cn } from "@/lib/utils";
 import {
   isLiveStageState,
   STAGE_ICON,
+  STAGE_STATE_KEY,
   type DealCockpitData,
   type DealStageState,
 } from "./DealStagePresentation";
@@ -851,11 +854,15 @@ export function DealCockpit({
    * client cannot see `isDeleted`, so this decision is not the client's to make.
    */
   const finalizedSaleId = canonicalizeUrl ? (deal?.canonicalSaleId ?? null) : null;
+  // The step being looked at travels with the redirect: a `?stage=` deep link
+  // opened on the application URL must not be dropped on its way to the sale.
+  const carriedStage = stageDeepLink?.value ?? null;
   useEffect(() => {
     if (finalizedSaleId) {
-      router.replace(`/${orgId}/sales/${finalizedSaleId}/deal`);
+      const query = carriedStage ? `?${STAGE_PARAM}=${encodeURIComponent(carriedStage)}` : "";
+      router.replace(`/${orgId}/sales/${finalizedSaleId}/deal${query}`);
     }
-  }, [finalizedSaleId, orgId, router]);
+  }, [finalizedSaleId, orgId, router, carriedStage]);
 
   // Hidden while the membership is still loading rather than shown optimistically:
   // an action that appears and then vanishes reads as a bug, and the server is
@@ -4212,6 +4219,14 @@ export function DealCockpitView({
     );
     if (holdsTask) setDetailsChoice(true);
   }, [liveStageKey]);
+  // A step that was being LOOKED at and has since become the live one is no
+  // longer "another step": clear the choice, so the address bar does not keep a
+  // `?stage=` that would resurface as a stale view when the deal moves on.
+  useEffect(() => {
+    if (!deal || requestedStageKey === null) return;
+    const chosen = resolveViewedStage(requestedStageKey, deal.stages);
+    if (chosen && isLiveStageState(chosen.state)) requestStage(null);
+  }, [deal, requestedStageKey, requestStage]);
   // Focus follows the task: if the stage change (or the re-open above) left
   // the document without focus, return it to where the operator was.
   useLayoutEffect(() => {
@@ -4574,20 +4589,40 @@ export function DealCockpitView({
   const stageStates = Object.fromEntries(stages.map((stage) => [stage.key, stage.state]));
   const openReadiness =
     closingChecklist?.readiness && closingChecklist.readiness.open ? closingChecklist.readiness : undefined;
+  // An answered list -- even an empty one (UNAVAILABLE with `checks: []`, a
+  // currency mismatch) -- is `{}`, never `undefined`: the cost items then stay
+  // on the list, not done, instead of vanishing with the verdict.
+  const readinessChecks: Partial<Record<ClosingReadinessCheckKey, string>> | undefined = openReadiness
+    ? Object.fromEntries(openReadiness.checks.map((check) => [check.key, check.status]))
+    : undefined;
   const checklistOf = (stage: (typeof stages)[number]): ChecklistItem[] | null =>
-    deriveStepChecklist({
-      stageKey: stage.key,
-      stageState: stage.state,
-      blocker: stage.blocker,
-      stageStates,
-      documents: deal.documents,
-      checks:
-        openReadiness && openReadiness.checks.length > 0
-          ? Object.fromEntries(openReadiness.checks.map((check) => [check.key, check.status]))
-          : undefined,
-      readinessState: openReadiness?.state,
-      routeRecorded: settlementRoute ? settlementRoute.route !== undefined : undefined,
-    });
+    // A step that has stopped will never happen: it has no sub-steps to list.
+    stage.state === "STOPPED"
+      ? null
+      : deriveStepChecklist({
+          stageKey: stage.key,
+          stageState: stage.state,
+          dealKind: deal.dealKind,
+          blocker: stage.blocker,
+          stageStates,
+          documents: deal.documents,
+          checks: readinessChecks,
+          readinessState: openReadiness?.state,
+          expectedPaymentRegistered:
+            "expectedPaymentRegistered" in deal ? deal.expectedPaymentRegistered : undefined,
+          routeRequired:
+            "supplierSettlementRouteRequired" in deal ? deal.supplierSettlementRouteRequired : undefined,
+          routeRecorded: settlementRoute ? settlementRoute.route !== undefined : undefined,
+          // The control THIS stage offers right now, so the current item can
+          // never disagree with it.
+          liveAction:
+            workflowAction && workflowAction.stageKey === stage.key
+              ? {
+                  actionKey: workflowAction.actionKey,
+                  unavailableReasonKey: workflowAction.unavailableReasonKey,
+                }
+              : undefined,
+        });
   // Which step is being LOOKED at. A key the deal does not have, or the live
   // step's own, is no choice at all: the live step is shown, as always.
   const viewedStage = resolveViewedStage(requestedStageKey, stages);
@@ -5253,8 +5288,9 @@ export function DealCockpitView({
   // and goes without ever remounting a panel.
   const stageViewNode: ReactNode = otherStage ? (
     <DealStageView
-      mode={viewedMode === "past" ? "past" : "future"}
+      mode={viewedMode === "live" ? "future" : viewedMode}
       stageKey={otherStage.key}
+      dealKind={deal.dealKind}
       label={t(STAGE_LABEL[otherStage.key] ?? otherStage.key)}
       state={otherStage.state}
       owner={stageOwnerLabel(otherStage, activeAppraisalProvider, t)}
@@ -5262,7 +5298,17 @@ export function DealCockpitView({
       total={stages.length}
       checklist={checklistOf(otherStage)}
       hasLiveStep={live !== undefined}
-      onBack={() => requestStage(null)}
+      onBack={() => {
+        // The back control unmounts with the card, taking focus with it: put
+        // it on the rail node first (the live step's, or -- on a finished
+        // deal with no live step -- the one that was being viewed), so a
+        // keyboard user is never dropped onto the page.
+        const target = document.querySelector<HTMLElement>(
+          `[data-testid="deal-stage-node-${live?.key ?? otherStage.key}"]`
+        );
+        target?.focus({ preventScroll: true });
+        requestStage(null);
+      }}
       onShowRecord={(() => {
         const shown = panelsForStage(otherStage.key).find((panel) => panelNodes[panel] != null);
         return shown ? () => goToFlowPanel(shown) : undefined;
@@ -5301,8 +5347,15 @@ export function DealCockpitView({
                   return hasDocumentsPane && documentsActionable ? goToDocuments : undefined;
                 }
                 if (destination === "handoverCosts") return costsDestination?.onGo;
-                if (destination === "financeDecision" || destination === "closing") {
-                  return panelNodes[destination] != null ? () => goToFlowPanel(destination) : undefined;
+                // Recording the approved amount is the approver's act: a caller
+                // without that authority is told who acts, not sent to a form.
+                if (destination === "financeDecision") {
+                  return financeDecision?.canRecordApproval && panelNodes.financeDecision != null
+                    ? () => goToFlowPanel("financeDecision")
+                    : undefined;
+                }
+                if (destination === "closing") {
+                  return panelNodes.closing != null ? () => goToFlowPanel("closing") : undefined;
                 }
                 return undefined;
               },
@@ -5710,6 +5763,14 @@ export function DealCockpitView({
       {/* The card carries `deal-next-step`; the live step's own panel follows it
           directly; the rest of the deal sits behind the Deal-details toggle,
           whole. Nothing is removed and nothing is drawn twice. */}
+      <StageViewAnnouncer
+        message={
+          otherStage
+            ? `${t("StageViewAnnounceShowing")}: ${t(STAGE_LABEL[otherStage.key] ?? otherStage.key)}, ${t(STAGE_STATE_KEY[otherStage.state])}`
+            : null
+        }
+        restoreMessage={live ? `${t("StageViewAnnounceBack")}: ${t(STAGE_LABEL[live.key] ?? live.key)}` : ""}
+      />
       <div
         ref={flowRef}
         className="grid min-w-0 gap-6 xl:grid-cols-5 xl:has-[>[data-zone=record]:not([hidden])]:[grid-template-rows:var(--flow-rows)]"

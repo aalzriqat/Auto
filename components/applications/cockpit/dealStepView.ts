@@ -10,7 +10,7 @@ import type { DealStageState } from "./DealStagePresentation";
  */
 export const STAGE_PARAM = "stage";
 
-export type StageViewMode = "live" | "past" | "future";
+export type StageViewMode = "live" | "past" | "future" | "stopped";
 
 /**
  * The `?stage=` deep link, owned by the route and handed down: the value as it
@@ -41,12 +41,15 @@ export function resolveViewedStage<S extends StageLike>(
 
 /**
  * How a step is shown. A live step (the server's CURRENT / BLOCKED) is the
- * normal cockpit. A COMPLETE one has recorded evidence to read. Anything else
- * (PENDING, STOPPED) has not happened, so it shows what it will need.
+ * normal cockpit. A COMPLETE one has recorded evidence to read. A PENDING one
+ * has not happened yet, so it shows what it will need. A STOPPED one belongs to
+ * a rejected or cancelled deal and will never happen: it says so, and promises
+ * no needs and no actor.
  */
 export function stageViewMode(state: DealStageState): StageViewMode {
   if (state === "CURRENT" || state === "BLOCKED") return "live";
   if (state === "COMPLETE") return "past";
+  if (state === "STOPPED") return "stopped";
   return "future";
 }
 
@@ -67,6 +70,19 @@ const NEEDS_KEY: Readonly<Record<string, string>> = {
   SALE_AGREED: "StageNeedsSaleAgreed",
 };
 
-export function stageNeedsKey(stageKey: string): string | undefined {
+/**
+ * The two stages a cash deal has that mean something different from the
+ * financed ones: its handover is the draft sale being completed, and its
+ * settlement is the supplier's claim -- neither is the financed chain.
+ */
+const CASH_NEEDS_KEY: Readonly<Record<string, string>> = {
+  HANDOVER: "StageNeedsHandoverCash",
+  SETTLEMENT: "StageNeedsSettlementCash",
+};
+
+export function stageNeedsKey(stageKey: string, dealKind?: string): string | undefined {
+  if (dealKind === "CASH" && Object.prototype.hasOwnProperty.call(CASH_NEEDS_KEY, stageKey)) {
+    return CASH_NEEDS_KEY[stageKey];
+  }
   return Object.prototype.hasOwnProperty.call(NEEDS_KEY, stageKey) ? NEEDS_KEY[stageKey] : undefined;
 }

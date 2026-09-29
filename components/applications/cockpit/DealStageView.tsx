@@ -8,6 +8,12 @@ import type { ChecklistDestination, ChecklistItem } from "./dealStepChecklist";
 import { STAGE_STATE_KEY, type DealStageState } from "./DealStagePresentation";
 import { stageNeedsKey, type StageViewMode } from "./dealStepView";
 
+const STAGE_VIEW_NOTE_KEY: Readonly<Record<Exclude<StageViewMode, "live">, string>> = {
+  past: "StageViewPastNote",
+  future: "StageViewFutureNote",
+  stopped: "StageViewStoppedNote",
+};
+
 /**
  * A step the operator is LOOKING at that is not the live one (SCRUM-417 UX4, O3).
  *
@@ -19,10 +25,13 @@ import { stageNeedsKey, type StageViewMode } from "./dealStepView";
  *  - past:   what was recorded, and who acted.
  *  - future: what the step will need, and who acts (the same owner wording the
  *            rail and the live card use, resolved by the caller).
+ *  - stopped: the deal was rejected or cancelled, so the step will never happen.
+ *            No needs and no actor are promised -- only that it stopped.
  */
 export function DealStageView({
   mode,
   stageKey,
+  dealKind,
   label,
   state,
   owner,
@@ -36,6 +45,8 @@ export function DealStageView({
 }: Readonly<{
   mode: Exclude<StageViewMode, "live">;
   stageKey: string;
+  /** "CASH" swaps the needs wording for the two stages a cash deal means differently. */
+  dealKind?: string;
   label: string;
   state: DealStageState;
   owner?: string;
@@ -49,7 +60,7 @@ export function DealStageView({
   onShowRecord?: () => void;
   t: (key: string) => string;
 }>) {
-  const needsKey = mode === "future" ? stageNeedsKey(stageKey) : undefined;
+  const needsKey = mode === "future" ? stageNeedsKey(stageKey, dealKind) : undefined;
   // A viewed step is never actionable, so its checklist never offers a control.
   const noGo: (destination: ChecklistDestination) => undefined = () => undefined;
   return (
@@ -85,10 +96,10 @@ export function DealStageView({
           </div>
 
           <p className="text-sm text-muted-foreground" data-testid="deal-stage-view-note">
-            {t(mode === "past" ? "StageViewPastNote" : "StageViewFutureNote")}
+            {t(STAGE_VIEW_NOTE_KEY[mode])}
           </p>
 
-          {owner && (
+          {owner && mode !== "stopped" && (
             <p className="text-sm" data-testid="deal-stage-view-owner">
               <span className="text-muted-foreground">{t("StageViewWhoActs")}: </span>
               <bdi className="font-medium">{owner}</bdi>
@@ -102,7 +113,7 @@ export function DealStageView({
             </div>
           )}
 
-          {checklist && <DealStepChecklist items={checklist} go={noGo} t={t} />}
+          {checklist && mode !== "stopped" && <DealStepChecklist items={checklist} go={noGo} t={t} />}
 
           {mode === "past" && onShowRecord && (
             <button

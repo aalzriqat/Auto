@@ -35,7 +35,7 @@ describe("stageViewMode", () => {
     expect(stageViewMode("BLOCKED")).toBe("live");
     expect(stageViewMode("COMPLETE")).toBe("past");
     expect(stageViewMode("PENDING")).toBe("future");
-    expect(stageViewMode("STOPPED")).toBe("future");
+    expect(stageViewMode("STOPPED")).toBe("stopped");
   });
 });
 
