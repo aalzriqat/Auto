@@ -15,12 +15,18 @@ import { useState } from "react";
 export function StageViewAnnouncer({
   message,
   restoreMessage,
-}: Readonly<{ message: string | null; restoreMessage: string }>) {
+  recordedMessage = null,
+}: Readonly<{
+  message: string | null;
+  restoreMessage: string;
+  /** SCRUM-417 UX5 (S7): "Recorded. Next: ..." -- said before anything about the view. */
+  recordedMessage?: string | null;
+}>) {
   // Set during render (not in an effect): once a step has been viewed, the way
   // back has something to announce; until then the region stays empty.
   const [hasViewed, setHasViewed] = useState(false);
   if (message !== null && !hasViewed) setHasViewed(true);
-  const text = message ?? (hasViewed ? restoreMessage : "");
+  const text = recordedMessage ?? message ?? (hasViewed ? restoreMessage : "");
 
   return (
     <div

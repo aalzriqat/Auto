@@ -434,6 +434,17 @@ const dealRailMessages = defineBilingualMessages({
   BackToDeals: ["Deals", "الصفقات"],
   /** "Stage 3 / 8" — the numbers are rendered beside it as their own LTR run. */
   StageOfLabel: ["Stage", "المرحلة"],
+  /** "Stage 7 of 8": a sentence, not "7 / 8", so Arabic reads 7 before 8 (SCRUM-468). */
+  StageOfSeparator: ["of", "من"],
+  /** The compact mobile header: "Step 3 of 8 · Handover" (SCRUM-417 UX5, O4). */
+  MobileStepLabel: ["Step", "الخطوة"],
+  ShowAllSteps: ["Show all steps", "عرض كل الخطوات"],
+  HideAllSteps: ["Hide steps", "إخفاء الخطوات"],
+  /** The persistent line after a step is saved and the screen shows it (S7). */
+  RecordedLead: ["Recorded.", "تم التسجيل."],
+  RecordedNextPrefix: ["Next:", "التالي:"],
+  RecordedAllDone: ["Nothing left to do on this deal.", "لا يوجد ما تبقى للقيام به في هذه الصفقة."],
+  DismissRecorded: ["Dismiss", "إغلاق"],
   DealAllStagesComplete: ["All stages complete", "اكتملت جميع المراحل"],
   ShowStages: ["Show stages", "عرض المراحل"],
   HideStages: ["Hide stages", "إخفاء المراحل"],

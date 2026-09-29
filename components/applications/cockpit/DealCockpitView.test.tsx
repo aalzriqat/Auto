@@ -255,7 +255,7 @@ describe("a corrupt moment in the header or essentials never loses the screen", 
   test("a corrupt updatedAt alone is guarded too, without touching a valid createdAt", () => {
     renderCockpit(dealFixture({ updatedAt: Number.NaN }));
     expect(screen.getByTestId("deal-header").textContent).toContain("LastUpdated: —");
-    expect(screen.getByText("DealOwner").parentElement?.textContent).toMatch(/Jul 2026/);
+    expect(screen.getByText("DealOwner").parentElement?.textContent).toMatch(/يوليو 2026/);
   });
 });
 
@@ -1650,8 +1650,11 @@ describe("the current stage has exactly one working surface, beneath the rail", 
       />
     );
 
-    // Rail node + panel heading, and nothing else names the stage.
-    expect(screen.getAllByText("StageHandover")).toHaveLength(2);
+    // Rail node + panel heading, and nothing else names the stage -- bar the
+    // phone-only "Step N of M" bar (O4), which is the rail folded, not a third card.
+    expect(
+      screen.getAllByText("StageHandover").filter((node) => !node.closest('[data-testid="deal-mobile-stepbar"]'))
+    ).toHaveLength(2);
     expect(screen.queryByText("NextStepHeading")).toBeNull();
     // The rail marks exactly the stage the panel is working.
     const rail = screen.getByTestId("deal-stage-rail");
@@ -1881,7 +1884,7 @@ describe("last updated on a phone", () => {
     expect(headerStamp?.className).toContain("sm:inline");
     const cell = screen.getByTestId("deal-essentials-last-updated");
     expect(cell.className).toContain("sm:hidden");
-    expect(cell.textContent).toMatch(/LastUpdated.*Aug 2026/);
+    expect(cell.textContent).toMatch(/LastUpdated.*أغسطس 2026/);
   });
 
   test("the essentials copy keeps the calm dash for a corrupt moment", () => {

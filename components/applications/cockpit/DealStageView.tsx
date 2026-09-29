@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { STAGE_STATE_KEY, type DealStageState } from "./DealStagePresentation";
 import { stageViewCopy, type StageViewMode } from "./dealStepView";
+import { StagePosition } from "./StagePosition";
 
 /**
  * A step the operator is LOOKING at that is not the live one (SCRUM-417 UX4, O3).
@@ -63,10 +64,7 @@ export function DealStageView({
           <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
             <div className="min-w-0 space-y-1">
               <p className="text-xs text-muted-foreground">
-                {t("StageOfLabel")}{" "}
-                <bdi dir="ltr">
-                  {position} / {total}
-                </bdi>
+                <StagePosition t={t} position={position} total={total} />
               </p>
               <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
                 <h2 id="deal-stage-view-title" className="text-lg font-semibold leading-tight">
