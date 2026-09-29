@@ -92,6 +92,7 @@ import {
   type DealStageState,
 } from "./DealStagePresentation";
 import { SupplierSettlementDialog } from "./SupplierSettlementDialog";
+import { FcChequePanel } from "./FcChequePanel";
 import { SettlementAdviceCorrectionDialog } from "./SettlementAdviceCorrectionDialog";
 import {
   FinanceCompanyDecisionCard,
@@ -763,6 +764,8 @@ export function DealCockpit({
   const registerVehicleHandover = useMutation(api.applications.registerVehicleHandover);
   const resolveAppraisalGap = useMutation(api.financingEconomics.resolveAppraisalGap);
   const registerExpectedPayment = useMutation(api.applications.registerExpectedPayment);
+  const correctExpectedPayment = useMutation(api.applications.correctExpectedPayment);
+  const attestChequeFace = useMutation(api.applications.attestChequeFace);
   const finalizeDeal = useMutation(api.applications.finalizeDeal);
   const approveDealerPurchaseAmount = useMutation(
     api.financingEconomics.approveDealerPurchaseAmount
@@ -2942,6 +2945,19 @@ export function DealCockpit({
         },
       }}
       canCorrectAdvice={canCorrectAdvice}
+      fcCheque={{
+        onAttest: async (faceAmount) => {
+          const chequeId =
+            deal && "unattestedChequeId" in deal ? deal.unattestedChequeId : null;
+          if (!chequeId) return;
+          await attestChequeFace({ orgId, chequeId, faceAmount });
+          toast.success(t("FcAttestDone"));
+        },
+        onCorrect: async (reason) => {
+          await correctExpectedPayment({ orgId, applicationId, reason });
+          toast.success(t("FcCorrectExpectedPaymentDone"));
+        },
+      }}
       canSettleSupplier={canSettleSupplier}
       documentsActionable={!permissionsLoading && documentsStepReason === undefined}
       recordedFeedback={{ recorded: recordedFeedback, track: trackRecorded, onDismiss: clearRecorded }}
@@ -3921,6 +3937,7 @@ export function DealCockpitView({
   expectedPayment,
   finalize,
   canCorrectAdvice = false,
+  fcCheque,
   canSettleSupplier: callerMaySettleSupplier = false,
   supplierSettlementHref,
   documentsActionable = true,
@@ -4175,6 +4192,7 @@ export function DealCockpitView({
       method: ExpectedPaymentMethod;
       expectedDate: number;
       chequeDetails?: { bank: string; chequeNumber: string };
+      faceAmount?: string;
     }) => void | Promise<void>;
   };
   /** The finalization confirmation's own state. */
@@ -4198,6 +4216,11 @@ export function DealCockpitView({
    * action rather than offering one the server will refuse.
    */
   canCorrectAdvice?: boolean;
+  /** SCRUM-447: the finance-company cheque actions (MANAGE_FINANCE gates them via `canCorrectAdvice`). */
+  fcCheque?: {
+    onAttest: (faceAmount: string) => Promise<void>;
+    onCorrect: (reason: string) => Promise<void>;
+  };
   /**
    * Whether this caller may record a supplier receipt (MANAGE_FINANCE — the
    * permission `supplierReceivables.recordReceipt` requires). The route and
@@ -5979,6 +6002,25 @@ export function DealCockpitView({
             />
           )}
         </div>
+      )}
+
+      {/* --- finance-company cheque: face, correction, re-registration ------
+          Workflow flags only (no amounts) from the server. Above the rail for
+          the same reason the discrepancy alert is: it is the exception that
+          stops the disbursement stage. */}
+      {fcCheque && "chequePaymentRegistered" in deal && (
+        <FcChequePanel
+          canManage={canCorrectAdvice}
+          chequeFaceUnrecorded={deal.chequeFaceUnrecorded}
+          unattestedChequeId={deal.unattestedChequeId ?? null}
+          expectedPaymentCorrectable={deal.expectedPaymentCorrectable}
+          chequePaymentRegistered={deal.chequePaymentRegistered}
+          needsReRegistration={deal.expectedPaymentReRegistrable}
+          t={t}
+          onAttest={fcCheque.onAttest}
+          onCorrect={fcCheque.onCorrect}
+          onRegister={() => expectedPayment?.onOpenChange(true)}
+        />
       )}
 
       {/* --- stage rail: the signature element ---------------------------- */}

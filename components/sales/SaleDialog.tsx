@@ -40,6 +40,7 @@ import {
 import { SearchableSelect } from "@/components/ui/searchable-select";
 
 import { saleSchema, SaleFormValues, SaleDialogProps } from "./sale.schema";
+import Link from "next/link";
 import { getErrorMessage } from "@/lib/errors";
 import { ConsignedSettlementSection } from "./ConsignedSettlementSection";
 import { ProfitApprovalNotice, useProfitApproval } from "./ProfitApprovalNotice";
@@ -470,9 +471,25 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                           <SelectContent>
                             <SelectItem value="PENDING">{t("PendingStatus" as any)}</SelectItem>
                             <SelectItem value="COMPLETED">{t("CompletedStatus" as any)}</SelectItem>
-                            {sale && <SelectItem value="CANCELLED">{t("CancelledStatus" as any)}</SelectItem>}
+                            {/* SCRUM-447 D4: a financed deal is cancelled from the deal
+                                screen, which resolves its cheque; the server refuses
+                                the cancel here too. */}
+                            {sale && (!sale.applicationId || sale.status === "CANCELLED") && (
+                              <SelectItem value="CANCELLED">{t("CancelledStatus" as any)}</SelectItem>
+                            )}
                           </SelectContent>
                         </Select>
+                        {sale?.applicationId && sale.status !== "CANCELLED" && (
+                          <p className="text-xs text-muted-foreground" data-testid="sale-cancel-from-deal">
+                            {t("FcSaleCancelFromDeal" as any)}{" "}
+                            <Link
+                              className="font-medium underline underline-offset-2"
+                              href={`/${activeOrgId}/sales/${sale._id}/deal`}
+                            >
+                              {t("FcOpenDeal" as any)}
+                            </Link>
+                          </p>
+                        )}
                         <FormMessage />
                       </FormItem>
                     )}

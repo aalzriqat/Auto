@@ -63,6 +63,9 @@ type ChequeRow = Doc<"postDatedCheques"> & {
   customerName: string;
   vehicleLabel?: string;
   receivableTitle?: string;
+  /** SCRUM-447: the row has finance-company lineage; the drawer is named or unverified. */
+  isFinanceCompanyCheque?: boolean;
+  drawerName?: string | null;
 };
 
 type ApprovalRow = Doc<"collectionApprovalRequests"> & {
@@ -394,6 +397,16 @@ export function CollectionsTab() {
                       <TableCell>
                         <div className="font-medium">{cheque.customerName}</div>
                         <div className="text-xs text-muted-foreground">{cheque.receivableTitle || cheque.vehicleLabel || "-"}</div>
+                        {cheque.isFinanceCompanyCheque && (
+                          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                            <Badge variant="outline">{t("FcChequeBadge" as any)}</Badge>
+                            <span className="text-xs text-muted-foreground">
+                              {cheque.drawerName
+                                ? interpolate(t("FcDrawerLine" as any), { name: cheque.drawerName })
+                                : t("FcDrawerUnverified" as any)}
+                            </span>
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell>{cheque.bank}</TableCell>
                       <TableCell>{cheque.chequeNumber}</TableCell>
@@ -415,6 +428,11 @@ export function CollectionsTab() {
                                 {isDepositing && <Loader2 className="me-1 h-3.5 w-3.5 animate-spin" />}
                                 {t("Deposit" as any)}
                               </Button>
+                              {cheque.isFinanceCompanyCheque ? (
+                                <span className="self-center text-xs text-muted-foreground">
+                                  {t("FcHandledFromDeal" as any)}
+                                </span>
+                              ) : (
                               <Button
                                 size="sm"
                                 variant="outline"
@@ -424,6 +442,7 @@ export function CollectionsTab() {
                                 {isClearing && <Loader2 className="me-1 h-3.5 w-3.5 animate-spin" />}
                                 {t("Clear" as any)}
                               </Button>
+                              )}
                               <Button
                                 size="sm"
                                 variant="outline"
@@ -432,6 +451,7 @@ export function CollectionsTab() {
                               >
                                 {t("Return" as any)}
                               </Button>
+                              {!cheque.isFinanceCompanyCheque && (
                               <Button
                                 size="sm"
                                 variant="outline"
@@ -440,6 +460,7 @@ export function CollectionsTab() {
                               >
                                 {t("Replace" as any)}
                               </Button>
+                              )}
                             </div>
                           );
                         })()}
