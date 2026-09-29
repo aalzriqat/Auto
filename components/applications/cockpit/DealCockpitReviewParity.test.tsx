@@ -16,6 +16,10 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { pickMethod } from "./testPaymentMethodSelect";
+
+// SCRUM-469: no money dialog pre-selects a method, so the tests choose one.
+vi.mock("@/components/payments/PaymentMethodSelect", () => import("./testPaymentMethodSelect"));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({ t: (key: string) => key, isRtl: false, locale: "en" }),
@@ -607,6 +611,12 @@ describe("held deposit on a stopped deal — deposits.release", () => {
 
     expect(screen.getByTestId("deal-deposit-awaiting-resolution")).toBeTruthy();
     fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    // SCRUM-469: the method is not pre-selected — nothing is sent until one is
+    // chosen (the deposit having been received by CASH does not choose it), and
+    // then exactly the chosen one is.
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    expect(mutationCalls.get("deposits:release")).toBeUndefined();
+    pickMethod(screen.getByRole("dialog"), "BANK_TRANSFER");
     fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
 
     await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(1));
@@ -615,14 +625,14 @@ describe("held deposit on a stopped deal — deposits.release", () => {
       orgId: ORG,
       depositId: "dep_1",
       resolution: "REFUNDED",
-      refundMethod: "CASH",
+      refundMethod: "BANK_TRANSFER",
     });
     // The GENERATION-AWARE identity (SCRUM-313): `deposits.release` pays out
     // whatever is FREE on the row, so two genuine payouts of one deposit are
     // byte-identical requests and only the server's `releaseCount` can tell a
     // retry from a second real payout. The intent names deposit, decision,
     // method and the generation observed when the operator decided.
-    expect(call.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:CASH:gen0:[0-9a-f-]{36}$/);
+    expect(call.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:BANK_TRANSFER:gen0:[0-9a-f-]{36}$/);
   });
 
   test("an unknown result keeps the SAME release identity for the retry; a confirmed payout that advanced the generation mints a NEW one", async () => {
@@ -639,6 +649,7 @@ describe("held deposit on a stopped deal — deposits.release", () => {
     renderCockpit();
 
     fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    pickMethod(screen.getByRole("dialog"));
     fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
     await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(1));
     // Retry the same decision after the lost response.
@@ -660,6 +671,7 @@ describe("held deposit on a stopped deal — deposits.release", () => {
     cleanup();
     renderCockpit();
     fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    pickMethod(screen.getByRole("dialog"));
     fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
     await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(3));
     const third = (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[2];

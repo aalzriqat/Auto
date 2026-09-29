@@ -86,7 +86,9 @@ export function StoppedDealDepositsPanel({
      */
     releaseCount: number;
   } | null>(null);
-  const [refundMethod, setRefundMethod] = useState<PaymentMethod>("CASH");
+  // SCRUM-469: no default. The method picks the ledger account the refund is
+  // credited to, so it is chosen, never assumed.
+  const [refundMethod, setRefundMethod] = useState<PaymentMethod | undefined>(undefined);
 
   const statusLabel = (status: string) => {
     switch (status) {
@@ -117,8 +119,9 @@ export function StoppedDealDepositsPanel({
 
   const close = () => {
     setPending(null);
-    setRefundMethod("CASH");
+    setRefundMethod(undefined);
   };
+  const refundMethodMissing = pending?.resolution === "REFUNDED" && refundMethod === undefined;
   const isResolvingPending = pending !== null && resolvingId === pending.depositId;
 
   return (
@@ -237,7 +240,18 @@ export function StoppedDealDepositsPanel({
           {pending?.resolution === "REFUNDED" && (
             <div className="space-y-1">
               <span className="text-sm font-medium">{t("PaymentMethodLabel")}</span>
-              <PaymentMethodSelect t={t} value={refundMethod} onValueChange={setRefundMethod} />
+              <PaymentMethodSelect
+                t={t}
+                value={refundMethod}
+                onValueChange={setRefundMethod}
+                ariaLabel={t("PaymentMethodLabel")}
+                placeholder={t("RefundChooseMethod")}
+              />
+              {refundMethodMissing ? (
+                <p className="text-sm font-medium text-destructive" role="alert">
+                  {t("RefundMethodRequired")}
+                </p>
+              ) : null}
             </div>
           )}
           <DialogFooter className="gap-2">
@@ -247,15 +261,17 @@ export function StoppedDealDepositsPanel({
             {pending && (
               <Button
                 variant={pending.resolution === "FORFEITED" ? "destructive" : "default"}
-                disabled={isResolvingPending}
-                onClick={() =>
+                disabled={isResolvingPending || refundMethodMissing}
+                onClick={() => {
+                  // Belt and braces with `disabled`: an unchosen refund method is never sent.
+                  if (refundMethodMissing) return;
                   void onResolve(
                     pending.depositId,
                     pending.resolution,
                     pending.resolution === "REFUNDED" ? refundMethod : undefined,
                     pending.releaseCount
-                  ).then(close, () => undefined)
-                }
+                  ).then(close, () => undefined);
+                }}
               >
                 {pending.resolution === "REFUNDED" ? t("ConfirmRefund") : t("ConfirmForfeit")}
               </Button>
