@@ -21,9 +21,17 @@ import { useMemo, useRef, useState } from "react";
  *     new key and could pay the same, or newly freed, money out twice. The
  *     operator reconciles: retry the recorded attempt, or dismiss it.
  *   - only a CONFIRMED success (`confirm`) or an explicit `dismiss` clears it.
+ *   - `dismiss` also RETIRES the recorded intent's command key (via the required
+ *     `retire` parameter, so no caller can forget it). A dismissed attempt may
+ *     have committed; if its key stayed available, resubmitting the same method
+ *     while the displayed `releaseCount` is still stale would rebuild the same
+ *     intent, reuse the same key, and the server would replay the earlier result
+ *     -- "refunded" for a submission that moved no money. `confirm` does NOT
+ *     retire: callers already retire on success.
  *
  * It lives in a ref keyed by deposit id, so it survives the method picker
- * clearing, the dialog closing and reopening, and looking at another vehicle.
+ * clearing and the dialog closing and reopening. It does not outlive the owning
+ * component instance (nor does the command identity it retires).
  */
 export type PendingPayout = {
   resolution: "REFUNDED" | "FORFEITED";
@@ -44,7 +52,7 @@ export type PendingDepositPayouts = {
   blocked: Readonly<Record<string, PendingPayout>>;
 };
 
-export function usePendingDepositPayouts(): PendingDepositPayouts {
+export function usePendingDepositPayouts(retire: (intent: string) => void): PendingDepositPayouts {
   const pendingRef = useRef<Map<string, PendingPayout>>(new Map());
   const [blocked, setBlocked] = useState<Record<string, PendingPayout>>({});
 
@@ -71,8 +79,12 @@ export function usePendingDepositPayouts(): PendingDepositPayouts {
         if (!pendingRef.current.has(depositId)) pendingRef.current.set(depositId, payout);
       },
       confirm: clear,
-      dismiss: clear,
+      dismiss(depositId) {
+        const existing = pendingRef.current.get(depositId);
+        if (existing) retire(existing.intent);
+        clear(depositId);
+      },
       blocked,
     };
-  }, [blocked]);
+  }, [blocked, retire]);
 }

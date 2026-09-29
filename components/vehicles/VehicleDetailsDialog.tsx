@@ -111,7 +111,7 @@ export function VehicleDetailsDialog({
   const commandId = useCommandIdentity();
   // SCRUM-469 F1: the identity (resolution + METHOD + key) of a payout that may
   // have committed, per deposit, kept until confirmed or explicitly dismissed.
-  const pendingPayouts = usePendingDepositPayouts();
+  const pendingPayouts = usePendingDepositPayouts(commandId.retire);
   const upsertLandedCosts = useMutation(api.vehicles.upsertLandedCosts);
   const createReservation = useMutation(api.vehicles.createReservation);
   // Minted at the user-intent boundary and held across attempts. With a deposit

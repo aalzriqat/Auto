@@ -223,9 +223,12 @@ function VehicleDetailContent({
   const commandId = useCommandIdentity();
   // SCRUM-469 F1: the identity (resolution + METHOD + intent) of a deposit payout
   // that may have committed, per deposit. Kept until a CONFIRMED success or an
-  // explicit dismissal — not by the method picker clearing, the generation
-  // moving, or changing vehicle — so a different method chosen afterwards can
-  // never mint a second key for what may be the same money.
+  // explicit dismissal — not by the method picker clearing or the generation
+  // moving — so a different method chosen afterwards can never mint a second key
+  // for what may be the same money. It lives and dies with this screen instance
+  // (a new one is opened per vehicle), exactly like `commandId`. Dismissal also
+  // RETIRES the recorded intent's key: otherwise resubmitting the same method
+  // at a stale generation rebuilds the same intent and replays the earlier result.
   const pendingPayoutsRef = useRef<Map<string, { resolution: "REFUNDED" | "FORFEITED"; method: string; intent: string }>>(
     new Map(),
   );
@@ -357,6 +360,7 @@ function VehicleDetailContent({
             text: locale === "ar" ? "لم تُنفذ - تجاهل" : "It did not go through - dismiss",
             style: "destructive",
             onPress: () => {
+              commandId.retire(pendingPayout.intent);
               pendingPayoutsRef.current.delete(depositId);
             },
           },

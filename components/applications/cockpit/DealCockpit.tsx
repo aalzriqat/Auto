@@ -1047,7 +1047,7 @@ export function DealCockpit({
   const commandId = useCommandIdentity();
   // SCRUM-469 F1: the identity (resolution + METHOD + key) of a deposit payout
   // that may have committed, kept until confirmed or explicitly dismissed.
-  const pendingPayouts = usePendingDepositPayouts();
+  const pendingPayouts = usePendingDepositPayouts(commandId.retire);
 
   // ---- the same derivations the Review dialog made, from the same payload ----
   // The dealer-side economics are denominated in the application's OWN pinned

@@ -347,4 +347,34 @@ describe("vehicle dialog: an unconfirmed payout keeps its identity (SCRUM-469 ro
     expect(state.releaseCalls[1]!.idempotencyKey).not.toBe(firstKey);
     expect(state.releaseCalls[1]!.refundMethod).toBe("BANK_TRANSFER");
   });
+
+  test("SCRUM-469 R4-01: dismissing a possibly committed payout retires its key even when the SAME method is resubmitted at a stale generation", async () => {
+    state.releaseOutcomes = ["lost", "ok"];
+    const view = render(ui());
+    await chooseAndRefund("CASH");
+    const firstKey = state.releaseCalls[0]!.idempotencyKey;
+    reopen(view);
+    await chooseAndRefund("BANK_TRANSFER");
+    expect(notice()).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "PayoutUnconfirmedDismiss", hidden: true }));
+    await waitFor(() => expect(notice()).toBeNull());
+    // releaseCount is still 0 (stale): the intent string is the SAME as the dismissed one.
+    await chooseAndRefund("CASH");
+
+    await waitFor(() => expect(state.releaseCalls).toHaveLength(2));
+    expect(state.releaseCalls[1]!.idempotencyKey).not.toBe(firstKey);
+  });
+
+  test("control: a same-method retry BEFORE dismissal reuses the first key at a stale generation", async () => {
+    state.releaseOutcomes = ["lost", "ok"];
+    const view = render(ui());
+    await chooseAndRefund("CASH");
+    const firstKey = state.releaseCalls[0]!.idempotencyKey;
+    reopen(view);
+    await chooseAndRefund("CASH");
+
+    await waitFor(() => expect(state.releaseCalls).toHaveLength(2));
+    expect(state.releaseCalls[1]!.idempotencyKey).toBe(firstKey);
+  });
 });

@@ -169,6 +169,29 @@ describe("VehicleDetailScreen an unconfirmed payout keeps its identity (SCRUM-46
     expect(releaseDeposit.mock.calls[1]![0].idempotencyKey).not.toBe(releaseDeposit.mock.calls[0]![0].idempotencyKey);
   });
 
+  test("SCRUM-469 R4-01: dismissing retires the key even when the SAME method is resubmitted at a stale generation", async () => {
+    releaseDeposit.mockRejectedValueOnce(new Error("lost")).mockResolvedValue(undefined);
+    const view = await render(tree());
+    await refund(view, "CASH");
+    await refund(view, "BANK_TRANSFER");
+    expect(releaseDeposit).toHaveBeenCalledTimes(1);
+    await pressAlert("لم تُنفذ - تجاهل");
+    // releaseCount is still 0 (stale): the intent string is the SAME as the dismissed one.
+    await refund(view, "CASH");
+
+    expect(releaseDeposit).toHaveBeenCalledTimes(2);
+    expect(releaseDeposit.mock.calls[1]![0].idempotencyKey).not.toBe(releaseDeposit.mock.calls[0]![0].idempotencyKey);
+  });
+
+  test("control: a same-method retry BEFORE dismissal reuses the first key at a stale generation", async () => {
+    releaseDeposit.mockRejectedValueOnce(new Error("lost")).mockResolvedValue(undefined);
+    const view = await render(tree());
+    await refund(view, "CASH");
+    await refund(view, "CASH");
+
+    expect(releaseDeposit).toHaveBeenCalledTimes(2);
+    expect(releaseDeposit.mock.calls[1]![0].idempotencyKey).toBe(releaseDeposit.mock.calls[0]![0].idempotencyKey);
+  });
   test("the notice's retry replays the recorded attempt with its own method and key", async () => {
     releaseDeposit.mockRejectedValueOnce(new Error("lost")).mockResolvedValue(undefined);
     const view = await render(tree());
