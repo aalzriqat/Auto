@@ -3447,6 +3447,44 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_application", ["applicationId"]),
 
+  /**
+   * SCRUM-444 — a salesperson's REQUEST that the dealership take a deposit.
+   *
+   * ⚠️ THIS ROW IS NOT MONEY. It has no deposit, transaction, payment, journal,
+   * outbox event or vehicle commitment behind it, and nothing may read it as
+   * "paid". Money reaches the ledger only when an actor holding
+   * CONFIRM_FINANCE_DISBURSEMENT confirms receipt (`depositRequests.confirm`),
+   * which writes the `deposits` row and flips this one to CONFIRMED in the same
+   * transaction. A PENDING request does not hold the car either.
+   */
+  depositRequests: defineTable({
+    orgId: v.id("organizations"),
+    quoteId: v.id("quotes"),
+    customerId: v.id("customers"),
+    vehicleId: v.id("vehicles"),
+    /** Major units, in `currency`. Confirmation must equal this exactly. */
+    amount: v.number(),
+    amountMinor: v.number(),
+    currency: v.string(),
+    note: v.optional(v.string()),
+    status: v.union(
+      v.literal("PENDING"),
+      v.literal("CONFIRMED"),
+      v.literal("REJECTED"),
+      v.literal("WITHDRAWN")
+    ),
+    requestedBy: v.id("users"),
+    requestedAt: v.number(),
+    idempotencyKey: v.string(),
+    resolvedBy: v.optional(v.id("users")),
+    resolvedAt: v.optional(v.number()),
+    resolutionReason: v.optional(v.string()),
+    confirmedDepositId: v.optional(v.id("deposits")),
+  })
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_quote_status", ["quoteId", "status"])
+    .index("by_quote", ["quoteId"]),
+
   deposits: defineTable({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
@@ -3833,7 +3871,22 @@ export default defineSchema({
     // the answer is only ever wanted within one. Leading with orgId makes the
     // tenant boundary part of the access path rather than a filter somebody has
     // to remember to apply.
-    .index("by_org_consumed_sale", ["orgId", "consumedBySaleId"]),
+    .index("by_org_consumed_sale", ["orgId", "consumedBySaleId"])
+    // SCRUM-444 R5 — "THE DISTINCT RESERVATION ORIGINS OF THIS QUOTE'S DEAL".
+    // The reservation-deposit probe seeks `(org, headQuoteId = Q)` and then
+    // steps `originReservationId` forward with `.gt(<last origin>).first()`, so
+    // it costs one seek per DISTINCT origin and skips every other root that
+    // shares one (restoration successors copy `headQuoteId` and
+    // `originReservationId`). It never scans the car's history
+    // (`by_org_vehicle_status` grows for the life of a car).
+    //
+    // Both fields are optional. Convex DOES index a row whose field is
+    // undefined, and it sorts BEFORE every defined value, so a root headed at Q
+    // with no origin sits at the very start of the `(org, Q)` range. The probe's
+    // first seek uses `.gt("originReservationId", undefined)` to step over
+    // those rows; a root with no `headQuoteId` is never in Q's range at all.
+    // No backfill: Convex builds the index on deploy.
+    .index("by_org_head_quote_origin", ["orgId", "headQuoteId", "originReservationId"]),
 
   /**
    * SCRUM-195 — ONE ACQUISITION EPISODE.
@@ -3927,7 +3980,16 @@ export default defineSchema({
     // `depositVehicleHolds` row carries, not by searching the episodes that
     // share a deposit — an index here would only invite that search back.
     .index("by_application", ["applicationId"])
-    .index("by_reservation", ["reservationId"]),
+    .index("by_reservation", ["reservationId"])
+    // SCRUM-444 R5 — the FUNDED reservation episodes that name a quote. Leading
+    // with `(org, quoteId, evidenceKind = "RESERVATION")` and stepping
+    // `depositId` forward with `.gt(<last deposit>).first()` costs one seek per
+    // DISTINCT funded deposit. `depositId` is undefined on an UNFUNDED
+    // reservation's claim (only a funded reservation stamps it) and undefined
+    // sorts before every defined value, so `.gt("depositId", undefined)` never
+    // returns, and never counts, an unfunded reservation. Claims of other
+    // evidence kinds are outside the `RESERVATION` range. No data migration.
+    .index("by_org_quote_kind_deposit", ["orgId", "quoteId", "evidenceKind", "depositId"]),
 
   /**
    * One immutable row per application of deposit money to a sale.

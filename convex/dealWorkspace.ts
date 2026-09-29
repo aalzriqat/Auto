@@ -4,6 +4,7 @@ import { query } from "./_generated/server";
 import { api } from "./_generated/api";
 import { pendingDepositResolution } from "./applications";
 import { requireOwnedRow } from "./utils/tenancy";
+import { pendingDepositRequestsForQuote } from "./utils/depositRequestGuards";
 import { selectActiveAppraisal } from "./utils/financingEconomics";
 import type { Doc } from "./_generated/dataModel";
 import type * as applicationsModule from "./applications";
@@ -68,6 +69,17 @@ function activeAppraisalProviderFor(
 /** The cockpit payload, unchanged, plus the two facts P3 adds. */
 export type FinancedDealCockpit = DealCockpitPayload & {
   pendingDepositResolution: boolean;
+  /**
+   * SCRUM-444 — deposit REQUESTS still waiting for a manager or accountant to
+   * confirm receipt. Not money: a request counts as zero paid.
+   */
+  pendingDepositRequests: Array<{
+    _id: Doc<"depositRequests">["_id"];
+    amount: number;
+    currency: string;
+    requestedBy: Doc<"depositRequests">["requestedBy"];
+    requestedAt: number;
+  }>;
   activeAppraisalProvider: ActiveAppraisalProvider;
 };
 
@@ -171,6 +183,17 @@ export const financedDealCockpit = query({
        * is the defect this field exists to close.
        */
       pendingDepositResolution: await pendingDepositResolution(ctx, app),
+      // SCRUM-444: requests awaiting confirmation, from the same guard module
+      // the terminal doors use, re-scoped to the caller's org.
+      pendingDepositRequests: (await pendingDepositRequestsForQuote(ctx, app.quoteId))
+        .filter((row) => row.orgId === args.orgId)
+        .map((row) => ({
+          _id: row._id,
+          amount: row.amount,
+          currency: row.currency,
+          requestedBy: row.requestedBy,
+          requestedAt: row.requestedAt,
+        })),
       /**
        * Whose move the APPRAISAL stage actually is.
        *

@@ -1,6 +1,5 @@
 import {
   acquireVehicle,
-  assertAcquirable,
   assertNoLiveBasisHolds,
   COMMITMENT_MESSAGES,
   evidenceForDepositHold,
@@ -14,7 +13,6 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import {
-  holdVehicleForDeposit,
   releaseAllVehiclesForDeposit,
   releaseHeldDeposit,
   maybeReleaseVehicleHold,
@@ -27,10 +25,11 @@ import { hookDepositVoided, getOrgCurrency } from "./accounting/workflowHooks";
 import {
   amountToMinorOrThrow,
   depositMethodValidator,
-  methodOrDefault,
+  requireDepositMethod,
   normalizeCurrency,
-  recordHeldDeposit,
 } from "./utils/depositRecording";
+import { postQuoteDeposit } from "./utils/quoteDepositPosting";
+import { assertNoPendingDepositRequest } from "./utils/depositRequestGuards";
 import { voidCanonicalPayment } from "./subledger";
 import {
   quoteDepositAllocation,
@@ -58,16 +57,24 @@ export const create = mutation({
     adoptReservationId: v.optional(v.id("vehicleReservations")),
   },
   handler: async (ctx, args) => {
-    // Recording a deposit while working a deal in the wizard is normal
-    // day-to-day sales activity, not a committed sale — VIEW_SALES (held by
-    // SALES/MANAGER/ACCOUNTANT/OWNER) is the right bar, same as quotes.ts.
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    // SCRUM-444 (owner ruling R1): only a manager or accountant moves money, and
+    // only when it passes through the dealership. Taking a deposit posts
+    // DEPOSIT_RECEIVED and commits the car, so it takes the disbursement
+    // authority — NOT VIEW_SALES, which every salesperson holds. A salesperson
+    // records a REQUEST instead (`depositRequests.request`); a manager or
+    // accountant confirms receipt there.
+    const { user } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+    ]);
     const orgCurrency = normalizeCurrency(await getOrgCurrency(ctx, args.orgId));
     const currency = args.currency ? normalizeCurrency(args.currency) : orgCurrency;
     if (currency !== orgCurrency) {
       throw new ConvexError(`Deposit currency must match organization currency (${orgCurrency}).`);
     }
-    const method = methodOrDefault(args.method);
+    // SCRUM-445: no silent CASH default. Which drawer or account the money
+    // entered decides which ledger account is debited, so it is asked, never
+    // assumed. The message names the way forward for an out-of-date client.
+    const method = requireDepositMethod(args.method);
     const amountMinor = amountToMinorOrThrow(args.amount, currency);
 
     return await runWithIdempotency(
@@ -99,114 +106,29 @@ export const create = mutation({
         if (!quote || quote.orgId !== args.orgId) {
           throwAppError(AppErrorCode.QUOTE_NOT_FOUND, "Quote not found in this organization.");
         }
-        const quoteAmountMinor = amountToMinorOrThrow(quote.vehiclePrice, currency, "Quote amount");
-        const existingDeposits = await ctx.db
-          .query("deposits")
-          .withIndex("by_quote", (q) => q.eq("quoteId", args.quoteId))
-          .collect();
-        const existingActiveMinor = existingDeposits.reduce((sum, deposit) => {
-          if (deposit.isDeleted === true) return sum;
-          if (deposit.status !== "HELD" && deposit.status !== "APPLIED") return sum;
-          const rowMinor =
-            deposit.amountMinor ?? amountToMinorOrThrow(deposit.amount, currency);
-          // Less whatever has been handed back. A row can now be released in
-          // part and stay HELD, and counting it at face value meant a customer
-          // whose deposit was partly refunded could not put the money down
-          // again — the quote read as fully deposited when it was not.
-          return sum + Math.max(0, rowMinor - (deposit.releasedAmountMinor ?? 0));
-        }, 0);
-        if (existingActiveMinor + amountMinor > quoteAmountMinor) {
-          throw new ConvexError("Total deposits cannot exceed the quote amount.");
-        }
 
-        // Throws if a vehicle is SOLD/ARCHIVED; otherwise patches AVAILABLE -> RESERVED
-        // (no-op if already RESERVED — parallel deposits are allowed). A multi-vehicle
-        // quote holds every vehicle on the deal, not just the first one.
-        const depositVehicleItems = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId }];
-
-        // SCRUM-195: ask the AUTHORITY before moving a car's status. Vehicle
-        // status is an advisory projection (I4) — it says where a car IS, not
-        // whose deal it belongs to, and two deals can both see AVAILABLE. The
-        // commitment root is the lock, and it refuses BEFORE any side effect.
-        //
-        // The quote is the lineage PROOF, not the identity: presenting it says
-        // "I am acting for the deal this quote belongs to". A quote with no
-        // root has proven nothing, so a second independent quote for the same
-        // customer on the same car is refused here, exactly as a rival's is.
-        for (const item of depositVehicleItems) {
-          await assertAcquirable(ctx, {
-            orgId: args.orgId,
-            vehicleId: item.vehicleId,
-            lineage: { quoteId: args.quoteId, adoptReservationId: args.adoptReservationId },
-          });
-        }
-        for (const item of depositVehicleItems) {
-          await holdVehicleForDeposit(ctx, item.vehicleId);
-        }
-
-        const now = Date.now();
-        const depositId = await recordHeldDeposit(ctx, {
+        // DA-04: a waiting request is the salesperson's claim on the same
+        // money. Recording a second deposit over it would leave the request
+        // dangling, to be confirmed later as a duplicate — so the request is
+        // resolved first (confirm it instead, or reject/withdraw it).
+        await assertNoPendingDepositRequest(ctx, {
           orgId: args.orgId,
-          vehicleId: quote.vehicleId,
-          customerId: quote.customerId,
           quoteId: args.quoteId,
+          action: "record a separate deposit",
+        });
+
+        const depositId = await postQuoteDeposit(ctx, {
+          orgId: args.orgId,
+          quote,
           amount: args.amount,
           amountMinor,
           currency,
           method,
-          idempotencyKey: args.idempotencyKey,
           notes: args.notes,
+          idempotencyKey: args.idempotencyKey,
           actorId: user._id,
-          now,
-          sourceLabel: `quote ${args.quoteId}`,
-          // SCRUM-208 — THE SAME CONDITION THAT DECIDES WHETHER HOLD ROWS ARE
-          // WRITTEN, read once and stamped on the row. The `> 1` test below is
-          // the definition of the sliced representation; expressing it twice
-          // is how the discriminator and the rows it describes drift apart.
-          usesVehicleHoldRows: depositVehicleItems.length > 1,
+          adoptReservationId: args.adoptReservationId,
         });
-
-        // SCRUM-195: record WHOSE deal now holds each car, on the strength of
-        // THIS deposit. One episode per car per acquisition — a further
-        // instalment on the same deal joins the same root and opens its own
-        // episode, so the history says how the deal was built.
-        const episodeByVehicle = new Map<string, Id<"vehicleCommitmentClaims">>();
-        for (const item of depositVehicleItems) {
-          const { claimId } = await acquireVehicle(ctx, {
-            orgId: args.orgId,
-            vehicleId: item.vehicleId,
-            customerId: quote.customerId,
-            createdBy: user._id,
-            evidence: { kind: "DEPOSIT", depositId },
-            lineage: { quoteId: args.quoteId, adoptReservationId: args.adoptReservationId },
-          });
-          episodeByVehicle.set(String(item.vehicleId), claimId);
-        }
-
-        // Only multi-vehicle deposits need a join row per vehicle — a
-        // single-vehicle deposit is already fully tracked by the deposit's
-        // own vehicleId + by_vehicle_hold index.
-        if (depositVehicleItems.length > 1) {
-          for (const item of depositVehicleItems) {
-            // SCRUM-195: the slice names the episode it was created with, so
-            // what this money is evidence OF can be read back exactly instead
-            // of inferred from the surrounding row or searched for in history.
-            const sourceCommitmentClaimId = episodeByVehicle.get(String(item.vehicleId));
-            if (!sourceCommitmentClaimId) {
-              throw new Error(
-                `no commitment episode was recorded for vehicle ${item.vehicleId} on deposit ${depositId}`
-              );
-            }
-            await ctx.db.insert("depositVehicleHolds", {
-              orgId: args.orgId,
-              depositId,
-              vehicleId: item.vehicleId,
-              active: true,
-              createdAt: now,
-              sourceCommitmentClaimId,
-            });
-          }
-        }
 
         const actorName = await getActorName(ctx);
         await notifyManagers(
@@ -559,9 +481,13 @@ export const allocateToVehicles = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    // Same bar as recording the deposit itself: this is deal work, not a
-    // financial approval — no money moves and nothing posts.
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    // SCRUM-444 DA-02: choosing which car deposit MONEY is committed to changes
+    // what the dealership owes and who may buy which car, so it carries the same
+    // bar as taking the deposit — a salesperson can no longer re-point money
+    // that only a manager or accountant was allowed to take.
+    const { user } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+    ]);
 
     const quote = await ctx.db.get(args.quoteId);
     if (!quote || quote.orgId !== args.orgId) {
@@ -814,10 +740,15 @@ export const resolveReleasedAllocation = mutation({
       args.treatment === "REFUND_TO_CUSTOMER" ||
       args.treatment === "FORFEITED" ||
       args.treatment === "OTHER";
+    // SCRUM-444 DA-02: the two ACQUIRING treatments (REALLOCATE_TO_VEHICLE,
+    // RETURN_TO_UNALLOCATED) change which car the money is committed to, so they
+    // take the disbursement authority rather than plain deal access.
     const { user } = await requireTenantAuth(
       ctx,
       args.orgId,
-      needsApproval ? [PERMISSIONS.APPROVE_REQUESTS] : [PERMISSIONS.VIEW_SALES]
+      needsApproval
+        ? [PERMISSIONS.APPROVE_REQUESTS]
+        : [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]
     );
 
     const hold = await ctx.db.get(args.holdId);
@@ -1151,7 +1082,10 @@ export const releaseVehicleAllocation = mutation({
     reason: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    // SCRUM-444 DA-02: taking a car out of a deal moves deposit money off it.
+    const { user } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+    ]);
 
     const quote = await ctx.db.get(args.quoteId);
     if (!quote || quote.orgId !== args.orgId) {

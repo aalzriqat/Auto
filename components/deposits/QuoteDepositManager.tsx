@@ -119,6 +119,10 @@ export function QuoteDepositManager({
   // server enforces. Offering them to somebody who cannot pass it turns a
   // permission into an error message.
   const canApprove = hasPermission(PERMISSIONS.APPROVE_REQUESTS);
+  // Taking a share off a deal, or returning / reallocating it, moves held money
+  // and is the same authority as recording the deposit (SCRUM-444). A
+  // salesperson is shown the reason instead of a button that would be refused.
+  const canConfirm = hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
   const allocation = useQuery(api.deposits.quoteAllocation, { orgId, quoteId });
   const releaseVehicle = useMutation(api.deposits.releaseVehicleAllocation);
   const resolveReleased = useMutation(api.deposits.resolveReleasedAllocation);
@@ -260,7 +264,12 @@ export function QuoteDepositManager({
                     ? t("DepositNotAllocatedYet" as any)
                     : money(vehicle.allocatedMinor)}
                 </span>
-                {vehicle.status === "ALLOCATED" && (
+                {vehicle.status === "ALLOCATED" && !canConfirm && (
+                  <span className="text-xs text-muted-foreground" data-testid="deposit-ask-manager">
+                    {t("DepositAskManagerOrAccountant" as any)}
+                  </span>
+                )}
+                {vehicle.status === "ALLOCATED" && canConfirm && (
                   <Button
                     variant="ghost"
                     size="sm"
@@ -402,7 +411,7 @@ export function QuoteDepositManager({
                     disabled={
                       busyHoldId === holdId ||
                       (treatment === "REALLOCATE_TO_VEHICLE" && !targetByHold[holdId]) ||
-                      (movesMoney(treatment) && !canApprove)
+                      (movesMoney(treatment) ? !canApprove : !canConfirm)
                     }
                     onClick={() => {
                       // Terminal, and one of them pays a customer. A select
@@ -426,6 +435,11 @@ export function QuoteDepositManager({
                     {t("DepositRecordDecision" as any)}
                   </Button>
                 </div>
+                )}
+                {!movesMoney(treatment) && !canConfirm && !pendingReversal && (
+                  <p className="text-xs text-muted-foreground">
+                    {t("DepositAskManagerOrAccountant" as any)}
+                  </p>
                 )}
                 {movesMoney(treatment) && !canApprove && !pendingReversal && (
                   <p className="text-xs text-muted-foreground">

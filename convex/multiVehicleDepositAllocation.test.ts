@@ -40,6 +40,7 @@ vi.mock("./rateLimit", () => ({
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
 const PERMS = [
+  "confirm:finance_disbursement",
   "view:sales", "create:sales", "edit:sales", "delete:sales",
   "view:vehicles", "create:vehicles", "edit:vehicles",
   "view:customers", "create:customers",

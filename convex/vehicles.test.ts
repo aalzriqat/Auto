@@ -12,6 +12,7 @@ vi.mock("./rateLimit", () => ({
 }));
 
 const PERMISSIONS = [
+  "confirm:finance_disbursement",
   "create:vehicles", "edit:vehicles", "delete:vehicles",
   "view:vehicles", "view:users", "manage:users", "view:reports", "view:sales",
 ];
@@ -801,7 +802,7 @@ describe("inventory intelligence", () => {
       ctx.db.insert("customers", { orgId, firstName: "Reserve", lastName: "Customer" })
     );
 
-    const reservationId = await asUser.mutation(api.vehicles.createReservation, {
+    const reservationId = await asUser.mutation(api.vehicles.createReservation, { depositMethod: "CASH",
       idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
@@ -910,7 +911,7 @@ describe("inventory intelligence", () => {
     // and names it. Without that proof the authority correctly refuses — a
     // second, unrelated deal on a held vehicle is exactly what it exists to stop,
     // and the same customer is not evidence of the same deal.
-    await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
+    await asUser.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId,
       quoteId,
       amount: 500,

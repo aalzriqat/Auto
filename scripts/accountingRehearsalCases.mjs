@@ -137,6 +137,7 @@ async function makePartiallyCommittedDeposit({ orgId, ownerMust, label }) {
     orgId,
     quoteId,
     amount: 5000,
+    method: "CASH",
     idempotencyKey: `rehearsal-deposit-${label}-${stamp}`,
   });
 
@@ -866,6 +867,7 @@ export async function runRehearsalCases(ctx) {
         orgId,
         quoteId,
         amount: 5000,
+        method: "CASH",
         idempotencyKey: `rehearsal-rt1-deposit-${stamp}`,
       };
       const firstDeposit = await ownerMust("mutation", "deposits:create", depositArgs);

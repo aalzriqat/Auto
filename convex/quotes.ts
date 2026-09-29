@@ -23,6 +23,7 @@ import {
 import { calculateUnifiedMurabaha, minimumDownPaymentForFinancingLimit } from "../lib/financing";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { assertMajorAmountRepresentable } from "./utils/money";
+import { assertNoPendingDepositRequest } from "./utils/depositRequestGuards";
 
 function assertFiniteNumber(val: unknown, name: string): void {
   if (val !== undefined && (typeof val !== "number" || !Number.isFinite(val))) {
@@ -515,6 +516,17 @@ export const updateQuoteStatus = mutation({
     await requireTenantAuth(ctx, orgId, [PERMISSIONS.VIEW_SALES]);
     const existing = await ctx.db.get(quoteId);
     if (!existing || existing.orgId !== orgId) throw new ConvexError("Not found");
+
+    // SCRUM-444 DA-03: EXPIRED is the terminal quote status. A deposit request
+    // still waiting on the quote would be orphaned by it, so the quote cannot
+    // expire until the request is confirmed, rejected or withdrawn.
+    if (status === "EXPIRED") {
+      await assertNoPendingDepositRequest(ctx, {
+        orgId,
+        quoteId,
+        action: "expire this quote",
+      });
+    }
 
     await ctx.db.patch(quoteId, { status });
 
