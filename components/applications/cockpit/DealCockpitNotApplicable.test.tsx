@@ -280,12 +280,15 @@ describe("live-stage selection skips a NOT_APPLICABLE stage", () => {
     expect(screen.queryByRole("button", { name: "ConfirmDisbursement" })).toBeNull();
   });
 
-  test("a NOT_APPLICABLE stage does not stop the deal reading as unfinished while another stage is pending", () => {
+  test("a NOT_APPLICABLE stage does not stop the deal reading as unfinished while another stage is live", () => {
+    // The server always makes the first unfinished reachable stage live, so the
+    // shape to guard is NA + a BLOCKED settlement, never NA + PENDING alone.
     arrange(
-      FINISHED_NA_STAGES.map((stage) => (stage.key === "SETTLEMENT" ? { ...stage, state: "PENDING" } : stage))
+      FINISHED_NA_STAGES.map((stage) => (stage.key === "SETTLEMENT" ? { ...stage, state: "BLOCKED" } : stage))
     );
     renderCockpit();
     expect(screen.queryByTestId("deal-stages-toggle")).toBeNull();
     expect(screen.getByTestId("deal-stage-rail")).toBeTruthy();
+    expect(screen.queryByTestId("deal-stopped")).toBeNull();
   });
 });

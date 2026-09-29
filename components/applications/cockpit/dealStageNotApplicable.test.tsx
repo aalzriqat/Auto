@@ -40,7 +40,7 @@ describe("the exhaustive state maps know NOT_APPLICABLE", () => {
   test("its state key names it 'Not needed' in English and Arabic, distinct from every other state", () => {
     const key = STAGE_STATE_KEY.NOT_APPLICABLE;
     expect(en[key]).toBe("Not needed");
-    expect(ar[key]).toBe("غير مطلوب");
+    expect(ar[key]).toBe("غير مطلوبة");
     const others = ALL_STATES.filter((s) => s !== "NOT_APPLICABLE").map((s) => en[STAGE_STATE_KEY[s]]);
     expect(others).not.toContain(en[key]);
   });
@@ -63,7 +63,6 @@ describe("finished, live and complete are three different questions", () => {
   test("NOT_APPLICABLE is finished but neither live nor complete", () => {
     expect(isFinishedStageState("NOT_APPLICABLE")).toBe(true);
     expect(isLiveStageState("NOT_APPLICABLE")).toBe(false);
-    expect("NOT_APPLICABLE").not.toBe("COMPLETE");
   });
 
   test.each(ALL_STATES)("%s: finished only for COMPLETE and NOT_APPLICABLE", (state) => {

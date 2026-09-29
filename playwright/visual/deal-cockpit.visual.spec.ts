@@ -805,7 +805,7 @@ for (const variant of UX4_VARIANTS) {
             if (variant.na) {
               // SCRUM-446: the rail says "not needed" and the slot agrees. Literals are
               // hand-written, not read from the dictionaries the render used.
-              const stateWord = locale === "ar" ? "غير مطلوب" : "Not needed";
+              const stateWord = locale === "ar" ? "غير مطلوبة" : "Not needed";
               const reason = locale === "ar" ? NA_REASON_LITERAL.ar : NA_REASON_LITERAL.en;
               const node = page.getByTestId("deal-stage-node-DISBURSEMENT");
               await expect(node).toBeVisible();
@@ -865,7 +865,7 @@ for (const variant of UX4_VARIANTS) {
               }
               if (variant.mode === "notApplicable") {
                 await expect(page.getByTestId("deal-stage-view-note")).toHaveText(NA_REASON_LITERAL[locale]);
-                await expect(view.getByText(locale === "ar" ? "غير مطلوب" : "Not needed", { exact: true })).toBeVisible();
+                await expect(view.getByText(locale === "ar" ? "غير مطلوبة" : "Not needed", { exact: true })).toBeVisible();
                 await expect(page.getByTestId("deal-stage-view-needs")).toHaveCount(0);
               }
               // Only the live step has sub-steps: a viewed one lists none.
