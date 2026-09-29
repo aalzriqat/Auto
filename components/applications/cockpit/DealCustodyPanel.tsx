@@ -515,7 +515,14 @@ export function DealCustodyPanel({
   const noRecipient = canStart && actions?.members !== undefined && recipients.length === 0;
 
   return (
-    <Card data-testid="deal-custody" id="deal-custody-panel" tabIndex={-1} className="scroll-mt-20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+    <Card
+      data-testid="deal-custody"
+      id="deal-custody-panel"
+      // An open dialog is an active task (its content is portalled out of this
+      // panel, so the panel says so itself); see the cockpit's stage change.
+      data-active-task={dialog !== null ? "" : undefined}
+      tabIndex={-1}
+      className="scroll-mt-20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
             <HandCoins className="h-4 w-4 shrink-0 text-dealer-side" aria-hidden />

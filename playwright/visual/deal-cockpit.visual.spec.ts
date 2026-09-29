@@ -378,6 +378,13 @@ for (const locale of LOCALES) {
           await page.screenshot({
             path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}-top.png`),
           });
+          // STATIC EXPANDED-LAYOUT COVERAGE, not an interaction test. The page is
+          // server-rendered markup with no hydration, so nothing here proves the
+          // toggle works in a browser: the collapsed state above is what the markup
+          // renders, and the expanded state below is APPLIED to the DOM by this
+          // script so the layout can be measured and shot. Click, Enter and Space
+          // on the toggle are covered in jsdom (DealCockpitVisualFixture.test.tsx);
+          // a hydrated real-browser interaction test is a follow-up.
           // Open it. The page is static markup (no React handlers), so the toggle
           // is applied to the DOM the way its handler does: aria-expanded and the
           // `hidden` attribute of every record wrapper. The handler itself is
@@ -387,6 +394,28 @@ for (const locale of LOCALES) {
             document.querySelectorAll('[data-zone="record"]').forEach((el) => ((el as HTMLElement).hidden = false));
           });
           await expect(page.getByTestId("deal-money")).toBeVisible();
+
+          // SCRUM-417 UX3 N3: the money column spans the working panels beside it.
+          // When the money is far TALLER than they are, the working cards must stay
+          // one gap apart (24px), not be pushed apart by the spanning item.
+          if (viewport.width >= 1280) {
+            await page.evaluate(() => {
+              const spacer = document.createElement("div");
+              spacer.style.height = "2600px";
+              document.querySelector('[data-testid="deal-money"]')?.appendChild(spacer);
+            });
+            const tops = await page.evaluate(() =>
+              Array.from(document.querySelectorAll('[data-zone="record"]:not(#deal-record-money)')).map((el) => {
+                // The panel itself, not its grid cell: a stretched cell would hide the gap.
+                const box = (el.firstElementChild ?? el).getBoundingClientRect();
+                return { top: box.top, bottom: box.bottom };
+              })
+            );
+            expect(tops.length).toBeGreaterThan(1);
+            for (let i = 1; i < tops.length; i += 1) {
+              expect(tops[i].top - tops[i - 1].bottom, `gap between record panel ${i - 1} and ${i} with a tall money column`).toBeCloseTo(24, 0);
+            }
+          }
 
           // Painted on screen: header, headline figure, stage rail — inside
           // main's box, not merely inside the viewport.

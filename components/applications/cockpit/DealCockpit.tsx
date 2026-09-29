@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
@@ -2401,6 +2401,10 @@ export function DealCockpit({
       deal={deal}
       backHref={`/${orgId}/deals`}
       financeDecision={financeDecision}
+      // The step's panel can still arrive only while what it is built from is
+      // unanswered. Queries a caller cannot run are skipped (they stay undefined
+      // for good), so each is counted only when this caller runs it.
+      workbenchPending={permissionsLoading || app === undefined || (canViewApplications && economics === undefined)}
       financingPlan={financingPlan ? { facts: financingPlan, formatMajor: formatPlanMajor } : undefined}
       handoverCosts={handoverCosts}
       financialOverview={deal ? { data: overview ?? undefined, loading: overview === undefined } : undefined}
@@ -3773,6 +3777,7 @@ export function DealCockpitView({
   deal,
   backHref,
   financeDecision,
+  workbenchPending = false,
   financingPlan,
   handoverCosts,
   financialOverview,
@@ -3910,6 +3915,17 @@ export function DealCockpitView({
    * was skipped for want of `view:finance_applications`.
    */
   financeDecision?: FinanceDecisionWiring;
+  /**
+   * True while the wiring above can still ARRIVE: permissions, the application
+   * or the economics query have not answered yet. The container computes it from
+   * those queries' real states. It is deliberately NOT derived from the stage:
+   * a caller who is never given a panel (no `view:finance_applications`, so the
+   * economics and closing queries are skipped for good) must not be told to wait
+   * for it. Pending keeps the record closed so it never flashes open and snaps
+   * shut when the step's panel lands; once it is false, a step with no panel
+   * of its own opens the record.
+   */
+  workbenchPending?: boolean;
   /**
    * The customer's financing plan as the quote recorded it — financed deals
    * only, and only once `applications.get` has arrived. Read-only; separate
@@ -4147,6 +4163,45 @@ export function DealCockpitView({
   // of its own, open when nothing is promoted); a choice, or a blocker link that
   // needs a panel inside it, overrides.
   const [detailsChoice, setDetailsChoice] = useState<boolean | null>(null);
+  const flowRef = useRef<HTMLDivElement>(null);
+  // The element the operator last had focus on inside the flow. A keyed sibling
+  // that is moved can lose focus in a real browser without a blur the page
+  // sees, so it is remembered here to be put back.
+  const flowFocusRef = useRef<HTMLElement | null>(null);
+  const liveStageKey = deal
+    ? (orderStagesForDisplay(deal.stages).find((s) => isLiveStageState(s.state))?.key ?? null)
+    : null;
+  const seenLiveStageRef = useRef(liveStageKey);
+  // A reactive stage change (another user registers the handover) demotes the
+  // panel the operator is working in into the collapsed record. A demoted panel
+  // that holds an ACTIVE TASK — focus inside it, or a child marking
+  // `data-active-task` (an open add-cost form, an unresolved attempt, an open
+  // custody dialog) — opens the record instead of vanishing under the operator.
+  // A demoted panel with nothing active stays collapsed. Child state is not
+  // lifted: the panel says so on its own DOM. Layout effect, so the record is
+  // open again before the browser paints or fixes focus up.
+  useLayoutEffect(() => {
+    if (seenLiveStageRef.current === liveStageKey) return;
+    seenLiveStageRef.current = liveStageKey;
+    const active = document.activeElement;
+    const holdsTask = Array.from(flowRef.current?.querySelectorAll<HTMLElement>('[data-zone="record"]') ?? []).some(
+      (wrapper) =>
+        wrapper.hidden && (wrapper.querySelector("[data-active-task]") !== null || (active !== null && wrapper.contains(active)))
+    );
+    if (holdsTask) setDetailsChoice(true);
+  }, [liveStageKey]);
+  // Focus follows the task: if the stage change (or the re-open above) left
+  // the document without focus, return it to where the operator was.
+  useLayoutEffect(() => {
+    const focused = flowFocusRef.current;
+    if (
+      focused?.isConnected &&
+      (document.activeElement === null || document.activeElement === document.body) &&
+      focused.closest("[hidden]") === null
+    ) {
+      focused.focus({ preventScroll: true });
+    }
+  }, [liveStageKey, detailsChoice]);
   // Open the record if `target` lives in it. Called from the click handler,
   // BEFORE the scroll frame: React flushes a discrete event's update at its end,
   // so the panel is on screen (and focusable) when the scroll and focus land.
@@ -5099,10 +5154,12 @@ export function DealCockpitView({
   const workbenchPanels = panelsForStage(live?.key).filter((panel) => panelNodes[panel] != null);
   // Nothing promoted: the record is the whole surface, so it starts open —
   // never a collapsed disclosure over an empty page.
-  // ...and it also starts closed while the step's panel is only not there YET
-  // (its wiring still loading; a cash sale never wires them), so it never flashes open and then snaps shut.
-  const expectsPanel = deal.dealKind !== "CASH" && panelsForStage(live?.key).length > 0;
-  const detailsOpen = detailsChoice ?? (workbenchPanels.length === 0 && !expectsPanel);
+  // ...but not while the wiring can still arrive (`workbenchPending`, told by
+  // the container from the real query states), so it never flashes open and
+  // then snaps shut. A caller who is never given the panel is not pending.
+  // Pending only matters where the stage HAS a panel to wait for.
+  const waitingForPanel = workbenchPending && panelsForStage(live?.key).length > 0;
+  const detailsOpen = detailsChoice ?? (workbenchPanels.length === 0 && !waitingForPanel);
   const inWorkbench = (panel: WorkbenchPanel) => workbenchPanels.includes(panel);
   // The record keeps its original order: the car, the plan, what the finance
   // company told us, the handover costs, the closing checks, custody, then the
@@ -5224,6 +5281,17 @@ export function DealCockpitView({
     });
   }
 
+
+  // The money column spans the rows of the working panels beside it. When the
+  // money is TALLER than they are, a spanning item shares its extra height
+  // equally across every row it spans, which pushes the working cards apart.
+  // Every row but the last is sized to its content and the last takes the
+  // slack, so the cards stay together and the spare height sits under them.
+  // (One row per flow item except the money, which spans them.)
+  const flowRows: CSSProperties | undefined =
+    recordMoneyColumn && recordWorkingColumn
+      ? ({ "--flow-rows": `repeat(${flow.length - 2}, auto) 1fr` } as CSSProperties)
+      : undefined;
 
   return (
     <div className="space-y-6">
@@ -5528,7 +5596,19 @@ export function DealCockpitView({
       {/* The card carries `deal-next-step`; the live step's own panel follows it
           directly; the rest of the deal sits behind the Deal-details toggle,
           whole. Nothing is removed and nothing is drawn twice. */}
-      <div className="grid min-w-0 gap-6 xl:grid-cols-5">
+      <div
+        ref={flowRef}
+        className="grid min-w-0 gap-6 xl:grid-cols-5 xl:[grid-template-rows:var(--flow-rows)]"
+        style={flowRows}
+        onFocus={(event) => {
+          flowFocusRef.current = event.target as HTMLElement;
+        }}
+        onBlur={(event) => {
+          // A real blur leaves the element in the document; a node that is
+          // being moved is not a decision to leave, so its memory is kept.
+          if ((event.target as HTMLElement).isConnected) flowFocusRef.current = null;
+        }}
+      >
         {flow.map((item) => (
           <div
             key={item.key}
