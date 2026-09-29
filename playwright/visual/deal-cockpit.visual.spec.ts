@@ -400,9 +400,11 @@ for (const locale of LOCALES) {
           // server-rendered markup with no hydration, so nothing here proves the
           // toggle works in a browser: the collapsed state above is what the markup
           // renders, and the expanded state below is APPLIED to the DOM by this
-          // script so the layout can be measured and shot. Click, Enter and Space
-          // on the toggle are covered in jsdom (DealCockpitVisualFixture.test.tsx);
-          // a hydrated real-browser interaction test is a follow-up.
+          // script so the layout can be measured and shot. The jsdom suite
+          // (DealCockpitVisualFixture.test.tsx) covers only that the toggle is a
+          // native button, that Enter/Space are not cancelled, and that a click
+          // toggles it; real keyboard activation needs a hydrated browser test
+          // (follow-up SCRUM-465).
           // Open it. The page is static markup (no React handlers), so the toggle
           // is applied to the DOM the way its handler does: aria-expanded and the
           // `hidden` attribute of every record wrapper. The handler itself is
