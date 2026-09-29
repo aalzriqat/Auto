@@ -174,6 +174,7 @@ export function DealStagesComplete({
         variant="ghost"
         size="sm"
         className="h-9"
+        data-testid="deal-stages-toggle"
         aria-expanded={expanded}
         onClick={onToggle}
       >

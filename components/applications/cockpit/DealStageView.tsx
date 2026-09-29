@@ -3,23 +3,17 @@
 import { ArrowUpLeft } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { DealStepChecklist } from "./DealStepChecklistList";
-import type { ChecklistDestination, ChecklistItem } from "./dealStepChecklist";
 import { STAGE_STATE_KEY, type DealStageState } from "./DealStagePresentation";
-import { stageNeedsKey, type StageViewMode } from "./dealStepView";
-
-const STAGE_VIEW_NOTE_KEY: Readonly<Record<Exclude<StageViewMode, "live">, string>> = {
-  past: "StageViewPastNote",
-  future: "StageViewFutureNote",
-  stopped: "StageViewStoppedNote",
-};
+import { stageViewCopy, type StageViewMode } from "./dealStepView";
 
 /**
  * A step the operator is LOOKING at that is not the live one (SCRUM-417 UX4, O3).
  *
- * Read-only by construction: it renders no command, only words, the step's
- * sub-steps and -- for a step that already happened -- a link to where the
- * recorded panel lives. It is drawn as a sibling ABOVE the live step and never
+ * Read-only by construction: it renders no command, only words and -- for a step
+ * that already happened -- a link to where the recorded panel lives. It lists no
+ * sub-steps: the server reports item-level facts only for the LIVE step, so a
+ * finished or upcoming one could only be all-ticked or all-pending, and both
+ * would be false. It is drawn as a sibling ABOVE the live step and never
  * replaces it, so the live workbench under it keeps its state.
  *
  *  - past:   what was recorded, and who acted.
@@ -31,13 +25,13 @@ const STAGE_VIEW_NOTE_KEY: Readonly<Record<Exclude<StageViewMode, "live">, strin
 export function DealStageView({
   mode,
   stageKey,
-  dealKind,
+  path,
+  closed,
   label,
   state,
   owner,
   position,
   total,
-  checklist,
   hasLiveStep,
   onBack,
   onShowRecord,
@@ -45,14 +39,15 @@ export function DealStageView({
 }: Readonly<{
   mode: Exclude<StageViewMode, "live">;
   stageKey: string;
-  /** "CASH" swaps the needs wording for the two stages a cash deal means differently. */
-  dealKind?: string;
+  /** "SALE" (the sale-keyed cockpit) swaps the needs wording for the two stages it means differently. */
+  path?: "SALE" | "APPLICATION";
+  /** The server reports the deal CLOSED: a pending Settlement then waits on the finance company's payment. */
+  closed?: boolean;
   label: string;
   state: DealStageState;
   owner?: string;
   position: number;
   total: number;
-  checklist: ReadonlyArray<ChecklistItem> | null;
   /** False on a finished deal, where there is no "current step" to go back to. */
   hasLiveStep: boolean;
   onBack: () => void;
@@ -60,9 +55,7 @@ export function DealStageView({
   onShowRecord?: () => void;
   t: (key: string) => string;
 }>) {
-  const needsKey = mode === "future" ? stageNeedsKey(stageKey, dealKind) : undefined;
-  // A viewed step is never actionable, so its checklist never offers a control.
-  const noGo: (destination: ChecklistDestination) => undefined = () => undefined;
+  const { noteKey, needsKey } = stageViewCopy(mode, stageKey, { path, closed });
   return (
     <section aria-labelledby="deal-stage-view-title" data-testid="deal-stage-view" data-mode={mode} data-stage={stageKey}>
       <Card className="border-dashed bg-muted/30">
@@ -96,7 +89,7 @@ export function DealStageView({
           </div>
 
           <p className="text-sm text-muted-foreground" data-testid="deal-stage-view-note">
-            {t(STAGE_VIEW_NOTE_KEY[mode])}
+            {t(noteKey)}
           </p>
 
           {owner && mode !== "stopped" && (
@@ -112,8 +105,6 @@ export function DealStageView({
               <p className="text-sm">{t(needsKey)}</p>
             </div>
           )}
-
-          {checklist && mode !== "stopped" && <DealStepChecklist items={checklist} go={noGo} t={t} />}
 
           {mode === "past" && onShowRecord && (
             <button

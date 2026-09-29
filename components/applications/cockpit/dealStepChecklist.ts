@@ -21,9 +21,17 @@ import type { DealStageState } from "./DealStagePresentation";
  *  (c) the items mirror the gates in the order the server checks them, for the
  *      deal kind at hand (a cash deal is not given the financed chain).
  *  (d) the CURRENT item agrees with the live control the step offers. A gate the
- *      list does not otherwise model (a held deposit, an unsupported currency, a
- *      reconciliation note, a cash deposit decision) is added ONLY when the live
- *      control reports it, and is then the current item.
+ *      list does not otherwise model (a held deposit, a pending deposit request,
+ *      an unsupported currency, a reconciliation note, a cash deposit decision)
+ *      is added ONLY when the live control reports it, and is then the current
+ *      item. An item whose fact is UNKNOWN is shown, not done, and never takes
+ *      the current slot (round 2): the operator is not sent to act on a guess.
+ *
+ * ROUND 2 -- the checklist exists for the LIVE stage only. The server reports
+ * item-level facts only while a stage is open (readiness closes and returns no
+ * checks once the deal is closed) and none before it starts, so a completed or
+ * upcoming stage could only be all-ticked or all-pending, and both are false.
+ * Those views keep their read-only evidence and their "needs" copy instead.
  *
  * Pure on purpose: no React, no i18n, no DOM. It returns keys and statuses; the
  * caller renders them and wires the destinations to controls that already exist.
@@ -58,8 +66,14 @@ export type ChecklistLiveAction = Readonly<{
 export type ChecklistFacts = Readonly<{
   stageKey: string;
   stageState: DealStageState;
-  /** "CASH" gets the cash step, never the financed chain; anything else is financed. */
-  dealKind?: string;
+  /**
+   * The identity of the cockpit: "SALE" is the sale-keyed one (`applicationId`
+   * is null -- a cash sale, or a financed sale opened without its application),
+   * which has the sale's own steps; "APPLICATION" is the financed chain. NOT
+   * `dealKind`: an applicationless FINANCED/LEASE sale reports `dealKind:
+   * "FINANCED"` and still has no appraisal, handover registration or close.
+   */
+  path?: "SALE" | "APPLICATION";
   /** The server's blocker key for this stage, when it has one. */
   blocker?: string;
   /** Every stage's state by key, so a stage can read its neighbours. */
@@ -96,30 +110,25 @@ type Draft = Readonly<{
    * to do (invariant d).
    */
   gate?: true;
+  /** The fact is not on hand (not reported, unreadable): shown, not done, never current. */
+  unknown?: true;
 }>;
 
 /**
- * Turns established facts into item statuses for a stage in `state`.
+ * Turns established facts into item statuses for the LIVE stage.
  *
- *  - COMPLETE: every item is done (the stage is over; there is nothing left).
- *  - live (CURRENT / BLOCKED): positively established facts are done. The
- *    current item is the live control's gate when it reported one, otherwise the
- *    FIRST item not done; the rest are pending.
- *  - PENDING / STOPPED: nothing has started, so nothing is claimed done -- a
- *    preview of what the step will ask for, all pending.
- *
- * Nothing here infers "done" from the absence of a blocker.
+ * Positively established facts are done. The current item is the live control's
+ * gate when it reported one, otherwise the FIRST item that is neither done nor
+ * unknown; the rest are pending. Nothing here infers "done" from the absence of
+ * a blocker, and nothing is ticked for a stage that is not live.
  */
-function settle(drafts: ReadonlyArray<Draft>, state: DealStageState): ChecklistItem[] {
-  const live = state === "CURRENT" || state === "BLOCKED";
-  const gate = live ? drafts.find((draft) => draft.gate && !draft.done) : undefined;
+function settle(drafts: ReadonlyArray<Draft>): ChecklistItem[] {
+  const gate = drafts.find((draft) => draft.gate && !draft.done);
   let currentTaken = false;
   return drafts.map((draft): ChecklistItem => {
     let status: ChecklistItemStatus;
-    if (state === "COMPLETE") status = "done";
-    else if (!live) status = "pending";
-    else if (draft.done) status = "done";
-    else if (gate ? draft === gate : !currentTaken) {
+    if (draft.done) status = "done";
+    else if (gate ? draft === gate : !currentTaken && !draft.unknown) {
       currentTaken = true;
       status = "current";
     } else status = "pending";
@@ -128,7 +137,6 @@ function settle(drafts: ReadonlyArray<Draft>, state: DealStageState): ChecklistI
       : { id: draft.id, labelKey: draft.labelKey, status };
   });
 }
-
 const UPLOADED = new Set(["UPLOADED", "VERIFIED", "WAIVED"]);
 const VERIFIED = new Set(["VERIFIED", "WAIVED"]);
 const CURRENCY_REASONS: ReadonlySet<string> = new Set(Object.values(FINALIZE_DENOMINATION_REASON));
@@ -169,19 +177,17 @@ function deliveryActions(f: ChecklistFacts): Draft[] | null {
 }
 
 /**
- * Financed handover. `registerVehicleHandover` requires an APPROVED deal with its
- * economics ready (`assertDealerEconomicsReady`). The server's own verdict on the
- * second is the stage state: CURRENT is its positive "nothing blocks the
- * handover"; BLOCKED (HandoverBlocked, or any other) is not ready. Handover
- * costs are NOT read there -- they gate the close, so they are SETTLEMENT items.
+ * Financed handover: a single act, `registerVehicleHandover`. The server has no
+ * item-level fact for its other precondition (the deal's economics being ready)
+ * -- the stage state is one verdict for the whole step, not a tick for one part
+ * of it -- so nothing is listed or ticked for it. One item is not a checklist:
+ * the live control already carries the action and any reason it is withheld.
+ * Handover costs are not read here either; they gate the close, so they are
+ * SETTLEMENT items.
  */
-function handover(f: ChecklistFacts): Draft[] {
-  return [
-    { id: "economics-ready", labelKey: "ChecklistDealFiguresReady", done: f.stageState === "CURRENT" },
-    { id: "register-handover", labelKey: "ChecklistRegisterHandover", done: false, destination: "primaryAction" },
-  ];
+function handover(): Draft[] {
+  return [{ id: "register-handover", labelKey: "ChecklistRegisterHandover", done: false, destination: "primaryAction" }];
 }
-
 /**
  * A cash deal's handover is the sale still being a draft: the step is
  * `completeDraft`. There is no server fact for the deal's figures on this path,
@@ -212,7 +218,13 @@ function closingCheck(
 ): Draft | null {
   const status = checks[key];
   if (status === "NOT_APPLICABLE") return null;
-  return { id, labelKey, done: status === "READY", destination: "handoverCosts" };
+  return {
+    id,
+    labelKey,
+    done: status === "READY",
+    destination: "handoverCosts",
+    ...(status === undefined ? { unknown: true as const } : {}),
+  };
 }
 
 /**
@@ -241,6 +253,11 @@ function settlement(f: ChecklistFacts): Draft[] {
   }
   // Gates the live control reports, none of which the facts above can see.
   const reason = f.liveAction?.unavailableReasonKey;
+  // `finalizeDeal` refuses first on a waiting deposit request; the live control
+  // says so, and it is then what the operator has to resolve.
+  if (reason === "FinalizeNeedsPendingDepositRequestResolved") {
+    drafts.push({ id: "deposit-request-resolved", labelKey: "ChecklistDepositRequestResolved", done: false, gate: true });
+  }
   if (reason === "FinalizeNeedsHeldDepositResolved") {
     drafts.push({ id: "deposit-resolved", labelKey: "ChecklistDepositResolved", done: false, gate: true });
   }
@@ -290,7 +307,9 @@ function disbursement(f: ChecklistFacts): Draft[] | null {
  */
 export function deriveStepChecklist(facts: ChecklistFacts): ChecklistItem[] | null {
   let drafts: Draft[] | null;
-  if (facts.dealKind === "CASH") {
+  // Only the live stage has item-level facts the server reports.
+  if (facts.stageState !== "CURRENT" && facts.stageState !== "BLOCKED") return null;
+  if (facts.path === "SALE") {
     drafts = facts.stageKey === "HANDOVER" ? cashHandover(facts) : null;
   } else {
     switch (facts.stageKey) {
@@ -301,7 +320,7 @@ export function deriveStepChecklist(facts: ChecklistFacts): ChecklistItem[] | nu
         drafts = deliveryActions(facts);
         break;
       case "HANDOVER":
-        drafts = handover(facts);
+        drafts = handover();
         break;
       case "SETTLEMENT":
         drafts = settlement(facts);
@@ -314,5 +333,5 @@ export function deriveStepChecklist(facts: ChecklistFacts): ChecklistItem[] | nu
     }
   }
   if (drafts === null || drafts.length < 2) return null;
-  return settle(drafts, facts.stageState);
+  return settle(drafts);
 }

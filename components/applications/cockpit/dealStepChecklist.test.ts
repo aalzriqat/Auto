@@ -1,6 +1,9 @@
 /**
  * SCRUM-417 UX PR 4 (O2) -- the sub-step checklist derivation, one block per
  * stage. Pure: the facts go in, ids/statuses/destinations come out.
+ *
+ * Round 2: the checklist exists for the LIVE stage only (CURRENT / BLOCKED).
+ * A completed or upcoming stage has no item-level facts, so it gets none.
  */
 import { describe, expect, test } from "vitest";
 import { deriveStepChecklist, type ChecklistFacts } from "./dealStepChecklist";
@@ -35,16 +38,6 @@ describe("APPROVED_PURCHASE", () => {
       facts({ stageKey: "APPROVED_PURCHASE", stageState: "BLOCKED", blocker: "SomeRenamedBlocker" })
     );
     expect(view(items)).toEqual(["approved-amount:current", "gap-settled:pending"]);
-  });
-  test("complete: everything done; pending: nothing claimed", () => {
-    expect(view(deriveStepChecklist(facts({ stageKey: "APPROVED_PURCHASE", stageState: "COMPLETE" })))).toEqual([
-      "approved-amount:done",
-      "gap-settled:done",
-    ]);
-    expect(view(deriveStepChecklist(facts({ stageKey: "APPROVED_PURCHASE", stageState: "PENDING" })))).toEqual([
-      "approved-amount:pending",
-      "gap-settled:pending",
-    ]);
   });
 });
 
@@ -85,50 +78,31 @@ describe("DELIVERY_ACTIONS", () => {
     );
     expect(view(items)).toEqual(["documents-uploaded:done", "documents-verified:current"]);
   });
-  test("complete: all done", () => {
-    const items = deriveStepChecklist(
-      facts({ stageKey, stageState: "COMPLETE", documents: [{ required: true, status: "VERIFIED" }] })
-    );
-    expect(view(items)).toEqual(["documents-uploaded:done", "documents-verified:done"]);
-  });
 });
 
-describe("HANDOVER", () => {
+describe("HANDOVER (financed)", () => {
   const stageKey = "HANDOVER";
-  // registerVehicleHandover does not read handover costs -- they gate the close --
-  // so none of them is an item here.
-  test("ready (no blocker): the figures are done and registering is the one thing left", () => {
-    const items = deriveStepChecklist(facts({ stageKey, stageState: "CURRENT" }));
-    expect(view(items)).toEqual(["economics-ready:done", "register-handover:current"]);
-    expect(items?.[1].destination).toBe("primaryAction");
+  // registerVehicleHandover is one act. The server has no item-level fact for the
+  // deal's economics being ready, so nothing is listed or ticked for it; one item
+  // is not a checklist.
+  test("ready (no blocker): one action, no checklist", () => {
+    expect(deriveStepChecklist(facts({ stageKey, stageState: "CURRENT" }))).toBeNull();
   });
-  test("HandoverBlocked: the figures are current, registering pending", () => {
-    const items = deriveStepChecklist(facts({ stageKey, stageState: "BLOCKED", blocker: "HandoverBlocked" }));
-    expect(view(items)).toEqual(["economics-ready:current", "register-handover:pending"]);
-  });
-  test("any blocked handover is not ready, whatever the blocker key is called", () => {
-    const items = deriveStepChecklist(facts({ stageKey, stageState: "BLOCKED", blocker: "Renamed" }));
-    expect(view(items)).toEqual(["economics-ready:current", "register-handover:pending"]);
+  test("blocked, whatever the blocker is called: still no checklist, and never an economics tick", () => {
+    for (const blocker of ["HandoverBlocked", "Renamed", undefined]) {
+      expect(deriveStepChecklist(facts({ stageKey, stageState: "BLOCKED", blocker }))).toBeNull();
+    }
   });
   test("costs never appear under Handover, even when readiness shows them unpaid", () => {
-    const items = deriveStepChecklist(
-      facts({
-        stageKey,
-        stageState: "CURRENT",
-        checks: { CONFIGURED_FEES_RECORDED: "BLOCKED", HANDOVER_COSTS_PAID: "BLOCKED" },
-      })
-    );
-    expect(view(items)).toEqual(["economics-ready:done", "register-handover:current"]);
-  });
-  test("a pending handover previews everything as pending; a complete one as done", () => {
-    expect(view(deriveStepChecklist(facts({ stageKey, stageState: "PENDING" })))).toEqual([
-      "economics-ready:pending",
-      "register-handover:pending",
-    ]);
-    expect(view(deriveStepChecklist(facts({ stageKey, stageState: "COMPLETE" })))).toEqual([
-      "economics-ready:done",
-      "register-handover:done",
-    ]);
+    expect(
+      deriveStepChecklist(
+        facts({
+          stageKey,
+          stageState: "CURRENT",
+          checks: { CONFIGURED_FEES_RECORDED: "BLOCKED", HANDOVER_COSTS_PAID: "BLOCKED" },
+        })
+      )
+    ).toBeNull();
   });
 });
 
@@ -195,7 +169,7 @@ describe("SETTLEMENT", () => {
     );
     expect(view(items)).toEqual(["expected-payment:done", "closing-checks:current", "close-deal:pending"]);
   });
-  test("RISK: an expected check key that is absent renders not-done -- never omitted, never done", () => {
+  test("RISK: an expected check key that is absent renders not-done, is never done, and never takes the current slot", () => {
     const items = deriveStepChecklist(
       facts({
         ...open,
@@ -205,9 +179,9 @@ describe("SETTLEMENT", () => {
       })
     );
     const byId = Object.fromEntries((items ?? []).map((item) => [item.id, item.status]));
-    expect(byId["costs-recorded"]).toBe("current");
+    expect(byId["costs-recorded"]).toBe("pending");
     expect(byId["costs-paid"]).toBe("pending");
-    for (const id of ["costs-recorded", "costs-paid"]) expect(byId[id]).not.toBe("done");
+    expect(byId["closing-checks"]).toBe("current");
   });
   test("RISK: a check with an unrecognised status is not done either", () => {
     const items = deriveStepChecklist(
@@ -235,17 +209,29 @@ describe("DISBURSEMENT", () => {
   test("neighbours unknown: no checklist", () => {
     expect(deriveStepChecklist(facts({ stageKey, stageState: "CURRENT" }))).toBeNull();
   });
-  test("handed over and closed: confirming the payment is current", () => {
+  test("live once handed over and closed: confirming the payment is current", () => {
     const items = deriveStepChecklist(
       facts({ stageKey, stageState: "BLOCKED", stageStates: { HANDOVER: "COMPLETE", SETTLEMENT: "PENDING" } })
     );
     expect(view(items)).toEqual(["handed-over:done", "sale-closed:done", "payment-confirmed:current"]);
   });
-  test("not yet handed over: handover is the first thing outstanding", () => {
-    const items = deriveStepChecklist(
-      facts({ stageKey, stageState: "PENDING", stageStates: { HANDOVER: "CURRENT", SETTLEMENT: "PENDING" } })
-    );
-    expect(view(items)).toEqual(["handed-over:pending", "sale-closed:pending", "payment-confirmed:pending"]);
+});
+
+describe("ROUND 2: the checklist is the LIVE stage's only -- nothing ticks without a fact", () => {
+  const everything: Array<Partial<ChecklistFacts> & Pick<ChecklistFacts, "stageKey">> = [
+    { stageKey: "APPROVED_PURCHASE" },
+    { stageKey: "DELIVERY_ACTIONS", documents: [{ required: true, status: "VERIFIED" }] },
+    { stageKey: "HANDOVER", path: "SALE", liveAction: { actionKey: "CompleteCashSaleAction", unavailableReasonKey: "CashSaleCompletionNeedsDepositDecision" } },
+    { stageKey: "SETTLEMENT", expectedPaymentRegistered: true, readinessState: "READY" },
+    { stageKey: "DISBURSEMENT", stageStates: { HANDOVER: "COMPLETE", SETTLEMENT: "PENDING" } },
+  ];
+  test.each(["COMPLETE", "PENDING", "STOPPED"] as const)("%s: no checklist for any stage", (stageState) => {
+    for (const extra of everything) {
+      expect(deriveStepChecklist(facts({ ...extra, stageState })), `${extra.stageKey}`).toBeNull();
+    }
+  });
+  test.each(["CURRENT", "BLOCKED"] as const)("%s (live) still has one where the stage has sub-steps", (stageState) => {
+    expect(deriveStepChecklist(facts({ stageKey: "APPROVED_PURCHASE", stageState }))).not.toBeNull();
   });
 });
 
@@ -261,9 +247,9 @@ describe("INVARIANT: the checklist never contradicts the step's own status", () 
     { checks: {}, readinessState: "NOT_READY", routeRecorded: false, expectedPaymentRegistered: false },
     { stageStates: { HANDOVER: "CURRENT", SETTLEMENT: "PENDING" } },
   ];
-  test.each(["FINANCED", "CASH", undefined])("HANDOVER (%s) with no blocker: nothing is pending-blocking", (dealKind) => {
+  test.each(["APPLICATION", "SALE", undefined] as const)("HANDOVER (%s) with no blocker: nothing is pending-blocking", (path) => {
     for (const extra of hostileFacts) {
-      const items = deriveStepChecklist(facts({ stageKey: "HANDOVER", stageState: "CURRENT", dealKind, ...extra })) ?? [];
+      const items = deriveStepChecklist(facts({ stageKey: "HANDOVER", stageState: "CURRENT", path, ...extra })) ?? [];
       for (const item of items) {
         expect(item.status, `${item.id}`).not.toBe("pending");
         if (item.status === "current") expect(item.destination).toBe("primaryAction");
@@ -370,7 +356,7 @@ describe("ROUND 1 F1: Settlement mirrors the finalizeDeal gates and the live con
   });
 });
 
-describe("ROUND 1 F2: an answered, empty readiness list keeps the cost items, not done", () => {
+describe("ROUND 1 F2 / ROUND 2 L1: an answered, empty readiness list keeps the cost items, not done, not current", () => {
   const stageKey = "SETTLEMENT";
   const settle = (checks: Record<string, string> | undefined) =>
     deriveStepChecklist(
@@ -382,10 +368,12 @@ describe("ROUND 1 F2: an answered, empty readiness list keeps the cost items, no
         checks,
       })
     );
-  test("{} (UNAVAILABLE with checks: []) keeps both cost items, not done", () => {
+  test("{} (UNAVAILABLE with checks: []) keeps both cost items, pending; the closing checks are current", () => {
     const items = settle({});
-    expect(items?.find((i) => i.id === "costs-recorded")?.status).toBe("current");
+    expect(items?.find((i) => i.id === "costs-recorded")?.status).toBe("pending");
     expect(items?.find((i) => i.id === "costs-paid")?.status).toBe("pending");
+    expect(items?.find((i) => i.id === "closing-checks")?.status).toBe("current");
+    expect(items?.find((i) => i.id === "closing-checks")?.destination).toBe("closing");
   });
   test("control: READY is done", () => {
     const items = settle({ CONFIGURED_FEES_RECORDED: "READY", HANDOVER_COSTS_PAID: "READY" });
@@ -396,40 +384,42 @@ describe("ROUND 1 F2: an answered, empty readiness list keeps the cost items, no
     const items = settle({ CONFIGURED_FEES_RECORDED: "NOT_APPLICABLE", HANDOVER_COSTS_PAID: "NOT_APPLICABLE" });
     expect(items?.some((i) => i.id === "costs-recorded" || i.id === "costs-paid")).toBe(false);
   });
-  test("control: one key missing is not done", () => {
-    const items = settle({ HANDOVER_COSTS_PAID: "READY" });
-    expect(items?.find((i) => i.id === "costs-recorded")?.status).toBe("current");
+  test("control: one key missing is not done and not current; the key that is known still is", () => {
+    const items = settle({ HANDOVER_COSTS_PAID: "BLOCKED" });
+    expect(items?.find((i) => i.id === "costs-recorded")?.status).toBe("pending");
+    expect(items?.find((i) => i.id === "costs-paid")?.status).toBe("current");
   });
-  test("control: a redacted / unavailable status is not done", () => {
+  test("control: a reported-but-unusable status is a known fact: not done, and it may be current", () => {
     const items = settle({ CONFIGURED_FEES_RECORDED: "UNAVAILABLE", HANDOVER_COSTS_PAID: "BLOCKED" });
     expect(items?.find((i) => i.id === "costs-recorded")?.status).toBe("current");
     expect(items?.find((i) => i.id === "costs-paid")?.status).toBe("pending");
   });
-  test("readiness not read at all (undefined): the cost items are not omitted either", () => {
+  test("readiness not read at all (undefined): the cost items are not omitted, and not current", () => {
     const items = settle(undefined);
-    expect(items?.find((i) => i.id === "costs-recorded")?.status).toBe("current");
+    expect(items?.find((i) => i.id === "costs-recorded")?.status).toBe("pending");
+    expect(items?.find((i) => i.id === "closing-checks")?.status).toBe("current");
   });
 });
 
-describe("ROUND 1 F3: cash deals show no inferred ticks", () => {
+describe("ROUND 1 F3 / ROUND 2 F2-P: the sale-keyed path is chosen by identity, not by dealKind", () => {
   test("a live cash handover has no checklist (a single action is not a checklist)", () => {
     expect(
       deriveStepChecklist(
         facts({
           stageKey: "HANDOVER",
           stageState: "CURRENT",
-          dealKind: "CASH",
+          path: "SALE",
           liveAction: { actionKey: "CompleteCashSaleAction" },
         })
       )
     ).toBeNull();
   });
-  test("a cash handover with a deposit decision pending mirrors the cash step, no economics tick", () => {
+  test("a sale-keyed handover with a deposit decision pending mirrors the cash step: no economics, no register", () => {
     const items = deriveStepChecklist(
       facts({
         stageKey: "HANDOVER",
         stageState: "CURRENT",
-        dealKind: "CASH",
+        path: "SALE",
         liveAction: {
           actionKey: "CompleteCashSaleAction",
           unavailableReasonKey: "CashSaleCompletionNeedsDepositDecision",
@@ -437,12 +427,24 @@ describe("ROUND 1 F3: cash deals show no inferred ticks", () => {
       })
     );
     expect(view(items)).toEqual(["cash-deposit-decision:current", "complete-sale:pending"]);
-    expect(items?.some((i) => i.id === "economics-ready")).toBe(false);
+    expect(items?.some((i) => i.id === "economics-ready" || i.id === "register-handover")).toBe(false);
   });
-  test("a cash settlement is never given the financed close chain", () => {
+  test("a sale-keyed settlement is never given the financed close chain", () => {
     expect(
       deriveStepChecklist(
-        facts({ stageKey: "SETTLEMENT", stageState: "BLOCKED", dealKind: "CASH", expectedPaymentRegistered: false })
+        facts({ stageKey: "SETTLEMENT", stageState: "BLOCKED", path: "SALE", expectedPaymentRegistered: false })
+      )
+    ).toBeNull();
+  });
+  test("the same cash reason on the application path is not a cash chain", () => {
+    expect(
+      deriveStepChecklist(
+        facts({
+          stageKey: "HANDOVER",
+          stageState: "CURRENT",
+          path: "APPLICATION",
+          liveAction: { actionKey: "X", unavailableReasonKey: "CashSaleCompletionNeedsDepositDecision" },
+        })
       )
     ).toBeNull();
   });
@@ -454,5 +456,30 @@ describe("ROUND 1 F5: the shortfall item points at the action that can settle it
       facts({ stageKey: "APPROVED_PURCHASE", stageState: "BLOCKED", blocker: "GapUnresolved" })
     );
     expect(items?.find((i) => i.id === "gap-settled")?.destination).toBe("primaryAction");
+  });
+});
+
+describe("ROUND 2 L4: a waiting deposit request is the current gate, and Close is not", () => {
+  const base = {
+    stageKey: "SETTLEMENT",
+    stageState: "BLOCKED" as const,
+    expectedPaymentRegistered: true,
+    readinessState: "READY",
+    checks: { CONFIGURED_FEES_RECORDED: "READY", HANDOVER_COSTS_PAID: "READY" },
+  };
+  test("all gates ready plus a pending deposit request: the request gate is current, close is pending", () => {
+    const items = deriveStepChecklist(
+      facts({
+        ...base,
+        liveAction: { actionKey: "FinalizeDealAction", unavailableReasonKey: "FinalizeNeedsPendingDepositRequestResolved" },
+      })
+    );
+    expect(items?.find((i) => i.id === "deposit-request-resolved")?.status).toBe("current");
+    expect(items?.find((i) => i.id === "close-deal")?.status).toBe("pending");
+  });
+  test("control: no request, close is current and there is no request gate", () => {
+    const items = deriveStepChecklist(facts({ ...base, liveAction: { actionKey: "FinalizeDealAction" } }));
+    expect(items?.find((i) => i.id === "close-deal")?.status).toBe("current");
+    expect(items?.some((i) => i.id === "deposit-request-resolved")).toBe(false);
   });
 });

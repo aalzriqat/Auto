@@ -82,6 +82,18 @@ const dealStepMessages = defineBilingualMessages({
   ],
   StageViewAnnounceShowing: ["Showing step", "عرض الخطوة"],
   StageViewAnnounceBack: ["Back to the current step", "العودة إلى الخطوة الحالية"],
+  // ROUND 2 (SCRUM-417 UX4): the deal is closed and this step waits on the finance company.
+  StageViewAnnounceBackDone: ["Back to the deal summary", "العودة إلى ملخص الصفقة"],
+  StageViewSettlementClosedNote: [
+    "The deal is closed. This step completes when the finance company's payment is confirmed, and the supplier is settled where the vehicle was supplied on consignment.",
+    "الصفقة مغلقة. تكتمل هذه الخطوة عند تأكيد دفعة شركة التمويل، وعند تسوية المورّد إن كانت المركبة مورَّدة بالأمانة.",
+  ],
+  // A deposit request still waiting blocks the close (finalizeDeal refuses on it first).
+  ChecklistDepositRequestResolved: ["Deposit request resolved", "معالجة طلب العربون"],
+  FinalizeNeedsPendingDepositRequestResolved: [
+    "A deposit request is still waiting on this deal. Confirm or cancel it in the deposit requests on this page, then close.",
+    "ما زال طلب عربون بانتظار المعالجة على هذه الصفقة. أكّده أو ألغِه من طلبات العربون في هذه الصفحة، ثم أغلق الصفقة.",
+  ],
   StageViewNeedsHeading: ["What it will need", "ما تحتاجه"],
   StageViewWhoActs: ["Who acts", "الجهة المنفّذة"],
   StageViewShowRecord: ["Show the recorded details", "عرض التفاصيل المسجّلة"],

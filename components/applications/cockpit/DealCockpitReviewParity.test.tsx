@@ -1156,6 +1156,47 @@ describe("the close is withheld where the server would refuse the drifted pin â€
     expect(within(focusRow()).getByRole("button", { name: "FinalizeDealAction" })).toBeTruthy();
   });
 
+  // SCRUM-417 UX4 round 2 (Sol R2-1 / Opus L4): `finalizeDeal` refuses FIRST on a
+  // waiting deposit request (applications.ts), so the close is not offered and
+  // the checklist's current item is that request, not "Close the deal".
+  const withPendingRequest = (pending: unknown[] | undefined) => {
+    closeable();
+    queryResults.set(GET_QUERY, application({ status: "APPROVED", economicsCurrency: "JOD" }));
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "APPROVED",
+        expectedPaymentRegistered: true,
+        stages: settlementStages,
+        ...(pending === undefined ? {} : { pendingDepositRequests: pending }),
+      })
+    );
+  };
+  const request = { _id: "req_1", amount: 1500, currency: "JOD", requestedBy: "user_1", requestedAt: 1 };
+  const item = (id: string) => within(screen.getByTestId("deal-step-checklist")).getByTestId(`deal-step-item-${id}`);
+
+  test("a waiting deposit request withholds the close, names why, and is the checklist's current item", () => {
+    withPendingRequest([request]);
+    renderCockpit();
+    expect(within(focusRow()).queryByRole("button", { name: "FinalizeDealAction" })).toBeNull();
+    expect(within(focusRow()).getByText("FinalizeNeedsPendingDepositRequestResolved")).toBeTruthy();
+    expect(item("deposit-request-resolved").getAttribute("data-status")).toBe("current");
+    expect(item("close-deal").getAttribute("data-status")).toBe("pending");
+  });
+
+  test("CONTROL -- no waiting request (empty list): the close is current and offered", () => {
+    withPendingRequest([]);
+    renderCockpit();
+    expect(within(focusRow()).getByRole("button", { name: "FinalizeDealAction" })).toBeTruthy();
+    expect(item("close-deal").getAttribute("data-status")).toBe("current");
+    expect(within(screen.getByTestId("deal-step-checklist")).queryByTestId("deal-step-item-deposit-request-resolved")).toBeNull();
+  });
+
+  test("CONTROL -- the payload does not carry the field: nothing is asserted either way", () => {
+    withPendingRequest(undefined);
+    renderCockpit();
+    expect(within(focusRow()).getByRole("button", { name: "FinalizeDealAction" })).toBeTruthy();
+  });
   test("a deal with a named finance company pinned to another currency: the close is withheld and the reason names the boundary", () => {
     closeable();
     queryResults.set(GET_QUERY, application({ status: "APPROVED", economicsCurrency: "USD" }));

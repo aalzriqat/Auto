@@ -80,9 +80,45 @@ const CASH_NEEDS_KEY: Readonly<Record<string, string>> = {
   SETTLEMENT: "StageNeedsSettlementCash",
 };
 
-export function stageNeedsKey(stageKey: string, dealKind?: string): string | undefined {
-  if (dealKind === "CASH" && Object.prototype.hasOwnProperty.call(CASH_NEEDS_KEY, stageKey)) {
+/**
+ * `path` is the cockpit's identity, not the deal's kind: "SALE" (no
+ * `applicationId`) is the sale-keyed cockpit, whose handover and settlement mean
+ * something different from the financed chain, even when the sale is a financed
+ * one.
+ */
+export function stageNeedsKey(stageKey: string, path?: "SALE" | "APPLICATION"): string | undefined {
+  if (path === "SALE" && Object.prototype.hasOwnProperty.call(CASH_NEEDS_KEY, stageKey)) {
     return CASH_NEEDS_KEY[stageKey];
   }
   return Object.prototype.hasOwnProperty.call(NEEDS_KEY, stageKey) ? NEEDS_KEY[stageKey] : undefined;
+}
+
+const NOTE_KEY: Readonly<Record<Exclude<StageViewMode, "live">, string>> = {
+  past: "StageViewPastNote",
+  future: "StageViewFutureNote",
+  stopped: "StageViewStoppedNote",
+};
+
+/**
+ * The words a viewed (non-live) step shows: a note, and -- for a step still to
+ * come -- what it will need.
+ *
+ * One case is neither "not started" nor a preview: the financed SETTLEMENT step
+ * of a deal the server reports CLOSED. The deal's own closing steps are done;
+ * the step stays PENDING until the finance company's payment is confirmed, so it
+ * says exactly that instead of "has not started". `closed` must be a fact the
+ * payload reports (`status === "CLOSED"`), never an inference from the rail.
+ */
+export function stageViewCopy(
+  mode: Exclude<StageViewMode, "live">,
+  stageKey: string,
+  opts: Readonly<{ path?: "SALE" | "APPLICATION"; closed?: boolean }> = {}
+): Readonly<{ noteKey: string; needsKey?: string }> {
+  if (mode === "future" && stageKey === "SETTLEMENT" && opts.path !== "SALE" && opts.closed === true) {
+    return { noteKey: "StageViewSettlementClosedNote" };
+  }
+  return {
+    noteKey: NOTE_KEY[mode],
+    needsKey: mode === "future" ? stageNeedsKey(stageKey, opts.path) : undefined,
+  };
 }

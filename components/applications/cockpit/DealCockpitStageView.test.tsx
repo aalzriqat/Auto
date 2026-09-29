@@ -37,6 +37,7 @@ vi.mock("@/components/accounting/AccountingTabShared", () => ({
 const stubs = vi.hoisted(() => ({
   queryResults: new Map<string, unknown>(),
   permissions: new Set<string>(),
+  replace: vi.fn(),
 }));
 
 vi.mock("@/hooks/use-permissions", () => ({
@@ -61,7 +62,7 @@ vi.mock("convex/react", async () => {
 });
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
+  useRouter: () => ({ replace: stubs.replace, push: vi.fn() }),
 }));
 
 vi.mock("@/components/ui/sonner", () => ({
@@ -130,6 +131,7 @@ afterEach(() => {
   cleanup();
   queryResults.clear();
   permissions.clear();
+  stubs.replace.mockClear();
 });
 
 const node = (key: string) => screen.getByTestId(`deal-stage-node-${key}`);
@@ -246,5 +248,23 @@ describe("O3 -- the ?stage= deep link", () => {
     renderDeal({}, link("SETTLEMENT"));
     expect(node("HANDOVER").getAttribute("aria-current")).toBe("step");
     expect(screen.getByTestId("deal-next-step").textContent).toContain("StageHandover");
+  });
+});
+describe("ROUND 2 -- the redirect to the sale keeps the viewed step", () => {
+  const withCanonicalSale = (stageDeepLink: StageDeepLink | undefined) => {
+    renderDeal({}, stageDeepLink);
+    cleanup();
+    stubs.replace.mockClear();
+    const cockpit = queryResults.get("dealWorkspace:financedDealCockpit") as Record<string, unknown>;
+    queryResults.set("dealWorkspace:financedDealCockpit", { ...cockpit, canonicalSaleId: "sale_9" });
+    return render(<DealCockpit orgId={ORG} applicationId={APP} stageDeepLink={stageDeepLink} />);
+  };
+  test("?stage=SETTLEMENT travels with the redirect", () => {
+    withCanonicalSale({ value: "SETTLEMENT", onChange: vi.fn() });
+    expect(stubs.replace).toHaveBeenCalledWith("/org1/sales/sale_9/deal?stage=SETTLEMENT");
+  });
+  test("control: no viewed step, a bare sale URL", () => {
+    withCanonicalSale({ value: null, onChange: vi.fn() });
+    expect(stubs.replace).toHaveBeenCalledWith("/org1/sales/sale_9/deal");
   });
 });

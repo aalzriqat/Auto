@@ -3,7 +3,7 @@
  * the fall-back to the live step, and how each state is shown.
  */
 import { describe, expect, test } from "vitest";
-import { resolveViewedStage, stageNeedsKey, stageViewMode } from "./dealStepView";
+import { resolveViewedStage, stageNeedsKey, stageViewCopy, stageViewMode } from "./dealStepView";
 import { deriveStepChecklist } from "./dealStepChecklist";
 import { salesAr, salesEn } from "@/lib/i18n/domains/sales";
 
@@ -57,6 +57,35 @@ describe("stageNeedsKey", () => {
     expect(stageNeedsKey("toString")).toBeUndefined();
     expect(stageNeedsKey("NOPE")).toBeUndefined();
   });
+  test("the sale-keyed path (applicationId null) gets the cash wording for Handover and Settlement, whatever dealKind says", () => {
+    expect(stageNeedsKey("HANDOVER", "SALE")).toBe("StageNeedsHandoverCash");
+    expect(stageNeedsKey("SETTLEMENT", "SALE")).toBe("StageNeedsSettlementCash");
+    expect(stageNeedsKey("HANDOVER", "APPLICATION")).toBe("StageNeedsHandover");
+    expect(stageNeedsKey("SETTLEMENT")).toBe("StageNeedsSettlement");
+    expect(stageNeedsKey("DISBURSEMENT", "SALE")).toBe("StageNeedsDisbursement");
+  });
+});
+
+describe("stageViewCopy", () => {
+  test("past and stopped carry a note and no needs; future carries both", () => {
+    expect(stageViewCopy("past", "HANDOVER")).toEqual({ noteKey: "StageViewPastNote", needsKey: undefined });
+    expect(stageViewCopy("stopped", "HANDOVER")).toEqual({ noteKey: "StageViewStoppedNote", needsKey: undefined });
+    expect(stageViewCopy("future", "HANDOVER")).toEqual({ noteKey: "StageViewFutureNote", needsKey: "StageNeedsHandover" });
+  });
+  test("a pending financed Settlement of a CLOSED deal never says 'has not started'", () => {
+    expect(stageViewCopy("future", "SETTLEMENT", { path: "APPLICATION", closed: true })).toEqual({
+      noteKey: "StageViewSettlementClosedNote",
+    });
+  });
+  test("controls: open deal, unknown closed fact, sale-keyed path and other stages keep the future copy", () => {
+    expect(stageViewCopy("future", "SETTLEMENT", { closed: false }).noteKey).toBe("StageViewFutureNote");
+    expect(stageViewCopy("future", "SETTLEMENT", {}).noteKey).toBe("StageViewFutureNote");
+    expect(stageViewCopy("future", "SETTLEMENT", { path: "SALE", closed: true })).toEqual({
+      noteKey: "StageViewFutureNote",
+      needsKey: "StageNeedsSettlementCash",
+    });
+    expect(stageViewCopy("future", "DISBURSEMENT", { closed: true }).noteKey).toBe("StageViewFutureNote");
+  });
 });
 
 describe("O2/O3 copy is paired EN/AR", () => {
@@ -84,8 +113,9 @@ describe("O2/O3 copy is paired EN/AR", () => {
       deriveStepChecklist({
         stageKey: "HANDOVER",
         stageState: "CURRENT",
+        path: "SALE",
         stageStates: states,
-        checks: { CONFIGURED_FEES_RECORDED: "READY", HANDOVER_COSTS_PAID: "READY" },
+        liveAction: { actionKey: "CompleteCashSaleAction", unavailableReasonKey: "CashSaleCompletionNeedsDepositDecision" },
       }),
       deriveStepChecklist({
         stageKey: "SETTLEMENT",
@@ -94,6 +124,15 @@ describe("O2/O3 copy is paired EN/AR", () => {
         routeRecorded: true,
         readinessState: "READY",
       }),
+      ...["FinalizeNeedsPendingDepositRequestResolved", "FinalizeNeedsHeldDepositResolved", "FinalizeCurrencyMismatch"].map(
+        (unavailableReasonKey) =>
+          deriveStepChecklist({
+            stageKey: "SETTLEMENT",
+            stageState: "CURRENT",
+            stageStates: states,
+            liveAction: { actionKey: "FinalizeDealAction", unavailableReasonKey },
+          })
+      ),
       deriveStepChecklist({ stageKey: "DISBURSEMENT", stageState: "CURRENT", stageStates: states }),
     ].flatMap((items) => items ?? []);
     expect(all.length).toBeGreaterThan(8);

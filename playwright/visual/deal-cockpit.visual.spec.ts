@@ -118,7 +118,7 @@ const WITHHELD_CLOSE_VARIANTS: ReadonlyArray<{
 ];
 
 /**
- * SCRUM-417 UX4 (O2/O3): the sub-step checklist on a live Handover, and the
+ * SCRUM-417 UX4 (O2/O3): the sub-step checklist on the LIVE step (Settlement), and the
  * read-only view of a past and of a future step (what `?stage=` or a rail click
  * opens). `mode` is what the view card must declare; `checklist` whether the
  * live card must list sub-steps.
@@ -129,7 +129,7 @@ const UX4_VARIANTS: ReadonlyArray<{
   mode: "past" | "future" | null;
   stage: string | null;
 }> = [
-  { suffix: "-ux4-handover-checklist", title: "the live Handover card lists only its own gates", mode: null, stage: null },
+  { suffix: "-ux4-settlement-checklist", title: "the live Settlement card lists its closing gates, one current", mode: null, stage: null },
   { suffix: "-ux4-view-past", title: "a past step opens read-only with a way back", mode: "past", stage: "APPLICATION" },
   { suffix: "-ux4-view-future", title: "a future step says what it needs and who acts", mode: "future", stage: "SETTLEMENT" },
 ];
@@ -785,10 +785,11 @@ for (const variant of UX4_VARIANTS) {
               await expect(list).toBeVisible();
               expect(await list.locator('[data-status="current"]').count()).toBe(1);
               expect(await list.locator('[data-status="done"]').count()).toBeGreaterThan(0);
-              // Handover with no blocker: the server says nothing is outstanding, so the
-              // checklist must not leave anything pending (costs gate the close, not this step).
-              expect(await list.locator('[data-status="pending"]').count()).toBe(0);
-              await expect(list.getByTestId("deal-step-item-costs-paid")).toHaveCount(0);
+              // Settlement: the closing gates follow the server's order, so what
+              // is not reached yet is pending, and the unpaid cost is the current one.
+              expect(await list.locator('[data-status="pending"]').count()).toBeGreaterThan(0);
+              await expect(list.getByTestId("deal-step-item-costs-paid")).toHaveAttribute("data-status", "current");
+              await expect(list.getByTestId("deal-step-item-close-deal")).toHaveAttribute("data-status", "pending");
               await expect(page.getByTestId("deal-stage-view")).toHaveCount(0);
               const box = await list.boundingBox();
               expect(box!.x).toBeGreaterThanOrEqual(mainBox!.x - 0.5);
@@ -805,6 +806,8 @@ for (const variant of UX4_VARIANTS) {
               expect(backBox!.x).toBeGreaterThanOrEqual(mainBox!.x - 0.5);
               expect(backBox!.x + backBox!.width).toBeLessThanOrEqual(mainBox!.x + mainBox!.width + 0.5);
               await expect(page.getByTestId("deal-stage-view-owner")).toBeVisible();
+              // Only the live step has sub-steps: a viewed one lists none.
+              await expect(view.getByTestId("deal-step-checklist")).toHaveCount(0);
               if (variant.mode === "future") await expect(page.getByTestId("deal-stage-view-needs")).toBeVisible();
               // The live step is still the only aria-current node and card.
               expect(await rail.locator('[aria-current="step"]').count()).toBe(1);

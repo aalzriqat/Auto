@@ -1968,7 +1968,14 @@ export function DealCockpit({
       };
     }
 
-    const finalizeReasonKey = finalizeDenominationBlock
+    // `finalizeDeal` refuses FIRST on a waiting deposit request (SCRUM-444
+    // DA-03), so it outranks every other reason. Only a payload that carries the
+    // field asserts it; an absent field keeps the behaviour below.
+    const hasPendingDepositRequest =
+      "pendingDepositRequests" in deal && deal.pendingDepositRequests.length > 0;
+    const finalizeReasonKey = hasPendingDepositRequest
+      ? "FinalizeNeedsPendingDepositRequestResolved"
+      : finalizeDenominationBlock
       ? FINALIZE_DENOMINATION_REASON[finalizeDenominationBlock]
       : finalizeUnavailableReasonKey({
           routeRequired: settlementRouteRequired,
@@ -4595,14 +4602,19 @@ export function DealCockpitView({
   const readinessChecks: Partial<Record<ClosingReadinessCheckKey, string>> | undefined = openReadiness
     ? Object.fromEntries(openReadiness.checks.map((check) => [check.key, check.status]))
     : undefined;
+  // The identity of THIS cockpit, by `applicationId` (as the title below does),
+  // never by `dealKind`: an applicationless FINANCED/LEASE sale is `dealKind:
+  // "FINANCED"` and has the sale's steps, not the financed chain.
+  const dealPath: "SALE" | "APPLICATION" = deal.applicationId === null ? "SALE" : "APPLICATION";
+  // The server reports a closed deal positively: `status === "CLOSED"`.
+  const dealClosed = deal.status === "CLOSED";
+  // Only the LIVE step has a checklist (`deriveStepChecklist` is null for any
+  // other state): the server has no item-level facts for a finished or upcoming one.
   const checklistOf = (stage: (typeof stages)[number]): ChecklistItem[] | null =>
-    // A step that has stopped will never happen: it has no sub-steps to list.
-    stage.state === "STOPPED"
-      ? null
-      : deriveStepChecklist({
+      deriveStepChecklist({
           stageKey: stage.key,
           stageState: stage.state,
-          dealKind: deal.dealKind,
+          path: dealPath,
           blocker: stage.blocker,
           stageStates,
           documents: deal.documents,
@@ -5286,33 +5298,40 @@ export function DealCockpitView({
   // The step being looked at, when it is not the live one: a read-only card
   // ABOVE the live step. It is one more keyed sibling in the flow, so it comes
   // and goes without ever remounting a panel.
+  const recordPanel = otherStage
+    ? panelsForStage(otherStage.key).find((panel) => panelNodes[panel] != null)
+    : undefined;
   const stageViewNode: ReactNode = otherStage ? (
     <DealStageView
       mode={viewedMode === "live" ? "future" : viewedMode}
       stageKey={otherStage.key}
-      dealKind={deal.dealKind}
+      path={dealPath}
+      closed={dealClosed}
       label={t(STAGE_LABEL[otherStage.key] ?? otherStage.key)}
       state={otherStage.state}
       owner={stageOwnerLabel(otherStage, activeAppraisalProvider, t)}
       position={stages.findIndex((stage) => stage.key === otherStage.key) + 1}
       total={stages.length}
-      checklist={checklistOf(otherStage)}
       hasLiveStep={live !== undefined}
       onBack={() => {
         // The back control unmounts with the card, taking focus with it: put
         // it on the rail node first (the live step's, or -- on a finished
         // deal with no live step -- the one that was being viewed), so a
         // keyboard user is never dropped onto the page.
-        const target = document.querySelector<HTMLElement>(
-          `[data-testid="deal-stage-node-${live?.key ?? otherStage.key}"]`
-        );
+        // A finished deal keeps its rail collapsed behind the persistent
+        // "show stages" toggle: with no node on screen, focus goes there.
+        const target =
+          document.querySelector<HTMLElement>(
+            `[data-testid="deal-stage-node-${live?.key ?? otherStage.key}"]`
+          ) ?? document.querySelector<HTMLElement>('[data-testid="deal-stages-toggle"]');
         target?.focus({ preventScroll: true });
         requestStage(null);
       }}
-      onShowRecord={(() => {
-        const shown = panelsForStage(otherStage.key).find((panel) => panelNodes[panel] != null);
-        return shown ? () => goToFlowPanel(shown) : undefined;
-      })()}
+      // The documents live in the controlled lower tabs, which may be on
+      // Activity: the existing documents transition switches them first.
+      onShowRecord={
+        recordPanel ? (recordPanel === "documents" ? goToDocuments : () => goToFlowPanel(recordPanel)) : undefined
+      }
       t={t}
     />
   ) : null;
@@ -5769,7 +5788,11 @@ export function DealCockpitView({
             ? `${t("StageViewAnnounceShowing")}: ${t(STAGE_LABEL[otherStage.key] ?? otherStage.key)}, ${t(STAGE_STATE_KEY[otherStage.state])}`
             : null
         }
-        restoreMessage={live ? `${t("StageViewAnnounceBack")}: ${t(STAGE_LABEL[live.key] ?? live.key)}` : ""}
+        restoreMessage={
+          live
+            ? `${t("StageViewAnnounceBack")}: ${t(STAGE_LABEL[live.key] ?? live.key)}`
+            : t("StageViewAnnounceBackDone")
+        }
       />
       <div
         ref={flowRef}
