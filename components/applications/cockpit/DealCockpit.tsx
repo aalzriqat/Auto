@@ -1523,20 +1523,23 @@ export function DealCockpit({
     app.status !== "CANCELLED";
   /**
    * SCRUM-447 N1-A: the cheque states in which `confirmDisbursement` REFUSES
-   * (a cleared cheque awaiting accounting review, a returned/cancelled one
-   * awaiting correction, or no payment registered on a closed deal). The rail
-   * withholds the confirmation exactly there and names the cheque panel's own
-   * notice, so it never offers a step the server would refuse. Review outranks
-   * correction, as on the server, where a CLEARED row is named first.
+   * (a cleared cheque awaiting accounting review, a live cheque whose face was
+   * never recorded, a returned/cancelled one awaiting correction, or no payment
+   * registered on a closed deal). The rail withholds the confirmation exactly
+   * there and names the cheque panel's own notice, in the panel's order, so it
+   * never offers a step the server would refuse. Review comes first, as on the
+   * server, where a CLEARED row is named first.
    */
   const chequeDisbursementBlockKey: string | undefined =
     deal?.chequeNeedsAccountingReview === true
       ? "FcAccountingReviewNotice"
-      : deal?.chequeNeedsCorrection === true
-        ? "FcCorrectNeededNotice"
-        : deal?.expectedPaymentReRegistrable === true
-          ? "FcReRegisterNotice"
-          : undefined;
+      : deal?.chequeFaceUnrecorded === true
+        ? "FcChequeFaceUnrecordedNotice"
+        : deal?.chequeNeedsCorrection === true
+          ? "FcCorrectNeededNotice"
+          : deal?.expectedPaymentReRegistrable === true
+            ? "FcReRegisterNotice"
+            : undefined;
   // On the direct route the company pays the supplier, so there is no
   // dealership receipt to confirm — `confirmDisbursement` would invent cash.
   const canConfirmDisbursement =

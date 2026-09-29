@@ -583,6 +583,7 @@ describe("disbursement — the two confirmations, from the DISBURSEMENT stage", 
   // confirmation, so the rail must not offer it and must point at the panel.
   test.each([
     ["chequeNeedsAccountingReview", "FcAccountingReviewNotice"],
+    ["chequeFaceUnrecorded", "FcChequeFaceUnrecordedNotice"],
     ["chequeNeedsCorrection", "FcCorrectNeededNotice"],
     ["expectedPaymentReRegistrable", "FcReRegisterNotice"],
   ])("%s withholds ConfirmDisbursement and names the panel's notice", (flag, reasonKey) => {
