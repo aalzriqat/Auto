@@ -1251,10 +1251,14 @@ describe("O1 -- the step workbench", () => {
   }
 
   function renderStage(live: FinancedDealStageKey | null, state: "CURRENT" | "STOPPED" = "CURRENT") {
+    return render(stageElement(live, state));
+  }
+
+  function stageElement(live: FinancedDealStageKey | null, state: "CURRENT" | "STOPPED" = "CURRENT") {
     language.locale = "en";
     const base = financedDeal();
     const deal: FinancedDealCockpitData = { ...base, stages: stagesWithLive(live, state) };
-    return render(
+    return (
       <DealCockpitView
         deal={deal}
         backHref="/org_1/deals"
@@ -1433,6 +1437,52 @@ describe("O1 -- the step workbench", () => {
     render(<DealCockpitView deal={deal} backHref="/org_1/deals" onRecordSupplierReceipt={async () => {}} />);
     expect(screen.queryByTestId("deal-workbench")).toBeNull();
     expect(details().open).toBe(true);
+  });
+
+  // A panel that changes place when the live stage changes must be MOVED, not
+  // remounted: its money-command state (the add-cost form's intent, an open
+  // custody dialog and its identity) is component-local, and losing it would
+  // forget an attempt whose outcome may be UNKNOWN. Another user registering
+  // the handover flips the stage under an operator with a form open.
+  test.each([
+    ["HANDOVER", "SETTLEMENT"],
+    ["SETTLEMENT", "HANDOVER"],
+  ] as const)("a stage change %s -> %s keeps an open add-cost form and its intent", (from, to) => {
+    const { rerender } = renderStage(from);
+    const panel = screen.getByTestId("deal-handover-costs");
+    fireEvent.click(within(panel).getByRole("button", { name: (dictionaries.en as Record<string, string>).AddHandoverCost }));
+    const form = screen.getByTestId("deal-handover-cost-add");
+    const intent = form.getAttribute("data-intent");
+    expect(intent).toBeTruthy();
+
+    rerender(stageElement(to));
+
+    expect(screen.getByTestId("deal-handover-costs")).toBe(panel);
+    expect(screen.getByTestId("deal-handover-cost-add")).toBe(form);
+    expect(screen.getByTestId("deal-handover-cost-add").getAttribute("data-intent")).toBe(intent);
+  });
+
+  test.each([
+    ["HANDOVER", "SETTLEMENT"],
+    ["SETTLEMENT", "HANDOVER"],
+  ] as const)("a stage change %s -> %s keeps an open custody dialog", (from, to) => {
+    const { rerender } = renderStage(from);
+    const panel = screen.getByTestId("deal-custody");
+    fireEvent.click(within(panel).getByRole("button", { name: (dictionaries.en as Record<string, string>).CustodyRecordReturn }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    rerender(stageElement(to));
+
+    expect(screen.getByTestId("deal-custody")).toBe(panel);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  test("collapsing Deal details does not unmount what is in it", () => {
+    renderStage("SETTLEMENT");
+    const panel = screen.getByTestId("deal-custody");
+    fireEvent.click(screen.getByTestId("deal-details-toggle"));
+    fireEvent.click(screen.getByTestId("deal-details-toggle"));
+    expect(screen.getByTestId("deal-custody")).toBe(panel);
   });
 
   test("S4: a blocked check whose panel is inside collapsed Deal details opens it before it scrolls and focuses", () => {
