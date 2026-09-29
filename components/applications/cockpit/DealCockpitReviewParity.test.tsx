@@ -679,6 +679,60 @@ describe("held deposit on a stopped deal — deposits.release", () => {
     expect(third.idempotencyKey).not.toBe(first.idempotencyKey);
   });
 
+  test("SCRUM-469 F1: after a lost response a DIFFERENT method is not sent; the notice offers retry-as-recorded (same key) or dismiss (new key)", async () => {
+    permissions.add(PERMISSIONS.APPROVE_REQUESTS);
+    queryResults.set(COCKPIT_QUERY, cockpit(rejected));
+    queryResults.set(
+      GET_QUERY,
+      application({ status: "REJECTED", deposits: [{ _id: "dep_1", amount: 500, status: "HELD", releaseCount: 0 }] })
+    );
+    stubs.mutationFailures.set("deposits:release", "network lost");
+    renderCockpit();
+
+    fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    pickMethod(screen.getByRole("dialog"), "CASH");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(1));
+    const firstKey = (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[0]!.idempotencyKey;
+
+    // The operator changes their mind about the method and presses Refund.
+    pickMethod(screen.getByRole("dialog"), "BANK_TRANSFER");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    const notice = await screen.findByTestId("unconfirmed-payout-notice");
+    expect(mutationCalls.get("deposits:release")).toHaveLength(1);
+
+    // Retry exactly as recorded: same method, same key.
+    fireEvent.click(within(notice).getByRole("button", { name: "PayoutUnconfirmedRetry" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(2));
+    const second = (mutationCalls.get("deposits:release") as Array<Record<string, unknown>>)[1]!;
+    expect(second.idempotencyKey).toBe(firstKey);
+    expect(second.refundMethod).toBe("CASH");
+
+    // The retry confirmed: the identity is retired and the notice is gone.
+    await waitFor(() => expect(screen.queryByTestId("unconfirmed-payout-notice")).toBeNull());
+
+    // A fresh unconfirmed attempt, then DISMISS: the next payout is a new command.
+    stubs.mutationFailures.set("deposits:release", "network lost");
+    fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    pickMethod(screen.getByRole("dialog"), "CASH");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(3));
+    const lostKey = (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[2]!.idempotencyKey;
+    expect(lostKey).not.toBe(firstKey);
+    pickMethod(screen.getByRole("dialog"), "BANK_TRANSFER");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    const secondNotice = await screen.findByTestId("unconfirmed-payout-notice");
+    expect(mutationCalls.get("deposits:release")).toHaveLength(3);
+    fireEvent.click(within(secondNotice).getByRole("button", { name: "PayoutUnconfirmedDismiss" }));
+    await waitFor(() => expect(screen.queryByTestId("unconfirmed-payout-notice")).toBeNull());
+    fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    pickMethod(screen.getByRole("dialog"), "BANK_TRANSFER");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(4));
+    const fourth = (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[3]!;
+    expect(fourth.idempotencyKey).not.toBe(lostKey);
+  });
+
   test("forfeiting carries no refund method", async () => {
     permissions.add(PERMISSIONS.APPROVE_REQUESTS);
     queryResults.set(COCKPIT_QUERY, cockpit(rejected));

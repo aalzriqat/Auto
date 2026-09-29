@@ -51,6 +51,8 @@ import { PERMISSIONS } from "@/convex/utils/permissions";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { isChosenMethod } from "@/components/payments/paymentMethod";
 import { HeldDepositActions } from "@/components/vehicles/HeldDepositActions";
+import { UnconfirmedPayoutNotice } from "@/components/deposits/UnconfirmedPayoutNotice";
+import { usePendingDepositPayouts } from "@/hooks/usePendingDepositPayouts";
 import { getErrorMessage } from "@/lib/errors";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 
@@ -107,6 +109,9 @@ export function VehicleDetailsDialog({
   );
   const releaseDeposit = useMutation(api.deposits.release);
   const commandId = useCommandIdentity();
+  // SCRUM-469 F1: the identity (resolution + METHOD + key) of a payout that may
+  // have committed, per deposit, kept until confirmed or explicitly dismissed.
+  const pendingPayouts = usePendingDepositPayouts();
   const upsertLandedCosts = useMutation(api.vehicles.upsertLandedCosts);
   const createReservation = useMutation(api.vehicles.createReservation);
   // Minted at the user-intent boundary and held across attempts. With a deposit
@@ -281,8 +286,13 @@ export function VehicleDetailsDialog({
   ) => {
     if (!activeOrgId) return;
     if (resolution === "REFUNDED" && !isChosenMethod(chosenRefundMethod)) return;
-    setReleasingDepositId(depositId);
     const refundMethod = resolution === "REFUNDED" ? chosenRefundMethod : "NONE";
+    // An earlier attempt on this deposit that never confirmed keeps its identity.
+    // A DIFFERENT decision is refused here (the notice explains) rather than
+    // minting a new key that could pay the same or newly freed money out twice.
+    const gate = pendingPayouts.check(String(depositId), resolution, String(refundMethod));
+    if (gate.status === "blocked") return;
+    setReleasingDepositId(depositId);
     try {
       // SCRUM-313 — a GENERATION-AWARE retained identity. This line has been
       // wrong twice in two opposite directions, so both failures are recorded:
@@ -311,8 +321,14 @@ export function VehicleDetailsDialog({
       // The refund method is in the intent because it is part of the decision
       // being made, not a presentation detail: refunding to CASH and refunding
       // to BANK_TRANSFER are different commands and must not share an identity.
-      const generation = observedReleaseCount;
-      const intent = `release-deposit:${String(depositId)}:${resolution}:${refundMethod}:gen${generation}`;
+      //
+      // The intent is the one recorded with the FIRST attempt: a retry after the
+      // generation moved (the lost response had in fact committed, or freed money
+      // arrived) must still be that attempt, not a new command.
+      const intent =
+        gate.recordedIntent ??
+        `release-deposit:${String(depositId)}:${resolution}:${refundMethod}:gen${observedReleaseCount}`;
+      pendingPayouts.record(String(depositId), { resolution, method: String(refundMethod), intent });
       await releaseDeposit({
         orgId: activeOrgId,
         depositId,
@@ -321,6 +337,7 @@ export function VehicleDetailsDialog({
         idempotencyKey: commandId.for(intent),
       });
       commandId.retire(intent);
+      pendingPayouts.confirm(String(depositId));
       toast.success(
         resolution === "REFUNDED"
           ? (t("DepositRefundedSuccess" as any) ?? "Deposit refunded")
@@ -570,6 +587,23 @@ export function VehicleDetailsDialog({
                                 handleReleaseDeposit(deposit._id, "REFUNDED", deposit.releaseCount ?? 0, method)
                               }
                               onForfeit={() => handleReleaseDeposit(deposit._id, "FORFEITED", deposit.releaseCount ?? 0)}
+                            />
+                          )}
+                          {pendingPayouts.blocked[deposit._id] && (
+                            <UnconfirmedPayoutNotice
+                              t={t as any}
+                              pending={pendingPayouts.blocked[deposit._id]!}
+                              busy={releasingDepositId === deposit._id}
+                              onRetry={() => {
+                                const recorded = pendingPayouts.blocked[deposit._id]!;
+                                void handleReleaseDeposit(
+                                  deposit._id,
+                                  recorded.resolution,
+                                  deposit.releaseCount ?? 0,
+                                  recorded.resolution === "REFUNDED" ? (recorded.method as PaymentMethod) : undefined
+                                );
+                              }}
+                              onDismiss={() => pendingPayouts.dismiss(deposit._id)}
                             />
                           )}
                         </div>

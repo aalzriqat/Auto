@@ -6,6 +6,7 @@
  * method chosen for the previous payout must not apply to the next one.
  */
 import { fireEvent, render } from "@testing-library/react-native";
+import { Alert } from "react-native";
 import { useMutation, useQuery } from "convex/react";
 
 jest.mock("convex/react", () => ({
@@ -91,5 +92,92 @@ describe("VehicleDetailScreen refund method is per payout (SCRUM-469 round 1)", 
     await fireEvent.changeText(view.getByTestId(`select-${REFUND_LABEL}`), "CASH");
     await view.rerender(tree());
     expect(view.getByTestId(`select-${REFUND_LABEL}`).props.value).toBe("CASH");
+  });
+});
+
+describe("VehicleDetailScreen an unconfirmed payout keeps its identity (SCRUM-469 round 3, F1)", () => {
+  const NOTICE_TITLE = "قد تكون دفعة سابقة لهذا العربون قد نُفذت بالفعل.";
+  type AlertButton = { text?: string; onPress?: () => void };
+  let alertSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    alertSpy = jest.spyOn(Alert, "alert").mockImplementation(() => undefined);
+  });
+  afterEach(() => alertSpy.mockRestore());
+
+  const pressAlert = async (text: string) => {
+    const buttons = alertSpy.mock.calls.at(-1)![2] as AlertButton[];
+    buttons.find((button) => button.text === text)!.onPress!();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+  const refund = async (view: Awaited<ReturnType<typeof render>>, method: string) => {
+    await fireEvent.changeText(view.getByTestId(`select-${REFUND_LABEL}`), method);
+    await fireEvent.press(view.getByRole("button", { name: REFUND_BUTTON }));
+    await pressAlert(REFUND_BUTTON);
+  };
+  const noticeShown = () => alertSpy.mock.calls.some((call) => call[0] === NOTICE_TITLE);
+
+  test("lost response, generation moves, a DIFFERENT method: no release is sent and the notice is shown", async () => {
+    releaseDeposit.mockRejectedValueOnce(new Error("lost")).mockResolvedValue(undefined);
+    const view = await render(tree());
+    await refund(view, "CASH");
+    expect(releaseDeposit).toHaveBeenCalledTimes(1);
+
+    releaseCount = 1;
+    await view.rerender(tree());
+    await refund(view, "BANK_TRANSFER");
+
+    expect(releaseDeposit).toHaveBeenCalledTimes(1);
+    expect(noticeShown()).toBe(true);
+  });
+
+  test("the SAME method reuses the same key even after the generation moved", async () => {
+    releaseDeposit.mockRejectedValueOnce(new Error("lost")).mockResolvedValue(undefined);
+    const view = await render(tree());
+    await refund(view, "CASH");
+    releaseCount = 1;
+    await view.rerender(tree());
+    await refund(view, "CASH");
+
+    expect(releaseDeposit).toHaveBeenCalledTimes(2);
+    expect(releaseDeposit.mock.calls[1]![0].idempotencyKey).toBe(releaseDeposit.mock.calls[0]![0].idempotencyKey);
+  });
+
+  test("control: a confirmed success mints a new key for the next payout", async () => {
+    releaseDeposit.mockResolvedValue(undefined);
+    const view = await render(tree());
+    await refund(view, "CASH");
+    releaseCount = 1;
+    await view.rerender(tree());
+    await refund(view, "BANK_TRANSFER");
+
+    expect(releaseDeposit).toHaveBeenCalledTimes(2);
+    expect(releaseDeposit.mock.calls[1]![0].idempotencyKey).not.toBe(releaseDeposit.mock.calls[0]![0].idempotencyKey);
+    expect(noticeShown()).toBe(false);
+  });
+
+  test("dismissing retires the recorded attempt: the next payout mints a new key", async () => {
+    releaseDeposit.mockRejectedValueOnce(new Error("lost")).mockResolvedValue(undefined);
+    const view = await render(tree());
+    await refund(view, "CASH");
+    await refund(view, "BANK_TRANSFER");
+    expect(releaseDeposit).toHaveBeenCalledTimes(1);
+    await pressAlert("لم تُنفذ - تجاهل");
+    await refund(view, "BANK_TRANSFER");
+
+    expect(releaseDeposit).toHaveBeenCalledTimes(2);
+    expect(releaseDeposit.mock.calls[1]![0].idempotencyKey).not.toBe(releaseDeposit.mock.calls[0]![0].idempotencyKey);
+  });
+
+  test("the notice's retry replays the recorded attempt with its own method and key", async () => {
+    releaseDeposit.mockRejectedValueOnce(new Error("lost")).mockResolvedValue(undefined);
+    const view = await render(tree());
+    await refund(view, "CASH");
+    await refund(view, "BANK_TRANSFER");
+    await pressAlert("إعادة الدفعة السابقة");
+
+    expect(releaseDeposit).toHaveBeenCalledTimes(2);
+    expect(releaseDeposit.mock.calls[1]![0].idempotencyKey).toBe(releaseDeposit.mock.calls[0]![0].idempotencyKey);
+    expect(releaseDeposit.mock.calls[1]![0].refundMethod).toBe("CASH");
   });
 });

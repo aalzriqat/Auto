@@ -13,6 +13,8 @@ import {
 import { HandCoins, Undo2, XCircle } from "lucide-react";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { isChosenMethod } from "@/components/payments/paymentMethod";
+import { UnconfirmedPayoutNotice } from "@/components/deposits/UnconfirmedPayoutNotice";
+import type { PendingPayout } from "@/hooks/usePendingDepositPayouts";
 
 export type DepositResolution = "REFUNDED" | "FORFEITED";
 
@@ -55,6 +57,8 @@ export function StoppedDealDepositsPanel({
   formatAmount,
   t,
   onResolve,
+  unconfirmed,
+  onDismissUnconfirmed,
 }: Readonly<{
   deposits: ReadonlyArray<DealDeposit>;
   canResolve: boolean;
@@ -75,6 +79,13 @@ export function StoppedDealDepositsPanel({
     refundMethod: PaymentMethod | undefined,
     observedReleaseCount: number
   ) => Promise<void>;
+  /**
+   * SCRUM-469 F1: deposits whose EARLIER payout attempt never confirmed and is
+   * blocking a different decision. The earlier payout may already have gone
+   * through, so the operator retries it as recorded or dismisses it.
+   */
+  unconfirmed?: Readonly<Record<string, PendingPayout>>;
+  onDismissUnconfirmed?: (depositId: string) => void;
 }>) {
   const [pending, setPending] = useState<{
     depositId: string;
@@ -166,6 +177,23 @@ export function StoppedDealDepositsPanel({
                   {statusLabel(deposit.status)}
                 </span>
               </div>
+              {unconfirmed?.[deposit._id] && (
+                <UnconfirmedPayoutNotice
+                  t={t}
+                  pending={unconfirmed[deposit._id]!}
+                  busy={resolvingId === deposit._id}
+                  onRetry={() => {
+                    const recorded = unconfirmed[deposit._id]!;
+                    void onResolve(
+                      deposit._id,
+                      recorded.resolution,
+                      recorded.resolution === "REFUNDED" ? (recorded.method as PaymentMethod) : undefined,
+                      deposit.releaseCount ?? 0
+                    ).catch(() => undefined);
+                  }}
+                  onDismiss={() => onDismissUnconfirmed?.(deposit._id)}
+                />
+              )}
               {held && canResolve && !!(deposit.releasedAmountMinor ?? 0) && faceValueIsReleasable && (
                 <p className="text-xs text-muted-foreground">{t("DepositResolveElsewhere")}</p>
               )}

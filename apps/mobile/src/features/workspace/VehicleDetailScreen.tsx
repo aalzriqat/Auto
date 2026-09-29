@@ -221,6 +221,14 @@ function VehicleDetailContent({
 
   const releaseDeposit = useMutation(api.deposits.release);
   const commandId = useCommandIdentity();
+  // SCRUM-469 F1: the identity (resolution + METHOD + intent) of a deposit payout
+  // that may have committed, per deposit. Kept until a CONFIRMED success or an
+  // explicit dismissal — not by the method picker clearing, the generation
+  // moving, or changing vehicle — so a different method chosen afterwards can
+  // never mint a second key for what may be the same money.
+  const pendingPayoutsRef = useRef<Map<string, { resolution: "REFUNDED" | "FORFEITED"; method: string; intent: string }>>(
+    new Map(),
+  );
   const upsertLandedCosts = useMutation(api.vehicles.upsertLandedCosts);
   const createReservation = useMutation(api.vehicles.createReservation);
   // Minted at the user-intent boundary and held across attempts — with a
@@ -304,13 +312,58 @@ function VehicleDetailContent({
     depositId: string,
     resolution: "REFUNDED" | "FORFEITED",
     observedReleaseCount: number,
+    // Set only by the reconciliation notice's retry: the RECORDED attempt's own
+    // method, not whatever the picker holds now.
+    recordedMethod?: string,
   ) {
     if (!orgId) return;
     // SCRUM-469: no default. A refund with no chosen method is refused here
     // BEFORE the busy flag is raised (an early return after it would leave the
     // row disabled forever), and the server refuses it too.
-    const chosenMethod = refundMethodFor({ _id: depositId, releaseCount: observedReleaseCount });
+    const chosenMethod =
+      (recordedMethod as MobileDepositMethod | undefined) ??
+      refundMethodFor({ _id: depositId, releaseCount: observedReleaseCount });
     if (resolution === "REFUNDED" && !isChosenMethod(chosenMethod)) return;
+    const method = resolution === "REFUNDED" ? chosenMethod : "NONE";
+    const pendingPayout = pendingPayoutsRef.current.get(depositId);
+    if (pendingPayout && (pendingPayout.resolution !== resolution || pendingPayout.method !== method)) {
+      // A DIFFERENT decision than an earlier attempt that never confirmed: do not
+      // send it (it would mint a new key and could pay out twice). Tell the
+      // operator to reconcile: retry the recorded attempt, or dismiss it.
+      const attemptLabel =
+        pendingPayout.resolution === "FORFEITED"
+          ? locale === "ar" ? "مصادرة" : "Forfeit"
+          : (paymentMethodOptions.find((option) => option.value === pendingPayout.method)?.label ?? pendingPayout.method);
+      Alert.alert(
+        locale === "ar"
+          ? "قد تكون دفعة سابقة لهذا العربون قد نُفذت بالفعل."
+          : "An earlier payout for this deposit may already have gone through.",
+        locale === "ar"
+          ? `تحقق أولاً من سجل الرد لهذا العربون. المحاولة السابقة: ${attemptLabel}`
+          : `Check this deposit's refund history first. Earlier attempt: ${attemptLabel}`,
+        [
+          { text: locale === "ar" ? "إغلاق" : "Close", style: "cancel" },
+          {
+            text: locale === "ar" ? "إعادة الدفعة السابقة" : "Retry the earlier payout",
+            onPress: () =>
+              void handleReleaseDeposit(
+                depositId,
+                pendingPayout.resolution,
+                observedReleaseCount,
+                pendingPayout.resolution === "REFUNDED" ? pendingPayout.method : undefined,
+              ),
+          },
+          {
+            text: locale === "ar" ? "لم تُنفذ - تجاهل" : "It did not go through - dismiss",
+            style: "destructive",
+            onPress: () => {
+              pendingPayoutsRef.current.delete(depositId);
+            },
+          },
+        ],
+      );
+      return;
+    }
     setReleasingDepositId(depositId);
     // SCRUM-313 — a GENERATION-AWARE retained identity, mirroring the web caller
     // in `components/vehicles/VehicleDetailsDialog.tsx`, which carries the full
@@ -330,8 +383,12 @@ function VehicleDetailContent({
     //
     // The refund method is part of the decision, not presentation: refunding to
     // CASH and to BANK_TRANSFER must not share one identity.
-    const method = resolution === "REFUNDED" ? chosenMethod : "NONE";
-    const intent = `release-deposit:${String(depositId)}:${resolution}:${method}:gen${observedReleaseCount}`;
+    // The intent is the one recorded with the FIRST attempt, so a retry after the
+    // generation moved is still that attempt and not a new command.
+    const intent =
+      pendingPayout?.intent ??
+      `release-deposit:${String(depositId)}:${resolution}:${method}:gen${observedReleaseCount}`;
+    if (!pendingPayout) pendingPayoutsRef.current.set(depositId, { resolution, method: String(method), intent });
     try {
       await releaseDeposit({
         orgId,
@@ -341,6 +398,7 @@ function VehicleDetailContent({
         idempotencyKey: commandId.for(intent),
       });
       commandId.retire(intent);
+      pendingPayoutsRef.current.delete(depositId);
     } catch (error) {
       reportError("Mobile deposit release failed", error);
     } finally {

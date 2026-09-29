@@ -16,6 +16,9 @@ const state = vi.hoisted(() => ({
   /** Outcome of the next createReservation call: a lost response, or success. */
   reservationOutcomes: [] as Array<"lost" | "ok" | "mismatch">,
   toastError: [] as string[],
+  releaseCalls: [] as Array<Record<string, unknown>>,
+  /** Outcome of the next deposits.release call: a lost response, or success. */
+  releaseOutcomes: [] as Array<"lost" | "ok">,
 }));
 
 vi.mock("@/components/ui/select", async () => {
@@ -47,6 +50,11 @@ vi.mock("convex/react", async () => {
       return undefined;
     },
     useMutation: (reference: never) => async (args: Record<string, unknown>) => {
+      if (getFunctionName(reference) === "deposits:release") {
+        state.releaseCalls.push(args);
+        if (state.releaseOutcomes.shift() === "lost") throw new Error("Network error: response lost");
+        return undefined;
+      }
       if (getFunctionName(reference) !== "vehicles:createReservation") return undefined;
       state.reservationCalls.push(args);
       const outcome = state.reservationOutcomes.shift();
@@ -67,9 +75,28 @@ vi.mock("@/hooks/useOrgSettings", () => ({ useOrgSettings: () => ({}) }));
 vi.mock("@/hooks/use-permissions", () => ({
   usePermissions: () => ({ hasPermission: () => true, isLoading: false }),
 }));
-vi.mock("@/hooks/useCommandIdentity", () => ({
-  useCommandIdentity: () => ({ for: (intent: string) => intent, retire: () => undefined }),
-}));
+vi.mock("@/hooks/useCommandIdentity", async () => {
+  // The REAL lifecycle: minted once per intent, held until retired.
+  const React = await import("react");
+  return {
+    useCommandIdentity: () => {
+      const keys = React.useRef(new Map<string, string>());
+      return React.useMemo(
+        () => ({
+          for: (intent: string) => {
+            const existing = keys.current.get(intent);
+            if (existing) return existing;
+            const minted = `${intent}:${Math.random().toString(36).slice(2)}`;
+            keys.current.set(intent, minted);
+            return minted;
+          },
+          retire: (intent: string) => void keys.current.delete(intent),
+        }),
+        []
+      );
+    },
+  };
+});
 vi.mock("@/components/ui/sonner", () => ({
   toast: { success: vi.fn(), error: (message: string) => state.toastError.push(message) },
 }));
@@ -134,6 +161,8 @@ beforeEach(() => {
   state.reservationCalls = [];
   state.reservationOutcomes = [];
   state.toastError = [];
+  state.releaseCalls = [];
+  state.releaseOutcomes = [];
   Element.prototype.hasPointerCapture = () => false;
   Element.prototype.setPointerCapture = () => {};
   Element.prototype.releasePointerCapture = () => {};
@@ -226,5 +255,96 @@ describe("vehicle dialog: method is per money movement (SCRUM-469 round 1)", () 
     fireEvent.click(screen.getAllByRole("button", { name: "CreateReservation", hidden: true }).at(-1)!);
     await waitFor(() => expect(state.toastError).toHaveLength(1));
     expect(state.toastError[0]).toBe("ReservationAttemptChanged");
+  });
+});
+describe("vehicle dialog: an unconfirmed payout keeps its identity (SCRUM-469 round 3, F1)", () => {
+  const chooseAndRefund = async (method: string) => {
+    fireEvent.change(refundSelect(), { target: { value: method } });
+    fireEvent.click(refundButton());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+  const reopen = (view: ReturnType<typeof render>) => {
+    view.rerender(ui(false));
+    view.rerender(ui(true));
+  };
+  const notice = () => screen.queryByTestId("unconfirmed-payout-notice");
+
+  test("lost response, close, reopen, a DIFFERENT method: no release is sent and the reconciliation notice is shown", async () => {
+    state.releaseOutcomes = ["lost", "ok"];
+    const view = render(ui());
+    await chooseAndRefund("CASH");
+    expect(state.releaseCalls).toHaveLength(1);
+
+    // The other vehicle's allocation was returned: the row now has more free money.
+    state.deposits = [deposit(1)];
+    reopen(view);
+    expect(refundSelect().value).toBe("");
+    await chooseAndRefund("BANK_TRANSFER");
+
+    expect(state.releaseCalls).toHaveLength(1);
+    expect(notice()).not.toBeNull();
+  });
+
+  test("retrying with the SAME method reuses the same key, even after the generation moved", async () => {
+    state.releaseOutcomes = ["lost", "ok"];
+    const view = render(ui());
+    await chooseAndRefund("CASH");
+    const firstKey = state.releaseCalls[0]!.idempotencyKey;
+
+    state.deposits = [deposit(1)];
+    reopen(view);
+    await chooseAndRefund("CASH");
+
+    await waitFor(() => expect(state.releaseCalls).toHaveLength(2));
+    expect(state.releaseCalls[1]!.idempotencyKey).toBe(firstKey);
+    expect(state.releaseCalls[1]!.refundMethod).toBe("CASH");
+  });
+
+  test("the notice's retry replays the recorded attempt with its own method and key", async () => {
+    state.releaseOutcomes = ["lost", "ok"];
+    const view = render(ui());
+    await chooseAndRefund("CASH");
+    const firstKey = state.releaseCalls[0]!.idempotencyKey;
+    reopen(view);
+    await chooseAndRefund("BANK_TRANSFER");
+
+    fireEvent.click(screen.getByRole("button", { name: "PayoutUnconfirmedRetry", hidden: true }));
+    await waitFor(() => expect(state.releaseCalls).toHaveLength(2));
+    expect(state.releaseCalls[1]!.idempotencyKey).toBe(firstKey);
+    expect(state.releaseCalls[1]!.refundMethod).toBe("CASH");
+    await waitFor(() => expect(notice()).toBeNull());
+  });
+
+  test("control: a CONFIRMED success mints a new identity for the next payout", async () => {
+    state.releaseOutcomes = ["ok", "ok"];
+    const view = render(ui());
+    await chooseAndRefund("CASH");
+    const firstKey = state.releaseCalls[0]!.idempotencyKey;
+
+    state.deposits = [deposit(1)];
+    reopen(view);
+    await chooseAndRefund("BANK_TRANSFER");
+
+    await waitFor(() => expect(state.releaseCalls).toHaveLength(2));
+    expect(state.releaseCalls[1]!.idempotencyKey).not.toBe(firstKey);
+    expect(notice()).toBeNull();
+  });
+
+  test("dismissing the notice retires the recorded attempt: the next payout mints a new key", async () => {
+    state.releaseOutcomes = ["lost", "ok"];
+    const view = render(ui());
+    await chooseAndRefund("CASH");
+    const firstKey = state.releaseCalls[0]!.idempotencyKey;
+    reopen(view);
+    await chooseAndRefund("BANK_TRANSFER");
+    expect(notice()).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "PayoutUnconfirmedDismiss", hidden: true }));
+    await waitFor(() => expect(notice()).toBeNull());
+    await chooseAndRefund("BANK_TRANSFER");
+
+    await waitFor(() => expect(state.releaseCalls).toHaveLength(2));
+    expect(state.releaseCalls[1]!.idempotencyKey).not.toBe(firstKey);
+    expect(state.releaseCalls[1]!.refundMethod).toBe("BANK_TRANSFER");
   });
 });

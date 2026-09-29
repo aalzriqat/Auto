@@ -125,6 +125,7 @@ import {
 } from "./StoppedDealDepositsPanel";
 import { DisbursementConfirmationDialog } from "../DisbursementConfirmationDialog";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
+import { usePendingDepositPayouts, type PendingPayout } from "@/hooks/usePendingDepositPayouts";
 import { FinancingPlanPanel, type FinancingPlanFacts } from "./FinancingPlanPanel";
 import {
   DealFinancialOverview,
@@ -1044,6 +1045,9 @@ export function DealCockpit({
   // result); a confirmed payout advances the generation, so the next genuine
   // payout is a new command. Identical in shape to the Review dialog's caller.
   const commandId = useCommandIdentity();
+  // SCRUM-469 F1: the identity (resolution + METHOD + key) of a deposit payout
+  // that may have committed, kept until confirmed or explicitly dismissed.
+  const pendingPayouts = usePendingDepositPayouts();
 
   // ---- the same derivations the Review dialog made, from the same payload ----
   // The dealer-side economics are denominated in the application's OWN pinned
@@ -2603,11 +2607,21 @@ export function DealCockpit({
               // not provably the releasable value.
               faceValueIsReleasable: !quoteHasCommittedMoney,
               resolvingId: resolvingDepositId,
+              unconfirmed: pendingPayouts.blocked,
+              onDismissUnconfirmed: pendingPayouts.dismiss,
               onResolve: async (depositId, resolution, refundMethod, observedReleaseCount) => {
+                const method = resolution === "REFUNDED" ? refundMethod : "NONE";
+                // A DIFFERENT decision than an unconfirmed earlier attempt is not
+                // sent: it would mint a new key and could pay out twice. The panel
+                // shows the reconciliation notice instead.
+                const gate = pendingPayouts.check(depositId, resolution, String(method));
+                if (gate.status === "blocked") return;
+                const releaseIntent =
+                  gate.recordedIntent ??
+                  `release-deposit:${depositId}:${resolution}:${method}:gen${observedReleaseCount}`;
+                pendingPayouts.record(depositId, { resolution, method: String(method), intent: releaseIntent });
                 setResolvingDepositId(depositId);
                 try {
-                  const method = resolution === "REFUNDED" ? refundMethod : "NONE";
-                  const releaseIntent = `release-deposit:${depositId}:${resolution}:${method}:gen${observedReleaseCount}`;
                   await releaseDeposit({
                     orgId,
                     depositId: depositId as Id<"deposits">,
@@ -2616,6 +2630,7 @@ export function DealCockpit({
                     idempotencyKey: commandId.for(releaseIntent),
                   });
                   commandId.retire(releaseIntent);
+                  pendingPayouts.confirm(depositId);
                   toast.success(
                     t(resolution === "REFUNDED" ? "DepositRefundedSuccess" : "DepositForfeitedSuccess")
                   );
@@ -3905,6 +3920,9 @@ export function DealCockpitView({
       refundMethod: PaymentMethod | undefined,
       observedReleaseCount: number
     ) => Promise<void>;
+    /** SCRUM-469 F1: earlier unconfirmed payouts blocking a different decision, by deposit id. */
+    unconfirmed: Readonly<Record<string, PendingPayout>>;
+    onDismissUnconfirmed: (depositId: string) => void;
   };
   /** The two disbursement confirmations' own state. Financed only. */
   disbursement?: {
@@ -5752,6 +5770,8 @@ export function DealCockpitView({
               formatAmount={(amount) => currency.format(amount)}
               t={t}
               onResolve={deposits.onResolve}
+              unconfirmed={deposits.unconfirmed}
+              onDismissUnconfirmed={deposits.onDismissUnconfirmed}
             />
           )}
         </div>
