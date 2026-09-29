@@ -2,7 +2,11 @@ packages:
   - "apps/*"
   - "packages/*"
 overrides:
-  undici: ^7.29.0
+  # GHSA-rfgv-xxqx-mfg5 (DoS) and GHSA-w293-vg96-wgc3 (TLS certificate validation
+  # bypass), both HIGH, published 2026-09-29, patched in 7.29.1 (SCRUM-483). Dev-only
+  # (vitest -> jsdom). Pinned exact like the overrides below; 7.29.1 was published
+  # 2026-09-04, clearing the minimumReleaseAge (<24h) gate.
+  undici: 7.29.1
   # Security overrides — force patched transitive deps flagged by `pnpm audit`.
   # GHSA-rgj7-g3m4-5g8c: libheif vulnerabilities (GHSA-g89c-p67h-r497,
   # GHSA-2jg2-4ch7-h545) reachable through sharp's bundled libvips. Patched
