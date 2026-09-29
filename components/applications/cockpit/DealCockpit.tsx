@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
@@ -54,6 +54,8 @@ import {
 import { DealVehicleCard } from "./DealVehicleCard";
 import { DealStageRail, DealStagesComplete } from "./DealStageRail";
 import { orderStagesForDisplay } from "./dealStageDisplayOrder";
+import { panelsForStage, type WorkbenchPanel } from "./dealWorkbenchPanels";
+import { cn } from "@/lib/utils";
 import {
   isLiveStageState,
   STAGE_ICON,
@@ -4139,8 +4141,23 @@ export function DealCockpitView({
   const lowerTabsRef = useRef<HTMLDivElement>(null);
   const documentsTriggerRef = useRef<HTMLButtonElement>(null);
   const hasDocumentsPane = documents !== undefined || (deal?.documents.length ?? 0) > 0;
+
+  // SCRUM-417 UX3 (O1): the "Deal details" record. `null` = the operator has not
+  // chosen, so it follows the default (collapsed while the live step has a panel
+  // of its own, open when nothing is promoted); a choice, or a blocker link that
+  // needs a panel inside it, overrides.
+  const [detailsChoice, setDetailsChoice] = useState<boolean | null>(null);
+  // Open the record if `target` lives in it. Called from the click handler,
+  // BEFORE the scroll frame: React flushes a discrete event's update at its end,
+  // so the panel is on screen (and focusable) when the scroll and focus land.
+  // Looked up in the document, never through a ref, so nothing reads a ref while
+  // rendering (the closing destinations below are built during render).
+  const revealDetailsFor = (target: Element | null) => {
+    if (target && target.closest('[data-testid="deal-details"]')) setDetailsChoice(true);
+  };
   const goToDocuments = () => {
     setLowerTab("documents");
+    revealDetailsFor(document.querySelector('[data-testid="deal-lower-tabs"]'));
     // After the switch has painted, so the scroll lands on the visible pane.
     // The target's `scroll-mt-*` keeps it clear of the sticky header; focus
     // moves to the Documents tab without a second, instant jump.
@@ -4157,6 +4174,7 @@ export function DealCockpitView({
   // it. Same scroll-then-focus contract as `goToDocuments`; the target is a
   // panel this view renders itself, found by id at click time (never at render).
   const goToPanel = (id: string) => {
+    revealDetailsFor(document.getElementById(id));
     requestAnimationFrame(() => {
       const target = document.getElementById(id);
       if (!target) return;
@@ -4707,6 +4725,399 @@ export function DealCockpitView({
         : null,
   };
 
+  // SCRUM-417 UX3 (O1): every panel of the working surface, built ONCE. Which of
+  // them the live step works from (the workbench) and which are kept in the
+  // collapsed Deal details record is decided below; none is built twice.
+  const moneyNode = (
+    <div data-testid="deal-money" className="space-y-6">
+          {/* --- money ---------------------------------------------------- */}
+          {/* Withheld before anything is spelled, because a figure in an
+              unverifiable denomination is worse than no figure: the operator
+              cannot tell it is wrong. Placed ahead of the permission case so a
+              caller who CAN see the money is told why it is absent, rather than
+              being shown amounts scaled by a guess. */}
+          {denominationUnusable ? (
+            <Card className="border-destructive/40">
+              <CardContent className="space-y-2 py-8 text-sm">
+                <p className="font-medium text-destructive">{t("EconomicsCurrencyUnusable")}</p>
+                <p className="text-muted-foreground">{t("EconomicsCurrencyUnusableHint")}</p>
+              </CardContent>
+            </Card>
+          ) : deal.money === null ? (
+            <Card>
+              <CardContent className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
+                <Lock className="h-4 w-4" />
+                {t("MoneyPanelHidden")}
+              </CardContent>
+            </Card>
+          ) : (
+            <>
+              {!deal.money.routeKnown && (
+                <div
+                  role="alert"
+                  className="flex items-start gap-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-300"
+                >
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{t("RouteUnknownWarning")}</span>
+                </div>
+              )}
+
+              {/* The six facts and, under them, the parties — ABSENT when
+                  there is nobody to list. An OWNED cash sale has no third
+                  party at all, so the row would be a heading over nothing.
+                  The appraisal gap is gated on the DATA rather than on
+                  `dealKind`, because a financed SALE opened on the sale-keyed
+                  route is `dealKind: "FINANCED"` and still has no appraisal
+                  payload. */}
+              <MoneyPanel
+                money={money}
+                profit={deal.money.profit}
+                summary={{
+                  applicationId: deal.applicationId,
+                  evidence: handoverEvidence ?? undefined,
+                  moneyIn: servedMoney,
+                }}
+                overview={
+                  financialOverview && custodyMoney
+                    ? {
+                        ...financialOverview,
+                        // The panel's own short-form spelling for figures in
+                        // the deal's currency (the marker the headline uses),
+                        // the explicit code for anything else.
+                        moneyIn: (minor: number, currency: string) =>
+                          currency === dealCurrency ? money(minor) : custodyMoney(minor, currency),
+                        formatDate: (ms: number) => renderMoment(ms, "d MMM yyyy"),
+                      }
+                    : undefined
+                }
+                parties={
+                  deal.money.parties.length > 0 || deal.applicationId !== null
+                    ? {
+                        items: deal.money.parties,
+                        appraisalGap:
+                          deal.applicationId !== null
+                            ? { amountMinor: deal.money.appraisalGapMinor }
+                            : null,
+                        onSettleSupplier: canSettleSupplier ? () => setSettlingSupplier(true) : undefined,
+                        supplierGuidance,
+                      }
+                    : null
+                }
+                t={t}
+              />
+
+              {/* --- actual expenses -------------------------------------- */}
+              {/* ABSENT on a CASH deal with no fee records, rather than a card
+                  reading "expenses: 0" on every cash deal forever. A cash sale's
+                  costs are already inside the vehicle's capitalized cost and
+                  therefore already inside the margin above — listing them again
+                  here would show the owner a cost subtracted twice.
+
+                  Gated on the deal KIND, not merely on emptiness. A financed
+                  deal keeps the card unconditionally because that is how the
+                  shipped screen behaves: its expenses are real pending actuals
+                  an operator is waiting on, so "none recorded yet" is
+                  information rather than noise. Hiding it on emptiness alone
+                  silently changed a production screen from inside a PR whose
+                  scope excludes touching it. */}
+              {!handoverCosts && (deal.dealKind === "FINANCED" ||
+                deal.money.expenses.lines.length > 0 ||
+                deal.money.expenses.actualTotalMinor !== 0) && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-base">
+            <Receipt className="h-4 w-4 shrink-0 text-money-out" aria-hidden />
+            {t("ActualExpensesHeading")}
+          </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  {deal.money.expenses.lines.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">{t("NoExpensesRecorded")}</p>
+                  ) : (
+                    deal.money.expenses.lines.map((fee) => (
+                      <div key={fee.id} className="flex items-center justify-between gap-4 text-sm">
+                        <span className="text-muted-foreground">
+                          <bdi>{fee.description || fee.feeType}</bdi>
+                        </span>
+                        <span>
+                          {fee.actualAmountMinor === undefined ? (
+                            <span className="text-muted-foreground">—</span>
+                          ) : (
+                            <Money>{money(fee.actualAmountMinor)}</Money>
+                          )}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                  <Separator />
+                  <div className="flex items-center justify-between gap-4 font-medium">
+                    <span>{t("ActualExpensesHeading")}</span>
+                    <Money>{money(deal.money.expenses.actualTotalMinor)}</Money>
+                  </div>
+                  {deal.money.expenses.awaitingActuals > 0 && (
+                    <p className="text-xs text-amber-700 dark:text-amber-400">
+                      <bdi>{deal.money.expenses.awaitingActuals}</bdi> {t("ExpensesAwaitingActuals")}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+              )}
+            </>
+          )}
+    </div>
+  );
+  const vehicleNode = deal.vehicle ? (
+      <DealVehicleCard vehicle={deal.vehicle} t={t}>
+        {settlementRoute && !routeBlocksClose && (
+          <SettlementRouteControl
+            route={settlementRoute.route}
+            canSettleDirectToSupplier={settlementRoute.canSettleDirectToSupplier}
+            directRouteRefusal={settlementRoute.directRouteRefusal}
+            supplierName={settlementRoute.supplierName}
+            t={t}
+            onChoose={settlementRoute.onChoose}
+          />
+        )}
+      </DealVehicleCard>
+  ) : null;
+  const planNode = financingPlan ? (
+    <FinancingPlanPanel
+      plan={financingPlan.facts}
+      formatMajor={financingPlan.formatMajor}
+      t={t}
+    />
+  ) : null;
+  const financeDecisionNode = financeDecision ? (
+    <>
+        <FinanceCompanyDecisionCard
+          facts={financeDecision.facts}
+          canRecordQuotation={financeDecision.canRecordQuotation}
+          canRecordApproval={financeDecision.canRecordApproval}
+          canEstablishLtvPercent={financeDecision.canEstablishLtvPercent}
+          canRecordAppraisal={financeDecision.canRecordAppraisal}
+          isOwnDeal={financeDecision.isOwnDeal}
+          money={decisionMoney}
+          t={t}
+          onRecordQuotation={openRecordQuotation}
+          onRecordAppraisal={openRecordAppraisal}
+          onRecordApproved={openRecordApproval}
+          onCorrectApproved={() => {
+            setReopenError(null);
+            setReopeningApproval(true);
+          }}
+        />
+      {/* SCRUM-373 D2 — only on the server's verdict that it would accept. */}
+      {financeDecision?.firstPaymentCorrection && (
+        <div
+          role="status"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/40"
+        >
+          <p className="min-w-0 flex-1">
+            {t("ApplyQuoteFirstPaymentNotice")}{" "}
+            <bdi className="tabular-nums font-semibold">
+              {decisionMoney(financeDecision.firstPaymentCorrection.quoteDownPaymentMinor)}
+            </bdi>
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setFirstPaymentError(null);
+              setApplyingFirstPayment(true);
+            }}
+          >
+            {t("ApplyQuoteFirstPaymentAction")}
+          </Button>
+        </div>
+      )}
+    </>
+  ) : null;
+  const handoverCostsNode = handoverCosts ? <HandoverCostsPanel {...handoverCosts} t={t} /> : null;
+  const closingNode = closingChecklist ? (
+    <Card data-testid="deal-closing-checklist">
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0 pb-3">
+        <CardTitle className="flex min-w-0 items-center gap-2 text-base">
+          <ClipboardCheck className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+          {t("ClosingReadinessHeading")}
+        </CardTitle>
+        {closingChecklist.legalInvoice && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={closingChecklist.legalInvoice.onRecord}
+          >
+            <FileText className="h-4 w-4 me-1.5" />
+            {t("RecordLegalInvoice")}
+          </Button>
+        )}
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        <DealClosingReadinessList
+          readiness={closingChecklist.readiness}
+          serviceUnavailable={closingChecklist.serviceUnavailable}
+          destinations={closingDestinations}
+          t={t}
+        />
+        {closingChecklist.legalInvoice &&
+          (closingChecklist.legalInvoice.amountMinor !== undefined ? (
+            <dl
+              className="grid grid-cols-2 gap-4 rounded-md bg-muted/40 p-3 text-xs sm:grid-cols-4"
+              data-testid="deal-legal-invoice"
+            >
+              <div>
+                <dt className="text-muted-foreground">{t("LegalInvoiceAmount")}</dt>
+                <dd className="font-semibold tabular-nums">
+                  <bdi dir="ltr">{money(closingChecklist.legalInvoice.amountMinor)}</bdi>
+                </dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">{t("LegalInvoiceNumber")}</dt>
+                <dd className="font-medium">{closingChecklist.legalInvoice.number ?? "-"}</dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">{t("LegalInvoiceDate")}</dt>
+                <dd className="font-medium">
+                  {closingChecklist.legalInvoice.date
+                    ? format(closingChecklist.legalInvoice.date, "d MMM yyyy")
+                    : "-"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">{t("LegalInvoiceIssuedTo")}</dt>
+                <dd className="font-medium">
+                  {closingChecklist.legalInvoice.issuedTo
+                    ? t(LEGAL_INVOICE_ISSUED_TO_LABEL[closingChecklist.legalInvoice.issuedTo] ?? closingChecklist.legalInvoice.issuedTo)
+                    : "-"}
+                </dd>
+              </div>
+            </dl>
+          ) : (
+            <p className="text-xs text-muted-foreground">{t("LegalInvoiceNotRecorded")}</p>
+          ))}
+      </CardContent>
+    </Card>
+  ) : null;
+  const custodyNode =
+    custody && custodyMoney ? <DealCustodyPanel wiring={custody} money={custodyMoney} t={t} /> : null;
+  const documentsNode = (() => {
+    const documentsPane = documents ? (
+      <DealDocumentsPanel
+        documents={documents.items}
+        history={documents.history}
+        checklist={deal.documents}
+        canUpload={documents.canUpload}
+        canVerify={documents.canVerify}
+        uploadingRuleIds={documents.uploadingRuleIds}
+        t={t}
+        onUpload={documents.onUpload}
+        onVerify={documents.onVerify}
+      />
+    ) : deal.documents.length > 0 ? (
+      <DealDocumentsPanel
+        documents={undefined}
+        checklist={deal.documents}
+        canUpload={false}
+        canVerify={false}
+        uploadingRuleIds={NO_UPLOADS}
+        t={t}
+        onUpload={() => {}}
+        onVerify={() => {}}
+      />
+    ) : null;
+    const activityPane = (
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+    <History className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+    {t("StatusLogHeading")}
+  </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {deal.timeline.length === 0 && (
+            <p className="text-sm text-muted-foreground">{t("StatusLogEmpty")}</p>
+          )}
+          {deal.timeline.map((entry, index) => (
+        <div key={`${entry.changedAt ?? "no-date"}-${index}`} className="flex gap-3 text-sm">
+          <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <div className="min-w-0">
+            <p>{t(STATUS_LABEL[entry.toStatus] ?? entry.toStatus)}</p>
+            <p className="text-xs text-muted-foreground">
+              <bdi>{entry.actorName}</bdi>
+              {/* The transition is stated whether or not its moment is
+                  known. `changedAt` is optional precisely so a status is
+                  never withheld for want of a timestamp — and `format`
+                  throws `RangeError` on an unrenderable input, which
+                  during render loses the whole screen, not one row. */}
+              {isRenderableMoment(entry.changedAt) && (
+                <>
+                  {" · "}
+                  <bdi>{format(entry.changedAt, "d MMM yyyy HH:mm")}</bdi>
+                </>
+              )}
+            </p>
+          </div>
+        </div>
+      ))}
+        </CardContent>
+      </Card>
+    );
+    if (!hasDocumentsPane) return activityPane;
+    return (
+      <Tabs
+        ref={lowerTabsRef}
+        value={lowerTab}
+        onValueChange={(value) => setLowerTab(value === "activity" ? "activity" : "documents")}
+        className="scroll-mt-32 space-y-3 sm:scroll-mt-20"
+        data-testid="deal-lower-tabs"
+      >
+        <TabsList>
+          <TabsTrigger ref={documentsTriggerRef} value="documents">
+            {t("DealTabDocuments")}
+          </TabsTrigger>
+          <TabsTrigger value="activity">{t("DealTabActivity")}</TabsTrigger>
+        </TabsList>
+        <TabsContent value="documents" forceMount className="data-[state=inactive]:hidden">
+          {documentsPane}
+        </TabsContent>
+        <TabsContent value="activity" forceMount className="data-[state=inactive]:hidden">
+          {activityPane}
+        </TabsContent>
+      </Tabs>
+    );
+  })();
+  const panelNodes: Record<WorkbenchPanel, ReactNode> = {
+    documents: documentsNode,
+    financeDecision: financeDecisionNode,
+    handoverCosts: handoverCostsNode,
+    custody: custodyNode,
+    closing: closingNode,
+    money: moneyNode,
+  };
+  // The live step's panels that this caller actually has. A panel that is not
+  // wired (no permission, no data) is absent, exactly as before.
+  const workbenchPanels = panelsForStage(live?.key).filter((panel) => panelNodes[panel] != null);
+  // Nothing promoted: the record is the whole surface, so it starts open —
+  // never a collapsed disclosure over an empty page.
+  const detailsOpen = detailsChoice ?? workbenchPanels.length === 0;
+  const inWorkbench = (panel: WorkbenchPanel) => workbenchPanels.includes(panel);
+  // The record keeps its original order: the car, the plan, what the finance
+  // company told us, the handover costs, the closing checks, custody, then the
+  // documents and activity. Only what the workbench took is missing.
+  const recordWorkingNodes = (
+    [
+      ["vehicle", vehicleNode],
+      ["plan", planNode],
+      ["financeDecision", inWorkbench("financeDecision") ? null : financeDecisionNode],
+      ["handoverCosts", inWorkbench("handoverCosts") ? null : handoverCostsNode],
+      ["closing", inWorkbench("closing") ? null : closingNode],
+      ["custody", inWorkbench("custody") ? null : custodyNode],
+      ["documents", inWorkbench("documents") ? null : documentsNode],
+    ] as Array<[string, ReactNode]>
+  ).filter(([, node]) => node != null);
+  const recordMoneyColumn = !inWorkbench("money");
+  const recordWorkingColumn = recordWorkingNodes.length > 0;
+
   return (
     <div className="space-y-6">
       {/* --- header ------------------------------------------------------ */}
@@ -5058,422 +5469,71 @@ export function DealCockpitView({
         )
       )}
 
-      {/* Split only at xl: at lg the money column is ~220px beside a 256px
-          sidebar — too narrow for its figures — so it stacks instead. Two of
-          five tracks, not a strict third: a third is ~300px at 1280. */}
-      <div className="grid gap-6 xl:grid-cols-5">
-        {/* --- side column: the money ------------------------------------ */}
-        {/* First in source so a phone reads the figures right after the
-            step, and FIRST on a wide screen too (SCRUM-372, agreed with the
-            owner's concept): the reading side — right in Arabic, left in
-            English. Not sticky: the column is long, and a sticky rail taller
-            than the viewport hides its own foot. The step and its one action
-            stay full-width ABOVE this grid, so the money gains prominence
-            without displacing the live task. */}
-        <div className="min-w-0 space-y-6 xl:col-span-2">
-          {/* --- money ---------------------------------------------------- */}
-          {/* Withheld before anything is spelled, because a figure in an
-              unverifiable denomination is worse than no figure: the operator
-              cannot tell it is wrong. Placed ahead of the permission case so a
-              caller who CAN see the money is told why it is absent, rather than
-              being shown amounts scaled by a guess. */}
-          {denominationUnusable ? (
-            <Card className="border-destructive/40">
-              <CardContent className="space-y-2 py-8 text-sm">
-                <p className="font-medium text-destructive">{t("EconomicsCurrencyUnusable")}</p>
-                <p className="text-muted-foreground">{t("EconomicsCurrencyUnusableHint")}</p>
-              </CardContent>
-            </Card>
-          ) : deal.money === null ? (
-            <Card>
-              <CardContent className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-                <Lock className="h-4 w-4" />
-                {t("MoneyPanelHidden")}
-              </CardContent>
-            </Card>
-          ) : (
-            <>
-              {!deal.money.routeKnown && (
-                <div
-                  role="alert"
-                  className="flex items-start gap-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-300"
-                >
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                  <span>{t("RouteUnknownWarning")}</span>
-                </div>
-              )}
+      {/* --- the step's own panel: the workbench ------------------------- */}
+      {/* Directly under the next-step card, so the step and the thing it is
+          worked from are one unit. Absent when the live step has no panel of
+          its own (or none is wired for this caller): nothing is promoted and
+          the record below opens instead. */}
+      {workbenchPanels.length > 0 && (
+        <section
+          data-testid="deal-workbench"
+          aria-label={t("DealWorkbenchLabel")}
+          className="min-w-0 space-y-6"
+        >
+          {workbenchPanels.map((panel) => (
+            <Fragment key={panel}>{panelNodes[panel]}</Fragment>
+          ))}
+        </section>
+      )}
 
-              {/* The six facts and, under them, the parties — ABSENT when
-                  there is nobody to list. An OWNED cash sale has no third
-                  party at all, so the row would be a heading over nothing.
-                  The appraisal gap is gated on the DATA rather than on
-                  `dealKind`, because a financed SALE opened on the sale-keyed
-                  route is `dealKind: "FINANCED"` and still has no appraisal
-                  payload. */}
-              <MoneyPanel
-                money={money}
-                profit={deal.money.profit}
-                summary={{
-                  applicationId: deal.applicationId,
-                  evidence: handoverEvidence ?? undefined,
-                  moneyIn: servedMoney,
-                }}
-                overview={
-                  financialOverview && custodyMoney
-                    ? {
-                        ...financialOverview,
-                        // The panel's own short-form spelling for figures in
-                        // the deal's currency (the marker the headline uses),
-                        // the explicit code for anything else.
-                        moneyIn: (minor: number, currency: string) =>
-                          currency === dealCurrency ? money(minor) : custodyMoney(minor, currency),
-                        formatDate: (ms: number) => renderMoment(ms, "d MMM yyyy"),
-                      }
-                    : undefined
-                }
-                parties={
-                  deal.money.parties.length > 0 || deal.applicationId !== null
-                    ? {
-                        items: deal.money.parties,
-                        appraisalGap:
-                          deal.applicationId !== null
-                            ? { amountMinor: deal.money.appraisalGapMinor }
-                            : null,
-                        onSettleSupplier: canSettleSupplier ? () => setSettlingSupplier(true) : undefined,
-                        supplierGuidance,
-                      }
-                    : null
-                }
-                t={t}
-              />
-
-              {/* --- actual expenses -------------------------------------- */}
-              {/* ABSENT on a CASH deal with no fee records, rather than a card
-                  reading "expenses: 0" on every cash deal forever. A cash sale's
-                  costs are already inside the vehicle's capitalized cost and
-                  therefore already inside the margin above — listing them again
-                  here would show the owner a cost subtracted twice.
-
-                  Gated on the deal KIND, not merely on emptiness. A financed
-                  deal keeps the card unconditionally because that is how the
-                  shipped screen behaves: its expenses are real pending actuals
-                  an operator is waiting on, so "none recorded yet" is
-                  information rather than noise. Hiding it on emptiness alone
-                  silently changed a production screen from inside a PR whose
-                  scope excludes touching it. */}
-              {!handoverCosts && (deal.dealKind === "FINANCED" ||
-                deal.money.expenses.lines.length > 0 ||
-                deal.money.expenses.actualTotalMinor !== 0) && (
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="flex items-center gap-2 text-base">
-            <Receipt className="h-4 w-4 shrink-0 text-money-out" aria-hidden />
-            {t("ActualExpensesHeading")}
-          </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2">
-                  {deal.money.expenses.lines.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">{t("NoExpensesRecorded")}</p>
-                  ) : (
-                    deal.money.expenses.lines.map((fee) => (
-                      <div key={fee.id} className="flex items-center justify-between gap-4 text-sm">
-                        <span className="text-muted-foreground">
-                          <bdi>{fee.description || fee.feeType}</bdi>
-                        </span>
-                        <span>
-                          {fee.actualAmountMinor === undefined ? (
-                            <span className="text-muted-foreground">—</span>
-                          ) : (
-                            <Money>{money(fee.actualAmountMinor)}</Money>
-                          )}
-                        </span>
-                      </div>
-                    ))
-                  )}
-                  <Separator />
-                  <div className="flex items-center justify-between gap-4 font-medium">
-                    <span>{t("ActualExpensesHeading")}</span>
-                    <Money>{money(deal.money.expenses.actualTotalMinor)}</Money>
-                  </div>
-                  {deal.money.expenses.awaitingActuals > 0 && (
-                    <p className="text-xs text-amber-700 dark:text-amber-400">
-                      <bdi>{deal.money.expenses.awaitingActuals}</bdi> {t("ExpensesAwaitingActuals")}
-                    </p>
-                  )}
-                </CardContent>
-              </Card>
-              )}
-            </>
-          )}
-        </div>
-
-        {/* --- working column ------------------------------------------- */}
-        <div className="min-w-0 space-y-6 xl:col-span-3">
-          {/* --- the car ------------------------------------------------------ */}
-          {/* Vehicle-first recognition (SCRUM-372). The settlement-route
-              question hangs off its ownership badge: the car is the
-              supplier's, so who the finance company pays has to be recorded
-              here before the deal can close. Rendered on the live step
-              INSTEAD whenever it is what the close waits on. */}
-          {deal.vehicle && (
-            <DealVehicleCard vehicle={deal.vehicle} t={t}>
-              {settlementRoute && !routeBlocksClose && (
-                <SettlementRouteControl
-                  route={settlementRoute.route}
-                  canSettleDirectToSupplier={settlementRoute.canSettleDirectToSupplier}
-                  directRouteRefusal={settlementRoute.directRouteRefusal}
-                  supplierName={settlementRoute.supplierName}
-                  t={t}
-                  onChoose={settlementRoute.onChoose}
-                />
-              )}
-            </DealVehicleCard>
-          )}
-
-          {/* What the CUSTOMER agreed to pay — with the working panels, right
-              after the car it finances (SCRUM-372 frozen spec). The one fact
-              set the money panel deliberately does not carry; its visibility
-              is its own, not the money column's. */}
-          {financingPlan && (
-            <FinancingPlanPanel
-              plan={financingPlan.facts}
-              formatMajor={financingPlan.formatMajor}
-              t={t}
-            />
-          )}
-
-          {/* --- what the finance company told us ----------------------------- */}
-          {/* Under the next step, not inside the money column: this is the ACTION
-              on the stage the rail reports as blocked, and the money column is
-              withheld entirely from the role that performs it. */}
-          {financeDecision && (
-            <FinanceCompanyDecisionCard
-              facts={financeDecision.facts}
-              canRecordQuotation={financeDecision.canRecordQuotation}
-              canRecordApproval={financeDecision.canRecordApproval}
-              canEstablishLtvPercent={financeDecision.canEstablishLtvPercent}
-              canRecordAppraisal={financeDecision.canRecordAppraisal}
-              isOwnDeal={financeDecision.isOwnDeal}
-              money={decisionMoney}
-              t={t}
-              onRecordQuotation={openRecordQuotation}
-              onRecordAppraisal={openRecordAppraisal}
-              onRecordApproved={openRecordApproval}
-              onCorrectApproved={() => {
-                setReopenError(null);
-                setReopeningApproval(true);
-              }}
-            />
-          )}
-
-          {/* SCRUM-373 D2 — only on the server's verdict that it would accept. */}
-          {financeDecision?.firstPaymentCorrection && (
-            <div
-              role="status"
-              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/40"
-            >
-              <p className="min-w-0 flex-1">
-                {t("ApplyQuoteFirstPaymentNotice")}{" "}
-                <bdi className="tabular-nums font-semibold">
-                  {decisionMoney(financeDecision.firstPaymentCorrection.quoteDownPaymentMinor)}
-                </bdi>
-              </p>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  setFirstPaymentError(null);
-                  setApplyingFirstPayment(true);
-                }}
-              >
-                {t("ApplyQuoteFirstPaymentAction")}
-              </Button>
+      {/* --- Deal details: everything else, whole ----------------------------- */}
+      {/* A native disclosure, so the summary is keyboard-operable and the
+          content stays mounted while collapsed (findable, and the S4 scroll
+          targets exist). Controlled, so a blocker link can reveal it before it
+          scrolls. Nothing is removed: the money, the car, the plan, the
+          records and the activity are all here or in the workbench above. */}
+      <details
+        data-testid="deal-details"
+        open={detailsOpen}
+        className="group min-w-0 rounded-lg border bg-card"
+      >
+        <summary
+          data-testid="deal-details-toggle"
+          onClick={(event) => {
+            event.preventDefault();
+            setDetailsChoice(!detailsOpen);
+          }}
+          className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-4 py-3 text-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden"
+        >
+          <span className="min-w-0">
+            <span className="block text-base font-semibold">{t("DealDetailsHeading")}</span>
+            <span className="block text-xs text-muted-foreground">{t("DealDetailsHint")}</span>
+          </span>
+          <ChevronDown className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180" aria-hidden />
+        </summary>
+        {/* Split only at xl: at lg the money column is ~220px beside a 256px
+            sidebar — too narrow for its figures — so it stacks instead. Two of
+            five tracks, not a strict third: a third is ~300px at 1280. */}
+        <div className="grid gap-6 px-4 pb-4 pt-2 xl:grid-cols-5">
+          {/* First in source so a phone reads the figures first, and FIRST on a
+              wide screen too (SCRUM-372): the reading side. Not sticky: the
+              column is long and a sticky rail taller than the viewport hides
+              its own foot. */}
+          {recordMoneyColumn && (
+            <div className={cn("min-w-0 space-y-6", recordWorkingColumn ? "xl:col-span-2" : "xl:col-span-5")}>
+              {moneyNode}
             </div>
           )}
-
-          {/* --- رسوم ومصاريف تسليم السيارة -------------------------------- */}
-          {/* Outside the money branch on purpose: the cost RECORD is readable
-              with view:finance_applications, which is not view:finance. A
-              sales operator who cannot see the margin still records the
-              transfer fee. The read-only expenses card above is withheld
-              whenever this section is present so the same lines are not
-              listed twice. */}
-          {handoverCosts && <HandoverCostsPanel {...handoverCosts} t={t} />}
-
-          {/* --- جاهزية الإغلاق (تلقائية) والفاتورة القانونية ----------------- */}
-          {/* SCRUM-407: replaces the manual "classify deal accounting" step.
-              Nothing here is ticked by a person — every check is the server's,
-              re-run by finalizeDeal. The testid is kept for existing specs. */}
-          {closingChecklist && (
-            <Card data-testid="deal-closing-checklist">
-              <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0 pb-3">
-                <CardTitle className="flex min-w-0 items-center gap-2 text-base">
-                  <ClipboardCheck className="h-4 w-4 shrink-0 text-primary" aria-hidden />
-                  {t("ClosingReadinessHeading")}
-                </CardTitle>
-                {closingChecklist.legalInvoice && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={closingChecklist.legalInvoice.onRecord}
-                  >
-                    <FileText className="h-4 w-4 me-1.5" />
-                    {t("RecordLegalInvoice")}
-                  </Button>
-                )}
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm">
-                <DealClosingReadinessList
-                  readiness={closingChecklist.readiness}
-                  serviceUnavailable={closingChecklist.serviceUnavailable}
-                  destinations={closingDestinations}
-                  t={t}
-                />
-                {closingChecklist.legalInvoice &&
-                  (closingChecklist.legalInvoice.amountMinor !== undefined ? (
-                    <dl
-                      className="grid grid-cols-2 gap-4 rounded-md bg-muted/40 p-3 text-xs sm:grid-cols-4"
-                      data-testid="deal-legal-invoice"
-                    >
-                      <div>
-                        <dt className="text-muted-foreground">{t("LegalInvoiceAmount")}</dt>
-                        <dd className="font-semibold tabular-nums">
-                          <bdi dir="ltr">{money(closingChecklist.legalInvoice.amountMinor)}</bdi>
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className="text-muted-foreground">{t("LegalInvoiceNumber")}</dt>
-                        <dd className="font-medium">{closingChecklist.legalInvoice.number ?? "-"}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-muted-foreground">{t("LegalInvoiceDate")}</dt>
-                        <dd className="font-medium">
-                          {closingChecklist.legalInvoice.date
-                            ? format(closingChecklist.legalInvoice.date, "d MMM yyyy")
-                            : "-"}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className="text-muted-foreground">{t("LegalInvoiceIssuedTo")}</dt>
-                        <dd className="font-medium">
-                          {closingChecklist.legalInvoice.issuedTo
-                            ? t(LEGAL_INVOICE_ISSUED_TO_LABEL[closingChecklist.legalInvoice.issuedTo] ?? closingChecklist.legalInvoice.issuedTo)
-                            : "-"}
-                        </dd>
-                      </div>
-                    </dl>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">{t("LegalInvoiceNotRecorded")}</p>
-                  ))}
-              </CardContent>
-            </Card>
-          )}
-
-          {/* --- عهدة الموظف ------------------------------------------------ */}
-          {/* Beside the costs it pays for, under the same permission to read.
-              The balances are the server's; the money commands post through
-              the custody clearing account and are offered to the
-              disbursement tier only. */}
-          {custody && custodyMoney && (
-            <DealCustodyPanel wiring={custody} money={custodyMoney} t={t} />
-          )}
-
-          {/* --- documents · activity ------------------------------------- */}
-          {/* One card, two tabs, below the money: the checklist that also DOES
-              something (upload, verify, view) and the status history — the
-              owner's workspace shell. Documents lead when the deal has a
-              checklist because they are actionable; a cash deal has none and
-              opens on its history. Both panes stay mounted so a search or a
-              test finds either without a click. */}
-          {(() => {
-            const documentsPane = documents ? (
-              <DealDocumentsPanel
-                documents={documents.items}
-                history={documents.history}
-                checklist={deal.documents}
-                canUpload={documents.canUpload}
-                canVerify={documents.canVerify}
-                uploadingRuleIds={documents.uploadingRuleIds}
-                t={t}
-                onUpload={documents.onUpload}
-                onVerify={documents.onVerify}
-              />
-            ) : deal.documents.length > 0 ? (
-              <DealDocumentsPanel
-                documents={undefined}
-                checklist={deal.documents}
-                canUpload={false}
-                canVerify={false}
-                uploadingRuleIds={NO_UPLOADS}
-                t={t}
-                onUpload={() => {}}
-                onVerify={() => {}}
-              />
-            ) : null;
-            const activityPane = (
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="flex items-center gap-2 text-base">
-            <History className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-            {t("StatusLogHeading")}
-          </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {deal.timeline.length === 0 && (
-                    <p className="text-sm text-muted-foreground">{t("StatusLogEmpty")}</p>
-                  )}
-                  {deal.timeline.map((entry, index) => (
-                <div key={`${entry.changedAt ?? "no-date"}-${index}`} className="flex gap-3 text-sm">
-                  <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <div className="min-w-0">
-                    <p>{t(STATUS_LABEL[entry.toStatus] ?? entry.toStatus)}</p>
-                    <p className="text-xs text-muted-foreground">
-                      <bdi>{entry.actorName}</bdi>
-                      {/* The transition is stated whether or not its moment is
-                          known. `changedAt` is optional precisely so a status is
-                          never withheld for want of a timestamp — and `format`
-                          throws `RangeError` on an unrenderable input, which
-                          during render loses the whole screen, not one row. */}
-                      {isRenderableMoment(entry.changedAt) && (
-                        <>
-                          {" · "}
-                          <bdi>{format(entry.changedAt, "d MMM yyyy HH:mm")}</bdi>
-                        </>
-                      )}
-                    </p>
-                  </div>
-                </div>
+          {recordWorkingColumn && (
+            <div className={cn("min-w-0 space-y-6", recordMoneyColumn ? "xl:col-span-3" : "xl:col-span-5")}>
+              {recordWorkingNodes.map(([panel, node]) => (
+                <Fragment key={panel}>{node}</Fragment>
               ))}
-                </CardContent>
-              </Card>
-            );
-            if (!hasDocumentsPane) return activityPane;
-            return (
-              <Tabs
-                ref={lowerTabsRef}
-                value={lowerTab}
-                onValueChange={(value) => setLowerTab(value === "activity" ? "activity" : "documents")}
-                className="scroll-mt-32 space-y-3 sm:scroll-mt-20"
-                data-testid="deal-lower-tabs"
-              >
-                <TabsList>
-                  <TabsTrigger ref={documentsTriggerRef} value="documents">
-                    {t("DealTabDocuments")}
-                  </TabsTrigger>
-                  <TabsTrigger value="activity">{t("DealTabActivity")}</TabsTrigger>
-                </TabsList>
-                <TabsContent value="documents" forceMount className="data-[state=inactive]:hidden">
-                  {documentsPane}
-                </TabsContent>
-                <TabsContent value="activity" forceMount className="data-[state=inactive]:hidden">
-                  {activityPane}
-                </TabsContent>
-              </Tabs>
-            );
-          })()}
+            </div>
+          )}
         </div>
-      </div>
+      </details>
+
 
       {/* Mounted only while the action is offered: losing authority or the
           settle-able state UNMOUNTS an open dialog rather than leaving a form
