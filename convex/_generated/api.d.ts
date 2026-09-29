@@ -175,6 +175,7 @@ import type * as utils_env from "../utils/env.js";
 import type * as utils_errors from "../utils/errors.js";
 import type * as utils_expenseAmortization from "../utils/expenseAmortization.js";
 import type * as utils_facebookApi from "../utils/facebookApi.js";
+import type * as utils_feeDocLimits from "../utils/feeDocLimits.js";
 import type * as utils_feeSummary from "../utils/feeSummary.js";
 import type * as utils_financeApplicationProjection from "../utils/financeApplicationProjection.js";
 import type * as utils_financeStatuses from "../utils/financeStatuses.js";
@@ -186,6 +187,8 @@ import type * as utils_financingProvenance from "../utils/financingProvenance.js
 import type * as utils_firstPaymentCorrection from "../utils/firstPaymentCorrection.js";
 import type * as utils_geoProvider from "../utils/geoProvider.js";
 import type * as utils_grossTransactionValue from "../utils/grossTransactionValue.js";
+import type * as utils_handoverCostPayment from "../utils/handoverCostPayment.js";
+import type * as utils_handoverDirectProof from "../utils/handoverDirectProof.js";
 import type * as utils_idempotency from "../utils/idempotency.js";
 import type * as utils_importLimits from "../utils/importLimits.js";
 import type * as utils_instagramApi from "../utils/instagramApi.js";
@@ -417,6 +420,7 @@ declare const fullApi: ApiFromModules<{
   "utils/errors": typeof utils_errors;
   "utils/expenseAmortization": typeof utils_expenseAmortization;
   "utils/facebookApi": typeof utils_facebookApi;
+  "utils/feeDocLimits": typeof utils_feeDocLimits;
   "utils/feeSummary": typeof utils_feeSummary;
   "utils/financeApplicationProjection": typeof utils_financeApplicationProjection;
   "utils/financeStatuses": typeof utils_financeStatuses;
@@ -428,6 +432,8 @@ declare const fullApi: ApiFromModules<{
   "utils/firstPaymentCorrection": typeof utils_firstPaymentCorrection;
   "utils/geoProvider": typeof utils_geoProvider;
   "utils/grossTransactionValue": typeof utils_grossTransactionValue;
+  "utils/handoverCostPayment": typeof utils_handoverCostPayment;
+  "utils/handoverDirectProof": typeof utils_handoverDirectProof;
   "utils/idempotency": typeof utils_idempotency;
   "utils/importLimits": typeof utils_importLimits;
   "utils/instagramApi": typeof utils_instagramApi;
