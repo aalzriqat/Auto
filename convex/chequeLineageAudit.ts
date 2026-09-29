@@ -37,6 +37,8 @@ export type ChequeAuditClass =
 
 /** Largest page a caller may ask for; each row can cost several point reads. */
 const MAX_PAGE_SIZE = 200;
+/** Used when the caller sends a non-finite page size (`v.number()` admits NaN). */
+const DEFAULT_PAGE_SIZE = 50;
 /** How many replacement links an unmarked row is followed forward. */
 const MAX_CHAIN_DEPTH = 8;
 
@@ -83,7 +85,10 @@ export const auditFinanceCompanyCheques = query({
 
     // The ONE paginated query. The caller's page size is capped: every row can
     // cost several point reads below.
-    const numItems = Math.min(Math.max(1, Math.floor(args.paginationOpts.numItems)), MAX_PAGE_SIZE);
+    const requested = Number.isNaN(args.paginationOpts.numItems)
+      ? DEFAULT_PAGE_SIZE
+      : Math.floor(args.paginationOpts.numItems);
+    const numItems = Math.min(Math.max(1, requested), MAX_PAGE_SIZE);
     const page = await ctx.db
       .query("postDatedCheques")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))

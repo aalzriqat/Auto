@@ -1972,6 +1972,9 @@ export function DealCockpit({
     // (as a cheque) with nothing live behind it. Registering again would be
     // refused; the way forward is Correct, offered by the cheque panel above.
     if ("chequeNeedsCorrection" in deal && deal.chequeNeedsCorrection === true) return undefined;
+    // SCRUM-447 F6: a CLEARED cheque with no confirmed disbursement is for
+    // accounting to review; the panel above says so and the rail offers nothing.
+    if ("chequeNeedsAccountingReview" in deal && deal.chequeNeedsAccountingReview === true) return undefined;
 
     if (!expectedPaymentRegistered) {
       return {
@@ -6026,6 +6029,7 @@ export function DealCockpitView({
           canManage={canCorrectAdvice}
           canRegisterPayment={canRegisterPayment}
           needsCorrection={deal.chequeNeedsCorrection === true}
+          needsAccountingReview={deal.chequeNeedsAccountingReview === true}
           chequeFaceAttested={deal.chequeFaceAttested === true}
           chequeFaceUnrecorded={deal.chequeFaceUnrecorded}
           unattestedChequeId={deal.unattestedChequeId ?? null}

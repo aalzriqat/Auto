@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { getErrorMessage } from "@/lib/errors";
+import { isConvexError } from "@/lib/errors";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -37,6 +37,11 @@ export type FcChequePanelProps = {
   canRegisterPayment: boolean;
   /** A returned/cancelled cheque needs its expected payment corrected. */
   needsCorrection: boolean;
+  /**
+   * The deal's cheque is CLEARED but the disbursement was never confirmed. Not
+   * correctable by anyone here: the notice shows, no action does.
+   */
+  needsAccountingReview?: boolean;
   /** The face was attested by a finance manager (not read from the receipt). */
   chequeFaceAttested: boolean;
   chequeFaceUnrecorded: boolean;
@@ -53,6 +58,22 @@ export type FcChequePanelProps = {
 
 const DECIMAL = /^\d+(\.\d+)?$/;
 
+/**
+ * The server's own refusal text, or null. Only a deliberate `ConvexError`
+ * carries copy meant for an operator; anything else (a wrapped server crash, a
+ * transport failure, an unknown throw) may carry internals and is never shown.
+ */
+function refusalMessage(caught: unknown): string | null {
+  if (!isConvexError(caught)) return null;
+  const { data } = caught;
+  if (typeof data === "string") return data.trim() || null;
+  if (typeof data === "object" && data !== null) {
+    const message = (data as { message?: unknown }).message;
+    if (typeof message === "string") return message.trim() || null;
+  }
+  return null;
+}
+
 /** 44px on a phone (thumb target), the compact `sm` height from `sm:` up. */
 const ACTION_SIZE = "h-11 w-full sm:h-8 sm:w-auto";
 
@@ -60,6 +81,7 @@ export function FcChequePanel({
   canManage,
   canRegisterPayment,
   needsCorrection,
+  needsAccountingReview = false,
   chequeFaceAttested,
   chequeFaceUnrecorded,
   unattestedChequeId,
@@ -79,18 +101,31 @@ export function FcChequePanel({
   const [error, setError] = useState<string | null>(null);
 
   const canAttest =
-    canManage && chequeFaceUnrecorded && unattestedChequeId !== null;
+    canManage &&
+    !needsAccountingReview &&
+    chequeFaceUnrecorded &&
+    unattestedChequeId !== null;
   const canCorrect =
-    canManage && expectedPaymentCorrectable && chequePaymentRegistered;
-  const canRegister = (canManage || canRegisterPayment) && needsReRegistration;
+    canManage &&
+    !needsAccountingReview &&
+    expectedPaymentCorrectable &&
+    chequePaymentRegistered;
+  const canRegister =
+    (canManage || canRegisterPayment) &&
+    !needsAccountingReview &&
+    needsReRegistration;
   const showNotice =
-    chequeFaceUnrecorded || needsReRegistration || needsCorrection;
+    needsAccountingReview ||
+    chequeFaceUnrecorded ||
+    needsReRegistration ||
+    needsCorrection;
   if (!showNotice && !canCorrect) return null;
 
   // B2: when the viewer lacks the permission for the step the deal is waiting
   // on, say who acts instead of leaving a notice with nothing to press.
   let reasonKey: string | null = null;
-  if (chequeFaceUnrecorded && !canManage) reasonKey = "FcNeedsFinanceAttest";
+  if (needsAccountingReview) reasonKey = null;
+  else if (chequeFaceUnrecorded && !canManage) reasonKey = "FcNeedsFinanceAttest";
   else if (needsReRegistration && !canRegister)
     reasonKey = "FcNeedsRegisterPermission";
   else if (needsCorrection && !canManage) reasonKey = "FcNeedsFinanceCorrect";
@@ -111,7 +146,7 @@ export function FcChequePanel({
       else await onCorrect(reason.trim());
       close();
     } catch (caught) {
-      setError(getErrorMessage(caught));
+      setError(refusalMessage(caught) ?? t("UnexpectedError"));
     } finally {
       setSubmitting(false);
     }
@@ -131,7 +166,9 @@ export function FcChequePanel({
         )}
         <div className="min-w-0">
           <p className="min-w-0">
-            {chequeFaceUnrecorded
+            {needsAccountingReview
+              ? t("FcAccountingReviewNotice")
+              : chequeFaceUnrecorded
               ? t("FcChequeFaceUnrecordedNotice")
               : needsReRegistration
                 ? t("FcReRegisterNotice")

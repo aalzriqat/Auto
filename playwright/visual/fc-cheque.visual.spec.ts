@@ -48,6 +48,7 @@ const SCENARIOS = [
   "panel-reregister-noperm",
   "panel-returned-finance",
   "panel-returned-manager",
+  "panel-accounting-review",
   "panel-none",
   "attest-dialog",
   "correct-dialog",

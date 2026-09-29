@@ -177,6 +177,7 @@ function financedDirectDeal(): FinancedDealCockpitData {
     expectedPaymentCorrectable: false,
     expectedPaymentReRegistrable: false,
     chequeNeedsCorrection: false,
+    chequeNeedsAccountingReview: false,
     chequeFaceAttested: false,
     supplierSettlementRouteRequired: false,
     economicsRecorded: true,

@@ -84,7 +84,7 @@ const FC_KEYS = [
   "FcDrawerLine", "FcDrawerUnverified", "FcChequeBadge", "FcHandledFromDeal", "FcSaleCancelFromDeal",
   "FcOpenDeal", "RegisterExpectedPayment", "Cancel", "Confirm", "FcAttestNoteLabel", "FcAttestNotePlaceholder",
   "FcFaceAttestedBadge", "FcCorrectNeededNotice", "FcNeedsFinanceAttest", "FcNeedsFinanceCorrect",
-  "FcNeedsRegisterPermission",
+  "FcNeedsRegisterPermission", "FcAccountingReviewNotice",
 ];
 
 function tFor(locale: "en" | "ar") {
@@ -155,6 +155,10 @@ describe.skipIf(!GENERATE)("SCRUM-447 finance-company cheque visual fixture", ()
       "reregister-manager": { canManage: false, canRegisterPayment: true, needsReRegistration: true },
       "reregister-noperm": { canManage: false, canRegisterPayment: false, needsReRegistration: true },
       "returned-finance": { needsCorrection: true, expectedPaymentCorrectable: true, chequePaymentRegistered: true },
+      // F6: a cleared cheque nobody confirmed: notice only, no action.
+      "accounting-review": {
+        needsAccountingReview: true, expectedPaymentCorrectable: true, chequePaymentRegistered: true,
+      },
       "returned-manager": {
         canManage: false, canRegisterPayment: true, needsCorrection: true,
         expectedPaymentCorrectable: true, chequePaymentRegistered: true,

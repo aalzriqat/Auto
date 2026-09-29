@@ -9,6 +9,7 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({ t: (key: string) => key, isRtl: false, locale: "en" }),
 }));
 
+import { ConvexError } from "convex/values";
 import { FcChequePanel, type FcChequePanelProps } from "./FcChequePanel";
 
 afterEach(cleanup);
@@ -67,45 +68,97 @@ describe("FcChequePanel", () => {
     );
   });
 
-  test("B5: a raw Convex error never reaches the screen; an unknown throw shows the generic message; the dialog stays open", async () => {
-    const raw = new Error(
-      "[CONVEX M(applications:correctExpectedPayment)] [Request ID: abc] Server Error\nUncaught Error: Nope\n    at handler (../convex/applications.ts:3733:5)\n  Called by client"
+  test("F5: only a deliberate refusal is shown; a wrapped server crash and an unknown throw show the generic message; the dialog stays open", async () => {
+    const wrapped = new Error(
+      "[CONVEX M(x)] [Request ID: abc] Server Error\nUncaught Error: Internal ledger lookup failed\n    at handler (../convex/applications.ts:1:1)\n  Called by client"
     );
     const onCorrect = vi.fn(async () => {
-      throw raw;
+      throw wrapped;
     });
     panel({ expectedPaymentCorrectable: true, chequePaymentRegistered: true, onCorrect });
     fireEvent.click(screen.getByRole("button", { name: "FcCorrectExpectedPayment" }));
     fireEvent.change(document.querySelector("#fc-reason") as HTMLTextAreaElement, { target: { value: "why" } });
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toBe("Nope");
+    expect(alert.textContent).toBe("UnexpectedError");
+    expect(document.body.textContent).not.toContain("Internal ledger lookup failed");
     expect(document.body.textContent).not.toContain("Request ID");
-    expect(document.body.textContent).not.toContain("convex/applications.ts");
     expect(screen.getByRole("dialog")).toBeTruthy();
 
     onCorrect.mockImplementationOnce(async () => {
       throw { weird: true };
     });
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
-    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("An unexpected error occurred"));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("UnexpectedError"));
+
+    onCorrect.mockImplementationOnce(async () => {
+      throw new Error("plain client error with internals ../convex/x.ts:1:1");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("UnexpectedError"));
     expect(screen.getByRole("dialog")).toBeTruthy();
   });
 
-  test("B5: the attest dialog also sanitises a raw error", async () => {
+  test("F5: a deliberate ConvexError refusal is shown (correct dialog, string and {message} data)", async () => {
+    const refusal = "The finance-company cheque for this deal was already cleared, so the expected payment cannot be corrected.";
+    const onCorrect = vi.fn(async () => {
+      throw new ConvexError(refusal);
+    });
+    panel({ expectedPaymentCorrectable: true, chequePaymentRegistered: true, onCorrect });
+    fireEvent.click(screen.getByRole("button", { name: "FcCorrectExpectedPayment" }));
+    fireEvent.change(document.querySelector("#fc-reason") as HTMLTextAreaElement, { target: { value: "why" } });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(refusal);
+
+    onCorrect.mockImplementationOnce(async () => {
+      throw new ConvexError({ message: "Object-shaped refusal" });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("Object-shaped refusal"));
+
+    onCorrect.mockImplementationOnce(async () => {
+      throw new ConvexError({ code: 7 });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("UnexpectedError"));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  test("F5: the attest dialog follows the same contract", async () => {
     const onAttest = vi.fn(async () => {
-      throw new Error("[CONVEX M(x)] [Request ID: q] Server Error Uncaught Error: bad at ../convex/applications.ts:1:1");
+      throw new Error("[CONVEX M(x)] [Request ID: q] Server Error\nUncaught Error: Internal attest failure\n    at handler (../convex/applications.ts:1:1)");
     });
     panel({ chequeFaceUnrecorded: true, unattestedChequeId: "c1", onAttest });
     fireEvent.click(screen.getByRole("button", { name: "FcAttestChequeFace" }));
     fireEvent.change(document.querySelector("#fc-face") as HTMLInputElement, { target: { value: "5" } });
     fireEvent.change(document.querySelector("#fc-note") as HTMLTextAreaElement, { target: { value: "n" } });
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).not.toContain("Request ID");
-    expect(alert.textContent).not.toContain("convex/applications.ts");
+    expect((await screen.findByRole("alert")).textContent).toBe("UnexpectedError");
+    expect(document.body.textContent).not.toContain("Internal attest failure");
+
+    onAttest.mockImplementationOnce(async () => {
+      throw new ConvexError("Attestation refused: the cheque already has a recorded face.");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toBe("Attestation refused: the cheque already has a recorded face.")
+    );
   });
 
+  test("F6: a cleared, unconfirmed cheque shows the review notice and offers no Correct, Register or Attest", () => {
+    panel({
+      needsAccountingReview: true,
+      canManage: true,
+      canRegisterPayment: true,
+      expectedPaymentCorrectable: true,
+      chequePaymentRegistered: true,
+      chequeFaceUnrecorded: true,
+      unattestedChequeId: "c1",
+      needsReRegistration: true,
+    });
+    expect(screen.getByText("FcAccountingReviewNotice")).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
   test("B2: on a corrected CLOSED deal every visible action is one the server accepts", () => {
     // The server accepts register with REGISTER_EXPECTED_PAYMENT or MANAGE_FINANCE
     // on a CLOSED undisbursed deal, and correct/attest with MANAGE_FINANCE only.
@@ -163,7 +216,7 @@ describe("FcChequePanel", () => {
 
   test("correct needs a reason and shows the server refusal on the dialog", async () => {
     const onCorrect = vi.fn(async () => {
-      throw new Error("A deposited cheque cannot be withdrawn.");
+      throw new ConvexError("A deposited cheque cannot be withdrawn.");
     });
     panel({ expectedPaymentCorrectable: true, chequePaymentRegistered: true, onCorrect });
     fireEvent.click(screen.getByRole("button", { name: "FcCorrectExpectedPayment" }));

@@ -280,6 +280,27 @@ describe("the step the rail names is a step this screen can take", () => {
     expect(screen.queryByRole("button", { name: "FinalizeDealAction" })).toBeNull();
   });
 
+  test.each([
+    ["chequeNeedsCorrection"],
+    ["chequeNeedsAccountingReview"],
+  ])("the register step is withheld while %s is raised, and offered when it is not", (flag) => {
+    grantTheWholeTail();
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: false, [flag]: true })
+    );
+    renderCockpit();
+    expect(screen.queryByRole("button", { name: "RegisterExpectedPaymentAction" })).toBeNull();
+    cleanup();
+
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: false, [flag]: false })
+    );
+    renderCockpit();
+    expect(screen.getByRole("button", { name: "RegisterExpectedPaymentAction" })).toBeTruthy();
+  });
+
   test("closing is offered only once the payment fact the server demands is on file", () => {
     readyToClose();
     queryResults.set(

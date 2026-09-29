@@ -1894,7 +1894,8 @@ export const dealCockpit = query({
     // SCRUM-447 D0/D6: the LIVE finance-company cheque(s) for this deal. A cheque
     // registered as the payment method counts as "registered" only while a live
     // row exists — a retired (returned/cancelled/replaced) one does not.
-    const liveFcCheques = await liveChequesForApplication(ctx, app._id);
+    const linkedCheques = await chequesForApplication(ctx, app._id);
+    const liveFcCheques = linkedCheques.filter(isLiveFcCheque);
     const chequeMethodRegistered = app.expectedPaymentMethod === "CHEQUE";
     const chequeFaceUnrecorded =
       chequeMethodRegistered && liveFcCheques.some((row) => row.amountMinor === undefined);
@@ -2122,9 +2123,17 @@ export const dealCockpit = query({
       // SCRUM-447 B2/B4 workflow flags: a cheque payment is registered but no
       // live cheque backs it (returned/cancelled) and it is still correctable,
       // and a live cheque's face was attested by a finance manager.
+      // A CLEARED row takes precedence (mirrors correctExpectedPayment, which
+      // refuses it): that deal needs accounting review, never a correction.
       chequeNeedsCorrection:
         chequeMethodRegistered &&
         liveFcCheques.length === 0 &&
+        !linkedCheques.some((row) => row.status === "CLEARED") &&
+        app.status !== "CANCELLED" &&
+        !app.disbursedAt,
+      chequeNeedsAccountingReview:
+        chequeMethodRegistered &&
+        linkedCheques.some((row) => row.status === "CLEARED") &&
         app.status !== "CANCELLED" &&
         !app.disbursedAt,
       chequeFaceAttested: liveFcCheques.some((row) => row.faceAttestedAt !== undefined),
@@ -3658,7 +3667,10 @@ export const registerExpectedPayment = mutation({
       throw new ConvexError("Application must be APPROVED before registering expected payment.");
     }
     if (!app.vehicleHandoverAt) throw new ConvexError("Register the vehicle handover before the expected payment.");
-    if (app.expectedPaymentRegisteredAt) throw new ConvexError("Expected payment has already been registered.");
+    // A legacy row can carry a method with no `registeredAt`; it is still registered.
+    if (app.expectedPaymentRegisteredAt || app.expectedPaymentMethod) {
+      throw new ConvexError("Expected payment has already been registered.");
+    }
     if ((await liveChequesForApplication(ctx, args.applicationId)).length > 0) {
       throw new ConvexError(
         "This deal already has a live finance-company cheque. Correct the expected payment first."

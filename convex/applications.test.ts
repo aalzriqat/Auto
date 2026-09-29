@@ -2518,6 +2518,32 @@ describe("SCRUM-447 D3 correcting the expected payment", () => {
     await expect(s.confirm()).rejects.toThrow(/already marked cleared but the disbursement was never confirmed/i);
   });
 
+  test("L-b: a legacy CLOSED row with a method but no registeredAt cannot be silently re-registered", async () => {
+    const s = await setupApprovedDealWithCheque({ face: "20000" });
+    await s.finalize();
+    await s.asUser.mutation(api.applications.correctExpectedPayment, {
+      orgId: s.orgId,
+      applicationId: s.applicationId,
+      reason: "fix",
+    });
+    await s.t.run((ctx) =>
+      ctx.db.patch(s.applicationId, { expectedPaymentMethod: "BANK_TRANSFER", expectedPaymentDate: Date.now() })
+    );
+    const before = await s.t.run((ctx) => ctx.db.get(s.applicationId));
+    expect(before?.expectedPaymentRegisteredAt).toBeUndefined();
+    await expect(
+      s.asUser.mutation(api.applications.registerExpectedPayment, {
+        orgId: s.orgId,
+        applicationId: s.applicationId,
+        method: "BANK_TRANSFER",
+        expectedDate: Date.now() + 86_400_000,
+      })
+    ).rejects.toThrow(/already been registered/i);
+    const after = await s.t.run((ctx) => ctx.db.get(s.applicationId));
+    expect(after?.expectedPaymentDate).toBe(before?.expectedPaymentDate);
+    expect(after?.expectedPaymentRegisteredAt).toBeUndefined();
+  });
+
   test("B1: a same-key replay of a successful confirmation returns the original result", async () => {
     const s = await setupApprovedDealWithCheque({ face: "20000" });
     await s.finalize();
@@ -2570,6 +2596,69 @@ describe("SCRUM-447 D3 correcting the expected payment", () => {
     await s.asUser.mutation(api.collections.returnCheque, { orgId: s.orgId, chequeId: cheque._id, returnReason: "NSF" });
     const after = await s.asUser.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId: s.applicationId });
     expect(after?.expectedPaymentRegistered).toBe(false);
+  });
+
+  describe("cockpit cheque recovery flags", () => {
+    const flags = async (s: Awaited<ReturnType<typeof setupApprovedDealWithCheque>>) => {
+      const deal = await s.asUser.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId: s.applicationId });
+      return {
+        needsCorrection: deal?.chequeNeedsCorrection,
+        accountingReview: deal?.chequeNeedsAccountingReview,
+      };
+    };
+
+    test("T1: a returned cheque needs correction until the payment is corrected; a live HELD cheque does not", async () => {
+      const control = await setupApprovedDealWithCheque();
+      expect(await flags(control)).toEqual({ needsCorrection: false, accountingReview: false });
+
+      const s = await setupApprovedDealWithCheque();
+      const [cheque] = await s.rows();
+      await s.asUser.mutation(api.collections.returnCheque, { orgId: s.orgId, chequeId: cheque._id, returnReason: "NSF" });
+      expect(await flags(s)).toEqual({ needsCorrection: true, accountingReview: false });
+      await s.asUser.mutation(api.applications.correctExpectedPayment, {
+        orgId: s.orgId,
+        applicationId: s.applicationId,
+        reason: "returned",
+      });
+      expect(await flags(s)).toEqual({ needsCorrection: false, accountingReview: false });
+    });
+
+    test("F6: a CLEARED, undisbursed cheque asks for accounting review and is never offered Correct", async () => {
+      const s = await setupApprovedDealWithCheque();
+      const [cheque] = await s.rows();
+      await s.t.run((ctx) => ctx.db.patch(cheque._id, { status: "CLEARED", clearedAt: Date.now() }));
+      expect(await flags(s)).toEqual({ needsCorrection: false, accountingReview: true });
+    });
+
+    test("F6: CLEARED beside a RETURNED row takes precedence over correction", async () => {
+      const s = await setupApprovedDealWithCheque();
+      const [cheque] = await s.rows();
+      const now = Date.now();
+      await s.t.run((ctx) => ctx.db.patch(cheque._id, { status: "CLEARED", clearedAt: now }));
+      await s.t.run((ctx) =>
+        ctx.db.insert("postDatedCheques", {
+          orgId: s.orgId,
+          customerId: s.customerId,
+          applicationId: s.applicationId,
+          bank: "B",
+          chequeNumber: "RET-1",
+          chequeDate: now,
+          amount: 5,
+          status: "RETURNED",
+          createdBy: s.userId,
+          createdAt: now,
+          updatedAt: now,
+        })
+      );
+      expect(await flags(s)).toEqual({ needsCorrection: false, accountingReview: true });
+    });
+
+    test("F6: a DEPOSITED cheque is live, so neither flag is raised", async () => {
+      const s = await setupApprovedDealWithCheque();
+      const [cheque] = await s.rows();
+      await s.asUser.mutation(api.collections.depositCheque, { orgId: s.orgId, chequeId: cheque._id });
+      expect(await flags(s)).toEqual({ needsCorrection: false, accountingReview: false });
+    });
   });
 });
 
@@ -2705,6 +2794,13 @@ describe("SCRUM-447 D7'' read-only lineage audit", () => {
       const result = await x.audit();
       expect(x.classesOf(result, old)).toEqual(["LINEAGE_DETACHED_BY_LEGACY_REPLACEMENT"]);
       expect(result.findings.find((f) => f.chequeId === old)?.verdict).toBe("UNKNOWN");
+    });
+
+    test("L-f: a NaN page size falls back to the default page size instead of surviving", async () => {
+      const x = await seed();
+      for (let i = 0; i < 55; i += 1) await x.insert({ chequeNumber: `N-${i}`, status: "HELD" });
+      const result = await x.audit(Number.NaN);
+      expect(result.denominator.pageSize).toBe(50);
     });
 
     test("a three-row chain reaching an FC row flags every unmarked link; a customer-only chain flags nothing", async () => {
