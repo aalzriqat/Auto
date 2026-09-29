@@ -58,6 +58,7 @@ vi.mock("@/components/accounting/AccountingTabShared", () => ({
 }));
 
 import { DealCockpitView, StageFocusRow, type WorkflowAction } from "./DealCockpit";
+import { orderStagesForDisplay } from "./dealStageDisplayOrder";
 import { DealDocumentsPanel } from "./DealDocumentsPanel";
 import type { FinancedDealOverviewData } from "./DealFinancialOverview";
 import type { DealCustodyWiring } from "./DealCustodyPanel";
@@ -554,7 +555,9 @@ type FocusState = Readonly<
 >;
 
 function stagePosition(focus: FocusState): { position: number; total: number } {
-  const order: readonly string[] = focus.kind === "CASH" ? CASH_DEAL_STAGE_ORDER : DEAL_STAGE_ORDER;
+  // The rail (and so its "n / total" kicker) shows the executable order.
+  const serverOrder: readonly string[] = focus.kind === "CASH" ? CASH_DEAL_STAGE_ORDER : DEAL_STAGE_ORDER;
+  const order = orderStagesForDisplay(serverOrder.map((key) => ({ key }))).map((stage) => stage.key);
   const index = order.indexOf(focus.stageKey);
   expect(index, `${focus.id}: ${focus.stageKey} is not a ${focus.kind} stage`).toBeGreaterThanOrEqual(0);
   return { position: index + 1, total: order.length };

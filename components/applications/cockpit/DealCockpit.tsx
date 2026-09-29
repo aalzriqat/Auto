@@ -53,6 +53,7 @@ import {
 } from "lucide-react";
 import { DealVehicleCard } from "./DealVehicleCard";
 import { DealStageRail, DealStagesComplete } from "./DealStageRail";
+import { orderStagesForDisplay } from "./dealStageDisplayOrder";
 import {
   isLiveStageState,
   STAGE_ICON,
@@ -4422,7 +4423,10 @@ export function DealCockpitView({
     );
   }
 
-  const stages = deal.stages;
+  // The rail's DISPLAY order (S1): payment confirmation last, because it can
+  // only be confirmed after handover and close. The same stage objects, keyed
+  // re-sequenced; every "which step is this" number below reads this order.
+  const stages = orderStagesForDisplay(deal.stages);
   const live = stages.find((s) => isLiveStageState(s.state));
   // A finished deal gets one calm completion line instead of a rail of ticks;
   // the rail itself stays one click away. Every other deal — live, or stopped
