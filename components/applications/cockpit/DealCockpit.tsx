@@ -32,7 +32,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/components/ui/sonner";
 import { getErrorMessage, isConvexError } from "@/lib/errors";
-import { format, isValid } from "date-fns";
+import { isValid } from "date-fns";
+import { formatLocalized } from "@/lib/dateLocale";
 import {
   AlertTriangle,
   ArrowDown,
@@ -57,6 +58,27 @@ import { orderStagesForDisplay } from "./dealStageDisplayOrder";
 import { panelsForStage, type WorkbenchPanel } from "./dealWorkbenchPanels";
 import { DealStageView } from "./DealStageView";
 import { StageViewAnnouncer } from "./StageViewAnnouncer";
+import { StagePosition } from "./StagePosition";
+import {
+  approvalReopenedReflected,
+  approvedPurchaseReflected,
+  creditStatusReflected,
+  depositReleaseReflected,
+  expectedPaymentReflected,
+  financeDisbursementReflected,
+  handoverReflected,
+  legalInvoiceReflected,
+  nextOutstandingDocument,
+  quotationReflected,
+  reconciliationReflected,
+  supplierDisbursementReflected,
+  uploadReflected,
+  useRecordedFeedback,
+  verifyReflected,
+  type RecordedFeedback,
+  type RecordedModel,
+  type RecordedTrackOptions,
+} from "./recordedFeedback";
 import { DealStepChecklist } from "./DealStepChecklistList";
 import type { ClosingReadinessCheckKey } from "@/lib/closingReadinessReasonCodes";
 import { deriveStepChecklist, type ChecklistDestination, type ChecklistItem } from "./dealStepChecklist";
@@ -204,8 +226,8 @@ function isRenderableMoment(value: number | undefined): value is number {
  */
 const MOMENT_UNAVAILABLE = "—";
 
-function renderMoment(value: number | undefined, pattern: string): string {
-  return isRenderableMoment(value) ? format(value, pattern) : MOMENT_UNAVAILABLE;
+function renderMoment(value: number | undefined, pattern: string, locale?: string): string {
+  return isRenderableMoment(value) ? formatLocalized(value, pattern, locale) : MOMENT_UNAVAILABLE;
 }
 
 const STAGE_LABEL: Record<string, string> = {
@@ -906,6 +928,19 @@ export function DealCockpit({
     api.financeDealCosts.listDealCosts,
     canViewApplications && deal ? { orgId, applicationId } : "skip"
   );
+  // SCRUM-417 UX5 (S7). A step's success is held until the read model shows the
+  // fact THAT action wrote (each call site names it: `reflectedWhen`), then shown
+  // as one persistent "Recorded. Next: ..." line. An action with no observable
+  // fact of its own says so at once, as the toast. Declared here -- before the
+  // early return below -- because it is a hook, and its handlers are lower down.
+  const recordedModel: RecordedModel | null = deal
+    ? { deal, documents, application: app, economics: economicsApp, costs: dealCosts }
+    : null;
+  const {
+    recorded: recordedFeedback,
+    track: trackRecorded,
+    clear: clearRecorded,
+  } = useRecordedFeedback(recordedModel, (fallbackKey) => toast.success(t(fallbackKey)), String(applicationId));
   // The custody picker's own read, shaped for the money permission — see
   // `listCustodyCandidates`. Mounted on EXACTLY the predicate that offers the
   // custody commands below (`custodyCommandsOffered`), so the plan and issue
@@ -2046,8 +2081,9 @@ export function DealCockpit({
     setCreditSubmitting(true);
     setCreditError(null);
     try {
-      await updateStatus({ orgId, applicationId, status });
-      toast.success(t(CREDIT_STATUS_SUCCESS[status]));
+      await trackRecorded(() => updateStatus({ orgId, applicationId, status }), CREDIT_STATUS_SUCCESS[status], {
+        reflectedWhen: creditStatusReflected(status),
+      });
       setDecidingCredit(false);
     } catch (error) {
       // "You cannot approve your own application", an illegal transition —
@@ -2408,7 +2444,7 @@ export function DealCockpit({
                 custodyId={custodyId}
                 currency={record?.currency ?? dealCosts?.currency ?? economicsCurrencyCode}
                 money={custodyMoney}
-                formatDate={(ms: number) => renderMoment(ms, "d MMM yyyy")}
+                formatDate={(ms: number) => renderMoment(ms, "d MMM yyyy", locale)}
                 t={t}
                 onReverse={onReverse}
               />
@@ -2532,7 +2568,7 @@ export function DealCockpit({
                   ruleName: doc.ruleName,
                   status: doc.status,
                   fileUrl: doc.fileUrl,
-                  uploadedLabel: isRenderableMoment(uploadedAt) ? format(uploadedAt, "d MMM yyyy") : null,
+                  uploadedLabel: isRenderableMoment(uploadedAt) ? formatLocalized(uploadedAt, "d MMM yyyy", locale) : null,
                 },
               ]
             : [];
@@ -2548,7 +2584,13 @@ export function DealCockpit({
           if (uploadsInFlightRef.current.has(doc.ruleId)) return;
           uploadsInFlightRef.current.add(doc.ruleId);
           setUploadingRuleIds(new Set(uploadsInFlightRef.current));
+          // The stored file (`_storage` id) this upload produces: what identifies it
+          // on the documents read model, unlike a timestamp two uploads can share.
+          let storedFileId: string | undefined;
           try {
+            // Tracked from the START, so a row the read model already moved
+            // while the file was uploading still counts as reflected (S7).
+            await trackRecorded(async () => {
             // A rule added after the application was created has no row yet
             // (SCRUM-421): create it first, under the same authority as the
             // upload. Idempotent, so a retry lands on the same row.
@@ -2573,12 +2615,20 @@ export function DealCockpit({
               body: file,
             });
             const { storageId } = await result.json();
+            storedFileId = typeof storageId === "string" ? storageId : undefined;
             await saveDocumentFile({
               orgId,
               documentId: documentId as Id<"applicationDocuments">,
               fileId: storageId,
             });
-            toast.success(t("UploadSuccess"));
+            }, "UploadSuccess", {
+              isDocumentAction: true,
+              documentRuleId: doc.ruleId,
+              // This rule's row carries the new file -- not "the list changed":
+              // another operator's verify, or the rule list reordering when a
+              // row-less rule is materialized, must not release the line.
+              reflectedWhen: uploadReflected(doc.ruleId, () => storedFileId),
+            });
           } catch (error) {
             toast.error(getErrorMessage(error));
           } finally {
@@ -2587,12 +2637,22 @@ export function DealCockpit({
           }
         },
         onVerify: async (documentId) => {
+          const documentRuleId = documents?.find((doc) => doc._id === documentId)?.ruleId;
           try {
-            await updateDocStatus({
-              orgId,
-              documentId: documentId as Id<"applicationDocuments">,
-              status: "VERIFIED",
-            });
+            await trackRecorded(
+              () =>
+                updateDocStatus({
+                  orgId,
+                  documentId: documentId as Id<"applicationDocuments">,
+                  status: "VERIFIED",
+                }),
+              "DocVerified",
+              {
+                isDocumentAction: true,
+                documentRuleId: documentRuleId,
+                reflectedWhen: verifyReflected(documentRuleId),
+              }
+            );
           } catch (error) {
             toast.error(getErrorMessage(error));
           }
@@ -2622,18 +2682,22 @@ export function DealCockpit({
                 pendingPayouts.record(depositId, { resolution, method: String(method), intent: releaseIntent });
                 setResolvingDepositId(depositId);
                 try {
-                  await releaseDeposit({
-                    orgId,
-                    depositId: depositId as Id<"deposits">,
-                    resolution,
-                    refundMethod: resolution === "REFUNDED" ? refundMethod : undefined,
-                    idempotencyKey: commandId.for(releaseIntent),
-                  });
+                  await trackRecorded(
+                    () =>
+                      releaseDeposit({
+                        orgId,
+                        depositId: depositId as Id<"deposits">,
+                        resolution,
+                        refundMethod: resolution === "REFUNDED" ? refundMethod : undefined,
+                        idempotencyKey: commandId.for(releaseIntent),
+                      }),
+                    resolution === "REFUNDED" ? "DepositRefundedSuccess" : "DepositForfeitedSuccess",
+                    // The deposit's own release counter moved past the one the
+                    // dialog observed; nothing else on the deal proves it.
+                    { reflectedWhen: depositReleaseReflected(depositId, observedReleaseCount) }
+                  );
                   commandId.retire(releaseIntent);
                   pendingPayouts.confirm(depositId);
-                  toast.success(
-                    t(resolution === "REFUNDED" ? "DepositRefundedSuccess" : "DepositForfeitedSuccess")
-                  );
                 } catch (error) {
                   toast.error(getErrorMessage(error));
                   throw error;
@@ -2657,14 +2721,19 @@ export function DealCockpit({
                   setDisbursementSubmitting(true);
                   try {
                     confirmDisbursementKeyRef.current ??= `confirm-disbursement:${crypto.randomUUID()}`;
-                    await confirmDisbursement({
-                      orgId,
-                      applicationId,
-                      disbursedAmountMinor: expectedDisbursementMinor,
-                      idempotencyKey: confirmDisbursementKeyRef.current,
-                    });
+                    const disbursementKey = confirmDisbursementKeyRef.current;
+                    await trackRecorded(
+                      () =>
+                        confirmDisbursement({
+                          orgId,
+                          applicationId,
+                          disbursedAmountMinor: expectedDisbursementMinor,
+                          idempotencyKey: disbursementKey,
+                        }),
+                      "DisbursementConfirmedSuccess",
+                      { reflectedWhen: financeDisbursementReflected }
+                    );
                     confirmDisbursementKeyRef.current = null;
-                    toast.success(t("DisbursementConfirmedSuccess"));
                     setConfirmingDisbursement(false);
                   } catch (error) {
                     toast.error(getErrorMessage(error));
@@ -2693,18 +2762,23 @@ export function DealCockpit({
                   setDisbursementSubmitting(true);
                   try {
                     confirmSupplierDisbursementKeyRef.current ??= `confirm-supplier-disbursement:${crypto.randomUUID()}`;
-                    await confirmSupplierDisbursement({
-                      orgId,
-                      applicationId,
-                      // Scaled by the APPLICATION's pinned economics currency —
-                      // this figure lives in that block.
-                      disbursedAmountMinor: Math.round(advice.amountMajor * economicsFactor),
-                      reference: advice.reference,
-                      disbursedAt: advice.disbursedAt,
-                      idempotencyKey: confirmSupplierDisbursementKeyRef.current,
-                    });
+                    const supplierDisbursementKey = confirmSupplierDisbursementKeyRef.current;
+                    await trackRecorded(
+                      () =>
+                        confirmSupplierDisbursement({
+                          orgId,
+                          applicationId,
+                          // Scaled by the APPLICATION's pinned economics currency —
+                          // this figure lives in that block.
+                          disbursedAmountMinor: Math.round(advice.amountMajor * economicsFactor),
+                          reference: advice.reference,
+                          disbursedAt: advice.disbursedAt,
+                          idempotencyKey: supplierDisbursementKey,
+                        }),
+                      "SupplierDisbursementConfirmedSuccess",
+                      { reflectedWhen: supplierDisbursementReflected }
+                    );
                     confirmSupplierDisbursementKeyRef.current = null;
-                    toast.success(t("SupplierDisbursementConfirmedSuccess"));
                     setConfirmingSupplierDisbursement(false);
                   } catch (error) {
                     toast.error(getErrorMessage(error));
@@ -2731,21 +2805,24 @@ export function DealCockpit({
         onSubmit: async (values) => {
           setGapSubmitting(true);
           try {
-            await resolveAppraisalGap({
-              orgId,
-              applicationId,
-              // The stamp the DIALOG snapshotted when it opened, passed straight
-              // through. Re-reading it from `deal` here would undo that
-              // snapshot and hand the server a revision the operator never saw.
-              economicsStamp: values.economicsStamp ?? "",
-              customerGapShareMinor: values.customerGapShareMinor,
-              dealerGapShareMinor: values.dealerGapShareMinor,
-              customerGapCashToDealerMinor: values.customerGapCashToDealerMinor,
-              customerGapInstallmentToDealerMinor: values.customerGapInstallmentToDealerMinor,
-              customerGapToFinanceCompanyMinor: values.customerGapToFinanceCompanyMinor,
-              notes: values.notes || undefined,
-            });
-            toast.success(t("GapResolved"));
+            await trackRecorded(
+              () =>
+                resolveAppraisalGap({
+                  orgId,
+                  applicationId,
+                  // The stamp the DIALOG snapshotted when it opened, passed straight
+                  // through. Re-reading it from `deal` here would undo that
+                  // snapshot and hand the server a revision the operator never saw.
+                  economicsStamp: values.economicsStamp ?? "",
+                  customerGapShareMinor: values.customerGapShareMinor,
+                  dealerGapShareMinor: values.dealerGapShareMinor,
+                  customerGapCashToDealerMinor: values.customerGapCashToDealerMinor,
+                  customerGapInstallmentToDealerMinor: values.customerGapInstallmentToDealerMinor,
+                  customerGapToFinanceCompanyMinor: values.customerGapToFinanceCompanyMinor,
+                  notes: values.notes || undefined,
+                }),
+              "GapResolved"
+            );
             setResolvingGap(false);
           } catch (error) {
             const message = getErrorMessage(error);
@@ -2769,16 +2846,20 @@ export function DealCockpit({
         onSubmit: async (values) => {
           setHandoverSubmitting(true);
           try {
-            await registerVehicleHandover({
-              orgId,
-              applicationId,
-              notes: values.notes,
-              // The stamp the dialog was OPENED against, passed straight
-              // through. Not re-read from `deal` here — that would undo the
-              // snapshot the dialog took and restore the race it closes.
-              economicsStamp: values.economicsStamp,
-            });
-            toast.success(t("HandoverRegistered"));
+            await trackRecorded(
+              () =>
+                registerVehicleHandover({
+                  orgId,
+                  applicationId,
+                  notes: values.notes,
+                  // The stamp the dialog was OPENED against, passed straight
+                  // through. Not re-read from `deal` here — that would undo the
+                  // snapshot the dialog took and restore the race it closes.
+                  economicsStamp: values.economicsStamp,
+                }),
+              "HandoverRegistered",
+              { reflectedWhen: handoverReflected }
+            );
             setConfirmingHandover(false);
           } catch (error) {
             // The server's refusals name the thing to change — not APPROVED
@@ -2801,8 +2882,11 @@ export function DealCockpit({
           setPaymentSubmitting(true);
           setPaymentError(null);
           try {
-            await registerExpectedPayment({ orgId, applicationId, ...values });
-            toast.success(t("ExpectedPaymentRegisteredSuccess"));
+            await trackRecorded(
+              () => registerExpectedPayment({ orgId, applicationId, ...values }),
+              "ExpectedPaymentRegisteredSuccess",
+              { reflectedWhen: expectedPaymentReflected }
+            );
             setRegisteringPayment(false);
           } catch (error) {
             const message = getErrorMessage(error);
@@ -2839,13 +2923,20 @@ export function DealCockpit({
             // server has confirmed, so a lost response retries the SAME
             // operation rather than starting a new one.
             finalizeKeyRef.current ??= `finalize-deal:${crypto.randomUUID()}`;
-            await finalizeDeal({
-              orgId,
-              applicationId,
-              idempotencyKey: finalizeKeyRef.current,
-            });
+            const finalizeKey = finalizeKeyRef.current;
+            await trackRecorded(
+              () =>
+                finalizeDeal({
+                  orgId,
+                  applicationId,
+                  idempotencyKey: finalizeKey,
+                }),
+              "DealFinalizedSuccess"
+              // No `reflectedWhen`, on purpose: finalizing navigates to the
+              // sale's own deal page and this cockpit unmounts, taking a held
+              // line with it. The outcome is said at once, as cancel says it.
+            );
             finalizeKeyRef.current = null;
-            toast.success(t("DealFinalizedSuccess"));
             setConfirmingFinalize(false);
           } catch (error) {
             // Deliberately keeps the key: every refusal here is actionable and
@@ -2868,6 +2959,7 @@ export function DealCockpit({
       canCorrectAdvice={canCorrectAdvice}
       canSettleSupplier={canSettleSupplier}
       documentsActionable={!permissionsLoading && documentsStepReason === undefined}
+      recordedFeedback={{ recorded: recordedFeedback, track: trackRecorded, onDismiss: clearRecorded }}
       onCorrectSettlementAdvice={async (correction) => {
         correctionKeyRef.current ??= `amend-supplier-advice:${crypto.randomUUID()}`;
         await amendAdvice({
@@ -2945,8 +3037,11 @@ export function DealCockpit({
             setReconciliationSubmitting(true);
             setReconciliationError(null);
             try {
-              await resolveFinancingReconciliation({ orgId, applicationId, note });
-              toast.success(t("ReconciliationResolved"));
+              await trackRecorded(
+                () => resolveFinancingReconciliation({ orgId, applicationId, note }),
+                "ReconciliationResolved",
+                { reflectedWhen: reconciliationReflected }
+              );
               setResolvingReconciliation(false);
             } catch (error) {
               // "Record what was checked", "not flagged" — each names what to
@@ -2983,16 +3078,27 @@ export function DealCockpit({
             setLegalInvoiceSubmitting(true);
             setLegalInvoiceError(null);
             try {
-              await recordLegalInvoice({
-                orgId,
-                applicationId,
-                legalInvoiceAmountMinor: values.legalInvoiceAmountMinor,
-                legalInvoiceNumber: values.legalInvoiceNumber,
-                legalInvoiceDate: values.legalInvoiceDate,
-                issuedTo: values.issuedTo,
-                issuedToOther: values.issuedToOther,
-              });
-              toast.success(t("LegalInvoiceRecorded"));
+              await trackRecorded(
+                () =>
+                  recordLegalInvoice({
+                    orgId,
+                    applicationId,
+                    legalInvoiceAmountMinor: values.legalInvoiceAmountMinor,
+                    legalInvoiceNumber: values.legalInvoiceNumber,
+                    legalInvoiceDate: values.legalInvoiceDate,
+                    issuedTo: values.issuedTo,
+                    issuedToOther: values.issuedToOther,
+                  }),
+                "LegalInvoiceRecorded",
+                {
+                  reflectedWhen: legalInvoiceReflected({
+                    number: values.legalInvoiceNumber,
+                    amountMinor: values.legalInvoiceAmountMinor,
+                    date: values.legalInvoiceDate,
+                    issuedTo: values.issuedTo,
+                  }),
+                }
+              );
               setRecordingLegalInvoice(false);
             } catch (err) {
               setLegalInvoiceError(getErrorMessage(err));
@@ -3833,6 +3939,7 @@ export function DealCockpitView({
   canSettleSupplier: callerMaySettleSupplier = false,
   supplierSettlementHref,
   documentsActionable = true,
+  recordedFeedback,
   onCorrectSettlementAdvice,
   onRecordSupplierReceipt,
   activeAppraisalProvider = null,
@@ -3854,6 +3961,20 @@ export function DealCockpitView({
    * is view selection only: it never changes the live stage or any command.
    */
   stageDeepLink?: StageDeepLink;
+  /**
+   * SCRUM-417 UX5 (S7): the container's hold-until-reflected feedback. Absent
+   * (a plain view, a test), a step's success is announced at once, as before.
+   */
+  recordedFeedback?: {
+    /** The step that was just recorded and is now on screen; `null` when there is none. */
+    recorded: RecordedFeedback | null;
+    track: <T>(
+      run: () => Promise<T>,
+      fallbackKey: string,
+      options?: RecordedTrackOptions
+    ) => Promise<T>;
+    onDismiss: () => void;
+  };
   /** Deposit requests still waiting on this deal (SCRUM-444). Financed only. */
   depositRequests?: {
     orgId: Id<"organizations">;
@@ -4147,6 +4268,36 @@ export function DealCockpitView({
   const { t, locale } = useLanguage();
   const currency = useCurrency();
 
+  // S7: with no container feedback (a plain view), a step's success is said at once.
+  const trackStep: NonNullable<typeof recordedFeedback>["track"] =
+    recordedFeedback?.track ??
+    (async <T,>(run: () => Promise<T>, fallbackKey: string) => {
+      const value = await run();
+      toast.success(t(fallbackKey));
+      return value;
+    });
+  // After a document upload or verify, focus goes to the NEXT outstanding
+  // document row -- once per recorded step, and only when one is left.
+  const recordedStep = recordedFeedback?.recorded ?? null;
+  const focusedForRef = useRef<RecordedFeedback | null>(null);
+  const nextDocumentRuleId =
+    recordedStep?.isDocumentAction && deal
+      ? nextOutstandingDocument(deal.documents, recordedStep.documentRuleId)
+      : undefined;
+  useEffect(() => {
+    if (recordedStep === null || nextDocumentRuleId === undefined) return;
+    if (focusedForRef.current === recordedStep) return;
+    // Matched by attribute value, not a selector string: a rule id is data.
+    const row = Array.from(document.querySelectorAll<HTMLElement>("[data-rule-id]")).find(
+      (element) => element.getAttribute("data-rule-id") === nextDocumentRuleId
+    );
+    if (!row) return;
+    focusedForRef.current = recordedStep;
+    row.focus();
+  }, [recordedStep, nextDocumentRuleId]);
+
+  // O4: whether the phone's folded stage rail is open. Presentation only.
+  const [railOpen, setRailOpen] = useState(false);
   const [settlingSupplier, setSettlingSupplier] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [correctingAdvice, setCorrectingAdvice] = useState(false);
@@ -4684,14 +4835,18 @@ export function DealCockpitView({
       // Keyed to THIS claim, whose id the server resolved. The screen never
       // lets a client name a receivable of its own choosing.
       receiptKeyRef.current ??= crypto.randomUUID();
-      await onRecordSupplierReceipt(
-        supplierRow.receivableId as Id<"vehicleSupplierReceivables">,
-        { ...receipt, idempotencyKey: receiptKeyRef.current }
+      const receiptKey = receiptKeyRef.current;
+      await trackStep(
+        () =>
+          onRecordSupplierReceipt(supplierRow.receivableId as Id<"vehicleSupplierReceivables">, {
+            ...receipt,
+            idempotencyKey: receiptKey,
+          }),
+        "ReceiptRecorded"
       );
       // Only now: a failed attempt keeps its key so retrying is the same
       // receipt rather than a second one.
       receiptKeyRef.current = null;
-      toast.success(t("ReceiptRecorded"));
       setSettlingSupplier(false);
     } catch (error) {
       toast.error(getErrorMessage(error));
@@ -4720,8 +4875,9 @@ export function DealCockpitView({
     setQuotationSubmitting(true);
     setQuotationError(null);
     try {
-      await financeDecision.onRecordQuotation(values);
-      toast.success(t("QuotationRecorded"));
+      await trackStep(() => financeDecision.onRecordQuotation(values), "QuotationRecorded", {
+        reflectedWhen: quotationReflected(values.submittedQuotationMinor, values.source),
+      });
       setRecordingQuotation(false);
     } catch (error) {
       const message = getErrorMessage(error);
@@ -4743,8 +4899,7 @@ export function DealCockpitView({
     setAppraisalSubmitting(true);
     setAppraisalError(null);
     try {
-      await financeDecision.onRecordAppraisal(values);
-      toast.success(t("AppraisalRecorded"));
+      await trackStep(() => financeDecision.onRecordAppraisal(values), "AppraisalRecorded");
       setRecordingAppraisal(false);
     } catch (error) {
       const message = getErrorMessage(error);
@@ -4766,8 +4921,9 @@ export function DealCockpitView({
     setApprovalSubmitting(true);
     setApprovalError(null);
     try {
-      await financeDecision.onRecordApproved(values);
-      toast.success(t("ApprovedPurchaseRecorded"));
+      await trackStep(() => financeDecision.onRecordApproved(values), "ApprovedPurchaseRecorded", {
+        reflectedWhen: approvedPurchaseReflected(values.approvedAmountMinor, values.basis),
+      });
       setRecordingApproval(false);
     } catch (error) {
       const message = getErrorMessage(error);
@@ -4783,8 +4939,10 @@ export function DealCockpitView({
     setFirstPaymentSubmitting(true);
     setFirstPaymentError(null);
     try {
-      await financeDecision.onApplyQuoteFirstPayment(values);
-      toast.success(t("ApplyQuoteFirstPaymentApplied"));
+      await trackStep(
+        () => financeDecision.onApplyQuoteFirstPayment!(values),
+        "ApplyQuoteFirstPaymentApplied"
+      );
       setApplyingFirstPayment(false);
     } catch (error) {
       const message = getErrorMessage(error);
@@ -4800,8 +4958,9 @@ export function DealCockpitView({
     setReopenSubmitting(true);
     setReopenError(null);
     try {
-      await financeDecision.onReopenApproved(values);
-      toast.success(t("ApprovedPurchaseReopened"));
+      await trackStep(() => financeDecision.onReopenApproved(values), "ApprovedPurchaseReopened", {
+        reflectedWhen: approvalReopenedReflected,
+      });
       setReopeningApproval(false);
       // Straight into recording the correct figure. Reopening leaves the deal
       // with no approved amount and handover blocked — a state nobody wants to
@@ -4973,7 +5132,7 @@ export function DealCockpitView({
                         // the explicit code for anything else.
                         moneyIn: (minor: number, currency: string) =>
                           currency === dealCurrency ? money(minor) : custodyMoney(minor, currency),
-                        formatDate: (ms: number) => renderMoment(ms, "d MMM yyyy"),
+                        formatDate: (ms: number) => renderMoment(ms, "d MMM yyyy", locale),
                       }
                     : undefined
                 }
@@ -5166,7 +5325,7 @@ export function DealCockpitView({
                 <dt className="text-muted-foreground">{t("LegalInvoiceDate")}</dt>
                 <dd className="font-medium">
                   {closingChecklist.legalInvoice.date
-                    ? format(closingChecklist.legalInvoice.date, "d MMM yyyy")
+                    ? formatLocalized(closingChecklist.legalInvoice.date, "d MMM yyyy", locale)
                     : "-"}
                 </dd>
               </div>
@@ -5239,7 +5398,7 @@ export function DealCockpitView({
               {isRenderableMoment(entry.changedAt) && (
                 <>
                   {" · "}
-                  <bdi>{format(entry.changedAt, "d MMM yyyy HH:mm")}</bdi>
+                  <bdi>{formatLocalized(entry.changedAt, "d MMM yyyy HH:mm", locale)}</bdi>
                 </>
               )}
             </p>
@@ -5314,6 +5473,46 @@ export function DealCockpitView({
     ...recordWorkingNodes,
   ];
   const checklistItems = live ? checklistOf(live) : null;
+  // S7: what comes next, read from the SAME facts the card below is built from
+  // -- the current sub-step when the live step has one, else the live step.
+  const recordedNextLabel = recordedStep
+    ? (() => {
+        const item =
+          checklistItems?.find((entry) => entry.status === "current") ??
+          checklistItems?.find((entry) => entry.status === "pending");
+        if (item) return t(item.labelKey);
+        return live ? t(STAGE_LABEL[live.key] ?? live.key) : null;
+      })()
+    : null;
+  // "Nothing left to do" is a claim about a FINISHED deal only. A stopped deal has
+  // no live step either, but work can remain on it (a held deposit still to be
+  // released or forfeited), so there it says only that it was recorded.
+  const recordedTail = recordedNextLabel
+    ? `${t("RecordedNextPrefix")} ${recordedNextLabel}`
+    : allComplete
+      ? t("RecordedAllDone")
+      : null;
+  const recordedMessage = recordedStep ? [t("RecordedLead"), recordedTail].filter(Boolean).join(" ") : null;
+  // Dismissing removes the very button that had focus, which would drop it on
+  // <body>. It goes to the step's heading instead (the step being looked at, or
+  // the live one) -- and nothing is announced for it: the announcer speaks
+  // transitions of the view, not the removal of a line. With no step on screen (a
+  // finished or stopped deal) it goes to what IS there: the stopped notice, else
+  // the toggle that opens the completed stages, else the deal header.
+  const dismissRecorded = () => {
+    recordedFeedback?.onDismiss();
+    const target =
+      document.querySelector<HTMLElement>(
+        '[data-testid="deal-stage-view"] h2, [data-testid="deal-next-step"] h2'
+      ) ??
+      document.querySelector<HTMLElement>('[data-testid="deal-stopped"]') ??
+      document.querySelector<HTMLElement>('[data-testid="deal-stages-toggle"]') ??
+      document.querySelector<HTMLElement>('[data-testid="deal-header"]');
+    if (!target) return;
+    // A button is already focusable; a heading, a paragraph or the header is not.
+    if (target.tabIndex < 0 && !target.matches("button, a[href], input, select, textarea")) target.tabIndex = -1;
+    target.focus();
+  };
   // The step being looked at, when it is not the live one: a read-only card
   // ABOVE the live step. It is one more keyed sibling in the flow, so it comes
   // and goes without ever remounting a panel.
@@ -5339,10 +5538,15 @@ export function DealCockpitView({
         // keyboard user is never dropped onto the page.
         // A finished deal keeps its rail collapsed behind the persistent
         // "show stages" toggle: with no node on screen, focus goes there.
+        // On a phone the rail is folded behind its bar (O4): its nodes are not
+        // on screen, so focus goes to the bar that opens them.
+        const railHidden = !railOpen && window.matchMedia?.("(max-width: 767px)").matches === true;
         const target =
+          (railHidden ? document.querySelector<HTMLElement>('[data-testid="deal-mobile-rail-toggle"]') : null) ??
           document.querySelector<HTMLElement>(
             `[data-testid="deal-stage-node-${live?.key ?? otherStage.key}"]`
-          ) ?? document.querySelector<HTMLElement>('[data-testid="deal-stages-toggle"]');
+          ) ??
+          document.querySelector<HTMLElement>('[data-testid="deal-stages-toggle"]');
         target?.focus({ preventScroll: true });
         requestStage(null);
       }}
@@ -5496,8 +5700,89 @@ export function DealCockpitView({
       ? ({ "--flow-rows": `repeat(${flow.length - 2}, auto) 1fr` } as CSSProperties)
       : undefined;
 
+  // SCRUM-417 UX5 (O4). Below md the step comes first: the identity strip is
+  // rendered as two copies (see `identityStrip` below), one per breakpoint and
+  // never both visible, so the phone copy can sit after the step in DOM order
+  // and the order Tab walks is the order it is drawn, and the stage rail folds
+  // behind a "Step N of M" bar. From md up the desktop copy sits under the
+  // header: nothing moves there. No CSS `order` is involved.
+  const mobileStage = allComplete ? undefined : (otherStage ?? live);
+  const mobileStageIndex = mobileStage ? stages.findIndex((stage) => stage.key === mobileStage.key) : -1;
+  const railFolded = mobileStage !== undefined && !railOpen;
+
+  // The identity strip (SCRUM-372): what kind of deal, which record, and the
+  // people on it -- customer, finance company, salesperson. Each cell is absent
+  // rather than empty: a cash deal has no finance company.
+  // Drawn TWICE, one copy per breakpoint, and never both: `hidden` is display:none,
+  // which removes a copy from the tab order and the accessibility tree. The desktop
+  // copy sits in the DOM right under the header (where md and up paint it); the
+  // phone copy is the last node of the document (where a phone paints it, after
+  // the step). So Tab and a screen reader meet it in the order it is drawn, at
+  // either width, with no CSS `order` to make the two disagree (SCRUM-417 UX5 R2-2).
+  const identityStrip = (placement: "desktop" | "phone") => (
+      <dl
+        className={cn(
+          "grid-cols-2 gap-x-4 gap-y-3 rounded-lg border bg-card p-4 text-sm shadow-sm sm:gap-x-6 lg:grid-cols-5",
+          placement === "desktop" ? "hidden md:grid" : "grid md:hidden"
+        )}
+        aria-label={t("DealEssentialsHeading")}
+        data-testid={placement === "desktop" ? "deal-identity" : "deal-identity-mobile"}
+      >
+        <div className="min-w-0">
+          <dt className="text-xs text-muted-foreground">{t("DealTypeLabel")}</dt>
+          <dd className="font-medium">
+            {t(deal.dealKind === "CASH" ? "DealKindCash" : "DealKindFinanced")}
+          </dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="text-xs text-muted-foreground">
+            {t(deal.applicationId === null ? "DealReferenceSale" : "DealReferenceApplication")}
+          </dt>
+          <dd className="flex min-w-0 items-center gap-1 font-medium">
+            <CopyableReference value={String(deal.dealRef)} t={t} />
+          </dd>
+        </div>
+        {deal.customer && (
+          <div className="min-w-0">
+            <dt className="text-xs text-muted-foreground">{t("Customer")}</dt>
+            <dd className="min-w-0 break-words font-medium">
+              <bdi>{deal.customer.name}</bdi>
+              {deal.customer.phone && (
+                <>
+                  {" "}
+                  <bdi className="font-normal text-muted-foreground">{deal.customer.phone}</bdi>
+                </>
+              )}
+            </dd>
+          </div>
+        )}
+        {deal.financeCompanyName && (
+          <div className="min-w-0">
+            <dt className="text-xs text-muted-foreground">{t("PartyFinancier")}</dt>
+            <dd className="min-w-0 break-words font-medium">
+              <bdi>{deal.financeCompanyName}</bdi>
+            </dd>
+          </div>
+        )}
+        <div className="min-w-0">
+          <dt className="text-xs text-muted-foreground">{t("DealOwner")}</dt>
+          <dd className="min-w-0 break-words font-medium">
+            <bdi>{deal.salespersonName}</bdi>{" "}
+            <bdi className="font-normal text-muted-foreground">{renderMoment(deal.createdAt, "d MMM yyyy", locale)}</bdi>
+          </dd>
+        </div>
+        {/* The header's "last updated", in the flow on a phone only. */}
+        <div className="min-w-0 sm:hidden" data-testid="deal-essentials-last-updated">
+          <dt className="text-xs text-muted-foreground">{t("LastUpdated")}</dt>
+          <dd className="font-medium">
+            <bdi>{renderMoment(deal.updatedAt ?? deal.createdAt, "d MMM yyyy HH:mm", locale)}</bdi>
+          </dd>
+        </div>
+      </dl>
+  );
+
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       {/* --- header ------------------------------------------------------ */}
       {/* Sticky: the deal's identity, status and the exceptional action stay
           in view while the operator works down the rail and the money —
@@ -5553,7 +5838,7 @@ export function DealCockpitView({
           {/* Off the sticky bar on a phone, where every row it takes is a row
               of the deal hidden under it; the essentials carry it there. */}
           <span className="hidden text-xs text-muted-foreground sm:inline">
-            {t("LastUpdated")}: <bdi>{renderMoment(deal.updatedAt ?? deal.createdAt, "d MMM yyyy HH:mm")}</bdi>
+            {t("LastUpdated")}: <bdi>{renderMoment(deal.updatedAt ?? deal.createdAt, "d MMM yyyy HH:mm", locale)}</bdi>
           </span>
         </div>
         {/* The exceptional action, in the header and quiet on purpose: it is
@@ -5576,68 +5861,7 @@ export function DealCockpitView({
         )}
       </div>
 
-      {/* --- essentials --------------------------------------------------- */}
-      {/* The identity strip (SCRUM-372): what kind of deal, which record, and
-          the people on it — customer, finance company, salesperson. Each cell
-          is absent rather than empty — a cash deal has no finance company.
-          The VEHICLE moved to its own card in the working column, with the
-          settlement-route question that hangs off its ownership. */}
-      <dl
-        className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-lg border bg-card p-4 text-sm shadow-sm sm:gap-x-6 lg:grid-cols-5"
-        aria-label={t("DealEssentialsHeading")}
-        data-testid="deal-identity"
-      >
-        <div className="min-w-0">
-          <dt className="text-xs text-muted-foreground">{t("DealTypeLabel")}</dt>
-          <dd className="font-medium">
-            {t(deal.dealKind === "CASH" ? "DealKindCash" : "DealKindFinanced")}
-          </dd>
-        </div>
-        <div className="min-w-0">
-          <dt className="text-xs text-muted-foreground">
-            {t(deal.applicationId === null ? "DealReferenceSale" : "DealReferenceApplication")}
-          </dt>
-          <dd className="flex min-w-0 items-center gap-1 font-medium">
-            <CopyableReference value={String(deal.dealRef)} t={t} />
-          </dd>
-        </div>
-        {deal.customer && (
-          <div className="min-w-0">
-            <dt className="text-xs text-muted-foreground">{t("Customer")}</dt>
-            <dd className="min-w-0 break-words font-medium">
-              <bdi>{deal.customer.name}</bdi>
-              {deal.customer.phone && (
-                <>
-                  {" "}
-                  <bdi className="font-normal text-muted-foreground">{deal.customer.phone}</bdi>
-                </>
-              )}
-            </dd>
-          </div>
-        )}
-        {deal.financeCompanyName && (
-          <div className="min-w-0">
-            <dt className="text-xs text-muted-foreground">{t("PartyFinancier")}</dt>
-            <dd className="min-w-0 break-words font-medium">
-              <bdi>{deal.financeCompanyName}</bdi>
-            </dd>
-          </div>
-        )}
-        <div className="min-w-0">
-          <dt className="text-xs text-muted-foreground">{t("DealOwner")}</dt>
-          <dd className="min-w-0 break-words font-medium">
-            <bdi>{deal.salespersonName}</bdi>{" "}
-            <bdi className="font-normal text-muted-foreground">{renderMoment(deal.createdAt, "d MMM yyyy")}</bdi>
-          </dd>
-        </div>
-        {/* The header's "last updated", in the flow on a phone only. */}
-        <div className="min-w-0 sm:hidden" data-testid="deal-essentials-last-updated">
-          <dt className="text-xs text-muted-foreground">{t("LastUpdated")}</dt>
-          <dd className="font-medium">
-            <bdi>{renderMoment(deal.updatedAt ?? deal.createdAt, "d MMM yyyy HH:mm")}</bdi>
-          </dd>
-        </div>
-      </dl>
+      {identityStrip("desktop")}
 
       {/* --- the two records that disagree -------------------------------- */}
       {/* Above the stage rail, not inside the money column. The rail tells the
@@ -5783,6 +6007,46 @@ export function DealCockpitView({
           one click away. The rail is a PROGRESS readout only; the live stage
           is worked from the focus panel directly beneath it, and both read the
           same `live` so they cannot name different stages. */}
+      {mobileStage && (
+        <div className="md:hidden" data-testid="deal-mobile-stepbar">
+          <button
+            type="button"
+            data-testid="deal-mobile-rail-toggle"
+            aria-expanded={railOpen}
+            aria-controls="deal-stage-rail-panel"
+            onClick={() => setRailOpen((open) => !open)}
+            className="group flex min-h-11 w-full cursor-pointer items-center justify-between gap-3 rounded-lg border bg-card px-4 py-2.5 text-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <span className="min-w-0">
+              <span className="block text-xs text-muted-foreground" data-testid="deal-mobile-step-position">
+                <StagePosition
+                  t={t}
+                  labelKey="MobileStepLabel"
+                  position={mobileStageIndex + 1}
+                  total={stages.length}
+                />
+                {/* Looking at a step that is not the live one: the bar names
+                    that stage, so it must not read like "you are here". */}
+                {otherStage && (
+                  <>
+                    {" · "}
+                    <span className="font-medium text-foreground" data-testid="deal-mobile-step-viewing">
+                      {t("MobileStepViewing")}
+                    </span>
+                  </>
+                )}
+              </span>
+              <span className="block break-words text-base font-semibold leading-snug">
+                {t(STAGE_LABEL[mobileStage.key] ?? mobileStage.key)}
+              </span>
+            </span>
+            <span className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-muted-foreground">
+              {t(railOpen ? "HideAllSteps" : "ShowAllSteps")}
+              <ChevronDown className="h-4 w-4 transition-transform group-aria-expanded:rotate-180" aria-hidden />
+            </span>
+          </button>
+        </div>
+      )}
       {allComplete ? (
         <div className="space-y-3">
           <DealStagesComplete
@@ -5796,7 +6060,9 @@ export function DealCockpitView({
           )}
         </div>
       ) : (
-        <DealStageRail stages={railStages} t={t} viewedKey={otherStage?.key ?? null} onSelect={requestStage} />
+        <div id="deal-stage-rail-panel" className={railFolded ? "hidden md:block" : undefined}>
+          <DealStageRail stages={railStages} t={t} viewedKey={otherStage?.key ?? null} onSelect={requestStage} />
+        </div>
       )}
 
       {/* --- the step, its panel, and the rest of the deal ---------------- */}
@@ -5804,6 +6070,8 @@ export function DealCockpitView({
           directly; the rest of the deal sits behind the Deal-details toggle,
           whole. Nothing is removed and nothing is drawn twice. */}
       <StageViewAnnouncer
+        recordedMessage={recordedMessage}
+        viewKey={otherStage?.key ?? null}
         message={
           otherStage
             ? `${t("StageViewAnnounceShowing")}: ${t(STAGE_LABEL[otherStage.key] ?? otherStage.key)}, ${t(STAGE_STATE_KEY[otherStage.state])}`
@@ -5815,6 +6083,32 @@ export function DealCockpitView({
             : t("StageViewAnnounceBackDone")
         }
       />
+      {recordedMessage !== null && (
+        <div
+          data-testid="deal-recorded-feedback"
+          className="flex items-start gap-3 rounded-lg border border-emerald-700/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-950 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-50"
+        >
+          <Check className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+          <p className="min-w-0 flex-1">
+            <span className="font-semibold">{t("RecordedLead")}</span>{" "}
+            {recordedNextLabel ? (
+              <>
+                {t("RecordedNextPrefix")} <bdi className="font-medium">{recordedNextLabel}</bdi>
+              </>
+            ) : allComplete ? (
+              t("RecordedAllDone")
+            ) : null}
+          </p>
+          <button
+            type="button"
+            data-testid="deal-recorded-feedback-dismiss"
+            onClick={dismissRecorded}
+            className="min-h-9 shrink-0 cursor-pointer rounded-md px-2 text-xs font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {t("DismissRecorded")}
+          </button>
+        </div>
+      )}
       <div
         ref={flowRef}
         className="grid min-w-0 gap-6 xl:grid-cols-5 xl:has-[>[data-zone=record]:not([hidden])]:[grid-template-rows:var(--flow-rows)]"
@@ -5847,6 +6141,11 @@ export function DealCockpitView({
           </div>
         ))}
       </div>
+
+      {/* --- essentials, phone copy ---------------------------------------- */}
+      {/* Last in the document: on a phone it is drawn after the step. The copy
+          for md and up is right under the header (see `identityStrip`). */}
+      {identityStrip("phone")}
 
 
       {/* Mounted only while the action is offered: losing authority or the
@@ -6143,7 +6442,7 @@ export function StageFocusRow({
 }: Readonly<{
   state: DealStageState;
   label: string;
-  /** 1-based place on the rail, for the "Stage 3 / 8" kicker. */
+  /** 1-based place on the rail, for the "Step 3 of 8" kicker. */
   position: number;
   total: number;
   /** Whose move it is, resolved from server authority AND recorded provenance. */
@@ -6194,10 +6493,7 @@ export function StageFocusRow({
           <div className="min-w-0 flex-1 space-y-3">
             <div className="min-w-0 space-y-1">
               <p className="text-xs text-muted-foreground">
-                {t("StageOfLabel")}{" "}
-                <bdi dir="ltr">
-                  {position} / {total}
-                </bdi>
+                <StagePosition t={t} position={position} total={total} />
               </p>
               <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
                 <h2 className="text-lg font-semibold leading-tight">{label}</h2>
