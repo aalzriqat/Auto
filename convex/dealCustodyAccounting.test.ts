@@ -10,6 +10,7 @@ import { deriveRecommendedCustody } from "./financeDealCosts";
 import { drainEntries } from "./accountingOutbox";
 import { hookCustodyFeePaid, hookCustodyFeeReversed } from "./accounting/workflowHooks";
 import { getDocumentSize } from "convex/values";
+import { feeDocBytes, MAX_FEE_DOC_BYTES } from "./utils/feeDocLimits";
 import {
   assertStoredVersion,
   CUSTODY_PROOF_CALLER_RESERVE_BYTES,
@@ -1536,6 +1537,33 @@ describe("B — a custody family is on the books completely, or the deal does no
     expect(await pending(seed)).toHaveLength(0);
 
     await classify(seed);
+  });
+
+  test("SCRUM-443 byte cap: a legacy line whose custody posting record would take it past the cap refuses the migration, writing nothing", async () => {
+    const seed = await seedDeal("legacy-bytes", { templates: false });
+    const { custodyId, feeId, t0 } = await seedLegacyFamily(seed);
+    const row = (await seed.t.run((ctx) => ctx.db.get(feeId)))!;
+    const posted = {
+      custodyPosted: { version: 1, amountMinor: jod(650), custodyId, occurredAt: t0 + DAY },
+      custodyPostingVersion: 1,
+      updatedAt: Date.now(),
+    };
+    // Exactly at the cap without the posting record: the row is legal today,
+    // and the migration's own patch is what would take it over.
+    const bytesWith = (n: number, extra: Record<string, unknown>) => feeDocBytes({ ...row, ...extra, description: "x".repeat(n) });
+    let lo = 0;
+    let hi = MAX_FEE_DOC_BYTES;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (bytesWith(mid, {}) <= MAX_FEE_DOC_BYTES) lo = mid;
+      else hi = mid - 1;
+    }
+    await seed.t.run((ctx) => ctx.db.patch(feeId, { description: "x".repeat(lo) }));
+    expect(bytesWith(lo, {})).toBeLessThanOrEqual(MAX_FEE_DOC_BYTES);
+    expect(bytesWith(lo, posted)).toBeGreaterThan(MAX_FEE_DOC_BYTES);
+    await expect(migrate(seed, custodyId)).rejects.toThrow(/too large to store/);
+    expect(await events(seed)).toHaveLength(0);
+    expect((await seed.t.run((ctx) => ctx.db.get(feeId)))?.custodyPosted).toBeUndefined();
   });
 
   test("a legacy OPEN record with an out-of-pocket position migrates its payable too; a written-off one posts its shortage", async () => {

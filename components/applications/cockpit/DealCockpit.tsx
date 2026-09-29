@@ -1328,6 +1328,9 @@ export function DealCockpit({
           // Undefined while readiness is loading or unavailable: nothing then
           // says a recorded payment is on the books.
           handoverCostsCheck: closingReadiness?.checks.find((c) => c.key === "HANDOVER_COSTS_PAID")?.status,
+          // A cancelled deal is never finalized: its direct payments read as
+          // recorded on a cancelled deal, never as settled (SCRUM-443).
+          dealCancelled: app.status === "CANCELLED",
           postingHoldFeeIds: ((): string[] => {
             const check = closingReadiness?.checks.find((c) => c.key === "HANDOVER_COSTS_PAID");
             return check?.status === "BLOCKED" ? (check.feeIds ?? []) : [];

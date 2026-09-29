@@ -53,6 +53,7 @@ function renderPanel(
     onRecordDirectPayment?: (feeId: string, values: DirectHandoverPayment) => Promise<void>;
     onAbandonDirectPayment?: (feeId: string, intentId: string) => void;
     dealClosed?: boolean;
+    dealCancelled?: boolean;
     postingHoldFeeIds?: ReadonlyArray<string>;
     handoverCostsCheck?: "READY" | "BLOCKED" | "UNAVAILABLE" | "NOT_APPLICABLE";
   } = {}
@@ -66,6 +67,7 @@ function renderPanel(
       money={(minor) => `${minor / 1000} JOD`}
       canManage={true}
       dealClosed={props.dealClosed ?? false}
+      dealCancelled={props.dealCancelled}
       costSource={{ kind: "PENDING" }}
       t={t}
       onAdd={async () => {}}
@@ -358,6 +360,58 @@ describe("a queued payment is never shown as paid", () => {
       expect(salesEn[key]).toBeTruthy();
       expect(salesAr[key]).toMatch(/[؀-ۿ]/);
     }
+  });
+});
+
+describe("a CLOSED or CANCELLED deal shows a settled or an honestly-recorded payment (SCRUM-443 v5)", () => {
+  const paid = () =>
+    line({
+      handoverPayment: "PAID_DIRECT",
+      directPaymentEligible: false,
+      directPayment: { method: "CHEQUE", amountMinor: 90_000, paidAt: Date.UTC(2026, 8, 20), reference: "CHQ-1" },
+    });
+
+  test("CLOSED: the settled 'Paid by the dealership' state, whatever a later read of readiness says", () => {
+    for (const check of [undefined, "READY", "BLOCKED", "UNAVAILABLE", "NOT_APPLICABLE"] as const) {
+      const view = renderPanel([paid()], { dealClosed: true, handoverCostsCheck: check });
+      const row = screen.getByTestId("deal-handover-payment-fee1");
+      expect(row.getAttribute("data-state")).toBe("PAID_DIRECT");
+      expect(row.textContent).toContain(salesEn.HandoverPaymentPaidDirect);
+      expect(row.textContent).not.toContain(salesEn.HandoverPaymentRecordedUnconfirmed);
+      view.unmount();
+    }
+  });
+
+  test("CLOSED: even a line the check names is settled (a closed deal was proven on the books to close), with no queued note", () => {
+    renderPanel([paid()], { dealClosed: true, postingHoldFeeIds: ["fee1"], handoverCostsCheck: "BLOCKED" });
+    const row = screen.getByTestId("deal-handover-payment-fee1");
+    expect(row.getAttribute("data-state")).toBe("PAID_DIRECT");
+    expect(row.textContent).not.toContain(salesEn.HandoverPaymentQueuedNote);
+  });
+
+  test("CANCELLED: an honest 'Recorded - deal cancelled' state, no green, never 'Paid', in either language", () => {
+    for (const check of [undefined, "READY", "BLOCKED"] as const) {
+      const view = renderPanel([paid()], { dealClosed: true, dealCancelled: true, handoverCostsCheck: check, postingHoldFeeIds: check === "BLOCKED" ? ["fee1"] : [] });
+      const row = screen.getByTestId("deal-handover-payment-fee1");
+      expect(row.getAttribute("data-state")).toBe("PAID_DIRECT_CANCELLED");
+      expect(row.textContent).toContain(salesEn.HandoverPaymentRecordedCancelled);
+      expect(row.textContent).not.toContain(salesEn.HandoverPaymentPaidDirect);
+      expect(row.textContent).not.toContain(salesEn.HandoverPaymentQueuedNote);
+      expect(row.querySelector("[class*='emerald']")).toBeNull();
+      // What was recorded stays visible.
+      expect(row.textContent).toContain("CHQ-1");
+      view.unmount();
+    }
+    expect(salesEn.HandoverPaymentRecordedCancelled).toMatch(/cancelled/i);
+    expect(salesAr.HandoverPaymentRecordedCancelled.length).toBeGreaterThan(0);
+  });
+
+  test("an OPEN deal keeps the ledger-proof rules: green only when the check is READY", () => {
+    renderPanel([paid()], { dealClosed: false, handoverCostsCheck: "READY" });
+    expect(screen.getByTestId("deal-handover-payment-fee1").getAttribute("data-state")).toBe("PAID_DIRECT");
+    cleanup();
+    renderPanel([paid()], { dealClosed: false, handoverCostsCheck: "BLOCKED" });
+    expect(screen.getByTestId("deal-handover-payment-fee1").getAttribute("data-state")).toBe("PAID_DIRECT_UNCONFIRMED");
   });
 });
 

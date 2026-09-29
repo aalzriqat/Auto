@@ -45,11 +45,16 @@ import {
   custodyPositionDependencies,
   foldAbandonedPayableDeltas,
   loadCustodyEntries,
-  MAX_DIRECT_PAID_LINES,
-  MAX_DIRECT_PAYMENT_VERSIONS,
   nextStoredVersion,
   type CustodyLedgerDependency,
 } from "./utils/custodySourceLedger";
+import { MAX_DIRECT_PAID_LINES, MAX_DIRECT_PAYMENT_VERSIONS, readDirectPaymentFamily } from "./utils/handoverDirectProof";
+import {
+  assertFeeAttachmentCount,
+  assertFeeDocWithinBytes,
+  feeAfterPatch,
+  MAX_DIRECT_PAYMENT_REFERENCE_CHARS,
+} from "./utils/feeDocLimits";
 import {
   assertExpectedCurrency,
   assertRoomForAnotherLine,
@@ -525,11 +530,13 @@ async function syncCustodyFeePosting(
     occurredAt,
     replacesReversal: reversal,
   });
-  await ctx.db.patch(fee._id, {
+  const postedPatch = {
     custodyPosted: { version, amountMinor: target.amountMinor, custodyId: target.custodyId, occurredAt },
     custodyPostingVersion: version,
     updatedAt: now,
-  });
+  };
+  assertFeeDocWithinBytes(feeAfterPatch(fee, postedPatch), "posting this cost to custody");
+  await ctx.db.patch(fee._id, postedPatch);
   // The receiving record's payable, dated with the fee and held behind the
   // replacement version (which is itself queued behind the deferred reversal
   // of the version it replaces) and, on the same record, behind that
@@ -1932,7 +1939,7 @@ export const recordDealFee = mutation({
         assertRoomForAnotherLine(await loadActiveFees(ctx, args.applicationId), "recording this cost");
 
         const now = Date.now();
-        const feeId = await ctx.db.insert("financeDealFees", {
+        const newFee = {
           orgId: args.orgId,
           applicationId: args.applicationId,
           feeType: args.feeType,
@@ -1954,7 +1961,11 @@ export const recordDealFee = mutation({
           createdBy: user._id,
           createdAt: now,
           updatedAt: now,
-        });
+        };
+        // Judged on the resulting row, before anything is written (SCRUM-443).
+        assertFeeAttachmentCount(args.documentStorageIds, "recording this cost");
+        assertFeeDocWithinBytes(newFee, "recording this cost");
+        const feeId = await ctx.db.insert("financeDealFees", newFee);
         // Inside the idempotent section with the insert: a replay returns the
         // stored id above and never posts a second time.
         if (custodyId) await syncCustodyFeePosting(ctx, feeId, user._id, "Handover cost recorded against custody.");
@@ -2142,7 +2153,7 @@ export const recordTemplateFeeActual = mutation({
         assertRoomForAnotherLine(await loadActiveFees(ctx, args.applicationId), "recording this cost");
 
         const now = Date.now();
-        const feeId = await ctx.db.insert("financeDealFees", {
+        const templateFee = {
           orgId: args.orgId,
           applicationId: args.applicationId,
           feeType: template.feeType,
@@ -2162,12 +2173,17 @@ export const recordTemplateFeeActual = mutation({
           paidAt: args.paidAt,
           receiptReference: args.receiptReference?.trim() || undefined,
           documentStorageIds: args.documentStorageIds,
-          source: "COMPANY_TEMPLATE",
+          source: "COMPANY_TEMPLATE" as const,
           templateIndex: args.templateIndex,
           createdBy: user._id,
           createdAt: now,
           updatedAt: now,
-        });
+        };
+        // The template's description is copied text the operator cannot shorten
+        // here: when it alone is too big, the refusal names the template.
+        assertFeeAttachmentCount(args.documentStorageIds, "recording this cost");
+        assertFeeDocWithinBytes(templateFee, "recording this cost", ["receiptReference", "documentStorageIds"]);
+        const feeId = await ctx.db.insert("financeDealFees", templateFee);
         if (custodyId) await syncCustodyFeePosting(ctx, feeId, user._id, "Configured fee actual recorded against custody.");
         await recomputeAfterSettlementInputChange(ctx, args.applicationId, template.deductedFromSettlement);
         return feeId;
@@ -2300,10 +2316,11 @@ export const recordActualFeeAmount = mutation({
       assertFeeCustodyCurrency(fee, existing, "re-recording a cost charged to this custody record");
     }
 
+    assertFeeAttachmentCount(args.documentStorageIds, "recording this actual amount");
     const nextStorageIds = args.documentStorageIds ?? fee.documentStorageIds;
     await deleteDroppedAttachments(ctx, fee.documentStorageIds, args.documentStorageIds);
 
-    await ctx.db.patch(args.feeId, {
+    const amountPatch = {
       actualAmountMinor: args.actualAmountMinor,
       paidAt: args.paidAt ?? fee.paidAt,
       receiptReference: args.receiptReference?.trim() || fee.receiptReference,
@@ -2316,7 +2333,9 @@ export const recordActualFeeAmount = mutation({
       reconciledBy: undefined,
       reconciliationNotes: undefined,
       updatedAt: Date.now(),
-    });
+    };
+    assertFeeDocWithinBytes(feeAfterPatch(fee, amountPatch), "recording this actual amount");
+    await ctx.db.patch(args.feeId, amountPatch);
     // The ledger follows the row: a changed amount or custody reverses what
     // was posted and posts the line again at its new figure.
     if (custodyId || fee.custodyPosted) {
@@ -2391,12 +2410,14 @@ export const reconcileDealFee = mutation({
       throw new ConvexError("Record what was checked before reconciling this cost.");
     }
 
-    await ctx.db.patch(args.feeId, {
+    const reconcilePatch = {
       reconciledAt: Date.now(),
       reconciledBy: user._id,
       reconciliationNotes: notes,
       updatedAt: Date.now(),
-    });
+    };
+    assertFeeDocWithinBytes(feeAfterPatch(fee, reconcilePatch), "reconciling this cost");
+    await ctx.db.patch(args.feeId, reconcilePatch);
     return args.feeId;
   },
 });
@@ -2449,12 +2470,14 @@ export const voidDealFee = mutation({
       assertCustodyOpen(custody);
     }
 
-    await ctx.db.patch(args.feeId, {
+    const voidPatch = {
       voidedAt: Date.now(),
       voidedBy: user._id,
       voidReason: reason,
       updatedAt: Date.now(),
-    });
+    };
+    assertFeeDocWithinBytes(feeAfterPatch(fee, voidPatch), "removing this cost");
+    await ctx.db.patch(args.feeId, voidPatch);
     // A voided line is no longer a custody-paid cost: its posting is reversed
     // (or its queued post cancelled) and the employee's clearing balance rises
     // back by the amount — the same arithmetic the summary performs.
@@ -2522,6 +2545,10 @@ export const setFeeCustody = mutation({
       ? await resolveFeeCustody(ctx, args.orgId, fee.applicationId, args.custodyId, fee, user._id)
       : undefined;
     const now = Date.now();
+    // No byte check on this link patch alone: the posting that follows
+    // (`syncCustodyFeePosting`) is the larger write, judges the line as it
+    // will stand with the link AND its posting record, and refuses the whole
+    // mutation (SCRUM-443).
     await ctx.db.patch(args.feeId, { custodyId, updatedAt: now });
     await syncCustodyFeePosting(
       ctx, args.feeId, user._id,
@@ -2603,6 +2630,11 @@ export const recordDirectFeePayment = mutation({
     }
     assertNotFuture(args.paidAt, Date.now(), "The paid date");
     const reference = args.reference?.trim() || undefined;
+    if (reference !== undefined && reference.length > MAX_DIRECT_PAYMENT_REFERENCE_CHARS) {
+      throw new ConvexError(
+        `The payment reference is too long (${reference.length} characters; the most is ${MAX_DIRECT_PAYMENT_REFERENCE_CHARS}). Shorten it and try again. Nothing has been recorded.`
+      );
+    }
 
     return await runWithIdempotency(
       ctx,
@@ -2682,30 +2714,34 @@ export const recordDirectFeePayment = mutation({
           }
         }
         if (version > 1) {
-          const events = await ctx.db
-            .query("accountingEvents")
-            .withIndex("by_org_event_source_version", (q) =>
-              q
-                .eq("orgId", args.orgId)
-                .eq("eventType", "HANDOVER_COST_PAID_DIRECT")
-                .eq("sourceType", "financeDealFees")
-                .eq("sourceId", fee._id.toString())
-            )
-            .take(MAX_DIRECT_PAYMENT_VERSIONS + 1);
-          if (events.length > MAX_DIRECT_PAYMENT_VERSIONS) {
-            throw new ConvexError(
-              "This cost has been paid and corrected too many times to verify against the ledger here. Have the record reviewed; nothing has been recorded."
-            );
-          }
-          const stillPosted = events.find((event) => event.status === "POSTED");
-          if (stillPosted !== undefined) {
-            throw new ConvexError(
-              `An earlier payment of this cost (v${stillPosted.eventVersion}) is still on the books; its reversal is waiting for an accounting period to open (the reversal is dated the day the payment was taken back, so open the period that covers that date). Let the reversal post, then record the payment again. Nothing has been recorded.`
-            );
+          // The SAME family reader the closing proof uses: canonical rows or a
+          // guided refusal, never a guess.
+          const family = await readDirectPaymentFamily(ctx, args.orgId, fee._id, version - 1);
+          for (const [eventVersion, event] of family) {
+            if (event.status === "POSTED") {
+              throw new ConvexError(
+                `An earlier payment of this cost (v${eventVersion}) is still on the books; its reversal is waiting for an accounting period to open (the reversal is dated the day the payment was taken back, so open the period that covers that date). Let the reversal post, then record the payment again. Nothing has been recorded.`
+              );
+            }
           }
         }
 
         const now = Date.now();
+        const paidPatch = {
+          directPayment: {
+            version,
+            amountMinor,
+            method: args.method,
+            paidAt: args.paidAt,
+            reference,
+            recordedBy: user._id,
+            recordedAt: now,
+          },
+          directPaymentVersion: version,
+          updatedAt: now,
+        };
+        // Judged BEFORE the posting: an oversize resulting line writes nothing.
+        assertFeeDocWithinBytes(feeAfterPatch(fee, paidPatch), "recording this payment");
         await hookHandoverCostPaidDirect(ctx, {
           orgId: args.orgId,
           fee,
@@ -2718,19 +2754,7 @@ export const recordDirectFeePayment = mutation({
           actorId: user._id,
           occurredAt: args.paidAt,
         });
-        await ctx.db.patch(fee._id, {
-          directPayment: {
-            version,
-            amountMinor,
-            method: args.method,
-            paidAt: args.paidAt,
-            reference,
-            recordedBy: user._id,
-            recordedAt: now,
-          },
-          directPaymentVersion: version,
-          updatedAt: now,
-        });
+        await ctx.db.patch(fee._id, paidPatch);
         return fee._id;
       }
     );
@@ -3434,11 +3458,13 @@ export const migrateLegacyCustodyToLedger = mutation({
             actorId: user._id,
             occurredAt,
           });
-          await ctx.db.patch(fee._id, {
+          const migratedPatch = {
             custodyPosted: { version, amountMinor: fee.actualAmountMinor, custodyId: custody._id, occurredAt },
             custodyPostingVersion: version,
             updatedAt: Date.now(),
-          });
+          };
+          assertFeeDocWithinBytes(feeAfterPatch(fee, migratedPatch), "migrating this custody record");
+          await ctx.db.patch(fee._id, migratedPatch);
           payableDependencies.push({ must: "SETTLED", idempotencyKey: custodyFeePostKey(fee._id, version) });
           feesPosted += 1;
         }

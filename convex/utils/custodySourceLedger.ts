@@ -490,121 +490,6 @@ export async function loadCustodyPostedLines(
   return rows;
 }
 
-/**
- * THE ADMISSION ENVELOPE of the direct-payment family (SCRUM-443). The closing
- * proof reads every line that ever carried a direct payment and each one's
- * whole event family; unbounded history would make that proof unfinishable
- * (UNAVAILABLE for ever although the ledger is right). So the WRITER refuses,
- * with a guided message and nothing written, anything that would take a deal
- * past these two numbers, and the proof's budget below is DERIVED from them —
- * every state the writers can reach fits, by construction.
- *
- *  - `MAX_DIRECT_PAID_LINES` = 50 lines per application that have EVER carried
- *    a direct payment (live, zeroed or voided). A real handover has roughly
- *    5-10 cost lines; 50 is five to ten times that, so no honest deal meets it,
- *    while keeping the proof to a few dozen source families.
- *  - `MAX_DIRECT_PAYMENT_VERSIONS` = 10 payment versions per line. A version is
- *    a payment reversed by an amount edit or a void and re-recorded; ten is far
- *    past any correction history a real cost line has.
- */
-export const MAX_DIRECT_PAID_LINES = 50;
-export const MAX_DIRECT_PAYMENT_VERSIONS = 10;
-
-/**
- * How many documents the direct-payment proof of a deal's closing check may
- * read in all, DERIVED from the admission envelope above and the live-line cap
- * (the proof is handed every live line and charges them first). With
- * L = `MAX_LIVE_DEAL_FEE_LINES` (500), N = `MAX_DIRECT_PAID_LINES` (50) and
- * V = `MAX_DIRECT_PAYMENT_VERSIONS` (10), the worst state the writers can reach
- * costs:
- *
- *   L                    the live lines, charged up front
- *   V + 1                one probe per distinct version value, plus the empty
- *                        probe that ends the enumeration
- *   N                    the ever-paid lines themselves
- *   per line at version v, at most 2v: a live paid line reads its one keyed
- *     forward event (1) plus its whole family (v forwards + v-1 reversal rows =
- *     2v-1); a voided or zeroed line reads no keyed event but a family of at
- *     most 2v (v forwards + v reversal rows — a reversal may add an event row,
- *     counted for safety although the engine may not write one).
- *   The sum over lines is largest with as many lines as possible at V and one
- *   line at each lower version (so every probe is spent): (N-V+1)·2V +
- *   Σ_{v=1..V-1} 2v = (N-V+1)·2V + V(V-1).
- *
- *   = 500 + 11 + 50 + 41·20 + 90 = 1471 documents.
- *
- * Assumed platform limits (docs.convex.dev/production/state/limits): 32,000
- * documents and 16 MiB read per transaction. 1471 documents is under 5% of the
- * first; the byte side is held by the budget's own 4 MiB cap, which 1471
- * documents reach only if the average is above 2.8 KiB (a ledger event is
- * about 1 KiB). `assertHeadroom` still refuses to fetch a batch the
- * transaction could not take. Past this budget the check stays UNAVAILABLE —
- * only a state the writers could not have produced (a raw edit) reaches it.
- */
-export const MAX_HANDOVER_DIRECT_LEDGER_PROOFS =
-  MAX_LIVE_DEAL_FEE_LINES +
-  (MAX_DIRECT_PAYMENT_VERSIONS + 1) +
-  MAX_DIRECT_PAID_LINES +
-  (MAX_DIRECT_PAID_LINES - MAX_DIRECT_PAYMENT_VERSIONS + 1) * 2 * MAX_DIRECT_PAYMENT_VERSIONS +
-  MAX_DIRECT_PAYMENT_VERSIONS * (MAX_DIRECT_PAYMENT_VERSIONS - 1);
-/**
- * Every line of a deal that has ever carried a DIRECT payment — live, zeroed
- * or voided — from ONE bounded indexed read, or a refusal (SCRUM-443). The
- * twin of `loadCustodyPostedLines`, for the direct-payment family:
- * `directPaymentVersion` is set by `recordDirectFeePayment` and never unset,
- * so the range `> 0` is exactly the population the closing gate must prove
- * has no payment still on the books but the live one; a removed or zero-edited
- * line stays in it, which is the point — its reversal may still be queued
- * behind a closed period while the row no longer says it was ever paid.
- */
-export async function loadDirectPaidLines(
-  ctx: QueryCtx | MutationCtx,
-  applicationId: Id<"financeApplications">,
-  action: string,
-  budget?: CustodyLedgerReadBudget
-): Promise<Array<Doc<"financeDealFees">>> {
-  const rows: Array<Doc<"financeDealFees">> = [];
-  let version = 0;
-  while (rows.length <= MAX_DIRECT_PAID_LINES) {
-    await budget?.assertHeadroom(ctx);
-    const next = await ctx.db
-      .query("financeDealFees")
-      .withIndex("by_application_directPaymentVersion", (q) =>
-        q.eq("applicationId", applicationId).gt("directPaymentVersion", version)
-      )
-      .take(1);
-    budget?.chargeRead(next);
-    if (next.length === 0) break;
-    const at = next[0].directPaymentVersion;
-    if (at === undefined || !(at > version) || !isStoredVersion(at)) {
-      throw new ConvexError(
-        `A cost line on this deal carries a direct-payment version that is not a positive whole number (${at}), so ${action} cannot enumerate the lines it must verify; nothing has been changed. Have the deal's accounting reviewed.`
-      );
-    }
-    version = at;
-    const atVersion = await readBatched(
-      ctx,
-      (after, take) =>
-        ctx.db
-          .query("financeDealFees")
-          .withIndex("by_application_directPaymentVersion", (q) => {
-            const range = q.eq("applicationId", applicationId).eq("directPaymentVersion", at);
-            return after === undefined ? range : range.gt("_creationTime", after);
-          })
-          .take(take),
-      MAX_DIRECT_PAID_LINES - rows.length,
-      budget
-    );
-    for (const row of atVersion) rows.push(row);
-  }
-  if (rows.length > MAX_DIRECT_PAID_LINES) {
-    throw new ConvexError(
-      `This deal has more than ${MAX_DIRECT_PAID_LINES} cost lines that have carried a direct payment, which is past what ${action} can verify completely; nothing has been changed. Have the deal's accounting reviewed.`
-    );
-  }
-  return rows;
-}
-
 /** The events of one source, in full or refused — never a prefix. */
 async function sourceEvents(
   ctx: QueryCtx | MutationCtx,
@@ -691,10 +576,9 @@ async function eventPosted(
 export async function ledgerEventPosted(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
-  idempotencyKey: string,
-  budget?: CustodyLedgerReadBudget
+  idempotencyKey: string
 ): Promise<boolean> {
-  return eventPosted(ctx, orgId, idempotencyKey, budget);
+  return eventPosted(ctx, orgId, idempotencyKey);
 }
 
 /** Whether version `version` of a record's payable reclassification is POSTED. */
@@ -848,11 +732,10 @@ export async function earlierVersionStillPosted(
   eventType: "CUSTODY_FEE_PAID" | "CUSTODY_WRITTEN_OFF" | "HANDOVER_COST_PAID_DIRECT",
   sourceType: "financeDealFees" | "financeDealCustody",
   sourceId: string,
-  version: number,
-  budget?: CustodyLedgerReadBudget
+  version: number
 ): Promise<number | null> {
   if (version <= 1) return null;
-  const rows = await sourceEvents(ctx, orgId, sourceType, sourceId, budget?.forAction ?? "posting this custody replacement", budget);
+  const rows = await sourceEvents(ctx, orgId, sourceType, sourceId, "posting this custody replacement");
   let earliest: number | null = null;
   for (const row of rows) {
     if (row.eventType !== eventType || row.status !== "POSTED" || row.eventVersion >= version) continue;

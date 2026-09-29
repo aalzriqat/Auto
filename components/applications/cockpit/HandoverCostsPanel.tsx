@@ -458,6 +458,7 @@ export function HandoverCostsPanel({
   onAbandonDirectPayment,
   postingHoldFeeIds = [],
   handoverCostsCheck,
+  dealCancelled = false,
 }: Readonly<{
   /** `undefined` while loading or when this caller may not read the cost rows. */
   costs: HandoverCostsData | undefined;
@@ -530,6 +531,13 @@ export function HandoverCostsPanel({
    * the books, so it is shown as recorded, not as paid.
    */
   handoverCostsCheck?: "READY" | "BLOCKED" | "UNAVAILABLE" | "NOT_APPLICABLE";
+  /**
+   * The deal was CANCELLED (SCRUM-443 v5). A cancelled deal is never finalized,
+   * so no closing check will ever confirm its payments on the books: they are
+   * shown as recorded on a cancelled deal — no green claim of a settled cost.
+   * (A cancellation never reverses a direct payment: the money left.)
+   */
+  dealCancelled?: boolean;
 }>) {
   /** The line whose direct-payment form is open. */
   const [payingId, setPayingId] = useState<string | null>(null);
@@ -656,6 +664,7 @@ export function HandoverCostsPanel({
         money={money}
         denominationCode={denomination.code}
         dealClosed={dealClosed}
+        dealCancelled={dealCancelled}
         canRecord={canRecordDirectPayment && onRecordDirectPayment !== undefined}
         postingHold={postingHoldFeeIds.includes(line._id)}
         proofConfirmed={handoverCostsCheck === "READY"}
@@ -2029,6 +2038,7 @@ function HandoverPaymentRow({
   money,
   denominationCode,
   dealClosed,
+  dealCancelled,
   canRecord,
   postingHold,
   proofConfirmed,
@@ -2043,6 +2053,8 @@ function HandoverPaymentRow({
   money: (minor: number, currency: string) => string;
   denominationCode: string;
   dealClosed: boolean;
+  /** The deal was cancelled: its payments are recorded, never settled. */
+  dealCancelled: boolean;
   canRecord: boolean;
   /** The server's closing check names this line as waiting on the ledger. */
   postingHold: boolean;
@@ -2081,22 +2093,30 @@ function HandoverPaymentRow({
   }
   if (state === "PAID_DIRECT") {
     const paid = line.directPayment;
+    // A CANCELLED deal is never finalized: its payments are shown as recorded on
+    // a cancelled deal (the cash did leave), never as paid or settled. A CLOSED
+    // deal is finalized — the closing check proved every payment on the books
+    // before it could close — and shows the settled state whatever a later read
+    // of readiness says. Open deals keep the ledger-proof rules below.
+    const shown = dealCancelled ? "PAID_DIRECT_CANCELLED" : dealClosed ? state : postingHold ? "PAID_DIRECT_QUEUED" : proofConfirmed ? state : "PAID_DIRECT_UNCONFIRMED";
+    const settled = !dealCancelled && (dealClosed || (!postingHold && proofConfirmed));
+    const queued = !dealCancelled && !dealClosed && postingHold;
     // Recorded on the row is not on the books: while the server says the
     // posting has not landed (no open period for its date, not yet processed),
     // the line is shown as waiting, never as paid.
     return (
-      <div className="mt-2 space-y-1 text-xs" data-testid={testId} data-state={postingHold ? "PAID_DIRECT_QUEUED" : proofConfirmed ? state : "PAID_DIRECT_UNCONFIRMED"}>
+      <div className="mt-2 space-y-1 text-xs" data-testid={testId} data-state={shown}>
         <Badge
           variant="outline"
           className={
-            postingHold
+            queued
               ? "border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-400"
-              : proofConfirmed
+              : settled
                 ? "border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-400"
                 : "text-muted-foreground"
           }
         >
-          {t(postingHold ? "HandoverPaymentQueued" : proofConfirmed ? "HandoverPaymentPaidDirect" : "HandoverPaymentRecordedUnconfirmed")}
+          {t(dealCancelled ? "HandoverPaymentRecordedCancelled" : queued ? "HandoverPaymentQueued" : settled ? "HandoverPaymentPaidDirect" : "HandoverPaymentRecordedUnconfirmed")}
         </Badge>
         {paid && (
           <span className="ms-2 text-muted-foreground">
@@ -2113,7 +2133,7 @@ function HandoverPaymentRow({
             )}
           </span>
         )}
-        {postingHold && <p className="text-amber-700 dark:text-amber-400">{t("HandoverPaymentQueuedNote")}</p>}
+        {queued && <p className="text-amber-700 dark:text-amber-400">{t("HandoverPaymentQueuedNote")}</p>}
         {!dealClosed && <p className="text-muted-foreground">{t("DirectPaymentChangeNote")}</p>}
       </div>
     );

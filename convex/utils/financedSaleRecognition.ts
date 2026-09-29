@@ -30,14 +30,9 @@ import {
 } from "../../lib/closingReadinessReasonCodes";
 import type { AppErrorData } from "./errors";
 import {
-  assertStoredVersion,
-  CustodyLedgerReadBudget,
   custodyLedgerFamilyRefusal,
-  earlierVersionStillPosted,
-  ledgerEventPosted,
-  loadDirectPaidLines,
-  MAX_HANDOVER_DIRECT_LEDGER_PROOFS,
 } from "./custodySourceLedger";
+import { DirectProofBudget, directPaymentLedgerProof } from "./handoverDirectProof";
 import { heldDepositRowsForVehicle } from "./saleCompletion";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { toMinorUnits } from "./money";
@@ -45,7 +40,6 @@ import { requireCustomerGapToDealer } from "./financingEconomics";
 import { summarizeFees } from "./feeSummary";
 import {
   blockingHandoverLines,
-  handoverDirectPostKey,
   handoverPaymentState,
   type HandoverPaymentState,
 } from "./handoverCostPayment";
@@ -237,8 +231,9 @@ function handoverCostsPaidRefusal(liveFees: ReadonlyArray<Doc<"financeDealFees">
  * is still on the books that the row says was taken back, and the next step
  * is the accounting period, not the line.
  *
- * Read by the custody family's own rules (`ledgerEventPosted`,
- * `earlierVersionStillPosted`), every read charged to ONE budget; a ledger
+ * Read by `handoverDirectProof` (the line's event family by index, validated
+ * canonical), every read charged to the proof's own budget, an expression of
+ * the writers' caps (the evaluator's live-fee read is not charged to it); a ledger
  * that cannot be read completely, or a proof past its budget or caps, THROWS a
  * `ConvexError`, which the caller turns into UNAVAILABLE — never a pass.
  * `feeIds` name every line either refusal is about, so the screen can point at
@@ -249,45 +244,9 @@ export async function handoverDirectLedgerRefusal(
   orgId: Doc<"financeApplications">["orgId"],
   applicationId: Doc<"financeApplications">["_id"],
   liveFees: ReadonlyArray<Doc<"financeDealFees">>,
-  budgetLimit: number = MAX_HANDOVER_DIRECT_LEDGER_PROOFS
+  budget: DirectProofBudget = new DirectProofBudget()
 ): Promise<{ refusal: ClosingReadinessReason | null; feeIds: string[] }> {
-  const action = "finalizing this deal";
-  const budget = new CustodyLedgerReadBudget(budgetLimit, action);
-  budget.charge(liveFees);
-  const everPaid = await loadDirectPaidLines(ctx, applicationId, action, budget);
-  // A live line that carries a payment but was not enumerated (its version
-  // counter absent) is still judged: the row's own claim is never skipped.
-  const seen = new Set(everPaid.map((line) => line._id));
-  const lines = [
-    ...everPaid,
-    ...liveFees.filter((fee) => fee.directPayment !== undefined && !seen.has(fee._id)),
-  ];
-
-  const notOnLedger: string[] = [];
-  const reversalPending: string[] = [];
-  for (const line of lines) {
-    const live = handoverPaymentState(line) === "PAID_DIRECT" ? line.directPayment : undefined;
-    const highest = Math.max(line.directPaymentVersion ?? 0, live?.version ?? 0);
-    assertStoredVersion(highest, "A cost line's direct payment", action);
-    if (live !== undefined) {
-      assertStoredVersion(live.version, "A cost line's direct payment", action);
-      if (live.version !== highest) {
-        throw new ConvexError(
-          `A cost line's direct payment names version ${live.version} while ${highest} is the latest ever used, so ${action} cannot tell which posting is live; nothing has been changed. Have the deal's accounting reviewed.`
-        );
-      }
-    }
-    const sourceId = line._id.toString();
-    if (live !== undefined && !(await ledgerEventPosted(ctx, orgId, handoverDirectPostKey(line._id, live.version), budget))) {
-      notOnLedger.push(line._id as string);
-    }
-    // Versions BELOW the live one; for a line with no live payment, every
-    // version up to the highest ever used.
-    const stillPosted = await earlierVersionStillPosted(
-      ctx, orgId, "HANDOVER_COST_PAID_DIRECT", "financeDealFees", sourceId, live !== undefined ? live.version : highest + 1, budget
-    );
-    if (stillPosted !== null) reversalPending.push(line._id as string);
-  }
+  const { notOnLedger, reversalPending } = await directPaymentLedgerProof(ctx, orgId, applicationId, liveFees, budget);
 
   const feeIds = [...reversalPending, ...notOnLedger.filter((id) => !reversalPending.includes(id))];
   if (reversalPending.length > 0) {

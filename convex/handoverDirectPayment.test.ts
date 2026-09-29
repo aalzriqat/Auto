@@ -6,15 +6,21 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { drainEntries } from "./accountingOutbox";
 import { MAX_CUSTODY_READ_BATCH } from "./utils/custodySourceLedger";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS, PERMISSIONS } from "./utils/permissions";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { evaluateClosingReadiness, handoverDirectLedgerRefusal } from "./utils/financedSaleRecognition";
 import {
+  DirectProofBudget,
+  MAX_DIRECT_EVENT_DOC_BYTES,
   MAX_DIRECT_PAID_LINES,
   MAX_DIRECT_PAYMENT_VERSIONS,
-  MAX_HANDOVER_DIRECT_LEDGER_PROOFS,
-} from "./utils/custodySourceLedger";
+  MAX_DIRECT_PROOF_BYTES,
+  MAX_DIRECT_PROOF_DOCUMENTS,
+} from "./utils/handoverDirectProof";
+import { MAX_LIVE_DEAL_FEE_LINES } from "./utils/dealCostLimits";
+import { feeDocBytes, MAX_FEE_DOC_BYTES } from "./utils/feeDocLimits";
+import { getDocumentSize } from "convex/values";
 import {
   handoverDirectPostKey,
   handoverDirectReversalKey,
@@ -819,7 +825,7 @@ describe("HANDOVER_COSTS_PAID: a reversed payment still POSTED behind a closed p
   test("over the cap on lines that ever carried a payment: UNAVAILABLE, never READY", async () => {
     const seed = await seedDeal("rev-cap");
     await seed.t.run(async (ctx) => {
-      for (let i = 0; i < 501; i += 1) {
+      for (let i = 0; i < MAX_DIRECT_PAID_LINES + 1; i += 1) {
         await ctx.db.insert("financeDealFees", {
           orgId: seed.orgId, applicationId: seed.applicationId, feeType: "LICENSING", paidBy: "DEALER", paidTo: "GOVERNMENT",
           accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE", actualAmountMinor: jod(1), currency: "JOD",
@@ -844,7 +850,7 @@ describe("HANDOVER_COSTS_PAID: a reversed payment still POSTED behind a closed p
       const app = (await ctx.db.get("financeApplications", seed.applicationId))!;
       const fees = await ctx.db.query("financeDealFees").withIndex("by_application", (q) => q.eq("applicationId", seed.applicationId)).take(10);
       try {
-        await handoverDirectLedgerRefusal(ctx, app.orgId, app._id, fees, 1);
+        await handoverDirectLedgerRefusal(ctx, app.orgId, app._id, fees, new DirectProofBudget(1, MAX_DIRECT_PROOF_BYTES));
         return "no refusal";
       } catch (error) {
         return error instanceof ConvexError ? "ConvexError" : `other: ${String(error)}`;
@@ -954,7 +960,10 @@ describe("R2-2: a reversal is dated when the payment is taken back, so THAT peri
   });
 });
 
-describe("R2-3: the admission envelope guarantees the closing proof always fits", () => {
+
+describe("v5: the direct-payment proof is bounded by the writers' caps, read by index, and fails closed", () => {
+  const N = MAX_DIRECT_PAID_LINES;
+  const V = MAX_DIRECT_PAYMENT_VERSIONS;
   const rawLine = (seed: Seed, extra: Record<string, unknown>) => ({
     orgId: seed.orgId, applicationId: seed.applicationId, feeType: "LICENSING", paidBy: "DEALER", paidTo: "GOVERNMENT",
     accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE", currency: "JOD",
@@ -969,18 +978,22 @@ describe("R2-3: the admission envelope guarantees the closing proof always fits"
       }
     });
 
-  test("the derived budget is the arithmetic in its comment", () => {
-    expect(MAX_HANDOVER_DIRECT_LEDGER_PROOFS).toBe(500 + (10 + 1) + 50 + (50 - 10 + 1) * 2 * 10 + 10 * 9);
-    expect(MAX_DIRECT_PAID_LINES).toBe(50);
-    expect(MAX_DIRECT_PAYMENT_VERSIONS).toBe(10);
+  test("the caps and the budget expressions, with their numbers", () => {
+    expect(N).toBe(20);
+    expect(V).toBe(5);
+    // documents: the ever-paid lines (+1 to detect overflow) and each line's family (+1 likewise).
+    expect(MAX_DIRECT_PROOF_DOCUMENTS).toBe(N + 1 + N * (V + 1));
+    expect(MAX_DIRECT_PROOF_DOCUMENTS).toBe(141);
+    expect(MAX_DIRECT_PROOF_BYTES).toBe((N + 1) * MAX_FEE_DOC_BYTES + N * (V + 1) * MAX_DIRECT_EVENT_DOC_BYTES);
+    expect(MAX_DIRECT_PROOF_BYTES).toBe(21 * 8192 + 120 * 2048);
   });
 
   test("at the line cap the next payment on a NEW line is refused, guided, with nothing written", async () => {
     const seed = await seedDeal("adm-lines");
-    await seedEverPaid(seed, MAX_DIRECT_PAID_LINES);
+    await seedEverPaid(seed, N);
     const feeId = await dealerFee(seed, jod(50));
     const journals = await journalCount(seed);
-    await expect(payDirect(seed, feeId)).rejects.toThrow(/already has 50 cost lines.*Nothing has been recorded/s);
+    await expect(payDirect(seed, feeId)).rejects.toThrow(new RegExp(`already has ${N} cost lines.*Nothing has been recorded`, "s"));
     expect(await journalCount(seed)).toBe(journals);
     expect(await directEvents(seed)).toHaveLength(0);
     expect((await seed.t.run((ctx) => ctx.db.get("financeDealFees", feeId)))?.directPayment).toBeUndefined();
@@ -988,7 +1001,7 @@ describe("R2-3: the admission envelope guarantees the closing proof always fits"
 
   test("one below the cap admits the payment, and that line may then be corrected and re-paid past the cap", async () => {
     const seed = await seedDeal("adm-below");
-    await seedEverPaid(seed, MAX_DIRECT_PAID_LINES - 1);
+    await seedEverPaid(seed, N - 1);
     const feeId = await dealerFee(seed, jod(50));
     await payDirect(seed, feeId);
     await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
@@ -998,88 +1011,242 @@ describe("R2-3: the admission envelope guarantees the closing proof always fits"
     expect(expense(await ledger(seed))).toBe(jod(65));
   });
 
-  test("a line's version cap: the 11th payment version is refused, the 10th is admitted", async () => {
+  test("a line's version cap: the version past it is refused, the last one admitted", async () => {
     const seed = await seedDeal("adm-versions");
     const feeId = await dealerFee(seed, jod(50));
-    await seed.t.run((ctx) => ctx.db.patch(feeId, { directPaymentVersion: MAX_DIRECT_PAYMENT_VERSIONS }));
-    await expect(payDirect(seed, feeId)).rejects.toThrow(/10 times.*Nothing has been recorded/s);
+    await seed.t.run((ctx) => ctx.db.patch(feeId, { directPaymentVersion: V }));
+    await expect(payDirect(seed, feeId)).rejects.toThrow(new RegExp(`${V} times.*Nothing has been recorded`, "s"));
     expect(await journalCount(seed)).toBe(0);
-    await seed.t.run((ctx) => ctx.db.patch(feeId, { directPaymentVersion: MAX_DIRECT_PAYMENT_VERSIONS - 1 }));
+    await seed.t.run((ctx) => ctx.db.patch(feeId, { directPaymentVersion: V - 1 }));
     await payDirect(seed, feeId);
-    expect((await directEvents(seed))[0].eventVersion).toBe(MAX_DIRECT_PAYMENT_VERSIONS);
+    expect((await directEvents(seed))[0].eventVersion).toBe(V);
+  });
+
+  test("the stored forward event is small, and its payload carries no free text (the event-size constant is measured, not guessed)", async () => {
+    const seed = await seedDeal("event-size");
+    const feeId = await seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
+      expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId,
+      feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "GOVERNMENT", accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+      actualAmountMinor: jod(50), description: "FREE-TEXT-DESCRIPTION", receiptReference: "FREE-TEXT-RECEIPT",
+    });
+    await payDirect(seed, feeId, { method: "BANK_TRANSFER", reference: `FREE-TEXT-REFERENCE-${"r".repeat(170)}` });
+    // Taken back with a long reason: the forward event gains status and a link, never the text.
+    await seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: `FREE-TEXT-REASON-${"z".repeat(300)}` });
+    const event = (await directEvents(seed))[0];
+    expect(event.status).toBe("REVERSED");
+    expect(event.reversedByEventId).toBeDefined();
+    const size = getDocumentSize(event as never);
+    console.info(`measured stored HANDOVER_COST_PAID_DIRECT event (reversed, all links present): ${size} bytes`);
+    expect(size).toBeLessThanOrEqual(MAX_DIRECT_EVENT_DOC_BYTES);
+    expect(Object.keys(event.payload as object).sort()).toEqual(
+      ["accountingTreatment", "amountMinor", "applicationId", "currency", "feeId", "feeType", "paymentMethod", "vehicleId"].sort()
+    );
+    expect(JSON.stringify(event)).not.toMatch(/FREE-TEXT/);
   });
 
   /**
-   * The worst state the writers can reach: 500 live lines, 50 lines that ever
-   * carried a payment (nine at versions 1..9, the rest at version 10, every
-   * version reversed, each with a forward event AND a reversal row), all
-   * posted. The proof must judge it READY within its derived budget.
+   * A state the writers can reach at the caps: `N` lines that ever carried a
+   * payment, each at `V` versions, every earlier version reversed, the last
+   * live and POSTED (`live`) or reversed on a voided line (`!live`); the deal
+   * also carries the live-line cap of ordinary lines. `pad` fills every fee
+   * document to MAX_FEE_DOC_BYTES and every event to MAX_DIRECT_EVENT_DOC_BYTES.
+   * Built by a loop over the exported caps, never hand-picked.
    */
-  async function worstCase(name: string) {
+  async function buildAtCap(name: string, opts: { live: boolean; pad?: boolean; earlierPosted?: boolean }) {
     const seed = await seedDeal(name);
     await seed.t.run(async (ctx) => {
-      for (let i = 0; i < 500; i += 1) {
-        await ctx.db.insert("financeDealFees", rawLine(seed, { actualAmountMinor: 0 }) as never);
+      const fillers = MAX_LIVE_DEAL_FEE_LINES - (opts.live ? N : 0);
+      for (let i = 0; i < fillers; i += 1) await ctx.db.insert("financeDealFees", rawLine(seed, { actualAmountMinor: 0 }) as never);
+      const now = Date.now();
+      const shape = (description: string | undefined) =>
+        rawLine(seed, {
+          actualAmountMinor: jod(1),
+          directPaymentVersion: V,
+          description,
+          ...(opts.live
+            ? { directPayment: { version: V, amountMinor: jod(1), method: "BANK_TRANSFER", paidAt: now - 1000, reference: opts.pad ? "r".repeat(200) : undefined, recordedBy: seed.userId, recordedAt: now } }
+            : { voidedAt: now, voidedBy: seed.userId, voidReason: "entered in error" }),
+        });
+      let description: string | undefined;
+      if (opts.pad) {
+        let lo = 0;
+        let hi = MAX_FEE_DOC_BYTES;
+        while (lo < hi) {
+          const mid = Math.ceil((lo + hi) / 2);
+          if (feeDocBytes(shape("x".repeat(mid)) as never) <= MAX_FEE_DOC_BYTES) lo = mid;
+          else hi = mid - 1;
+        }
+        description = "x".repeat(lo);
       }
-      for (let i = 0; i < MAX_DIRECT_PAID_LINES; i += 1) {
-        const version = i < MAX_DIRECT_PAYMENT_VERSIONS - 1 ? i + 1 : MAX_DIRECT_PAYMENT_VERSIONS;
-        const feeId = await ctx.db.insert(
-          "financeDealFees",
-          rawLine(seed, { actualAmountMinor: jod(1), voidedAt: Date.now(), directPaymentVersion: version }) as never
-        );
-        for (let k = 1; k <= version; k += 1) {
-          const base = {
-            orgId: seed.orgId, sourceType: "financeDealFees", sourceId: feeId as string, eventVersion: k,
-            occurredAt: Date.now(), accountingDate: Date.now(), currency: "JOD", payload: {},
-            createdBy: seed.userId, createdAt: Date.now(),
+      for (let i = 0; i < N; i += 1) {
+        const feeId = await ctx.db.insert("financeDealFees", shape(description) as never);
+        for (let k = 1; k <= V; k += 1) {
+          const isLive = opts.live && k === V;
+          const posted = isLive || (opts.earlierPosted === true && i === 0 && k === 1);
+          const common = {
+            orgId: seed.orgId, sourceType: "financeDealFees", sourceId: feeId as string,
+            occurredAt: now, accountingDate: now, currency: "JOD", createdBy: seed.userId, createdAt: now,
           };
-          await ctx.db.insert("accountingEvents", {
-            ...base, eventType: "HANDOVER_COST_PAID_DIRECT", idempotencyKey: handoverDirectPostKey(feeId, k), status: "REVERSED",
-          });
-          await ctx.db.insert("accountingEvents", {
-            ...base, eventType: "HANDOVER_COST_PAID_DIRECT_REVERSAL", idempotencyKey: handoverDirectReversalKey(feeId, k), status: "POSTED",
-          });
+          const forwardBase = {
+            ...common, eventType: "HANDOVER_COST_PAID_DIRECT", eventVersion: k, idempotencyKey: handoverDirectPostKey(feeId, k),
+            payload: { feeId, applicationId: seed.applicationId, feeType: "LICENSING", accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE", amountMinor: jod(1), currency: "JOD", paymentMethod: "BANK_TRANSFER" } as Record<string, unknown>,
+            payloadHash: "h".repeat(64),
+          };
+          let forwardId: Id<"accountingEvents">;
+          if (posted) {
+            forwardId = await ctx.db.insert("accountingEvents", { ...forwardBase, status: "POSTED" });
+          } else {
+            // The reversal is its OWN event type under its own key, carrying the free-text reason.
+            const reversalId = await ctx.db.insert("accountingEvents", {
+              ...common, eventType: "JOURNAL_REVERSAL", eventVersion: k + 1, idempotencyKey: handoverDirectReversalKey(feeId, k),
+              payload: { originalEventType: "HANDOVER_COST_PAID_DIRECT", reason: "Handover cost removed: entered in error" }, status: "POSTED",
+            });
+            forwardId = await ctx.db.insert("accountingEvents", { ...forwardBase, status: "REVERSED", reversedByEventId: reversalId });
+          }
+          if (opts.pad) {
+            const size = getDocumentSize((await ctx.db.get(forwardId))! as never);
+            await ctx.db.patch(forwardId, { payload: { ...forwardBase.payload, pad: "e".repeat(Math.max(0, MAX_DIRECT_EVENT_DOC_BYTES - size - 8)) } });
+          }
         }
       }
     });
     return seed;
   }
 
-  test("the worst state at the caps is READY, not UNAVAILABLE, when everything is posted", async () => {
-    const seed = await worstCase("adm-worst");
+  /** The proof itself, with the reads it made. */
+  async function proof(seed: Seed, budget = new DirectProofBudget()) {
+    return await seed.t.run(async (ctx) => {
+      const app = (await ctx.db.get("financeApplications", seed.applicationId))!;
+      const fees = await ctx.db.query("financeDealFees").withIndex("by_application_voidedAt", (q) => q.eq("applicationId", seed.applicationId).eq("voidedAt", undefined)).take(MAX_LIVE_DEAL_FEE_LINES + 1);
+      try {
+        const result = await handoverDirectLedgerRefusal(ctx, app.orgId, app._id, fees, budget);
+        return { verdict: "judged" as const, code: result.refusal?.code ?? null, count: (result.refusal?.params as { count?: number } | undefined)?.count ?? null, docs: budget.documentsRead, bytes: budget.bytesRead };
+      } catch (error) {
+        return { verdict: error instanceof ConvexError ? ("refused" as const) : ("other" as const), code: null, count: null, docs: budget.documentsRead, bytes: budget.bytesRead };
+      }
+    });
+  }
+
+  test("ALL-AT-CAP, live: every ever-paid line at V versions, earlier reversed, live posted -> READY within the budget", async () => {
+    const seed = await buildAtCap("cap-live", { live: true });
     const check = await readiness(seed);
     expect(check.reason?.code).toBeUndefined();
     expect(check.status).toBe("READY");
+    const read = await proof(seed);
+    expect(read).toMatchObject({ verdict: "judged", code: null });
+    // Exactly the family reads: N lines + N x V forward events. The reversals are a different event type and are never read.
+    expect(read.docs).toBe(N + N * V);
+    expect(read.docs).toBeLessThanOrEqual(MAX_DIRECT_PROOF_DOCUMENTS);
+    expect(read.bytes).toBeLessThanOrEqual(MAX_DIRECT_PROOF_BYTES);
   }, 120_000);
 
-  test("the same worst state with ONE reversal still POSTED blocks (the controls still bite at the caps)", async () => {
-    const seed = await worstCase("adm-worst-blocked");
-    await seed.t.run(async (ctx) => {
-      const event = (await ctx.db.query("accountingEvents").collect()).find(
-        (e) => e.eventType === "HANDOVER_COST_PAID_DIRECT" && e.eventVersion === 10
-      )!;
-      await ctx.db.patch(event._id, { status: "POSTED" });
-    });
+  test("ALL-AT-CAP, all voided: every version reversed on voided lines -> READY", async () => {
+    const seed = await buildAtCap("cap-voided", { live: false });
+    const check = await readiness(seed);
+    expect(check.reason?.code).toBeUndefined();
+    expect(check.status).toBe("READY");
+    expect((await proof(seed)).docs).toBe(N + N * V);
+  }, 120_000);
+
+  test("ALL-AT-CAP, one earlier version still POSTED -> REVERSAL_PENDING naming that line (the controls still bite at the caps)", async () => {
+    const seed = await buildAtCap("cap-earlier", { live: true, earlierPosted: true });
     const check = await readiness(seed);
     expect(check.status).toBe("BLOCKED");
     expect(check.reason?.code).toBe("HANDOVER_DIRECT_REVERSAL_PENDING");
+    expect(check.feeIds).toHaveLength(1);
   }, 120_000);
 
-  test("one document under the derived budget the same worst state cannot be judged: UNAVAILABLE, never READY", async () => {
-    const seed = await worstCase("adm-worst-tight");
-    const verdict = await seed.t.run(async (ctx) => {
-      const app = (await ctx.db.get("financeApplications", seed.applicationId))!;
-      const fees = await ctx.db.query("financeDealFees").withIndex("by_application_voidedAt", (q) => q.eq("applicationId", seed.applicationId).eq("voidedAt", undefined)).take(501);
-      const run = async (limit: number) => {
-        try {
-          await handoverDirectLedgerRefusal(ctx, app.orgId, app._id, fees, limit);
-          return "judged";
-        } catch (error) {
-          return error instanceof ConvexError ? "refused" : `other: ${String(error)}`;
-        }
-      };
-      return { exact: await run(MAX_HANDOVER_DIRECT_LEDGER_PROOFS), oneLess: await run(MAX_HANDOVER_DIRECT_LEDGER_PROOFS - 1) };
+  test("MAX-SIZE legal state at the caps (every fee document at MAX_FEE_DOC_BYTES, every event at MAX_DIRECT_EVENT_DOC_BYTES) is READY within the byte budget", async () => {
+    const seed = await buildAtCap("cap-bytes", { live: true, pad: true });
+    const stored = await seed.t.run(async (ctx) => {
+      const lines = await ctx.db.query("financeDealFees").withIndex("by_application_directPaymentVersion", (q) => q.eq("applicationId", seed.applicationId).gt("directPaymentVersion", 0)).take(N + 1);
+      const events = (await ctx.db.query("accountingEvents").withIndex("by_org_event_source_version", (q) => q.eq("orgId", seed.orgId).eq("eventType", "HANDOVER_COST_PAID_DIRECT")).take(N * V + 1));
+      return { lineMax: Math.max(...lines.map((l) => getDocumentSize(l as never))), eventMax: Math.max(...events.map((e) => getDocumentSize(e as never))), lines: lines.length, events: events.length };
     });
-    expect(verdict).toEqual({ exact: "judged", oneLess: "refused" });
+    expect(stored.lines).toBe(N);
+    expect(stored.events).toBe(N * V);
+    expect(stored.lineMax).toBeLessThanOrEqual(MAX_FEE_DOC_BYTES);
+    expect(stored.lineMax).toBeGreaterThan(MAX_FEE_DOC_BYTES - 200);
+    expect(stored.eventMax).toBeLessThanOrEqual(MAX_DIRECT_EVENT_DOC_BYTES);
+    expect(stored.eventMax).toBeGreaterThan(MAX_DIRECT_EVENT_DOC_BYTES - 200);
+    const read = await proof(seed);
+    expect(read).toMatchObject({ verdict: "judged", code: null });
+    expect(read.bytes).toBeLessThanOrEqual(MAX_DIRECT_PROOF_BYTES);
+    console.info(`max-size state at the caps: ${read.docs} documents, ${read.bytes} bytes read (budget ${MAX_DIRECT_PROOF_DOCUMENTS} / ${MAX_DIRECT_PROOF_BYTES}); largest line ${stored.lineMax}, largest event ${stored.eventMax}`);
+    expect((await readiness(seed)).status).toBe("READY");
   }, 120_000);
+
+  test("TIGHTNESS: the reachable maximum read fits its budget exactly; one document or one byte less refuses, never READY", async () => {
+    const seed = await buildAtCap("cap-tight", { live: true, pad: true });
+    const exact = await proof(seed);
+    expect(exact.verdict).toBe("judged");
+    const oneDocLess = await proof(seed, new DirectProofBudget(exact.docs - 1, MAX_DIRECT_PROOF_BYTES));
+    const oneByteLess = await proof(seed, new DirectProofBudget(MAX_DIRECT_PROOF_DOCUMENTS, exact.bytes - 1));
+    const exactAgain = await proof(seed, new DirectProofBudget(exact.docs, exact.bytes));
+    expect([oneDocLess.verdict, oneByteLess.verdict, exactAgain.verdict]).toEqual(["refused", "refused", "judged"]);
+    // And the deployed budget is not looser than the caps allow: the reachable
+    // maximum is N + N x V documents, the budget adds the two overflow-detection reads.
+    expect(MAX_DIRECT_PROOF_DOCUMENTS - exact.docs).toBe(1 + N);
+  }, 120_000);
+
+  describe("non-canonical ledger rows fail CLOSED (UNAVAILABLE), never READY", () => {
+    async function paidOnce(name: string) {
+      const seed = await seedDeal(name);
+      const feeId = await dealerFee(seed, jod(50));
+      await payDirect(seed, feeId);
+      expect((await readiness(seed)).status).toBe("READY");
+      const event = (await directEvents(seed))[0];
+      return { seed, feeId, event };
+    }
+    const copyOf = (event: Doc<"accountingEvents">, over: Record<string, unknown>) => {
+      const { _id, _creationTime, ...rest } = event;
+      void _id; void _creationTime;
+      return { ...rest, ...over };
+    };
+    async function expectUnverifiable(seed: Seed) {
+      const check = await readiness(seed);
+      expect(check.status).toBe("UNAVAILABLE");
+      expect(check.reason?.code).toBe("HANDOVER_DIRECT_LEDGER_UNVERIFIABLE");
+    }
+
+    test("a row under a key that is not its version's canonical key", async () => {
+      const { seed, event } = await paidOnce("nc-key");
+      await seed.t.run((ctx) => ctx.db.patch(event._id, { idempotencyKey: "handover_direct_paid_forged_v1" }));
+      await expectUnverifiable(seed);
+    });
+
+    test("two rows for one version", async () => {
+      const { seed, event } = await paidOnce("nc-dup");
+      await seed.t.run((ctx) => ctx.db.insert("accountingEvents", copyOf(event, {}) as never));
+      await expectUnverifiable(seed);
+    });
+
+    test("a version above the line's highest, at zero, or fractional", async () => {
+      for (const [label, version] of [["above", 2], ["zero", 0], ["fraction", 1.5]] as const) {
+        const { seed, feeId, event } = await paidOnce(`nc-range-${label}`);
+        await seed.t.run((ctx) =>
+          ctx.db.insert("accountingEvents", copyOf(event, { eventVersion: version, idempotencyKey: handoverDirectPostKey(feeId, version) }) as never)
+        );
+        await expectUnverifiable(seed);
+      }
+    });
+
+    test("the live version's own row PENDING or FAILED is not on the books: NOT_ON_LEDGER, never READY", async () => {
+      for (const status of ["PENDING", "FAILED"] as const) {
+        const { seed, event } = await paidOnce(`nc-status-${status}`);
+        await seed.t.run((ctx) => ctx.db.patch(event._id, { status }));
+        const check = await readiness(seed);
+        expect(check.status).toBe("BLOCKED");
+        expect(check.reason?.code).toBe("HANDOVER_DIRECT_NOT_ON_LEDGER");
+      }
+    });
+
+    test("more rows than a line can have versions", async () => {
+      const { seed, event } = await paidOnce("nc-many");
+      await seed.t.run(async (ctx) => {
+        for (let k = 0; k < V; k += 1) await ctx.db.insert("accountingEvents", copyOf(event, {}) as never);
+      });
+      await expectUnverifiable(seed);
+    });
+  });
 });

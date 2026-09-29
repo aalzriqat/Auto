@@ -584,6 +584,10 @@ const dealRailMessages = defineBilingualMessages({
     "Recorded — ledger status is confirmed at closing",
     "مسجَّل — يُتأكد من حالته في الدفاتر عند الإغلاق",
   ],
+  HandoverPaymentRecordedCancelled: [
+    "Recorded — deal cancelled",
+    "مسجَّل — الصفقة ملغاة",
+  ],
   DirectPaymentAmountChanged: [
     "The amount of this cost changed since you opened this form. It is now:",
     "تغيّر مبلغ هذا المصروف منذ فتحت هذا النموذج. المبلغ الآن:",
