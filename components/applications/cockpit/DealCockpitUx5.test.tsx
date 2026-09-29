@@ -115,8 +115,10 @@ function setDeal(overrides: Partial<DealStageFacts>, extra: Record<string, unkno
     saleId: null,
     canonicalSaleId: null,
     status: overrides.status ?? "APPROVED",
-    createdAt: Date.UTC(2026, 6, 28),
-    updatedAt: Date.UTC(2026, 7, 9),
+    // Midday UTC: the dates render in the runner's local zone, and midnight
+    // UTC is the previous day anywhere west of Greenwich.
+    createdAt: Date.UTC(2026, 6, 28, 12, 0),
+    updatedAt: Date.UTC(2026, 7, 9, 12, 0),
     customer: { id: "c1", name: "Sami", phone: "0790112233" },
     vehicle: null,
     salespersonName: "Layth",
