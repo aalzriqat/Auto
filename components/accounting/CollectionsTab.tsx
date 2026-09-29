@@ -1062,18 +1062,22 @@ function ChequeDialog({ receivable, onOpenChange }: { receivable: ReceivableRow 
 
 type DisbursementMethod = "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD";
 
-function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable: ReceivableRow; type: "REFUND" | "RESCHEDULE" | "CANCEL_RECEIVABLE" } | null; onOpenChange: (open: boolean) => void }) {
+export function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable: ReceivableRow; type: "REFUND" | "RESCHEDULE" | "CANCEL_RECEIVABLE" } | null; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const requestApproval = useMutation(api.collections.requestApproval);
   const [amount, setAmount] = useState("");
   const [dueDate, setDueDate] = useState(todayInput);
-  const [disbursementMethod, setDisbursementMethod] = useState<DisbursementMethod>("CASH");
+  // SCRUM-469: a refund's method is chosen, never assumed - it picks the account
+  // the money is paid out of, and an unstated one used to be sent as CASH.
+  const [disbursementMethod, setDisbursementMethod] = useState<DisbursementMethod | undefined>(undefined);
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const refundMethodMissing = target?.type === "REFUND" && disbursementMethod === undefined;
 
   async function submit() {
     if (!activeOrgId || !target) return;
+    if (refundMethodMissing) return;
     setSubmitting(true);
     try {
       await requestApproval({
@@ -1089,7 +1093,7 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
       onOpenChange(false);
       setAmount("");
       setReason("");
-      setDisbursementMethod("CASH");
+      setDisbursementMethod(undefined);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
@@ -1115,9 +1119,9 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
           {target?.type === "REFUND" && (
             <>
               <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={t("RefundAmount" as any)} />
-              <Select value={disbursementMethod} onValueChange={(v) => setDisbursementMethod(v as DisbursementMethod)}>
-                <SelectTrigger>
-                  <SelectValue placeholder={t("PaymentMethodLabel" as any)} />
+              <Select value={disbursementMethod ?? ""} onValueChange={(v) => setDisbursementMethod(v as DisbursementMethod)}>
+                <SelectTrigger aria-label={t("PaymentMethodLabel" as any)}>
+                  <SelectValue placeholder={t("RefundChooseMethod" as any)} />
                 </SelectTrigger>
                 <SelectContent>
                   {(Object.keys(disbursementLabels) as DisbursementMethod[]).map((method) => (
@@ -1125,6 +1129,9 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
                   ))}
                 </SelectContent>
               </Select>
+              {refundMethodMissing && (
+                <p className="text-sm font-medium text-destructive" role="alert">{t("RefundMethodRequired" as any)}</p>
+              )}
             </>
           )}
           {target?.type === "RESCHEDULE" && <Input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />}
@@ -1132,7 +1139,7 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
-          <Button onClick={submit} disabled={submitting || !reason || (target?.type === "REFUND" && !amount)}>{submitting ? t("Submitting" as any) : t("Submit" as any)}</Button>
+          <Button onClick={submit} disabled={submitting || !reason || (target?.type === "REFUND" && !amount) || refundMethodMissing}>{submitting ? t("Submitting" as any) : t("Submit" as any)}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

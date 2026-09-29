@@ -49,6 +49,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import { HeldDepositActions } from "@/components/vehicles/HeldDepositActions";
 import { getErrorMessage } from "@/lib/errors";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 
@@ -235,11 +236,16 @@ export function VehicleDetailsDialog({
   const handleReleaseDeposit = async (
     depositId: any,
     resolution: "REFUNDED" | "FORFEITED",
-    observedReleaseCount: number
+    observedReleaseCount: number,
+    // SCRUM-469: the method the operator CHOSE, handed in by the control that
+    // refuses to offer Refund without one. Never read back from state with a
+    // fallback: a refund with no method has no account to leave by.
+    chosenRefundMethod?: PaymentMethod
   ) => {
     if (!activeOrgId) return;
+    if (resolution === "REFUNDED" && chosenRefundMethod === undefined) return;
     setReleasingDepositId(depositId);
-    const refundMethod = resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : "NONE";
+    const refundMethod = resolution === "REFUNDED" ? chosenRefundMethod : "NONE";
     try {
       // SCRUM-313 — a GENERATION-AWARE retained identity. This line has been
       // wrong twice in two opposite directions, so both failures are recorded:
@@ -274,7 +280,7 @@ export function VehicleDetailsDialog({
         orgId: activeOrgId,
         depositId,
         resolution,
-        refundMethod: resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : undefined,
+        refundMethod: resolution === "REFUNDED" ? chosenRefundMethod : undefined,
         idempotencyKey: commandId.for(intent),
       });
       commandId.retire(intent);
@@ -509,36 +515,18 @@ export function VehicleDetailsDialog({
                             {deposit.notes && <p className="text-xs text-muted-foreground mt-0.5 italic">&ldquo;{deposit.notes}&rdquo;</p>}
                           </div>
                           {deposit.status === "HELD" && !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_REQUESTS) && (
-                            <div className="flex gap-2 shrink-0 items-center">
-                              <div className="w-32">
-                                <PaymentMethodSelect
-                                  t={t as any}
-                                  value={refundMethodByDeposit[deposit._id] ?? "CASH"}
-                                  onValueChange={(method) =>
-                                    setRefundMethodByDeposit((prev) => ({ ...prev, [deposit._id]: method }))
-                                  }
-                                  ariaLabel={t("PaymentMethodLabel" as any)}
-                                />
-                              </div>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="h-7 text-xs"
-                                disabled={releasingDepositId === deposit._id}
-                                onClick={() => handleReleaseDeposit(deposit._id, "REFUNDED", deposit.releaseCount ?? 0)}
-                              >
-                                {t("Refund" as any) ?? "Refund"}
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="h-7 text-xs text-destructive hover:text-destructive"
-                                disabled={releasingDepositId === deposit._id}
-                                onClick={() => handleReleaseDeposit(deposit._id, "FORFEITED", deposit.releaseCount ?? 0)}
-                              >
-                                {t("Forfeit" as any) ?? "Forfeit"}
-                              </Button>
-                            </div>
+                            <HeldDepositActions
+                              t={t as any}
+                              method={refundMethodByDeposit[deposit._id]}
+                              onMethodChange={(method) =>
+                                setRefundMethodByDeposit((prev) => ({ ...prev, [deposit._id]: method }))
+                              }
+                              busy={releasingDepositId === deposit._id}
+                              onRefund={(method) =>
+                                handleReleaseDeposit(deposit._id, "REFUNDED", deposit.releaseCount ?? 0, method)
+                              }
+                              onForfeit={() => handleReleaseDeposit(deposit._id, "FORFEITED", deposit.releaseCount ?? 0)}
+                            />
                           )}
                         </div>
                       ))}
