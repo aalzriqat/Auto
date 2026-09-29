@@ -462,15 +462,20 @@ export async function evaluateClosingReadiness(
    * read; otherwise READY, or BLOCKED with the refusal. A ConvexError thrown
    * while judging becomes `onThrow` with its message, coded `throwCode` —
    * stated per check, since a refusal (BLOCKED) and an unreadable input
-   * (UNAVAILABLE) are different verdicts. `planOnly` checks are
-   * NOT_APPLICABLE off the plan's route.
+   * (UNAVAILABLE) are different verdicts. A `throughDealershipOnly` check is
+   * NOT_APPLICABLE on the direct-to-supplier route.
    */
   const onRows = async (
     key: ClosingReadinessCheckKey,
-    spec: { onThrow: "BLOCKED" | "UNAVAILABLE"; throwCode?: "CUSTODY_LEDGER_UNVERIFIABLE" | "HANDOVER_DIRECT_LEDGER_UNVERIFIABLE"; planOnly?: boolean },
+    spec: {
+      onThrow: "BLOCKED" | "UNAVAILABLE";
+      throwCode?: "CUSTODY_LEDGER_UNVERIFIABLE" | "HANDOVER_DIRECT_LEDGER_UNVERIFIABLE";
+      /** NOT_APPLICABLE only when the deal settles direct to the supplier (wider than the plan's own route). */
+      throughDealershipOnly?: boolean;
+    },
     judge: (read: NonNullable<typeof rows>) => ClosingReadinessReason | null | Promise<ClosingReadinessReason | null>
   ) => {
-    if (spec.planOnly && !planCovered) return add(key, "NOT_APPLICABLE", null);
+    if (spec.throughDealershipOnly && opts.settlesDirect) return add(key, "NOT_APPLICABLE", null);
     if (rows === null) return add(key, "UNAVAILABLE", rowsUnavailable);
     try {
       const refusal = await judge(rows);
@@ -505,7 +510,11 @@ export async function evaluateClosingReadiness(
   await onRows("CUSTODY_SETTLED", { onThrow: "BLOCKED" }, ({ fees, custody }) => custodySettledRefusal(custody, fees));
 
   // The CURRENT state of the deal's costs, judged on the rows just read.
-  await onRows("COSTS_CLOSABLE", { onThrow: "BLOCKED", planOnly: true }, ({ fees }) =>
+  // Applies on EVERY through-the-dealership deal, NOT only where the plan covers
+  // it (SCRUM-446): a deal that names no finance company settles through the
+  // dealership too, and the deal rail reads it finished once closed, so its
+  // costs must be evidenced at close. Only the direct route is exempt.
+  await onRows("COSTS_CLOSABLE", { onThrow: "BLOCKED", throughDealershipOnly: true }, ({ fees }) =>
     costsClosableRefusal(fees, opts.currency)
   );
 

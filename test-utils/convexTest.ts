@@ -112,6 +112,37 @@ export function convexTestWithComponents<
 }
 
 /**
+ * SCRUM-446: a financed deal that settles through the dealership cannot close
+ * without cost evidence, configured company or not. This records the dealer's
+ * "no closing costs" line at zero and reconciles it — the same evidence a
+ * screen collects — so a fixture about something else can reach `finalizeDeal`.
+ * Must run before the deal closes (closing refuses new costs).
+ */
+export async function recordReconciledZeroCost(
+  as: { mutation: (ref: any, args: any) => Promise<any> },
+  api: any,
+  orgId: unknown,
+  applicationId: unknown,
+  /** Reconciling takes a different authority from recording; defaults to `as`. */
+  asReconciler: { mutation: (ref: any, args: any) => Promise<any> } = as
+): Promise<void> {
+  const feeId = await as.mutation(api.financeDealCosts.recordDealFee, {
+    orgId,
+    applicationId,
+    feeType: "OTHER_CLOSING_EXPENSE",
+    paidBy: "DEALER",
+    paidTo: "OTHER",
+    accountingTreatment: "SELLING_EXPENSE",
+    deductedFromSettlement: false,
+    actualAmountMinor: 0,
+    description: "No closing costs.",
+    expectedCurrency: "JOD",
+    idempotencyKey: crypto.randomUUID(),
+  });
+  await asReconciler.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId, notes: "Nothing to match." });
+}
+
+/**
  * `registerVehicleHandover`, driven the way a screen drives it.
  *
  * The mutation demands the economics stamp the caller's own deal payload

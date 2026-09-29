@@ -1,5 +1,5 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { registerHandover } from "../test-utils/convexTest";
+import { recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -174,6 +174,7 @@ describe("Phase 0 financial safety controls", () => {
       method: "CASH",
       expectedDate: Date.now(),
     });
+    await recordReconciledZeroCost(asUser, api, orgId, applicationId);
 
     const firstSaleId = await asUser.mutation(api.applications.finalizeDeal, {
       orgId,

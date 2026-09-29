@@ -1,6 +1,6 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
 import { ConvexError } from "convex/values";
-import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import { convexTestWithComponents, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -124,6 +124,11 @@ async function dealerFee(
     deductedFromSettlement: extra.deductedFromSettlement ?? false,
     actualAmountMinor, estimatedAmountMinor: extra.estimatedAmountMinor, custodyId: extra.custodyId,
   });
+}
+
+/** SCRUM-446: a no-company deal through the dealership cannot close on unreconciled costs, so a test aimed at a LATER check reconciles the line first. */
+async function reconcileFee(seed: Seed, feeId: Id<"financeDealFees">) {
+  await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "Matched to the invoice." });
 }
 
 type Method = "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD";
@@ -470,7 +475,7 @@ describe("HANDOVER_COSTS_PAID blocks the deal on every route", () => {
 
   test("finalizeDeal refuses with this reason, and finalizes nothing", async () => {
     const seed = await seedDeal("finalize");
-    await dealerFee(seed, jod(50));
+    await reconcileFee(seed, await dealerFee(seed, jod(50)));
     await registerHandover(seed.asUser, api, seed.orgId, seed.applicationId);
     await seed.asUser.mutation(api.applications.registerExpectedPayment, {
       orgId: seed.orgId, applicationId: seed.applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
@@ -687,6 +692,7 @@ describe("HANDOVER_COSTS_PAID proves each direct payment on the ledger (SCRUM-44
     await closePeriod(seed);
     const feeId = await dealerFee(seed, jod(50));
     await payDirect(seed, feeId);
+    await reconcileFee(seed, feeId);
     // The row says paid; the books do not have it.
     expect((await lineOf(seed, feeId))?.handoverPayment).toBe("PAID_DIRECT");
     expect(await directEvents(seed)).toHaveLength(0);
@@ -854,6 +860,7 @@ describe("HANDOVER_COSTS_PAID: a reversed payment still POSTED behind a closed p
     await payDirect(seed, feeId);
     await closePeriod(seed);
     await voidIt(seed, feeId);
+    await recordReconciledZeroCost(seed.asUser, api, seed.orgId, seed.applicationId);
     await registerHandover(seed.asUser, api, seed.orgId, seed.applicationId);
     await seed.asUser.mutation(api.applications.registerExpectedPayment, {
       orgId: seed.orgId, applicationId: seed.applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),

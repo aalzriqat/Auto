@@ -222,7 +222,11 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
       expect(all.some((st) => st.state === "BLOCKED" && st.blocker === "AwaitingDisbursement")).toBe(false);
     });
 
-    test("SETTLEMENT completes on the supplier obligation, and profit is ACTUAL once expenses reconcile", async () => {
+    // These rows are SEEDED directly as CLOSED. The finalize gate (SCRUM-446,
+    // see the "costs are evidenced before a no-company deal closes" block below)
+    // stops `finalizeDeal` reaching a cost-less CLOSED deal; this documents how
+    // an already-seeded / legacy row READS, which the gate does not restate.
+    test("directly seeded CLOSED rows: SETTLEMENT completes on the supplier obligation, and profit is ACTUAL once expenses reconcile", async () => {
       const s = await seed(`settle_${mode}`);
       // Money settles on the supplier obligation alone; profit is ACTUAL only
       // once the dealer-borne cost lines are reconciled too.
@@ -476,6 +480,82 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
       if (all.some((st) => st.state === "NOT_APPLICABLE")) {
         expect(all.some(isLive) || allComplete(all)).toBe(true);
       }
+    });
+  });
+
+  // ── 10. SCRUM-446: the rail reads a closed no-company deal as finished, so
+  //        its costs must be evidenced BEFORE it can close ──────────────────
+  describe("costs are evidenced before a no-company deal closes", () => {
+    /** A pre-close application that has passed every finalizeDeal precondition except its costs. */
+    async function readyToFinalize(s: Seed, opts: DealOpts = {}) {
+      const { applicationId } = await insertDeal(s, { status: "APPROVED", sale: "none", ...opts });
+      await s.t.run(async (ctx) => {
+        await ctx.db.patch(applicationId, {
+          vehicleHandoverAt: Date.now(),
+          expectedPaymentMethod: "BANK_TRANSFER",
+          expectedPaymentDate: Date.now(),
+        });
+        await ctx.db.patch(s.vehicleId, { status: "AVAILABLE" });
+      });
+      return applicationId;
+    }
+
+    async function costsCheck(s: Seed, applicationId: Id<"financeApplications">) {
+      const r = await s.asOwner.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
+      return r.checks.find((c) => c.key === "COSTS_CLOSABLE")!;
+    }
+
+    const finalize = (s: Seed, applicationId: Id<"financeApplications">) =>
+      s.asOwner.mutation(api.applications.finalizeDeal, {
+        orgId: s.orgId,
+        applicationId,
+        idempotencyKey: crypto.randomUUID(),
+      });
+
+    test.each<{ name: string; mode: Mode }>([
+      { name: "a manual finance company", mode: "MANUAL_FINANCE_COMPANY" },
+      { name: "a lease", mode: "LEASE" },
+      { name: "an internal instalment", mode: "INTERNAL_INSTALLMENT" },
+    ])("$name through the dealership with NO cost line: COSTS_CLOSABLE is BLOCKED", async ({ mode }) => {
+      const s = await seed(`cc_blocked_${mode}`);
+      const applicationId = await readyToFinalize(s, { mode });
+      expect((await costsCheck(s, applicationId)).status).toBe("BLOCKED");
+    });
+
+    test("finalizeDeal refuses a no-company through-dealership deal with no cost line, and closes nothing", async () => {
+      const s = await seed("cc_refuse");
+      const applicationId = await readyToFinalize(s);
+      await expect(finalize(s, applicationId)).rejects.toThrow();
+      const after = await s.t.run((ctx) => ctx.db.get(applicationId));
+      expect(after?.status).toBe("APPROVED");
+      expect(after?.finalizedSaleId).toBeUndefined();
+    });
+
+    test("positive control: a reconciled zero line makes it READY, it finalizes, and the rail reads finished", async () => {
+      const s = await seed("cc_ready");
+      const applicationId = await readyToFinalize(s);
+      await reconcileZeroFee(s, applicationId);
+      expect((await costsCheck(s, applicationId)).status).toBe("READY");
+      await finalize(s, applicationId);
+      const after = await s.t.run((ctx) => ctx.db.get(applicationId));
+      expect(after?.status).toBe("CLOSED");
+      const { all, disbursement } = await stagesOf(s, applicationId);
+      expect(disbursement.state).toBe("NOT_APPLICABLE");
+      expect(allComplete(all)).toBe(true);
+    });
+
+    test("control: the direct route with no cost line keeps COSTS_CLOSABLE NOT_APPLICABLE", async () => {
+      const s = await seed("cc_direct");
+      const applicationId = await readyToFinalize(s, { route: "DIRECT_TO_SUPPLIER" });
+      // The direct route only exists for a consigned (SOURCED) vehicle.
+      await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { sourceType: "SOURCED" as const }));
+      expect((await costsCheck(s, applicationId)).status).toBe("NOT_APPLICABLE");
+    });
+
+    test("control: a configured company through the dealership with no cost line is still BLOCKED", async () => {
+      const s = await seed("cc_configured");
+      const applicationId = await readyToFinalize(s, { mode: "CONFIGURED_FINANCE_COMPANY", configured: true });
+      expect((await costsCheck(s, applicationId)).status).toBe("BLOCKED");
     });
   });
 
