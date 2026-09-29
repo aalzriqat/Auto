@@ -82,9 +82,16 @@ import {
 import { DealStepChecklist } from "./DealStepChecklistList";
 import type { ClosingReadinessCheckKey } from "@/lib/closingReadinessReasonCodes";
 import { deriveStepChecklist, type ChecklistDestination, type ChecklistItem } from "./dealStepChecklist";
-import { resolveViewedStage, STAGE_PARAM, stageViewMode, type StageDeepLink } from "./dealStepView";
+import {
+  resolveViewedStage,
+  STAGE_PARAM,
+  stageNotApplicableReasonKey,
+  stageViewMode,
+  type StageDeepLink,
+} from "./dealStepView";
 import { cn } from "@/lib/utils";
 import {
+  isFinishedStageState,
   isLiveStageState,
   STAGE_ICON,
   STAGE_STATE_KEY,
@@ -1649,6 +1656,12 @@ export function DealCockpit({
    * Read here rather than left implicit, because one branch below has to answer
    * for a stage that has no action at all, and "return the handover entry and
    * let the view filter it out" cannot express that.
+   *
+   * A NOT_APPLICABLE stage is never this one (SCRUM-446): the server does not
+   * choose it as live, so a deal whose finance company pays nobody offers no
+   * "confirm payment" action and no `DisbursementUnavailable` sentence to
+   * contradict a rail that says the step is not needed. The step's own words
+   * live in `DealStageView` (see `stageNotApplicableReasonKey`).
    */
   const liveStage = deal?.stages.find(
     (stage) => stage.state === "CURRENT" || stage.state === "BLOCKED"
@@ -4719,7 +4732,9 @@ export function DealCockpitView({
   // the rail itself stays one click away. Every other deal — live, or stopped
   // with nothing left to do — shows the rail as-is, because on a stopped deal
   // WHERE it stopped is the information.
-  const allComplete = stages.length > 0 && stages.every((s) => s.state === "COMPLETE");
+  // A stage the server proved NOT_APPLICABLE is not outstanding work: it counts
+  // as finished here, though never as COMPLETE (SCRUM-446).
+  const allComplete = stages.length > 0 && stages.every((s) => isFinishedStageState(s.state));
   const liveIndex = live ? stages.findIndex((s) => s.key === live.key) : -1;
   // Settlement is shown ahead of a payment step that is live: every closed
   // financed deal sits there until the finance company pays, so the node says
@@ -4731,15 +4746,20 @@ export function DealCockpitView({
     label: t(STAGE_LABEL[stage.key] ?? stage.key),
     // The same provenance-gated resolution the focus panel uses, so a node
     // and the panel can never name different parties for one step.
-    owner: stageOwnerLabel(stage, activeAppraisalProvider, t),
+    // A stage that is not needed has nobody acting on it, so no owner is drawn.
+    owner: stage.state === "NOT_APPLICABLE" ? undefined : stageOwnerLabel(stage, activeAppraisalProvider, t),
+    // ...and its "blocker" slot carries WHY it is not needed (rail tooltip and
+    // accessible name), never a wait.
     blocker:
-      stage.key === "DISBURSEMENT" && stage.state === "PENDING"
-        ? t("BlockerDisbursementAfterHandover")
-        : stage.key === "SETTLEMENT" && stage.state === "PENDING" && paymentIsLive
-          ? t("BlockerSettlementAfterFinancePayment")
-          : stage.blocker
-            ? t(`Blocker${stage.blocker}`)
-            : undefined,
+      stage.state === "NOT_APPLICABLE"
+        ? t(stageNotApplicableReasonKey(stage.key))
+        : stage.key === "DISBURSEMENT" && stage.state === "PENDING"
+          ? t("BlockerDisbursementAfterHandover")
+          : stage.key === "SETTLEMENT" && stage.state === "PENDING" && paymentIsLive
+            ? t("BlockerSettlementAfterFinancePayment")
+            : stage.blocker
+              ? t(`Blocker${stage.blocker}`)
+              : undefined,
   }));
   // SCRUM-417 UX4 (O2/O3). The sub-steps of any stage, from facts this view
   // already holds -- never a new read. Readiness counts only while it is open
@@ -5509,7 +5529,7 @@ export function DealCockpitView({
       closed={dealClosed}
       label={t(STAGE_LABEL[otherStage.key] ?? otherStage.key)}
       state={otherStage.state}
-      owner={stageOwnerLabel(otherStage, activeAppraisalProvider, t)}
+      owner={otherStage.state === "NOT_APPLICABLE" ? undefined : stageOwnerLabel(otherStage, activeAppraisalProvider, t)}
       position={stages.findIndex((stage) => stage.key === otherStage.key) + 1}
       total={stages.length}
       hasLiveStep={live !== undefined}
@@ -6030,7 +6050,8 @@ export function DealCockpitView({
       {allComplete ? (
         <div className="space-y-3">
           <DealStagesComplete
-            count={stages.length}
+            count={stages.filter((s) => s.state === "COMPLETE").length}
+            notNeeded={stages.filter((s) => s.state === "NOT_APPLICABLE").length}
             expanded={showCompleted}
             onToggle={() => setShowCompleted((open) => !open)}
             t={t}
