@@ -25,6 +25,7 @@ import {
 import { ReceivableCreditKey } from "./accounting/postingRules";
 import { assertValidAccountingDate } from "./accountingPeriods";
 import { toMinorUnits, fromMinorUnits, scaleForCurrency } from "./utils/money";
+import { isFcLineage, isLiveFcCheque, parseFaceAmountMinor, dealChequeCurrency, FC_CHEQUE_DEAL_NEXT_STEP } from "./utils/fcCheque";
 import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
@@ -1647,6 +1648,13 @@ export async function registerChequeCore(
     notes?: string;
     actorId: Id<"users">;
     branchId?: Id<"branches">;
+    /** SCRUM-447: the recorded face (minor units) and its denomination. */
+    amountMinor?: number;
+    currency?: string;
+    /** SCRUM-447: drawer and lineage, written on every new FC row. */
+    drawerType?: "FINANCE_COMPANY";
+    financeCompanyId?: Id<"financeCompanies">;
+    originApplicationId?: Id<"financeApplications">;
   }
 ) {
   assertPositiveAmount(args.amount);
@@ -1730,6 +1738,10 @@ export async function registerChequeCore(
     vehicleId: receivable?.vehicleId ?? args.vehicleId,
     saleId: receivable?.saleId ?? args.saleId,
     applicationId: args.applicationId,
+    ...(args.amountMinor !== undefined ? { amountMinor: args.amountMinor, currency: args.currency } : {}),
+    ...(args.drawerType !== undefined ? { drawerType: args.drawerType } : {}),
+    ...(args.financeCompanyId !== undefined ? { financeCompanyId: args.financeCompanyId } : {}),
+    ...(args.originApplicationId !== undefined ? { originApplicationId: args.originApplicationId } : {}),
     bank: args.bank.trim(),
     chequeNumber: args.chequeNumber.trim(),
     chequeDate: args.chequeDate,
@@ -1772,6 +1784,17 @@ export const depositCheque = mutation({
     const cheque = await ctx.db.get(args.chequeId);
     if (!cheque || cheque.orgId !== args.orgId || cheque.isDeleted) throw new ConvexError("Cheque not found.");
     if (cheque.status !== "HELD") throw new ConvexError("Only held cheques can be deposited.");
+    // SCRUM-447 D4: depositing the finance company's cheque is legitimate on a
+    // live deal, but a cancelled deal has no instrument left to present.
+    const lineageAppId = cheque.applicationId ?? cheque.originApplicationId;
+    if (lineageAppId) {
+      const app = await ctx.db.get(lineageAppId);
+      if (!app || app.orgId !== args.orgId || app.status === "CANCELLED") {
+        throw new ConvexError(
+          "This cheque belongs to a cancelled finance deal and cannot be deposited."
+        );
+      }
+    }
     await ctx.db.patch(args.chequeId, {
       status: "DEPOSITED",
       depositedDate: args.depositedDate ?? Date.now(),
@@ -1835,9 +1858,15 @@ export const clearCheque = mutation({
         if (!existingCheque || existingCheque.orgId !== args.orgId || existingCheque.isDeleted) {
           throw new ConvexError("Cheque not found.");
         }
-        if (existingCheque.applicationId) {
+        // SCRUM-447 D9: keyed on FC LINEAGE, not on applicationId presence. A
+        // cheque whose applicationId was cleared by the pre-447 replaceCheque, or
+        // that carries only originApplicationId / drawerType, is still the
+        // finance company's instrument and must not settle a customer receivable.
+        if (isFcLineage(existingCheque)) {
           throw new ConvexError(
-            `This cheque belongs to finance application ${existingCheque.applicationId} — confirm disbursement from the Applications page instead.`
+            `This finance-company cheque${
+              existingCheque.applicationId ? ` (finance application ${existingCheque.applicationId})` : ""
+            } cannot be cleared from customer collections — confirm disbursement from the Applications page instead.`
           );
         }
 
@@ -1983,7 +2012,10 @@ export const returnCheque = mutation({
       updatedAt: Date.now(),
     });
 
-    if (cheque.receivableId) {
+    // SCRUM-447 D5': a finance-company cheque bouncing is the finance company's
+    // problem, not the customer's. Neither the customer's receivable nor the
+    // customer's phone is touched; managers are still told below.
+    if (cheque.receivableId && !isFcLineage(cheque)) {
       const receivable = await ctx.db.get(cheque.receivableId);
       if (receivable && receivable.status !== "PAID") {
         await ctx.db.patch(receivable._id, { status: "OVERDUE", updatedAt: Date.now() });
@@ -2012,16 +2044,77 @@ export const replaceCheque = mutation({
     bank: v.string(),
     chequeNumber: v.string(),
     chequeDate: v.number(),
-    amount: v.number(),
+    /** Customer cheques only. A finance-company cheque takes `faceAmount`. */
+    amount: v.optional(v.number()),
+    /** SCRUM-447 D1: a finance-company cheque's face, as a decimal string. */
+    faceAmount: v.optional(v.string()),
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    assertPositiveAmount(args.amount);
     const oldCheque = await ctx.db.get(args.chequeId);
     if (!oldCheque || oldCheque.orgId !== args.orgId) throw new ConvexError("Cheque not found.");
+    // SCRUM-447 D9a: REPLACED is terminal for replacement, whatever the lineage.
+    // A second replacement of the same row would fork the chain, and a pre-447
+    // row lost its applicationId when it was replaced, so its lineage cannot be
+    // re-established from the row itself.
+    if (oldCheque.status === "REPLACED") {
+      throw new ConvexError("This cheque was already replaced — act on its replacement instead.");
+    }
     if (oldCheque.status === "CLEARED" || oldCheque.status === "CANCELLED") {
       throw new ConvexError("Cleared or cancelled cheques cannot be replaced.");
+    }
+
+    const fcLineage = isFcLineage(oldCheque);
+    let amount: number;
+    let faceFields: { amountMinor: number; currency: string } | null = null;
+    let lineageFields: {
+      applicationId: Id<"financeApplications">;
+      originApplicationId: Id<"financeApplications">;
+      drawerType?: "FINANCE_COMPANY";
+      financeCompanyId?: Id<"financeCompanies">;
+    } | null = null;
+
+    if (fcLineage) {
+      // SCRUM-447 D9: a finance-company cheque is replaced only while its deal is
+      // live AND it is the live instrument of a still-registered CHEQUE payment.
+      // Anything else is re-registered on the deal.
+      if (!oldCheque.applicationId) {
+        throw new ConvexError(`${FC_CHEQUE_DEAL_NEXT_STEP} It is no longer linked to a live deal, so it cannot be replaced.`);
+      }
+      const app = await ctx.db.get(oldCheque.applicationId);
+      if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found.");
+      if (app.status === "CANCELLED") {
+        throw new ConvexError("This cheque belongs to a cancelled finance deal and cannot be replaced.");
+      }
+      if (app.disbursedAt) {
+        throw new ConvexError("This deal's disbursement is already confirmed, so its cheque cannot be replaced.");
+      }
+      if (oldCheque.status === "DEPOSITED") {
+        throw new ConvexError(
+          "This finance-company cheque is deposited. Record its return first, then correct the expected payment on the deal."
+        );
+      }
+      if (oldCheque.status !== "HELD" || app.expectedPaymentMethod !== "CHEQUE") {
+        throw new ConvexError(
+          "This finance-company cheque is no longer the deal's registered payment. Correct the expected payment and register a new cheque from the deal."
+        );
+      }
+      const currency = await dealChequeCurrency(ctx, app, await getOrgCurrency(ctx, args.orgId));
+      const amountMinor = parseFaceAmountMinor(args.faceAmount, currency);
+      amount = fromMinorUnits(amountMinor, currency);
+      faceFields = { amountMinor, currency };
+      lineageFields = {
+        applicationId: oldCheque.applicationId,
+        originApplicationId: oldCheque.originApplicationId ?? oldCheque.applicationId,
+        // A legacy row whose drawer history cannot be proven stays UNVERIFIED.
+        drawerType: oldCheque.drawerType,
+        financeCompanyId: oldCheque.financeCompanyId,
+      };
+    } else {
+      if (args.amount === undefined) throw new ConvexError("Cheque amount is required.");
+      assertPositiveAmount(args.amount);
+      amount = args.amount;
     }
 
     const currency = await getOrgCurrency(ctx, args.orgId);
@@ -2033,14 +2126,16 @@ export const replaceCheque = mutation({
       customerId: oldCheque.customerId,
       vehicleId: oldCheque.vehicleId,
       saleId: oldCheque.saleId,
-      // Transfers rather than copies — an application's expected-payment
-      // cheque must stay a 1:1 link so confirmDisbursement's lookup by
-      // applicationId keeps resolving to exactly one (the active) cheque.
-      applicationId: oldCheque.applicationId,
+      // SCRUM-447 D0: lineage is COPIED, never transferred. The old row keeps
+      // its applicationId; "the application's live cheque" is a status
+      // predicate (liveChequesForApplication), so exactly one HELD/DEPOSITED
+      // row remains after this transaction.
+      ...(lineageFields ?? {}),
+      ...(faceFields ?? {}),
       bank: args.bank.trim(),
       chequeNumber: args.chequeNumber.trim(),
       chequeDate: args.chequeDate,
-      amount: roundMoney(args.amount, currency),
+      amount: roundMoney(amount, currency),
       status: "HELD",
       notes: args.notes,
       createdBy: user._id,
@@ -2051,7 +2146,7 @@ export const replaceCheque = mutation({
     await ctx.db.patch(args.chequeId, {
       status: "REPLACED",
       replacementChequeId: newChequeId,
-      applicationId: undefined,
+      ...(lineageFields ? { originApplicationId: lineageFields.originApplicationId } : {}),
       updatedAt: now,
     });
 
@@ -2125,9 +2220,10 @@ export const returnClearedCheque = mutation({
         // source work is incomplete. Do NOT manufacture a `collectionPayments`
         // mirror or a customer receivable here to reuse the machinery below;
         // the two clearing paths originate different economic lineages.
-        if (cheque.applicationId) {
+        // SCRUM-447 D9: FC LINEAGE, not applicationId presence.
+        if (isFcLineage(cheque)) {
           throw new ConvexError(
-            `This cheque belongs to finance application ${cheque.applicationId}. Returning a cleared ` +
+            `This cheque belongs to finance application ${cheque.applicationId ?? cheque.originApplicationId ?? "(unlinked)"}. Returning a cleared ` +
               `finance-company cheque has to reverse that application's own receipt, receivable and ` +
               `allocation, which this customer-collection path does not own (SCRUM-239).`
           );
@@ -3186,6 +3282,9 @@ export const processDailyCollectionReminders = internalMutation({
         )
         .take(100);
       for (const cheque of cheques.filter((row) => row.chequeDate <= chequeLimit)) {
+        // SCRUM-447 D5': a finance-company cheque is never chased from the
+        // customer, whatever its receivable or applicationId says.
+        if (isFcLineage(cheque)) continue;
         const reminderId = await queueCustomerReminder(ctx, {
           orgId: org._id,
           customerId: cheque.customerId,
@@ -3218,7 +3317,12 @@ export const getReminderPayload = internalQuery({
       reminder.chequeId ? ctx.db.get(reminder.chequeId) : null,
       getOrgCurrency(ctx, reminder.orgId),
     ]);
-    return { reminder, customer, receivable, cheque, currency };
+    // SCRUM-447 D5': re-read at send time. A reminder queued before the row was
+    // recognised as finance-company (or before it was replaced) is suppressed
+    // here. This narrows the window; it cannot recall a message already handed
+    // to the provider, and no atomicity is claimed.
+    const fcLineageSuppressed = cheque ? isFcLineage(cheque) : false;
+    return { reminder, customer, receivable, cheque, currency, fcLineageSuppressed };
   },
 });
 

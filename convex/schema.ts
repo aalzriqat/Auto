@@ -901,6 +901,10 @@ export default defineSchema({
       v.literal("ALLOCATE_DEPOSIT"),
       v.literal("RESOLVE_DEPOSIT_ALLOCATION"),
       v.literal("SET_SUPPLIER_SETTLEMENT_ROUTE"),
+      // SCRUM-447: retiring a registered expected payment, and attesting the
+      // face of a legacy finance-company cheque.
+      v.literal("CORRECT_EXPECTED_PAYMENT"),
+      v.literal("ATTEST_CHEQUE_FACE"),
       v.literal("CONFIRM_SUPPLIER_DISBURSEMENT"),
       // Correcting a mistyped settlement advice. Distinct from recording one so
       // the audit trail shows an amendment as an amendment — a second
@@ -4419,7 +4423,28 @@ export default defineSchema({
     saleId: v.optional(v.id("sales")),
     // Set when this cheque is the registered expected-payment method for a
     // finance application, ahead of finalizeDeal — see registerExpectedPayment.
+    //
+    // SCRUM-447 D0 — PERMANENT LINEAGE. Once set, no writer clears it: it marks
+    // the cheque as a finance-company instrument for the rest of its life, and
+    // "active" is a STATUS question (HELD / DEPOSITED), never "is this set".
     applicationId: v.optional(v.id("financeApplications")),
+    // SCRUM-447 D1 — the cheque's FACE, as the operator recorded it (or as
+    // `attestChequeFace` attested it), in minor units of `currency`. `amount`
+    // stays the legacy display figure. A row with no `amountMinor` has an
+    // UNAVAILABLE face and can never be cleared by confirmDisbursement.
+    amountMinor: v.optional(v.number()),
+    currency: v.optional(v.string()),
+    faceAttestedBy: v.optional(v.id("users")),
+    faceAttestedAt: v.optional(v.number()),
+    // SCRUM-447 D2 — who drew it. Absent on an application-linked row means the
+    // drawer is UNVERIFIED (history cannot prove it), never "the customer".
+    drawerType: v.optional(v.literal("FINANCE_COMPANY")),
+    financeCompanyId: v.optional(v.id("financeCompanies")),
+    // Immutable lineage anchor: the application this cheque was ever opened for.
+    originApplicationId: v.optional(v.id("financeApplications")),
+    cancelledAt: v.optional(v.number()),
+    cancelledBy: v.optional(v.id("users")),
+    cancellationReason: v.optional(v.string()),
     bank: v.string(),
     chequeNumber: v.string(),
     chequeDate: v.number(),
