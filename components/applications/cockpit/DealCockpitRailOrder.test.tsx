@@ -169,18 +169,53 @@ describe("S1 -- the rendered rail shows the executable order", () => {
     expect(payment.getAttribute("aria-label")).toContain("StageStatePending");
   });
 
-  test("a closed deal with the payment pending: the payment is the one live step, last, place 8 / 8", () => {
-    renderDeal({
-      status: "CLOSED",
-      finalizedSaleId: "sale_1" as never,
-      handoverStatus: "HANDED_OVER",
-      settlementComplete: true,
-    });
+  // The state every closed financed deal is in until the finance company pays:
+  // CLOSED, handed over, and the settlement NOT complete (the money has not
+  // arrived). Production never produces `settlementComplete: true` with no
+  // `disbursedAt`, so that is not the fixture.
+  const closedAwaitingPayment = {
+    status: "CLOSED",
+    finalizedSaleId: "sale_1" as never,
+    handoverStatus: "HANDED_OVER",
+    settlementComplete: false,
+  };
+  const stateOf = (node: HTMLElement) =>
+    ["StageStateComplete", "StageStateCurrent", "StageStateBlocked", "StageStatePending", "StageStateStopped"].find(
+      (state) => (node.getAttribute("aria-label") ?? "").includes(state)
+    );
+
+  test("a closed deal awaiting the finance company: node 7 Settlement is PENDING, node 8 payment is the live step", () => {
+    renderDeal(closedAwaitingPayment);
     expect(nodes().map(label)).toEqual(EXECUTABLE_LABELS);
+    // The full node-state sequence, in displayed order.
+    expect(nodes().map(stateOf)).toEqual([
+      "StageStateComplete",
+      "StageStateComplete",
+      "StageStateComplete",
+      "StageStateComplete",
+      "StageStateComplete",
+      "StageStateComplete",
+      "StageStatePending",
+      "StageStateBlocked",
+    ]);
+    expect(number(nodes()[6])).toBe("7");
+    expect(label(nodes()[6])).toBe("StageSettlement");
     const live = nodes().filter((n) => n.getAttribute("aria-current") === "step");
     expect(live.map(label)).toEqual(["StageDisbursement"]);
     expect(live[0]).toBe(nodes().at(-1));
     expect(screen.getByTestId("deal-next-step").textContent).toContain("8 / 8");
+  });
+
+  test("UX2-F2b: the pending Settlement node says it completes after the finance company pays", () => {
+    renderDeal(closedAwaitingPayment);
+    expect(nodes()[6].getAttribute("aria-label")).toContain("BlockerSettlementAfterFinancePayment");
+  });
+
+  test("UX2-F2b: no such note on Settlement at Handover (it is waiting on the handover, not on the payment)", () => {
+    renderDeal({});
+    const settlement = nodes()[6];
+    expect(label(settlement)).toBe("StageSettlement");
+    expect(settlement.getAttribute("aria-label")).not.toContain("BlockerSettlementAfterFinancePayment");
   });
 });
 

@@ -98,17 +98,30 @@ describe("the payment confirmation is never the live step before the deal is clo
     expect(shown.findIndex((s) => s.key === "DISBURSEMENT") + 1).toBe(8);
   });
 
-  test("a closed deal whose payment is pending: only now is the payment live, and it is last", () => {
+  test("a closed deal awaiting the finance company: Settlement (7) is PENDING, payment (8) is the only live stage", () => {
+    // CLOSED + handed over + settlement NOT complete: what every closed
+    // financed deal looks like until the money arrives. (`settlementComplete:
+    // true` with no `disbursedAt` is a state production never produces.)
     const shown = orderStagesForDisplay(
       deriveDealStages(
         facts({
           status: "CLOSED",
           finalizedSaleId: "sale_1" as never,
           handoverStatus: "HANDED_OVER",
-          settlementComplete: true,
+          settlementComplete: false,
         })
       )
     );
+    expect(shown.map((s) => `${s.key}:${s.state}`)).toEqual([
+      "APPLICATION:COMPLETE",
+      "CREDIT_DECISION:COMPLETE",
+      "APPRAISAL:COMPLETE",
+      "APPROVED_PURCHASE:COMPLETE",
+      "DELIVERY_ACTIONS:COMPLETE",
+      "HANDOVER:COMPLETE",
+      "SETTLEMENT:PENDING",
+      "DISBURSEMENT:BLOCKED",
+    ]);
     expect(live(shown)).toBe("DISBURSEMENT");
     expect(shown.at(-1)?.key).toBe("DISBURSEMENT");
     expect(shown.filter((s) => s.state === "CURRENT" || s.state === "BLOCKED")).toHaveLength(1);
