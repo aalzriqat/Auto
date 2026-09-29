@@ -43,6 +43,9 @@ export type FcChequePanelProps = {
 
 const DECIMAL = /^\d+(\.\d+)?$/;
 
+/** 44px on a phone (thumb target), the compact `sm` height from `sm:` up. */
+const ACTION_SIZE = "h-11 w-full sm:h-8 sm:w-auto";
+
 export function FcChequePanel({
   canManage,
   chequeFaceUnrecorded,
@@ -106,19 +109,19 @@ export function FcChequePanel({
               : t("FcChequeRegisteredNote")}
         </p>
       </div>
-      <div className="flex flex-wrap gap-2">
+      <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap">
         {canAttest && (
-          <Button size="sm" variant="outline" onClick={() => setDialog("attest")}>
+          <Button size="sm" className={ACTION_SIZE} onClick={() => setDialog("attest")}>
             {t("FcAttestChequeFace")}
           </Button>
         )}
         {canCorrect && (
-          <Button size="sm" variant="outline" onClick={() => setDialog("correct")}>
+          <Button size="sm" variant="outline" className={ACTION_SIZE} onClick={() => setDialog("correct")}>
             {t("FcCorrectExpectedPayment")}
           </Button>
         )}
         {canRegister && (
-          <Button size="sm" onClick={onRegister}>
+          <Button size="sm" className={ACTION_SIZE} onClick={onRegister}>
             {t("RegisterExpectedPayment")}
           </Button>
         )}
@@ -144,6 +147,7 @@ export function FcChequePanel({
                 value={face}
                 inputMode="decimal"
                 dir="ltr"
+                className="h-11 sm:h-9 rtl:text-end"
                 autoComplete="off"
                 onChange={(event) => setFace(event.target.value)}
               />
@@ -168,11 +172,12 @@ export function FcChequePanel({
             </p>
           )}
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={close}>
+            <Button type="button" variant="outline" className="h-11 sm:h-9" onClick={close}>
               {t("Cancel")}
             </Button>
             <Button
               type="button"
+              className="h-11 sm:h-9"
               disabled={submitting || (dialog === "attest" ? !attestValid : !correctValid)}
               onClick={() => void submit()}
             >

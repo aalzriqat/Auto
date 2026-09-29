@@ -198,7 +198,7 @@ export function SalesModule({
     return (
       <Text style={styles.recordMeta}>
         {locale === "ar"
-          ? `صفقة ممولة — ألغِها من شاشة الصفقة على الويب (${target.reference})`
+          ? `صفقة ممولة — ألغِها من شاشة الصفقة على الويب (\u2068${target.reference}\u2069)`
           : `Financed deal — cancel it from the deal screen on the web (${target.reference})`}
       </Text>
     );

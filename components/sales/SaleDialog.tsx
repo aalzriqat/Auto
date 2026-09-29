@@ -483,7 +483,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                           <p className="text-xs text-muted-foreground" data-testid="sale-cancel-from-deal">
                             {t("FcSaleCancelFromDeal" as any)}{" "}
                             <Link
-                              className="font-medium underline underline-offset-2"
+                              className="inline-flex min-h-11 items-center font-medium underline underline-offset-2 sm:min-h-0"
                               href={`/${activeOrgId}/sales/${sale._id}/deal`}
                             >
                               {t("FcOpenDeal" as any)}
