@@ -61,6 +61,9 @@ export async function liveChequesForApplication(
   return (await chequesForApplication(ctx, applicationId)).filter(isLiveFcCheque);
 }
 
+/** SCRUM-447 B4: longest operator note kept with a face attestation. */
+export const ATTESTATION_NOTE_MAX_LENGTH = 500;
+
 /** The operator-facing next step for every customer-collection refusal. */
 export const FC_CHEQUE_DEAL_NEXT_STEP =
   "This is a finance-company cheque. It is handled from the deal, never from customer collections.";

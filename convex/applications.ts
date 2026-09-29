@@ -21,7 +21,8 @@ import {
   mayRecordSubmittedQuotation,
   projectFinanceApplication,
 } from "./utils/financeApplicationProjection";
-import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
+import { PERMISSIONS, isSystemOwnerRole, type Permission } from "./utils/permissions";
+import { throwAppError, AppErrorCode } from "./utils/errors";
 import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
 import { depositMethodValidator, type DepositMethod } from "./utils/depositRecording";
@@ -124,6 +125,7 @@ import {
   liveChequesForApplication,
   parseFaceAmountMinor,
   dealChequeCurrency,
+  ATTESTATION_NOTE_MAX_LENGTH,
 } from "./utils/fcCheque";
 import { assertFinancedDepositsSurviveParentReversal } from "./utils/depositApplications";
 import { projectDealVehicleProfile } from "./utils/dealVehicleProfile";
@@ -2117,6 +2119,15 @@ export const dealCockpit = query({
         !app.expectedPaymentRegisteredAt,
       // The registered method is a cheque (a workflow fact, no amount).
       chequePaymentRegistered: chequeMethodRegistered,
+      // SCRUM-447 B2/B4 workflow flags: a cheque payment is registered but no
+      // live cheque backs it (returned/cancelled) and it is still correctable,
+      // and a live cheque's face was attested by a finance manager.
+      chequeNeedsCorrection:
+        chequeMethodRegistered &&
+        liveFcCheques.length === 0 &&
+        app.status !== "CANCELLED" &&
+        !app.disbursedAt,
+      chequeFaceAttested: liveFcCheques.some((row) => row.faceAttestedAt !== undefined),
       // The row the attest action targets. An id, not an amount.
       unattestedChequeId:
         liveFcCheques.find((row) => row.amountMinor === undefined)?._id ?? null,
@@ -3596,10 +3607,11 @@ export const registerVehicleHandover = mutation({
 
 /**
  * Registers how and when the deal's payment is expected to arrive — cash,
- * in-house installment with the customer, a cheque (from the finance company
- * or the customer's bank), or a bank transfer — before finalizeDeal. For
- * CHEQUE this also opens a real postDatedCheques record so it flows through
- * the existing cheque lifecycle (HELD -> DEPOSITED -> CLEARED).
+ * in-house installment with the customer, a finance-company cheque, or a bank
+ * transfer — before finalizeDeal. For CHEQUE this opens a postDatedCheques
+ * record drawn by the deal's finance company (the through-dealership route
+ * only), which is cleared by confirmDisbursement, never from customer
+ * collections.
  */
 export const registerExpectedPayment = mutation({
   args: {
@@ -3616,12 +3628,32 @@ export const registerExpectedPayment = mutation({
     faceAmount: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.REGISTER_EXPECTED_PAYMENT]);
-    const app = await ctx.db.get(args.applicationId);
-    if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
+    // Membership first, the row proven to belong to the org second, and only
+    // then the permission — because which permission applies depends on the row.
+    const { user, role } = await requireTenantAuth(ctx, args.orgId);
+    const app = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId,
+      "Application not found"
+    );
     // SCRUM-447 D3: APPROVED, or CLOSED but not yet disbursed (re-registration
     // after correctExpectedPayment). A cancelled or disbursed deal never.
     const closedUndisbursed = app.status === "CLOSED" && !app.disbursedAt;
+    // SCRUM-447 B2: the operator who CORRECTS a closed deal (MANAGE_FINANCE) must
+    // be able to finish the recovery; the default ACCOUNTANT holds the former
+    // and not REGISTER_EXPECTED_PAYMENT. Either permission suffices, and only on
+    // a CLOSED, undisbursed deal — the APPROVED flow is unchanged.
+    const allowed: Permission[] = closedUndisbursed
+      ? [PERMISSIONS.REGISTER_EXPECTED_PAYMENT, PERMISSIONS.MANAGE_FINANCE]
+      : [PERMISSIONS.REGISTER_EXPECTED_PAYMENT];
+    if (!isSystemOwnerRole(role) && !allowed.some((p) => role.permissions.includes(p))) {
+      throwAppError(
+        AppErrorCode.FORBIDDEN,
+        `Forbidden: Missing required permissions: ${PERMISSIONS.REGISTER_EXPECTED_PAYMENT}`
+      );
+    }
     if (app.status !== "APPROVED" && !closedUndisbursed) {
       throw new ConvexError("Application must be APPROVED before registering expected payment.");
     }
@@ -3728,8 +3760,13 @@ export const correctExpectedPayment = mutation({
     const reason = args.reason.trim();
     if (!reason) throw new ConvexError("Give a reason for correcting the expected payment.");
 
-    const app = await ctx.db.get(args.applicationId);
-    if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
+    const app = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId,
+      "Application not found"
+    );
     if (app.status === "CANCELLED") throw new ConvexError("This application was cancelled.");
     if (app.disbursedAt) {
       throw new ConvexError(
@@ -3817,13 +3854,20 @@ export const attestChequeFace = mutation({
     orgId: v.id("organizations"),
     chequeId: v.id("postDatedCheques"),
     faceAmount: v.string(),
+    // SCRUM-447 B4: why the operator says this is the printed face. Required.
+    note: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    const cheque = await ctx.db.get(args.chequeId);
-    if (!cheque || cheque.orgId !== args.orgId || cheque.isDeleted === true) {
-      throw new ConvexError("Cheque not found.");
+    const note = args.note.trim();
+    if (!note) throw new ConvexError("Add a note saying why this face is correct.");
+    if (note.length > ATTESTATION_NOTE_MAX_LENGTH) {
+      throw new ConvexError(
+        `Keep the attestation note to ${ATTESTATION_NOTE_MAX_LENGTH} characters or fewer.`
+      );
     }
+    const cheque = await requireOwnedRow(ctx, args.orgId, "postDatedCheques", args.chequeId, "Cheque not found.");
+    if (cheque.isDeleted === true) throw new ConvexError("Cheque not found.");
     if (!cheque.applicationId) {
       throw new ConvexError("Only a finance-deal cheque can have its face attested here.");
     }
@@ -3833,8 +3877,13 @@ export const attestChequeFace = mutation({
     if (cheque.amountMinor !== undefined) {
       throw new ConvexError("This cheque's face amount is already recorded and cannot be changed.");
     }
-    const app = await ctx.db.get(cheque.applicationId);
-    if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
+    const app = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      cheque.applicationId,
+      "Application not found"
+    );
     if (app.status === "CANCELLED" || app.disbursedAt) {
       throw new ConvexError("This deal is cancelled or already disbursed.");
     }
@@ -3846,6 +3895,7 @@ export const attestChequeFace = mutation({
       currency,
       faceAttestedBy: user._id,
       faceAttestedAt: now,
+      faceAttestationNote: note,
       updatedAt: now,
     });
     await auditLog(ctx, {
@@ -3854,9 +3904,9 @@ export const attestChequeFace = mutation({
       actionType: "ATTEST_CHEQUE_FACE",
       resourceType: "postDatedCheques",
       resourceId: args.chequeId,
-      description: "Cheque face attested by a finance manager.",
+      description: `Cheque face attested by a finance manager: ${note}`,
       before: { amount: cheque.amount },
-      after: { amountMinor, currency },
+      after: { amountMinor, currency, note },
     });
     return now;
   },
@@ -4710,6 +4760,24 @@ export const confirmDisbursement = mutation({
           );
         }
 
+        // SCRUM-447 B1: confirming consumes a REGISTERED tender, never an assumed
+        // one. correctExpectedPayment clears the method and date; without this
+        // guard the bank-transfer default below would settle the deal with no
+        // tender on record. All refusals sit before the first write.
+        if (!app.expectedPaymentMethod || !app.expectedPaymentDate) {
+          throw new ConvexError(
+            "Register the expected payment (method and date) before confirming disbursement."
+          );
+        }
+        if (app.expectedPaymentMethod !== "CHEQUE") {
+          const stillLive = (await chequesForApplication(ctx, args.applicationId)).some(isLiveFcCheque);
+          if (stillLive) {
+            throw new ConvexError(
+              "This deal still has a live finance-company cheque. Correct the expected payment first."
+            );
+          }
+        }
+
         const quote = await ctx.db.get(app.quoteId);
         // Everything below settles exactly this figure in exactly this
         // currency, both proven from the deal's own records before the first
@@ -4736,7 +4804,12 @@ export const confirmDisbursement = mutation({
           if (liveRows.length === 0) {
             if (allRows.some((row) => row.status === "RETURNED" || row.status === "CANCELLED")) {
               throw new ConvexError(
-                "This cheque was returned/cancelled — register a replacement or a different payment method before confirming disbursement."
+                "This cheque was returned or cancelled. Correct the expected payment, then register the new payment, before confirming disbursement."
+              );
+            }
+            if (allRows.some((row) => row.status === "CLEARED")) {
+              throw new ConvexError(
+                "This deal's cheque is already marked cleared but the disbursement was never confirmed. Ask accounting to review it before confirming."
               );
             }
             throw new ConvexError("Expected cheque record not found for this application.");

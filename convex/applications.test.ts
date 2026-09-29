@@ -5,6 +5,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { transferFinancedAmountFromCustomerReceivable } from "./applications";
+import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 
 const MODULES = import.meta.glob("./**/*.ts");
 
@@ -1877,7 +1878,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
         applicationId,
         disbursedAmountMinor: 20_000_000,
       })
-    ).rejects.toThrow(/returned\/cancelled/i);
+    ).rejects.toThrow(/returned or cancelled\. Correct the expected payment, then register the new payment/i);
   });
 
   test("clearCheque refuses to clear a cheque that belongs to a finance application", async () => {
@@ -2170,13 +2171,33 @@ describe("SCRUM-447 D1 confirmDisbursement clears only an exactly-equal, recorde
     );
     await expect(s.confirm()).rejects.toThrow(/attest/i);
 
+    // B4: the operator must say why the face is right; a missing, blank or
+    // over-long note is refused and nothing is written.
+    for (const bad of ["", "   \n ", "x".repeat(501)]) {
+      await expect(
+        s.asUser.mutation(api.applications.attestChequeFace, {
+          orgId: s.orgId,
+          chequeId: cheque._id,
+          faceAmount: "20000",
+          note: bad,
+        })
+      ).rejects.toThrow(/note/i);
+    }
+    expect((await s.rows())[0].amountMinor).toBeUndefined();
+
     await s.asUser.mutation(api.applications.attestChequeFace, {
       orgId: s.orgId,
       chequeId: cheque._id,
       faceAmount: "20000",
+      note: "  Read off the printed instrument, matches the finance company's letter.  ",
     });
     const attested = (await s.rows())[0];
-    expect(attested).toMatchObject({ amountMinor: 20_000_000, currency: "JOD", faceAttestedBy: s.userId });
+    expect(attested).toMatchObject({
+      amountMinor: 20_000_000,
+      currency: "JOD",
+      faceAttestedBy: s.userId,
+      faceAttestationNote: "Read off the printed instrument, matches the finance company's letter.",
+    });
     expect(attested.faceAttestedAt).toBeGreaterThan(0);
     // The legacy display figure is never rewritten.
     expect(attested.amount).toBe(17000);
@@ -2187,6 +2208,7 @@ describe("SCRUM-447 D1 confirmDisbursement clears only an exactly-equal, recorde
         orgId: s.orgId,
         chequeId: cheque._id,
         faceAmount: "1",
+        note: "again",
       })
     ).rejects.toThrow(/already recorded/i);
 
@@ -2196,6 +2218,7 @@ describe("SCRUM-447 D1 confirmDisbursement clears only an exactly-equal, recorde
     const audit = await s.t.run((ctx) => ctx.db.query("financialAuditLog").collect());
     const event = audit.find((row) => row.actionType === "ATTEST_CHEQUE_FACE");
     expect(event?.before).toMatchObject({ amount: 17000 });
+    expect(event?.description).toContain("Read off the printed instrument");
   });
 
   test("exactly one live row: a second live cheque for the deal is refused", async () => {
@@ -2242,7 +2265,7 @@ describe("SCRUM-447 D1 confirmDisbursement clears only an exactly-equal, recorde
       })
     );
     await expect(
-      s.asUser.mutation(api.applications.attestChequeFace, { orgId: s.orgId, chequeId: unlinked, faceAmount: "5" })
+      s.asUser.mutation(api.applications.attestChequeFace, { orgId: s.orgId, chequeId: unlinked, faceAmount: "5", note: "n" })
     ).rejects.toThrow(/finance-deal cheque/i);
   });
 });
@@ -2333,6 +2356,176 @@ describe("SCRUM-447 D3 correcting the expected payment", () => {
     expect(rows.map((r) => r.status)).toEqual(["CANCELLED", "CLEARED"]);
     const app = await s.t.run((ctx) => ctx.db.get(s.applicationId));
     expect(app?.disbursedAt).toBeGreaterThan(0);
+  });
+
+  test("B1: after correcting a CLOSED deal, confirmDisbursement refuses with zero writes until a payment is re-registered", async () => {
+    const s = await setupApprovedDealWithCheque({ face: "20000" });
+    await s.finalize();
+    await s.asUser.mutation(api.applications.correctExpectedPayment, {
+      orgId: s.orgId,
+      applicationId: s.applicationId,
+      reason: "wrong instrument",
+    });
+    const snapshot = () =>
+      s.t.run(async (ctx) => ({
+        cheques: await ctx.db.query("postDatedCheques").collect(),
+        payments: await ctx.db.query("canonicalPayments").collect(),
+        allocations: await ctx.db.query("paymentAllocations").collect(),
+        events: await ctx.db.query("accountingEvents").collect(),
+        journals: await ctx.db.query("journalEntries").collect(),
+        app: await ctx.db.get(s.applicationId),
+      }));
+    const before = await snapshot();
+    await expect(s.confirm()).rejects.toThrow(/Register the expected payment \(method and date\)/);
+    expect(await snapshot()).toEqual(before);
+    expect(before.app?.disbursedAt).toBeUndefined();
+  });
+
+  test("B1: correct then re-register CHEQUE (new face) confirms; correct then BANK_TRANSFER confirms; a live cheque refuses a non-cheque method", async () => {
+    const cheque = await setupApprovedDealWithCheque({ face: "15000" });
+    await cheque.finalize();
+    await cheque.asUser.mutation(api.applications.correctExpectedPayment, {
+      orgId: cheque.orgId,
+      applicationId: cheque.applicationId,
+      reason: "face",
+    });
+    await cheque.registerCheque("20000", "CHQ-B1-NEW");
+    await cheque.confirm();
+    expect((await cheque.rows()).map((r) => r.status)).toEqual(["CANCELLED", "CLEARED"]);
+
+    const bank = await setupApprovedDealWithCheque({ face: "20000" });
+    await bank.finalize();
+    await bank.asUser.mutation(api.applications.correctExpectedPayment, {
+      orgId: bank.orgId,
+      applicationId: bank.applicationId,
+      reason: "switch to transfer",
+    });
+    await bank.asUser.mutation(api.applications.registerExpectedPayment, {
+      orgId: bank.orgId,
+      applicationId: bank.applicationId,
+      method: "BANK_TRANSFER",
+      expectedDate: Date.now(),
+    });
+    await bank.confirm();
+    const bankApp = await bank.t.run((ctx) => ctx.db.get(bank.applicationId));
+    expect(bankApp?.disbursedAt).toBeGreaterThan(0);
+
+    // A stored non-cheque method beside a still-live FC cheque is refused.
+    const mixed = await setupApprovedDealWithCheque({ face: "20000" });
+    await mixed.finalize();
+    await mixed.t.run((ctx) => ctx.db.patch(mixed.applicationId, { expectedPaymentMethod: "BANK_TRANSFER" }));
+    await expect(mixed.confirm()).rejects.toThrow(/still has a live finance-company cheque/i);
+    expect((await mixed.rows())[0].status).toBe("HELD");
+  });
+
+  describe("B2 closed-deal re-registration is completable by the role that corrects", () => {
+    const memberWith = async (
+      s: Awaited<ReturnType<typeof setupApprovedDealWithCheque>>,
+      roleName: string,
+      orgId = s.orgId
+    ) => {
+      const template = DEFAULT_ROLE_TEMPLATES.find((r) => r.name === roleName);
+      if (!template) throw new Error(`no template ${roleName}`);
+      const clerkId = `user_b2_${roleName}_${orgId}`;
+      const userId = await s.t.run((ctx) =>
+        ctx.db.insert("users", { clerkId, email: `${clerkId}@test.com`, name: roleName })
+      );
+      const roleId = await s.t.run((ctx) =>
+        ctx.db.insert("roles", { orgId, name: roleName, permissions: template.permissions })
+      );
+      await s.t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+      return s.t.withIdentity({ subject: clerkId, clerkId });
+    };
+    const registerBank = (as: Awaited<ReturnType<typeof memberWith>>, s: { orgId: Id<"organizations">; applicationId: Id<"financeApplications"> }) =>
+      (as.mutation as unknown as (fn: unknown, args: unknown) => Promise<unknown>)(api.applications.registerExpectedPayment, {
+        orgId: s.orgId,
+        applicationId: s.applicationId,
+        method: "BANK_TRANSFER",
+        expectedDate: Date.now(),
+      });
+
+    test("ACCOUNTANT: correct, register (CLOSED), confirm all succeed", async () => {
+      const s = await setupApprovedDealWithCheque({ face: "20000" });
+      await s.finalize();
+      const asAccountant = await memberWith(s, "ACCOUNTANT");
+      await asAccountant.mutation(api.applications.correctExpectedPayment, {
+        orgId: s.orgId,
+        applicationId: s.applicationId,
+        reason: "fix",
+      });
+      await registerBank(asAccountant, s);
+      await asAccountant.mutation(api.applications.confirmDisbursement, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId: s.orgId,
+        applicationId: s.applicationId,
+        disbursedAmountMinor: 20_000_000,
+      });
+      const app = await s.t.run((ctx) => ctx.db.get(s.applicationId));
+      expect(app?.disbursedAt).toBeGreaterThan(0);
+    });
+
+    test("ACCOUNTANT is still refused on the APPROVED flow; MANAGER registers there and on CLOSED", async () => {
+      const approved = await setupApprovedDealWithCheque({ face: "20000" });
+      await approved.asUser.mutation(api.applications.correctExpectedPayment, {
+        orgId: approved.orgId,
+        applicationId: approved.applicationId,
+        reason: "fix",
+      });
+      const acct = await memberWith(approved, "ACCOUNTANT");
+      await expect(registerBank(acct, approved)).rejects.toThrow(/Missing required permissions/);
+      const mgr = await memberWith(approved, "MANAGER");
+      await registerBank(mgr, approved);
+      expect((await approved.t.run((ctx) => ctx.db.get(approved.applicationId)))?.expectedPaymentMethod).toBe("BANK_TRANSFER");
+
+      const closed = await setupApprovedDealWithCheque({ face: "20000" });
+      await closed.finalize();
+      await closed.asUser.mutation(api.applications.correctExpectedPayment, {
+        orgId: closed.orgId,
+        applicationId: closed.applicationId,
+        reason: "fix",
+      });
+      await registerBank(await memberWith(closed, "MANAGER"), closed);
+      expect((await closed.t.run((ctx) => ctx.db.get(closed.applicationId)))?.expectedPaymentMethod).toBe("BANK_TRANSFER");
+    });
+
+    test("a member of another organization is refused on a CLOSED deal", async () => {
+      const s = await setupApprovedDealWithCheque({ face: "20000" });
+      await s.finalize();
+      await s.asUser.mutation(api.applications.correctExpectedPayment, {
+        orgId: s.orgId,
+        applicationId: s.applicationId,
+        reason: "fix",
+      });
+      const otherOrg = await s.t.run((ctx) => ctx.db.insert("organizations", { name: "Other", createdAt: Date.now() }));
+      const foreign = await memberWith(s, "ACCOUNTANT", otherOrg);
+      await expect(
+        foreign.mutation(api.applications.registerExpectedPayment, {
+          orgId: otherOrg,
+          applicationId: s.applicationId,
+          method: "BANK_TRANSFER",
+          expectedDate: Date.now(),
+        })
+      ).rejects.toThrow(/Application not found/);
+      expect((await s.t.run((ctx) => ctx.db.get(s.applicationId)))?.expectedPaymentMethod).toBeUndefined();
+    });
+  });
+
+  test("L1: a CLEARED cheque on an undisbursed deal gets the specific accounting-review message", async () => {
+    const s = await setupApprovedDealWithCheque({ face: "20000" });
+    await s.finalize();
+    const [cheque] = await s.rows();
+    await s.t.run((ctx) => ctx.db.patch(cheque._id, { status: "CLEARED", clearedAt: Date.now() }));
+    await expect(s.confirm()).rejects.toThrow(/already marked cleared but the disbursement was never confirmed/i);
+  });
+
+  test("B1: a same-key replay of a successful confirmation returns the original result", async () => {
+    const s = await setupApprovedDealWithCheque({ face: "20000" });
+    await s.finalize();
+    const key = crypto.randomUUID();
+    const args = { idempotencyKey: key, orgId: s.orgId, applicationId: s.applicationId, disbursedAmountMinor: 20_000_000 };
+    const first = await s.asUser.mutation(api.applications.confirmDisbursement, args);
+    const second = await s.asUser.mutation(api.applications.confirmDisbursement, args);
+    expect(second).toEqual(first);
   });
 
   test("a disbursed or cancelled deal cannot be corrected; a missing reason is refused", async () => {
@@ -2441,6 +2634,8 @@ describe("SCRUM-447 D7'' read-only lineage audit", () => {
         originApplicationId: applicationId,
       })
     );
+    // DEFENSIVE class: no known writer produces a marked predecessor pointing at
+    // an unmarked successor (the pre-v4 writer did the opposite, see B3 below).
     const successorOnly = await t.run((ctx) =>
       ctx.db.insert("postDatedCheques", { ...shape, chequeNumber: "A-3", status: "HELD" })
     );
@@ -2473,6 +2668,99 @@ describe("SCRUM-447 D7'' read-only lineage audit", () => {
     // UNKNOWN is reported, never folded into a clean verdict.
     expect(result.findings.filter((f) => f.verdict === "UNKNOWN").length).toBe(result.unknownCount);
     expect(result.note).toMatch(/UNKNOWN is not PASS/);
+  });
+
+  describe("B3 detached historical lineage (pre-v4 replaceCheque residue)", () => {
+    const seed = async () => {
+      const s = await setupApprovedDealWithCheque();
+      const { t, orgId, userId, customerId, applicationId } = s;
+      const auditRoleId = await t.run((ctx) =>
+        ctx.db.insert("roles", { orgId, name: "Auditor", permissions: ["view:finance"] })
+      );
+      const auditorId = await t.run((ctx) =>
+        ctx.db.insert("users", { clerkId: "user_auditor_b3", email: "aud3@test.com", name: "Auditor" })
+      );
+      await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: auditorId, roleId: auditRoleId }));
+      const asAuditor = t.withIdentity({ subject: "user_auditor_b3", clerkId: "user_auditor_b3" });
+      const now = Date.now();
+      const shape = { orgId, customerId, bank: "B", chequeDate: now, amount: 1, createdBy: userId, createdAt: now, updatedAt: now };
+      const insert = (over: Record<string, unknown>) =>
+        t.run((ctx) => ctx.db.insert("postDatedCheques", { ...shape, ...over } as never));
+      const audit = (numItems = 50) =>
+        asAuditor.query(api.chequeLineageAudit.auditFinanceCompanyCheques, {
+          orgId,
+          paginationOpts: { numItems, cursor: null },
+        });
+      const classesOf = (result: Awaited<ReturnType<typeof audit>>, id: string) =>
+        result.findings.filter((f) => f.chequeId === id).map((f) => f.class);
+      return { ...s, shape, insert, audit, classesOf, applicationId };
+    };
+
+    test("the BASE writer's shape: an unmarked REPLACED row whose successor carries the lineage is reported UNKNOWN", async () => {
+      const x = await seed();
+      // origin/main replaceCheque copied applicationId to the successor and
+      // cleared it from the old row, which became REPLACED -> successor.
+      const successor = await x.insert({ chequeNumber: "S-1", status: "HELD", applicationId: x.applicationId, drawerType: "FINANCE_COMPANY", originApplicationId: x.applicationId });
+      const old = await x.insert({ chequeNumber: "O-1", status: "REPLACED", replacementChequeId: successor });
+      const result = await x.audit();
+      expect(x.classesOf(result, old)).toEqual(["LINEAGE_DETACHED_BY_LEGACY_REPLACEMENT"]);
+      expect(result.findings.find((f) => f.chequeId === old)?.verdict).toBe("UNKNOWN");
+    });
+
+    test("a three-row chain reaching an FC row flags every unmarked link; a customer-only chain flags nothing", async () => {
+      const x = await seed();
+      const tail = await x.insert({ chequeNumber: "T-3", status: "HELD", applicationId: x.applicationId, drawerType: "FINANCE_COMPANY", originApplicationId: x.applicationId });
+      const mid = await x.insert({ chequeNumber: "T-2", status: "REPLACED", replacementChequeId: tail });
+      const head = await x.insert({ chequeNumber: "T-1", status: "REPLACED", replacementChequeId: mid });
+      const custTail = await x.insert({ chequeNumber: "C-2", status: "HELD" });
+      const custHead = await x.insert({ chequeNumber: "C-1", status: "REPLACED", replacementChequeId: custTail });
+      const result = await x.audit();
+      expect(x.classesOf(result, head)).toEqual(["LINEAGE_DETACHED_BY_LEGACY_REPLACEMENT"]);
+      expect(x.classesOf(result, mid)).toEqual(["LINEAGE_DETACHED_BY_LEGACY_REPLACEMENT"]);
+      expect(x.classesOf(result, custHead)).toEqual([]);
+      expect(x.classesOf(result, custTail)).toEqual([]);
+    });
+
+    test("a cycle, a missing successor, a foreign-org successor and an over-deep chain are UNRESOLVED, never a pass", async () => {
+      const x = await seed();
+      const p = await x.insert({ chequeNumber: "P", status: "REPLACED" });
+      const q = await x.insert({ chequeNumber: "Q", status: "REPLACED", replacementChequeId: p });
+      await x.t.run((ctx) => ctx.db.patch(p, { replacementChequeId: q }));
+
+      const gone = await x.insert({ chequeNumber: "G-2", status: "HELD" });
+      const missing = await x.insert({ chequeNumber: "G-1", status: "REPLACED", replacementChequeId: gone });
+      await x.t.run((ctx) => ctx.db.delete(gone));
+
+      const otherOrg = await x.t.run((ctx) => ctx.db.insert("organizations", { name: "Other", createdAt: Date.now() }));
+      const foreignCustomer = await x.t.run((ctx) => ctx.db.insert("customers", { orgId: otherOrg, firstName: "F", lastName: "O" }));
+      const foreignSucc = await x.t.run((ctx) =>
+        ctx.db.insert("postDatedCheques", { ...x.shape, orgId: otherOrg, customerId: foreignCustomer, chequeNumber: "F-2", status: "HELD", drawerType: "FINANCE_COMPANY" })
+      );
+      const foreign = await x.insert({ chequeNumber: "F-1", status: "REPLACED", replacementChequeId: foreignSucc });
+
+      let prev = await x.insert({ chequeNumber: "D-end", status: "HELD" });
+      let deepHead = prev;
+      for (let i = 0; i < 10; i += 1) {
+        deepHead = await x.insert({ chequeNumber: `D-${i}`, status: "REPLACED", replacementChequeId: prev });
+        prev = deepHead;
+      }
+
+      const result = await x.audit(100);
+      for (const id of [p, q, missing, foreign, deepHead]) {
+        expect(x.classesOf(result, id)).toEqual(["LINEAGE_CHAIN_UNRESOLVED"]);
+        expect(result.findings.find((f) => f.chequeId === id)?.verdict).toBe("UNKNOWN");
+      }
+    });
+
+    test("a caller-supplied page size is capped", async () => {
+      const x = await seed();
+      for (let i = 0; i < 210; i += 1) {
+        await x.insert({ chequeNumber: `N-${i}`, status: "HELD" });
+      }
+      const result = await x.audit(100_000);
+      expect(result.denominator.pageSize).toBeLessThanOrEqual(200);
+      expect(result.isDone).toBe(false);
+    });
   });
 
   test("a caller without finance visibility is refused", async () => {

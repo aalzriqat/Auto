@@ -893,6 +893,10 @@ export function DealCockpit({
   // an action that appears and then vanishes reads as a bug, and the server is
   // the authority either way.
   const canCorrectAdvice = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
+  // SCRUM-447 B2: registering the payment is a separate permission the server
+  // also accepts on a closed, undisbursed deal alongside MANAGE_FINANCE.
+  const canRegisterPayment =
+    !permissionsLoading && hasPermission(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
   // `supplierReceivables.recordReceipt` requires the same permission. Fails
   // closed while loading, and is never inferred from a role name or from
   // VIEW_FINANCE — a custom role that can read the money block cannot settle.
@@ -1964,6 +1968,11 @@ export function DealCockpit({
     if (!settlementStage || settlementStage.state === "COMPLETE") return undefined;
     if (deal.status !== "APPROVED") return undefined;
 
+    // SCRUM-447 B2: a returned/cancelled cheque leaves the payment REGISTERED
+    // (as a cheque) with nothing live behind it. Registering again would be
+    // refused; the way forward is Correct, offered by the cheque panel above.
+    if ("chequeNeedsCorrection" in deal && deal.chequeNeedsCorrection === true) return undefined;
+
     if (!expectedPaymentRegistered) {
       return {
         stageKey: "SETTLEMENT",
@@ -2945,12 +2954,13 @@ export function DealCockpit({
         },
       }}
       canCorrectAdvice={canCorrectAdvice}
+      canRegisterPayment={canRegisterPayment}
       fcCheque={{
-        onAttest: async (faceAmount) => {
+        onAttest: async (faceAmount, note) => {
           const chequeId =
             deal && "unattestedChequeId" in deal ? deal.unattestedChequeId : null;
           if (!chequeId) return;
-          await attestChequeFace({ orgId, chequeId, faceAmount });
+          await attestChequeFace({ orgId, chequeId, faceAmount, note });
           toast.success(t("FcAttestDone"));
         },
         onCorrect: async (reason) => {
@@ -3937,6 +3947,7 @@ export function DealCockpitView({
   expectedPayment,
   finalize,
   canCorrectAdvice = false,
+  canRegisterPayment = false,
   fcCheque,
   canSettleSupplier: callerMaySettleSupplier = false,
   supplierSettlementHref,
@@ -4216,9 +4227,11 @@ export function DealCockpitView({
    * action rather than offering one the server will refuse.
    */
   canCorrectAdvice?: boolean;
+  /** REGISTER_EXPECTED_PAYMENT — see `FcChequePanel.canRegisterPayment`. */
+  canRegisterPayment?: boolean;
   /** SCRUM-447: the finance-company cheque actions (MANAGE_FINANCE gates them via `canCorrectAdvice`). */
   fcCheque?: {
-    onAttest: (faceAmount: string) => Promise<void>;
+    onAttest: (faceAmount: string, note: string) => Promise<void>;
     onCorrect: (reason: string) => Promise<void>;
   };
   /**
@@ -6011,6 +6024,9 @@ export function DealCockpitView({
       {fcCheque && "chequePaymentRegistered" in deal && (
         <FcChequePanel
           canManage={canCorrectAdvice}
+          canRegisterPayment={canRegisterPayment}
+          needsCorrection={deal.chequeNeedsCorrection === true}
+          chequeFaceAttested={deal.chequeFaceAttested === true}
           chequeFaceUnrecorded={deal.chequeFaceUnrecorded}
           unattestedChequeId={deal.unattestedChequeId ?? null}
           expectedPaymentCorrectable={deal.expectedPaymentCorrectable}

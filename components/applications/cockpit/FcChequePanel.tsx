@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { getErrorMessage } from "@/lib/errors";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -29,6 +30,15 @@ import {
 export type FcChequePanelProps = {
   /** MANAGE_FINANCE. Without it the notices still show, the actions do not. */
   canManage: boolean;
+  /**
+   * REGISTER_EXPECTED_PAYMENT. On a closed, undisbursed deal the server accepts
+   * registration from this OR MANAGE_FINANCE, so either one offers the action.
+   */
+  canRegisterPayment: boolean;
+  /** A returned/cancelled cheque needs its expected payment corrected. */
+  needsCorrection: boolean;
+  /** The face was attested by a finance manager (not read from the receipt). */
+  chequeFaceAttested: boolean;
   chequeFaceUnrecorded: boolean;
   unattestedChequeId: string | null;
   expectedPaymentCorrectable: boolean;
@@ -36,7 +46,7 @@ export type FcChequePanelProps = {
   /** The deal is CLOSED, not disbursed, and no expected payment is on file. */
   needsReRegistration: boolean;
   t: (key: string) => string;
-  onAttest: (faceAmount: string) => Promise<void>;
+  onAttest: (faceAmount: string, note: string) => Promise<void>;
   onCorrect: (reason: string) => Promise<void>;
   onRegister: () => void;
 };
@@ -48,6 +58,9 @@ const ACTION_SIZE = "h-11 w-full sm:h-8 sm:w-auto";
 
 export function FcChequePanel({
   canManage,
+  canRegisterPayment,
+  needsCorrection,
+  chequeFaceAttested,
   chequeFaceUnrecorded,
   unattestedChequeId,
   expectedPaymentCorrectable,
@@ -61,19 +74,32 @@ export function FcChequePanel({
   const [dialog, setDialog] = useState<"attest" | "correct" | null>(null);
   const [face, setFace] = useState("");
   const [reason, setReason] = useState("");
+  const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const canAttest = canManage && chequeFaceUnrecorded && unattestedChequeId !== null;
-  const canCorrect = canManage && expectedPaymentCorrectable && chequePaymentRegistered;
-  const canRegister = canManage && needsReRegistration;
-  const showNotice = chequeFaceUnrecorded || needsReRegistration;
+  const canAttest =
+    canManage && chequeFaceUnrecorded && unattestedChequeId !== null;
+  const canCorrect =
+    canManage && expectedPaymentCorrectable && chequePaymentRegistered;
+  const canRegister = (canManage || canRegisterPayment) && needsReRegistration;
+  const showNotice =
+    chequeFaceUnrecorded || needsReRegistration || needsCorrection;
   if (!showNotice && !canCorrect) return null;
+
+  // B2: when the viewer lacks the permission for the step the deal is waiting
+  // on, say who acts instead of leaving a notice with nothing to press.
+  let reasonKey: string | null = null;
+  if (chequeFaceUnrecorded && !canManage) reasonKey = "FcNeedsFinanceAttest";
+  else if (needsReRegistration && !canRegister)
+    reasonKey = "FcNeedsRegisterPermission";
+  else if (needsCorrection && !canManage) reasonKey = "FcNeedsFinanceCorrect";
 
   const close = () => {
     setDialog(null);
     setFace("");
     setReason("");
+    setNote("");
     setError(null);
   };
 
@@ -81,17 +107,17 @@ export function FcChequePanel({
     setSubmitting(true);
     setError(null);
     try {
-      if (dialog === "attest") await onAttest(face.trim());
+      if (dialog === "attest") await onAttest(face.trim(), note.trim());
       else await onCorrect(reason.trim());
       close();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(getErrorMessage(caught));
     } finally {
       setSubmitting(false);
     }
   };
 
-  const attestValid = DECIMAL.test(face.trim());
+  const attestValid = DECIMAL.test(face.trim()) && note.trim().length > 0;
   const correctValid = reason.trim().length > 0;
 
   return (
@@ -100,23 +126,51 @@ export function FcChequePanel({
       data-testid="deal-fc-cheque-panel"
     >
       <div className="flex min-w-0 items-start gap-2 text-sm text-amber-900 dark:text-amber-200">
-        {showNotice && <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />}
-        <p className="min-w-0">
-          {chequeFaceUnrecorded
-            ? t("FcChequeFaceUnrecordedNotice")
-            : needsReRegistration
-              ? t("FcReRegisterNotice")
-              : t("FcChequeRegisteredNote")}
-        </p>
+        {showNotice && (
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+        )}
+        <div className="min-w-0">
+          <p className="min-w-0">
+            {chequeFaceUnrecorded
+              ? t("FcChequeFaceUnrecordedNotice")
+              : needsReRegistration
+                ? t("FcReRegisterNotice")
+                : needsCorrection
+                  ? t("FcCorrectNeededNotice")
+                  : t("FcChequeRegisteredNote")}
+            {chequeFaceAttested && (
+              <span className="ms-2 inline-flex items-center rounded-sm border border-amber-400/70 px-1.5 py-0.5 text-xs font-medium">
+                {t("FcFaceAttestedBadge")}
+              </span>
+            )}
+          </p>
+          {reasonKey && (
+            <p
+              className="mt-1 min-w-0 text-xs font-medium opacity-90"
+              data-testid="fc-reason-line"
+            >
+              {t(reasonKey)}
+            </p>
+          )}
+        </div>
       </div>
       <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap">
         {canAttest && (
-          <Button size="sm" className={ACTION_SIZE} onClick={() => setDialog("attest")}>
+          <Button
+            size="sm"
+            className={ACTION_SIZE}
+            onClick={() => setDialog("attest")}
+          >
             {t("FcAttestChequeFace")}
           </Button>
         )}
         {canCorrect && (
-          <Button size="sm" variant="outline" className={ACTION_SIZE} onClick={() => setDialog("correct")}>
+          <Button
+            size="sm"
+            variant="outline"
+            className={ACTION_SIZE}
+            onClick={() => setDialog("correct")}
+          >
             {t("FcCorrectExpectedPayment")}
           </Button>
         )}
@@ -131,10 +185,14 @@ export function FcChequePanel({
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>
-              {dialog === "attest" ? t("FcAttestChequeFace") : t("FcCorrectExpectedPayment")}
+              {dialog === "attest"
+                ? t("FcAttestChequeFace")
+                : t("FcCorrectExpectedPayment")}
             </DialogTitle>
             <DialogDescription>
-              {dialog === "attest" ? t("FcAttestChequeFaceDesc") : t("FcCorrectExpectedPaymentDesc")}
+              {dialog === "attest"
+                ? t("FcAttestChequeFaceDesc")
+                : t("FcCorrectExpectedPaymentDesc")}
             </DialogDescription>
           </DialogHeader>
           {dialog === "attest" ? (
@@ -151,7 +209,22 @@ export function FcChequePanel({
                 autoComplete="off"
                 onChange={(event) => setFace(event.target.value)}
               />
-              <p className="text-xs text-muted-foreground">{t("FcChequeFaceHelp")}</p>
+              <p className="text-xs text-muted-foreground">
+                {t("FcChequeFaceHelp")}
+              </p>
+              <label
+                htmlFor="fc-note"
+                className="block pt-2 text-sm font-medium"
+              >
+                {t("FcAttestNoteLabel")}
+              </label>
+              <Textarea
+                id="fc-note"
+                value={note}
+                maxLength={500}
+                placeholder={t("FcAttestNotePlaceholder")}
+                onChange={(event) => setNote(event.target.value)}
+              />
             </div>
           ) : (
             <div className="space-y-1">
@@ -172,13 +245,21 @@ export function FcChequePanel({
             </p>
           )}
           <DialogFooter>
-            <Button type="button" variant="outline" className="h-11 sm:h-9" onClick={close}>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11 sm:h-9"
+              onClick={close}
+            >
               {t("Cancel")}
             </Button>
             <Button
               type="button"
               className="h-11 sm:h-9"
-              disabled={submitting || (dialog === "attest" ? !attestValid : !correctValid)}
+              disabled={
+                submitting ||
+                (dialog === "attest" ? !attestValid : !correctValid)
+              }
               onClick={() => void submit()}
             >
               {submitting && <Loader2 className="h-4 w-4 animate-spin" />}

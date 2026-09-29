@@ -1,6 +1,6 @@
 import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
-import { query } from "./_generated/server";
+import { query, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -31,7 +31,14 @@ export type ChequeAuditClass =
   | "DRAWER_CONTRADICTS_APPLICATION"
   | "SEVERAL_LIVE_ROWS_FOR_APPLICATION"
   | "FC_ROW_CARRIES_CUSTOMER_RECEIVABLE"
-  | "LINEAGE_UNKNOWN_REACHABLE_ONLY_VIA_REPLACEMENT";
+  | "LINEAGE_UNKNOWN_REACHABLE_ONLY_VIA_REPLACEMENT"
+  | "LINEAGE_DETACHED_BY_LEGACY_REPLACEMENT"
+  | "LINEAGE_CHAIN_UNRESOLVED";
+
+/** Largest page a caller may ask for; each row can cost several point reads. */
+const MAX_PAGE_SIZE = 200;
+/** How many replacement links an unmarked row is followed forward. */
+const MAX_CHAIN_DEPTH = 8;
 
 interface AuditFinding {
   chequeId: Id<"postDatedCheques">;
@@ -39,6 +46,31 @@ interface AuditFinding {
   /** UNKNOWN can never be read as PASS. */
   verdict: "FINDING" | "UNKNOWN";
   detail: string;
+}
+
+/**
+ * Walks replacementChequeId forward from an unmarked row. "FC": reaches a row
+ * with finance-company lineage. "CUSTOMER": ends at a row with none. Anything
+ * else (cycle, missing row, another organisation's row, depth cap) is
+ * "UNRESOLVED".
+ */
+async function followReplacementChain(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  start: Doc<"postDatedCheques">
+): Promise<"FC" | "CUSTOMER" | "UNRESOLVED"> {
+  const seen = new Set<string>([start._id]);
+  let nextId = start.replacementChequeId;
+  for (let depth = 0; depth < MAX_CHAIN_DEPTH; depth += 1) {
+    if (nextId === undefined) return "CUSTOMER";
+    if (seen.has(nextId)) return "UNRESOLVED";
+    seen.add(nextId);
+    const next = await ctx.db.get(nextId);
+    if (!next || next.orgId !== orgId) return "UNRESOLVED";
+    if (isFcLineage(next)) return "FC";
+    nextId = next.replacementChequeId;
+  }
+  return nextId === undefined ? "CUSTOMER" : "UNRESOLVED";
 }
 
 export const auditFinanceCompanyCheques = query({
@@ -49,11 +81,13 @@ export const auditFinanceCompanyCheques = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
-    // The ONE paginated query.
+    // The ONE paginated query. The caller's page size is capped: every row can
+    // cost several point reads below.
+    const numItems = Math.min(Math.max(1, Math.floor(args.paginationOpts.numItems)), MAX_PAGE_SIZE);
     const page = await ctx.db
       .query("postDatedCheques")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .paginate(args.paginationOpts);
+      .paginate({ ...args.paginationOpts, numItems });
 
     const findings: AuditFinding[] = [];
     const push = (
@@ -76,6 +110,30 @@ export const auditFinanceCompanyCheques = query({
       // carries no lineage mark, but a finance-company row names it as its
       // replacement. History cannot prove which side it belongs to.
       if (!lineage) {
+        // Forward direction, the REAL residue: before v4, replaceCheque copied
+        // applicationId to the successor and CLEARED it from the old row, which
+        // became REPLACED -> successor. The old row now looks like a customer
+        // cheque; its finance-company origin is provable only from where the
+        // chain leads. Bounded same-org point reads; anything that cannot be
+        // walked to an end is UNKNOWN, never a pass.
+        if (row.replacementChequeId !== undefined) {
+          const outcome = await followReplacementChain(ctx, args.orgId, row);
+          if (outcome === "FC") {
+            push(
+              row,
+              "LINEAGE_DETACHED_BY_LEGACY_REPLACEMENT",
+              "UNKNOWN",
+              "Replaced before lineage was kept; its finance-company successor proves the origin."
+            );
+          } else if (outcome === "UNRESOLVED") {
+            push(
+              row,
+              "LINEAGE_CHAIN_UNRESOLVED",
+              "UNKNOWN",
+              "The replacement chain could not be followed to an end, so the origin is unknown."
+            );
+          }
+        }
         const predecessors = await ctx.db
           .query("postDatedCheques")
           .withIndex("by_replacementCheque", (q) => q.eq("replacementChequeId", row._id))

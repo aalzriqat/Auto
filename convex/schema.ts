@@ -4436,6 +4436,8 @@ export default defineSchema({
     currency: v.optional(v.string()),
     faceAttestedBy: v.optional(v.id("users")),
     faceAttestedAt: v.optional(v.number()),
+    // SCRUM-447 B4: the operator's stated reason the attested face is correct.
+    faceAttestationNote: v.optional(v.string()),
     // SCRUM-447 D2 — who drew it. Absent on an application-linked row means the
     // drawer is UNVERIFIED (history cannot prove it), never "the customer".
     drawerType: v.optional(v.literal("FINANCE_COMPANY")),

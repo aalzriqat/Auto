@@ -247,6 +247,8 @@ function financedDeal(): FinancedDealCockpitData {
     chequePaymentRegistered: false,
     expectedPaymentCorrectable: false,
     expectedPaymentReRegistrable: false,
+    chequeNeedsCorrection: false,
+    chequeFaceAttested: false,
     supplierSettlementRouteRequired: false,
     economicsRecorded: true,
     economicsStamp: "fixture-economics-stamp",

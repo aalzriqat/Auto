@@ -82,7 +82,9 @@ const FC_KEYS = [
   "FcCorrectExpectedPaymentDesc", "FcCorrectReasonLabel", "FcCorrectReasonPlaceholder",
   "FcAttestChequeFace", "FcAttestChequeFaceDesc", "FcChequeFaceUnrecordedNotice", "FcReRegisterNotice",
   "FcDrawerLine", "FcDrawerUnverified", "FcChequeBadge", "FcHandledFromDeal", "FcSaleCancelFromDeal",
-  "FcOpenDeal", "RegisterExpectedPayment", "Cancel", "Confirm",
+  "FcOpenDeal", "RegisterExpectedPayment", "Cancel", "Confirm", "FcAttestNoteLabel", "FcAttestNotePlaceholder",
+  "FcFaceAttestedBadge", "FcCorrectNeededNotice", "FcNeedsFinanceAttest", "FcNeedsFinanceCorrect",
+  "FcNeedsRegisterPermission",
 ];
 
 function tFor(locale: "en" | "ar") {
@@ -93,6 +95,9 @@ function tFor(locale: "en" | "ar") {
 function panelProps(locale: "en" | "ar", overrides: Partial<FcChequePanelProps>): FcChequePanelProps {
   return {
     canManage: true,
+    canRegisterPayment: false,
+    needsCorrection: false,
+    chequeFaceAttested: false,
     chequeFaceUnrecorded: false,
     unattestedChequeId: null,
     expectedPaymentCorrectable: false,
@@ -144,8 +149,16 @@ describe.skipIf(!GENERATE)("SCRUM-447 finance-company cheque visual fixture", ()
     const states: Record<string, Partial<FcChequePanelProps>> = {
       unattested: { chequeFaceUnrecorded: true, unattestedChequeId: "c1" },
       "unattested-readonly": { canManage: false, chequeFaceUnrecorded: true, unattestedChequeId: "c1" },
-      attested: { expectedPaymentCorrectable: true, chequePaymentRegistered: true },
+      attested: { expectedPaymentCorrectable: true, chequePaymentRegistered: true, chequeFaceAttested: true },
       reregister: { needsReRegistration: true },
+      // B2: a sales manager holds REGISTER_EXPECTED_PAYMENT only.
+      "reregister-manager": { canManage: false, canRegisterPayment: true, needsReRegistration: true },
+      "reregister-noperm": { canManage: false, canRegisterPayment: false, needsReRegistration: true },
+      "returned-finance": { needsCorrection: true, expectedPaymentCorrectable: true, chequePaymentRegistered: true },
+      "returned-manager": {
+        canManage: false, canRegisterPayment: true, needsCorrection: true,
+        expectedPaymentCorrectable: true, chequePaymentRegistered: true,
+      },
     };
     for (const [id, over] of Object.entries(states)) {
       const html = renderToStaticMarkup(<FcChequePanel {...panelProps(locale, over)} />);
@@ -164,7 +177,12 @@ describe.skipIf(!GENERATE)("SCRUM-447 finance-company cheque visual fixture", ()
       render(<FcChequePanel {...panelProps(locale, over)} />);
       fireEvent.click(screen.getByRole("button", { name: table[button] }));
       await screen.findByRole("dialog");
-      if (id === "attest-dialog") fireEvent.change(document.querySelector("#fc-face")!, { target: { value: "20000.500" } });
+      if (id === "attest-dialog") {
+        fireEvent.change(document.querySelector("#fc-face")!, { target: { value: "20000.500" } });
+        fireEvent.change(document.querySelector("#fc-note")!, {
+          target: { value: locale === "ar" ? "قُرئ من الشيك المطبوع في الملف." : "Read from the printed instrument in the file." },
+        });
+      }
       await new Promise((r) => setTimeout(r, 400));
       write(locale, id, document.body.innerHTML);
       cleanup();
