@@ -49,12 +49,19 @@ jobs:
           # Each class of frame is counted exactly, so a matrix that silently
           # shrank cannot hide behind another class that grew.
           count() { find test-results/deal-cockpit-visual -mindepth 2 -maxdepth 2 -name "$1" | wc -l; }
-          BASE="$(( $(count 'deal-cockpit-*-top.png') + $(count 'deal-cockpit-*-bottom.png') ))"
+          # '*-top.png' also matches the '*-expanded-top.png' frames, so those
+          # are counted as their own class and subtracted from the base count.
+          EXPANDED="$(count 'deal-cockpit-*-expanded-top.png')"
+          BASE="$(( $(count 'deal-cockpit-*-top.png') - EXPANDED + $(count 'deal-cockpit-*-bottom.png') ))"
           NEXT_STEP="$(count 'deal-cockpit-*-next-step.png')"
           PANEL="$(count 'deal-cockpit-*-panel.png')"
-          echo "visual gate screenshots: base $BASE, withheld-close next-step $NEXT_STEP, panel $PANEL"
+          echo "visual gate screenshots: base $BASE, expanded record $EXPANDED, withheld-close next-step $NEXT_STEP, panel $PANEL"
           if [ "$BASE" -ne 16 ]; then
             echo "expected 16 base screenshots (2 locales x 2 themes x 2 viewports x top/bottom), found $BASE" >&2
+            exit 1
+          fi
+          if [ "$EXPANDED" -ne 8 ]; then
+            echo "expected 8 expanded Deal details screenshots (2 locales x 2 themes x 2 viewports, SCRUM-417 UX3), found $EXPANDED" >&2
             exit 1
           fi
           if [ "$NEXT_STEP" -ne 16 ] || [ "$PANEL" -ne 8 ]; then

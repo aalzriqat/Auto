@@ -743,7 +743,25 @@ export function HandoverCostsPanel({
     ) : null;
 
   return (
-    <Card data-testid="deal-handover-costs" id="deal-handover-costs-panel" tabIndex={-1} className="scroll-mt-20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+    <Card
+      data-testid="deal-handover-costs"
+      id="deal-handover-costs-panel"
+      // Marks work in progress for the cockpit: a stage change that moves this
+      // panel into the collapsed record must not hide an open form or an
+      // attempt whose outcome is not known.
+      data-active-task={
+        adding ||
+        unresolved.length > 0 ||
+        payingId !== null ||
+        recordingTemplateIndex !== null ||
+        editingId !== null ||
+        voidingId !== null ||
+        reconcilingId !== null
+          ? ""
+          : undefined
+      }
+      tabIndex={-1}
+      className="scroll-mt-20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
       <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-2 pb-3">
         <div className="space-y-1">
           <CardTitle className="flex items-center gap-2 text-base">

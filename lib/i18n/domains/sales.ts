@@ -855,7 +855,11 @@ const dealWizardMessages = defineBilingualMessages({
     "يتولى المحاسب دفع مستحقات الموردين.",
   ],
   ClosingCheckGoToCosts: ["Go to handover costs", "الانتقال إلى رسوم التسليم"],
-  ClosingCheckGoToCustody: ["Go to custody", "الانتقال إلى العهدة"],});
+  ClosingCheckGoToCustody: ["Go to custody", "الانتقال إلى العهدة"],
+  // SCRUM-417 UX3 (O1): the step workbench and the collapsed record beneath it.
+  DealDetailsHeading: ["Deal details", "تفاصيل الصفقة"],
+  DealDetailsHint: ["The rest of this deal's information", "بقية معلومات الصفقة"],
+});
 
 /**
  * The deal overview, the vehicle's pre-deal cost basis, the employee cash

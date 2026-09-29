@@ -153,7 +153,13 @@ function dealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
 }
 
 function renderCockpit(deal: DealCockpitData | null | undefined = dealFixture()) {
-  return render(<DealCockpitView deal={deal} onRecordSupplierReceipt={async () => {}} />);
+  const view = render(<DealCockpitView deal={deal} onRecordSupplierReceipt={async () => {}} />);
+  // The rest of the deal sits behind "Deal details", `hidden` (out of the
+  // accessibility tree) while collapsed; these tests read what is in it, so
+  // they open it the way an operator does.
+  const toggle = screen.queryByTestId("deal-details-toggle");
+  if (toggle?.getAttribute("aria-expanded") === "false") fireEvent.click(toggle);
+  return view;
 }
 
 /**
@@ -456,7 +462,7 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
   function summaryTile(labelKey: string): string | null {
     const label = screen
       .queryAllByText(labelKey)
-      .find((el) => el.tagName === "P" && el.closest("details") === null);
+      .find((el) => el.tagName === "P" && el.closest("details, [hidden]") === null);
     return label?.parentElement?.textContent ?? null;
   }
 
@@ -538,7 +544,7 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
     );
     const tiles = screen
       .getAllByText(/^Line/)
-      .filter((el) => el.tagName === "P" && el.closest("details") === null)
+      .filter((el) => el.tagName === "P" && el.closest("details, [hidden]") === null)
       .map((el) => el.textContent);
     expect(tiles).toEqual([
       "LineApprovedPurchase",
@@ -589,7 +595,7 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
     ];
     // Tiles: one per line, server order, zeros spelled with their sign.
     const tiles = Array.from(container.querySelectorAll("p"))
-      .filter((el) => served.includes(el.textContent ?? "") && el.closest("details") === null)
+      .filter((el) => served.includes(el.textContent ?? "") && el.closest("details, [hidden]") === null)
       .map((el) => el.textContent);
     expect(tiles).toEqual(served);
     expect(summaryTile("LineCustomerPlannedToDealer")).toMatch(/LineCustomerPlannedToDealer0 د\.أ/);

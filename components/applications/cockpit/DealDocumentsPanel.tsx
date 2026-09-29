@@ -194,7 +194,13 @@ export function DealDocumentsPanel({
 
   return (
     <>
-      <Card data-testid="deal-documents">
+      <Card
+        data-testid="deal-documents"
+        // Marks work in progress for the cockpit: a stage change that moves this
+        // panel into the collapsed record must not hide an upload that is still
+        // in flight, or a file preview the operator has open.
+        data-active-task={uploadingRuleIds.size > 0 || previewFile !== null ? "" : undefined}
+      >
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <FileText className="h-4 w-4 shrink-0 text-primary" aria-hidden />

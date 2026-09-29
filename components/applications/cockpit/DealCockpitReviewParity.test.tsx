@@ -202,8 +202,21 @@ afterEach(() => {
   stubs.membershipUserId = "user_manager";
 });
 
+/**
+ * The rest of the deal sits behind the "Deal details" toggle (collapsed while the
+ * live step has a panel of its own, and `hidden` — out of the accessibility
+ * tree — while collapsed). These tests exercise the panels in it, so they open
+ * it the way an operator does. Absent while the cockpit is still a skeleton.
+ */
+function openDealDetails() {
+  const toggle = screen.queryByTestId("deal-details-toggle");
+  if (toggle?.getAttribute("aria-expanded") === "false") fireEvent.click(toggle);
+}
+
 function renderCockpit() {
-  return render(<DealCockpit orgId={ORG} applicationId={APP} />);
+  const view = render(<DealCockpit orgId={ORG} applicationId={APP} />);
+  openDealDetails();
+  return view;
 }
 
 const focusRow = () => screen.getByTestId("deal-next-step");
@@ -2103,5 +2116,58 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     expect(screen.getByTestId("deal-handover-cost-add").textContent).toContain("AdditionalCostNote");
     expect(screen.queryByLabelText("CostFigureLabel")).toBeNull();
     expect(screen.getByLabelText("CostPaidOnLabel")).toBeTruthy();
+  });
+
+  // Opus L3: an UNKNOWN add attempt whose form was cancelled is still an
+  // unresolved money command. The panel keeps its active-task marker, so a
+  // live-stage change cannot fold it away, until the attempt is acknowledged.
+  test("an UNKNOWN attempt still marks the panel as an active task after its form is cancelled, until acknowledged", async () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(COSTS_QUERY, costsPayload());
+    renderCockpit();
+    await frozenUnknownAdd();
+    expect(screen.getByTestId("deal-handover-costs").hasAttribute("data-active-task")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByTestId("deal-handover-cost-add")).toBeNull();
+    expect(screen.getByTestId("deal-handover-costs-uncertain")).toBeTruthy();
+    expect(screen.getByTestId("deal-handover-costs").hasAttribute("data-active-task")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "HandoverCostAcknowledgeChecked" }));
+    expect(screen.queryByTestId("deal-handover-costs-uncertain")).toBeNull();
+    expect(screen.getByTestId("deal-handover-costs").hasAttribute("data-active-task")).toBe(false);
+  });
+});
+
+// Opus L4: `workbenchPending` is computed by the container, from the queries it
+// actually runs. A caller who may not run the economics query never gets an
+// answer to it, so it must not count as "still loading" for them: their step
+// has no panel here and the record must be open, not an empty workbench over a
+// closed record.
+describe("workbenchPending — a caller who cannot run the economics query", () => {
+  const settlementDeal = {
+    stages: [
+      { key: "APPLICATION", state: "COMPLETE", authority: "DEALER" },
+      { key: "SETTLEMENT", state: "CURRENT", authority: "DEALER" },
+    ],
+  };
+  const isOpen = () => screen.getByTestId("deal-details-toggle").getAttribute("aria-expanded");
+
+  test("without VIEW_FINANCE_APPLICATIONS the never-answered economics query does not hold the record closed", () => {
+    queryResults.set(COCKPIT_QUERY, cockpit(settlementDeal));
+    queryResults.set(GET_QUERY, application());
+    // Deliberately not `renderCockpit`: it opens a collapsed record, which
+    // would hide exactly what is under test.
+    render(<DealCockpit orgId={ORG} applicationId={APP} />);
+    expect(isOpen()).toBe("true");
+  });
+
+  test("control: WITH VIEW_FINANCE_APPLICATIONS the same unanswered query is still loading, and the record stays closed", () => {
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    queryResults.set(COCKPIT_QUERY, cockpit(settlementDeal));
+    queryResults.set(GET_QUERY, application());
+    render(<DealCockpit orgId={ORG} applicationId={APP} />);
+    expect(isOpen()).toBe("false");
   });
 });
