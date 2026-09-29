@@ -174,9 +174,9 @@ describe("S1 -- the rendered rail shows the executable order", () => {
   // arrived). Production never produces `settlementComplete: true` with no
   // `disbursedAt`, so that is not the fixture.
   const closedAwaitingPayment = {
-    status: "CLOSED",
+    status: "CLOSED" as const,
     finalizedSaleId: "sale_1" as never,
-    handoverStatus: "HANDED_OVER",
+    handoverStatus: "HANDED_OVER" as const,
     settlementComplete: false,
   };
   const stateOf = (node: HTMLElement) =>
