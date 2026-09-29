@@ -25,7 +25,7 @@ import {
 import { ReceivableCreditKey } from "./accounting/postingRules";
 import { assertValidAccountingDate } from "./accountingPeriods";
 import { toMinorUnits, fromMinorUnits, scaleForCurrency } from "./utils/money";
-import { isFcLineage, isLiveFcCheque, parseFaceAmountMinor, dealChequeCurrency, FC_CHEQUE_DEAL_NEXT_STEP } from "./utils/fcCheque";
+import { isFcLineage, parseFaceAmountMinor, dealChequeCurrency, FC_CHEQUE_DEAL_NEXT_STEP } from "./utils/fcCheque";
 import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
@@ -266,11 +266,21 @@ async function hydrateCheque(ctx: QueryCtx, cheque: Doc<"postDatedCheques">) {
     getOptionalVehicle(ctx, cheque.vehicleId),
     cheque.receivableId ? ctx.db.get(cheque.receivableId) : null,
   ]);
+  const isFinanceCompanyCheque = isFcLineage(cheque);
+  let drawerName: string | null = null;
+  if (isFinanceCompanyCheque && cheque.drawerType === "FINANCE_COMPANY" && cheque.financeCompanyId) {
+    const drawer = await ctx.db.get(cheque.financeCompanyId);
+    if (drawer && drawer.orgId === cheque.orgId) drawerName = drawer.name;
+  }
   return {
     ...cheque,
     customerName: customerName(customer),
     vehicleLabel: vehicleLabel(vehicle),
     receivableTitle: receivable?.title,
+    // SCRUM-447 D2/D5: lineage and the named drawer, for the read side. A row
+    // with lineage but no recorded drawer is UNVERIFIED (drawerName null).
+    isFinanceCompanyCheque,
+    drawerName,
   };
 }
 

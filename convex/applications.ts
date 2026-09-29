@@ -2108,6 +2108,18 @@ export const dealCockpit = query({
        * payment can still be corrected (not cancelled, not disbursed).
        */
       chequeFaceUnrecorded,
+      // CLOSED, not disbursed, nothing registered: the state correctExpectedPayment
+      // leaves a closed deal in, where registering again is the only way forward.
+      expectedPaymentReRegistrable:
+        app.status === "CLOSED" &&
+        !app.disbursedAt &&
+        !app.expectedPaymentMethod &&
+        !app.expectedPaymentRegisteredAt,
+      // The registered method is a cheque (a workflow fact, no amount).
+      chequePaymentRegistered: chequeMethodRegistered,
+      // The row the attest action targets. An id, not an amount.
+      unattestedChequeId:
+        liveFcCheques.find((row) => row.amountMinor === undefined)?._id ?? null,
       expectedPaymentCorrectable:
         app.status !== "CANCELLED" &&
         !app.disbursedAt &&

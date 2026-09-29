@@ -719,8 +719,9 @@ describe("protected source content pins", () => {
       // SCRUM-444 RENEWAL 2026-09-29: three additive refusals (finalizeDeal, cancelApplication, updateStatus->REJECTED) via `assertNoPendingDepositRequest`; previous postimage bytes 241443, sha256 a3c4ff8ede8b112e0fdbb9748eff8daabc32e6829e7cd5a901570ab80e39c2dc. Recomputed from the file with this test's own normalization.
       // SCRUM-444 RENEWAL 2026-09-29 (2): fix round 2 — `createFromQuote` refuses to adopt a reservation that already holds a deposit (`assertReservationAdoptableWithoutDeposit`); previous postimage bytes 242587, sha256 9756ce0b6cc523161d92d9724e3e2a7e47d30b2ebd4ac28fd2c7206579a218bb. Recomputed from the file with this test's own normalization.
       // SCRUM-443 RENEWAL 2026-09-29 (handover costs paid, see the JSDoc entry above), re-applied on top of SCRUM-444 when merging origin/main 06d45b966: git auto-merged convex/applications.ts with no conflict; previous postimages 242976 / 19867f44… (main) and 241662 / d532f1c2… (SCRUM-443 branch). Recomputed from the merged file with this test's own normalization.
-      bytes: 243195,
-      sha256: "b42c6e1801d6af32ff2b66f67d46a71f30264f3b9fc7b19cbb17f36412e4e580",
+      // SCRUM-447 RENEWAL 2026-09-29: finance-company cheque lineage, exact face and lifecycle — `registerExpectedPayment` (face, CHEQUE requires companyId + non-direct route, CLOSED-not-disbursed re-registration), `confirmDisbursement` (exact-face match, refusals before any write), `cancelApplication` (resolves the deal's cheques), `finalizeDeal` (live-cheque check), `setSupplierSettlementRoute` (DIRECT refused while a live FC cheque exists), `dealCockpit` workflow flags, and the new `correctExpectedPayment` / `attestChequeFace` mutations. NOT yet reviewed by an independent seat at the time of this renewal; read the hunks. Previous postimage bytes 243195, sha256 b42c6e1801d6af32ff2b66f67d46a71f30264f3b9fc7b19cbb17f36412e4e580. Recomputed from the file with this test's own normalization.
+      bytes: 257235,
+      sha256: "f8c4cf39ddc0e4e11456de630ceb4cfc3fe929e9d5f0beeab01d042757738881",
     },
     {
       /**
