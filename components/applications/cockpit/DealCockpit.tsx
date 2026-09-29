@@ -1536,7 +1536,8 @@ export function DealCockpit({
         ? "FcCorrectNeededNotice"
         : deal?.expectedPaymentReRegistrable === true
           ? "FcReRegisterNotice"
-          : undefined;  // On the direct route the company pays the supplier, so there is no
+          : undefined;
+  // On the direct route the company pays the supplier, so there is no
   // dealership receipt to confirm — `confirmDisbursement` would invent cash.
   const canConfirmDisbursement =
     app != null &&
@@ -1927,7 +1928,8 @@ export function DealCockpit({
           onStart: () => setConfirmingDisbursement(true),
           unavailableReasonKey: chequeDisbursementBlockKey,
         };
-      }      // The currency boundary is named before permission or applicability:
+      }
+      // The currency boundary is named before permission or applicability:
       // it is a fact about the deal that no caller can act on from here.
       if (disbursementDenominationBlock && !app.disbursedAt) {
         return {
