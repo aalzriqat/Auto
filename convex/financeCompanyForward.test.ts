@@ -563,6 +563,13 @@ describe("SCRUM-435 - the cockpit shows the same proof, tiered by permission", (
     const asRole = s.t.withIdentity({ subject: "cock3_fc", clerkId: "cock3_fc" });
     const cockpit = await asRole.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
     expect(cockpit?.forward.mayCancelFinalized).toBe(false);
+    // Both sides of "the cockpit offers exactly what the server accepts".
+    const refusal = await refusalOf(
+      asRole.mutation(api.applications.cancelApplication, {
+        orgId: s.orgId, applicationId, reason: "Customer withdrew.", idempotencyKey: crypto.randomUUID(),
+      })
+    );
+    expect(refusal).toMatch(/create:finance_application/);
   });
 });
 

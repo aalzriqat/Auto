@@ -2604,6 +2604,7 @@ export function DealCockpit({
                 if (!forwardId || !kind) return;
                 // A VOID dialog opened before the transfer was confirmed must not submit after it.
                 if (kind === "VOID" && deal.forward?.transferConfirmed === true) {
+                  toast.error(t("ForwardVoidAfterTransfer"));
                   setForwardCorrection(null);
                   return;
                 }

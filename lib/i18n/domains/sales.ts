@@ -284,6 +284,10 @@ const dealRailMessages = defineBilingualMessages({
   ForwardReasonLabel: ["Reason", "السبب"],
   ForwardReasonRequired: ["A reason is required.", "السبب مطلوب."],
   ForwardCorrectionSuccess: ["Payment to the finance company corrected", "تم تصحيح الدفع لشركة التمويل"],
+  ForwardVoidAfterTransfer: [
+    "The finance company's transfer is now confirmed, so this payment can no longer be voided. If the company sent it back, report it as returned.",
+    "تم تأكيد تحويل شركة التمويل، لذا لم يعد بالإمكان إلغاء هذا الدفع. إذا أعادته الشركة، أبلغ عن إرجاعه.",
+  ],
   /** Settlement node while the payment step is live: it closes only once the money arrives. */
   BlockerSettlementAfterFinancePayment: [
     "Completes after the finance company pays",

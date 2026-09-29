@@ -97,6 +97,7 @@ vi.mock("@/components/ui/sonner", () => ({
 
 import { DealCockpit } from "./DealCockpit";
 import { PERMISSIONS } from "@/convex/utils/permissions";
+import { toast } from "@/components/ui/sonner";
 
 const { queryResults, permissions, mutationCalls } = stubs;
 
@@ -651,6 +652,37 @@ describe("disbursement - the payment to the finance company comes first", () => 
       reason: "Recorded on the wrong deal",
     });
     expect(mutationCalls.get("financeCompanyForward:reportFinanceCompanyForwardReturned")).toBeUndefined();
+  });
+
+  test("a void dialog opened before the transfer does not submit once the transfer is confirmed, and says what to do", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    const before = cockpit({
+      status: "CLOSED",
+      stages: settledStages,
+      forward: forward({ state: "SETTLED", onBooksForwardId: "fwd_1" }),
+      money: forwardMoney,
+    });
+    queryResults.set(COCKPIT_QUERY, before);
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    const view = renderCockpit();
+
+    fireEvent.click(screen.getByTestId("deal-forward-void"));
+    fireEvent.change(screen.getByLabelText("ForwardReasonLabel"), { target: { value: "Recorded on the wrong deal" } });
+    // The transfer is confirmed elsewhere while the dialog is open.
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: settledStages,
+        forward: forward({ state: "SETTLED", onBooksForwardId: "fwd_1", transferConfirmed: true }),
+        money: forwardMoney,
+      })
+    );
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+    fireEvent.click(screen.getAllByRole("button", { name: "ForwardVoidAction" }).at(-1)!);
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("ForwardVoidAfterTransfer"));
+    expect(mutationCalls.get("financeCompanyForward:reverseFinanceCompanyForward")).toBeUndefined();
   });
 
   test("ON_BOOKS after the transfer: only 'report returned' is offered - a payment cannot be voided any more", async () => {
