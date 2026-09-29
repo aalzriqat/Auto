@@ -230,9 +230,9 @@ const link = () => within(step()).queryByTestId("deal-next-step-link");
 const linkNote = () => within(step()).queryByTestId("deal-next-step-link-note");
 
 describe("S2 -- a blocked handover is never offered as an action", () => {
-  const handover = (state: "BLOCKED" | "CURRENT") =>
+  const handover = (state: "BLOCKED" | "CURRENT", status = "UNDER_REVIEW") =>
     cockpit(
-      "UNDER_REVIEW",
+      status,
       [
         { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "DEALER" },
         state === "BLOCKED"
@@ -257,6 +257,22 @@ describe("S2 -- a blocked handover is never offered as an action", () => {
     expect(stepButton()).toBeNull();
     expect(step().textContent).toContain("HandoverBlockedNeedsApproval");
     expect(step().textContent).not.toContain("HandoverNeedsPermission");
+  });
+
+  test("F1 -- an APPROVED deal whose stored handover status reads BLOCKED still offers Register handover (the server only requires APPROVED)", () => {
+    permissions.add(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
+    queryResults.set(COCKPIT_QUERY, handover("BLOCKED", "APPROVED"));
+    renderCockpit();
+    expect(stepButton()?.textContent).toBe("RegisterHandoverAction");
+    expect(step().textContent).not.toContain("HandoverBlockedNeedsApproval");
+  });
+
+  test("F1 -- the same stale-BLOCKED APPROVED deal without the permission gets the permission reason, not the approval one", () => {
+    queryResults.set(COCKPIT_QUERY, handover("BLOCKED", "APPROVED"));
+    renderCockpit();
+    expect(stepButton()).toBeNull();
+    expect(step().textContent).toContain("HandoverNeedsPermission");
+    expect(step().textContent).not.toContain("HandoverBlockedNeedsApproval");
   });
 
   test("CONTROL -- the same caller on a CURRENT handover still gets the working step", () => {
@@ -434,22 +450,51 @@ describe("S4 -- a blocker on another page links to it, for the caller who can ac
     });
   });
 
-  describe("accounting-handled supplier settlement", () => {
-    test("links to accounting for a caller who manages finance", () => {
+  describe("supplier settlement on a consigned cash sale", () => {
+    // Server-consistent: THROUGH_DEALERSHIP means `settlesDirectToSupplier` is
+    // false and the row is a payable the dealership owes (sales.ts ~2359, 2675).
+    const withPosition = (position: string) => {
+      const base = cash(false);
+      return { ...base, money: { ...base.money, parties: [{ ...SUPPLIER_ROW, position }] } };
+    };
+    const financeCaller = () => {
       permissions.add(PERMISSIONS.MANAGE_FINANCE);
       permissions.add(PERMISSIONS.VIEW_FINANCE);
-      queryResults.set("sales:dealCockpit", cash(false));
+    };
+
+    test("a payable the dealership owes links to the supplier payables page for a finance caller", () => {
+      financeCaller();
+      queryResults.set("sales:dealCockpit", withPosition("DEALERSHIP_OWES"));
       render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
-      expect(step().textContent).toContain("CashSettlementNotRecordedHere");
-      expect(link()?.getAttribute("href")).toBe(`/${ORG}/accounting`);
+      expect(step().textContent).toContain("SupplierPayableRecordedOnPayables");
+      expect(step().textContent).not.toContain("CashSettlementNotRecordedHere");
+      expect(link()?.getAttribute("href")).toBe(`/${ORG}/sourcing`);
+      expect(link()?.textContent).toContain("OpenSourcingPayablesAction");
     });
 
-    test("a caller who cannot act in accounting gets no link and is told who does", () => {
-      queryResults.set("sales:dealCockpit", cash(false));
+    test("MANAGE_FINANCE without VIEW_FINANCE cannot open the payables list, so no link", () => {
+      permissions.add(PERMISSIONS.MANAGE_FINANCE);
+      queryResults.set("sales:dealCockpit", withPosition("DEALERSHIP_OWES"));
+      render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
+      expect(link()).toBeNull();
+      expect(linkNote()?.textContent).toBe("SupplierPayablesNeedFinanceRole");
+    });
+
+    test("a caller who cannot act on finance gets no link and is told who does", () => {
+      queryResults.set("sales:dealCockpit", withPosition("DEALERSHIP_OWES"));
+      render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
+      expect(step().textContent).toContain("SupplierPayableRecordedOnPayables");
+      expect(link()).toBeNull();
+      expect(linkNote()?.textContent).toBe("SupplierPayablesNeedFinanceRole");
+    });
+
+    test("an UNKNOWN obligation is not a payable anyone can pay: note, never a link", () => {
+      financeCaller();
+      queryResults.set("sales:dealCockpit", withPosition("UNKNOWN"));
       render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
       expect(step().textContent).toContain("CashSettlementNotRecordedHere");
       expect(link()).toBeNull();
-      expect(linkNote()?.textContent).toBe("AccountingNeedsFinanceRole");
+      expect(linkNote()?.textContent).toBe("SupplierSettlementNeedsPermission");
     });
   });
 });
