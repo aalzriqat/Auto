@@ -3,7 +3,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 
 type TestConvex = ConvexTestInstance<typeof schema>;
@@ -384,5 +384,139 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
         idempotencyKey: crypto.randomUUID(),
       })
     ).rejects.toThrow();
+  });
+
+  // ── 9. L-1: STOPPED beats NOT_APPLICABLE; no orphaned PENDING; allComplete ─
+  type Stage = { key: string; state: string };
+  /** The cockpit's `allComplete`: every stage finished (COMPLETE or NOT_APPLICABLE). */
+  const allComplete = (stages: Stage[]) =>
+    stages.length > 0 && stages.every((st) => st.state === "COMPLETE" || st.state === "NOT_APPLICABLE");
+  const isLive = (st: Stage) => st.state === "CURRENT" || st.state === "BLOCKED";
+  /** A stage is never PENDING unless some stage is live to be waited on. */
+  const expectNoOrphanedPending = (stages: Stage[]) => {
+    if (stages.some((st) => st.state === "PENDING")) {
+      expect(stages.some(isLive)).toBe(true);
+    }
+  };
+
+  describe("stopped deals are STOPPED, never NOT_APPLICABLE", () => {
+    const stoppedShapes: Array<{ name: string; make: (s: Seed) => Promise<Id<"financeApplications">> }> = [
+      {
+        name: "application CANCELLED after the deal closed",
+        make: async (s) => {
+          const { applicationId } = await insertDeal(s);
+          await s.t.run((ctx) => ctx.db.patch(applicationId, { status: "CANCELLED" }));
+          return applicationId;
+        },
+      },
+      {
+        name: "application REJECTED",
+        make: async (s) => {
+          const { applicationId } = await insertDeal(s);
+          await s.t.run((ctx) => ctx.db.patch(applicationId, { status: "REJECTED" }));
+          return applicationId;
+        },
+      },
+      {
+        name: "linked sale cancelled, application still CLOSED",
+        make: async (s) => (await insertDeal(s, { sale: "CANCELLED" })).applicationId,
+      },
+      {
+        name: "application CANCELLED and linked sale cancelled",
+        make: async (s) => {
+          const { applicationId, finalizedSaleId } = await insertDeal(s);
+          await s.t.run(async (ctx) => {
+            await ctx.db.patch(applicationId, { status: "CANCELLED" });
+            await ctx.db.patch(finalizedSaleId!, { status: "CANCELLED" });
+          });
+          return applicationId;
+        },
+      },
+    ];
+
+    test.each(stoppedShapes)("$name", async ({ name, make }) => {
+      const s = await seed(`stop_${name.replace(/\W+/g, "").slice(0, 24)}`);
+      const applicationId = await make(s);
+      const { all, disbursement } = await stagesOf(s, applicationId);
+      expect(disbursement.state).toBe("STOPPED");
+      expect(all.some((st) => st.state === "NOT_APPLICABLE")).toBe(false);
+      // Nothing is left waiting: every stage is either done or stopped.
+      expect(all.every((st) => st.state === "COMPLETE" || st.state === "STOPPED")).toBe(true);
+      expect(all.some((st) => st.state === "PENDING")).toBe(false);
+      expect(allComplete(all)).toBe(false);
+    });
+
+    test("control: the identical live deal is NOT_APPLICABLE, so the shapes above differ by the stop alone", async () => {
+      const s = await seed("stop_control");
+      const { applicationId } = await insertDeal(s);
+      expect((await stagesOf(s, applicationId)).disbursement.state).toBe("NOT_APPLICABLE");
+    });
+  });
+
+  describe("no orphaned PENDING on any reachable no-company deal", () => {
+    const shapes: Array<{ name: string; opts: DealOpts; patch?: Partial<Doc<"financeApplications">> }> = [
+      { name: "pre-close", opts: { status: "APPROVED", sale: "none" } },
+      { name: "live close", opts: {} },
+      { name: "live close, legacy row", opts: { legacy: true } },
+      { name: "application cancelled", opts: {}, patch: { status: "CANCELLED" } },
+      { name: "sale cancelled", opts: { sale: "CANCELLED" } },
+      { name: "sale missing", opts: { sale: "deleted" } },
+      { name: "no sale named", opts: { sale: "none" } },
+      { name: "closed, handover not registered", opts: {}, patch: { handoverStatus: "READY" } },
+      { name: "direct route", opts: { route: "DIRECT_TO_SUPPLIER" } },
+    ];
+
+    test.each(shapes)("$name", async ({ name, opts, patch }) => {
+      const s = await seed(`orph_${name.replace(/\W+/g, "").slice(0, 24)}`);
+      const { applicationId } = await insertDeal(s, opts);
+      if (patch) await s.t.run((ctx) => ctx.db.patch(applicationId, patch));
+      const { all } = await stagesOf(s, applicationId);
+      expectNoOrphanedPending(all);
+      // The forbidden combination named in the acceptance criteria.
+      if (all.some((st) => st.state === "NOT_APPLICABLE")) {
+        expect(all.some(isLive) || allComplete(all)).toBe(true);
+      }
+    });
+  });
+
+  describe("allComplete is true only on a live COMPLETED-sale deal that is genuinely finished", () => {
+    test("live COMPLETED sale, reconciled: every stage is COMPLETE or NOT_APPLICABLE", async () => {
+      const s = await seed("ac_true");
+      const { applicationId } = await insertDeal(s, { reconciledFee: true });
+      const { all, disbursement } = await stagesOf(s, applicationId);
+      expect(disbursement.state).toBe("NOT_APPLICABLE");
+      expect(all.filter((st) => st.state !== "NOT_APPLICABLE").every((st) => st.state === "COMPLETE")).toBe(true);
+      expect(allComplete(all)).toBe(true);
+    });
+
+    test("live COMPLETED sale whose handover is not registered is NOT all complete", async () => {
+      const s = await seed("ac_handover");
+      const { applicationId } = await insertDeal(s);
+      await s.t.run((ctx) => ctx.db.patch(applicationId, { handoverStatus: "READY" }));
+      const { all, disbursement } = await stagesOf(s, applicationId);
+      expect(disbursement.state).toBe("NOT_APPLICABLE");
+      expect(allComplete(all)).toBe(false);
+      expect(all.some(isLive)).toBe(true);
+    });
+
+    test.each([
+      { name: "pre-close", opts: { status: "APPROVED", sale: "none" } as DealOpts },
+      { name: "sale cancelled", opts: { sale: "CANCELLED" } as DealOpts },
+      { name: "sale missing", opts: { sale: "deleted" } as DealOpts },
+      { name: "direct route", opts: { route: "DIRECT_TO_SUPPLIER" } as DealOpts },
+      { name: "configured finance company", opts: { mode: "CONFIGURED_FINANCE_COMPANY", configured: true } as DealOpts },
+    ])("$name is never all complete", async ({ name, opts }) => {
+      const s = await seed(`ac_false_${name.replace(/\W+/g, "").slice(0, 20)}`);
+      const { applicationId } = await insertDeal(s, opts);
+      expect(allComplete((await stagesOf(s, applicationId)).all)).toBe(false);
+    });
+
+    test("an application CANCELLED after a completed sale is never all complete", async () => {
+      const s = await seed("ac_appcancel");
+      const { applicationId } = await insertDeal(s, { reconciledFee: true });
+      expect(allComplete((await stagesOf(s, applicationId)).all)).toBe(true);
+      await s.t.run((ctx) => ctx.db.patch(applicationId, { status: "CANCELLED" }));
+      expect(allComplete((await stagesOf(s, applicationId)).all)).toBe(false);
+    });
   });
 });
