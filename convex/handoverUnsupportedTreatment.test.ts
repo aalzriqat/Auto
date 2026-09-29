@@ -126,11 +126,6 @@ async function offPlanFee(
   } as never);
 }
 
-/** SCRUM-446: a no-company deal through the dealership cannot close on unreconciled costs, so a test aimed at the LATER handover check reconciles the line first. */
-async function reconcileFee(seed: Seed, feeId: Id<"financeDealFees">) {
-  await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "Matched to the invoice." });
-}
-
 const journals = (seed: Seed) => seed.t.run(async (ctx) => (await ctx.db.query("journalEntries").collect()).length);
 
 /** Records a fee the way the LEGACY finance-company template writer does: source COMPANY_TEMPLATE, treatment and deduction frozen from the snapshot. */
@@ -157,7 +152,6 @@ async function templateFee(seed: Seed, over: Partial<{ accountingTreatment: stri
 
 /** finalizeDeal is refused with `code`, nothing is journalled or queued for the line, and the deal stays APPROVED. */
 async function expectFinalizeRefusedWithNoGl(seed: Seed, feeId: Id<"financeDealFees">, code: string, key: string) {
-  await reconcileFee(seed, feeId);
   await registerHandover(seed.asUser, api, seed.orgId, seed.applicationId);
   await seed.asUser.mutation(api.applications.registerExpectedPayment, {
     orgId: seed.orgId, applicationId: seed.applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
@@ -188,7 +182,6 @@ describe("b1 - an off-plan dealer-borne line no supported source can pay blocks 
     const served = await seed.asUser.query(api.applications.getClosingReadiness, { orgId: seed.orgId, applicationId: seed.applicationId });
     expect(served.checks.find((c) => c.key === "HANDOVER_COSTS_PAID")?.status).toBe("BLOCKED");
 
-    await reconcileFee(seed, feeId);
     await registerHandover(seed.asUser, api, seed.orgId, seed.applicationId);
     await seed.asUser.mutation(api.applications.registerExpectedPayment, {
       orgId: seed.orgId, applicationId: seed.applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),

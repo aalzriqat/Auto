@@ -83,7 +83,9 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
     return { t, orgId, userId, customerId, vehicleId, quoteId, asOwner: t.withIdentity({ subject: `fl_${tag}` }) };
   }
 
-  type Mode = "CONFIGURED_FINANCE_COMPANY" | "MANUAL_FINANCE_COMPANY" | "LEASE" | "INTERNAL_INSTALLMENT";
+  type FinancedMode = "CONFIGURED_FINANCE_COMPANY" | "MANUAL_FINANCE_COMPANY" | "LEASE" | "INTERNAL_INSTALLMENT";
+  /** `NONE`: a mode-less application (no `quoteModeAtSubmission`, and the seed quote carries no mode). */
+  type Mode = FinancedMode | "CASH" | "NONE";
 
   interface DealOpts {
     mode?: Mode;
@@ -129,7 +131,7 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
           salePrice: 10_500,
           saleDate: Date.now(),
           status: saleKind === "CANCELLED" ? "CANCELLED" : "COMPLETED",
-          financingType: mode === "LEASE" ? "LEASE" : "FINANCED",
+          financingType: mode === "LEASE" ? "LEASE" : mode === "CASH" || mode === "NONE" ? "CASH" : "FINANCED",
           ...(opts.route ? { supplierSettlementRoute: opts.route } : {}),
         })
       );
@@ -154,7 +156,7 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
         vehicleId: s.vehicleId,
         salespersonId: s.userId,
         status: opts.reconciledFee ? ("APPROVED" as const) : status,
-        quoteModeAtSubmission: mode,
+        ...(mode === "NONE" ? {} : { quoteModeAtSubmission: mode }),
         ...(companyId ? { companyId } : {}),
         economicsCurrency: "JOD",
         targetSellingAmountMinor: 12_000_000,
@@ -512,7 +514,7 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
         idempotencyKey: crypto.randomUUID(),
       });
 
-    test.each<{ name: string; mode: Mode }>([
+    test.each<{ name: string; mode: FinancedMode }>([
       { name: "a manual finance company", mode: "MANUAL_FINANCE_COMPANY" },
       { name: "a lease", mode: "LEASE" },
       { name: "an internal instalment", mode: "INTERNAL_INSTALLMENT" },
@@ -550,6 +552,19 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
       // The direct route only exists for a consigned (SOURCED) vehicle.
       await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { sourceType: "SOURCED" as const }));
       expect((await costsCheck(s, applicationId)).status).toBe("NOT_APPLICABLE");
+    });
+
+    // SCRUM-455 owns these: CASH and mode-less applications are outside the SCRUM-446 gate.
+    test.each<{ name: string; mode: "CASH" | "NONE" }>([
+      { name: "a CASH-mode deal", mode: "CASH" },
+      { name: "a mode-less application", mode: "NONE" },
+    ])("exclusion control: $name with NO cost line keeps COSTS_CLOSABLE NOT_APPLICABLE and finalizes", async ({ mode }) => {
+      const s = await seed(`cc_excl_${mode}`);
+      const applicationId = await readyToFinalize(s, { mode });
+      expect((await costsCheck(s, applicationId)).status).toBe("NOT_APPLICABLE");
+      await finalize(s, applicationId);
+      const after = await s.t.run((ctx) => ctx.db.get(applicationId));
+      expect(after?.status).toBe("CLOSED");
     });
 
     test("control: a configured company through the dealership with no cost line is still BLOCKED", async () => {

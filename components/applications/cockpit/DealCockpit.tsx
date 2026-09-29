@@ -1366,6 +1366,8 @@ export function DealCockpit({
           // caller who may confirm a finance disbursement is offered it (R1);
           // the server refuses anyone else regardless.
           canRecordDirectPayment: canConfirmFinanceDisbursement,
+          // The reconcile mutation checks the same permission (confirm:finance_disbursement).
+          canReconcile: canConfirmFinanceDisbursement,
           onRecordDirectPayment: async (feeId: string, values: DirectHandoverPayment) => {
             const intent = `record-direct-payment:${applicationId}:${feeId}:${values.intentId}`;
             try {

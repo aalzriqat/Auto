@@ -51,6 +51,8 @@ function renderPanel(
   lines: HandoverCostLine[],
   props: {
     canRecordDirectPayment?: boolean;
+    canReconcile?: boolean;
+    onReconcile?: (feeId: string, notes: string) => Promise<void>;
     onRecordDirectPayment?: (feeId: string, values: DirectHandoverPayment) => Promise<void>;
     onAbandonDirectPayment?: (feeId: string, intentId: string) => void;
     dealClosed?: boolean;
@@ -77,6 +79,8 @@ function renderPanel(
       onRecordActual={async () => {}}
       onVoid={async () => {}}
       canRecordDirectPayment={props.canRecordDirectPayment}
+      canReconcile={props.canReconcile}
+      onReconcile={props.onReconcile}
       onRecordDirectPayment={props.onRecordDirectPayment}
       onAbandonDirectPayment={props.onAbandonDirectPayment}
       postingHoldFeeIds={props.postingHoldFeeIds}
@@ -430,6 +434,23 @@ describe("a CLOSED or CANCELLED deal shows a settled or an honestly-recorded pay
     cleanup();
     renderPanel([paid()], { dealClosed: false, handoverCostsCheck: "BLOCKED" });
     expect(screen.getByTestId("deal-handover-payment-fee1").getAttribute("data-state")).toBe("PAID_DIRECT_UNCONFIRMED");
+  });
+});
+
+describe("the reconcile action follows the permission the server checks (SCRUM-446)", () => {
+  const reconcileName = salesEn.ReconcileDealFee;
+
+  test("without confirm:finance_disbursement there is no Reconcile button, and the hint says who can", () => {
+    renderPanel([line()], { canReconcile: false, onReconcile: async () => {} });
+    expect(screen.queryByRole("button", { name: reconcileName })).toBeNull();
+    expect(screen.getByTestId("deal-handover-reconcile-fee1-waiting").textContent).toBe(salesEn.ReconcileNeedsAccountant);
+    expect(salesAr.ReconcileNeedsAccountant.length).toBeGreaterThan(0);
+  });
+
+  test("with the permission the Reconcile button is offered and no hint shows", () => {
+    renderPanel([line()], { canReconcile: true, onReconcile: async () => {} });
+    expect(screen.getByRole("button", { name: reconcileName })).toBeTruthy();
+    expect(screen.queryByTestId("deal-handover-reconcile-fee1-waiting")).toBeNull();
   });
 });
 

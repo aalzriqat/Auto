@@ -1,5 +1,5 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
+import { registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -356,7 +356,7 @@ describe("Finance lifecycle Phase 4", () => {
   });
 
   test("finalizeDeal requires CONFIRM_FINANCE_DISBURSEMENT permission (SCRUM-407: accountants only)", async () => {
-    const { t, orgId, salespersonId, customerId, asLimitedUser, asFinalizer, asSalesperson } =
+    const { t, orgId, salespersonId, customerId, asLimitedUser, asFinalizer } =
       await seedFinanceLifecycleDealer("finalize");
     const { applicationId } = await seedFinanceApplication(t, {
       orgId,
@@ -376,8 +376,6 @@ describe("Finance lifecycle Phase 4", () => {
       method: "CASH",
       expectedDate: Date.now(),
     });
-    // Recording a cost takes the salesperson's authority; reconciling it takes the finalizer's.
-    await recordReconciledZeroCost(asSalesperson, api, orgId, applicationId, asFinalizer);
 
     const saleId = await asFinalizer.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId,

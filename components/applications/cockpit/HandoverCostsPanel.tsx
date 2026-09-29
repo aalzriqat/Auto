@@ -468,6 +468,7 @@ export function HandoverCostsPanel({
   onRecordTemplateActual,
   onAbandonTemplateActual,
   canRecordDirectPayment = false,
+  canReconcile = false,
   onRecordDirectPayment,
   onAbandonDirectPayment,
   postingHoldFeeIds = [],
@@ -524,6 +525,13 @@ export function HandoverCostsPanel({
    * money). Everyone else is told who can, never offered a button that refuses.
    */
   canRecordDirectPayment?: boolean;
+  /**
+   * `confirm:finance_disbursement` — the permission `reconcileDealFee` checks,
+   * which is NOT the one that records the line (`create:finance_application`).
+   * Without it a line awaiting reconciliation shows who can, never a button
+   * that refuses (SCRUM-446).
+   */
+  canReconcile?: boolean;
   /** Records the dealership's own payment of a line. Rejects with `HandoverCostAttemptError`. */
   onRecordDirectPayment?: (feeId: string, values: DirectHandoverPayment) => Promise<void>;
   /** The form closed after an attempt whose result never arrived: that identity is over. */
@@ -1017,7 +1025,12 @@ export function HandoverCostsPanel({
                               )}
                               {canManage && row.actual !== null && row.actual.currency === denomination.code && lineFor(row) && (
                                 <div className="flex gap-1">
-                                  {row.actual.status !== "RECONCILED" && onReconcile && (
+                                  {row.actual.status !== "RECONCILED" && onReconcile && !canReconcile && (
+                                    <span className="text-xs text-muted-foreground" data-testid={`deal-handover-reconcile-${row.actual.feeId}-waiting`}>
+                                      {t("ReconcileNeedsAccountant")}
+                                    </span>
+                                  )}
+                                  {row.actual.status !== "RECONCILED" && onReconcile && canReconcile && (
                                     <Button
                                       type="button"
                                       variant="ghost"
@@ -1216,7 +1229,12 @@ export function HandoverCostsPanel({
                         )}
                         {canManage && isHandoverType(line.feeType) && line.currency === denomination.code && (
                           <div className="flex gap-1">
-                            {line.actualAmountMinor !== undefined && line.status !== "RECONCILED" && onReconcile && (
+                            {line.actualAmountMinor !== undefined && line.status !== "RECONCILED" && onReconcile && !canReconcile && (
+                              <span className="text-xs text-muted-foreground" data-testid={`deal-handover-reconcile-${line._id}-waiting`}>
+                                {t("ReconcileNeedsAccountant")}
+                              </span>
+                            )}
+                            {line.actualAmountMinor !== undefined && line.status !== "RECONCILED" && onReconcile && canReconcile && (
                               <Button
                                 type="button"
                                 variant="ghost"

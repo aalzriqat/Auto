@@ -141,7 +141,6 @@ async function finalizeQuote(
     method: "CASH",
     expectedDate: Date.now(),
   });
-  await recordReconciledZeroCost(asUser, api, orgId, applicationId);
   return await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId });
 }
 

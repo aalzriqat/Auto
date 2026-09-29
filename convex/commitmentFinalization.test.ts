@@ -278,7 +278,7 @@
  */
 
 import { describe, expect, test, vi } from "vitest";
-import { convexTestWithComponents, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
@@ -637,7 +637,6 @@ async function financedSale(seed: Seed, applicationId: Id<"financeApplications">
     method: "CASH" as const,
     expectedDate: Date.now() + 86_400_000,
   });
-  await recordReconciledZeroCost(seed.asUser, api, seed.orgId, applicationId);
   return (await seed.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
     orgId: seed.orgId,
     applicationId,

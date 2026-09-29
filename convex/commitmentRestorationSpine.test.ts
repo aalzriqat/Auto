@@ -22,7 +22,7 @@
  * status by hand. The one deliberate exception is the corruption fixture in
  * S.10, which exists precisely to reproduce state no writer should produce.
  */
-import { convexTestWithComponents, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -853,7 +853,6 @@ describe("S.4 an organization without the canonical authority", () => {
       method: "CASH" as const,
       expectedDate: Date.now() + 86_400_000,
     });
-    await recordReconciledZeroCost(seed.asUser, api, seed.orgId, applicationId);
     await seed.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       applicationId,
