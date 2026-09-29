@@ -792,6 +792,86 @@ describe("disbursement - the payment to the finance company comes first", () => 
     expect(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" })).toBeTruthy();
   });
 
+  test("returned AFTER the transfer: the step reopens and offers the replacement payment", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("AwaitingForwardToFinanceCompany"),
+        forward: forward({ returnedExceptionOpen: true, transferConfirmed: true }),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED", disbursedAt: Date.UTC(2026, 8, 1) }));
+    renderCockpit();
+
+    expect(within(focusRow()).queryByRole("button", { name: "ConfirmDisbursement" })).toBeNull();
+    fireEvent.click(within(focusRow()).getByRole("button", { name: "RecordForwardToFinanceCompany" }));
+    fireEvent.change(screen.getByLabelText("DirectPaymentMethodLabel"), { target: { value: "BANK_TRANSFER" } });
+    fireEvent.click(screen.getByRole("button", { name: "RecordForwardConfirm" }));
+    await waitFor(() =>
+      expect(mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")).toHaveLength(1)
+    );
+    expect(mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")![0]).toMatchObject({
+      applicationId: APP,
+      expectedAmountMinor: 1_575_000,
+    });
+  });
+
+  test("returned AFTER the transfer without the permission: no button, the reason names who acts", () => {
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("AwaitingForwardToFinanceCompany"),
+        forward: forward({ returnedExceptionOpen: true, transferConfirmed: true, mayRecord: false }),
+        money: null,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED", disbursedAt: Date.UTC(2026, 8, 1) }));
+    renderCockpit();
+    expect(within(focusRow()).queryByRole("button")).toBeNull();
+    expect(within(focusRow()).getByText("ForwardNeedsPermission")).toBeTruthy();
+  });
+
+  test("returned AFTER the transfer while the reversal is unsettled: no button, the unsettled reason", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("ForwardNotSettled"),
+        forward: forward({ state: "NEEDS_REPAIR", returnedExceptionOpen: true, transferConfirmed: true }),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED", disbursedAt: Date.UTC(2026, 8, 1) }));
+    renderCockpit();
+    expect(within(focusRow()).queryByRole("button")).toBeNull();
+    expect(within(focusRow()).getByText("ForwardNotSettledReason")).toBeTruthy();
+  });
+
+  test("disbursed and SETTLED: no forward action is offered", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: [
+          { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+          { key: "DISBURSEMENT", state: "COMPLETE", authority: "MIRROR" },
+          { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+        ],
+        forward: forward({ state: "SETTLED", transferConfirmed: true }),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED", disbursedAt: Date.UTC(2026, 8, 1) }));
+    renderCockpit();
+    expect(screen.queryByRole("button", { name: "RecordForwardToFinanceCompany" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "ConfirmDisbursement" })).toBeNull();
+  });
   test("a finalizer who is not a manager sees who cancels, not a cancel button", () => {
     permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
     permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);

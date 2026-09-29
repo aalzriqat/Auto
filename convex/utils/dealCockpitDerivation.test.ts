@@ -886,4 +886,15 @@ describe("the disbursement stage while the dealership owes the finance company a
       expect(stages({ ...closed, forwardState }).blocker("DISBURSEMENT")).toBe("ForwardNotSettled");
     }
   });
+  test("a returned payment keeps the transfer stage open even after the transfer was confirmed", () => {
+    const after = { ...closed, disbursedAt: Date.UTC(2026, 8, 1) };
+    const open = stages({ ...after, forwardState: "DUE", forwardExceptionOpen: true });
+    expect(open.blocker("DISBURSEMENT")).toBe("AwaitingForwardToFinanceCompany");
+    expect(open.state("DISBURSEMENT")).not.toBe("COMPLETE");
+    for (const forwardState of ["POSTING_PENDING", "POSTING_FAILED", "REVERSAL_PENDING", "NEEDS_REPAIR"] as const) {
+      expect(stages({ ...after, forwardState, forwardExceptionOpen: true }).blocker("DISBURSEMENT")).toBe("ForwardNotSettled");
+    }
+    // Once the replacement settles the exception closes and the stage is complete again.
+    expect(stages({ ...after, forwardState: "SETTLED", forwardExceptionOpen: false }).state("DISBURSEMENT")).toBe("COMPLETE");
+  });
 });

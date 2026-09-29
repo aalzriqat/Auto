@@ -136,10 +136,13 @@ export const recordFinanceCompanyForward = mutation({
         if (app.status !== "CLOSED") {
           throw new ConvexError("The deal must be finalized before the payment to the finance company is recorded. A manager finalizes the deal first.");
         }
-        if (app.disbursedAt !== undefined) {
+        const proof = await deriveForwardState(ctx, app);
+        // After the transfer the ONLY payment that may still be recorded is the
+        // replacement for one the finance company sent back: the amount owed is
+        // due again and nothing else can clear it.
+        if (app.disbursedAt !== undefined && !(proof.returnedExceptionOpen && proof.state === "DUE")) {
           throw new ConvexError("The finance company's transfer is already confirmed, so this payment can no longer be recorded here. A manager reviews the deal.");
         }
-        const proof = await deriveForwardState(ctx, app);
         if (proof.state !== "DUE") {
           throw new ConvexError(
             proof.state === "SETTLED"

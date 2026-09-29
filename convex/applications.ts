@@ -1929,6 +1929,7 @@ export const dealCockpit = query({
     const forwardProof = await deriveForwardState(ctx, app);
     const stages = deriveDealStages({
       forwardState: forwardProof.state,
+      forwardExceptionOpen: forwardProof.returnedExceptionOpen,
       settlementComplete: settlementFacts.moneySettled,
       dealCancelled: settlementFacts.saleCancelled,
       status: app.status,

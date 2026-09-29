@@ -1924,7 +1924,9 @@ export function DealCockpit({
       // is settled on the books the transfer is not offered (the server refuses
       // it too); the step names who acts and, when the caller may, offers the
       // recording instead of a dead end.
-      if (forwardBlocksTransfer && !app.disbursedAt) {
+      // After the transfer the same step reopens ONLY for a returned payment
+      // (the stage stays live then); a deal whose forward is settled is never here.
+      if (forwardBlocksTransfer) {
         if (deal?.forward?.state === "DUE") {
           return {
             stageKey: "DISBURSEMENT",

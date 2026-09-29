@@ -573,3 +573,105 @@ describe("SCRUM-435 - replacement eligibility follows the same proof", () => {
     expect(await s.t.run((ctx) => ctx.db.query("financeCompanyForwards").collect())).toHaveLength(1);
   });
 });
+
+/**
+ * The finance company can send the dealership's payment back AFTER it confirmed
+ * the transfer. The amount owed is due again, and the replacement payment must be
+ * recordable (no dead end), on the same one proof, with a balanced ledger.
+ */
+describe("SCRUM-435 - returned after the transfer: the replacement payment is recordable", () => {
+  const ledger = (s: Seeded) =>
+    s.t.run(async (ctx) => {
+      const lines = await ctx.db.query("journalLines").collect();
+      let debit = 0;
+      let credit = 0;
+      let apFinance = 0;
+      for (const line of lines) {
+        if (line.orgId !== s.orgId) continue;
+        debit += line.debitMinor;
+        credit += line.creditMinor;
+        const account = await ctx.db.get(line.accountId);
+        if (account?.systemKey === "ACCOUNTS_PAYABLE_FINANCE_COMPANIES") apFinance += line.debitMinor - line.creditMinor;
+      }
+      return { debit, credit, apFinance };
+    });
+  const reportReturned = (s: Seeded, applicationId: Id<"financeApplications">, forwardId: Id<"financeCompanyForwards">) =>
+    s.owner.as.mutation(api.financeCompanyForward.reportFinanceCompanyForwardReturned, {
+      orgId: s.orgId, applicationId, forwardId, reason: "The company sent it back.", idempotencyKey: crypto.randomUUID(),
+    });
+  const railOf = async (s: Seeded, applicationId: Id<"financeApplications">) =>
+    (await s.owner.as.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId }))!;
+
+  test("record -> transfer -> returned -> replacement succeeds; SETTLED, ledger balanced, AP-Finance nets to zero", async () => {
+    const { s, applicationId } = await finalizedDeal("rat1");
+    const first = await record(s, applicationId);
+    await confirmTransfer(s, applicationId);
+    await reportReturned(s, applicationId, first);
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.disbursedAt).toBeDefined();
+    const returned = await proofOf(s, applicationId);
+    expect(returned.state).toBe("DUE");
+    expect(returned.returnedExceptionOpen).toBe(true);
+    expect((await ledger(s)).apFinance).toBe(-FORWARD);
+
+    const cockpitReturned = await railOf(s, applicationId);
+    expect(cockpitReturned.forward).toMatchObject({ state: "DUE", returnedExceptionOpen: true, transferConfirmed: true });
+    const stageOpen = cockpitReturned.stages.find((stage: { key: string }) => stage.key === "DISBURSEMENT");
+    expect(stageOpen?.state).not.toBe("COMPLETE");
+    expect(stageOpen?.blocker).toBe("AwaitingForwardToFinanceCompany");
+
+    const replacement = await record(s, applicationId);
+    expect(replacement).not.toBe(first);
+    const settled = await proofOf(s, applicationId);
+    expect(settled.state).toBe("SETTLED");
+    expect(settled.returnedExceptionOpen).toBe(false);
+    expect(settled.versions.map((v) => v.state)).toEqual(["RETURNED", "ON_BOOKS"]);
+    const books = await ledger(s);
+    expect(books.debit).toBe(books.credit);
+    expect(books.apFinance).toBe(0);
+
+    const stageClosed = (await railOf(s, applicationId)).stages.find((stage: { key: string }) => stage.key === "DISBURSEMENT");
+    expect(stageClosed?.state).toBe("COMPLETE");
+  });
+
+  test("replay of the replacement (same key) books one row and one entry", async () => {
+    const { s, applicationId } = await finalizedDeal("rat2");
+    const first = await record(s, applicationId);
+    await confirmTransfer(s, applicationId);
+    await reportReturned(s, applicationId, first);
+    const key = crypto.randomUUID();
+    const paidAt = Date.now() - 1000;
+    const one = await record(s, applicationId, { idempotencyKey: key, paidAt });
+    const two = await record(s, applicationId, { idempotencyKey: key, paidAt });
+    expect(two).toEqual(one);
+    expect(await s.t.run((ctx) => ctx.db.query("financeCompanyForwards").collect())).toHaveLength(2);
+    expect((await ledger(s)).apFinance).toBe(0);
+  });
+
+  test("control: after the transfer with the forward SETTLED (nothing returned) the record is refused", async () => {
+    const { s, applicationId } = await finalizedDeal("rat3");
+    await record(s, applicationId);
+    await confirmTransfer(s, applicationId);
+    expect(await refusalOf(record(s, applicationId))).toMatch(/transfer is already confirmed/i);
+    expect(await s.t.run((ctx) => ctx.db.query("financeCompanyForwards").collect())).toHaveLength(1);
+  });
+
+  test("control: after the transfer with the forward ON_BOOKS again a second record is refused", async () => {
+    const { s, applicationId } = await finalizedDeal("rat4");
+    const first = await record(s, applicationId);
+    await confirmTransfer(s, applicationId);
+    await reportReturned(s, applicationId, first);
+    await record(s, applicationId);
+    expect(await refusalOf(record(s, applicationId))).toMatch(/transfer is already confirmed/i);
+    expect(await s.t.run((ctx) => ctx.db.query("financeCompanyForwards").collect())).toHaveLength(2);
+  });
+
+  test("the replacement after the transfer still pins the amount and needs the permission", async () => {
+    const { s, applicationId } = await finalizedDeal("rat5");
+    const first = await record(s, applicationId);
+    await confirmTransfer(s, applicationId);
+    await reportReturned(s, applicationId, first);
+    expect(await refusalOf(record(s, applicationId, { expectedAmountMinor: FORWARD - 1 }))).toMatch(/changed since you opened/i);
+    expect(await refusalOf(record(s, applicationId, {}, s.sales.as))).not.toBeNull();
+    expect(await s.t.run((ctx) => ctx.db.query("financeCompanyForwards").collect())).toHaveLength(1);
+  });
+});

@@ -1486,6 +1486,13 @@ export interface DealStageFacts extends LifecycleFacts {
     | "POSTING_FAILED"
     | "REVERSAL_PENDING"
     | "NEEDS_REPAIR";
+  /**
+   * SCRUM-435 - true when the finance company sent the dealership's payment back
+   * and no replacement is settled (`deriveForwardState(...).returnedExceptionOpen`).
+   * The transfer stage then stays open even after the transfer was confirmed, so
+   * the amount owed is never a silent liability behind a "complete" step.
+   */
+  forwardExceptionOpen?: boolean;
 }
 
 /**
@@ -1563,7 +1570,8 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
     // because the route is not always recorded, and an unknown route must not
     // make a disbursement that demonstrably happened unreadable.
     DISBURSEMENT:
-      facts.disbursedAt !== undefined || facts.supplierDisbursementConfirmedAt !== undefined,
+      (facts.disbursedAt !== undefined || facts.supplierDisbursementConfirmedAt !== undefined) &&
+      facts.forwardExceptionOpen !== true,
     HANDOVER: handover === "HANDED_OVER",
     SETTLEMENT:
       facts.settlementComplete ??
