@@ -129,6 +129,7 @@ import {
   HandoverCostsPanel,
   type ExpectedHandoverRow,
   type ActualHandoverCost,
+  type DirectHandoverPayment,
   type HandoverCostsData,
   type HandoverCostSource,
   type NewHandoverCost,
@@ -900,6 +901,7 @@ export function DealCockpit({
   const recordDealFee = useMutation(api.financeDealCosts.recordDealFee);
   const recordTemplateFeeActual = useMutation(api.financeDealCosts.recordTemplateFeeActual);
   const recordActualFeeAmount = useMutation(api.financeDealCosts.recordActualFeeAmount);
+  const recordDirectFeePayment = useMutation(api.financeDealCosts.recordDirectFeePayment);
   const voidDealFee = useMutation(api.financeDealCosts.voidDealFee);
   const reconcileDealFee = useMutation(api.financeDealCosts.reconcileDealFee);
   const recordLegalInvoice = useMutation(api.financeDealCosts.recordLegalInvoice);
@@ -1107,6 +1109,19 @@ export function DealCockpit({
                   status: fee.status,
                   paidAt: fee.paidAt,
                   receiptReference: fee.receiptReference,
+                  // SCRUM-443: who paid it and whether it is on the books —
+                  // the server's verdict (the closing check's own module),
+                  // passed through, never re-derived here.
+                  handoverPayment: fee.handoverPayment,
+                  directPaymentEligible: fee.directPaymentEligible,
+                  directPayment: fee.directPayment
+                    ? {
+                        method: fee.directPayment.method,
+                        amountMinor: fee.directPayment.amountMinor,
+                        paidAt: fee.directPayment.paidAt,
+                        reference: fee.directPayment.reference,
+                      }
+                    : undefined,
                 })),
                 // Null over mixed rows, with the reason beside it — served as
                 // such, never turned into a zero or a cast here.
@@ -1276,6 +1291,58 @@ export function DealCockpit({
           onAbandonTemplateActual: (row: ExpectedHandoverRow) => {
             commandId.retire(`record-template-fee:${applicationId}:${row.templateIndex}`);
           },
+          // SCRUM-443: the dealership's own payment of a handover cost. Only a
+          // caller who may confirm a finance disbursement is offered it (R1);
+          // the server refuses anyone else regardless.
+          canRecordDirectPayment: canConfirmFinanceDisbursement,
+          onRecordDirectPayment: async (feeId: string, values: DirectHandoverPayment) => {
+            const intent = `record-direct-payment:${applicationId}:${feeId}:${values.intentId}`;
+            try {
+              await recordDirectFeePayment({
+                orgId,
+                feeId: feeId as Id<"financeDealFees">,
+                method: values.method,
+                paidAt: values.paidAt,
+                // The amount the operator saw when they chose to pay: the
+                // server refuses if the line has changed since (R1).
+                expectedAmountMinor: values.expectedAmountMinor,
+                reference: values.reference,
+                idempotencyKey: commandId.for(intent),
+              });
+              commandId.retire(intent);
+              toast.success(t("DirectPaymentSaved"));
+            } catch (error) {
+              // The server's own refusal rolled the mutation back: nothing
+              // committed, so the identity is released. Anything else is a lost
+              // response — the payment may exist, and the form replays it.
+              const outcome = isConvexError(error) ? "REFUSED" : "UNKNOWN";
+              if (outcome === "REFUSED") commandId.retire(intent);
+              throw new HandoverCostAttemptError(getErrorMessage(error), outcome);
+            }
+          },
+          onAbandonDirectPayment: (feeId: string, intentId: string) => {
+            commandId.retire(`record-direct-payment:${applicationId}:${feeId}:${intentId}`);
+          },
+          // The lines the server's own closing check names as waiting on the
+          // ledger: passed through, so a recorded-but-queued payment is never
+          // shown as paid. Only a blocked check names any.
+          // Undefined while readiness is loading or unavailable: nothing then
+          // says a recorded payment is on the books.
+          handoverCostsCheck: closingReadiness?.checks.find((c) => c.key === "HANDOVER_COSTS_PAID")?.status,
+          // The same discipline for a custody-paid line (SCRUM-443 v6): the row
+          // says a posting was made; only this check says it is on the books.
+          custodyLedgerCheck: closingReadiness?.checks.find((c) => c.key === "CUSTODY_ON_LEDGER")?.status,
+          // A stopped (cancelled or rejected) deal: labels follow app.status, so
+          // its direct payments read as recorded, never as settled, and none is
+          // offered. cancelApplication can leave finalizedSaleId set, so a
+          // stopped deal may also be finalized; dealClosed still governs edit
+          // notes there. Taken from the app record, not from a separately
+          // fetched eligibility flag (SCRUM-443).
+          dealStopped: app.status === "CANCELLED" || app.status === "REJECTED" ? app.status : null,
+          postingHoldFeeIds: ((): string[] => {
+            const check = closingReadiness?.checks.find((c) => c.key === "HANDOVER_COSTS_PAID");
+            return check?.status === "BLOCKED" ? (check.feeIds ?? []) : [];
+          })(),
           onRecordActual: async (feeId: string, values: ActualHandoverCost) => {
             try {
               await recordActualFeeAmount({

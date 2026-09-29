@@ -428,6 +428,9 @@ const REQUIRED_FINGERPRINT_FIELDS: Array<[string, string, string[]]> = [
   ],
   // Selects the credit account in hookEmployeeAdvancePaid.
   ["convex/payroll.ts", "payroll.recordAdvance", ["method"]],
+  // Selects the credit account (cash on hand vs bank) a direct handover payment leaves.
+  // …and the amount the approver SAW: the same key for another figure is another intent.
+  ["convex/financeDealCosts.ts", "financeDealCosts.recordDirectFeePayment", ["method", "expectedAmountMinor"]],
 ];
 
 describe("SCRUM-57 — fields whose omission was a reproduced defect stay hashed", () => {
@@ -547,6 +550,7 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
     "recordCustodyMovement",
     "migrateLegacyCustodyToLedger",
     "reconcileDealCustody",
+    "recordDirectFeePayment",
   ],
   "./paymentIntents": ["create", "markSettled"],
   "./payroll": ["recordAdvance", "recoverAdvance"],
@@ -624,7 +628,11 @@ describe("SCRUM-57 — classification ratchet", () => {
     //
     // 42 -> 44 by SCRUM-444 deposit requests:
     // +depositRequests.request and +depositRequests.confirm.
-    expect(checked).toBe(44);
+    // 44 -> 45 by SCRUM-443 handover costs paid:
+    // +financeDealCosts.recordDirectFeePayment, the dealership's own payment of
+    // a handover cost (HANDOVER_COST_PAID_DIRECT) — runWithIdempotency with
+    // economic: true, method/date/reference/actual in its fingerprint.
+    expect(checked).toBe(45);
   });
 
   /**
@@ -687,9 +695,10 @@ describe("SCRUM-57 — classification ratchet", () => {
     // The denominator, asserted rather than described.
     // 40 -> 42 / 41 -> 43: SCRUM-389's two supplier-cost-recovery commands.
     // 42 -> 44 / 43 -> 45: SCRUM-444's `depositRequests.request` and `.confirm`.
-    expect(economicInSource.size).toBe(44);
+    // 44 -> 45 / 45 -> 46: SCRUM-443's `financeDealCosts.recordDirectFeePayment`.
+    expect(economicInSource.size).toBe(45);
     expect([...nonEconomicInSource].sort()).toEqual(["sales.createDraft"]);
-    expect(economicInSource.size + nonEconomicInSource.size).toBe(45);
+    expect(economicInSource.size + nonEconomicInSource.size).toBe(46);
   });
 
   /**

@@ -3809,6 +3809,8 @@ function closingReasonView(reason: ClosingReadinessReason | null): ClosingReason
 type ClosingReadinessCheckView = ClosingReasonView & {
   key: ClosingReadinessCheckKey;
   status: ClosingReadinessCheck["status"];
+  /** The cost lines a BLOCKED check is about (`HANDOVER_COSTS_PAID`), by id — never amounts, so served whole below the finance tier. */
+  feeIds?: string[];
 };
 
 /**
@@ -3862,9 +3864,10 @@ export const getClosingReadiness = query({
       }
     }
 
-    const checks: ClosingReadinessCheckView[] = readiness.checks.map(({ key, status, reason }) => ({
+    const checks: ClosingReadinessCheckView[] = readiness.checks.map(({ key, status, reason, feeIds }) => ({
       key,
       status,
+      ...(feeIds === undefined ? {} : { feeIds }),
       ...closingReasonView(redactClosingReason(reason, mayReadMoney, withheldReasonCode(key))),
     }));
     const why = closingReasonView(redactClosingReason(unavailable, mayReadMoney, "WITHHELD_UNAVAILABLE"));

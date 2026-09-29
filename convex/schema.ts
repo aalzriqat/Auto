@@ -25,6 +25,7 @@ import {
   quotationSourceValidator,
   settlementStatusValidator,
 } from "./utils/financingEconomics";
+import { directPaymentValidator } from "./utils/handoverCostPayment";
 import { consignedSettlementRouteValidator } from "./utils/vehicleOwnership";
 
 const organizationDeletionRequestStatus = v.union(
@@ -3201,6 +3202,21 @@ export default defineSchema({
     ),
     /** The highest custody posting version ever used on this line — never reused after a reversal. */
     custodyPostingVersion: v.optional(v.number()),
+    /**
+     * SCRUM-443. What of this line is ON THE BOOKS as a DIRECT dealership
+     * payment right now, or absent when nothing is: the dealership itself paid
+     * the cost (cash, bank transfer, cheque issued, card), recorded by
+     * somebody who may confirm a finance disbursement. `HANDOVER_COST_PAID_DIRECT`
+     * posts once per version against `financeDealFees/<id>` (DR the treatment's
+     * expense / CR the outbound cash or bank account); an amount edit or a void
+     * reverses the live version and leaves the line unpaid again — there is no
+     * automatic re-post. Mutually exclusive with `custodyPosted`: no writer
+     * changes `paidBy`, and only a DEALER line can be paid this way.
+     * Legacy rows carry none and simply read as unpaid.
+     */
+    directPayment: v.optional(directPaymentValidator),
+    /** The highest direct-payment posting version ever used on this line — never reused after a reversal. */
+    directPaymentVersion: v.optional(v.number()),
     paidAt: v.optional(v.number()),
     receiptReference: v.optional(v.string()),
     documentStorageIds: v.optional(v.array(v.id("_storage"))),
@@ -3255,6 +3271,15 @@ export default defineSchema({
     // line whose reversal was deferred) — without the unbounded read of
     // every removed row the deal ever had.
     .index("by_application_custodyPostingVersion", ["applicationId", "custodyPostingVersion"])
+    // Every line of a deal that has EVER carried a direct dealership payment
+    // (SCRUM-443), live, zero-edited or removed: `directPaymentVersion` is set
+    // by the one writer that posts one (`recordDirectFeePayment`) and never
+    // unset, so `.gt("directPaymentVersion", 0)` after the application equality
+    // enumerates exactly the lines whose `HANDOVER_COST_PAID_DIRECT` family the
+    // closing gate must prove OFF the books — a voided or zeroed line's
+    // reversal may still be queued behind a closed period, and the row no
+    // longer says so.
+    .index("by_application_directPaymentVersion", ["applicationId", "directPaymentVersion"])
     // The one LIVE line per configured position. `recordTemplateFeeActual`
     // proves uniqueness against this index with every field an equality —
     // `voidedAt` last, so `undefined` (live) is the one value asked for — and

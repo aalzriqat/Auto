@@ -696,13 +696,31 @@ describe("protected source content pins", () => {
        * independent seat at the time of this renewal. Read the hunks; do not
        * take this note's word for them. Same governance; both constants
        * recomputed FROM THE FILE with this test's own normalization.
+       *
+       * -- RENEWAL 2026-09-29 - SCRUM-443 handover costs paid (readiness carries line ids)
+       *
+       * Previous postimage, superseded by this entry (renewal (7) just above):
+       *
+       *   bytes:  241443
+       *   sha256: a3c4ff8ede8b112e0fdbb9748eff8daabc32e6829e7cd5a901570ab80e39c2dc
+       *
+       * The delta, 4 insertions and 1 deletion, passes the new check's
+       * `feeIds` through `getClosingReadiness`: the view type gains an optional
+       * `feeIds?: string[]` and the mapper forwards it when the evaluator set
+       * one (only `HANDOVER_COSTS_PAID` does). Ids only, never an amount or a
+       * param. No permission, schema, index, posting or idempotency change;
+       * `finalizeDeal` is untouched. NOT yet reviewed by an independent seat
+       * at the time of this renewal. Read the hunks; do not take this note's
+       * word for them. Same governance; both constants recomputed FROM THE
+       * FILE with this test's own normalization.
        */
       file: "convex/applications.ts",
       // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)), then for SCRUM-407 automatic closing readiness (RENEWALs 2026-09-28, 2026-09-28 (2), (3) and (4)), then for SCRUM-414 readiness reason codes (RENEWALs 2026-09-28 (5), (6) and (7)).
       // SCRUM-444 RENEWAL 2026-09-29: three additive refusals (finalizeDeal, cancelApplication, updateStatus->REJECTED) via `assertNoPendingDepositRequest`; previous postimage bytes 241443, sha256 a3c4ff8ede8b112e0fdbb9748eff8daabc32e6829e7cd5a901570ab80e39c2dc. Recomputed from the file with this test's own normalization.
       // SCRUM-444 RENEWAL 2026-09-29 (2): fix round 2 — `createFromQuote` refuses to adopt a reservation that already holds a deposit (`assertReservationAdoptableWithoutDeposit`); previous postimage bytes 242587, sha256 9756ce0b6cc523161d92d9724e3e2a7e47d30b2ebd4ac28fd2c7206579a218bb. Recomputed from the file with this test's own normalization.
-      bytes: 242976,
-      sha256: "19867f443ea7c20307655278a552651139714974828aa8738eb36bed14c11782",
+      // SCRUM-443 RENEWAL 2026-09-29 (handover costs paid, see the JSDoc entry above), re-applied on top of SCRUM-444 when merging origin/main 06d45b966: git auto-merged convex/applications.ts with no conflict; previous postimages 242976 / 19867f44… (main) and 241662 / d532f1c2… (SCRUM-443 branch). Recomputed from the merged file with this test's own normalization.
+      bytes: 243195,
+      sha256: "b42c6e1801d6af32ff2b66f67d46a71f30264f3b9fc7b19cbb17f36412e4e580",
     },
     {
       /**

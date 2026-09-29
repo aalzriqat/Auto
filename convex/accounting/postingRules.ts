@@ -80,6 +80,9 @@ export type EventType =
   // The delta that keeps the employee's out-of-pocket position in the
   // liability account rather than as a credit on the clearing asset.
   | "CUSTODY_PAYABLE_RECLASSIFIED"
+  // SCRUM-443: a handover cost the DEALERSHIP paid directly (not out of an
+  // employee's custody), one event per (fee line, version).
+  | "HANDOVER_COST_PAID_DIRECT"
   | "JOURNAL_REVERSAL";
 
 export const ALL_EVENT_TYPES = new Set<string>([
@@ -106,6 +109,7 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "EMPLOYEE_ADVANCE_PAID", "EMPLOYEE_ADVANCE_RECOVERED", "PAYROLL_ACCRUED", "PAYROLL_PAID",
   "CUSTODY_CASH_ISSUED", "CUSTODY_CASH_RETURNED", "CUSTODY_REIMBURSED", "CUSTODY_FEE_PAID", "CUSTODY_WRITTEN_OFF",
   "CUSTODY_PAYABLE_RECLASSIFIED",
+  "HANDOVER_COST_PAID_DIRECT",
   // JOURNAL_REVERSAL is intentionally excluded: it is written directly by
   // reverseAccountingEvent() in reversals.ts and never goes through postAccountingEvent().
 ]);
@@ -158,7 +162,7 @@ function cashAccountKey(
 // means the dealership ISSUES a cheque — crediting BANK_ACCOUNT (not
 // CHEQUES_IN_HAND, which is strictly an asset of customer cheques physically
 // held by the dealership). cashAccountKey is the inbound mapper.
-function disbursementAccountKey(method: string | undefined): SystemKey {
+export function disbursementAccountKey(method: string | undefined): SystemKey {
   if (method === "CHEQUE") return SYSTEM_KEYS.BANK_ACCOUNT;
   if (method === "BANK_TRANSFER") return SYSTEM_KEYS.BANK_ACCOUNT;
   if (method === "CARD") return SYSTEM_KEYS.BANK_ACCOUNT;
@@ -2792,6 +2796,57 @@ export function ruleCustodyFeePaid(p: CustodyFeePaidPayload): RuleResult {
   };
 }
 
+/** A handover cost the dealership paid directly, at its recorded actual (SCRUM-443). */
+export interface HandoverCostPaidDirectPayload {
+  feeId: string;
+  applicationId: string;
+  vehicleId?: string;
+  feeType: string;
+  accountingTreatment: FeeAccountingTreatment;
+  amountMinor: number;
+  currency: string;
+  /** How the money left: REQUIRED, never defaulted — see the rule. */
+  paymentMethod: string;
+}
+
+/**
+ * Dr the fee's canonical expense account (the SAME one `ruleCustodyFeePaid`
+ * and the financed-sale plan debit for that treatment) / Cr the OUTBOUND cash
+ * or bank account the dealership paid from. Posted exactly once per live
+ * (fee, amount) — a corrected amount or a void is a reversal, never a second
+ * forward entry beside the first.
+ *
+ * ⚠️ The credit is `disbursementAccountKey`, NOT `cashAccountKey`: this is money
+ * LEAVING the dealership, and a cheque here is one the dealership ISSUED
+ * (credit the bank), never one it holds (`CHEQUES_IN_HAND`). The method is
+ * refused when it is not one of the four the command admits — an absent method
+ * silently falling to CASH_ON_HAND is exactly the wrong-account posting the
+ * command's required argument exists to prevent.
+ */
+export function ruleHandoverCostPaidDirect(p: HandoverCostPaidDirectPayload): RuleResult {
+  assertCustodyAmount(p, "HANDOVER_COST_PAID_DIRECT");
+  if (
+    p.paymentMethod !== "CASH" &&
+    p.paymentMethod !== "BANK_TRANSFER" &&
+    p.paymentMethod !== "CHEQUE" &&
+    p.paymentMethod !== "CARD"
+  ) {
+    throw new Error(
+      `HANDOVER_COST_PAID_DIRECT carries a payment method that is not CASH, BANK_TRANSFER, CHEQUE or CARD (${String(p.paymentMethod)}) — refusing to post.`
+    );
+  }
+  const expense = custodyFeeExpenseKey(p.accountingTreatment);
+  if (expense.systemKey === null) throw new Error(expense.refusal);
+  return {
+    lines: [
+      line(expense.systemKey, p.amountMinor, 0, `Handover cost (${p.feeType}) paid directly by the dealership`, { vehicleId: p.vehicleId }),
+      line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor, "Handover cost paid by the dealership"),
+    ],
+    memo: "Handover cost paid directly by the dealership",
+    category: "SYSTEM",
+  };
+}
+
 export interface CustodyWrittenOffPayload {
   custodyId: string;
   applicationId: string;
@@ -2911,6 +2966,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "CUSTODY_CASH_RETURNED": return ruleCustodyCashReturned(payload as unknown as CustodyCashPayload);
     case "CUSTODY_REIMBURSED": return ruleCustodyReimbursed(payload as unknown as CustodyCashPayload);
     case "CUSTODY_FEE_PAID": return ruleCustodyFeePaid(payload as unknown as CustodyFeePaidPayload);
+    case "HANDOVER_COST_PAID_DIRECT": return ruleHandoverCostPaidDirect(payload as unknown as HandoverCostPaidDirectPayload);
     case "CUSTODY_WRITTEN_OFF": return ruleCustodyWrittenOff(payload as unknown as CustodyWrittenOffPayload);
     case "CUSTODY_PAYABLE_RECLASSIFIED": return ruleCustodyPayableReclassified(payload as unknown as CustodyPayableReclassifiedPayload);
     default:

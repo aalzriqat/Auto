@@ -561,6 +561,100 @@ const dealRailMessages = defineBilingualMessages({
   CostStatusActual: ["Actual recorded", "فعلي مسجّل"],
   CostStatusReconciled: ["Reconciled", "مُطابَق"],
   CostStatusVoid: ["Void", "ملغى"],
+  // SCRUM-443 — who paid a handover cost, and how the dealership records paying one itself.
+  HandoverPaymentPaidCustody: ["Paid from custody", "مدفوع من العهدة"],
+  // A custody charge is on the row but its posting has not been confirmed on the
+  // ledger (an accounting period is closed, or the queue has not processed it).
+  HandoverPaymentCustodyRecorded: ["Recorded — waiting for posting", "مسجَّل — بانتظار الترحيل"],
+  HandoverPaymentUnsupportedTreatment: [
+    "This cost's accounting treatment cannot be paid or posted, so it would never reach the books. Remove it and add it again as an ownership transfer, insurance or selling expense; it is then settled from the employee's custody or by a direct dealership payment, as applicable.",
+    "المعالجة المحاسبية لهذا المصروف لا يمكن دفعها أو ترحيلها، فلن يصل إلى الدفاتر أبدًا. احذفه وأضفه من جديد كمصروف نقل ملكية أو تأمين أو بيع؛ وعندئذٍ تتم تسويته من عهدة الموظف أو بدفع مباشر من المعرض بحسب الحال.",
+  ],
+  HandoverPaymentDeductionNotRecognised: [
+    "This cost is marked as deducted from the finance company's settlement, but this deal has no configured financing plan to recognise it, so it would never reach the books. Remove it and add it again without the settlement deduction, then pay it.",
+    "هذا المصروف معلَّم كمخصوم من تسوية شركة التمويل، لكن هذه الصفقة بلا خطة تمويل مُعدّة تعترف به، فلن يصل إلى الدفاتر أبدًا. احذفه وأضفه من جديد دون خصم التسوية، ثم سجّل دفعه.",
+  ],
+  HandoverPaymentLegacyTemplateReview: [
+    "This cost comes from the finance company's older fee setup, and its accounting treatment cannot be paid or posted as recorded. It cannot be corrected from the deal — ask an accountant or administrator to review it.",
+    "هذا المصروف مصدره إعداد الرسوم القديم لشركة التمويل، ولا يمكن دفع معالجته المحاسبية أو ترحيلها كما هي مسجّلة. ولا يمكن تصحيحه من الصفقة — اطلب من المحاسب أو المسؤول مراجعته.",
+  ],
+  HandoverPaymentPaidDirect: ["Paid by the dealership", "دفعه المعرض مباشرةً"],
+  HandoverPaymentUnpaid: ["Payment not recorded", "الدفع غير مسجَّل"],
+  HandoverPaymentNoActual: ["Record its actual amount first", "سجّل مبلغه الفعلي أولًا"],
+  HandoverPaymentConflict: ["Recorded as paid twice — needs review", "مسجَّل كمدفوع مرتين — يحتاج مراجعة"],
+  HandoverPaymentNeedsCustody: [
+    "Paid by an employee: charge it to that employee's custody under Employee cash custody.",
+    "دفعه موظف: حمِّله على عهدة ذلك الموظف من قسم عهدة الموظف النقدية.",
+  ],
+  RecordDirectPayment: ["Record direct payment", "تسجيل دفع مباشر"],
+  DirectPaymentWaiting: [
+    "Waiting for a manager or an accountant to record the payment.",
+    "بانتظار مدير أو محاسب لتسجيل الدفع.",
+  ],
+  DirectPaymentNote: [
+    "Use this when the dealership itself paid the cost (bank transfer, e-payment, cash or an issued cheque) rather than an employee out of custody cash. It posts to the books from the account you choose, dated the day it was paid; if no accounting period is open for that date it waits, and the line shows it as waiting.",
+    "استخدمه عندما دفع المعرض المصروف بنفسه (حوالة بنكية أو دفع إلكتروني أو نقدًا أو بشيك صادر) لا موظف من نقد العهدة. يُرحَّل إلى الدفاتر من الحساب الذي تختاره بتاريخ الدفع؛ وإن لم تكن هناك فترة محاسبية مفتوحة لذلك التاريخ فإنه ينتظر، ويظهر البند على أنه بانتظار الترحيل.",
+  ],
+  HandoverPaymentRecordedUnconfirmed: [
+    "Recorded — ledger status is confirmed at closing",
+    "مسجَّل — يُتأكد من حالته في الدفاتر عند الإغلاق",
+  ],
+  HandoverPaymentRecordedCancelled: [
+    "Recorded — deal cancelled",
+    "مسجَّل — الصفقة ملغاة",
+  ],
+  HandoverPaymentRecordedRejected: [
+    "Recorded — deal rejected",
+    "مسجَّل — الصفقة مرفوضة",
+  ],
+  // A stopped (CANCELLED or REJECTED) deal accepts no new custody cash or direct
+  // payment. Only when its economics are also frozen (finalized or CLOSED) is
+  // nothing actionable, so this wording is for that case; an unfrozen stopped
+  // deal can still remove a cost, so it gets the Employee / Remove variants below.
+  HandoverPaymentUntreatableStopped: [
+    "This cost's accounting treatment cannot be paid or posted as recorded. The deal is stopped, so no payment or settlement can be recorded for it now.",
+    "المعالجة المحاسبية لهذا المصروف لا يمكن دفعها أو ترحيلها كما هي مسجّلة. الصفقة متوقفة، فلا يمكن تسجيل دفع أو تسوية له الآن.",
+  ],
+  HandoverPaymentUntreatableStoppedEmployee: [
+    "This cost's accounting treatment cannot be paid or posted as recorded. The deal is stopped, so no new cash can be handed out for it. Remove it and add it again as an ownership transfer, insurance or selling expense; it can then be settled from custody the employee already holds.",
+    "لا يمكن دفع المعالجة المحاسبية لهذا المصروف أو ترحيلها كما هي مسجّلة. الصفقة متوقفة، فلا يمكن صرف مبلغ نقدي جديد له. أزِله ثم أضِفه من جديد كنقل ملكية أو تأمين أو مصروف بيع؛ عندها يمكن تسويته من العهدة التي يحتفظ بها الموظف بالفعل.",
+  ],
+  HandoverPaymentUntreatableStoppedRemove: [
+    "This cost's accounting treatment cannot be paid or posted as recorded. The deal is stopped, so no new payment can be recorded for it. Remove it so it does not stay on the deal.",
+    "لا يمكن دفع المعالجة المحاسبية لهذا المصروف أو ترحيلها كما هي مسجّلة. الصفقة متوقفة، فلا يمكن تسجيل دفعة جديدة له. أزِله حتى لا يبقى على الصفقة.",
+  ],
+  HandoverPaymentStoppedNoNewPayment: [
+    "The deal is stopped, so no new payment is recorded for this cost.",
+    "الصفقة متوقفة، فلا تُسجَّل دفعة جديدة لهذا المصروف.",
+  ],
+  DirectPaymentAmountChanged: [
+    "The amount of this cost changed since you opened this form. It is now:",
+    "تغيّر مبلغ هذا المصروف منذ فتحت هذا النموذج. المبلغ الآن:",
+  ],
+  DirectPaymentUseNewAmount: ["Review and use the new amount", "راجِع المبلغ الجديد واعتمده"],
+  HandoverPaymentQueued: ["Recorded — waiting to post to the books", "مسجَّل — بانتظار الترحيل إلى الدفاتر"],
+  HandoverPaymentQueuedNote: [
+    "This payment is not on the books yet — usually because no accounting period is open for its date. Open the period and let the accounting queue process; the deal cannot close until it posts.",
+    "هذا الدفع لم يدخل الدفاتر بعد — غالبًا لأنه لا توجد فترة محاسبية مفتوحة لتاريخه. افتح الفترة واترك طابور المحاسبة يعالجه؛ لا يمكن إغلاق الصفقة قبل ترحيله.",
+  ],
+  HandoverPaymentReversalPending: [
+    "An earlier payment of this cost is still on the books: its reversal is waiting for an accounting period to open for the date it was taken back (usually today). Open that period (or wait for the reversal to post) before closing the deal.",
+    "دفعة سابقة لهذا المصروف ما زالت في الدفاتر: عكس قيدها بانتظار فتح فترة محاسبية لتاريخ التراجع عنها (غالبًا اليوم). افتح تلك الفترة (أو انتظر ترحيل عكس القيد) قبل إغلاق الصفقة.",
+  ],
+  DirectPaymentMethodLabel: ["Paid by", "طريقة الدفع"],
+  DirectPaymentMethodChoose: ["Choose how it was paid…", "اختر طريقة الدفع…"],
+  DirectPaymentMethodRequired: ["Choose how the dealership paid.", "اختر كيف دفع المعرض."],
+  DirectPaymentDateRequired: ["Choose the date it was paid.", "اختر تاريخ الدفع."],
+  SaveDirectPayment: ["Save payment", "حفظ الدفع"],
+  DirectPaymentSaved: ["Direct payment recorded", "تم تسجيل الدفع المباشر"],
+  DirectPaymentChangeNote: [
+    "Changing this cost's amount or removing it reverses this payment; record it again afterwards.",
+    "تغيير مبلغ هذا المصروف أو إزالته يعكس هذا الدفع؛ سجّله من جديد بعد ذلك.",
+  ],
+  DirectPaymentChangeNoteStopped: [
+    "Changing this cost's amount or removing it still reverses this payment, but the deal is stopped, so it cannot be recorded again.",
+    "تغيير مبلغ هذا المصروف أو إزالته ما زال يعكس هذا الدفع، لكن الصفقة متوقفة، فلا يمكن تسجيله من جديد.",
+  ],
   FeeTypeFinanceCompany: ["Finance company fee", "رسوم جهة التمويل"],
   FeeTypeAppraisal: ["Appraisal fee", "رسوم التقييم"],
   FeeTypeInsurance: ["Insurance", "التأمين"],
@@ -945,6 +1039,7 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingCheck_CUSTODY_ON_LEDGER: ["Employee custody is on the books", "عهدة الموظفين مرحَّلة إلى الدفاتر"],
   ClosingCheck_CUSTODY_SETTLED: ["Employee custody is settled", "عهدة الموظفين مسوّاة"],
   ClosingCheck_COSTS_CLOSABLE: ["Deal costs are recorded and reconciled", "مصاريف الصفقة مسجَّلة ومسوّاة"],
+  ClosingCheck_HANDOVER_COSTS_PAID: ["Handover costs are paid", "مصاريف التسليم مدفوعة"],
   ClosingCheck_FIRST_PAYMENT_RECORDED: ["The customer's first payment is recorded", "الدفعة الأولى للعميل مسجَّلة"],
   ClosingCheck_LEGAL_INVOICE_RECORDED: ["The legal invoice is recorded", "الفاتورة القانونية مسجَّلة"],
   // SCRUM-414 — why a check is not met, by the server's reason code (lib/closingReadinessReasonCodes.ts).
@@ -1024,6 +1119,42 @@ const dealOverviewMessages = defineBilingualMessages({
     "\"{feeLabel}\" is classified as {treatment}, which has no account to post to. Reclassify it before closing.",
     "البند «{feeLabel}» مصنّف على أنه {treatment}، ولا يوجد حساب يُرحَّل إليه. أعد تصنيفه قبل الإغلاق.",
   ],
+  ClosingReason_HANDOVER_COSTS_NO_ACTUAL: [
+    "{count} handover cost(s) have no actual amount recorded. Record each one's actual (or zero if the dealership was charged nothing) in Handover costs before closing.",
+    "يوجد {count} من مصاريف التسليم دون مبلغ فعلي مسجَّل. سجّل الفعلي لكل منها (أو صفرًا إن لم يُحمَّل المعرض شيئًا) في مصاريف التسليم قبل الإغلاق.",
+  ],
+  ClosingReason_HANDOVER_COSTS_UNPAID: [
+    "{count} handover cost(s) have not been paid from a recorded source. In Handover costs, record the dealership's direct payment; or charge the cost to the employee custody that paid it under Employee cash custody. Then close.",
+    "يوجد {count} من مصاريف التسليم لم يُسجَّل لها مصدر دفع. في مصاريف التسليم سجّل دفع المعرض المباشر، أو حمِّل المصروف على عهدة الموظف التي دفعته من قسم عهدة الموظف النقدية، ثم أغلق.",
+  ],
+  ClosingReason_HANDOVER_COSTS_CONFLICT: [
+    "{count} handover cost(s) are recorded as paid both from employee custody and directly, which would count the cost twice. Have the line reviewed before closing.",
+    "يوجد {count} من مصاريف التسليم مسجَّلة كمدفوعة من عهدة الموظف ومباشرةً معًا، مما يحسب المصروف مرتين. اطلب مراجعة البند قبل الإغلاق.",
+  ],
+  ClosingReason_HANDOVER_COSTS_UNSUPPORTED_TREATMENT: [
+    "{count} handover cost(s) are classified with a treatment no payment can be recorded against, so they would never reach the books. In Handover costs, remove each one and add it again as an ownership transfer, insurance or selling expense; each is then settled from the employee's custody or by a direct dealership payment, as applicable. Then close.",
+    "يوجد {count} من مصاريف التسليم مصنّفة بمعالجة محاسبية لا يمكن تسجيل دفع عليها، فلن تصل إلى الدفاتر أبدًا. في مصاريف التسليم احذف كل بند منها وأضفه من جديد كمصروف نقل ملكية أو تأمين أو بيع؛ وتتم تسوية كل منها من عهدة الموظف أو بدفع مباشر من المعرض بحسب الحال. ثم أغلق.",
+  ],
+  ClosingReason_HANDOVER_COSTS_DEDUCTION_NOT_RECOGNISED: [
+    "{count} handover cost(s) are marked as deducted from the finance company's settlement, but this deal has no configured financing plan to recognise a deduction, so they would never reach the books. In Handover costs, remove each one and add it again without the settlement deduction, then pay it directly or charge it to custody. Then close.",
+    "يوجد {count} من مصاريف التسليم معلَّمة كمخصومة من تسوية شركة التمويل، لكن هذه الصفقة بلا خطة تمويل مُعدّة تعترف بالخصم، فلن تصل إلى الدفاتر أبدًا. في مصاريف التسليم احذف كل بند منها وأضفه من جديد دون خصم التسوية، ثم سجّل دفعه مباشرةً أو حمِّله على العهدة. ثم أغلق.",
+  ],
+  ClosingReason_HANDOVER_COSTS_LEGACY_TEMPLATE_REVIEW: [
+    "{count} handover cost(s) come from the finance company's older fee setup, and their accounting treatment cannot be paid or posted as recorded. They cannot be corrected from the deal. Ask an accountant or administrator to review them before finalizing.",
+    "يوجد {count} من مصاريف التسليم مصدرها إعداد الرسوم القديم لشركة التمويل، ولا يمكن دفع معالجتها المحاسبية أو ترحيلها كما هي مسجّلة. ولا يمكن تصحيحها من الصفقة. اطلب من المحاسب أو المسؤول مراجعتها قبل إغلاق الصفقة.",
+  ],
+  ClosingReason_HANDOVER_DIRECT_NOT_ON_LEDGER: [
+    "{count} direct handover payment(s) are recorded but not on the books yet: the posting is waiting because no accounting period is open for its date, or has not been processed. Open the accounting period for the payment date and let the accounting queue process, then close the deal.",
+    "يوجد {count} من مدفوعات مصاريف التسليم المباشرة مسجَّلة لكنها لم تدخل الدفاتر بعد: القيد بانتظار فتح فترة محاسبية لتاريخ الدفع أو لم تتم معالجته. افتح الفترة المحاسبية لتاريخ الدفع واترك طابور المحاسبة يعالجه، ثم أغلق الصفقة.",
+  ],
+  ClosingReason_HANDOVER_DIRECT_REVERSAL_PENDING: [
+    "{count} direct handover payment(s) that were removed, set to zero or replaced on their cost line are still on the books: their reversal is waiting because no accounting period is open for the date the payment was taken back (the day it was removed, set to zero or replaced — usually today, not the payment date). Open the accounting period that covers that date (or wait for the reversal to post), then close the deal.",
+    "يوجد {count} من مدفوعات مصاريف التسليم المباشرة التي حُذفت أو صُفّرت أو استُبدلت في بند التكلفة ما زالت في الدفاتر: عكس القيد بانتظار فتح فترة محاسبية لتاريخ التراجع عن الدفع (يوم الحذف أو التصفير أو الاستبدال — غالبًا اليوم وليس تاريخ الدفع). افتح الفترة المحاسبية التي تشمل ذلك التاريخ (أو انتظر ترحيل عكس القيد)، ثم أغلق الصفقة.",
+  ],
+  ClosingReason_HANDOVER_DIRECT_LEDGER_UNVERIFIABLE: [
+    "The ledger could not be read completely, so whether the direct handover payments are on the books cannot be confirmed. Try again shortly; if it persists, have the deal's accounting reviewed.",
+    "تعذّرت قراءة الدفاتر كاملةً، فلا يمكن التأكد من دخول مدفوعات مصاريف التسليم المباشرة إليها. حاول مجدداً بعد قليل، وإن استمر ذلك فاطلب مراجعة محاسبة الصفقة.",
+  ],
   ClosingReason_FIRST_PAYMENT_MISSING: [
     "The customer's first payment is not recorded, so the funding split cannot be established. Record it before closing.",
     "لم تُسجَّل الدفعة الأولى للعميل، لذلك لا يمكن تحديد توزيع التمويل. سجّلها قبل الإغلاق.",
@@ -1072,6 +1203,10 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingReason_WITHHELD_COSTS_CLOSABLE: [
     "The deal's costs are not all recorded and reconciled yet.",
     "لم تُسجَّل مصاريف الصفقة وتُسوَّ كلها بعد.",
+  ],
+  ClosingReason_WITHHELD_HANDOVER_COSTS_PAID: [
+    "A handover cost on this deal has not been paid from a recorded source yet.",
+    "يوجد مصروف تسليم على هذه الصفقة لم يُسجَّل له مصدر دفع بعد.",
   ],
   ClosingReason_WITHHELD_FIRST_PAYMENT_RECORDED: [
     "The customer's first payment is not recorded yet.",
