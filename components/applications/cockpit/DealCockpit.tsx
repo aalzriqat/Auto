@@ -2920,7 +2920,12 @@ export function DealCockpit({
         registering: registeringPayment,
         submitting: paymentSubmitting,
         error: paymentError,
-        onOpenChange: setRegisteringPayment,
+        onOpenChange: (open) => {
+          // Every way in (rail or cheque panel) opens a fresh form, never one
+          // still carrying a previous attempt's refusal.
+          if (open) setPaymentError(null);
+          setRegisteringPayment(open);
+        },
         onSubmit: async (values) => {
           setPaymentSubmitting(true);
           setPaymentError(null);
@@ -3005,7 +3010,9 @@ export function DealCockpit({
         onAttest: async (faceAmount, note) => {
           const chequeId =
             deal && "unattestedChequeId" in deal ? deal.unattestedChequeId : null;
-          if (!chequeId) return;
+          // Nothing to write to: refuse loudly so the dialog stays open and shows
+          // the error instead of closing as if the face had been recorded.
+          if (!chequeId) throw new Error(t("UnexpectedError"));
           await attestChequeFace({ orgId, chequeId, faceAmount, note });
           toast.success(t("FcAttestDone"));
         },

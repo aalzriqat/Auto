@@ -1755,7 +1755,9 @@ export async function registerChequeCore(
     bank: args.bank.trim(),
     chequeNumber: args.chequeNumber.trim(),
     chequeDate: args.chequeDate,
-    amount: roundMoney(args.amount, currency),
+    // A recorded face is rounded in ITS denomination, not the org's: the deal's
+    // currency can carry more decimals than the org's (SCRUM-447).
+    amount: roundMoney(args.amount, args.amountMinor !== undefined && args.currency ? args.currency : currency),
     status: "HELD",
     notes: args.notes,
     createdBy: args.actorId,
@@ -2145,7 +2147,8 @@ export const replaceCheque = mutation({
       bank: args.bank.trim(),
       chequeNumber: args.chequeNumber.trim(),
       chequeDate: args.chequeDate,
-      amount: roundMoney(amount, currency),
+      // The face is rounded in its own denomination when one was recorded.
+      amount: roundMoney(amount, faceFields?.currency ?? currency),
       status: "HELD",
       notes: args.notes,
       createdBy: user._id,
