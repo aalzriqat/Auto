@@ -110,6 +110,12 @@ const dealRailMessages = defineBilingualMessages({
    * Disbursement stage in rail ahead of handover: clarifies that disbursement
    * confirmation occurs after handover and finalization.
    */
+  /** Settlement node while the payment step is live: it closes only once the money arrives. */
+  BlockerSettlementAfterFinancePayment: [
+    "Completes after the finance company pays",
+    "تكتمل بعد صرف شركة التمويل",
+  ],
+
   BlockerDisbursementAfterHandover: [
     "Recorded after vehicle handover and finalization",
     "يُسجَّل بعد تسليم المركبة وإتمام الصفقة",
@@ -188,11 +194,11 @@ const dealRailMessages = defineBilingualMessages({
   RecordCreditDecisionConfirm: ["Record decision", "تسجيل القرار"],
   CreditDecisionApproveNeedsPermission: [
     "A Manager records the finance company's approval.",
-    "يسجّل موافقة شركة التمويل المدير.",
+    "يسجّل المدير موافقة شركة التمويل.",
   ],
   CreditDecisionRejectNeedsPermission: [
     "A Manager records the finance company's rejection.",
-    "يسجّل رفض شركة التمويل المدير.",
+    "يسجّل المدير رفض شركة التمويل.",
   ],
   CreditDecisionOwnDeal: [
     "You submitted this application, so another Manager records its approval.",
@@ -200,7 +206,7 @@ const dealRailMessages = defineBilingualMessages({
   ],
   CreditDecisionNeedsPermission: [
     "A Manager records the finance company's decision.",
-    "يسجّل قرار شركة التمويل المدير.",
+    "يسجّل المدير قرار شركة التمويل.",
   ],
 
   /**
@@ -210,7 +216,7 @@ const dealRailMessages = defineBilingualMessages({
    */
   DisbursementNeedsPermission: [
     "A Manager or Accountant confirms the finance company's payment.",
-    "يؤكد دفعة شركة التمويل المدير أو المحاسب.",
+    "يؤكد المدير أو المحاسب صرف شركة التمويل.",
   ],
   DisbursementUnavailable: [
     "Nothing is expected from the finance company on this deal, or the receipt is already on record.",
@@ -383,8 +389,8 @@ const dealRailMessages = defineBilingualMessages({
   ResolveGapAction: ["Resolve appraisal gap", "حل فرق التخمين"],
   GapResolved: ["Recorded who covers the appraisal gap.", "سُجِّلت الجهة التي تتحمّل فرق التخمين."],
   GapResolutionNeedsPermission: [
-    "A Manager records who covers the difference.",
-    "يسجّل الجهة التي تتحمّل الفرق المدير.",
+    "The dealership owner records who covers the difference.",
+    "يسجّل مالك المعرض الجهة التي تتحمّل الفرق.",
   ],
   // A DIFFERENT obstacle: this person may record the agreement, but the deal's
   // figures are not shown to them, and the shortfall is one of those figures.
@@ -399,8 +405,8 @@ const dealRailMessages = defineBilingualMessages({
     "تجاوزت هذه الصفقة هذه المرحلة، فلم يعد بالإمكان تسجيل الجهة التي تتحمّل الفرق من هنا.",
   ],
   GapResolutionSelfDeal: [
-    "You cannot settle the appraisal gap on your own deal. A manager or the dealership owner records it.",
-    "لا يمكنك تسوية فرق التخمين على صفقتك أنت. يسجّلها مدير أو مالك المعرض.",
+    "You cannot settle the appraisal gap on your own deal. The dealership owner records it.",
+    "لا يمكنك تسوية فرق التخمين على صفقتك أنت. يسجّلها مالك المعرض.",
   ],
   ResolveGapTitle: ["Resolve the appraisal gap", "حل فرق التخمين"],
   ResolveGapDescription: [
@@ -728,12 +734,12 @@ const dealWizardMessages = defineBilingualMessages({
   CompleteDocumentsAction: ["Complete the documents", "إكمال المستندات"],
   DocumentsNeedUploader: [
     "Sales or a Manager uploads the finance documents.",
-    "يرفع مستندات التمويل موظف المبيعات أو المدير.",
+    "يرفع موظف المبيعات أو المدير مستندات التمويل.",
   ],
   // W1 — every outstanding document is uploaded; only a verifier moves it now.
   DocumentsAwaitVerifier: [
     "Uploaded. A Manager verifies the finance documents.",
-    "تم الرفع. يتحقق من مستندات التمويل المدير.",
+    "تم الرفع. يتحقق المدير من مستندات التمويل.",
   ],
   // Round 2 (S417-R2-1): may upload or verify, but cannot read the rows the controls sit on.
   DocumentsNeedReadAccess: [
@@ -763,7 +769,7 @@ const dealWizardMessages = defineBilingualMessages({
   ],
   ReconciliationNeedsPermission: [
     "A Manager or Accountant reviews this deal's reconciliation note.",
-    "يراجع ملاحظة التسوية على هذه الصفقة المدير أو المحاسب.",
+    "يراجع المدير أو المحاسب ملاحظة التسوية على هذه الصفقة.",
   ],
   ResolveReconciliationDesc: [
     "Clearing the flag records that someone checked the figures. It changes no amount.",
@@ -817,7 +823,7 @@ const dealWizardMessages = defineBilingualMessages({
   ],
   SupplierSettlementNeedsPermission: [
     "An Accountant records the supplier's settlement.",
-    "يسجّل تسوية المورد المحاسب.",
+    "يسجّل المحاسب تسوية المورد.",
   ],
   CashSettlementNotRecordedHere: [
     "The supplier's balance on this sale is still open, and it is not settled from this screen. It closes when accounting records the payment.",
@@ -832,12 +838,12 @@ const dealWizardMessages = defineBilingualMessages({
   OpenDepositManagerAction: ["Open vehicles to resolve the deposit", "فتح المركبات لمعالجة العربون"],
   DepositManagerNeedsApprover: [
     "A Manager resolves the deposit. Ask a Manager to do it.",
-    "يعالج العربون المدير. اطلب من المدير معالجته.",
+    "يعالج المدير العربون. اطلب منه معالجته.",
   ],
   OpenSalesPageAction: ["Open the Sales page", "فتح صفحة المبيعات"],
   SalesPageNeedsAccess: [
     "A Manager completes this sale from the Sales page.",
-    "يُتمّ هذا البيع المدير من صفحة المبيعات.",
+    "يُتمّ المدير هذا البيع من صفحة المبيعات.",
   ],
   SupplierPayableRecordedOnPayables: [
     "The dealership collected the full sale price, so the supplier's share is a payable it owes. It is paid from the supplier payables page, not from this screen.",
@@ -846,7 +852,7 @@ const dealWizardMessages = defineBilingualMessages({
   OpenSourcingPayablesAction: ["Open supplier payables", "فتح مستحقات الموردين"],
   SupplierPayablesNeedFinanceRole: [
     "An Accountant pays supplier payables.",
-    "يدفع مستحقات الموردين المحاسب.",
+    "يتولى المحاسب دفع مستحقات الموردين.",
   ],
   ClosingCheckGoToCosts: ["Go to handover costs", "الانتقال إلى رسوم التسليم"],
   ClosingCheckGoToCustody: ["Go to custody", "الانتقال إلى العهدة"],});
@@ -3252,7 +3258,7 @@ export const salesAr = {
   ApplyQuoteFirstPaymentApplied: "تم تحديث الدفعة الأولى.",
 
   RegisterHandoverAction: "تسجيل تسليم المركبة",
-  HandoverNeedsPermission: "يسجّل تسليم المركبة موظف المبيعات أو المدير.",
+  HandoverNeedsPermission: "يسجّل موظف المبيعات أو المدير تسليم المركبة.",
   ConfirmHandoverTitle: "تسجيل تسليم المركبة",
   ConfirmHandoverDesc: "تخرج المركبة إلى العميل. يُسجَّل ذلك كواقعة، ويُغلق أرقام الصفقة.",
   HandoverSealsApprovedAmount:
@@ -3272,9 +3278,9 @@ export const salesAr = {
 
   RegisterExpectedPaymentAction: "تسجيل الدفعة المتوقعة",
   ExpectedPaymentNeedsPermission:
-    "يسجّل الدفعة المتوقعة موظف المبيعات أو المدير.",
+    "يسجّل موظف المبيعات أو المدير الدفعة المتوقعة.",
   FinalizeDealAction: "إغلاق الصفقة",
-  FinalizeNeedsPermission: "يغلق الصفقة المدير أو المحاسب.",
+  FinalizeNeedsPermission: "يغلق المدير أو المحاسب الصفقة.",
   FinalizeWaitsForReadiness:
     "تعذّر فحص جاهزية الإغلاق الآن، لذا لا يمكن إغلاق الصفقة بعد. حاول مجددًا بعد قليل.",
   FinalizeNeedsReadinessAccess:
