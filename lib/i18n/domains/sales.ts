@@ -80,6 +80,16 @@ const dealStepMessages = defineBilingualMessages({
     "This step stopped when the deal was rejected or cancelled. Nothing more will happen here.",
     "توقفت هذه الخطوة عند رفض الصفقة أو إلغائها. لن يحدث شيء آخر هنا.",
   ],
+  // SCRUM-446: a step the server proved is not needed on this deal.
+  StageViewNotApplicableNote: [
+    "This step is not needed on this deal.",
+    "هذه الخطوة غير مطلوبة في هذه الصفقة.",
+  ],
+  StageNotApplicableReasonDisbursement: [
+    "No finance company pays the dealership on this deal.",
+    "لا توجد شركة تمويل تدفع للمعرض في هذه الصفقة.",
+  ],
+  StageViewNobodyActs: ["Nobody, there is nothing to confirm", "لا أحد، لا يوجد ما يُؤكَّد"],
   StageViewAnnounceShowing: ["Showing step", "عرض الخطوة"],
   StageViewAnnounceBack: ["Back to the current step", "العودة إلى الخطوة الحالية"],
   // ROUND 2 (SCRUM-417 UX4): the deal is closed and this step waits on the finance company.
@@ -447,6 +457,7 @@ const dealRailMessages = defineBilingualMessages({
   StageStateBlocked: ["Blocked", "متوقفة"],
   StageStatePending: ["Not started", "لم تبدأ"],
   StageStateStopped: ["Will not continue", "لن تستكمل"],
+  StageStateNotApplicable: ["Not needed", "غير مطلوب"],
   ProfitBreakdownToggle: ["How this is calculated", "طريقة الاحتساب"],
   /** The headline is served but its working is not — distinct from "never recorded". */
   ProfitBreakdownUnavailable: ["Breakdown unavailable", "التفصيل غير متاح"],
