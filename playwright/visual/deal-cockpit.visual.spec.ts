@@ -117,6 +117,23 @@ const WITHHELD_CLOSE_VARIANTS: ReadonlyArray<{
   },
 ];
 
+/**
+ * SCRUM-417 UX4 (O2/O3): the sub-step checklist on a live Handover, and the
+ * read-only view of a past and of a future step (what `?stage=` or a rail click
+ * opens). `mode` is what the view card must declare; `checklist` whether the
+ * live card must list sub-steps.
+ */
+const UX4_VARIANTS: ReadonlyArray<{
+  suffix: string;
+  title: string;
+  mode: "past" | "future" | null;
+  stage: string | null;
+}> = [
+  { suffix: "-ux4-handover-checklist", title: "the live Handover card lists its sub-steps", mode: null, stage: null },
+  { suffix: "-ux4-view-past", title: "a past step opens read-only with a way back", mode: "past", stage: "APPLICATION" },
+  { suffix: "-ux4-view-future", title: "a future step says what it needs and who acts", mode: "future", stage: "SETTLEMENT" },
+];
+
 /** The desktop sidebar (`w-64`) at the default 16px root font size. */
 const SIDEBAR_WIDTH_PX = 256;
 /** Tailwind's `md` breakpoint, where the sidebar appears. */
@@ -164,6 +181,11 @@ test.beforeAll(async () => {
         statSync(file).mtimeMs,
         `${file} predates this run — a stale artifact, not this bridge's output`,
       ).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
+    }
+    for (const { suffix } of UX4_VARIANTS) {
+      const variantFile = resolve(FIXTURES, `deal-cockpit-${locale}${suffix}.html`);
+      expect(existsSync(variantFile), `bridge did not write ${variantFile}`).toBe(true);
+      expect(statSync(variantFile).mtimeMs).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
     }
     for (const { suffix } of WITHHELD_CLOSE_VARIANTS) {
       const variantFile = resolve(FIXTURES, `deal-cockpit-${locale}${suffix}.html`);
@@ -716,6 +738,88 @@ for (const variant of WITHHELD_CLOSE_VARIANTS) {
                 path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${variant.suffix}-panel.png`),
               });
             }
+          } finally {
+            await context.close();
+          }
+        });
+      }
+    }
+  }
+}
+
+/**
+ * SCRUM-417 UX4, painted. The checklist marks exactly one item current, every
+ * rail node is a real keyboard-focusable button, a viewed step shows its
+ * read-only card with a visible "back to current step" chip, the live step's
+ * card stays on the page, and nothing leaks sideways.
+ */
+for (const variant of UX4_VARIANTS) {
+  for (const locale of LOCALES) {
+    for (const theme of THEMES) {
+      for (const viewport of VIEWPORTS) {
+        test(`${locale} · ${theme} · ${viewport.name}px: ${variant.title}`, async ({ browser }) => {
+          const context = await browser.newContext({
+            viewport: { width: viewport.width, height: viewport.height },
+            colorScheme: theme,
+          });
+          const page = await context.newPage();
+          try {
+            await paint(page, locale, theme, variant.suffix);
+            const main = page.getByTestId("shell-main");
+            const mainBox = await main.boundingBox();
+            expect(mainBox).not.toBeNull();
+
+            // The rail: eight real buttons, exactly one aria-current.
+            const rail = page.getByTestId("deal-stage-rail");
+            await expect(rail).toBeVisible();
+            expect(await rail.getByRole("button").count()).toBe(8);
+            expect(await rail.locator('[aria-current="step"]').count()).toBe(1);
+            await rail.getByRole("button").first().focus();
+            expect(await page.evaluate(() => document.activeElement?.tagName)).toBe("BUTTON");
+
+            const nextStep = page.getByTestId("deal-next-step");
+            await expect(nextStep).toBeVisible();
+
+            if (variant.mode === null) {
+              const list = page.getByTestId("deal-step-checklist");
+              await expect(list).toBeVisible();
+              expect(await list.locator('[data-status="current"]').count()).toBe(1);
+              expect(await list.locator('[data-status="done"]').count()).toBeGreaterThan(0);
+              expect(await list.locator('[data-status="pending"]').count()).toBeGreaterThan(0);
+              await expect(page.getByTestId("deal-stage-view")).toHaveCount(0);
+              const box = await list.boundingBox();
+              expect(box!.x).toBeGreaterThanOrEqual(mainBox!.x - 0.5);
+              expect(box!.x + box!.width).toBeLessThanOrEqual(mainBox!.x + mainBox!.width + 0.5);
+              await list.scrollIntoViewIfNeeded();
+            } else {
+              const view = page.getByTestId("deal-stage-view");
+              await expect(view).toBeVisible();
+              await expect(view).toHaveAttribute("data-mode", variant.mode);
+              await expect(view).toHaveAttribute("data-stage", variant.stage!);
+              const back = page.getByTestId("deal-stage-view-back");
+              await expect(back).toBeVisible();
+              const backBox = await back.boundingBox();
+              expect(backBox!.x).toBeGreaterThanOrEqual(mainBox!.x - 0.5);
+              expect(backBox!.x + backBox!.width).toBeLessThanOrEqual(mainBox!.x + mainBox!.width + 0.5);
+              await expect(page.getByTestId("deal-stage-view-owner")).toBeVisible();
+              if (variant.mode === "future") await expect(page.getByTestId("deal-stage-view-needs")).toBeVisible();
+              // The live step is still the only aria-current node and card.
+              expect(await rail.locator('[aria-current="step"]').count()).toBe(1);
+              await view.scrollIntoViewIfNeeded();
+            }
+            expect(await page.evaluate(() => getComputedStyle(document.body).direction)).toBe(
+              locale === "ar" ? "rtl" : "ltr",
+            );
+
+            const overflow = await main.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+            expect(
+              overflow.scrollWidth,
+              `main scrolls sideways at ${viewport.width}px (${JSON.stringify(overflow)})`,
+            ).toBeLessThanOrEqual(overflow.clientWidth);
+
+            await page.screenshot({
+              path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${variant.suffix}.png`),
+            });
           } finally {
             await context.close();
           }

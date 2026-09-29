@@ -1063,6 +1063,79 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
     mkdirSync(outDir, { recursive: true });
     writeFileSync(resolve(outDir, `deal-cockpit-${locale}-readiness-access.html`), html);
   });
+
+  // SCRUM-417 UX4 (O2/O3): the sub-step checklist on a live Handover, and the
+  // read-only past / future step views a rail click (or ?stage=) opens.
+  const ux4Markup = (locale: "en" | "ar", variant: "handover-checklist" | "view-past" | "view-future") => {
+    language.locale = locale;
+    const base = financedDeal();
+    const deal: FinancedDealCockpitData =
+      variant === "handover-checklist"
+        ? {
+            ...base,
+            stages: base.stages.map((stage) => ({
+              ...stage,
+              state:
+                stage.key === "HANDOVER"
+                  ? ("CURRENT" as const)
+                  : stage.key === "DISBURSEMENT" || stage.key === "SETTLEMENT"
+                    ? ("PENDING" as const)
+                    : ("COMPLETE" as const),
+              blocker: undefined,
+            })),
+          }
+        : base;
+    const viewed = variant === "view-past" ? "APPLICATION" : variant === "view-future" ? "SETTLEMENT" : null;
+    return renderToStaticMarkup(
+      <DealCockpitView
+        deal={deal}
+        stageDeepLink={{ value: viewed, onChange: () => {} }}
+        backHref="/org_1/deals"
+        activeAppraisalProvider={deal.activeAppraisalProvider}
+        onRecordSupplierReceipt={async () => {}}
+        financialOverview={{ data: financedOverview(), loading: false }}
+        custody={custodyWiring()}
+        custodyMoney={custodyMoney}
+        closingChecklist={
+          variant === "handover-checklist"
+            ? {
+                readiness: {
+                  state: "BLOCKED",
+                  open: true,
+                  unavailableReason: null,
+                  unavailableReasonCode: null,
+                  moneyWithheld: false,
+                  checks: [
+                    { key: "CONFIGURED_FEES_RECORDED", status: "READY", reason: null, reasonCode: null },
+                    { key: "HANDOVER_COSTS_PAID", status: "BLOCKED", reason: "blocked", reasonCode: null },
+                  ],
+                } as unknown as NonNullable<React.ComponentProps<typeof DealCockpitView>["closingChecklist"]>["readiness"],
+              }
+            : undefined
+        }
+        financingPlan={{ facts: FINANCING_PLAN, formatMajor: (major, currency) => `${major.toLocaleString()} ${currency}` }}
+        handoverCosts={handoverCostsWiring()}
+      />
+    );
+  };
+  test.each(
+    (["en", "ar"] as const).flatMap((locale) =>
+      (["handover-checklist", "view-past", "view-future"] as const).map((variant) => [locale, variant] as const)
+    )
+  )("writes the %s markup for UX4 %s", (locale, variant) => {
+    expect(OUT_DIR, "DEAL_COCKPIT_VISUAL_FIXTURE_DIR must name this run's fresh directory").toBeTruthy();
+    const outDir = resolve(OUT_DIR!);
+    const html = ux4Markup(locale, variant);
+    if (variant === "handover-checklist") {
+      expect(html).toContain("data-testid=\"deal-step-checklist\"");
+      expect(html).not.toContain("data-testid=\"deal-stage-view\"");
+    } else {
+      expect(html).toContain("data-testid=\"deal-stage-view\"");
+      expect(html).toContain("data-testid=\"deal-stage-view-back\"");
+    }
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(resolve(outDir, `deal-cockpit-${locale}-ux4-${variant}.html`), html);
+  });
 });
 
 
