@@ -165,6 +165,10 @@ export function QuoteDepositManager({
 
   const handleResolve = async (holdId: Id<"depositVehicleHolds">) => {
     const treatment = treatmentByHold[holdId] ?? "RETURN_TO_UNALLOCATED";
+    // SCRUM-469: a refund's method is chosen, never assumed. The button is
+    // disabled without one; this is the second line, so none is ever sent.
+    const refundMethod = methodByHold[holdId];
+    if (treatment === "REFUND_TO_CUSTOMER" && refundMethod === undefined) return;
     setBusyHoldId(holdId);
     try {
       await resolveReleased({
@@ -174,9 +178,7 @@ export function QuoteDepositManager({
         ...(treatment === "REALLOCATE_TO_VEHICLE"
           ? { toVehicleId: targetByHold[holdId] as Id<"vehicles"> | undefined }
           : {}),
-        ...(treatment === "REFUND_TO_CUSTOMER"
-          ? { refundMethod: methodByHold[holdId] ?? "CASH" }
-          : {}),
+        ...(treatment === "REFUND_TO_CUSTOMER" && refundMethod !== undefined ? { refundMethod } : {}),
         ...(reasonByHold[holdId]?.trim() ? { reason: reasonByHold[holdId].trim() } : {}),
       });
       toast.success(t("DepositShareResolved" as any));
@@ -384,7 +386,7 @@ export function QuoteDepositManager({
                     <div className="w-full sm:w-40">
                       <PaymentMethodSelect
                         t={t}
-                        value={methodByHold[holdId] ?? "CASH"}
+                        value={methodByHold[holdId]}
                         onValueChange={(method) =>
                           setMethodByHold((prev) => ({
                             ...prev,
@@ -392,6 +394,7 @@ export function QuoteDepositManager({
                           }))
                         }
                         ariaLabel={t("PaymentMethodLabel" as any)}
+                        placeholder={t("RefundChooseMethod" as any)}
                       />
                     </div>
                   )}
@@ -411,6 +414,7 @@ export function QuoteDepositManager({
                     disabled={
                       busyHoldId === holdId ||
                       (treatment === "REALLOCATE_TO_VEHICLE" && !targetByHold[holdId]) ||
+                      (treatment === "REFUND_TO_CUSTOMER" && !methodByHold[holdId]) ||
                       (movesMoney(treatment) ? !canApprove : !canConfirm)
                     }
                     onClick={() => {
@@ -435,6 +439,11 @@ export function QuoteDepositManager({
                     {t("DepositRecordDecision" as any)}
                   </Button>
                 </div>
+                )}
+                {treatment === "REFUND_TO_CUSTOMER" && !methodByHold[holdId] && !pendingReversal && (
+                  <p className="text-xs font-medium text-destructive" role="alert">
+                    {t("RefundMethodRequired" as any)}
+                  </p>
                 )}
                 {!movesMoney(treatment) && !canConfirm && !pendingReversal && (
                   <p className="text-xs text-muted-foreground">
