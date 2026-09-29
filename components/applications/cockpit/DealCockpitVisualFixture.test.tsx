@@ -545,6 +545,8 @@ type FocusState = Readonly<
     outstandingDocuments?: ReadonlyArray<{ ruleId: string; name: Readonly<Record<"en" | "ar", string>> }>;
     /** Already resolved, as the view passes it: a present `onStart` is a working button. */
     action: Omit<WorkflowAction, "stageKey">;
+    /** The container's verdict on documents (S3); false withholds the passive link. Default true. */
+    documentsActionable?: boolean;
   } & (
     | { kind: "FINANCED"; stageKey: FinancedDealStageKey }
     | { kind: "CASH"; stageKey: CashDealStageKey }
@@ -649,7 +651,67 @@ const FOCUS_STATES = [
     ownerKey: "StageOwnerDealership",
     blocker: "DocumentsIncomplete",
     outstandingDocuments: [{ ruleId: "r1", name: { en: "National ID copy", ar: "صورة الهوية" } }],
+    documentsActionable: false,
     action: { actionKey: "CompleteDocumentsAction", opens: "DOCUMENTS", unavailableReasonKey: "DocumentsAwaitVerifier" },
+  },
+  {
+    // SCRUM-417 UX1 (S3): a caller who can neither upload nor verify sees the
+    // outstanding documents and who acts, but no link into a checklist with
+    // nothing they can press.
+    id: "delivery-documents-read-only-role",
+    kind: "FINANCED",
+    stageKey: "DELIVERY_ACTIONS",
+    state: "BLOCKED",
+    labelKey: "StageDeliveryActions",
+    ownerKey: "StageOwnerDealership",
+    blocker: "DocumentsIncomplete",
+    outstandingDocuments: [
+      { ruleId: "r1", name: { en: "National ID copy", ar: "صورة الهوية" } },
+      { ruleId: "r2", name: { en: "Salary certificate", ar: "كشف راتب" } },
+    ],
+    documentsActionable: false,
+    action: { actionKey: "CompleteDocumentsAction", opens: "DOCUMENTS", unavailableReasonKey: "DocumentsNeedUploader" },
+  },
+  {
+    // SCRUM-417 UX1 (S2): the server says the vehicle cannot be handed over yet.
+    id: "handover-blocked",
+    kind: "FINANCED",
+    stageKey: "HANDOVER",
+    state: "BLOCKED",
+    labelKey: "StageHandover",
+    ownerKey: "StageOwnerDealership",
+    blocker: "HandoverBlocked",
+    action: { actionKey: "RegisterHandoverAction", unavailableReasonKey: "HandoverBlockedNeedsApproval" },
+  },
+  {
+    // SCRUM-417 UX1 (S4): a held vehicle deposit, with the way to resolve it.
+    id: "held-deposit-link",
+    kind: "FINANCED",
+    stageKey: "SETTLEMENT",
+    state: "BLOCKED",
+    labelKey: "StageSettlement",
+    ownerKey: "StageOwnerDealership",
+    blocker: "AwaitingSettlement",
+    action: {
+      actionKey: "FinalizeDealAction",
+      unavailableReasonKey: "FinalizeNeedsHeldDepositResolved",
+      unavailableLink: { href: "/org_1/vehicles", labelKey: "OpenDepositManagerAction" },
+    },
+  },
+  {
+    // The same blocker for a caller who cannot act there: told who does.
+    id: "held-deposit-no-access",
+    kind: "FINANCED",
+    stageKey: "SETTLEMENT",
+    state: "BLOCKED",
+    labelKey: "StageSettlement",
+    ownerKey: "StageOwnerDealership",
+    blocker: "AwaitingSettlement",
+    action: {
+      actionKey: "FinalizeDealAction",
+      unavailableReasonKey: "FinalizeNeedsHeldDepositResolved",
+      unavailableNoteKey: "DepositManagerNeedsApprover",
+    },
   },
   {
     // Round 2 (S417-R2-1): may upload/verify, cannot read the rows the panel's
@@ -679,6 +741,7 @@ const FOCUS_STATES = [
     ownerKey: "StageOwnerDealership",
     blocker: "DocumentsIncomplete",
     outstandingDocuments: [{ ruleId: "r1", name: { en: "National ID copy", ar: "صورة الهوية" } }],
+    documentsActionable: false,
     action: { actionKey: "CompleteDocumentsAction", opens: "DOCUMENTS", unavailableReasonKey: "DocumentsNeedReadAccess" },
   },
   {
@@ -719,7 +782,11 @@ const FOCUS_STATES = [
     state: "CURRENT",
     labelKey: "StageHandover",
     ownerKey: "StageOwnerDealership",
-    action: { actionKey: "CompleteCashSaleAction", unavailableReasonKey: "CashSaleCompletionNeedsDepositDecision" },
+    action: {
+      actionKey: "CompleteCashSaleAction",
+      unavailableReasonKey: "CashSaleCompletionNeedsDepositDecision",
+      unavailableLink: { href: "/org_1/sales/sales", labelKey: "OpenSalesPageAction" },
+    },
   },
 ] satisfies readonly FocusState[];
 
@@ -775,6 +842,8 @@ function focusStatesMarkup(locale: "en" | "ar"): string {
       action.actionKey,
       action.noteKey,
       action.unavailableReasonKey,
+      action.unavailableNoteKey,
+      action.unavailableLink?.labelKey,
       action.secondary?.actionKey,
     ].filter((key): key is string => typeof key === "string");
     for (const key of keys) expect(table[key], `${locale} dictionary lacks ${key}`).toBeTruthy();
@@ -794,6 +863,7 @@ function focusStatesMarkup(locale: "en" | "ar"): string {
           name: doc.name[locale],
         }))}
         onGoToDocuments={() => {}}
+        documentsActionable={focus.documentsActionable ?? true}
         t={t}
       />
     )}</section>`;
