@@ -286,3 +286,58 @@ export function PendingDepositRequestsQueue({ orgId }: { orgId: Id<"organization
     </section>
   );
 }
+
+/**
+ * The same requests as the deal cockpit sees them (SCRUM-444). A deal being
+ * finalized is where an accountant or manager actually is, so a waiting request
+ * is shown THERE with the decision at hand — not only on the Approvals page.
+ * Everyone else sees a read-only line that says who has to act, because the
+ * server refuses to end a deal while a request waits and a refusal with no
+ * explanation is a dead end.
+ */
+export function DealPendingDepositRequests({
+  orgId,
+  requests,
+}: {
+  orgId: Id<"organizations">;
+  requests: ReadonlyArray<{
+    _id: Id<"depositRequests">;
+    amount: number;
+    currency: string;
+  }>;
+}) {
+  const { t, isRtl } = useLanguage();
+  const { hasPermission } = usePermissions();
+  const canDecide = hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+  if (requests.length === 0) return null;
+
+  const money = (amount: number) =>
+    amount.toLocaleString(isRtl ? "ar-JO" : "en-JO", { maximumFractionDigits: 3 });
+
+  return (
+    <div
+      className="space-y-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 dark:border-amber-900/60 dark:bg-amber-950/30"
+      data-testid="deal-pending-deposit-requests"
+    >
+      <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+        {t("DealDepositRequestPendingTitle" as any)}
+      </p>
+      <ul className="space-y-2">
+        {requests.map((request) => (
+          <li key={request._id} className="space-y-1.5 text-sm">
+            <span className="font-semibold tabular-nums">
+              {money(request.amount)} {request.currency}
+            </span>
+            {canDecide ? (
+              <DecisionControls orgId={orgId} requestId={request._id} amount={request.amount} />
+            ) : (
+              <p className="text-xs text-amber-800 dark:text-amber-300" data-testid="deal-pending-deposit-readonly">
+                {t("DealDepositRequestPendingReadonly" as any)}
+              </p>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}

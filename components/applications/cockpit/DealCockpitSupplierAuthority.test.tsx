@@ -487,3 +487,57 @@ describe.each(PATHS)("$path withholds the settlement on a DISPUTED claim, and sa
     expect(screen.queryByRole("status")).toBeNull();
   });
 });
+
+/**
+ * SCRUM-444 F3: a deposit request waiting on the deal is shown IN the cockpit,
+ * where an accountant finalizing the deal actually is. Deciders get the
+ * controls; everyone else gets a read-only line naming who has to act.
+ */
+describe("a pending deposit request on the financed cockpit", () => {
+  const pending = [
+    {
+      _id: "req_1" as Id<"depositRequests">,
+      amount: 1500,
+      currency: "JOD",
+      requestedBy: "user_1" as Id<"users">,
+      requestedAt: 1,
+    },
+  ];
+  const mountWithPending = () => {
+    stubs.queryResults.set("dealWorkspace:financedDealCockpit", {
+      ...financedDirectDeal(),
+      pendingDepositRequests: pending,
+    });
+    render(<DealCockpit orgId={ORG} applicationId={APP} />);
+  };
+
+  test("a confirmer sees the request with confirm and reject at hand", () => {
+    stubs.membership = {
+      roleName: "Accountant",
+      permissions: [...FINANCE_READER.permissions, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT],
+    };
+    mountWithPending();
+    expect(screen.getByTestId("deal-pending-deposit-requests")).toBeTruthy();
+    expect(screen.getByTestId("deposit-request-confirm-open")).toBeTruthy();
+    expect(screen.getByTestId("deposit-request-reject-open")).toBeTruthy();
+    expect(screen.queryByTestId("deal-pending-deposit-readonly")).toBeNull();
+  });
+
+  test("anyone else sees a read-only line and no controls", () => {
+    stubs.membership = FINANCE_READER;
+    mountWithPending();
+    expect(screen.getByTestId("deal-pending-deposit-requests")).toBeTruthy();
+    expect(screen.getByTestId("deal-pending-deposit-readonly")).toBeTruthy();
+    expect(screen.queryByTestId("deposit-request-confirm-open")).toBeNull();
+  });
+
+  test("no block at all when nothing is waiting", () => {
+    stubs.membership = FINANCE_READER;
+    stubs.queryResults.set("dealWorkspace:financedDealCockpit", {
+      ...financedDirectDeal(),
+      pendingDepositRequests: [],
+    });
+    render(<DealCockpit orgId={ORG} applicationId={APP} />);
+    expect(screen.queryByTestId("deal-pending-deposit-requests")).toBeNull();
+  });
+});

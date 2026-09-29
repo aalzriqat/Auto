@@ -170,6 +170,10 @@ export async function notifyByPermission(
 
   for (const membership of memberships) {
     if (opts?.excludeUserId && membership.userId === opts.excludeUserId) continue;
+    // SCRUM-444 F4: an offboarding member is not an active one — the same
+    // predicate `requireTenantAuth` refuses them on. Without it a finance
+    // member who has left would still be sent deal amounts and links.
+    if (membership.offboardingStatus) continue;
     const role = await ctx.db.get(membership.roleId);
     if (!role) continue;
     if (role.permissions.includes(permission)) {

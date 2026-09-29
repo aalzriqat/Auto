@@ -3,6 +3,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { acquireVehicle, assertAcquirable } from "../commitments";
 import { holdVehicleForDeposit } from "./depositHelpers";
+import { assertNoQuoteLinkedReservationDeposit } from "./depositRequestGuards";
 import {
   amountToMinorOrThrow,
   recordHeldDeposit,
@@ -59,6 +60,8 @@ export async function postQuoteDeposit(
   }
 ): Promise<Id<"deposits">> {
   const { quote } = args;
+  // SCRUM-444 F1: fail closed on a receipt this quote's totals cannot see.
+  await assertNoQuoteLinkedReservationDeposit(ctx, quote);
   const quoteAmountMinor = amountToMinorOrThrow(quote.vehiclePrice, args.currency, "Quote amount");
   const existingActiveMinor = await activeQuoteDepositMinor(ctx, quote._id, args.currency);
   if (existingActiveMinor + args.amountMinor > quoteAmountMinor) {

@@ -1737,6 +1737,16 @@ export const createReservation = mutation({
         ? [PERMISSIONS.EDIT_VEHICLES, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]
         : [PERMISSIONS.EDIT_VEHICLES]
     );
+    // SCRUM-444 F1: a deposit taken on a reservation that is linked to a quote
+    // posts DEPOSIT_RECEIVED with no quote, so the quote's cap and its pending-
+    // request guard cannot see it and the same customer could pay twice. The
+    // quote's own deposit flow sees every receipt, so that is where it goes.
+    // A reservation with no deposit, or a standalone one, is unchanged.
+    if (hasDepositAtEntry && args.dealQuoteId !== undefined) {
+      throw new ConvexError(
+        "A deposit cannot be taken on a reservation that is linked to a quote. Reserve without a deposit, then record the deposit (or ask a manager or accountant to) from the quote's deposit screen."
+      );
+    }
     return await runWithIdempotency(
       ctx,
       {

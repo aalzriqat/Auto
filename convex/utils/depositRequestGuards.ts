@@ -84,3 +84,51 @@ export async function quoteTerminalReason(
   }
   return null;
 }
+
+/**
+ * SCRUM-444 F1 — the way out named by every refusal below.
+ */
+export const RESERVATION_DEPOSIT_NEXT_STEP =
+  "Release or resolve that reservation deposit first (vehicle, Reservations tab), then record or request the deposit on the quote.";
+
+/**
+ * A reservation that was taken WITH a deposit and is linked to this quote is a
+ * receipt the quote's own arithmetic cannot see: `deposits.by_quote` never
+ * lists it, so the cap and the pending-request guard both read "nothing paid".
+ * `createReservation` no longer creates one, but historical rows can exist, so
+ * every door that would receive more money against the quote fails CLOSED while
+ * one is live.
+ *
+ * The lookup is bounded: the quote's own vehicles (one, or its line items) and,
+ * for each, the ACTIVE commitment claims of that car (`by_org_vehicle_status`),
+ * looking for a RESERVATION episode opened under THIS quote that carries a
+ * deposit which is still held or applied.
+ */
+export async function assertNoQuoteLinkedReservationDeposit(
+  ctx: QueryCtx,
+  quote: Doc<"quotes">
+): Promise<void> {
+  const vehicleIds = new Set<Id<"vehicles">>(
+    (quote.vehicleItems ?? [{ vehicleId: quote.vehicleId }]).map((item) => item.vehicleId)
+  );
+  for (const vehicleId of vehicleIds) {
+    const claims = await ctx.db
+      .query("vehicleCommitmentClaims")
+      .withIndex("by_org_vehicle_status", (q) =>
+        q.eq("orgId", quote.orgId).eq("vehicleId", vehicleId).eq("status", "ACTIVE")
+      )
+      .take(10);
+    for (const claim of claims) {
+      if (claim.evidenceKind !== "RESERVATION" || claim.quoteId !== quote._id) continue;
+      if (!claim.reservationId) continue;
+      const reservation = await ctx.db.get(claim.reservationId);
+      if (!reservation || reservation.orgId !== quote.orgId || !reservation.depositId) continue;
+      const deposit = await ctx.db.get(reservation.depositId);
+      if (!deposit || deposit.orgId !== quote.orgId || deposit.isDeleted === true) continue;
+      if (deposit.status !== "HELD" && deposit.status !== "APPLIED") continue;
+      throw new ConvexError(
+        `A reservation deposit taken on this deal's vehicle is already holding money for it, and this quote cannot see it. ${RESERVATION_DEPOSIT_NEXT_STEP}`
+      );
+    }
+  }
+}

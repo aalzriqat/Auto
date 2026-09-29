@@ -14,7 +14,10 @@ import {
   requireDepositMethod,
 } from "./utils/depositRecording";
 import { activeQuoteDepositMinor, postQuoteDeposit } from "./utils/quoteDepositPosting";
-import { quoteTerminalReason } from "./utils/depositRequestGuards";
+import {
+  assertNoQuoteLinkedReservationDeposit,
+  quoteTerminalReason,
+} from "./utils/depositRequestGuards";
 import { assertAcquirable } from "./commitments";
 import { getActorName, notifyByPermission, notifyUser } from "./utils/notifications";
 
@@ -54,6 +57,23 @@ function requestIsTerminalMessage(status: Doc<"depositRequests">["status"]): str
 
 function holdsConfirmAuthority(role: Doc<"roles">): boolean {
   return isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+}
+
+/**
+ * SCRUM-444 F4: whether the requester can still be told about their request.
+ * The predicate is the one the tenancy guard denies on — no membership, or an
+ * offboarding one — so a member who has left is never sent deal details.
+ */
+async function requesterIsActiveMember(
+  ctx: Parameters<typeof requireTenantAuth>[0],
+  orgId: Id<"organizations">,
+  userId: Id<"users">
+): Promise<boolean> {
+  const membership = await ctx.db
+    .query("memberships")
+    .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
+    .unique();
+  return !!membership && !membership.offboardingStatus;
 }
 
 async function loadOwnedRequest(
@@ -117,6 +137,10 @@ export const request = mutation({
           );
         }
 
+        // SCRUM-444 F1: a reservation deposit linked to this quote is money the
+        // arithmetic below cannot see, so the request fails closed on it.
+        await assertNoQuoteLinkedReservationDeposit(ctx, quote);
+
         // What the quote can still take, counting both the money already held
         // and the requests already waiting — otherwise two salespeople could
         // each request the full price and a manager would have to refuse the
@@ -160,7 +184,7 @@ export const request = mutation({
           PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
           "depositRequest.created",
           { actorName, amount: String(args.amount) },
-          { link: `/${args.orgId}/sales`, excludeUserId: user._id }
+          { link: `/${args.orgId}/approvals`, excludeUserId: user._id }
         );
 
         return requestId;
@@ -227,12 +251,26 @@ export const confirm = mutation({
         // what the customer was told, and quietly posting another one would
         // make the row and the ledger disagree about what was requested.
         const currency = normalizeCurrency(row.currency);
+        // SCRUM-444 F2: the request carries the currency it was raised in, and
+        // the org may since have changed it (the lock now probes PENDING
+        // requests, but an anomalous row must still never post at the wrong
+        // scale). Checked BEFORE any write.
+        const orgCurrency = normalizeCurrency(await getOrgCurrency(ctx, args.orgId));
+        if (currency !== orgCurrency) {
+          throw new ConvexError(
+            `This request was raised in ${currency} but the organization now uses ${orgCurrency}, so it cannot be confirmed. Reject it and ask the salesperson to raise a new request.`
+          );
+        }
         const amountMinor = amountToMinorOrThrow(args.amount, currency);
         if (amountMinor !== row.amountMinor) {
           throw new ConvexError(
             "The amount received does not match the request. Reject this request and ask the salesperson to make a new one for the amount actually received."
           );
         }
+
+        // SCRUM-444 F1: fail closed on a reservation deposit this quote cannot
+        // see; the request stays PENDING (this mutation throws and rolls back).
+        await assertNoQuoteLinkedReservationDeposit(ctx, quote);
 
         // Q1: a pending request never held the car, so a rival deal may have
         // taken it since. Checked BEFORE any write, with the way out named; the
@@ -275,7 +313,7 @@ export const confirm = mutation({
           confirmedDepositId: depositId,
         });
 
-        if (row.requestedBy !== user._id) {
+        if (row.requestedBy !== user._id && (await requesterIsActiveMember(ctx, args.orgId, row.requestedBy))) {
           const actorName = await getActorName(ctx);
           await notifyUser(
             ctx,
@@ -318,7 +356,7 @@ export const reject = mutation({
       resolutionReason: reason,
     });
 
-    if (row.requestedBy !== user._id) {
+    if (row.requestedBy !== user._id && (await requesterIsActiveMember(ctx, args.orgId, row.requestedBy))) {
       const actorName = await getActorName(ctx);
       await notifyUser(
         ctx,

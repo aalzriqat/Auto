@@ -913,3 +913,303 @@ describe("queue readers", () => {
     expect(await s.outsider.as.query(api.depositRequests.listPending, { orgId: s.otherOrgId })).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// FIX ROUND 1 (Opus 5.5 + Sol review of 670856372)
+// ---------------------------------------------------------------------------
+
+/** The historical shape F1 is about: a reservation deposit whose claim names the quote. */
+async function seedQuoteLinkedReservationDeposit(s: Ctx, quoteId: Id<"quotes">) {
+  const reservationId = await s.manager.as.mutation(api.vehicles.createReservation, {
+    orgId: s.orgId,
+    vehicleId: s.vehicleId,
+    customerId: s.customerId,
+    depositAmount: 22000,
+    depositMethod: "CASH",
+    idempotencyKey: crypto.randomUUID(),
+  });
+  // Rows written before `createReservation` refused this combination carry the
+  // quote on the reservation's commitment episode. One field, exactly that.
+  await s.t.run(async (ctx) => {
+    const claims = await ctx.db
+      .query("vehicleCommitmentClaims")
+      .withIndex("by_reservation", (q) => q.eq("reservationId", reservationId))
+      .collect();
+    expect(claims).toHaveLength(1);
+    await ctx.db.patch(claims[0]._id, { quoteId });
+  });
+  return reservationId;
+}
+
+describe("F1 — a quote-linked reservation deposit cannot be paid twice", () => {
+  test("createReservation REFUSES a deposit together with dealQuoteId, and writes nothing", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+
+    await expect(
+      s.manager.as.mutation(api.vehicles.createReservation, {
+        orgId: s.orgId,
+        vehicleId: s.vehicleId,
+        customerId: s.customerId,
+        depositAmount: 22000,
+        depositMethod: "CASH",
+        dealQuoteId: quoteId,
+        idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(/linked to a quote.*quote's deposit screen/i);
+
+    expect(await moneyFootprint(s)).toEqual(NO_MONEY);
+    expect(await s.t.run((ctx) => ctx.db.query("vehicleReservations").collect())).toHaveLength(0);
+  });
+
+  test("ordering 2: a PENDING request then a linked reservation deposit -> refused, no receipt", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    await requestDeposit(s, quoteId, 22000);
+
+    await expect(
+      s.manager.as.mutation(api.vehicles.createReservation, {
+        orgId: s.orgId,
+        vehicleId: s.vehicleId,
+        customerId: s.customerId,
+        depositAmount: 22000,
+        depositMethod: "CASH",
+        dealQuoteId: quoteId,
+        idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(/linked to a quote/i);
+    expect((await moneyFootprint(s)).deposits).toBe(0);
+  });
+
+  test("ordering 1: a live quote-linked reservation deposit -> request, record and confirm all fail closed", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    // Raised BEFORE the reservation deposit exists, so `confirm` is exercised too.
+    const earlyRequest = await requestDeposit(s, quoteId, 22000);
+    await seedQuoteLinkedReservationDeposit(s, quoteId);
+    expect((await moneyFootprint(s)).deposits).toBe(1);
+
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(/reservation deposit.*already holding money/i);
+    await expect(
+      s.manager.as.mutation(api.depositRequests.confirm, {
+        orgId: s.orgId,
+        requestId: earlyRequest,
+        amount: 22000,
+        method: "CASH",
+        idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(/reservation deposit.*already holding money/i);
+    expect((await s.t.run((ctx) => ctx.db.get(earlyRequest)))?.status).toBe("PENDING");
+
+    // Withdraw the waiting request so DA-04 does not answer first, then the
+    // direct door must still fail closed on the reservation deposit.
+    await s.sales.as.mutation(api.depositRequests.withdraw, { orgId: s.orgId, requestId: earlyRequest });
+    await expect(
+      s.manager.as.mutation(api.deposits.create, {
+        orgId: s.orgId,
+        quoteId,
+        amount: 22000,
+        method: "CASH",
+        idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(/reservation deposit.*already holding money/i);
+
+    // Exactly ONE receipt in the whole org.
+    expect((await moneyFootprint(s)).deposits).toBe(1);
+  });
+
+  test("controls: a deposit-free quote-linked reservation and a standalone reservation deposit still work", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    // Standalone reservation WITH a deposit: unchanged.
+    const standalone = await s.manager.as.mutation(api.vehicles.createReservation, {
+      orgId: s.orgId,
+      vehicleId: s.vehicleId,
+      customerId: s.customerId,
+      depositAmount: 1000,
+      depositMethod: "CASH",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(standalone).toBeTruthy();
+    expect((await moneyFootprint(s)).deposits).toBe(1);
+
+    // A second car: deposit-free reservation naming its quote is unchanged.
+    const car2 = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin: "1HGCM82633A555555", make: "Kia", model: "Sportage", year: 2022,
+        color: "Blue", fuelType: "Gasoline", transmission: "Automatic", mileage: 900,
+        sellingPrice: 18000, status: "AVAILABLE",
+      })
+    );
+    const quote2 = await makeQuote(s, { vehicleId: car2 });
+    const linked = await s.manager.as.mutation(api.vehicles.createReservation, {
+      orgId: s.orgId,
+      vehicleId: car2,
+      customerId: s.customerId,
+      dealQuoteId: quote2,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(linked).toBeTruthy();
+    expect((await moneyFootprint(s)).deposits).toBe(1);
+    // ...and the quote for a car with NO such deposit still takes a request.
+    await expect(requestDeposit(s, quote2, 500)).resolves.toBeTruthy();
+    void quoteId;
+  });
+});
+
+describe("F2 — currency", () => {
+  test("a PENDING request locks the organization currency; a resolved one does not", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const requestId = await requestDeposit(s, quoteId, 1500);
+    // Changing the currency is an owner action (`requireOwner`).
+    const ownerUserId = await s.t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "user_owner", email: "owner@test.com", name: "Owner" })
+    );
+    const ownerRoleId = await s.t.run((ctx) =>
+      ctx.db.insert("roles", {
+        orgId: s.orgId,
+        name: "OWNER",
+        permissions: [...Object.values(PERMISSIONS)],
+        isSystemOwnerRole: true,
+      })
+    );
+    await s.t.run((ctx) =>
+      ctx.db.insert("memberships", { orgId: s.orgId, userId: ownerUserId, roleId: ownerRoleId })
+    );
+    const owner = s.t.withIdentity({ subject: "user_owner", clerkId: "user_owner" });
+
+    await expect(
+      owner.mutation(api.orgSettings.upsert, { orgId: s.orgId, currency: "USD" })
+    ).rejects.toThrow(/currency cannot be changed/i);
+
+    await s.manager.as.mutation(api.depositRequests.reject, {
+      orgId: s.orgId,
+      requestId,
+      reason: "Customer changed their mind",
+    });
+    await expect(
+      owner.mutation(api.orgSettings.upsert, { orgId: s.orgId, currency: "USD" })
+    ).resolves.toBeDefined();
+  });
+
+  test("confirm refuses a request raised in another currency BEFORE any write", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const requestId = await s.t.run((ctx) =>
+      ctx.db.insert("depositRequests", {
+        orgId: s.orgId,
+        quoteId,
+        customerId: s.customerId,
+        vehicleId: s.vehicleId,
+        amount: 1500,
+        amountMinor: 150000,
+        currency: "USD",
+        status: "PENDING",
+        requestedBy: s.sales.userId,
+        requestedAt: Date.now(),
+        idempotencyKey: "anomalous-usd",
+      })
+    );
+
+    await expect(
+      s.manager.as.mutation(api.depositRequests.confirm, {
+        orgId: s.orgId,
+        requestId,
+        amount: 1500,
+        method: "CASH",
+        idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(/raised in USD.*now uses JOD.*raise a new request/i);
+    expect(await moneyFootprint(s)).toEqual(NO_MONEY);
+    expect((await s.t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("PENDING");
+  });
+
+  test("control: a same-currency request confirms", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const requestId = await requestDeposit(s, quoteId, 1500);
+    await expect(
+      s.manager.as.mutation(api.depositRequests.confirm, {
+        orgId: s.orgId,
+        requestId,
+        amount: 1500,
+        method: "CASH",
+        idempotencyKey: crypto.randomUUID(),
+      })
+    ).resolves.toBeTruthy();
+    expect((await moneyFootprint(s)).deposits).toBe(1);
+  });
+});
+
+describe("F3/F4 — who is told, and where the link goes", () => {
+  async function offboard(s: Ctx, userId: Id<"users">) {
+    await s.t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", s.orgId).eq("userId", userId))
+        .unique();
+      await ctx.db.patch(membership!._id, { offboardingStatus: "PENDING_EXTERNAL_REMOVAL" });
+    });
+  }
+  const notifiedFor = (s: Ctx, type: string) =>
+    s.t.run(async (ctx) =>
+      (await ctx.db.query("notifications").collect()).filter((n) => n.type === type)
+    );
+
+  test("the new-request notification links to the approvals queue, where accountants can act", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    await requestDeposit(s, quoteId, 1500);
+    const created = await notifiedFor(s, "depositRequest.created");
+    expect(created.length).toBeGreaterThan(0);
+    for (const n of created) expect(n.link).toBe(`/${s.orgId}/approvals`);
+  });
+
+  test("an OFFBOARDED finance member is told nothing; active finance members still are", async () => {
+    const s = await setup();
+    await offboard(s, s.accountant.userId);
+    const quoteId = await makeQuote(s);
+    await requestDeposit(s, quoteId, 1500);
+
+    const recipients = (await notifiedFor(s, "depositRequest.created")).map((n) => n.userId);
+    expect(recipients).not.toContain(s.accountant.userId);
+    expect(recipients).toContain(s.manager.userId);
+  });
+
+  test("an OFFBOARDED requester gets no rejection or confirmation notice; an active one does", async () => {
+    const s = await setup();
+    const q1 = await makeQuote(s);
+    const r1 = await requestDeposit(s, q1, 1500);
+    await s.manager.as.mutation(api.depositRequests.reject, { orgId: s.orgId, requestId: r1, reason: "No funds" });
+    expect((await notifiedFor(s, "depositRequest.rejected")).map((n) => n.userId)).toEqual([s.sales.userId]);
+
+    const car2 = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin: "1HGCM82633A666666", make: "Kia", model: "Rio", year: 2021,
+        color: "Grey", fuelType: "Gasoline", transmission: "Automatic", mileage: 700,
+        sellingPrice: 12000, status: "AVAILABLE",
+      })
+    );
+    const q2 = await makeQuote(s, { vehicleId: car2 });
+    const r2 = await requestDeposit(s, q2, 500);
+    await offboard(s, s.sales.userId);
+    await s.manager.as.mutation(api.depositRequests.reject, { orgId: s.orgId, requestId: r2, reason: "Changed mind" });
+    await s.manager.as.mutation(api.depositRequests.confirm, {
+      orgId: s.orgId,
+      requestId: await s.t.run(async (ctx) =>
+        (await ctx.db.insert("depositRequests", {
+          orgId: s.orgId, quoteId: q2, customerId: s.customerId, vehicleId: car2,
+          amount: 500, amountMinor: 500000, currency: "JOD", status: "PENDING",
+          requestedBy: s.sales.userId, requestedAt: Date.now(), idempotencyKey: "off-confirm",
+        }))
+      ),
+      amount: 500,
+      method: "CASH",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    // Still exactly the ONE notice from the active-requester control above.
+    expect((await notifiedFor(s, "depositRequest.rejected"))).toHaveLength(1);
+    expect(await notifiedFor(s, "depositRequest.confirmed")).toHaveLength(0);
+  });
+});
