@@ -126,13 +126,30 @@ const WITHHELD_CLOSE_VARIANTS: ReadonlyArray<{
 const UX4_VARIANTS: ReadonlyArray<{
   suffix: string;
   title: string;
-  mode: "past" | "future" | null;
+  mode: "past" | "future" | "notApplicable" | null;
   stage: string | null;
+  /** SCRUM-446: the DISBURSEMENT node is NOT_APPLICABLE and must read as such. */
+  na?: boolean;
 }> = [
+  { suffix: "-ux4-na-rail", title: "a not-needed payment step is a quiet dash on the rail, with no contradicting action", mode: null, stage: null, na: true },
+  { suffix: "-ux4-na-view", title: "opening a not-needed step says so, says why, and names nobody as acting", mode: "notApplicable", stage: "DISBURSEMENT", na: true },
   { suffix: "-ux4-settlement-checklist", title: "the live Settlement card lists its closing gates, one current", mode: null, stage: null },
   { suffix: "-ux4-view-past", title: "a past step opens read-only with a way back", mode: "past", stage: "APPLICATION" },
   { suffix: "-ux4-view-future", title: "a future step says what it needs and who acts", mode: "future", stage: "SETTLEMENT" },
 ];
+
+/** Sol UI-446-1: every stage finished, DISBURSEMENT not needed: the collapsed summary. */
+const NA_FINISHED_SUFFIX = "-ux4-na-finished";
+const NA_FINISHED_LITERAL: Readonly<Record<(typeof LOCALES)[number], { finished: string; complete: string; notNeeded: string }>> = {
+  en: { finished: "All stages finished", complete: "complete", notNeeded: "not needed" },
+  ar: { finished: "انتهت جميع المراحل", complete: "مكتملة", notNeeded: "غير مطلوبة" },
+};
+
+/** SCRUM-446: the one-line reason, hand-written for both languages. */
+const NA_REASON_LITERAL: Readonly<Record<(typeof LOCALES)[number], string>> = {
+  en: "No finance company pays the dealership on this deal.",
+  ar: "لا توجد شركة تمويل تدفع للمعرض في هذه الصفقة.",
+};
 
 /**
  * SCRUM-417 UX5 (O4): below `md` the stage rail is folded behind a disclosure
@@ -207,6 +224,11 @@ test.beforeAll(async () => {
       ).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
     }
     for (const { suffix } of UX4_VARIANTS) {
+      const variantFile = resolve(FIXTURES, `deal-cockpit-${locale}${suffix}.html`);
+      expect(existsSync(variantFile), `bridge did not write ${variantFile}`).toBe(true);
+      expect(statSync(variantFile).mtimeMs).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
+    }
+    for (const suffix of [NA_FINISHED_SUFFIX]) {
       const variantFile = resolve(FIXTURES, `deal-cockpit-${locale}${suffix}.html`);
       expect(existsSync(variantFile), `bridge did not write ${variantFile}`).toBe(true);
       expect(statSync(variantFile).mtimeMs).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
@@ -914,7 +936,33 @@ for (const variant of UX4_VARIANTS) {
             const nextStep = page.getByTestId("deal-next-step");
             await expect(nextStep).toBeVisible();
 
-            if (variant.mode === null) {
+            if (variant.na) {
+              // SCRUM-446: the rail says "not needed" and the slot agrees. Literals are
+              // hand-written, not read from the dictionaries the render used.
+              const stateWord = locale === "ar" ? "غير مطلوبة" : "Not needed";
+              const reason = locale === "ar" ? NA_REASON_LITERAL.ar : NA_REASON_LITERAL.en;
+              const node = page.getByTestId("deal-stage-node-DISBURSEMENT");
+              await expect(node).toBeVisible();
+              const label = (await node.getAttribute("aria-label")) ?? "";
+              expect(label, "node accessible name carries the state").toContain(stateWord);
+              expect(label, "node accessible name carries the reason").toContain(reason);
+              await expect(node).not.toHaveAttribute("aria-current", "step");
+              await expect(node.getByTestId("deal-stage-owner")).toHaveCount(0);
+              // The quiet dash: neither the success tick nor a stage number.
+              expect(await node.locator("svg").count()).toBeGreaterThan(0);
+              expect(await node.locator("svg.lucide-check, svg.lucide-circle-check").count()).toBe(0);
+              // No payment action or refusal is offered anywhere on the page.
+              // (The rail node's own accessible name says "Confirm finance company payment
+              // · Not needed", so the action slot is checked, not the whole page.)
+              await expect(nextStep.getByRole("button", { name: /confirm.*(payment|disbursement)|تأكيد.*(دفع|صرف)/i })).toHaveCount(0);
+              expect(await page.getByText(/Nothing is expected from the finance company|لا يوجد مبلغ متوقّع من شركة التمويل/).count()).toBe(0);
+              await node.scrollIntoViewIfNeeded();
+              await page.screenshot({
+                path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${variant.suffix}-rail.png`),
+              });
+            }
+
+            if (variant.mode === null && !variant.na) {
               const list = page.getByTestId("deal-step-checklist");
               await expect(list).toBeVisible();
               expect(await list.locator('[data-status="current"]').count()).toBe(1);
@@ -929,6 +977,10 @@ for (const variant of UX4_VARIANTS) {
               expect(box!.x).toBeGreaterThanOrEqual(mainBox!.x - 0.5);
               expect(box!.x + box!.width).toBeLessThanOrEqual(mainBox!.x + mainBox!.width + 0.5);
               await list.scrollIntoViewIfNeeded();
+            } else if (variant.mode === null) {
+              // na-rail: no step is being viewed; the live step's own card stays.
+              await expect(page.getByTestId("deal-stage-view")).toHaveCount(0);
+              expect(await rail.locator('[aria-current="step"]').count()).toBe(1);
             } else {
               const view = page.getByTestId("deal-stage-view");
               await expect(view).toBeVisible();
@@ -939,7 +991,17 @@ for (const variant of UX4_VARIANTS) {
               const backBox = await back.boundingBox();
               expect(backBox!.x).toBeGreaterThanOrEqual(mainBox!.x - 0.5);
               expect(backBox!.x + backBox!.width).toBeLessThanOrEqual(mainBox!.x + mainBox!.width + 0.5);
-              await expect(page.getByTestId("deal-stage-view-owner")).toBeVisible();
+              // Sol UI-446-2: a not-needed step names no owner at all; real stages keep theirs.
+              if (variant.mode === "notApplicable") {
+                await expect(page.getByTestId("deal-stage-view-owner")).toHaveCount(0);
+              } else {
+                await expect(page.getByTestId("deal-stage-view-owner")).toBeVisible();
+              }
+              if (variant.mode === "notApplicable") {
+                await expect(page.getByTestId("deal-stage-view-note")).toHaveText(NA_REASON_LITERAL[locale]);
+                await expect(view.getByText(locale === "ar" ? "غير مطلوبة" : "Not needed", { exact: true })).toBeVisible();
+                await expect(page.getByTestId("deal-stage-view-needs")).toHaveCount(0);
+              }
               // Only the live step has sub-steps: a viewed one lists none.
               await expect(view.getByTestId("deal-step-checklist")).toHaveCount(0);
               if (variant.mode === "future") await expect(page.getByTestId("deal-stage-view-needs")).toBeVisible();
@@ -965,6 +1027,52 @@ for (const variant of UX4_VARIANTS) {
           }
         });
       }
+    }
+  }
+}
+// Sol UI-446-1: the collapsed summary of a finished deal with a not-needed stage.
+for (const locale of LOCALES) {
+  for (const theme of THEMES) {
+    for (const viewport of VIEWPORTS) {
+      test(`${locale} · ${theme} · ${viewport.name}px: a finished deal with a not-needed step is summarised neutrally, with no completion tick`, async ({ browser }) => {
+        const context = await browser.newContext({
+          viewport: { width: viewport.width, height: viewport.height },
+          colorScheme: theme,
+        });
+        const page = await context.newPage();
+        try {
+          await paint(page, locale, theme, NA_FINISHED_SUFFIX);
+          const main = page.getByTestId("shell-main");
+          const mainBox = await main.boundingBox();
+          expect(mainBox).not.toBeNull();
+          const toggle = page.getByTestId("deal-stages-toggle");
+          await expect(toggle).toBeVisible();
+          const summary = toggle.locator("xpath=..");
+          const lit = NA_FINISHED_LITERAL[locale];
+          await expect(summary).toContainText(lit.finished);
+          await expect(summary).toContainText(lit.complete);
+          await expect(summary).toContainText(lit.notNeeded);
+          expect(await summary.innerText()).not.toContain(locale === "ar" ? "اكتملت جميع المراحل" : "All stages complete");
+          expect(await summary.locator("svg.lucide-check, svg.lucide-circle-check").count()).toBe(0);
+          expect(await summary.locator("bdi[dir=ltr]").allInnerTexts()).toEqual(["7", "1"]);
+          await expect(page.getByTestId("deal-stage-rail")).toHaveCount(0);
+          const box = await summary.boundingBox();
+          expect(box!.x).toBeGreaterThanOrEqual(mainBox!.x - 0.5);
+          expect(box!.x + box!.width).toBeLessThanOrEqual(mainBox!.x + mainBox!.width + 0.5);
+          expect(await page.evaluate(() => getComputedStyle(document.body).direction)).toBe(locale === "ar" ? "rtl" : "ltr");
+          const overflow = await main.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+          expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth);
+          await summary.scrollIntoViewIfNeeded();
+          await page.screenshot({
+            path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${NA_FINISHED_SUFFIX}.png`),
+          });
+          await summary.screenshot({
+            path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${NA_FINISHED_SUFFIX}-summary.png`),
+          });
+        } finally {
+          await context.close();
+        }
+      });
     }
   }
 }
