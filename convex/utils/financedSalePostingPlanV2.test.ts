@@ -68,6 +68,13 @@ describe("v2 financed-sale plan (finance company forward)", () => {
     expect(!f.ok && f.refusal.code).toBe("CONTRIBUTION_INVALID");
   });
 
+  it("names an unusable held deposit as the deposit, not the contribution", () => {
+    const n = buildFinancedSalePostingPlanV2({ ...base, depositLiabilityAppliedMinor: -1 });
+    expect(!n.ok && n.refusal.code).toBe("DEPOSIT_INVALID");
+    const f = buildFinancedSalePostingPlanV2({ ...base, depositLiabilityAppliedMinor: 1.5 });
+    expect(!f.ok && f.refusal.code).toBe("DEPOSIT_INVALID");
+  });
+
   it("refuses an unbalanced invoice and never echoes H or C in the message", () => {
     const r = buildFinancedSalePostingPlanV2({ ...base, legalInvoiceConsiderationMinor: 20_000 });
     expect(!r.ok && r.refusal.code).toBe("PLAN_UNBALANCED");

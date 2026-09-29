@@ -552,6 +552,18 @@ describe("SCRUM-435 - the cockpit shows the same proof, tiered by permission", (
     const asSales = await s.sales.as.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
     expect(asSales?.forward.mayCancelFinalized).toBe(false);
   });
+
+  test("a role that may finalize and confirm but not create applications is not offered the cancel", async () => {
+    // cancelApplication requires CREATE_FINANCE_APPLICATION at entry, so the cockpit must not offer it.
+    const { s, applicationId } = await finalizedDeal("cock3");
+    const perms = ["finalize:financed_deal", "confirm:finance_disbursement", "view:finance_applications", "view:sales"];
+    const userId = await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "cock3_fc", email: "cock3.fc@example.com", name: "fc" }));
+    const roleId = await s.t.run((ctx) => ctx.db.insert("roles", { orgId: s.orgId, name: "FIN_CONFIRM", permissions: perms }));
+    await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId }));
+    const asRole = s.t.withIdentity({ subject: "cock3_fc", clerkId: "cock3_fc" });
+    const cockpit = await asRole.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+    expect(cockpit?.forward.mayCancelFinalized).toBe(false);
+  });
 });
 
 describe("SCRUM-435 - replacement eligibility follows the same proof", () => {

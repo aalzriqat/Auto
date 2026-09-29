@@ -143,7 +143,8 @@ export type PlanRefusalCode =
   // v2 (SCRUM-435, finance-company forward)
   | "SETTLEMENT_DEDUCTIONS_NOT_ALLOWED"
   | "DEPOSIT_EXCEEDS_FIRST_PAYMENT"
-  | "CONTRIBUTION_INVALID";
+  | "CONTRIBUTION_INVALID"
+  | "DEPOSIT_INVALID";
 
 export interface PlanRefusal {
   code: PlanRefusalCode;
@@ -609,7 +610,7 @@ export function buildFinancedSalePostingPlanV2(input: FinancedSalePlanV2Input): 
   const h = input.depositLiabilityAppliedMinor;
   if (!isWholeMinorAmount(h) || h < 0) {
     return refuseV2(
-      "CONTRIBUTION_INVALID",
+      "DEPOSIT_INVALID",
       "The deposit held for this deal is not a usable amount. Have accounting review it before finalizing."
     );
   }

@@ -1381,14 +1381,14 @@ async function setupFinalizedFinancedDeal() {
         expectedAmountMinor: due,
         idempotencyKey: crypto.randomUUID(),
       });
-      // This fixture has no chart of accounts, so the outbox cannot drain here;
-      // the posting itself is proven in financeCompanyForward.test.ts.
-      await t.run(async (ctx) => {
-        const events = await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect();
-        for (const e of events) {
-          if (e.eventType === "FINANCE_COMPANY_FORWARD_PAID") await ctx.db.patch(e._id, { status: "POSTED" });
-        }
-      });
+      // The chart and an open period exist, so the forward posts synchronously.
+      // Assert it rather than force it: confirmDisbursement gates on this proof.
+      const forwardEvents = await t.run(async (ctx) =>
+        (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).filter(
+          (e) => e.eventType === "FINANCE_COMPANY_FORWARD_PAID"
+        )
+      );
+      expect(forwardEvents.map((e) => e.status)).toEqual(["POSTED"]);
     }
     return due;
   };

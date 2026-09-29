@@ -2602,6 +2602,11 @@ export function DealCockpit({
                 const forwardId = deal.forward?.onBooksForwardId;
                 const kind = forwardCorrection;
                 if (!forwardId || !kind) return;
+                // A VOID dialog opened before the transfer was confirmed must not submit after it.
+                if (kind === "VOID" && deal.forward?.transferConfirmed === true) {
+                  setForwardCorrection(null);
+                  return;
+                }
                 setForwardCorrectionSubmitting(true);
                 const intent = `forward-correction:${kind}:${applicationId}:${forwardId}:${reason}`;
                 try {

@@ -2210,7 +2210,8 @@ export const dealCockpit = query({
          */
         mayCancelFinalized:
           isSystemOwnerRole(role) ||
-          (role.permissions.includes(PERMISSIONS.FINALIZE_FINANCED_DEAL) &&
+          (role.permissions.includes(PERMISSIONS.CREATE_FINANCE_APPLICATION) &&
+            role.permissions.includes(PERMISSIONS.FINALIZE_FINANCED_DEAL) &&
             role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT)),
       },
       documents,
