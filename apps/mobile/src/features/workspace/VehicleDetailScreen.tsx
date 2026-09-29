@@ -309,14 +309,18 @@ function VehicleDetailContent({
     //
     // The refund method is part of the decision, not presentation: refunding to
     // CASH and to BANK_TRANSFER must not share one identity.
-    const method = resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : "NONE";
+    // SCRUM-469: no default. A refund with no chosen method is refused here (the
+    // button is also disabled) and the server refuses it too.
+    const chosenMethod = refundMethodByDeposit[depositId];
+    if (resolution === "REFUNDED" && chosenMethod === undefined) return;
+    const method = resolution === "REFUNDED" ? chosenMethod : "NONE";
     const intent = `release-deposit:${String(depositId)}:${resolution}:${method}:gen${observedReleaseCount}`;
     try {
       await releaseDeposit({
         orgId,
         depositId,
         resolution,
-        refundMethod: resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : undefined,
+        refundMethod: resolution === "REFUNDED" ? chosenMethod : undefined,
         idempotencyKey: commandId.for(intent),
       });
       commandId.retire(intent);
@@ -566,7 +570,7 @@ function VehicleDetailContent({
                     <>
                       <SelectField
                         label={locale === "ar" ? "طريقة الاسترداد" : "Refund method"}
-                        value={refundMethodByDeposit[deposit._id] ?? "CASH"}
+                        value={refundMethodByDeposit[deposit._id] ?? ""}
                         options={paymentMethodOptions}
                         onChange={(method) =>
                           setRefundMethodByDeposit((prev) => ({
@@ -575,9 +579,16 @@ function VehicleDetailContent({
                           }))
                         }
                       />
+                      {refundMethodByDeposit[deposit._id] === undefined ? (
+                        <Text accessibilityRole="alert" style={styles.mutedText}>
+                          {locale === "ar"
+                            ? "اختر طريقة الاسترداد لتتمكن من استرداد العربون."
+                            : "Choose the refund method to refund this deposit."}
+                        </Text>
+                      ) : null}
                       <View style={styles.cardActions}>
                         <PrimaryButton
-                          disabled={releasingDepositId === deposit._id}
+                          disabled={releasingDepositId === deposit._id || refundMethodByDeposit[deposit._id] === undefined}
                           label={locale === "ar" ? "استرداد" : "Refund"}
                           tone="muted"
                           onPress={() =>
