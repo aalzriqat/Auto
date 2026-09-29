@@ -462,7 +462,7 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
   function summaryTile(labelKey: string): string | null {
     const label = screen
       .queryAllByText(labelKey)
-      .find((el) => el.tagName === "P" && el.closest('details:not([data-testid="deal-details"])') === null);
+      .find((el) => el.tagName === "P" && el.closest("details, [hidden]") === null);
     return label?.parentElement?.textContent ?? null;
   }
 
@@ -544,7 +544,7 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
     );
     const tiles = screen
       .getAllByText(/^Line/)
-      .filter((el) => el.tagName === "P" && el.closest('details:not([data-testid="deal-details"])') === null)
+      .filter((el) => el.tagName === "P" && el.closest("details, [hidden]") === null)
       .map((el) => el.textContent);
     expect(tiles).toEqual([
       "LineApprovedPurchase",
@@ -595,16 +595,16 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
     ];
     // Tiles: one per line, server order, zeros spelled with their sign.
     const tiles = Array.from(container.querySelectorAll("p"))
-      .filter((el) => served.includes(el.textContent ?? "") && el.closest('details:not([data-testid="deal-details"])') === null)
+      .filter((el) => served.includes(el.textContent ?? "") && el.closest("details, [hidden]") === null)
       .map((el) => el.textContent);
     expect(tiles).toEqual(served);
     expect(summaryTile("LineCustomerPlannedToDealer")).toMatch(/LineCustomerPlannedToDealer0 د\.أ/);
     expect(summaryTile("LineDealerContribution")).toMatch(/LineDealerContribution− 0 د\.أ/);
     expect(summaryTile("FUTURE_SERVER_LINE")).toMatch(/FUTURE_SERVER_LINE− 0 د\.أ/);
     // Breakdown: the same six terms, same order, nothing filtered.
-    const breakdown = Array.from(container.querySelectorAll('details:not([data-testid="deal-details"]) dt')).map((el) => el.textContent);
+    const breakdown = Array.from(container.querySelectorAll("details dt")).map((el) => el.textContent);
     expect(breakdown).toEqual(served);
-    const breakdownValues = Array.from(container.querySelectorAll('details:not([data-testid="deal-details"]) dd')).map((el) => el.textContent);
+    const breakdownValues = Array.from(container.querySelectorAll("details dd")).map((el) => el.textContent);
     expect(breakdownValues).toEqual([
       "12,500 د.أ",
       "0 د.أ",
