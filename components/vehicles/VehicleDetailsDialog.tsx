@@ -486,8 +486,8 @@ export function VehicleDetailsDialog({
                     </span>
                     <div className="space-y-2">
                       {deposits.map((deposit) => (
-                        <div key={deposit._id} className="bg-muted/30 p-3 rounded-lg border text-sm flex items-center justify-between gap-3">
-                          <div>
+                        <div key={deposit._id} className="bg-muted/30 p-3 rounded-lg border text-sm flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                          <div className="min-w-0">
                             <p className="font-medium">
                               {deposit.amount.toLocaleString()} JOD{" "}
                               <span

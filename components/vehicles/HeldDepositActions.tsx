@@ -30,9 +30,9 @@ export function HeldDepositActions({
   t: (key: any) => string;
 }>) {
   return (
-    <div className="flex flex-col items-end gap-1 shrink-0">
-      <div className="flex gap-2 items-center">
-        <div className="w-32">
+    <div className="flex min-w-0 max-w-full flex-col items-end gap-1">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <div className="w-44 max-w-full">
           <PaymentMethodSelect
             t={t}
             value={method}
@@ -63,7 +63,7 @@ export function HeldDepositActions({
         </Button>
       </div>
       {method === undefined ? (
-        <p className="text-xs font-medium text-destructive text-end" role="alert">
+        <p className="max-w-[18rem] text-xs font-medium text-destructive text-end" role="alert">
           {t("RefundMethodRequired")}
         </p>
       ) : null}
