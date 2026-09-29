@@ -26,6 +26,45 @@ export const MAX_FEE_ATTACHMENTS = 10;
 /** How long a direct payment's free-text reference may be, in characters. */
 export const MAX_DIRECT_PAYMENT_REFERENCE_CHARS = 200;
 
+/**
+ * Field caps, in JS string length (UTF-16 units) — the input boundary of the
+ * byte bound (SCRUM-443 v6). A unit is at most 3 UTF-8 bytes (Arabic is 2, a
+ * surrogate pair is 2 per unit), so the worst case of the free text one line
+ * can carry is 3 x (description + void reason + reconciliation notes + receipt
+ * reference + direct-payment reference) = 3 x 1,700 = 5,100 bytes, leaving
+ * ~3,000 of the 8,192 for the fixed fields, ten attachment ids, the custody /
+ * direct-payment sub-documents and the ids at production length. The composed
+ * worst-case test (`feeDocFieldCaps.test.ts`) measures it.
+ *
+ * The caps in the brief (1,000 / 500 / 2,000) do not fit at 3 bytes a unit:
+ * 3 x 3,500 alone is 10,500 bytes.
+ */
+export const MAX_FEE_DESCRIPTION_CHARS = 500;
+export const MAX_FEE_VOID_REASON_CHARS = 300;
+export const MAX_FEE_RECONCILIATION_NOTES_CHARS = 500;
+export const MAX_FEE_RECEIPT_REFERENCE_CHARS = 200;
+
+/** The first `max` UTF-16 units of `text`, never splitting a surrogate pair. */
+export function truncateFeeText(text: string, max: number): string {
+  if (text.length <= max) return text;
+  let end = max;
+  const code = text.charCodeAt(end - 1);
+  if (code >= 0xd800 && code <= 0xdbff) end -= 1;
+  return text.slice(0, end);
+}
+
+/**
+ * Refuses, guided and before anything is written, free text past its cap. The
+ * server is the authority; the cockpit inputs only mirror it with `maxLength`.
+ */
+export function assertFeeTextWithinCap(text: string | undefined, max: number, label: string, action: string): void {
+  if (text !== undefined && text.length > max) {
+    throw new ConvexError(
+      `${label} may be at most ${max} characters (this one has ${text.length}), so ${action} is refused. Shorten it and try again. Nothing has been recorded.`
+    );
+  }
+}
+
 /** The value with every `undefined` (a cleared field) removed, recursively — what the platform would store. */
 function withoutUndefined(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(withoutUndefined);
@@ -49,35 +88,20 @@ export function feeDocBytes(doc: Record<string, unknown>): number {
 }
 
 /**
- * Refuses, guided and before anything is written, a cost line whose RESULTING
- * document — the row as it will stand after the insert or patch — is past
- * `MAX_FEE_DOC_BYTES`. `userFields` names the fields the caller typed
- * (`receiptReference`, `documentStorageIds`, ...): when the line is too big
- * even without them, the text is copied from the finance company's fee template
- * (`financeCompanies.feeTemplates`, frozen onto the application's
- * `companyRuleSnapshot`) and the next step is to edit that template.
+ * The LAST-RESORT backstop: refuses, guided and before anything is written, a
+ * cost line whose RESULTING document — the row as it will stand after the
+ * insert or patch — is past `MAX_FEE_DOC_BYTES`. The field caps above make this
+ * unreachable for a row a writer admits (SCRUM-443 v6); it stays at every
+ * writer so a legacy or raw-edited row that is already near the bound is
+ * refused rather than grown past it.
  */
-export function assertFeeDocWithinBytes(
-  doc: Record<string, unknown>,
-  action: string,
-  userFields: ReadonlyArray<string> = []
-): void {
+export function assertFeeDocWithinBytes(doc: Record<string, unknown>, action: string): void {
   const bytes = feeDocBytes(doc);
   if (bytes <= MAX_FEE_DOC_BYTES) return;
-  if (userFields.length > 0) {
-    const stripped: Record<string, unknown> = { ...doc };
-    for (const field of userFields) delete stripped[field];
-    if (feeDocBytes(stripped) > MAX_FEE_DOC_BYTES) {
-      throw new ConvexError(
-        `This cost's description (copied from the finance company's fee template) is too large to store (${bytes.toLocaleString("en-US")} of ${MAX_FEE_DOC_BYTES.toLocaleString("en-US")} bytes), so ${action} is refused. Edit the fee template in the finance company's settings to shorten it, then record the cost again. Nothing has been recorded.`
-      );
-    }
-  }
   throw new ConvexError(
     `This cost's text and attachments are too large to store (${bytes.toLocaleString("en-US")} of ${MAX_FEE_DOC_BYTES.toLocaleString("en-US")} bytes), so ${action} is refused. Shorten the description, reference or notes, or remove attachments, and try again. Nothing has been recorded.`
   );
 }
-
 /** The cost line as it will stand after `patch` is applied (a key set to `undefined` is cleared). */
 export function feeAfterPatch<T extends Record<string, unknown>>(fee: T, patch: Record<string, unknown>): Record<string, unknown> {
   return { ...fee, ...patch };

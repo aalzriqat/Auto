@@ -1328,6 +1328,9 @@ export function DealCockpit({
           // Undefined while readiness is loading or unavailable: nothing then
           // says a recorded payment is on the books.
           handoverCostsCheck: closingReadiness?.checks.find((c) => c.key === "HANDOVER_COSTS_PAID")?.status,
+          // The same discipline for a custody-paid line (SCRUM-443 v6): the row
+          // says a posting was made; only this check says it is on the books.
+          custodyLedgerCheck: closingReadiness?.checks.find((c) => c.key === "CUSTODY_ON_LEDGER")?.status,
           // A cancelled deal is never finalized: its direct payments read as
           // recorded on a cancelled deal, never as settled (SCRUM-443).
           dealCancelled: app.status === "CANCELLED",

@@ -109,6 +109,40 @@ export function isHandoverLine(line: HandoverPaymentLine): boolean {
 }
 
 /**
+ * What the deal's route does with a dealer-borne cost that is WITHHELD from the
+ * finance company's settlement. On a configured financed-sale plan the plan
+ * itself recognises it (`settlementDeductedFees` posts each to its treatment's
+ * account), so it is nobody's cash here; off the plan nothing posts it at all
+ * (SCRUM-443 v6, Sol F1).
+ */
+export type HandoverScope = { planRecognisesDeductions: boolean };
+
+/** The scope of callers that do not judge a route (payment-family tests, the proof): deductions are the plan's. */
+const PLAN_SCOPE: HandoverScope = { planRecognisesDeductions: true };
+
+/**
+ * The two states of a REAL cost (dealer-borne, a handover fee type, a positive
+ * readable actual) that NO supported payment source can settle, so it would
+ * reach no ledger account at all:
+ *
+ *  - UNSUPPORTED_TREATMENT   — its treatment is not one a payment posts against
+ *                              (capitalized to the vehicle, a receivable, ...).
+ *  - DEDUCTION_NOT_RECOGNISED — withheld from a settlement no configured plan
+ *                              recognises (a cash / off-plan deal).
+ */
+function unsupportedSourceState(line: HandoverPaymentLine, scope: HandoverScope): "UNSUPPORTED_TREATMENT" | "DEDUCTION_NOT_RECOGNISED" | null {
+  if (line.voidedAt !== undefined) return null;
+  if (!HANDOVER_LINE_FEE_TYPES.has(line.feeType)) return null;
+  if (line.paidBy !== "DEALER" && line.paidBy !== "EMPLOYEE") return null;
+  const actual = line.actualAmountMinor;
+  if (actual === undefined || !isMinorAmount(actual) || actual <= 0) return null;
+  const deducted = line.deductedFromSettlement === true;
+  if (deducted && scope.planRecognisesDeductions) return null;
+  if (!CUSTODY_POSTABLE_TREATMENTS.has(line.accountingTreatment)) return "UNSUPPORTED_TREATMENT";
+  return deducted ? "DEDUCTION_NOT_RECOGNISED" : null;
+}
+
+/**
  * The payment state of one line.
  *
  *  - NOT_HANDOVER_LINE — outside the invariant.
@@ -120,6 +154,8 @@ export function isHandoverLine(line: HandoverPaymentLine): boolean {
  *                        live custody posting is that custody at that amount.
  *  - PAID_DIRECT       — a live direct payment whose amount is the actual.
  *  - UNPAID            — a real actual with neither. BLOCKING.
+ *  - UNSUPPORTED_TREATMENT / DEDUCTION_NOT_RECOGNISED — a real cost no supported
+ *                        source can pay (see `unsupportedSourceState`). BLOCKING.
  *  - CONFLICT          — carries BOTH a custody posting and a direct payment,
  *                        which would put the one cost on the books twice.
  *                        BLOCKING; no writer produces it.
@@ -131,10 +167,12 @@ export type HandoverPaymentState =
   | "PAID_CUSTODY"
   | "PAID_DIRECT"
   | "UNPAID"
+  | "UNSUPPORTED_TREATMENT"
+  | "DEDUCTION_NOT_RECOGNISED"
   | "CONFLICT";
 
-export function handoverPaymentState(line: HandoverPaymentLine): HandoverPaymentState {
-  if (!isHandoverLine(line)) return "NOT_HANDOVER_LINE";
+export function handoverPaymentState(line: HandoverPaymentLine, scope: HandoverScope = PLAN_SCOPE): HandoverPaymentState {
+  if (!isHandoverLine(line)) return unsupportedSourceState(line, scope) ?? "NOT_HANDOVER_LINE";
   const actual = line.actualAmountMinor;
   if (actual === undefined) return "NO_ACTUAL";
   // Checked positively: NaN, a fraction or a negative is not a figure anybody
@@ -154,14 +192,21 @@ export function handoverPaymentState(line: HandoverPaymentLine): HandoverPayment
 
 /** Whether a line in this state stops the deal from finalizing. */
 export function handoverStateBlocks(state: HandoverPaymentState): boolean {
-  return state === "NO_ACTUAL" || state === "UNPAID" || state === "CONFLICT";
+  return (
+    state === "NO_ACTUAL" ||
+    state === "UNPAID" ||
+    state === "CONFLICT" ||
+    state === "UNSUPPORTED_TREATMENT" ||
+    state === "DEDUCTION_NOT_RECOGNISED"
+  );
 }
 
 /** The live handover lines that are neither custody-paid nor direct-paid (nor zero). */
 export function blockingHandoverLines<T extends HandoverPaymentLine & { _id: Id<"financeDealFees"> }>(
-  liveFees: ReadonlyArray<T>
+  liveFees: ReadonlyArray<T>,
+  scope: HandoverScope = PLAN_SCOPE
 ): T[] {
-  return liveFees.filter((fee) => handoverStateBlocks(handoverPaymentState(fee)));
+  return liveFees.filter((fee) => handoverStateBlocks(handoverPaymentState(fee, scope)));
 }
 
 /**
@@ -178,6 +223,15 @@ export function blockingHandoverLines<T extends HandoverPaymentLine & { _id: Id<
 export function directPaymentRefusal(line: HandoverPaymentLine): string | null {
   if (line.voidedAt !== undefined) {
     return "This cost has been removed, so no payment can be recorded against it. Add the cost again if it was paid.";
+  }
+  // A real dealer-borne cost whose treatment no payment posts against: say so,
+  // and name the door — this deal cannot pay it from any source as recorded.
+  if (
+    !isHandoverLine(line) &&
+    line.deductedFromSettlement !== true &&
+    unsupportedSourceState(line, { planRecognisesDeductions: false }) === "UNSUPPORTED_TREATMENT"
+  ) {
+    return `This cost is treated as ${line.accountingTreatment}, which no payment can be recorded against, so it would never reach the ledger. Remove the cost and record it again with a treatment that posts (appraisal, insurance, ownership transfer, finance-company commission or selling expense). Nothing has been recorded.`;
   }
   if (!isHandoverLine(line)) {
     return "Only a handover cost the dealership bears (not deducted from the finance company's settlement) is paid this way. Nothing has been recorded.";

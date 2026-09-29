@@ -38,10 +38,12 @@ import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { toMinorUnits } from "./money";
 import { requireCustomerGapToDealer } from "./financingEconomics";
 import { summarizeFees } from "./feeSummary";
+import { consignedSettlementRoute, dealershipCollectsGross, isConsignedAgentSale } from "./vehicleOwnership";
 import {
   blockingHandoverLines,
   handoverPaymentState,
   type HandoverPaymentState,
+  type HandoverScope,
 } from "./handoverCostPayment";
 
 /**
@@ -58,6 +60,21 @@ import {
  * or not settled, stop finalization on every route, before the coverage
  * question is asked. See `evaluateClosingReadiness`.
  */
+
+/**
+ * Whether this deal's money goes straight from the finance company to the
+ * supplier, so nothing gross ever reaches the dealership's books — the pre-sale
+ * reading (the live vehicle), shared by finalization and the cost screen so the
+ * two cannot disagree about whether the plan covers the deal. Fails closed onto
+ * the ordinary path: a route naming a supplier settlement on dealer-owned stock
+ * is a contradiction, not a direct deal.
+ */
+// KEEP IN STEP with `settlesDirectToSupplier` in convex/applications.ts (a byte-pinned protected file that cannot import this without a pin renewal); a tripwire test compares the two bodies.
+export async function dealSettlesDirect(ctx: QueryCtx | MutationCtx, app: Doc<"financeApplications">): Promise<boolean> {
+  if (dealershipCollectsGross(consignedSettlementRoute(app))) return false;
+  const vehicle = await ctx.db.get(app.vehicleId);
+  return vehicle != null && isConsignedAgentSale(vehicle);
+}
 
 /** Deals this model covers. Everything else posts the way it always did. */
 export function financedSaleRecognitionApplies(
@@ -181,8 +198,11 @@ function custodySettledRefusal(
  * The first refusal names the most upstream problem — a line nobody has said
  * the cost of, then a line that is unpaid, then a contradictory one.
  */
-function handoverCostsPaidRefusal(liveFees: ReadonlyArray<Doc<"financeDealFees">>): ClosingReadinessReason | null {
-  const states = liveFees.map((fee) => handoverPaymentState(fee));
+function handoverCostsPaidRefusal(
+  liveFees: ReadonlyArray<Doc<"financeDealFees">>,
+  scope: HandoverScope
+): ClosingReadinessReason | null {
+  const states = liveFees.map((fee) => handoverPaymentState(fee, scope));
   const count = (state: HandoverPaymentState) => states.filter((s) => s === state).length;
   const noActual = count("NO_ACTUAL");
   if (noActual > 0) {
@@ -198,6 +218,24 @@ function handoverCostsPaidRefusal(liveFees: ReadonlyArray<Doc<"financeDealFees">
       "HANDOVER_COSTS_UNPAID",
       `${unpaid} handover cost(s) on this deal have not been paid from a recorded source. Charge each to the employee custody that paid it, or record the dealership's direct payment, before finalizing.`,
       { count: unpaid }
+    );
+  }
+  // A real cost no supported source can pay: it would reach no ledger account
+  // (SCRUM-443 v6). Named with the door, in the deal's own words.
+  const unsupported = count("UNSUPPORTED_TREATMENT");
+  if (unsupported > 0) {
+    return reasonOf(
+      "HANDOVER_COSTS_UNSUPPORTED_TREATMENT",
+      `${unsupported} handover cost(s) on this deal are classified with a treatment no payment can be recorded against, so they would never reach the ledger. Remove each one and record it again with a treatment that posts (appraisal, insurance, ownership transfer, finance-company commission or selling expense), then pay it, before finalizing.`,
+      { count: unsupported }
+    );
+  }
+  const notRecognised = count("DEDUCTION_NOT_RECOGNISED");
+  if (notRecognised > 0) {
+    return reasonOf(
+      "HANDOVER_COSTS_DEDUCTION_NOT_RECOGNISED",
+      `${notRecognised} handover cost(s) on this deal are marked as deducted from the finance company's settlement, but this deal has no configured financing plan to recognise a deduction, so they would never reach the ledger. Remove each one and record it again without the settlement deduction, then pay it directly or charge it to custody, before finalizing.`,
+      { count: notRecognised }
     );
   }
   const conflict = count("CONFLICT");
@@ -462,12 +500,14 @@ export async function evaluateClosingReadiness(
   // Row verdicts first (a line with no source at all); only when every line
   // has one is each direct payment proven on the LEDGER — a ledger that cannot
   // be read is UNAVAILABLE, never READY.
+  // Deductions are the plan's to recognise only where a plan covers the deal.
+  const handoverScope: HandoverScope = { planRecognisesDeductions: planCovered };
   let ledgerFeeIds: string[] = [];
   await onRows(
     "HANDOVER_COSTS_PAID",
     { onThrow: "UNAVAILABLE", throwCode: "HANDOVER_DIRECT_LEDGER_UNVERIFIABLE" },
     async ({ fees }) => {
-      const rowRefusal = handoverCostsPaidRefusal(fees);
+      const rowRefusal = handoverCostsPaidRefusal(fees, handoverScope);
       if (rowRefusal !== null) return rowRefusal;
       const proof = await handoverDirectLedgerRefusal(ctx, app.orgId, app._id, fees);
       ledgerFeeIds = proof.feeIds;
@@ -477,7 +517,7 @@ export async function evaluateClosingReadiness(
   const handoverCheck = checks[checks.length - 1];
   if (rows !== null && handoverCheck.status === "BLOCKED") {
     handoverCheck.feeIds =
-      ledgerFeeIds.length > 0 ? ledgerFeeIds : blockingHandoverLines(rows.fees).map((fee) => fee._id as string);
+      ledgerFeeIds.length > 0 ? ledgerFeeIds : blockingHandoverLines(rows.fees, handoverScope).map((fee) => fee._id as string);
   }
 
   // An unknown first payment is not zero (SCRUM-373): a quoted, approved deal

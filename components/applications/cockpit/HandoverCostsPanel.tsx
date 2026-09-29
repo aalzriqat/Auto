@@ -10,6 +10,13 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { economicDateInputToMs, economicTodayDateInput } from "@/lib/dateInput";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
+import {
+  MAX_DIRECT_PAYMENT_REFERENCE_CHARS,
+  MAX_FEE_DESCRIPTION_CHARS,
+  MAX_FEE_RECEIPT_REFERENCE_CHARS,
+  MAX_FEE_RECONCILIATION_NOTES_CHARS,
+  MAX_FEE_VOID_REASON_CHARS,
+} from "@/convex/utils/feeDocLimits";
 
 /** The fee-type union the server validates — the row carries it as such, so no cast is needed to send it back. */
 export type ServedFeeType = Doc<"financeDealFees">["feeType"];
@@ -210,6 +217,8 @@ export type HandoverPaymentView =
   | "PAID_CUSTODY"
   | "PAID_DIRECT"
   | "UNPAID"
+  | "UNSUPPORTED_TREATMENT"
+  | "DEDUCTION_NOT_RECOGNISED"
   | "CONFLICT";
 
 /** How the dealership itself paid — required, never defaulted (it decides which account the money left). */
@@ -458,6 +467,7 @@ export function HandoverCostsPanel({
   onAbandonDirectPayment,
   postingHoldFeeIds = [],
   handoverCostsCheck,
+  custodyLedgerCheck,
   dealCancelled = false,
 }: Readonly<{
   /** `undefined` while loading or when this caller may not read the cost rows. */
@@ -531,6 +541,14 @@ export function HandoverCostsPanel({
    * the books, so it is shown as recorded, not as paid.
    */
   handoverCostsCheck?: "READY" | "BLOCKED" | "UNAVAILABLE" | "NOT_APPLICABLE";
+  /**
+   * The server's verdict on the `CUSTODY_ON_LEDGER` check (SCRUM-443 v6). A
+   * custody-paid line's emerald "Paid from custody" is shown ONLY when this is
+   * READY (or the deal is closed): the row says a posting was made, the ledger
+   * says whether it landed (a closed period queues it). Any other state, or none
+   * while readiness loads, shows the neutral "Recorded — waiting for posting".
+   */
+  custodyLedgerCheck?: "READY" | "BLOCKED" | "UNAVAILABLE" | "NOT_APPLICABLE";
   /**
    * The deal was CANCELLED (SCRUM-443 v5). A cancelled deal is never finalized,
    * so no closing check will ever confirm its payments on the books: they are
@@ -668,6 +686,7 @@ export function HandoverCostsPanel({
         canRecord={canRecordDirectPayment && onRecordDirectPayment !== undefined}
         postingHold={postingHoldFeeIds.includes(line._id)}
         proofConfirmed={handoverCostsCheck === "READY"}
+        custodyConfirmed={custodyLedgerCheck === "READY"}
         paying={payingId === line._id}
         busy={submittingAny}
         t={t}
@@ -1560,6 +1579,7 @@ function AddForm({
           <Label htmlFor="handover-cost-description">{t("CostDescriptionLabel")}</Label>
           <Input
             id="handover-cost-description"
+            maxLength={MAX_FEE_DESCRIPTION_CHARS}
             value={description}
             onChange={(event) => setDescription(event.target.value)}
           />
@@ -1591,6 +1611,7 @@ function AddForm({
           <Label htmlFor="handover-cost-reference">{t("ReceiptReferenceLabel")}</Label>
           <Input
             id="handover-cost-reference"
+            maxLength={MAX_FEE_RECEIPT_REFERENCE_CHARS}
             value={reference}
             onChange={(event) => setReference(event.target.value)}
           />
@@ -1767,6 +1788,7 @@ function TemplateActualForm({
           <Label htmlFor={`${fieldId}-reference`}>{t("ReceiptReferenceLabel")}</Label>
           <Input
             id={`${fieldId}-reference`}
+            maxLength={MAX_FEE_RECEIPT_REFERENCE_CHARS}
             value={reference}
             onChange={(event) => setReference(event.target.value)}
           />
@@ -1882,6 +1904,7 @@ function ActualForm({
           <Label htmlFor={`actual-reference-${line._id}`}>{t("ReceiptReferenceLabel")}</Label>
           <Input
             id={`actual-reference-${line._id}`}
+            maxLength={MAX_FEE_RECEIPT_REFERENCE_CHARS}
             value={reference}
             onChange={(event) => setReference(event.target.value)}
           />
@@ -1941,7 +1964,12 @@ function VoidForm({
       <p className="text-xs text-muted-foreground">{t("VoidCostNote")}</p>
       <div className="space-y-1.5">
         <Label htmlFor="void-reason">{t("VoidReasonLabel")}</Label>
-        <Input id="void-reason" value={reason} onChange={(event) => setReason(event.target.value)} />
+        <Input
+          id="void-reason"
+          maxLength={MAX_FEE_VOID_REASON_CHARS}
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+        />
       </div>
       {error && (
         <p role="alert" className="text-xs font-medium text-destructive">
@@ -2000,6 +2028,7 @@ function ReconcileForm({
         <Label htmlFor="reconcile-notes">{t("ReconcileNotes")}</Label>
         <Input
           id="reconcile-notes"
+          maxLength={MAX_FEE_RECONCILIATION_NOTES_CHARS}
           value={notes}
           onChange={(event) => setNotes(event.target.value)}
           placeholder={t("ReconcileNotesPlaceholder")}
@@ -2042,6 +2071,7 @@ function HandoverPaymentRow({
   canRecord,
   postingHold,
   proofConfirmed,
+  custodyConfirmed,
   paying,
   busy,
   t,
@@ -2060,6 +2090,8 @@ function HandoverPaymentRow({
   postingHold: boolean;
   /** `HANDOVER_COSTS_PAID` is READY: every direct payment is proven on the ledger. */
   proofConfirmed: boolean;
+  /** `CUSTODY_ON_LEDGER` is READY: every custody-paid line is proven on the ledger. */
+  custodyConfirmed: boolean;
   paying: boolean;
   busy: boolean;
   t: (key: string) => string;
@@ -2083,10 +2115,22 @@ function HandoverPaymentRow({
   }
 
   if (state === "PAID_CUSTODY") {
+    // The row says a custody posting was made; only the ledger check says it
+    // landed. A CANCELLED deal is never finalized, so its cost is recorded, not
+    // settled; a CLOSED deal was proven before it could close (SCRUM-443 v6).
+    const settled = !dealCancelled && (dealClosed || custodyConfirmed);
+    const shown = dealCancelled ? "PAID_CUSTODY_CANCELLED" : settled ? state : "PAID_CUSTODY_UNCONFIRMED";
     return (
-      <div className="mt-2 text-xs" data-testid={testId} data-state={state}>
-        <Badge variant="outline" className="border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-400">
-          {t("HandoverPaymentPaidCustody")}
+      <div className="mt-2 text-xs" data-testid={testId} data-state={shown}>
+        <Badge
+          variant="outline"
+          className={
+            settled
+              ? "border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-400"
+              : "text-muted-foreground"
+          }
+        >
+          {t(dealCancelled ? "HandoverPaymentRecordedCancelled" : settled ? "HandoverPaymentPaidCustody" : "HandoverPaymentCustodyRecorded")}
         </Badge>
       </div>
     );
@@ -2142,6 +2186,13 @@ function HandoverPaymentRow({
     return (
       <p className="mt-2 text-xs text-amber-700 dark:text-amber-400" data-testid={testId} data-state={state}>
         {t("HandoverPaymentNoActual")}
+      </p>
+    );
+  }
+  if (state === "UNSUPPORTED_TREATMENT" || state === "DEDUCTION_NOT_RECOGNISED") {
+    return (
+      <p role="alert" className="mt-2 text-xs font-medium text-destructive" data-testid={testId} data-state={state}>
+        {t(state === "UNSUPPORTED_TREATMENT" ? "HandoverPaymentUnsupportedTreatment" : "HandoverPaymentDeductionNotRecognised")}
       </p>
     );
   }
@@ -2338,6 +2389,7 @@ function DirectPaymentForm({
           <Label htmlFor={`${id}-reference`}>{t("ReceiptReferenceLabel")}</Label>
           <Input
             id={`${id}-reference`}
+            maxLength={MAX_DIRECT_PAYMENT_REFERENCE_CHARS}
             value={reference}
             disabled={frozen || submitting}
             onChange={(event) => setReference(event.target.value)}

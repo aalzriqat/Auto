@@ -563,6 +563,17 @@ const dealRailMessages = defineBilingualMessages({
   CostStatusVoid: ["Void", "ملغى"],
   // SCRUM-443 — who paid a handover cost, and how the dealership records paying one itself.
   HandoverPaymentPaidCustody: ["Paid from custody", "مدفوع من العهدة"],
+  // A custody charge is on the row but its posting has not been confirmed on the
+  // ledger (an accounting period is closed, or the queue has not processed it).
+  HandoverPaymentCustodyRecorded: ["Recorded — waiting for posting", "مسجَّل — بانتظار الترحيل"],
+  HandoverPaymentUnsupportedTreatment: [
+    "This cost's accounting treatment cannot be paid or posted, so it would never reach the books. Remove it and add it again with a treatment that posts (appraisal, insurance, ownership transfer, finance-company commission or selling expense).",
+    "المعالجة المحاسبية لهذا المصروف لا يمكن دفعها أو ترحيلها، فلن يصل إلى الدفاتر أبدًا. احذفه وأضفه من جديد بمعالجة تُرحَّل (تقييم، تأمين، نقل ملكية، عمولة شركة تمويل أو مصروف بيع).",
+  ],
+  HandoverPaymentDeductionNotRecognised: [
+    "This cost is marked as deducted from the finance company's settlement, but this deal has no configured financing plan to recognise it, so it would never reach the books. Remove it and add it again without the settlement deduction, then pay it.",
+    "هذا المصروف معلَّم كمخصوم من تسوية شركة التمويل، لكن هذه الصفقة بلا خطة تمويل مُعدّة تعترف به، فلن يصل إلى الدفاتر أبدًا. احذفه وأضفه من جديد دون خصم التسوية، ثم سجّل دفعه.",
+  ],
   HandoverPaymentPaidDirect: ["Paid by the dealership", "دفعه المعرض مباشرةً"],
   HandoverPaymentUnpaid: ["Payment not recorded", "الدفع غير مسجَّل"],
   HandoverPaymentNoActual: ["Record its actual amount first", "سجّل مبلغه الفعلي أولًا"],
@@ -1087,6 +1098,14 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingReason_HANDOVER_COSTS_CONFLICT: [
     "{count} handover cost(s) are recorded as paid both from employee custody and directly, which would count the cost twice. Have the line reviewed before closing.",
     "يوجد {count} من مصاريف التسليم مسجَّلة كمدفوعة من عهدة الموظف ومباشرةً معًا، مما يحسب المصروف مرتين. اطلب مراجعة البند قبل الإغلاق.",
+  ],
+  ClosingReason_HANDOVER_COSTS_UNSUPPORTED_TREATMENT: [
+    "{count} handover cost(s) are classified with a treatment no payment can be recorded against, so they would never reach the books. In Handover costs, remove each one and add it again with a treatment that posts (appraisal, insurance, ownership transfer, finance-company commission or selling expense), then pay it. Then close.",
+    "يوجد {count} من مصاريف التسليم مصنّفة بمعالجة محاسبية لا يمكن تسجيل دفع عليها، فلن تصل إلى الدفاتر أبدًا. في مصاريف التسليم احذف كل بند منها وأضفه من جديد بمعالجة تُرحَّل (تقييم، تأمين، نقل ملكية، عمولة شركة تمويل أو مصروف بيع)، ثم سجّل دفعه. ثم أغلق.",
+  ],
+  ClosingReason_HANDOVER_COSTS_DEDUCTION_NOT_RECOGNISED: [
+    "{count} handover cost(s) are marked as deducted from the finance company's settlement, but this deal has no configured financing plan to recognise a deduction, so they would never reach the books. In Handover costs, remove each one and add it again without the settlement deduction, then pay it directly or charge it to custody. Then close.",
+    "يوجد {count} من مصاريف التسليم معلَّمة كمخصومة من تسوية شركة التمويل، لكن هذه الصفقة بلا خطة تمويل مُعدّة تعترف بالخصم، فلن تصل إلى الدفاتر أبدًا. في مصاريف التسليم احذف كل بند منها وأضفه من جديد دون خصم التسوية، ثم سجّل دفعه مباشرةً أو حمِّله على العهدة. ثم أغلق.",
   ],
   ClosingReason_HANDOVER_DIRECT_NOT_ON_LEDGER: [
     "{count} direct handover payment(s) are recorded but not on the books yet: the posting is waiting because no accounting period is open for its date, or has not been processed. Open the accounting period for the payment date and let the accounting queue process, then close the deal.",

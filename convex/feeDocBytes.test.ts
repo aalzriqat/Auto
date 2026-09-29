@@ -5,7 +5,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS } from "./utils/permissions";
-import { feeDocBytes, MAX_DIRECT_PAYMENT_REFERENCE_CHARS, MAX_FEE_ATTACHMENTS, MAX_FEE_DOC_BYTES } from "./utils/feeDocLimits";
+import { feeDocBytes, MAX_DIRECT_PAYMENT_REFERENCE_CHARS, MAX_FEE_ATTACHMENTS, MAX_FEE_DESCRIPTION_CHARS, MAX_FEE_DOC_BYTES } from "./utils/feeDocLimits";
 
 /**
  * SCRUM-443 v5 — every financeDealFees document is bounded, at EVERY writer.
@@ -117,7 +117,7 @@ async function padTo(seed: Seed, feeId: Id<"financeDealFees">, extra: Record<str
 describe("every writer refuses an oversize resulting financeDealFees document, writing nothing", () => {
   test("recordDealFee: a description past the cap is refused, no line", async () => {
     const seed = await seedDeal("w-record");
-    await expect(addFee(seed, { description: HUGE })).rejects.toThrow(/too large to store.*Nothing has been recorded/s);
+    await expect(addFee(seed, { description: HUGE })).rejects.toThrow(/may be at most 500 characters.*Nothing has been recorded/s);
     expect(await feeCount(seed)).toBe(0);
   });
 
@@ -134,7 +134,7 @@ describe("every writer refuses an oversize resulting financeDealFees document, w
     expect(await feeCount(seed)).toBe(1);
   });
 
-  test("recordTemplateFeeActual: a template description past the cap names the template to edit; a long receipt reference does not", async () => {
+  test("recordTemplateFeeActual: a template description past the cap is shortened on the copy (never a dead end); a long receipt reference is refused", async () => {
     const seed = await seedDeal("w-template");
     const template = {
       feeType: "LICENSING", description: HUGE, estimatedAmountMinor: jod(50), paidBy: "DEALER", paidTo: "GOVERNMENT",
@@ -148,16 +148,17 @@ describe("every writer refuses an oversize resulting financeDealFees document, w
         orgId: seed.orgId, applicationId: seed.applicationId, templateIndex: 0, feeType: "LICENSING",
         actualAmountMinor: jod(50), expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), ...extra,
       } as never);
-    await expect(record()).rejects.toThrow(/fee template in the finance company's settings/);
-    expect(await feeCount(seed)).toBe(0);
+    const feeId = await record();
+    expect((await rowOf(seed, feeId))?.description).toHaveLength(MAX_FEE_DESCRIPTION_CHARS);
+    expect(await feeCount(seed)).toBe(1);
     // A small template with an oversize typed reference is the caller's to shorten.
     await seed.t.run((ctx) =>
       ctx.db.patch(seed.applicationId, {
         companyRuleSnapshot: { ruleVersion: 1, companyName: "X", feeTemplates: [{ ...template, description: "Plates" }] } as never,
       })
     );
-    await expect(record({ receiptReference: HUGE })).rejects.toThrow(/Shorten the description, reference or notes/);
-    expect(await feeCount(seed)).toBe(0);
+    await expect(record({ receiptReference: HUGE })).rejects.toThrow(/may be at most 200 characters/);
+    expect(await feeCount(seed)).toBe(1);
   });
 
   test("recordActualFeeAmount: a receipt reference that pushes the line past the cap is refused, the amount unchanged", async () => {
@@ -167,7 +168,7 @@ describe("every writer refuses an oversize resulting financeDealFees document, w
       seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
         orgId: seed.orgId, feeId, actualAmountMinor: jod(65), expectedCurrency: "JOD", receiptReference: HUGE,
       })
-    ).rejects.toThrow(/too large to store/);
+    ).rejects.toThrow(/may be at most 200 characters/);
     expect((await rowOf(seed, feeId))?.actualAmountMinor).toBe(jod(50));
   });
 
@@ -176,7 +177,7 @@ describe("every writer refuses an oversize resulting financeDealFees document, w
     const feeId = await addFee(seed);
     await expect(
       seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: HUGE })
-    ).rejects.toThrow(/too large to store/);
+    ).rejects.toThrow(/may be at most 500 characters/);
     expect((await rowOf(seed, feeId))?.reconciledAt).toBeUndefined();
   });
 
@@ -185,8 +186,26 @@ describe("every writer refuses an oversize resulting financeDealFees document, w
     const feeId = await addFee(seed);
     await expect(
       seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: HUGE })
-    ).rejects.toThrow(/too large to store/);
+    ).rejects.toThrow(/may be at most 300 characters/);
     expect((await rowOf(seed, feeId))?.voidedAt).toBeUndefined();
+  });
+
+  test("backstop: a raw over-cap row is refused by every text writer (the field caps make it unreachable through the public door)", async () => {
+    const seed = await seedDeal("w-backstop");
+    const feeId = await addFee(seed);
+    await padTo(seed, feeId, {}, 0);
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+        orgId: seed.orgId, feeId, actualAmountMinor: jod(65), expectedCurrency: "JOD", receiptReference: "r".repeat(150),
+      })
+    ).rejects.toThrow(/too large to store/);
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "n".repeat(300) })
+    ).rejects.toThrow(/too large to store/);
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "v".repeat(200) })
+    ).rejects.toThrow(/too large to store/);
+    expect((await rowOf(seed, feeId))?.actualAmountMinor).toBe(jod(50));
   });
 
   test("recordDirectFeePayment: a payment that would take the line past the cap posts nothing; at the cap it is admitted", async () => {

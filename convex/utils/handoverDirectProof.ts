@@ -63,6 +63,10 @@ export const MAX_DIRECT_PROOF_BYTES =
 
 const ACTION = "finalizing this deal";
 
+/** The per-row caps the aggregate budget is derived from; each row the proof reads is held to its own. */
+const FEE_ROW_CAP = { bytes: MAX_FEE_DOC_BYTES, what: "cost line" } as const;
+const EVENT_ROW_CAP = { bytes: MAX_DIRECT_EVENT_DOC_BYTES, what: "direct-payment posting" } as const;
+
 /** Counts every document the proof reads, in number and in exact platform bytes; refuses by name past either limit. */
 export class DirectProofBudget {
   private docs = 0;
@@ -73,9 +77,23 @@ export class DirectProofBudget {
     private readonly byteLimit: number = MAX_DIRECT_PROOF_BYTES
   ) {}
 
-  charge(rows: ReadonlyArray<unknown>): void {
+  /**
+   * Charges `rows`; when `perRowCap` is given, ALSO refuses (fail closed) any one
+   * row past it. The aggregate budget is derived from the per-row caps, so a
+   * single oversized row with aggregate headroom left is not a state the writers
+   * can produce — it is a row nobody proved safe to read (SCRUM-443 v6, Sol F4).
+   */
+  charge(rows: ReadonlyArray<unknown>, perRowCap?: { bytes: number; what: string }): void {
     this.docs += rows.length;
-    for (const row of rows) this.bytes += documentBytes(row);
+    for (const row of rows) {
+      const size = documentBytes(row);
+      if (perRowCap !== undefined && size > perRowCap.bytes) {
+        throw new ConvexError(
+          `A ${perRowCap.what} on this deal is ${size.toLocaleString("en-US")} bytes, past the ${perRowCap.bytes.toLocaleString("en-US")} bytes no writer produces, so ${ACTION} cannot verify it completely; nothing has been changed. Have the record reviewed.`
+        );
+      }
+      this.bytes += size;
+    }
     if (this.docs > this.documentLimit || this.bytes > this.byteLimit) {
       throw new ConvexError(
         `This deal's direct handover payments carry more ledger history than ${ACTION} can verify completely (${this.docs} documents, ${this.bytes.toLocaleString("en-US")} bytes read); nothing has been changed. Have the deal's accounting reviewed.`
@@ -106,7 +124,7 @@ export async function loadDirectPaidLines(
     .query("financeDealFees")
     .withIndex("by_application_directPaymentVersion", (q) => q.eq("applicationId", applicationId).gt("directPaymentVersion", 0))
     .take(MAX_DIRECT_PAID_LINES + 1);
-  budget.charge(rows);
+  budget.charge(rows, FEE_ROW_CAP);
   if (rows.length > MAX_DIRECT_PAID_LINES) {
     throw new ConvexError(
       `This deal has more than ${MAX_DIRECT_PAID_LINES} cost lines that have carried a direct payment, which is past what ${ACTION} can verify completely; nothing has been changed. Have the deal's accounting reviewed.`
@@ -135,7 +153,7 @@ export async function readDirectPaymentFamily(
       q.eq("orgId", orgId).eq("eventType", "HANDOVER_COST_PAID_DIRECT").eq("sourceType", "financeDealFees").eq("sourceId", feeId.toString())
     )
     .take(MAX_DIRECT_PAYMENT_VERSIONS + 1);
-  budget?.charge(rows);
+  budget?.charge(rows, EVENT_ROW_CAP);
   if (rows.length > MAX_DIRECT_PAYMENT_VERSIONS) {
     throw new ConvexError(
       `A cost line on this deal has more than ${MAX_DIRECT_PAYMENT_VERSIONS} direct-payment postings on the ledger, which no writer produces and is past what ${ACTION} can verify completely; nothing has been changed. Have the record reviewed.`
@@ -180,7 +198,10 @@ export async function directPaymentLedgerProof(
   // A live line that carries a payment but was not enumerated (its version
   // counter absent) is still judged: the row's own claim is never skipped.
   const seen = new Set(everPaid.map((line) => line._id));
-  const lines = [...everPaid, ...liveFees.filter((fee) => fee.directPayment !== undefined && !seen.has(fee._id))];
+  const unenumerated = liveFees.filter((fee) => fee.directPayment !== undefined && !seen.has(fee._id));
+  // Read by the caller, not charged here, but each is still held to the row cap.
+  new DirectProofBudget(unenumerated.length, unenumerated.length * MAX_FEE_DOC_BYTES).charge(unenumerated, FEE_ROW_CAP);
+  const lines = [...everPaid, ...unenumerated];
 
   const notOnLedger: string[] = [];
   const reversalPending: string[] = [];

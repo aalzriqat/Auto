@@ -452,9 +452,14 @@ describe("HANDOVER_COSTS_PAID blocks the deal on every route", () => {
     expect(check.status).toBe("READY");
   });
 
-  test("a line the finance company settles, or a non-handover line, is outside the invariant", async () => {
+  test("a customer-borne line, and a zero-actual line are outside the invariant", async () => {
     const seed = await seedDeal("outside");
-    await dealerFee(seed, jod(40), { deductedFromSettlement: true });
+    await seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
+      expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId,
+      feeType: "LICENSING", paidBy: "CUSTOMER", paidTo: "GOVERNMENT", accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+      actualAmountMinor: jod(40),
+    });
+    await dealerFee(seed, 0, { deductedFromSettlement: true });
     expect((await readiness(seed)).status).toBe("READY");
   });
 
@@ -1031,7 +1036,7 @@ describe("v5: the direct-payment proof is bounded by the writers' caps, read by 
     });
     await payDirect(seed, feeId, { method: "BANK_TRANSFER", reference: `FREE-TEXT-REFERENCE-${"r".repeat(170)}` });
     // Taken back with a long reason: the forward event gains status and a link, never the text.
-    await seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: `FREE-TEXT-REASON-${"z".repeat(300)}` });
+    await seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: `FREE-TEXT-REASON-${"z".repeat(280)}` });
     const event = (await directEvents(seed))[0];
     expect(event.status).toBe("REVERSED");
     expect(event.reversedByEventId).toBeDefined();
@@ -1188,6 +1193,64 @@ describe("v5: the direct-payment proof is bounded by the writers' caps, read by 
     // maximum is N + N x V documents, the budget adds the two overflow-detection reads.
     expect(MAX_DIRECT_PROOF_DOCUMENTS - exact.docs).toBe(1 + N);
   }, 120_000);
+
+  describe("the proof refuses ANY single row past its per-row cap, even with aggregate headroom (SCRUM-443 v6, Sol F4)", () => {
+    async function paidLine(name: string) {
+      const seed = await seedDeal(name);
+      const feeId = await dealerFee(seed, jod(50));
+      await payDirect(seed, feeId);
+      expect((await readiness(seed)).status).toBe("READY");
+      return { seed, feeId };
+    }
+    /** Pads the fee row so its stored size is MAX_FEE_DOC_BYTES + slack. */
+    async function padFee(seed: Seed, feeId: Id<"financeDealFees">, slack: number) {
+      const row = (await seed.t.run((ctx) => ctx.db.get("financeDealFees", feeId)))!;
+      let lo = 0;
+      let hi = MAX_FEE_DOC_BYTES;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (getDocumentSize({ ...row, description: "x".repeat(mid) } as never) <= MAX_FEE_DOC_BYTES + slack) lo = mid;
+        else hi = mid - 1;
+      }
+      await seed.t.run((ctx) => ctx.db.patch(feeId, { description: "x".repeat(lo) }));
+      return await seed.t.run(async (ctx) => getDocumentSize((await ctx.db.get("financeDealFees", feeId))! as never));
+    }
+    async function padEvent(seed: Seed, slack: number) {
+      const event = (await directEvents(seed))[0];
+      const { pad: _pad, ...basePayload } = event.payload as Record<string, unknown>;
+      void _pad;
+      const sizeWith = (n: number) => getDocumentSize({ ...event, payload: { ...basePayload, pad: "e".repeat(n) } } as never);
+      let lo = 0;
+      let hi = MAX_DIRECT_EVENT_DOC_BYTES;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (sizeWith(mid) <= MAX_DIRECT_EVENT_DOC_BYTES + slack) lo = mid;
+        else hi = mid - 1;
+      }
+      await seed.t.run((ctx) => ctx.db.patch(event._id, { payload: { ...basePayload, pad: "e".repeat(lo) } }));
+      return await seed.t.run(async (ctx) => getDocumentSize((await ctx.db.get("accountingEvents", event._id))! as never));
+    }
+
+    test("one fee row one byte over MAX_FEE_DOC_BYTES -> UNAVAILABLE; exactly at the cap -> READY", async () => {
+      const { seed, feeId } = await paidLine("row-cap");
+      expect(await padFee(seed, feeId, 0)).toBeLessThanOrEqual(MAX_FEE_DOC_BYTES);
+      expect((await readiness(seed)).status).toBe("READY");
+      expect(await padFee(seed, feeId, 1)).toBe(MAX_FEE_DOC_BYTES + 1);
+      // One row over its cap: far inside the aggregate byte budget.
+      expect(MAX_FEE_DOC_BYTES + 1).toBeLessThan(MAX_DIRECT_PROOF_BYTES);
+      expect((await readiness(seed)).status).toBe("UNAVAILABLE");
+      expect((await proof(seed)).verdict).toBe("refused");
+    });
+
+    test("one forward event one byte over MAX_DIRECT_EVENT_DOC_BYTES -> UNAVAILABLE; at the cap -> READY", async () => {
+      const { seed } = await paidLine("event-cap");
+      expect(await padEvent(seed, 0)).toBeLessThanOrEqual(MAX_DIRECT_EVENT_DOC_BYTES);
+      expect((await readiness(seed)).status).toBe("READY");
+      const over = await padEvent(seed, 1);
+      expect(over).toBe(MAX_DIRECT_EVENT_DOC_BYTES + 1);
+      expect((await readiness(seed)).status).toBe("UNAVAILABLE");
+    });
+  });
 
   describe("non-canonical ledger rows fail CLOSED (UNAVAILABLE), never READY", () => {
     async function paidOnce(name: string) {

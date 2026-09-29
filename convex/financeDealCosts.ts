@@ -36,7 +36,9 @@ import {
   directPaymentMethodValidator,
   directPaymentRefusal,
   handoverPaymentState,
+  type HandoverScope,
 } from "./utils/handoverCostPayment";
+import { dealSettlesDirect, financedSaleRecognitionApplies } from "./utils/financedSaleRecognition";
 import {
   assertStoredVersion,
   custodyEntryPostKey,
@@ -44,6 +46,7 @@ import {
   custodyPayableReclassPosted,
   custodyPositionDependencies,
   foldAbandonedPayableDeltas,
+  isStoredVersion,
   loadCustodyEntries,
   nextStoredVersion,
   type CustodyLedgerDependency,
@@ -52,8 +55,14 @@ import { MAX_DIRECT_PAID_LINES, MAX_DIRECT_PAYMENT_VERSIONS, readDirectPaymentFa
 import {
   assertFeeAttachmentCount,
   assertFeeDocWithinBytes,
+  assertFeeTextWithinCap,
   feeAfterPatch,
   MAX_DIRECT_PAYMENT_REFERENCE_CHARS,
+  MAX_FEE_DESCRIPTION_CHARS,
+  MAX_FEE_RECEIPT_REFERENCE_CHARS,
+  MAX_FEE_RECONCILIATION_NOTES_CHARS,
+  MAX_FEE_VOID_REASON_CHARS,
+  truncateFeeText,
 } from "./utils/feeDocLimits";
 import {
   assertExpectedCurrency,
@@ -606,6 +615,28 @@ async function assertDirectPaymentAccountingReady(
 }
 
 /**
+ * Refuses to CLEAR a live direct payment whose version counter is missing or
+ * does not match it (SCRUM-443 v6, Sol F2). The closing proof enumerates paid
+ * lines through `directPaymentVersion`; a row whose payment carries no valid
+ * matching counter has a POSTED forward event the proof cannot see, and
+ * clearing the row would hide that event for good. No writer produces this
+ * state (a raw edit or a partial legacy import does); the repair is an
+ * accountant's, not a screen's.
+ */
+function assertDirectPaymentCounterIntact(
+  fee: Pick<Doc<"financeDealFees">, "directPayment" | "directPaymentVersion">,
+  action: string
+): void {
+  const paid = fee.directPayment;
+  if (paid === undefined) return;
+  if (!isStoredVersion(fee.directPaymentVersion) || fee.directPaymentVersion !== paid.version) {
+    throw new ConvexError(
+      `This cost carries a direct payment whose record is inconsistent (its payment counter is missing or does not match), so ${action} is refused: it would hide a posting from the closing checks. Nothing has been changed. Contact support or have an accountant repair the record.`
+    );
+  }
+}
+
+/**
  * Takes a line's live direct payment OFF the books and off the row: reverses
  * the stored version through the canonical reversal path (or cancels its
  * still-queued post) and clears `directPayment`, leaving the line UNPAID. There
@@ -626,6 +657,7 @@ async function reverseDirectFeePayment(
   if (fee === null) throw new ConvexError(FEE_NOT_FOUND);
   const paid = fee.directPayment;
   if (paid === undefined) return undefined;
+  assertDirectPaymentCounterIntact(fee, "reversing this direct payment");
   assertStoredVersion(paid.version, "This cost line's direct payment", "reversing this direct payment");
   const now = Date.now();
   const outcome = await hookHandoverCostPaidDirectReversed(ctx, {
@@ -1630,6 +1662,11 @@ export const listDealCosts = query({
       currency,
       actualTotalMinor: summary ? summary.actualTotalMinor : null,
     });
+    // Whether a configured financed-sale plan covers the deal: the plan itself
+    // recognises a settlement-deducted cost only then (SCRUM-443 v6).
+    const handoverScope: HandoverScope = {
+      planRecognisesDeductions: financedSaleRecognitionApplies(app, { settlesDirect: await dealSettlesDirect(ctx, app) }),
+    };
     const plannedHolder = mayReadPlan && app.plannedCustody ? await ctx.db.get(app.plannedCustody.userId) : null;
     return {
       currency,
@@ -1650,12 +1687,12 @@ export const listDealCosts = query({
          * and the mutation guards read, so the screen cannot disagree with
          * them. NOT_HANDOVER_LINE for a line outside the invariant.
          */
-        handoverPayment: handoverPaymentState(fee),
+        handoverPayment: handoverPaymentState(fee, handoverScope),
         /** Whether a direct dealership payment may be recorded on this line now — the mutation's own predicate, in the deal's currency. */
         directPaymentEligible: directPaymentRefusal(fee) === null && fee.currency === currency,
       })),
       /** The live handover lines that stop the deal finalizing (no actual, or neither custody-paid nor direct-paid) — by id, for the screen to point at. */
-      handoverCostsBlockingFeeIds: blockingHandoverLines(fees).map((fee) => fee._id),
+      handoverCostsBlockingFeeIds: blockingHandoverLines(fees, handoverScope).map((fee) => fee._id),
       /**
        * Whether the org's ledger can take a custody posting right now, with the
        * reason it cannot — the same predicate every custody money mutation
@@ -1854,6 +1891,11 @@ export const recordDealFee = mutation({
     // amount unknown" is a real state, and one worth recording rather than
     // leaving to memory. It just cannot close the deal; see requireCostsClosable.
 
+    // Free text is bounded at the input boundary, BEFORE anything is judged or
+    // written, so a line this writer admits can always take every later write
+    // (pay, void, reconcile, custody) inside MAX_FEE_DOC_BYTES (SCRUM-443 v6).
+    assertFeeTextWithinCap(args.description?.trim(), MAX_FEE_DESCRIPTION_CHARS, "The description", "recording this cost");
+    assertFeeTextWithinCap(args.receiptReference?.trim(), MAX_FEE_RECEIPT_REFERENCE_CHARS, "The receipt reference", "recording this cost");
     assertTimestamp(args.paidAt, "The paid date");
     assertNotFuture(args.paidAt, Date.now(), "The paid date");
     // A line charged to custody posts a custody journal: custody authority.
@@ -2084,6 +2126,7 @@ export const recordTemplateFeeActual = mutation({
       : undefined;
     // A timestamp, not a number: `v.number()` admits NaN, Infinity and
     // negatives, and a stored NaN date is a row no report can order.
+    assertFeeTextWithinCap(args.receiptReference?.trim(), MAX_FEE_RECEIPT_REFERENCE_CHARS, "The receipt reference", "recording this cost");
     assertTimestamp(args.paidAt, "The paid date");
     assertNotFuture(args.paidAt, Date.now(), "The paid date");
 
@@ -2157,7 +2200,13 @@ export const recordTemplateFeeActual = mutation({
           orgId: args.orgId,
           applicationId: args.applicationId,
           feeType: template.feeType,
-          description: template.description?.trim() || undefined,
+          // Copied from the frozen snapshot, which a deal's operator cannot edit
+          // and a manual line can never stand in for (the configured-position
+          // gate matches by position). A legacy over-long description is
+          // therefore SHORTENED to the cap, never refused — a refusal would
+          // strand the position with no door (SCRUM-443 v6). The snapshot keeps
+          // the full text; the identity flag is display-only.
+          description: truncateFeeText(template.description?.trim() ?? "", MAX_FEE_DESCRIPTION_CHARS) || undefined,
           currency,
           // The template's expectation, copied — never the caller's, and
           // never a corrupt one (see above).
@@ -2179,10 +2228,8 @@ export const recordTemplateFeeActual = mutation({
           createdAt: now,
           updatedAt: now,
         };
-        // The template's description is copied text the operator cannot shorten
-        // here: when it alone is too big, the refusal names the template.
         assertFeeAttachmentCount(args.documentStorageIds, "recording this cost");
-        assertFeeDocWithinBytes(templateFee, "recording this cost", ["receiptReference", "documentStorageIds"]);
+        assertFeeDocWithinBytes(templateFee, "recording this cost");
         const feeId = await ctx.db.insert("financeDealFees", templateFee);
         if (custodyId) await syncCustodyFeePosting(ctx, feeId, user._id, "Configured fee actual recorded against custody.");
         await recomputeAfterSettlementInputChange(ctx, args.applicationId, template.deductedFromSettlement);
@@ -2249,6 +2296,7 @@ export const recordActualFeeAmount = mutation({
       );
     }
     assertMinorAmount(args.actualAmountMinor, "Actual amount");
+    assertFeeTextWithinCap(args.receiptReference?.trim(), MAX_FEE_RECEIPT_REFERENCE_CHARS, "The receipt reference", "recording this actual amount");
     assertTimestamp(args.paidAt, "The paid date");
     assertNotFuture(args.paidAt, Date.now(), "The paid date");
     // The parent must exist in this org (R6, F3): a line whose deal is gone or
@@ -2298,6 +2346,7 @@ export const recordActualFeeAmount = mutation({
       }
       if (fee.directPayment.amountMinor !== args.actualAmountMinor) {
         assertMayMoveDirectPayment(auth, "Changing the amount of a cost the dealership paid directly");
+        assertDirectPaymentCounterIntact(fee, "changing this amount");
       }
     }
     const custodyId = args.custodyId
@@ -2409,6 +2458,7 @@ export const reconcileDealFee = mutation({
     if (!notes) {
       throw new ConvexError("Record what was checked before reconciling this cost.");
     }
+    assertFeeTextWithinCap(notes, MAX_FEE_RECONCILIATION_NOTES_CHARS, "The reconciliation notes", "reconciling this cost");
 
     const reconcilePatch = {
       reconciledAt: Date.now(),
@@ -2449,6 +2499,7 @@ export const voidDealFee = mutation({
     if (!reason) {
       throw new ConvexError("Say why this cost is being removed.");
     }
+    assertFeeTextWithinCap(reason, MAX_FEE_VOID_REASON_CHARS, "The reason", "removing this cost");
     if (fee.voidedAt !== undefined) return args.feeId;
     // The parent must exist in this org (R6, F3); see recordActualFeeAmount.
     const parent = await requireOwnedRow(ctx, args.orgId, "financeApplications", fee.applicationId, APPLICATION_NOT_FOUND);
@@ -2461,6 +2512,7 @@ export const voidDealFee = mutation({
     // So does voiding a line the dealership paid directly (SCRUM-443).
     if (fee.directPayment !== undefined) {
       assertMayMoveDirectPayment(auth, "Removing a cost the dealership paid directly");
+      assertDirectPaymentCounterIntact(fee, "removing this cost");
     }
     // The record the line sits on, proven this org's on this deal (R7, F3)
     // — a link nobody can load is refused, never skipped past.
@@ -2545,11 +2597,14 @@ export const setFeeCustody = mutation({
       ? await resolveFeeCustody(ctx, args.orgId, fee.applicationId, args.custodyId, fee, user._id)
       : undefined;
     const now = Date.now();
-    // No byte check on this link patch alone: the posting that follows
-    // (`syncCustodyFeePosting`) is the larger write, judges the line as it
-    // will stand with the link AND its posting record, and refuses the whole
-    // mutation (SCRUM-443).
-    await ctx.db.patch(args.feeId, { custodyId, updatedAt: now });
+    // The link patch is judged on its own, BEFORE it is written. The posting
+    // that follows judges the line with its posting record, but returns early
+    // (nothing to post: no actual, a zero actual, an unchanged target) without
+    // reaching that judgement, so this patch would otherwise land unchecked
+    // (SCRUM-443 v6, Sol F3).
+    const linkPatch = { custodyId, updatedAt: now };
+    assertFeeDocWithinBytes(feeAfterPatch(fee, linkPatch), "moving this cost onto or off custody");
+    await ctx.db.patch(args.feeId, linkPatch);
     await syncCustodyFeePosting(
       ctx, args.feeId, user._id,
       custodyId ? "Handover cost charged to employee custody." : "Handover cost released from employee custody."

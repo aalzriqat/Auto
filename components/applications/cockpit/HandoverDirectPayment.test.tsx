@@ -56,6 +56,7 @@ function renderPanel(
     dealCancelled?: boolean;
     postingHoldFeeIds?: ReadonlyArray<string>;
     handoverCostsCheck?: "READY" | "BLOCKED" | "UNAVAILABLE" | "NOT_APPLICABLE";
+    custodyLedgerCheck?: "READY" | "BLOCKED" | "UNAVAILABLE" | "NOT_APPLICABLE";
   } = {}
 ) {
   return render(
@@ -79,6 +80,7 @@ function renderPanel(
       onAbandonDirectPayment={props.onAbandonDirectPayment}
       postingHoldFeeIds={props.postingHoldFeeIds}
       handoverCostsCheck={props.handoverCostsCheck}
+      custodyLedgerCheck={props.custodyLedgerCheck}
     />
   );
 }
@@ -453,7 +455,7 @@ describe("each state of the server's verdict is shown as it is", () => {
           directPayment: { method: "CHEQUE", amountMinor: 90_000, paidAt: Date.UTC(2026, 8, 20), reference: "CHQ-1" },
         }),
       ],
-      { canRecordDirectPayment: true, onRecordDirectPayment: async () => {}, handoverCostsCheck: "READY" }
+      { canRecordDirectPayment: true, onRecordDirectPayment: async () => {}, handoverCostsCheck: "READY", custodyLedgerCheck: "READY" }
     );
     expect(screen.getByTestId("deal-handover-payment-a").textContent).toBe(salesEn.HandoverPaymentPaidCustody);
     const direct = screen.getByTestId("deal-handover-payment-b").textContent ?? "";
@@ -531,5 +533,39 @@ describe("the readiness reasons point at the lines, in both languages", () => {
   test("the check has a label in both languages", () => {
     expect(salesEn.ClosingCheck_HANDOVER_COSTS_PAID).toBeTruthy();
     expect(salesAr.ClosingCheck_HANDOVER_COSTS_PAID).toMatch(/[؀-ۿ]/);
+  });
+});
+
+describe("a custody payment is shown as settled only once its ledger posting is confirmed (SCRUM-443 v6, Sol F5)", () => {
+  const custody = () => line({ _id: "c1", handoverPayment: "PAID_CUSTODY" });
+  const stateOf = () => screen.getByTestId("deal-handover-payment-c1");
+
+  test.each(["BLOCKED", "UNAVAILABLE", undefined] as const)("custody check %s: no confirmed badge, a neutral waiting state", (check) => {
+    renderPanel([custody()], { custodyLedgerCheck: check });
+    expect(stateOf().getAttribute("data-state")).toBe("PAID_CUSTODY_UNCONFIRMED");
+    expect(stateOf().textContent).toContain(salesEn.HandoverPaymentCustodyRecorded);
+    expect(stateOf().textContent).not.toContain(salesEn.HandoverPaymentPaidCustody);
+  });
+
+  test("custody check READY: the confirmed badge", () => {
+    renderPanel([custody()], { custodyLedgerCheck: "READY" });
+    expect(stateOf().getAttribute("data-state")).toBe("PAID_CUSTODY");
+    expect(stateOf().textContent).toBe(salesEn.HandoverPaymentPaidCustody);
+  });
+
+  test("a CLOSED deal shows the confirmed badge whatever the live check says", () => {
+    renderPanel([custody()], { dealClosed: true, custodyLedgerCheck: "BLOCKED" });
+    expect(stateOf().getAttribute("data-state")).toBe("PAID_CUSTODY");
+  });
+
+  test("CANCELLED takes precedence over every check: never confirmed", () => {
+    renderPanel([custody()], { dealClosed: true, dealCancelled: true, custodyLedgerCheck: "READY" });
+    expect(stateOf().getAttribute("data-state")).toBe("PAID_CUSTODY_CANCELLED");
+    expect(stateOf().textContent).toContain(salesEn.HandoverPaymentRecordedCancelled);
+  });
+
+  test("the waiting copy exists in both languages", () => {
+    expect(salesEn.HandoverPaymentCustodyRecorded.length).toBeGreaterThan(0);
+    expect(salesAr.HandoverPaymentCustodyRecorded.length).toBeGreaterThan(0);
   });
 });

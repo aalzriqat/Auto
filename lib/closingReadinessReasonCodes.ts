@@ -61,6 +61,11 @@ export const CLOSING_READINESS_REASON_PARAMS = {
   HANDOVER_COSTS_NO_ACTUAL: ["count"],
   HANDOVER_COSTS_UNPAID: ["count"],
   HANDOVER_COSTS_CONFLICT: ["count"],
+  // A REAL dealer-borne cost no supported source can pay (SCRUM-443 v6): its
+  // treatment posts nowhere, or it is withheld from a settlement no configured
+  // plan recognises. It would reach no ledger account, so it blocks closing.
+  HANDOVER_COSTS_UNSUPPORTED_TREATMENT: ["count"],
+  HANDOVER_COSTS_DEDUCTION_NOT_RECOGNISED: ["count"],
   // A direct payment is recorded on the line but is not (yet) on the ledger:
   // its posting is queued (no open accounting period), failed, or an earlier
   // version's reversal has not landed.
