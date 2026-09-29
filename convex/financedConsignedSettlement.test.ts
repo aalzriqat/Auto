@@ -161,6 +161,32 @@ async function seedDealership(tag: string, opts: { sourceType?: "STOCK" | "SOURC
 type Seeded = Awaited<ReturnType<typeof seedDealership>>;
 
 /**
+ * SCRUM-447 D4: `sales.update` now refuses to cancel a sale that belongs to a
+ * financed deal ("cancel this deal from the deal screen"), so no public door
+ * leaves an application CLOSED behind a CANCELLED sale any more. Several tests
+ * here need exactly that LEGACY state as their precondition (a deal cancelled
+ * through the old sales door). This reproduces it faithfully: the sale's
+ * application link is lifted for the duration of the cancel and restored, so
+ * the sale teardown runs exactly as it did and every later assertion sees the
+ * same rows. It is setup for legacy data, NOT a supported door.
+ */
+async function legacyCancelSaleThroughSalesDoor(s: Seeded, saleId: unknown) {
+  const id = saleId as Id<"sales">;
+  const applicationId = await s.t.run(async (ctx) => {
+    const sale = await ctx.db.get(id);
+    const link = sale?.applicationId;
+    await ctx.db.patch(id, { applicationId: undefined });
+    return link;
+  });
+  await s.asApprover.mutation(api.sales.update, {
+    orgId: s.orgId,
+    saleId: id,
+    status: "CANCELLED" as const,
+  });
+  await s.t.run((ctx) => ctx.db.patch(id, { applicationId }));
+}
+
+/**
  * Walks a deal to APPROVED and, unless told otherwise, finalizes it.
  *
  * `downPayment` is the customer's own money in the deal; `totalFinancedAmount`
@@ -2541,11 +2567,7 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
     const first = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
 
     // Cancelled before any receipt, so the supplier-paid guard does not fire.
-    await s.asApprover.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId: first.saleId as never,
-      status: "CANCELLED" as const,
-    });
+    await legacyCancelSaleThroughSalesDoor(s, first.saleId as never);
 
     // The financier leg of the DEAD deal is then closed. This ordering is the
     // reachable one: `sales.update` refuses to cancel a sale whose supplier
@@ -2886,11 +2908,7 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
         dealerContributionMinor: 0,
       });
     });
-    await s.asApprover.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId: saleId as never,
-      status: "CANCELLED" as const,
-    });
+    await legacyCancelSaleThroughSalesDoor(s, saleId as never);
 
     const profit = (await cockpitOf(s, applicationId))!.money!.managementProfit;
     expect(profit.available).toBe(false);
@@ -3164,11 +3182,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
       (APPROVED - SUPPLIER_ENTITLEMENT) * SCALE
     );
 
-    await s.asApprover.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId: saleId as never,
-      status: "CANCELLED" as const,
-    });
+    await legacyCancelSaleThroughSalesDoor(s, saleId as never);
 
     // The subledger claim is withdrawn...
     const claims = await supplierClaimsOf(s);
@@ -3392,20 +3406,24 @@ describe("cancelling a deal whose financing evidence cannot be read", () => {
     ).rejects.toThrow(/isn't possible to confirm whether the finance company has already paid/i);
   });
 
-  test("a readable application with nothing paid still cancels normally", async () => {
+  test("a readable application with nothing paid is refused only by the financed-deal rule", async () => {
     // The control. Without it the three refusals above are equally satisfied by
     // a guard that refuses every cancellation, which would be its own defect.
     const s = await seedDealership("cancelReadableClean");
     const { saleId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
 
-    await s.asApprover.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId: saleId as never,
-      status: "CANCELLED" as const,
-    });
+    // SCRUM-447 D4: the payment locks above pass, and the financed-deal refusal
+    // then applies — the sale is cancelled from the deal, never on its own.
+    await expect(
+      s.asApprover.mutation(api.sales.update, {
+        orgId: s.orgId,
+        saleId: saleId as never,
+        status: "CANCELLED" as const,
+      })
+    ).rejects.toThrow(/cancel this deal from the deal screen/i);
 
     const sale = (await s.t.run((ctx) => ctx.db.get(saleId as never))) as { status: string };
-    expect(sale.status).toBe("CANCELLED");
+    expect(sale.status).toBe("COMPLETED");
   });
 });
 
@@ -6278,11 +6296,7 @@ describe("the deal cockpit's canonical sale destination", () => {
     // A different actor: `sales.update` refuses to let a salesperson approve the
     // cancellation of their own sale, which is a real separation-of-duties rule
     // and not something to work around with a direct patch.
-    await s.asApprover.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId: saleId!,
-      status: "CANCELLED" as const,
-    });
+    await legacyCancelSaleThroughSalesDoor(s, saleId!);
     await s.asApprover.mutation(api.sales.softDelete, { orgId: s.orgId, saleId: saleId! });
 
     const view = await s.asUser.query(api.applications.dealCockpit, {
@@ -7581,11 +7595,7 @@ describe("a stale finance application cannot tear down the sale that replaced it
       downPayment: 3_000,
     });
 
-    await s.asApprover.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId: saleId!,
-      status: "CANCELLED" as const,
-    });
+    await legacyCancelSaleThroughSalesDoor(s, saleId!);
 
     // The precondition of the whole defect, asserted rather than assumed:
     // cancelling the sale does NOT cancel the application.
@@ -7700,11 +7710,7 @@ describe("a stale finance application cannot tear down the sale that replaced it
       downPayment: 3_000,
     });
 
-    await s.asApprover.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId: saleId!,
-      status: "CANCELLED" as const,
-    });
+    await legacyCancelSaleThroughSalesDoor(s, saleId!);
 
     // Cancelling the sale reinstated the hold: that is the legitimate,
     // once-only restoration, and it is the state the replay must not repeat.

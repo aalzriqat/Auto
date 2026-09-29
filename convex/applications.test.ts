@@ -1826,6 +1826,7 @@ async function setupFinalizedFinancedDealWithCheque() {
     method: "CHEQUE",
     expectedDate: Date.now(),
     chequeDetails: { bank: "Arab Bank", chequeNumber: "CHQ-001" },
+    faceAmount: "20000",
   });
   await classifyFinancedDeal({ orgId, applicationId, asUser }, 20000);
   await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId });
@@ -1835,7 +1836,8 @@ async function setupFinalizedFinancedDealWithCheque() {
       ctx.db
         .query("postDatedCheques")
         .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
-        .unique()
+        .order("desc")
+        .first()
     );
 
   return { ...base, companyId, quoteId, applicationId, getCheque };
@@ -1897,7 +1899,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
       bank: "Cairo Amman Bank",
       chequeNumber: "CHQ-002",
       chequeDate: Date.now(),
-      amount: originalCheque!.amount,
+      faceAmount: "20000",
     });
 
     await asUser.mutation(api.applications.confirmDisbursement, { idempotencyKey: crypto.randomUUID(),
@@ -1924,6 +1926,567 @@ describe("applications.confirmDisbursement cheque linking", () => {
         disbursedAmountMinor: 20_000_000,
       })
     ).rejects.toThrow(/cheque record not found/i);
+  });
+});
+
+/**
+ * SCRUM-447 — finance-company cheque lineage, face and lifecycle.
+ *
+ * Each test states the invariant it defends. Fixtures walk a real financed deal
+ * (economics, handover, register the cheque) so the writers are exercised, not
+ * hand-seeded rows, except where a LEGACY shape is the point.
+ */
+async function setupApprovedDealWithCheque(opts: { face?: string; chequeNumber?: string } = {}) {
+  const base = await setup();
+  const { t, orgId, customerId, customerStatusId, vehicleId, asUser, asApprover } = base;
+  const companyId = await t.run((ctx) =>
+    ctx.db.insert("financeCompanies", {
+      orgId,
+      name: "Jordan Auto Finance",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      isActive: true,
+      defaultLtvPercent: 100,
+      adminFees: 0,
+    })
+  );
+  const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+    orgId,
+    customerId,
+    vehicleId,
+    vehiclePrice: 20000,
+    downPayment: 3000,
+    termMonths: 48,
+    mode: "CONFIGURED_FINANCE_COMPANY",
+    companyId,
+    customerEligibilityStatusIds: [customerStatusId],
+    totalFinancedAmount: 17000,
+  });
+  const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+  await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
+  await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+  await recordFinancedDealEconomics({ orgId, applicationId, asUser, asApprover }, 20000);
+  await registerHandover(asUser, api, orgId, applicationId);
+
+  const registerCheque = (face: string | undefined, chequeNumber: string) =>
+    asUser.mutation(api.applications.registerExpectedPayment, {
+      orgId,
+      applicationId,
+      method: "CHEQUE",
+      expectedDate: Date.now(),
+      chequeDetails: { bank: "Arab Bank", chequeNumber },
+      ...(face === undefined ? {} : { faceAmount: face }),
+    });
+  await registerCheque(opts.face ?? "20000", opts.chequeNumber ?? "CHQ-447-1");
+
+  const rows = () =>
+    t.run(async (ctx) => {
+      const all = await ctx.db
+        .query("postDatedCheques")
+        .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+        .collect();
+      return all.sort((a, b) => a._creationTime - b._creationTime);
+    });
+  const finalize = async () => {
+    await classifyFinancedDeal({ orgId, applicationId, asUser }, 20000);
+    await asUser.mutation(api.applications.finalizeDeal, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId,
+      applicationId,
+    });
+  };
+  const confirm = () =>
+    asUser.mutation(api.applications.confirmDisbursement, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId,
+      applicationId,
+      disbursedAmountMinor: 20_000_000,
+    });
+  return { ...base, companyId, applicationId, registerCheque, rows, finalize, confirm };
+}
+
+describe("SCRUM-447 D0/D1/D2 lineage is permanent and the face is exact", () => {
+  test("a new deal cheque records its drawer, lineage and exact minor-unit face", async () => {
+    const { rows, companyId, applicationId } = await setupApprovedDealWithCheque({ face: "20000.000" });
+    const [cheque] = await rows();
+    expect(cheque).toMatchObject({
+      applicationId,
+      originApplicationId: applicationId,
+      drawerType: "FINANCE_COMPANY",
+      financeCompanyId: companyId,
+      amountMinor: 20_000_000,
+      currency: "JOD",
+      status: "HELD",
+    });
+  });
+
+  test("the face is refused when missing, over-precise, zero or not a plain decimal", async () => {
+    const s = await setupApprovedDealWithCheque();
+    // Retire the first cheque so a second registration reaches the face check.
+    await s.asUser.mutation(api.applications.correctExpectedPayment, {
+      orgId: s.orgId,
+      applicationId: s.applicationId,
+      reason: "wrong instrument",
+    });
+    for (const bad of [undefined, "", "0", "-5", "1e3", "20000.0001", "abc"]) {
+      await expect(s.registerCheque(bad, "CHQ-BAD")).rejects.toThrow(/face amount/i);
+    }
+    expect(await s.rows()).toHaveLength(1);
+  });
+
+  test("replace keeps lineage on the old row and copies drawer, lineage and face to the successor", async () => {
+    const { orgId, asUser, rows, applicationId, companyId } = await setupApprovedDealWithCheque();
+    const [original] = await rows();
+    const newId = await asUser.mutation(api.collections.replaceCheque, {
+      orgId,
+      chequeId: original._id,
+      bank: "Cairo Amman Bank",
+      chequeNumber: "CHQ-447-2",
+      chequeDate: Date.now(),
+      faceAmount: "20000",
+    });
+    const [oldRow, newRow] = await rows();
+    expect(oldRow).toMatchObject({ status: "REPLACED", applicationId, originApplicationId: applicationId });
+    expect(oldRow.replacementChequeId).toBe(newId);
+    expect(newRow).toMatchObject({
+      _id: newId,
+      status: "HELD",
+      applicationId,
+      originApplicationId: applicationId,
+      drawerType: "FINANCE_COMPANY",
+      financeCompanyId: companyId,
+      amountMinor: 20_000_000,
+    });
+  });
+
+  test("REPLACED is terminal for replacement (D9a) and a replacement needs its own face", async () => {
+    const { orgId, asUser, rows } = await setupApprovedDealWithCheque();
+    const [original] = await rows();
+    await expect(
+      asUser.mutation(api.collections.replaceCheque, {
+        orgId,
+        chequeId: original._id,
+        bank: "B",
+        chequeNumber: "X-1",
+        chequeDate: Date.now(),
+      })
+    ).rejects.toThrow(/face amount/i);
+    await asUser.mutation(api.collections.replaceCheque, {
+      orgId,
+      chequeId: original._id,
+      bank: "B",
+      chequeNumber: "X-2",
+      chequeDate: Date.now(),
+      faceAmount: "20000",
+    });
+    await expect(
+      asUser.mutation(api.collections.replaceCheque, {
+        orgId,
+        chequeId: original._id,
+        bank: "B",
+        chequeNumber: "X-3",
+        chequeDate: Date.now(),
+        faceAmount: "20000",
+      })
+    ).rejects.toThrow(/already replaced/i);
+    expect(await rows()).toHaveLength(2);
+  });
+
+  test("clear, returnCleared and replace refuse finance-company lineage, including a detached pre-v4 successor", async () => {
+    const { t, orgId, userId, asUser, applicationId, customerId } = await setupApprovedDealWithCheque();
+    const now = Date.now();
+    const shape = { orgId, customerId, bank: "Old", chequeDate: now, amount: 100, createdBy: userId, createdAt: now, updatedAt: now };
+    // A successor written by the pre-v4 replaceCheque: applicationId cleared, only the
+    // lineage anchor (or only the drawer) survives.
+    const detachedOrigin = await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", { ...shape, chequeNumber: "D-1", status: "HELD", originApplicationId: applicationId })
+    );
+    const detachedDrawer = await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", { ...shape, chequeNumber: "D-2", status: "HELD", drawerType: "FINANCE_COMPANY" })
+    );
+    const clearedFc = await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", { ...shape, chequeNumber: "D-3", status: "CLEARED", clearedAt: now, drawerType: "FINANCE_COMPANY" })
+    );
+    for (const chequeId of [detachedOrigin, detachedDrawer]) {
+      await expect(
+        asUser.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId })
+      ).rejects.toThrow(/disbursement|deal/i);
+      await expect(
+        asUser.mutation(api.collections.replaceCheque, {
+          orgId,
+          chequeId,
+          bank: "B",
+          chequeNumber: "Z",
+          chequeDate: now,
+          amount: 100,
+        })
+      ).rejects.toThrow();
+    }
+    await expect(
+      asUser.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId: clearedFc })
+    ).rejects.toThrow(/deal|finance/i);
+    // Nothing moved.
+    const after = await t.run(async (ctx) => [await ctx.db.get(detachedOrigin), await ctx.db.get(detachedDrawer), await ctx.db.get(clearedFc)]);
+    expect(after.map((r) => r?.status)).toEqual(["HELD", "HELD", "CLEARED"]);
+  });
+
+  test("a cheque for a cancelled deal cannot be deposited", async () => {
+    const { t, orgId, asUser, rows, applicationId } = await setupApprovedDealWithCheque();
+    const [cheque] = await rows();
+    await t.run((ctx) => ctx.db.patch(applicationId, { status: "CANCELLED" }));
+    await expect(
+      asUser.mutation(api.collections.depositCheque, { orgId, chequeId: cheque._id })
+    ).rejects.toThrow(/cancelled finance deal/i);
+  });
+});
+
+describe("SCRUM-447 D1 confirmDisbursement clears only an exactly-equal, recorded face", () => {
+  test("a face that differs from the receipt is refused before any write", async () => {
+    const s = await setupApprovedDealWithCheque({ face: "19999.500" });
+    await s.finalize();
+    await expect(s.confirm()).rejects.toThrow(/does not equal/i);
+    const [cheque] = await s.rows();
+    const app = await s.t.run((ctx) => ctx.db.get(s.applicationId));
+    expect(cheque.status).toBe("HELD");
+    expect(app?.disbursedAt).toBeUndefined();
+  });
+
+  test("a wrong currency on the recorded face is refused", async () => {
+    const s = await setupApprovedDealWithCheque();
+    await s.finalize();
+    const [cheque] = await s.rows();
+    await s.t.run((ctx) => ctx.db.patch(cheque._id, { currency: "USD" }));
+    await expect(s.confirm()).rejects.toThrow(/does not equal/i);
+  });
+
+  test("a legacy row with no recorded face is refused, then accepted once attested", async () => {
+    const s = await setupApprovedDealWithCheque();
+    await s.finalize();
+    const [cheque] = await s.rows();
+    // The pre-447 shape: only the display `amount`, no minor face.
+    await s.t.run((ctx) =>
+      ctx.db.patch(cheque._id, { amountMinor: undefined, currency: undefined, amount: 17000 })
+    );
+    await expect(s.confirm()).rejects.toThrow(/attest/i);
+
+    await s.asUser.mutation(api.applications.attestChequeFace, {
+      orgId: s.orgId,
+      chequeId: cheque._id,
+      faceAmount: "20000",
+    });
+    const attested = (await s.rows())[0];
+    expect(attested).toMatchObject({ amountMinor: 20_000_000, currency: "JOD", faceAttestedBy: s.userId });
+    expect(attested.faceAttestedAt).toBeGreaterThan(0);
+    // The legacy display figure is never rewritten.
+    expect(attested.amount).toBe(17000);
+
+    // An attested face is never edited.
+    await expect(
+      s.asUser.mutation(api.applications.attestChequeFace, {
+        orgId: s.orgId,
+        chequeId: cheque._id,
+        faceAmount: "1",
+      })
+    ).rejects.toThrow(/already recorded/i);
+
+    await s.confirm();
+    expect((await s.rows())[0].status).toBe("CLEARED");
+
+    const audit = await s.t.run((ctx) => ctx.db.query("financialAuditLog").collect());
+    const event = audit.find((row) => row.actionType === "ATTEST_CHEQUE_FACE");
+    expect(event?.before).toMatchObject({ amount: 17000 });
+  });
+
+  test("exactly one live row: a second live cheque for the deal is refused", async () => {
+    const s = await setupApprovedDealWithCheque();
+    await s.finalize();
+    const [first] = await s.rows();
+    const now = Date.now();
+    await s.t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", {
+        orgId: s.orgId,
+        customerId: s.customerId,
+        applicationId: s.applicationId,
+        bank: "Dup",
+        chequeNumber: "DUP-1",
+        chequeDate: now,
+        amount: 20000,
+        amountMinor: 20_000_000,
+        currency: "JOD",
+        status: "HELD",
+        createdBy: s.userId,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+    await expect(s.confirm()).rejects.toThrow(/more than one live/i);
+    expect((await s.rows()).find((r) => r._id === first._id)?.status).toBe("HELD");
+  });
+
+  test("attest is refused for a cheque that is not linked to a finance deal", async () => {
+    const s = await setupApprovedDealWithCheque();
+    const now = Date.now();
+    const unlinked = await s.t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", {
+        orgId: s.orgId,
+        customerId: s.customerId,
+        bank: "U",
+        chequeNumber: "U-1",
+        chequeDate: now,
+        amount: 5,
+        status: "HELD",
+        createdBy: s.userId,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+    await expect(
+      s.asUser.mutation(api.applications.attestChequeFace, { orgId: s.orgId, chequeId: unlinked, faceAmount: "5" })
+    ).rejects.toThrow(/finance-deal cheque/i);
+  });
+});
+
+describe("SCRUM-447 D3 correcting the expected payment", () => {
+  test("HELD: the cheque is cancelled, keeps its lineage, the payment is cleared and audited, and a repeat is refused", async () => {
+    const s = await setupApprovedDealWithCheque();
+    const [cheque] = await s.rows();
+    await s.asUser.mutation(api.applications.correctExpectedPayment, {
+      orgId: s.orgId,
+      applicationId: s.applicationId,
+      reason: "wrong bank",
+    });
+    const [after] = await s.rows();
+    expect(after).toMatchObject({ _id: cheque._id, status: "CANCELLED", applicationId: s.applicationId });
+    expect(after.cancelledAt).toBeGreaterThan(0);
+    const app = await s.t.run((ctx) => ctx.db.get(s.applicationId));
+    expect(app?.expectedPaymentMethod).toBeUndefined();
+    expect(app?.expectedPaymentDate).toBeUndefined();
+    expect(app?.expectedPaymentRegisteredAt).toBeUndefined();
+    const audit = await s.t.run((ctx) => ctx.db.query("financialAuditLog").collect());
+    const event = audit.find((row) => row.actionType === "CORRECT_EXPECTED_PAYMENT");
+    expect(event?.before).toMatchObject({ expectedPaymentMethod: "CHEQUE" });
+    await expect(
+      s.asUser.mutation(api.applications.correctExpectedPayment, {
+        orgId: s.orgId,
+        applicationId: s.applicationId,
+        reason: "again",
+      })
+    ).rejects.toThrow(/nothing registered/i);
+    // And the deal can register again.
+    await s.registerCheque("20000", "CHQ-447-NEW");
+    const live = (await s.rows()).filter((r) => r.status === "HELD");
+    expect(live).toHaveLength(1);
+    expect(live[0].chequeNumber).toBe("CHQ-447-NEW");
+  });
+
+  test("RETURNED is allowed as it is; DEPOSITED and CLEARED are refused", async () => {
+    const returned = await setupApprovedDealWithCheque();
+    const [r] = await returned.rows();
+    await returned.asUser.mutation(api.collections.returnCheque, { orgId: returned.orgId, chequeId: r._id, returnReason: "NSF" });
+    await returned.asUser.mutation(api.applications.correctExpectedPayment, {
+      orgId: returned.orgId,
+      applicationId: returned.applicationId,
+      reason: "returned",
+    });
+    expect((await returned.rows())[0].status).toBe("RETURNED");
+
+    const deposited = await setupApprovedDealWithCheque();
+    const [d] = await deposited.rows();
+    await deposited.asUser.mutation(api.collections.depositCheque, { orgId: deposited.orgId, chequeId: d._id });
+    await expect(
+      deposited.asUser.mutation(api.applications.correctExpectedPayment, {
+        orgId: deposited.orgId,
+        applicationId: deposited.applicationId,
+        reason: "x",
+      })
+    ).rejects.toThrow(/record its return first|deposited/i);
+    expect((await deposited.rows())[0].status).toBe("DEPOSITED");
+
+    const cleared = await setupApprovedDealWithCheque();
+    const [c] = await cleared.rows();
+    await cleared.t.run((ctx) => ctx.db.patch(c._id, { status: "CLEARED", clearedAt: Date.now() }));
+    await expect(
+      cleared.asUser.mutation(api.applications.correctExpectedPayment, {
+        orgId: cleared.orgId,
+        applicationId: cleared.applicationId,
+        reason: "x",
+      })
+    ).rejects.toThrow(/cleared/i);
+  });
+
+  test("a CLOSED, not-disbursed deal can correct and re-register, then disburse against the new cheque", async () => {
+    const s = await setupApprovedDealWithCheque({ face: "15000" });
+    await s.finalize();
+    const closed = await s.t.run((ctx) => ctx.db.get(s.applicationId));
+    expect(closed?.status).toBe("CLOSED");
+    await expect(s.confirm()).rejects.toThrow(/does not equal/i);
+
+    await s.asUser.mutation(api.applications.correctExpectedPayment, {
+      orgId: s.orgId,
+      applicationId: s.applicationId,
+      reason: "face typed wrong",
+    });
+    await s.registerCheque("20000", "CHQ-447-FIXED");
+    await s.confirm();
+    const rows = await s.rows();
+    expect(rows.map((r) => r.status)).toEqual(["CANCELLED", "CLEARED"]);
+    const app = await s.t.run((ctx) => ctx.db.get(s.applicationId));
+    expect(app?.disbursedAt).toBeGreaterThan(0);
+  });
+
+  test("a disbursed or cancelled deal cannot be corrected; a missing reason is refused", async () => {
+    const s = await setupApprovedDealWithCheque();
+    await expect(
+      s.asUser.mutation(api.applications.correctExpectedPayment, {
+        orgId: s.orgId,
+        applicationId: s.applicationId,
+        reason: "   ",
+      })
+    ).rejects.toThrow(/reason/i);
+    await s.finalize();
+    await s.confirm();
+    await expect(
+      s.asUser.mutation(api.applications.correctExpectedPayment, {
+        orgId: s.orgId,
+        applicationId: s.applicationId,
+        reason: "too late",
+      })
+    ).rejects.toThrow(/already been confirmed/i);
+  });
+
+  test("finalizeDeal refuses a registered cheque whose live row is gone", async () => {
+    const s = await setupApprovedDealWithCheque();
+    const [cheque] = await s.rows();
+    await s.t.run((ctx) => ctx.db.patch(cheque._id, { status: "RETURNED", returnedAt: Date.now() }));
+    await classifyFinancedDeal({ orgId: s.orgId, applicationId: s.applicationId, asUser: s.asUser }, 20000);
+    await expect(
+      s.asUser.mutation(api.applications.finalizeDeal, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId: s.orgId,
+        applicationId: s.applicationId,
+      })
+    ).rejects.toThrow(/no longer live/i);
+  });
+
+  test("the cockpit's expectedPaymentRegistered follows the LIVE cheque, not the stored method", async () => {
+    const s = await setupApprovedDealWithCheque();
+    const before = await s.asUser.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId: s.applicationId });
+    expect(before?.expectedPaymentRegistered).toBe(true);
+    const [cheque] = await s.rows();
+    await s.asUser.mutation(api.collections.returnCheque, { orgId: s.orgId, chequeId: cheque._id, returnReason: "NSF" });
+    const after = await s.asUser.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId: s.applicationId });
+    expect(after?.expectedPaymentRegistered).toBe(false);
+  });
+});
+
+describe("SCRUM-447 D4 a cheque never outlives its deal", () => {
+  test("cancelApplication cancels a HELD cheque", async () => {
+    const s = await setupApprovedDealWithCheque();
+    await s.asUser.mutation(api.applications.cancelApplication, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId: s.orgId,
+      applicationId: s.applicationId,
+      reason: "customer walked",
+    });
+    const [cheque] = await s.rows();
+    expect(cheque.status).toBe("CANCELLED");
+    expect(cheque.cancellationReason).toBe("customer walked");
+    expect(cheque.applicationId).toBe(s.applicationId);
+  });
+
+  test("cancelApplication refuses a DEPOSITED cheque and changes nothing", async () => {
+    const s = await setupApprovedDealWithCheque();
+    const [cheque] = await s.rows();
+    await s.asUser.mutation(api.collections.depositCheque, { orgId: s.orgId, chequeId: cheque._id });
+    await expect(
+      s.asUser.mutation(api.applications.cancelApplication, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId: s.orgId,
+        applicationId: s.applicationId,
+        reason: "x",
+      })
+    ).rejects.toThrow(/deposited/i);
+    expect((await s.rows())[0].status).toBe("DEPOSITED");
+    const app = await s.t.run((ctx) => ctx.db.get(s.applicationId));
+    expect(app?.status).toBe("APPROVED");
+  });
+});
+
+describe("SCRUM-447 D7'' read-only lineage audit", () => {
+  test("names each class, states its denominator, and never turns UNKNOWN into a pass", async () => {
+    const s = await setupApprovedDealWithCheque();
+    const { t, orgId, userId, customerId, applicationId } = s;
+    const auditRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "Auditor", permissions: ["view:finance"] })
+    );
+    const auditorId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "user_auditor", email: "aud@test.com", name: "Auditor" })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: auditorId, roleId: auditRoleId }));
+    const asAuditor = t.withIdentity({ subject: "user_auditor", clerkId: "user_auditor" });
+
+    const now = Date.now();
+    const shape = { orgId, customerId, bank: "A", chequeDate: now, amount: 1, createdBy: userId, createdAt: now, updatedAt: now };
+    const drawerless = await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", { ...shape, chequeNumber: "A-1", status: "HELD", applicationId })
+    );
+    const legacyCleared = await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", {
+        ...shape,
+        chequeNumber: "A-2",
+        status: "CLEARED",
+        clearedAt: now,
+        drawerType: "FINANCE_COMPANY",
+        originApplicationId: applicationId,
+      })
+    );
+    const successorOnly = await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", { ...shape, chequeNumber: "A-3", status: "HELD" })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", {
+        ...shape,
+        chequeNumber: "A-4",
+        status: "REPLACED",
+        replacementChequeId: successorOnly,
+        drawerType: "FINANCE_COMPANY",
+        originApplicationId: applicationId,
+      })
+    );
+    await t.run((ctx) => ctx.db.patch(applicationId, { status: "CANCELLED" }));
+
+    const result = await asAuditor.query(api.chequeLineageAudit.auditFinanceCompanyCheques, {
+      orgId,
+      paginationOpts: { numItems: 50, cursor: null },
+    });
+    const classesOf = (id: string) => result.findings.filter((f) => f.chequeId === id).map((f) => f.class);
+    expect(result.isDone).toBe(true);
+    // 1 registered by the writer + 4 seeded above.
+    expect(result.denominator.examined).toBe(5);
+    expect(classesOf(drawerless)).toEqual(expect.arrayContaining(["DRAWER_UNVERIFIED", "LIVE_ON_CANCELLED_DEAL", "SEVERAL_LIVE_ROWS_FOR_APPLICATION"]));
+    expect(classesOf(legacyCleared)).toEqual(
+      expect.arrayContaining(["CLEARED_OUTSIDE_CONFIRM_DISBURSEMENT", "CLEARED_LEGACY_FACE_UNAVAILABLE"])
+    );
+    expect(classesOf(successorOnly)).toEqual(["LINEAGE_UNKNOWN_REACHABLE_ONLY_VIA_REPLACEMENT"]);
+    expect(result.unknownCount).toBeGreaterThanOrEqual(2);
+    // UNKNOWN is reported, never folded into a clean verdict.
+    expect(result.findings.filter((f) => f.verdict === "UNKNOWN").length).toBe(result.unknownCount);
+    expect(result.note).toMatch(/UNKNOWN is not PASS/);
+  });
+
+  test("a caller without finance visibility is refused", async () => {
+    const s = await setupApprovedDealWithCheque();
+    const roleId = await s.t.run((ctx) => ctx.db.insert("roles", { orgId: s.orgId, name: "Nobody", permissions: [] }));
+    const nobody = await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "user_nobody", email: "n@test.com", name: "N" }));
+    await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: s.orgId, userId: nobody, roleId }));
+    const asNobody = s.t.withIdentity({ subject: "user_nobody", clerkId: "user_nobody" });
+    await expect(
+      asNobody.query(api.chequeLineageAudit.auditFinanceCompanyCheques, {
+        orgId: s.orgId,
+        paginationOpts: { numItems: 10, cursor: null },
+      })
+    ).rejects.toThrow();
   });
 });
 

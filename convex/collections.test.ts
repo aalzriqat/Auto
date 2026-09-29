@@ -1544,13 +1544,16 @@ describe("Collections", () => {
         updatedAt: Date.now(),
       })
     );
+    // SCRUM-447: a finance-company row is replaceable only while it is the
+    // deal's registered payment, and the replacement states its face exactly.
+    await t.run((ctx) => ctx.db.patch(applicationId, { expectedPaymentMethod: "CHEQUE" }));
     const replacementId = await asFinance.mutation(api.collections.replaceCheque, {
       orgId,
       chequeId: appChequeId,
       bank: "Replacement Bank",
       chequeNumber: "APP-2",
       chequeDate: Date.now() + 3 * 86_400_000,
-      amount: 150,
+      faceAmount: "150",
       notes: "Customer changed bank",
     });
     await t.run(async (ctx) => {
@@ -1560,7 +1563,9 @@ describe("Collections", () => {
         status: "REPLACED",
         replacementChequeId: replacementId,
       });
-      expect(oldCheque?.applicationId).toBeUndefined();
+      // SCRUM-447 D0: lineage is permanent — the replaced row keeps its application.
+      expect(oldCheque?.applicationId).toBe(applicationId);
+      expect(oldCheque?.originApplicationId).toBe(applicationId);
       expect(replacement).toMatchObject({
         status: "HELD",
         applicationId,
@@ -2245,6 +2250,59 @@ describe("Collections", () => {
 
     const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
     expect(draft).toMatchObject({ complete: true, expectedCash: 40, paymentCount: 1 });
+  });
+  test("SCRUM-447 reminders never chase a finance-company cheque from the customer", async () => {
+    vi.useFakeTimers();
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, userId } = await seedFinanceMember(t);
+    const now = Date.now();
+    const dueDate = now + 2 * 24 * 60 * 60 * 1000;
+    const base = {
+      orgId,
+      customerId,
+      bank: "FC Bank",
+      chequeDate: dueDate,
+      amount: 500,
+      status: "HELD" as const,
+      createdBy: userId,
+      createdAt: now,
+      updatedAt: now,
+    };
+    // One row carrying each lineage mark on its own: a drawer type, and the
+    // origin anchor a replacement leaves behind. Neither has a live applicationId.
+    const drawerOnly = await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", { ...base, chequeNumber: "FC-D", drawerType: "FINANCE_COMPANY" as const })
+    );
+    const ordinary = await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", { ...base, chequeNumber: "CUST-1" })
+    );
+
+    const result = await t.mutation(internal.collections.processDailyCollectionReminders, {});
+    // Only the ordinary customer cheque is reminded.
+    expect(result).toMatchObject({ queued: 1 });
+    const reminders = await t.run((ctx) =>
+      ctx.db.query("collectionReminders").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(reminders.map((r) => r.chequeId)).toEqual([ordinary]);
+
+    // Send-time re-read: a reminder queued BEFORE the row was recognised as
+    // finance-company is suppressed by the payload, not sent.
+    const staleReminderId = await t.run((ctx) =>
+      ctx.db.insert("collectionReminders", {
+        orgId,
+        customerId,
+        chequeId: drawerOnly,
+        channel: "SMS",
+        messageType: "CHEQUE_UPCOMING",
+        status: "PENDING",
+        scheduledAt: now,
+        createdAt: now,
+      })
+    );
+    const payload = await t.query(internal.collections.getReminderPayload, { reminderId: staleReminderId });
+    expect(payload?.fcLineageSuppressed).toBe(true);
+    const ordinaryPayload = await t.query(internal.collections.getReminderPayload, { reminderId: reminders[0]._id });
+    expect(ordinaryPayload?.fcLineageSuppressed).toBe(false);
   });
   test("daily_collection_reminders_queue_channels_dedupe_and_mark_results", async () => {
     // Installed before anything schedules: vitest fake timers only control
