@@ -241,7 +241,7 @@ function handoverCostsPaidRefusal(
   if (unsupported > 0) {
     return reasonOf(
       "HANDOVER_COSTS_UNSUPPORTED_TREATMENT",
-      `${unsupported} handover cost(s) on this deal are classified with a treatment no payment can be recorded against, so they would never reach the ledger. Remove each one and record it again with a treatment that posts (appraisal, insurance, ownership transfer, finance-company commission or selling expense), then pay it, before finalizing.`,
+      `${unsupported} handover cost(s) on this deal are classified with a treatment no payment can be recorded against, so they would never reach the ledger. Remove each one and add it again as an ownership transfer, insurance or selling expense; each is then settled from the employee's custody or by a direct dealership payment, as applicable, before finalizing.`,
       { count: unsupported }
     );
   }

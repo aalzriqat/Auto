@@ -427,13 +427,15 @@ export function dealAcceptsNewCustodyCash(
 
 function assertDealAcceptsNewCustodyCash(
   app: Pick<Doc<"financeApplications">, "status" | "finalizedSaleId">,
-  action: string
+  action: string,
+  settleSentence = "Custody the employee already holds can still be returned, reimbursed, reversed or reconciled.",
+  gone = "no handover left to fund"
 ): void {
   const state = dealAcceptsNewCustodyCash(app);
   if (state.accepts) return;
   if (state.reason === "APPLICATION_CANCELLED" || state.reason === "APPLICATION_REJECTED") {
     throw new ConvexError(
-      `This deal has been ${state.reason === "APPLICATION_CANCELLED" ? "cancelled" : "rejected"}, so there is no handover left to fund; ${action} is refused. Custody the employee already holds can still be returned, reimbursed, reversed or reconciled. Nothing has been changed.`
+      `This deal has been ${state.reason === "APPLICATION_CANCELLED" ? "cancelled" : "rejected"}, so there is ${gone}; ${action} is refused. ${settleSentence} Nothing has been changed.`
     );
   }
   assertDealEconomicsOpen(app, action);
@@ -1689,7 +1691,10 @@ export const listDealCosts = query({
          */
         handoverPayment: handoverPaymentState(fee, handoverScope),
         /** Whether a direct dealership payment may be recorded on this line now — the mutation's own predicate, in the deal's currency. */
-        directPaymentEligible: directPaymentRefusal(fee) === null && fee.currency === currency,
+        directPaymentEligible:
+          dealAcceptsNewCustodyCash(app).accepts &&
+          directPaymentRefusal(fee) === null &&
+          fee.currency === currency,
       })),
       /** The live handover lines that stop the deal finalizing (no actual, or neither custody-paid nor direct-paid) — by id, for the screen to point at. */
       handoverCostsBlockingFeeIds: blockingHandoverLines(fees, handoverScope).map((fee) => fee._id),
@@ -2714,7 +2719,12 @@ export const recordDirectFeePayment = mutation({
         // Mutable-state checks live inside the section: a replay of a payment
         // that was recorded returns it even if the deal froze or the line
         // changed since — those describe the world after the success.
-        assertDealEconomicsOpen(app, "recording a direct payment");
+        assertDealAcceptsNewCustodyCash(
+          app,
+          "recording a direct payment",
+          "A direct payment already recorded can still be reversed.",
+          "no handover left to pay for"
+        );
         const refusal = directPaymentRefusal(fee);
         if (refusal !== null) throw new ConvexError(refusal);
         const amountMinor = fee.actualAmountMinor as number;

@@ -571,6 +571,21 @@ export function HandoverCostsPanel({
   /** Every attempt that has gone out and is not yet resolved, by intentId. */
   const [attempts, setAttempts] = useState<Record<string, AddAttempt>>({});
 
+  // A direct-payment form belongs to a line that is still payable and is closed
+  // whenever an edit, remove or reconcile form opens. If the line stops being payable (an UNKNOWN
+  // attempt that actually committed, later reversed) or another opener runs,
+  // the open-form marker is dropped, so the form can never reappear later with
+  // a stale open state.
+  const payingLine = payingId === null ? undefined : (costs?.lines ?? []).find((line) => line._id === payingId);
+  const payingStale =
+    payingId !== null &&
+    (payingLine?.directPaymentEligible !== true ||
+      editingId !== null ||
+      voidingId !== null ||
+      reconcilingId !== null);
+  // Reset during render (React's derived-state pattern), not in an effect.
+  if (payingStale) setPayingId(null);
+
   const openAttempt = openIntent ? (attempts[openIntent.intentId] ?? null) : null;
   const submittingAny = Object.values(attempts).some((attempt) => attempt.status === "SUBMITTING");
   /**
@@ -689,7 +704,7 @@ export function HandoverCostsPanel({
         postingHold={postingHoldFeeIds.includes(line._id)}
         proofConfirmed={handoverCostsCheck === "READY"}
         custodyConfirmed={custodyLedgerCheck === "READY"}
-        paying={payingId === line._id}
+        paying={payingId === line._id && line.directPaymentEligible === true}
         busy={submittingAny}
         t={t}
         onOpen={() => {
@@ -2213,7 +2228,9 @@ function HandoverPaymentRow({
   }
 
   // UNPAID — the state that blocks the deal.
-  const payable = line.directPaymentEligible === true && line.currency === denominationCode;
+  // A cancelled deal offers no NEW payment (a rejected one reaches here as
+  // `directPaymentEligible: false`, served by the server from the same rule).
+  const payable = line.directPaymentEligible === true && line.currency === denominationCode && !dealCancelled;
   return (
     <div className="mt-2 space-y-2 text-xs" data-testid={testId} data-state={state}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">

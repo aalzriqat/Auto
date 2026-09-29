@@ -231,7 +231,7 @@ export function directPaymentRefusal(line: HandoverPaymentLine): string | null {
     line.deductedFromSettlement !== true &&
     unsupportedSourceState(line, { planRecognisesDeductions: false }) === "UNSUPPORTED_TREATMENT"
   ) {
-    return `This cost is treated as ${line.accountingTreatment}, which no payment can be recorded against, so it would never reach the ledger. Remove the cost and record it again with a treatment that posts (appraisal, insurance, ownership transfer, finance-company commission or selling expense). Nothing has been recorded.`;
+    return `This cost is treated as ${line.accountingTreatment}, which no payment can be recorded against, so it would never reach the ledger. Remove the cost and add it again as an ownership transfer, insurance or selling expense; it is then settled from the employee's custody or by a direct dealership payment, as applicable. Nothing has been recorded.`;
   }
   if (!isHandoverLine(line)) {
     return "Only a handover cost the dealership bears (not deducted from the finance company's settlement) is paid this way. Nothing has been recorded.";

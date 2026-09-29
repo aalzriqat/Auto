@@ -567,8 +567,8 @@ const dealRailMessages = defineBilingualMessages({
   // ledger (an accounting period is closed, or the queue has not processed it).
   HandoverPaymentCustodyRecorded: ["Recorded — waiting for posting", "مسجَّل — بانتظار الترحيل"],
   HandoverPaymentUnsupportedTreatment: [
-    "This cost's accounting treatment cannot be paid or posted, so it would never reach the books. Remove it and add it again with a treatment that posts (appraisal, insurance, ownership transfer, finance-company commission or selling expense).",
-    "المعالجة المحاسبية لهذا المصروف لا يمكن دفعها أو ترحيلها، فلن يصل إلى الدفاتر أبدًا. احذفه وأضفه من جديد بمعالجة تُرحَّل (تقييم، تأمين، نقل ملكية، عمولة شركة تمويل أو مصروف بيع).",
+    "This cost's accounting treatment cannot be paid or posted, so it would never reach the books. Remove it and add it again as an ownership transfer, insurance or selling expense; it is then settled from the employee's custody or by a direct dealership payment, as applicable.",
+    "المعالجة المحاسبية لهذا المصروف لا يمكن دفعها أو ترحيلها، فلن يصل إلى الدفاتر أبدًا. احذفه وأضفه من جديد كمصروف نقل ملكية أو تأمين أو بيع؛ وعندئذٍ تتم تسويته من عهدة الموظف أو بدفع مباشر من المعرض بحسب الحال.",
   ],
   HandoverPaymentDeductionNotRecognised: [
     "This cost is marked as deducted from the finance company's settlement, but this deal has no configured financing plan to recognise it, so it would never reach the books. Remove it and add it again without the settlement deduction, then pay it.",
@@ -607,7 +607,7 @@ const dealRailMessages = defineBilingualMessages({
     "The amount of this cost changed since you opened this form. It is now:",
     "تغيّر مبلغ هذا المصروف منذ فتحت هذا النموذج. المبلغ الآن:",
   ],
-  DirectPaymentUseNewAmount: ["Review and use the new amount", "راجعت المبلغ الجديد واعتمده"],
+  DirectPaymentUseNewAmount: ["Review and use the new amount", "راجِع المبلغ الجديد واعتمده"],
   HandoverPaymentQueued: ["Recorded — waiting to post to the books", "مسجَّل — بانتظار الترحيل إلى الدفاتر"],
   HandoverPaymentQueuedNote: [
     "This payment is not on the books yet — usually because no accounting period is open for its date. Open the period and let the accounting queue process; the deal cannot close until it posts.",
@@ -1104,8 +1104,8 @@ const dealOverviewMessages = defineBilingualMessages({
     "يوجد {count} من مصاريف التسليم مسجَّلة كمدفوعة من عهدة الموظف ومباشرةً معًا، مما يحسب المصروف مرتين. اطلب مراجعة البند قبل الإغلاق.",
   ],
   ClosingReason_HANDOVER_COSTS_UNSUPPORTED_TREATMENT: [
-    "{count} handover cost(s) are classified with a treatment no payment can be recorded against, so they would never reach the books. In Handover costs, remove each one and add it again with a treatment that posts (appraisal, insurance, ownership transfer, finance-company commission or selling expense), then pay it. Then close.",
-    "يوجد {count} من مصاريف التسليم مصنّفة بمعالجة محاسبية لا يمكن تسجيل دفع عليها، فلن تصل إلى الدفاتر أبدًا. في مصاريف التسليم احذف كل بند منها وأضفه من جديد بمعالجة تُرحَّل (تقييم، تأمين، نقل ملكية، عمولة شركة تمويل أو مصروف بيع)، ثم سجّل دفعه. ثم أغلق.",
+    "{count} handover cost(s) are classified with a treatment no payment can be recorded against, so they would never reach the books. In Handover costs, remove each one and add it again as an ownership transfer, insurance or selling expense; each is then settled from the employee's custody or by a direct dealership payment, as applicable. Then close.",
+    "يوجد {count} من مصاريف التسليم مصنّفة بمعالجة محاسبية لا يمكن تسجيل دفع عليها، فلن تصل إلى الدفاتر أبدًا. في مصاريف التسليم احذف كل بند منها وأضفه من جديد كمصروف نقل ملكية أو تأمين أو بيع؛ وتتم تسوية كل منها من عهدة الموظف أو بدفع مباشر من المعرض بحسب الحال. ثم أغلق.",
   ],
   ClosingReason_HANDOVER_COSTS_DEDUCTION_NOT_RECOGNISED: [
     "{count} handover cost(s) are marked as deducted from the finance company's settlement, but this deal has no configured financing plan to recognise a deduction, so they would never reach the books. In Handover costs, remove each one and add it again without the settlement deduction, then pay it directly or charge it to custody. Then close.",

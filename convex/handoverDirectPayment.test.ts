@@ -517,6 +517,58 @@ describe("the screen's projection agrees with the server's refusal", () => {
   });
 });
 
+describe("a stopped deal takes no NEW direct payment (SCRUM-443 CodeRabbit item 1)", () => {
+  const stop = async (seed: Seed, status: "CANCELLED" | "REJECTED") =>
+    await seed.t.run((ctx) => ctx.db.patch("financeApplications", seed.applicationId, { status }));
+
+  test.each([
+    ["CANCELLED", "cancelled"],
+    ["REJECTED", "rejected"],
+  ] as const)("T1/T2: a %s deal refuses the payment, guided, and writes nothing", async (status, word) => {
+    const seed = await seedDeal(`stopped-${status}`);
+    const feeId = await dealerFee(seed, jod(50));
+    await stop(seed, status);
+    const journals = await journalCount(seed);
+    const feeBefore = await seed.t.run((ctx) => ctx.db.get("financeDealFees", feeId));
+    await expect(payDirect(seed, feeId)).rejects.toThrow(
+      `This deal has been ${word}, so there is no handover left to pay for; recording a direct payment is refused. A direct payment already recorded can still be reversed. Nothing has been changed.`
+    );
+    expect(await journalCount(seed)).toBe(journals);
+    expect(await directEvents(seed)).toHaveLength(0);
+    expect(await seed.t.run((ctx) => ctx.db.get("financeDealFees", feeId))).toEqual(feeBefore);
+  });
+
+  test("T3 control: a payment recorded while OPEN can still be reversed after the deal is cancelled", async () => {
+    const seed = await seedDeal("stopped-reverse");
+    const feeId = await dealerFee(seed, jod(50));
+    await payDirect(seed, feeId);
+    await stop(seed, "CANCELLED");
+    await seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "entered in error" });
+    expect(expense(await ledger(seed))).toBe(0);
+    expect((await directEvents(seed))[0].status).toBe("REVERSED");
+  });
+
+  test("T4 control: a same-key replay of a payment committed before the cancel still returns its stored result", async () => {
+    const seed = await seedDeal("stopped-replay");
+    const feeId = await dealerFee(seed, jod(50));
+    const args = { method: "BANK_TRANSFER" as const, paidAt: Date.now() - DAY, reference: "TRX-9", idempotencyKey: "replay-after-cancel" };
+    const first = await payDirect(seed, feeId, args);
+    await stop(seed, "CANCELLED");
+    const journals = await journalCount(seed);
+    const second = await payDirect(seed, feeId, args);
+    expect(second).toBe(first);
+    expect(await journalCount(seed)).toBe(journals);
+    expect(await directEvents(seed)).toHaveLength(1);
+  });
+
+  test.each(["CANCELLED", "REJECTED"] as const)("T5: listDealCosts on a %s deal is not eligible where an open deal is", async (status) => {
+    const seed = await seedDeal(`stopped-list-${status}`);
+    const feeId = await dealerFee(seed, jod(50));
+    expect((await lineOf(seed, feeId))?.directPaymentEligible).toBe(true);
+    await stop(seed, status);
+    expect((await lineOf(seed, feeId))?.directPaymentEligible).toBe(false);
+  });
+});
 describe("the shared verdict never trusts a payment that no longer matches the cost", () => {
   const base: HandoverPaymentLine = {
     voidedAt: undefined, feeType: "LICENSING", paidBy: "DEALER", deductedFromSettlement: false,
@@ -691,7 +743,7 @@ describe("HANDOVER_COSTS_PAID proves each direct payment on the ledger (SCRUM-44
     expect(check.reason?.code).toBe("HANDOVER_DIRECT_LEDGER_UNVERIFIABLE");
   });
 
-  test("custody-paid and zero-actual lines need no direct-payment proof", async () => {
+  test("a deal whose only line has a zero actual needs no direct-payment proof", async () => {
     const seed = await seedDeal("ledger-custody");
     await dealerFee(seed, 0);
     expect((await readiness(seed)).status).toBe("READY");

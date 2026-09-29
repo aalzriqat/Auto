@@ -438,6 +438,30 @@ describe("who is offered the action, and what everyone else is told", () => {
     expect(screen.queryByRole("button", { name: salesEn.RecordDirectPayment })).toBeNull();
   });
 
+  test("a cancelled deal offers nothing to record, even for a line the payload still calls eligible (T6)", () => {
+    renderPanel([line()], { canRecordDirectPayment: true, onRecordDirectPayment: async () => {}, dealCancelled: true });
+    expect(screen.queryByRole("button", { name: salesEn.RecordDirectPayment })).toBeNull();
+  });
+
+  test("a rejected deal is served directPaymentEligible=false and offers nothing to record (T6)", () => {
+    renderPanel([line({ directPaymentEligible: false })], { canRecordDirectPayment: true, onRecordDirectPayment: async () => {} });
+    expect(screen.queryByRole("button", { name: salesEn.RecordDirectPayment })).toBeNull();
+  });
+
+  test("a form left open on a line that became paid is closed, and does not reappear when the payment is reversed", () => {
+    const onRecord = async () => {};
+    const { rerender } = render(panelWith([line()], onRecord));
+    fireEvent.click(screen.getByRole("button", { name: salesEn.RecordDirectPayment }));
+    expect(screen.getByTestId("direct-payment-fee1-form")).toBeTruthy();
+    // The attempt actually committed: the line is now paid, not payable.
+    rerender(panelWith([line({ handoverPayment: "PAID_DIRECT", directPaymentEligible: false })], onRecord));
+    expect(screen.queryByTestId("direct-payment-fee1-form")).toBeNull();
+    // Later reversed: payable again, but the stale open form must not come back.
+    rerender(panelWith([line()], onRecord));
+    expect(screen.queryByTestId("direct-payment-fee1-form")).toBeNull();
+    expect(screen.getByRole("button", { name: salesEn.RecordDirectPayment })).toBeTruthy();
+  });
+
   test("a closed deal offers nothing to record", () => {
     renderPanel([line()], { canRecordDirectPayment: true, onRecordDirectPayment: async () => {}, dealClosed: true });
     expect(screen.queryByRole("button", { name: salesEn.RecordDirectPayment })).toBeNull();

@@ -184,11 +184,10 @@ describe("a2 - the composed worst case: every field at its cap, multibyte, produ
       createdBy: id, createdAt: 1.7e12, updatedAt: 1.7e12,
     };
     const bytes = feeDocBytes(doc);
-    console.info(`composed worst case (${_label}): ${bytes} of ${MAX_FEE_DOC_BYTES} bytes`);
+
     // Measured 2026-09-29: 6,577 bytes (3-byte units), 4,877 (Arabic / astral), of 8,192.
     expect(bytes, `${_label}: ${bytes}`).toBeLessThanOrEqual(MAX_FEE_DOC_BYTES);
     expect(bytes).toBeGreaterThan(0);
-    expect(`${bytes}`).toBe(`${bytes}`);
   });
 
   test("the caps are tight enough to matter: the pre-v6 caps (1,000 / 500 / 2,000) would NOT have fit at 3 bytes a unit", () => {

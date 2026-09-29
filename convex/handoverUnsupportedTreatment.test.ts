@@ -230,7 +230,14 @@ describe("b1 - an off-plan dealer-borne line no supported source can pay blocks 
     const feeId = await offPlanFee(seed, { accountingTreatment: "CAPITALIZED_TO_VEHICLE" });
     await seed.asSales.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "wrong treatment" });
     expect((await seed.t.run((ctx) => ctx.db.get("financeDealFees", feeId)))?.voidedAt).toBeDefined();
-    expect(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT).toBeDefined();
+    // The role that may remove the line still cannot pay it: no disbursement authority.
+    const payable = await offPlanFee(seed);
+    const before = await seed.t.run((ctx) => ctx.db.get("financeDealFees", payable));
+    await expect(payDirect(seed, payable, { as: seed.asSales })).rejects.toThrow();
+    expect(await seed.t.run((ctx) => ctx.db.get("financeDealFees", payable))).toEqual(before);
+    // Control: the same payment by the owner (who holds the authority) is accepted.
+    await payDirect(seed, payable);
+    expect((await seed.t.run((ctx) => ctx.db.get("financeDealFees", payable)))?.directPayment).toBeDefined();
   });
 
   test("controls: an ordinary postable UNPAID line keeps its own code; a zero actual is exempt; customer- and financier-borne are out of scope", async () => {
