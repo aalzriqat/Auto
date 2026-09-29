@@ -143,6 +143,21 @@ describe("the direct-payment action", () => {
     await waitFor(() => expect(screen.queryByTestId("direct-payment-fee1-form")).toBeNull());
   });
 
+  // Opus L3: an open direct-payment form is an active money command. The
+  // panel says so with data-active-task, and only while the form is open, so a
+  // live-stage change cannot fold it behind a closed record.
+  test("an open direct-payment form marks the panel as an active task, and only while it is open", () => {
+    renderPanel([line()], { canRecordDirectPayment: true, onRecordDirectPayment: async () => {} });
+    const panel = () => screen.getByTestId("deal-handover-costs");
+    expect(panel().hasAttribute("data-active-task")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: salesEn.RecordDirectPayment }));
+    expect(screen.getByTestId("direct-payment-fee1-form")).toBeTruthy();
+    expect(panel().hasAttribute("data-active-task")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: /^Cancel$/ }));
+    expect(screen.queryByTestId("direct-payment-fee1-form")).toBeNull();
+    expect(panel().hasAttribute("data-active-task")).toBe(false);
+  });
+
   test("every method offered is one the server accepts, each labelled", () => {
     renderPanel([line()], { canRecordDirectPayment: true, onRecordDirectPayment: async () => {} });
     fireEvent.click(screen.getByRole("button", { name: salesEn.RecordDirectPayment }));

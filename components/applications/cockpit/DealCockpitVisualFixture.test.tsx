@@ -1250,11 +1250,19 @@ describe("O1 -- the step workbench", () => {
     });
   }
 
-  function renderStage(live: FinancedDealStageKey | null, state: "CURRENT" | "STOPPED" = "CURRENT") {
-    return render(stageElement(live, state));
+  function renderStage(
+    live: FinancedDealStageKey | null,
+    state: "CURRENT" | "STOPPED" = "CURRENT",
+    extra: Partial<React.ComponentProps<typeof DealCockpitView>> = {}
+  ) {
+    return render(stageElement(live, state, extra));
   }
 
-  function stageElement(live: FinancedDealStageKey | null, state: "CURRENT" | "STOPPED" = "CURRENT") {
+  function stageElement(
+    live: FinancedDealStageKey | null,
+    state: "CURRENT" | "STOPPED" = "CURRENT",
+    extra: Partial<React.ComponentProps<typeof DealCockpitView>> = {}
+  ) {
     language.locale = "en";
     const base = financedDeal();
     const deal: FinancedDealCockpitData = { ...base, stages: stagesWithLive(live, state) };
@@ -1281,6 +1289,7 @@ describe("O1 -- the step workbench", () => {
         }}
         financingPlan={{ facts: FINANCING_PLAN, formatMajor: (major, currency) => `${major.toLocaleString()} ${currency}` }}
         handoverCosts={handoverCostsWiring()}
+        {...extra}
       />
     );
   }
@@ -1577,38 +1586,109 @@ describe("O1 -- the step workbench", () => {
     expect(insideHidden(screen.getByTestId("deal-custody"))).toBe(false);
   });
 
-  // jsdom has no keyboard activation (no user-event here): `press` sends the
-  // key events to the focused control and, exactly as a browser does for a
-  // native button, activates it on Enter (keydown) and Space (keyup) UNLESS a
-  // handler called preventDefault. So the test fails if the toggle is not a
-  // native focusable button, or if anything swallows the key.
-  function press(el: HTMLElement, key: "Enter" | " ") {
-    const init = { key, code: key === " " ? "Space" : "Enter", bubbles: true, cancelable: true };
-    const down = fireEvent.keyDown(el, init);
-    if (key === "Enter" && down) fireEvent.click(el);
-    const up = fireEvent.keyUp(el, init);
-    if (key === " " && up) fireEvent.click(el);
-  }
+  // Sol 417-R1 / Opus L6: an upload in flight (or a file preview open) is an
+  // active task exactly like an open add-cost form. A live-stage change that
+  // demotes the documents panel must not hide it behind a closed record.
+  const documentsWiring = (uploading: ReadonlyArray<string>, fileUrl: string | null = null) => ({
+    items: [{ _id: "d1", ruleId: "r1", ruleName: "National ID copy", status: "MISSING", fileUrl }],
+    canUpload: true,
+    canVerify: false,
+    uploadingRuleIds: new Set(uploading) as ReadonlySet<string>,
+    onUpload: () => {},
+    onVerify: () => {},
+  });
 
-  test("Sol 417-2: Deal details opens and closes from the keyboard (Enter and Space on the focused button)", () => {
+  test("Sol 417-R1: DELIVERY_ACTIONS -> APPRAISAL with an upload in flight and focus elsewhere opens the record, same panel, same upload state", () => {
+    const { rerender } = renderStage("DELIVERY_ACTIONS", "CURRENT", { documents: documentsWiring(["r1"]) });
+    expect(zoneOf("deal-lower-tabs")).toBe("workbench");
+    const panel = screen.getByTestId("deal-documents");
+    expect(document.activeElement).toBe(document.body);
+
+    rerender(stageElement("APPRAISAL", "CURRENT", { documents: documentsWiring(["r1"]) }));
+
+    expect(zoneOf("deal-lower-tabs")).toBe("record");
+    expect(recordOpen()).toBe(true);
+    expect(insideHidden(screen.getByTestId("deal-documents"))).toBe(false);
+    expect(screen.getByTestId("deal-documents")).toBe(panel);
+    expect((document.getElementById("deal-doc-file-d1") as HTMLInputElement).disabled).toBe(true);
+  });
+
+  test("Sol 417-R1 control (a): the same transition with no upload keeps the idle documents panel collapsed", () => {
+    const { rerender } = renderStage("DELIVERY_ACTIONS", "CURRENT", { documents: documentsWiring([]) });
+    rerender(stageElement("APPRAISAL", "CURRENT", { documents: documentsWiring([]) }));
+    expect(zoneOf("deal-lower-tabs")).toBe("record");
+    expect(recordOpen()).toBe(false);
+    expect(recordHidden()).toBe(true);
+  });
+
+  test("Sol 417-R1: an open file preview also keeps the documents panel visible across the transition", () => {
+    const { rerender } = renderStage("DELIVERY_ACTIONS", "CURRENT", {
+      documents: documentsWiring([], "https://files.test/id.pdf"),
+    });
+    const view = (dictionaries.en as Record<string, string>).ViewFile;
+    fireEvent.click(within(screen.getByTestId("deal-documents")).getByRole("button", { name: view }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    // Nothing is focused inside the panel itself: the dialog owns focus.
+    rerender(stageElement("APPRAISAL", "CURRENT", { documents: documentsWiring([], "https://files.test/id.pdf") }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(recordOpen()).toBe(true);
+    expect(insideHidden(screen.getByTestId("deal-documents"))).toBe(false);
+  });
+
+  // Opus L3: the focus-only branch. Focus sits on a control of a panel that is
+  // about to be demoted, with NO active-task marker on it: the record still
+  // opens so the focused control is not hidden under the operator.
+  test("Opus L3: focus inside a demoted panel with no active task opens the record and keeps the focus", () => {
+    const { rerender } = renderStage("HANDOVER");
+    const add = within(screen.getByTestId("deal-handover-costs")).getByRole("button", {
+      name: (dictionaries.en as Record<string, string>).AddHandoverCost,
+    });
+    add.focus();
+    expect(document.activeElement).toBe(add);
+    expect(screen.getByTestId("deal-handover-costs").hasAttribute("data-active-task")).toBe(false);
+
+    rerender(stageElement("SETTLEMENT"));
+
+    expect(zoneOf("deal-handover-costs")).toBe("record");
+    expect(recordOpen()).toBe(true);
+    expect(insideHidden(add)).toBe(false);
+    expect(document.activeElement).toBe(add);
+  });
+
+  // Opus L3, stated plainly: the layout effect that puts focus back on
+  // `flowFocusRef` after a stage change is NOT covered by any automated test.
+  // Deleting its focus call fails nothing in jsdom: React's own focus restore
+  // after a commit, and jsdom's lack of rendering, both mask it (several
+  // attempts to emulate a browser-side loss, including refusing focus inside
+  // `hidden`, left the mutation alive). It is kept, and is unverified in a
+  // real browser.
+
+  // Sol 417-R2: jsdom has no keyboard activation (no user-event here), so this
+  // test does NOT claim the browser turns Enter/Space into a click. It pins
+  // what the browser's native activation depends on: a real focusable button,
+  // that no key handler cancels Enter/Space, and that a click toggles it. Real
+  // keyboard activation is covered by no automated test here (no hydrated
+  // browser harness) and is a recorded follow-up.
+  test("Sol 417-R2: Deal details is a native button no key handler cancels, and a click toggles it", () => {
     renderStage("SETTLEMENT");
     expect(toggle().tagName).toBe("BUTTON");
     expect(toggle().getAttribute("type")).toBe("button");
     expect(toggle().tabIndex).toBeGreaterThanOrEqual(0);
     toggle().focus();
     expect(document.activeElement).toBe(toggle());
+    for (const key of ["Enter", " "]) {
+      const init = { key, code: key === " " ? "Space" : "Enter", bubbles: true, cancelable: true };
+      // fireEvent returns false when a handler called preventDefault.
+      expect(fireEvent.keyDown(toggle(), init), `keydown ${JSON.stringify(key)} is not cancelled`).toBe(true);
+      expect(fireEvent.keyUp(toggle(), init), `keyup ${JSON.stringify(key)} is not cancelled`).toBe(true);
+    }
     expect(recordOpen()).toBe(false);
-    press(toggle(), "Enter");
+    fireEvent.click(toggle());
     expect(recordOpen()).toBe(true);
     expect(recordHidden()).toBe(false);
-    press(toggle(), " ");
+    fireEvent.click(toggle());
     expect(recordOpen()).toBe(false);
     expect(recordHidden()).toBe(true);
-    press(toggle(), " ");
-    expect(recordOpen()).toBe(true);
-    press(toggle(), "Enter");
-    expect(recordOpen()).toBe(false);
-    // Focus never left the control.
     expect(document.activeElement).toBe(toggle());
   });
 

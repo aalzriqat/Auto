@@ -375,6 +375,24 @@ for (const locale of LOCALES) {
           // Collapsed means hidden, not removed: the money is in the record and
           // is not painted until it is opened.
           await expect(page.getByTestId("deal-money")).toBeHidden();
+          // Opus L1: with the record collapsed the grid ends at the toggle. The
+          // row template that keeps the working cards together (N3) belongs to
+          // the EXPANDED record; applied while collapsed it left ~120-144px of
+          // blank rows under the toggle at desktop widths.
+          if (viewport.width >= 1280) {
+            const collapsedEnd = await page.evaluate(() => {
+              const wrapper = document.querySelector('[data-zone="toggle"]') as HTMLElement;
+              const grid = wrapper.parentElement as HTMLElement;
+              return {
+                gridBottom: grid.getBoundingClientRect().bottom,
+                toggleBottom: wrapper.getBoundingClientRect().bottom,
+              };
+            });
+            expect(
+              collapsedEnd.gridBottom - collapsedEnd.toggleBottom,
+              `blank space under the collapsed toggle: ${JSON.stringify(collapsedEnd)}`,
+            ).toBeLessThanOrEqual(0.5);
+          }
           await page.screenshot({
             path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}-top.png`),
           });
@@ -402,6 +420,7 @@ for (const locale of LOCALES) {
             await page.evaluate(() => {
               const spacer = document.createElement("div");
               spacer.style.height = "2600px";
+              spacer.setAttribute("data-n3-spacer", "");
               document.querySelector('[data-testid="deal-money"]')?.appendChild(spacer);
             });
             const tops = await page.evaluate(() =>
@@ -415,6 +434,10 @@ for (const locale of LOCALES) {
             for (let i = 1; i < tops.length; i += 1) {
               expect(tops[i].top - tops[i - 1].bottom, `gap between record panel ${i - 1} and ${i} with a tall money column`).toBeCloseTo(24, 0);
             }
+            // The spacer only existed to measure: take it out so the bottom
+            // screenshot shows the real page, not 2600px of nothing.
+            await page.evaluate(() => document.querySelectorAll("[data-n3-spacer]").forEach((el) => el.remove()));
+            expect(await page.locator("[data-n3-spacer]").count()).toBe(0);
           }
 
           // Painted on screen: header, headline figure, stage rail — inside
