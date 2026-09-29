@@ -1,0 +1,118 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+const { validateLcovSources, main } = require("../.github/scripts/validateLcovSources.cjs") as {
+  validateLcovSources: (text: string, opts: { candidateRoot: string }) => number;
+  main: (argv: string[]) => number;
+};
+
+let root: string;
+
+const rec = (sf: string) => `TN:\nSF:${sf}\nDA:1,1\nend_of_record\n`;
+const touch = (rel: string) => {
+  const full = path.join(root, rel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, "x");
+};
+const validate = (text: string) => validateLcovSources(text, { candidateRoot: root });
+
+beforeEach(() => {
+  root = fs.mkdtempSync(path.join(os.tmpdir(), "validate-lcov-"));
+  for (const f of [
+    "convex/a.ts",
+    "apps/mobile/src/a.tsx",
+    "apps/mobile/app/(app)/x.tsx",
+    "apps/mobile/appx/a.ts",
+    "apps/mobile/jest.setup.ts",
+    "components/a.tsx",
+    "lib/commission.ts",
+    "Convex/a.ts",
+  ]) {
+    touch(f);
+  }
+});
+
+afterEach(() => {
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+describe("validateLcovSources", () => {
+  test.each(["convex/a.ts", "apps/mobile/src/a.tsx", "apps/mobile/app/(app)/x.tsx"])("accepts %s", (sf) => {
+    expect(validate(rec(sf))).toBe(1);
+  });
+
+  test("normalises backslashes as before", () => {
+    expect(validate(rec("apps\\mobile\\src\\a.tsx"))).toBe(1);
+  });
+
+  test.each([
+    "apps/mobile/appx/a.ts",
+    "apps/mobile/jest.setup.ts",
+    "components/a.tsx",
+    "/abs/convex/a.ts",
+    "apps/mobile/src/../../x",
+    "Convex/a.ts",
+    "convex/./a.ts",
+    "convex//a.ts",
+    "convex/a.ts ",
+  ])("refuses out-of-scope or malformed source %s", (sf) => {
+    expect(() => validate(rec(sf))).toThrow(/refuses/);
+  });
+
+  test("refuses an artifact with a bare CR smuggling a second SF", () => {
+    expect(() => validate("SF:convex/a.ts\rSF:lib/commission.ts\nend_of_record\n")).toThrow(/control character/);
+  });
+
+  test("refuses NUL and other control characters but allows CRLF and tab", () => {
+    expect(() => validate("SF:convex/a.ts\u0000\nend_of_record\n")).toThrow(/control character/);
+    expect(() => validate("SF:convex/a.ts\u001b\nend_of_record\n")).toThrow(/control character/);
+    expect(validate("TN:\r\nSF:convex/a.ts\r\nFN:1,\tf\r\nend_of_record\r\n")).toBe(1);
+  });
+
+  test("refuses an SF that is missing from the candidate checkout", () => {
+    expect(() => validate(rec("convex/missing.ts"))).toThrow(/not an existing regular file/);
+  });
+
+  test("refuses an SF that is a directory", () => {
+    fs.mkdirSync(path.join(root, "convex", "dir.ts"));
+    expect(() => validate(rec("convex/dir.ts"))).toThrow(/not an existing regular file/);
+  });
+
+  test("refuses an SF that is a symlink", () => {
+    try {
+      fs.symlinkSync(path.join(root, "lib/commission.ts"), path.join(root, "convex/link.ts"));
+    } catch {
+      return; // symlink creation not permitted on this host; CI (linux) exercises it
+    }
+    expect(() => validate(rec("convex/link.ts"))).toThrow(/not an existing regular file/);
+  });
+});
+
+describe("main", () => {
+  test("returns 0 for a valid artifact and 1 for an invalid one", () => {
+    const lcov = path.join(root, "lcov.info");
+    fs.writeFileSync(lcov, rec("convex/a.ts"));
+    expect(main([lcov, root])).toBe(0);
+    fs.writeFileSync(lcov, rec("components/a.tsx"));
+    expect(main([lcov, root])).toBe(1);
+    expect(main([])).toBe(1);
+  });
+});
+
+describe("sonar-pr-report.yml wiring", () => {
+  const source = fs.readFileSync(path.resolve(process.cwd(), ".github/workflows/sonar-pr-report.yml"), "utf8");
+
+  test("runs the validator from the trusted checkout, never the candidate", () => {
+    expect(source).toContain("node trusted/.github/scripts/validateLcovSources.cjs");
+    expect(source).not.toMatch(/candidate\/\.github\/scripts/);
+  });
+
+  test("validates before the candidate lcov is placed and the scan runs", () => {
+    expect(source.indexOf("validateLcovSources.cjs")).toBeLessThan(source.indexOf("cp \"$RUNNER_TEMP/sonar-coverage/lcov.info\""));
+    expect(source.indexOf("Checkout exact tested PR merge as data only")).toBeLessThan(source.indexOf("validateLcovSources.cjs"));
+  });
+});

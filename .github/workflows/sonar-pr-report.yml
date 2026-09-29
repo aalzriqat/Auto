@@ -194,24 +194,9 @@ jobs:
             exit 1
           fi
 
-          node <<'NODE'
-          const fs = require("node:fs");
-          const lcov = fs.readFileSync(process.env.RUNNER_TEMP + "/sonar-coverage/lcov.info", "utf8");
-          // SCRUM-293: the mobile jest LCOV is repo-relative (apps/mobile/src/...), so that
-          // prefix is allowed alongside convex/ and scripts/. Absolute paths, "..", and any
-          // other prefix (including apps/mobile config or sibling dirs) stay refused.
-          for (const line of lcov.split(/\r?\n/)) {
-            if (!line.startsWith("SF:")) continue;
-            const source = line.slice(3).replaceAll("\\", "/");
-            if (
-              source.startsWith("/") ||
-              source.split("/").includes("..") ||
-              !/^(convex|scripts|apps\/mobile\/src)\//.test(source)
-            ) {
-              throw new Error("Trusted Sonar refuses out-of-scope LCOV source path: " + source);
-            }
-          }
-          NODE
+          # SCRUM-293: the validator is read from the immutable trusted checkout, never the
+          # candidate merge, and checks every SF record against the exact candidate checkout.
+          node trusted/.github/scripts/validateLcovSources.cjs "$LCOV" candidate
 
           mkdir -p candidate/coverage
           cp "$RUNNER_TEMP/sonar-coverage/lcov.info" candidate/coverage/lcov.info
