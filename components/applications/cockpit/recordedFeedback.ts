@@ -327,14 +327,15 @@ export function useRecordedFeedback(
       from: pending,
     });
   }
-
   // A released line is only as true as the fact it names. If, on the same deal,
   // the read model later stops showing that fact (another operator changed the
   // same value), the line is retracted. Retraction only removes the line: the
   // outcome was already delivered, so it says nothing else and never toasts, and
   // it is permanent (the value coming back does not revive it). It converges:
-  // once `released` is null this condition is false.
-  if (released !== null && model !== null && released.from.scope === scopeKey && !isReflected(released.from, model)) {
+  // once `released` is null this condition is false. It is an `else`: a newer
+  // release in this render already replaced the older line, and `released` here
+  // is still that older one -- retracting it would drop the newer line.
+  else if (released !== null && model !== null && released.from.scope === scopeKey && !isReflected(released.from, model)) {
     setReleased(null);
   }
 

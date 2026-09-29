@@ -462,6 +462,47 @@ describe("Sol R3-1 -- a released line is retracted when the read model stops sho
   });
 });
 
+describe("Opus F1 -- retracting an older line never drops a newer one released in the same render", () => {
+  test("A released, then one snapshot shows B's fact and removes A's: B's line shows and nothing is owed", async () => {
+    const onUnreflected = vi.fn();
+    const econ = (minor: number, status: string): RecordedModel => ({
+      deal: { stages: [] },
+      economics: { submittedQuotationMinor: minor, submittedQuotationSource: "MANUAL_ENTRY" },
+      application: { status },
+    });
+    const { result, rerender, unmount } = renderHook(
+      ({ m }: { m: RecordedModel | null }) => useRecordedFeedback(m, onUnreflected, "deal-1"),
+      { initialProps: { m: econ(90, "PENDING_DOCS") as RecordedModel | null } }
+    );
+    let resolveA!: () => void;
+    let resolveB!: () => void;
+    let a!: Promise<string>;
+    let b!: Promise<string>;
+    act(() => {
+      a = result.current.track(() => new Promise<string>((r) => (resolveA = () => r("a"))), "QuotationRecorded", {
+        reflectedWhen: quotationReflected(100, "MANUAL_ENTRY"),
+      });
+      b = result.current.track(() => new Promise<string>((r) => (resolveB = () => r("b"))), "CreditStatusChanged", {
+        reflectedWhen: creditStatusReflected("UNDER_REVIEW"),
+      });
+    });
+    await act(async () => {
+      resolveA();
+      await a;
+    });
+    rerender({ m: econ(100, "PENDING_DOCS") });
+    expect(result.current.recorded).not.toBeNull();
+    await act(async () => {
+      resolveB();
+      await b;
+    });
+    rerender({ m: econ(120, "UNDER_REVIEW") });
+    expect(result.current.recorded).not.toBeNull();
+    unmount();
+    expect(onUnreflected).not.toHaveBeenCalled();
+  });
+});
+
 describe("Opus L1 -- the released line retires its owed outcome at commit, before any timer can run", () => {
   test("a timer firing in the commit that shows the line does not add a toast", async () => {
     vi.useFakeTimers();
