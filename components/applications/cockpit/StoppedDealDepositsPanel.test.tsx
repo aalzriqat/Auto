@@ -63,7 +63,7 @@ describe("StoppedDealDepositsPanel refund method (SCRUM-469)", () => {
     expect(select.value).toBe("");
     const confirm = screen.getByRole("button", { name: "ConfirmRefund" }) as HTMLButtonElement;
     expect(confirm.disabled).toBe(true);
-    expect(screen.getByRole("alert").textContent).toBe("RefundMethodRequired");
+    expect(screen.getByRole("status").textContent).toBe("RefundMethodRequired");
 
     fireEvent.click(confirm);
     expect(onResolve).not.toHaveBeenCalled();
@@ -76,7 +76,7 @@ describe("StoppedDealDepositsPanel refund method (SCRUM-469)", () => {
 
     const confirm = screen.getByRole("button", { name: "ConfirmRefund" }) as HTMLButtonElement;
     expect(confirm.disabled).toBe(false);
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
     fireEvent.click(confirm);
     expect(onResolve).toHaveBeenCalledWith("dep1", "REFUNDED", "BANK_TRANSFER", 2);
   });

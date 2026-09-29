@@ -88,7 +88,7 @@ describe("SupplierCostRecoveriesSection receipt method (SCRUM-469)", () => {
   test("opens with no method: recording is refused and the reason is on screen", () => {
     const dialog = openDialog();
     expect((within(dialog).getByTestId("method-select") as HTMLSelectElement).value).toBe("");
-    expect(within(dialog).getByRole("alert").textContent).toBe("MoneyMethodRequired");
+    expect(within(dialog).getByRole("status").textContent).toBe("MoneyMethodRequired");
     expect(record(dialog).disabled).toBe(true);
     fireEvent.click(record(dialog));
     expect(stubs.calls).toHaveLength(0);
@@ -97,7 +97,7 @@ describe("SupplierCostRecoveriesSection receipt method (SCRUM-469)", () => {
   test("sends exactly the chosen method", async () => {
     const dialog = openDialog();
     fireEvent.change(within(dialog).getByTestId("method-select"), { target: { value: "BANK_TRANSFER" } });
-    expect(within(dialog).queryByRole("alert")).toBeNull();
+    expect(within(dialog).queryByRole("status")).toBeNull();
     expect(record(dialog).disabled).toBe(false);
     fireEvent.click(record(dialog));
     await waitFor(() => expect(stubs.calls).toHaveLength(1));

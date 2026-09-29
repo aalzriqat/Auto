@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { HandCoins, Undo2, XCircle } from "lucide-react";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import { isChosenMethod } from "@/components/payments/paymentMethod";
 
 export type DepositResolution = "REFUNDED" | "FORFEITED";
 
@@ -121,7 +122,7 @@ export function StoppedDealDepositsPanel({
     setPending(null);
     setRefundMethod(undefined);
   };
-  const refundMethodMissing = pending?.resolution === "REFUNDED" && refundMethod === undefined;
+  const refundMethodMissing = pending?.resolution === "REFUNDED" && !isChosenMethod(refundMethod);
   const isResolvingPending = pending !== null && resolvingId === pending.depositId;
 
   return (
@@ -248,7 +249,7 @@ export function StoppedDealDepositsPanel({
                 placeholder={t("RefundChooseMethod")}
               />
               {refundMethodMissing ? (
-                <p className="text-sm font-medium text-destructive" role="alert">
+                <p className="text-sm font-medium text-destructive" role="status">
                   {t("RefundMethodRequired")}
                 </p>
               ) : null}

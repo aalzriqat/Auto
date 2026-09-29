@@ -2,6 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import { isChosenMethod } from "@/components/payments/paymentMethod";
 
 /**
  * Refund or forfeit a HELD deposit, from the vehicle's own deposit list.
@@ -45,9 +46,9 @@ export function HeldDepositActions({
           variant="outline"
           size="sm"
           className="h-7 text-xs"
-          disabled={busy || method === undefined}
+          disabled={busy || !isChosenMethod(method)}
           onClick={() => {
-            if (method !== undefined) onRefund(method);
+            if (isChosenMethod(method)) onRefund(method);
           }}
         >
           {t("Refund") ?? "Refund"}
@@ -62,8 +63,8 @@ export function HeldDepositActions({
           {t("Forfeit") ?? "Forfeit"}
         </Button>
       </div>
-      {method === undefined ? (
-        <p className="max-w-[18rem] text-xs font-medium text-destructive text-end" role="alert">
+      {!isChosenMethod(method) ? (
+        <p className="max-w-[18rem] text-xs font-medium text-destructive text-end" role="status">
           {t("RefundMethodRequired")}
         </p>
       ) : null}

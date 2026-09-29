@@ -3,7 +3,7 @@
  * Select, which needs pointer-capture stubs to open in jsdom; a native select
  * lets a test choose a method the way an operator now must, because no money
  * dialog pre-selects one. Used via
- * `vi.mock("@/components/payments/PaymentMethodSelect", () => import("./testPaymentMethodSelect"))`.
+ * `vi.mock("@/components/payments/PaymentMethodSelect", () => import("@/test-utils/paymentMethodSelect"))`.
  */
 import { fireEvent, within } from "@testing-library/react";
 

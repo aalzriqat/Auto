@@ -57,7 +57,7 @@ describe("HeldDepositActions (SCRUM-469)", () => {
     expect((screen.getByTestId("method-select") as HTMLSelectElement).value).toBe("");
     const refund = screen.getByRole("button", { name: "Refund" }) as HTMLButtonElement;
     expect(refund.disabled).toBe(true);
-    expect(screen.getByRole("alert").textContent).toBe("RefundMethodRequired");
+    expect(screen.getByRole("status").textContent).toBe("RefundMethodRequired");
     fireEvent.click(refund);
     expect(onRefund).not.toHaveBeenCalled();
   });
@@ -67,7 +67,7 @@ describe("HeldDepositActions (SCRUM-469)", () => {
     render(<Harness onRefund={onRefund} onForfeit={vi.fn()} />);
     fireEvent.change(screen.getByTestId("method-select"), { target: { value: "BANK_TRANSFER" } });
 
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Refund" }));
     expect(onRefund).toHaveBeenCalledExactlyOnceWith("BANK_TRANSFER");
   });

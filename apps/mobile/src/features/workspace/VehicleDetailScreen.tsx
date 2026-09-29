@@ -69,6 +69,11 @@ type EditableLandedItem = {
 
 let landedItemKeyCounter = 0;
 
+/** SCRUM-469: an unset or empty selection is NOT a chosen method. */
+function isChosenMethod<M extends string>(method: M | "" | null | undefined): method is M {
+  return typeof method === "string" && method !== "";
+}
+
 function nextLandedItemKey(): string {
   landedItemKeyCounter += 1;
   return `landed-${landedItemKeyCounter}`;
@@ -225,7 +230,16 @@ function VehicleDetailContent({
   const archiveVehicle = useMutation(api.vehicles.softDelete);
 
   const [releasingDepositId, setReleasingDepositId] = useState<string | null>(null);
-  const [refundMethodByDeposit, setRefundMethodByDeposit] = useState<Record<string, MobileDepositMethod>>({});
+  // SCRUM-469: a refund method belongs to ONE payout. It is stored with the
+  // payout generation (`releaseCount`) it was chosen for, so once a partial
+  // payout confirms and the generation advances the choice no longer applies.
+  const [refundChoiceByDeposit, setRefundChoiceByDeposit] = useState<
+    Record<string, { method: MobileDepositMethod; generation: number }>
+  >({});
+  const refundMethodFor = (deposit: { _id: string; releaseCount?: number }): MobileDepositMethod | undefined => {
+    const choice = refundChoiceByDeposit[deposit._id];
+    return choice && choice.generation === (deposit.releaseCount ?? 0) ? choice.method : undefined;
+  };
   const [landedItems, setLandedItems] = useState<EditableLandedItem[]>([]);
   const [savingCosts, setSavingCosts] = useState(false);
   const [reservationCustomerId, setReservationCustomerId] = useState("");
@@ -254,7 +268,7 @@ function VehicleDetailContent({
     setReservationDeposit("");
     setReservationMethod("");
     setReservationHoldDays("");
-    setRefundMethodByDeposit({});
+    setRefundChoiceByDeposit({});
   }, [vehicleId]);
 
   const paymentMethodOptions: Array<{ label: string; value: MobileLandedCostPaymentMethod }> = [
@@ -290,6 +304,11 @@ function VehicleDetailContent({
     observedReleaseCount: number,
   ) {
     if (!orgId) return;
+    // SCRUM-469: no default. A refund with no chosen method is refused here
+    // BEFORE the busy flag is raised (an early return after it would leave the
+    // row disabled forever), and the server refuses it too.
+    const chosenMethod = refundMethodFor({ _id: depositId, releaseCount: observedReleaseCount });
+    if (resolution === "REFUNDED" && !isChosenMethod(chosenMethod)) return;
     setReleasingDepositId(depositId);
     // SCRUM-313 — a GENERATION-AWARE retained identity, mirroring the web caller
     // in `components/vehicles/VehicleDetailsDialog.tsx`, which carries the full
@@ -309,10 +328,6 @@ function VehicleDetailContent({
     //
     // The refund method is part of the decision, not presentation: refunding to
     // CASH and to BANK_TRANSFER must not share one identity.
-    // SCRUM-469: no default. A refund with no chosen method is refused here (the
-    // button is also disabled) and the server refuses it too.
-    const chosenMethod = refundMethodByDeposit[depositId];
-    if (resolution === "REFUNDED" && chosenMethod === undefined) return;
     const method = resolution === "REFUNDED" ? chosenMethod : "NONE";
     const intent = `release-deposit:${String(depositId)}:${resolution}:${method}:gen${observedReleaseCount}`;
     try {
@@ -570,17 +585,20 @@ function VehicleDetailContent({
                     <>
                       <SelectField
                         label={locale === "ar" ? "طريقة الاسترداد" : "Refund method"}
-                        value={refundMethodByDeposit[deposit._id] ?? ""}
+                        value={refundMethodFor(deposit) ?? ""}
                         options={paymentMethodOptions}
                         onChange={(method) =>
-                          setRefundMethodByDeposit((prev) => ({
+                          setRefundChoiceByDeposit((prev) => ({
                             ...prev,
-                            [deposit._id]: method as MobileDepositMethod,
+                            [deposit._id]: {
+                              method: method as MobileDepositMethod,
+                              generation: deposit.releaseCount ?? 0,
+                            },
                           }))
                         }
                       />
-                      {refundMethodByDeposit[deposit._id] === undefined ? (
-                        <Text accessibilityRole="alert" style={styles.mutedText}>
+                      {!isChosenMethod(refundMethodFor(deposit)) ? (
+                        <Text accessibilityRole="summary" style={styles.mutedText}>
                           {locale === "ar"
                             ? "اختر طريقة الاسترداد لتتمكن من استرداد العربون."
                             : "Choose the refund method to refund this deposit."}
@@ -588,7 +606,7 @@ function VehicleDetailContent({
                       ) : null}
                       <View style={styles.cardActions}>
                         <PrimaryButton
-                          disabled={releasingDepositId === deposit._id || refundMethodByDeposit[deposit._id] === undefined}
+                          disabled={releasingDepositId === deposit._id || !isChosenMethod(refundMethodFor(deposit))}
                           label={locale === "ar" ? "استرداد" : "Refund"}
                           tone="muted"
                           onPress={() =>

@@ -36,7 +36,7 @@ vi.mock("convex/react", async () => {
   };
 });
 
-import { ApprovalRequestDialog } from "./CollectionsTab";
+import { ApprovalRequestDialog, KeyedApprovalRequestDialog } from "./CollectionsTab";
 
 // jsdom implements none of the pointer-capture surface Radix reaches for.
 beforeAll(() => {
@@ -75,7 +75,7 @@ describe("ApprovalRequestDialog refund method (SCRUM-469)", () => {
     fireEvent.change(screen.getByPlaceholderText("Reason"), { target: { value: "Customer withdrew" } });
 
     expect(screen.getByText("RefundChooseMethod")).toBeTruthy();
-    expect(screen.getByRole("alert").textContent).toBe("RefundMethodRequired");
+    expect(screen.getByRole("status").textContent).toBe("RefundMethodRequired");
     expect(submit().disabled).toBe(true);
     fireEvent.click(submit());
     expect(stubs.calls).toHaveLength(0);
@@ -87,7 +87,7 @@ describe("ApprovalRequestDialog refund method (SCRUM-469)", () => {
     fireEvent.change(screen.getByPlaceholderText("Reason"), { target: { value: "Customer withdrew" } });
     chooseMethod("Bank Transfer");
 
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
     expect(submit().disabled).toBe(false);
     fireEvent.click(submit());
     await waitFor(() => expect(stubs.calls).toHaveLength(1));
@@ -107,5 +107,45 @@ describe("ApprovalRequestDialog refund method (SCRUM-469)", () => {
     fireEvent.click(submit());
     await waitFor(() => expect(stubs.calls).toHaveLength(1));
     expect(stubs.calls[0]!.args.disbursementMethod).toBeUndefined();
+  });
+});
+describe("refund method is per intent, never carried over (SCRUM-469 round 1, SOL-01)", () => {
+  const other = { _id: "rec_2", customerName: "Omar", title: "Deal 9" } as never;
+  const open = (r: never, type: "REFUND" | "RESCHEDULE" | "CANCEL_RECEIVABLE" = "REFUND") => (
+    <KeyedApprovalRequestDialog target={{ receivable: r, type }} onOpenChange={() => undefined} />
+  );
+
+  test("Cancel then a different receivable's Refund opens with NO method and Submit disabled", () => {
+    const view = render(open(receivable));
+    fireEvent.change(screen.getByPlaceholderText("RefundAmount"), { target: { value: "50" } });
+    fireEvent.change(screen.getByPlaceholderText("Reason"), { target: { value: "Customer withdrew" } });
+    chooseMethod("Bank Transfer");
+    expect(submit().disabled).toBe(false);
+
+    view.rerender(<KeyedApprovalRequestDialog target={null} onOpenChange={() => undefined} />);
+    view.rerender(open(other));
+
+    expect(screen.getByText("RefundChooseMethod")).toBeTruthy();
+    expect((screen.getByPlaceholderText("RefundAmount") as HTMLInputElement).value).toBe("");
+    expect((screen.getByPlaceholderText("Reason") as HTMLInputElement).value).toBe("");
+    expect(submit().disabled).toBe(true);
+  });
+
+  test("reopening the SAME receivable after close is a new intent too", () => {
+    const view = render(open(receivable));
+    chooseMethod("Bank Transfer");
+    view.rerender(<KeyedApprovalRequestDialog target={null} onOpenChange={() => undefined} />);
+    view.rerender(open(receivable));
+    expect(screen.getByText("RefundChooseMethod")).toBeTruthy();
+  });
+
+  test("control: while the same target stays open (a retry) the method is kept", () => {
+    const view = render(open(receivable));
+    fireEvent.change(screen.getByPlaceholderText("RefundAmount"), { target: { value: "50" } });
+    fireEvent.change(screen.getByPlaceholderText("Reason"), { target: { value: "Customer withdrew" } });
+    chooseMethod("Bank Transfer");
+    view.rerender(open(receivable));
+    expect(screen.queryByText("RefundChooseMethod")).toBeNull();
+    expect(submit().disabled).toBe(false);
   });
 });

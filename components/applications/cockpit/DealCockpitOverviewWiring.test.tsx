@@ -10,10 +10,10 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { salesEn } from "@/lib/i18n/domains/sales";
-import { pickMethod } from "./testPaymentMethodSelect";
+import { pickMethod } from "@/test-utils/paymentMethodSelect";
 
 // SCRUM-469: no money dialog pre-selects a method, so the tests choose one.
-vi.mock("@/components/payments/PaymentMethodSelect", () => import("./testPaymentMethodSelect"));
+vi.mock("@/components/payments/PaymentMethodSelect", () => import("@/test-utils/paymentMethodSelect"));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({

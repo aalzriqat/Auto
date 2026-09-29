@@ -49,6 +49,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import { isChosenMethod } from "@/components/payments/paymentMethod";
 import { HeldDepositActions } from "@/components/vehicles/HeldDepositActions";
 import { getErrorMessage } from "@/lib/errors";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
@@ -114,7 +115,14 @@ export function VehicleDetailsDialog({
   const reservationKeyRef = useRef<string | null>(null);
   const releaseReservation = useMutation(api.vehicles.releaseReservation);
   const [releasingDepositId, setReleasingDepositId] = useState<string | null>(null);
-  const [refundMethodByDeposit, setRefundMethodByDeposit] = useState<Record<string, PaymentMethod>>({});
+  // SCRUM-469: a refund method belongs to ONE payout. It is stored with the
+  // payout generation (`releaseCount`) it was chosen for, so a CONFIRMED partial
+  // payout (the deposit stays HELD and its releaseCount advances) never carries
+  // it into the next payout, while a retry of the same unconfirmed attempt (same
+  // generation) keeps both its method and its command identity.
+  const [refundChoiceByDeposit, setRefundChoiceByDeposit] = useState<
+    Record<string, { method: PaymentMethod; generation: number }>
+  >({});
   const [landedCostItems, setLandedCostItems] = useState<
     { id: string; label: string; amount: number; paymentMethod: PaymentMethod }[]
   >([]);
@@ -129,6 +137,17 @@ export function VehicleDetailsDialog({
   const [reservationExpiresAt, setReservationExpiresAt] = useState("");
   const [savingReservation, setSavingReservation] = useState(false);
   const [activeGroup, setActiveGroup] = useState<VehicleDetailsGroup>("overview");
+
+  // Closing the dialog, or looking at another vehicle, ends the money intents
+  // begun here: the next open starts with no method chosen (SCRUM-469) and mints
+  // a new reservation identity, since the method is part of that command.
+  const detailsSessionId = open ? (vehicle?._id ?? null) : null;
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- A new open / vehicle is a new intent: clear the chosen methods.
+    setReservationMethod(undefined);
+    setRefundChoiceByDeposit({});
+    reservationKeyRef.current = null;
+  }, [detailsSessionId]);
 
   // Prefill the expiry field from the org's configured hold period (falls
   // back to 3 days) — still editable, so a specific reservation can override it.
@@ -243,7 +262,7 @@ export function VehicleDetailsDialog({
     chosenRefundMethod?: PaymentMethod
   ) => {
     if (!activeOrgId) return;
-    if (resolution === "REFUNDED" && chosenRefundMethod === undefined) return;
+    if (resolution === "REFUNDED" && !isChosenMethod(chosenRefundMethod)) return;
     setReleasingDepositId(depositId);
     const refundMethod = resolution === "REFUNDED" ? chosenRefundMethod : "NONE";
     try {
@@ -517,9 +536,16 @@ export function VehicleDetailsDialog({
                           {deposit.status === "HELD" && !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_REQUESTS) && (
                             <HeldDepositActions
                               t={t as any}
-                              method={refundMethodByDeposit[deposit._id]}
+                              method={
+                                refundChoiceByDeposit[deposit._id]?.generation === (deposit.releaseCount ?? 0)
+                                  ? refundChoiceByDeposit[deposit._id]?.method
+                                  : undefined
+                              }
                               onMethodChange={(method) =>
-                                setRefundMethodByDeposit((prev) => ({ ...prev, [deposit._id]: method }))
+                                setRefundChoiceByDeposit((prev) => ({
+                                  ...prev,
+                                  [deposit._id]: { method, generation: deposit.releaseCount ?? 0 },
+                                }))
                               }
                               busy={releasingDepositId === deposit._id}
                               onRefund={(method) =>
@@ -943,7 +969,7 @@ export function VehicleDetailsDialog({
                       disabled={
                         savingReservation ||
                         !reservationCustomerId ||
-                        (reservationHasDeposit && (!canRecordDeposit || !reservationMethod))
+                        (reservationHasDeposit && (!canRecordDeposit || !isChosenMethod(reservationMethod)))
                       }
                     >
                       <Plus className="h-4 w-4 me-2" />

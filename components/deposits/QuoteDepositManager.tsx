@@ -21,6 +21,7 @@ import {
 import { toast } from "@/components/ui/sonner";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
+import { isChosenMethod } from "@/components/payments/paymentMethod";
 import { getErrorMessage } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { DepositAllocationPanel } from "@/components/sales/wizard/components/DepositAllocationPanel";
@@ -168,7 +169,7 @@ export function QuoteDepositManager({
     // SCRUM-469: a refund's method is chosen, never assumed. The button is
     // disabled without one; this is the second line, so none is ever sent.
     const refundMethod = methodByHold[holdId];
-    if (treatment === "REFUND_TO_CUSTOMER" && refundMethod === undefined) return;
+    if (treatment === "REFUND_TO_CUSTOMER" && !isChosenMethod(refundMethod)) return;
     setBusyHoldId(holdId);
     try {
       await resolveReleased({
@@ -178,7 +179,7 @@ export function QuoteDepositManager({
         ...(treatment === "REALLOCATE_TO_VEHICLE"
           ? { toVehicleId: targetByHold[holdId] as Id<"vehicles"> | undefined }
           : {}),
-        ...(treatment === "REFUND_TO_CUSTOMER" && refundMethod !== undefined ? { refundMethod } : {}),
+        ...(treatment === "REFUND_TO_CUSTOMER" && isChosenMethod(refundMethod) ? { refundMethod } : {}),
         ...(reasonByHold[holdId]?.trim() ? { reason: reasonByHold[holdId].trim() } : {}),
       });
       toast.success(t("DepositShareResolved" as any));
@@ -414,7 +415,7 @@ export function QuoteDepositManager({
                     disabled={
                       busyHoldId === holdId ||
                       (treatment === "REALLOCATE_TO_VEHICLE" && !targetByHold[holdId]) ||
-                      (treatment === "REFUND_TO_CUSTOMER" && !methodByHold[holdId]) ||
+                      (treatment === "REFUND_TO_CUSTOMER" && !isChosenMethod(methodByHold[holdId])) ||
                       (movesMoney(treatment) ? !canApprove : !canConfirm)
                     }
                     onClick={() => {
@@ -440,8 +441,8 @@ export function QuoteDepositManager({
                   </Button>
                 </div>
                 )}
-                {treatment === "REFUND_TO_CUSTOMER" && !methodByHold[holdId] && !pendingReversal && (
-                  <p className="text-xs font-medium text-destructive" role="alert">
+                {treatment === "REFUND_TO_CUSTOMER" && !isChosenMethod(methodByHold[holdId]) && !pendingReversal && (
+                  <p className="text-xs font-medium text-destructive" role="status">
                     {t("RefundMethodRequired" as any)}
                   </p>
                 )}

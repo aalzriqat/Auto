@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import { isChosenMethod } from "@/components/payments/paymentMethod";
 import type { Id } from "@/convex/_generated/dataModel";
 import { economicDateInputToMs, economicTodayDateInput } from "@/lib/dateInput";
 import {
@@ -149,7 +150,7 @@ function SubmitError({ message }: Readonly<{ message: string | null }>) {
   );
 }
 
-/** Hand over / return / reimburse. `kind` decides the copy, the bounds and the default method. */
+/** Hand over / return / reimburse. `kind` decides the copy and the bounds; the method is always chosen, never defaulted. */
 export function CustodyMovementDialog({
   open,
   intentId,
@@ -213,7 +214,7 @@ export function CustodyMovementDialog({
   // in the list (stale default, empty picker) is not one to move money to.
   const recipient = needsPerson ? members.find((member) => member.userId === userId) : undefined;
   const canSubmit =
-    minor !== null && method !== undefined && !exceeds && !busy && (!needsPerson || recipient !== undefined);
+    minor !== null && isChosenMethod(method) && !exceeds && !busy && (!needsPerson || recipient !== undefined);
 
   const copy = {
     ISSUED: { title: "CustodyIssueTitle", desc: "CustodyIssueDesc", cta: "CustodyIssueCash", exceed: "CustodyAmountExceedsIssued" },
@@ -282,7 +283,7 @@ export function CustodyMovementDialog({
               ariaLabel={t("CustodyAccount")}
               placeholder={t("MoneyMethodChoose")}
             />
-            {method === undefined && (
+            {!isChosenMethod(method) && (
               // A standing hint, not an alert: it is true from the moment the dialog opens, and the
               // amount-error alerts above must stay the only alerts a screen reader is interrupted by.
               <p role="status" data-testid={`${id}-method-required`} className="text-xs font-medium text-destructive">
@@ -320,7 +321,7 @@ export function CustodyMovementDialog({
             data-testid={`${id}-submit`}
             onClick={() =>
               minor !== null &&
-              method !== undefined &&
+              isChosenMethod(method) &&
               onSubmit({
                 intentId,
                 amountMinor: minor,

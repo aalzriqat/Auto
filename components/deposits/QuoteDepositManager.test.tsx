@@ -560,7 +560,7 @@ describe("what each role can do with a released share", () => {
     const record = () => screen.getAllByText("DepositRecordDecision")[0]!.closest("button") as HTMLButtonElement;
     // Empty picker, a reason on screen, and the button refused.
     expect(within(row).getByText("RefundChooseMethod")).toBeTruthy();
-    expect(within(row).getByRole("alert").textContent).toBe("RefundMethodRequired");
+    expect(within(row).getByRole("status").textContent).toBe("RefundMethodRequired");
     expect(record().disabled).toBe(true);
     fireEvent.click(record());
     expect(mutationCalls).toHaveLength(0);
@@ -569,7 +569,7 @@ describe("what each role can do with a released share", () => {
     fireEvent.keyDown(methodTrigger, { key: "Enter", code: "Enter" });
     fireEvent.click(screen.getByText("PaymentMethod_BANK_TRANSFER"));
 
-    expect(within(row).queryByRole("alert")).toBeNull();
+    expect(within(row).queryByRole("status")).toBeNull();
     expect(record().disabled).toBe(false);
     fireEvent.click(record());
     expect(mutationCalls).toHaveLength(1);

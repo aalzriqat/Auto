@@ -16,6 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PaymentMethodSelect } from "@/components/payments/PaymentMethodSelect";
+import { isChosenMethod } from "@/components/payments/paymentMethod";
 import { toast } from "@/components/ui/sonner";
 import { getErrorMessage } from "@/lib/errors";
 
@@ -93,7 +94,7 @@ export function SupplierCostRecoveriesSection() {
 
   const submit = async () => {
     if (!activeOrgId || !target) return;
-    if (method === undefined) return;
+    if (!isChosenMethod(method)) return;
     let amountMinor: number;
     try {
       // Throws on anything that is not a safe integer in minor units (NaN included).
@@ -244,8 +245,8 @@ export function SupplierCostRecoveriesSection() {
                     ariaLabel={t("RecoveryReceiptMethod" as any)}
                     placeholder={t("MoneyMethodChoose" as any)}
                   />
-                  {method === undefined && (
-                    <p className="text-xs font-medium text-destructive" role="alert">
+                  {!isChosenMethod(method) && (
+                    <p className="text-xs font-medium text-destructive" role="status">
                       {t("MoneyMethodRequired" as any)}
                     </p>
                   )}
@@ -269,7 +270,7 @@ export function SupplierCostRecoveriesSection() {
                 <Button type="button" variant="outline" onClick={() => setTarget(null)}>
                   {t("Cancel" as any)}
                 </Button>
-                <Button type="button" disabled={saving || method === undefined} onClick={() => void submit()}>
+                <Button type="button" disabled={saving || !isChosenMethod(method)} onClick={() => void submit()}>
                   {saving ? t("Saving" as any) : t("RecordRecoveryReceipt" as any)}
                 </Button>
               </div>
