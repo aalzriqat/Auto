@@ -3,7 +3,10 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { acquireVehicle, assertAcquirable } from "../commitments";
 import { holdVehicleForDeposit } from "./depositHelpers";
-import { assertNoQuoteLinkedReservationDeposit } from "./depositRequestGuards";
+import {
+  assertNoQuoteLinkedReservationDeposit,
+  assertReservationAdoptableWithoutDeposit,
+} from "./depositRequestGuards";
 import {
   amountToMinorOrThrow,
   recordHeldDeposit,
@@ -60,6 +63,13 @@ export async function postQuoteDeposit(
   }
 ): Promise<Id<"deposits">> {
   const { quote } = args;
+  // SCRUM-444 R-B: a funded reservation is never adopted; release its deposit first.
+  if (args.adoptReservationId) {
+    await assertReservationAdoptableWithoutDeposit(ctx, {
+      orgId: args.orgId,
+      reservationId: args.adoptReservationId,
+    });
+  }
   // SCRUM-444 F1: fail closed on a receipt this quote's totals cannot see.
   await assertNoQuoteLinkedReservationDeposit(ctx, quote);
   const quoteAmountMinor = amountToMinorOrThrow(quote.vehiclePrice, args.currency, "Quote amount");

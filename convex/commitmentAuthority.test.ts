@@ -934,12 +934,11 @@ describe("P1-W the five reachable acquisition writers", () => {
 describe("P1-A continuation is proven, never inferred", () => {
   async function reserved(seed: Seed) {
     const v = await vehicle(seed);
-    const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, { depositMethod: "CASH",
+    const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
       idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: v,
       customerId: seed.customerA,
-      depositAmount: 1_000,
     });
     return { v, reservationId };
   }
@@ -1002,12 +1001,11 @@ describe("P1-A continuation is proven, never inferred", () => {
     const seed = await seedDealer("a3");
     const { v } = await reserved(seed);
     const other = await vehicle(seed);
-    const otherReservation = await seed.asUser.mutation(api.vehicles.createReservation, { depositMethod: "CASH",
+    const otherReservation = await seed.asUser.mutation(api.vehicles.createReservation, {
       idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: other,
       customerId: seed.customerA,
-      depositAmount: 500,
     });
 
     const quoteId = await cashQuote(seed, seed.customerA, v);
@@ -1519,12 +1517,11 @@ describe("P1-A continuation is proven, never inferred", () => {
     // happens to catch it.
     const seed = await seedDealer("a8");
     const other = await secondTenant(seed);
-    const foreign = await other.asUser.mutation(api.vehicles.createReservation, { depositMethod: "CASH",
+    const foreign = await other.asUser.mutation(api.vehicles.createReservation, {
       idempotencyKey: crypto.randomUUID(),
       orgId: other.orgId,
       vehicleId: other.vehicleId,
       customerId: other.customerId,
-      depositAmount: 500,
     });
 
     const v = await vehicle(seed);
@@ -1620,12 +1617,11 @@ describe("P1-A continuation is proven, never inferred", () => {
     // with this quote. Same customer is not evidence of the same deal, and an
     // unrelated live reservation is not a licence to keep going.
     const unrelated = await vehicle(seed);
-    const otherReservation = await seed.asUser.mutation(api.vehicles.createReservation, { depositMethod: "CASH",
+    const otherReservation = await seed.asUser.mutation(api.vehicles.createReservation, {
       idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: unrelated,
       customerId: seed.customerA,
-      depositAmount: 500,
     });
 
     const before = await snapshot(seed, v);
@@ -1944,12 +1940,11 @@ describe("P1-A continuation is proven, never inferred", () => {
     const seed = await seedDealer("a11");
     const reservedCar = await vehicle(seed);
     const secondCar = await vehicle(seed);
-    const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, { depositMethod: "CASH",
+    const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
       idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: reservedCar,
       customerId: seed.customerA,
-      depositAmount: 1_000,
     });
 
     const quoteId = await seed.asUser.mutation(api.quotes.saveQuote, {
@@ -2336,12 +2331,11 @@ describe("P1-C2 a supplied lineage proof is proved, not taken on trust", () => {
     // today's callers.
     const seed = await seedDealer("c28");
     const reservedCar = await vehicle(seed);
-    const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, { depositMethod: "CASH",
+    const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
       idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: reservedCar,
       customerId: seed.customerA,
-      depositAmount: 1_000,
     });
 
     // Real, this org's, this customer's — and about a different car entirely.
@@ -2383,12 +2377,11 @@ describe("P1-C4 an idempotency key does not launder a changed adoption", () => {
   const CONFLICT = /reused with different request content/i;
 
   async function reservationOn(seed: Seed, v: Id<"vehicles">) {
-    return await seed.asUser.mutation(api.vehicles.createReservation, { depositMethod: "CASH",
+    return await seed.asUser.mutation(api.vehicles.createReservation, {
       idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: v,
       customerId: seed.customerA,
-      depositAmount: 1_000,
     });
   }
 
@@ -2529,12 +2522,11 @@ describe("P1-S the multi-vehicle narrowing refuses what it must", () => {
     const carB = await vehicle(seed);
 
     // A: this deal's own reservation, genuinely adoptable.
-    const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, { depositMethod: "CASH",
+    const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
       idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: carA,
       customerId: seed.customerA,
-      depositAmount: 1_000,
     });
     // B: somebody else's deal, already holding it.
     const rivalQuote = await cashQuote(seed, seed.customerB, carB);
@@ -2766,12 +2758,11 @@ describe("P1-C2E a reservation proof must still be LIVE, not merely ACTIVE", () 
   // earlier guard can be what refuses.
   async function adoptableButExpiring(seed: Seed) {
     const v = await vehicle(seed);
-    const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, { depositMethod: "CASH",
+    const reservationId = await seed.asUser.mutation(api.vehicles.createReservation, {
       idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       vehicleId: v,
       customerId: seed.customerA,
-      depositAmount: 1_000,
     });
     const quoteId = await cashQuote(seed, seed.customerA, v);
     return { v, reservationId, quoteId };

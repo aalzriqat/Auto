@@ -25,7 +25,10 @@ import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
 import { depositMethodValidator, type DepositMethod } from "./utils/depositRecording";
-import { assertNoPendingDepositRequest } from "./utils/depositRequestGuards";
+import {
+  assertNoPendingDepositRequest,
+  assertReservationAdoptableWithoutDeposit,
+} from "./utils/depositRequestGuards";
 import { completeSale } from "./utils/saleCompletion";
 import {
   resolveFinancedSalePlan,
@@ -2508,6 +2511,14 @@ export const createFromQuote = mutation({
     // The quote is the lineage: a financed deal that already took a deposit
     // JOINS the root that deposit opened (the ordinary financed flow), while a
     // quote that has proven nothing cannot take a car another deal holds.
+    // SCRUM-444 R-B: a funded reservation is never adopted (its money would be
+    // invisible to the quote); refused before the authority is even asked.
+    if (args.adoptReservationId) {
+      await assertReservationAdoptableWithoutDeposit(ctx, {
+        orgId: args.orgId,
+        reservationId: args.adoptReservationId,
+      });
+    }
     for (const item of quoteVehicleItems) {
       await assertAcquirable(ctx, {
         orgId: args.orgId,

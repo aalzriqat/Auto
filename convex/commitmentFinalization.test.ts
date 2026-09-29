@@ -2070,7 +2070,7 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
   test("F.24 releasing the reservation while the FINANCE application is live keeps the root OPEN", async () => {
     const seed = await seedDealer("f24");
     const v = await vehicle(seed);
-    const reservationId = await reserve(seed, v, seed.customerA, { depositAmount: 1_000 });
+    const reservationId = await reserve(seed, v, seed.customerA);
     const quoteId = await quoteFor(seed, seed.customerA, [v]);
     const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
       orgId: seed.orgId,
@@ -2524,7 +2524,7 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
   test("F.30 expiry does NOT release a root another live basis still holds", async () => {
     const seed = await seedDealer("f30");
     const v = await vehicle(seed);
-    const reservationId = await reserve(seed, v, seed.customerA, { depositAmount: 1_000 });
+    const reservationId = await reserve(seed, v, seed.customerA);
     const quoteId = await quoteFor(seed, seed.customerA, [v]);
     const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
       orgId: seed.orgId,
@@ -2610,7 +2610,7 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
   test("F.33 a rejection that releases BOTH a finance and a reservation basis at once still releases the root", async () => {
     const seed = await seedDealer("f33");
     const v = await vehicle(seed);
-    const reservationId = await reserve(seed, v, seed.customerA, { depositAmount: 1_000 });
+    const reservationId = await reserve(seed, v, seed.customerA);
     const quoteId = await quoteFor(seed, seed.customerA, [v]);
     const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
       orgId: seed.orgId,

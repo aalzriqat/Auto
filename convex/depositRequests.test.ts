@@ -4,6 +4,10 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { DEFAULT_ROLE_TEMPLATES, PERMISSIONS } from "./utils/permissions";
+import {
+  RESERVATION_PROBE_MAX_CLAIMS_PER_ROOT,
+  RESERVATION_PROBE_MAX_ROOTS_PER_STATUS,
+} from "./utils/depositRequestGuards";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -1211,5 +1215,447 @@ describe("F3/F4 — who is told, and where the link goes", () => {
     // Still exactly the ONE notice from the active-requester control above.
     expect((await notifiedFor(s, "depositRequest.rejected"))).toHaveLength(1);
     expect(await notifiedFor(s, "depositRequest.confirmed")).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FIX ROUND 2 (Opus 5.5 N1/N2 + Sol F1-R2 on b8f6fe9e4)
+//
+// INVARIANT: every HELD/APPLIED receipt that belongs to a quote's deal — however
+// it joined (quote deposit, quote-linked reservation, reservation joined via
+// dealDepositId, standalone reservation adopted into the quote) — is visible to
+// every door that can post money for the quote, and the probe fails CLOSED.
+// ---------------------------------------------------------------------------
+
+const RESERVATION_MONEY = /reservation deposit.*already holding money/i;
+const FUNDED_ADOPTION = /already holds a deposit.*cannot be continued/i;
+
+async function fundedStandaloneReservation(
+  s: Ctx,
+  amount = 22000,
+  vehicleId = s.vehicleId,
+  creator: "manager" | "cashier" = "manager"
+) {
+  let actor = s.manager.as;
+  if (creator === "cashier") {
+    // A second finance actor, so a DIFFERENT person (the manager) can resolve the
+    // deposit — the creator may not resolve their own.
+    const userId = await s.t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "user_cashier", email: "cashier@test.com", name: "Cashier" })
+    );
+    const roleId = await s.t.run((ctx) =>
+      ctx.db.insert("roles", {
+        orgId: s.orgId,
+        name: "CASHIER",
+        permissions: [PERMISSIONS.EDIT_VEHICLES, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT],
+      })
+    );
+    await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId }));
+    actor = s.t.withIdentity({ subject: "user_cashier", clerkId: "user_cashier" });
+  }
+  await actor.mutation(api.vehicles.createReservation, {
+    orgId: s.orgId,
+    vehicleId,
+    customerId: s.customerId,
+    depositAmount: amount,
+    depositMethod: "CASH",
+    idempotencyKey: crypto.randomUUID(),
+  });
+  return await s.t.run(async (ctx) => {
+    const reservation = (await ctx.db.query("vehicleReservations").collect()).find(
+      (r) => r.vehicleId === vehicleId && r.status === "ACTIVE"
+    );
+    if (!reservation) throw new Error("fixture: no ACTIVE reservation");
+    return reservation._id;
+  });
+}
+
+/** The pre-fix adoption's footprint: root re-headed onto the quote, claim untagged. */
+async function rehead(s: Ctx, quoteId: Id<"quotes">, vehicleId = s.vehicleId) {
+  await s.t.run(async (ctx) => {
+    const root = await ctx.db
+      .query("commitmentRoots")
+      .withIndex("by_org_vehicle_status", (q) =>
+        q.eq("orgId", s.orgId).eq("vehicleId", vehicleId).eq("status", "OPEN")
+      )
+      .unique();
+    await ctx.db.patch(root!._id, { headQuoteId: quoteId });
+  });
+}
+
+async function seedAnotherCar(s: Ctx, vin: string) {
+  return await s.t.run((ctx) =>
+    ctx.db.insert("vehicles", {
+      orgId: s.orgId, vin, make: "Kia", model: "Sportage", year: 2022,
+      color: "Blue", fuelType: "Gasoline", transmission: "Automatic", mileage: 900,
+      sellingPrice: 18000, status: "AVAILABLE",
+    })
+  );
+}
+
+describe("R2 (i) R-A — dealDepositId joins the deal, so it cannot carry a deposit either", () => {
+  test("a reservation deposit naming the quote's DEPOSIT is refused; nothing is written", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const depositId = await s.manager.as.mutation(api.deposits.create, {
+      orgId: s.orgId, quoteId, amount: 5000, method: "CASH", idempotencyKey: crypto.randomUUID(),
+    });
+    const before = await moneyFootprint(s);
+    expect(before.deposits).toBe(1);
+
+    await expect(
+      s.manager.as.mutation(api.vehicles.createReservation, {
+        orgId: s.orgId,
+        vehicleId: s.vehicleId,
+        customerId: s.customerId,
+        depositAmount: 3000,
+        depositMethod: "CASH",
+        dealDepositId: depositId,
+        idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(/linked to a quote or one of its deposits.*quote's deposit screen/i);
+
+    expect(await moneyFootprint(s)).toEqual(before);
+    expect(await s.t.run((ctx) => ctx.db.query("vehicleReservations").collect())).toHaveLength(0);
+  });
+
+  test("ordering 2: with a request PENDING on the quote the same call is still refused, no receipt", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const depositId = await s.manager.as.mutation(api.deposits.create, {
+      orgId: s.orgId, quoteId, amount: 5000, method: "CASH", idempotencyKey: crypto.randomUUID(),
+    });
+    await requestDeposit(s, quoteId, 1000);
+    const before = await moneyFootprint(s);
+
+    await expect(
+      s.manager.as.mutation(api.vehicles.createReservation, {
+        orgId: s.orgId,
+        vehicleId: s.vehicleId,
+        customerId: s.customerId,
+        depositAmount: 3000,
+        depositMethod: "CASH",
+        dealDepositId: depositId,
+        dealQuoteId: quoteId,
+        idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(/linked to a quote or one of its deposits/i);
+    expect(await moneyFootprint(s)).toEqual(before);
+  });
+
+  test("control: a DEPOSIT-FREE reservation naming the quote's deposit still joins", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const depositId = await s.manager.as.mutation(api.deposits.create, {
+      orgId: s.orgId, quoteId, amount: 5000, method: "CASH", idempotencyKey: crypto.randomUUID(),
+    });
+    await expect(
+      s.manager.as.mutation(api.vehicles.createReservation, {
+        orgId: s.orgId,
+        vehicleId: s.vehicleId,
+        customerId: s.customerId,
+        dealDepositId: depositId,
+        idempotencyKey: crypto.randomUUID(),
+      })
+    ).resolves.toBeTruthy();
+    expect((await moneyFootprint(s)).deposits).toBe(1);
+  });
+});
+
+describe("R2 (ii)/(iii) R-B — a FUNDED reservation is never adopted", () => {
+  test("deposits.create({adoptReservationId}) on a funded reservation is refused; zero new money rows", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const reservationId = await fundedStandaloneReservation(s);
+    const before = await moneyFootprint(s);
+    expect(before.deposits).toBe(1);
+
+    await expect(
+      s.manager.as.mutation(api.deposits.create, {
+        orgId: s.orgId, quoteId, amount: 22000, method: "CASH",
+        adoptReservationId: reservationId, idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(FUNDED_ADOPTION);
+    expect(await moneyFootprint(s)).toEqual(before);
+  });
+
+  test("applications.createFromQuote({adoptReservationId}) on a funded reservation is refused", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const reservationId = await fundedStandaloneReservation(s);
+    const before = await moneyFootprint(s);
+
+    await expect(
+      s.manager.as.mutation(api.applications.createFromQuote, {
+        orgId: s.orgId, quoteId, adoptReservationId: reservationId,
+      })
+    ).rejects.toThrow(FUNDED_ADOPTION);
+    expect(await s.t.run((ctx) => ctx.db.query("financeApplications").collect())).toHaveLength(0);
+    expect(await moneyFootprint(s)).toEqual(before);
+  });
+
+  test("controls: DEPOSIT-FREE adoption still works at both doors", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    await s.manager.as.mutation(api.vehicles.createReservation, {
+      orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, idempotencyKey: crypto.randomUUID(),
+    });
+    const reservationId = await s.t.run(async (ctx) => (await ctx.db.query("vehicleReservations").collect())[0]._id);
+    await expect(
+      s.manager.as.mutation(api.deposits.create, {
+        orgId: s.orgId, quoteId, amount: 5000, method: "CASH",
+        adoptReservationId: reservationId, idempotencyKey: crypto.randomUUID(),
+      })
+    ).resolves.toBeTruthy();
+
+    const car2 = await seedAnotherCar(s, "1HGCM82633A777777");
+    const quote2 = await makeQuote(s, { vehicleId: car2 });
+    await s.manager.as.mutation(api.vehicles.createReservation, {
+      orgId: s.orgId, vehicleId: car2, customerId: s.customerId, idempotencyKey: crypto.randomUUID(),
+    });
+    const reservation2 = await s.t.run(async (ctx) =>
+      (await ctx.db.query("vehicleReservations").collect()).find((r) => r.vehicleId === car2)!._id
+    );
+    await expect(
+      s.manager.as.mutation(api.applications.createFromQuote, {
+        orgId: s.orgId, quoteId: quote2, adoptReservationId: reservation2,
+      })
+    ).resolves.toBeTruthy();
+  });
+
+  test("control: once the reservation deposit is RELEASED, adoption and the quote deposit are allowed", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    // Created by a different finance actor: the creator may not resolve their own deposit.
+    const reservationId = await fundedStandaloneReservation(s, 22000, s.vehicleId, "cashier");
+    const reservationDepositId = await s.t.run(
+      async (ctx) => (await ctx.db.get(reservationId))!.depositId!
+    );
+
+    // The operator path: Vehicle > Deposits > Refund (deposits.release).
+    await s.manager.as.mutation(api.deposits.release, {
+      orgId: s.orgId,
+      depositId: reservationDepositId,
+      resolution: "REFUNDED",
+      refundMethod: "CASH",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect((await s.t.run((ctx) => ctx.db.get(reservationDepositId)))?.status).toBe("REFUNDED");
+
+    await expect(
+      s.manager.as.mutation(api.deposits.create, {
+        orgId: s.orgId, quoteId, amount: 22000, method: "CASH",
+        adoptReservationId: reservationId, idempotencyKey: crypto.randomUUID(),
+      })
+    ).resolves.toBeTruthy();
+  });
+
+  test("control: a standalone funded reservation alone is untouched, and other orgs' reservations do not interfere", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    // Another tenant's funded reservation on ITS car.
+    const foreignCar = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.otherOrgId, vin: "1HGCM82633A888888", make: "Kia", model: "Rio", year: 2021,
+        color: "Grey", fuelType: "Gasoline", transmission: "Automatic", mileage: 700,
+        sellingPrice: 12000, status: "AVAILABLE",
+      })
+    );
+    const foreignCustomer = await s.t.run((ctx) =>
+      ctx.db.insert("customers", { orgId: s.otherOrgId, firstName: "Far", lastName: "Away" })
+    );
+    await s.outsider.as.mutation(api.vehicles.createReservation, {
+      orgId: s.otherOrgId, vehicleId: foreignCar, customerId: foreignCustomer,
+      depositAmount: 12000, depositMethod: "CASH", idempotencyKey: crypto.randomUUID(),
+    });
+    await expect(requestDeposit(s, quoteId, 500)).resolves.toBeTruthy();
+  });
+});
+
+describe("R2 (iv) — request PENDING, then a funded standalone reservation", () => {
+  test("adoption is refused, and confirm stays refused while the reservation money is held", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const requestId = await requestDeposit(s, quoteId, 22000);
+    const reservationId = await fundedStandaloneReservation(s);
+    const before = await moneyFootprint(s);
+    expect(before.deposits).toBe(1);
+
+    await expect(
+      s.manager.as.mutation(api.applications.createFromQuote, {
+        orgId: s.orgId, quoteId, adoptReservationId: reservationId,
+      })
+    ).rejects.toThrow(FUNDED_ADOPTION);
+    await expect(
+      s.manager.as.mutation(api.deposits.create, {
+        orgId: s.orgId, quoteId, amount: 22000, method: "CASH",
+        adoptReservationId: reservationId, idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow();
+
+    await expect(
+      s.manager.as.mutation(api.depositRequests.confirm, {
+        orgId: s.orgId, requestId, amount: 22000, method: "CASH", idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow();
+    expect((await s.t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("PENDING");
+    expect(await moneyFootprint(s)).toEqual(before);
+  });
+});
+
+describe("R2 (v) — the historical/adopted shape: root re-headed onto the quote, claim untagged", () => {
+  test("request, confirm and deposits.create all refuse on the root probe", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const earlyRequest = await requestDeposit(s, quoteId, 22000);
+    await fundedStandaloneReservation(s);
+    await rehead(s, quoteId);
+    // The claim carries no quote — this is exactly what the claim-tag probe missed.
+    const claims = await s.t.run((ctx) => ctx.db.query("vehicleCommitmentClaims").collect());
+    expect(claims).toHaveLength(1);
+    expect(claims[0].quoteId).toBeUndefined();
+    const before = await moneyFootprint(s);
+    expect(before.deposits).toBe(1);
+
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(RESERVATION_MONEY);
+    await expect(
+      s.manager.as.mutation(api.depositRequests.confirm, {
+        orgId: s.orgId, requestId: earlyRequest, amount: 22000, method: "CASH",
+        idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(RESERVATION_MONEY);
+    await s.sales.as.mutation(api.depositRequests.withdraw, { orgId: s.orgId, requestId: earlyRequest });
+    await expect(
+      s.manager.as.mutation(api.deposits.create, {
+        orgId: s.orgId, quoteId, amount: 22000, method: "CASH", idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(RESERVATION_MONEY);
+    expect(await moneyFootprint(s)).toEqual(before);
+  });
+
+  test("multi-vehicle quote: the shape on the SECOND car is still seen", async () => {
+    const s = await setup();
+    const car2 = await seedAnotherCar(s, "1HGCM82633A999999");
+    const quoteId = await makeQuote(s);
+    await s.t.run((ctx) =>
+      ctx.db.patch(quoteId, {
+        vehicleItems: [
+          { vehicleId: s.vehicleId, unitPrice: 22000 },
+          { vehicleId: car2, unitPrice: 18000 },
+        ],
+      })
+    );
+    await fundedStandaloneReservation(s, 18000, car2);
+    await rehead(s, quoteId, car2);
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(RESERVATION_MONEY);
+  });
+
+  test("control: once the reservation deposit is RELEASED the quote can take a request again", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const reservationId = await fundedStandaloneReservation(s, 22000, s.vehicleId, "cashier");
+    await rehead(s, quoteId);
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(RESERVATION_MONEY);
+    const depositId = await s.t.run(async (ctx) => (await ctx.db.get(reservationId))!.depositId!);
+    await s.manager.as.mutation(api.deposits.release, {
+      orgId: s.orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
+  });
+});
+
+describe("R2 (vi) N2 — the probe fails closed, never open", () => {
+  async function insertTerminalRootWithActiveClaims(s: Ctx, claimCount: number) {
+    await s.t.run(async (ctx) => {
+      const rootId = await ctx.db.insert("commitmentRoots", {
+        orgId: s.orgId,
+        vehicleId: s.vehicleId,
+        customerId: s.customerId,
+        status: "RELEASED",
+        openedAt: Date.now(),
+        openedBy: s.manager.userId,
+        closedAt: Date.now(),
+      });
+      for (let i = 0; i < claimCount; i++) {
+        await ctx.db.insert("vehicleCommitmentClaims", {
+          orgId: s.orgId,
+          rootId,
+          vehicleId: s.vehicleId,
+          evidenceKind: "FINANCE",
+          status: "ACTIVE",
+          createdAt: Date.now(),
+          createdBy: s.manager.userId,
+        });
+      }
+    });
+  }
+
+  test("more than 10 older ACTIVE claims on the car do not hide the match", async () => {
+    const s = await setup();
+    // Claims never leave ACTIVE in production, so finished deals pile up first.
+    await insertTerminalRootWithActiveClaims(s, 12);
+    const quoteId = await makeQuote(s);
+    await fundedStandaloneReservation(s);
+    await rehead(s, quoteId);
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(RESERVATION_MONEY);
+  });
+
+  test("the match sitting beyond the first 10 ACTIVE claims of the SAME root is still seen", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    const reservationId = await fundedStandaloneReservation(s);
+    await rehead(s, quoteId);
+    // Episodes accumulate on the root (nothing retires them); the reservation's
+    // own episode ends up behind a dozen others.
+    await s.t.run(async (ctx) => {
+      const original = (await ctx.db.query("vehicleCommitmentClaims").collect())[0];
+      await ctx.db.delete(original._id);
+      for (let i = 0; i < 12; i++) {
+        await ctx.db.insert("vehicleCommitmentClaims", {
+          orgId: s.orgId, rootId: original.rootId, vehicleId: s.vehicleId,
+          evidenceKind: "FINANCE", status: "ACTIVE",
+          createdAt: Date.now(), createdBy: s.manager.userId,
+        });
+      }
+      await ctx.db.insert("vehicleCommitmentClaims", {
+        orgId: s.orgId, rootId: original.rootId, vehicleId: s.vehicleId,
+        evidenceKind: "RESERVATION", status: "ACTIVE", reservationId,
+        createdAt: Date.now(), createdBy: s.manager.userId,
+      });
+    });
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(RESERVATION_MONEY);
+  });
+  test("the tagged (round-1) shape is also seen behind more than 10 older claims", async () => {
+    const s = await setup();
+    await insertTerminalRootWithActiveClaims(s, 12);
+    const quoteId = await makeQuote(s);
+    await seedQuoteLinkedReservationDeposit(s, quoteId);
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(RESERVATION_MONEY);
+  });
+
+  test("a root carrying more claims than the probe's bound THROWS instead of concluding 'clear'", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    await insertTerminalRootWithActiveClaims(s, RESERVATION_PROBE_MAX_CLAIMS_PER_ROOT + 1);
+    const before = await moneyFootprint(s);
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(/too many deal records/i);
+    expect(await moneyFootprint(s)).toEqual(before);
+  });
+
+  test("more roots on one car than the bound THROWS as well", async () => {
+    const s = await setup();
+    const quoteId = await makeQuote(s);
+    for (let i = 0; i <= RESERVATION_PROBE_MAX_ROOTS_PER_STATUS; i++) {
+      await insertTerminalRootWithActiveClaims(s, 0);
+    }
+    await expect(requestDeposit(s, quoteId, 100)).rejects.toThrow(/too many deal records/i);
+  });
+
+  test("control: a car with a few finished deals and no reservation money still takes a request", async () => {
+    const s = await setup();
+    await insertTerminalRootWithActiveClaims(s, 3);
+    const quoteId = await makeQuote(s);
+    await expect(requestDeposit(s, quoteId, 100)).resolves.toBeTruthy();
   });
 });

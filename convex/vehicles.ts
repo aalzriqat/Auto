@@ -1742,9 +1742,12 @@ export const createReservation = mutation({
     // request guard cannot see it and the same customer could pay twice. The
     // quote's own deposit flow sees every receipt, so that is where it goes.
     // A reservation with no deposit, or a standalone one, is unchanged.
-    if (hasDepositAtEntry && args.dealQuoteId !== undefined) {
+    // SCRUM-444 R-A: ANY deal lineage counts. `dealDepositId` joins the quote's
+    // deal exactly as `dealQuoteId` does (through the deposit's root), and the
+    // reservation's own deposit would carry no quote either way.
+    if (hasDepositAtEntry && (args.dealQuoteId !== undefined || args.dealDepositId !== undefined)) {
       throw new ConvexError(
-        "A deposit cannot be taken on a reservation that is linked to a quote. Reserve without a deposit, then record the deposit (or ask a manager or accountant to) from the quote's deposit screen."
+        "A deposit cannot be taken on a reservation that is linked to a quote or one of its deposits. Reserve without a deposit, then record the deposit (or ask a manager or accountant to) from the quote's deposit screen."
       );
     }
     return await runWithIdempotency(

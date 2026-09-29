@@ -700,8 +700,9 @@ describe("protected source content pins", () => {
       file: "convex/applications.ts",
       // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)), then for SCRUM-407 automatic closing readiness (RENEWALs 2026-09-28, 2026-09-28 (2), (3) and (4)), then for SCRUM-414 readiness reason codes (RENEWALs 2026-09-28 (5), (6) and (7)).
       // SCRUM-444 RENEWAL 2026-09-29: three additive refusals (finalizeDeal, cancelApplication, updateStatus->REJECTED) via `assertNoPendingDepositRequest`; previous postimage bytes 241443, sha256 a3c4ff8ede8b112e0fdbb9748eff8daabc32e6829e7cd5a901570ab80e39c2dc. Recomputed from the file with this test's own normalization.
-      bytes: 242587,
-      sha256: "9756ce0b6cc523161d92d9724e3e2a7e47d30b2ebd4ac28fd2c7206579a218bb",
+      // SCRUM-444 RENEWAL 2026-09-29 (2): fix round 2 — `createFromQuote` refuses to adopt a reservation that already holds a deposit (`assertReservationAdoptableWithoutDeposit`); previous postimage bytes 242587, sha256 9756ce0b6cc523161d92d9724e3e2a7e47d30b2ebd4ac28fd2c7206579a218bb. Recomputed from the file with this test's own normalization.
+      bytes: 242976,
+      sha256: "19867f443ea7c20307655278a552651139714974828aa8738eb36bed14c11782",
     },
     {
       /**

@@ -812,14 +812,23 @@ describe("applications hold release and deposit resolution", () => {
       downPayment: 3000,
       termMonths: 48,
     });
+    // SCRUM-444 R-B: `createFromQuote` no longer ADOPTS a funded reservation, so
+    // this HISTORICAL shape — a funded reservation whose deal was already
+    // re-headed onto the quote by the pre-fix adoption — is built the way that
+    // adoption left it (root.headQuoteId = quote). The quote then JOINS the root
+    // by lineage, and cancelling still has to lift the reservation deposit hold.
+    await t.run(async (ctx) => {
+      const root = await ctx.db
+        .query("commitmentRoots")
+        .withIndex("by_org_vehicle_status", (q) =>
+          q.eq("orgId", orgId).eq("vehicleId", vehicleId).eq("status", "OPEN")
+        )
+        .unique();
+      await ctx.db.patch(root!._id, { headQuoteId: quoteId });
+    });
     const applicationId = await asUser.mutation(api.applications.createFromQuote, {
       orgId,
       quoteId,
-      // SCRUM-195: this financed deal CONTINUES the reservation that is holding
-      // the car. The reservation is NAMED; the authority verifies it is the one
-      // the holding root actually came from. It is never inferred from the
-      // customer and the vehicle happening to match.
-      adoptReservationId: reservationId,
     });
 
     await asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
