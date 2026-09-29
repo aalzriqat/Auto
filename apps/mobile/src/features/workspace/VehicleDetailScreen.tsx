@@ -252,6 +252,7 @@ function VehicleDetailContent({
   useEffect(() => {
     setReservationCustomerId("");
     setReservationDeposit("");
+    setReservationMethod("");
     setReservationHoldDays("");
     setRefundMethodByDeposit({});
   }, [vehicleId]);
