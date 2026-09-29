@@ -407,9 +407,9 @@ const EXPECTED_STAGE_OWNERS: Readonly<Record<"en" | "ar", ReadonlyArray<string>>
     "An independent appraiser", // APPRAISAL · MIRROR, provenance INDEPENDENT
     "Finance company", // APPROVED_PURCHASE · MIRROR
     "Dealership", // DELIVERY_ACTIONS · DEALER
-    "Finance company", // DISBURSEMENT · MIRROR
     "Dealership", // HANDOVER · DEALER
     "Dealership", // SETTLEMENT · DEALER
+    "Finance company", // DISBURSEMENT · MIRROR (shown last: the executable order)
   ],
   ar: [
     "المعرض", // APPLICATION · DEALER
@@ -417,9 +417,9 @@ const EXPECTED_STAGE_OWNERS: Readonly<Record<"en" | "ar", ReadonlyArray<string>>
     "مُخمِّن مستقل", // APPRAISAL · MIRROR, provenance INDEPENDENT
     "شركة التمويل", // APPROVED_PURCHASE · MIRROR
     "المعرض", // DELIVERY_ACTIONS · DEALER
-    "شركة التمويل", // DISBURSEMENT · MIRROR
     "المعرض", // HANDOVER · DEALER
     "المعرض", // SETTLEMENT · DEALER
+    "شركة التمويل", // DISBURSEMENT · MIRROR (shown last: the executable order)
   ],
 };
 
