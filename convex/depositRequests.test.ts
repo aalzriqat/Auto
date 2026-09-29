@@ -2018,6 +2018,53 @@ describe("R5 T1 — a multi-car CASH quote is never a dead end (platform limits 
   );
 });
 
+async function maxShapeQuote(s: Ctx, cars: number) {
+  const extra = await seedCars(s, cars - 1);
+  const quoteId = await makeQuote(s);
+  await s.t.run((ctx) =>
+    ctx.db.patch(quoteId, {
+      vehicleItems: [s.vehicleId, ...extra].map((vehicleId) => ({ vehicleId, unitPrice: 200 })),
+    })
+  );
+  // Maximum probe shape, nothing refusing: 100 origins + 50 funded tagged deposits.
+  for (let i = 0; i < 100; i++) {
+    await headedOriginWithDeposit(s, quoteId, await directDeposit(s, { status: "REFUNDED" }));
+  }
+  for (let i = 0; i < 50; i++) {
+    await taggedFundedClaim(s, quoteId, await directDeposit(s, { status: "REFUNDED" }));
+  }
+  return quoteId;
+}
+
+describe("R5 T1b — the known ENVELOPE of a large quote combined with the maximum probe shape (limits ENFORCED)", () => {
+  test("(a) envelope pass: a 90-car quote with the max probe shape -> deposits.create, request, confirm all succeed", async () => {
+    const s = await setup({ transactionLimits: true });
+    const quoteId = await maxShapeQuote(s, 90);
+    const beforeDeposits = (await moneyFootprint(s)).deposits;
+    await s.manager.as.mutation(api.deposits.create, {
+      orgId: s.orgId, quoteId, amount: 100, method: "CASH", idempotencyKey: crypto.randomUUID(),
+    });
+    const requestId = await requestDeposit(s, quoteId, 100);
+    await expect(confirmPending(s, requestId, 100)).resolves.toBeTruthy();
+    expect((await moneyFootprint(s)).deposits).toBe(beforeDeposits + 2);
+  }, 300_000);
+
+  test("(b) KNOWN ENVELOPE (follow-up SCRUM-461): a 101-car quote with the max probe shape exceeds the platform range limit and the transaction writes nothing", async () => {
+    const s = await setup({ transactionLimits: true });
+    const quoteId = await maxShapeQuote(s, 101);
+    await expect(
+      s.manager.as.mutation(api.deposits.create, {
+        orgId: s.orgId, quoteId, amount: 100, method: "CASH", idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(/Too many index ranges/i);
+    const written = await s.t.run(async (ctx) => ({
+      deposits: (await ctx.db.query("deposits").collect()).filter((d) => d.quoteId === quoteId).length,
+      requests: (await ctx.db.query("depositRequests").collect()).filter((r) => r.quoteId === quoteId).length,
+    }));
+    expect(written).toEqual({ deposits: 0, requests: 0 });
+  }, 300_000);
+});
+
 describe("R5 T2 — many instalments on one quote across cars", () => {
   test("200 deposits over a 3-car quote, then a request, still pass", async () => {
     const s = await setup();

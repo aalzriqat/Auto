@@ -124,6 +124,12 @@ export const RESERVATION_DEPOSIT_NEXT_STEP =
  * confirm door runs the probe twice (request, and inside the shared posting
  * body), so about 1,000 against the platform's 4,096. It is a ceiling on the
  * SHAPE, not a measurement of a typical deal, which is a handful.
+ *
+ * Known envelope (SCRUM-461): at its max shape the probe costs about 450 index
+ * ranges. Combined with a very large quote (roughly 95+ cars) the create/confirm
+ * door can exceed the platform's 4,096 range limit before the guided refusal.
+ * The transaction aborts atomically, so no money is recorded. The structural fix
+ * is the SCRUM-461 link table.
  */
 export const RESERVATION_PROBE_MAX_ORIGINS_PER_QUOTE = 100;
 export const RESERVATION_PROBE_MAX_FUNDED_TAGGED_PER_QUOTE = 50;
