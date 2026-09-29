@@ -35,6 +35,111 @@ const profitApprovalMessages = defineBilingualMessages({
   ApprovalListPrice: ["List price", "سعر القائمة"],
 });
 
+/**
+ * SCRUM-417 UX PR 4: the sub-steps inside a stage (O2) and the clickable rail's
+ * past / future step views (O3). Defined once per message, like the rail's own.
+ */
+const dealStepMessages = defineBilingualMessages({
+  ChecklistHeading: ["Steps in this stage", "خطوات هذه المرحلة"],
+  ChecklistDone: ["Done", "تم"],
+  ChecklistCurrent: ["Next", "التالي"],
+  ChecklistPending: ["Not yet", "لاحقًا"],
+  ChecklistApprovedAmountRecorded: ["Approved amount recorded", "تسجيل المبلغ المعتمد"],
+  ChecklistShortfallSettled: ["Shortfall settled", "تسوية الفرق"],
+  ChecklistDocumentsUploaded: ["Required documents uploaded", "رفع المستندات المطلوبة"],
+  ChecklistDocumentsVerified: ["Required documents verified", "التحقق من المستندات المطلوبة"],
+  ChecklistCostsRecorded: ["Handover costs recorded", "تسجيل تكاليف التسليم"],
+  ChecklistCostsPaid: ["Handover costs paid", "دفع تكاليف التسليم"],
+  ChecklistDealFiguresReady: ["Deal figures ready to hand over", "أرقام الصفقة جاهزة للتسليم"],
+  ChecklistRegisterHandover: ["Register the handover", "تسجيل تسليم المركبة"],
+  ChecklistRouteRecorded: ["Settlement route recorded", "تسجيل مسار التسوية"],
+  ChecklistClosingChecksReady: ["Closing checks ready", "جاهزية فحوصات الإغلاق"],
+  ChecklistCloseDeal: ["Close the deal", "إغلاق الصفقة"],
+  ChecklistExpectedPaymentRegistered: ["Expected payment registered", "تسجيل الدفعة المتوقعة"],
+  ChecklistDepositResolved: ["Held deposit resolved", "معالجة العربون المحتجز"],
+  ChecklistCurrencySupported: ["Deal currency supported for closing", "عملة الصفقة مدعومة للإغلاق"],
+  ChecklistReconciliationResolved: ["Reconciliation note reviewed", "مراجعة ملاحظة التسوية"],
+  ChecklistCashDepositDecision: ["Deposit decision made", "اتخاذ قرار العربون"],
+  ChecklistCompleteSale: ["Complete the sale", "إتمام البيع"],
+  ChecklistHandoverRegistered: ["Vehicle handover registered", "تسجيل تسليم المركبة"],
+  ChecklistSaleClosed: ["Sale closed", "إغلاق البيع"],
+  ChecklistPaymentConfirmed: ["Finance company payment confirmed", "تأكيد صرف شركة التمويل"],
+
+  BackToCurrentStep: ["Back to current step", "العودة إلى الخطوة الحالية"],
+  StageViewBack: ["Close this view", "إغلاق هذا العرض"],
+  StageViewing: ["viewing", "قيد العرض"],
+  StageViewPastNote: [
+    "You are looking at a step that is already done. This is a read-only view of what was recorded.",
+    "أنت تعرض خطوة منتهية. هذا عرض للقراءة فقط لما تم تسجيله.",
+  ],
+  StageViewFutureNote: [
+    "You are looking at a step that has not started. Nothing here can be done yet.",
+    "أنت تعرض خطوة لم تبدأ بعد. لا يمكن تنفيذ شيء هنا الآن.",
+  ],
+  StageViewStoppedNote: [
+    "This step stopped when the deal was rejected or cancelled. Nothing more will happen here.",
+    "توقفت هذه الخطوة عند رفض الصفقة أو إلغائها. لن يحدث شيء آخر هنا.",
+  ],
+  StageViewAnnounceShowing: ["Showing step", "عرض الخطوة"],
+  StageViewAnnounceBack: ["Back to the current step", "العودة إلى الخطوة الحالية"],
+  // ROUND 2 (SCRUM-417 UX4): the deal is closed and this step waits on the finance company.
+  StageViewAnnounceBackDone: ["Back to the deal summary", "العودة إلى ملخص الصفقة"],
+  StageViewSettlementClosedNote: [
+    "The deal is closed. This step completes when the finance company's payment is confirmed, and the supplier is settled where the vehicle was supplied on consignment.",
+    "الصفقة مغلقة. تكتمل هذه الخطوة عند تأكيد دفعة شركة التمويل، وعند تسوية المورّد إن كانت المركبة مورَّدة بالأمانة.",
+  ],
+  // A deposit request still waiting blocks the close (finalizeDeal refuses on it first).
+  ChecklistDepositRequestResolved: ["Deposit request resolved", "معالجة طلب العربون"],
+  FinalizeNeedsPendingDepositRequestResolved: [
+    "A deposit request on this deal is waiting for a manager or accountant to confirm receipt or reject it. The deal can't be closed until it is resolved.",
+    "طلب عربون على هذه الصفقة بانتظار أن يؤكّد مدير أو محاسب استلامه أو يرفضه. لا يمكن إغلاق الصفقة قبل معالجته.",
+  ],
+  StageViewNeedsHeading: ["What it will need", "ما تحتاجه"],
+  StageViewWhoActs: ["Who acts", "الجهة المنفّذة"],
+  StageViewShowRecord: ["Show the recorded details", "عرض التفاصيل المسجّلة"],
+  StageNeedsApplication: [
+    "The application put together and sent to the finance company.",
+    "تجهيز الطلب وإرساله إلى شركة التمويل.",
+  ],
+  StageNeedsCreditDecision: [
+    "The finance company's credit decision, recorded here.",
+    "قرار شركة التمويل الائتماني، مسجّلًا هنا.",
+  ],
+  StageNeedsAppraisal: [
+    "A valuation of the vehicle, from the finance company or an independent appraiser.",
+    "تقييم للمركبة من شركة التمويل أو من مقيّم مستقل.",
+  ],
+  StageNeedsApprovedPurchase: [
+    "The amount the finance company approves for the purchase, and any shortfall settled.",
+    "المبلغ الذي توافق عليه شركة التمويل للشراء، وتسوية أي فرق.",
+  ],
+  StageNeedsDeliveryActions: [
+    "Every required document uploaded and verified.",
+    "رفع جميع المستندات المطلوبة والتحقق منها.",
+  ],
+  StageNeedsDisbursement: [
+    "The finance company's payment, confirmed once the sale is handed over and closed.",
+    "صرف شركة التمويل، ويُؤكَّد بعد تسليم المركبة وإغلاق البيع.",
+  ],
+  StageNeedsHandover: [
+    "The deal figures ready, then the vehicle handover registered. Handover costs are settled later, before the deal is closed.",
+    "جاهزية أرقام الصفقة، ثم تسجيل تسليم المركبة. تُسوّى تكاليف التسليم لاحقًا، قبل إغلاق الصفقة.",
+  ],
+  StageNeedsHandoverCash: [
+    "The draft sale completed, with the deposit decision made where a deposit was received.",
+    "إتمام البيع المسودّة، مع اتخاذ قرار العربون إن كان قد استُلم عربون.",
+  ],
+  StageNeedsSettlement: [
+    "The expected payment registered, a settlement route where one is required, the handover costs recorded and paid and the closing checks ready, then the deal closed.",
+    "تسجيل الدفعة المتوقعة، ومسار التسوية إن كان مطلوبًا، وتسجيل تكاليف التسليم ودفعها، وجاهزية فحوصات الإغلاق، ثم إغلاق الصفقة.",
+  ],
+  StageNeedsSettlementCash: [
+    "The supplier's claim settled, where the vehicle was supplied on consignment.",
+    "تسوية مطالبة المورّد، إن كانت المركبة مورَّدة بالأمانة.",
+  ],
+  StageNeedsSaleAgreed: ["The sale agreed with the customer.", "الاتفاق على البيع مع العميل."],
+});
+
 const dealRailMessages = defineBilingualMessages({
   /**
    * Named for the money moving, not for a form being filled in. This is the
@@ -1399,6 +1504,7 @@ const dealOverviewMessages = defineBilingualMessages({
 
 export const salesEn = {
   ...dealRailMessages.en,
+  ...dealStepMessages.en,
   ...profitApprovalMessages.en,
   ...dealOverviewMessages.en,
   ...dealWizardMessages.en,
@@ -2448,6 +2554,7 @@ export const salesEn = {
 
 export const salesAr = {
   ...dealRailMessages.ar,
+  ...dealStepMessages.ar,
   ...profitApprovalMessages.ar,
   ...dealOverviewMessages.ar,
   ...dealWizardMessages.ar,

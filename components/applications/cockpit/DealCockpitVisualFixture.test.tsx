@@ -18,6 +18,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { cloneElement, useState } from "react";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -1063,6 +1064,80 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
     mkdirSync(outDir, { recursive: true });
     writeFileSync(resolve(outDir, `deal-cockpit-${locale}-readiness-access.html`), html);
   });
+
+  // SCRUM-417 UX4 (O2/O3): the sub-step checklist on a live Handover, and the
+  // read-only past / future step views a rail click (or ?stage=) opens.
+  const ux4Markup = (locale: "en" | "ar", variant: "settlement-checklist" | "view-past" | "view-future") => {
+    language.locale = locale;
+    const base = financedDeal();
+    const deal: FinancedDealCockpitData =
+      variant === "settlement-checklist"
+        ? {
+            ...base,
+            expectedPaymentRegistered: true,
+            stages: base.stages.map((stage) => ({
+              ...stage,
+              state:
+                stage.key === "SETTLEMENT"
+                  ? ("BLOCKED" as const)
+                  : stage.key === "DISBURSEMENT"
+                    ? ("PENDING" as const)
+                    : ("COMPLETE" as const),
+              blocker: stage.key === "SETTLEMENT" ? ("AwaitingSettlement" as const) : undefined,
+            })),
+          }
+        : base;
+    const viewed = variant === "view-past" ? "APPLICATION" : variant === "view-future" ? "SETTLEMENT" : null;
+    return renderToStaticMarkup(
+      <DealCockpitView
+        deal={deal}
+        stageDeepLink={{ value: viewed, onChange: () => {} }}
+        backHref="/org_1/deals"
+        activeAppraisalProvider={deal.activeAppraisalProvider}
+        onRecordSupplierReceipt={async () => {}}
+        financialOverview={{ data: financedOverview(), loading: false }}
+        custody={custodyWiring()}
+        custodyMoney={custodyMoney}
+        closingChecklist={
+          variant === "settlement-checklist"
+            ? {
+                readiness: {
+                  state: "BLOCKED",
+                  open: true,
+                  unavailableReason: null,
+                  unavailableReasonCode: null,
+                  moneyWithheld: false,
+                  checks: [
+                    { key: "CONFIGURED_FEES_RECORDED", status: "READY", reason: null, reasonCode: null },
+                    { key: "HANDOVER_COSTS_PAID", status: "BLOCKED", reason: "blocked", reasonCode: null },
+                  ],
+                } as unknown as NonNullable<React.ComponentProps<typeof DealCockpitView>["closingChecklist"]>["readiness"],
+              }
+            : undefined
+        }
+        financingPlan={{ facts: FINANCING_PLAN, formatMajor: (major, currency) => `${major.toLocaleString()} ${currency}` }}
+        handoverCosts={handoverCostsWiring()}
+      />
+    );
+  };
+  test.each(
+    (["en", "ar"] as const).flatMap((locale) =>
+      (["settlement-checklist", "view-past", "view-future"] as const).map((variant) => [locale, variant] as const)
+    )
+  )("writes the %s markup for UX4 %s", (locale, variant) => {
+    expect(OUT_DIR, "DEAL_COCKPIT_VISUAL_FIXTURE_DIR must name this run's fresh directory").toBeTruthy();
+    const outDir = resolve(OUT_DIR!);
+    const html = ux4Markup(locale, variant);
+    if (variant === "settlement-checklist") {
+      expect(html).toContain("data-testid=\"deal-step-checklist\"");
+      expect(html).not.toContain("data-testid=\"deal-stage-view\"");
+    } else {
+      expect(html).toContain("data-testid=\"deal-stage-view\"");
+      expect(html).toContain("data-testid=\"deal-stage-view-back\"");
+    }
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(resolve(outDir, `deal-cockpit-${locale}-ux4-${variant}.html`), html);
+  });
 });
 
 
@@ -1080,9 +1155,36 @@ describe("closing-readiness rows are destinations", () => {
     Element.prototype.scrollIntoView = originalScrollIntoView;
   });
 
-  function renderWith(checks: Array<{ key: string; status: string }>, onRecord?: () => void, withPanels = true) {
+  function renderWith(
+    checks: Array<{ key: string; status: string }>,
+    onRecord?: () => void,
+    withPanels = true,
+    liveKey: string | null = null
+  ) {
     language.locale = "en";
-    const deal = financedDeal();
+    const base = financedDeal();
+    // The fixture is live on Documents; UX4 tests move the live step (`liveKey`).
+    const order = base.stages.map((stage) => stage.key);
+    const deal = liveKey
+      ? {
+          ...base,
+          // Settlement's first gate is the expected payment; these tests are about the cost items after it.
+          expectedPaymentRegistered: liveKey === "SETTLEMENT",
+          stages: base.stages.map((stage) => ({
+            ...stage,
+            state:
+              stage.key === liveKey
+                ? liveKey === "HANDOVER"
+                  ? ("CURRENT" as const)
+                  : ("BLOCKED" as const)
+                : order.indexOf(stage.key) < order.indexOf(liveKey as (typeof order)[number])
+                  ? ("COMPLETE" as const)
+                  : ("PENDING" as const),
+            blocker:
+              stage.key === liveKey && liveKey !== "HANDOVER" ? ("AwaitingSettlement" as const) : undefined,
+          })),
+        }
+      : base;
     return render(
       <DealCockpitView
         deal={deal}
@@ -1136,6 +1238,51 @@ describe("closing-readiness rows are destinations", () => {
         done();
       })
     );
+  });
+
+  test("UX4 O2: handover costs are CLOSING gates -- the live Settlement card lists them, and the current one goes to the costs panel", () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    renderWith(
+      [
+        { key: "CONFIGURED_FEES_RECORDED", status: "READY" },
+        { key: "HANDOVER_COSTS_PAID", status: "BLOCKED" },
+      ],
+      undefined,
+      true,
+      "SETTLEMENT"
+    );
+    const list = screen.getByTestId("deal-step-checklist");
+    const status = (id: string) => within(list).getByTestId(`deal-step-item-${id}`).getAttribute("data-status");
+    expect(status("costs-recorded")).toBe("done");
+    expect(status("costs-paid")).toBe("current");
+    expect(status("close-deal")).toBe("pending");
+    // Exactly one item is the current one, and it is the only one that acts.
+    const go = within(list).getByTestId("deal-step-item-go");
+    expect(go.getAttribute("aria-current")).toBe("step");
+    expect(within(list).getAllByTestId("deal-step-item-go")).toHaveLength(1);
+    fireEvent.click(go);
+    return new Promise<void>((done) =>
+      requestAnimationFrame(() => {
+        expect(document.activeElement).toBe(screen.getByTestId("deal-handover-costs"));
+        done();
+      })
+    );
+  });
+
+  test("UX4 O2 invariant: a financed Handover with unpaid costs lists no costs and no checklist at all (one action is not a list)", () => {
+    renderWith(
+      [
+        { key: "CONFIGURED_FEES_RECORDED", status: "BLOCKED" },
+        { key: "HANDOVER_COSTS_PAID", status: "BLOCKED" },
+      ],
+      undefined,
+      true,
+      "HANDOVER"
+    );
+    expect(screen.queryByTestId("deal-step-checklist")).toBeNull();
+    expect(screen.queryByTestId("deal-step-item-costs-paid")).toBeNull();
+    expect(screen.queryByTestId("deal-step-item-economics-ready")).toBeNull();
+    expect(screen.queryByTestId("deal-step-item-register-handover")).toBeNull();
   });
 
   test("a blocked legal-invoice check opens the existing record dialog", () => {
@@ -1719,4 +1866,424 @@ describe("O1 -- the step workbench", () => {
       })
     );
   });
-});
+  // ---------------------------------------------------------------------------
+  // SCRUM-417 UX4 round 1 (F2, F4, F6, F7, F8): rendered, real dictionaries.
+  // ---------------------------------------------------------------------------
+  const viewLink = (value: string | null) => ({ value, onChange: vi.fn() });
+  const en = dictionaries.en as Record<string, string>;
+  const ar = dictionaries.ar as Record<string, string>;
+  /** Render with the locale set AFTER the element is built (stageElement pins "en"). */
+  function renderIn(locale: "en" | "ar", element: React.ReactElement) {
+    language.locale = locale;
+    return render(element);
+  }
+  const cashDealAt = (live: "SALE_AGREED" | "HANDOVER") =>
+    ({
+      ...financedDeal(),
+      dealKind: "CASH",
+      financingApplicationId: null,
+      applicationId: null,
+      saleId: "sale_7731",
+      dealRef: "sale_7731",
+      status: "PENDING",
+      stages: ["SALE_AGREED", "HANDOVER", "SETTLEMENT"].map((key) => ({
+        key,
+        state: key === live ? "CURRENT" : key === "SALE_AGREED" ? "COMPLETE" : "PENDING",
+        authority: "DEALER",
+      })),
+    }) as unknown as DealCockpitData;
+
+  test.each(["en", "ar"] as const)(
+    "F4 (%s): a FUTURE financed Handover says what it needs -- and costs are not a handover gate",
+    (locale) => {
+      const el = stageElement("DELIVERY_ACTIONS", "CURRENT", { stageDeepLink: viewLink("HANDOVER") });
+      renderIn(locale, el);
+      const dict = locale === "en" ? en : ar;
+      const needs = screen.getByTestId("deal-stage-view-needs").textContent ?? "";
+      expect(needs).toContain(dict.StageNeedsHandover);
+      expect(dict.StageNeedsHandover).not.toBe(dict.StageNeedsHandoverCash);
+      if (locale === "en") expect(needs).toMatch(/costs are settled later/i);
+    }
+  );
+
+  test.each(["en", "ar"] as const)("F4 (%s): a FUTURE financed Settlement includes the expected payment", (locale) => {
+    const el = stageElement("HANDOVER", "CURRENT", { stageDeepLink: viewLink("SETTLEMENT") });
+    renderIn(locale, el);
+    const dict = locale === "en" ? en : ar;
+    const needs = screen.getByTestId("deal-stage-view-needs").textContent ?? "";
+    expect(needs).toContain(dict.StageNeedsSettlement);
+    if (locale === "en") expect(needs).toMatch(/expected payment/i);
+  });
+
+  test.each(["en", "ar"] as const)(
+    "F4 (%s): a FUTURE cash Settlement has its own wording, not the financed one",
+    (locale) => {
+      language.locale = locale;
+      render(
+        <DealCockpitView
+          deal={cashDealAt("SALE_AGREED")}
+          backHref="/org_1/deals"
+          onRecordSupplierReceipt={async () => {}}
+          stageDeepLink={viewLink("SETTLEMENT")}
+        />
+      );
+      const dict = locale === "en" ? en : ar;
+      const needs = screen.getByTestId("deal-stage-view-needs").textContent ?? "";
+      expect(needs).toContain(dict.StageNeedsSettlementCash);
+      expect(dict.StageNeedsSettlementCash).not.toBe(dict.StageNeedsSettlement);
+      expect(needs).not.toContain(dict.StageNeedsSettlement);
+    }
+  );
+
+  test.each(["en", "ar"] as const)(
+    "F7 (%s): a STOPPED step is terminal -- no 'will need', no owner, no checklist",
+    (locale) => {
+      const order = orderStagesForDisplay(DEAL_STAGE_ORDER.map((key) => ({ key })));
+      const stopped = order[2].key;
+      const el = stageElement(null, "STOPPED", { stageDeepLink: viewLink(stopped) });
+      renderIn(locale, el);
+      const dict = locale === "en" ? en : ar;
+      const view = screen.getByTestId("deal-stage-view");
+      expect(view.getAttribute("data-mode")).toBe("stopped");
+      expect(view.textContent).toContain(dict.StageViewStoppedNote);
+      expect(within(view).queryByTestId("deal-stage-view-needs")).toBeNull();
+      expect(within(view).queryByTestId("deal-stage-view-owner")).toBeNull();
+      expect(within(view).queryByTestId("deal-step-checklist")).toBeNull();
+      expect(view.textContent).not.toContain(dict.StageViewWillNeed ?? "\u0000");
+    }
+  );
+
+  test("F6: Back puts focus on the live rail button and the live region says where the view went", () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    renderStage("HANDOVER");
+    const announcer = screen.getByTestId("deal-stage-view-announcer");
+    expect(announcer.getAttribute("aria-live")).toBe("polite");
+    expect(announcer.textContent).toBe("");
+    fireEvent.click(screen.getByTestId("deal-stage-node-SETTLEMENT"));
+    expect(announcer.textContent).toContain(en.StageViewAnnounceShowing);
+    const back = screen.getByTestId("deal-stage-view-back");
+    back.focus();
+    fireEvent.click(back);
+    // The chip unmounted with the card; focus is on a real control, not <body>.
+    expect(screen.queryByTestId("deal-stage-view-back")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId("deal-stage-node-HANDOVER"));
+    expect(announcer.textContent).toContain(en.StageViewAnnounceBack);
+    // The region persisted across the whole exchange (same node, never remounted).
+    expect(screen.getByTestId("deal-stage-view-announcer")).toBe(announcer);
+  });
+
+  test("F8: when the viewed step BECOMES the live one, the stale ?stage is cleared", () => {
+    const link = viewLink("HANDOVER");
+    const { rerender } = renderStage("DELIVERY_ACTIONS", "CURRENT", { stageDeepLink: link });
+    expect(screen.getByTestId("deal-stage-view").getAttribute("data-stage")).toBe("HANDOVER");
+    expect(link.onChange).not.toHaveBeenCalled();
+    rerender(stageElement("HANDOVER", "CURRENT", { stageDeepLink: link }));
+    expect(screen.queryByTestId("deal-stage-view")).toBeNull();
+    expect(link.onChange).toHaveBeenCalledWith(null);
+  });
+
+  // F2: an ANSWERED empty list must not read as "no answer".
+  describe("F2: readiness answered with no checks", () => {
+    const liveSettlement = (readiness: unknown) => {
+      const el = stageElement("SETTLEMENT", "CURRENT", {
+        closingChecklist: { readiness } as unknown as NonNullable<
+          React.ComponentProps<typeof DealCockpitView>["closingChecklist"]
+        >,
+      });
+      language.locale = "en";
+      return render({ ...el, props: { ...el.props, deal: { ...el.props.deal, expectedPaymentRegistered: true } } });
+    };
+    const statusOf = (id: string) =>
+      within(screen.getByTestId("deal-step-checklist")).queryByTestId(`deal-step-item-${id}`)?.getAttribute("data-status") ?? null;
+    const base = { open: true, unavailableReason: null, unavailableReasonCode: null, moneyWithheld: false };
+
+    test("UNAVAILABLE with checks: [] keeps the cost items on the list, NOT done", () => {
+      liveSettlement({ ...base, state: "UNAVAILABLE", checks: [] });
+      expect(statusOf("costs-recorded")).not.toBeNull();
+      expect(statusOf("costs-recorded")).not.toBe("done");
+      expect(statusOf("costs-paid")).not.toBe("done");
+      expect(statusOf("costs-paid")).not.toBeNull();
+      // L1: an unknown fact is shown, but is never what the operator is sent to act on.
+      expect(statusOf("costs-recorded")).toBe("pending");
+      expect(statusOf("costs-paid")).toBe("pending");
+      expect(statusOf("closing-checks")).toBe("current");
+    });
+
+    test("READY checks are done; NOT_APPLICABLE ones are omitted; a missing key is not done", () => {
+      liveSettlement({
+        ...base,
+        state: "BLOCKED",
+        checks: [
+          { key: "CONFIGURED_FEES_RECORDED", status: "READY", reason: null, reasonCode: null },
+          { key: "HANDOVER_COSTS_PAID", status: "NOT_APPLICABLE", reason: null, reasonCode: null },
+        ],
+      });
+      expect(statusOf("costs-recorded")).toBe("done");
+      expect(statusOf("costs-paid")).toBeNull();
+      cleanup();
+      liveSettlement({ ...base, state: "BLOCKED", checks: [{ key: "CONFIGURED_FEES_RECORDED", status: "READY", reason: null, reasonCode: null }] });
+      expect(statusOf("costs-paid")).not.toBe("done");
+      expect(statusOf("costs-paid")).not.toBeNull();
+    });
+
+    test("redaction (no readiness answer at all) shows the cost items as not done, never as done", () => {
+      liveSettlement(undefined);
+      for (const id of ["costs-recorded", "costs-paid", "closing-checks", "close-deal"]) {
+        expect(statusOf(id), id).not.toBe("done");
+      }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // SCRUM-417 UX4 round 2: the checklist is the live stage's only; the sale-keyed
+  // path follows applicationId; the pending deposit request gates the close.
+  // -------------------------------------------------------------------------
+  const restage = (el: React.ReactElement, states: Record<string, string>, dealOver: Record<string, unknown> = {}) => {
+    const props = el.props as React.ComponentProps<typeof DealCockpitView>;
+    return cloneElement(el, {
+      deal: {
+        ...props.deal!,
+        ...dealOver,
+        stages: props.deal!.stages.map((stage) => ({ ...stage, state: states[stage.key] ?? stage.state })),
+      },
+    } as never);
+  };
+
+  test.each(["en", "ar"] as const)(
+    "R2 (%s): a completed or upcoming step never shows a checklist, whatever the deal holds",
+    (locale) => {
+      // HANDOVER is live; the past step and the future step are viewed in turn.
+      for (const viewed of ["APPLICATION", "SETTLEMENT", "DELIVERY_ACTIONS"]) {
+        const el = stageElement("HANDOVER", "CURRENT", { stageDeepLink: viewLink(viewed) });
+        const { unmount } = renderIn(locale, el);
+        expect(screen.getByTestId("deal-stage-view")).toBeTruthy();
+        expect(within(screen.getByTestId("deal-stage-view")).queryByTestId("deal-step-checklist")).toBeNull();
+        unmount();
+      }
+    }
+  );
+
+  test.each(["en", "ar"] as const)(
+    "R2 F2-P (%s): a FINANCED-kind sale with no applicationId gets the sale's steps, not the financed chain",
+    (locale) => {
+      const cashShaped = { ...(cashDealAt("HANDOVER") as unknown as Record<string, unknown>), dealKind: "FINANCED" };
+      language.locale = locale;
+      render(
+        <DealCockpitView
+          deal={cashShaped as unknown as DealCockpitData}
+          backHref="/org_1/deals"
+          onRecordSupplierReceipt={async () => {}}
+          workflowAction={{
+            stageKey: "HANDOVER",
+            actionKey: "CompleteCashSaleAction",
+            onStart: () => {},
+            unavailableReasonKey: "CashSaleCompletionNeedsDepositDecision",
+          }}
+        />
+      );
+      const list = screen.getByTestId("deal-step-checklist");
+      expect(within(list).getByTestId("deal-step-item-cash-deposit-decision").getAttribute("data-status")).toBe("current");
+      expect(within(list).queryByTestId("deal-step-item-economics-ready")).toBeNull();
+      expect(within(list).queryByTestId("deal-step-item-register-handover")).toBeNull();
+    }
+  );
+
+  test.each(["en", "ar"] as const)(
+    "R2 F2-P (%s): a FINANCED-kind sale with no applicationId shows the cash/supplier copy for a future Settlement",
+    (locale) => {
+      const cashShaped = { ...(cashDealAt("SALE_AGREED") as unknown as Record<string, unknown>), dealKind: "FINANCED" };
+      language.locale = locale;
+      render(
+        <DealCockpitView
+          deal={cashShaped as unknown as DealCockpitData}
+          backHref="/org_1/deals"
+          onRecordSupplierReceipt={async () => {}}
+          stageDeepLink={viewLink("SETTLEMENT")}
+        />
+      );
+      const dict = locale === "en" ? en : ar;
+      const needs = screen.getByTestId("deal-stage-view-needs").textContent ?? "";
+      expect(needs).toContain(dict.StageNeedsSettlementCash);
+      expect(needs).not.toContain(dict.StageNeedsSettlement);
+    }
+  );
+
+  test.each(["en", "ar"] as const)(
+    "R2 NEW-1 (%s): a CLOSED financed deal's pending Settlement says the deal is closed, never 'has not started'",
+    (locale) => {
+      const el = restage(
+        stageElement("DISBURSEMENT", "CURRENT", { stageDeepLink: viewLink("SETTLEMENT") }),
+        { SETTLEMENT: "PENDING", DISBURSEMENT: "CURRENT" },
+        { status: "CLOSED" }
+      );
+      renderIn(locale, el);
+      const dict = locale === "en" ? en : ar;
+      const view = screen.getByTestId("deal-stage-view");
+      expect(view.getAttribute("data-mode")).toBe("future");
+      expect(screen.getByTestId("deal-stage-view-note").textContent).toBe(dict.StageViewSettlementClosedNote);
+      expect(view.textContent).not.toContain(dict.StageViewFutureNote);
+      expect(within(view).queryByTestId("deal-stage-view-needs")).toBeNull();
+      expect(dict.StageViewSettlementClosedNote).not.toBe(dict.StageViewFutureNote);
+    }
+  );
+
+  test("R2 NEW-1 control: an OPEN deal's pending Settlement keeps the ordinary future copy", () => {
+    const el = restage(
+      stageElement("HANDOVER", "CURRENT", { stageDeepLink: viewLink("SETTLEMENT") }),
+      {},
+      { status: "APPROVED" }
+    );
+    renderIn("en", el);
+    expect(screen.getByTestId("deal-stage-view-note").textContent).toBe(en.StageViewFutureNote);
+    expect(screen.getByTestId("deal-stage-view-needs")).toBeTruthy();
+  });
+
+  test("R2 L4: a waiting deposit request is the current gate on Settlement, and Close is not", () => {
+    const el = stageElement("SETTLEMENT", "CURRENT", {
+      workflowAction: {
+        stageKey: "SETTLEMENT",
+        actionKey: "FinalizeDealAction",
+        onStart: () => {},
+        unavailableReasonKey: "FinalizeNeedsPendingDepositRequestResolved",
+      },
+    });
+    renderIn("en", restage(el, {}, { expectedPaymentRegistered: true }));
+    const list = screen.getByTestId("deal-step-checklist");
+    const status = (id: string) => within(list).getByTestId(`deal-step-item-${id}`).getAttribute("data-status");
+    expect(status("deposit-request-resolved")).toBe("current");
+    expect(status("close-deal")).toBe("pending");
+  });
+
+  // SCRUM-417 UX4 round 3 (R3-A): the server keeps Settlement live on a CLOSED
+  // financed deal while money is still owed, but there is no close left to walk
+  // towards -- "closing checks -> close deal" must not be shown.
+  test.each(["en", "ar"] as const)(
+    "R3-A (%s): a CLOSED deal with a live Settlement shows no closing-checks or close-deal items",
+    (locale) => {
+      const el = stageElement("SETTLEMENT", "CURRENT", {
+        closingChecklist: {
+          readiness: { state: "BLOCKED", open: false, checks: [], unavailableReason: null, unavailableReasonCode: null, moneyWithheld: false },
+        } as unknown as NonNullable<React.ComponentProps<typeof DealCockpitView>["closingChecklist"]>,
+      });
+      renderIn(
+        locale,
+        restage(el, { HANDOVER: "COMPLETE", DISBURSEMENT: "COMPLETE", SETTLEMENT: "BLOCKED" }, { status: "CLOSED", expectedPaymentRegistered: true })
+      );
+      expect(screen.queryByTestId("deal-step-item-closing-checks")).toBeNull();
+      expect(screen.queryByTestId("deal-step-item-close-deal")).toBeNull();
+    }
+  );
+
+  test("R3-A control: the same deal, still APPROVED, keeps the closing checks", () => {
+    const el = stageElement("SETTLEMENT", "CURRENT", {
+      closingChecklist: {
+        readiness: { state: "BLOCKED", open: true, checks: [], unavailableReason: null, unavailableReasonCode: null, moneyWithheld: false },
+      } as unknown as NonNullable<React.ComponentProps<typeof DealCockpitView>["closingChecklist"]>,
+    });
+    renderIn("en", restage(el, { HANDOVER: "COMPLETE", DISBURSEMENT: "COMPLETE", SETTLEMENT: "BLOCKED" }, { status: "APPROVED", expectedPaymentRegistered: true }));
+    expect(screen.getByTestId("deal-step-item-closing-checks")).toBeTruthy();
+    expect(screen.getByTestId("deal-step-item-close-deal")).toBeTruthy();
+  });
+
+  // R3-B: the blocker names what is true for every viewer -- who resolves it and
+  // how -- and promises nothing beyond it.
+  describe.each(["en", "ar"] as const)("R3-B (%s): the waiting-deposit-request blocker copy", (locale) => {
+    test("the dictionary text is role-neutral and does not promise the next step", () => {
+      const text = (locale === "en" ? en : ar).FinalizeNeedsPendingDepositRequestResolved;
+      expect(text).toBeTruthy();
+      expect(text.toLowerCase()).not.toContain("cancel");
+      expect(text.toLowerCase()).not.toContain("then close");
+      expect(text).not.toContain("ألغِه");
+      expect(text).not.toContain("ثم أغلق");
+    });
+    test("rendered on the live Settlement step, the same text for every viewer", () => {
+      const el = stageElement("SETTLEMENT", "CURRENT", {
+        workflowAction: {
+          stageKey: "SETTLEMENT",
+          actionKey: "FinalizeDealAction",
+          onStart: () => {},
+          unavailableReasonKey: "FinalizeNeedsPendingDepositRequestResolved",
+        },
+      });
+      renderIn(locale, el);
+      const dict = locale === "en" ? en : ar;
+      const body = document.body.textContent ?? "";
+      expect(body).toContain(dict.FinalizeNeedsPendingDepositRequestResolved);
+      expect(body).not.toMatch(/cancel|then close/i);
+      expect(body).not.toContain("ثم أغلق");
+    });
+  });
+  test.each(["en", "ar"] as const)(
+    "R2 L5 (%s): Back on a finished deal with the rail collapsed lands on the show-stages toggle, and says so",
+    (locale) => {
+      Element.prototype.scrollIntoView = vi.fn();
+      // The route owns `?stage=`: a host that stores what the cockpit writes.
+      const Host = () => {
+        const [value, setValue] = useState<string | null>("HANDOVER");
+        const el = cloneElement(stageElement(null, "CURRENT"), { stageDeepLink: { value, onChange: setValue } } as never);
+        language.locale = locale; // stageElement pins "en"
+        return el;
+      };
+      renderIn(locale, <Host />);
+      expect(screen.queryByTestId("deal-stage-node-HANDOVER")).toBeNull();
+      const back = screen.getByTestId("deal-stage-view-back");
+      back.focus();
+      fireEvent.click(back);
+      expect(document.activeElement).toBe(screen.getByTestId("deal-stages-toggle"));
+      const dict = locale === "en" ? en : ar;
+      expect(screen.getByTestId("deal-stage-view-announcer").textContent).toBe(dict.StageViewAnnounceBackDone);
+      expect(dict.StageViewAnnounceBackDone).toBeTruthy();
+    }
+  );
+
+  test("R2-5: 'Show recorded details' for a past documents step switches the controlled tab from Activity", () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    const el = stageElement("HANDOVER", "CURRENT", { stageDeepLink: viewLink("CREDIT_DECISION") });
+    renderIn("en", el);
+    const lowerPane = (name: "documents" | "activity") =>
+      within(screen.getByTestId("deal-lower-tabs"))
+        .getAllByRole("tabpanel", { hidden: true })
+        .find((panel) => panel.id.endsWith(`-content-${name}`));
+    fireEvent.mouseDown(screen.getByRole("tab", { name: en.DealTabActivity, hidden: true }), { button: 0 });
+    expect(lowerPane("activity")?.getAttribute("data-state")).toBe("active");
+    fireEvent.click(screen.getByTestId("deal-stage-view-record"));
+    expect(lowerPane("documents")?.getAttribute("data-state")).toBe("active");
+    expect(lowerPane("activity")?.getAttribute("data-state")).toBe("inactive");
+  });
+
+  describe("R2: the go control needs the approver's authority", () => {
+    const liveApprovedPurchase = (canRecordApproval: boolean) => {
+      const el = restage(
+        stageElement("APPROVED_PURCHASE", "CURRENT", {
+          financeDecision: { ...financeDecision(), canRecordApproval },
+        }),
+        { APPROVED_PURCHASE: "BLOCKED" },
+        {}
+      );
+      const props = el.props as React.ComponentProps<typeof DealCockpitView>;
+      return renderIn("en", {
+        ...el,
+        props: {
+          ...props,
+          deal: {
+            ...props.deal!,
+            stages: props.deal!.stages.map((stage) =>
+              stage.key === "APPROVED_PURCHASE" ? { ...stage, blocker: "NoApprovedPurchaseAmount" } : stage
+            ),
+          },
+        },
+      });
+    };
+    test("with canRecordApproval the current item goes to the finance decision", () => {
+      liveApprovedPurchase(true);
+      const list = screen.getByTestId("deal-step-checklist");
+      expect(within(list).getByTestId("deal-step-item-approved-amount").getAttribute("data-status")).toBe("current");
+      expect(within(list).getAllByTestId("deal-step-item-go")).toHaveLength(1);
+    });
+    test("without it the item is shown, current, with no control to go to", () => {
+      liveApprovedPurchase(false);
+      const list = screen.getByTestId("deal-step-checklist");
+      expect(within(list).getByTestId("deal-step-item-approved-amount").getAttribute("data-status")).toBe("current");
+      expect(within(list).queryByTestId("deal-step-item-go")).toBeNull();
+    });
+  });});

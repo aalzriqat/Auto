@@ -128,7 +128,7 @@ afterEach(() => {
   permissions.clear();
 });
 
-const nodes = () => within(screen.getByTestId("deal-stage-rail")).getAllByRole("listitem");
+const nodes = () => within(screen.getByTestId("deal-stage-rail")).getAllByRole("button");
 const label = (node: HTMLElement) => (node.getAttribute("aria-label") ?? "").split(" · ")[0];
 const number = (node: HTMLElement) => node.querySelector("bdi")?.textContent;
 

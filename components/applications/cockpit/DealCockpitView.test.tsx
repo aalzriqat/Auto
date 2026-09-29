@@ -1661,8 +1661,8 @@ describe("the current stage has exactly one working surface, beneath the rail", 
     const focus = screen.getByTestId("deal-next-step");
     expect(focus.textContent).toContain("StageHandover");
     expect(focus.textContent).toContain("RegisterHandoverAction");
-    // The rail is a readout: no button lives on it.
-    expect(rail.querySelector("button")).toBeNull();
+    // UX4 (O3): each node is a real button that selects a step to LOOK at.
+    expect(rail.querySelectorAll("button").length).toBeGreaterThan(0);
     // Exactly one recommended CTA on the whole screen.
     expect(screen.getAllByRole("button", { name: "RegisterHandoverAction" })).toHaveLength(1);
   });
@@ -1709,25 +1709,25 @@ describe("the current stage has exactly one working surface, beneath the rail", 
     );
     // The ACCESSIBLE NAME of each node carries label, state, owner and
     // blocker — asserted through the role, not by scraping text content.
-    const items = within(screen.getByTestId("deal-stage-rail")).getAllByRole("listitem");
+    const items = within(screen.getByTestId("deal-stage-rail")).getAllByRole("button");
     expect(items).toHaveLength(4);
     expect(
-      within(screen.getByTestId("deal-stage-rail")).getByRole("listitem", {
+      within(screen.getByTestId("deal-stage-rail")).getByRole("button", {
         name: /StageApplication.*StageStateComplete.*StageOwnerDealership/,
       })
     ).toBeTruthy();
     expect(
-      within(screen.getByTestId("deal-stage-rail")).getByRole("listitem", {
+      within(screen.getByTestId("deal-stage-rail")).getByRole("button", {
         name: /StageCreditDecision.*StageStateBlocked.*StageOwnerFinanceCompany.*BlockerAwaitingCreditDecision/,
       })
     ).toBeTruthy();
     expect(
-      within(screen.getByTestId("deal-stage-rail")).getByRole("listitem", {
+      within(screen.getByTestId("deal-stage-rail")).getByRole("button", {
         name: /StageHandover.*StageStatePending.*StageOwnerDealership/,
       })
     ).toBeTruthy();
     expect(
-      within(screen.getByTestId("deal-stage-rail")).getByRole("listitem", {
+      within(screen.getByTestId("deal-stage-rail")).getByRole("button", {
         name: /StageSettlement.*StageStateStopped/,
       })
     ).toBeTruthy();

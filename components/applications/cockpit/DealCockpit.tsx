@@ -55,10 +55,17 @@ import { DealVehicleCard } from "./DealVehicleCard";
 import { DealStageRail, DealStagesComplete } from "./DealStageRail";
 import { orderStagesForDisplay } from "./dealStageDisplayOrder";
 import { panelsForStage, type WorkbenchPanel } from "./dealWorkbenchPanels";
+import { DealStageView } from "./DealStageView";
+import { StageViewAnnouncer } from "./StageViewAnnouncer";
+import { DealStepChecklist } from "./DealStepChecklistList";
+import type { ClosingReadinessCheckKey } from "@/lib/closingReadinessReasonCodes";
+import { deriveStepChecklist, type ChecklistDestination, type ChecklistItem } from "./dealStepChecklist";
+import { resolveViewedStage, STAGE_PARAM, stageViewMode, type StageDeepLink } from "./dealStepView";
 import { cn } from "@/lib/utils";
 import {
   isLiveStageState,
   STAGE_ICON,
+  STAGE_STATE_KEY,
   type DealCockpitData,
   type DealStageState,
 } from "./DealStagePresentation";
@@ -687,9 +694,12 @@ export function DealCockpit({
   orgId,
   applicationId,
   canonicalizeUrl = true,
+  stageDeepLink,
 }: Readonly<{
   orgId: Id<"organizations">;
   applicationId: Id<"financeApplications">;
+  /** The `?stage=` deep link, owned by the route (SCRUM-417 UX4, O3). View selection only. */
+  stageDeepLink?: StageDeepLink;
   /**
    * Whether this instance owns the address bar and may correct it.
    *
@@ -844,11 +854,15 @@ export function DealCockpit({
    * client cannot see `isDeleted`, so this decision is not the client's to make.
    */
   const finalizedSaleId = canonicalizeUrl ? (deal?.canonicalSaleId ?? null) : null;
+  // The step being looked at travels with the redirect: a `?stage=` deep link
+  // opened on the application URL must not be dropped on its way to the sale.
+  const carriedStage = stageDeepLink?.value ?? null;
   useEffect(() => {
     if (finalizedSaleId) {
-      router.replace(`/${orgId}/sales/${finalizedSaleId}/deal`);
+      const query = carriedStage ? `?${STAGE_PARAM}=${encodeURIComponent(carriedStage)}` : "";
+      router.replace(`/${orgId}/sales/${finalizedSaleId}/deal${query}`);
     }
-  }, [finalizedSaleId, orgId, router]);
+  }, [finalizedSaleId, orgId, router, carriedStage]);
 
   // Hidden while the membership is still loading rather than shown optimistically:
   // an action that appears and then vanishes reads as a bug, and the server is
@@ -1954,7 +1968,14 @@ export function DealCockpit({
       };
     }
 
-    const finalizeReasonKey = finalizeDenominationBlock
+    // `finalizeDeal` refuses FIRST on a waiting deposit request (SCRUM-444
+    // DA-03), so it outranks every other reason. Only a payload that carries the
+    // field asserts it; an absent field keeps the behaviour below.
+    const hasPendingDepositRequest =
+      "pendingDepositRequests" in deal && deal.pendingDepositRequests.length > 0;
+    const finalizeReasonKey = hasPendingDepositRequest
+      ? "FinalizeNeedsPendingDepositRequestResolved"
+      : finalizeDenominationBlock
       ? FINALIZE_DENOMINATION_REASON[finalizeDenominationBlock]
       : finalizeUnavailableReasonKey({
           routeRequired: settlementRouteRequired,
@@ -2399,6 +2420,7 @@ export function DealCockpit({
     <>
       <DealCockpitView
       deal={deal}
+      stageDeepLink={stageDeepLink}
       backHref={`/${orgId}/deals`}
       financeDecision={financeDecision}
       // The step's panel can still arrive only while what it is built from is
@@ -2999,7 +3021,8 @@ export function DealCockpit({
 export function SaleDealCockpit({
   orgId,
   saleId,
-}: Readonly<{ orgId: Id<"organizations">; saleId: Id<"sales"> }>) {
+  stageDeepLink,
+}: Readonly<{ orgId: Id<"organizations">; saleId: Id<"sales">; stageDeepLink?: StageDeepLink }>) {
   const deal = useQuery(api.sales.dealCockpit, { orgId, saleId });
   const recordReceipt = useMutation(api.supplierReceivables.recordReceipt);
   const { hasPermission, isLoading: permissionsLoading } = usePermissions();
@@ -3082,6 +3105,7 @@ export function SaleDealCockpit({
         orgId={orgId}
         applicationId={financingApplicationId}
         canonicalizeUrl={false}
+        stageDeepLink={stageDeepLink}
       />
     );
   }
@@ -3140,6 +3164,7 @@ export function SaleDealCockpit({
     <>
       <DealCockpitView
         deal={deal}
+        stageDeepLink={stageDeepLink}
         backHref={`/${orgId}/deals`}
         workflowAction={cashAction}
         canSettleSupplier={canSettleSupplier}
@@ -3775,6 +3800,7 @@ export type FinanceDecisionWiring = {
 
 export function DealCockpitView({
   deal,
+  stageDeepLink,
   backHref,
   financeDecision,
   workbenchPending = false,
@@ -3807,6 +3833,12 @@ export function DealCockpitView({
 }: Readonly<{
   /** `undefined` while loading, `null` when the deal is not readable. */
   deal: DealCockpitData | null | undefined;
+  /**
+   * Which step is being LOOKED at, mirrored to `?stage=` by the route
+   * (SCRUM-417 UX4, O3). Absent, the choice is kept in this view. Either way it
+   * is view selection only: it never changes the live stage or any command.
+   */
+  stageDeepLink?: StageDeepLink;
   /** Deposit requests still waiting on this deal (SCRUM-444). Financed only. */
   depositRequests?: {
     orgId: Id<"organizations">;
@@ -4163,6 +4195,10 @@ export function DealCockpitView({
   // of its own, open when nothing is promoted); a choice, or a blocker link that
   // needs a panel inside it, overrides.
   const [detailsChoice, setDetailsChoice] = useState<boolean | null>(null);
+  // Which step the operator is LOOKING at when no deep link owns that choice.
+  const [localViewedKey, setLocalViewedKey] = useState<string | null>(null);
+  const requestedStageKey = stageDeepLink ? stageDeepLink.value : localViewedKey;
+  const requestStage = stageDeepLink ? stageDeepLink.onChange : setLocalViewedKey;
   const flowRef = useRef<HTMLDivElement>(null);
   // The element the operator last had focus on inside the flow. A keyed sibling
   // that is moved can lose focus in a real browser without a blur the page
@@ -4190,6 +4226,14 @@ export function DealCockpitView({
     );
     if (holdsTask) setDetailsChoice(true);
   }, [liveStageKey]);
+  // A step that was being LOOKED at and has since become the live one is no
+  // longer "another step": clear the choice, so the address bar does not keep a
+  // `?stage=` that would resurface as a stale view when the deal moves on.
+  useEffect(() => {
+    if (!deal || requestedStageKey === null) return;
+    const chosen = resolveViewedStage(requestedStageKey, deal.stages);
+    if (chosen && isLiveStageState(chosen.state)) requestStage(null);
+  }, [deal, requestedStageKey, requestStage]);
   // Focus follows the task: if the stage change (or the re-open above) left
   // the document without focus, return it to where the operator was.
   useLayoutEffect(() => {
@@ -4238,6 +4282,25 @@ export function DealCockpitView({
         window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       target.scrollIntoView?.({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
       target.focus({ preventScroll: true });
+    });
+  };
+  // Bring a promoted or recorded panel into view by its flow wrapper, opening the
+  // Deal-details record first when it lives there. Focus goes to the first
+  // control inside it, when it has one; the wrapper itself is never focusable.
+  const goToFlowPanel = (panel: WorkbenchPanel) => {
+    const find = () =>
+      document.getElementById("deal-workbench-" + panel) ?? document.getElementById("deal-record-" + panel);
+    revealDetailsFor(find());
+    requestAnimationFrame(() => {
+      const target = find();
+      if (!target) return;
+      const reduceMotion =
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      target.scrollIntoView?.({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+      target
+        .querySelector<HTMLElement>('button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])')
+        ?.focus({ preventScroll: true });
     });
   };
   const costsDestination = handoverCosts
@@ -4527,6 +4590,57 @@ export function DealCockpitView({
             ? t(`Blocker${stage.blocker}`)
             : undefined,
   }));
+  // SCRUM-417 UX4 (O2/O3). The sub-steps of any stage, from facts this view
+  // already holds -- never a new read. Readiness counts only while it is open
+  // and answered: a closed or unreadable verdict names no sub-step it cannot see.
+  const stageStates = Object.fromEntries(stages.map((stage) => [stage.key, stage.state]));
+  const openReadiness =
+    closingChecklist?.readiness && closingChecklist.readiness.open ? closingChecklist.readiness : undefined;
+  // An answered list -- even an empty one (UNAVAILABLE with `checks: []`, a
+  // currency mismatch) -- is `{}`, never `undefined`: the cost items then stay
+  // on the list, not done, instead of vanishing with the verdict.
+  const readinessChecks: Partial<Record<ClosingReadinessCheckKey, string>> | undefined = openReadiness
+    ? Object.fromEntries(openReadiness.checks.map((check) => [check.key, check.status]))
+    : undefined;
+  // The identity of THIS cockpit, by `applicationId` (as the title below does),
+  // never by `dealKind`: an applicationless FINANCED/LEASE sale is `dealKind:
+  // "FINANCED"` and has the sale's steps, not the financed chain.
+  const dealPath: "SALE" | "APPLICATION" = deal.applicationId === null ? "SALE" : "APPLICATION";
+  // The server reports a closed deal positively: `status === "CLOSED"`.
+  const dealClosed = deal.status === "CLOSED";
+  // Only the LIVE step has a checklist (`deriveStepChecklist` is null for any
+  // other state): the server has no item-level facts for a finished or upcoming one.
+  const checklistOf = (stage: (typeof stages)[number]): ChecklistItem[] | null =>
+      deriveStepChecklist({
+          stageKey: stage.key,
+          stageState: stage.state,
+          path: dealPath,
+          closed: dealClosed,
+          blocker: stage.blocker,
+          stageStates,
+          documents: deal.documents,
+          checks: readinessChecks,
+          readinessState: openReadiness?.state,
+          expectedPaymentRegistered:
+            "expectedPaymentRegistered" in deal ? deal.expectedPaymentRegistered : undefined,
+          routeRequired:
+            "supplierSettlementRouteRequired" in deal ? deal.supplierSettlementRouteRequired : undefined,
+          routeRecorded: settlementRoute ? settlementRoute.route !== undefined : undefined,
+          // The control THIS stage offers right now, so the current item can
+          // never disagree with it.
+          liveAction:
+            workflowAction && workflowAction.stageKey === stage.key
+              ? {
+                  actionKey: workflowAction.actionKey,
+                  unavailableReasonKey: workflowAction.unavailableReasonKey,
+                }
+              : undefined,
+        });
+  // Which step is being LOOKED at. A key the deal does not have, or the live
+  // step's own, is no choice at all: the live step is shown, as always.
+  const viewedStage = resolveViewedStage(requestedStageKey, stages);
+  const viewedMode = viewedStage ? stageViewMode(viewedStage.state) : "live";
+  const otherStage = viewedStage && viewedMode !== "live" ? viewedStage : undefined;
   // Whether the close is being refused for want of the settlement route — the
   // one case where the route control belongs on the live step itself.
   const routeBlocksClose =
@@ -5181,6 +5295,47 @@ export function DealCockpitView({
     ...(recordMoneyColumn ? ([["money", moneyNode]] as Array<[string, ReactNode]>) : []),
     ...recordWorkingNodes,
   ];
+  const checklistItems = live ? checklistOf(live) : null;
+  // The step being looked at, when it is not the live one: a read-only card
+  // ABOVE the live step. It is one more keyed sibling in the flow, so it comes
+  // and goes without ever remounting a panel.
+  const recordPanel = otherStage
+    ? panelsForStage(otherStage.key).find((panel) => panelNodes[panel] != null)
+    : undefined;
+  const stageViewNode: ReactNode = otherStage ? (
+    <DealStageView
+      mode={viewedMode === "live" ? "future" : viewedMode}
+      stageKey={otherStage.key}
+      path={dealPath}
+      closed={dealClosed}
+      label={t(STAGE_LABEL[otherStage.key] ?? otherStage.key)}
+      state={otherStage.state}
+      owner={stageOwnerLabel(otherStage, activeAppraisalProvider, t)}
+      position={stages.findIndex((stage) => stage.key === otherStage.key) + 1}
+      total={stages.length}
+      hasLiveStep={live !== undefined}
+      onBack={() => {
+        // The back control unmounts with the card, taking focus with it: put
+        // it on the rail node first (the live step's, or -- on a finished
+        // deal with no live step -- the one that was being viewed), so a
+        // keyboard user is never dropped onto the page.
+        // A finished deal keeps its rail collapsed behind the persistent
+        // "show stages" toggle: with no node on screen, focus goes there.
+        const target =
+          document.querySelector<HTMLElement>(
+            `[data-testid="deal-stage-node-${live?.key ?? otherStage.key}"]`
+          ) ?? document.querySelector<HTMLElement>('[data-testid="deal-stages-toggle"]');
+        target?.focus({ preventScroll: true });
+        requestStage(null);
+      }}
+      // The documents live in the controlled lower tabs, which may be on
+      // Activity: the existing documents transition switches them first.
+      onShowRecord={
+        recordPanel ? (recordPanel === "documents" ? goToDocuments : () => goToFlowPanel(recordPanel)) : undefined
+      }
+      t={t}
+    />
+  ) : null;
   // The next-step card (or, for a stopped deal, the muted fact that it stopped).
   const stepNode: ReactNode = live ? (
     <StageFocusRow
@@ -5201,6 +5356,32 @@ export function DealCockpitView({
       }
       onGoToDocuments={hasDocumentsPane ? goToDocuments : undefined}
       documentsActionable={documentsActionable}
+      checklist={
+        checklistItems
+          ? {
+              items: checklistItems,
+              // Only destinations the cockpit already has, and only for a
+              // caller who can act there: the same gates as the blocker links.
+              go: (destination) => {
+                if (destination === "documents") {
+                  return hasDocumentsPane && documentsActionable ? goToDocuments : undefined;
+                }
+                if (destination === "handoverCosts") return costsDestination?.onGo;
+                // Recording the approved amount is the approver's act: a caller
+                // without that authority is told who acts, not sent to a form.
+                if (destination === "financeDecision") {
+                  return financeDecision?.canRecordApproval && panelNodes.financeDecision != null
+                    ? () => goToFlowPanel("financeDecision")
+                    : undefined;
+                }
+                if (destination === "closing") {
+                  return panelNodes.closing != null ? () => goToFlowPanel("closing") : undefined;
+                }
+                return undefined;
+              },
+            }
+          : undefined
+      }
       t={t}
     >
       {/* The route IS the blocker on this step, so the control is on the
@@ -5237,6 +5418,7 @@ export function DealCockpitView({
   const recordIds = recordItems.map(([panel]) => "deal-record-" + panel);
   const recordWorking = recordItems.filter(([panel]) => panel !== "money");
   const flow: Array<{ key: string; zone: "step" | "workbench" | "toggle" | "record"; className: string; style?: CSSProperties; node: ReactNode }> = [];
+  if (stageViewNode != null) flow.push({ key: "stage-view", zone: "step", className: "xl:col-span-5", node: stageViewNode });
   if (stepNode != null) flow.push({ key: "next-step", zone: "step", className: "xl:col-span-5", node: stepNode });
   for (const panel of workbenchPanels) {
     flow.push({ key: panel, zone: "workbench", className: "xl:col-span-5", node: panelNodes[panel] });
@@ -5589,16 +5771,30 @@ export function DealCockpitView({
             onToggle={() => setShowCompleted((open) => !open)}
             t={t}
           />
-          {showCompleted && <DealStageRail stages={railStages} t={t} />}
+          {showCompleted && (
+            <DealStageRail stages={railStages} t={t} viewedKey={otherStage?.key ?? null} onSelect={requestStage} />
+          )}
         </div>
       ) : (
-        <DealStageRail stages={railStages} t={t} />
+        <DealStageRail stages={railStages} t={t} viewedKey={otherStage?.key ?? null} onSelect={requestStage} />
       )}
 
       {/* --- the step, its panel, and the rest of the deal ---------------- */}
       {/* The card carries `deal-next-step`; the live step's own panel follows it
           directly; the rest of the deal sits behind the Deal-details toggle,
           whole. Nothing is removed and nothing is drawn twice. */}
+      <StageViewAnnouncer
+        message={
+          otherStage
+            ? `${t("StageViewAnnounceShowing")}: ${t(STAGE_LABEL[otherStage.key] ?? otherStage.key)}, ${t(STAGE_STATE_KEY[otherStage.state])}`
+            : null
+        }
+        restoreMessage={
+          live
+            ? `${t("StageViewAnnounceBack")}: ${t(STAGE_LABEL[live.key] ?? live.key)}`
+            : t("StageViewAnnounceBackDone")
+        }
+      />
       <div
         ref={flowRef}
         className="grid min-w-0 gap-6 xl:grid-cols-5 xl:has-[>[data-zone=record]:not([hidden])]:[grid-template-rows:var(--flow-rows)]"
@@ -5616,7 +5812,13 @@ export function DealCockpitView({
           <div
             key={item.key}
             data-zone={item.zone}
-            id={item.zone === "record" ? "deal-record-" + item.key : undefined}
+            id={
+              item.zone === "record"
+                ? "deal-record-" + item.key
+                : item.zone === "workbench"
+                  ? "deal-workbench-" + item.key
+                  : undefined
+            }
             hidden={item.zone === "record" && !detailsOpen}
             className={cn("min-w-0", item.className)}
             style={item.style}
@@ -5915,6 +6117,7 @@ export function StageFocusRow({
   outstandingDocuments,
   onGoToDocuments,
   documentsActionable = true,
+  checklist,
   t,
   children,
 }: Readonly<{
@@ -5941,9 +6144,18 @@ export function StageFocusRow({
    * to has nothing this caller can press (SCRUM-417 UX1, S3).
    */
   documentsActionable?: boolean;
+  /**
+   * The sub-steps of this stage (SCRUM-417 UX4, O2) and where the current one
+   * is acted on. `go` returns a handler only for a destination this caller has.
+   */
+  checklist?: {
+    items: ReadonlyArray<ChecklistItem>;
+    go: (destination: Exclude<ChecklistDestination, "primaryAction">) => (() => void) | undefined;
+  };
   t: (key: string) => string;
 }>) {
   const icon = STAGE_ICON[state];
+  const primaryButtonRef = useRef<HTMLButtonElement>(null);
   const primary =
     action && action.unavailableReasonKey === undefined
       ? action.opens === "DOCUMENTS"
@@ -6025,6 +6237,24 @@ export function StageFocusRow({
               </p>
             )}
 
+            {checklist && (
+              <DealStepChecklist
+                items={checklist.items}
+                t={t}
+                go={(destination) =>
+                  destination === "primaryAction"
+                    ? primary
+                      ? () => {
+                          const button = primaryButtonRef.current;
+                          button?.scrollIntoView?.({ block: "center" });
+                          button?.focus({ preventScroll: true });
+                        }
+                      : undefined
+                    : checklist.go(destination)
+                }
+              />
+            )}
+
             {/* The action for the step this block NAMES. A step worth naming
                 is a step worth doing here — the one recommended action, and
                 exactly one. */}
@@ -6038,6 +6268,7 @@ export function StageFocusRow({
             {primary && action && (
               <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-1">
                 <Button
+                  ref={primaryButtonRef}
                   size="lg"
                   className="w-full sm:w-auto"
                   data-testid="deal-next-step-action"
