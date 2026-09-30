@@ -40,6 +40,9 @@ export const AppErrorCode = {
   // SCRUM-51. Claims is retired as an accounting authority; its five
   // writers refuse rather than open a second finance-company receivable.
   CLAIMS_RETIRED: "CLAIMS_RETIRED",
+  // SCRUM-495. LEASE and INTERNAL_INSTALLMENT are no longer offered; every door
+  // that would create or finalize a deal in one refuses with this code.
+  DEAL_MODE_RETIRED: "DEAL_MODE_RETIRED",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];

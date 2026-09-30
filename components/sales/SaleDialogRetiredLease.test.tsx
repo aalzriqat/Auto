@@ -84,6 +84,13 @@ beforeEach(() => {
 
 const open = (s: Doc<"sales">) => render(<SaleDialog open onOpenChange={() => {}} sale={s} />);
 
+/** Clicks Save and returns what `sales.update` was called with. */
+async function saveAndGetUpdateArgs(): Promise<Record<string, unknown>> {
+  fireEvent.click(screen.getByRole("button", { name: /SaveChanges/ }));
+  await waitFor(() => expect(stubs.mutations.get("sales:update")).toHaveBeenCalledTimes(1));
+  return stubs.mutations.get("sales:update")!.mock.calls[0][0] as Record<string, unknown>;
+}
+
 describe("a retired LEASE sale in the sale form", () => {
   test("keeps showing Lease (retired) as the stored value, never CASH", async () => {
     open(sale("LEASE"));
@@ -99,10 +106,7 @@ describe("a retired LEASE sale in the sale form", () => {
 
   test("saving it untouched does not resend the financing type, and never sends CASH", async () => {
     open(sale("LEASE"));
-    fireEvent.click(screen.getByRole("button", { name: /SaveChanges/ }));
-
-    await waitFor(() => expect(stubs.mutations.get("sales:update")).toHaveBeenCalledTimes(1));
-    const args = stubs.mutations.get("sales:update")!.mock.calls[0][0] as Record<string, unknown>;
+    const args = await saveAndGetUpdateArgs();
     expect(args).not.toHaveProperty("financingType");
     expect(Object.values(args)).not.toContain("CASH");
   });
@@ -111,10 +115,7 @@ describe("a retired LEASE sale in the sale form", () => {
     open(sale("CASH"));
     // A CASH sale offers no Lease item at all.
     expect(screen.queryByText("LeaseRetired")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /SaveChanges/ }));
-
-    await waitFor(() => expect(stubs.mutations.get("sales:update")).toHaveBeenCalledTimes(1));
-    const args = stubs.mutations.get("sales:update")!.mock.calls[0][0] as Record<string, unknown>;
+    const args = await saveAndGetUpdateArgs();
     // Untouched CASH is not resent either: only a change is.
     expect(args).not.toHaveProperty("financingType");
   });

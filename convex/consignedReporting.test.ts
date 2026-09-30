@@ -13,6 +13,7 @@
  * carry, so they agree before the migration runs as well as after.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -1600,9 +1601,7 @@ describe("a financed consigned sale settled directly with the supplier", () => {
 
     // Was /finance application|financing workflow/i (the financed-direct rule). A LEASE sale can no longer
     // be created at all; the outcome this test protects (no supplier claim is written) is unchanged.
-    await expect(attempt()).rejects.toThrow(
-      "Lease and in-house instalment deals are no longer offered. Choose cash or a finance company."
-    );
+    await expectRetiredDealMode(attempt());
 
     const claims = await s.t.run(async (ctx) =>
       (await ctx.db.query("vehicleSupplierReceivables").collect()).filter((r) => r.vehicleId === vehicleId)

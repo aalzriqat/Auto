@@ -1,5 +1,6 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
 import { convexTestWithComponents, recordReconciledZeroCost } from "../test-utils/convexTest";
+import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -625,20 +626,17 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
       expect((await costsCheck(s, applicationId)).status).toBe("BLOCKED");
     });
 
-    // SCRUM-495 (OR-6 / OR-7): a deal frozen in a retired mode cannot be finalized, even when every
-    // other precondition (handover, payment method, a reconciled zero cost) is met, so the refusal
-    // cannot be confused with any other. The control above (MANUAL_FINANCE_COMPANY) finalizes on
-    // the identical fixture.
-    const RETIRED_MESSAGE =
-      "Lease and in-house instalment deals are no longer offered. Choose cash or a finance company.";
+    // SCRUM-495: a retired-mode deal cannot be finalized even with every other precondition met; the
+    // control above (MANUAL_FINANCE_COMPANY) finalizes on the identical fixture.
+    const RETIRED = [{ mode: "LEASE" }, { mode: "INTERNAL_INSTALLMENT" }] as const;
 
-    test.each<{ mode: "LEASE" | "INTERNAL_INSTALLMENT" }>([{ mode: "LEASE" }, { mode: "INTERNAL_INSTALLMENT" }])(
+    test.each(RETIRED)(
       "finalizeDeal refuses a $mode deal with the retired-mode message, closes nothing and creates no sale",
       async ({ mode }) => {
         const s = await seed(`retired_finalize_${mode}`);
         const applicationId = await readyToFinalize(s, { mode });
         await recordReconciledZeroCost(s.asOwner, api, s.orgId, applicationId);
-        await expect(finalize(s, applicationId)).rejects.toThrow(RETIRED_MESSAGE);
+        await expectRetiredDealMode(finalize(s, applicationId));
         const after = await s.t.run((ctx) => ctx.db.get(applicationId));
         expect(after?.status).toBe("APPROVED");
         expect(after?.finalizedSaleId).toBeUndefined();
@@ -647,7 +645,7 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
       }
     );
 
-    test.each<{ mode: "LEASE" | "INTERNAL_INSTALLMENT" }>([{ mode: "LEASE" }, { mode: "INTERNAL_INSTALLMENT" }])(
+    test.each(RETIRED)(
       "getClosingReadiness states DEAL_MODE_RETIRED as a BLOCKED check for a $mode deal",
       async ({ mode }) => {
         const s = await seed(`retired_ready_${mode}`);

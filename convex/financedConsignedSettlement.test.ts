@@ -19,6 +19,7 @@
 import * as applicationsModule from "./applications";
 import * as financingEconomicsModule from "./financingEconomics";
 import { convexTestWithComponents, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
+import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -297,9 +298,8 @@ async function runDeal(
   if (retiredMode) {
     await s.t.run(async (ctx) => {
       await ctx.db.patch(quoteId, { mode: retiredMode });
-      await ctx.db.patch(applicationId, { quoteModeAtSubmission: retiredMode });
       // A legacy retired-mode row never carried the manual-provider snapshot the operated mode stamps.
-      await ctx.db.patch(applicationId, { manualFinanceSnapshot: undefined });
+      await ctx.db.patch(applicationId, { quoteModeAtSubmission: retiredMode, manualFinanceSnapshot: undefined });
     });
   }
   if (opts.omitMode) {
@@ -1070,9 +1070,7 @@ describe("a lease, which is external but has no provider identity", () => {
     const s = await seedDealership("lease1");
     // SCRUM-495: a lease can no longer be finalized at all, so it is refused the retired-mode message
     // before it is ever asked the route question (was: /record the settlement route/i).
-    await expect(runDeal(s, { mode: "LEASE" })).rejects.toThrow(
-      "Lease and in-house instalment deals are no longer offered. Choose cash or a finance company."
-    );
+    await expectRetiredDealMode(runDeal(s, { mode: "LEASE" }));
   });
 
   test("is refused the direct route, naming the missing provider as the reason", async () => {
@@ -1091,13 +1089,13 @@ describe("a lease, which is external but has no provider identity", () => {
     // SCRUM-495: was "finalizes normally once it is told to settle through the dealership". A lease can
     // no longer be finalized, so the same fully-prepared deal (route chosen, reconciled cost evidence) is
     // refused with the retired-mode message and closes nothing.
-    await expect(
+    await expectRetiredDealMode(
       runDeal(s, {
         mode: "LEASE",
         route: "THROUGH_DEALERSHIP",
         beforeFinalize: (applicationId) => recordReconciledZeroCost(s.asUser, api, s.orgId, applicationId),
       })
-    ).rejects.toThrow("Lease and in-house instalment deals are no longer offered. Choose cash or a finance company.");
+    );
     const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
     expect(sales).toHaveLength(0);
   });

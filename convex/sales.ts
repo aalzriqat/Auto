@@ -667,10 +667,9 @@ export const update = mutation({
     if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
       throwAppError(AppErrorCode.SALE_NOT_FOUND, "Sale not found in this organization.");
     }
-    // SCRUM-495 (OR-7): refuse only a change INTO a retired financing type. The
-    // edit dialog resends the stored value on every save, so a legacy LEASE draft
-    // that keeps LEASE (an edit, or a cancellation) must still go through: a
-    // legacy row is never a dead end.
+    // SCRUM-495 (OR-7): refuse only a change INTO a retired financing type, so a legacy
+    // LEASE draft stays editable and cancellable even if a client (mobile, an older
+    // web build) resends the stored LEASE: a legacy row is never a dead end.
     if (args.financingType !== undefined && args.financingType !== sale.financingType) {
       assertOperatedDealMode(args.financingType);
     }

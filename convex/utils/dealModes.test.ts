@@ -18,14 +18,17 @@ describe("dealModes (SCRUM-495)", () => {
     );
   });
 
-  test.each(["LEASE", "INTERNAL_INSTALLMENT"])("%s is refused with a ConvexError carrying the message", (mode) => {
+  test.each(["LEASE", "INTERNAL_INSTALLMENT"])("%s is refused with a ConvexError carrying the code and message", (mode) => {
     expect(isRetiredDealMode(mode)).toBe(true);
     try {
       assertOperatedDealMode(mode);
       throw new Error("expected a refusal");
     } catch (error) {
       expect(error).toBeInstanceOf(ConvexError);
-      expect((error as ConvexError<string>).data).toBe(RETIRED_DEAL_MODE_MESSAGE);
+      expect((error as ConvexError<{ code: string; message: string }>).data).toEqual({
+        code: "DEAL_MODE_RETIRED",
+        message: RETIRED_DEAL_MODE_MESSAGE,
+      });
     }
   });
 

@@ -201,11 +201,8 @@ async function prepareSaleCompletion(
   args: SaleCompletionArgs,
   intent: SalePreparationIntent
 ): Promise<PreparedSaleCompletion> {
-  // SCRUM-495 (OR-7): the ONE place every sale creation and completion path
-  // reaches (`create`, `createDraft`, `completeDraft`, `finalizeDeal`,
-  // `completeFromQuote`). A draft written in LEASE before it was retired cannot
-  // be completed; it can still be edited or cancelled through `sales.update`,
-  // which does not come through here.
+  // SCRUM-495 (OR-7): every sale creation and completion path passes here, so a LEASE draft
+  // cannot be completed; it can still be edited or cancelled via `sales.update`.
   assertOperatedDealMode(args.financingType);
 
   const vehicle = await ctx.db.get(args.vehicleId);

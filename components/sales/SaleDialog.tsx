@@ -132,6 +132,9 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     return payment;
   })();
 
+  // The stored value (never mapped to CASH), for the reset below and for the changed-check on save.
+  const initialFinancingType = sale?.financingType || "CASH";
+
   useEffect(() => {
     if (sale && open) {
       const date = new Date(sale.saleDate);
@@ -149,7 +152,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
         downPayment: sale.downPayment || 0,
         tradeInVehicleId: sale.tradeInVehicleId || "none",
         tradeInValue: sale.tradeInValue || 0,
-        financingType: sale.financingType || "CASH",
+        financingType: initialFinancingType,
         loanAmount: sale.loanAmount || 0,
         apr: sale.apr || 0,
         termMonths: sale.termMonths || 0,
@@ -187,7 +190,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
       supplierSettlementRoute: "THROUGH_DEALERSHIP",
       });
     }
-  }, [sale, open, form]);
+  }, [sale, open, form, initialFinancingType]);
 
 
   const salePrice = form.watch("salePrice");
@@ -271,12 +274,10 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
           downPayment: values.downPayment,
           tradeInVehicleId: values.tradeInVehicleId && values.tradeInVehicleId !== "none" ? values.tradeInVehicleId as Id<"vehicles"> : undefined,
           tradeInValue: values.tradeInValue,
-          // SCRUM-495: sent only when the user CHANGED it. A legacy LEASE row is
-          // therefore edited without re-stating LEASE (the server refuses a change
-          // INTO a retired mode), and is never rewritten to CASH.
-          ...(values.financingType !== (sale.financingType || "CASH")
-            ? { financingType: values.financingType }
-            : {}),
+          // SCRUM-495: sent only when the user CHANGED it, so a legacy LEASE row is neither
+          // re-stated nor rewritten to CASH. (The server independently refuses only a
+          // change INTO a retired type.)
+          ...(values.financingType !== initialFinancingType ? { financingType: values.financingType } : {}),
           loanAmount: values.loanAmount,
           apr: values.apr,
           termMonths: values.termMonths,

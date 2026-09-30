@@ -1,19 +1,11 @@
-import { ConvexError } from "convex/values";
+import { throwAppError, AppErrorCode } from "./errors";
+import type { DealMode } from "./financedSaleRecognition";
 
 /**
- * SCRUM-495 (owner rulings OR-6 / OR-7).
- *
- * The dealership never self-finances, so INTERNAL_INSTALLMENT is not a business
- * it operates, and LEASE was removed. The schema unions and every reader keep
- * both values, so a historical row still renders and settles exactly as it did;
- * what is refused is a NEW quote, application or sale entering either mode.
- *
- * ONE set and ONE message, shared by every write door, so the doors cannot
- * drift into refusing different populations or describing the refusal
- * differently. The sentence is written for a person: the mobile clients show a
- * generic message for a refused save, and the web toast shows this one.
+ * SCRUM-495 (OR-6 / OR-7): LEASE and INTERNAL_INSTALLMENT are no longer offered. Schema and readers keep
+ * both, so a legacy row still renders; every door that would create or finalize one refuses here, once.
  */
-export const RETIRED_DEAL_MODES = ["LEASE", "INTERNAL_INSTALLMENT"] as const;
+export const RETIRED_DEAL_MODES = ["LEASE", "INTERNAL_INSTALLMENT"] as const satisfies readonly DealMode[];
 
 export type RetiredDealMode = (typeof RETIRED_DEAL_MODES)[number];
 
@@ -25,11 +17,7 @@ export function isRetiredDealMode(mode: string | null | undefined): mode is Reti
   return mode != null && (RETIRED_DEAL_MODES as readonly string[]).includes(mode);
 }
 
-/**
- * Refuses a retired mode with the shared message. Call it BEFORE the door's
- * first write. Never call it on a path that exits a legacy row (cancel, reject):
- * a legacy deal must always be able to leave.
- */
+/** Refuses a retired mode. Call BEFORE the door's first write; never on a path that exits a legacy row (cancel, reject). */
 export function assertOperatedDealMode(mode: string | null | undefined): void {
-  if (isRetiredDealMode(mode)) throw new ConvexError(RETIRED_DEAL_MODE_MESSAGE);
+  if (isRetiredDealMode(mode)) throwAppError(AppErrorCode.DEAL_MODE_RETIRED, RETIRED_DEAL_MODE_MESSAGE);
 }
