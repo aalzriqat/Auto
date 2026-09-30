@@ -75,6 +75,8 @@ const sonarCoverageArgs = [
   "--coverage.include=convex/**/*.ts",
   "--coverage.include=scripts/**/*.ts",
   "--coverage.include=scripts/**/*.mjs",
+  // SCRUM-426: the guardrail checker is release tooling with its own suite.
+  "--coverage.include=quality/**/*.mjs",
   "--coverage.exclude=convex/_generated/**",
   "--coverage.exclude=**/*.test.ts",
   ...thresholdZeroArgs,
