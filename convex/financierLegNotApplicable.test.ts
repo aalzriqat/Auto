@@ -343,19 +343,22 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
     expect(disbursement.state).not.toBe("NOT_APPLICABLE");
     expect(settlement.state).not.toBe("COMPLETE");
   });
+
   // ── 4b. dealModeOf: a legacy application reads the mode from its quote, same org only ──
   describe("a legacy application with no quoteModeAtSubmission reads the mode from its quote", () => {
-    /** Closed internal-instalment deal whose frozen mode is cleared, so the quote is the only mode evidence. */
+    /** Closed internal-instalment deal whose frozen mode is cleared; the quote, in INTERNAL_INSTALLMENT, is the only mode evidence. */
     async function legacyDeal(s: Seed) {
       const { applicationId } = await insertDeal(s, { mode: "INTERNAL_INSTALLMENT" });
-      await s.t.run((ctx) => ctx.db.patch(applicationId, { quoteModeAtSubmission: undefined }));
+      await s.t.run(async (ctx) => {
+        await ctx.db.patch(applicationId, { quoteModeAtSubmission: undefined });
+        await ctx.db.patch(s.quoteId, { mode: "INTERNAL_INSTALLMENT" });
+      });
       return applicationId;
     }
 
     test("a same-org quote in INTERNAL_INSTALLMENT resolves the leg exactly like the frozen mode", async () => {
       const s = await seed("dm_sameorg");
       const applicationId = await legacyDeal(s);
-      await s.t.run((ctx) => ctx.db.patch(s.quoteId, { mode: "INTERNAL_INSTALLMENT" }));
       const { disbursement, settlement } = await stagesOf(s, applicationId);
       expect(disbursement.state).toBe("NOT_APPLICABLE");
       expect(disbursement.blocker).toBeUndefined();
@@ -365,15 +368,13 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
     test("a quote belonging to another org is not evidence: the stage keeps waiting", async () => {
       const s = await seed("dm_crossorg");
       const applicationId = await legacyDeal(s);
-      await s.t.run((ctx) => ctx.db.patch(s.quoteId, { mode: "INTERNAL_INSTALLMENT" }));
       // Control: in its own org the quote proves the verdict.
       expect((await stagesOf(s, applicationId)).disbursement.state).toBe("NOT_APPLICABLE");
-      const foreignOrgId = await s.t.run((ctx) =>
-        ctx.db.insert("organizations", { name: "FL dm foreign", createdAt: Date.now() })
-      );
-      await s.t.run((ctx) => ctx.db.patch(s.quoteId, { orgId: foreignOrgId }));
+      await s.t.run(async (ctx) => {
+        const foreignOrgId = await ctx.db.insert("organizations", { name: "FL dm foreign", createdAt: Date.now() });
+        await ctx.db.patch(s.quoteId, { orgId: foreignOrgId });
+      });
       const { disbursement, settlement } = await stagesOf(s, applicationId);
-      expect(disbursement.state).not.toBe("NOT_APPLICABLE");
       expect(disbursement.state).toBe("BLOCKED");
       expect(settlement.state).not.toBe("COMPLETE");
     });
@@ -381,11 +382,9 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
     test("a deleted quote is missing evidence: the stage keeps waiting", async () => {
       const s = await seed("dm_deleted");
       const applicationId = await legacyDeal(s);
-      await s.t.run((ctx) => ctx.db.patch(s.quoteId, { mode: "INTERNAL_INSTALLMENT" }));
       expect((await stagesOf(s, applicationId)).disbursement.state).toBe("NOT_APPLICABLE");
       await s.t.run((ctx) => ctx.db.delete(s.quoteId));
       const { disbursement, settlement } = await stagesOf(s, applicationId);
-      expect(disbursement.state).not.toBe("NOT_APPLICABLE");
       expect(disbursement.state).toBe("BLOCKED");
       expect(settlement.state).not.toBe("COMPLETE");
     });
