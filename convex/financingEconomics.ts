@@ -49,6 +49,8 @@ import {
   deriveEconomics,
   economicsStamp,
   evaluateQuotationException,
+  GAP_RESOLUTION_CLEARED,
+  gapResolutionTransition,
   requireCustomerGapToDealer,
   resolveAppliedLtv,
   selectActiveAppraisal,
@@ -2131,16 +2133,9 @@ export const recordAppraisal = mutation({
             expectedDealerRemittanceMinor: undefined,
             rawAppraisalGapMinor: undefined,
             gapResolution: undefined,
-            customerGapShareMinor: undefined,
-            dealerGapShareMinor: undefined,
-            customerGapCashToDealerMinor: undefined,
-            customerGapInstallmentToDealerMinor: undefined,
-            customerGapToFinanceCompanyMinor: undefined,
-            gapResolvedAt: undefined,
-            gapResolvedBy: undefined,
-            // The note says things like "customer agreed to absorb the full
-            // 1,000" — it cannot outlive the 1,000.
-            gapResolutionNotes: undefined,
+            // Includes the note, which says things like "customer agreed to absorb the
+            // full 1,000" — it cannot outlive the 1,000.
+            ...GAP_RESOLUTION_CLEARED,
             // Out of READY: nothing may be handed over against an approval that
             // no longer exists. finalizeDeal's own guard (below) is the other
             // half of this.
@@ -2597,56 +2592,14 @@ export const approveDealerPurchaseAmount = mutation({
     }
 
     const rawGapMinor = refreshed.rawAppraisalGapMinor ?? 0;
-    const gapChanged = rawGapMinor !== previousRawGapMinor;
-
-    if (rawGapMinor <= 0) {
-      // Nothing left to negotiate. Any shares agreed against the old gap are
-      // void — leaving them would let a resolution reconciled against a
-      // different number stay attached to this deal.
-      await ctx.db.patch(args.applicationId, {
-        gapResolution: "NOT_REQUIRED",
-        ...(gapChanged
-          ? {
-              customerGapShareMinor: undefined,
-              dealerGapShareMinor: undefined,
-              customerGapCashToDealerMinor: undefined,
-              customerGapInstallmentToDealerMinor: undefined,
-              customerGapToFinanceCompanyMinor: undefined,
-              gapResolvedAt: undefined,
-              gapResolvedBy: undefined,
-              gapResolutionNotes: undefined,
-            }
-          : {}),
-      });
-    } else if (
-      gapChanged ||
-      refreshed.gapResolution === undefined ||
-      // FAILED is written when a deal is rejected or cancelled with a gap open.
-      // REJECTED -> PENDING_DOCS is a legal transition, so a reopened deal
-      // carried "negotiation failed" against a live shortfall and this branch
-      // never reopened it, because FAILED is neither undefined nor a change.
-      refreshed.gapResolution === "FAILED"
-    ) {
-      // The gap moved, so whatever the parties agreed was agreed about a
-      // different amount. Reopen the negotiation rather than carrying a stale
-      // NOT_REQUIRED (or a stale split) against a live shortfall.
-      await ctx.db.patch(args.applicationId, {
-        gapResolution: "PENDING_NEGOTIATION",
-        ...(gapChanged
-          ? {
-              customerGapShareMinor: undefined,
-              dealerGapShareMinor: undefined,
-              customerGapCashToDealerMinor: undefined,
-              customerGapInstallmentToDealerMinor: undefined,
-              customerGapToFinanceCompanyMinor: undefined,
-              gapResolvedAt: undefined,
-              gapResolvedBy: undefined,
-              gapResolutionNotes: undefined,
-            }
-          : {}),
-      });
+    const transition = gapResolutionTransition(
+      rawGapMinor,
+      previousRawGapMinor,
+      refreshed.gapResolution
+    );
+    if (transition !== null) {
+      await ctx.db.patch(args.applicationId, transition);
     }
-
     return args.applicationId;
   },
 });
@@ -2739,14 +2692,7 @@ export const reopenApproval = mutation({
       expectedDealerRemittanceMinor: undefined,
       rawAppraisalGapMinor: undefined,
       gapResolution: undefined,
-      customerGapShareMinor: undefined,
-      dealerGapShareMinor: undefined,
-      customerGapCashToDealerMinor: undefined,
-      customerGapInstallmentToDealerMinor: undefined,
-      customerGapToFinanceCompanyMinor: undefined,
-      gapResolvedAt: undefined,
-      gapResolvedBy: undefined,
-      gapResolutionNotes: undefined,
+      ...GAP_RESOLUTION_CLEARED,
       // Only when there was one. A MANUAL approval needs no appraisal, and
       // upgrading PENDING to COMPLETED here asserted a completed appraisal on a
       // deal with no appraisal rows at all — the same false claim removed from
@@ -3347,36 +3293,17 @@ export const recordManualFinanceApproval = mutation({
     const gapMinor = computeAppraisalGap({
       submittedQuotationMinor: salePriceMinor,
       approvedDealerPurchaseAmountMinor: args.approvedAmountMinor,
-      appliedLtvPercent: 100,
+      appliedLtvPercent: 100, // inert for rawAppraisalGapMinor
     }).rawAppraisalGapMinor;
-    const gapChanged = gapMinor !== (app.rawAppraisalGapMinor ?? 0);
-    const clearedShares = {
-      customerGapShareMinor: undefined,
-      dealerGapShareMinor: undefined,
-      customerGapCashToDealerMinor: undefined,
-      customerGapInstallmentToDealerMinor: undefined,
-      customerGapToFinanceCompanyMinor: undefined,
-      gapResolvedAt: undefined,
-      gapResolvedBy: undefined,
-      gapResolutionNotes: undefined,
-    };
-    const gapPatch =
-      gapMinor <= 0
-        ? {
-            rawAppraisalGapMinor: 0,
-            gapResolution: "NOT_REQUIRED" as const,
-            ...(gapChanged ? clearedShares : {}),
-          }
-        : gapChanged || app.gapResolution === undefined || app.gapResolution === "FAILED"
-          ? {
-              rawAppraisalGapMinor: gapMinor,
-              gapResolution: "PENDING_NEGOTIATION" as const,
-              ...(gapChanged ? clearedShares : {}),
-            }
-          : { rawAppraisalGapMinor: gapMinor };
+    const transition = gapResolutionTransition(
+      gapMinor,
+      app.rawAppraisalGapMinor ?? 0,
+      app.gapResolution
+    );
 
     await ctx.db.patch(args.applicationId, {
-      ...gapPatch,
+      rawAppraisalGapMinor: gapMinor,
+      ...(transition ?? {}),
       economicsRevision: (app.economicsRevision ?? 0) + 1,
       manualApproval: {
         approvedAmountMinor: args.approvedAmountMinor,

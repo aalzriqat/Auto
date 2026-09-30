@@ -301,7 +301,9 @@ async function getActiveReceivableAllocations(
  * A reappraisal or a reopened approval clears the approved purchase amount
  * while `status` stays APPROVED throughout, so status alone cannot be the gate.
  * Deals with no quotation recorded predate this model entirely and are let
- * through, so nothing in flight is stranded.
+ * through, so nothing in flight is stranded. The one exception is a manual
+ * finance company: it never has a quotation, but it does carry an appraisal gap
+ * (sale price minus the letter, OR-12), which is still gated.
  *
  * One copy, two callers: handover and finalization applied the same two checks
  * in the same order and differed only in the closing verb. Two copies of a
@@ -315,9 +317,7 @@ function assertDealerEconomicsReady(
   const action =
     opts.phase === "HANDOVER" ? "handing over the vehicle" : "finalizing";
   if (app.submittedQuotationMinor === undefined) {
-    // A manual finance company never has a quotation, so this deal was let through
-    // by the line above and its shortfall (sale price - letter, OR-12) went
-    // unchecked. The gap gate applies to it exactly as to a configured deal.
+    // A manual deal has no quotation but still carries an OR-12 appraisal gap.
     if (manualPayerOf(app) !== null) assertAppraisalGapSettledToAdvance(app, action);
     return;
   }
