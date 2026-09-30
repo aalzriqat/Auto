@@ -129,7 +129,7 @@ import {
   resolveCreationRuleSnapshot,
 } from "./utils/creationEconomics";
 
-import { isManualFinanceApplication, MANUAL_GAP_TO_FINANCIER_REFUSAL, manualPayerOf } from "./utils/manualFinancePayer";
+import { isManualFinanceApplication, isManualLetterUnitIntact, MANUAL_GAP_TO_FINANCIER_REFUSAL, manualPayerLabel, manualPayerOf } from "./utils/manualFinancePayer";
 
 /** sourceType used for the canonical finance-company receivable opened at finalizeDeal. */
 const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
@@ -303,13 +303,7 @@ async function getActiveReceivableAllocations(
  * Every refusal is before any write and carries no figures.
  */
 function assertManualLetterReady(app: Doc<"financeApplications">, action: string): void {
-  const letter = app.manualApproval;
-  if (
-    letter === undefined ||
-    app.approvedPurchaseBasis !== "MANUAL" ||
-    app.approvedDealerPurchaseAmountMinor !== letter.approvedAmountMinor ||
-    app.rawAppraisalGapMinor === undefined
-  ) {
+  if (!isManualLetterUnitIntact(app)) {
     throw new ConvexError(
       `This deal's finance company approval letter is not fully recorded. Enter (or re-enter) the letter's approved amount, the company's name and the amount the dealership sends it before ${action}.`
     );
@@ -432,15 +426,6 @@ async function closedDealSettlesDirectToSupplier(
   // own route is what `finalizeDeal` acted on, and absent reads as
   // THROUGH_DEALERSHIP, which is exactly what those deals posted.
   return !dealershipCollectsGross(consignedSettlementRoute(app));
-}
-
-/**
- * The manual finance company's name as every reader shows it: the letter's name
- * once the manager has entered it (the only payer identity from then on), the
- * quote-time provider label only before that. SCRUM-27.
- */
-function manualPayerLabel(app: Doc<"financeApplications">): string | undefined {
-  return manualPayerOf(app)?.name ?? app.manualFinanceSnapshot?.providerName;
 }
 
 /**
@@ -1660,16 +1645,17 @@ export const list = query({
         // same rule — this file has been corrected twice already for exactly
         // that. The pure form, because `quote` is loaded here anyway for the
         // financed amounts, so it costs no extra read.
+        const payerLabel = manualPayerLabel(app);
         const payer = settlementPayer({
           quoteMode: app.quoteModeAtSubmission ?? quote?.mode,
           financeCompanyId: app.companyId,
-          manualProviderName: manualPayerLabel(app),
+          manualProviderName: payerLabel,
         });
         // Trimmed, matching `settlementPayer` — `saveQuote` applies no trim, so
         // a whitespace-only provider name is reachable, and raw truthiness
         // would render it as a blank cell while the resolver correctly called
         // the payer unnamed.
-        const manualProviderName = manualPayerLabel(app)?.trim() || undefined;
+        const manualProviderName = payerLabel?.trim() || undefined;
 
         return {
           // The list spreads the whole document too, and it authorizes on the

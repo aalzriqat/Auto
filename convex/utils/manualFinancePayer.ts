@@ -52,6 +52,37 @@ export function manualPayerOf(app: ManualFinanceApplicationShape): { name: strin
   return { name };
 }
 
+/**
+ * SCRUM-27 R1: the letter, G, the MANUAL basis and the derived gap are ONE unit.
+ * True only when all four are present together and G equals the letter's amount.
+ */
+export function isManualLetterUnitIntact(
+  app: Pick<
+    Doc<"financeApplications">,
+    "manualApproval" | "approvedPurchaseBasis" | "approvedDealerPurchaseAmountMinor" | "rawAppraisalGapMinor"
+  >
+): boolean {
+  return (
+    app.manualApproval !== undefined &&
+    app.approvedPurchaseBasis === "MANUAL" &&
+    app.approvedDealerPurchaseAmountMinor === app.manualApproval.approvedAmountMinor &&
+    app.rawAppraisalGapMinor !== undefined
+  );
+}
+
+/**
+ * The manual finance company's name as every reader shows it: the letter's name
+ * once the manager has entered it (the only payer identity from then on), the
+ * quote-time provider label only before that. SCRUM-27.
+ */
+export function manualPayerLabel(
+  app: Pick<
+    Doc<"financeApplications">,
+    "companyId" | "quoteModeAtSubmission" | "manualApproval" | "manualFinanceSnapshot"
+  >
+): string | undefined {
+  return manualPayerOf(app)?.name ?? app.manualFinanceSnapshot?.providerName;
+}
 /** Trimmed, exactly as typed otherwise. Refuses blank and placeholder names before anything is written. */
 export function normalizeManualPayerName(raw: string): string {
   const name = raw.trim();

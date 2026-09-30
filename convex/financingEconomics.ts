@@ -16,7 +16,7 @@ import {
   requiresLtvPercentFor,
 } from "./utils/financeApplicationProjection";
 import { PERMISSIONS } from "./utils/permissions";
-import { isManualFinanceApplication, MANUAL_GAP_TO_FINANCIER_REFUSAL, normalizeManualPayerName } from "./utils/manualFinancePayer";
+import { isManualFinanceApplication, isManualLetterUnitIntact, MANUAL_GAP_TO_FINANCIER_REFUSAL, normalizeManualPayerName } from "./utils/manualFinancePayer";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import {
   computeAppraisalGap,
@@ -3257,9 +3257,6 @@ export const recordManualFinanceApproval = mutation({
       throw new ConvexError("This application is closed. Its approval can no longer be changed.");
     }
     const previous = app.manualApproval;
-    const letterRefusal =
-      "This deal has already been finalized or handed over, so the approval letter can no longer be changed. Cancel the application to reverse it instead.";
-    if (app.financedSalePlanVersion !== undefined) throw new ConvexError(letterRefusal);
     // After handover and before finalize the letter is frozen EXCEPT for S alone:
     // G and the name are sealed with the handover, but S is checked against the
     // held deposits only at finalize, so a mistyped S would otherwise strand the
@@ -3268,7 +3265,11 @@ export const recordManualFinanceApproval = mutation({
       previous !== undefined &&
       previous.approvedAmountMinor === args.approvedAmountMinor &&
       previous.financierName === financierName;
-    if (app.vehicleHandoverAt && !sameLetter) throw new ConvexError(letterRefusal);
+    if (app.financedSalePlanVersion !== undefined || (app.vehicleHandoverAt && !sameLetter)) {
+      throw new ConvexError(
+        "This deal has already been finalized or handed over, so the approval letter can no longer be changed. Cancel the application to reverse it instead."
+      );
+    }
     assertSupportedDenomination(app.economicsCurrency, "recording this approval");
     if (user._id === app.salespersonId) {
       throw new ConvexError("You cannot approve the purchase amount on your own application.");
@@ -3303,12 +3304,7 @@ export const recordManualFinanceApproval = mutation({
     // A retry is a no-op, not a re-stamp - but only when the WHOLE unit is intact.
     // A letter present with G, the basis or the gap missing (a superseded
     // approval, a legacy row) is re-derived from the letter, never left half-written.
-    const unitIntact =
-      previous !== undefined &&
-      app.approvedDealerPurchaseAmountMinor === previous.approvedAmountMinor &&
-      app.approvedPurchaseBasis === "MANUAL" &&
-      app.rawAppraisalGapMinor !== undefined;
-    if (!changed && unitIntact) return args.applicationId;
+    if (!changed && isManualLetterUnitIntact(app)) return args.applicationId;
     if (previous !== undefined) {
       await recordOverride(ctx, {
         orgId: args.orgId,

@@ -729,8 +729,9 @@ describe("protected source content pins", () => {
       // SCRUM-27 OR-12 RENEWAL 2026-09-30: `assertDealerEconomicsReady applies the appraisal-gap gate to a manual deal too (it has no quotation, so the early return skipped it); previous postimage bytes 255496, sha256 7c85d4faac1a617dd408eceb2330aba29cf02d984377515138feca40cc6fa977. Recomputed from the file with this test's own normalization.
       // SCRUM-27 OR-12 /simplify 2026-09-30: comment/docblock wording only in `assertDealerEconomicsReady`; previous postimage bytes 255831, sha256 a2a8fb932401b5c11c4389a8f3132af3f0fce904431f536f0de7bdc554d8f31e.
       // SCRUM-27 R1 RENEWAL 2026-09-30: manual deals gate handover/finalize on the whole letter unit (assertManualLetterReady, keyed on isManualFinanceApplication), refuse a stored gap-to-financier split, and every payer reader shows the letter name once entered (manualPayerLabel); previous postimage bytes 255846, sha256 7ea672416ea387ade9e402a5bc0a2f1ef7b6c7956904b4cdc1969668a2335eea. Recomputed from the file with this test's own normalization.
-      bytes: 257647,
-      sha256: "e317d47828ff4068df552548008952939016411a123bf8ec655be26557a6baec",
+      // SCRUM-27 R1 /simplify RENEWAL 2026-09-30: behaviour-preserving - assertManualLetterReady uses isManualLetterUnitIntact, manualPayerLabel moved to utils/manualFinancePayer.ts and computed once per row in `list`; previous postimage bytes 257647, sha256 e317d47828ff4068df552548008952939016411a123bf8ec655be26557a6baec. Recomputed from the file with this test's own normalization.
+      bytes: 257129,
+      sha256: "9dc7f2ecdd1927ad0b27d1a9fcad8f316cca20715366077c3ad8ed05c741db7b",
     },
     {
       /**
