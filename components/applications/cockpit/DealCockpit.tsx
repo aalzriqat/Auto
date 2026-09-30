@@ -2773,7 +2773,10 @@ export function DealCockpit({
                 const chequeId = deal.disbursementReturn?.chequeId;
                 if (!chequeId) return;
                 // The version being returned: the one this screen observes now.
-                const returnedVersion = observedDisbursementVersion;
+                // Undefined while `app` is not loaded: no version was observed, so
+                // nothing may be cleared on the strength of it (`?? 1` would lie).
+                // A LOADED app without the field is version 1.
+                const returnedVersion = appObserved ? observedDisbursementVersion : undefined;
                 setChequeReturnSubmitting(true);
                 // One key per dialog open: a retry after a lost response is the SAME command.
                 if (chequeReturnKeyRef.current?.reason !== reason) {
@@ -2810,7 +2813,7 @@ export function DealCockpit({
                   // So no "result not known" notice is owed for that version. Cleared
                   // here, before `chequeReturnSubmitting` resets and lets the
                   // reconcile effect run.
-                  if (confirmUnknownOutcomeVersionRef.current === returnedVersion) {
+                  if (returnedVersion !== undefined && confirmUnknownOutcomeVersionRef.current === returnedVersion) {
                     confirmUnknownOutcomeVersionRef.current = null;
                   }
                   setChequeReturnOpen(false);
@@ -3014,7 +3017,12 @@ export function DealCockpit({
                   // Round 7 defence: an owed notice for another version is never
                   // dropped by minting a new key. The reconcile effect normally
                   // shows it first; it can only still be owed here while an own
-                  // cheque return was in flight and holding the effect back.
+                  // cheque return was in flight and holding the effect back. The
+                  // notice tells the operator to review receipts and cheque history
+                  // BEFORE confirming again, so this click sends nothing: the mark
+                  // and kept key are cleared, and the next click mints a fresh key
+                  // at the observed version. (Nothing is stuck by returning here:
+                  // `disbursementSubmitting` is only set below.)
                   if (
                     confirmUnknownOutcomeVersionRef.current !== null &&
                     confirmUnknownOutcomeVersionRef.current !== observedVersion
@@ -3022,6 +3030,7 @@ export function DealCockpit({
                     confirmUnknownOutcomeVersionRef.current = null;
                     confirmDisbursementKeyRef.current = null;
                     toast.error(t("DisbursementChangedOutcomeUnknown"));
+                    return;
                   }
                   // Round 6: an EARLIER send of the kept key at this version whose
                   // answer was lost. Read before this send re-marks the ref. A fresh
