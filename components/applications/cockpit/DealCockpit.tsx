@@ -2962,7 +2962,7 @@ export function DealCockpit({
                     confirmDisbursementKeyRef.current = null;
                     setConfirmingDisbursement(false);
                   } catch (error) {
-                    toast.error(getErrorMessage(error));
+                    toast.error(getLocalizedErrorMessage(error, t));
                   } finally {
                     setDisbursementSubmitting(false);
                   }

@@ -1691,7 +1691,7 @@ const serverErrorMessages = defineBilingualMessages({
   ],
   ServerError_CHEQUE_NOT_CLEARED: [
     "Only cleared cheques can be returned after clearing. Nothing has been changed.",
-    "لا يمكن إرجاع الشيك بعد الصرف إلا إذا كان قد تم صرفه. لم يتم تغيير أي شيء.",
+    "لا يمكن إرجاع الشيك بعد التصفية إلا إذا كان الشيك مصفّى. لم يتم تغيير أي شيء.",
   ],
   ServerError_FINANCE_RETURN_KEY_INVALID: [
     "The request identity is missing or too long (at most 200 characters). Nothing has been changed. Reopen the dialog and try again.",

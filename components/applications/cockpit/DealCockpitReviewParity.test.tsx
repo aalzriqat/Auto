@@ -18,7 +18,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import type { Id } from "../../../convex/_generated/dataModel";
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
-  useLanguage: () => ({ t: (key: string) => key, isRtl: false, locale: "en" }),
+  useLanguage: () => ({ t: (key: string) => stubs.t(key), isRtl: false, locale: "en" }),
 }));
 
 vi.mock("@/hooks/useCurrency", () => ({
@@ -36,6 +36,8 @@ const stubs = vi.hoisted(() => ({
   permissions: new Set<string>(),
   mutationCalls: new Map<string, unknown[]>(),
   mutationFailures: new Map<string, string>(),
+  /** The translator the mocked LanguageProvider hands out; a test may swap in an Arabic dictionary. */
+  t: (key: string): string => key,
   /** A mutation held open until the test settles it — for in-flight and late-response cases. */
   mutationHolds: new Map<string, Promise<unknown>>(),
   /** What a mutation resolves to, where the caller uses the result (default null). */
@@ -79,6 +81,11 @@ vi.mock("convex/react", async () => {
           // "refused:<message>" is the server's OWN answer (thrown inside the
           // mutation, nothing committed); anything else is a lost response.
           if (failure.startsWith("refused:")) throw new ConvexError(failure.slice("refused:".length));
+          // "coded:<CODE>|<message>" is a coded refusal, as `throwAppError` raises it.
+          if (failure.startsWith("coded:")) {
+            const [code, ...message] = failure.slice("coded:".length).split("|");
+            throw new ConvexError({ code, message: message.join("|") });
+          }
           throw new Error(failure);
         }
         return stubs.mutationReturns.get(name) ?? null;
@@ -201,6 +208,7 @@ afterEach(() => {
   permissions.clear();
   mutationCalls.clear();
   stubs.membershipUserId = "user_manager";
+  stubs.t = (key: string) => key;
 });
 
 /**
@@ -2811,5 +2819,34 @@ describe("cheque returned by the bank - applications.returnFinanceDisbursementCh
     // Still version 2: the new key is kept for ITS retry.
     await confirmOnce(4);
     expect(confirmCalls()[3].idempotencyKey).toBe(afterReturn.idempotencyKey);
+  });
+  test("SCRUM-239: a coded stale-confirm refusal is shown in the operator's language, not as English passthrough", async () => {
+    const { salesAr } = await import("../../../lib/i18n/domains/sales");
+    stubs.t = (key: string) => (key.startsWith("ServerError_") ? (salesAr as Record<string, string>)[key] ?? key : key);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: [
+          { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+          { key: "DISBURSEMENT", state: "BLOCKED", blocker: "AwaitingDisbursement", authority: "MIRROR" },
+          { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+          { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
+        ],
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    stubs.mutationFailures.set(
+      "applications:confirmDisbursement",
+      "coded:FINANCE_CONFIRM_STALE_REQUEST|This confirmation was prepared before the deal's cheque was returned, so it cannot be applied. Nothing has been changed. Reopen the deal and confirm again."
+    );
+    fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    const shown = String(vi.mocked(toast.error).mock.calls.at(-1)?.[0]);
+    expect(shown).toBe((salesAr as Record<string, string>).ServerError_FINANCE_CONFIRM_STALE_REQUEST);
+    expect(shown).not.toContain('{"code"');
   });
 });
