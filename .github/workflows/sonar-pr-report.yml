@@ -112,11 +112,19 @@ jobs:
             exit 1
           fi
 
+          # The epoch used to refuse any merge commit newer than the Tests run.
+          # What that protected is "the merge analysed differs from the merge
+          # Tests ran on": a base move or head push after Tests started. Both
+          # change the merge tree or parents, which the content-identity
+          # comparison in "Sanitize scanner inputs" refuses (see
+          # scripts/mergeContentIdentity.mjs). A newer commit date alone
+          # (GitHub regenerating refs/pull/N/merge with the same tree and
+          # parents) is not a content change, so it is no longer a refusal by
+          # itself; the coverage merge must still be content-identical.
           MERGE_COMMIT_EPOCH="$(git show -s --format=%ct "$FETCHED_MERGE")"
           TRIGGER_STARTED_EPOCH="$(date -u -d "$TRIGGER_STARTED_AT" +%s)"
           if [ "$MERGE_COMMIT_EPOCH" -gt "$TRIGGER_STARTED_EPOCH" ]; then
-            echo "Current PR merge ref was created after the triggering Tests run started; refusing mismatched coverage provenance." >&2
-            exit 1
+            echo "::notice::PR merge commit is newer than the triggering Tests run; coverage must be content-identical (tree and both parents) to it or Sonar refuses."
           fi
 
           echo "base_sha=$FIRST_PARENT" >> "$GITHUB_OUTPUT"
@@ -178,9 +186,23 @@ jobs:
             exit 1
           fi
           coverage_merge="$(head -c 64 "$TESTED_MERGE_FILE" | tr -d '[:space:]')"
-          if [ "$coverage_merge" != "$TESTED_SHA" ]; then
-            echo "::error::Coverage was produced for merge $coverage_merge, not the analysed merge $TESTED_SHA. Re-run Tests on the current merge."
+          # The artifact is candidate-written text: accept only a 40-hex SHA and
+          # derive tree/parents from the real git object fetched from origin,
+          # never from artifact content. Fetch or parse failure refuses.
+          if ! [[ "$coverage_merge" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::coverage-report names a malformed tested merge; refusing mismatched coverage provenance."
             exit 1
+          fi
+          if [ "$coverage_merge" != "$TESTED_SHA" ]; then
+            if ! git -C trusted fetch --no-tags origin "$coverage_merge"; then
+              echo "::error::Coverage merge $coverage_merge cannot be fetched from origin; refusing mismatched coverage provenance."
+              exit 1
+            fi
+            if ! node trusted/scripts/mergeContentIdentity.mjs --repo trusted same "$coverage_merge" "$TESTED_SHA"; then
+              echo "::error::Coverage was produced for merge $coverage_merge, whose content differs from the analysed merge $TESTED_SHA; refusing mismatched coverage provenance. Re-run Tests on the current merge."
+              exit 1
+            fi
+            echo "::notice::Coverage merge $coverage_merge is content-identical to analysed merge $TESTED_SHA (regenerated merge ref)."
           fi
 
           LCOV="$RUNNER_TEMP/sonar-coverage/lcov.info"
@@ -351,7 +373,8 @@ jobs:
           git -C trusted fetch --no-tags origin \
             "+refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-report-merge"
           current_merge="$(git -C trusted rev-parse refs/autoflow/sonar-report-merge)"
-          if [ "$current_merge" != "$TESTED_SHA" ]; then
+          if [ "$current_merge" != "$TESTED_SHA" ] &&
+            ! node trusted/scripts/mergeContentIdentity.mjs --repo trusted same "$current_merge" "$TESTED_SHA"; then
             echo "::notice::Skipping stale Sonar report for merge $TESTED_SHA; PR merge is now $current_merge."
             exit 0
           fi
@@ -416,9 +439,21 @@ jobs:
             "refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-final-merge"
           current_merge="$(git rev-parse refs/autoflow/sonar-final-merge)"
 
+          # Current means content-identical (tree and both parents), not the
+          # same commit SHA: GitHub regenerates the merge ref with a new date.
+          # This job's clone has not seen the analysed merge object, so fetch
+          # it; a failed fetch or identity check leaves the merge not current.
+          merge_is_current=false
+          if [ "$current_merge" = "$TESTED_SHA" ]; then
+            merge_is_current=true
+          elif git fetch --no-tags origin "$TESTED_SHA" &&
+            node scripts/mergeContentIdentity.mjs same "$current_merge" "$TESTED_SHA"; then
+            merge_is_current=true
+          fi
+
           state=failure
           description="Trusted Sonar PR analysis did not complete successfully."
-          if [ "$SCAN_RESULT" = "success" ] && [ "$current_merge" = "$TESTED_SHA" ]; then
+          if [ "$SCAN_RESULT" = "success" ] && [ "$merge_is_current" = "true" ]; then
             state=success
             description="Trusted Sonar PR analysis passed on the still-current exact merge."
           elif [ "$SCAN_RESULT" = "success" ]; then
