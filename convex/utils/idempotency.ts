@@ -2,7 +2,7 @@ import { ConvexError } from "convex/values";
 import { Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
 
-const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
+export const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
 
 function normalizeIdempotencyKey(idempotencyKey: string | undefined) {
   if (idempotencyKey === undefined) return undefined;

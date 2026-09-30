@@ -53,6 +53,7 @@ import { PaymentLinksPanel } from "./collections/PaymentLinksPanel";
 import { InstallmentCalendar } from "./collections/InstallmentCalendar";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { interpolate } from "@/lib/i18n/interpolate";
+import { getLocalizedErrorMessage } from "@/lib/errors";
 
 type ReceivableRow = Doc<"receivables"> & {
   customerName: string;
@@ -1215,7 +1216,7 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
       setReason("");
       setBankFeeMinor("");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setSubmitting(false);
     }

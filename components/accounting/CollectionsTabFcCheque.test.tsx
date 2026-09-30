@@ -6,16 +6,20 @@
  * cheque keeps Return. The Collections row says where the FC cheque is handled.
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { ConvexError } from "convex/values";
 import type { Doc } from "@/convex/_generated/dataModel";
+import { salesAr } from "@/lib/i18n/domains/sales";
 
 const stubs = vi.hoisted(() => ({
   queryResults: new Map<string, unknown>(),
   paginated: new Map<string, unknown[]>(),
+  mutations: new Map<string, (...args: unknown[]) => unknown>(),
+  t: (key: string): string => key,
 }));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
-  useLanguage: () => ({ t: (key: string) => key, isRtl: false, locale: "en" }),
+  useLanguage: () => ({ t: (key: string) => stubs.t(key), isRtl: false, locale: "en" }),
 }));
 vi.mock("@/components/providers/OrgProvider", () => ({
   useOrg: () => ({ activeOrgId: "org1" }),
@@ -42,7 +46,7 @@ vi.mock("convex/react", async () => {
       status: "Exhausted",
       loadMore: () => {},
     }),
-    useMutation: () => vi.fn(),
+    useMutation: (reference: never) => stubs.mutations.get(getFunctionName(reference)) ?? vi.fn(),
   };
 });
 
@@ -67,6 +71,8 @@ afterEach(() => {
   cleanup();
   stubs.queryResults.clear();
   stubs.paginated.clear();
+  stubs.mutations.clear();
+  stubs.t = (key: string) => key;
 });
 
 async function openChequesTab() {
@@ -134,5 +140,27 @@ describe("Collections, Cheques tab: Return", () => {
     await openChequesTab();
     expect(screen.getAllByRole("button", { name: "Return" })).toHaveLength(1);
     expect(screen.getAllByText("FcHandledFromDeal")).toHaveLength(1);
+  });
+});
+
+describe("Collections, Cheques tab: the Return dialog shows a translated refusal", () => {
+  test("a coded CHEQUE_ALREADY_RETURNED refusal is rendered in Arabic, not as raw JSON", async () => {
+    // Only the server-error dictionary is Arabic here; button labels stay keys.
+    stubs.t = (key: string) => (key.startsWith("ServerError_") ? (salesAr as Record<string, string>)[key] ?? key : key);
+    const returnCheque = vi.fn().mockRejectedValue(
+      new ConvexError({ code: "CHEQUE_ALREADY_RETURNED", message: "This cheque has already been returned, so it cannot be returned again. Nothing has been changed." })
+    );
+    stubs.mutations.set("collections:returnCheque", returnCheque);
+    stubs.paginated.set("collections:listCheques", [cheque({ _id: "c1", isFinanceCompanyCheque: false, status: "HELD" })]);
+    await openChequesTab();
+    fireEvent.click(screen.getAllByRole("button", { name: "Return" })[0]);
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getAllByRole("button", { name: "Return" }).at(-1)!);
+    await waitFor(() => expect(returnCheque).toHaveBeenCalledTimes(1));
+    const { toast } = await import("@/components/ui/sonner");
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    const shown = String(vi.mocked(toast.error).mock.calls.at(-1)?.[0]);
+    expect(shown).toBe((salesAr as Record<string, string>).ServerError_CHEQUE_ALREADY_RETURNED);
+    expect(shown).not.toContain('{"code"');
   });
 });

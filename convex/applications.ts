@@ -55,7 +55,7 @@ import {
 } from "../lib/closingReadinessReasonCodes";
 import { loadCustodyRecords } from "./utils/settlementDeductions";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
-import { runWithIdempotency } from "./utils/idempotency";
+import { MAX_IDEMPOTENCY_KEY_LENGTH, runWithIdempotency } from "./utils/idempotency";
 import { registerChequeCore, markChequeClearedCore, assertNoActiveAllocations } from "./collections";
 import {
   hookFinanceDisbursed,
@@ -5012,6 +5012,17 @@ export const confirmDisbursement = mutation({
     assertValidMinorAmount(args.disbursedAmountMinor, "disbursed amount");
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
 
+    // SCRUM-239: a confirmation belongs to ONE disbursement version. A completed
+    // key is replayed BEFORE the body reads the application, so without the
+    // version in the fingerprint a key kept from version n (lost response) would
+    // replay n's result after a return opened version n+1 - a success toast and
+    // no payment, allocation or FINANCE_CASH_RECEIVED for the new disbursement.
+    // Version 1 keeps the historical fingerprint byte for byte so existing rows
+    // still replay. A missing or foreign row leaves the legacy shape; the body
+    // refuses it exactly as before.
+    const knownApp = await ctx.db.get(args.applicationId);
+    const version = knownApp && knownApp.orgId === args.orgId ? disbursementVersionOf(knownApp) : 1;
+
     return await runWithIdempotency(
       ctx,
       {
@@ -5023,7 +5034,13 @@ export const confirmDisbursement = mutation({
         fingerprint: JSON.stringify({
           applicationId: args.applicationId,
           disbursedAmountMinor: args.disbursedAmountMinor,
+          ...(version > 1 ? { disbursementVersion: version } : {}),
         }),
+        // Only a later version can be stale; a version-1 conflict is a plain
+        // key reuse with different content and keeps the default refusal.
+        ...(version > 1
+          ? { onFingerprintConflict: (): never => refuseFinanceReturn("FINANCE_CONFIRM_STALE_REQUEST") }
+          : {}),
       },
       async () => {
         const app = await ctx.db.get(args.applicationId);
@@ -5291,6 +5308,12 @@ export const returnFinanceDisbursementCheque = mutation({
       PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
       PERMISSIONS.VIEW_FINANCE,
     ]);
+    // The default idempotency refusals are plain strings; a dialog key that is
+    // blank or too long is refused here, coded and translated, before any read.
+    const keyLength = args.idempotencyKey.trim().length;
+    if (keyLength === 0 || keyLength > MAX_IDEMPOTENCY_KEY_LENGTH) {
+      refuseFinanceReturn("FINANCE_RETURN_KEY_INVALID");
+    }
     const returnReason = args.returnReason.trim();
     if (returnReason === "") refuseFinanceReturn("FINANCE_RETURN_REASON_REQUIRED");
     if (returnReason.length > FC_RETURN_REASON_MAX_LENGTH) {

@@ -2215,9 +2215,11 @@ export const returnClearedCheque = mutation({
       },
       async () => {
         const cheque = await ctx.db.get(args.chequeId);
-        if (!cheque || cheque.orgId !== args.orgId) throw new ConvexError("Cheque not found.");
+        if (!cheque || cheque.orgId !== args.orgId) {
+          throwAppError(AppErrorCode.CHEQUE_NOT_FOUND, FC_RETURN_MESSAGES.CHEQUE_NOT_FOUND);
+        }
         if (cheque.status !== "CLEARED") {
-          throw new ConvexError("Only cleared cheques can be returned after clearing.");
+          throwAppError(AppErrorCode.CHEQUE_NOT_CLEARED, FC_RETURN_MESSAGES.CHEQUE_NOT_CLEARED);
         }
 
         const now = Date.now();

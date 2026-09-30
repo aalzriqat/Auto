@@ -2771,4 +2771,45 @@ describe("cheque returned by the bank - applications.returnFinanceDisbursementCh
     expect(String(v2.idempotencyKey)).toMatch(/^confirm-disbursement:/);
     expect(v2.idempotencyKey).not.toBe(v1.idempotencyKey);
   });
+
+  test("SCRUM-239 round 2: the confirm key rotates when the observed disbursementVersion changes (another operator returned the cheque), and is kept while it does not", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    const confirmStages = [
+      { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+      { key: "DISBURSEMENT", state: "BLOCKED", blocker: "AwaitingDisbursement", authority: "MIRROR" },
+      { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+      { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
+    ];
+    const show = (disbursementVersion?: number) => {
+      queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages: confirmStages }));
+      queryResults.set(GET_QUERY, application({ status: "CLOSED", ...(disbursementVersion ? { disbursementVersion } : {}) }));
+    };
+    const confirmCalls = () => (mutationCalls.get("applications:confirmDisbursement") ?? []) as Array<Record<string, unknown>>;
+    const confirmOnce = async (expected: number) => {
+      stubs.mutationFailures.set("applications:confirmDisbursement", "connection lost");
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+      fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+      await waitFor(() => expect(confirmCalls()).toHaveLength(expected));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      vi.mocked(toast.error).mockClear();
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    };
+
+    show();
+    const view = renderCockpit();
+    await confirmOnce(1);
+    // Same observed version (absent = 1): a lost-response retry is the SAME command.
+    await confirmOnce(2);
+    // Another operator returned the cheque: the screen now observes version 2.
+    show(2);
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+    await confirmOnce(3);
+    const [first, retry, afterReturn] = confirmCalls();
+    expect(retry.idempotencyKey).toBe(first.idempotencyKey);
+    expect(afterReturn.idempotencyKey).not.toBe(first.idempotencyKey);
+    // Still version 2: the new key is kept for ITS retry.
+    await confirmOnce(4);
+    expect(confirmCalls()[3].idempotencyKey).toBe(afterReturn.idempotencyKey);
+  });
 });

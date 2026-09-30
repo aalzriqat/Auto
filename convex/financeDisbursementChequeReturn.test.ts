@@ -890,3 +890,122 @@ describe("SCRUM-239 F4 - audit: a RETURNED stamped cheque whose payment row is m
     expect(mine.map((f) => [f.class, f.verdict])).toContainEqual(["RETURN_DISBURSEMENT_NOT_UNDONE", "FINDING"]);
   });
 });
+
+describe("SCRUM-239 round 2 - stale confirm key, coded return refusals", () => {
+  const confirmWith = (d: Awaited<ReturnType<typeof finalizedChequeDeal>>, key: string) =>
+    d.s.owner.as.mutation(api.applications.confirmDisbursement, {
+      orgId: d.s.orgId, applicationId: d.applicationId, disbursedAmountMinor: G, idempotencyKey: key,
+    });
+  const confirmRow = (s: Seeded, key: string) =>
+    s.t.run((ctx) =>
+      ctx.db.query("commandIdempotency").withIndex("by_org_operation_key", (q) =>
+        q.eq("orgId", s.orgId).eq("operation", "applications.confirmDisbursement").eq("idempotencyKey", key)
+      ).unique()
+    );
+  const errOf = (promise: Promise<unknown>) =>
+    promise.then(() => null, (e: unknown) => e as { data?: { code?: string; message?: string } });
+
+  test("F1: a confirm key from version 1 cannot replay after a return; a fresh key books exactly one v2 payment and event", async () => {
+    const d = await finalizedChequeDeal("r2a", "OPEN_YEAR");
+    const { s, applicationId } = d;
+    const keyK = "confirm-disbursement:stale-K";
+    await confirmWith(d, keyK);
+    const [first] = await d.cheques();
+    await d.giveBack(first._id);
+    await s.owner.as.mutation(api.applications.correctExpectedPayment, { orgId: s.orgId, applicationId, reason: "Bank returned the cheque" });
+    await d.registerCheque("CHQ-239-2");
+
+    const v1 = financeDisbursementKeys(applicationId, 1);
+    const v2 = financeDisbursementKeys(applicationId, 2);
+    const before = await s.t.run(async (ctx) => ({
+      app: await ctx.db.get(applicationId),
+      payments: await ctx.db.query("canonicalPayments").collect(),
+      allocations: await ctx.db.query("paymentAllocations").collect(),
+      events: await ctx.db.query("accountingEvents").collect(),
+    }));
+    const error = await errOf(confirmWith(d, keyK));
+    expect(error?.data?.code).toBe("FINANCE_CONFIRM_STALE_REQUEST");
+    expect(await paymentByKey(s, v2.paymentKey)).toBeNull();
+    expect((await paymentByKey(s, v1.paymentKey))?.status).toBe("VOIDED");
+    expect(await s.t.run(async (ctx) => ({
+      app: await ctx.db.get(applicationId),
+      payments: await ctx.db.query("canonicalPayments").collect(),
+      allocations: await ctx.db.query("paymentAllocations").collect(),
+      events: await ctx.db.query("accountingEvents").collect(),
+    }))).toEqual(before);
+
+    await confirmWith(d, "confirm-disbursement:fresh");
+    expect((await paymentByKey(s, v2.paymentKey))?.status).toBe("SETTLED");
+    expect((await cashEvents(s)).map((e) => [e.eventVersion, e.status])).toEqual([[1, "REVERSED"], [2, "POSTED"]]);
+  });
+
+  test("F1 (c): a same-version replay of the key before any return still dedupes to one payment and one event", async () => {
+    const d = await finalizedChequeDeal("r2b", "OPEN_YEAR");
+    const { s, applicationId } = d;
+    const keyK = "confirm-disbursement:same-version";
+    const first = await confirmWith(d, keyK);
+    const second = await confirmWith(d, keyK);
+    expect(second).toEqual(first);
+    expect(await s.t.run((ctx) => ctx.db.query("canonicalPayments").collect())).toHaveLength(1);
+    expect(await cashEvents(s)).toHaveLength(1);
+    expect(((await d.app())!).disbursementVersion ?? 1).toBe(1);
+    void applicationId;
+  });
+
+  test("F1: at version 1 the stored fingerprint is byte-identical to the historical shape", async () => {
+    const d = await finalizedChequeDeal("r2c", "OPEN_YEAR");
+    const keyK = "confirm-disbursement:fp";
+    await confirmWith(d, keyK);
+    const row = await confirmRow(d.s, keyK);
+    expect(row?.fingerprint).toBe(JSON.stringify({ applicationId: d.applicationId, disbursedAmountMinor: G }));
+  });
+
+  test("F3b: an empty or over-long key on the finance return is refused with FINANCE_RETURN_KEY_INVALID, nothing written; default messages unchanged elsewhere", async () => {
+    const d = await finalizedChequeDeal("r2d", "OPEN_YEAR");
+    await d.confirm();
+    const [cheque] = await d.cheques();
+    const before = await d.s.t.run(async (ctx) => ({
+      cheques: await ctx.db.query("postDatedCheques").collect(),
+      idem: await ctx.db.query("commandIdempotency").collect(),
+    }));
+    for (const key of ["", "   ", "k".repeat(201)]) {
+      const error = await errOf(d.giveBack(cheque._id, { key }));
+      expect(error?.data?.code, JSON.stringify(key.slice(0, 5))).toBe("FINANCE_RETURN_KEY_INVALID");
+    }
+    expect(await d.s.t.run(async (ctx) => ({
+      cheques: await ctx.db.query("postDatedCheques").collect(),
+      idem: await ctx.db.query("commandIdempotency").collect(),
+    }))).toEqual(before);
+    // 200 characters is the limit and is accepted.
+    await d.giveBack(cheque._id, { key: "k".repeat(200) });
+  });
+
+  test("F3a: returnClearedCheque answers CHEQUE_NOT_FOUND / CHEQUE_NOT_CLEARED with codes, keeping the old sentence", async () => {
+    const d = await finalizedChequeDeal("r2e", "OPEN_YEAR");
+    const [held] = await d.cheques();
+    const other = await seed("r2f", "NONE");
+    const foreign = await other.t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", {
+        orgId: other.orgId, customerId: other.customerId, bank: "x", chequeNumber: "foreign", chequeDate: Date.now(),
+        amount: 1, status: "CLEARED", createdBy: other.owner.userId, createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
+    const ret = (chequeId: Id<"postDatedCheques">) =>
+      errOf(d.s.owner.as.mutation(api.collections.returnClearedCheque, { orgId: d.s.orgId, chequeId, idempotencyKey: crypto.randomUUID() }));
+    const notCleared = await ret(held._id);
+    expect(notCleared?.data?.code).toBe("CHEQUE_NOT_CLEARED");
+    expect(notCleared?.data?.message).toContain("Only cleared cheques can be returned after clearing");
+    expect((await ret(foreign))?.data?.code).toBe("CHEQUE_NOT_FOUND");
+  });
+
+  test("new refusals have EN and AR text", () => {
+    for (const code of ["FINANCE_CONFIRM_STALE_REQUEST", "FINANCE_RETURN_KEY_INVALID", "CHEQUE_NOT_CLEARED"] as const) {
+      const en = (salesEn as Record<string, string>)[`ServerError_${code}`];
+      const ar = (salesAr as Record<string, string>)[`ServerError_${code}`];
+      expect(en, code).toBe((FC_RETURN_MESSAGES as Record<string, string>)[code]);
+      expect(ar, code).toMatch(/[\u0600-\u06FF]/);
+      expect(ar, code).toContain("لم يتم تغيير أي شيء");
+      expect(en, code).toContain("Nothing has been changed.");
+    }
+  });
+});

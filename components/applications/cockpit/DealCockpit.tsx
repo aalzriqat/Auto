@@ -1104,6 +1104,11 @@ export function DealCockpit({
   // These are the exact keys the Review dialog minted, under the same names.
   const cancelKeyRef = useRef<string | null>(null);
   const confirmDisbursementKeyRef = useRef<string | null>(null);
+  // The disbursement version the kept confirm key was minted for. The server
+  // binds a key to one version (SCRUM-239); if the observed version moved - a
+  // colleague returned the cheque - the kept key is stale and a fresh one is
+  // minted instead of being refused.
+  const confirmDisbursementKeyVersionRef = useRef(1);
   const confirmSupplierDisbursementKeyRef = useRef<string | null>(null);
   // `deposits.release` gets a GENERATION-AWARE retained identity instead of a
   // plain key ref (SCRUM-313; the full reasoning lives at the release path in
@@ -2936,6 +2941,11 @@ export function DealCockpit({
                   if (!expectedDisbursementMinor) return;
                   setDisbursementSubmitting(true);
                   try {
+                    const observedVersion = app.disbursementVersion ?? 1;
+                    if (confirmDisbursementKeyVersionRef.current !== observedVersion) {
+                      confirmDisbursementKeyRef.current = null;
+                    }
+                    confirmDisbursementKeyVersionRef.current = observedVersion;
                     confirmDisbursementKeyRef.current ??= `confirm-disbursement:${crypto.randomUUID()}`;
                     const disbursementKey = confirmDisbursementKeyRef.current;
                     await trackRecorded(

@@ -147,6 +147,12 @@ export const FC_RETURN_MESSAGES = {
     "This cheque can no longer be returned. Nothing has been changed.",
   CHEQUE_NOT_FOUND:
     "Cheque not found. Nothing has been changed.",
+  CHEQUE_NOT_CLEARED:
+    "Only cleared cheques can be returned after clearing. Nothing has been changed.",
+  FINANCE_RETURN_KEY_INVALID:
+    "The request identity is missing or too long (at most 200 characters). Nothing has been changed. Reopen the dialog and try again.",
+  FINANCE_CONFIRM_STALE_REQUEST:
+    "This confirmation was prepared before the deal's cheque was returned, so it cannot be applied. Nothing has been changed. Reopen the deal and confirm again.",
 } as const;
 /** SCRUM-447 B4: longest operator note kept with a face attestation. */
 export const ATTESTATION_NOTE_MAX_LENGTH = 500;

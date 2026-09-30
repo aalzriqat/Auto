@@ -745,8 +745,9 @@ describe("protected source content pins", () => {
       // SCRUM-239 RENEWAL 2026-09-30 (2): coded, translated reason refusals (FINANCE_RETURN_REASON_REQUIRED / _TOO_LONG with `max`), the manager notification carries the display amount (`cheque.amount`, not minor units), and `dealCockpit` gains `disbursementReturn { mayReturn, chequeId, lastReturnedChequeId }` (server-computed gate for the cockpit action; read-only). Previous postimage bytes 286857, sha256 a5a0d621c22727051bd7ea287c0258205930c017f16c70a9592f712a389ae3c6. Recomputed from the file with this test's own normalization.
       // SCRUM-239 /simplify 2026-09-30: behaviour-preserving - `returnFinanceDisbursementCheque` computes the payment currency once, and `FC_RETURN_REASON_MAX_LENGTH` moved to utils/fcCheque.ts (shared with the dialog); previous postimage bytes 288109, sha256 63ddd97092a5d28adbc60728c222fc695d9ba9edb6295904d4a0b61c25dce050. Recomputed from the file with this test's own normalization.
       // SCRUM-239 RENEWAL 2026-09-30 (3): `returnFinanceDisbursementCheque` raises coded FINANCE_RETURN_NOT_FOUND (deal or cheque missing / foreign org) and FINANCE_RETURN_KEY_CONFLICT (contradictory key replay, via the optional `onFingerprintConflict` override of runWithIdempotency); no write before either refusal. Previous postimage bytes 288048, sha256 46b57cf12efad386e4424c722bddc8cf854550c8aaf1282a2813789c10691f51. Recomputed from the file with this test's own normalization.
-      bytes: 288344,
-      sha256: "ab09b8642fb1158f32c4d342bca02f9bffe865074b3ba21a604dce3c2a0db15b",
+      // SCRUM-239 round-2 RENEWAL 2026-09-30: `confirmDisbursement` binds its idempotency fingerprint to the disbursement version (byte-identical at version 1; `disbursementVersion` added above 1) and refuses a stale key with coded FINANCE_CONFIRM_STALE_REQUEST via `onFingerprintConflict`; `returnFinanceDisbursementCheque` refuses a blank or over-long key with coded FINANCE_RETURN_KEY_INVALID before any read. Previous postimage bytes 288344, sha256 ab09b8642fb1158f32c4d342bca02f9bffe865074b3ba21a604dce3c2a0db15b. Recomputed from the file with this test's own normalization.
+      bytes: 289851,
+      sha256: "ebe97552d6830d5ba949638c4bf97234ed7743453a63714b34598e08d88521bc",
     },
     {
       /**

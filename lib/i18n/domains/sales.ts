@@ -1689,6 +1689,18 @@ const serverErrorMessages = defineBilingualMessages({
     "Cheque not found. Nothing has been changed.",
     "لم يتم العثور على الشيك. لم يتم تغيير أي شيء.",
   ],
+  ServerError_CHEQUE_NOT_CLEARED: [
+    "Only cleared cheques can be returned after clearing. Nothing has been changed.",
+    "لا يمكن إرجاع الشيك بعد الصرف إلا إذا كان قد تم صرفه. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_RETURN_KEY_INVALID: [
+    "The request identity is missing or too long (at most 200 characters). Nothing has been changed. Reopen the dialog and try again.",
+    "معرّف الطلب مفقود أو أطول من الحد المسموح (200 حرف كحد أقصى). لم يتم تغيير أي شيء. أعد فتح النافذة وحاول مرة أخرى.",
+  ],
+  ServerError_FINANCE_CONFIRM_STALE_REQUEST: [
+    "This confirmation was prepared before the deal's cheque was returned, so it cannot be applied. Nothing has been changed. Reopen the deal and confirm again.",
+    "جرى تجهيز هذا التأكيد قبل إرجاع شيك الصفقة، لذلك لا يمكن تطبيقه. لم يتم تغيير أي شيء. أعد فتح الصفقة وأكّد من جديد.",
+  ],
 });
 
 export const salesEn = {
