@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { ConvexError } from "convex/values";
-import { getErrorMessage, GENERIC_ERROR_MESSAGE } from "./errors";
+import { getErrorMessage, getLocalizedErrorMessage, GENERIC_ERROR_MESSAGE } from "./errors";
 
 /** Mirrors what the browser client hands a `catch` block for a server throw. */
 function convexWrapped(inner: string, kind: "Error" | "ConvexError" = "Error"): string {
@@ -214,5 +214,60 @@ describe("getErrorMessage — totality", () => {
     const result = getErrorMessage(input);
     expect(typeof result).toBe("string");
     expect(result.trim().length).toBeGreaterThan(0);
+  });
+});
+
+describe("getLocalizedErrorMessage - coded server refusals", () => {
+  const table: Record<string, string> = {
+    ServerError_SOME_CODE: "ترجمة {baseCurrency} / {orgCurrency} / {baseCurrency}",
+  };
+  // Mirrors the language provider: an unresolved key comes back as itself.
+  const t = (key: string) => table[key] ?? key;
+
+  it("returns the translation for a code with a dictionary entry, filling placeholders", () => {
+    const error = new ConvexError({ code: "SOME_CODE", message: "English text", baseCurrency: "USD", orgCurrency: "JOD" });
+    expect(getLocalizedErrorMessage(error, t)).toBe("ترجمة USD / JOD / USD");
+  });
+
+  it("falls back to the server message for a code with no dictionary entry", () => {
+    const error = new ConvexError({ code: "UNKNOWN_CODE", message: "English text" });
+    expect(getLocalizedErrorMessage(error, t)).toBe("English text");
+  });
+
+  it("falls back to the message for a plain-string ConvexError", () => {
+    expect(getLocalizedErrorMessage(new ConvexError("Vehicle already sold"), t)).toBe("Vehicle already sold");
+  });
+
+  it("falls back for a non-string code and for a non-Convex error", () => {
+    expect(getLocalizedErrorMessage(new ConvexError({ code: 42, message: "Numeric code" }), t)).toBe("Numeric code");
+    expect(getLocalizedErrorMessage(new Error("boom"), t)).toBe("boom");
+    expect(getLocalizedErrorMessage(undefined, t)).toBe(GENERIC_ERROR_MESSAGE);
+  });
+
+  it("falls back when the translate function throws", () => {
+    const error = new ConvexError({ code: "SOME_CODE", message: "English text" });
+    expect(getLocalizedErrorMessage(error, () => { throw new Error("no provider"); })).toBe("English text");
+  });
+
+  it("the two SCRUM-390 refusal codes resolve to non-key, placeholder-filled Arabic", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const finalize = getLocalizedErrorMessage(
+      new ConvexError({ code: "COMMISSION_BASE_UNUSABLE", message: "en", baseCurrency: "USD", orgCurrency: "JOD" }),
+      ar
+    );
+    expect(finalize).toContain("USD");
+    expect(finalize).toContain("JOD");
+    expect(finalize).toMatch(/[\u0600-\u06FF]/);
+    expect(finalize).not.toMatch(/\{\w+\}/);
+    const recalc = getLocalizedErrorMessage(new ConvexError({ code: "COMMISSION_BASE_UNUSABLE_RECALC", message: "en" }), ar);
+    expect(recalc).toMatch(/[\u0600-\u06FF]/);
+    expect(recalc).not.toBe("en");
+  });
+
+  it("the English dictionary text equals the server's message for both codes", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    expect(dictionaries.en.ServerError_COMMISSION_BASE_UNUSABLE).toContain("{baseCurrency}");
+    expect(dictionaries.en.ServerError_COMMISSION_BASE_UNUSABLE).toContain("{orgCurrency}");
   });
 });

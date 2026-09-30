@@ -325,9 +325,11 @@ describe("SCRUM-390 OR-5: commissionable vehicle margin on a v2 financed sale", 
       const settings = (await ctx.db.query("orgSettings").collect()).find((x) => x.orgId === s.orgId)!;
       await ctx.db.patch(settings._id, { currency: "USD", currencySymbol: "$" });
     });
-    await expect(s.as.mutation(api.sales.recalculateCommission, { orgId: s.orgId, saleId })).rejects.toThrow(
-      /different currency/i
-    );
+    const error = await s.as
+      .mutation(api.sales.recalculateCommission, { orgId: s.orgId, saleId })
+      .then(() => null, (e: unknown) => e as { data?: { code?: string; message?: string } });
+    expect(error?.data?.code).toBe("COMMISSION_BASE_UNUSABLE_RECALC");
+    expect(error?.data?.message).toMatch(/different currency/i);
     const after = await s.t.run((ctx) => ctx.db.get(saleId));
     expect(after?.commissionAmount).toBeUndefined();
   });
@@ -341,9 +343,11 @@ describe("SCRUM-390 OR-5: commissionable vehicle margin on a v2 financed sale", 
     await s.t.run((ctx) =>
       ctx.db.patch(saleId, { commissionBase: { approvedMinor: 12_500_000, contributionMinor: bad, currency: "JOD" } })
     );
-    await expect(s.as.mutation(api.sales.recalculateCommission, { orgId: s.orgId, saleId })).rejects.toThrow(
-      /unusable amount/i
-    );
+    const error = await s.as
+      .mutation(api.sales.recalculateCommission, { orgId: s.orgId, saleId })
+      .then(() => null, (e: unknown) => e as { data?: { code?: string; message?: string } });
+    expect(error?.data?.code).toBe("COMMISSION_BASE_UNUSABLE_RECALC");
+    expect(error?.data?.message).toMatch(/unusable amount/i);
     const after = await s.t.run((ctx) => ctx.db.get(saleId));
     expect(after?.commissionAmount).toBeUndefined();
   });

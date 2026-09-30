@@ -29,6 +29,8 @@
  * throw the good payload away.
  */
 
+import { interpolate } from "./i18n/interpolate";
+
 export const GENERIC_ERROR_MESSAGE = "An unexpected error occurred. Please try again later.";
 
 /**
@@ -140,4 +142,42 @@ export function getErrorMessage(error: unknown): string {
     // a second error.
     return GENERIC_ERROR_MESSAGE;
   }
+}
+
+/** Dictionary key a coded server refusal is translated under (`ServerError_<code>`). */
+export function serverErrorMessageKey(code: string): string {
+  return `ServerError_${code}`;
+}
+
+/**
+ * Like `getErrorMessage`, but a server refusal that carries a `data.code` with a
+ * `ServerError_<code>` dictionary entry is shown in the user's language. The
+ * payload's scalar fields (e.g. `baseCurrency`) fill the `{placeholders}`.
+ * Anything without a translation - a plain-string ConvexError, an unknown code, a
+ * transport failure - falls back to `getErrorMessage`, so behaviour is unchanged
+ * until a code is given a dictionary entry.
+ *
+ * `t` is the language provider's translate function, which returns the key
+ * itself when it cannot resolve one; that is how a missing entry is detected.
+ */
+export function getLocalizedErrorMessage(error: unknown, t: (key: string) => string): string {
+  try {
+    if (isConvexError(error) && typeof error.data === "object" && error.data !== null) {
+      const data = error.data as Record<string, unknown>;
+      if (typeof data.code === "string") {
+        const key = serverErrorMessageKey(data.code);
+        const template = t(key);
+        if (typeof template === "string" && template !== "" && template !== key) {
+          const values: Record<string, string | number> = {};
+          for (const [name, value] of Object.entries(data)) {
+            if (typeof value === "string" || typeof value === "number") values[name] = value;
+          }
+          return interpolate(template, values);
+        }
+      }
+    }
+  } catch {
+    // fall through to the untranslated message
+  }
+  return getErrorMessage(error);
 }

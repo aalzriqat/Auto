@@ -31,7 +31,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/components/ui/sonner";
-import { getErrorMessage, isConvexError } from "@/lib/errors";
+import { getErrorMessage, getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
 import { isValid } from "date-fns";
 import { formatLocalized } from "@/lib/dateLocale";
 import {
@@ -3142,7 +3142,7 @@ export function DealCockpit({
             const refusal = isConvexError(error) ? closingReadinessRefusalOf(error.data) : null;
             const message = refusal
               ? closingReasonText(t, refusal.code, refusal.params, refusal.message).text
-              : getErrorMessage(error);
+              : getLocalizedErrorMessage(error, t);
             setFinalizeError(message);
             toast.error(message);
           } finally {

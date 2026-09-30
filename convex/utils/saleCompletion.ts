@@ -204,6 +204,11 @@ type PreparedSaleCompletion = {
 export const FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT =
   "This is a financed sale of the supplier's car settled directly with him, so what the finance company approved is what he actually receives — and the dealership's claim on him is measured from it. That amount lives on the finance application, so this deal has to be completed through the financing workflow rather than recorded as a sale directly.";
 
+/** SCRUM-390: `ConvexError.data.code` of a finalize refused for an unusable commission base. */
+export const COMMISSION_BASE_UNUSABLE_CODE = "COMMISSION_BASE_UNUSABLE";
+/** SCRUM-390: `ConvexError.data.code` of a commission recalculation refused for an unusable frozen base. */
+export const COMMISSION_BASE_UNUSABLE_RECALC_CODE = "COMMISSION_BASE_UNUSABLE_RECALC";
+
 /**
  * Why a commission cannot be recalculated on an already-completed financed
  * direct sale that has no usable record of what it earned.
@@ -364,9 +369,14 @@ async function prepareSaleCompletion(
   if (intent === "COMPLETION" && args.commissionBase && !isConsignedAgentSale(vehicle)) {
     const margin = financedMarginOf(args.commissionBase, currency);
     if (!margin) {
-      throw new ConvexError(
-        `This deal's financing figures (recorded in ${args.commissionBase.currency}) cannot be used to work out the commissionable vehicle margin in the dealership's currency (${currency}). Settle the deal's currency and figures before completing it.`
-      );
+      // Coded so an Arabic screen can translate it (lib/errors.ts getLocalizedErrorMessage);
+      // `message` stays the English text every existing caller already shows.
+      throw new ConvexError({
+        code: COMMISSION_BASE_UNUSABLE_CODE,
+        message: `This deal's financing figures (recorded in ${args.commissionBase.currency}) cannot be used to work out the commissionable vehicle margin in the dealership's currency (${currency}). Settle the deal's currency and figures before completing it.`,
+        baseCurrency: args.commissionBase.currency,
+        orgCurrency: currency,
+      });
     }
     commissionBase = args.commissionBase;
     financedMargin = margin;

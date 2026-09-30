@@ -34,7 +34,7 @@ import { CommissionPaymentDialog } from "@/components/commissions/CommissionPaym
 import { type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { useTableControls } from "@/hooks/useTableControls";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
-import { getErrorMessage, GENERIC_ERROR_MESSAGE } from "@/lib/errors";
+import { getErrorMessage, getLocalizedErrorMessage, GENERIC_ERROR_MESSAGE } from "@/lib/errors";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 
 type CommissionStatus = "NOT_SET" | "NO_COMMISSION" | "UNPAID" | "PAID" | "VOID" | "PENDING_SALE";
@@ -82,8 +82,8 @@ function formatCurrency(amount: number) {
  * `getErrorMessage` falls back to an English sentence for unexpected failures,
  * which would be the one untranslated line on an Arabic screen.
  */
-function errorToast(error: unknown, fallback: string): string {
-  const message = getErrorMessage(error);
+function errorToast(error: unknown, fallback: string, t?: (key: string) => string): string {
+  const message = t ? getLocalizedErrorMessage(error, t) : getErrorMessage(error);
   return message === GENERIC_ERROR_MESSAGE ? fallback : message;
 }
 
@@ -243,7 +243,7 @@ export default function CommissionsPage() {
       // `e.message` here is Convex's transport wrapper — it carries the request
       // id, the stack and the convex/ source path straight to the screen.
       // getErrorMessage strips all of that.
-      toast.error(errorToast(e, t("CommissionUpdateFailed" as any)));
+      toast.error(errorToast(e, t("CommissionUpdateFailed" as any), t));
     }
   }
 

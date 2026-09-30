@@ -32,7 +32,7 @@ import {
 } from "./utils/financingEconomics";
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
-import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, type CommissionBase } from "./utils/saleCompletion";
+import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, COMMISSION_BASE_UNUSABLE_RECALC_CODE, type CommissionBase } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompanyForward";
@@ -1979,9 +1979,11 @@ export const recalculateCommission = mutation({
       if (sale.commissionBase && !isConsignedAgentSale(vehicle)) {
         const margin = financedMarginOf(sale.commissionBase, orgSettings?.currency ?? "JOD");
         if (!margin) {
-          throw new ConvexError(
-            "This sale's recorded commissionable margin is in a different currency from the organization's or holds an unusable amount, so a commission cannot be worked out. Have the deal's figures corrected before recalculating; the existing commission has been left untouched."
-          );
+          throw new ConvexError({
+            code: COMMISSION_BASE_UNUSABLE_RECALC_CODE,
+            message:
+              "This sale's recorded commissionable margin is in a different currency from the organization's or holds an unusable amount, so a commission cannot be worked out. Have the deal's figures corrected before recalculating; the existing commission has been left untouched.",
+          });
         }
         financedMargin = margin;
       }
