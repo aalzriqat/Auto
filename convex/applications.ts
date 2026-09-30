@@ -2013,6 +2013,12 @@ export const dealCockpit = query({
     // is finished. The rail is qualitative — stage names and blocker keys, no
     // amounts — so it is safe to show a caller who cannot see the money.
     const settlementFacts = await resolveSettlement(ctx, app);
+    // SCRUM-447 x SCRUM-446: the SAME resolved leg `confirmDisbursement` reads. When it is
+    // NONE no finance company pays the dealership, so the cheque / disbursement flags below
+    // must not offer a step the server will refuse (attest, re-register, correct-a-returned-
+    // cheque). `expectedPaymentCorrectable` deliberately stays: clearing a legacy registered
+    // method is the documented exit from that state.
+    const disbursementApplies = settlementFacts.financierLeg !== "NONE";
     // SCRUM-435: the ONE forward proof feeds the rail, the cockpit view and the
     // gates; nothing here derives it a second time.
     const forwardProof = await deriveForwardState(ctx, app);
@@ -2188,10 +2194,11 @@ export const dealCockpit = query({
        * recorded face (legacy row — attest it), and whether the registered
        * payment can still be corrected (not cancelled, not disbursed).
        */
-      chequeFaceUnrecorded,
+      chequeFaceUnrecorded: disbursementApplies && chequeFaceUnrecorded,
       // CLOSED, not disbursed, nothing registered: the state correctExpectedPayment
       // leaves a closed deal in, where registering again is the only way forward.
       expectedPaymentReRegistrable:
+        disbursementApplies &&
         app.status === "CLOSED" &&
         !app.disbursedAt &&
         !app.expectedPaymentMethod &&
@@ -2204,6 +2211,7 @@ export const dealCockpit = query({
       // A CLEARED row takes precedence (mirrors correctExpectedPayment, which
       // refuses it): that deal needs accounting review, never a correction.
       chequeNeedsCorrection:
+        disbursementApplies &&
         chequeMethodRegistered &&
         liveFcCheques.length === 0 &&
         !hasClearedLinkedCheque(linkedCheques) &&
@@ -2216,8 +2224,9 @@ export const dealCockpit = query({
         !app.disbursedAt,
       chequeFaceAttested: liveFcCheques.some((row) => row.faceAttestedAt !== undefined),
       // The row the attest action targets. An id, not an amount.
-      unattestedChequeId:
-        liveFcCheques.find((row) => row.amountMinor === undefined)?._id ?? null,
+      unattestedChequeId: disbursementApplies
+        ? (liveFcCheques.find((row) => row.amountMinor === undefined)?._id ?? null)
+        : null,
       expectedPaymentCorrectable:
         app.status !== "CANCELLED" &&
         !app.disbursedAt &&

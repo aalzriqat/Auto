@@ -730,8 +730,9 @@ describe("protected source content pins", () => {
       // SCRUM-446 RENEWAL 2026-09-29: `resolveFinancierLeg` (DISBURSEMENT NOT_APPLICABLE only on proven evidence), the cancelled-sale guard on `moneySettled`, and the `confirmDisbursement` refusal wording; previous postimage bytes 243195, sha256 b42c6e1801d6af32ff2b66f67d46a71f30264f3b9fc7b19cbb17f36412e4e580. Recomputed from the file with this test's own normalization.
       // SCRUM-446 RENEWAL 2026-09-30: `resolveFinancierLeg` takes the deal mode (`dealModeOf`) and returns NONE only for INTERNAL_INSTALLMENT (OR-1/OR-2, SCRUM-486 c21360); MANUAL_FINANCE_COMPANY, LEASE, CASH and mode-less deals stay UNKNOWN. Merged with origin/main (SCRUM-435 forward proof) so the pin below covers both. Recomputed from the merged file with this test's own normalization.
       // SCRUM-446 /simplify 2026-09-30: `loadDealRoute` shared by the cockpit and the confirmDisbursement guard; previous postimage bytes 251598, sha256 068aa9d4b4090407fbef8d68bd6703a1b79af70ca3a71ebdd2ac2e416de00ee9.
-      bytes: 269955,
-      sha256: "912cd1702a122046cb2235971796d1693cd533961d3c2897c121f00792cefd22",
+      // SCRUM-447 RENEWAL 2026-09-30 (merge fix): `dealCockpit` gates the cheque/disbursement workflow flags (`chequeFaceUnrecorded`, `unattestedChequeId`, `chequeNeedsCorrection`, `expectedPaymentReRegistrable`) on the resolved financier leg (`settlementFacts.financierLeg !== "NONE"`), so a closed no-company deal is not pointed at registering/attesting a disbursement the server refuses; `expectedPaymentCorrectable` is unchanged; configured-company behaviour is unchanged (12 insertions, 3 deletions, cockpit projection only; no mutation, posting or permission change). Previous postimage bytes 269955, sha256 912cd1702a122046cb2235971796d1693cd533961d3c2897c121f00792cefd22. Recomputed from the file with this test's own normalization.
+      bytes: 270601,
+      sha256: "8815826a835f4e84b20fc817fd5ca9f05ae4bfa78bb78d7050281910683c3e0d",
     },
     {
       /**

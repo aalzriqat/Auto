@@ -239,4 +239,30 @@ describe("FcChequePanel", () => {
     expect(screen.getByText("FcReRegisterNotice")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "RegisterExpectedPayment" })).toBeNull();
   });
-});
+
+  // SCRUM-447 x SCRUM-446: on a closed no-company deal (financier leg NONE) the
+  // server sends every disbursement/cheque prompt flag false and keeps only
+  // `expectedPaymentCorrectable` for a legacy registered method. The panel
+  // renders server flags only, so it offers Correct and NEVER Register/Attest.
+  test("a legacy no-company registered cheque (server flags gated by leg NONE) offers only Correct", () => {
+    panel({
+      canManage: true,
+      canRegisterPayment: true,
+      chequeFaceUnrecorded: false,
+      unattestedChequeId: null,
+      needsCorrection: false,
+      needsReRegistration: false,
+      expectedPaymentCorrectable: true,
+      chequePaymentRegistered: true,
+    });
+    expect(screen.getByRole("button", { name: "FcCorrectExpectedPayment" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "RegisterExpectedPayment" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "FcAttestChequeFace" })).toBeNull();
+    for (const notice of ["FcReRegisterNotice", "FcChequeFaceUnrecordedNotice", "FcCorrectNeededNotice"]) {
+      expect(screen.queryByText(notice)).toBeNull();
+    }
+    cleanup();
+    // Nothing registered, leg NONE: no panel at all (no dead-end prompt).
+    panel({ expectedPaymentCorrectable: false, chequePaymentRegistered: false, needsReRegistration: false });
+    expect(screen.queryByTestId("deal-fc-cheque-panel")).toBeNull();
+  });});
