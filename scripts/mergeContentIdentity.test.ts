@@ -18,12 +18,16 @@ const git = (args: string[], env: Record<string, string> = {}) =>
     env: { ...process.env, ...env },
   }).trim();
 
+const COMMITTER = {
+  GIT_AUTHOR_NAME: "t",
+  GIT_AUTHOR_EMAIL: "t@t",
+  GIT_COMMITTER_NAME: "t",
+  GIT_COMMITTER_EMAIL: "t@t",
+};
+
 const commitTree = (tree: string, parents: string[], date: string) =>
   git(["commit-tree", tree, ...parents.flatMap((p) => ["-p", p]), "-m", "m"], {
-    GIT_AUTHOR_NAME: "t",
-    GIT_AUTHOR_EMAIL: "t@t",
-    GIT_COMMITTER_NAME: "t",
-    GIT_COMMITTER_EMAIL: "t@t",
+    ...COMMITTER,
     GIT_AUTHOR_DATE: date,
     GIT_COMMITTER_DATE: date,
   });
@@ -41,6 +45,7 @@ let tree = "";
 let otherTree = "";
 let merge1 = "";
 let merge2 = "";
+let tagSha = "";
 
 beforeAll(() => {
   repo = mkdtempSync(path.join(tmpdir(), "merge-identity-"));
@@ -53,6 +58,8 @@ beforeAll(() => {
   otherTree = treeOf("merged-differently");
   merge1 = commitTree(tree, [base, head], "2026-02-01T00:00:00Z");
   merge2 = commitTree(tree, [base, head], "2026-02-01T01:00:00Z");
+  git(["tag", "-a", "-m", "t", "tagged-merge", merge1], COMMITTER);
+  tagSha = git(["rev-parse", "tagged-merge"]);
 });
 
 afterAll(() => rmSync(repo, { recursive: true, force: true }));
@@ -102,20 +109,11 @@ describe("merge content identity", () => {
   });
 
   test("an annotated tag pointing at a valid merge is refused (no tag peeling)", () => {
-    const tagSha = makeTag();
     expect(tagSha).not.toBe(merge1);
     expect(() => contentIdentity(repo, tagSha)).toThrow(/is not a commit/);
     expect(() => sameContentIdentity(repo, merge1, tagSha)).toThrow(/is not a commit/);
   });
 });
-
-const makeTag = () => {
-  git(["tag", "-f", "-a", "-m", "t", "tagged-merge", merge1], {
-    GIT_COMMITTER_NAME: "t",
-    GIT_COMMITTER_EMAIL: "t@t",
-  });
-  return git(["rev-parse", "tagged-merge"]);
-};
 
 describe("merge content identity CLI (subprocess)", () => {
   const script = path.join(path.dirname(fileURLToPath(import.meta.url)), "mergeContentIdentity.mjs");
@@ -128,28 +126,14 @@ describe("merge content identity CLI (subprocess)", () => {
     expect(r.stdout.trim()).toBe("SAME");
   });
 
-  test("different tree exits 1 with no SAME output", () => {
-    const other = commitTree(otherTree, [base, head], "2026-03-01T00:00:00Z");
-    const r = run("same", merge1, other);
-    expect(r.status).toBe(1);
-    expect(r.stdout).not.toContain("SAME");
-  });
-
-  test("malformed SHA exits 1 with no SAME output", () => {
-    const r = run("same", merge1, "not-a-sha");
-    expect(r.status).toBe(1);
-    expect(r.stdout).not.toContain("SAME");
-  });
-
-  test("bad usage exits 2 with no SAME output", () => {
-    const r = run("same", merge1);
-    expect(r.status).toBe(2);
-    expect(r.stdout).not.toContain("SAME");
-  });
-
-  test("an annotated tag is refused with exit 1 and no SAME output", () => {
-    const r = run("same", merge1, makeTag());
-    expect(r.status).toBe(1);
+  test.each([
+    ["different tree", () => ["same", merge1, commitTree(otherTree, [base, head], "2026-03-01T00:00:00Z")], 1],
+    ["malformed SHA", () => ["same", merge1, "not-a-sha"], 1],
+    ["annotated tag", () => ["same", merge1, tagSha], 1],
+    ["bad usage", () => ["same", merge1], 2],
+  ] as const)("%s exits %i with no SAME output", (_label, args, status) => {
+    const r = run(...args());
+    expect(r.status).toBe(status);
     expect(r.stdout).not.toContain("SAME");
   });
 });

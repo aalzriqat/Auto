@@ -19,21 +19,21 @@ export function contentIdentity(repo, sha) {
   if (typeof sha !== "string" || !SHA_RE.test(sha)) {
     throw new Error("merge SHA is not a 40-hex commit id");
   }
-  const gitOut = (args) =>
-    execFileSync("git", ["-C", repo, ...args], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  let raw;
+  const notCommit = () => new Error(`${sha} is not a commit present in the repository`);
+  let out;
   try {
-    // `cat-file commit` peels annotated tags; require the object itself to be a commit.
-    if (gitOut(["cat-file", "-t", sha]).trim() !== "commit") {
-      throw new Error("not a commit");
-    }
-    raw = gitOut(["cat-file", "commit", sha]);
+    // `cat-file --batch` does not peel tags: an annotated tag reports type "tag".
+    out = execFileSync("git", ["-C", repo, "cat-file", "--batch"], {
+      input: `${sha}\n`,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
   } catch {
-    throw new Error(`${sha} is not a commit present in the repository`);
+    throw notCommit();
   }
+  const eol = out.indexOf(10);
+  const [oid, type, size] = (eol < 0 ? "" : out.subarray(0, eol).toString("utf8")).split(" ");
+  if (type !== "commit" || oid?.toLowerCase() !== sha.toLowerCase()) throw notCommit();
+  const raw = out.subarray(eol + 1, eol + 1 + Number(size)).toString("utf8");
   const header = raw.split("\n\n", 1)[0];
   let tree = null;
   const parents = [];

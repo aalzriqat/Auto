@@ -111,13 +111,16 @@ describe("pull-request workflow secret boundary", () => {
     // Every merge comparison (coverage, stale report, verdict) goes through the
     // content-identity helper and needs its positive SAME affirmation; no bare
     // SHA comparison may decide identity (a regenerated merge has a new SHA).
-    const trustedCalls = source.match(/node trusted\/scripts\/mergeContentIdentity\.mjs --repo trusted same "\$(?:coverage_merge|current_merge)" "\$TESTED_SHA"/g);
-    expect(trustedCalls?.length).toBe(2);
-    const verdictCalls = source.match(/node scripts\/mergeContentIdentity\.mjs same "\$current_merge" "\$TESTED_SHA"/g);
-    expect(verdictCalls?.length).toBe(1);
+    const defs = source.match(/same_merge\(\) \{[^\n]*\}/g) ?? [];
+    expect(defs).toHaveLength(3);
+    for (const def of defs) expect(def).toContain('&& [ "$out" = "SAME" ]');
+    expect(defs.filter((d) => d.includes("node trusted/scripts/mergeContentIdentity.mjs --repo trusted same"))).toHaveLength(2);
+    expect(defs.filter((d) => d.includes("node scripts/mergeContentIdentity.mjs same"))).toHaveLength(1);
     expect(source.match(/mergeContentIdentity\.mjs/g)?.length).toBe(3);
     expect(source).not.toContain("candidate/scripts/mergeContentIdentity");
-    expect(source.match(/\[ "\$identity" = "SAME" \]/g)?.length).toBe(3);
+    expect(source).toContain('same_merge "$coverage_merge" "$TESTED_SHA"');
+    expect(source).toContain('! same_merge "$current_merge" "$TESTED_SHA"');
+    expect(source.match(/same_merge "\$current_merge" "\$TESTED_SHA"/g)?.length).toBe(2);
     // A bare SHA inequality may only guard the equal-SHA fetch shortcut / notice,
     // never refuse or accept: the refusal/skip branches are decided by the helper.
     expect(source).not.toMatch(/if \[ "\$(?:current_merge|coverage_merge)" != "\$TESTED_SHA" \]; then\s*\n\s*echo "::(?:error|warning)::/);

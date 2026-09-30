@@ -180,14 +180,12 @@ jobs:
           fi
           # Byte-equal SHAs need no fetch (the object is already present); the
           # helper still runs in every case and must positively answer SAME.
-          if [ "$coverage_merge" = "$TESTED_SHA" ]; then
-            :
-          elif ! git -C trusted fetch --no-tags origin "$coverage_merge"; then
+          same_merge() { local out; out="$(node trusted/scripts/mergeContentIdentity.mjs --repo trusted same "$1" "$2")" && [ "$out" = "SAME" ]; }
+          if ! { [ "$coverage_merge" = "$TESTED_SHA" ] || git -C trusted fetch --no-tags origin "$coverage_merge"; }; then
             echo "::error::Coverage merge $coverage_merge cannot be fetched from origin; refusing mismatched coverage provenance."
             exit 1
           fi
-          if identity="$(node trusted/scripts/mergeContentIdentity.mjs --repo trusted same "$coverage_merge" "$TESTED_SHA")" &&
-            [ "$identity" = "SAME" ]; then
+          if same_merge "$coverage_merge" "$TESTED_SHA"; then
             if [ "$coverage_merge" != "$TESTED_SHA" ]; then
               echo "::notice::PR merge ref was regenerated (content-identical): coverage merge $coverage_merge, analysed merge $TESTED_SHA."
             fi
@@ -365,8 +363,8 @@ jobs:
           git -C trusted fetch --no-tags origin \
             "+refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-report-merge"
           current_merge="$(git -C trusted rev-parse refs/autoflow/sonar-report-merge)"
-          if ! { identity="$(node trusted/scripts/mergeContentIdentity.mjs --repo trusted same "$current_merge" "$TESTED_SHA")" &&
-            [ "$identity" = "SAME" ]; }; then
+          same_merge() { local out; out="$(node trusted/scripts/mergeContentIdentity.mjs --repo trusted same "$1" "$2")" && [ "$out" = "SAME" ]; }
+          if ! same_merge "$current_merge" "$TESTED_SHA"; then
             echo "::notice::Skipping stale Sonar report for merge $TESTED_SHA; PR merge is now $current_merge."
             exit 0
           fi
@@ -438,10 +436,10 @@ jobs:
           # Current means content-identical, not the same commit SHA (GitHub
           # regenerates the merge ref with a new date). Fetch failure => stale.
           # Byte-equal SHAs need no fetch; the helper must still answer SAME.
+          same_merge() { local out; out="$(node scripts/mergeContentIdentity.mjs same "$1" "$2")" && [ "$out" = "SAME" ]; }
           merge_is_current=false
           if { [ "$current_merge" = "$TESTED_SHA" ] || git fetch --no-tags origin "$TESTED_SHA"; } &&
-            identity="$(node scripts/mergeContentIdentity.mjs same "$current_merge" "$TESTED_SHA")" &&
-            [ "$identity" = "SAME" ]; then
+            same_merge "$current_merge" "$TESTED_SHA"; then
             merge_is_current=true
             if [ "$current_merge" != "$TESTED_SHA" ]; then
               echo "::notice::PR merge ref was regenerated (content-identical): analysed merge $TESTED_SHA, current merge $current_merge."
@@ -453,10 +451,12 @@ jobs:
           if [ "$SCAN_RESULT" = "success" ] && [ "$GATE_OK" = "true" ] && [ "$merge_is_current" = "true" ]; then
             state=success
             description="Trusted Sonar PR analysis passed on the still-current exact merge."
-          elif [ "$SCAN_RESULT" = "success" ] && [ "$GATE_OK" != "true" ]; then
-            description="Trusted Sonar report was skipped as stale; the Quality Gate was not verified."
           elif [ "$SCAN_RESULT" = "success" ]; then
-            description="Trusted Sonar result is stale because the PR merge changed during analysis."
+            if [ "$GATE_OK" != "true" ]; then
+              description="Trusted Sonar report was skipped as stale; the Quality Gate was not verified."
+            else
+              description="Trusted Sonar result is stale because the PR merge changed during analysis."
+            fi
           fi
           payload="$(node -e '
             const [state, context, description, targetUrl] = process.argv.slice(1);
@@ -475,8 +475,8 @@ jobs:
           # Settle the pending status set on the tested merge, then also land the
           # verdict on the merge SHA GitHub currently evaluates when it differs.
           post_status "$TESTED_SHA"
-          if [ "$merge_is_current" = "true" ] && [ "$current_merge" != "$TESTED_SHA" ] &&
-            [[ "$current_merge" =~ ^[0-9a-f]{40}$ ]]; then
+          # merge_is_current=true already means the helper (40-hex only) answered SAME for current_merge.
+          if [ "$merge_is_current" = "true" ] && [ "$current_merge" != "$TESTED_SHA" ]; then
             post_status "$current_merge"
           fi
           if [ "$state" != "success" ]; then
