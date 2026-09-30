@@ -120,3 +120,16 @@ describe("a retired LEASE sale in the sale form", () => {
     expect(args).not.toHaveProperty("financingType");
   });
 });
+
+describe("financing type changes on an operated sale", () => {
+  test("positive control: changing CASH to FINANCED is sent as financingType FINANCED", async () => {
+    open(sale("CASH"));
+    const native = Array.from(document.querySelectorAll("select")).find((el) =>
+      Array.from(el.options).some((o) => o.value === "FINANCED")
+    );
+    expect(native).toBeDefined();
+    fireEvent.change(native!, { target: { value: "FINANCED" } });
+    const args = await saveAndGetUpdateArgs();
+    expect(args.financingType).toBe("FINANCED");
+  });
+});

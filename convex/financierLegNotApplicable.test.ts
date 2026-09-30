@@ -645,6 +645,20 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
       }
     );
 
+    // Coverage gap found by neutralizing finalizeDeal's own assertOperatedDealMode: the later readiness
+    // check states the same refusal, so a fully-ready retired deal cannot tell the two apart. The
+    // guard's own job is to refuse FIRST, before any other precondition: a retired deal with no
+    // handover recorded is refused as retired, not sent off to register a handover.
+    test.each(RETIRED)(
+      "finalizeDeal refuses a $mode deal as retired BEFORE any other precondition (handover not yet registered)",
+      async ({ mode }) => {
+        const s = await seed(`retired_first_${mode}`);
+        const applicationId = await readyToFinalize(s, { mode });
+        await s.t.run((ctx) => ctx.db.patch(applicationId, { vehicleHandoverAt: undefined }));
+        await expectRetiredDealMode(finalize(s, applicationId));
+      }
+    );
+
     test.each(RETIRED)(
       "getClosingReadiness states DEAL_MODE_RETIRED as a BLOCKED check for a $mode deal",
       async ({ mode }) => {
