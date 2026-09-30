@@ -279,7 +279,7 @@ export const paginateFinanceCompanyReceivables = query({
           documentNumber: doc.documentNumber,
           applicationId: verifiedApplicationId,
           financeCompanyId: doc.financeCompanyId,
-          financingEntity: sameOrgCompany ? sameOrgCompany.name : null,
+          financingEntity: sameOrgCompany ? sameOrgCompany.name : doc.payerType === "MANUAL_FINANCE_COMPANY" ? (doc.payerNameSnapshot ?? null) : null,
           customerId: doc.customerId,
           buyerName: sameOrgCustomer
             ? `${sameOrgCustomer.firstName ?? ""} ${sameOrgCustomer.lastName ?? ""}`.trim()
@@ -319,7 +319,7 @@ export const listFinanceCompanyReceivables = query({
           documentNumber: doc.documentNumber,
           applicationId: doc.sourceId,
           financeCompanyId: doc.financeCompanyId,
-          financingEntity: sameOrgCompany ? sameOrgCompany.name : null,
+          financingEntity: sameOrgCompany ? sameOrgCompany.name : doc.payerType === "MANUAL_FINANCE_COMPANY" ? (doc.payerNameSnapshot ?? null) : null,
           customerId: doc.customerId,
           buyerName: sameOrgCustomer
             ? `${sameOrgCustomer.firstName ?? ""} ${sameOrgCustomer.lastName ?? ""}`.trim()
