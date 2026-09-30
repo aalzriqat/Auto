@@ -13,6 +13,7 @@ import { isMinorAmount } from "./utils/financingEconomics";
 import { resolveDealCurrency } from "./utils/settlementDeductions";
 import { MAX_DIRECT_PAYMENT_REFERENCE_CHARS } from "./utils/feeDocLimits";
 import { planVersionOf } from "./utils/financedSalePostingPlan";
+import { manualPayerOf } from "./utils/manualFinancePayer";
 import {
   MAX_FORWARD_VERSIONS,
   deriveForwardState,
@@ -160,16 +161,23 @@ export const recordFinanceCompanyForward = mutation({
           throw new ConvexError("This deal has been paid and taken back too many times. An accountant reviews the deal. Nothing has been recorded.");
         }
         const currency = await resolveDealCurrency(ctx, app, "recording this payment");
-        if (app.companyId === undefined) {
+        // SCRUM-27: exactly ONE payer identity - the configured company, or the
+        // manual company's name frozen on the application. Neither is refused.
+        const manualPayer = manualPayerOf(app);
+        if (app.companyId === undefined && manualPayer === null) {
           throw new ConvexError("This deal has no finance company. Nothing has been recorded.");
         }
+        const payerIdentity =
+          app.companyId !== undefined
+            ? { financeCompanyId: app.companyId }
+            : { payerNameSnapshot: manualPayer!.name };
         const allowed = await checkPostingAllowed(ctx, args.orgId, args.paidAt);
         if (!allowed.ok && !allowed.waiting) throw new ConvexError(CLOSED_PERIOD_REFUSAL);
 
         const forwardId = await ctx.db.insert("financeCompanyForwards", {
           orgId: args.orgId,
           applicationId: app._id,
-          financeCompanyId: app.companyId,
+          ...payerIdentity,
           version,
           amountMinor: proof.dueMinor,
           depositPortionMinor: app.forwardDepositPortionMinor ?? 0,
@@ -185,7 +193,7 @@ export const recordFinanceCompanyForward = mutation({
           orgId: args.orgId,
           applicationId: app._id,
           forwardId,
-          financeCompanyId: app.companyId,
+          ...payerIdentity,
           version,
           amountMinor: proof.dueMinor,
           currency,
