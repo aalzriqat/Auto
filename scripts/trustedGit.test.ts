@@ -2,6 +2,7 @@
  * SCRUM-494: the shared trusted-git resolver returns an absolute path or throws
  * (never a bare "git" resolved through PATH; Sonar javascript:S4036).
  */
+import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { resolveTrustedGitExecutable } from "./trustedGit.mjs";
 
@@ -23,7 +24,9 @@ describe("resolveTrustedGitExecutable", () => {
     );
   });
 
-  test("defaults use the real filesystem and platform", () => {
-    expect(resolveTrustedGitExecutable()).toMatch(/git(\.exe)?$/);
+  test("defaults use the real filesystem and platform and return an absolute path", () => {
+    const real = resolveTrustedGitExecutable();
+    expect(path.isAbsolute(real)).toBe(true);
+    expect(real).toMatch(/git(\.exe)?$/);
   });
 });

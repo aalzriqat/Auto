@@ -230,11 +230,6 @@ describe("merge content identity CLI (in-process runCli)", () => {
 describe("git is resolved to an absolute trusted path, never via PATH", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  test("the real resolver returns an absolute path to an existing file", () => {
-    const real = resolveTrustedGitExecutable();
-    expect(path.isAbsolute(real)).toBe(true);
-    expect(real).not.toBe("git");
-  });
 
   test("contentIdentity executes exactly the path the resolver returns", () => {
     // A resolver result that does not exist makes the lookup fail closed; if the
