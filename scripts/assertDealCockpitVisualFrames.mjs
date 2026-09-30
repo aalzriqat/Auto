@@ -65,14 +65,26 @@ export function frameCensusErrors(census) {
   );
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  const resultsDir = path.resolve(process.argv[2] ?? "test-results/deal-cockpit-visual");
+/**
+ * The CLI body, in-process so its branches are measured: writes the census
+ * line and one line per short class, and returns the exit code.
+ *
+ * @param {string} resultsDir
+ * @param {{ write(chunk: string): unknown }} [out]
+ * @param {{ write(chunk: string): unknown }} [err]
+ * @returns {0 | 1}
+ */
+export function runCensusCli(resultsDir, out = process.stdout, err = process.stderr) {
   const census = censusFrames(listFrames(resultsDir));
-  process.stdout.write(
+  out.write(
     `visual gate screenshots: base ${census.base}, expanded record ${census.expanded}, ` +
       `withheld-close next-step ${census.nextStep}, panel ${census.panel}, ux4 ${census.ux4}, forward ${census.forward}\n`,
   );
   const errors = frameCensusErrors(census);
-  for (const error of errors) process.stderr.write(`${error}\n`);
-  if (errors.length > 0) process.exit(1);
+  for (const error of errors) err.write(`${error}\n`);
+  return errors.length > 0 ? 1 : 0;
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  process.exitCode = runCensusCli(path.resolve(process.argv[2] ?? "test-results/deal-cockpit-visual"));
 }

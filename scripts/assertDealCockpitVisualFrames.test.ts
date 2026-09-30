@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { censusFrames, frameCensusErrors } from "./assertDealCockpitVisualFrames.mjs";
+import { censusFrames, frameCensusErrors, listFrames, runCensusCli } from "./assertDealCockpitVisualFrames.mjs";
 
 const combos = ["en-light", "en-dark", "ar-light", "ar-dark"].flatMap((lt) =>
   ["390", "1280"].map((vp) => `${lt}-${vp}`),
@@ -65,7 +65,7 @@ describe("deal cockpit visual frame census (SCRUM-489)", () => {
       if (dir) rmSync(dir, { recursive: true, force: true });
     });
 
-    function runCli(frames: string[]) {
+    function writeFrames(frames: string[]): string {
       dir = mkdtempSync(path.join(os.tmpdir(), "dcv-census-"));
       frames.forEach((name, index) => {
         // One directory per test, frames one level down, as Playwright writes them.
@@ -73,11 +73,52 @@ describe("deal cockpit visual frame census (SCRUM-489)", () => {
         mkdirSync(testDir, { recursive: true });
         writeFileSync(path.join(testDir, name), "");
       });
+      return dir;
+    }
+
+    function runCli(frames: string[]) {
+      writeFrames(frames);
       return spawnSync(process.execPath, ["scripts/assertDealCockpitVisualFrames.mjs", dir], {
         cwd: process.cwd(),
         encoding: "utf8",
       });
     }
+
+    function sink() {
+      const chunks: string[] = [];
+      return { chunks, write: (chunk: string) => chunks.push(chunk) > 0 };
+    }
+
+    test("listFrames reads files exactly one directory down and ignores the rest", () => {
+      writeFrames([]);
+      mkdirSync(path.join(dir, "t1", "nested"), { recursive: true });
+      writeFileSync(path.join(dir, "t1", "deal-cockpit-a-top.png"), "");
+      writeFileSync(path.join(dir, "t1", "nested", "deal-cockpit-b-top.png"), "");
+      writeFileSync(path.join(dir, "stray.png"), "");
+      expect(listFrames(dir)).toEqual(["deal-cockpit-a-top.png"]);
+    });
+
+    test("runCensusCli (in-process) returns 0 and writes only the census line on a complete set", () => {
+      writeFrames(completeFrameSet());
+      const out = sink();
+      const err = sink();
+      expect(runCensusCli(dir, out, err)).toBe(0);
+      expect(out.chunks.join("")).toBe(
+        "visual gate screenshots: base 16, expanded record 8, withheld-close next-step 16, panel 8, ux4 72, forward 16\n",
+      );
+      expect(err.chunks).toEqual([]);
+    });
+
+    test("runCensusCli (in-process) returns 1 and writes one line per short class", () => {
+      writeFrames(completeFrameSet().filter((name) => !name.endsWith("-panel.png") && !name.endsWith("-forward-ask.png")));
+      const out = sink();
+      const err = sink();
+      expect(runCensusCli(dir, out, err)).toBe(1);
+      expect(err.chunks).toEqual([
+        "expected 8 panel screenshots (SCRUM-414), found 0\n",
+        "expected 16 forward-step screenshots (2 variants x 2 locales x 2 themes x 2 viewports, SCRUM-435), found 8\n",
+      ]);
+    });
 
     test("exits 0 on a complete set", () => {
       const result = runCli(completeFrameSet());
