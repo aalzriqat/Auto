@@ -55,11 +55,13 @@ import {
 } from "../lib/closingReadinessReasonCodes";
 import { loadCustodyRecords } from "./utils/settlementDeductions";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
-import { runWithIdempotency } from "./utils/idempotency";
+import { MAX_IDEMPOTENCY_KEY_LENGTH, runWithIdempotency } from "./utils/idempotency";
 import { registerChequeCore, markChequeClearedCore, assertNoActiveAllocations } from "./collections";
 import {
   hookFinanceDisbursed,
   hookFinanceCashReceived,
+  hookFinanceCashReceivedReturned,
+  isFinanceCashReceivedUndone,
   hookFinanceDisbursementCancelled,
   hookSaleCancelled,
   reverseCommissionForSale,
@@ -108,7 +110,10 @@ import {
   createCanonicalPayment,
   ensureReceivableDocument,
   getReceivableOutstandingMinor,
+  reverseAllocation,
+  voidCanonicalPayment,
 } from "./subledger";
+import { disbursementVersionOf, financeDisbursementKeys } from "./utils/financeDisbursementKeys";
 import { summarizeFees } from "./financeDealCosts";
 import {
   consignedSettlementRoute,
@@ -128,11 +133,16 @@ import { auditLog } from "./financialAudit";
 import {
   chequesForApplication,
   isLiveFcCheque,
+  isFcLineage,
+  FC_RETURN_MESSAGES,
   hasClearedLinkedCheque,
   liveChequesForApplication,
+  clearedDisbursementCheque,
+  latestReturnedAfterClearing,
   parseFaceAmountMinor,
   dealChequeCurrency,
   ATTESTATION_NOTE_MAX_LENGTH,
+  FC_RETURN_REASON_MAX_LENGTH,
 } from "./utils/fcCheque";
 import { assertFinancedDepositsSurviveParentReversal } from "./utils/depositApplications";
 import { projectDealVehicleProfile } from "./utils/dealVehicleProfile";
@@ -2078,6 +2088,7 @@ export const dealCockpit = query({
     // SCRUM-435: the ONE forward proof feeds the rail, the cockpit view and the
     // gates; nothing here derives it a second time.
     const forwardProof = await deriveForwardState(ctx, app);
+    const disbursementCheque = clearedDisbursementCheque(linkedCheques, app);
     const stages = deriveDealStages({
       forwardState: forwardProof.state,
       forwardExceptionOpen: forwardProof.returnedExceptionOpen,
@@ -2409,6 +2420,23 @@ export const dealCockpit = query({
           (role.permissions.includes(PERMISSIONS.CREATE_FINANCE_APPLICATION) &&
             role.permissions.includes(PERMISSIONS.FINALIZE_FINANCED_DEAL) &&
             role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT)),
+      },
+      /**
+       * SCRUM-239: the bank returned the finance company's cheque AFTER it
+       * cleared. `mayReturn` is computed here from the same permissions and the
+       * same cheque binding the command requires, so the screen offers only what
+       * the server accepts. `chequeId` names the cleared cheque to return;
+       * `lastReturnedChequeId` is the newest cheque already returned after
+       * clearing, which is how the screen sees the fact it wrote.
+       */
+      disbursementReturn: {
+        mayReturn:
+          disbursementCheque !== null &&
+          (isSystemOwnerRole(role) ||
+            (role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT) &&
+              role.permissions.includes(PERMISSIONS.VIEW_FINANCE))),
+        chequeId: disbursementCheque?._id ?? null,
+        lastReturnedChequeId: latestReturnedAfterClearing(linkedCheques)?._id ?? null,
       },
       documents,
       timeline: timeline
@@ -4976,6 +5004,9 @@ export const confirmDisbursement = mutation({
     applicationId: v.id("financeApplications"),
     disbursedAmountMinor: v.number(),
     idempotencyKey: v.string(),
+    // SCRUM-239 round 3: the disbursement version the confirmer OBSERVED. The
+    // server refuses a mismatch before the idempotency probe and any write.
+    expectedDisbursementVersion: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     // The expected-amount comparison further down is skipped whenever the quote
@@ -4983,6 +5014,32 @@ export const confirmDisbursement = mutation({
     // relied on to reject NaN. Validate the input unconditionally.
     assertValidMinorAmount(args.disbursedAmountMinor, "disbursed amount");
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
+
+    // SCRUM-239: a confirmation belongs to ONE disbursement version. A completed
+    // key is replayed BEFORE the body reads the application, so without the
+    // version in the fingerprint a key kept from version n (lost response) would
+    // replay n's result after a return opened version n+1 - a success toast and
+    // no payment, allocation or FINANCE_CASH_RECEIVED for the new disbursement.
+    // Version 1 keeps the historical fingerprint byte for byte so existing rows
+    // still replay. A missing or foreign row leaves the legacy shape; the body
+    // refuses it exactly as before.
+    const knownApp = await ctx.db.get(args.applicationId);
+    const ownedApp = knownApp && knownApp.orgId === args.orgId ? knownApp : null;
+    const version = ownedApp ? disbursementVersionOf(ownedApp) : 1;
+
+    // SCRUM-239 round 3: a request is bound to the version the CONFIRMER SAW. A
+    // fresh key from a screen that observed version n must not confirm version
+    // n+1's replacement cheque it never saw, so the comparison cannot rest on the
+    // idempotency fingerprint (a fresh key has no row). Only an application of
+    // this organisation is compared: a missing or foreign row falls through and
+    // the body refuses it as before, leaking nothing across tenants. A legacy
+    // client (no expected version) may confirm only a first disbursement.
+    if (ownedApp) {
+      const observed = args.expectedDisbursementVersion;
+      if ((observed !== undefined && observed !== version) || (observed === undefined && version > 1)) {
+        refuseFinanceReturn("FINANCE_CONFIRM_STALE_REQUEST");
+      }
+    }
 
     return await runWithIdempotency(
       ctx,
@@ -4995,13 +5052,19 @@ export const confirmDisbursement = mutation({
         fingerprint: JSON.stringify({
           applicationId: args.applicationId,
           disbursedAmountMinor: args.disbursedAmountMinor,
+          ...(version > 1 ? { disbursementVersion: version } : {}),
         }),
+        // Only a later version can be stale; a version-1 conflict is a plain
+        // key reuse with different content and keeps the default refusal.
+        ...(version > 1
+          ? { onFingerprintConflict: (): never => refuseFinanceReturn("FINANCE_CONFIRM_STALE_REQUEST") }
+          : {}),
       },
       async () => {
         const app = await ctx.db.get(args.applicationId);
         if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found.");
         if (app.status !== "CLOSED") throw new ConvexError("Disbursement can only be confirmed on a closed application.");
-        if (app.disbursedAt) throw new ConvexError("Disbursement has already been confirmed for this application.");
+        if (app.disbursedAt) refuseFinanceReturn("FINANCE_CONFIRM_ALREADY_CONFIRMED");
         if (!app.companyId && manualPayerOf(app) === null) {
           // Same resolver as the cockpit, so the screen and this guard cannot
           // disagree about whether a finance company pays on this deal.
@@ -5092,41 +5155,37 @@ export const confirmDisbursement = mutation({
           // beside it (live HELD, RETURNED), so it is named FIRST, before any
           // write and before the correct-the-payment refusal.
           if (hasClearedLinkedCheque(allRows)) {
-            throw new ConvexError(
-              "This deal's cheque is already marked cleared but the disbursement was never confirmed. Ask accounting to review it before confirming."
-            );
+            refuseFinanceReturn("FINANCE_CONFIRM_CHEQUE_ALREADY_CLEARED");
           }
           const liveRows = allRows.filter(isLiveFcCheque);
           if (liveRows.length === 0) {
             if (allRows.some((row) => row.status === "RETURNED" || row.status === "CANCELLED")) {
-              throw new ConvexError(
-                "This cheque was returned or cancelled. Correct the expected payment, then register the new payment, before confirming disbursement."
-              );
+              refuseFinanceReturn("FINANCE_CONFIRM_CHEQUE_RETURNED_OR_CANCELLED");
             }
-            throw new ConvexError("Expected cheque record not found for this application.");
+            refuseFinanceReturn("FINANCE_CONFIRM_CHEQUE_NOT_FOUND");
           }
           if (liveRows.length > 1) {
-            throw new ConvexError(
-              "This deal has more than one live finance-company cheque. Resolve the duplicate before confirming disbursement."
-            );
+            refuseFinanceReturn("FINANCE_CONFIRM_MULTIPLE_LIVE_CHEQUES");
           }
           const cheque = liveRows[0];
           // D1: the instrument's operator-recorded (or attested) face must equal
           // the receipt exactly, in the receipt's currency. A legacy row with no
           // recorded face is refused, never assumed equal. All before any write.
           if (cheque.amountMinor === undefined) {
-            throw new ConvexError(
-              "This cheque's face amount was never recorded in minor units. Have a finance manager attest the face from the deal before confirming disbursement."
-            );
+            refuseFinanceReturn("FINANCE_CONFIRM_CHEQUE_FACE_UNRECORDED");
           }
           if (cheque.currency !== currency || cheque.amountMinor !== receiptMinor) {
-            throw new ConvexError(
-              "The cheque's recorded face does not equal the disbursement being confirmed. Correct the expected payment or the cheque before confirming."
-            );
+            refuseFinanceReturn("FINANCE_CONFIRM_CHEQUE_FACE_MISMATCH");
           }
           chequeToClear = cheque;
         }
 
+        // SCRUM-239: this disbursement's identity. Version 1 (an absent stamp) is
+        // byte-identical to the keys that have always been used; after a bounced
+        // cheque was undone the application is at version 2+, and every key here
+        // is new, so nothing collides with the undone disbursement's rows.
+        const disbursementVersion = disbursementVersionOf(app);
+        const disbursementKeys = financeDisbursementKeys(args.applicationId, disbursementVersion);
         const now = Date.now();
         await ctx.db.patch(args.applicationId, {
           disbursedAt: now,
@@ -5151,6 +5210,9 @@ export const confirmDisbursement = mutation({
             chequeId: chequeToClear._id,
             clearedAt: now,
           });
+          // Which disbursement this instrument cleared; the return command
+          // refuses a cheque that is not the application's current one.
+          await ctx.db.patch(chequeToClear._id, { disbursementVersion });
         }
 
         // Post the actual receipt of funds: DR Bank / CR Accounts Receivable —
@@ -5169,6 +5231,7 @@ export const confirmDisbursement = mutation({
           currency,
           actorId: user._id,
           occurredAt: now,
+          disbursementVersion,
         });
 
         // Record the money in the canonical subledger and settle the
@@ -5191,7 +5254,7 @@ export const confirmDisbursement = mutation({
           method: disbursementMethod,
           amountMinor: receiptMinor,
           currency,
-          idempotencyKey: `finance_disbursement_${args.applicationId}`,
+          idempotencyKey: disbursementKeys.paymentKey,
           actorId: user._id,
           status: "SETTLED",
           externalReference: `Finance disbursement for application ${args.applicationId}`,
@@ -5214,6 +5277,232 @@ export const confirmDisbursement = mutation({
           actorName,
           amount: String(receiptMinor),
         }, { link: `/${args.orgId}/accounting` });
+      }
+    );
+  },
+});
+
+function refuseFinanceReturn(code: keyof typeof FC_RETURN_MESSAGES): never {
+  return throwAppError(AppErrorCode[code], FC_RETURN_MESSAGES[code]);
+}
+
+/**
+ * SCRUM-239: the bank returned a finance-company cheque AFTER it cleared.
+ *
+ * INVARIANT: a CLEARED finance-company disbursement cheque becomes RETURNED only
+ * through this one application-owned command, which in one transaction undoes
+ * exactly that disbursement - the application's receipt fields, every ACTIVE
+ * allocation of its canonical payment, the payment, and its own
+ * FINANCE_CASH_RECEIVED occurrence - and nothing else. It never touches the
+ * sale, the commission, the customer receivable, the forward rows, or another
+ * disbursement's rows. The next `confirmDisbursement` runs at version + 1 and
+ * mints fresh keys, so it cannot collide with what this reversed.
+ *
+ * Every refusal comes before the first write. There is deliberately NO forward
+ * precondition: an open forward exception on the deal has its own path, and
+ * refusing here would leave the operator with no way out (recordForward is the
+ * only command it allows).
+ */
+export const returnFinanceDisbursementCheque = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    chequeId: v.id("postDatedCheques"),
+    returnReason: v.string(),
+    idempotencyKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+      PERMISSIONS.VIEW_FINANCE,
+    ]);
+    // The default idempotency refusals are plain strings; a dialog key that is
+    // blank or too long is refused here, coded and translated, before any read.
+    const keyLength = args.idempotencyKey.trim().length;
+    if (keyLength === 0 || keyLength > MAX_IDEMPOTENCY_KEY_LENGTH) {
+      refuseFinanceReturn("FINANCE_RETURN_KEY_INVALID");
+    }
+    const returnReason = args.returnReason.trim();
+    if (returnReason === "") refuseFinanceReturn("FINANCE_RETURN_REASON_REQUIRED");
+    if (returnReason.length > FC_RETURN_REASON_MAX_LENGTH) {
+      // `max` rides beside the code so the dictionary's `{max}` is filled.
+      throw new ConvexError({
+        code: AppErrorCode.FINANCE_RETURN_REASON_TOO_LONG,
+        message: FC_RETURN_MESSAGES.FINANCE_RETURN_REASON_TOO_LONG,
+        max: FC_RETURN_REASON_MAX_LENGTH,
+      });
+    }
+
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "applications.returnFinanceDisbursementCheque",
+        economic: true,
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        fingerprint: JSON.stringify({
+          applicationId: args.applicationId,
+          chequeId: args.chequeId,
+          returnReason,
+        }),
+        onFingerprintConflict: () => refuseFinanceReturn("FINANCE_RETURN_KEY_CONFLICT"),
+      },
+      async () => {
+        // A missing row and another organisation's row answer identically, so the
+        // refusal never discloses that a foreign row exists.
+        const app = await ctx.db.get(args.applicationId);
+        if (!app || app.orgId !== args.orgId) refuseFinanceReturn("FINANCE_RETURN_NOT_FOUND");
+        if (app.disbursedAt === undefined || app.disbursedAmountMinor === undefined) {
+          refuseFinanceReturn("FINANCE_RETURN_NOT_DISBURSED");
+        }
+        const cheque = await ctx.db.get(args.chequeId);
+        if (!cheque || cheque.orgId !== args.orgId) refuseFinanceReturn("FINANCE_RETURN_NOT_FOUND");
+        if (cheque.status !== "CLEARED" || cheque.isDeleted === true) {
+          refuseFinanceReturn("FINANCE_RETURN_CHEQUE_NOT_CLEARED");
+        }
+
+        // The cheque, the application and the payment must describe ONE
+        // disbursement: the same version, the same instant, the same amount and
+        // currency. The same binding `chequeLineageAudit` checks.
+        const version = disbursementVersionOf(app);
+        const keys = financeDisbursementKeys(args.applicationId, version);
+        const anchorId = cheque.applicationId ?? cheque.originApplicationId;
+        if (
+          !isFcLineage(cheque) ||
+          anchorId !== args.applicationId ||
+          disbursementVersionOf(cheque) !== version ||
+          cheque.clearedAt !== app.disbursedAt ||
+          cheque.amountMinor !== app.disbursedAmountMinor ||
+          cheque.currency === undefined
+        ) {
+          refuseFinanceReturn("FINANCE_RETURN_CHAIN_MISMATCH");
+        }
+
+        const payment = await ctx.db
+          .query("canonicalPayments")
+          .withIndex("by_org_idempotency", (q) => q.eq("orgId", args.orgId).eq("idempotencyKey", keys.paymentKey))
+          .unique();
+        const expectedPayerType = app.companyId ? "FINANCE_COMPANY" : "MANUAL_FINANCE_COMPANY";
+        const paymentCurrency = payment?.currency.toUpperCase();
+        if (
+          !payment ||
+          payment.status !== "SETTLED" ||
+          payment.direction !== "IN" ||
+          payment.payerType !== expectedPayerType ||
+          (app.companyId
+            ? payment.financeCompanyId !== app.companyId
+            : payment.payerNameSnapshot !== manualPayerOf(app)?.name) ||
+          payment.amountMinor !== app.disbursedAmountMinor ||
+          payment.receivedAt !== app.disbursedAt ||
+          paymentCurrency !== cheque.currency.toUpperCase() ||
+          (app.economicsCurrency !== undefined &&
+            paymentCurrency !== app.economicsCurrency.toUpperCase())
+        ) {
+          refuseFinanceReturn("FINANCE_RETURN_CHAIN_MISMATCH");
+        }
+
+        // The remainder sentinel: the payment's ACTIVE allocations must be the
+        // whole payment and all of them on THIS deal's finance-company
+        // receivable. Anything else (a partial reversal by another path, an
+        // allocation elsewhere) is refused rather than partly reversed.
+        const receivable = await ctx.db
+          .query("receivableDocuments")
+          .withIndex("by_org_source", (q) =>
+            q.eq("orgId", args.orgId).eq("sourceType", FINANCE_APP_RECEIVABLE_SOURCE).eq("sourceId", args.applicationId)
+          )
+          .unique();
+        const activeAllocations = (
+          await ctx.db.query("paymentAllocations").withIndex("by_payment", (q) => q.eq("paymentId", payment._id)).collect()
+        ).filter((allocation) => allocation.status === "ACTIVE");
+        const allocatedMinor = activeAllocations.reduce((sum, allocation) => sum + allocation.amountMinor, 0);
+        if (
+          !receivable ||
+          activeAllocations.length === 0 ||
+          allocatedMinor !== payment.amountMinor ||
+          activeAllocations.some((allocation) => allocation.receivableDocumentId !== receivable._id)
+        ) {
+          refuseFinanceReturn("FINANCE_RETURN_ALLOCATION_SHAPE");
+        }
+
+        const now = Date.now();
+        for (const allocation of activeAllocations) {
+          await reverseAllocation(ctx, { orgId: args.orgId, allocationId: allocation._id, actorId: user._id });
+        }
+        await voidCanonicalPayment(ctx, { orgId: args.orgId, paymentId: payment._id, actorId: user._id });
+
+        const reversal = await hookFinanceCashReceivedReturned(ctx, {
+          orgId: args.orgId,
+          applicationId: args.applicationId,
+          disbursementVersion: version,
+          reason: `Finance-company cheque returned after clearing: ${returnReason}`,
+          actorId: user._id,
+          reversalDate: now,
+        });
+        // The hook's string is not the evidence (it says REVERSED for any
+        // reversal key it has seen). Read the books: a throw here rolls back
+        // every write above.
+        if (!(await isFinanceCashReceivedUndone(ctx, { orgId: args.orgId, applicationId: args.applicationId, disbursementVersion: version }))) {
+          refuseFinanceReturn("FINANCE_RETURN_REVERSAL_UNPROVEN");
+        }
+
+        await ctx.db.patch(cheque._id, {
+          status: "RETURNED",
+          returnedAt: now,
+          returnReason,
+          returnedAfterClearing: true,
+          disbursementVersion: version,
+          updatedAt: now,
+        });
+        await ctx.db.patch(args.applicationId, {
+          disbursedAt: undefined,
+          disbursedAmountMinor: undefined,
+          disbursementIdempotencyKey: undefined,
+          settlementStatus: "EXPECTED",
+          disbursementVersion: version + 1,
+          updatedAt: now,
+        });
+
+        await auditLog(ctx, {
+          orgId: args.orgId,
+          actorId: user._id,
+          actionType: "RETURN_FINANCE_DISBURSEMENT_CHEQUE",
+          resourceType: "financeApplications",
+          resourceId: args.applicationId,
+          description: `Finance-company cheque returned after clearing: ${returnReason}`,
+          before: {
+            disbursedAt: app.disbursedAt,
+            disbursedAmountMinor: app.disbursedAmountMinor,
+            disbursementIdempotencyKey: app.disbursementIdempotencyKey,
+            disbursementVersion: version,
+            settlementStatus: app.settlementStatus,
+          },
+          after: {
+            chequeId: cheque._id,
+            paymentId: payment._id,
+            reversedAllocationIds: activeAllocations.map((allocation) => allocation._id),
+            cashReceivedSourceId: keys.sourceId,
+            reversalOutcome: reversal,
+            disbursementVersion: version + 1,
+          },
+          idempotencyKey: args.idempotencyKey,
+        });
+
+        const actorName = await getActorName(ctx);
+        await notifyManagers(
+          ctx,
+          args.orgId,
+          "collection.cheque_returned",
+          { actorName, amount: String(cheque.amount) }, // display figure the template expects, not the minor-unit face (1000x)
+          { link: `/${args.orgId}/accounting` }
+        );
+
+        return {
+          chequeId: cheque._id,
+          returnedDisbursementVersion: version,
+          nextDisbursementVersion: version + 1,
+          reversal,
+        };
       }
     );
   },

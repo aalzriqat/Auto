@@ -185,6 +185,7 @@ import type * as utils_feeDocLimits from "../utils/feeDocLimits.js";
 import type * as utils_feeSummary from "../utils/feeSummary.js";
 import type * as utils_financeApplicationProjection from "../utils/financeApplicationProjection.js";
 import type * as utils_financeCompanyForward from "../utils/financeCompanyForward.js";
+import type * as utils_financeDisbursementKeys from "../utils/financeDisbursementKeys.js";
 import type * as utils_financeStatuses from "../utils/financeStatuses.js";
 import type * as utils_financedSalePostingPlan from "../utils/financedSalePostingPlan.js";
 import type * as utils_financedSaleRecognition from "../utils/financedSaleRecognition.js";
@@ -439,6 +440,7 @@ declare const fullApi: ApiFromModules<{
   "utils/feeSummary": typeof utils_feeSummary;
   "utils/financeApplicationProjection": typeof utils_financeApplicationProjection;
   "utils/financeCompanyForward": typeof utils_financeCompanyForward;
+  "utils/financeDisbursementKeys": typeof utils_financeDisbursementKeys;
   "utils/financeStatuses": typeof utils_financeStatuses;
   "utils/financedSalePostingPlan": typeof utils_financedSalePostingPlan;
   "utils/financedSaleRecognition": typeof utils_financedSaleRecognition;

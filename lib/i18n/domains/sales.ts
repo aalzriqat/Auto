@@ -284,6 +284,29 @@ const dealRailMessages = defineBilingualMessages({
   ForwardReasonLabel: ["Reason", "السبب"],
   ForwardReasonRequired: ["A reason is required.", "السبب مطلوب."],
   ForwardCorrectionSuccess: ["Payment to the finance company corrected", "تم تصحيح الدفع لشركة التمويل"],
+  // SCRUM-239: the bank returned the finance company's cheque after it cleared.
+  ChequeReturnedByBankAction: ["Cheque returned by bank", "شيك مرتجع من البنك"],
+  ChequeReturnedByBankTitle: ["Cheque returned by bank", "شيك مرتجع من البنك"],
+  ChequeReturnedByBankDesc: [
+    "Use this when the bank returned the finance company's cheque after it was cleared. The finance company's receipt comes off the books, the finance company's receivable reopens, and the deal goes back to waiting for a new cheque and a new disbursement.",
+    "استخدمه إذا أرجع البنك شيك شركة التمويل بعد صرفه. يُلغى قيد استلام مبلغ شركة التمويل من الدفاتر، وتعود ذمة شركة التمويل مفتوحة، وتعود الصفقة بانتظار شيك جديد وصرف التمويل من جديد.",
+  ],
+  ChequeReturnedByBankReasonLabel: ["Return reason", "سبب الإرجاع"],
+  ChequeReturnedByBankConfirm: ["Record the return", "تسجيل الإرجاع"],
+  ChequeReturnedByBankSuccess: [
+    "Cheque return recorded. The deal is waiting for a new cheque.",
+    "تم تسجيل الشيك المرتجع. الصفقة بانتظار شيك جديد.",
+  ],
+  // SCRUM-239 round 4: the deal's disbursement moved while the confirm dialog was open.
+  DisbursementChangedWhileConfirming: [
+    "This deal's disbursement changed while the confirmation was open (a cheque was returned). Nothing was confirmed. Reopen and review before confirming.",
+    "تغيّر صرف هذه الصفقة أثناء فتح نافذة التأكيد (تم إرجاع شيك). لم يتم تأكيد أي شيء. أعد فتح النافذة وراجع قبل التأكيد.",
+  ],
+  // SCRUM-239 round 5: same, but a confirmation had been SENT and its answer never arrived here.
+  DisbursementChangedOutcomeUnknown: [
+    "This deal's disbursement changed (a cheque was returned) after a confirmation was sent, and that confirmation's result is not known on this screen. Review the deal's receipts and cheque history before confirming again.",
+    "تغيّر صرف هذه الصفقة (تم إرجاع شيك) بعد إرسال تأكيد، ونتيجة ذلك التأكيد غير معروفة على هذه الشاشة. راجع مقبوضات الصفقة وسجل الشيكات قبل التأكيد مرة أخرى.",
+  ],
   ForwardVoidAfterTransfer: [
     "The finance company's transfer is now confirmed, so this payment can no longer be voided. If the company sent it back, report it as returned.",
     "تم تأكيد تحويل شركة التمويل، لذا لم يعد بالإمكان إلغاء هذا الدفع. إذا أعادته الشركة، أبلغ عن إرجاعه.",
@@ -1623,6 +1646,114 @@ const serverErrorMessages = defineBilingualMessages({
   ServerError_COMMISSION_BASE_UNUSABLE_RECALC: [
     "This sale's recorded commissionable margin is in a different currency from the organization's or holds an unusable amount, so a commission cannot be worked out. Have the deal's figures corrected before recalculating; the existing commission has been left untouched.",
     "هامش المركبة الخاضع للعمولة المسجل لعملية البيع هذه بعملة مختلفة عن عملة المؤسسة أو يحتوي على مبلغ غير صالح، لذا لا يمكن احتساب العمولة. يرجى تصحيح أرقام الصفقة قبل إعادة الاحتساب؛ لم يتم تغيير العمولة الحالية.",
+  ],
+  ServerError_FINANCE_RETURN_NOT_DISBURSED: [
+    "This deal has no confirmed finance-company disbursement, so there is no cleared cheque to return. Nothing has been changed.",
+    "لا يوجد صرف مؤكد من شركة التمويل لهذه الصفقة، لذلك لا يوجد شيك مصروف ليُسجَّل كمرتجع. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_RETURN_CHEQUE_NOT_CLEARED: [
+    "Only a cleared finance-company cheque can be returned from the deal, and this cheque is not cleared. Nothing has been changed.",
+    "لا يمكن تسجيل إرجاع شيك شركة التمويل من شاشة الصفقة إلا إذا كان قد تم صرفه، وهذا الشيك لم يُصرف بعد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_RETURN_CHAIN_MISMATCH: [
+    "This cheque does not match the deal's recorded disbursement (the cheque, amount, currency or payment). Nothing has been changed. An accountant reviews the deal.",
+    "هذا الشيك لا يطابق صرف التمويل المسجَّل على الصفقة (الشيك أو المبلغ أو العملة أو الدفعة). لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
+  ],
+  ServerError_FINANCE_RETURN_ALLOCATION_SHAPE: [
+    "The disbursement payment is not allocated exactly to this deal's finance-company receivable, so it cannot be reversed safely. Nothing has been changed. An accountant reviews the deal.",
+    "دفعة صرف التمويل غير موزَّعة بالكامل على ذمة شركة التمويل الخاصة بهذه الصفقة، لذلك لا يمكن عكسها بأمان. لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
+  ],
+  ServerError_FINANCE_RETURN_REVERSAL_UNPROVEN: [
+    "The finance company's receipt could not be confirmed as reversed on the books, so the return was not recorded. Nothing has been changed. An accountant reviews the deal.",
+    "تعذّر التأكد من عكس قيد استلام مبلغ شركة التمويل في الدفاتر، لذلك لم يُسجَّل المرتجع. لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
+  ],
+  ServerError_FINANCE_RETURN_REASON_REQUIRED: [
+    "Give the reason the bank returned the cheque. Nothing has been changed.",
+    "اكتب سبب إرجاع البنك للشيك. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_RETURN_REASON_TOO_LONG: [
+    "The return reason is too long (the most is {max} characters). Nothing has been changed.",
+    "سبب الإرجاع طويل جدًا (الحد الأقصى {max} حرفًا). لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_CHEQUE_RETURN_FROM_DEAL: [
+    "This is a finance-company cheque. Its return is recorded from the deal screen with the \"Cheque returned by bank\" action, not from customer collections. Nothing has been changed.",
+    "هذا شيك شركة تمويل، ويُسجَّل إرجاعه من شاشة الصفقة عبر إجراء «شيك مرتجع من البنك» وليس من تحصيلات العملاء. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_RETURN_NOT_FOUND: [
+    "The deal or the cheque could not be found. Nothing has been changed.",
+    "تعذّر العثور على الصفقة أو الشيك. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_RETURN_KEY_CONFLICT: [
+    "This request reuses the identity of an earlier request that had different content (another cheque or reason). Nothing has been changed. Reopen the dialog and try again.",
+    "يعيد هذا الطلب استخدام معرّف طلب سابق كان محتواه مختلفًا (شيك أو سبب آخر). لم يتم تغيير أي شيء. أعد فتح النافذة وحاول مرة أخرى.",
+  ],
+  ServerError_CHEQUE_ALREADY_RETURNED: [
+    "This cheque has already been returned, so it cannot be returned again. Nothing has been changed.",
+    "سبق تسجيل هذا الشيك كمرتجع، لذلك لا يمكن إرجاعه مرة أخرى. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CHEQUE_NOT_RETURNABLE: [
+    "This cheque can no longer be returned. Nothing has been changed.",
+    "لا يمكن إرجاع هذا الشيك بعد الآن. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CHEQUE_NOT_FOUND: [
+    "Cheque not found. Nothing has been changed.",
+    "لم يتم العثور على الشيك. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CHEQUE_NOT_CLEARED: [
+    "Only cleared cheques can be returned after clearing. Nothing has been changed.",
+    "لا يمكن إرجاع الشيك بعد التصفية إلا إذا كان الشيك مصفّى. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_RETURN_KEY_INVALID: [
+    "The request identity is missing or too long (at most 200 characters). Nothing has been changed. Reopen the dialog and try again.",
+    "معرّف الطلب مفقود أو أطول من الحد المسموح (200 حرف كحد أقصى). لم يتم تغيير أي شيء. أعد فتح النافذة وحاول مرة أخرى.",
+  ],
+  ServerError_FINANCE_CONFIRM_STALE_REQUEST: [
+    "This confirmation was prepared before the deal's cheque was returned, so it cannot be applied. Nothing has been changed. Reopen the deal and confirm again.",
+    "جرى تجهيز هذا التأكيد قبل إرجاع شيك الصفقة، لذلك لا يمكن تطبيقه. لم يتم تغيير أي شيء. أعد فتح الصفقة وأكّد من جديد.",
+  ],
+  ServerError_FINANCE_CONFIRM_ALREADY_CONFIRMED: [
+    "Disbursement has already been confirmed for this application. Nothing has been changed.",
+    "تم تأكيد الصرف لهذا الطلب مسبقًا. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_CONFIRM_CHEQUE_ALREADY_CLEARED: [
+    "This deal's cheque is already marked cleared but the disbursement was never confirmed. Ask accounting to review it before confirming. Nothing has been changed.",
+    "شيك هذه الصفقة مُعلَّم كمصفّى بالفعل لكن الصرف لم يُؤكَّد قط. اطلب من المحاسبة مراجعته قبل التأكيد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_CONFIRM_CHEQUE_RETURNED_OR_CANCELLED: [
+    "This cheque was returned or cancelled. Correct the expected payment, then register the new payment, before confirming disbursement. Nothing has been changed.",
+    "تم إرجاع هذا الشيك أو إلغاؤه. صحّح الدفعة المتوقعة ثم سجّل الدفعة الجديدة قبل تأكيد الصرف. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_CONFIRM_CHEQUE_NOT_FOUND: [
+    "Expected cheque record not found for this application. Nothing has been changed.",
+    "لم يتم العثور على سجل الشيك المتوقع لهذا الطلب. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_CONFIRM_MULTIPLE_LIVE_CHEQUES: [
+    "This deal has more than one live finance-company cheque. Resolve the duplicate before confirming disbursement. Nothing has been changed.",
+    "لهذه الصفقة أكثر من شيك واحد فعّال لشركة التمويل. عالج التكرار قبل تأكيد الصرف. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_CONFIRM_CHEQUE_FACE_UNRECORDED: [
+    "This cheque's face amount was never recorded in minor units. Have a finance manager attest the face from the deal before confirming disbursement. Nothing has been changed.",
+    "لم يُسجَّل المبلغ المكتوب على هذا الشيك بالوحدات الصغرى قط. اطلب من مدير مالي إقرار المبلغ من الصفقة قبل تأكيد الصرف. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_CONFIRM_CHEQUE_FACE_MISMATCH: [
+    "The cheque's recorded face does not equal the disbursement being confirmed. Correct the expected payment or the cheque before confirming. Nothing has been changed.",
+    "المبلغ المسجَّل على الشيك لا يساوي مبلغ الصرف الذي يتم تأكيده. صحّح الدفعة المتوقعة أو الشيك قبل التأكيد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CHEQUE_BANK_FEE_INVALID: [
+    "The bank fee must be a whole, non-negative amount in minor currency units. Nothing has been changed.",
+    "يجب أن تكون رسوم البنك عددًا صحيحًا غير سالب بالوحدات الصغرى للعملة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CHEQUE_RETURN_NO_RECEIPT_LINEAGE: [
+    "This cleared cheque has no persisted receipt lineage, so what it moved cannot be determined, and returning it would reopen the debt without reversing the receipt. Nothing has been changed. An accountant reviews the deal.",
+    "لا يوجد سجل محفوظ لقيد الاستلام المرتبط بهذا الشيك المصفّى، لذلك لا يمكن تحديد ما حرّكه، وإرجاعه سيعيد فتح الدين دون عكس الاستلام. لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
+  ],
+  ServerError_CHEQUE_RETURN_NO_PAYMENT_TO_REVERSE: [
+    "This cleared cheque has no collection payment to reverse, so reopening the debt would leave it owed and collected at the same time. Nothing has been changed. An accountant reviews the deal.",
+    "لا توجد دفعة تحصيل لهذا الشيك المصفّى ليتم عكسها، وإعادة فتح الدين ستجعله مستحقًا ومحصّلًا في الوقت نفسه. لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
+  ],
+  ServerError_CHEQUE_RETURN_KEY_CONFLICT: [
+    "This same request was already sent with a different cheque, reason or bank fee. Nothing has been changed. Close and reopen the dialog to try again.",
+    "سبق إرسال هذا الطلب نفسه مع شيك أو سبب أو رسوم بنكية مختلفة. لم يتم تغيير أي شيء. أغلق النافذة وأعد فتحها للمحاولة مرة أخرى.",
   ],
 });
 

@@ -66,6 +66,7 @@ import {
   depositReleaseReflected,
   expectedPaymentReflected,
   financeDisbursementReflected,
+  disbursementReturnReflected,
   handoverReflected,
   legalInvoiceReflected,
   nextOutstandingDocument,
@@ -159,6 +160,7 @@ import {
   type ForwardPaymentValues,
 } from "../RecordForwardToFinanceCompanyDialog";
 import { ForwardCorrectionDialog, type ForwardCorrectionKind } from "../ForwardCorrectionDialog";
+import { ChequeReturnedByBankDialog } from "../ChequeReturnedByBankDialog";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { FinancingPlanPanel, type FinancingPlanFacts } from "./FinancingPlanPanel";
 import {
@@ -1025,6 +1027,7 @@ export function DealCockpit({
     api.financeCompanyForward.reportFinanceCompanyForwardReturned
   );
   const confirmSupplierDisbursement = useMutation(api.applications.confirmSupplierDisbursement);
+  const returnFinanceDisbursementCheque = useMutation(api.applications.returnFinanceDisbursementCheque);
   const setSupplierSettlementRoute = useMutation(api.applications.setSupplierSettlementRoute);
   const releaseDeposit = useMutation(api.deposits.release);
   const updateDocStatus = useMutation(api.documents.updateDocumentStatus);
@@ -1074,6 +1077,12 @@ export function DealCockpit({
   const [forwardSubmitting, setForwardSubmitting] = useState(false);
   const [forwardCorrection, setForwardCorrection] = useState<ForwardCorrectionKind | null>(null);
   const [forwardCorrectionSubmitting, setForwardCorrectionSubmitting] = useState(false);
+  // SCRUM-239: the "cheque returned by bank" dialog. The idempotency key is made
+  // once per dialog open (and again only if the reason changes, because the
+  // server fingerprints the reason: a replay must be the same command).
+  const [chequeReturnOpen, setChequeReturnOpen] = useState(false);
+  const [chequeReturnSubmitting, setChequeReturnSubmitting] = useState(false);
+  const chequeReturnKeyRef = useRef<{ key: string; reason: string } | null>(null);
   const [confirmingSupplierDisbursement, setConfirmingSupplierDisbursement] = useState(false);
   const [disbursementSubmitting, setDisbursementSubmitting] = useState(false);
   /**
@@ -1095,6 +1104,63 @@ export function DealCockpit({
   // These are the exact keys the Review dialog minted, under the same names.
   const cancelKeyRef = useRef<string | null>(null);
   const confirmDisbursementKeyRef = useRef<string | null>(null);
+  // The disbursement version the kept confirm key was minted for. The server
+  // binds a key to one version (SCRUM-239); if the observed version moved - a
+  // colleague returned the cheque - the kept key is stale and a fresh one is
+  // minted instead of being refused.
+  const confirmDisbursementKeyVersionRef = useRef(1);
+  // SCRUM-239 round 4: the disbursement version observed WHEN the confirm dialog
+  // opened. The confirm binds to THIS, never to whatever the screen shows at
+  // click time: a dialog opened at v1 must not be able to confirm v2 (the
+  // replacement cheque) just because a colleague returned the v1 cheque while it
+  // stood open.
+  const [confirmObservedVersion, setConfirmObservedVersion] = useState(1);
+  // A ref mirror of the state above: an async confirm closes over the render it
+  // was clicked in, so a late answer must compare against THIS, not its closure.
+  const confirmObservedVersionRef = useRef(1);
+  // The version a confirm was SENT under whose outcome this screen does not know
+  // (sent, no answer yet or a lost response). It belongs to the confirm KEY, not
+  // the version: once any send of a key is lost, only a SUCCESS for that key
+  // resolves it. A refusal of a LATER retry of the same key proves nothing about
+  // the earlier send, so it must not clear the mark; a refusal of a send with no
+  // earlier unknown send can. It decides whether "nothing was confirmed" is
+  // still a true thing to say.
+  const confirmUnknownOutcomeVersionRef = useRef<number | null>(null);
+  const observedDisbursementVersion = app?.disbursementVersion ?? 1;
+  // `app` is undefined while loading or reconnecting and null if not found: no
+  // version is observed then, and `?? 1` above must not read as "moved to v1".
+  const appObserved = app != null;
+  const setConfirmingDisbursementObserved = (open: boolean) => {
+    if (open) setConfirmObservedVersion(observedDisbursementVersion);
+    setConfirmingDisbursement(open);
+  };
+  useEffect(() => {
+    confirmObservedVersionRef.current = confirmObservedVersion;
+  }, [confirmObservedVersion]);
+  // SCRUM-239 round 7: the ONE place a version move is reconciled, whether the
+  // dialog is open or closed. `confirmUnknownOutcomeVersionRef` is the record that
+  // an outcome-unknown notice is still OWED for the kept key; it is cleared only by
+  // a success, a refusal with no earlier unknown send, this operator's own
+  // successful return (the outcome is then known), or by the notice being shown
+  // here or in the confirm's catch, whichever resolves it first, exactly once.
+  // While this operator's own cheque return is in flight a version move may be
+  // that very return (which proves the confirm committed), so the reconcile waits
+  // for it to settle and re-runs then.
+  useEffect(() => {
+    if (!appObserved || chequeReturnSubmitting) return;
+    const owedUnknown =
+      confirmUnknownOutcomeVersionRef.current !== null &&
+      confirmUnknownOutcomeVersionRef.current !== observedDisbursementVersion;
+    const movedUnderDialog = confirmingDisbursement && observedDisbursementVersion !== confirmObservedVersion;
+    if (!owedUnknown && !movedUnderDialog) return;
+    // "Nothing was confirmed" is true only if nothing was sent; a sent confirm
+    // with a lost response may have committed, and the operator must be told to
+    // check receipts and cheque history even if the dialog was already closed.
+    confirmDisbursementKeyRef.current = null;
+    confirmUnknownOutcomeVersionRef.current = null;
+    if (movedUnderDialog) setConfirmingDisbursement(false);
+    toast.error(t(owedUnknown ? "DisbursementChangedOutcomeUnknown" : "DisbursementChangedWhileConfirming"));
+  }, [appObserved, chequeReturnSubmitting, confirmingDisbursement, observedDisbursementVersion, confirmObservedVersion, t]);
   const confirmSupplierDisbursementKeyRef = useRef<string | null>(null);
   // `deposits.release` gets a GENERATION-AWARE retained identity instead of a
   // plain key ref (SCRUM-313; the full reasoning lives at the release path in
@@ -1967,7 +2033,7 @@ export function DealCockpit({
         return {
           stageKey: "DISBURSEMENT",
           actionKey: "ConfirmDisbursement",
-          onStart: () => setConfirmingDisbursement(true),
+          onStart: () => setConfirmingDisbursementObserved(true),
           unavailableReasonKey: chequeDisbursementBlockKey,
         };
       }
@@ -2002,7 +2068,7 @@ export function DealCockpit({
         return {
           stageKey: "DISBURSEMENT",
           actionKey: "ConfirmDisbursement",
-          onStart: () => setConfirmingDisbursement(true),
+          onStart: () => setConfirmingDisbursementObserved(true),
           unavailableReasonKey: DISBURSEMENT_DENOMINATION_REASON[disbursementDenominationBlock],
           unavailableDetail: disbursementDenominationDetail,
         };
@@ -2010,7 +2076,7 @@ export function DealCockpit({
       return {
         stageKey: "DISBURSEMENT",
         actionKey: "ConfirmDisbursement",
-        onStart: () => setConfirmingDisbursement(true),
+        onStart: () => setConfirmingDisbursementObserved(true),
         unavailableReasonKey: disbursementUnavailableReason(
           canConfirmDisbursement,
           canConfirmFinanceDisbursement,
@@ -2688,6 +2754,80 @@ export function DealCockpit({
             }
           : undefined
       }
+      chequeReturn={
+        deal?.disbursementReturn?.mayReturn === true &&
+        deal.disbursementReturn.chequeId &&
+        deal.forward?.transferConfirmed === true
+          ? {
+              open: chequeReturnOpen,
+              submitting: chequeReturnSubmitting,
+              onOpen: () => {
+                chequeReturnKeyRef.current = null;
+                setChequeReturnOpen(true);
+              },
+              onClose: () => {
+                chequeReturnKeyRef.current = null;
+                setChequeReturnOpen(false);
+              },
+              onConfirm: async (reason: string) => {
+                const chequeId = deal.disbursementReturn?.chequeId;
+                if (!chequeId) return;
+                // The version being returned: the one this screen observes now.
+                // Undefined while `app` is not loaded: no version was observed, so
+                // nothing may be cleared on the strength of it (`?? 1` would lie).
+                // A LOADED app without the field is version 1.
+                const returnedVersion = appObserved ? observedDisbursementVersion : undefined;
+                setChequeReturnSubmitting(true);
+                // One key per dialog open: a retry after a lost response is the SAME command.
+                if (chequeReturnKeyRef.current?.reason !== reason) {
+                  chequeReturnKeyRef.current = { key: `return-fc-cheque:${crypto.randomUUID()}`, reason };
+                }
+                const { key } = chequeReturnKeyRef.current;
+                try {
+                  await trackRecorded(
+                    () =>
+                      returnFinanceDisbursementCheque({
+                        orgId,
+                        applicationId,
+                        chequeId,
+                        returnReason: reason,
+                        idempotencyKey: key,
+                      }),
+                    "ChequeReturnedByBankSuccess",
+                    // The disbursement is gone from the application AND this cheque is the newest returned one.
+                    { reflectedWhen: disbursementReturnReflected(chequeId) }
+                  );
+                  chequeReturnKeyRef.current = null;
+                  // The return reopens the deal for the NEXT disbursement version.
+                  // A confirm key kept after a lost response belongs to the
+                  // disbursement just returned; reusing it would make the server
+                  // replay that old result and never record the next one.
+                  confirmDisbursementKeyRef.current = null;
+                  // Round 7: the outcome of a lost confirm at this version is now
+                  // KNOWN. The server returns a cheque only for a confirmed
+                  // disbursement: convex/applications.ts returnFinanceDisbursementCheque
+                  // refuses FINANCE_RETURN_NOT_DISBURSED unless disbursedAt and
+                  // disbursedAmountMinor are set (5356-5358) and FINANCE_RETURN_
+                  // CHEQUE_NOT_CLEARED unless the cheque is CLEARED (5361), bound to
+                  // that disbursement at the same version and instant (5371-5380).
+                  // So no "result not known" notice is owed for that version. Cleared
+                  // here, before `chequeReturnSubmitting` resets and lets the
+                  // reconcile effect run.
+                  if (returnedVersion !== undefined && confirmUnknownOutcomeVersionRef.current === returnedVersion) {
+                    confirmUnknownOutcomeVersionRef.current = null;
+                  }
+                  setChequeReturnOpen(false);
+                } catch (error) {
+                  // The server answered: the next attempt is a new command. A lost response keeps the key.
+                  if (isConvexError(error)) chequeReturnKeyRef.current = null;
+                  toast.error(getLocalizedErrorMessage(error, t));
+                } finally {
+                  setChequeReturnSubmitting(false);
+                }
+              },
+            }
+          : undefined
+      }
       cancelHint={
         app?.status === "CLOSED" &&
         deal?.forward?.planV2 === true &&
@@ -2866,13 +3006,51 @@ export function DealCockpit({
                 confirming: confirmingDisbursement,
                 submitting: disbursementSubmitting,
                 amountLabel: expectedDisbursementLabel,
-                onOpenChange: setConfirmingDisbursement,
+                onOpenChange: setConfirmingDisbursementObserved,
                 onConfirm: async () => {
                   if (!expectedDisbursementMinor) return;
+                  // The version captured when the dialog OPENED, not the one the
+                  // screen shows now (the dialog closes itself if that moves).
+                  // Held in the closure so this request's answer, however late,
+                  // is judged against ITS version.
+                  const observedVersion = confirmObservedVersion;
+                  // Round 7 defence: an owed notice for another version is never
+                  // dropped by minting a new key. The reconcile effect normally
+                  // shows it first; it can only still be owed here while an own
+                  // cheque return was in flight and holding the effect back. The
+                  // notice tells the operator to review receipts and cheque history
+                  // BEFORE confirming again, so this click sends nothing: the mark
+                  // and kept key are cleared, and the next click mints a fresh key
+                  // at the observed version. (Nothing is stuck by returning here:
+                  // `disbursementSubmitting` is only set below.)
+                  if (
+                    confirmUnknownOutcomeVersionRef.current !== null &&
+                    confirmUnknownOutcomeVersionRef.current !== observedVersion
+                  ) {
+                    confirmUnknownOutcomeVersionRef.current = null;
+                    confirmDisbursementKeyRef.current = null;
+                    toast.error(t("DisbursementChangedOutcomeUnknown"));
+                    return;
+                  }
+                  // Round 6: an EARLIER send of the kept key at this version whose
+                  // answer was lost. Read before this send re-marks the ref. A fresh
+                  // key (a version move or a retired stale key) never inherits it: a
+                  // version move clears the mark via the effect, and the stale path
+                  // below clears it explicitly.
+                  const priorUnknown =
+                    confirmDisbursementKeyRef.current !== null &&
+                    confirmDisbursementKeyVersionRef.current === observedVersion &&
+                    confirmUnknownOutcomeVersionRef.current === observedVersion;
                   setDisbursementSubmitting(true);
                   try {
+                    if (confirmDisbursementKeyVersionRef.current !== observedVersion) {
+                      confirmDisbursementKeyRef.current = null;
+                    }
+                    confirmDisbursementKeyVersionRef.current = observedVersion;
                     confirmDisbursementKeyRef.current ??= `confirm-disbursement:${crypto.randomUUID()}`;
                     const disbursementKey = confirmDisbursementKeyRef.current;
+                    // Sent: until the server answers, the outcome is unknown here.
+                    confirmUnknownOutcomeVersionRef.current = observedVersion;
                     await trackRecorded(
                       () =>
                         confirmDisbursement({
@@ -2880,14 +3058,68 @@ export function DealCockpit({
                           applicationId,
                           disbursedAmountMinor: expectedDisbursementMinor,
                           idempotencyKey: disbursementKey,
+                          // The version the dialog observed: the server refuses a
+                          // confirm whose version it has since moved past. Sent ONLY
+                          // above 1: the frontend deploys on merge but the Convex
+                          // backend deploys by hand, and Convex rejects an undeclared
+                          // argument, so a v1 confirm must look exactly like the old
+                          // call. The server already refuses an omitted value at v2+.
+                          ...(observedVersion > 1 ? { expectedDisbursementVersion: observedVersion } : {}),
                         }),
                       "DisbursementConfirmedSuccess",
                       { reflectedWhen: financeDisbursementReflected }
                     );
-                    confirmDisbursementKeyRef.current = null;
-                    setConfirmingDisbursement(false);
+                    // The server answered: the outcome of THIS request is known.
+                    if (confirmUnknownOutcomeVersionRef.current === observedVersion) {
+                      confirmUnknownOutcomeVersionRef.current = null;
+                    }
+                    // A late answer to an OLD attempt must not touch a dialog
+                    // reopened at a newer version (its key, its open state).
+                    if (confirmObservedVersionRef.current === observedVersion) {
+                      confirmDisbursementKeyRef.current = null;
+                      setConfirmingDisbursement(false);
+                    }
                   } catch (error) {
-                    toast.error(getErrorMessage(error));
+                    // A server answer (a ConvexError) means the request was
+                    // refused and nothing committed; anything else is a lost
+                    // response whose outcome stays unknown.
+                    const answeredByServer = isConvexError(error);
+                    // ...but only for a send with no earlier unknown send of this key.
+                    if (answeredByServer && !priorUnknown && confirmUnknownOutcomeVersionRef.current === observedVersion) {
+                      confirmUnknownOutcomeVersionRef.current = null;
+                    }
+                    // A stale-version refusal is final for this key: the next click
+                    // (after the screen refreshes) mints a fresh one.
+                    const refusedCode = answeredByServer
+                      ? (error.data as { code?: unknown } | null)?.code
+                      : undefined;
+                    const isStale = refusedCode === "FINANCE_CONFIRM_STALE_REQUEST";
+                    const current = confirmObservedVersionRef.current === observedVersion;
+                    if (isStale && current) {
+                      confirmDisbursementKeyRef.current = null;
+                      // The dialog was prepared against a version that is gone:
+                      // reopening it observes the current one.
+                      setConfirmingDisbursement(false);
+                    }
+                    if (isStale && !current) {
+                      // A late answer to a superseded attempt: its dialog is gone
+                      // and a newer one is open; say nothing about it.
+                      return;
+                    }
+                    if (isStale && priorUnknown) {
+                      // An earlier send of this key may have committed, so "nothing
+                      // has been changed" would be untrue. The notice is owed only
+                      // while the mark still stands: if the version-move effect
+                      // already showed it and cleared the mark, say nothing more
+                      // (the stale text claims nothing changed). Otherwise show it
+                      // now and drop the mark so the effect cannot repeat it.
+                      if (confirmUnknownOutcomeVersionRef.current === observedVersion) {
+                        confirmUnknownOutcomeVersionRef.current = null;
+                        toast.error(t("DisbursementChangedOutcomeUnknown"));
+                      }
+                      return;
+                    }
+                    toast.error(getLocalizedErrorMessage(error, t));
                   } finally {
                     setDisbursementSubmitting(false);
                   }
@@ -4161,6 +4393,7 @@ export function DealCockpitView({
   cancel,
   cancelHint,
   forwardCorrection,
+  chequeReturn,
   settlementRoute,
   documents,
   deposits,
@@ -4235,6 +4468,18 @@ export function DealCockpitView({
     open: ForwardCorrectionKind | null;
     submitting: boolean;
     onOpen: (kind: ForwardCorrectionKind) => void;
+    onClose: () => void;
+    onConfirm: (reason: string) => void | Promise<void>;
+  };
+  /**
+   * SCRUM-239: the bank returned the finance company's cheque after it cleared.
+   * Present only when the server says this caller may (`disbursementReturn.mayReturn`)
+   * AND the transfer is confirmed AND a cleared cheque is linked.
+   */
+  chequeReturn?: {
+    open: boolean;
+    submitting: boolean;
+    onOpen: () => void;
     onClose: () => void;
     onConfirm: (reason: string) => void | Promise<void>;
   };
@@ -6127,11 +6372,22 @@ export function DealCockpitView({
             </Button>
           </div>
         )}
+        {chequeReturn && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className={forwardCorrection ? "h-9" : "ms-auto h-9"}
+            data-testid="deal-cheque-returned-by-bank"
+            onClick={chequeReturn.onOpen}
+          >
+            {t("ChequeReturnedByBankAction")}
+          </Button>
+        )}
         {cancel && (
           <Button
             variant="ghost"
             size="sm"
-            className={forwardCorrection ? "h-9 text-destructive hover:text-destructive" : "ms-auto h-9 text-destructive hover:text-destructive"}
+            className={cn("h-9 text-destructive hover:text-destructive", !(forwardCorrection || chequeReturn) && "ms-auto")}
             data-testid="deal-cancel-application"
             onClick={() => cancel.onOpenChange(true)}
           >
@@ -6649,6 +6905,17 @@ export function DealCockpitView({
             if (!next) forwardCorrection.onClose();
           }}
           onConfirm={forwardCorrection.onConfirm}
+        />
+      )}
+      {chequeReturn && (
+        <ChequeReturnedByBankDialog
+          open={chequeReturn.open}
+          submitting={chequeReturn.submitting}
+          t={t}
+          onOpenChange={(next) => {
+            if (!next) chequeReturn.onClose();
+          }}
+          onConfirm={chequeReturn.onConfirm}
         />
       )}
       {cancel && (

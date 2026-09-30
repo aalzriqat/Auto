@@ -53,6 +53,7 @@ import { PaymentLinksPanel } from "./collections/PaymentLinksPanel";
 import { InstallmentCalendar } from "./collections/InstallmentCalendar";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { interpolate } from "@/lib/i18n/interpolate";
+import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
 
 type ReceivableRow = Doc<"receivables"> & {
   customerName: string;
@@ -442,14 +443,16 @@ export function CollectionsTab() {
                                 {t("Clear" as any)}
                               </Button>
                               )}
+                              {!(cheque.isFinanceCompanyCheque && cheque.status === "CLEARED") && (
                               <Button
                                 size="sm"
                                 variant="outline"
-                                disabled={["REPLACED", "CANCELLED"].includes(cheque.status) || isChequeBusy}
+                                disabled={["RETURNED", "REPLACED", "CANCELLED"].includes(cheque.status) || isChequeBusy}
                                 onClick={() => setReturnTarget(cheque)}
                               >
                                 {t("Return" as any)}
                               </Button>
+                              )}
                               {!cheque.isFinanceCompanyCheque && (
                               <Button
                                 size="sm"
@@ -1213,7 +1216,14 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
       setReason("");
       setBankFeeMinor("");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      // The server says this key already belongs to a request with different
+      // content: it is dead for what is on screen, so the next attempt is a new
+      // command under a fresh key. (A lost response keeps the key.)
+      const refusedCode = isConvexError(error) ? (error.data as { code?: unknown } | null)?.code : undefined;
+      if (refusedCode === "CHEQUE_RETURN_KEY_CONFLICT") {
+        idempotencyKeyRef.current = null;
+      }
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setSubmitting(false);
     }

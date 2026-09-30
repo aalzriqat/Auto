@@ -56,10 +56,12 @@ import { PERMISSIONS, isSystemOwnerRole, type Permission } from "./permissions";
  *   approval workflow; not ordinary sales visibility, and nothing the
  *   disbursement tier must see to confirm a payment. Ruling #4.
  * - `DISBURSEMENT_WORKFLOW` - VIEW_FINANCE *or* CONFIRM_FINANCE_DISBURSEMENT.
- *   Two fields: `financedSaleNetReceivableMinor`, the narrow already-approved
+ *   Three fields: `financedSaleNetReceivableMinor`, the narrow already-approved
  *   workflow exception ruling #3 allows (load-bearing, not cosmetic - see the
- *   note on the field itself), and `plannedCustody`, the handover cash plan
- *   the same tier acts on when it opens the custody record.
+ *   note on the field itself), `plannedCustody`, the handover cash plan
+ *   the same tier acts on when it opens the custody record, and
+ *   `disbursementVersion`, the non-monetary counter the confirmer must echo
+ *   back so the server can refuse a confirm against a version it did not see.
  * - `FINANCE` - VIEW_FINANCE. The accounting economics, per ruling #3:
  *   `appliedLtvPercent`, the funding composition (funded / unfinanced / dealer
  *   contribution), the expected dealer remittance, the customer-to-finance-
@@ -273,6 +275,14 @@ const FIELD_VISIBILITY: Record<
    */
   finalizationIdempotencyKey: "FINANCE",
   disbursementIdempotencyKey: "FINANCE",
+  /**
+   * SCRUM-239: selects the versioned payment/posting keys. A non-monetary
+   * counter, and load-bearing for the confirm command: the confirmer must send
+   * the version it OBSERVED, and the server refuses a mismatch. See the note on
+   * `financedSaleNetReceivableMinor` - withholding it from the default MANAGER
+   * (CONFIRM_FINANCE_DISBURSEMENT, no VIEW_FINANCE) is the same dead-end.
+   */
+  disbursementVersion: "DISBURSEMENT_WORKFLOW",
 
   // --- The appraisal gap: the amount, its allocation and its metadata ------
   /** Ruling #2: an approval fact for the roles that approve and disburse. */
@@ -323,7 +333,8 @@ const FIELD_VISIBILITY: Record<
    */
   manualApproval: "APPROVAL_WORKFLOW",
   /**
-   * The ONLY member of `DISBURSEMENT_WORKFLOW`, and the narrow exception ruling
+   * A member of `DISBURSEMENT_WORKFLOW` (with `plannedCustody` and the
+   * non-monetary `disbursementVersion` counter), and the narrow exception ruling
    * #3 permits for an already-approved workflow tier. Load-bearing, not
    * cosmetic: `confirmDisbursement` checks the caller's amount against this
    * frozen net receivable FIRST, and `DealCockpit` sends

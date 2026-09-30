@@ -25,7 +25,8 @@ import {
 import { ReceivableCreditKey } from "./accounting/postingRules";
 import { assertValidAccountingDate } from "./accountingPeriods";
 import { toMinorUnits, fromMinorUnits, scaleForCurrency } from "./utils/money";
-import { isFcLineage, parseFaceAmountMinor, dealChequeCurrency, FC_CHEQUE_DEAL_NEXT_STEP } from "./utils/fcCheque";
+import { isFcLineage, parseFaceAmountMinor, dealChequeCurrency, FC_CHEQUE_DEAL_NEXT_STEP, FC_RETURN_MESSAGES } from "./utils/fcCheque";
+import { throwAppError, AppErrorCode } from "./utils/errors";
 import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
@@ -2012,9 +2013,18 @@ export const returnCheque = mutation({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const cheque = await ctx.db.get(args.chequeId);
-    if (!cheque || cheque.orgId !== args.orgId) throw new ConvexError("Cheque not found.");
+    if (!cheque || cheque.orgId !== args.orgId) {
+      throwAppError(AppErrorCode.CHEQUE_NOT_FOUND, FC_RETURN_MESSAGES.CHEQUE_NOT_FOUND);
+    }
+    // SCRUM-239: RETURNED is terminal for returning, whichever door recorded it
+    // (this one, or the deal's "Cheque returned by bank"). A second return would
+    // overwrite returnedAt/returnReason, re-notify managers and - for a customer
+    // cheque - re-flag the receivable and queue another reminder.
+    if (cheque.status === "RETURNED") {
+      throwAppError(AppErrorCode.CHEQUE_ALREADY_RETURNED, FC_RETURN_MESSAGES.CHEQUE_ALREADY_RETURNED);
+    }
     if (cheque.status === "CLEARED" || cheque.status === "REPLACED" || cheque.status === "CANCELLED") {
-      throw new ConvexError("This cheque can no longer be returned.");
+      throwAppError(AppErrorCode.CHEQUE_NOT_RETURNABLE, FC_RETURN_MESSAGES.CHEQUE_NOT_RETURNABLE);
     }
 
     await ctx.db.patch(args.chequeId, {
@@ -2186,7 +2196,7 @@ export const returnClearedCheque = mutation({
       args.bankFeeMinor !== undefined &&
       (!Number.isSafeInteger(args.bankFeeMinor) || args.bankFeeMinor < 0)
     ) {
-      throw new ConvexError("Bank fee must be a non-negative integer minor-unit amount.");
+      throwAppError(AppErrorCode.CHEQUE_BANK_FEE_INVALID, FC_RETURN_MESSAGES.CHEQUE_BANK_FEE_INVALID);
     }
 
     return await runWithIdempotency(
@@ -2202,12 +2212,18 @@ export const returnClearedCheque = mutation({
           bankFeeMinor: args.bankFeeMinor ?? 0,
           returnReason: args.returnReason ?? null,
         }),
+        // Coded, so the operator reads it in their language instead of the
+        // default English key-reuse text.
+        onFingerprintConflict: (): never =>
+          throwAppError(AppErrorCode.CHEQUE_RETURN_KEY_CONFLICT, FC_RETURN_MESSAGES.CHEQUE_RETURN_KEY_CONFLICT),
       },
       async () => {
         const cheque = await ctx.db.get(args.chequeId);
-        if (!cheque || cheque.orgId !== args.orgId) throw new ConvexError("Cheque not found.");
+        if (!cheque || cheque.orgId !== args.orgId) {
+          throwAppError(AppErrorCode.CHEQUE_NOT_FOUND, FC_RETURN_MESSAGES.CHEQUE_NOT_FOUND);
+        }
         if (cheque.status !== "CLEARED") {
-          throw new ConvexError("Only cleared cheques can be returned after clearing.");
+          throwAppError(AppErrorCode.CHEQUE_NOT_CLEARED, FC_RETURN_MESSAGES.CHEQUE_NOT_CLEARED);
         }
 
         const now = Date.now();
@@ -2235,11 +2251,10 @@ export const returnClearedCheque = mutation({
         // the two clearing paths originate different economic lineages.
         // SCRUM-447 D9: FC LINEAGE, not applicationId presence.
         if (isFcLineage(cheque)) {
-          throw new ConvexError(
-            `This cheque belongs to finance application ${cheque.applicationId ?? cheque.originApplicationId ?? "(unlinked)"}. Returning a cleared ` +
-              `finance-company cheque has to reverse that application's own receipt, receivable and ` +
-              `allocation, which this customer-collection path does not own (SCRUM-239).`
-          );
+          // SCRUM-239: the route now exists - `applications.returnFinanceDisbursementCheque`.
+          // This door still refuses (it must not learn a finance lineage), but with
+          // a stable code and a message that names where to go.
+          throwAppError(AppErrorCode.FINANCE_CHEQUE_RETURN_FROM_DEAL, FC_RETURN_MESSAGES.FINANCE_CHEQUE_RETURN_FROM_DEAL);
         }
 
         // Find the collection payment created when this cheque cleared
@@ -2344,9 +2359,9 @@ export const returnClearedCheque = mutation({
             )
             .unique();
           if (!movement) {
-            throw new ConvexError(
-              "This cleared cheque has no persisted receipt lineage, so what it moved cannot be " +
-                "determined and returning it would reopen the debt without reversing the receipt."
+            throwAppError(
+              AppErrorCode.CHEQUE_RETURN_NO_RECEIPT_LINEAGE,
+              FC_RETURN_MESSAGES.CHEQUE_RETURN_NO_RECEIPT_LINEAGE
             );
           }
 
@@ -2438,9 +2453,9 @@ export const returnClearedCheque = mutation({
           // owed on one row and collected on its canonical twin. The reversal and
           // the reopening are two halves of one movement: either both happen or
           // the mutation fails closed.
-          throw new ConvexError(
-            "This cleared cheque has no collection payment to reverse, so reopening the debt would " +
-              "leave it owed and collected at the same time."
+          throwAppError(
+            AppErrorCode.CHEQUE_RETURN_NO_PAYMENT_TO_REVERSE,
+            FC_RETURN_MESSAGES.CHEQUE_RETURN_NO_PAYMENT_TO_REVERSE
           );
         }
 

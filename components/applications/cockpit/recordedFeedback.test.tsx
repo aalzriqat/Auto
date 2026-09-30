@@ -13,6 +13,7 @@ import {
   approvedPurchaseReflected,
   creditStatusReflected,
   depositReleaseReflected,
+  disbursementReturnReflected,
   expectedPaymentReflected,
   financeDisbursementReflected,
   handoverReflected,
@@ -84,6 +85,18 @@ describe("predicates: each names the fact its action wrote", () => {
 
     expect(financeDisbursementReflected(app({}), null)).toBe(false);
     expect(financeDisbursementReflected(app({ disbursedAt: 9 }), null)).toBe(true);
+    // SCRUM-239: the return is reflected only when THIS cheque is the returned one AND the deal is undisbursed.
+    const returned = (disbursedAt: number | undefined, last: string | null | undefined): RecordedModel => ({
+      deal: { stages: [], disbursementReturn: { lastReturnedChequeId: last } },
+      application: { disbursedAt },
+    });
+    expect(disbursementReturnReflected("chq1")(returned(9, null), null)).toBe(false);
+    expect(disbursementReturnReflected("chq1")(returned(undefined, null), null)).toBe(false);
+    expect(disbursementReturnReflected("chq1")(returned(9, "chq1"), null)).toBe(false);
+    expect(disbursementReturnReflected("chq1")(returned(undefined, "other"), null)).toBe(false);
+    expect(disbursementReturnReflected("chq1")(returned(undefined, "chq1"), null)).toBe(true);
+    // A screen whose application has not loaded is never "reflected".
+    expect(disbursementReturnReflected("chq1")({ deal: { stages: [], disbursementReturn: { lastReturnedChequeId: "chq1" } } }, null)).toBe(false);
     expect(supplierDisbursementReflected(app({}), null)).toBe(false);
     expect(supplierDisbursementReflected(app({ supplierDisbursementStatus: "CONFIRMED" }), null)).toBe(true);
     expect(reconciliationReflected(app({ needsFinancingReconciliation: true }), null)).toBe(false);

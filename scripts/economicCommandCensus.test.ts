@@ -48,6 +48,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "applications.amendSupplierDisbursementAdvice": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "applications.cancelApplication": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "applications.confirmDisbursement": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
+  "applications.returnFinanceDisbursementCheque": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "applications.confirmSupplierDisbursement": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "applications.createFromQuote": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "applications.finalizeDeal": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
@@ -297,7 +298,8 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // 123 -> 126: `financeCompanyForward.recordFinanceCompanyForward`, `.reverseFinanceCompanyForward` and `.reportFinanceCompanyForwardReturned` (SCRUM-435).
     // 126 -> 128: the two SCRUM-447 mutations above, on top of the SCRUM-435 three (merge of origin/main into SCRUM-447).
     // 128 -> 129: `financingEconomics.recordManualFinanceApproval` (SCRUM-27), on top of main's 128.
-    expect(population).toHaveLength(129);
+    // 129 -> 130: `applications.returnFinanceDisbursementCheque` (SCRUM-239).
+    expect(population).toHaveLength(130);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {

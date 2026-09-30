@@ -921,6 +921,8 @@ export default defineSchema({
       // organization is not on the canonical authority yet. See
       // utils/saleCancellation.ts.
       v.literal("SETTLE_COMMITMENT_AUTHORITY"),
+      // SCRUM-239: a cleared finance-company disbursement cheque came back.
+      v.literal("RETURN_FINANCE_DISBURSEMENT_CHEQUE"),
     ),
     resourceType: v.string(),
     resourceId: v.string(),
@@ -2811,6 +2813,9 @@ export default defineSchema({
     disbursedAt: v.optional(v.number()),
     disbursedAmountMinor: v.optional(v.number()),
     disbursementIdempotencyKey: v.optional(v.string()),
+    // SCRUM-239: which disbursement of this application is live. Absent means 1;
+    // a returned cleared cheque bumps it so the next confirmation mints new keys.
+    disbursementVersion: v.optional(v.number()),
     // التنازل بالسيارة للعميل — vehicle handover to the customer, registered
     // before finalizeDeal is allowed to run.
     vehicleHandoverAt: v.optional(v.number()),
@@ -4556,6 +4561,8 @@ export default defineSchema({
     returnReason: v.optional(v.string()),
     clearedAt: v.optional(v.number()),
     returnedAfterClearing: v.optional(v.boolean()),
+    // SCRUM-239: the application disbursement version this FC cheque cleared under.
+    disbursementVersion: v.optional(v.number()),
     bankFeeMinor: v.optional(v.number()),
     idempotencyKey: v.optional(v.string()),
     notes: v.optional(v.string()),
