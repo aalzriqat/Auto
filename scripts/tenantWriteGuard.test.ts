@@ -644,10 +644,15 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // reportFinanceCompanyForwardReturned` (SCRUM-435) - 504 -> 507 total, 332 -> 335
   // analysed. Each takes `orgId` plus a caller-supplied application (and forward) id read
   // through `requireOwnedRow` after `requireTenantAuth`. Skipped counts unchanged.
+  //
+  // `financingEconomics.recordManualFinanceApproval` (SCRUM-27) - 507 -> 508 total,
+  // 335 -> 336 analysed. `orgId` plus a caller-supplied `applicationId` read through
+  // `requireOwnedRow` after `requireTenantAuth`; the unguarded-write audit stays empty.
+  // Skipped counts unchanged.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 507,
-      analysed: 335,
+      totalMutations: 508,
+      analysed: 336,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 157,
     });

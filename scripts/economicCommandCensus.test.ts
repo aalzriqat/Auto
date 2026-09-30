@@ -1,7 +1,7 @@
 /**
- * The 117-entry economic-command classification ratchet (SCRUM-313; 113 at the
+ * The 127-entry economic-command classification ratchet (SCRUM-313; 113 at the
  * RC, +1 for SCRUM-83's `financingEconomics.resolveAppraisalGap`, +1 for
- * SCRUM-215's `financeDealCosts.recordTemplateFeeActual`).
+ * SCRUM-215's `financeDealCosts.recordTemplateFeeActual`, +1 for SCRUM-27's `financingEconomics.recordManualFinanceApproval`).
  *
  * OWNER RULING: every public mutation that can reach a money-bearing sink must
  * carry EXACTLY ONE classification, and this must FAIL whenever a new public
@@ -111,6 +111,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "financingEconomics.applyQuoteFirstPayment": { bucket: "NON_ECONOMIC", mechanism: "patches the finance application's economics (first payment re-derived from the quote) only through the over-inclusive patch heuristic; no posting call is reachable from its own body. Replay-safe by the economics stamp: a retry carries a stale stamp and is refused before the application is written (an impersonated caller's access-audit row from requireTenantAuth may precede it; that row is not economic) (SCRUM-373)" },
   "financingEconomics.approveDealerPurchaseAmount": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "financingEconomics.recordAppraisal": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
+  "financingEconomics.recordManualFinanceApproval": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table (financeApplications letter/G/gap) only through the patch heuristic; no posting call is reachable from its own body. Replay-safe by state: an identical letter on an intact unit is a no-op; after handover only an S-only correction is accepted, and nothing after finalize (SCRUM-27)" },
   "financingEconomics.recordSubmittedQuotation": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "financingEconomics.reopenApproval": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "financingEconomics.resolveAppraisalGap": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table (financeApplications gap shares/destinations) only through the patch heuristic; no posting call is reachable from its own body. Replay-safe by state: refuses once gapResolution is CUSTOMER_ABSORBS/SPLIT/DEALER_ABSORBS and checks the economics stamp before any write (SCRUM-83)" },
@@ -290,7 +291,8 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // 121 → 122: `depositRequests.confirm` (SCRUM-444); `request` writes only a pending row and is not in the population.
     // 122 → 123: `financeDealCosts.recordDirectFeePayment` (SCRUM-443).
     // 123 -> 126: `financeCompanyForward.recordFinanceCompanyForward`, `.reverseFinanceCompanyForward` and `.reportFinanceCompanyForwardReturned` (SCRUM-435).
-    expect(population).toHaveLength(126);
+    // 126 -> 127: `financingEconomics.recordManualFinanceApproval` (SCRUM-27).
+    expect(population).toHaveLength(127);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {
