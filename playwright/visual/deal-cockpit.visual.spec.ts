@@ -183,6 +183,15 @@ const FORWARD_VARIANTS: ReadonlyArray<{ suffix: string; title: string; offersAct
   { suffix: "-forward-due", title: "the transfer step asks for the payment to the finance company first", offersAction: true },
   { suffix: "-forward-unsettled", title: "an unsettled payment names who resolves it and offers no action", offersAction: false },
 ];
+/**
+ * SCRUM-239: the header action the server offers when the finance company's
+ * transfer is confirmed and the linked cheque CLEARED.
+ */
+const CHEQUE_RETURN_SUFFIX = "-cheque-return";
+const CHEQUE_RETURN_LITERAL: Readonly<Record<(typeof LOCALES)[number], string>> = {
+  en: "Cheque returned by bank",
+  ar: "شيك مرتجع من البنك",
+};
 /** The desktop sidebar (`w-64`) at the default 16px root font size. */
 const SIDEBAR_WIDTH_PX = 256;
 /** Tailwind's `md` breakpoint, where the sidebar appears. */
@@ -245,6 +254,11 @@ test.beforeAll(async () => {
     expect(existsSync(ux5File), `bridge did not write ${ux5File}`).toBe(true);
     expect(statSync(ux5File).mtimeMs).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
     for (const { suffix } of FORWARD_VARIANTS) {
+      const variantFile = resolve(FIXTURES, `deal-cockpit-${locale}${suffix}.html`);
+      expect(existsSync(variantFile), `bridge did not write ${variantFile}`).toBe(true);
+      expect(statSync(variantFile).mtimeMs).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
+    }
+    for (const suffix of [CHEQUE_RETURN_SUFFIX]) {
       const variantFile = resolve(FIXTURES, `deal-cockpit-${locale}${suffix}.html`);
       expect(existsSync(variantFile), `bridge did not write ${variantFile}`).toBe(true);
       expect(statSync(variantFile).mtimeMs).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
@@ -1084,6 +1098,49 @@ for (const variant of FORWARD_VARIANTS) {
           }
         });
       }
+    }
+  }
+}
+/**
+ * SCRUM-239, painted: the "Cheque returned by bank" header action. Present, reading
+ * the hand-written literal, visible inside the header without clipping, and nothing
+ * leaks sideways in either direction or theme.
+ */
+for (const locale of LOCALES) {
+  for (const theme of THEMES) {
+    for (const viewport of VIEWPORTS) {
+      test(`${locale} · ${theme} · ${viewport.name}px: the cheque-returned-by-bank action is offered in the header`, async ({ browser }) => {
+        const context = await browser.newContext({
+          viewport: { width: viewport.width, height: viewport.height },
+          colorScheme: theme,
+        });
+        const page = await context.newPage();
+        try {
+          await paint(page, locale, theme, CHEQUE_RETURN_SUFFIX);
+          const main = page.getByTestId("shell-main");
+          const header = page.getByTestId("deal-header");
+          const action = page.getByTestId("deal-cheque-returned-by-bank");
+          await expect(action).toBeVisible();
+          await expect(action).toHaveText(CHEQUE_RETURN_LITERAL[locale]);
+          const headerBox = await header.boundingBox();
+          const actionBox = await action.boundingBox();
+          expect(actionBox).not.toBeNull();
+          expect(actionBox!.x).toBeGreaterThanOrEqual(0);
+          expect(actionBox!.x + actionBox!.width).toBeLessThanOrEqual(viewport.width + 0.5);
+          expect(actionBox!.y + actionBox!.height).toBeLessThanOrEqual(headerBox!.y + headerBox!.height + 0.5);
+          // A phone-sized tap target, stated not hidden: logged, not asserted (same ghost-button size as the sibling header actions).
+          console.log(`ACTION-BOX cheque-return ${locale} ${theme} ${viewport.name}: ${Math.round(actionBox!.width)}x${Math.round(actionBox!.height)}`);
+          expect(await page.evaluate(() => getComputedStyle(document.body).direction)).toBe(locale === "ar" ? "rtl" : "ltr");
+          const overflow = await main.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+          expect(overflow.scrollWidth, `main scrolls sideways (${JSON.stringify(overflow)})`).toBeLessThanOrEqual(overflow.clientWidth);
+          await page.screenshot({
+            path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${CHEQUE_RETURN_SUFFIX}.png`),
+            clip: { x: 0, y: 0, width: viewport.width, height: Math.min(viewport.height, 360) },
+          });
+        } finally {
+          await context.close();
+        }
+      });
     }
   }
 }

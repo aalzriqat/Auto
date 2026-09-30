@@ -55,9 +55,25 @@ const SCENARIOS = [
   "collections",
   "saledialog-financed",
   "saledialog-cash",
+  // SCRUM-239
+  "returned-by-bank-dialog",
+  "sc239-notices",
+  "sc239-refusals",
 ] as const;
+/**
+ * SCRUM-239: the notices are captured from the real sonner Toaster, whose own
+ * `data-sonner-theme` is baked into the markup, so the bridge writes one file
+ * per theme for these scenarios.
+ */
+const THEMED = new Set<string>(["sc239-notices", "sc239-refusals"]);
+/** Tall list surfaces: the viewport is grown to the content so nothing is cropped. */
+const TALL = new Set<string>(["sc239-notices", "sc239-refusals"]);
+const fixtureName = (scenario: string, locale: string, theme?: string) =>
+  `fc-${THEMED.has(scenario) ? `${scenario}-${theme ?? "light"}` : scenario}-${locale}.html`;
 /** Scenarios whose surface is a modal: it, not `main`, is what must fit the viewport. */
-const MODALS = new Set<string>(["attest-dialog", "correct-dialog", "saledialog-financed", "saledialog-cash"]);
+const MODALS = new Set<string>([
+  "attest-dialog", "correct-dialog", "saledialog-financed", "saledialog-cash", "returned-by-bank-dialog",
+]);
 const TOUCH_TARGET_PX = 44;
 
 let css = "";
@@ -82,9 +98,11 @@ test.beforeAll(async () => {
   );
   for (const locale of LOCALES) {
     for (const scenario of SCENARIOS) {
-      const file = resolve(FIXTURES, `fc-${scenario}-${locale}.html`);
-      expect(existsSync(file), `bridge did not write ${file}`).toBe(true);
-      expect(statSync(file).mtimeMs).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
+      for (const theme of THEMED.has(scenario) ? THEMES : (["light"] as const)) {
+        const file = resolve(FIXTURES, fixtureName(scenario, locale, theme));
+        expect(existsSync(file), `bridge did not write ${file}`).toBe(true);
+        expect(statSync(file).mtimeMs).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
+      }
     }
   }
   const here = createRequire(__filename);
@@ -99,7 +117,7 @@ test.beforeAll(async () => {
 });
 
 function documentFor(locale: (typeof LOCALES)[number], theme: (typeof THEMES)[number], scenario: string): string {
-  const body = readFileSync(resolve(FIXTURES, `fc-${scenario}-${locale}.html`), "utf8");
+  const body = readFileSync(resolve(FIXTURES, fixtureName(scenario, locale, theme)), "utf8");
   const dir = locale === "ar" ? "rtl" : "ltr";
   return `<!doctype html>
 <html dir="${dir}" lang="${locale}" class="${theme === "dark" ? "dark" : ""}">
@@ -138,6 +156,42 @@ for (const scenario of SCENARIOS) {
             expect(await page.evaluate(() => getComputedStyle(document.documentElement).direction)).toBe(
               locale === "ar" ? "rtl" : "ltr",
             );
+            let viewportHeight: number = viewport.height;
+            if (TALL.has(scenario)) {
+              // Grow the window to the content (plus the 64px top bar and the padding) so the whole list is judged.
+              const needed = await page.evaluate(
+                () => document.querySelector<HTMLElement>('[data-testid="shell-main"]')!.scrollHeight,
+              );
+              viewportHeight = needed + 64 + 8;
+              await page.setViewportSize({ width: viewport.width, height: viewportHeight });
+            }
+            if (THEMED.has(scenario)) {
+              const expected = scenario === "sc239-notices" ? 3 : null;
+              const toasts = page.locator("[data-sonner-toast]");
+              if (expected !== null) await expect(toasts).toHaveCount(expected);
+              else expect(await toasts.count()).toBeGreaterThan(20);
+              const problems = await toasts.evaluateAll((els) =>
+                els
+                  .map((el, i) => {
+                    const box = el.getBoundingClientRect();
+                    const content = el.querySelector<HTMLElement>("[data-content]");
+                    return {
+                      i,
+                      w: Math.round(box.width),
+                      h: Math.round(box.height),
+                      clipped: content ? content.scrollWidth > content.clientWidth + 1 : false,
+                      hidden: getComputedStyle(el).opacity === "0" || box.height === 0,
+                      bg: getComputedStyle(el).backgroundColor,
+                    };
+                  })
+                  .filter((t) => t.clipped || t.hidden || t.bg === "rgba(0, 0, 0, 0)"),
+              );
+              expect(problems, `toasts hidden, clipped or unpainted ${JSON.stringify(problems)}`).toEqual([]);
+              // The toast must state its own direction: sonner copies the document's.
+              expect(await toasts.first().evaluate((el) => getComputedStyle(el).direction)).toBe(
+                locale === "ar" ? "rtl" : "ltr",
+              );
+            }
 
             // Nothing scrolls sideways: `main` for page surfaces, the viewport for modals.
             const overflow = await page.evaluate(() => {
@@ -186,7 +240,7 @@ for (const scenario of SCENARIOS) {
                 });
             await page.screenshot({
               path: resolve(SHOTS, `${scenario}-${locale}-${theme}-${viewport.name}.png`),
-              clip: { x: 0, y: 0, width: viewport.width, height: Math.min(viewport.height, Math.max(contentBottom, 140)) },
+              clip: { x: 0, y: 0, width: viewport.width, height: Math.min(viewportHeight, Math.max(contentBottom, 140)) },
             });
           } finally {
             await context.close();
