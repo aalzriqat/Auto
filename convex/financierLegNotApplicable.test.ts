@@ -570,6 +570,25 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
       return applicationId;
     }
 
+    /**
+     * An otherwise-finalizable manual finance company deal: letter, handover, expected payment, legal invoice
+     * (issued to the company, = G) and customer first payment (no deposit held => 0). Only its costs are open,
+     * so a test built on it isolates the cost gate.
+     */
+    async function readyManualDeal(s: Seed) {
+      const applicationId = await readyToFinalize(s, { mode: "MANUAL_FINANCE_COMPANY", manualLetter: true });
+      await s.asOwner.mutation(api.financeDealCosts.recordLegalInvoice, {
+        orgId: s.orgId,
+        applicationId,
+        legalInvoiceAmountMinor: 12_000_000,
+        legalInvoiceNumber: `INV-${applicationId}`,
+        legalInvoiceDate: Date.now(),
+        issuedTo: "FINANCE_COMPANY",
+      });
+      await s.t.run((ctx) => ctx.db.patch(applicationId, { customerFirstPaymentMinor: 0 }));
+      return applicationId;
+    }
+
     async function costsCheck(s: Seed, applicationId: Id<"financeApplications">) {
       const r = await s.asOwner.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
       return r.checks.find((c) => c.key === "COSTS_CLOSABLE")!;
@@ -600,7 +619,8 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
       const noLetter = await readyToFinalize(s, { mode: "MANUAL_FINANCE_COMPANY" });
       await expect(finalize(s, noLetter)).rejects.toThrow(/approval letter is not fully recorded/);
       const s2 = await seed("cc_refuse_letter");
-      const applicationId = await readyToFinalize(s2, { mode: "MANUAL_FINANCE_COMPANY", manualLetter: true });
+      const applicationId = await readyManualDeal(s2);
+      expect((await costsCheck(s2, applicationId)).status).toBe("BLOCKED");
       await expect(finalize(s2, applicationId)).rejects.toThrow(/COSTS_NONE/);
       const after = await s2.t.run((ctx) => ctx.db.get(applicationId));
       expect(after?.status).toBe("APPROVED");
@@ -610,17 +630,7 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
     test("positive control: a reconciled zero line makes it READY, it finalizes, and the rail reads finished", async () => {
       const s = await seed("cc_ready");
       // SCRUM-495: re-based onto a manual finance company (see cc_refuse above).
-      const applicationId = await readyToFinalize(s, { mode: "MANUAL_FINANCE_COMPANY", manualLetter: true });
-      // SCRUM-27: a manual deal also needs its legal invoice (issued to the company, = G) and the customer first payment (no deposit held => 0).
-      await s.asOwner.mutation(api.financeDealCosts.recordLegalInvoice, {
-        orgId: s.orgId,
-        applicationId,
-        legalInvoiceAmountMinor: 12_000_000,
-        legalInvoiceNumber: `INV-${applicationId}`,
-        legalInvoiceDate: Date.now(),
-        issuedTo: "FINANCE_COMPANY",
-      });
-      await s.t.run((ctx) => ctx.db.patch(applicationId, { customerFirstPaymentMinor: 0 }));
+      const applicationId = await readyManualDeal(s);
       await recordReconciledZeroCost(s.asOwner, api, s.orgId, applicationId);
       expect((await costsCheck(s, applicationId)).status).toBe("READY");
       await finalize(s, applicationId);
