@@ -54,6 +54,8 @@ interface SeedOpts {
   cost: number | undefined;
   price: number;
   commissionMode?: "AUTO_MEMBER" | "MANUAL";
+  /** A consigned (SOURCED) car: `cost` is then the supplier entitlement. */
+  sourced?: boolean;
 }
 
 async function seedDealership(tag: string, opts: SeedOpts) {
@@ -105,8 +107,10 @@ async function seedDealership(tag: string, opts: SeedOpts) {
       ctx.db.insert("vehicles", {
         orgId, vin: `VIN390${tag}${vin}`, make: "Kia", model: "Sportage", year: 2024, mileage: 10,
         color: "Blue", fuelType: "Gasoline", transmission: "Automatic",
-        sellingPrice: opts.price, status: "AVAILABLE", sourceType: "STOCK" as const,
-        ...(opts.cost !== undefined ? { purchasePrice: opts.cost } : {}),
+        sellingPrice: opts.price, status: "AVAILABLE",
+        ...(opts.sourced
+          ? { sourceType: "SOURCED" as const, sourcedFromName: "Amman Importer Co", sourceCost: opts.cost }
+          : { sourceType: "STOCK" as const, ...(opts.cost !== undefined ? { purchasePrice: opts.cost } : {}) }),
       })
     );
   const vehicleId = await mkVehicle("A");
@@ -300,5 +304,55 @@ describe("SCRUM-390 OR-5: commissionable vehicle margin on a v2 financed sale", 
     const sale = await s.t.run((ctx) => ctx.db.get(saleId));
     expect(sale?.commissionAmount).toBeCloseTo(300, 6);
     expect(sale?.commissionBaseApprovedMinor).toBeUndefined();
+  });
+
+  test("6a. control: a consigned financed v2 deal through finalizeDeal keeps today's basis and freezes no commissionBase*", async () => {
+    const s = await seedDealership("consigned", { cost: 10_000, price: CONFIGURED.price, sourced: true });
+    const { applicationId } = await readyConfiguredDeal(s, CONFIGURED);
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { supplierSettlementRoute: "THROUGH_DEALERSHIP" }));
+    await finalize(s, applicationId);
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    // The deal really is a v2 plan, so the exclusion is the ownership check and not a missing plan.
+    expect(app?.financedSalePlanVersion).toBe(2);
+    const sale = await saleOf(s, applicationId);
+    expect(sale?.commissionBaseApprovedMinor).toBeUndefined();
+    expect(sale?.commissionBaseContributionMinor).toBeUndefined();
+    expect(sale?.commissionBaseCurrency).toBeUndefined();
+    // Today's consigned basis: sale price 13,000 - entitlement 10,000 = 3,000 at 10%.
+    // (The new base would give 112.5.)
+    expect(sale?.commissionAmount).toBeCloseTo(300, 6);
+  });
+
+  async function frozenNoCostSale(tag: string) {
+    const s = await seedDealership(tag, { cost: undefined, price: CONFIGURED.price });
+    const { applicationId } = await readyConfiguredDeal(s, CONFIGURED);
+    await finalize(s, applicationId);
+    const sale = await saleOf(s, applicationId);
+    expect(sale?.commissionAmount ?? null).toBeNull();
+    await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { purchasePrice: 10_000 }));
+    return { s, saleId: sale!._id };
+  }
+
+  test("6b. recalculateCommission refuses when the org currency changed after completion, leaving the commission untouched", async () => {
+    const { s, saleId } = await frozenNoCostSale("recalcccy");
+    await s.t.run(async (ctx) => {
+      const settings = (await ctx.db.query("orgSettings").collect()).find((x) => x.orgId === s.orgId)!;
+      await ctx.db.patch(settings._id, { currency: "USD", currencySymbol: "$" });
+    });
+    await expect(s.as.mutation(api.sales.recalculateCommission, { orgId: s.orgId, saleId })).rejects.toThrow(
+      /different currency/i
+    );
+    const after = await s.t.run((ctx) => ctx.db.get(saleId));
+    expect(after?.commissionAmount ?? null).toBeNull();
+  });
+
+  test("6c. recalculateCommission refuses a partial frozen record instead of falling back to salePrice - cost", async () => {
+    const { s, saleId } = await frozenNoCostSale("recalcpartial");
+    await s.t.run((ctx) => ctx.db.patch(saleId, { commissionBaseContributionMinor: undefined }));
+    await expect(s.as.mutation(api.sales.recalculateCommission, { orgId: s.orgId, saleId })).rejects.toThrow(
+      /incomplete/i
+    );
+    const after = await s.t.run((ctx) => ctx.db.get(saleId));
+    expect(after?.commissionAmount ?? null).toBeNull();
   });
 });
