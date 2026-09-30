@@ -295,6 +295,14 @@ const expectFailClosed = (r: RunResult) => {
   expect(r.status).not.toBe(0);
 };
 const gateUrls = (r: RunResult) => r.calls.filter((c) => c.url?.includes("qualitygates/project_status")).map((c) => c.url);
+const isSonarHost = (url?: string): boolean => {
+  if (!url) return false;
+  try {
+    return new URL(url).hostname === "sonarcloud.io";
+  } catch {
+    return false;
+  }
+};
 
 describe.skipIf(!bash)("sonar-pr-report.yml `report` step behaviour", () => {
   it("extracts the report and verdict scripts", () => {
@@ -359,7 +367,7 @@ describe.skipIf(!bash)("sonar-pr-report.yml `report` step behaviour", () => {
     const r = reportRun({ headNow: OTHER });
     expect(r.status).toBe(0);
     expect(gateOk(r)).toBe(false);
-    expect(r.calls.some((c) => c.url?.includes("sonarcloud.io"))).toBe(false);
+    expect(r.calls.some((c) => isSonarHost(c.url))).toBe(false);
   });
 
   it("stale merge skips the comment and gate_ok with exit 0 even when the gate is OK", () => {
