@@ -613,6 +613,8 @@ describe("Phase 8 — finance disbursement", () => {
         orgId, customerId, vehicleId, companyId: financeCompanyId,
         quoteId, salespersonId: userId,
         status: "CLOSED",
+        // SCRUM-447 B1: confirming consumes a registered tender.
+        expectedPaymentMethod: "BANK_TRANSFER", expectedPaymentDate: Date.now(),
         createdAt: Date.now(), updatedAt: Date.now(),
       })
     );

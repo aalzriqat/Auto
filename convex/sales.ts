@@ -816,6 +816,18 @@ export const update = mutation({
         }
       }
 
+      // SCRUM-447 D4: AFTER the payment locks above (which stay as defence in
+      // depth and keep their specific refusals). A financed deal is cancelled
+      // from the deal, where its finance-company cheque is resolved with it;
+      // cancelling only the sale would leave that cheque live on a dead deal.
+      // Cash sales are unchanged.
+      if (sale.applicationId) {
+        throwAppError(
+          AppErrorCode.VALIDATION_FAILED,
+          "This sale belongs to a financed deal — cancel this deal from the deal screen."
+        );
+      }
+
       const cancellationDate = Date.now();
       // Only a sale that actually COMPLETED has operational records to reverse.
       // This branch used to run for any non-CANCELLED sale, which included

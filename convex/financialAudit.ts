@@ -53,6 +53,9 @@ type AuditActionType =
   // his entitlement or holding a claim on him for its margin. The two produce
   // opposite balance sheets from the same sale.
   | "SET_SUPPLIER_SETTLEMENT_ROUTE"
+  // SCRUM-447: retiring a registered expected payment / attesting a cheque face.
+  | "CORRECT_EXPECTED_PAYMENT"
+  | "ATTEST_CHEQUE_FACE"
   // The finance company paid the supplier. Recorded as a fact off the
   // settlement advice, with no journal behind it — which is exactly why it
   // needs an audit trail: nothing in the ledger would otherwise show who
