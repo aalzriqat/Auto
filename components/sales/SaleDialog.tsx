@@ -271,7 +271,12 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
           downPayment: values.downPayment,
           tradeInVehicleId: values.tradeInVehicleId && values.tradeInVehicleId !== "none" ? values.tradeInVehicleId as Id<"vehicles"> : undefined,
           tradeInValue: values.tradeInValue,
-          financingType: values.financingType,
+          // SCRUM-495: sent only when the user CHANGED it. A legacy LEASE row is
+          // therefore edited without re-stating LEASE (the server refuses a change
+          // INTO a retired mode), and is never rewritten to CASH.
+          ...(values.financingType !== (sale.financingType || "CASH")
+            ? { financingType: values.financingType }
+            : {}),
           loanAmount: values.loanAmount,
           apr: values.apr,
           termMonths: values.termMonths,
@@ -608,7 +613,11 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                           <SelectContent>
                             <SelectItem value="CASH">{t("Cash" as any)}</SelectItem>
                             <SelectItem value="FINANCED">{t("Financed" as any)}</SelectItem>
-                            <SelectItem value="LEASE">{t("Lease" as any)}</SelectItem>
+                            {/* SCRUM-495: LEASE is no longer offered. A stored LEASE sale still
+                                shows what it is, as a disabled, non-selectable item. */}
+                            {field.value === "LEASE" && (
+                              <SelectItem value="LEASE" disabled>{t("LeaseRetired" as any)}</SelectItem>
+                            )}
                           </SelectContent>
                         </Select>
                         <FormMessage />
