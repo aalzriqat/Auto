@@ -259,12 +259,29 @@ describe("Finance lifecycle phase 1 quote mode", () => {
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
     await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
     await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+    // SCRUM-27: a manual company's deal cannot close until the approval letter is
+    // entered (approved amount, exact name, and what the dealership sends).
+    await asApprover.mutation(api.financingEconomics.recordManualFinanceApproval, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 31_000_000,
+      financierName: "Manual Bank",
+      dealerSendsMinor: 0,
+    });
     await registerHandover(asUser, api, orgId, applicationId);
     await asUser.mutation(api.applications.registerExpectedPayment, {
       orgId,
       applicationId,
       method: "CASH",
       expectedDate: Date.now(),
+    });
+    await asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+      orgId,
+      applicationId,
+      legalInvoiceAmountMinor: 31_000_000,
+      legalInvoiceNumber: "INV-MANUAL-1",
+      legalInvoiceDate: Date.now(),
+      issuedTo: "FINANCE_COMPANY",
     });
     await recordReconciledZeroCost(asUser, api, orgId, applicationId);
     await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId });
