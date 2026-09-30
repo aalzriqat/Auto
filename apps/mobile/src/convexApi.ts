@@ -395,6 +395,9 @@ export interface MobileSale {
   vehicleId: string;
   customerId: string;
   salespersonId: string;
+  // SCRUM-447: present on a sale that belongs to a financed deal. Such a sale is
+  // cancelled from the deal screen, so the Cancel control is hidden for it.
+  applicationId?: string;
   salePrice: number;
   saleDate: number;
   status: MobileSaleStatus;
