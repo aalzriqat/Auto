@@ -343,6 +343,54 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
     expect(disbursement.state).not.toBe("NOT_APPLICABLE");
     expect(settlement.state).not.toBe("COMPLETE");
   });
+  // ── 4b. dealModeOf: a legacy application reads the mode from its quote, same org only ──
+  describe("a legacy application with no quoteModeAtSubmission reads the mode from its quote", () => {
+    /** Closed internal-instalment deal whose frozen mode is cleared, so the quote is the only mode evidence. */
+    async function legacyDeal(s: Seed) {
+      const { applicationId } = await insertDeal(s, { mode: "INTERNAL_INSTALLMENT" });
+      await s.t.run((ctx) => ctx.db.patch(applicationId, { quoteModeAtSubmission: undefined }));
+      return applicationId;
+    }
+
+    test("a same-org quote in INTERNAL_INSTALLMENT resolves the leg exactly like the frozen mode", async () => {
+      const s = await seed("dm_sameorg");
+      const applicationId = await legacyDeal(s);
+      await s.t.run((ctx) => ctx.db.patch(s.quoteId, { mode: "INTERNAL_INSTALLMENT" }));
+      const { disbursement, settlement } = await stagesOf(s, applicationId);
+      expect(disbursement.state).toBe("NOT_APPLICABLE");
+      expect(disbursement.blocker).toBeUndefined();
+      expect(settlement.state).toBe("COMPLETE");
+    });
+
+    test("a quote belonging to another org is not evidence: the stage keeps waiting", async () => {
+      const s = await seed("dm_crossorg");
+      const applicationId = await legacyDeal(s);
+      await s.t.run((ctx) => ctx.db.patch(s.quoteId, { mode: "INTERNAL_INSTALLMENT" }));
+      // Control: in its own org the quote proves the verdict.
+      expect((await stagesOf(s, applicationId)).disbursement.state).toBe("NOT_APPLICABLE");
+      const foreignOrgId = await s.t.run((ctx) =>
+        ctx.db.insert("organizations", { name: "FL dm foreign", createdAt: Date.now() })
+      );
+      await s.t.run((ctx) => ctx.db.patch(s.quoteId, { orgId: foreignOrgId }));
+      const { disbursement, settlement } = await stagesOf(s, applicationId);
+      expect(disbursement.state).not.toBe("NOT_APPLICABLE");
+      expect(disbursement.state).toBe("BLOCKED");
+      expect(settlement.state).not.toBe("COMPLETE");
+    });
+
+    test("a deleted quote is missing evidence: the stage keeps waiting", async () => {
+      const s = await seed("dm_deleted");
+      const applicationId = await legacyDeal(s);
+      await s.t.run((ctx) => ctx.db.patch(s.quoteId, { mode: "INTERNAL_INSTALLMENT" }));
+      expect((await stagesOf(s, applicationId)).disbursement.state).toBe("NOT_APPLICABLE");
+      await s.t.run((ctx) => ctx.db.delete(s.quoteId));
+      const { disbursement, settlement } = await stagesOf(s, applicationId);
+      expect(disbursement.state).not.toBe("NOT_APPLICABLE");
+      expect(disbursement.state).toBe("BLOCKED");
+      expect(settlement.state).not.toBe("COMPLETE");
+    });
+  });
+
   // ── 5-7. controls: the paths this change must not touch ──────────────────
   test("control: a configured finance company still waits on confirmDisbursement", async () => {
     const s = await seed("configured");
@@ -386,7 +434,7 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
   test("confirmDisbursement on an UNKNOWN deal keeps refusing", async () => {
     const s = await seed("refuseunknown");
     const { applicationId } = await insertDeal(s, { sale: "deleted" });
-    await expect(confirm(s, applicationId)).rejects.toThrow();
+    await expect(confirm(s, applicationId)).rejects.toThrow(/no finance company — no disbursement expected/i);
   });
 
   // ── 9. L-1: STOPPED beats NOT_APPLICABLE; no orphaned PENDING; allComplete ─
@@ -524,7 +572,7 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
     test("finalizeDeal refuses a no-company through-dealership deal with no cost line, and closes nothing", async () => {
       const s = await seed("cc_refuse");
       const applicationId = await readyToFinalize(s);
-      await expect(finalize(s, applicationId)).rejects.toThrow();
+      await expect(finalize(s, applicationId)).rejects.toThrow(/COSTS_NONE/);
       const after = await s.t.run((ctx) => ctx.db.get(applicationId));
       expect(after?.status).toBe("APPROVED");
       expect(after?.finalizedSaleId).toBeUndefined();
