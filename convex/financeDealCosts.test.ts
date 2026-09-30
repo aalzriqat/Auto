@@ -1609,7 +1609,10 @@ describe("a deducted cost write establishes the remittance from what the company
     expect(app?.expectedDealerRemittanceMinor).toBeUndefined();
     expect(app?.needsFinancingReconciliation).toBe(true);
     expect(await closingCheck(seed, "FIRST_PAYMENT_RECORDED")).toMatchObject({ status: "BLOCKED" });
-    expect(await closingCheck(seed, "REMITTANCE_KNOWN")).not.toMatchObject({ status: "READY" });
+    // SCRUM-435 (Option A): the company sends the full approved amount and never
+    // deducts, so the remittance is the approval itself and no longer depends on
+    // the first payment. The missing first payment is still what blocks.
+    expect(await closingCheck(seed, "REMITTANCE_KNOWN")).toMatchObject({ status: "READY" });
   });
 
   test("a cost the company does NOT withhold leaves the remittance alone", async () => {

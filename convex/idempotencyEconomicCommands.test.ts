@@ -431,6 +431,8 @@ const REQUIRED_FINGERPRINT_FIELDS: Array<[string, string, string[]]> = [
   // Selects the credit account (cash on hand vs bank) a direct handover payment leaves.
   // …and the amount the approver SAW: the same key for another figure is another intent.
   ["convex/financeDealCosts.ts", "financeDealCosts.recordDirectFeePayment", ["method", "expectedAmountMinor"]],
+  // SCRUM-435: how the forward was paid selects the account it leaves, and the amount the payer saw is pinned.
+  ["convex/financeCompanyForward.ts", "financeCompanyForward.recordFinanceCompanyForward", ["method", "expectedAmountMinor"]],
 ];
 
 describe("SCRUM-57 — fields whose omission was a reproduced defect stay hashed", () => {
@@ -543,6 +545,7 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
   "./vehicles": ["create", "createReservation"],
   "./workOrders": ["create"],
   "./expenses": ["create"],
+  "./financeCompanyForward": ["recordFinanceCompanyForward", "reverseFinanceCompanyForward", "reportFinanceCompanyForwardReturned"],
   "./financeDealCosts": [
     "recordDealFee",
     "recordTemplateFeeActual",
@@ -632,7 +635,8 @@ describe("SCRUM-57 — classification ratchet", () => {
     // +financeDealCosts.recordDirectFeePayment, the dealership's own payment of
     // a handover cost (HANDOVER_COST_PAID_DIRECT) — runWithIdempotency with
     // economic: true, method/date/reference/actual in its fingerprint.
-    expect(checked).toBe(45);
+    // 45 -> 48 by SCRUM-435: the three finance-company forward commands.
+    expect(checked).toBe(48);
   });
 
   /**
@@ -696,9 +700,9 @@ describe("SCRUM-57 — classification ratchet", () => {
     // 40 -> 42 / 41 -> 43: SCRUM-389's two supplier-cost-recovery commands.
     // 42 -> 44 / 43 -> 45: SCRUM-444's `depositRequests.request` and `.confirm`.
     // 44 -> 45 / 45 -> 46: SCRUM-443's `financeDealCosts.recordDirectFeePayment`.
-    expect(economicInSource.size).toBe(45);
+    expect(economicInSource.size).toBe(48);
     expect([...nonEconomicInSource].sort()).toEqual(["sales.createDraft"]);
-    expect(economicInSource.size + nonEconomicInSource.size).toBe(46);
+    expect(economicInSource.size + nonEconomicInSource.size).toBe(49);
   });
 
   /**

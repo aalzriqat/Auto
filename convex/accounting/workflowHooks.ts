@@ -21,6 +21,7 @@ import {
 import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting, expensePostedKey, simplePayloadHash, RECEIPT_CREDIT_APPLIED_EVENT_TYPE, RECEIPT_CREDIT_APPLIED_SOURCE_TYPE, type FinancedSalePlanPayload } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { handoverDirectPostKey, handoverDirectReversalKey } from "../utils/handoverCostPayment";
+import { forwardPostKey, forwardReversalKey } from "../utils/financeCompanyForward";
 import { getOpenPeriodForDate, checkPostingAllowed } from "../accountingPeriods";
 import { SYSTEM_KEYS, type SystemKey } from "../utils/defaultChart";
 import {
@@ -3521,6 +3522,88 @@ export async function hookHandoverCostPaidDirectReversed(
     reversalDate: args.reversalDate,
     reversalIdempotencyKey: handoverDirectReversalKey(args.feeId, args.version),
     pendingPostIdempotencyKey: handoverDirectPostKey(args.feeId, args.version),
+  });
+}
+
+/**
+ * The dealership paid the finance company the deposit + contribution it owes
+ * onward (SCRUM-435), at forward version `version`: DR AP-Finance / CR the
+ * outbound cash or bank account. Dated when it was really paid. Both accounts
+ * are REQUIRED system keys, so an unmapped one queues the event (visible as
+ * POSTING_PENDING to `deriveForwardState`) instead of throwing inside the
+ * caller's transaction.
+ */
+export async function hookFinanceCompanyForwardPaid(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    applicationId: Id<"financeApplications">;
+    forwardId: Id<"financeCompanyForwards">;
+    financeCompanyId: Id<"financeCompanies">;
+    version: number;
+    amountMinor: number;
+    currency: string;
+    paymentMethod: string;
+    cashKey: SystemKey;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+): Promise<void> {
+  assertStoredVersion(args.version, "This deal's forward to the finance company", "posting this forward");
+  if (await isChartInitialized(ctx, args.orgId)) {
+    await ensureFinancedSettlementAccounts(ctx, args.orgId, args.actorId);
+  }
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "FINANCE_COMPANY_FORWARD_PAID",
+    sourceType: "financeCompanyForwards",
+    sourceId: args.forwardId.toString(),
+    eventVersion: args.version,
+    idempotencyKey: forwardPostKey(args.applicationId, args.version),
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    requiredSystemKeys: [SYSTEM_KEYS.ACCOUNTS_PAYABLE_FINANCE_COMPANIES, args.cashKey],
+    payload: {
+      forwardId: args.forwardId.toString(),
+      applicationId: args.applicationId.toString(),
+      financeCompanyId: args.financeCompanyId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
+    },
+  });
+}
+
+/**
+ * Reverses forward version `version` - pinned by version, never `.first()`.
+ * REVERSED / DEFERRED (no period open, the payment stays POSTED until the
+ * outbox drains) / NOT_POSTED (a queued forward post was cancelled).
+ */
+export async function hookFinanceCompanyForwardReversed(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    applicationId: Id<"financeApplications">;
+    forwardId: Id<"financeCompanyForwards">;
+    version: number;
+    reason: string;
+    actorId: Id<"users">;
+    reversalDate: number;
+  }
+): Promise<ReversalOutcome> {
+  assertStoredVersion(args.version, "This deal's forward to the finance company", "reversing this forward");
+  return reverseEventIfPosted(ctx, {
+    orgId: args.orgId,
+    sourceType: "financeCompanyForwards",
+    sourceId: args.forwardId.toString(),
+    eventType: "FINANCE_COMPANY_FORWARD_PAID",
+    eventVersion: args.version,
+    reason: args.reason,
+    actorId: args.actorId,
+    reversalDate: args.reversalDate,
+    reversalIdempotencyKey: forwardReversalKey(args.applicationId, args.version),
+    pendingPostIdempotencyKey: forwardPostKey(args.applicationId, args.version),
   });
 }
 
