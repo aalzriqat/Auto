@@ -793,6 +793,10 @@ const dealRailMessages = defineBilingualMessages({
     "دفعه موظف: حمِّله على عهدة ذلك الموظف من قسم عهدة الموظف النقدية.",
   ],
   RecordDirectPayment: ["Record direct payment", "تسجيل دفع مباشر"],
+  ReconcileNeedsAccountant: [
+    "Waiting for an accountant or a manager to reconcile this cost.",
+    "بانتظار محاسب أو مدير لمطابقة هذه التكلفة.",
+  ],
   DirectPaymentWaiting: [
     "Waiting for a manager or an accountant to record the payment.",
     "بانتظار مدير أو محاسب لتسجيل الدفع.",

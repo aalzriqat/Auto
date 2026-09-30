@@ -333,7 +333,15 @@ function routeSpecificProfit(args: {
   // contribution, composed at the shared boundary with each component
   // validated BEFORE the addition — added inline, a corrupt pair cancelled
   // into a safe operand.
-  const dealCancelled = app.status === "CANCELLED";
+  // A cancelled LINKED SALE cancels the deal too: `sales.update` reverses the
+  // journal and the supplier claim while the finance application keeps its own
+  // status (often CLOSED), so `app.status` alone let this branch state an
+  // estimate for a deal whose books were reversed. The cockpit already resolved
+  // that from the sale (`money.profit`), so it is honoured here rather than
+  // re-read (SCRUM-446).
+  const dealCancelled =
+    app.status === "CANCELLED" ||
+    (!money.profit.available && money.profit.reason === "DealCancelled");
   if (dealCancelled) return { available: false, reason: "DealCancelled" };
   const customerGapToDealer = composeCustomerGapToDealer(app);
   if (!customerGapToDealer.readable) return { available: false, reason: "CorruptInput" };

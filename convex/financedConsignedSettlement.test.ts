@@ -18,7 +18,7 @@
  */
 import * as applicationsModule from "./applications";
 import * as financingEconomicsModule from "./financingEconomics";
-import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import { convexTestWithComponents, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -1096,7 +1096,12 @@ describe("a lease, which is external but has no provider identity", () => {
 
   test("finalizes normally once it is told to settle through the dealership", async () => {
     const s = await seedDealership("lease3");
-    const { saleId } = await runDeal(s, { mode: "LEASE", route: "THROUGH_DEALERSHIP" });
+    // SCRUM-446: a no-company deal through the dealership needs reconciled cost evidence to close.
+    const { saleId } = await runDeal(s, {
+      mode: "LEASE",
+      route: "THROUGH_DEALERSHIP",
+      beforeFinalize: (applicationId) => recordReconciledZeroCost(s.asUser, api, s.orgId, applicationId),
+    });
     expect(saleId).toBeTruthy();
   });
 });
