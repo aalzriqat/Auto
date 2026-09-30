@@ -129,11 +129,11 @@ async function refusalOf(promise: Promise<unknown>): Promise<string | null> {
 }
 
 /** A manual-finance-company application, APPROVED at the credit stage, nothing entered from the letter yet. */
-async function manualApplication(s: Seeded, as = s.owner.as) {
+async function manualApplication(s: Seeded, as = s.owner.as, quoteLabel = "Other finance option") {
   const quoteId = await as.mutation(api.quotes.saveQuote, {
     orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId,
     vehiclePrice: G / SCALE, downPayment: 0, termMonths: 48,
-    mode: "MANUAL_FINANCE_COMPANY", manualProviderName: "Other finance option",
+    mode: "MANUAL_FINANCE_COMPANY", manualProviderName: quoteLabel,
     manualAdminFees: 0, manualProfitRate: 5,
   });
   const applicationId = await as.mutation(api.applications.createFromQuote, { orgId: s.orgId, quoteId });
@@ -181,9 +181,9 @@ async function finishManualDeal(s: Seeded, applicationId: Id<"financeApplication
 }
 
 /** Ready to finalize: letter entered, then the finishing steps. */
-async function readyManualDeal(s: Seeded, c: Case, opts: { enterLetter?: boolean } = {}) {
+async function readyManualDeal(s: Seeded, c: Case) {
   const { applicationId, quoteId } = await manualApplication(s);
-  if (opts.enterLetter !== false) await enterLetter(s, applicationId, {}, c);
+  await enterLetter(s, applicationId, {}, c);
   await finishManualDeal(s, applicationId, c);
   return { applicationId, quoteId };
 }
@@ -305,11 +305,13 @@ describe.each(CASES)("SCRUM-27 - $name", (c) => {
     expect(app?.companyId).toBeUndefined();
   });
 
-  test("finalize is refused until the letter has been entered, and nothing is written", async () => {
+  test("handover and finalize are both refused until the letter has been entered, and nothing is written", async () => {
     const s = await seedDealership(`gate_${c.H}_${c.S}`);
-    const { applicationId } = await readyManualDeal(s, c, { enterLetter: false });
+    const { applicationId } = await manualApplication(s);
+    expect(await refusalOf(registerHandover(s.owner.as, api, s.orgId, applicationId))).toMatch(/approval letter/i);
     expect(await refusalOf(finalize(s, applicationId))).not.toBeNull();
     const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(app?.vehicleHandoverAt).toBeUndefined();
     expect(app?.status).not.toBe("CLOSED");
     expect(app?.finalizedSaleId).toBeUndefined();
   });
@@ -667,5 +669,147 @@ describe("SCRUM-27 OR-12 - the shortfall (sale price minus the letter) is settle
     expect(app?.dealerGapShareMinor).toBeUndefined();
     expect(app?.customerGapShareMinor).toBeUndefined();
     expect(app?.gapResolvedAt).toBeUndefined();
+  });
+});
+
+describe("SCRUM-27 R1 - the letter, G, the basis and the gap are one unit", () => {
+  const read = (s: Seeded, id: Id<"financeApplications">) => s.t.run((ctx) => ctx.db.get(id));
+  const arFinanceDebits = (s: Seeded) =>
+    s.t.run(async (ctx) => {
+      const account = await ctx.db
+        .query("chartOfAccounts")
+        .withIndex("by_org_systemKey", (q) => q.eq("orgId", s.orgId).eq("systemKey", "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES"))
+        .unique();
+      return (await ctx.db.query("journalLines").collect())
+        .filter((l) => l.orgId === s.orgId && l.accountId === account?._id && l.debitMinor > 0)
+        .map((l) => l.debitMinor);
+    });
+  const resolveGap = (s: Seeded, applicationId: Id<"financeApplications">, app: NonNullable<Awaited<ReturnType<typeof read>>>, toFinance = 0) =>
+    s.approver.as.mutation(api.financingEconomics.resolveAppraisalGap, {
+      orgId: s.orgId, applicationId,
+      economicsStamp: economicsStamp(app),
+      customerGapShareMinor: toFinance > 0 ? GAP : 0,
+      dealerGapShareMinor: toFinance > 0 ? 0 : GAP,
+      customerGapCashToDealerMinor: 0,
+      customerGapInstallmentToDealerMinor: 0,
+      customerGapToFinanceCompanyMinor: toFinance,
+    });
+
+  test("B1: a letter whose G, basis or gap is missing (a partial unit) is refused at handover", async () => {
+    const { s, applicationId } = await shortfallDeal("r1_b1_partial", "ABSORB");
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { approvedPurchaseBasis: undefined }));
+    expect(await refusalOf(registerHandover(s.owner.as, api, s.orgId, applicationId))).toMatch(/approval letter/i);
+    expect((await read(s, applicationId))?.vehicleHandoverAt).toBeUndefined();
+  });
+
+  test("B2: a new appraisal voids the letter; it must be re-entered, which restores the whole unit", async () => {
+    const { s, applicationId } = await shortfallDeal("r1_b2", null);
+    await s.owner.as.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: s.orgId, applicationId, appraisalAmountMinor: G, providerType: "FINANCE_COMPANY", appraisedAt: Date.now(),
+    });
+    const voided = await read(s, applicationId);
+    expect(voided?.manualApproval).toBeUndefined();
+    expect(voided?.approvedDealerPurchaseAmountMinor).toBeUndefined();
+    expect(voided?.rawAppraisalGapMinor).toBeUndefined();
+    expect(await refusalOf(registerHandover(s.owner.as, api, s.orgId, applicationId))).not.toBeNull();
+    expect((await read(s, applicationId))?.vehicleHandoverAt).toBeUndefined();
+
+    await enterLetter(s, applicationId, { approvedAmountMinor: G - GAP }, NO_DEPOSIT);
+    const restored = await read(s, applicationId);
+    expect(restored?.manualApproval?.financierName).toBe(LETTER_NAME);
+    expect(restored?.approvedDealerPurchaseAmountMinor).toBe(G - GAP);
+    expect(restored?.approvedPurchaseBasis).toBe("MANUAL");
+    expect(restored?.rawAppraisalGapMinor).toBe(GAP);
+    expect(restored?.gapResolution).toBe("PENDING_NEGOTIATION");
+    await resolveGap(s, applicationId, restored!);
+    await registerHandover(s.owner.as, api, s.orgId, applicationId);
+    expect((await read(s, applicationId))?.vehicleHandoverAt).toBeDefined();
+  });
+
+  test("B2b: an identical letter retry is not a no-op when the unit is incomplete (letter present, G cleared)", async () => {
+    const { s, applicationId } = await shortfallDeal("r1_b2b", null);
+    await s.t.run((ctx) =>
+      ctx.db.patch(applicationId, { approvedDealerPurchaseAmountMinor: undefined, approvedPurchaseBasis: undefined, rawAppraisalGapMinor: undefined, gapResolution: undefined })
+    );
+    await enterLetter(s, applicationId, { approvedAmountMinor: G - GAP }, NO_DEPOSIT);
+    const app = await read(s, applicationId);
+    expect(app?.approvedDealerPurchaseAmountMinor).toBe(G - GAP);
+    expect(app?.approvedPurchaseBasis).toBe("MANUAL");
+    expect(app?.rawAppraisalGapMinor).toBe(GAP);
+    expect(app?.gapResolution).toBe("PENDING_NEGOTIATION");
+  });
+
+  test("B3: the shortfall cannot be settled to the finance company on a manual deal, and nothing is written", async () => {
+    const { s, applicationId } = await shortfallDeal("r1_b3", null);
+    const app = (await read(s, applicationId))!;
+    expect(await refusalOf(resolveGap(s, applicationId, app, GAP))).toMatch(/dealership only/i);
+    const after = await read(s, applicationId);
+    expect(after?.gapResolution).toBe("PENDING_NEGOTIATION");
+    expect(after?.customerGapToFinanceCompanyMinor).toBeUndefined();
+  });
+
+  test("B3: a stored split that routes the gap to the financier refuses handover", async () => {
+    const { s, applicationId } = await shortfallDeal("r1_b3_seed", null);
+    await s.t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        gapResolution: "CUSTOMER_ABSORBS", customerGapShareMinor: GAP, dealerGapShareMinor: 0,
+        customerGapCashToDealerMinor: 0, customerGapInstallmentToDealerMinor: 0, customerGapToFinanceCompanyMinor: GAP,
+      })
+    );
+    expect(await refusalOf(registerHandover(s.owner.as, api, s.orgId, applicationId))).toMatch(/dealership only/i);
+    expect((await read(s, applicationId))?.vehicleHandoverAt).toBeUndefined();
+  });
+
+  test("B4: every reader shows the quote label before the letter and the letter's name after it", async () => {
+    const s = await seedDealership("r1_b4");
+    const { applicationId } = await manualApplication(s, s.owner.as, "Quote Label Co");
+    const shown = async () => {
+      const cockpit = await s.owner.as.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+      const list = await s.owner.as.query(api.applications.list, { orgId: s.orgId, paginationOpts: { numItems: 20, cursor: null } });
+      const row = list.page.find((r: { _id: Id<"financeApplications"> }) => r._id === applicationId);
+      return { cockpit: cockpit?.financeCompanyName, list: row?.companyName };
+    };
+    expect(await shown()).toEqual({ cockpit: "Quote Label Co", list: "Quote Label Co" });
+    await enterLetter(s, applicationId, {}, NO_DEPOSIT);
+    expect(await shown()).toEqual({ cockpit: LETTER_NAME, list: LETTER_NAME });
+  });
+
+  test("B5: a mistyped S is correctable after handover; G and the name stay frozen; finalize then posts one AR-Finance debit of G", async () => {
+    const s = await seedDealership("r1_b5");
+    const H = 200_000;
+    const { applicationId } = await manualApplication(s);
+    await enterLetter(s, applicationId, { dealerSendsMinor: 0 });
+    await finishManualDeal(s, applicationId, { H });
+    expect(await refusalOf(finalize(s, applicationId))).not.toBeNull();
+    expect((await read(s, applicationId))?.status).toBe("APPROVED");
+
+    expect(await refusalOf(enterLetter(s, applicationId, { approvedAmountMinor: G - 1, dealerSendsMinor: 1_575_000 }))).toMatch(/can no longer be changed/i);
+    expect(await refusalOf(enterLetter(s, applicationId, { financierName: "Someone Else", dealerSendsMinor: 1_575_000 }))).toMatch(/can no longer be changed/i);
+    expect((await read(s, applicationId))?.manualApproval?.dealerSendsMinor).toBe(0);
+
+    const before = await read(s, applicationId);
+    await enterLetter(s, applicationId, { dealerSendsMinor: 1_575_000 });
+    const after = await read(s, applicationId);
+    expect(after?.manualApproval).toMatchObject({ approvedAmountMinor: G, financierName: LETTER_NAME, dealerSendsMinor: 1_575_000 });
+    expect(after?.economicsRevision).toBe((before?.economicsRevision ?? 0) + 1);
+    expect(after?.approvedDealerPurchaseAmountMinor).toBe(G);
+    expect(after?.rawAppraisalGapMinor).toBe(before?.rawAppraisalGapMinor);
+    expect(after?.vehicleHandoverAt).toBe(before?.vehicleHandoverAt);
+    const audit = (await s.t.run((ctx) => ctx.db.query("financeApplicationOverrides").collect())).filter(
+      (o) => o.applicationId === applicationId && o.field === "manualApproval"
+    );
+    expect(audit).toHaveLength(1);
+
+    await finalize(s, applicationId);
+    expect((await read(s, applicationId))?.status).toBe("CLOSED");
+    expect(await arFinanceDebits(s)).toEqual([G]);
+  });
+
+  test("L3: the Arabic placeholder the wizard sends is refused as a payer name", async () => {
+    const s = await seedDealership("r1_l3");
+    const { applicationId } = await manualApplication(s);
+    for (const placeholder of ["أخرى", "خيار تمويل آخر", "Others"]) {
+      expect(await refusalOf(enterLetter(s, applicationId, { financierName: placeholder }, NO_DEPOSIT))).toMatch(/placeholder/i);
+    }
   });
 });

@@ -129,7 +129,7 @@ import {
   resolveCreationRuleSnapshot,
 } from "./utils/creationEconomics";
 
-import { manualPayerOf } from "./utils/manualFinancePayer";
+import { isManualFinanceApplication, MANUAL_GAP_TO_FINANCIER_REFUSAL, manualPayerOf } from "./utils/manualFinancePayer";
 
 /** sourceType used for the canonical finance-company receivable opened at finalizeDeal. */
 const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
@@ -296,6 +296,32 @@ async function getActiveReceivableAllocations(
 }
 
 /**
+ * A MANUAL finance company deal advances only on a complete, consistent letter
+ * unit (SCRUM-27): the letter, `approvedDealerPurchaseAmountMinor` equal to the
+ * letter's amount, the MANUAL basis and a derived gap, all present together.
+ * Then a positive gap must be settled, and only to dealer-bound destinations.
+ * Every refusal is before any write and carries no figures.
+ */
+function assertManualLetterReady(app: Doc<"financeApplications">, action: string): void {
+  const letter = app.manualApproval;
+  if (
+    letter === undefined ||
+    app.approvedPurchaseBasis !== "MANUAL" ||
+    app.approvedDealerPurchaseAmountMinor !== letter.approvedAmountMinor ||
+    app.rawAppraisalGapMinor === undefined
+  ) {
+    throw new ConvexError(
+      `This deal's finance company approval letter is not fully recorded. Enter (or re-enter) the letter's approved amount, the company's name and the amount the dealership sends it before ${action}.`
+    );
+  }
+  // Defence against a row a writer bypassed: OR-12 never sends a gap to the financier.
+  if ((app.customerGapToFinanceCompanyMinor ?? 0) > 0) {
+    throw new ConvexError(MANUAL_GAP_TO_FINANCIER_REFUSAL);
+  }
+  assertAppraisalGapSettledToAdvance(app, action);
+}
+
+/**
  * Refuses to advance a deal whose dealer-side economics are not actually there.
  *
  * A reappraisal or a reopened approval clears the approved purchase amount
@@ -317,8 +343,11 @@ function assertDealerEconomicsReady(
   const action =
     opts.phase === "HANDOVER" ? "handing over the vehicle" : "finalizing";
   if (app.submittedQuotationMinor === undefined) {
-    // A manual deal has no quotation but still carries an OR-12 appraisal gap.
-    if (manualPayerOf(app) !== null) assertAppraisalGapSettledToAdvance(app, action);
+    // A manual deal has no quotation but its letter, approved amount, MANUAL
+    // basis and OR-12 appraisal gap are one unit, and it is gated on all of
+    // them: keyed on "is manual", NOT on "has a letter", or a deal with no
+    // letter at all would sail through handover and strand at finalization.
+    if (isManualFinanceApplication(app)) assertManualLetterReady(app, action);
     return;
   }
   if (app.approvedDealerPurchaseAmountMinor === undefined) {
@@ -406,6 +435,15 @@ async function closedDealSettlesDirectToSupplier(
 }
 
 /**
+ * The manual finance company's name as every reader shows it: the letter's name
+ * once the manager has entered it (the only payer identity from then on), the
+ * quote-time provider label only before that. SCRUM-27.
+ */
+function manualPayerLabel(app: Doc<"financeApplications">): string | undefined {
+  return manualPayerOf(app)?.name ?? app.manualFinanceSnapshot?.providerName;
+}
+
+/**
  * Resolves who pays for the car on this deal, from the application's own
  * snapshot.
  *
@@ -428,7 +466,7 @@ async function settlementPayerForApplication(
   return settlementPayer({
     quoteMode: await dealModeOf(ctx, app),
     financeCompanyId: app.companyId,
-    manualProviderName: app.manualFinanceSnapshot?.providerName,
+    manualProviderName: manualPayerLabel(app),
   });
 }
 
@@ -1371,7 +1409,7 @@ async function buildCockpitMoney(
         },
     {
       party: "FINANCIER" as const,
-      name: app.manualFinanceSnapshot?.providerName ?? "",
+      name: manualPayerLabel(app) ?? "",
       position: financierPosition({
         routeKnown,
         settlesDirect,
@@ -1625,13 +1663,13 @@ export const list = query({
         const payer = settlementPayer({
           quoteMode: app.quoteModeAtSubmission ?? quote?.mode,
           financeCompanyId: app.companyId,
-          manualProviderName: app.manualFinanceSnapshot?.providerName,
+          manualProviderName: manualPayerLabel(app),
         });
         // Trimmed, matching `settlementPayer` — `saveQuote` applies no trim, so
         // a whitespace-only provider name is reachable, and raw truthiness
         // would render it as a blank cell while the resolver correctly called
         // the payer unnamed.
-        const manualProviderName = app.manualFinanceSnapshot?.providerName?.trim() || undefined;
+        const manualProviderName = manualPayerLabel(app)?.trim() || undefined;
 
         return {
           // The list spreads the whole document too, and it authorizes on the
@@ -2156,7 +2194,7 @@ export const dealCockpit = query({
         profile: vehicleProfile,
       },
       salespersonName: salesperson?.name ?? "",
-      financeCompanyName: company?.name ?? app.manualFinanceSnapshot?.providerName ?? "",
+      financeCompanyName: company?.name ?? manualPayerLabel(app) ?? "",
       /**
        * That the recorded settlement advice disagrees with what the deal was
        * approved at — and nothing about by how much.

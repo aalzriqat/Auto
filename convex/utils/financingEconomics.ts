@@ -1094,7 +1094,7 @@ export function assertAppraisalGapSettledToAdvance(
   // SCRUM-117 projection and `register:vehicle_handover` is held by roles the
   // projection withholds it from; a refusal is a response like any other.
   throw new ConvexError(
-    `The finance company approved less than the quotation on this deal, and who covers the difference has not been agreed. Resolve the appraisal gap before ${action}.`
+    `The finance company approved less than the sale price on this deal, and who covers the difference has not been agreed. Resolve the appraisal gap before ${action}.`
   );
 }
 

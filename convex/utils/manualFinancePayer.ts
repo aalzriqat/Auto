@@ -21,9 +21,19 @@ export type ManualFinanceApplicationShape = Pick<
 >;
 
 /** The names the wizard invents when the operator types none. Never a real company. */
-const PLACEHOLDER_NAMES = new Set(["other finance option", "other", "n/a", "na", "none", "unknown", "manual", "-"]);
+const PLACEHOLDER_NAMES = new Set([
+  "other finance option", "other", "others", "n/a", "na", "none", "unknown", "manual", "-",
+  // The manual-quote wizard sends the translated "OtherFinanceOption" label
+  // (lib/i18n/domains/sales.ts: "Others" / "أخرى"), so the Arabic UI's
+  // placeholder is an equally invented name.
+  "أخرى", "خيار تمويل آخر",
+]);
 
 export const MANUAL_PAYER_NAME_MAX_LENGTH = 120;
+
+/** OR-12: a manual company's shortfall is never routed to the company. One message, two enforcement points. */
+export const MANUAL_GAP_TO_FINANCIER_REFUSAL =
+  "On a manual finance company deal the shortfall is settled with the dealership only: the customer pays it to the dealership, or the dealership absorbs it. It cannot be assigned to the finance company.";
 
 /** Is this application financed by a MANUAL finance company (whatever has or has not been entered yet)? */
 export function isManualFinanceApplication(app: Pick<ManualFinanceApplicationShape, "companyId" | "quoteModeAtSubmission">): boolean {

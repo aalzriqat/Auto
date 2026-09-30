@@ -16,7 +16,7 @@ import {
   requiresLtvPercentFor,
 } from "./utils/financeApplicationProjection";
 import { PERMISSIONS } from "./utils/permissions";
-import { isManualFinanceApplication, normalizeManualPayerName } from "./utils/manualFinancePayer";
+import { isManualFinanceApplication, MANUAL_GAP_TO_FINANCIER_REFUSAL, normalizeManualPayerName } from "./utils/manualFinancePayer";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import {
   computeAppraisalGap,
@@ -2140,6 +2140,10 @@ export const recordAppraisal = mutation({
             // no longer exists. finalizeDeal's own guard (below) is the other
             // half of this.
             handoverStatus: "BLOCKED" as const,
+            // A manual company's letter is part of the approval this appraisal
+            // withdraws (same as a configured deal, whose approval is voided):
+            // the letter is re-entered, which re-derives G, the basis and the gap.
+            ...(isManualFinanceApplication(app) ? { manualApproval: undefined } : {}),
           }
         : {}),
     });
@@ -3020,6 +3024,11 @@ export const resolveAppraisalGap = mutation({
       );
     }
 
+    // OR-12: a manual company never receives the shortfall. Refused before any write.
+    if (isManualFinanceApplication(app) && args.customerGapToFinanceCompanyMinor > 0) {
+      throw new ConvexError(MANUAL_GAP_TO_FINANCIER_REFUSAL);
+    }
+
     const settlement = {
       customerGapShareMinor: args.customerGapShareMinor,
       dealerGapShareMinor: args.dealerGapShareMinor,
@@ -3247,25 +3256,59 @@ export const recordManualFinanceApproval = mutation({
     if (app.status === "CLOSED" || app.status === "CANCELLED") {
       throw new ConvexError("This application is closed. Its approval can no longer be changed.");
     }
-    if (app.financedSalePlanVersion !== undefined || app.vehicleHandoverAt) {
-      throw new ConvexError(
-        "This deal has already been finalized or handed over, so the approval letter can no longer be changed. Cancel the application to reverse it instead."
-      );
-    }
+    const previous = app.manualApproval;
+    const letterRefusal =
+      "This deal has already been finalized or handed over, so the approval letter can no longer be changed. Cancel the application to reverse it instead.";
+    if (app.financedSalePlanVersion !== undefined) throw new ConvexError(letterRefusal);
+    // After handover and before finalize the letter is frozen EXCEPT for S alone:
+    // G and the name are sealed with the handover, but S is checked against the
+    // held deposits only at finalize, so a mistyped S would otherwise strand the
+    // deal. Anything that also moves G or the name keeps the refusal.
+    const sameLetter =
+      previous !== undefined &&
+      previous.approvedAmountMinor === args.approvedAmountMinor &&
+      previous.financierName === financierName;
+    if (app.vehicleHandoverAt && !sameLetter) throw new ConvexError(letterRefusal);
     assertSupportedDenomination(app.economicsCurrency, "recording this approval");
     if (user._id === app.salespersonId) {
       throw new ConvexError("You cannot approve the purchase amount on your own application.");
     }
 
-    const previous = app.manualApproval;
+    const now = Date.now();
+    if (app.vehicleHandoverAt && previous !== undefined) {
+      if (previous.dealerSendsMinor === args.dealerSendsMinor) return args.applicationId;
+      // ONLY S, with the audit row and the revision; G, the gap and the split are untouched.
+      await recordOverride(ctx, {
+        orgId: args.orgId,
+        applicationId: args.applicationId,
+        field: "manualApproval",
+        previousValue: `dealership sends ${previous.dealerSendsMinor}`,
+        newValue: `dealership sends ${args.dealerSendsMinor}, entered by ${user._id}`,
+        reason: "Amount the dealership sends the finance company corrected after handover.",
+        changedBy: user._id,
+      });
+      await ctx.db.patch(args.applicationId, {
+        manualApproval: { ...previous, dealerSendsMinor: args.dealerSendsMinor, enteredBy: user._id, enteredAt: now },
+        economicsRevision: (app.economicsRevision ?? 0) + 1,
+        updatedAt: now,
+      });
+      return args.applicationId;
+    }
+
     const changed =
       previous === undefined ||
       previous.approvedAmountMinor !== args.approvedAmountMinor ||
       previous.financierName !== financierName ||
       previous.dealerSendsMinor !== args.dealerSendsMinor;
-    if (!changed) return args.applicationId; // a retry is a no-op, not a re-stamp
-
-    const now = Date.now();
+    // A retry is a no-op, not a re-stamp - but only when the WHOLE unit is intact.
+    // A letter present with G, the basis or the gap missing (a superseded
+    // approval, a legacy row) is re-derived from the letter, never left half-written.
+    const unitIntact =
+      previous !== undefined &&
+      app.approvedDealerPurchaseAmountMinor === previous.approvedAmountMinor &&
+      app.approvedPurchaseBasis === "MANUAL" &&
+      app.rawAppraisalGapMinor !== undefined;
+    if (!changed && unitIntact) return args.applicationId;
     if (previous !== undefined) {
       await recordOverride(ctx, {
         orgId: args.orgId,
