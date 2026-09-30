@@ -305,7 +305,7 @@ const dealRailMessages = defineBilingualMessages({
   // SCRUM-239 round 5: same, but a confirmation had been SENT and its answer never arrived here.
   DisbursementChangedOutcomeUnknown: [
     "This deal's disbursement changed (a cheque was returned) after a confirmation was sent, and that confirmation's result is not known on this screen. Review the deal's receipts and cheque history before confirming again.",
-    "تغيّر صرف هذه الصفقة (تم إرجاع شيك) بعد إرسال تأكيد، ونتيجة ذلك التأكيد غير معروفة في هذه الشاشة. راجع مقبوضات الصفقة وسجل الشيكات قبل التأكيد مرة أخرى.",
+    "تغيّر صرف هذه الصفقة (تم إرجاع شيك) بعد إرسال تأكيد، ونتيجة ذلك التأكيد غير معروفة على هذه الشاشة. راجع مقبوضات الصفقة وسجل الشيكات قبل التأكيد مرة أخرى.",
   ],
   ForwardVoidAfterTransfer: [
     "The finance company's transfer is now confirmed, so this payment can no longer be voided. If the company sent it back, report it as returned.",

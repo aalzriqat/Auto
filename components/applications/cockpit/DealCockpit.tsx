@@ -1119,9 +1119,12 @@ export function DealCockpit({
   // was clicked in, so a late answer must compare against THIS, not its closure.
   const confirmObservedVersionRef = useRef(1);
   // The version a confirm was SENT under whose outcome this screen does not know
-  // (sent, no answer yet or a lost response). A server answer - success or any
-  // refusal - makes the outcome known and clears it. It is what decides whether
-  // "nothing was confirmed" is still a true thing to say.
+  // (sent, no answer yet or a lost response). It belongs to the confirm KEY, not
+  // the version: once any send of a key is lost, only a SUCCESS for that key
+  // resolves it. A refusal of a LATER retry of the same key proves nothing about
+  // the earlier send, so it must not clear the mark; a refusal of a send with no
+  // earlier unknown send can. It decides whether "nothing was confirmed" is
+  // still a true thing to say.
   const confirmUnknownOutcomeVersionRef = useRef<number | null>(null);
   const observedDisbursementVersion = app?.disbursementVersion ?? 1;
   // `app` is undefined while loading or reconnecting and null if not found: no
@@ -2981,6 +2984,15 @@ export function DealCockpit({
                   // Held in the closure so this request's answer, however late,
                   // is judged against ITS version.
                   const observedVersion = confirmObservedVersion;
+                  // Round 6: an EARLIER send of the kept key at this version whose
+                  // answer was lost. Read before this send re-marks the ref. A fresh
+                  // key (a version move or a retired stale key) never inherits it: a
+                  // version move clears the mark via the effect, and the stale path
+                  // below clears it explicitly.
+                  const priorUnknown =
+                    confirmDisbursementKeyRef.current !== null &&
+                    confirmDisbursementKeyVersionRef.current === observedVersion &&
+                    confirmUnknownOutcomeVersionRef.current === observedVersion;
                   setDisbursementSubmitting(true);
                   try {
                     if (confirmDisbursementKeyVersionRef.current !== observedVersion) {
@@ -3024,7 +3036,8 @@ export function DealCockpit({
                     // refused and nothing committed; anything else is a lost
                     // response whose outcome stays unknown.
                     const answeredByServer = isConvexError(error);
-                    if (answeredByServer && confirmUnknownOutcomeVersionRef.current === observedVersion) {
+                    // ...but only for a send with no earlier unknown send of this key.
+                    if (answeredByServer && !priorUnknown && confirmUnknownOutcomeVersionRef.current === observedVersion) {
                       confirmUnknownOutcomeVersionRef.current = null;
                     }
                     // A stale-version refusal is final for this key: the next click
@@ -3032,14 +3045,27 @@ export function DealCockpit({
                     const refusedCode = answeredByServer
                       ? (error.data as { code?: unknown } | null)?.code
                       : undefined;
-                    if (
-                      refusedCode === "FINANCE_CONFIRM_STALE_REQUEST" &&
-                      confirmObservedVersionRef.current === observedVersion
-                    ) {
+                    const isStale = refusedCode === "FINANCE_CONFIRM_STALE_REQUEST";
+                    const current = confirmObservedVersionRef.current === observedVersion;
+                    if (isStale && current) {
                       confirmDisbursementKeyRef.current = null;
                       // The dialog was prepared against a version that is gone:
                       // reopening it observes the current one.
                       setConfirmingDisbursement(false);
+                    }
+                    if (isStale && !current) {
+                      // A late answer to a superseded attempt: its dialog is gone
+                      // and a newer one is open; say nothing about it.
+                      return;
+                    }
+                    if (isStale && priorUnknown) {
+                      // An earlier send of this key may have committed, so "nothing
+                      // has been changed" would be untrue. The notice is shown now
+                      // and the key is retired, so drop the mark: the effect must
+                      // not repeat it, and a fresh key starts clean.
+                      confirmUnknownOutcomeVersionRef.current = null;
+                      toast.error(t("DisbursementChangedOutcomeUnknown"));
+                      return;
                     }
                     toast.error(getLocalizedErrorMessage(error, t));
                   } finally {

@@ -3047,8 +3047,103 @@ describe("cheque returned by the bank - applications.returnFinanceDisbursementCh
       vi.mocked(toast.error).mockClear();
       // The OLD attempt's answer arrives now.
       settleOld();
-      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      // Round 6 (L-B): a superseded attempt's STALE refusal is about a dialog that is gone; it shows nothing.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(toast.error).not.toHaveBeenCalled();
       expect(screen.queryByRole("dialog")).not.toBeNull();
+    });
+
+    const STALE = "coded:FINANCE_CONFIRM_STALE_REQUEST|This confirmation was prepared before the deal's cheque was returned, so it cannot be applied. Nothing has been changed. Reopen the deal and confirm again.";
+
+    test("round 6 R6-1: a lost send, then a server REFUSAL of the same key's retry, does not clear the unknown mark - a later version move still says the outcome is unknown", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      stubs.mutationFailures.set("applications:confirmDisbursement", "connection lost");
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      // The retry is refused by the server - which says nothing about the FIRST send.
+      stubs.mutationFailures.set("applications:confirmDisbursement", "coded:FORBIDDEN|You cannot do this");
+      fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      expect(confirmCalls()[1].idempotencyKey).toBe(confirmCalls()[0].idempotencyKey);
+      await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(2));
+      vi.mocked(toast.error).mockClear();
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(toast.error).toHaveBeenCalledWith("DisbursementChangedOutcomeUnknown");
+      expect(toast.error).not.toHaveBeenCalledWith("DisbursementChangedWhileConfirming");
+    });
+
+    test("round 6: a retry of a lost send refused as STALE closes the dialog and shows the outcome-unknown notice, not the stale text", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      renderCockpit();
+      stubs.mutationFailures.set("applications:confirmDisbursement", "connection lost");
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      vi.mocked(toast.error).mockClear();
+      stubs.mutationFailures.set("applications:confirmDisbursement", STALE);
+      fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(vi.mocked(toast.error).mock.calls).toEqual([["DisbursementChangedOutcomeUnknown"]]);
+    });
+
+    test("round 6 control: a first-and-only ConvexError refusal, then a version move, still says nothing was confirmed", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      stubs.mutationFailures.set("applications:confirmDisbursement", "coded:FORBIDDEN|You cannot do this");
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      vi.mocked(toast.error).mockClear();
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(toast.error).toHaveBeenCalledWith("DisbursementChangedWhileConfirming");
+      expect(toast.error).not.toHaveBeenCalledWith("DisbursementChangedOutcomeUnknown");
+    });
+
+    test("round 6 control: a successful replay of the kept key clears the unknown mark", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      stubs.mutationFailures.set("applications:confirmDisbursement", "connection lost");
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      stubs.mutationFailures.delete("applications:confirmDisbursement");
+      fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      vi.mocked(toast.error).mockClear();
+      // Reopen and move the version with nothing sent: the old send was answered, so the plain notice applies.
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(toast.error).toHaveBeenCalledWith("DisbursementChangedWhileConfirming");
+    });
+
+    test("round 6 Q4: the app query dropping out and returning at v2 closes the dialog opened at v1 with the moved-version notice", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      queryResults.delete(GET_QUERY);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      expect(toast.error).not.toHaveBeenCalled();
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(toast.error).toHaveBeenCalledWith("DisbursementChangedWhileConfirming");
     });
 
     test("round 5 F3: the app query going undefined at v2 does not make the effect close the dialog or toast", async () => {
@@ -3082,6 +3177,8 @@ describe("cheque returned by the bank - applications.returnFinanceDisbursementCh
       expect(en).not.toMatch(/Nothing was confirmed/);
       expect(ar).toMatch(/[؀-ۿ]/);
       expect(ar).toMatch(/غير معروفة/);
+      expect(ar).toContain("على هذه الشاشة");
+      expect(ar).not.toContain("في هذه الشاشة");
     });
 
     test("an unrelated lost response still keeps the key (control for the retirement above)", async () => {
