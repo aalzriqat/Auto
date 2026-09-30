@@ -2555,7 +2555,7 @@ export async function hookFinanceCashReceived(
     disbursementVersion?: number;
   }
 ) {
-  const keys = financeDisbursementKeys(args.applicationId, args.disbursementVersion ?? 1);
+  const keys = financeDisbursementKeys(args.applicationId, args.disbursementVersion);
   await postDomainEvent(ctx, {
     orgId: args.orgId,
     eventType: "FINANCE_CASH_RECEIVED",

@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { FC_RETURN_REASON_MAX_LENGTH } from "@/convex/utils/fcCheque";
 
 /**
  * SCRUM-239 - the bank returned the finance company's cheque AFTER it cleared.
@@ -24,8 +25,6 @@ import {
  * reversed); this collects the reason and states the consequence.
  * Mounted without a trigger: DealCockpit owns the button.
  */
-
-export const CHEQUE_RETURN_REASON_MAX_CHARS = 500;
 
 type ChequeReturnedByBankDialogProps = {
   open: boolean;
@@ -77,7 +76,7 @@ export function ChequeReturnedByBankDialog({
             id="cheque-returned-by-bank-reason"
             rows={3}
             required
-            maxLength={CHEQUE_RETURN_REASON_MAX_CHARS}
+            maxLength={FC_RETURN_REASON_MAX_LENGTH}
             value={reason}
             disabled={submitting}
             onChange={(event) => setReason(event.target.value)}

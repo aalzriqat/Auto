@@ -107,6 +107,9 @@ export async function liveChequesForApplication(
   return (await chequesForApplication(ctx, applicationId)).filter(isLiveFcCheque);
 }
 
+/** SCRUM-239: the longest return reason kept on the cheque and in the audit log. */
+export const FC_RETURN_REASON_MAX_LENGTH = 500;
+
 /**
  * SCRUM-239: the coded refusals of returning a cleared finance-company cheque.
  * The English text is the server's own `message`; `lib/i18n/domains/sales.ts`

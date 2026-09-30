@@ -142,6 +142,7 @@ import {
   parseFaceAmountMinor,
   dealChequeCurrency,
   ATTESTATION_NOTE_MAX_LENGTH,
+  FC_RETURN_REASON_MAX_LENGTH,
 } from "./utils/fcCheque";
 import { assertFinancedDepositsSurviveParentReversal } from "./utils/depositApplications";
 import { projectDealVehicleProfile } from "./utils/dealVehicleProfile";
@@ -5256,9 +5257,6 @@ export const confirmDisbursement = mutation({
   },
 });
 
-/** SCRUM-239: the longest return reason kept on the cheque and in the audit log. */
-const FC_RETURN_REASON_MAX_LENGTH = 500;
-
 function refuseFinanceReturn(code: keyof typeof FC_RETURN_MESSAGES): never {
   return throwAppError(AppErrorCode[code], FC_RETURN_MESSAGES[code]);
 }
@@ -5350,6 +5348,7 @@ export const returnFinanceDisbursementCheque = mutation({
           .withIndex("by_org_idempotency", (q) => q.eq("orgId", args.orgId).eq("idempotencyKey", keys.paymentKey))
           .unique();
         const expectedPayerType = app.companyId ? "FINANCE_COMPANY" : "MANUAL_FINANCE_COMPANY";
+        const paymentCurrency = payment?.currency.toUpperCase();
         if (
           !payment ||
           payment.status !== "SETTLED" ||
@@ -5360,9 +5359,9 @@ export const returnFinanceDisbursementCheque = mutation({
             : payment.payerNameSnapshot !== manualPayerOf(app)?.name) ||
           payment.amountMinor !== app.disbursedAmountMinor ||
           payment.receivedAt !== app.disbursedAt ||
-          payment.currency.toUpperCase() !== cheque.currency.toUpperCase() ||
+          paymentCurrency !== cheque.currency.toUpperCase() ||
           (app.economicsCurrency !== undefined &&
-            payment.currency.toUpperCase() !== app.economicsCurrency.toUpperCase())
+            paymentCurrency !== app.economicsCurrency.toUpperCase())
         ) {
           refuseFinanceReturn("FINANCE_RETURN_CHAIN_MISMATCH");
         }

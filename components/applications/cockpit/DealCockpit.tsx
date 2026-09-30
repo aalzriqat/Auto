@@ -6215,7 +6215,7 @@ export function DealCockpitView({
           <Button
             variant="ghost"
             size="sm"
-            className={forwardCorrection || chequeReturn ? "h-9 text-destructive hover:text-destructive" : "ms-auto h-9 text-destructive hover:text-destructive"}
+            className={cn("h-9 text-destructive hover:text-destructive", !(forwardCorrection || chequeReturn) && "ms-auto")}
             data-testid="deal-cancel-application"
             onClick={() => cancel.onOpenChange(true)}
           >

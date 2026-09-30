@@ -1,7 +1,8 @@
 /**
- * SCRUM-239: a finance-company cheque's return is recorded from the DEAL
+ * SCRUM-239: a CLEARED finance-company cheque's return is recorded from the DEAL
  * ("Cheque returned by bank"), so Collections never offers Return on it - the
- * server refuses it with FINANCE_CHEQUE_RETURN_FROM_DEAL anyway. A customer's
+ * server refuses it with FINANCE_CHEQUE_RETURN_FROM_DEAL anyway. A HELD or
+ * DEPOSITED FC cheque keeps Return (returnCheque supports it). A customer's
  * cheque keeps Return. The Collections row says where the FC cheque is handled.
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -81,8 +82,22 @@ async function openChequesTab() {
 }
 
 describe("Collections, Cheques tab: Return", () => {
-  test("a finance-company cheque has no Return (nor Clear/Replace); its deal handles it", async () => {
-    stubs.paginated.set("collections:listCheques", [cheque({ _id: "c1", isFinanceCompanyCheque: true })]);
+  test.each(["HELD", "DEPOSITED"])(
+    "a %s finance-company cheque keeps an enabled Return (returnCheque supports pre-clear FC bounces)",
+    async (status) => {
+      stubs.paginated.set("collections:listCheques", [
+        cheque({ _id: "c1", isFinanceCompanyCheque: true, status }),
+      ]);
+      await openChequesTab();
+      const ret = screen.getByRole("button", { name: "Return" }) as HTMLButtonElement;
+      expect(ret.disabled).toBe(false);
+    },
+  );
+
+  test("a CLEARED finance-company cheque has no Return (nor Clear/Replace); its deal handles it", async () => {
+    stubs.paginated.set("collections:listCheques", [
+      cheque({ _id: "c1", isFinanceCompanyCheque: true, status: "CLEARED" }),
+    ]);
     await openChequesTab();
     expect(screen.getByText("FcHandledFromDeal")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Return" })).toBeNull();
@@ -101,7 +116,7 @@ describe("Collections, Cheques tab: Return", () => {
 
   test("both kinds side by side: exactly one Return, on the customer's row", async () => {
     stubs.paginated.set("collections:listCheques", [
-      cheque({ _id: "c1", isFinanceCompanyCheque: true }),
+      cheque({ _id: "c1", isFinanceCompanyCheque: true, status: "CLEARED" }),
       cheque({ _id: "c2", isFinanceCompanyCheque: false, customerName: "Omar Nasser" }),
     ]);
     await openChequesTab();

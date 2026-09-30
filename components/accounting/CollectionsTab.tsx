@@ -442,7 +442,7 @@ export function CollectionsTab() {
                                 {t("Clear" as any)}
                               </Button>
                               )}
-                              {!cheque.isFinanceCompanyCheque && (
+                              {!(cheque.isFinanceCompanyCheque && cheque.status === "CLEARED") && (
                               <Button
                                 size="sm"
                                 variant="outline"

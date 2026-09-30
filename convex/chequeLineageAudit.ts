@@ -220,6 +220,7 @@ export const auditFinanceCompanyCheques = query({
       // clean. A stamped row must have its payment VOIDED and its
       // FINANCE_CASH_RECEIVED occurrence reversed or durably queued for reversal.
       if (row.status === "RETURNED" && row.returnedAfterClearing === true) {
+        // A legacy RETURNED FC cheque with no stamp is deliberately UNKNOWN, not v1: do not "fix" this to use disbursementVersionOf.
         if (row.disbursementVersion === undefined) {
           push(
             row,
