@@ -19,6 +19,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { isManualFinanceApplication, normalizeManualPayerName } from "./utils/manualFinancePayer";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import {
+  computeAppraisalGap,
   computeSubmittedQuotation,
   FinancingEconomicsError,
   isApprovalFarFromEvidence,
@@ -3331,7 +3332,51 @@ export const recordManualFinanceApproval = mutation({
       });
     }
 
+    // OR-12: a manual company works like a configured one. The shortfall is the
+    // sale price the customer buys at minus the letter's approved amount. The
+    // price is the one the application already carries from the quote
+    // (targetSellingAmountMinor, set once in createFromQuote and never rewritten
+    // for a manual deal), NOT the legal invoice, which is recorded later. It is
+    // not optional: a gap measured against an unknown price would read as none.
+    const salePriceMinor = app.targetSellingAmountMinor;
+    if (salePriceMinor === undefined) {
+      throw new ConvexError(
+        "This application carries no sale price, so the shortfall against the approval letter cannot be measured. Reconcile the quotation economics first."
+      );
+    }
+    const gapMinor = computeAppraisalGap({
+      submittedQuotationMinor: salePriceMinor,
+      approvedDealerPurchaseAmountMinor: args.approvedAmountMinor,
+      appliedLtvPercent: 100,
+    }).rawAppraisalGapMinor;
+    const gapChanged = gapMinor !== (app.rawAppraisalGapMinor ?? 0);
+    const clearedShares = {
+      customerGapShareMinor: undefined,
+      dealerGapShareMinor: undefined,
+      customerGapCashToDealerMinor: undefined,
+      customerGapInstallmentToDealerMinor: undefined,
+      customerGapToFinanceCompanyMinor: undefined,
+      gapResolvedAt: undefined,
+      gapResolvedBy: undefined,
+      gapResolutionNotes: undefined,
+    };
+    const gapPatch =
+      gapMinor <= 0
+        ? {
+            rawAppraisalGapMinor: 0,
+            gapResolution: "NOT_REQUIRED" as const,
+            ...(gapChanged ? clearedShares : {}),
+          }
+        : gapChanged || app.gapResolution === undefined || app.gapResolution === "FAILED"
+          ? {
+              rawAppraisalGapMinor: gapMinor,
+              gapResolution: "PENDING_NEGOTIATION" as const,
+              ...(gapChanged ? clearedShares : {}),
+            }
+          : { rawAppraisalGapMinor: gapMinor };
+
     await ctx.db.patch(args.applicationId, {
+      ...gapPatch,
       economicsRevision: (app.economicsRevision ?? 0) + 1,
       manualApproval: {
         approvedAmountMinor: args.approvedAmountMinor,

@@ -530,3 +530,196 @@ describe("SCRUM-27 - reversing a manual payer's posting", () => {
     expect(result.fcIds.every((x) => x === null)).toBe(true);
   });
 });
+
+describe("SCRUM-27 - the finance company approves less than the invoice (G < L)", () => {
+  const GAP = 1_000_000; // the customer pays the dealership this much; the company approves G - GAP
+  const c = { S: 0, H: 0 } as const;
+
+  test("the customer's difference can be settled through the existing gap step and the deal finalizes", async () => {
+    const s = await seedDealership("gap");
+    const { applicationId } = await manualApplication(s);
+    await enterLetter(s, applicationId, { approvedAmountMinor: G - GAP }, c);
+
+    // The same step a configured deal with a gap uses: the customer covers the
+    // whole difference, in cash, to the dealership.
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    await s.approver.as.mutation(api.financingEconomics.resolveAppraisalGap, {
+      orgId: s.orgId, applicationId,
+      economicsStamp: `v2|${app?.economicsRevision ?? 0}`,
+      customerGapShareMinor: GAP, dealerGapShareMinor: 0,
+      customerGapCashToDealerMinor: GAP, customerGapInstallmentToDealerMinor: 0,
+      customerGapToFinanceCompanyMinor: 0,
+    });
+
+    await registerHandover(s.owner.as, api, s.orgId, applicationId);
+    await s.owner.as.mutation(api.applications.registerExpectedPayment, {
+      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
+    });
+    await s.owner.as.mutation(api.financeDealCosts.recordLegalInvoice, {
+      orgId: s.orgId, applicationId, legalInvoiceAmountMinor: G, legalInvoiceNumber: `INV-${applicationId}`,
+      legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
+    });
+    await recordReconciledZeroCost(s.owner.as, api, s.orgId, applicationId);
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { customerFirstPaymentMinor: 0 }));
+    await finalize(s, applicationId);
+
+    const done = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(done?.status).toBe("CLOSED");
+    const receivable = await s.t.run(async (ctx) =>
+      (await ctx.db.query("receivableDocuments").collect()).find((r) => r.orgId === s.orgId && r.sourceType === "finance_application")
+    );
+    expect(receivable?.originalAmountMinor).toBe(G - GAP);
+    expect(receivable?.payerNameSnapshot).toBe(LETTER_NAME);
+  });
+
+  test("a letter that reaches the invoice needs no gap step (NOT_REQUIRED) and a re-entered lower amount reopens negotiation", async () => {
+    const s = await seedDealership("gap2");
+    const { applicationId } = await manualApplication(s);
+    await enterLetter(s, applicationId, { approvedAmountMinor: G }, c);
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.gapResolution).toBe("NOT_REQUIRED");
+    await enterLetter(s, applicationId, { approvedAmountMinor: G - GAP }, c);
+    const after = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(after?.rawAppraisalGapMinor).toBe(GAP);
+    expect(after?.gapResolution).toBe("PENDING_NEGOTIATION");
+  });
+});
+
+describe("SCRUM-27 OR-12 - the shortfall (sale price minus the letter) is settled by the existing gap step", () => {
+  const GAP = 1_000_000;
+  const c = { S: 0, H: 0 } as const;
+
+  type Split = "CASH" | "ABSORB";
+  async function shortfallDeal(tag: string, split: Split | null, invoiceMinor = G) {
+    const s = await seedDealership(tag);
+    const { applicationId } = await manualApplication(s);
+    await enterLetter(s, applicationId, { approvedAmountMinor: G - GAP }, c);
+    if (split !== null) {
+      const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+      await s.approver.as.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: s.orgId, applicationId,
+        economicsStamp: `v2|${app?.economicsRevision ?? 0}`,
+        customerGapShareMinor: split === "CASH" ? GAP : 0,
+        dealerGapShareMinor: split === "ABSORB" ? GAP : 0,
+        customerGapCashToDealerMinor: split === "CASH" ? GAP : 0,
+        customerGapInstallmentToDealerMinor: 0,
+        customerGapToFinanceCompanyMinor: 0,
+      });
+    }
+    return { s, applicationId, invoiceMinor };
+  }
+  async function readyToFinalize(s: Seeded, applicationId: Id<"financeApplications">, invoiceMinor: number) {
+    await registerHandover(s.owner.as, api, s.orgId, applicationId);
+    await s.owner.as.mutation(api.applications.registerExpectedPayment, {
+      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
+    });
+    await s.owner.as.mutation(api.financeDealCosts.recordLegalInvoice, {
+      orgId: s.orgId, applicationId, legalInvoiceAmountMinor: invoiceMinor, legalInvoiceNumber: `INV-${applicationId}`,
+      legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
+    });
+    await recordReconciledZeroCost(s.owner.as, api, s.orgId, applicationId);
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { customerFirstPaymentMinor: 0 }));
+  }
+
+  test("the sale price is the quote's price carried on the application, and the letter measures the shortfall against it", async () => {
+    const s = await seedDealership("or12_price");
+    const { applicationId } = await manualApplication(s);
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.targetSellingAmountMinor).toBe(G);
+    await enterLetter(s, applicationId, { approvedAmountMinor: G }, c);
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.gapResolution).toBe("NOT_REQUIRED");
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.rawAppraisalGapMinor).toBe(0);
+    await enterLetter(s, applicationId, { approvedAmountMinor: G - GAP }, c);
+    const after = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(after?.rawAppraisalGapMinor).toBe(GAP);
+    expect(after?.gapResolution).toBe("PENDING_NEGOTIATION");
+  });
+
+  test("re-entering the letter re-derives the gap and voids a split agreed against the old one", async () => {
+    const { s, applicationId } = await shortfallDeal("or12_reenter", "CASH");
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.gapResolution).not.toBe("PENDING_NEGOTIATION");
+    await enterLetter(s, applicationId, { approvedAmountMinor: G - 2 * GAP }, c);
+    const after = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(after?.rawAppraisalGapMinor).toBe(2 * GAP);
+    expect(after?.gapResolution).toBe("PENDING_NEGOTIATION");
+    expect(after?.customerGapShareMinor).toBeUndefined();
+    expect(after?.customerGapCashToDealerMinor).toBeUndefined();
+    expect(after?.gapResolvedAt).toBeUndefined();
+    await enterLetter(s, applicationId, { approvedAmountMinor: G }, c);
+    const closed = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(closed?.rawAppraisalGapMinor).toBe(0);
+    expect(closed?.gapResolution).toBe("NOT_REQUIRED");
+  });
+
+  test("the handover and finalize gate refuses a manual deal whose shortfall is unsettled", async () => {
+    const { s, applicationId } = await shortfallDeal("or12_gate", null);
+    const handover = await refusalOf(registerHandover(s.owner.as, api, s.orgId, applicationId));
+    expect(handover).toMatch(/Resolve the appraisal gap before handing over the vehicle/);
+    const done = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(done?.vehicleHandoverAt).toBeUndefined();
+  });
+
+  test("finalize is refused while the shortfall is unsettled", async () => {
+    const { s, applicationId, invoiceMinor } = await shortfallDeal("or12_final_gate", "CASH");
+    await readyToFinalize(s, applicationId, invoiceMinor);
+    // Reopen the negotiation behind the gate's back the way a re-entered letter does.
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { gapResolution: "PENDING_NEGOTIATION" }));
+    expect(await refusalOf(finalize(s, applicationId))).toMatch(/Resolve the appraisal gap before finalizing/);
+  });
+
+  test("customer pays the whole gap in cash: one AR-Finance debit of G, customer AR equals the gap", async () => {
+    const { s, applicationId, invoiceMinor } = await shortfallDeal("or12_cash", "CASH");
+    await readyToFinalize(s, applicationId, invoiceMinor);
+    await finalize(s, applicationId);
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
+    const net = await netByAccount(s, "SALE_COMPLETED");
+    expect(net.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES).toBe(G - GAP);
+    expect(net.ACCOUNTS_RECEIVABLE_CUSTOMERS).toBe(GAP);
+    const arFinanceDebits = await s.t.run(async (ctx) => {
+      const lines = await ctx.db.query("journalLines").collect();
+      const out: number[] = [];
+      for (const line of lines) {
+        if (line.orgId !== s.orgId || line.debitMinor <= 0) continue;
+        const account = await ctx.db.get(line.accountId);
+        if (account?.systemKey === "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES") out.push(line.debitMinor);
+      }
+      return out;
+    });
+    expect(arFinanceDebits).toEqual([G - GAP]);
+  });
+
+  test("dealer absorbs the gap: the invoice at the sale price is refused (G + customer receivable must equal L); at the letter amount it finalizes with no customer receivable", async () => {
+    const refused = await shortfallDeal("or12_absorb_refused", "ABSORB");
+    await readyToFinalize(refused.s, refused.applicationId, G);
+    expect(await refusalOf(finalize(refused.s, refused.applicationId))).toMatch(/legal invoice does not agree with the approved amount/);
+    expect((await refused.s.t.run((ctx) => ctx.db.get(refused.applicationId)))?.status).toBe("APPROVED");
+
+    const { s, applicationId } = await shortfallDeal("or12_absorb_ok", "ABSORB");
+    await readyToFinalize(s, applicationId, G - GAP);
+    await finalize(s, applicationId);
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
+    const net = await netByAccount(s, "SALE_COMPLETED");
+    expect(net.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES).toBe(G - GAP);
+    expect(net.ACCOUNTS_RECEIVABLE_CUSTOMERS ?? 0).toBe(0);
+    expect(Object.values(net).reduce((a, b) => a + b, 0)).toBe(0);
+  });
+
+  test("an invoice that differs from the sale price is reported, never silently posted", async () => {
+    const { s, applicationId } = await shortfallDeal("or12_invoice_differs", "CASH");
+    await readyToFinalize(s, applicationId, G - 500_000);
+    expect(await refusalOf(finalize(s, applicationId))).toMatch(/legal invoice does not agree with the approved amount/);
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("APPROVED");
+  });
+
+  test("reopening the approval clears the letter and every gap field", async () => {
+    const { s, applicationId } = await shortfallDeal("or12_reopen", "CASH");
+    await s.approver.as.mutation(api.financingEconomics.reopenApproval, {
+      orgId: s.orgId, applicationId, reason: "Letter withdrawn by the company.",
+    });
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(app?.manualApproval).toBeUndefined();
+    expect(app?.rawAppraisalGapMinor).toBeUndefined();
+    expect(app?.gapResolution).toBeUndefined();
+    expect(app?.dealerGapShareMinor).toBeUndefined();
+    expect(app?.customerGapShareMinor).toBeUndefined();
+    expect(app?.gapResolvedAt).toBeUndefined();
+  });
+});

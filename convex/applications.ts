@@ -314,7 +314,13 @@ function assertDealerEconomicsReady(
 ): void {
   const action =
     opts.phase === "HANDOVER" ? "handing over the vehicle" : "finalizing";
-  if (app.submittedQuotationMinor === undefined) return;
+  if (app.submittedQuotationMinor === undefined) {
+    // A manual finance company never has a quotation, so this deal was let through
+    // by the line above and its shortfall (sale price - letter, OR-12) went
+    // unchecked. The gap gate applies to it exactly as to a configured deal.
+    if (manualPayerOf(app) !== null) assertAppraisalGapSettledToAdvance(app, action);
+    return;
+  }
   if (app.approvedDealerPurchaseAmountMinor === undefined) {
     throw new ConvexError(
       `The finance company's approved purchase amount is not recorded on this deal. Record it before ${action}.`
