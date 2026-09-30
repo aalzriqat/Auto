@@ -98,7 +98,7 @@ export default function CommissionSettingsPage() {
       {/* SCRUM-390 (OR-17): static notice; tier thresholds are unchanged. */}
       <Alert>
         <Info className="h-4 w-4" />
-        <AlertTitle>{t("CommissionMarginNoticeTitle")}</AlertTitle>
+        <AlertTitle className="leading-snug">{t("CommissionMarginNoticeTitle")}</AlertTitle>
         <AlertDescription>{t("CommissionMarginNoticeDesc")}</AlertDescription>
       </Alert>
 
@@ -183,8 +183,8 @@ export default function CommissionSettingsPage() {
               )}
 
               {tiers.map((tier, index) => (
-                <div key={index} className="flex items-end gap-3 rounded-lg border p-4">
-                  <div className="flex-1 space-y-1">
+                <div key={index} className="flex flex-wrap items-end gap-3 rounded-lg border p-4">
+                  <div className="flex-1 min-w-full space-y-1 sm:min-w-0">
                     <Label className="text-xs">{t("MinProfitLabel")}</Label>
                     <Input
                       type="number"
@@ -218,7 +218,7 @@ export default function CommissionSettingsPage() {
 
               <div className="flex gap-3">
                 <Button variant="outline" size="sm" onClick={handleAddTier}>
-                  <Plus className="h-4 w-4 mr-2" />
+                  <Plus className="h-4 w-4 me-2" />
                   {t("AddTier")}
                 </Button>
                 <Button size="sm" onClick={handleSave} disabled={isSaving}>
