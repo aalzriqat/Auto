@@ -1137,18 +1137,30 @@ export function DealCockpit({
   useEffect(() => {
     confirmObservedVersionRef.current = confirmObservedVersion;
   }, [confirmObservedVersion]);
-  // The version moved under an open dialog: close it, drop the kept key, say so.
+  // SCRUM-239 round 7: the ONE place a version move is reconciled, whether the
+  // dialog is open or closed. `confirmUnknownOutcomeVersionRef` is the record that
+  // an outcome-unknown notice is still OWED for the kept key; it is cleared only by
+  // a success, a refusal with no earlier unknown send, this operator's own
+  // successful return (the outcome is then known), or by the notice being shown
+  // here or in the confirm's catch, whichever resolves it first, exactly once.
+  // While this operator's own cheque return is in flight a version move may be
+  // that very return (which proves the confirm committed), so the reconcile waits
+  // for it to settle and re-runs then.
   useEffect(() => {
-    if (!appObserved || !confirmingDisbursement) return;
-    if (observedDisbursementVersion === confirmObservedVersion) return;
-    // "Nothing was confirmed" is true only if nothing was sent under this
-    // dialog's version; a sent confirm with a lost response may have committed.
-    const outcomeUnknown = confirmUnknownOutcomeVersionRef.current === confirmObservedVersion;
+    if (!appObserved || chequeReturnSubmitting) return;
+    const owedUnknown =
+      confirmUnknownOutcomeVersionRef.current !== null &&
+      confirmUnknownOutcomeVersionRef.current !== observedDisbursementVersion;
+    const movedUnderDialog = confirmingDisbursement && observedDisbursementVersion !== confirmObservedVersion;
+    if (!owedUnknown && !movedUnderDialog) return;
+    // "Nothing was confirmed" is true only if nothing was sent; a sent confirm
+    // with a lost response may have committed, and the operator must be told to
+    // check receipts and cheque history even if the dialog was already closed.
     confirmDisbursementKeyRef.current = null;
     confirmUnknownOutcomeVersionRef.current = null;
-    setConfirmingDisbursement(false);
-    toast.error(t(outcomeUnknown ? "DisbursementChangedOutcomeUnknown" : "DisbursementChangedWhileConfirming"));
-  }, [appObserved, confirmingDisbursement, observedDisbursementVersion, confirmObservedVersion, t]);
+    if (movedUnderDialog) setConfirmingDisbursement(false);
+    toast.error(t(owedUnknown ? "DisbursementChangedOutcomeUnknown" : "DisbursementChangedWhileConfirming"));
+  }, [appObserved, chequeReturnSubmitting, confirmingDisbursement, observedDisbursementVersion, confirmObservedVersion, t]);
   const confirmSupplierDisbursementKeyRef = useRef<string | null>(null);
   // `deposits.release` gets a GENERATION-AWARE retained identity instead of a
   // plain key ref (SCRUM-313; the full reasoning lives at the release path in
@@ -2760,6 +2772,8 @@ export function DealCockpit({
               onConfirm: async (reason: string) => {
                 const chequeId = deal.disbursementReturn?.chequeId;
                 if (!chequeId) return;
+                // The version being returned: the one this screen observes now.
+                const returnedVersion = observedDisbursementVersion;
                 setChequeReturnSubmitting(true);
                 // One key per dialog open: a retry after a lost response is the SAME command.
                 if (chequeReturnKeyRef.current?.reason !== reason) {
@@ -2786,6 +2800,19 @@ export function DealCockpit({
                   // disbursement just returned; reusing it would make the server
                   // replay that old result and never record the next one.
                   confirmDisbursementKeyRef.current = null;
+                  // Round 7: the outcome of a lost confirm at this version is now
+                  // KNOWN. The server returns a cheque only for a confirmed
+                  // disbursement: convex/applications.ts returnFinanceDisbursementCheque
+                  // refuses FINANCE_RETURN_NOT_DISBURSED unless disbursedAt and
+                  // disbursedAmountMinor are set (5356-5358) and FINANCE_RETURN_
+                  // CHEQUE_NOT_CLEARED unless the cheque is CLEARED (5361), bound to
+                  // that disbursement at the same version and instant (5371-5380).
+                  // So no "result not known" notice is owed for that version. Cleared
+                  // here, before `chequeReturnSubmitting` resets and lets the
+                  // reconcile effect run.
+                  if (confirmUnknownOutcomeVersionRef.current === returnedVersion) {
+                    confirmUnknownOutcomeVersionRef.current = null;
+                  }
                   setChequeReturnOpen(false);
                 } catch (error) {
                   // The server answered: the next attempt is a new command. A lost response keeps the key.
@@ -2984,6 +3011,18 @@ export function DealCockpit({
                   // Held in the closure so this request's answer, however late,
                   // is judged against ITS version.
                   const observedVersion = confirmObservedVersion;
+                  // Round 7 defence: an owed notice for another version is never
+                  // dropped by minting a new key. The reconcile effect normally
+                  // shows it first; it can only still be owed here while an own
+                  // cheque return was in flight and holding the effect back.
+                  if (
+                    confirmUnknownOutcomeVersionRef.current !== null &&
+                    confirmUnknownOutcomeVersionRef.current !== observedVersion
+                  ) {
+                    confirmUnknownOutcomeVersionRef.current = null;
+                    confirmDisbursementKeyRef.current = null;
+                    toast.error(t("DisbursementChangedOutcomeUnknown"));
+                  }
                   // Round 6: an EARLIER send of the kept key at this version whose
                   // answer was lost. Read before this send re-marks the ref. A fresh
                   // key (a version move or a retired stale key) never inherits it: a
@@ -3060,11 +3099,15 @@ export function DealCockpit({
                     }
                     if (isStale && priorUnknown) {
                       // An earlier send of this key may have committed, so "nothing
-                      // has been changed" would be untrue. The notice is shown now
-                      // and the key is retired, so drop the mark: the effect must
-                      // not repeat it, and a fresh key starts clean.
-                      confirmUnknownOutcomeVersionRef.current = null;
-                      toast.error(t("DisbursementChangedOutcomeUnknown"));
+                      // has been changed" would be untrue. The notice is owed only
+                      // while the mark still stands: if the version-move effect
+                      // already showed it and cleared the mark, say nothing more
+                      // (the stale text claims nothing changed). Otherwise show it
+                      // now and drop the mark so the effect cannot repeat it.
+                      if (confirmUnknownOutcomeVersionRef.current === observedVersion) {
+                        confirmUnknownOutcomeVersionRef.current = null;
+                        toast.error(t("DisbursementChangedOutcomeUnknown"));
+                      }
                       return;
                     }
                     toast.error(getLocalizedErrorMessage(error, t));

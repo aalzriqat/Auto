@@ -14,7 +14,7 @@
  * `scripts/` proves that at the file level, this proves it at the call level.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Id } from "../../../convex/_generated/dataModel";
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
@@ -3048,7 +3048,9 @@ describe("cheque returned by the bank - applications.returnFinanceDisbursementCh
       // The OLD attempt's answer arrives now.
       settleOld();
       // Round 6 (L-B): a superseded attempt's STALE refusal is about a dialog that is gone; it shows nothing.
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Wait on a positive completion signal: the old attempt's `finally` resets the
+      // submitting state, which re-enables the reopened dialog's confirm button.
+      await waitFor(() => expect((screen.getByRole("button", { name: "ConfirmReceipt" }) as HTMLButtonElement).disabled).toBe(false));
       expect(toast.error).not.toHaveBeenCalled();
       expect(screen.queryByRole("dialog")).not.toBeNull();
     });
@@ -3161,6 +3163,142 @@ describe("cheque returned by the bank - applications.returnFinanceDisbursementCh
       view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
       expect(toast.error).not.toHaveBeenCalled();
       expect(screen.queryByRole("dialog")).not.toBeNull();
+    });
+
+    const UNKNOWN = "DisbursementChangedOutcomeUnknown";
+    const confirmButton = () => screen.getByRole("button", { name: "ConfirmReceipt" }) as HTMLButtonElement;
+    const lostConfirm = async () => {
+      stubs.mutationFailures.set("applications:confirmDisbursement", "connection lost");
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      vi.mocked(toast.error).mockClear();
+    };
+
+    test("round 7 R7-1: a lost send, the dialog CLOSED, then the version moves - the owed outcome-unknown notice is shown once, and the next confirm is a new command at v2", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      await lostConfirm();
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      // A colleague returns the cheque while the dialog is closed.
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith(UNKNOWN));
+      // Reopen and confirm: a NEW key, bound to v2, and no second notice.
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(confirmCalls()[1].expectedDisbursementVersion).toBe(2);
+      expect(confirmCalls()[1].idempotencyKey).not.toBe(confirmCalls()[0].idempotencyKey);
+      expect(vi.mocked(toast.error).mock.calls).toEqual([[UNKNOWN]]);
+    });
+
+    test("round 7 R7-L1: the version-move notice and a late STALE answer to the retry show the owed notice exactly ONCE, never the stale text", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      await lostConfirm();
+      let release!: () => void;
+      stubs.mutationHolds.set(
+        "applications:confirmDisbursement",
+        new Promise<void>((resolve) => {
+          release = resolve;
+        })
+      );
+      stubs.mutationFailures.set("applications:confirmDisbursement", STALE);
+      fireEvent.click(confirmButton());
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      // The v2 query update wins the race: the effect shows the notice and closes the dialog.
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(vi.mocked(toast.error).mock.calls).toEqual([[UNKNOWN]]);
+      // The retry's STALE answer arrives afterwards; flush it, then assert nothing more was said.
+      release();
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(vi.mocked(toast.error).mock.calls).toEqual([[UNKNOWN]]);
+    });
+
+    describe("round 7 T7: this operator's OWN successful return proves the confirm committed", () => {
+      const confirmStages = [
+        { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+        { key: "DISBURSEMENT", state: "BLOCKED", blocker: "AwaitingDisbursement", authority: "MIRROR" },
+        { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+        { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
+      ];
+      const afterReturn = (version: number) => {
+        queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages: confirmStages }));
+        queryResults.set(GET_QUERY, application({ status: "CLOSED", disbursementVersion: version }));
+      };
+      const submitReturn = async () => {
+        openDealDetails();
+        fireEvent.click(screen.getByTestId(ACTION));
+        fireEvent.change(screen.getByLabelText("ChequeReturnedByBankReasonLabel"), { target: { value: "Insufficient funds" } });
+        fireEvent.click(screen.getByRole("button", { name: "ChequeReturnedByBankConfirm" }));
+        await waitFor(() => expect(mutationCalls.get(RETURN_MUTATION)).toHaveLength(1));
+      };
+
+      test("a lost confirm, then the operator's own successful return, then the app at v2: no owed notice", async () => {
+        permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+        show();
+        const view = renderCockpit();
+        await lostConfirm();
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        setDeal();
+        view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+        await submitReturn();
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        vi.mocked(toast.error).mockClear();
+        afterReturn(2);
+        view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+        openDealDetails();
+        expect(toast.error).not.toHaveBeenCalled();
+        clickConfirm();
+        await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+        expect(confirmCalls()[1].expectedDisbursementVersion).toBe(2);
+        expect(confirmCalls()[1].idempotencyKey).not.toBe(confirmCalls()[0].idempotencyKey);
+      });
+
+      test("the query reaches v2 BEFORE the return's own promise resolves: still no owed notice", async () => {
+        permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+        show();
+        const view = renderCockpit();
+        await lostConfirm();
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        setDeal();
+        view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+        let release!: () => void;
+        stubs.mutationHolds.set(
+          RETURN_MUTATION,
+          new Promise<void>((resolve) => {
+            release = resolve;
+          })
+        );
+        await submitReturn();
+        afterReturn(2);
+        view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+        expect(toast.error).not.toHaveBeenCalled();
+        release();
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(toast.error).not.toHaveBeenCalled();
+      });
+    });
+
+    test("round 7 control: a version move with the dialog closed and NO unknown mark shows no toast at all", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      expect(toast.error).not.toHaveBeenCalled();
     });
 
     test("round 4: the moved-version notice exists in EN and AR", async () => {
