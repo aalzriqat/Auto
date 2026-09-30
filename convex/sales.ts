@@ -32,7 +32,7 @@ import {
 } from "./utils/financingEconomics";
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
-import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN } from "./utils/saleCompletion";
+import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, COMMISSION_BASE_UNUSABLE_RECALC_CODE, type CommissionBase } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompanyForward";
@@ -1970,10 +1970,29 @@ export const recalculateCommission = mutation({
         throw new ConvexError(CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN);
       }
 
+      // SCRUM-390 (OR-5): a dealer-owned sale that froze G and C at finalize is
+      // recalculated from THOSE values only - never from the application, whose
+      // approval or letter can move afterwards. Absent (any other sale) keeps
+      // salePrice - cost. A partial or foreign-currency record is refused rather
+      // than silently falling back to the old base.
+      let financedMargin: CommissionBase | undefined;
+      if (sale.commissionBase && !isConsignedAgentSale(vehicle)) {
+        const margin = financedMarginOf(sale.commissionBase, orgSettings?.currency ?? "JOD");
+        if (!margin) {
+          throw new ConvexError({
+            code: COMMISSION_BASE_UNUSABLE_RECALC_CODE,
+            message:
+              "This sale's recorded commissionable margin is in a different currency from the organization's or holds an unusable amount, so a commission cannot be worked out. Have the deal's figures corrected before recalculating; the existing commission has been left untouched.",
+          });
+        }
+        financedMargin = margin;
+      }
+
       const amount = await computeAutoCommissionAmount(ctx, {
         salePrice: sale.salePrice,
         vehicle,
         frozenRecognizedEarnings,
+        financedMargin,
         commissionMode: mode,
         memberCommissionRate: membership?.commissionRate,
         commissionTiers: orgSettings?.commissionTiers ?? [],

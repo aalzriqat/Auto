@@ -1610,7 +1610,24 @@ const dealOverviewMessages = defineBilingualMessages({
   Save: ["Save", "حفظ"],
 });
 
+/**
+ * Coded server refusals (`ConvexError.data.code`), translated by
+ * `getLocalizedErrorMessage` under `ServerError_<code>`. The English text must
+ * equal the server's own `message`; the placeholders are the payload's fields.
+ */
+const serverErrorMessages = defineBilingualMessages({
+  ServerError_COMMISSION_BASE_UNUSABLE: [
+    "This deal's financing figures (recorded in {baseCurrency}) cannot be used to work out the commissionable vehicle margin in the dealership's currency ({orgCurrency}). Settle the deal's currency and figures before completing it.",
+    "لا يمكن استخدام أرقام التمويل لهذه الصفقة (المسجلة بعملة {baseCurrency}) لاحتساب هامش المركبة الخاضع للعمولة بعملة المعرض ({orgCurrency}). يرجى تسوية عملة الصفقة وأرقامها قبل إتمامها.",
+  ],
+  ServerError_COMMISSION_BASE_UNUSABLE_RECALC: [
+    "This sale's recorded commissionable margin is in a different currency from the organization's or holds an unusable amount, so a commission cannot be worked out. Have the deal's figures corrected before recalculating; the existing commission has been left untouched.",
+    "هامش المركبة الخاضع للعمولة المسجل لعملية البيع هذه بعملة مختلفة عن عملة المؤسسة أو يحتوي على مبلغ غير صالح، لذا لا يمكن احتساب العمولة. يرجى تصحيح أرقام الصفقة قبل إعادة الاحتساب؛ لم يتم تغيير العمولة الحالية.",
+  ],
+});
+
 export const salesEn = {
+  ...serverErrorMessages.en,
   ...dealRailMessages.en,
   ...dealStepMessages.en,
   ...profitApprovalMessages.en,
@@ -2690,6 +2707,7 @@ export const salesEn = {
 };
 
 export const salesAr = {
+  ...serverErrorMessages.ar,
   ...dealRailMessages.ar,
   ...dealStepMessages.ar,
   ...profitApprovalMessages.ar,
