@@ -205,8 +205,8 @@ async function readyManualDeal(s: Seeded, o: { price: number; g: number; sends: 
   return { applicationId, quoteId };
 }
 
-const finalize = (s: Seeded, applicationId: Id<"financeApplications">) =>
-  s.as.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
+const finalize = (s: Seeded, applicationId: Id<"financeApplications">, key = crypto.randomUUID()) =>
+  s.as.mutation(api.applications.finalizeDeal, { idempotencyKey: key, orgId: s.orgId, applicationId });
 
 async function saleOf(s: Seeded, applicationId: Id<"financeApplications">) {
   return await s.t.run(async (ctx) => {
@@ -404,16 +404,14 @@ describe("SCRUM-390 OR-5: commissionable vehicle margin on a v2 financed sale", 
     const s = await seedDealership("retry", { cost: 10_000, price: CONFIGURED.price });
     const { applicationId } = await readyConfiguredDeal(s, CONFIGURED);
     const key = crypto.randomUUID();
-    const call = (idempotencyKey: string) =>
-      s.as.mutation(api.applications.finalizeDeal, { idempotencyKey, orgId: s.orgId, applicationId });
-    await call(key);
+    await finalize(s, applicationId, key);
     const first = await saleOf(s, applicationId);
     const sales = () => s.t.run((ctx) => ctx.db.query("sales").collect());
     const countBefore = (await sales()).length;
 
-    await call(key); // same key: a replay, not a second completion
+    await finalize(s, applicationId, key); // same key: a replay, not a second completion
     // A fresh key on an already-finalized deal: whether it replays or refuses, state must not move.
-    await call(crypto.randomUUID()).catch(() => undefined);
+    await finalize(s, applicationId, crypto.randomUUID()).catch(() => undefined);
 
     const after = await saleOf(s, applicationId);
     expect(after?._id).toBe(first?._id);

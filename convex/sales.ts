@@ -32,7 +32,7 @@ import {
 } from "./utils/financingEconomics";
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
-import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN } from "./utils/saleCompletion";
+import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, type CommissionBase } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompanyForward";
@@ -1975,7 +1975,7 @@ export const recalculateCommission = mutation({
       // approval or letter can move afterwards. Absent (any other sale) keeps
       // salePrice - cost. A partial or foreign-currency record is refused rather
       // than silently falling back to the old base.
-      let financedMargin: NonNullable<ReturnType<typeof financedMarginOf>> | undefined;
+      let financedMargin: CommissionBase | undefined;
       if (sale.commissionBase && !isConsignedAgentSale(vehicle)) {
         const margin = financedMarginOf(sale.commissionBase, orgSettings?.currency ?? "JOD");
         if (!margin) {

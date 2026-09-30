@@ -159,7 +159,7 @@ async function quoteLineIndexFor(
   return index >= 0 ? index : undefined;
 }
 
-type CommissionBase = { approvedMinor: number; contributionMinor: number; currency: string };
+export type CommissionBase = { approvedMinor: number; contributionMinor: number; currency: string };
 
 /**
  * SCRUM-390 (OR-5): the frozen G and C, still in integer MINOR units of the sale
@@ -176,7 +176,7 @@ export function financedMarginOf(
 ): CommissionBase | null {
   if (base.currency !== orgCurrency || !denominationOf(base.currency)) return null;
   if (!isValidMinorAmount(base.approvedMinor) || !isValidMinorAmount(base.contributionMinor)) return null;
-  return { approvedMinor: base.approvedMinor, contributionMinor: base.contributionMinor, currency: base.currency };
+  return base;
 }
 
 type PreparedSaleCompletion = {
@@ -608,9 +608,8 @@ function commissionableEarnings(args: {
     );
   }
   if (!consignedDirect && args.financedMargin) {
-    // OR-5: exact in integer minor units - G - C - cost - before the single
-    // conversion, so a tier threshold is never straddled by float error. The
-    // cost rounds with the same rule the ledger uses for COGS.
+    // OR-5: G - C - cost in integer minor units, converted once, so no tier
+    // threshold is straddled by float error; cost rounds as the ledger's COGS does.
     const { approvedMinor, contributionMinor, currency } = args.financedMargin;
     const marginMinor = approvedMinor - contributionMinor - toMinorUnits(args.vehicleCost, currency);
     return fromMinorUnits(Math.max(0, marginMinor), currency);
