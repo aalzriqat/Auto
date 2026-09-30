@@ -66,6 +66,7 @@ import {
   depositReleaseReflected,
   expectedPaymentReflected,
   financeDisbursementReflected,
+  disbursementReturnReflected,
   handoverReflected,
   legalInvoiceReflected,
   nextOutstandingDocument,
@@ -159,6 +160,7 @@ import {
   type ForwardPaymentValues,
 } from "../RecordForwardToFinanceCompanyDialog";
 import { ForwardCorrectionDialog, type ForwardCorrectionKind } from "../ForwardCorrectionDialog";
+import { ChequeReturnedByBankDialog } from "../ChequeReturnedByBankDialog";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { FinancingPlanPanel, type FinancingPlanFacts } from "./FinancingPlanPanel";
 import {
@@ -1025,6 +1027,7 @@ export function DealCockpit({
     api.financeCompanyForward.reportFinanceCompanyForwardReturned
   );
   const confirmSupplierDisbursement = useMutation(api.applications.confirmSupplierDisbursement);
+  const returnFinanceDisbursementCheque = useMutation(api.applications.returnFinanceDisbursementCheque);
   const setSupplierSettlementRoute = useMutation(api.applications.setSupplierSettlementRoute);
   const releaseDeposit = useMutation(api.deposits.release);
   const updateDocStatus = useMutation(api.documents.updateDocumentStatus);
@@ -1074,6 +1077,12 @@ export function DealCockpit({
   const [forwardSubmitting, setForwardSubmitting] = useState(false);
   const [forwardCorrection, setForwardCorrection] = useState<ForwardCorrectionKind | null>(null);
   const [forwardCorrectionSubmitting, setForwardCorrectionSubmitting] = useState(false);
+  // SCRUM-239: the "cheque returned by bank" dialog. The idempotency key is made
+  // once per dialog open (and again only if the reason changes, because the
+  // server fingerprints the reason: a replay must be the same command).
+  const [chequeReturnOpen, setChequeReturnOpen] = useState(false);
+  const [chequeReturnSubmitting, setChequeReturnSubmitting] = useState(false);
+  const chequeReturnKeyRef = useRef<{ key: string; reason: string } | null>(null);
   const [confirmingSupplierDisbursement, setConfirmingSupplierDisbursement] = useState(false);
   const [disbursementSubmitting, setDisbursementSubmitting] = useState(false);
   /**
@@ -2688,6 +2697,57 @@ export function DealCockpit({
             }
           : undefined
       }
+      chequeReturn={
+        deal?.disbursementReturn?.mayReturn === true &&
+        deal.disbursementReturn.chequeId &&
+        deal.forward?.transferConfirmed === true
+          ? {
+              open: chequeReturnOpen,
+              submitting: chequeReturnSubmitting,
+              onOpen: () => {
+                chequeReturnKeyRef.current = null;
+                setChequeReturnOpen(true);
+              },
+              onClose: () => {
+                chequeReturnKeyRef.current = null;
+                setChequeReturnOpen(false);
+              },
+              onConfirm: async (reason: string) => {
+                const chequeId = deal.disbursementReturn?.chequeId;
+                if (!chequeId) return;
+                setChequeReturnSubmitting(true);
+                // One key per dialog open: a retry after a lost response is the SAME command.
+                if (chequeReturnKeyRef.current?.reason !== reason) {
+                  chequeReturnKeyRef.current = { key: `return-fc-cheque:${crypto.randomUUID()}`, reason };
+                }
+                const { key } = chequeReturnKeyRef.current;
+                try {
+                  await trackRecorded(
+                    () =>
+                      returnFinanceDisbursementCheque({
+                        orgId,
+                        applicationId,
+                        chequeId,
+                        returnReason: reason,
+                        idempotencyKey: key,
+                      }),
+                    "ChequeReturnedByBankSuccess",
+                    // The disbursement is gone from the application AND this cheque is the newest returned one.
+                    { reflectedWhen: disbursementReturnReflected(chequeId) }
+                  );
+                  chequeReturnKeyRef.current = null;
+                  setChequeReturnOpen(false);
+                } catch (error) {
+                  // The server answered: the next attempt is a new command. A lost response keeps the key.
+                  if (isConvexError(error)) chequeReturnKeyRef.current = null;
+                  toast.error(getLocalizedErrorMessage(error, t));
+                } finally {
+                  setChequeReturnSubmitting(false);
+                }
+              },
+            }
+          : undefined
+      }
       cancelHint={
         app?.status === "CLOSED" &&
         deal?.forward?.planV2 === true &&
@@ -4161,6 +4221,7 @@ export function DealCockpitView({
   cancel,
   cancelHint,
   forwardCorrection,
+  chequeReturn,
   settlementRoute,
   documents,
   deposits,
@@ -4235,6 +4296,18 @@ export function DealCockpitView({
     open: ForwardCorrectionKind | null;
     submitting: boolean;
     onOpen: (kind: ForwardCorrectionKind) => void;
+    onClose: () => void;
+    onConfirm: (reason: string) => void | Promise<void>;
+  };
+  /**
+   * SCRUM-239: the bank returned the finance company's cheque after it cleared.
+   * Present only when the server says this caller may (`disbursementReturn.mayReturn`)
+   * AND the transfer is confirmed AND a cleared cheque is linked.
+   */
+  chequeReturn?: {
+    open: boolean;
+    submitting: boolean;
+    onOpen: () => void;
     onClose: () => void;
     onConfirm: (reason: string) => void | Promise<void>;
   };
@@ -6127,11 +6200,22 @@ export function DealCockpitView({
             </Button>
           </div>
         )}
+        {chequeReturn && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className={forwardCorrection ? "h-9" : "ms-auto h-9"}
+            data-testid="deal-cheque-returned-by-bank"
+            onClick={chequeReturn.onOpen}
+          >
+            {t("ChequeReturnedByBankAction")}
+          </Button>
+        )}
         {cancel && (
           <Button
             variant="ghost"
             size="sm"
-            className={forwardCorrection ? "h-9 text-destructive hover:text-destructive" : "ms-auto h-9 text-destructive hover:text-destructive"}
+            className={forwardCorrection || chequeReturn ? "h-9 text-destructive hover:text-destructive" : "ms-auto h-9 text-destructive hover:text-destructive"}
             data-testid="deal-cancel-application"
             onClick={() => cancel.onOpenChange(true)}
           >
@@ -6649,6 +6733,17 @@ export function DealCockpitView({
             if (!next) forwardCorrection.onClose();
           }}
           onConfirm={forwardCorrection.onConfirm}
+        />
+      )}
+      {chequeReturn && (
+        <ChequeReturnedByBankDialog
+          open={chequeReturn.open}
+          submitting={chequeReturn.submitting}
+          t={t}
+          onOpenChange={(next) => {
+            if (!next) chequeReturn.onClose();
+          }}
+          onConfirm={chequeReturn.onConfirm}
         />
       )}
       {cancel && (

@@ -442,6 +442,7 @@ export function CollectionsTab() {
                                 {t("Clear" as any)}
                               </Button>
                               )}
+                              {!cheque.isFinanceCompanyCheque && (
                               <Button
                                 size="sm"
                                 variant="outline"
@@ -450,6 +451,7 @@ export function CollectionsTab() {
                               >
                                 {t("Return" as any)}
                               </Button>
+                              )}
                               {!cheque.isFinanceCompanyCheque && (
                               <Button
                                 size="sm"

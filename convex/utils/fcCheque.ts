@@ -2,6 +2,7 @@ import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { assertSupportedDenomination, scaleForCurrency } from "./money";
+import { disbursementVersionOf } from "./financeDisbursementKeys";
 
 /**
  * SCRUM-447 — finance-company cheque lineage.
@@ -63,6 +64,41 @@ export async function chequesForApplication(
 export function hasClearedLinkedCheque(rows: ReadonlyArray<Pick<Doc<"postDatedCheques">, "status">>): boolean {
   return rows.some((row) => row.status === "CLEARED");
 }
+/**
+ * SCRUM-239: the CLEARED finance-company cheque that IS the application's
+ * current confirmed disbursement - same version, cleared at the instant the
+ * application was disbursed. The cockpit's return gate reads it, so the screen
+ * offers the return only for a cheque the command's first binding accepts.
+ */
+export function clearedDisbursementCheque(
+  rows: ReadonlyArray<Doc<"postDatedCheques">>,
+  app: Pick<Doc<"financeApplications">, "disbursedAt" | "disbursementVersion">
+): Doc<"postDatedCheques"> | null {
+  if (app.disbursedAt === undefined) return null;
+  const version = disbursementVersionOf(app);
+  return (
+    rows.find(
+      (row) =>
+        row.status === "CLEARED" &&
+        isFcLineage(row) &&
+        disbursementVersionOf(row) === version &&
+        row.clearedAt === app.disbursedAt
+    ) ?? null
+  );
+}
+
+/** SCRUM-239: the newest cheque of this application returned AFTER it cleared, or null. */
+export function latestReturnedAfterClearing(
+  rows: ReadonlyArray<Doc<"postDatedCheques">>
+): Doc<"postDatedCheques"> | null {
+  let latest: Doc<"postDatedCheques"> | null = null;
+  for (const row of rows) {
+    if (row.status !== "RETURNED" || row.returnedAfterClearing !== true) continue;
+    if (latest === null || (row.returnedAt ?? 0) > (latest.returnedAt ?? 0)) latest = row;
+  }
+  return latest;
+}
+
 /** The application's LIVE finance-company cheques. Never `.unique()`. */
 export async function liveChequesForApplication(
   ctx: QueryCtx,
@@ -89,6 +125,13 @@ export const FC_RETURN_MESSAGES = {
     "The disbursement payment is not allocated exactly to this deal's finance-company receivable, so it cannot be reversed safely. Nothing has been changed. An accountant reviews the deal.",
   FINANCE_RETURN_REVERSAL_UNPROVEN:
     "The finance company's receipt could not be confirmed as reversed on the books, so the return was not recorded. Nothing has been changed. An accountant reviews the deal.",
+  FINANCE_RETURN_REASON_REQUIRED:
+    "Give the reason the bank returned the cheque. Nothing has been changed.",
+  // The one message with a placeholder: the server sends `max` beside the code,
+  // and the dictionary entry reads `{max}`; this English fallback is the same
+  // sentence with the limit filled in.
+  FINANCE_RETURN_REASON_TOO_LONG:
+    "The return reason is too long (the most is 500 characters). Nothing has been changed.",
   FINANCE_CHEQUE_RETURN_FROM_DEAL:
     "This is a finance-company cheque. Its return is recorded from the deal screen with the \"Cheque returned by bank\" action, not from customer collections. Nothing has been changed.",
 } as const;

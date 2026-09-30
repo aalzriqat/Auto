@@ -2625,3 +2625,102 @@ describe("workbenchPending — a caller who cannot run the economics query", () 
     expect(isOpen()).toBe("false");
   });
 });
+
+describe("cheque returned by the bank - applications.returnFinanceDisbursementCheque, from the header (SCRUM-239)", () => {
+  const RETURN_MUTATION = "applications:returnFinanceDisbursementCheque";
+  const ACTION = "deal-cheque-returned-by-bank";
+  const disbursedStages = [
+    { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+    { key: "DISBURSEMENT", state: "COMPLETE", authority: "MIRROR" },
+    { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+  ];
+  const forwardState = (overrides: Record<string, unknown> = {}) => ({
+    planV2: true,
+    applies: true,
+    state: "SETTLED",
+    returnedExceptionOpen: false,
+    onBooksForwardId: null,
+    transferConfirmed: true,
+    mayRecord: false,
+    mayCancelFinalized: true,
+    ...overrides,
+  });
+  const setDeal = (over: Record<string, unknown> = {}) => {
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: disbursedStages,
+        forward: forwardState(),
+        disbursementReturn: { mayReturn: true, chequeId: "chq_fc1", lastReturnedChequeId: null },
+        ...over,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED", disbursedAt: Date.UTC(2026, 8, 1) }));
+  };
+
+  test("the server's gate is open: the action is offered, and the dialog says what will be reversed", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    setDeal();
+    renderCockpit();
+    fireEvent.click(screen.getByTestId(ACTION));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.getByText("ChequeReturnedByBankDesc")).toBeTruthy();
+  });
+
+  test("the server withholds the gate (CONFIRM without VIEW_FINANCE, or no cleared cheque): no action", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    setDeal({ disbursementReturn: { mayReturn: false, chequeId: "chq_fc1", lastReturnedChequeId: null } });
+    const view = renderCockpit();
+    expect(screen.queryByTestId(ACTION)).toBeNull();
+    view.unmount();
+    setDeal({ disbursementReturn: { mayReturn: false, chequeId: null, lastReturnedChequeId: null } });
+    renderCockpit();
+    expect(screen.queryByTestId(ACTION)).toBeNull();
+  });
+
+  test("hidden before the transfer is confirmed, without a cheque id, or when the payload lacks the flag", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    setDeal({ forward: forwardState({ transferConfirmed: false }) });
+    let view = renderCockpit();
+    expect(screen.queryByTestId(ACTION)).toBeNull();
+    view.unmount();
+    setDeal({ disbursementReturn: { mayReturn: true, chequeId: null, lastReturnedChequeId: null } });
+    view = renderCockpit();
+    expect(screen.queryByTestId(ACTION)).toBeNull();
+    view.unmount();
+    setDeal({ disbursementReturn: undefined });
+    renderCockpit();
+    expect(screen.queryByTestId(ACTION)).toBeNull();
+  });
+
+  test("a reason is required; submitting calls the command with the cheque, the reason and ONE key per open", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    setDeal();
+    stubs.mutationFailures.set(RETURN_MUTATION, "connection lost");
+    renderCockpit();
+    fireEvent.click(screen.getByTestId(ACTION));
+    const submit = () => screen.getByRole("button", { name: "ChequeReturnedByBankConfirm" }) as HTMLButtonElement;
+    expect(submit().disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("ChequeReturnedByBankReasonLabel"), { target: { value: "  Insufficient funds  " } });
+    expect(submit().disabled).toBe(false);
+
+    fireEvent.click(submit());
+    await waitFor(() => expect(mutationCalls.get(RETURN_MUTATION)).toHaveLength(1));
+    // A lost response: the operator retries from the same open dialog.
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    await waitFor(() => expect(submit().disabled).toBe(false));
+    fireEvent.click(submit());
+    await waitFor(() => expect(mutationCalls.get(RETURN_MUTATION)).toHaveLength(2));
+
+    const [first, second] = mutationCalls.get(RETURN_MUTATION) as Array<Record<string, unknown>>;
+    expect(first).toMatchObject({
+      orgId: ORG,
+      applicationId: APP,
+      chequeId: "chq_fc1",
+      returnReason: "Insufficient funds",
+    });
+    expect(typeof first.idempotencyKey).toBe("string");
+    expect(second.idempotencyKey).toBe(first.idempotencyKey);
+  });
+});

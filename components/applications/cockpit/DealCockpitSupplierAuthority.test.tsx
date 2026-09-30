@@ -149,6 +149,7 @@ function financedDirectDeal(): FinancedDealCockpitData {
     activeAppraisalProvider: null,
     stages: [{ key: "APPLICATION", state: "COMPLETE", authority: "DEALER" }],
     forward: { planV2: false, applies: false, state: "NOT_DUE" as const, returnedExceptionOpen: false, onBooksForwardId: null, transferConfirmed: false, mayRecord: false, mayCancelFinalized: false },
+    disbursementReturn: { mayReturn: false, chequeId: null, lastReturnedChequeId: null },
     documents: [],
     timeline: [],
     money: {

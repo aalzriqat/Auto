@@ -137,6 +137,8 @@ import {
   FC_RETURN_MESSAGES,
   hasClearedLinkedCheque,
   liveChequesForApplication,
+  clearedDisbursementCheque,
+  latestReturnedAfterClearing,
   parseFaceAmountMinor,
   dealChequeCurrency,
   ATTESTATION_NOTE_MAX_LENGTH,
@@ -2085,6 +2087,7 @@ export const dealCockpit = query({
     // SCRUM-435: the ONE forward proof feeds the rail, the cockpit view and the
     // gates; nothing here derives it a second time.
     const forwardProof = await deriveForwardState(ctx, app);
+    const disbursementCheque = clearedDisbursementCheque(linkedCheques, app);
     const stages = deriveDealStages({
       forwardState: forwardProof.state,
       forwardExceptionOpen: forwardProof.returnedExceptionOpen,
@@ -2416,6 +2419,23 @@ export const dealCockpit = query({
           (role.permissions.includes(PERMISSIONS.CREATE_FINANCE_APPLICATION) &&
             role.permissions.includes(PERMISSIONS.FINALIZE_FINANCED_DEAL) &&
             role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT)),
+      },
+      /**
+       * SCRUM-239: the bank returned the finance company's cheque AFTER it
+       * cleared. `mayReturn` is computed here from the same permissions and the
+       * same cheque binding the command requires, so the screen offers only what
+       * the server accepts. `chequeId` names the cleared cheque to return;
+       * `lastReturnedChequeId` is the newest cheque already returned after
+       * clearing, which is how the screen sees the fact it wrote.
+       */
+      disbursementReturn: {
+        mayReturn:
+          disbursementCheque !== null &&
+          (isSystemOwnerRole(role) ||
+            (role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT) &&
+              role.permissions.includes(PERMISSIONS.VIEW_FINANCE))),
+        chequeId: disbursementCheque?._id ?? null,
+        lastReturnedChequeId: latestReturnedAfterClearing(linkedCheques)?._id ?? null,
       },
       documents,
       timeline: timeline
@@ -5274,9 +5294,14 @@ export const returnFinanceDisbursementCheque = mutation({
       PERMISSIONS.VIEW_FINANCE,
     ]);
     const returnReason = args.returnReason.trim();
-    if (returnReason === "") throw new ConvexError("Give the reason the bank returned the cheque.");
+    if (returnReason === "") refuseFinanceReturn("FINANCE_RETURN_REASON_REQUIRED");
     if (returnReason.length > FC_RETURN_REASON_MAX_LENGTH) {
-      throw new ConvexError(`The return reason is too long (the most is ${FC_RETURN_REASON_MAX_LENGTH} characters).`);
+      // `max` rides beside the code so the dictionary's `{max}` is filled.
+      throw new ConvexError({
+        code: AppErrorCode.FINANCE_RETURN_REASON_TOO_LONG,
+        message: FC_RETURN_MESSAGES.FINANCE_RETURN_REASON_TOO_LONG,
+        max: FC_RETURN_REASON_MAX_LENGTH,
+      });
     }
 
     return await runWithIdempotency(
@@ -5433,7 +5458,7 @@ export const returnFinanceDisbursementCheque = mutation({
           ctx,
           args.orgId,
           "collection.cheque_returned",
-          { actorName, amount: String(app.disbursedAmountMinor) },
+          { actorName, amount: String(cheque.amount) }, // display figure the template expects, not the minor-unit face (1000x)
           { link: `/${args.orgId}/accounting` }
         );
 

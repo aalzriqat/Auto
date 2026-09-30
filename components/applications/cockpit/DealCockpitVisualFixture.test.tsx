@@ -138,6 +138,7 @@ function financedDeal(): FinancedDealCockpitData {
       { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
     ],
     forward: { planV2: false, applies: false, state: "NOT_DUE" as const, returnedExceptionOpen: false, onBooksForwardId: null, transferConfirmed: false, mayRecord: false, mayCancelFinalized: false },
+    disbursementReturn: { mayReturn: false, chequeId: null, lastReturnedChequeId: null },
     documents: [
       {
         ruleId: "r1" as Id<"companyDocumentRules">,

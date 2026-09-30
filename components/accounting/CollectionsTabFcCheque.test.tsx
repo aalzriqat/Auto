@@ -1,0 +1,111 @@
+/**
+ * SCRUM-239: a finance-company cheque's return is recorded from the DEAL
+ * ("Cheque returned by bank"), so Collections never offers Return on it - the
+ * server refuses it with FINANCE_CHEQUE_RETURN_FROM_DEAL anyway. A customer's
+ * cheque keeps Return. The Collections row says where the FC cheque is handled.
+ */
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { Doc } from "@/convex/_generated/dataModel";
+
+const stubs = vi.hoisted(() => ({
+  queryResults: new Map<string, unknown>(),
+  paginated: new Map<string, unknown[]>(),
+}));
+
+vi.mock("@/components/providers/LanguageProvider", () => ({
+  useLanguage: () => ({ t: (key: string) => key, isRtl: false, locale: "en" }),
+}));
+vi.mock("@/components/providers/OrgProvider", () => ({
+  useOrg: () => ({ activeOrgId: "org1" }),
+}));
+vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("@/hooks/use-permissions", () => ({
+  usePermissions: () => ({ hasPermission: () => true }),
+}));
+vi.mock("@/hooks/useCurrencyFormatter", () => ({
+  useCurrencyFormatter: () => (n: number) => `${n} JOD`,
+}));
+vi.mock("@/hooks/useCommandIdentity", () => ({
+  useCommandIdentity: () => ({ for: (k: string) => k, retire: () => {} }),
+}));
+vi.mock("@/components/accounting/collections/CashDrawerPanel", () => ({ CashDrawerPanel: () => null }));
+vi.mock("@/components/accounting/collections/PaymentLinksPanel", () => ({ PaymentLinksPanel: () => null }));
+vi.mock("@/components/accounting/collections/InstallmentCalendar", () => ({ InstallmentCalendar: () => null }));
+vi.mock("convex/react", async () => {
+  const { getFunctionName } = await import("convex/server");
+  return {
+    useQuery: (reference: never) => stubs.queryResults.get(getFunctionName(reference)),
+    usePaginatedQuery: (reference: never) => ({
+      results: stubs.paginated.get(getFunctionName(reference)) ?? [],
+      status: "Exhausted",
+      loadMore: () => {},
+    }),
+    useMutation: () => vi.fn(),
+  };
+});
+
+import { CollectionsTab } from "./CollectionsTab";
+
+const cheque = (over: Record<string, unknown>) =>
+  ({
+    _id: "c1",
+    _creationTime: 0,
+    orgId: "org1",
+    chequeDate: Date.UTC(2026, 9, 12),
+    customerName: "Layla Haddad",
+    vehicleLabel: "Toyota Camry 2024",
+    bank: "Arab Bank",
+    chequeNumber: "004512",
+    status: "CLEARED",
+    amount: 20000,
+    ...over,
+  }) as unknown as Doc<"postDatedCheques">;
+
+afterEach(() => {
+  cleanup();
+  stubs.queryResults.clear();
+  stubs.paginated.clear();
+});
+
+async function openChequesTab() {
+  stubs.queryResults.set("collections:summary", {
+    totalOutstanding: 0, overdueOutstanding: 0, dueToday: 0, collectedToday: 0, upcomingChequeTotal: 0,
+  });
+  render(<CollectionsTab />);
+  const tab = screen.getByRole("tab", { name: "Cheques" });
+  fireEvent.mouseDown(tab, { button: 0, ctrlKey: false });
+  fireEvent.focus(tab);
+  // The rows paint once the tab's content mounts.
+  await screen.findAllByText("004512", undefined, { timeout: 3000 });
+}
+
+describe("Collections, Cheques tab: Return", () => {
+  test("a finance-company cheque has no Return (nor Clear/Replace); its deal handles it", async () => {
+    stubs.paginated.set("collections:listCheques", [cheque({ _id: "c1", isFinanceCompanyCheque: true })]);
+    await openChequesTab();
+    expect(screen.getByText("FcHandledFromDeal")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Return" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Clear" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Replace" })).toBeNull();
+  });
+
+  test("a customer's cheque keeps Return", async () => {
+    stubs.paginated.set("collections:listCheques", [
+      cheque({ _id: "c2", isFinanceCompanyCheque: false, customerName: "Omar Nasser" }),
+    ]);
+    await openChequesTab();
+    expect(screen.getByRole("button", { name: "Return" })).toBeTruthy();
+    expect(screen.queryByText("FcHandledFromDeal")).toBeNull();
+  });
+
+  test("both kinds side by side: exactly one Return, on the customer's row", async () => {
+    stubs.paginated.set("collections:listCheques", [
+      cheque({ _id: "c1", isFinanceCompanyCheque: true }),
+      cheque({ _id: "c2", isFinanceCompanyCheque: false, customerName: "Omar Nasser" }),
+    ]);
+    await openChequesTab();
+    expect(screen.getAllByRole("button", { name: "Return" })).toHaveLength(1);
+    expect(screen.getAllByText("FcHandledFromDeal")).toHaveLength(1);
+  });
+});

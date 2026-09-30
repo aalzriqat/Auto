@@ -18,6 +18,10 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { getReceivableOutstandingMinor } from "./subledger";
 import { financeDisbursementKeys } from "./utils/financeDisbursementKeys";
+import { FC_RETURN_MESSAGES } from "./utils/fcCheque";
+import { salesAr, salesEn } from "../lib/i18n/domains/sales";
+import { getLocalizedErrorMessage } from "../lib/errors";
+import { ConvexError } from "convex/values";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -417,7 +421,11 @@ describe("SCRUM-239 - refusals happen before the first write", () => {
     // Missing permission: an accountant holds view:finance but not confirm:finance_disbursement.
     expect(await refusalCode(d.giveBack(cheque._id, { as: d.s.accountant.as }))).toBe("FORBIDDEN");
     // A blank reason is refused.
-    expect(await refusalCode(d.giveBack(cheque._id, { reason: "   " }))).not.toBe("NO_REFUSAL");
+    expect(await refusalCode(d.giveBack(cheque._id, { reason: "   " }))).toBe("FINANCE_RETURN_REASON_REQUIRED");
+    // ...and so is one over the 500-character limit, with the limit carried for {max}.
+    expect(await refusalCode(d.giveBack(cheque._id, { reason: "x".repeat(501) }))).toBe("FINANCE_RETURN_REASON_TOO_LONG");
+    const tooLong = await d.giveBack(cheque._id, { reason: "x".repeat(501) }).then(() => null, (e: unknown) => (e as { data?: { max?: number } }).data);
+    expect(tooLong?.max).toBe(500);
     expect(await snapshot(d)).toEqual(before);
   });
 
@@ -614,5 +622,80 @@ describe("SCRUM-239 - D7 lineage audit", () => {
       ctx.db.patch(c3._id, { status: "RETURNED", returnedAfterClearing: true, returnedAt: Date.now(), disbursementVersion: undefined })
     );
     expect(JSON.stringify(await auditOf(legacy.s))).toMatch(/RETURNED_AFTER_CLEARING_LEGACY/);
+  });
+});
+
+describe("SCRUM-239 - manager notification and coded, translated reason refusals", () => {
+  test("the notification carries the cheque's display amount (12500), not its minor-unit face (12500000)", async () => {
+    const d = await finalizedChequeDeal("n1", "OPEN_YEAR");
+    // notifyManagers reaches members holding manage:users; the seeded owner role does not.
+    await d.s.t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: "n1_mgr", email: "n1.mgr@example.com", name: "mgr" });
+      const roleId = await ctx.db.insert("roles", { orgId: d.s.orgId, name: "MGR", permissions: ["manage:users"] });
+      await ctx.db.insert("memberships", { orgId: d.s.orgId, userId, roleId });
+    });
+    await d.confirm();
+    const [cheque] = await d.cheques();
+    await d.giveBack(cheque._id);
+    const rows = await d.s.t.run(async (ctx) =>
+      (await ctx.db.query("notifications").collect()).filter((n) => n.orgId === d.s.orgId && n.type === "collection.cheque_returned")
+    );
+    expect(rows).toHaveLength(1);
+    // The same figure returnClearedCheque sends for a cheque of this face: String(cheque.amount).
+    expect(rows[0].data?.amount).toBe(String(cheque.amount));
+    expect(rows[0].data?.amount).toBe(String(G / SCALE));
+    expect(rows[0].data?.amount).not.toBe(String(G));
+  });
+
+  test("every FC return refusal has an EN and an AR dictionary entry, and the EN matches the server message", () => {
+    const codes = Object.keys(FC_RETURN_MESSAGES) as Array<keyof typeof FC_RETURN_MESSAGES>;
+    expect(codes.length).toBeGreaterThanOrEqual(8);
+    for (const code of codes) {
+      const key = `ServerError_${code}` as keyof typeof salesEn;
+      const en = salesEn[key] as string | undefined;
+      const ar = salesAr[key] as string | undefined;
+      expect(en, `EN for ${code}`).toBeTruthy();
+      expect(ar, `AR for ${code}`).toMatch(/[\u0600-\u06FF]/);
+      expect(en!.replace("{max}", "500"), code).toBe(FC_RETURN_MESSAGES[code]);
+    }
+  });
+
+  test("the too-long refusal interpolates {max} in both languages", () => {
+    const error = new ConvexError({ code: "FINANCE_RETURN_REASON_TOO_LONG", message: FC_RETURN_MESSAGES.FINANCE_RETURN_REASON_TOO_LONG, max: 500 });
+    const en = getLocalizedErrorMessage(error, (k) => (salesEn as Record<string, string>)[k] ?? k);
+    const ar = getLocalizedErrorMessage(error, (k) => (salesAr as Record<string, string>)[k] ?? k);
+    expect(en).toContain("500");
+    expect(ar).toContain("500");
+    expect(en).not.toContain("{max}");
+    expect(ar).not.toContain("{max}");
+  });
+});
+
+describe("SCRUM-239 - the cockpit's disbursementReturn gate is computed on the server", () => {
+  test("offered to the finance tier only for a cleared, current disbursement; CONFIRM-only or VIEW-only callers are not offered it", async () => {
+    const d = await finalizedChequeDeal("g1", "OPEN_YEAR");
+    const mk = async (suffix: string, perms: string[]) => {
+      const userId = await d.s.t.run((ctx) => ctx.db.insert("users", { clerkId: `g1_${suffix}`, email: `g1.${suffix}@example.com`, name: suffix }));
+      const roleId = await d.s.t.run((ctx) => ctx.db.insert("roles", { orgId: d.s.orgId, name: suffix.toUpperCase(), permissions: perms }));
+      await d.s.t.run((ctx) => ctx.db.insert("memberships", { orgId: d.s.orgId, userId, roleId }));
+      return d.s.t.withIdentity({ subject: `g1_${suffix}`, clerkId: `g1_${suffix}` });
+    };
+    const confirmOnly = await mk("confonly", ["view:sales", "view:finance_applications", "confirm:finance_disbursement"]);
+    const viewOnly = await mk("viewonly", ["view:sales", "view:finance_applications", "view:finance"]);
+    const flag = async (as: typeof d.s.owner.as) =>
+      (await as.query(api.applications.dealCockpit, { orgId: d.s.orgId, applicationId: d.applicationId }))?.disbursementReturn;
+
+    // Not disbursed: nothing to return.
+    expect(await flag(d.s.owner.as)).toEqual({ mayReturn: false, chequeId: null, lastReturnedChequeId: null });
+
+    await d.confirm();
+    const [cheque] = await d.cheques();
+    expect(await flag(d.s.owner.as)).toEqual({ mayReturn: true, chequeId: cheque._id, lastReturnedChequeId: null });
+    // The same permissions the command requires: both, not either.
+    expect((await flag(confirmOnly))?.mayReturn).toBe(false);
+    expect((await flag(viewOnly))?.mayReturn).toBe(false);
+
+    await d.giveBack(cheque._id);
+    expect(await flag(d.s.owner.as)).toEqual({ mayReturn: false, chequeId: null, lastReturnedChequeId: cheque._id });
   });
 });

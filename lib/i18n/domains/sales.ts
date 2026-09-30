@@ -284,6 +284,19 @@ const dealRailMessages = defineBilingualMessages({
   ForwardReasonLabel: ["Reason", "السبب"],
   ForwardReasonRequired: ["A reason is required.", "السبب مطلوب."],
   ForwardCorrectionSuccess: ["Payment to the finance company corrected", "تم تصحيح الدفع لشركة التمويل"],
+  // SCRUM-239: the bank returned the finance company's cheque after it cleared.
+  ChequeReturnedByBankAction: ["Cheque returned by bank", "شيك مرتجع من البنك"],
+  ChequeReturnedByBankTitle: ["Cheque returned by bank", "شيك مرتجع من البنك"],
+  ChequeReturnedByBankDesc: [
+    "Use this when the bank returned the finance company's cheque after it was cleared. The finance company's receipt comes off the books, the finance company's receivable reopens, and the deal goes back to waiting for a new cheque and a new disbursement.",
+    "استخدمه إذا أرجع البنك شيك شركة التمويل بعد صرفه. يُلغى قيد استلام مبلغ شركة التمويل من الدفاتر، وتعود ذمة شركة التمويل مفتوحة، وتعود الصفقة بانتظار شيك جديد وصرف التمويل من جديد.",
+  ],
+  ChequeReturnedByBankReasonLabel: ["Return reason", "سبب الإرجاع"],
+  ChequeReturnedByBankConfirm: ["Record the return", "تسجيل الإرجاع"],
+  ChequeReturnedByBankSuccess: [
+    "Cheque return recorded. The deal is waiting for a new cheque.",
+    "تم تسجيل الشيك المرتجع. الصفقة بانتظار شيك جديد.",
+  ],
   ForwardVoidAfterTransfer: [
     "The finance company's transfer is now confirmed, so this payment can no longer be voided. If the company sent it back, report it as returned.",
     "تم تأكيد تحويل شركة التمويل، لذا لم يعد بالإمكان إلغاء هذا الدفع. إذا أعادته الشركة، أبلغ عن إرجاعه.",
@@ -1643,6 +1656,14 @@ const serverErrorMessages = defineBilingualMessages({
   ServerError_FINANCE_RETURN_REVERSAL_UNPROVEN: [
     "The finance company's receipt could not be confirmed as reversed on the books, so the return was not recorded. Nothing has been changed. An accountant reviews the deal.",
     "تعذّر التأكد من عكس قيد استلام مبلغ شركة التمويل في الدفاتر، لذلك لم يُسجَّل المرتجع. لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
+  ],
+  ServerError_FINANCE_RETURN_REASON_REQUIRED: [
+    "Give the reason the bank returned the cheque. Nothing has been changed.",
+    "اكتب سبب إرجاع البنك للشيك. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_RETURN_REASON_TOO_LONG: [
+    "The return reason is too long (the most is {max} characters). Nothing has been changed.",
+    "سبب الإرجاع طويل جدًا (الحد الأقصى {max} حرفًا). لم يتم تغيير أي شيء.",
   ],
   ServerError_FINANCE_CHEQUE_RETURN_FROM_DEAL: [
     "This is a finance-company cheque. Its return is recorded from the deal screen with the \"Cheque returned by bank\" action, not from customer collections. Nothing has been changed.",

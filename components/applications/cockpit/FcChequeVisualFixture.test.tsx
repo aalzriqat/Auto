@@ -207,6 +207,9 @@ describe.skipIf(!GENERATE)("SCRUM-447 finance-company cheque visual fixture", ()
     fireEvent.focus(chequesTab);
     expect(await screen.findAllByText(table.FcChequeBadge, undefined, { timeout: 3000 })).toHaveLength(2);
     expect(screen.getAllByText(table.FcHandledFromDeal)).toHaveLength(2);
+    // SCRUM-239: a finance-company cheque's return is recorded from the deal, so
+    // the Return action is withheld from both FC rows and kept on the customer's.
+    expect(screen.getAllByRole("button", { name: table.Return })).toHaveLength(1);
     write(locale, "collections", document.body.innerHTML);
     cleanup();
 
