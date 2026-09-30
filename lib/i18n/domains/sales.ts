@@ -1622,7 +1622,7 @@ const serverErrorMessages = defineBilingualMessages({
   ],
   ServerError_COMMISSION_BASE_UNUSABLE_RECALC: [
     "This sale's recorded commissionable margin is in a different currency from the organization's or holds an unusable amount, so a commission cannot be worked out. Have the deal's figures corrected before recalculating; the existing commission has been left untouched.",
-    "هامش المركبة الخاضع للعمولة المسجل لهذه البيعة بعملة مختلفة عن عملة المؤسسة أو يحتوي على مبلغ غير صالح، لذا لا يمكن احتساب العمولة. يرجى تصحيح أرقام الصفقة قبل إعادة الاحتساب؛ لم يتم تغيير العمولة الحالية.",
+    "هامش المركبة الخاضع للعمولة المسجل لعملية البيع هذه بعملة مختلفة عن عملة المؤسسة أو يحتوي على مبلغ غير صالح، لذا لا يمكن احتساب العمولة. يرجى تصحيح أرقام الصفقة قبل إعادة الاحتساب؛ لم يتم تغيير العمولة الحالية.",
   ],
 });
 
