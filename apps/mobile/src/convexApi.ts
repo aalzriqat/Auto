@@ -26,7 +26,10 @@ export type MobileTaskStatus = "PENDING" | "COMPLETED" | "CANCELLED";
 export type MobileTaskPriority = "HIGH" | "MEDIUM" | "LOW";
 export type MobileCommunicationMethod = "PHONE" | "EMAIL" | "FAX";
 export type MobileSaleStatus = "PENDING" | "COMPLETED" | "CANCELLED";
+/** What a stored sale can carry: LEASE stays here so a legacy row still types and renders. */
 export type MobileFinancingType = "CASH" | "FINANCED" | "LEASE";
+/** SCRUM-495: what a NEW sale may be created with. LEASE is retired and the server refuses it. */
+export type MobileOperatedFinancingType = Exclude<MobileFinancingType, "LEASE">;
 export type MobileExpenseCategory =
   | "REPAIR"
   | "MAINTENANCE"
@@ -63,6 +66,8 @@ export type MobileQuoteMode =
   | "MANUAL_FINANCE_COMPANY"
   | "INTERNAL_INSTALLMENT"
   | "LEASE";
+/** SCRUM-495: what a NEW quote may be saved with. The two retired modes stay in MobileQuoteMode for stored rows. */
+export type MobileOperatedQuoteMode = Exclude<MobileQuoteMode, "INTERNAL_INSTALLMENT" | "LEASE">;
 export type MobileLedgerType = "IN" | "OUT";
 export type MobileLedgerCategory =
   | "VEHICLE_SALE"
@@ -1720,7 +1725,7 @@ type SaleDraftCreateArgs = OrgScopedArgs & {
   downPayment?: number;
   tradeInVehicleId?: string;
   tradeInValue?: number;
-  financingType?: MobileFinancingType;
+  financingType?: MobileOperatedFinancingType;
   loanAmount?: number;
   apr?: number;
   termMonths?: number;
@@ -1937,7 +1942,7 @@ export type QuoteSaveArgs = OrgScopedArgs & {
   vehicleId: string;
   companyId?: string;
   customerEligibilityStatusIds?: string[];
-  mode?: MobileQuoteMode;
+  mode?: MobileOperatedQuoteMode;
   leadId?: string;
   vehiclePrice: number;
   /** Dealer margin, checked server-side against the vehicle's minimumProfit. */
