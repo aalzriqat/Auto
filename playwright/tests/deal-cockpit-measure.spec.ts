@@ -121,11 +121,11 @@ test.describe("the deal cockpit's reading measure", () => {
    * distance between a label and the figure it names, at two widths and in two
    * languages. A redesign changes exactly that.
    *
-   * The reading-measure defect this
-   * gate exists for — `justify-between` on an unbounded row, which the owner
-   * had to zoom to 50% to read around — is a real product defect that a
-   * redesign can reintroduce. Re-enable this against the new screen; do not let
-   * the redesign land with no measure at all.
+   * The reading-measure defect this gate exists for is `justify-between` on
+   * an unbounded row, which the owner had to zoom to 50% to read around. It is
+   * a real product defect that a redesign can reintroduce, so keep this gate
+   * pointed at the new screen; do not let the redesign land with no measure at
+   * all.
    *
    * Tracked with the redesign: SCRUM-63 (Unified Deal Workspace).
    */
@@ -203,9 +203,7 @@ test.describe("the deal cockpit's reading measure", () => {
             .poll(() => page.evaluate(() => document.documentElement.dir))
             .toBe(locale === "ar" ? "rtl" : "ltr");
 
-          // The fixture deal is at handover, so the decision card is in the
-          // collapsed "Deal details" record (SCRUM-417 UX3): `hidden` rows lay
-          // out at width 0 and measure as nothing. Open it, as an operator would.
+          // Fixture deal is at handover: open the collapsed record (see openDealDetails).
           await openDealDetails(page);
 
           // The split rows arrive on their OWN query, not the one that renders

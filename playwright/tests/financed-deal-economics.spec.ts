@@ -60,13 +60,13 @@ test.describe("recording a financed deal's economics through the interface", () 
    * amount, the handover and the finalize are all entered through that screen's
    * controls. A redesign moves every one of them.
    *
-   * What this proves is not a layout detail — it is
-   * that an operator can REACH the economics writers at all. SCRUM-68 exists
-   * because they could not: the mutations were real and had no caller, and a
-   * configured deal stopped dead after its credit decision. It is also the only
-   * spec that exercises separation of duties across two identities end to end.
-   * A redesign that ships without re-enabling this can reintroduce exactly the
-   * defect the original ticket was filed for.
+   * What this proves is not a layout detail: it is that an operator can REACH
+   * the economics writers at all. SCRUM-68 exists because they could not. The
+   * mutations were real and had no caller, and a configured deal stopped dead
+   * after its credit decision. It is also the only spec that exercises
+   * separation of duties across two identities end to end. A redesign that
+   * ships without keeping this gate can reintroduce exactly the defect the
+   * original ticket was filed for.
    *
    * Tracked with the redesign: SCRUM-63 (Unified Deal Workspace).
    */
@@ -144,6 +144,7 @@ test.describe("recording a financed deal's economics through the interface", () 
       // 13,000 approved - 3,000 customer first payment = 10,000 funded (within 90% cap of 11,700),
       // leaving 1,300 unfinanced. Asserted as figures rather than as "a panel appeared":
       // a split that renders but does not add up is the failure this is here to catch.
+
       // The approval moves the live step to handover, which folds the decision
       // card into the collapsed "Deal details" record (SCRUM-417 UX3) — open it
       // the way an operator would before reading the split.
@@ -199,10 +200,9 @@ test.describe("recording a financed deal's economics through the interface", () 
       // click "Confirm closing" without either and then match "Closed" as a
       // substring anywhere on the page, so it passed while nothing closed.
       // The close is withheld first, and says why, rather than offered and
-      // refused.
-      // exact: the step checklist inside this container renders its current
-      // "close-deal" item as a button named "Close the deal Next", which a
-      // substring match would also take.
+      // refused. exact: the step checklist inside this container renders its
+      // current "close-deal" item as a button named "Close the deal Next",
+      // which a substring match would also take.
       const close = nextStep.getByRole("button", { name: "Close the deal", exact: true });
       await expect(nextStep).toContainText("The deal is not ready to close yet");
       await expect(close).toHaveCount(0);

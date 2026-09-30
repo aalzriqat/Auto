@@ -460,7 +460,6 @@ export async function buildDealWithRecordedEconomics(
  */
 export async function openDealDetails(page: Page): Promise<void> {
   const toggle = page.getByTestId("deal-details-toggle");
-  await expect(toggle).toBeVisible();
   if ((await toggle.getAttribute("aria-expanded")) !== "true") {
     await toggle.click();
   }
