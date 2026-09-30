@@ -240,6 +240,7 @@ jobs:
             -Dsonar.pullrequest.branch=${{ github.event.workflow_run.pull_requests[0].head.ref }}
             -Dsonar.pullrequest.base=${{ github.event.workflow_run.pull_requests[0].base.ref }}
             -Dsonar.scm.revision=${{ github.event.workflow_run.pull_requests[0].head.sha }}
+            -Dsonar.working.directory=${{ runner.temp }}/sonar-scannerwork
 
       - name: Fetch Sonar issues and upsert PR report
         id: report
@@ -264,14 +265,62 @@ jobs:
             exit 0
           fi
 
+          # The gate must belong to THIS run's analysis. The scanner wrote
+          # report-task.txt into a working directory forced outside the candidate
+          # tree (-Dsonar.working.directory on the scan step), so the candidate
+          # cannot influence it. Querying qualitygates/project_status by
+          # pullRequest would return the latest PROCESSED analysis, which may be
+          # an earlier OK while this scan's Compute Engine task is still queued.
+          task_file="$RUNNER_TEMP/sonar-scannerwork/report-task.txt"
+          if [ ! -f "$task_file" ]; then
+            echo "::error::Sonar scanner did not write report-task.txt; the quality gate cannot be bound to this analysis."
+            exit 1
+          fi
+          ce_task_id="$(tr -d '\r' < "$task_file" | sed -n 's/^ceTaskId=//p')"
+          if ! [[ "$ce_task_id" =~ ^[A-Za-z0-9_-]{1,64}$ ]]; then
+            echo "::error::report-task.txt does not contain exactly one well-formed ceTaskId."
+            exit 1
+          fi
+
+          analysis_id=""
+          for attempt in $(seq 1 60); do
+            if ce_json="$(
+              curl --fail --silent --show-error --retry 2 --retry-all-errors \
+                --header "Authorization: Bearer $SONAR_TOKEN" \
+                --get "$sonar_api/ce/task" \
+                --data-urlencode "id=$ce_task_id"
+            )"; then
+              ce_status="$(jq -r '.task.status // empty' <<<"$ce_json")"
+              case "$ce_status" in
+                SUCCESS)
+                  analysis_id="$(jq -r '.task.analysisId // empty' <<<"$ce_json")"
+                  break
+                  ;;
+                FAILED | CANCELED)
+                  echo "::error::Sonar analysis task $ce_task_id ended as $ce_status."
+                  exit 1
+                  ;;
+              esac
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              echo "::error::Sonar analysis task $ce_task_id did not finish in time."
+              exit 1
+            fi
+            sleep 5
+          done
+          if ! [[ "$analysis_id" =~ ^[A-Za-z0-9_-]{1,64}$ ]]; then
+            echo "::error::Sonar analysis task $ce_task_id succeeded without a usable analysisId."
+            exit 1
+          fi
+
           gate_json=""
+          gate_status=""
           for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
             if gate_json="$(
               curl --fail --silent --show-error --retry 2 --retry-all-errors \
                 --header "Authorization: Bearer $SONAR_TOKEN" \
                 --get "$sonar_api/qualitygates/project_status" \
-                --data-urlencode "projectKey=$PROJECT_KEY" \
-                --data-urlencode "pullRequest=$PR_NUMBER"
+                --data-urlencode "analysisId=$analysis_id"
             )"; then
               gate_status="$(jq -r '.projectStatus.status // empty' <<<"$gate_json")"
               if [ -n "$gate_status" ]; then
@@ -279,7 +328,7 @@ jobs:
               fi
             fi
             if [ "$attempt" -eq 12 ]; then
-              echo "::error::Sonar quality-gate status was unavailable after retries."
+              echo "::error::Sonar quality-gate status for analysis $analysis_id was unavailable after retries."
               exit 1
             fi
             sleep 5
@@ -429,21 +478,32 @@ jobs:
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin \
-            "refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-final-merge"
-          current_merge="$(git rev-parse refs/autoflow/sonar-final-merge)"
 
+          # Once a pending status exists on TESTED_SHA a terminal one must always
+          # follow. A missing merge ref (closed/conflicting PR, transient network)
+          # therefore means "current merge unknown": never post to an unverified
+          # SHA, but still settle TESTED_SHA below.
           # Current means content-identical, not the same commit SHA (GitHub
           # regenerates the merge ref with a new date). Fetch failure => stale.
           # Byte-equal SHAs need no fetch; the helper must still answer SAME.
           same_merge() { local out; out="$(node scripts/mergeContentIdentity.mjs same "$1" "$2")" && [ "$out" = "SAME" ]; }
+          current_merge=""
           merge_is_current=false
-          if { [ "$current_merge" = "$TESTED_SHA" ] || git fetch --no-tags origin "$TESTED_SHA"; } &&
-            same_merge "$current_merge" "$TESTED_SHA"; then
-            merge_is_current=true
-            if [ "$current_merge" != "$TESTED_SHA" ]; then
-              echo "::notice::PR merge ref was regenerated (content-identical): analysed merge $TESTED_SHA, current merge $current_merge."
+          merge_ref_unavailable=false
+          if git fetch --no-tags origin \
+              "refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-final-merge" &&
+            current_merge="$(git rev-parse refs/autoflow/sonar-final-merge)"; then
+            if { [ "$current_merge" = "$TESTED_SHA" ] || git fetch --no-tags origin "$TESTED_SHA"; } &&
+              same_merge "$current_merge" "$TESTED_SHA"; then
+              merge_is_current=true
+              if [ "$current_merge" != "$TESTED_SHA" ]; then
+                echo "::notice::PR merge ref was regenerated (content-identical): analysed merge $TESTED_SHA, current merge $current_merge."
+              fi
             fi
+          else
+            current_merge=""
+            merge_ref_unavailable=true
+            echo "::warning::Could not fetch the current PR merge ref; settling $TESTED_SHA as failed without touching any other commit."
           fi
 
           state=failure
@@ -454,6 +514,8 @@ jobs:
           elif [ "$SCAN_RESULT" = "success" ]; then
             if [ "$GATE_OK" != "true" ]; then
               description="Trusted Sonar report was skipped as stale; the Quality Gate was not verified."
+            elif [ "$merge_ref_unavailable" = "true" ]; then
+              description="Trusted Sonar result is unverified because the current PR merge could not be fetched."
             else
               description="Trusted Sonar result is stale because the PR merge changed during analysis."
             fi

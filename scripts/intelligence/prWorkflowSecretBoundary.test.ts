@@ -140,6 +140,14 @@ describe("pull-request workflow secret boundary", () => {
     // gate_ok is emitted only at the very end: after the OK check and after every stale-skip exit.
     expect(reportRun.indexOf('echo "gate_ok=true"')).toBeGreaterThan(reportRun.indexOf('if [ "$gate_status" != "OK" ]; then'));
     expect(reportRun.indexOf('echo "gate_ok=true"')).toBeGreaterThan(reportRun.lastIndexOf("exit 0"));
+    // SCRUM-494-3: the gate is bound to this scan's CE task, whose id comes from a
+    // scanner working directory forced outside the candidate tree. Behaviour is
+    // proven in sonarPrReportBehavior.test.ts; these pins only guard the wiring.
+    expect(source).toContain("-Dsonar.working.directory=${{ runner.temp }}/sonar-scannerwork");
+    expect(reportRun).toContain('task_file="$RUNNER_TEMP/sonar-scannerwork/report-task.txt"');
+    expect(reportRun).toContain('--data-urlencode "analysisId=$analysis_id"');
+    // SCRUM-494-4: the verdict's merge-ref fetch may fail without skipping the terminal post.
+    expect(verdictRun).toMatch(/if git fetch --no-tags origin \\\n\s*"refs\/pull\/\$\{PR_NUMBER\}\/merge:refs\/autoflow\/sonar-final-merge" &&/);
     expect(source.indexOf("sonar-report-merge")).toBeGreaterThan(source.indexOf("sonar-pr-report-payload.json"));
     expect(source.indexOf("sonar-report-merge")).toBeLessThan(source.indexOf("-X PATCH"));
     expect(source).toContain("tested-merge-sha.txt");
