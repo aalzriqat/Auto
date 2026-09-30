@@ -211,13 +211,13 @@ describe("Phase 0 financial safety controls", () => {
       termMonths: 0,
     });
 
-    const firstDepositId = await asUser.mutation(api.deposits.create, {
+    const firstDepositId = await asUser.mutation(api.deposits.create, { method: "CASH",
       orgId,
       quoteId,
       amount: 1000,
       idempotencyKey: "deposit-submit-1",
     });
-    const secondDepositId = await asUser.mutation(api.deposits.create, {
+    const secondDepositId = await asUser.mutation(api.deposits.create, { method: "CASH",
       orgId,
       quoteId,
       amount: 1000,

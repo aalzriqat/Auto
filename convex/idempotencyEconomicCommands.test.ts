@@ -24,6 +24,7 @@ vi.mock("./rateLimit", () => ({
 }));
 
 const PERMISSIONS = [
+  "confirm:finance_disbursement",
   "create:expenses",
   "edit:expenses",
   "delete:expenses",
@@ -427,6 +428,11 @@ const REQUIRED_FINGERPRINT_FIELDS: Array<[string, string, string[]]> = [
   ],
   // Selects the credit account in hookEmployeeAdvancePaid.
   ["convex/payroll.ts", "payroll.recordAdvance", ["method"]],
+  // Selects the credit account (cash on hand vs bank) a direct handover payment leaves.
+  // …and the amount the approver SAW: the same key for another figure is another intent.
+  ["convex/financeDealCosts.ts", "financeDealCosts.recordDirectFeePayment", ["method", "expectedAmountMinor"]],
+  // SCRUM-435: how the forward was paid selects the account it leaves, and the amount the payer saw is pinned.
+  ["convex/financeCompanyForward.ts", "financeCompanyForward.recordFinanceCompanyForward", ["method", "expectedAmountMinor"]],
 ];
 
 describe("SCRUM-57 — fields whose omission was a reproduced defect stay hashed", () => {
@@ -525,6 +531,9 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
     "submitCashierReconciliation",
   ],
   "./deposits": ["create", "release"],
+  // SCRUM-444: `request` writes no money but carries an identity and a canonical
+  // fingerprint like every deposit door; `confirm` is the money-moving one.
+  "./depositRequests": ["request", "confirm"],
   // ADDED by the SCRUM-313 CENSUS (owner ruling: scope A, mechanism C). These six
   // were outside the SCRUM-57 manifest because that manifest reasoned about
   // `runWithIdempotency` callers, which was only ever a SUBSET of the commands
@@ -536,6 +545,7 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
   "./vehicles": ["create", "createReservation"],
   "./workOrders": ["create"],
   "./expenses": ["create"],
+  "./financeCompanyForward": ["recordFinanceCompanyForward", "reverseFinanceCompanyForward", "reportFinanceCompanyForwardReturned"],
   "./financeDealCosts": [
     "recordDealFee",
     "recordTemplateFeeActual",
@@ -543,6 +553,7 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
     "recordCustodyMovement",
     "migrateLegacyCustodyToLedger",
     "reconcileDealCustody",
+    "recordDirectFeePayment",
   ],
   "./paymentIntents": ["create", "markSettled"],
   "./payroll": ["recordAdvance", "recoverAdvance"],
@@ -617,7 +628,15 @@ describe("SCRUM-57 — classification ratchet", () => {
     // 40 -> 42 by SCRUM-389 supplier cost bearer:
     // +supplierCostRecoveries.recordReceipt and
     // +supplierCostRecoveries.reverseReceipt.
-    expect(checked).toBe(42);
+    //
+    // 42 -> 44 by SCRUM-444 deposit requests:
+    // +depositRequests.request and +depositRequests.confirm.
+    // 44 -> 45 by SCRUM-443 handover costs paid:
+    // +financeDealCosts.recordDirectFeePayment, the dealership's own payment of
+    // a handover cost (HANDOVER_COST_PAID_DIRECT) — runWithIdempotency with
+    // economic: true, method/date/reference/actual in its fingerprint.
+    // 45 -> 48 by SCRUM-435: the three finance-company forward commands.
+    expect(checked).toBe(48);
   });
 
   /**
@@ -679,9 +698,11 @@ describe("SCRUM-57 — classification ratchet", () => {
 
     // The denominator, asserted rather than described.
     // 40 -> 42 / 41 -> 43: SCRUM-389's two supplier-cost-recovery commands.
-    expect(economicInSource.size).toBe(42);
+    // 42 -> 44 / 43 -> 45: SCRUM-444's `depositRequests.request` and `.confirm`.
+    // 44 -> 45 / 45 -> 46: SCRUM-443's `financeDealCosts.recordDirectFeePayment`.
+    expect(economicInSource.size).toBe(48);
     expect([...nonEconomicInSource].sort()).toEqual(["sales.createDraft"]);
-    expect(economicInSource.size + nonEconomicInSource.size).toBe(43);
+    expect(economicInSource.size + nonEconomicInSource.size).toBe(49);
   });
 
   /**

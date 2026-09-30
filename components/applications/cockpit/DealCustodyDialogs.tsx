@@ -556,6 +556,24 @@ export function CustodyCloseDialog({
           <DialogDescription>{t("CustodyCloseDesc")}</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
+          {!settled && (
+            // What stops the close, and the actions that settle it — before
+            // any write-off is offered (SCRUM-439). A write-off is for cash
+            // that is really lost, not for costs and returns not yet recorded.
+            <div className="space-y-1 rounded-md border bg-muted/40 p-3 text-sm" data-testid="custody-close-unsettled">
+              {employeeOwesMinor > 0 ? (
+                <p className="font-medium">
+                  <bdi dir="ltr" className="tabular-nums">{money(employeeOwesMinor, currency)}</bdi>{" "}
+                  {t("CustodyCloseStillHeld")}
+                </p>
+              ) : (
+                <p className="font-medium">{t("CustodyCloseOtherOutstanding")}</p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                {t(employeeOwesMinor > 0 ? "CustodyCloseSettleSteps" : "CustodyCloseOtherSteps")}
+              </p>
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="custody-close-notes">{t("CustodyCloseNotes")}</Label>
             <Textarea id="custody-close-notes" value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} />

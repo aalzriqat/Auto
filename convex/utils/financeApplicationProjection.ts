@@ -235,6 +235,16 @@ const FIELD_VISIBILITY: Record<
   targetNetProceedsMinor: "FINANCE",
   legalInvoiceAmountMinor: "FINANCE",
   financedSaleRecognitionFingerprint: "FINANCE",
+  /**
+   * SCRUM-435. The plan VERSION is a marker (1 or 2), never an amount: the
+   * cockpit needs it to know whether the forward step exists. The forward
+   * amounts are FINANCE tier - the deposit and the contribution are accounting
+   * economics, and a MANAGER sees the forward STATUS only (from the proof).
+   */
+  financedSalePlanVersion: "OPEN",
+  financeCompanyForwardDueMinor: "FINANCE",
+  forwardDepositPortionMinor: "FINANCE",
+  forwardContributionPortionMinor: "FINANCE",
   /** Free text that records the approved figure — the second recovery route. */
   approvedPurchaseNotes: "FINANCE",
   accountingClassificationNotes: "FINANCE",

@@ -35,6 +35,120 @@ const profitApprovalMessages = defineBilingualMessages({
   ApprovalListPrice: ["List price", "سعر القائمة"],
 });
 
+/**
+ * SCRUM-417 UX PR 4: the sub-steps inside a stage (O2) and the clickable rail's
+ * past / future step views (O3). Defined once per message, like the rail's own.
+ */
+const dealStepMessages = defineBilingualMessages({
+  ChecklistHeading: ["Steps in this stage", "خطوات هذه المرحلة"],
+  ChecklistDone: ["Done", "تم"],
+  ChecklistCurrent: ["Next", "التالي"],
+  ChecklistPending: ["Not yet", "لاحقًا"],
+  ChecklistApprovedAmountRecorded: ["Approved amount recorded", "تسجيل المبلغ المعتمد"],
+  ChecklistShortfallSettled: ["Shortfall settled", "تسوية الفرق"],
+  ChecklistDocumentsUploaded: ["Required documents uploaded", "رفع المستندات المطلوبة"],
+  ChecklistDocumentsVerified: ["Required documents verified", "التحقق من المستندات المطلوبة"],
+  ChecklistCostsRecorded: ["Handover costs recorded", "تسجيل تكاليف التسليم"],
+  ChecklistCostsPaid: ["Handover costs paid", "دفع تكاليف التسليم"],
+  ChecklistDealFiguresReady: ["Deal figures ready to hand over", "أرقام الصفقة جاهزة للتسليم"],
+  ChecklistRegisterHandover: ["Register the handover", "تسجيل تسليم المركبة"],
+  ChecklistRouteRecorded: ["Settlement route recorded", "تسجيل مسار التسوية"],
+  ChecklistClosingChecksReady: ["Closing checks ready", "جاهزية فحوصات الإغلاق"],
+  ChecklistCloseDeal: ["Close the deal", "إغلاق الصفقة"],
+  ChecklistExpectedPaymentRegistered: ["Expected payment registered", "تسجيل الدفعة المتوقعة"],
+  ChecklistDepositResolved: ["Held deposit resolved", "معالجة العربون المحتجز"],
+  ChecklistCurrencySupported: ["Deal currency supported for closing", "عملة الصفقة مدعومة للإغلاق"],
+  ChecklistReconciliationResolved: ["Reconciliation note reviewed", "مراجعة ملاحظة التسوية"],
+  ChecklistCashDepositDecision: ["Deposit decision made", "اتخاذ قرار العربون"],
+  ChecklistCompleteSale: ["Complete the sale", "إتمام البيع"],
+  ChecklistHandoverRegistered: ["Vehicle handover registered", "تسجيل تسليم المركبة"],
+  ChecklistSaleClosed: ["Sale closed", "إغلاق البيع"],
+  ChecklistPaymentConfirmed: ["Finance company payment confirmed", "تأكيد صرف شركة التمويل"],
+
+  BackToCurrentStep: ["Back to current step", "العودة إلى الخطوة الحالية"],
+  StageViewBack: ["Close this view", "إغلاق هذا العرض"],
+  StageViewing: ["viewing", "قيد العرض"],
+  StageViewPastNote: [
+    "You are looking at a step that is already done. This is a read-only view of what was recorded.",
+    "أنت تعرض خطوة منتهية. هذا عرض للقراءة فقط لما تم تسجيله.",
+  ],
+  StageViewFutureNote: [
+    "You are looking at a step that has not started. Nothing here can be done yet.",
+    "أنت تعرض خطوة لم تبدأ بعد. لا يمكن تنفيذ شيء هنا الآن.",
+  ],
+  StageViewStoppedNote: [
+    "This step stopped when the deal was rejected or cancelled. Nothing more will happen here.",
+    "توقفت هذه الخطوة عند رفض الصفقة أو إلغائها. لن يحدث شيء آخر هنا.",
+  ],
+  // SCRUM-446: a step the server proved is not needed on this deal.
+  StageViewNotApplicableNote: [
+    "This step is not needed on this deal.",
+    "هذه الخطوة غير مطلوبة في هذه الصفقة.",
+  ],
+  StageNotApplicableReasonDisbursement: [
+    "No finance company pays the dealership on this deal.",
+    "لا توجد شركة تمويل تدفع للمعرض في هذه الصفقة.",
+  ],
+  StageViewAnnounceShowing: ["Showing step", "عرض الخطوة"],
+  StageViewAnnounceBack: ["Back to the current step", "العودة إلى الخطوة الحالية"],
+  // ROUND 2 (SCRUM-417 UX4): the deal is closed and this step waits on the finance company.
+  StageViewAnnounceBackDone: ["Back to the deal summary", "العودة إلى ملخص الصفقة"],
+  StageViewSettlementClosedNote: [
+    "The deal is closed. This step completes when the finance company's payment is confirmed, and the supplier is settled where the vehicle was supplied on consignment.",
+    "الصفقة مغلقة. تكتمل هذه الخطوة عند تأكيد دفعة شركة التمويل، وعند تسوية المورّد إن كانت المركبة مورَّدة بالأمانة.",
+  ],
+  // A deposit request still waiting blocks the close (finalizeDeal refuses on it first).
+  ChecklistDepositRequestResolved: ["Deposit request resolved", "معالجة طلب العربون"],
+  FinalizeNeedsPendingDepositRequestResolved: [
+    "A deposit request on this deal is waiting for a manager or accountant to confirm receipt or reject it. The deal can't be closed until it is resolved.",
+    "طلب عربون على هذه الصفقة بانتظار أن يؤكّد مدير أو محاسب استلامه أو يرفضه. لا يمكن إغلاق الصفقة قبل معالجته.",
+  ],
+  StageViewNeedsHeading: ["What it will need", "ما تحتاجه"],
+  StageViewWhoActs: ["Who acts", "الجهة المنفّذة"],
+  StageViewShowRecord: ["Show the recorded details", "عرض التفاصيل المسجّلة"],
+  StageNeedsApplication: [
+    "The application put together and sent to the finance company.",
+    "تجهيز الطلب وإرساله إلى شركة التمويل.",
+  ],
+  StageNeedsCreditDecision: [
+    "The finance company's credit decision, recorded here.",
+    "قرار شركة التمويل الائتماني، مسجّلًا هنا.",
+  ],
+  StageNeedsAppraisal: [
+    "A valuation of the vehicle, from the finance company or an independent appraiser.",
+    "تقييم للمركبة من شركة التمويل أو من مقيّم مستقل.",
+  ],
+  StageNeedsApprovedPurchase: [
+    "The amount the finance company approves for the purchase, and any shortfall settled.",
+    "المبلغ الذي توافق عليه شركة التمويل للشراء، وتسوية أي فرق.",
+  ],
+  StageNeedsDeliveryActions: [
+    "Every required document uploaded and verified.",
+    "رفع جميع المستندات المطلوبة والتحقق منها.",
+  ],
+  StageNeedsDisbursement: [
+    "The finance company's payment, confirmed once the sale is handed over and closed.",
+    "صرف شركة التمويل، ويُؤكَّد بعد تسليم المركبة وإغلاق البيع.",
+  ],
+  StageNeedsHandover: [
+    "The deal figures ready, then the vehicle handover registered. Handover costs are settled later, before the deal is closed.",
+    "جاهزية أرقام الصفقة، ثم تسجيل تسليم المركبة. تُسوّى تكاليف التسليم لاحقًا، قبل إغلاق الصفقة.",
+  ],
+  StageNeedsHandoverCash: [
+    "The draft sale completed, with the deposit decision made where a deposit was received.",
+    "إتمام البيع المسودّة، مع اتخاذ قرار العربون إن كان قد استُلم عربون.",
+  ],
+  StageNeedsSettlement: [
+    "The expected payment registered, a settlement route where one is required, the handover costs recorded and paid and the closing checks ready, then the deal closed.",
+    "تسجيل الدفعة المتوقعة، ومسار التسوية إن كان مطلوبًا، وتسجيل تكاليف التسليم ودفعها، وجاهزية فحوصات الإغلاق، ثم إغلاق الصفقة.",
+  ],
+  StageNeedsSettlementCash: [
+    "The supplier's claim settled, where the vehicle was supplied on consignment.",
+    "تسوية مطالبة المورّد، إن كانت المركبة مورَّدة بالأمانة.",
+  ],
+  StageNeedsSaleAgreed: ["The sale agreed with the customer.", "الاتفاق على البيع مع العميل."],
+});
+
 const dealRailMessages = defineBilingualMessages({
   /**
    * Named for the money moving, not for a form being filled in. This is the
@@ -45,7 +159,7 @@ const dealRailMessages = defineBilingualMessages({
    * "صرف" is what a finance company actually does with the money, and what a
    * dealer says on the phone. "دفعة" would have read as the customer's payment.
    */
-  StageDisbursement: ["Finance company payment", "صرف شركة التمويل"],
+  StageDisbursement: ["Confirm finance company payment", "تأكيد صرف شركة التمويل"],
 
   /**
    * TRANSITIONAL. It did its job in the previous release; it is kept here as
@@ -104,6 +218,80 @@ const dealRailMessages = defineBilingualMessages({
   BlockerAwaitingDisbursement: [
     "Waiting on the finance company to pay",
     "بانتظار صرف شركة التمويل",
+  ],
+
+  /**
+   * SCRUM-435. The finance company sends the FULL approved amount; before that
+   * transfer is confirmed the dealership pays it the customer's deposit and its
+   * own contribution. These name the dealership as the one to act.
+   */
+  BlockerAwaitingForwardToFinanceCompany: [
+    "The deposit and the dealership's contribution are paid to the finance company first",
+    "يُدفع العربون ومساهمة المعرض لشركة التمويل أولاً",
+  ],
+  BlockerForwardNotSettled: [
+    "The payment to the finance company is not settled on the books yet",
+    "الدفعة المسدَّدة لشركة التمويل لم تُسوَّ في الدفاتر بعد",
+  ],
+  RecordForwardToFinanceCompany: [
+    "Record payment to the finance company",
+    "سجّل الدفع لشركة التمويل",
+  ],
+  ForwardNeedsPermission: [
+    "A manager or accountant records the payment to the finance company.",
+    "يسجّل المدير أو المحاسب الدفع لشركة التمويل.",
+  ],
+  ForwardNotSettledReason: [
+    "An accountant resolves the payment to the finance company before the transfer can be confirmed.",
+    "يعالج المحاسب الدفع لشركة التمويل قبل أن يمكن تأكيد التحويل.",
+  ],
+  ForwardReturnedNotSettledReason: [
+    "The finance company returned the payment. An accountant resolves its reversal before the replacement payment can be recorded.",
+    "أعادت شركة التمويل الدفعة. يعالج المحاسب عكسها قبل أن يمكن تسجيل الدفعة البديلة.",
+  ],
+  ManagerCancelsFinalizedDeal: [
+    "A manager cancels a finalized deal.",
+    "يلغي المدير الصفقة المُنهاة.",
+  ],
+  RecordForwardTitle: [
+    "Record payment to the finance company",
+    "تسجيل الدفع لشركة التمويل",
+  ],
+  RecordForwardDesc: [
+    "The finance company sends the full approved amount. Record here what the dealership pays it back: the customer's deposit and the dealership's own contribution. Nothing is deducted.",
+    "ترسل شركة التمويل المبلغ المعتمد كاملاً. سجّل هنا ما يدفعه المعرض لها: عربون العميل ومساهمة المعرض. لا يُخصم شيء.",
+  ],
+  RecordForwardAmount: ["Amount to pay", "المبلغ المستحق الدفع"],
+  RecordForwardDeposit: ["Customer deposit", "عربون العميل"],
+  RecordForwardContribution: ["Dealership contribution", "مساهمة المعرض"],
+  RecordForwardConfirm: ["Record payment", "تسجيل الدفع"],
+  ForwardRecordedSuccess: [
+    "Payment to the finance company recorded",
+    "تم تسجيل الدفع لشركة التمويل",
+  ],
+  ForwardVoidAction: ["Void the payment", "إلغاء الدفع"],
+  ForwardReturnedAction: ["Report returned by the company", "الإبلاغ عن إرجاع الشركة للمبلغ"],
+  ForwardVoidTitle: ["Void the payment to the finance company", "إلغاء الدفع لشركة التمويل"],
+  ForwardVoidDesc: [
+    "Use this when the payment was recorded by mistake and the finance company has not sent the transfer yet. The payment is reversed on the books and becomes due again.",
+    "استخدمه إذا سُجّل الدفع بالخطأ ولم ترسل شركة التمويل التحويل بعد. يُعكس الدفع في الدفاتر ويصبح مستحقاً من جديد.",
+  ],
+  ForwardReturnedTitle: ["Report the payment returned", "الإبلاغ عن إرجاع الدفع"],
+  ForwardReturnedDesc: [
+    "Use this when the finance company sent the payment back. It is reversed on the books and becomes due again, so the deal can be cancelled or the payment recorded once more.",
+    "استخدمه إذا أعادت شركة التمويل الدفع. يُعكس في الدفاتر ويصبح مستحقاً من جديد، فيمكن إلغاء الصفقة أو تسجيل الدفع مرة أخرى.",
+  ],
+  ForwardReasonLabel: ["Reason", "السبب"],
+  ForwardReasonRequired: ["A reason is required.", "السبب مطلوب."],
+  ForwardCorrectionSuccess: ["Payment to the finance company corrected", "تم تصحيح الدفع لشركة التمويل"],
+  ForwardVoidAfterTransfer: [
+    "The finance company's transfer is now confirmed, so this payment can no longer be voided. If the company sent it back, report it as returned.",
+    "تم تأكيد تحويل شركة التمويل، لذا لم يعد بالإمكان إلغاء هذا الدفع. إذا أعادته الشركة، أبلغ عن إرجاعه.",
+  ],
+  /** Settlement node while the payment step is live: it closes only once the money arrives. */
+  BlockerSettlementAfterFinancePayment: [
+    "Completes after the finance company pays",
+    "تكتمل بعد صرف شركة التمويل",
   ],
 
   /**
@@ -187,20 +375,20 @@ const dealRailMessages = defineBilingualMessages({
   ],
   RecordCreditDecisionConfirm: ["Record decision", "تسجيل القرار"],
   CreditDecisionApproveNeedsPermission: [
-    "Recording an approval needs permission to approve finance applications.",
-    "يتطلّب تسجيل الموافقة صلاحية اعتماد طلبات التمويل.",
+    "A Manager records the finance company's approval.",
+    "يسجّل المدير موافقة شركة التمويل.",
   ],
   CreditDecisionRejectNeedsPermission: [
-    "Recording a rejection needs permission to review finance applications.",
-    "يتطلّب تسجيل الرفض صلاحية مراجعة طلبات التمويل.",
+    "A Manager records the finance company's rejection.",
+    "يسجّل المدير رفض شركة التمويل.",
   ],
   CreditDecisionOwnDeal: [
-    "You submitted this application, so someone else records its approval.",
-    "أنت من قدّم هذا الطلب، لذا يسجّل الموافقة شخص آخر.",
+    "You submitted this application, so another Manager records its approval.",
+    "أنت من قدّم هذا الطلب، لذا يسجّل الموافقة مدير آخر.",
   ],
   CreditDecisionNeedsPermission: [
-    "You do not have permission to record the finance company's decision. Someone who does completes this step.",
-    "ليست لديك صلاحية تسجيل قرار شركة التمويل. يُكمل هذه الخطوة من يملكها.",
+    "A Manager records the finance company's decision.",
+    "يسجّل المدير قرار شركة التمويل.",
   ],
 
   /**
@@ -209,8 +397,8 @@ const dealRailMessages = defineBilingualMessages({
    * a person, the other names a fact about the deal.
    */
   DisbursementNeedsPermission: [
-    "You do not have permission to confirm the finance company's payment. Someone who does completes this step.",
-    "ليست لديك صلاحية تأكيد دفعة شركة التمويل. يُكمل هذه الخطوة من يملكها.",
+    "A Manager or Accountant confirms the finance company's payment.",
+    "يؤكد المدير أو المحاسب صرف شركة التمويل.",
   ],
   DisbursementUnavailable: [
     "Nothing is expected from the finance company on this deal, or the receipt is already on record.",
@@ -321,9 +509,26 @@ const dealRailMessages = defineBilingualMessages({
 
   /** The compact deal header, stage rail and six-fact money summary. */
   BackToDeals: ["Deals", "الصفقات"],
-  /** "Stage 3 / 8" — the numbers are rendered beside it as their own LTR run. */
-  StageOfLabel: ["Stage", "المرحلة"],
+  /** "Step 3 of 8" — the numbers are rendered beside it as their own isolated runs. One word, "step", on every surface that counts (SCRUM-417 UX5). */
+  StageOfLabel: ["Step", "الخطوة"],
+  /** "Step 7 of 8": a sentence, not "7 / 8", so Arabic reads 7 before 8 (SCRUM-468). */
+  StageOfSeparator: ["of", "من"],
+  /** The compact mobile header: "Step 3 of 8 · Handover" (SCRUM-417 UX5, O4). */
+  MobileStepLabel: ["Step", "الخطوة"],
+  /** Appended to the phone bar while a step other than the live one is being looked at. */
+  MobileStepViewing: ["Viewing", "قيد العرض"],
+  ShowAllSteps: ["Show all steps", "عرض كل الخطوات"],
+  HideAllSteps: ["Hide steps", "إخفاء الخطوات"],
+  /** The persistent line after a step is saved and the screen shows it (S7). */
+  RecordedLead: ["Recorded.", "تم التسجيل."],
+  RecordedNextPrefix: ["Next:", "التالي:"],
+  RecordedAllDone: ["Nothing left to do on this deal.", "لا يوجد ما تبقى للقيام به في هذه الصفقة."],
+  DismissRecorded: ["Dismiss", "إغلاق"],
   DealAllStagesComplete: ["All stages complete", "اكتملت جميع المراحل"],
+  /** Every stage is finished but at least one was not needed: no "complete" claim. */
+  DealStagesFinished: ["All stages finished", "انتهت جميع المراحل"],
+  DealStagesCompleteCount: ["complete", "مكتملة"],
+  DealStagesNotNeededCount: ["not needed", "غير مطلوبة"],
   ShowStages: ["Show stages", "عرض المراحل"],
   HideStages: ["Hide stages", "إخفاء المراحل"],
   FinancialSummaryHeading: ["Financial summary", "الملخص المالي"],
@@ -336,6 +541,7 @@ const dealRailMessages = defineBilingualMessages({
   StageStateBlocked: ["Blocked", "متوقفة"],
   StageStatePending: ["Not started", "لم تبدأ"],
   StageStateStopped: ["Will not continue", "لن تستكمل"],
+  StageStateNotApplicable: ["Not needed", "غير مطلوبة"],
   ProfitBreakdownToggle: ["How this is calculated", "طريقة الاحتساب"],
   /** The headline is served but its working is not — distinct from "never recorded". */
   ProfitBreakdownUnavailable: ["Breakdown unavailable", "التفصيل غير متاح"],
@@ -383,8 +589,8 @@ const dealRailMessages = defineBilingualMessages({
   ResolveGapAction: ["Resolve appraisal gap", "حل فرق التخمين"],
   GapResolved: ["Recorded who covers the appraisal gap.", "سُجِّلت الجهة التي تتحمّل فرق التخمين."],
   GapResolutionNeedsPermission: [
-    "Agreeing who covers the difference is recorded by whoever approves the purchase amount for this deal.",
-    "تسجيل الجهة التي تتحمّل الفرق يقوم به من يعتمد مبلغ الشراء لهذه الصفقة.",
+    "The dealership owner records who covers the difference.",
+    "يسجّل مالك المعرض الجهة التي تتحمّل الفرق.",
   ],
   // A DIFFERENT obstacle: this person may record the agreement, but the deal's
   // figures are not shown to them, and the shortfall is one of those figures.
@@ -399,8 +605,8 @@ const dealRailMessages = defineBilingualMessages({
     "تجاوزت هذه الصفقة هذه المرحلة، فلم يعد بالإمكان تسجيل الجهة التي تتحمّل الفرق من هنا.",
   ],
   GapResolutionSelfDeal: [
-    "You cannot settle the appraisal gap on your own deal. A manager or the dealership owner records it.",
-    "لا يمكنك تسوية فرق التخمين على صفقتك أنت. يسجّلها مدير أو مالك المعرض.",
+    "You cannot settle the appraisal gap on your own deal. The dealership owner records it.",
+    "لا يمكنك تسوية فرق التخمين على صفقتك أنت. يسجّلها مالك المعرض.",
   ],
   ResolveGapTitle: ["Resolve the appraisal gap", "حل فرق التخمين"],
   ResolveGapDescription: [
@@ -468,6 +674,33 @@ const dealRailMessages = defineBilingualMessages({
   CostActual: ["Actual", "فعلي"],
   CostTypeLabel: ["Cost type", "نوع المصروف"],
   CostPayeeLabel: ["Paid to", "مدفوع إلى"],
+  // A handover cost is always paid out of an employee's custody cash (owner
+  // ruling 2026-09-28, SCRUM-439).
+  CostPaidFromCustodyLabel: ["Paid from the custody cash of", "مدفوع من نقد عهدة"],
+  CostPaidFromCustodyHeading: ["Paid from custody cash", "مدفوع من نقد العهدة"],
+  CostPaidByChoose: ["Choose the employee…", "اختر الموظف…"],
+  CostPaidFromCustodyNote: [
+    "Handover costs are paid from custody cash. This one is charged to that employee's custody now and counts toward what they account for when it is reconciled.",
+    "تُدفع مصاريف التسليم من نقد العهدة. يُحمَّل هذا المصروف على عهدة الموظف الآن، ويُحتسب ضمن ما يبرّره عند تسويتها.",
+  ],
+  CostPaidFromCustodyPendingNote: [
+    "Handover costs are paid from custody cash. This one is recorded as the employee's and waits under “Charge a cost” in Employee cash custody for a manager or accountant to charge it.",
+    "تُدفع مصاريف التسليم من نقد العهدة. يُسجَّل هذا المصروف باسم الموظف، وينتظر في «تحميل مصروف» ضمن عهدة الموظف النقدية ليحمّله مدير أو محاسب.",
+  ],
+  CostPaidByRequired: ["Choose whose custody paid this cost.", "اختر العهدة التي دُفع منها هذا المصروف."],
+  CostPaidFromCustodyGone: [
+    "That custody record can no longer take this cost from here. Choose the employee again.",
+    "لم يعد بالإمكان تحميل المصروف على سجل العهدة هذا من هنا. اختر الموظف مجددًا.",
+  ],
+  CostPaidFromCustodyGoneNone: [
+    "That custody record can no longer take this cost from here, and no other custody can take it now. Record it as the employee's cost for now; it can be charged to a custody from “Charge a cost” later.",
+    "لم يعد بالإمكان تحميل المصروف على سجل العهدة هذا من هنا، ولا توجد عهدة أخرى يمكن تحميله عليها الآن. سجّله مصروفًا على الموظف الآن، ويمكن تحميله على عهدة لاحقًا من «تحميل مصروف».",
+  ],
+  CostPaidFromCustodyRelease: ["Record without charging a custody", "سجّل دون تحميله على عهدة"],
+  HandoverCostNeedsCustody: [
+    "Handover costs are paid from custody cash, and no employee holds any for this deal yet. This cost is recorded as the employee's; hand them the cash under Employee cash custody, then charge it there with “Charge a cost”.",
+    "تُدفع مصاريف التسليم من نقد العهدة، ولا يحمل أي موظف نقدًا لهذه الصفقة بعد. يُسجَّل هذا المصروف باسم الموظف؛ سلِّمه النقد من قسم عهدة الموظف النقدية، ثم حمِّله عليها من «تحميل مصروف».",
+  ],
   CostDescriptionLabel: ["Description (optional)", "الوصف (اختياري)"],
   CostFigureLabel: ["Figure", "الرقم"],
   // The checklist the finance company's frozen policy implies (owner product
@@ -534,6 +767,100 @@ const dealRailMessages = defineBilingualMessages({
   CostStatusActual: ["Actual recorded", "فعلي مسجّل"],
   CostStatusReconciled: ["Reconciled", "مُطابَق"],
   CostStatusVoid: ["Void", "ملغى"],
+  // SCRUM-443 — who paid a handover cost, and how the dealership records paying one itself.
+  HandoverPaymentPaidCustody: ["Paid from custody", "مدفوع من العهدة"],
+  // A custody charge is on the row but its posting has not been confirmed on the
+  // ledger (an accounting period is closed, or the queue has not processed it).
+  HandoverPaymentCustodyRecorded: ["Recorded — waiting for posting", "مسجَّل — بانتظار الترحيل"],
+  HandoverPaymentUnsupportedTreatment: [
+    "This cost's accounting treatment cannot be paid or posted, so it would never reach the books. Remove it and add it again as an ownership transfer, insurance or selling expense; it is then settled from the employee's custody or by a direct dealership payment, as applicable.",
+    "المعالجة المحاسبية لهذا المصروف لا يمكن دفعها أو ترحيلها، فلن يصل إلى الدفاتر أبدًا. احذفه وأضفه من جديد كمصروف نقل ملكية أو تأمين أو بيع؛ وعندئذٍ تتم تسويته من عهدة الموظف أو بدفع مباشر من المعرض بحسب الحال.",
+  ],
+  HandoverPaymentDeductionNotRecognised: [
+    "This cost is marked as deducted from the finance company's settlement, but this deal has no configured financing plan to recognise it, so it would never reach the books. Remove it and add it again without the settlement deduction, then pay it.",
+    "هذا المصروف معلَّم كمخصوم من تسوية شركة التمويل، لكن هذه الصفقة بلا خطة تمويل مُعدّة تعترف به، فلن يصل إلى الدفاتر أبدًا. احذفه وأضفه من جديد دون خصم التسوية، ثم سجّل دفعه.",
+  ],
+  HandoverPaymentLegacyTemplateReview: [
+    "This cost comes from the finance company's older fee setup, and its accounting treatment cannot be paid or posted as recorded. It cannot be corrected from the deal — ask an accountant or administrator to review it.",
+    "هذا المصروف مصدره إعداد الرسوم القديم لشركة التمويل، ولا يمكن دفع معالجته المحاسبية أو ترحيلها كما هي مسجّلة. ولا يمكن تصحيحه من الصفقة — اطلب من المحاسب أو المسؤول مراجعته.",
+  ],
+  HandoverPaymentPaidDirect: ["Paid by the dealership", "دفعه المعرض مباشرةً"],
+  HandoverPaymentUnpaid: ["Payment not recorded", "الدفع غير مسجَّل"],
+  HandoverPaymentNoActual: ["Record its actual amount first", "سجّل مبلغه الفعلي أولًا"],
+  HandoverPaymentConflict: ["Recorded as paid twice — needs review", "مسجَّل كمدفوع مرتين — يحتاج مراجعة"],
+  HandoverPaymentNeedsCustody: [
+    "Paid by an employee: charge it to that employee's custody under Employee cash custody.",
+    "دفعه موظف: حمِّله على عهدة ذلك الموظف من قسم عهدة الموظف النقدية.",
+  ],
+  RecordDirectPayment: ["Record direct payment", "تسجيل دفع مباشر"],
+  DirectPaymentWaiting: [
+    "Waiting for a manager or an accountant to record the payment.",
+    "بانتظار مدير أو محاسب لتسجيل الدفع.",
+  ],
+  DirectPaymentNote: [
+    "Use this when the dealership itself paid the cost (bank transfer, e-payment, cash or an issued cheque) rather than an employee out of custody cash. It posts to the books from the account you choose, dated the day it was paid; if no accounting period is open for that date it waits, and the line shows it as waiting.",
+    "استخدمه عندما دفع المعرض المصروف بنفسه (حوالة بنكية أو دفع إلكتروني أو نقدًا أو بشيك صادر) لا موظف من نقد العهدة. يُرحَّل إلى الدفاتر من الحساب الذي تختاره بتاريخ الدفع؛ وإن لم تكن هناك فترة محاسبية مفتوحة لذلك التاريخ فإنه ينتظر، ويظهر البند على أنه بانتظار الترحيل.",
+  ],
+  HandoverPaymentRecordedUnconfirmed: [
+    "Recorded — ledger status is confirmed at closing",
+    "مسجَّل — يُتأكد من حالته في الدفاتر عند الإغلاق",
+  ],
+  HandoverPaymentRecordedCancelled: [
+    "Recorded — deal cancelled",
+    "مسجَّل — الصفقة ملغاة",
+  ],
+  HandoverPaymentRecordedRejected: [
+    "Recorded — deal rejected",
+    "مسجَّل — الصفقة مرفوضة",
+  ],
+  // A stopped (CANCELLED or REJECTED) deal accepts no new custody cash or direct
+  // payment. Only when its economics are also frozen (finalized or CLOSED) is
+  // nothing actionable, so this wording is for that case; an unfrozen stopped
+  // deal can still remove a cost, so it gets the Employee / Remove variants below.
+  HandoverPaymentUntreatableStopped: [
+    "This cost's accounting treatment cannot be paid or posted as recorded. The deal is stopped, so no payment or settlement can be recorded for it now.",
+    "المعالجة المحاسبية لهذا المصروف لا يمكن دفعها أو ترحيلها كما هي مسجّلة. الصفقة متوقفة، فلا يمكن تسجيل دفع أو تسوية له الآن.",
+  ],
+  HandoverPaymentUntreatableStoppedEmployee: [
+    "This cost's accounting treatment cannot be paid or posted as recorded. The deal is stopped, so no new cash can be handed out for it. Remove it and add it again as an ownership transfer, insurance or selling expense; it can then be settled from custody the employee already holds.",
+    "لا يمكن دفع المعالجة المحاسبية لهذا المصروف أو ترحيلها كما هي مسجّلة. الصفقة متوقفة، فلا يمكن صرف مبلغ نقدي جديد له. أزِله ثم أضِفه من جديد كنقل ملكية أو تأمين أو مصروف بيع؛ عندها يمكن تسويته من العهدة التي يحتفظ بها الموظف بالفعل.",
+  ],
+  HandoverPaymentUntreatableStoppedRemove: [
+    "This cost's accounting treatment cannot be paid or posted as recorded. The deal is stopped, so no new payment can be recorded for it. Remove it so it does not stay on the deal.",
+    "لا يمكن دفع المعالجة المحاسبية لهذا المصروف أو ترحيلها كما هي مسجّلة. الصفقة متوقفة، فلا يمكن تسجيل دفعة جديدة له. أزِله حتى لا يبقى على الصفقة.",
+  ],
+  HandoverPaymentStoppedNoNewPayment: [
+    "The deal is stopped, so no new payment is recorded for this cost.",
+    "الصفقة متوقفة، فلا تُسجَّل دفعة جديدة لهذا المصروف.",
+  ],
+  DirectPaymentAmountChanged: [
+    "The amount of this cost changed since you opened this form. It is now:",
+    "تغيّر مبلغ هذا المصروف منذ فتحت هذا النموذج. المبلغ الآن:",
+  ],
+  DirectPaymentUseNewAmount: ["Review and use the new amount", "راجِع المبلغ الجديد واعتمده"],
+  HandoverPaymentQueued: ["Recorded — waiting to post to the books", "مسجَّل — بانتظار الترحيل إلى الدفاتر"],
+  HandoverPaymentQueuedNote: [
+    "This payment is not on the books yet — usually because no accounting period is open for its date. Open the period and let the accounting queue process; the deal cannot close until it posts.",
+    "هذا الدفع لم يدخل الدفاتر بعد — غالبًا لأنه لا توجد فترة محاسبية مفتوحة لتاريخه. افتح الفترة واترك طابور المحاسبة يعالجه؛ لا يمكن إغلاق الصفقة قبل ترحيله.",
+  ],
+  HandoverPaymentReversalPending: [
+    "An earlier payment of this cost is still on the books: its reversal is waiting for an accounting period to open for the date it was taken back (usually today). Open that period (or wait for the reversal to post) before closing the deal.",
+    "دفعة سابقة لهذا المصروف ما زالت في الدفاتر: عكس قيدها بانتظار فتح فترة محاسبية لتاريخ التراجع عنها (غالبًا اليوم). افتح تلك الفترة (أو انتظر ترحيل عكس القيد) قبل إغلاق الصفقة.",
+  ],
+  DirectPaymentMethodLabel: ["Paid by", "طريقة الدفع"],
+  DirectPaymentMethodChoose: ["Choose how it was paid…", "اختر طريقة الدفع…"],
+  DirectPaymentMethodRequired: ["Choose how the dealership paid.", "اختر كيف دفع المعرض."],
+  DirectPaymentDateRequired: ["Choose the date it was paid.", "اختر تاريخ الدفع."],
+  SaveDirectPayment: ["Save payment", "حفظ الدفع"],
+  DirectPaymentSaved: ["Direct payment recorded", "تم تسجيل الدفع المباشر"],
+  DirectPaymentChangeNote: [
+    "Changing this cost's amount or removing it reverses this payment; record it again afterwards.",
+    "تغيير مبلغ هذا المصروف أو إزالته يعكس هذا الدفع؛ سجّله من جديد بعد ذلك.",
+  ],
+  DirectPaymentChangeNoteStopped: [
+    "Changing this cost's amount or removing it still reverses this payment, but the deal is stopped, so it cannot be recorded again.",
+    "تغيير مبلغ هذا المصروف أو إزالته ما زال يعكس هذا الدفع، لكن الصفقة متوقفة، فلا يمكن تسجيله من جديد.",
+  ],
   FeeTypeFinanceCompany: ["Finance company fee", "رسوم جهة التمويل"],
   FeeTypeAppraisal: ["Appraisal fee", "رسوم التقييم"],
   FeeTypeInsurance: ["Insurance", "التأمين"],
@@ -606,18 +933,23 @@ const dealWizardMessages = defineBilingualMessages({
   // G5 — the paperwork.
   CompleteDocumentsAction: ["Complete the documents", "إكمال المستندات"],
   DocumentsNeedUploader: [
-    "The documents are uploaded and verified by the finance team.",
-    "يرفع المستندات ويتحقق منها فريق التمويل.",
+    "Sales or a Manager uploads the finance documents.",
+    "يرفع موظف المبيعات أو المدير مستندات التمويل.",
   ],
   // W1 — every outstanding document is uploaded; only a verifier moves it now.
   DocumentsAwaitVerifier: [
-    "Uploaded — waiting for someone who can verify finance documents.",
-    "تم الرفع — بانتظار من يملك صلاحية التحقق من مستندات التمويل.",
+    "Uploaded. A Manager verifies the finance documents.",
+    "تم الرفع. يتحقق المدير من مستندات التمويل.",
   ],
   // Round 2 (S417-R2-1): may upload or verify, but cannot read the rows the controls sit on.
   DocumentsNeedReadAccess: [
     "Your role can upload or verify documents but cannot open this deal's document list. Someone with access to finance applications completes them.",
     "يتيح دورك رفع المستندات أو التحقق منها، لكنه لا يتيح فتح قائمة مستندات هذه الصفقة. يُكملها من يملك صلاحية الوصول إلى طلبات التمويل.",
+  ],
+  // SCRUM-422: a closed or cancelled deal's documents are settled record.
+  DocumentsSettled: [
+    "This deal is closed or cancelled, so its documents can no longer be changed.",
+    "هذه الصفقة مغلقة أو ملغاة، لذا لم يعد بالإمكان تعديل مستنداتها.",
   ],
   // A rejected file is replaced in place; the server swaps the file on the same row.
   ReplaceFile: ["Upload a replacement", "رفع ملف بديل"],
@@ -636,8 +968,8 @@ const dealWizardMessages = defineBilingualMessages({
     "وُسم أحد أرقام هذه الصفقة بأنه غير موثوق عند احتسابه. سجّل ما راجعته قبل الإغلاق.",
   ],
   ReconciliationNeedsPermission: [
-    "This deal's reconciliation note is reviewed by the accountant who closes deals.",
-    "يراجع ملاحظة التسوية على هذه الصفقة المحاسبُ المخوّل بإغلاق الصفقات.",
+    "A Manager or Accountant reviews this deal's reconciliation note.",
+    "يراجع المدير أو المحاسب ملاحظة التسوية على هذه الصفقة.",
   ],
   ResolveReconciliationDesc: [
     "Clearing the flag records that someone checked the figures. It changes no amount.",
@@ -669,8 +1001,8 @@ const dealWizardMessages = defineBilingualMessages({
   ],
   // W3 — the sale's own dialog saves through edit:sales and completes through create:sales.
   CashSaleCompletionNeedsPermission: [
-    "This sale is still a draft. It is completed by someone who can both create and edit sales.",
-    "هذا البيع ما زال مسودة. يُتمّه من يملك صلاحيتَي إنشاء المبيعات وتعديلها معاً.",
+    "This sale is still a draft. A Manager completes it.",
+    "هذا البيع ما زال مسودة. يُتمّه المدير.",
   ],
   // Round 2 (S417-R2-2): the sale form also reads customers, vehicles and team members.
   CashSaleCompletionNeedsReadAccess: [
@@ -690,13 +1022,43 @@ const dealWizardMessages = defineBilingualMessages({
     "سُجّل مبلغ معتمد على هذه الصفقة، فلم يعد بالإمكان تغيير عرض السعر الذي بُني عليه. لتغيير عرض السعر، أعد فتح المبلغ المعتمد للتصحيح أولاً.",
   ],
   SupplierSettlementNeedsPermission: [
-    "The supplier's settlement is recorded by someone who manages finance.",
-    "يسجّل تسوية المورد من يملك صلاحية إدارة المالية.",
+    "An Accountant records the supplier's settlement.",
+    "يسجّل المحاسب تسوية المورد.",
   ],
   CashSettlementNotRecordedHere: [
     "The supplier's balance on this sale is still open, and it is not settled from this screen. It closes when accounting records the payment.",
     "رصيد المورد على هذا البيع ما زال مفتوحاً، ولا تتم تسويته من هذه الشاشة. يُغلق عندما تسجّل المحاسبة الدفعة.",
   ],
+  // SCRUM-417 UX1 -- dead-end repairs. S2: a blocked handover names its blocker.
+  HandoverBlockedNeedsApproval: [
+    "Handover is blocked until a Manager records the finance company's approval on this application.",
+    "التسليم متوقف إلى أن يسجّل المدير موافقة شركة التمويل على هذا الطلب.",
+  ],
+  // S4: blockers that live on another page link to it, or say who acts.
+  OpenDepositManagerAction: ["Open vehicles to resolve the deposit", "فتح المركبات لمعالجة العربون"],
+  DepositManagerNeedsApprover: [
+    "A Manager resolves the deposit. Ask a Manager to do it.",
+    "يعالج المدير العربون. اطلب منه معالجته.",
+  ],
+  OpenSalesPageAction: ["Open the Sales page", "فتح صفحة المبيعات"],
+  SalesPageNeedsAccess: [
+    "A Manager completes this sale from the Sales page.",
+    "يُتمّ المدير هذا البيع من صفحة المبيعات.",
+  ],
+  SupplierPayableRecordedOnPayables: [
+    "The dealership collected the full sale price, so the supplier's share is a payable it owes. It is paid from the supplier payables page, not from this screen.",
+    "حصّل المعرض كامل سعر البيع، فحصة المورد مستحقة عليه. تُدفع من صفحة مستحقات الموردين، لا من هذه الشاشة.",
+  ],
+  OpenSourcingPayablesAction: ["Open supplier payables", "فتح مستحقات الموردين"],
+  SupplierPayablesNeedFinanceRole: [
+    "An Accountant pays supplier payables.",
+    "يتولى المحاسب دفع مستحقات الموردين.",
+  ],
+  ClosingCheckGoToCosts: ["Go to handover costs", "الانتقال إلى رسوم التسليم"],
+  ClosingCheckGoToCustody: ["Go to custody", "الانتقال إلى العهدة"],
+  // SCRUM-417 UX3 (O1): the step workbench and the collapsed record beneath it.
+  DealDetailsHeading: ["Deal details", "تفاصيل الصفقة"],
+  DealDetailsHint: ["The rest of this deal's information", "بقية معلومات الصفقة"],
 });
 
 /**
@@ -913,6 +1275,7 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingCheck_CUSTODY_ON_LEDGER: ["Employee custody is on the books", "عهدة الموظفين مرحَّلة إلى الدفاتر"],
   ClosingCheck_CUSTODY_SETTLED: ["Employee custody is settled", "عهدة الموظفين مسوّاة"],
   ClosingCheck_COSTS_CLOSABLE: ["Deal costs are recorded and reconciled", "مصاريف الصفقة مسجَّلة ومسوّاة"],
+  ClosingCheck_HANDOVER_COSTS_PAID: ["Handover costs are paid", "مصاريف التسليم مدفوعة"],
   ClosingCheck_FIRST_PAYMENT_RECORDED: ["The customer's first payment is recorded", "الدفعة الأولى للعميل مسجَّلة"],
   ClosingCheck_LEGAL_INVOICE_RECORDED: ["The legal invoice is recorded", "الفاتورة القانونية مسجَّلة"],
   // SCRUM-414 — why a check is not met, by the server's reason code (lib/closingReadinessReasonCodes.ts).
@@ -992,6 +1355,42 @@ const dealOverviewMessages = defineBilingualMessages({
     "\"{feeLabel}\" is classified as {treatment}, which has no account to post to. Reclassify it before closing.",
     "البند «{feeLabel}» مصنّف على أنه {treatment}، ولا يوجد حساب يُرحَّل إليه. أعد تصنيفه قبل الإغلاق.",
   ],
+  ClosingReason_HANDOVER_COSTS_NO_ACTUAL: [
+    "{count} handover cost(s) have no actual amount recorded. Record each one's actual (or zero if the dealership was charged nothing) in Handover costs before closing.",
+    "يوجد {count} من مصاريف التسليم دون مبلغ فعلي مسجَّل. سجّل الفعلي لكل منها (أو صفرًا إن لم يُحمَّل المعرض شيئًا) في مصاريف التسليم قبل الإغلاق.",
+  ],
+  ClosingReason_HANDOVER_COSTS_UNPAID: [
+    "{count} handover cost(s) have not been paid from a recorded source. In Handover costs, record the dealership's direct payment; or charge the cost to the employee custody that paid it under Employee cash custody. Then close.",
+    "يوجد {count} من مصاريف التسليم لم يُسجَّل لها مصدر دفع. في مصاريف التسليم سجّل دفع المعرض المباشر، أو حمِّل المصروف على عهدة الموظف التي دفعته من قسم عهدة الموظف النقدية، ثم أغلق.",
+  ],
+  ClosingReason_HANDOVER_COSTS_CONFLICT: [
+    "{count} handover cost(s) are recorded as paid both from employee custody and directly, which would count the cost twice. Have the line reviewed before closing.",
+    "يوجد {count} من مصاريف التسليم مسجَّلة كمدفوعة من عهدة الموظف ومباشرةً معًا، مما يحسب المصروف مرتين. اطلب مراجعة البند قبل الإغلاق.",
+  ],
+  ClosingReason_HANDOVER_COSTS_UNSUPPORTED_TREATMENT: [
+    "{count} handover cost(s) are classified with a treatment no payment can be recorded against, so they would never reach the books. In Handover costs, remove each one and add it again as an ownership transfer, insurance or selling expense; each is then settled from the employee's custody or by a direct dealership payment, as applicable. Then close.",
+    "يوجد {count} من مصاريف التسليم مصنّفة بمعالجة محاسبية لا يمكن تسجيل دفع عليها، فلن تصل إلى الدفاتر أبدًا. في مصاريف التسليم احذف كل بند منها وأضفه من جديد كمصروف نقل ملكية أو تأمين أو بيع؛ وتتم تسوية كل منها من عهدة الموظف أو بدفع مباشر من المعرض بحسب الحال. ثم أغلق.",
+  ],
+  ClosingReason_HANDOVER_COSTS_DEDUCTION_NOT_RECOGNISED: [
+    "{count} handover cost(s) are marked as deducted from the finance company's settlement, but this deal has no configured financing plan to recognise a deduction, so they would never reach the books. In Handover costs, remove each one and add it again without the settlement deduction, then pay it directly or charge it to custody. Then close.",
+    "يوجد {count} من مصاريف التسليم معلَّمة كمخصومة من تسوية شركة التمويل، لكن هذه الصفقة بلا خطة تمويل مُعدّة تعترف بالخصم، فلن تصل إلى الدفاتر أبدًا. في مصاريف التسليم احذف كل بند منها وأضفه من جديد دون خصم التسوية، ثم سجّل دفعه مباشرةً أو حمِّله على العهدة. ثم أغلق.",
+  ],
+  ClosingReason_HANDOVER_COSTS_LEGACY_TEMPLATE_REVIEW: [
+    "{count} handover cost(s) come from the finance company's older fee setup, and their accounting treatment cannot be paid or posted as recorded. They cannot be corrected from the deal. Ask an accountant or administrator to review them before finalizing.",
+    "يوجد {count} من مصاريف التسليم مصدرها إعداد الرسوم القديم لشركة التمويل، ولا يمكن دفع معالجتها المحاسبية أو ترحيلها كما هي مسجّلة. ولا يمكن تصحيحها من الصفقة. اطلب من المحاسب أو المسؤول مراجعتها قبل إغلاق الصفقة.",
+  ],
+  ClosingReason_HANDOVER_DIRECT_NOT_ON_LEDGER: [
+    "{count} direct handover payment(s) are recorded but not on the books yet: the posting is waiting because no accounting period is open for its date, or has not been processed. Open the accounting period for the payment date and let the accounting queue process, then close the deal.",
+    "يوجد {count} من مدفوعات مصاريف التسليم المباشرة مسجَّلة لكنها لم تدخل الدفاتر بعد: القيد بانتظار فتح فترة محاسبية لتاريخ الدفع أو لم تتم معالجته. افتح الفترة المحاسبية لتاريخ الدفع واترك طابور المحاسبة يعالجه، ثم أغلق الصفقة.",
+  ],
+  ClosingReason_HANDOVER_DIRECT_REVERSAL_PENDING: [
+    "{count} direct handover payment(s) that were removed, set to zero or replaced on their cost line are still on the books: their reversal is waiting because no accounting period is open for the date the payment was taken back (the day it was removed, set to zero or replaced — usually today, not the payment date). Open the accounting period that covers that date (or wait for the reversal to post), then close the deal.",
+    "يوجد {count} من مدفوعات مصاريف التسليم المباشرة التي حُذفت أو صُفّرت أو استُبدلت في بند التكلفة ما زالت في الدفاتر: عكس القيد بانتظار فتح فترة محاسبية لتاريخ التراجع عن الدفع (يوم الحذف أو التصفير أو الاستبدال — غالبًا اليوم وليس تاريخ الدفع). افتح الفترة المحاسبية التي تشمل ذلك التاريخ (أو انتظر ترحيل عكس القيد)، ثم أغلق الصفقة.",
+  ],
+  ClosingReason_HANDOVER_DIRECT_LEDGER_UNVERIFIABLE: [
+    "The ledger could not be read completely, so whether the direct handover payments are on the books cannot be confirmed. Try again shortly; if it persists, have the deal's accounting reviewed.",
+    "تعذّرت قراءة الدفاتر كاملةً، فلا يمكن التأكد من دخول مدفوعات مصاريف التسليم المباشرة إليها. حاول مجدداً بعد قليل، وإن استمر ذلك فاطلب مراجعة محاسبة الصفقة.",
+  ],
   ClosingReason_FIRST_PAYMENT_MISSING: [
     "The customer's first payment is not recorded, so the funding split cannot be established. Record it before closing.",
     "لم تُسجَّل الدفعة الأولى للعميل، لذلك لا يمكن تحديد توزيع التمويل. سجّلها قبل الإغلاق.",
@@ -1040,6 +1439,10 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingReason_WITHHELD_COSTS_CLOSABLE: [
     "The deal's costs are not all recorded and reconciled yet.",
     "لم تُسجَّل مصاريف الصفقة وتُسوَّ كلها بعد.",
+  ],
+  ClosingReason_WITHHELD_HANDOVER_COSTS_PAID: [
+    "A handover cost on this deal has not been paid from a recorded source yet.",
+    "يوجد مصروف تسليم على هذه الصفقة لم يُسجَّل له مصدر دفع بعد.",
   ],
   ClosingReason_WITHHELD_FIRST_PAYMENT_RECORDED: [
     "The customer's first payment is not recorded yet.",
@@ -1129,6 +1532,20 @@ const dealOverviewMessages = defineBilingualMessages({
   ],
   CustodyAttachPick: ["Cost", "المصروف"],
   CustodyAttachNone: ["No eligible cost is waiting to be charged.", "لا مصروف مؤهَّل بانتظار التحميل."],
+  CustodyAttachHowTo: [
+    "Nothing waiting to be charged. Costs the employee paid are recorded under Vehicle handover fees and costs.",
+    "لا مصروف بانتظار التحميل. تُسجَّل المصاريف التي دفعها الموظف في رسوم ومصاريف تسليم السيارة.",
+  ],
+  CustodyCloseStillHeld: ["is still not accounted for.", "لم يُبرَّر بعد."],
+  CustodyCloseSettleSteps: [
+    "First record the costs the employee paid (Vehicle handover fees and costs) and the cash they returned (Record return). Write off only cash that is really lost.",
+    "سجِّل أولًا المصاريف التي دفعها الموظف (رسوم ومصاريف تسليم السيارة) والنقد الذي أعاده (تسجيل إعادة). لا تشطب إلا نقدًا مفقودًا فعلًا.",
+  ],
+  CustodyCloseOtherOutstanding: ["This custody is not settled yet.", "هذه العهدة غير مسوّاة بعد."],
+  CustodyCloseOtherSteps: [
+    "Something is still owed in one direction — reimburse the employee, or correct an over-return or over-reimbursement — before it can close.",
+    "ما زال هناك مبلغ مستحق في أحد الاتجاهين — عوِّض الموظف، أو صحِّح إعادة أو تعويضًا زائدًا — قبل أن تُغلق.",
+  ],
   CustodyRelease: ["Release from custody", "تحرير من العهدة"],
   CustodyCloseTitle: ["Reconcile and close this custody", "تسوية هذه العهدة وإغلاقها"],
   CustodyCloseDesc: ["Say what was checked. The record closes only when nothing is outstanding in either direction.", "اذكر ما تم التحقق منه. يُغلق السجل فقط عندما لا يبقى شيء مستحق في أي اتجاه."],
@@ -1182,6 +1599,7 @@ const dealOverviewMessages = defineBilingualMessages({
 
 export const salesEn = {
   ...dealRailMessages.en,
+  ...dealStepMessages.en,
   ...profitApprovalMessages.en,
   ...dealOverviewMessages.en,
   ...dealWizardMessages.en,
@@ -1277,6 +1695,31 @@ export const salesEn = {
   RecordDeposit: "Record Deposit",
   RecordDepositDesc: "Record the deposit the customer paid. The vehicle will show as reserved until the deal completes or the deposit is released.",
   DepositRecordedSuccess: "Deposit recorded — vehicle is now on hold",
+  RequestDeposit: "Request deposit",
+  RequestDepositDesc: "Ask a manager or accountant to record the deposit the customer is handing over. Nothing is held and no money is recorded until they confirm they received it.",
+  DepositRequestedSuccess: "Deposit requested — waiting for a manager or accountant to confirm receipt",
+  DepositRequestedLabel: "Deposit requested — awaiting confirmation",
+  DepositChooseMethod: "How was it received?",
+  DepositMethodRequired: "Choose how the deposit was received (cash, bank transfer, card or cheque) to continue.",
+  DepositAskManagerOrAccountant: "Only a manager or accountant can change held deposit money. Ask one of them to do this.",
+  DepositRequestsTitle: "Deposit requests",
+  DepositRequestStatus_PENDING: "Requested — awaiting confirmation (counts as nothing paid yet)",
+  DepositRequestStatus_CONFIRMED: "Confirmed — deposit recorded",
+  DepositRequestStatus_REJECTED: "Rejected",
+  DepositRequestStatus_WITHDRAWN: "Withdrawn",
+  DepositRequestAwaitingManager: "A manager or accountant will confirm once the money is received. You can withdraw the request if it is no longer needed.",
+  DepositRequestWithdrawAction: "Withdraw request",
+  DepositRequestConfirmAction: "Confirm receipt",
+  DepositRequestRejectAction: "Reject",
+  DepositRequestReceivedConfirm: "Money received — record deposit",
+  DepositRequestRejectReason: "Why is it being rejected?",
+  DepositRequestConfirmedToast: "Deposit recorded — the vehicle is now on hold",
+  DepositRequestRejectedToast: "Deposit request rejected",
+  DepositRequestWithdrawnToast: "Deposit request withdrawn",
+  DepositRequestsQueueTitle: "Deposits waiting for confirmation",
+  DepositRequestsQueueDesc: "Salespeople asked to record these deposits. Confirm only once the money has actually been received, and say how.",
+  DealDepositRequestPendingTitle: "A deposit request is waiting on this deal",
+  DealDepositRequestPendingReadonly: "The deal cannot be finalized or cancelled until a manager or accountant confirms receipt or rejects this request. Ask one of them, or withdraw it if it is no longer needed.",
   DepositRecorded: "Deposit Recorded ✓",
   SubmitSale: "Submit Sale",
   SaleCompleted: "Sale Completed ✓",
@@ -2027,7 +2470,7 @@ export const salesEn = {
 
   RegisterHandoverAction: "Register vehicle handover",
   HandoverNeedsPermission:
-    "You do not have permission to register the vehicle handover. Someone who does completes this step.",
+    "Sales or a Manager registers the vehicle handover.",
   ConfirmHandoverTitle: "Register the vehicle handover",
   ConfirmHandoverDesc: "The vehicle goes out to the customer. This is recorded as a fact, and it closes the deal's figures.",
   /**
@@ -2071,10 +2514,10 @@ export const salesEn = {
 
   RegisterExpectedPaymentAction: "Register the expected payment",
   ExpectedPaymentNeedsPermission:
-    "You do not have permission to register the expected payment. Someone who does completes this step.",
+    "Sales or a Manager registers the expected payment.",
   FinalizeDealAction: "Close the deal",
   FinalizeNeedsPermission:
-    "You do not have permission to close the deal. Someone who does completes this step.",
+    "A Manager or Accountant closes the deal.",
   FinalizeWaitsForReadiness:
     "Closing readiness could not be checked right now, so the deal can't be closed yet. Try again shortly.",
   FinalizeNeedsReadinessAccess:
@@ -2206,6 +2649,7 @@ export const salesEn = {
 
 export const salesAr = {
   ...dealRailMessages.ar,
+  ...dealStepMessages.ar,
   ...profitApprovalMessages.ar,
   ...dealOverviewMessages.ar,
   ...dealWizardMessages.ar,
@@ -2293,6 +2737,31 @@ export const salesAr = {
   RecordDeposit: "تسجيل عربون",
   RecordDepositDesc: "سجّل العربون الذي دفعه العميل. ستظهر المركبة محجوزة إلى أن تكتمل الصفقة أو يُفرج عن العربون.",
   DepositRecordedSuccess: "تم تسجيل العربون — المركبة الآن محجوزة",
+  RequestDeposit: "طلب تسجيل عربون",
+  RequestDepositDesc: "اطلب من المدير أو المحاسب تسجيل العربون الذي يسلّمه العميل. لن يُحجز شيء ولن يُسجَّل أي مبلغ قبل أن يؤكد استلامه.",
+  DepositRequestedSuccess: "تم إرسال طلب العربون — بانتظار تأكيد الاستلام من المدير أو المحاسب",
+  DepositRequestedLabel: "تم طلب العربون — بانتظار التأكيد",
+  DepositChooseMethod: "كيف تم الاستلام؟",
+  DepositMethodRequired: "اختر طريقة استلام العربون (نقداً أو تحويل بنكي أو بطاقة أو شيك) للمتابعة.",
+  DepositAskManagerOrAccountant: "المدير أو المحاسب فقط يمكنه تعديل مبالغ العربون المحجوزة. اطلب منه تنفيذ ذلك.",
+  DepositRequestsTitle: "طلبات العربون",
+  DepositRequestStatus_PENDING: "مطلوب — بانتظار التأكيد (لا يُحتسب كمبلغ مدفوع بعد)",
+  DepositRequestStatus_CONFIRMED: "تم التأكيد — سُجّل العربون",
+  DepositRequestStatus_REJECTED: "مرفوض",
+  DepositRequestStatus_WITHDRAWN: "تم سحب الطلب",
+  DepositRequestAwaitingManager: "سيؤكد المدير أو المحاسب بعد استلام المبلغ. يمكنك سحب الطلب إن لم يعد لازماً.",
+  DepositRequestWithdrawAction: "سحب الطلب",
+  DepositRequestConfirmAction: "تأكيد الاستلام",
+  DepositRequestRejectAction: "رفض",
+  DepositRequestReceivedConfirm: "تم استلام المبلغ — سجّل العربون",
+  DepositRequestRejectReason: "ما سبب الرفض؟",
+  DepositRequestConfirmedToast: "تم تسجيل العربون — المركبة الآن محجوزة",
+  DepositRequestRejectedToast: "تم رفض طلب العربون",
+  DepositRequestWithdrawnToast: "تم سحب طلب العربون",
+  DepositRequestsQueueTitle: "عربونات بانتظار التأكيد",
+  DepositRequestsQueueDesc: "طلب مندوبو المبيعات تسجيل هذه العربونات. أكّد فقط بعد استلام المبلغ فعلاً، وحدد طريقة الاستلام.",
+  DealDepositRequestPendingTitle: "يوجد طلب عربون بانتظار القرار على هذه الصفقة",
+  DealDepositRequestPendingReadonly: "لا يمكن إنهاء الصفقة أو إلغاؤها حتى يؤكد المدير أو المحاسب استلام المبلغ أو يرفض الطلب. اطلب منه ذلك، أو اسحب الطلب إن لم يعد لازماً.",
   DepositRecorded: "تم تسجيل العربون ✓",
   SubmitSale: "إرسال البيع",
   SaleCompleted: "تم البيع ✓",
@@ -2995,7 +3464,7 @@ export const salesAr = {
   ApplyQuoteFirstPaymentApplied: "تم تحديث الدفعة الأولى.",
 
   RegisterHandoverAction: "تسجيل تسليم المركبة",
-  HandoverNeedsPermission: "لا تملك صلاحية تسجيل تسليم المركبة. يُكمل هذه الخطوة من يملكها.",
+  HandoverNeedsPermission: "يسجّل موظف المبيعات أو المدير تسليم المركبة.",
   ConfirmHandoverTitle: "تسجيل تسليم المركبة",
   ConfirmHandoverDesc: "تخرج المركبة إلى العميل. يُسجَّل ذلك كواقعة، ويُغلق أرقام الصفقة.",
   HandoverSealsApprovedAmount:
@@ -3015,9 +3484,9 @@ export const salesAr = {
 
   RegisterExpectedPaymentAction: "تسجيل الدفعة المتوقعة",
   ExpectedPaymentNeedsPermission:
-    "لا تملك صلاحية تسجيل الدفعة المتوقعة. يُكمل هذه الخطوة من يملكها.",
+    "يسجّل موظف المبيعات أو المدير الدفعة المتوقعة.",
   FinalizeDealAction: "إغلاق الصفقة",
-  FinalizeNeedsPermission: "لا تملك صلاحية إغلاق الصفقة. يُكمل هذه الخطوة من يملكها.",
+  FinalizeNeedsPermission: "يغلق المدير أو المحاسب الصفقة.",
   FinalizeWaitsForReadiness:
     "تعذّر فحص جاهزية الإغلاق الآن، لذا لا يمكن إغلاق الصفقة بعد. حاول مجددًا بعد قليل.",
   FinalizeNeedsReadinessAccess:

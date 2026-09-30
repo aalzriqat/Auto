@@ -1,7 +1,7 @@
 "use client";
 
 import type { FunctionReturnType } from "convex/server";
-import { AlertTriangle, CheckCircle2, CircleSlash, HelpCircle, Loader2 } from "lucide-react";
+import { AlertTriangle, ArrowDown, CheckCircle2, CircleSlash, HelpCircle, Loader2 } from "lucide-react";
 import type { api } from "@/convex/_generated/api";
 import type { ClosingReadinessCheckStatus } from "@/convex/utils/financedSaleRecognition";
 import type { FeeAccountingTreatment } from "@/convex/utils/financedSalePostingPlan";
@@ -138,6 +138,7 @@ function StatusIcon({ status }: Readonly<{ status: ClosingReadinessCheckStatus }
 export function DealClosingReadinessList({
   readiness,
   serviceUnavailable = false,
+  destinations,
   t,
 }: Readonly<{
   /** `undefined` while the read is in flight, or when it failed. */
@@ -147,6 +148,13 @@ export function DealClosingReadinessList({
    * existed). Said calmly; closing still re-checks on the server.
    */
   serviceUnavailable?: boolean;
+  /**
+   * Where an unsatisfied check is resolved, by check key (SCRUM-417 UX1, S4).
+   * Supplied by the cockpit only for a panel that is on screen; a check with no
+   * entry keeps its reason text and no control. Never offered on a satisfied
+   * or not-applicable row.
+   */
+  destinations?: Partial<Record<string, { labelKey: string; onGo: () => void }>>;
   t: (key: string) => string;
 }>) {
   if (serviceUnavailable) {
@@ -238,6 +246,17 @@ export function DealClosingReadinessList({
                     diagnostic={check.reason}
                     testId={`closing-check-reason-${check.key}`}
                   />
+                )}
+                {(check.status === "BLOCKED" || check.status === "UNAVAILABLE") && destinations?.[check.key] && (
+                  <button
+                    type="button"
+                    className="mt-1 inline-flex min-h-9 items-center gap-1 rounded-sm text-xs font-medium underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    data-testid={`closing-check-go-${check.key}`}
+                    onClick={destinations[check.key]?.onGo}
+                  >
+                    {t(destinations[check.key]?.labelKey ?? "")}
+                    <ArrowDown className="h-3 w-3" aria-hidden />
+                  </button>
                 )}
               </div>
             </li>

@@ -25,6 +25,7 @@ import {
   quotationSourceValidator,
   settlementStatusValidator,
 } from "./utils/financingEconomics";
+import { directPaymentValidator } from "./utils/handoverCostPayment";
 import { consignedSettlementRouteValidator } from "./utils/vehicleOwnership";
 
 const organizationDeletionRequestStatus = v.union(
@@ -3031,6 +3032,18 @@ export default defineSchema({
      */
     financedSaleNetReceivableMinor: v.optional(v.number()),
 
+    /**
+     * SCRUM-435 (finance-company forward). Written only by finalization. A
+     * plan-version-2 deal: the company transfers the FULL approved amount and
+     * the dealership forwards H (deposit) + C (its contribution) to it. Frozen
+     * at finalize so the forward due never re-derives from moving inputs.
+     * Absent on a v1 deal, which is never recomputed.
+     */
+    financedSalePlanVersion: v.optional(v.union(v.literal(1), v.literal(2))),
+    financeCompanyForwardDueMinor: v.optional(v.number()),
+    forwardDepositPortionMinor: v.optional(v.number()),
+    forwardContributionPortionMinor: v.optional(v.number()),
+
     // Appraisal gap and its negotiated split. The gap negotiated is the RAW
     // difference against the submitted quotation, not the change in the
     // company's funded portion.
@@ -3201,6 +3214,21 @@ export default defineSchema({
     ),
     /** The highest custody posting version ever used on this line — never reused after a reversal. */
     custodyPostingVersion: v.optional(v.number()),
+    /**
+     * SCRUM-443. What of this line is ON THE BOOKS as a DIRECT dealership
+     * payment right now, or absent when nothing is: the dealership itself paid
+     * the cost (cash, bank transfer, cheque issued, card), recorded by
+     * somebody who may confirm a finance disbursement. `HANDOVER_COST_PAID_DIRECT`
+     * posts once per version against `financeDealFees/<id>` (DR the treatment's
+     * expense / CR the outbound cash or bank account); an amount edit or a void
+     * reverses the live version and leaves the line unpaid again — there is no
+     * automatic re-post. Mutually exclusive with `custodyPosted`: no writer
+     * changes `paidBy`, and only a DEALER line can be paid this way.
+     * Legacy rows carry none and simply read as unpaid.
+     */
+    directPayment: v.optional(directPaymentValidator),
+    /** The highest direct-payment posting version ever used on this line — never reused after a reversal. */
+    directPaymentVersion: v.optional(v.number()),
     paidAt: v.optional(v.number()),
     receiptReference: v.optional(v.string()),
     documentStorageIds: v.optional(v.array(v.id("_storage"))),
@@ -3255,6 +3283,15 @@ export default defineSchema({
     // line whose reversal was deferred) — without the unbounded read of
     // every removed row the deal ever had.
     .index("by_application_custodyPostingVersion", ["applicationId", "custodyPostingVersion"])
+    // Every line of a deal that has EVER carried a direct dealership payment
+    // (SCRUM-443), live, zero-edited or removed: `directPaymentVersion` is set
+    // by the one writer that posts one (`recordDirectFeePayment`) and never
+    // unset, so `.gt("directPaymentVersion", 0)` after the application equality
+    // enumerates exactly the lines whose `HANDOVER_COST_PAID_DIRECT` family the
+    // closing gate must prove OFF the books — a voided or zeroed line's
+    // reversal may still be queued behind a closed period, and the row no
+    // longer says so.
+    .index("by_application_directPaymentVersion", ["applicationId", "directPaymentVersion"])
     // The one LIVE line per configured position. `recordTemplateFeeActual`
     // proves uniqueness against this index with every field an equality —
     // `voidedAt` last, so `undefined` (live) is the one value asked for — and
@@ -3303,6 +3340,42 @@ export default defineSchema({
    * `reimbursedMinor` is different and IS stored, because money owed and money
    * actually paid back are separate facts and only the second closes the record.
    */
+  /**
+   * SCRUM-435: one row per forward VERSION (the dealership paying the finance
+   * company H + C). The row holds the payment facts and the reversal INTENT
+   * only. Whether the money is really on the books is DERIVED from the exact
+   * accounting events by `deriveForwardState` — there is deliberately no stored
+   * "pending" label that could disagree with the ledger.
+   */
+  financeCompanyForwards: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    financeCompanyId: v.id("financeCompanies"),
+    version: v.number(),
+    amountMinor: v.number(),
+    depositPortionMinor: v.number(),
+    contributionPortionMinor: v.number(),
+    currency: v.string(),
+    method: v.union(
+      v.literal("CASH"),
+      v.literal("BANK_TRANSFER"),
+      v.literal("CHEQUE"),
+      v.literal("CARD")
+    ),
+    paidAt: v.number(),
+    reference: v.optional(v.string()),
+    actorId: v.id("users"),
+    createdAt: v.number(),
+    // Reversal intent (the ledger decides whether it happened).
+    reversalRequestedAt: v.optional(v.number()),
+    reversalIdempotencyKey: v.optional(v.string()),
+    reversalKind: v.optional(v.union(v.literal("VOID"), v.literal("RETURNED"))),
+    reverseReason: v.optional(v.string()),
+    reversedAt: v.optional(v.number()),
+    reversalActorId: v.optional(v.id("users")),
+  })
+    .index("by_org_application", ["orgId", "applicationId"]),
+
   financeDealCustody: defineTable({
     orgId: v.id("organizations"),
     applicationId: v.id("financeApplications"),
@@ -3446,6 +3519,44 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_application", ["applicationId"]),
+
+  /**
+   * SCRUM-444 — a salesperson's REQUEST that the dealership take a deposit.
+   *
+   * ⚠️ THIS ROW IS NOT MONEY. It has no deposit, transaction, payment, journal,
+   * outbox event or vehicle commitment behind it, and nothing may read it as
+   * "paid". Money reaches the ledger only when an actor holding
+   * CONFIRM_FINANCE_DISBURSEMENT confirms receipt (`depositRequests.confirm`),
+   * which writes the `deposits` row and flips this one to CONFIRMED in the same
+   * transaction. A PENDING request does not hold the car either.
+   */
+  depositRequests: defineTable({
+    orgId: v.id("organizations"),
+    quoteId: v.id("quotes"),
+    customerId: v.id("customers"),
+    vehicleId: v.id("vehicles"),
+    /** Major units, in `currency`. Confirmation must equal this exactly. */
+    amount: v.number(),
+    amountMinor: v.number(),
+    currency: v.string(),
+    note: v.optional(v.string()),
+    status: v.union(
+      v.literal("PENDING"),
+      v.literal("CONFIRMED"),
+      v.literal("REJECTED"),
+      v.literal("WITHDRAWN")
+    ),
+    requestedBy: v.id("users"),
+    requestedAt: v.number(),
+    idempotencyKey: v.string(),
+    resolvedBy: v.optional(v.id("users")),
+    resolvedAt: v.optional(v.number()),
+    resolutionReason: v.optional(v.string()),
+    confirmedDepositId: v.optional(v.id("deposits")),
+  })
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_quote_status", ["quoteId", "status"])
+    .index("by_quote", ["quoteId"]),
 
   deposits: defineTable({
     orgId: v.id("organizations"),
@@ -3833,7 +3944,22 @@ export default defineSchema({
     // the answer is only ever wanted within one. Leading with orgId makes the
     // tenant boundary part of the access path rather than a filter somebody has
     // to remember to apply.
-    .index("by_org_consumed_sale", ["orgId", "consumedBySaleId"]),
+    .index("by_org_consumed_sale", ["orgId", "consumedBySaleId"])
+    // SCRUM-444 R5 — "THE DISTINCT RESERVATION ORIGINS OF THIS QUOTE'S DEAL".
+    // The reservation-deposit probe seeks `(org, headQuoteId = Q)` and then
+    // steps `originReservationId` forward with `.gt(<last origin>).first()`, so
+    // it costs one seek per DISTINCT origin and skips every other root that
+    // shares one (restoration successors copy `headQuoteId` and
+    // `originReservationId`). It never scans the car's history
+    // (`by_org_vehicle_status` grows for the life of a car).
+    //
+    // Both fields are optional. Convex DOES index a row whose field is
+    // undefined, and it sorts BEFORE every defined value, so a root headed at Q
+    // with no origin sits at the very start of the `(org, Q)` range. The probe's
+    // first seek uses `.gt("originReservationId", undefined)` to step over
+    // those rows; a root with no `headQuoteId` is never in Q's range at all.
+    // No backfill: Convex builds the index on deploy.
+    .index("by_org_head_quote_origin", ["orgId", "headQuoteId", "originReservationId"]),
 
   /**
    * SCRUM-195 — ONE ACQUISITION EPISODE.
@@ -3927,7 +4053,16 @@ export default defineSchema({
     // `depositVehicleHolds` row carries, not by searching the episodes that
     // share a deposit — an index here would only invite that search back.
     .index("by_application", ["applicationId"])
-    .index("by_reservation", ["reservationId"]),
+    .index("by_reservation", ["reservationId"])
+    // SCRUM-444 R5 — the FUNDED reservation episodes that name a quote. Leading
+    // with `(org, quoteId, evidenceKind = "RESERVATION")` and stepping
+    // `depositId` forward with `.gt(<last deposit>).first()` costs one seek per
+    // DISTINCT funded deposit. `depositId` is undefined on an UNFUNDED
+    // reservation's claim (only a funded reservation stamps it) and undefined
+    // sorts before every defined value, so `.gt("depositId", undefined)` never
+    // returns, and never counts, an unfunded reservation. Claims of other
+    // evidence kinds are outside the `RESERVATION` range. No data migration.
+    .index("by_org_quote_kind_deposit", ["orgId", "quoteId", "evidenceKind", "depositId"]),
 
   /**
    * One immutable row per application of deposit money to a sale.
@@ -4499,7 +4634,8 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_application", ["applicationId"])
-    .index("by_rule", ["ruleId"]),
+    .index("by_rule", ["ruleId"])
+    .index("by_file", ["fileId"]),
 
   branches: defineTable({
     orgId: v.id("organizations"),

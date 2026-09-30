@@ -116,6 +116,9 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "financeApplicationOverrides", index: "by_org" },
   // Deal costs and custody, deepest first: entries reference a custody record,
   // fee lines reference both a custody record and the application.
+  // SCRUM-435: forward rows reference the application; gone before it. The
+  // index leads with orgId, so the org-scoped read is the same prefix scan.
+  { kind: "orgRows", table: "financeCompanyForwards", index: "by_org_application" },
   { kind: "orgRows", table: "financeDealCustodyEntries", index: "by_org" },
   { kind: "financeDealFeesWithStorage" },
   { kind: "orgRows", table: "financeDealCustody", index: "by_org" },
@@ -141,6 +144,8 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // deposit, so it must not outlive the row it points at.
   { kind: "orgRows", table: "depositApplications", index: "by_org" },
   { kind: "orgRows", table: "deposits", index: "by_org" },
+  // SCRUM-444: pending/resolved deposit requests; points at quotes and deposits.
+  { kind: "orgRows", table: "depositRequests", index: "by_org_status" },
   { kind: "orgRows", table: "receivables", index: "by_org" },
   { kind: "orgRows", table: "collectionPayments", index: "by_org" },
   { kind: "orgRows", table: "postDatedCheques", index: "by_org" },
@@ -444,8 +449,17 @@ async function deleteApplicationDocumentsWithStorageBatch(ctx: MutationCtx, orgI
     .take(ORG_DELETION_BATCH_SIZE);
   const counts: DeletedCounts = {};
   for (const document of documents) {
-    addStorageCount(counts, await deleteStorageIds(ctx, document.fileId ? [document.fileId] : []));
     await ctx.db.delete(document._id);
+    // SCRUM-422: a file another document row still holds (a legacy alias,
+    // possibly another organization's) is that row's evidence. The blob goes
+    // with its last holder, so a file shared inside this org is still removed.
+    const fileId = document.fileId;
+    if (!fileId) continue;
+    const stillHeld = await ctx.db
+      .query("applicationDocuments")
+      .withIndex("by_file", (q) => q.eq("fileId", fileId))
+      .first();
+    if (!stillHeld) addStorageCount(counts, await deleteStorageIds(ctx, [fileId]));
   }
   if (documents.length > 0) {
     counts.applicationDocuments = documents.length;

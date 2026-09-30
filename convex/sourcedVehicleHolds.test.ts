@@ -10,6 +10,7 @@ vi.mock("./rateLimit", () => ({
 }));
 
 const PERMISSIONS = [
+  "confirm:finance_disbursement",
   "create:sales",
   "edit:sales",
   "view:sales",

@@ -102,6 +102,12 @@ export const NOTIFICATION_TYPES = {
   "transaction.removed": { category: "finance", priority: "normal", criticalDefault: false },
   "deposit.created": { category: "finance", priority: "normal", criticalDefault: false },
   "deposit.released": { category: "finance", priority: "normal", criticalDefault: false },
+  // SCRUM-444: a salesperson asked the dealership to take a deposit. Urgent and
+  // criticalDefault because it is the ONLY signal that a customer is waiting
+  // for a manager or accountant to confirm receipt.
+  "depositRequest.created": { category: "finance", priority: "urgent", criticalDefault: true },
+  "depositRequest.confirmed": { category: "finance", priority: "normal", criticalDefault: false },
+  "depositRequest.rejected": { category: "finance", priority: "urgent", criticalDefault: true },
   "deposit.expired": { category: "finance", priority: "urgent", criticalDefault: true },
   "claim.updated": { category: "finance", priority: "normal", criticalDefault: false },
   "fixedAsset.changed": { category: "finance", priority: "normal", criticalDefault: false },

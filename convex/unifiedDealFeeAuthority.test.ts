@@ -975,6 +975,16 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         feeId,
         notes: "Execution fees reconciled.",
       });
+      // SCRUM-443: a dealer-borne handover cost must reach the ledger from a
+      // recorded source before the deal closes; here the dealership paid it directly.
+      await asOwner.mutation(api.financeDealCosts.recordDirectFeePayment, {
+        orgId,
+        feeId,
+        method: "BANK_TRANSFER",
+        paidAt: Date.now(),
+        expectedAmountMinor: 700 * 1000,
+        idempotencyKey: `fee-direct-${applicationId}`,
+      });
 
       // SCRUM-407: no manual classification step - finalization checks readiness itself.
 

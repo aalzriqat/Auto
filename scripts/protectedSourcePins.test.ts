@@ -696,11 +696,34 @@ describe("protected source content pins", () => {
        * independent seat at the time of this renewal. Read the hunks; do not
        * take this note's word for them. Same governance; both constants
        * recomputed FROM THE FILE with this test's own normalization.
+       *
+       * -- RENEWAL 2026-09-29 - SCRUM-443 handover costs paid (readiness carries line ids)
+       *
+       * Previous postimage, superseded by this entry (renewal (7) just above):
+       *
+       *   bytes:  241443
+       *   sha256: a3c4ff8ede8b112e0fdbb9748eff8daabc32e6829e7cd5a901570ab80e39c2dc
+       *
+       * The delta, 4 insertions and 1 deletion, passes the new check's
+       * `feeIds` through `getClosingReadiness`: the view type gains an optional
+       * `feeIds?: string[]` and the mapper forwards it when the evaluator set
+       * one (only `HANDOVER_COSTS_PAID` does). Ids only, never an amount or a
+       * param. No permission, schema, index, posting or idempotency change;
+       * `finalizeDeal` is untouched. NOT yet reviewed by an independent seat
+       * at the time of this renewal. Read the hunks; do not take this note's
+       * word for them. Same governance; both constants recomputed FROM THE
+       * FILE with this test's own normalization.
        */
       file: "convex/applications.ts",
       // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)), then for SCRUM-407 automatic closing readiness (RENEWALs 2026-09-28, 2026-09-28 (2), (3) and (4)), then for SCRUM-414 readiness reason codes (RENEWALs 2026-09-28 (5), (6) and (7)).
-      bytes: 241443,
-      sha256: "a3c4ff8ede8b112e0fdbb9748eff8daabc32e6829e7cd5a901570ab80e39c2dc",
+      // SCRUM-444 RENEWAL 2026-09-29: three additive refusals (finalizeDeal, cancelApplication, updateStatus->REJECTED) via `assertNoPendingDepositRequest`; previous postimage bytes 241443, sha256 a3c4ff8ede8b112e0fdbb9748eff8daabc32e6829e7cd5a901570ab80e39c2dc. Recomputed from the file with this test's own normalization.
+      // SCRUM-444 RENEWAL 2026-09-29 (2): fix round 2 — `createFromQuote` refuses to adopt a reservation that already holds a deposit (`assertReservationAdoptableWithoutDeposit`); previous postimage bytes 242587, sha256 9756ce0b6cc523161d92d9724e3e2a7e47d30b2ebd4ac28fd2c7206579a218bb. Recomputed from the file with this test's own normalization.
+      // SCRUM-443 RENEWAL 2026-09-29 (handover costs paid, see the JSDoc entry above), re-applied on top of SCRUM-444 when merging origin/main 06d45b966: git auto-merged convex/applications.ts with no conflict; previous postimages 242976 / 19867f44… (main) and 241662 / d532f1c2… (SCRUM-443 branch). Recomputed from the merged file with this test's own normalization.
+      // SCRUM-435 RENEWAL 2026-09-29: forward proof. `confirmDisbursement` refuses until the deposit and contribution the dealership owes the finance company are proven on the books (`deriveForwardState`); `cancelApplication` on a CLOSED v2 deal requires FINALIZE_FINANCED_DEAL and CONFIRM_FINANCE_DISBURSEMENT and the same proof; `dealCockpit` exposes the forward STATUS (no amounts) as `forward`; previous postimage bytes 243195, sha256 b42c6e1801d6af32ff2b66f67d46a71f30264f3b9fc7b19cbb17f36412e4e580. Recomputed from the file with this test's own normalization.
+      // SCRUM-435 RENEWAL 2026-09-29 (2): returned-after-transfer dead end. `dealCockpit` passes one more fact to `deriveDealStages` (`forwardExceptionOpen: forwardProof.returnedExceptionOpen`, 1 insertion) so the transfer stage stays open while a returned payment is owed; previous postimage bytes 247994, sha256 9a69210109ef40519d99e4d92d8db3cf88f2c11e2d093db64b233a2f8f33ba5a. Recomputed from the file with this test's own normalization.
+      // SCRUM-435 RENEWAL 2026-09-30 (CodeRabbit #376): `mayCancelFinalized` also requires CREATE_FINANCE_APPLICATION, which `cancelApplication` checks at entry (1 insertion, cockpit flag only; no mutation, posting or permission-check change); previous postimage bytes 248058, sha256 7cbb3cdb52357ce09b306eb57ab40eedf4bfc35bc158e908f67eb2c3a5b85103. Recomputed from the file with this test's own normalization.
+      bytes: 248139,
+      sha256: "2620f8cd1c9e68ae0d5abf01572162a5a7d13fc69eaab4eba1f0425bd9ff01c0",
     },
     {
       /**
@@ -811,8 +834,9 @@ describe("protected source content pins", () => {
        * authority it must not reinterpret.
        */
       file: "convex/dealWorkspace.ts",
-      bytes: 9216,
-      sha256: "1eb4f689e0082d3b4fbe591cc0a3bf62924734eedf3679c7d011981565aa7ab4",
+      // SCRUM-444 RENEWAL 2026-09-29: the financed cockpit additionally returns `pendingDepositRequests` (read-only, tenant-scoped); previous postimage bytes 9216, sha256 1eb4f689e0082d3b4fbe591cc0a3bf62924734eedf3679c7d011981565aa7ab4. Recomputed from the file with this test's own normalization.
+      bytes: 10142,
+      sha256: "9b3110fb3e3d79b783c09acb18bd9c7b9fdc060edc0385b4561cc501324d4ce1",
     },
   ] as const;
 

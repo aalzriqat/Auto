@@ -57,6 +57,7 @@ function renderPanel(adoption: HandoverFeeAdoption) {
       money={(minor) => `${minor / 1000} JOD`}
       canManage={true}
       dealClosed={false}
+      costSource={{ kind: "PENDING" }}
       t={t}
       onAdd={async () => {}}
       onAbandonAdd={() => {}}
