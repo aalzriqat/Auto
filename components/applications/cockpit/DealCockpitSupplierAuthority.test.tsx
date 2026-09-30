@@ -148,6 +148,7 @@ function financedDirectDeal(): FinancedDealCockpitData {
     financeCompanyName: "شركة التمويل الوطني",
     activeAppraisalProvider: null,
     stages: [{ key: "APPLICATION", state: "COMPLETE", authority: "DEALER" }],
+    forward: { planV2: false, applies: false, state: "NOT_DUE" as const, returnedExceptionOpen: false, onBooksForwardId: null, transferConfirmed: false, mayRecord: false, mayCancelFinalized: false },
     documents: [],
     timeline: [],
     money: {
@@ -160,6 +161,7 @@ function financedDirectDeal(): FinancedDealCockpitData {
       parties: [SUPPLIER_OWES_MARGIN],
       supplierReceipt: { actionable: true },
       appraisalGapMinor: undefined,
+      forward: { dueMinor: 0, depositMinor: 0, contributionMinor: 0, onBooksMinor: 0 },
     },
     handoverEvidence: {
       approvedPurchaseAmountMinor: 12_500 * SCALE,

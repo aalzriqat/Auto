@@ -34,6 +34,8 @@ import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
 import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
+import { planVersionOf } from "./utils/financedSalePostingPlan";
+import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompanyForward";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
@@ -771,6 +773,21 @@ export const update = mutation({
           );
         }
         {
+          // SCRUM-435: a v2 deal has payments held by the finance company. This door
+          // applies the SAME manager gate and the SAME forward proof as
+          // `cancelApplication`, so it is never a way round them.
+          if (planVersionOf(app) === 2) {
+            try {
+              await requireTenantAuth(ctx, args.orgId, [
+                PERMISSIONS.FINALIZE_FINANCED_DEAL,
+                PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+              ]);
+            } catch {
+              throw new ConvexError("A manager cancels a finalized deal.");
+            }
+            const forwardBlock = forwardCancelRefusal(await deriveForwardState(ctx, app));
+            if (forwardBlock !== null) throw new ConvexError(forwardBlock);
+          }
           if (app.disbursedAt) {
             throw new ConvexError(
               "The finance company has already paid the dealership on this deal, so it can't be cancelled from here. Void it through a manual accounting correction instead."

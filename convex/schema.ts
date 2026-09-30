@@ -3036,6 +3036,18 @@ export default defineSchema({
      */
     financedSaleNetReceivableMinor: v.optional(v.number()),
 
+    /**
+     * SCRUM-435 (finance-company forward). Written only by finalization. A
+     * plan-version-2 deal: the company transfers the FULL approved amount and
+     * the dealership forwards H (deposit) + C (its contribution) to it. Frozen
+     * at finalize so the forward due never re-derives from moving inputs.
+     * Absent on a v1 deal, which is never recomputed.
+     */
+    financedSalePlanVersion: v.optional(v.union(v.literal(1), v.literal(2))),
+    financeCompanyForwardDueMinor: v.optional(v.number()),
+    forwardDepositPortionMinor: v.optional(v.number()),
+    forwardContributionPortionMinor: v.optional(v.number()),
+
     // Appraisal gap and its negotiated split. The gap negotiated is the RAW
     // difference against the submitted quotation, not the change in the
     // company's funded portion.
@@ -3332,6 +3344,42 @@ export default defineSchema({
    * `reimbursedMinor` is different and IS stored, because money owed and money
    * actually paid back are separate facts and only the second closes the record.
    */
+  /**
+   * SCRUM-435: one row per forward VERSION (the dealership paying the finance
+   * company H + C). The row holds the payment facts and the reversal INTENT
+   * only. Whether the money is really on the books is DERIVED from the exact
+   * accounting events by `deriveForwardState` — there is deliberately no stored
+   * "pending" label that could disagree with the ledger.
+   */
+  financeCompanyForwards: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    financeCompanyId: v.id("financeCompanies"),
+    version: v.number(),
+    amountMinor: v.number(),
+    depositPortionMinor: v.number(),
+    contributionPortionMinor: v.number(),
+    currency: v.string(),
+    method: v.union(
+      v.literal("CASH"),
+      v.literal("BANK_TRANSFER"),
+      v.literal("CHEQUE"),
+      v.literal("CARD")
+    ),
+    paidAt: v.number(),
+    reference: v.optional(v.string()),
+    actorId: v.id("users"),
+    createdAt: v.number(),
+    // Reversal intent (the ledger decides whether it happened).
+    reversalRequestedAt: v.optional(v.number()),
+    reversalIdempotencyKey: v.optional(v.string()),
+    reversalKind: v.optional(v.union(v.literal("VOID"), v.literal("RETURNED"))),
+    reverseReason: v.optional(v.string()),
+    reversedAt: v.optional(v.number()),
+    reversalActorId: v.optional(v.id("users")),
+  })
+    .index("by_org_application", ["orgId", "applicationId"]),
+
   financeDealCustody: defineTable({
     orgId: v.id("organizations"),
     applicationId: v.id("financeApplications"),

@@ -97,6 +97,7 @@ vi.mock("@/components/ui/sonner", () => ({
 
 import { DealCockpit } from "./DealCockpit";
 import { PERMISSIONS } from "@/convex/utils/permissions";
+import { toast } from "@/components/ui/sonner";
 
 const { queryResults, permissions, mutationCalls } = stubs;
 
@@ -632,6 +633,365 @@ describe("disbursement — the two confirmations, from the DISBURSEMENT stage", 
   });
 });
 
+/**
+ * SCRUM-435. The finance company sends the FULL approved amount; the dealership
+ * pays back the deposit and its contribution first. The transfer is not offered
+ * until that payment is settled, and the step names who acts.
+ */
+describe("disbursement - the payment to the finance company comes first", () => {
+  const forwardStages = (blocker: string) => [
+    { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+    { key: "DISBURSEMENT", state: "BLOCKED", blocker, authority: "DEALER" },
+    { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+    { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
+  ];
+  const forwardMoney = {
+    currency: "JOD",
+    settlesDirectToSupplier: false,
+    routeKnown: true,
+    profit: { available: false },
+    managementProfit: { available: false },
+    expenses: { lines: [], actualTotalMinor: 0, awaitingActuals: 0 },
+    parties: [],
+    supplierReceipt: { actionable: false, reason: "NOT_DIRECT_ROUTE" },
+    appraisalGapMinor: undefined,
+    forward: { dueMinor: 1_575_000, depositMinor: 200_000, contributionMinor: 1_375_000, onBooksMinor: 0 },
+  };
+  const forward = (overrides: Record<string, unknown> = {}) => ({
+    planV2: true,
+    applies: true,
+    state: "DUE",
+    returnedExceptionOpen: false,
+    onBooksForwardId: null,
+    transferConfirmed: false,
+    mayRecord: true,
+    mayCancelFinalized: true,
+    ...overrides,
+  });
+
+  const settledStages = [
+    { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+    { key: "DISBURSEMENT", state: "BLOCKED", blocker: "AwaitingDisbursement", authority: "MIRROR" },
+    { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+  ];
+
+  test("ON_BOOKS before the transfer: the manager can void or report it returned, each with a reason", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: settledStages,
+        forward: forward({ state: "SETTLED", onBooksForwardId: "fwd_1" }),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+
+    fireEvent.click(screen.getByTestId("deal-forward-void"));
+    const submit = screen.getByRole("button", { name: "ForwardVoidAction", hidden: false });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("ForwardReasonLabel"), { target: { value: "Recorded on the wrong deal" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "ForwardVoidAction" }).at(-1)!);
+
+    await waitFor(() =>
+      expect(mutationCalls.get("financeCompanyForward:reverseFinanceCompanyForward")).toHaveLength(1)
+    );
+    expect(mutationCalls.get("financeCompanyForward:reverseFinanceCompanyForward")![0]).toMatchObject({
+      orgId: ORG,
+      applicationId: APP,
+      forwardId: "fwd_1",
+      reason: "Recorded on the wrong deal",
+    });
+    expect(mutationCalls.get("financeCompanyForward:reportFinanceCompanyForwardReturned")).toBeUndefined();
+  });
+
+  test("a void dialog opened before the transfer does not submit once the transfer is confirmed, and says what to do", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    const before = cockpit({
+      status: "CLOSED",
+      stages: settledStages,
+      forward: forward({ state: "SETTLED", onBooksForwardId: "fwd_1" }),
+      money: forwardMoney,
+    });
+    queryResults.set(COCKPIT_QUERY, before);
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    const view = renderCockpit();
+
+    fireEvent.click(screen.getByTestId("deal-forward-void"));
+    fireEvent.change(screen.getByLabelText("ForwardReasonLabel"), { target: { value: "Recorded on the wrong deal" } });
+    // The transfer is confirmed elsewhere while the dialog is open.
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: settledStages,
+        forward: forward({ state: "SETTLED", onBooksForwardId: "fwd_1", transferConfirmed: true }),
+        money: forwardMoney,
+      })
+    );
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+    fireEvent.click(screen.getAllByRole("button", { name: "ForwardVoidAction" }).at(-1)!);
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("ForwardVoidAfterTransfer"));
+    expect(mutationCalls.get("financeCompanyForward:reverseFinanceCompanyForward")).toBeUndefined();
+  });
+
+  test("ON_BOOKS after the transfer: only 'report returned' is offered - a payment cannot be voided any more", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: settledStages,
+        forward: forward({ state: "SETTLED", onBooksForwardId: "fwd_1", transferConfirmed: true }),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+
+    expect(screen.queryByTestId("deal-forward-void")).toBeNull();
+    fireEvent.click(screen.getByTestId("deal-forward-returned"));
+    fireEvent.change(screen.getByLabelText("ForwardReasonLabel"), { target: { value: "Company sent it back" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "ForwardReturnedAction" }).at(-1)!);
+
+    await waitFor(() =>
+      expect(mutationCalls.get("financeCompanyForward:reportFinanceCompanyForwardReturned")).toHaveLength(1)
+    );
+    expect(mutationCalls.get("financeCompanyForward:reportFinanceCompanyForwardReturned")![0]).toMatchObject({
+      forwardId: "fwd_1",
+      reason: "Company sent it back",
+    });
+  });
+
+  test("no payment on the books, or a caller the server would refuse: no correction buttons", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ status: "CLOSED", stages: settledStages, forward: forward({ state: "SETTLED" }), money: forwardMoney })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    const first = renderCockpit();
+    expect(screen.queryByTestId("deal-forward-correction")).toBeNull();
+    first.unmount();
+
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: settledStages,
+        forward: forward({ state: "SETTLED", onBooksForwardId: "fwd_1", mayRecord: false }),
+        money: null,
+      })
+    );
+    renderCockpit();
+    expect(screen.queryByTestId("deal-forward-correction")).toBeNull();
+  });
+
+  test("DUE: the step offers the recording, not the transfer, and sends the frozen figure the operator saw", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("AwaitingForwardToFinanceCompany"),
+        forward: forward(),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+
+    expect(within(focusRow()).queryByRole("button", { name: "ConfirmDisbursement" })).toBeNull();
+    fireEvent.click(within(focusRow()).getByRole("button", { name: "RecordForwardToFinanceCompany" }));
+    expect(screen.getByTestId("forward-breakdown").textContent).toContain("1,575");
+    fireEvent.change(screen.getByLabelText("DirectPaymentMethodLabel"), { target: { value: "BANK_TRANSFER" } });
+    fireEvent.click(screen.getByRole("button", { name: "RecordForwardConfirm" }));
+
+    await waitFor(() =>
+      expect(mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")).toHaveLength(1)
+    );
+    const call = mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")![0] as Record<string, unknown>;
+    expect(call).toMatchObject({
+      orgId: ORG,
+      applicationId: APP,
+      method: "BANK_TRANSFER",
+      expectedAmountMinor: 1_575_000,
+    });
+    expect(typeof call.idempotencyKey).toBe("string");
+    expect(mutationCalls.get("applications:confirmDisbursement")).toBeUndefined();
+  });
+
+  test("DUE without the permission: no button, the reason names the manager or accountant", () => {
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("AwaitingForwardToFinanceCompany"),
+        forward: forward({ mayRecord: false }),
+        money: null,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(within(focusRow()).queryByRole("button")).toBeNull();
+    expect(within(focusRow()).getByText("ForwardNeedsPermission")).toBeTruthy();
+  });
+
+  test("an unsettled payment (pending/failed/reversing): no button at all, an accountant resolves it", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("ForwardNotSettled"),
+        forward: forward({ state: "POSTING_PENDING" }),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(within(focusRow()).queryByRole("button")).toBeNull();
+    expect(within(focusRow()).getByText("ForwardNotSettledReason")).toBeTruthy();
+  });
+
+  test("SETTLED: the ordinary transfer confirmation is offered again", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: [
+          { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+          { key: "DISBURSEMENT", state: "BLOCKED", blocker: "AwaitingDisbursement", authority: "MIRROR" },
+          { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+        ],
+        forward: forward({ state: "SETTLED" }),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" })).toBeTruthy();
+  });
+
+  test("returned AFTER the transfer: the step reopens and offers the replacement payment", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("AwaitingForwardToFinanceCompany"),
+        forward: forward({ returnedExceptionOpen: true, transferConfirmed: true }),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED", disbursedAt: Date.UTC(2026, 8, 1) }));
+    renderCockpit();
+
+    expect(within(focusRow()).queryByRole("button", { name: "ConfirmDisbursement" })).toBeNull();
+    fireEvent.click(within(focusRow()).getByRole("button", { name: "RecordForwardToFinanceCompany" }));
+    fireEvent.change(screen.getByLabelText("DirectPaymentMethodLabel"), { target: { value: "BANK_TRANSFER" } });
+    fireEvent.click(screen.getByRole("button", { name: "RecordForwardConfirm" }));
+    await waitFor(() =>
+      expect(mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")).toHaveLength(1)
+    );
+    expect(mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")![0]).toMatchObject({
+      applicationId: APP,
+      expectedAmountMinor: 1_575_000,
+    });
+  });
+
+  test("returned AFTER the transfer without the permission: no button, the reason names who acts", () => {
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("AwaitingForwardToFinanceCompany"),
+        forward: forward({ returnedExceptionOpen: true, transferConfirmed: true, mayRecord: false }),
+        money: null,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED", disbursedAt: Date.UTC(2026, 8, 1) }));
+    renderCockpit();
+    expect(within(focusRow()).queryByRole("button")).toBeNull();
+    expect(within(focusRow()).getByText("ForwardNeedsPermission")).toBeTruthy();
+  });
+
+  test("returned AFTER the transfer while the reversal is unsettled: no button, the unsettled reason", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("ForwardNotSettled"),
+        forward: forward({ state: "NEEDS_REPAIR", returnedExceptionOpen: true, transferConfirmed: true }),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED", disbursedAt: Date.UTC(2026, 8, 1) }));
+    renderCockpit();
+    expect(within(focusRow()).queryByRole("button")).toBeNull();
+    expect(within(focusRow()).getByText("ForwardReturnedNotSettledReason")).toBeTruthy();
+  });
+
+  test("disbursed with a reported return whose reversal is REVERSAL_PENDING: the live step names the accountant and offers no record action", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("ForwardNotSettled"),
+        forward: forward({ state: "REVERSAL_PENDING", returnedExceptionOpen: true, transferConfirmed: true }),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED", disbursedAt: Date.UTC(2026, 8, 1) }));
+    renderCockpit();
+    expect(within(focusRow()).queryByRole("button")).toBeNull();
+    expect(within(focusRow()).getByText("ForwardReturnedNotSettledReason")).toBeTruthy();
+    expect(screen.queryByText("ForwardNotSettledReason")).toBeNull();
+  });
+
+  test("disbursed and SETTLED: no forward action is offered", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: [
+          { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+          { key: "DISBURSEMENT", state: "COMPLETE", authority: "MIRROR" },
+          { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+        ],
+        forward: forward({ state: "SETTLED", transferConfirmed: true }),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED", disbursedAt: Date.UTC(2026, 8, 1) }));
+    renderCockpit();
+    expect(screen.queryByRole("button", { name: "RecordForwardToFinanceCompany" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "ConfirmDisbursement" })).toBeNull();
+  });
+  test("a finalizer who is not a manager sees who cancels, not a cancel button", () => {
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("AwaitingForwardToFinanceCompany"),
+        forward: forward({ mayCancelFinalized: false }),
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(screen.queryByTestId("deal-cancel-application")).toBeNull();
+    expect(screen.getByTestId("deal-cancel-manager-hint").textContent).toBe("ManagerCancelsFinalizedDeal");
+  });
+});
 describe("held deposit on a stopped deal — deposits.release", () => {
   const rejected = {
     status: "REJECTED",

@@ -643,10 +643,16 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // 504 → 506 total, 332 → 334 analysed. Both take `orgId`, read the row through an
   // org-checked `ctx.db.get` after `requireTenantAuth(MANAGE_FINANCE)`; the analyser reports
   // no unguarded write. Skipped counts unchanged.
+  //
+  // `financeCompanyForward.recordFinanceCompanyForward/reverseFinanceCompanyForward/
+  // reportFinanceCompanyForwardReturned` (SCRUM-435) - 504 -> 507 total, 332 -> 335
+  // analysed. Each takes `orgId` plus a caller-supplied application (and forward) id read
+  // through `requireOwnedRow` after `requireTenantAuth`. Skipped counts unchanged.
+  // Merge of origin/main into SCRUM-447: 504 + 2 (SCRUM-447) + 3 (SCRUM-435) = 509 total, 332 + 5 = 337 analysed.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 506,
-      analysed: 334,
+      totalMutations: 509,
+      analysed: 337,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 157,
     });

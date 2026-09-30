@@ -20,6 +20,7 @@ const PERMISSIONS = [
   "approve:finance_application",
   "finalize:financed_deal",
   "confirm:finance_disbursement",
+  "view:finance",
   "verify:finance_documents",
   "register:vehicle_handover",
   "register:expected_payment",
@@ -1352,20 +1353,64 @@ async function setupFinalizedFinancedDeal() {
         : null;
     });
 
-  return { ...base, companyId, quoteId, applicationId, depositId, getFinanceReceivable, getCustomerReceivable };
+  // SCRUM-435: a v2 deal is paid out only after the dealership has recorded the
+  // deposit and contribution it owes the finance company back.
+  const recordForward = async () => {
+    const due = await t.run(async (ctx) => (await ctx.db.get(applicationId))?.financeCompanyForwardDueMinor ?? 0);
+    if (due > 0) {
+      // The forward posts to the ledger, so the books must exist. finalizeDeal
+      // queued its own posts before this point; only the forward is drained here.
+      const fiscalYear = new Date().getUTCFullYear();
+      await t.run((ctx) =>
+        ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
+      );
+      await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+      await asUser.mutation(api.accountingPeriods.create, {
+        orgId,
+        startDate: Date.UTC(fiscalYear, 0, 1),
+        endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+        fiscalYear,
+        periodNumber: 1,
+      });
+      const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
+      await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+      await asUser.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
+        orgId,
+        applicationId,
+        method: "BANK_TRANSFER",
+        paidAt: Date.now(),
+        expectedAmountMinor: due,
+        idempotencyKey: crypto.randomUUID(),
+      });
+      // The chart and an open period exist, so the forward posts synchronously.
+      // Assert it rather than force it: confirmDisbursement gates on this proof.
+      const forwardEvents = await t.run(async (ctx) =>
+        (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).filter(
+          (e) => e.eventType === "FINANCE_COMPANY_FORWARD_PAID"
+        )
+      );
+      expect(forwardEvents.map((e) => e.status)).toEqual(["POSTED"]);
+    }
+    return due;
+  };
+
+  return { ...base, companyId, quoteId, applicationId, depositId, getFinanceReceivable, getCustomerReceivable, recordForward };
 }
 
 describe("applications finance-company canonical receivable", () => {
   test("finalizeDeal opens a FINANCE_COMPANY receivable and confirmDisbursement settles it by allocation", async () => {
-    const { t, orgId, companyId, applicationId, asUser, getFinanceReceivable, getCustomerReceivable } =
+    const { t, orgId, companyId, applicationId, asUser, getFinanceReceivable, getCustomerReceivable, recordForward } =
       await setupFinalizedFinancedDeal();
 
     // Finalizing must open a canonical receivable owed BY the finance company.
+    // SCRUM-435 (Option A): the company sends the FULL approved amount, 20,000,
+    // and never deducts the customer's deposit. The deposit (3,000) goes back to
+    // the company from the dealership, recorded before the transfer.
     const receivableAfterFinalize = await getFinanceReceivable();
     expect(receivableAfterFinalize).not.toBeNull();
     expect(receivableAfterFinalize?.payerType).toBe("FINANCE_COMPANY");
     expect(receivableAfterFinalize?.financeCompanyId).toBe(companyId);
-    expect(receivableAfterFinalize?.originalAmountMinor).toBe(17_000_000);
+    expect(receivableAfterFinalize?.originalAmountMinor).toBe(20_000_000);
     expect(receivableAfterFinalize?.status).toBe("OPEN");
 
     const customerReceivableAfterFinalize = await getCustomerReceivable();
@@ -1391,13 +1436,23 @@ describe("applications finance-company canonical receivable", () => {
           .filter((allocation) => allocation.status === "ACTIVE")
           .reduce((sum, allocation) => sum + allocation.amountMinor, 0);
       const financeOutstanding = receivableAfterFinalize!.originalAmountMinor;
-      expect(customerOutstanding + financeOutstanding).toBe(17_000_000);
+      expect(customerOutstanding + financeOutstanding).toBe(20_000_000);
     });
 
+    // The transfer is refused until the forward is recorded, then confirms the
+    // full approved amount.
+    await expect(
+      asUser.mutation(api.applications.confirmDisbursement, { idempotencyKey: crypto.randomUUID(),
+        orgId,
+        applicationId,
+        disbursedAmountMinor: 20_000_000,
+      })
+    ).rejects.toThrow(/have not been paid yet/i);
+    expect(await recordForward()).toBe(3_000_000);
     await asUser.mutation(api.applications.confirmDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId,
       applicationId,
-      disbursedAmountMinor: 17_000_000,
+      disbursedAmountMinor: 20_000_000,
     });
 
     const settledReceivable = await getFinanceReceivable();
@@ -1413,7 +1468,7 @@ describe("applications finance-company canonical receivable", () => {
       expect(payment?.direction).toBe("IN");
       expect(payment?.payerType).toBe("FINANCE_COMPANY");
       expect(payment?.financeCompanyId).toBe(companyId);
-      expect(payment?.amountMinor).toBe(17_000_000);
+      expect(payment?.amountMinor).toBe(20_000_000);
 
       const allocations = await ctx.db
         .query("paymentAllocations")
@@ -1421,23 +1476,30 @@ describe("applications finance-company canonical receivable", () => {
         .collect();
       expect(allocations).toHaveLength(1);
       expect(allocations[0].status).toBe("ACTIVE");
-      expect(allocations[0].amountMinor).toBe(17_000_000);
+      expect(allocations[0].amountMinor).toBe(20_000_000);
     });
   });
 
   test("confirmDisbursement rejects an amount that is not what the company owes", async () => {
-    const { orgId, applicationId, asUser } = await setupFinalizedFinancedDeal();
+    const { orgId, applicationId, asUser, recordForward } = await setupFinalizedFinancedDeal();
+    await recordForward();
 
     await expect(
       asUser.mutation(api.applications.confirmDisbursement, { idempotencyKey: crypto.randomUUID(),
         orgId,
         applicationId,
-        disbursedAmountMinor: 16_999_999,
+        disbursedAmountMinor: 19_999_999,
       })
-    // The yardstick moved from the customer's financing principal to what the
-    // company actually owes. On this deal they happen to coincide at 17,000,000
-    // — the deposit reduces the settlement by exactly the down payment — so the
-    // refusal is proved by the message, not by the number.
+    // SCRUM-435: the yardstick is the FULL approved amount the company sends
+    // (20,000,000). It never deducts the deposit, so the old net (17,000,000)
+    // is refused too, by the message and not by the number.
+    ).rejects.toThrow(/is not what this financing company owes/i);
+    await expect(
+      asUser.mutation(api.applications.confirmDisbursement, { idempotencyKey: crypto.randomUUID(),
+        orgId,
+        applicationId,
+        disbursedAmountMinor: 17_000_000,
+      })
     ).rejects.toThrow(/is not what this financing company owes/i);
   });
 
