@@ -523,6 +523,10 @@ export const updateQuoteStatus = mutation({
     const existing = await ctx.db.get(quoteId);
     if (!existing || existing.orgId !== orgId) throw new ConvexError("Not found");
 
+    // SCRUM-495: a quote stored in a retired mode may not be offered (SHARED) or
+    // accepted as if live. DRAFT and EXPIRED stay open: EXPIRED is its exit.
+    if (status === "SHARED" || status === "ACCEPTED") assertOperatedDealMode(existing.mode);
+
     // SCRUM-444 DA-03: EXPIRED is the terminal quote status. A deposit request
     // still waiting on the quote would be orphaned by it, so the quote cannot
     // expire until the request is confirmed, rejected or withdrawn.

@@ -128,6 +128,57 @@ describe("quotes.saveQuote", () => {
 });
 
 // ---------------------------------------------------------------------------
+describe("quotes.updateQuoteStatus", () => {
+  /** A quote in `mode` linked to a lead and created by the OTHER member, so both the lead advance and the acceptance notification are observable. */
+  async function linkedQuote(s: Seeded, mode: Mode) {
+    const quoteId = await quoteIn(s, mode);
+    const leadId = await s.t.run((ctx) =>
+      ctx.db.insert("leads", { orgId: s.orgId, customerId: s.customerId, source: "walk-in", stage: "INTERESTED" })
+    );
+    await s.t.run((ctx) => ctx.db.patch(quoteId, { leadId, createdBy: s.sellerId }));
+    return { quoteId, leadId };
+  }
+  const quoteStatus = (s: Seeded, id: Id<"quotes">) => s.t.run(async (ctx) => (await ctx.db.get(id))?.status);
+  const leadStage = (s: Seeded, id: Id<"leads">) => s.t.run(async (ctx) => (await ctx.db.get(id))?.stage);
+  const acceptedNotifications = (s: Seeded) =>
+    s.t.run(async (ctx) => (await ctx.db.query("notifications").collect()).filter((n) => n.type === "quote.accepted").length);
+
+  for (const mode of RETIRED_MODES) {
+    test.each(["SHARED", "ACCEPTED"] as const)(
+      `a legacy ${mode} quote cannot be moved to %s and nothing is written`,
+      async (status) => {
+        const s = await seed(`us_${mode}_${status}`);
+        const { quoteId, leadId } = await linkedQuote(s, mode);
+        const statusBefore = await quoteStatus(s, quoteId);
+        const notificationsBefore = await acceptedNotifications(s);
+        await expectRetiredDealMode(s.asUser.mutation(api.quotes.updateQuoteStatus, { orgId: s.orgId, quoteId, status }));
+        expect(await quoteStatus(s, quoteId)).toBe(statusBefore);
+        expect(await leadStage(s, leadId)).toBe("INTERESTED");
+        expect(await acceptedNotifications(s)).toBe(notificationsBefore);
+      }
+    );
+
+    test(`exit: a legacy ${mode} quote can still be EXPIRED`, async () => {
+      const s = await seed(`ue_${mode}`);
+      const { quoteId } = await linkedQuote(s, mode);
+      await s.asUser.mutation(api.quotes.updateQuoteStatus, { orgId: s.orgId, quoteId, status: "EXPIRED" });
+      expect(await quoteStatus(s, quoteId)).toBe("EXPIRED");
+    });
+  }
+
+  test("control: a CASH quote in the same fixture still goes to SHARED (lead advances) and ACCEPTED (notification sent)", async () => {
+    const s = await seed("uc_CASH");
+    const { quoteId, leadId } = await linkedQuote(s, "CASH");
+    await s.asUser.mutation(api.quotes.updateQuoteStatus, { orgId: s.orgId, quoteId, status: "SHARED" });
+    expect(await quoteStatus(s, quoteId)).toBe("SHARED");
+    expect(await leadStage(s, leadId)).toBe("NEGOTIATION");
+    await s.asUser.mutation(api.quotes.updateQuoteStatus, { orgId: s.orgId, quoteId, status: "ACCEPTED" });
+    expect(await quoteStatus(s, quoteId)).toBe("ACCEPTED");
+    expect(await acceptedNotifications(s)).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe("sales doors", () => {
   const saleArgs = (s: Seeded, financingType: Financing) => ({
     orgId: s.orgId,
