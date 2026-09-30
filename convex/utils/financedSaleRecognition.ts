@@ -38,6 +38,7 @@ import { DirectProofBudget, directPaymentLedgerProof } from "./handoverDirectPro
 import { heldDepositRowsForVehicle } from "./saleCompletion";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { toMinorUnits } from "./money";
+import { isManualFinanceApplication } from "./manualFinancePayer";
 import { requireCustomerGapToDealer } from "./financingEconomics";
 import { summarizeFees } from "./feeSummary";
 import { consignedSettlementRoute, dealershipCollectsGross, isConsignedAgentSale } from "./vehicleOwnership";
@@ -116,7 +117,9 @@ export function financedSaleRecognitionApplies(
   // dealership-side finance receivable exists to recognise. Without a configured
   // company there is no counterparty to owe one.
   if (opts.settlesDirect) return false;
-  return app.companyId !== undefined;
+  // SCRUM-27: a MANUAL finance company is a counterparty too - identified by the
+  // name on its approval letter rather than by a configured row.
+  return app.companyId !== undefined || isManualFinanceApplication(app);
 }
 
 /**
@@ -889,6 +892,27 @@ export async function resolveFinancedSalePlan(
         "On a deal financed by a finance company the customer's deposit is forwarded to the company, not applied against the dealer's amount. Choose to apply it to the transaction settlement, or refund or forfeit it, before finalizing."
       );
     }
+    // SCRUM-27: for a manual company the contribution is NOT a stored figure.
+    // The letter says how much the dealership sends (S); the deposits already
+    // held are part of that, so the dealership's own money is S minus H. It is
+    // derived here, at the moment H is proven, because the deposits can still
+    // change after the letter is entered. Never `?? 0`: an absent letter is
+    // refused, and S below H would mean a negative contribution.
+    let contributionForPlanMinor = dealerContributionMinor;
+    if (isManualFinanceApplication(app)) {
+      const letter = app.manualApproval;
+      if (letter === undefined) {
+        throw new ConvexError(
+          "Enter the finance company's approval letter (its name, the approved amount and the amount the dealership sends it) before finalizing this deal."
+        );
+      }
+      contributionForPlanMinor = letter.dealerSendsMinor - depositLiabilityAppliedMinor;
+      if (contributionForPlanMinor < 0) {
+        throw new ConvexError(
+          "The amount the approval letter says the dealership sends the finance company is less than the deposit already held for this deal. Correct the letter figures or the deposit before finalizing."
+        );
+      }
+    }
     const v2 = buildFinancedSalePostingPlanV2({
       currency: opts.currency,
       legalInvoiceConsiderationMinor: app.legalInvoiceAmountMinor,
@@ -898,11 +922,19 @@ export async function resolveFinancedSalePlan(
       hasSettlementComponents: components.length > 0,
       customerReceivableMinor,
       depositLiabilityAppliedMinor,
-      dealerContributionMinor,
+      dealerContributionMinor: contributionForPlanMinor,
       customerFirstPaymentMinor: app.customerFirstPaymentMinor,
     });
     if (!v2.ok) throw new ConvexError(v2.refusal.message);
     return v2.plan;
+  }
+
+  if (isManualFinanceApplication(app)) {
+    // Plan v1 posts through hooks that identify the payer by a configured
+    // company id. A manual deal has none, so v1 must stay unreachable for it.
+    throw new ConvexError(
+      "A deal financed by a manual finance company can only be finalized on the current sale plan. Reopen it from the current version of the deal."
+    );
   }
 
   const result = buildFinancedSalePostingPlan({
