@@ -1624,6 +1624,30 @@ const serverErrorMessages = defineBilingualMessages({
     "This sale's recorded commissionable margin is in a different currency from the organization's or holds an unusable amount, so a commission cannot be worked out. Have the deal's figures corrected before recalculating; the existing commission has been left untouched.",
     "هامش المركبة الخاضع للعمولة المسجل لعملية البيع هذه بعملة مختلفة عن عملة المؤسسة أو يحتوي على مبلغ غير صالح، لذا لا يمكن احتساب العمولة. يرجى تصحيح أرقام الصفقة قبل إعادة الاحتساب؛ لم يتم تغيير العمولة الحالية.",
   ],
+  ServerError_FINANCE_RETURN_NOT_DISBURSED: [
+    "This deal has no confirmed finance-company disbursement, so there is no cleared cheque to return. Nothing has been changed.",
+    "لا يوجد صرف مؤكد من شركة التمويل لهذه الصفقة، لذلك لا يوجد شيك مصروف ليُسجَّل كمرتجع. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_RETURN_CHEQUE_NOT_CLEARED: [
+    "Only a cleared finance-company cheque can be returned from the deal, and this cheque is not cleared. Nothing has been changed.",
+    "لا يمكن تسجيل إرجاع شيك شركة التمويل من شاشة الصفقة إلا إذا كان قد تم صرفه، وهذا الشيك لم يُصرف بعد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_RETURN_CHAIN_MISMATCH: [
+    "This cheque does not match the deal's recorded disbursement (the cheque, amount, currency or payment). Nothing has been changed. An accountant reviews the deal.",
+    "هذا الشيك لا يطابق صرف التمويل المسجَّل على الصفقة (الشيك أو المبلغ أو العملة أو الدفعة). لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
+  ],
+  ServerError_FINANCE_RETURN_ALLOCATION_SHAPE: [
+    "The disbursement payment is not allocated exactly to this deal's finance-company receivable, so it cannot be reversed safely. Nothing has been changed. An accountant reviews the deal.",
+    "دفعة صرف التمويل غير موزَّعة بالكامل على ذمة شركة التمويل الخاصة بهذه الصفقة، لذلك لا يمكن عكسها بأمان. لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
+  ],
+  ServerError_FINANCE_RETURN_REVERSAL_UNPROVEN: [
+    "The finance company's receipt could not be confirmed as reversed on the books, so the return was not recorded. Nothing has been changed. An accountant reviews the deal.",
+    "تعذّر التأكد من عكس قيد استلام مبلغ شركة التمويل في الدفاتر، لذلك لم يُسجَّل المرتجع. لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
+  ],
+  ServerError_FINANCE_CHEQUE_RETURN_FROM_DEAL: [
+    "This is a finance-company cheque. Its return is recorded from the deal screen with the \"Cheque returned by bank\" action, not from customer collections. Nothing has been changed.",
+    "هذا شيك شركة تمويل، ويُسجَّل إرجاعه من شاشة الصفقة عبر إجراء «شيك مرتجع من البنك» وليس من تحصيلات العملاء. لم يتم تغيير أي شيء.",
+  ],
 });
 
 export const salesEn = {

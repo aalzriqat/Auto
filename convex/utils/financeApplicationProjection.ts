@@ -273,6 +273,8 @@ const FIELD_VISIBILITY: Record<
    */
   finalizationIdempotencyKey: "FINANCE",
   disbursementIdempotencyKey: "FINANCE",
+  /** SCRUM-239: selects the versioned payment/posting keys; same audience as the key it versions. */
+  disbursementVersion: "FINANCE",
 
   // --- The appraisal gap: the amount, its allocation and its metadata ------
   /** Ruling #2: an approval fact for the roles that approve and disburse. */

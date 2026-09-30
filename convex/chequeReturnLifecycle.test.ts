@@ -1085,7 +1085,7 @@ describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
     const before = await worldSnapshot(t);
     await expect(
       asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId })
-    ).rejects.toThrow(/finance application/i);
+    ).rejects.toThrow(/Cheque returned by bank/);
     expect(await worldSnapshot(t), "the refusal was not zero-delta").toEqual(before);
   });
 

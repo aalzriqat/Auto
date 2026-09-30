@@ -5,6 +5,8 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { isFcLineage, isLiveFcCheque } from "./utils/fcCheque";
+import { financeDisbursementKeys } from "./utils/financeDisbursementKeys";
+import { isFinanceCashReceivedUndone } from "./accounting/workflowHooks";
 
 /**
  * SCRUM-447 D7'' — read-only finance-company cheque lineage audit.
@@ -25,6 +27,11 @@ export type ChequeAuditClass =
   | "CLEARED_FACE_MISMATCH_OR_NO_RECEIPT"
   | "CLEARED_LEGACY_FACE_UNAVAILABLE"
   | "CLEARED_OUTSIDE_CONFIRM_DISBURSEMENT"
+  // SCRUM-239: a cheque the bank returned AFTER it cleared.
+  | "RETURNED_AFTER_CLEARING_LEGACY"
+  | "RETURN_DISBURSEMENT_NOT_UNDONE"
+  | "RETURN_REVERSAL_FAILED"
+  | "RETURN_REVERSAL_MISSING"
   | "LIVE_ON_CANCELLED_DEAL"
   | "APP_LINKED_NO_COMPANY_OR_DIRECT_ROUTE"
   | "DRAWER_UNVERIFIED"
@@ -203,6 +210,46 @@ export const auditFinanceCompanyCheques = query({
             .collect();
           if (siblings.filter((s) => isLiveFcCheque(s)).length > 1) {
             push(row, "SEVERAL_LIVE_ROWS_FOR_APPLICATION", "FINDING", "More than one open cheque exists for this deal.");
+          }
+        }
+      }
+
+      // SCRUM-239: a RETURNED-after-clearing cheque is proven undone against the
+      // books, never assumed. A row with no version stamp predates the command
+      // (nothing records what, if anything, was undone), so it is UNKNOWN - not
+      // clean. A stamped row must have its payment VOIDED and its
+      // FINANCE_CASH_RECEIVED occurrence reversed or durably queued for reversal.
+      if (row.status === "RETURNED" && row.returnedAfterClearing === true) {
+        if (row.disbursementVersion === undefined) {
+          push(
+            row,
+            "RETURNED_AFTER_CLEARING_LEGACY",
+            "UNKNOWN",
+            "Returned after clearing before returns were an application command, so what was undone is not recorded."
+          );
+        } else {
+          const keys = financeDisbursementKeys(app._id, row.disbursementVersion);
+          const payment = await ctx.db
+            .query("canonicalPayments")
+            .withIndex("by_org_idempotency", (q) => q.eq("orgId", args.orgId).eq("idempotencyKey", keys.paymentKey))
+            .unique();
+          if (payment !== null && payment.status !== "VOIDED") {
+            push(row, "RETURN_DISBURSEMENT_NOT_UNDONE", "FINDING", "The cheque was returned but its disbursement payment is still standing.");
+          }
+          const queuedReversal = await ctx.db
+            .query("pendingAccountingEvents")
+            .withIndex("by_org_idempotency", (q) => q.eq("orgId", args.orgId).eq("idempotencyKey", keys.reversalKey))
+            .unique();
+          if (queuedReversal !== null && queuedReversal.status === "FAILED") {
+            push(row, "RETURN_REVERSAL_FAILED", "FINDING", "The queued reversal of the finance company's receipt failed and has not posted.");
+          } else if (
+            !(await isFinanceCashReceivedUndone(ctx, {
+              orgId: args.orgId,
+              applicationId: app._id,
+              disbursementVersion: row.disbursementVersion,
+            }))
+          ) {
+            push(row, "RETURN_REVERSAL_MISSING", "FINDING", "The finance company's receipt is still posted with no reversal queued.");
           }
         }
       }

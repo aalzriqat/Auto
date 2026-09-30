@@ -25,7 +25,8 @@ import {
 import { ReceivableCreditKey } from "./accounting/postingRules";
 import { assertValidAccountingDate } from "./accountingPeriods";
 import { toMinorUnits, fromMinorUnits, scaleForCurrency } from "./utils/money";
-import { isFcLineage, parseFaceAmountMinor, dealChequeCurrency, FC_CHEQUE_DEAL_NEXT_STEP } from "./utils/fcCheque";
+import { isFcLineage, parseFaceAmountMinor, dealChequeCurrency, FC_CHEQUE_DEAL_NEXT_STEP, FC_RETURN_MESSAGES } from "./utils/fcCheque";
+import { throwAppError, AppErrorCode } from "./utils/errors";
 import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
@@ -2235,11 +2236,10 @@ export const returnClearedCheque = mutation({
         // the two clearing paths originate different economic lineages.
         // SCRUM-447 D9: FC LINEAGE, not applicationId presence.
         if (isFcLineage(cheque)) {
-          throw new ConvexError(
-            `This cheque belongs to finance application ${cheque.applicationId ?? cheque.originApplicationId ?? "(unlinked)"}. Returning a cleared ` +
-              `finance-company cheque has to reverse that application's own receipt, receivable and ` +
-              `allocation, which this customer-collection path does not own (SCRUM-239).`
-          );
+          // SCRUM-239: the route now exists - `applications.returnFinanceDisbursementCheque`.
+          // This door still refuses (it must not learn a finance lineage), but with
+          // a stable code and a message that names where to go.
+          throwAppError(AppErrorCode.FINANCE_CHEQUE_RETURN_FROM_DEAL, FC_RETURN_MESSAGES.FINANCE_CHEQUE_RETURN_FROM_DEAL);
         }
 
         // Find the collection payment created when this cheque cleared

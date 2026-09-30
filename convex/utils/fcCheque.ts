@@ -71,6 +71,27 @@ export async function liveChequesForApplication(
   return (await chequesForApplication(ctx, applicationId)).filter(isLiveFcCheque);
 }
 
+/**
+ * SCRUM-239: the coded refusals of returning a cleared finance-company cheque.
+ * The English text is the server's own `message`; `lib/i18n/domains/sales.ts`
+ * carries the same sentence and its Arabic under `ServerError_<code>`, and a
+ * test holds the two together. Static on purpose: no placeholders, and no
+ * amounts or ids.
+ */
+export const FC_RETURN_MESSAGES = {
+  FINANCE_RETURN_NOT_DISBURSED:
+    "This deal has no confirmed finance-company disbursement, so there is no cleared cheque to return. Nothing has been changed.",
+  FINANCE_RETURN_CHEQUE_NOT_CLEARED:
+    "Only a cleared finance-company cheque can be returned from the deal, and this cheque is not cleared. Nothing has been changed.",
+  FINANCE_RETURN_CHAIN_MISMATCH:
+    "This cheque does not match the deal's recorded disbursement (the cheque, amount, currency or payment). Nothing has been changed. An accountant reviews the deal.",
+  FINANCE_RETURN_ALLOCATION_SHAPE:
+    "The disbursement payment is not allocated exactly to this deal's finance-company receivable, so it cannot be reversed safely. Nothing has been changed. An accountant reviews the deal.",
+  FINANCE_RETURN_REVERSAL_UNPROVEN:
+    "The finance company's receipt could not be confirmed as reversed on the books, so the return was not recorded. Nothing has been changed. An accountant reviews the deal.",
+  FINANCE_CHEQUE_RETURN_FROM_DEAL:
+    "This is a finance-company cheque. Its return is recorded from the deal screen with the \"Cheque returned by bank\" action, not from customer collections. Nothing has been changed.",
+} as const;
 /** SCRUM-447 B4: longest operator note kept with a face attestation. */
 export const ATTESTATION_NOTE_MAX_LENGTH = 500;
 

@@ -43,6 +43,15 @@ export const AppErrorCode = {
   // SCRUM-495. LEASE and INTERNAL_INSTALLMENT are no longer offered; every door
   // that would create or finalize a deal in one refuses with this code.
   DEAL_MODE_RETIRED: "DEAL_MODE_RETIRED",
+  // SCRUM-239. Returning a cleared finance-company cheque from the deal; each
+  // refusal is raised before the first write and is translated under
+  // ServerError_<code>.
+  FINANCE_RETURN_NOT_DISBURSED: "FINANCE_RETURN_NOT_DISBURSED",
+  FINANCE_RETURN_CHEQUE_NOT_CLEARED: "FINANCE_RETURN_CHEQUE_NOT_CLEARED",
+  FINANCE_RETURN_CHAIN_MISMATCH: "FINANCE_RETURN_CHAIN_MISMATCH",
+  FINANCE_RETURN_ALLOCATION_SHAPE: "FINANCE_RETURN_ALLOCATION_SHAPE",
+  FINANCE_RETURN_REVERSAL_UNPROVEN: "FINANCE_RETURN_REVERSAL_UNPROVEN",
+  FINANCE_CHEQUE_RETURN_FROM_DEAL: "FINANCE_CHEQUE_RETURN_FROM_DEAL",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];
