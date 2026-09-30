@@ -1975,7 +1975,7 @@ export const recalculateCommission = mutation({
       // approval or letter can move afterwards. Absent (any other sale) keeps
       // salePrice - cost. A partial or foreign-currency record is refused rather
       // than silently falling back to the old base.
-      let financedMargin: { approved: number; contribution: number } | undefined;
+      let financedMargin: NonNullable<ReturnType<typeof financedMarginOf>> | undefined;
       if (sale.commissionBase && !isConsignedAgentSale(vehicle)) {
         const margin = financedMarginOf(sale.commissionBase, orgSettings?.currency ?? "JOD");
         if (!margin) {

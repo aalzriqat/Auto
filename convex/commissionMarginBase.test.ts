@@ -53,7 +53,9 @@ interface SeedOpts {
   /** Vehicle acquisition cost in major units; undefined leaves the car with NO recorded cost. */
   cost: number | undefined;
   price: number;
-  commissionMode?: "AUTO_MEMBER" | "MANUAL";
+  commissionMode?: "AUTO_MEMBER" | "AUTO_TIERS" | "MANUAL";
+  /** Only read in AUTO_TIERS mode. */
+  tiers?: { minProfitAmount: number; commissionPct: number }[];
   /** A consigned (SOURCED) car: `cost` is then the supplier entitlement. */
   sourced?: boolean;
 }
@@ -84,6 +86,7 @@ async function seedDealership(tag: string, opts: SeedOpts) {
     ctx.db.insert("orgSettings", {
       orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH", "BANK_TRANSFER"],
       commissionMode: opts.commissionMode ?? "AUTO_MEMBER",
+      ...(opts.tiers ? { commissionTiers: opts.tiers } : {}),
     })
   );
   await as.mutation(api.chartOfAccounts.initialize, { orgId });
@@ -213,6 +216,11 @@ async function saleOf(s: Seeded, applicationId: Id<"financeApplications">) {
 }
 
 const CONFIGURED = { price: 13_000, g: 12_500_000, c: 1_375_000, first: 500_000 };
+// 5% from 0, 10% from 1,000: the bracket edge sits exactly on a JOD margin of 1,000.
+const TIERS = [
+  { minProfitAmount: 0, commissionPct: 5 },
+  { minProfitAmount: 1_000, commissionPct: 10 },
+];
 const MANUAL = { price: 12_000, g: 12_000_000, sends: 1_650_000, h: 500_000 }; // C = 1,150
 
 describe("SCRUM-390 OR-5: commissionable vehicle margin on a v2 financed sale", () => {
@@ -338,5 +346,79 @@ describe("SCRUM-390 OR-5: commissionable vehicle margin on a v2 financed sale", 
     );
     const after = await s.t.run((ctx) => ctx.db.get(saleId));
     expect(after?.commissionAmount).toBeUndefined();
+  });
+
+  // S390-1: G, C and cost are exact minor units (fils); the margin must be
+  // subtracted as integers or a sale one float-ulp under a tier edge lands in the
+  // wrong bracket. Deal: G 10,000.005 - C 1,000.000 - cost 8,000.005 = 1,000.000.
+  const EDGE = { price: 13_000, g: 10_000_005, c: 1_000_000, first: 500_000 };
+
+  test("S390-1a. JOD exact tier threshold: margin exactly 1,000.000 lands in the 10% bracket (commission 100)", async () => {
+    const s = await seedDealership("edge", { cost: 8_000.005, price: EDGE.price, commissionMode: "AUTO_TIERS", tiers: TIERS });
+    const { applicationId } = await readyConfiguredDeal(s, EDGE);
+    await finalize(s, applicationId);
+    const sale = await saleOf(s, applicationId);
+    expect(sale?.commissionBase).toEqual({ approvedMinor: 10_000_005, contributionMinor: 1_000_000, currency: "JOD" });
+    expect(sale?.commissionAmount).toBeCloseTo(100, 9);
+  });
+
+  test("S390-1b. one fil below the threshold (margin 999.999) stays in the 5% bracket", async () => {
+    const s = await seedDealership("edgebelow", { cost: 8_000.006, price: EDGE.price, commissionMode: "AUTO_TIERS", tiers: TIERS });
+    const { applicationId } = await readyConfiguredDeal(s, EDGE);
+    await finalize(s, applicationId);
+    const sale = await saleOf(s, applicationId);
+    expect(sale?.commissionAmount).toBeCloseTo(999.999 * 0.05, 9);
+  });
+
+  test("S390-1c. recalculation of the exact-threshold deal (cost recorded after finalize) also lands at 100", async () => {
+    const s = await seedDealership("edgerecalc", { cost: undefined, price: EDGE.price, commissionMode: "AUTO_TIERS", tiers: TIERS });
+    const { applicationId } = await readyConfiguredDeal(s, EDGE);
+    await finalize(s, applicationId);
+    const before = await saleOf(s, applicationId);
+    expect(before?.commissionAmount).toBeUndefined();
+    await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { purchasePrice: 8_000.005 }));
+    const result = await s.as.mutation(api.sales.recalculateCommission, { orgId: s.orgId, saleId: before!._id });
+    expect(result.commissionAmount).toBeCloseTo(100, 9);
+  });
+
+  test("S390-1e. AUTO_TIERS on the reference deal (margin 1,125) picks the tier by the margin, not by the 3,000 sale-price spread", async () => {
+    // Tiers chosen so the two bases fall in different brackets: 1,125 -> 10%, 3,000 -> 20%.
+    const tiers = [...TIERS, { minProfitAmount: 2_000, commissionPct: 20 }];
+    const s = await seedDealership("tiersref", { cost: 10_000, price: CONFIGURED.price, commissionMode: "AUTO_TIERS", tiers });
+    const { applicationId } = await readyConfiguredDeal(s, CONFIGURED);
+    await finalize(s, applicationId);
+    const sale = await saleOf(s, applicationId);
+    expect(sale?.commissionAmount).toBeCloseTo(112.5, 9);
+  });
+
+  test("S390-1f. MANUAL mode still freezes commissionBase on finalize and sets no automatic amount", async () => {
+    const s = await seedDealership("manualfrozen", { cost: 10_000, price: CONFIGURED.price, commissionMode: "MANUAL" });
+    const { applicationId } = await readyConfiguredDeal(s, CONFIGURED);
+    await finalize(s, applicationId);
+    const sale = await saleOf(s, applicationId);
+    expect(sale?.commissionAmount).toBeUndefined();
+    expect(sale?.commissionBase).toEqual({ approvedMinor: 12_500_000, contributionMinor: 1_375_000, currency: "JOD" });
+  });
+
+  test("S390-1g. finalize retried after success (same key, and a fresh key) leaves the commission and frozen base unchanged", async () => {
+    const s = await seedDealership("retry", { cost: 10_000, price: CONFIGURED.price });
+    const { applicationId } = await readyConfiguredDeal(s, CONFIGURED);
+    const key = crypto.randomUUID();
+    const call = (idempotencyKey: string) =>
+      s.as.mutation(api.applications.finalizeDeal, { idempotencyKey, orgId: s.orgId, applicationId });
+    await call(key);
+    const first = await saleOf(s, applicationId);
+    const sales = () => s.t.run((ctx) => ctx.db.query("sales").collect());
+    const countBefore = (await sales()).length;
+
+    await call(key); // same key: a replay, not a second completion
+    // A fresh key on an already-finalized deal: whether it replays or refuses, state must not move.
+    await call(crypto.randomUUID()).catch(() => undefined);
+
+    const after = await saleOf(s, applicationId);
+    expect(after?._id).toBe(first?._id);
+    expect(after?.commissionAmount).toBe(first?.commissionAmount);
+    expect(after?.commissionBase).toEqual(first?.commissionBase);
+    expect((await sales()).length).toBe(countBefore);
   });
 });

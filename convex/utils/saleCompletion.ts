@@ -162,22 +162,21 @@ async function quoteLineIndexFor(
 type CommissionBase = { approvedMinor: number; contributionMinor: number; currency: string };
 
 /**
- * SCRUM-390 (OR-5): G and C in MAJOR units, or null when the recorded pair
- * cannot be trusted - a currency other than the organization's, an unsupported
- * currency, or an amount that is not a non-negative safe integer. One check for
+ * SCRUM-390 (OR-5): the frozen G and C, still in integer MINOR units of the sale
+ * currency, or null when the recorded pair cannot be trusted - a currency other
+ * than the organization's, an unsupported currency, or an amount that is not a
+ * non-negative safe integer. They stay minor so the margin subtraction is exact
+ * and a tier threshold is never straddled by float error. One check for
  * completion and recalculation, so neither can accept what the other refuses;
  * each caller words its own refusal.
  */
 export function financedMarginOf(
   base: CommissionBase,
   orgCurrency: string
-): { approved: number; contribution: number } | null {
+): CommissionBase | null {
   if (base.currency !== orgCurrency || !denominationOf(base.currency)) return null;
   if (!isValidMinorAmount(base.approvedMinor) || !isValidMinorAmount(base.contributionMinor)) return null;
-  return {
-    approved: fromMinorUnits(base.approvedMinor, base.currency),
-    contribution: fromMinorUnits(base.contributionMinor, base.currency),
-  };
+  return { approvedMinor: base.approvedMinor, contributionMinor: base.contributionMinor, currency: base.currency };
 }
 
 type PreparedSaleCompletion = {
@@ -361,7 +360,7 @@ async function prepareSaleCompletion(
   // SCRUM-390 (OR-5): applies to a completion of a dealer-owned car only; a consigned
   // sale keeps its frozen-margin basis and a draft commits nothing.
   let commissionBase: CommissionBase | undefined;
-  let financedMargin: { approved: number; contribution: number } | undefined;
+  let financedMargin: CommissionBase | undefined;
   if (intent === "COMPLETION" && args.commissionBase && !isConsignedAgentSale(vehicle)) {
     const margin = financedMarginOf(args.commissionBase, currency);
     if (!margin) {
@@ -504,13 +503,13 @@ export async function computeAutoCommissionAmount(
      */
     frozenRecognizedEarnings?: number;
     /**
-     * SCRUM-390 (OR-5): G and C, in major units, of a dealer-owned financed sale
+     * SCRUM-390 (OR-5): G and C, in integer minor units, of a dealer-owned financed sale
      * completed under a v2 plan. When given, the base is the "Commissionable
      * vehicle margin" G - C - cost (never below 0) instead of salePrice - cost.
      * Completion and recalculation feed it from the SAME frozen sale-row
      * values; nothing is read from the application.
      */
-    financedMargin?: { approved: number; contribution: number };
+    financedMargin?: CommissionBase;
   }
 ): Promise<number | undefined> {
   let grossProfit: number;
@@ -596,8 +595,8 @@ function commissionableEarnings(args: {
   supplierGrossReceipt?: number;
   settlementRoute?: ConsignedSettlementRoute;
   externallyFinanced: boolean;
-  /** OR-5: G and C in major units; owned sales only (a consigned sale never receives it). */
-  financedMargin?: { approved: number; contribution: number };
+  /** OR-5: G and C in minor units; owned sales only (a consigned sale never receives it). */
+  financedMargin?: CommissionBase;
 }): number {
   const settlesDirect = !dealershipCollectsGross(
     consignedSettlementRoute({ supplierSettlementRoute: args.settlementRoute })
@@ -608,11 +607,15 @@ function commissionableEarnings(args: {
       "This sale is the supplier's car, financed, and settled directly with him, but the amount the finance company actually paid him was not recorded on it. Commission is earned on what the dealership recognized over the supplier's entitlement, and without that amount it cannot be worked out. Record the approved purchase amount on the deal first."
     );
   }
-  const realizedBasis = consignedDirect
-    ? (args.supplierGrossReceipt ?? args.salePrice)
-    : args.financedMargin
-      ? args.financedMargin.approved - args.financedMargin.contribution
-      : args.salePrice;
+  if (!consignedDirect && args.financedMargin) {
+    // OR-5: exact in integer minor units - G - C - cost - before the single
+    // conversion, so a tier threshold is never straddled by float error. The
+    // cost rounds with the same rule the ledger uses for COGS.
+    const { approvedMinor, contributionMinor, currency } = args.financedMargin;
+    const marginMinor = approvedMinor - contributionMinor - toMinorUnits(args.vehicleCost, currency);
+    return fromMinorUnits(Math.max(0, marginMinor), currency);
+  }
+  const realizedBasis = consignedDirect ? (args.supplierGrossReceipt ?? args.salePrice) : args.salePrice;
   return Math.max(0, realizedBasis - args.vehicleCost);
 }
 

@@ -435,9 +435,9 @@ export const settingsEn = {
   CommissionPreviewTitle: "Preview",
   CommissionPreviewDesc: "Calculate commission for a sample commissionable vehicle margin.",
   ProfitAmount: "Commissionable vehicle margin",
-  CommissionMarginNoticeTitle: "Financed deals now use the commissionable vehicle margin",
+  CommissionMarginNoticeTitle: "Financed deals on dealership-owned cars now use the commissionable vehicle margin",
   CommissionMarginNoticeDesc:
-    "For financed deals completed through the financing workflow, commission is now calculated on the commissionable vehicle margin: the approved amount minus the showroom contribution minus the vehicle's acquisition cost. This base is smaller than before, so your tier thresholds may need review. Existing thresholds have not been changed.",
+    "For financed deals on vehicles the dealership owns, completed through the financing workflow, commission is now calculated on the commissionable vehicle margin: the approved amount minus the showroom contribution minus the vehicle's acquisition cost. This base is usually smaller than before, so your tier thresholds may need review. Existing thresholds have not been changed. Consigned and supplier cars keep the previous basis.",
   AppliedTier: "Applied tier",
   CommissionTiersSaved: "Commission tiers saved.",
   FailedToSaveCommissionTiers: "Failed to save commission tiers.",
@@ -1160,9 +1160,9 @@ export const settingsAr = {
   CommissionPreviewTitle: "معاينة",
   CommissionPreviewDesc: "احسب العمولة لهامش مركبة خاضع للعمولة نموذجي.",
   ProfitAmount: "هامش المركبة الخاضع للعمولة",
-  CommissionMarginNoticeTitle: "الصفقات الممولة تعتمد الآن هامش المركبة الخاضع للعمولة",
+  CommissionMarginNoticeTitle: "الصفقات الممولة على سيارات المعرض تعتمد الآن هامش المركبة الخاضع للعمولة",
   CommissionMarginNoticeDesc:
-    "في الصفقات الممولة التي تُنجز عبر مسار التمويل، تُحسب العمولة الآن على هامش المركبة الخاضع للعمولة: المبلغ المعتمد ناقص مساهمة المعرض ناقص تكلفة اقتناء المركبة. هذا الأساس أصغر من السابق، لذا قد تحتاج حدود الشرائح إلى مراجعة. لم يتم تغيير الحدود الحالية.",
+    "في الصفقات الممولة على المركبات المملوكة للمعرض والتي تُنجز عبر مسار التمويل، تُحسب العمولة الآن على هامش المركبة الخاضع للعمولة: المبلغ المعتمد ناقص مساهمة المعرض ناقص تكلفة اقتناء المركبة. هذا الأساس عادةً أصغر من السابق، لذا قد تحتاج حدود الشرائح إلى مراجعة. لم يتم تغيير الحدود الحالية. أما المركبات المعروضة بالأمانة أو مركبات الموردين فتبقى على الأساس السابق.",
   AppliedTier: "الشريحة المطبقة",
   CommissionTiersSaved: "تم حفظ شرائح العمولة.",
   FailedToSaveCommissionTiers: "فشل في حفظ شرائح العمولة.",
