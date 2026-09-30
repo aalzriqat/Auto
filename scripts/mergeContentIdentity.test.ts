@@ -3,10 +3,11 @@
  * parents, new commit SHA) and refuse anything whose content differs.
  * Uses real git repositories, not mocks.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { contentIdentity, sameContentIdentity } from "./mergeContentIdentity.mjs";
 
@@ -97,6 +98,58 @@ describe("merge content identity", () => {
   });
 
   test("a non-commit object is refused", () => {
-    expect(() => contentIdentity(repo, tree)).toThrow(/not a commit present/);
+    expect(() => contentIdentity(repo, tree)).toThrow(/not a commit/);
+  });
+
+  test("an annotated tag pointing at a valid merge is refused (no tag peeling)", () => {
+    const tagSha = makeTag();
+    expect(tagSha).not.toBe(merge1);
+    expect(() => contentIdentity(repo, tagSha)).toThrow(/is not a commit/);
+    expect(() => sameContentIdentity(repo, merge1, tagSha)).toThrow(/is not a commit/);
+  });
+});
+
+const makeTag = () => {
+  git(["tag", "-f", "-a", "-m", "t", "tagged-merge", merge1], {
+    GIT_COMMITTER_NAME: "t",
+    GIT_COMMITTER_EMAIL: "t@t",
+  });
+  return git(["rev-parse", "tagged-merge"]);
+};
+
+describe("merge content identity CLI (subprocess)", () => {
+  const script = path.join(path.dirname(fileURLToPath(import.meta.url)), "mergeContentIdentity.mjs");
+  const run = (...args: string[]) =>
+    spawnSync("node", [script, "--repo", repo, ...args], { encoding: "utf8" });
+
+  test("identical content exits 0 and prints exactly SAME", () => {
+    const r = run("same", merge1, merge2);
+    expect(r.status).toBe(0);
+    expect(r.stdout.trim()).toBe("SAME");
+  });
+
+  test("different tree exits 1 with no SAME output", () => {
+    const other = commitTree(otherTree, [base, head], "2026-03-01T00:00:00Z");
+    const r = run("same", merge1, other);
+    expect(r.status).toBe(1);
+    expect(r.stdout).not.toContain("SAME");
+  });
+
+  test("malformed SHA exits 1 with no SAME output", () => {
+    const r = run("same", merge1, "not-a-sha");
+    expect(r.status).toBe(1);
+    expect(r.stdout).not.toContain("SAME");
+  });
+
+  test("bad usage exits 2 with no SAME output", () => {
+    const r = run("same", merge1);
+    expect(r.status).toBe(2);
+    expect(r.stdout).not.toContain("SAME");
+  });
+
+  test("an annotated tag is refused with exit 1 and no SAME output", () => {
+    const r = run("same", merge1, makeTag());
+    expect(r.status).toBe(1);
+    expect(r.stdout).not.toContain("SAME");
   });
 });

@@ -30,6 +30,7 @@ jobs:
       statuses: write
     outputs:
       tested_sha: ${{ steps.provenance.outputs.tested_sha }}
+      gate_ok: ${{ steps.report.outputs.gate_ok }}
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       GH_TOKEN: ${{ github.token }}
@@ -177,11 +178,20 @@ jobs:
             echo "::error::coverage-report names a malformed tested merge; refusing mismatched coverage provenance."
             exit 1
           fi
-          if ! git -C trusted fetch --no-tags origin "$coverage_merge"; then
+          # Byte-equal SHAs need no fetch (the object is already present); the
+          # helper still runs in every case and must positively answer SAME.
+          if [ "$coverage_merge" = "$TESTED_SHA" ]; then
+            :
+          elif ! git -C trusted fetch --no-tags origin "$coverage_merge"; then
             echo "::error::Coverage merge $coverage_merge cannot be fetched from origin; refusing mismatched coverage provenance."
             exit 1
           fi
-          if ! node trusted/scripts/mergeContentIdentity.mjs --repo trusted same "$coverage_merge" "$TESTED_SHA"; then
+          if identity="$(node trusted/scripts/mergeContentIdentity.mjs --repo trusted same "$coverage_merge" "$TESTED_SHA")" &&
+            [ "$identity" = "SAME" ]; then
+            if [ "$coverage_merge" != "$TESTED_SHA" ]; then
+              echo "::notice::PR merge ref was regenerated (content-identical): coverage merge $coverage_merge, analysed merge $TESTED_SHA."
+            fi
+          else
             echo "::error::Coverage was produced for merge $coverage_merge, whose content differs from the analysed merge $TESTED_SHA; refusing mismatched coverage provenance. Re-run Tests on the current merge."
             exit 1
           fi
@@ -234,6 +244,7 @@ jobs:
             -Dsonar.scm.revision=${{ github.event.workflow_run.pull_requests[0].head.sha }}
 
       - name: Fetch Sonar issues and upsert PR report
+        id: report
         if: steps.provenance.outputs.stale == 'false'
         shell: bash
         env:
@@ -354,7 +365,8 @@ jobs:
           git -C trusted fetch --no-tags origin \
             "+refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-report-merge"
           current_merge="$(git -C trusted rev-parse refs/autoflow/sonar-report-merge)"
-          if ! node trusted/scripts/mergeContentIdentity.mjs --repo trusted same "$current_merge" "$TESTED_SHA"; then
+          if ! { identity="$(node trusted/scripts/mergeContentIdentity.mjs --repo trusted same "$current_merge" "$TESTED_SHA")" &&
+            [ "$identity" = "SAME" ]; }; then
             echo "::notice::Skipping stale Sonar report for merge $TESTED_SHA; PR merge is now $current_merge."
             exit 0
           fi
@@ -382,6 +394,9 @@ jobs:
             echo "::error::Sonar quality gate is $gate_status."
             exit 1
           fi
+          # Positive evidence only: reached solely after a verified OK gate, the
+          # final merge recheck and the comment write. Stale skips exit earlier.
+          echo "gate_ok=true" >> "$GITHUB_OUTPUT"
 
   verdict:
     name: trusted-sonar-pr-verdict
@@ -412,6 +427,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TESTED_SHA: ${{ needs.scan-report.outputs.tested_sha }}
           SCAN_RESULT: ${{ needs.scan-report.result }}
+          GATE_OK: ${{ needs.scan-report.outputs.gate_ok }}
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
         run: |
           set -euo pipefail
@@ -421,17 +437,24 @@ jobs:
 
           # Current means content-identical, not the same commit SHA (GitHub
           # regenerates the merge ref with a new date). Fetch failure => stale.
+          # Byte-equal SHAs need no fetch; the helper must still answer SAME.
           merge_is_current=false
-          if git fetch --no-tags origin "$TESTED_SHA" &&
-            node scripts/mergeContentIdentity.mjs same "$current_merge" "$TESTED_SHA"; then
+          if { [ "$current_merge" = "$TESTED_SHA" ] || git fetch --no-tags origin "$TESTED_SHA"; } &&
+            identity="$(node scripts/mergeContentIdentity.mjs same "$current_merge" "$TESTED_SHA")" &&
+            [ "$identity" = "SAME" ]; then
             merge_is_current=true
+            if [ "$current_merge" != "$TESTED_SHA" ]; then
+              echo "::notice::PR merge ref was regenerated (content-identical): analysed merge $TESTED_SHA, current merge $current_merge."
+            fi
           fi
 
           state=failure
           description="Trusted Sonar PR analysis did not complete successfully."
-          if [ "$SCAN_RESULT" = "success" ] && [ "$merge_is_current" = "true" ]; then
+          if [ "$SCAN_RESULT" = "success" ] && [ "$GATE_OK" = "true" ] && [ "$merge_is_current" = "true" ]; then
             state=success
             description="Trusted Sonar PR analysis passed on the still-current exact merge."
+          elif [ "$SCAN_RESULT" = "success" ] && [ "$GATE_OK" != "true" ]; then
+            description="Trusted Sonar report was skipped as stale; the Quality Gate was not verified."
           elif [ "$SCAN_RESULT" = "success" ]; then
             description="Trusted Sonar result is stale because the PR merge changed during analysis."
           fi
@@ -439,14 +462,23 @@ jobs:
             const [state, context, description, targetUrl] = process.argv.slice(1);
             process.stdout.write(JSON.stringify({state, context, description, target_url: targetUrl}));
           ' "$state" autoflow/trusted-sonar-pr "$description" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")"
-          curl --fail --silent --show-error \
-            -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -H "Content-Type: application/json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$TESTED_SHA" \
-            --data "$payload" >/dev/null
+          post_status() {
+            curl --fail --silent --show-error \
+              -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "Content-Type: application/json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$1" \
+              --data "$payload" >/dev/null
+          }
+          # Settle the pending status set on the tested merge, then also land the
+          # verdict on the merge SHA GitHub currently evaluates when it differs.
+          post_status "$TESTED_SHA"
+          if [ "$merge_is_current" = "true" ] && [ "$current_merge" != "$TESTED_SHA" ] &&
+            [[ "$current_merge" =~ ^[0-9a-f]{40}$ ]]; then
+            post_status "$current_merge"
+          fi
           if [ "$state" != "success" ]; then
             exit 1
           fi

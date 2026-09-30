@@ -4,7 +4,9 @@
  * GitHub regenerates refs/pull/N/merge with the same tree and parents but a new
  * commit date/SHA, so merges are compared by (tree, first parent, second parent).
  * Fails closed: anything that is not a 40-hex SHA of a present, exact two-parent
- * merge commit throws. CLI: mergeContentIdentity.mjs [--repo <dir>] same <a> <b>
+ * merge commit throws (annotated tags are not peeled). CLI:
+ * mergeContentIdentity.mjs [--repo <dir>] same <a> <b>; success prints exactly
+ * SAME and exits 0, so callers can require positive affirmation.
  */
 import { execFileSync } from "node:child_process";
 import path from "node:path";
@@ -17,12 +19,18 @@ export function contentIdentity(repo, sha) {
   if (typeof sha !== "string" || !SHA_RE.test(sha)) {
     throw new Error("merge SHA is not a 40-hex commit id");
   }
-  let raw;
-  try {
-    raw = execFileSync("git", ["-C", repo, "cat-file", "commit", sha], {
+  const gitOut = (args) =>
+    execFileSync("git", ["-C", repo, ...args], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
+  let raw;
+  try {
+    // `cat-file commit` peels annotated tags; require the object itself to be a commit.
+    if (gitOut(["cat-file", "-t", sha]).trim() !== "commit") {
+      throw new Error("not a commit");
+    }
+    raw = gitOut(["cat-file", "commit", sha]);
   } catch {
     throw new Error(`${sha} is not a commit present in the repository`);
   }
@@ -60,7 +68,10 @@ function main(argv) {
     return 2;
   }
   try {
-    if (sameContentIdentity(repo, shaA, shaB)) return 0;
+    if (sameContentIdentity(repo, shaA, shaB)) {
+      console.log("SAME");
+      return 0;
+    }
     console.error("merge content identities differ (tree or parents)");
   } catch (error) {
     console.error(`mergeContentIdentity: ${error instanceof Error ? error.message : String(error)}`);
