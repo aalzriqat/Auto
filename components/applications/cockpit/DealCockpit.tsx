@@ -99,6 +99,7 @@ import {
   type DealStageState,
 } from "./DealStagePresentation";
 import { SupplierSettlementDialog } from "./SupplierSettlementDialog";
+import { FcChequePanel } from "./FcChequePanel";
 import { SettlementAdviceCorrectionDialog } from "./SettlementAdviceCorrectionDialog";
 import {
   FinanceCompanyDecisionCard,
@@ -775,6 +776,8 @@ export function DealCockpit({
   const registerVehicleHandover = useMutation(api.applications.registerVehicleHandover);
   const resolveAppraisalGap = useMutation(api.financingEconomics.resolveAppraisalGap);
   const registerExpectedPayment = useMutation(api.applications.registerExpectedPayment);
+  const correctExpectedPayment = useMutation(api.applications.correctExpectedPayment);
+  const attestChequeFace = useMutation(api.applications.attestChequeFace);
   const finalizeDeal = useMutation(api.applications.finalizeDeal);
   const approveDealerPurchaseAmount = useMutation(
     api.financingEconomics.approveDealerPurchaseAmount
@@ -902,6 +905,10 @@ export function DealCockpit({
   // an action that appears and then vanishes reads as a bug, and the server is
   // the authority either way.
   const canCorrectAdvice = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
+  // SCRUM-447 B2: registering the payment is a separate permission the server
+  // also accepts on a closed, undisbursed deal alongside MANAGE_FINANCE.
+  const canRegisterPayment =
+    !permissionsLoading && hasPermission(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
   // `supplierReceivables.recordReceipt` requires the same permission. Fails
   // closed while loading, and is never inferred from a role name or from
   // VIEW_FINANCE — a custom role that can read the money block cannot settle.
@@ -1537,6 +1544,25 @@ export function DealCockpit({
     isConsignedDeal &&
     app.status !== "CLOSED" &&
     app.status !== "CANCELLED";
+  /**
+   * SCRUM-447 N1-A: the cheque states in which `confirmDisbursement` REFUSES
+   * (a cleared cheque awaiting accounting review, a live cheque whose face was
+   * never recorded, a returned/cancelled one awaiting correction, or no payment
+   * registered on a closed deal). The rail withholds the confirmation exactly
+   * there and names the cheque panel's own notice, in the panel's order, so it
+   * never offers a step the server would refuse. Review comes first, as on the
+   * server, where a CLEARED row is named first.
+   */
+  const chequeDisbursementBlockKey: string | undefined =
+    deal?.chequeNeedsAccountingReview === true
+      ? "FcAccountingReviewNotice"
+      : deal?.chequeFaceUnrecorded === true
+        ? "FcChequeFaceUnrecordedNotice"
+        : deal?.chequeNeedsCorrection === true
+          ? "FcCorrectNeededNotice"
+          : deal?.expectedPaymentReRegistrable === true
+            ? "FcReRegisterNotice"
+            : undefined;
   // On the direct route the company pays the supplier, so there is no
   // dealership receipt to confirm — `confirmDisbursement` would invent cash.
   const canConfirmDisbursement =
@@ -1551,7 +1577,8 @@ export function DealCockpit({
       deal.forward.state !== "SETTLED" &&
       deal.forward.state !== "NOT_DUE"
     ) &&
-    disbursementDenominationBlock === undefined;
+    disbursementDenominationBlock === undefined &&
+    chequeDisbursementBlockKey === undefined;
   // Gated on the SERVER's own answer (`canSettleDirectToSupplier`), not on
   // `companyId`, which is unset on every MANUAL_FINANCE_COMPANY deal.
   const canConfirmSupplierDisbursement =
@@ -1934,6 +1961,16 @@ export function DealCockpit({
           ),
         };
       }
+      // A cheque state the server refuses is a fact about the deal, named
+      // before permission: the way forward is on the cheque panel above.
+      if (chequeDisbursementBlockKey && !app.disbursedAt) {
+        return {
+          stageKey: "DISBURSEMENT",
+          actionKey: "ConfirmDisbursement",
+          onStart: () => setConfirmingDisbursement(true),
+          unavailableReasonKey: chequeDisbursementBlockKey,
+        };
+      }
       // SCRUM-435: the finance company sends the FULL approved amount, and the
       // dealership pays back the deposit and its contribution first. Until that
       // is settled on the books the transfer is not offered (the server refuses
@@ -2024,6 +2061,14 @@ export function DealCockpit({
     // own closing steps while the application is still APPROVED.
     if (!settlementStage || settlementStage.state === "COMPLETE") return undefined;
     if (deal.status !== "APPROVED") return undefined;
+
+    // SCRUM-447 B2: a returned/cancelled cheque leaves the payment REGISTERED
+    // (as a cheque) with nothing live behind it. Registering again would be
+    // refused; the way forward is Correct, offered by the cheque panel above.
+    if ("chequeNeedsCorrection" in deal && deal.chequeNeedsCorrection === true) return undefined;
+    // SCRUM-447 F6: a CLEARED cheque with no confirmed disbursement is for
+    // accounting to review; the panel above says so and the rail offers nothing.
+    if ("chequeNeedsAccountingReview" in deal && deal.chequeNeedsAccountingReview === true) return undefined;
 
     if (!expectedPaymentRegistered) {
       return {
@@ -3021,7 +3066,12 @@ export function DealCockpit({
         registering: registeringPayment,
         submitting: paymentSubmitting,
         error: paymentError,
-        onOpenChange: setRegisteringPayment,
+        onOpenChange: (open) => {
+          // Every way in (rail or cheque panel) opens a fresh form, never one
+          // still carrying a previous attempt's refusal.
+          if (open) setPaymentError(null);
+          setRegisteringPayment(open);
+        },
         onSubmit: async (values) => {
           setPaymentSubmitting(true);
           setPaymentError(null);
@@ -3101,6 +3151,22 @@ export function DealCockpit({
         },
       }}
       canCorrectAdvice={canCorrectAdvice}
+      canRegisterPayment={canRegisterPayment}
+      fcCheque={{
+        onAttest: async (faceAmount, note) => {
+          const chequeId =
+            deal && "unattestedChequeId" in deal ? deal.unattestedChequeId : null;
+          // Nothing to write to: refuse loudly so the dialog stays open and shows
+          // the error instead of closing as if the face had been recorded.
+          if (!chequeId) throw new Error(t("UnexpectedError"));
+          await attestChequeFace({ orgId, chequeId, faceAmount, note });
+          toast.success(t("FcAttestDone"));
+        },
+        onCorrect: async (reason) => {
+          await correctExpectedPayment({ orgId, applicationId, reason });
+          toast.success(t("FcCorrectExpectedPaymentDone"));
+        },
+      }}
       canSettleSupplier={canSettleSupplier}
       documentsActionable={!permissionsLoading && documentsStepReason === undefined}
       recordedFeedback={{ recorded: recordedFeedback, track: trackRecorded, onDismiss: clearRecorded }}
@@ -4080,6 +4146,8 @@ export function DealCockpitView({
   expectedPayment,
   finalize,
   canCorrectAdvice = false,
+  canRegisterPayment = false,
+  fcCheque,
   canSettleSupplier: callerMaySettleSupplier = false,
   supplierSettlementHref,
   documentsActionable = true,
@@ -4366,6 +4434,7 @@ export function DealCockpitView({
       method: ExpectedPaymentMethod;
       expectedDate: number;
       chequeDetails?: { bank: string; chequeNumber: string };
+      faceAmount?: string;
     }) => void | Promise<void>;
   };
   /** The finalization confirmation's own state. */
@@ -4389,6 +4458,13 @@ export function DealCockpitView({
    * action rather than offering one the server will refuse.
    */
   canCorrectAdvice?: boolean;
+  /** REGISTER_EXPECTED_PAYMENT — see `FcChequePanel.canRegisterPayment`. */
+  canRegisterPayment?: boolean;
+  /** SCRUM-447: the finance-company cheque actions (MANAGE_FINANCE gates them via `canCorrectAdvice`). */
+  fcCheque?: {
+    onAttest: (faceAmount: string, note: string) => Promise<void>;
+    onCorrect: (reason: string) => Promise<void>;
+  };
   /**
    * Whether this caller may record a supplier receipt (MANAGE_FINANCE — the
    * permission `supplierReceivables.recordReceipt` requires). The route and
@@ -6206,6 +6282,29 @@ export function DealCockpitView({
             />
           )}
         </div>
+      )}
+
+      {/* --- finance-company cheque: face, correction, re-registration ------
+          Workflow flags only (no amounts) from the server. Above the rail for
+          the same reason the discrepancy alert is: it is the exception that
+          stops the disbursement stage. */}
+      {fcCheque && "chequePaymentRegistered" in deal && (
+        <FcChequePanel
+          canManage={canCorrectAdvice}
+          canRegisterPayment={canRegisterPayment}
+          needsCorrection={deal.chequeNeedsCorrection === true}
+          needsAccountingReview={deal.chequeNeedsAccountingReview === true}
+          chequeFaceAttested={deal.chequeFaceAttested === true}
+          chequeFaceUnrecorded={deal.chequeFaceUnrecorded}
+          unattestedChequeId={deal.unattestedChequeId ?? null}
+          expectedPaymentCorrectable={deal.expectedPaymentCorrectable}
+          chequePaymentRegistered={deal.chequePaymentRegistered}
+          needsReRegistration={deal.expectedPaymentReRegistrable}
+          t={t}
+          onAttest={fcCheque.onAttest}
+          onCorrect={fcCheque.onCorrect}
+          onRegister={() => expectedPayment?.onOpenChange(true)}
+        />
       )}
 
       {/* --- stage rail: the signature element ---------------------------- */}

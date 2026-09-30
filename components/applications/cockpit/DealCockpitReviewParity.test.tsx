@@ -578,6 +578,59 @@ describe("disbursement — the two confirmations, from the DISBURSEMENT stage", 
     expect(within(focusRow()).queryByRole("button")).toBeNull();
     expect(within(focusRow()).getByText("DisbursementUnavailable")).toBeTruthy();
   });
+
+  // SCRUM-447 N1-A: every recovery action the screen offers is executable in
+  // the state it describes. Under any of these flags the server refuses the
+  // confirmation, so the rail must not offer it and must point at the panel.
+  test.each([
+    ["chequeNeedsAccountingReview", "FcAccountingReviewNotice"],
+    ["chequeFaceUnrecorded", "FcChequeFaceUnrecordedNotice"],
+    ["chequeNeedsCorrection", "FcCorrectNeededNotice"],
+    ["expectedPaymentReRegistrable", "FcReRegisterNotice"],
+  ])("%s withholds ConfirmDisbursement and names the panel's notice", (flag, reasonKey) => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages: closedStages, [flag]: true }));
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(within(focusRow()).queryByRole("button", { name: "ConfirmDisbursement" })).toBeNull();
+    expect(within(focusRow()).getAllByText(reasonKey).length).toBeGreaterThan(0);
+  });
+
+  test("CONTROL — a live HELD cheque (all three flags false) still offers ConfirmDisbursement", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: closedStages,
+        chequeNeedsAccountingReview: false,
+        chequeNeedsCorrection: false,
+        expectedPaymentReRegistrable: false,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" })).toBeTruthy();
+  });
+
+  test("CONTROL — direct to the supplier is unchanged by the cheque flags", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ status: "CLOSED", stages: closedStages, chequeNeedsAccountingReview: true })
+    );
+    queryResults.set(
+      GET_QUERY,
+      application({
+        status: "CLOSED",
+        vehicle: { sourceType: "SOURCED", sourcedFromName: "x" },
+        supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+        canSettleDirectToSupplier: true,
+      })
+    );
+    renderCockpit();
+    expect(within(focusRow()).getByRole("button", { name: "ConfirmSupplierDisbursement" })).toBeTruthy();
+  });
 });
 
 /**

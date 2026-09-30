@@ -1,10 +1,12 @@
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { useState } from "react";
-import { Text, View } from "react-native";
+import { Linking, Text, View } from "react-native";
 import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepFlow";
 import { api, type MobileFinancingType, type MobileMyMembership, type MobileSale } from "../../../convexApi";
 import { hapticSuccess } from "../../../haptics";
 import { useLocale } from "../../../providers/LocaleProvider";
+import { getMobileAppUrl } from "../../../config/env";
+import { financedDealCancelTarget } from "./financedDealCancel";
 import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, type MobileSaleStatusFilter, compactNumber, money, dateLabel, commissionAmountLabel, commissionStatusLabel, parseOptionalNumber, parseRequiredNumber, idempotencyKey, useCommandIdentity, invalidNumberMessage, requiredSelectionMessage, useFormErrors, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, saleMatchesView, averageSalePrice, saleRemainingBalance, vehicleListPriceLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
@@ -175,6 +177,33 @@ export function SalesModule({
     }
   }
 
+  // SCRUM-447 D4: instead of Cancel on a financed deal — a link when the web
+  // origin is configured, otherwise the instruction and the deal reference.
+  function renderFinancedDealCancel(sale: MobileSale) {
+    const target = financedDealCancelTarget(sale, orgId, getMobileAppUrl());
+    if (!target) return null;
+    if (target.kind === "link") {
+      return (
+        <PrimaryButton
+          label={locale === "ar" ? "افتح الصفقة للإلغاء" : "Open the deal to cancel"}
+          tone="muted"
+          onPress={() => {
+            void Linking.openURL(target.url).catch((error: unknown) => {
+              reportError("Mobile open deal failed", error);
+            });
+          }}
+        />
+      );
+    }
+    return (
+      <Text style={styles.recordMeta}>
+        {locale === "ar"
+          ? `صفقة ممولة — ألغِها من شاشة الصفقة على الويب (\u2068${target.reference}\u2069)`
+          : `Financed deal — cancel it from the deal screen on the web (${target.reference})`}
+      </Text>
+    );
+  }
+
   async function cancel(sale: MobileSale) {
     try {
       await updateSale({ orgId, saleId: sale._id, status: "CANCELLED" });
@@ -229,7 +258,8 @@ export function SalesModule({
             <View style={styles.cardActions}>
               <PrimaryButton label={locale === "ar" ? "تفاصيل" : "Details"} tone="muted" onPress={() => setDetailSale(sale)} />
               {sale.status === "PENDING" ? <PrimaryButton label={locale === "ar" ? "إتمام" : "Complete"} tone="muted" onPress={() => complete(sale)} /> : null}
-              {sale.status !== "CANCELLED" ? <PrimaryButton label={locale === "ar" ? "إلغاء" : "Cancel"} tone="danger" onPress={() => cancel(sale)} /> : null}
+              {sale.status !== "CANCELLED" && !sale.applicationId ? <PrimaryButton label={locale === "ar" ? "إلغاء" : "Cancel"} tone="danger" onPress={() => cancel(sale)} /> : null}
+              {renderFinancedDealCancel(sale)}
             </View>
           </RecordCard>
         )}
@@ -360,7 +390,7 @@ export function SalesModule({
                   }}
                 />
               ) : null}
-              {detailSale.status !== "CANCELLED" ? (
+              {detailSale.status !== "CANCELLED" && !detailSale.applicationId ? (
                 <PrimaryButton
                   label={locale === "ar" ? "إلغاء البيع" : "Cancel sale"}
                   tone="danger"
@@ -370,6 +400,7 @@ export function SalesModule({
                   }}
                 />
               ) : null}
+              {renderFinancedDealCancel(detailSale)}
             </View>
           </>
         ) : null}
