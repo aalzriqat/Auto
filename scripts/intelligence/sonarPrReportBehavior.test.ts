@@ -205,7 +205,7 @@ function runScript(
   writeFileSync(log, "");
   writeFileSync(ghOut, "");
   writeFileSync(path.join(dir, "step.sh"), script);
-  const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+  const env: NodeJS.ProcessEnv = { ...process.env };
   Object.assign(env, {
     REAL_NODE: fwd(process.execPath),
     STUB_SCENARIO: fwd(scenario),
