@@ -2867,13 +2867,22 @@ describe("cheque returned by the bank - applications.returnFinanceDisbursementCh
       fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
     };
 
-    test("the confirm always sends expectedDisbursementVersion: 1 for an application that carries no version, and the version it shows otherwise", async () => {
+    test("DEP-2 deploy skew: at version 1 the key expectedDisbursementVersion is ABSENT from the call (an older backend rejects undeclared args)", async () => {
       permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
       show();
       renderCockpit();
       clickConfirm();
       await waitFor(() => expect(confirmCalls()).toHaveLength(1));
-      expect(confirmCalls()[0].expectedDisbursementVersion).toBe(1);
+      expect(Object.keys(confirmCalls()[0])).not.toContain("expectedDisbursementVersion");
+    });
+
+    test("DEP-2: an explicit version 1 is also omitted; only a version above 1 is sent", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show(1);
+      renderCockpit();
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      expect(Object.keys(confirmCalls()[0])).not.toContain("expectedDisbursementVersion");
     });
 
     test("a version-2 screen sends expectedDisbursementVersion: 2", async () => {
@@ -2897,11 +2906,70 @@ describe("cheque returned by the bank - applications.returnFinanceDisbursementCh
       await waitFor(() => expect(confirmCalls()).toHaveLength(1));
       await waitFor(() => expect(toast.error).toHaveBeenCalled());
       stubs.mutationFailures.delete("applications:confirmDisbursement");
-      // The dialog is still open; confirming again is a new command.
-      fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+      // Round 4: the refusal closes the dialog; confirming again means reopening it,
+      // and that confirm is a new command.
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      clickConfirm();
       await waitFor(() => expect(confirmCalls()).toHaveLength(2));
       const [first, second] = confirmCalls();
       expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
+    });
+
+    test("round 4: a coded stale-request refusal CLOSES the confirm dialog", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      renderCockpit();
+      stubs.mutationFailures.set(
+        "applications:confirmDisbursement",
+        "coded:FINANCE_CONFIRM_STALE_REQUEST|This confirmation was prepared before the deal's cheque was returned, so it cannot be applied. Nothing has been changed. Reopen the deal and confirm again."
+      );
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    });
+
+    test("round 4: a lost response (not a stale refusal) keeps the dialog open", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      renderCockpit();
+      stubs.mutationFailures.set("applications:confirmDisbursement", "connection lost");
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+    });
+
+    test("round 4: a dialog opened at v1 never confirms v2 - when the version moves under it the dialog closes, the key is dropped and a localized notice shows", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      // Open at v1 and leave it open; a lost response first, so a confirm key is KEPT.
+      stubs.mutationFailures.set("applications:confirmDisbursement", "connection lost");
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      vi.mocked(toast.error).mockClear();
+      stubs.mutationFailures.delete("applications:confirmDisbursement");
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      // A colleague returns the cheque: the screen now observes version 2.
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(toast.error).toHaveBeenCalledWith("DisbursementChangedWhileConfirming");
+      // Nothing was confirmed at v2 by the stale dialog.
+      expect(confirmCalls()).toHaveLength(1);
+      expect(Object.keys(confirmCalls()[0])).not.toContain("expectedDisbursementVersion");
+      // Reopening observes v2, sends v2, and does NOT reuse the v1 key.
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      expect(confirmCalls()[1].expectedDisbursementVersion).toBe(2);
+      expect(confirmCalls()[1].idempotencyKey).not.toBe(confirmCalls()[0].idempotencyKey);
+    });
+
+    test("round 4: the moved-version notice exists in EN and AR", async () => {
+      const { salesEn, salesAr } = await import("../../../lib/i18n/domains/sales");
+      expect((salesEn as Record<string, string>).DisbursementChangedWhileConfirming).toMatch(/Nothing was confirmed/);
+      expect((salesAr as Record<string, string>).DisbursementChangedWhileConfirming).toMatch(/[؀-ۿ]/);
     });
 
     test("an unrelated lost response still keeps the key (control for the retirement above)", async () => {

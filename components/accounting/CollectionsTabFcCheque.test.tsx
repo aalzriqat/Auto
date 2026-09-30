@@ -183,4 +183,48 @@ describe("Collections, Cheques tab: the Return dialog shows a translated refusal
     expect(shown).toMatch(/[\u0600-\u06FF]/);
     expect(shown).not.toContain('{"code"');
   });
+
+  test("after a coded CHEQUE_RETURN_KEY_CONFLICT the next submit mints a FRESH idempotency key (the kept key is dead for that content)", async () => {
+    const returnClearedCheque = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new ConvexError({ code: "CHEQUE_RETURN_KEY_CONFLICT", message: "This same request was already sent with a different cheque, reason or bank fee. Nothing has been changed. Close and reopen the dialog to try again." })
+      )
+      .mockResolvedValue(undefined);
+    stubs.mutations.set("collections:returnClearedCheque", returnClearedCheque);
+    stubs.paginated.set("collections:listCheques", [cheque({ _id: "c3", isFinanceCompanyCheque: false, status: "CLEARED" })]);
+    await openChequesTab();
+    fireEvent.click(screen.getAllByRole("button", { name: "Return" })[0]);
+    const dialog = await screen.findByRole("dialog");
+    const submit = () => fireEvent.click(within(dialog).getAllByRole("button", { name: "Return" }).at(-1)!);
+    submit();
+    await waitFor(() => expect(returnClearedCheque).toHaveBeenCalledTimes(1));
+    const { toast } = await import("@/components/ui/sonner");
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    submit();
+    await waitFor(() => expect(returnClearedCheque).toHaveBeenCalledTimes(2));
+    const [first, second] = returnClearedCheque.mock.calls.map((call) => (call[0] as { idempotencyKey: string }).idempotencyKey);
+    expect(second).not.toBe(first);
+  });
+
+  test("control: an unrelated lost response (plain error) keeps the same key for the retry", async () => {
+    const returnClearedCheque = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("connection lost"))
+      .mockResolvedValue(undefined);
+    stubs.mutations.set("collections:returnClearedCheque", returnClearedCheque);
+    stubs.paginated.set("collections:listCheques", [cheque({ _id: "c3", isFinanceCompanyCheque: false, status: "CLEARED" })]);
+    await openChequesTab();
+    fireEvent.click(screen.getAllByRole("button", { name: "Return" })[0]);
+    const dialog = await screen.findByRole("dialog");
+    const submit = () => fireEvent.click(within(dialog).getAllByRole("button", { name: "Return" }).at(-1)!);
+    submit();
+    await waitFor(() => expect(returnClearedCheque).toHaveBeenCalledTimes(1));
+    const { toast } = await import("@/components/ui/sonner");
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    submit();
+    await waitFor(() => expect(returnClearedCheque).toHaveBeenCalledTimes(2));
+    const [first, second] = returnClearedCheque.mock.calls.map((call) => (call[0] as { idempotencyKey: string }).idempotencyKey);
+    expect(second).toBe(first);
+  });
 });

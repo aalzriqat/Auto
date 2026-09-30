@@ -53,7 +53,7 @@ import { PaymentLinksPanel } from "./collections/PaymentLinksPanel";
 import { InstallmentCalendar } from "./collections/InstallmentCalendar";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { interpolate } from "@/lib/i18n/interpolate";
-import { getLocalizedErrorMessage } from "@/lib/errors";
+import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
 
 type ReceivableRow = Doc<"receivables"> & {
   customerName: string;
@@ -1216,6 +1216,13 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
       setReason("");
       setBankFeeMinor("");
     } catch (error) {
+      // The server says this key already belongs to a request with different
+      // content: it is dead for what is on screen, so the next attempt is a new
+      // command under a fresh key. (A lost response keeps the key.)
+      const refusedCode = isConvexError(error) ? (error.data as { code?: unknown } | null)?.code : undefined;
+      if (refusedCode === "CHEQUE_RETURN_KEY_CONFLICT") {
+        idempotencyKeyRef.current = null;
+      }
       toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setSubmitting(false);

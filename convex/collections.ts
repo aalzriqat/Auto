@@ -2215,7 +2215,7 @@ export const returnClearedCheque = mutation({
         // Coded, so the operator reads it in their language instead of the
         // default English key-reuse text.
         onFingerprintConflict: (): never =>
-          throwAppError(AppErrorCode.FINANCE_RETURN_KEY_CONFLICT, FC_RETURN_MESSAGES.FINANCE_RETURN_KEY_CONFLICT),
+          throwAppError(AppErrorCode.CHEQUE_RETURN_KEY_CONFLICT, FC_RETURN_MESSAGES.CHEQUE_RETURN_KEY_CONFLICT),
       },
       async () => {
         const cheque = await ctx.db.get(args.chequeId);

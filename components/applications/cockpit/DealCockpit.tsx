@@ -1109,6 +1109,25 @@ export function DealCockpit({
   // colleague returned the cheque - the kept key is stale and a fresh one is
   // minted instead of being refused.
   const confirmDisbursementKeyVersionRef = useRef(1);
+  // SCRUM-239 round 4: the disbursement version observed WHEN the confirm dialog
+  // opened. The confirm binds to THIS, never to whatever the screen shows at
+  // click time: a dialog opened at v1 must not be able to confirm v2 (the
+  // replacement cheque) just because a colleague returned the v1 cheque while it
+  // stood open.
+  const [confirmObservedVersion, setConfirmObservedVersion] = useState(1);
+  const observedDisbursementVersion = app?.disbursementVersion ?? 1;
+  const setConfirmingDisbursementObserved = (open: boolean) => {
+    if (open) setConfirmObservedVersion(observedDisbursementVersion);
+    setConfirmingDisbursement(open);
+  };
+  // The version moved under an open dialog: close it, drop the kept key, say so.
+  useEffect(() => {
+    if (!confirmingDisbursement) return;
+    if (observedDisbursementVersion === confirmObservedVersion) return;
+    confirmDisbursementKeyRef.current = null;
+    setConfirmingDisbursement(false);
+    toast.error(t("DisbursementChangedWhileConfirming"));
+  }, [confirmingDisbursement, observedDisbursementVersion, confirmObservedVersion, t]);
   const confirmSupplierDisbursementKeyRef = useRef<string | null>(null);
   // `deposits.release` gets a GENERATION-AWARE retained identity instead of a
   // plain key ref (SCRUM-313; the full reasoning lives at the release path in
@@ -1981,7 +2000,7 @@ export function DealCockpit({
         return {
           stageKey: "DISBURSEMENT",
           actionKey: "ConfirmDisbursement",
-          onStart: () => setConfirmingDisbursement(true),
+          onStart: () => setConfirmingDisbursementObserved(true),
           unavailableReasonKey: chequeDisbursementBlockKey,
         };
       }
@@ -2016,7 +2035,7 @@ export function DealCockpit({
         return {
           stageKey: "DISBURSEMENT",
           actionKey: "ConfirmDisbursement",
-          onStart: () => setConfirmingDisbursement(true),
+          onStart: () => setConfirmingDisbursementObserved(true),
           unavailableReasonKey: DISBURSEMENT_DENOMINATION_REASON[disbursementDenominationBlock],
           unavailableDetail: disbursementDenominationDetail,
         };
@@ -2024,7 +2043,7 @@ export function DealCockpit({
       return {
         stageKey: "DISBURSEMENT",
         actionKey: "ConfirmDisbursement",
-        onStart: () => setConfirmingDisbursement(true),
+        onStart: () => setConfirmingDisbursementObserved(true),
         unavailableReasonKey: disbursementUnavailableReason(
           canConfirmDisbursement,
           canConfirmFinanceDisbursement,
@@ -2936,12 +2955,14 @@ export function DealCockpit({
                 confirming: confirmingDisbursement,
                 submitting: disbursementSubmitting,
                 amountLabel: expectedDisbursementLabel,
-                onOpenChange: setConfirmingDisbursement,
+                onOpenChange: setConfirmingDisbursementObserved,
                 onConfirm: async () => {
                   if (!expectedDisbursementMinor) return;
                   setDisbursementSubmitting(true);
                   try {
-                    const observedVersion = app.disbursementVersion ?? 1;
+                    // The version captured when the dialog OPENED, not the one the
+                    // screen shows now (the dialog closes itself if that moves).
+                    const observedVersion = confirmObservedVersion;
                     if (confirmDisbursementKeyVersionRef.current !== observedVersion) {
                       confirmDisbursementKeyRef.current = null;
                     }
@@ -2955,9 +2976,13 @@ export function DealCockpit({
                           applicationId,
                           disbursedAmountMinor: expectedDisbursementMinor,
                           idempotencyKey: disbursementKey,
-                          // The version this screen observed: the server refuses a
-                          // confirm whose version it has since moved past.
-                          expectedDisbursementVersion: observedVersion,
+                          // The version the dialog observed: the server refuses a
+                          // confirm whose version it has since moved past. Sent ONLY
+                          // above 1: the frontend deploys on merge but the Convex
+                          // backend deploys by hand, and Convex rejects an undeclared
+                          // argument, so a v1 confirm must look exactly like the old
+                          // call. The server already refuses an omitted value at v2+.
+                          ...(observedVersion > 1 ? { expectedDisbursementVersion: observedVersion } : {}),
                         }),
                       "DisbursementConfirmedSuccess",
                       { reflectedWhen: financeDisbursementReflected }
@@ -2972,6 +2997,9 @@ export function DealCockpit({
                       : undefined;
                     if (refusedCode === "FINANCE_CONFIRM_STALE_REQUEST") {
                       confirmDisbursementKeyRef.current = null;
+                      // The dialog was prepared against a version that is gone:
+                      // reopening it observes the current one.
+                      setConfirmingDisbursement(false);
                     }
                     toast.error(getLocalizedErrorMessage(error, t));
                   } finally {

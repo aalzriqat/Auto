@@ -1199,7 +1199,7 @@ describe("SCRUM-239 round 3 - every reachable confirm-after-return refusal is co
     await expectRefusal(d, "FINANCE_CONFIRM_CHEQUE_FACE_MISMATCH");
   });
 
-  test("returnClearedCheque: a fresh-body reuse of a key is the coded FINANCE_RETURN_KEY_CONFLICT; a bad bank fee is CHEQUE_BANK_FEE_INVALID", async () => {
+  test("returnClearedCheque: a fresh-body reuse of a key is its OWN coded CHEQUE_RETURN_KEY_CONFLICT (not the finance-return one) and writes nothing; a bad bank fee is CHEQUE_BANK_FEE_INVALID", async () => {
     const d = await finalizedChequeDeal("c3h", "OPEN_YEAR");
     const [cheque] = await d.cheques();
     const call = (extra: Record<string, unknown>, key = crypto.randomUUID()) =>
@@ -1214,8 +1214,35 @@ describe("SCRUM-239 round 3 - every reachable confirm-after-return refusal is co
         fingerprint: "{\"different\":true}", status: "COMPLETED", createdBy: d.s.owner.userId, createdAt: Date.now(),
       });
     });
+    const snapshot = () =>
+      d.s.t.run(async (ctx) => ({
+        cheques: await ctx.db.query("postDatedCheques").collect(),
+        payments: await ctx.db.query("canonicalPayments").collect(),
+        allocations: await ctx.db.query("paymentAllocations").collect(),
+        events: await ctx.db.query("accountingEvents").collect(),
+        pending: await ctx.db.query("pendingAccountingEvents").collect(),
+        audits: await ctx.db.query("financialAuditLog").collect(),
+        idempotency: await ctx.db.query("commandIdempotency").collect(),
+      }));
+    const before = await snapshot();
     const conflict = await call({}, key);
-    expect(conflict?.data?.code).toBe("FINANCE_RETURN_KEY_CONFLICT");
+    expect(conflict?.data?.code).toBe("CHEQUE_RETURN_KEY_CONFLICT");
+    expect(conflict?.data?.message).toBe(FC_RETURN_MESSAGES.CHEQUE_RETURN_KEY_CONFLICT);
+    expect(await snapshot()).toEqual(before);
+  });
+
+  test("round 4 copy: lineage refusals name who acts next; the Arabic wording fixes hold; the collections conflict names what differed", () => {
+    for (const code of ["CHEQUE_RETURN_NO_RECEIPT_LINEAGE", "CHEQUE_RETURN_NO_PAYMENT_TO_REVERSE"] as const) {
+      expect(FC_RETURN_MESSAGES[code], code).toMatch(/An accountant reviews the deal\.$/);
+      expect((salesEn as Record<string, string>)[`ServerError_${code}`], code).toMatch(/An accountant reviews the deal\.$/);
+      expect((salesAr as Record<string, string>)[`ServerError_${code}`], code).toMatch(/ويراجع المحاسب الصفقة\.$/);
+    }
+    const ar = salesAr as Record<string, string>;
+    expect(ar.ServerError_CHEQUE_BANK_FEE_INVALID).toContain("عددًا صحيحًا غير سالب");
+    expect(ar.ServerError_FINANCE_CONFIRM_MULTIPLE_LIVE_CHEQUES).toContain("أكثر من شيك واحد فعّال");
+    expect(ar.ServerError_FINANCE_CONFIRM_CHEQUE_FACE_MISMATCH).toContain("لا يساوي مبلغ الصرف");
+    expect(FC_RETURN_MESSAGES.CHEQUE_RETURN_KEY_CONFLICT).toContain("cheque, reason or bank fee");
+    expect(ar.ServerError_CHEQUE_RETURN_KEY_CONFLICT).toContain("رسوم بنكية");
   });
 
   test("every new confirm/return refusal has EN text equal to the server text, AR text, and the nothing-changed sentence", () => {
@@ -1223,6 +1250,7 @@ describe("SCRUM-239 round 3 - every reachable confirm-after-return refusal is co
       "FINANCE_CONFIRM_ALREADY_CONFIRMED", "FINANCE_CONFIRM_CHEQUE_ALREADY_CLEARED", "FINANCE_CONFIRM_CHEQUE_RETURNED_OR_CANCELLED",
       "FINANCE_CONFIRM_CHEQUE_NOT_FOUND", "FINANCE_CONFIRM_MULTIPLE_LIVE_CHEQUES", "FINANCE_CONFIRM_CHEQUE_FACE_UNRECORDED",
       "FINANCE_CONFIRM_CHEQUE_FACE_MISMATCH", "CHEQUE_BANK_FEE_INVALID", "CHEQUE_RETURN_NO_RECEIPT_LINEAGE", "CHEQUE_RETURN_NO_PAYMENT_TO_REVERSE",
+      "CHEQUE_RETURN_KEY_CONFLICT",
     ] as const) {
       const error = new ConvexError({ code, message: FC_RETURN_MESSAGES[code] });
       const en = getLocalizedErrorMessage(error, (k) => (salesEn as Record<string, string>)[k] ?? k);

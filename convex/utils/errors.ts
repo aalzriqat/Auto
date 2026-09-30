@@ -77,6 +77,9 @@ export const AppErrorCode = {
   CHEQUE_BANK_FEE_INVALID: "CHEQUE_BANK_FEE_INVALID",
   CHEQUE_RETURN_NO_RECEIPT_LINEAGE: "CHEQUE_RETURN_NO_RECEIPT_LINEAGE",
   CHEQUE_RETURN_NO_PAYMENT_TO_REVERSE: "CHEQUE_RETURN_NO_PAYMENT_TO_REVERSE",
+  // SCRUM-239 round 4: `collections.returnClearedCheque` key reuse with a different
+  // cheque, reason or bank fee (its fingerprint includes the fee).
+  CHEQUE_RETURN_KEY_CONFLICT: "CHEQUE_RETURN_KEY_CONFLICT",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];
