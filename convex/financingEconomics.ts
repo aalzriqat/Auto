@@ -16,6 +16,7 @@ import {
   requiresLtvPercentFor,
 } from "./utils/financeApplicationProjection";
 import { PERMISSIONS } from "./utils/permissions";
+import { isManualFinanceApplication, normalizeManualPayerName } from "./utils/manualFinancePayer";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import {
   computeSubmittedQuotation,
@@ -154,6 +155,11 @@ async function recomputeAndPatchEconomics(
   // without its own check, the bad denomination stops here rather than being
   // persisted and scaled by a guess further downstream.
   assertSupportedDenomination(app.economicsCurrency, "recomputing these economics");
+  // SCRUM-27: a manual finance company has no configured rule to derive a split
+  // from. Its figures come from the approval letter (G, S) and are frozen at
+  // finalize; deriving here would need a company that does not exist and would
+  // overwrite the letter-derived contribution.
+  if (isManualFinanceApplication(app)) return false;
   const snapshot = await resolveRuleSnapshot(ctx, app);
   // Pinning is the moment an unpinned deal's denomination becomes permanent.
   // It must agree with the cost/custody rows already recorded against the deal
@@ -2242,6 +2248,13 @@ export const approveDealerPurchaseAmount = mutation({
     if (app.status === "CLOSED" || app.status === "CANCELLED") {
       throw new ConvexError("This application is closed. Its approval can no longer be changed.");
     }
+    // SCRUM-27: a manual finance company has its own door. This one resolves
+    // rule snapshots and LTV that a manual application does not have.
+    if (isManualFinanceApplication(app)) {
+      throw new ConvexError(
+        "This application is financed by a manual finance company. Enter its approval letter with the manual approval form instead."
+      );
+    }
     /**
      * At the TOP of the handler, so every approval route runs it.
      *
@@ -2717,6 +2730,8 @@ export const reopenApproval = mutation({
       approvedPurchaseApprovedBy: undefined,
       approvedPurchaseApprovedAt: undefined,
       approvedPurchaseNotes: undefined,
+      // SCRUM-27: the letter is the approval for a manual company.
+      manualApproval: undefined,
       financeCompanyFundedPortionMinor: undefined,
       unfinancedPortionMinor: undefined,
       dealerContributionMinor: undefined,
@@ -3231,6 +3246,109 @@ export const resolveFinancingReconciliation = mutation({
       updatedAt: Date.now(),
     });
 
+    return args.applicationId;
+  },
+});
+
+/**
+ * SCRUM-27 - the manager enters what a MANUAL finance company's approval letter
+ * says. Three facts, all from the letter, none derived:
+ *   - the approved amount G (what the company will pay),
+ *   - the company's name exactly as printed (its identity: it has no party row),
+ *   - S, the amount the dealership must send the company (explicit 0 is real;
+ *     unknown is refused, never read as 0).
+ *
+ * This is the manual sibling of `approveDealerPurchaseAmount` and deliberately
+ * skips everything that mutation does that a manual company has no rows for:
+ * quotation, appraisal, LTV and rule snapshots. The dealer contribution is NOT
+ * written here: it is S minus the deposits held at finalize, and the deposits can
+ * still change after the letter, so finalizeDeal derives it from S.
+ */
+export const recordManualFinanceApproval = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    approvedAmountMinor: v.number(),
+    financierName: v.string(),
+    dealerSendsMinor: v.number(),
+  },
+  returns: v.id("financeApplications"),
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.APPROVE_FINANCE_APPLICATION,
+    ]);
+    assertMinorAmount(args.approvedAmountMinor, "Approved amount");
+    if (args.approvedAmountMinor <= 0) {
+      throw new ConvexError("The approved amount must be greater than zero.");
+    }
+    // 0 is a real answer ("send nothing"); a missing or malformed one is not.
+    assertMinorAmount(args.dealerSendsMinor, "Amount the dealership sends the finance company");
+    const financierName = normalizeManualPayerName(args.financierName);
+
+    const app = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId,
+      APPLICATION_NOT_FOUND
+    );
+    if (!isManualFinanceApplication(app)) {
+      throw new ConvexError(
+        "This application is financed by a configured finance company. Record its approval with the purchase-amount approval instead."
+      );
+    }
+    if (app.status === "CLOSED" || app.status === "CANCELLED") {
+      throw new ConvexError("This application is closed. Its approval can no longer be changed.");
+    }
+    if (app.financedSalePlanVersion !== undefined || app.vehicleHandoverAt) {
+      throw new ConvexError(
+        "This deal has already been finalized or handed over, so the approval letter can no longer be changed. Cancel the application to reverse it instead."
+      );
+    }
+    assertSupportedDenomination(app.economicsCurrency, "recording this approval");
+    if (user._id === app.salespersonId) {
+      throw new ConvexError("You cannot approve the purchase amount on your own application.");
+    }
+
+    const previous = app.manualApproval;
+    const changed =
+      previous === undefined ||
+      previous.approvedAmountMinor !== args.approvedAmountMinor ||
+      previous.financierName !== financierName ||
+      previous.dealerSendsMinor !== args.dealerSendsMinor;
+    if (!changed) return args.applicationId; // a retry is a no-op, not a re-stamp
+
+    const now = Date.now();
+    if (previous !== undefined) {
+      await recordOverride(ctx, {
+        orgId: args.orgId,
+        applicationId: args.applicationId,
+        field: "manualApproval",
+        previousValue: `${previous.approvedAmountMinor} from "${previous.financierName}", dealership sends ${previous.dealerSendsMinor}, entered by ${previous.enteredBy}`,
+        newValue: `${args.approvedAmountMinor} from "${financierName}", dealership sends ${args.dealerSendsMinor}, entered by ${user._id}`,
+        reason: "Approval letter figures re-entered.",
+        changedBy: user._id,
+      });
+    }
+
+    await ctx.db.patch(args.applicationId, {
+      economicsRevision: (app.economicsRevision ?? 0) + 1,
+      manualApproval: {
+        approvedAmountMinor: args.approvedAmountMinor,
+        financierName,
+        dealerSendsMinor: args.dealerSendsMinor,
+        enteredBy: user._id,
+        enteredAt: now,
+      },
+      approvedDealerPurchaseAmountMinor: args.approvedAmountMinor,
+      approvedPurchaseBasis: "MANUAL",
+      approvedPurchaseApprovedBy: user._id,
+      approvedPurchaseApprovedAt: now,
+      updatedAt: now,
+    });
+    if (app.handoverStatus === "BLOCKED" && app.status === "APPROVED") {
+      await ctx.db.patch(args.applicationId, { handoverStatus: "READY" });
+    }
     return args.applicationId;
   },
 });
