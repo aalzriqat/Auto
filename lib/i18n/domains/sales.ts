@@ -220,6 +220,74 @@ const dealRailMessages = defineBilingualMessages({
     "بانتظار صرف شركة التمويل",
   ],
 
+  /**
+   * SCRUM-435. The finance company sends the FULL approved amount; before that
+   * transfer is confirmed the dealership pays it the customer's deposit and its
+   * own contribution. These name the dealership as the one to act.
+   */
+  BlockerAwaitingForwardToFinanceCompany: [
+    "The deposit and the dealership's contribution are paid to the finance company first",
+    "يُدفع العربون ومساهمة المعرض لشركة التمويل أولاً",
+  ],
+  BlockerForwardNotSettled: [
+    "The payment to the finance company is not settled on the books yet",
+    "الدفعة المسدَّدة لشركة التمويل لم تُسوَّ في الدفاتر بعد",
+  ],
+  RecordForwardToFinanceCompany: [
+    "Record payment to the finance company",
+    "سجّل الدفع لشركة التمويل",
+  ],
+  ForwardNeedsPermission: [
+    "A manager or accountant records the payment to the finance company.",
+    "يسجّل المدير أو المحاسب الدفع لشركة التمويل.",
+  ],
+  ForwardNotSettledReason: [
+    "An accountant resolves the payment to the finance company before the transfer can be confirmed.",
+    "يعالج المحاسب الدفع لشركة التمويل قبل أن يمكن تأكيد التحويل.",
+  ],
+  ForwardReturnedNotSettledReason: [
+    "The finance company returned the payment. An accountant resolves its reversal before the replacement payment can be recorded.",
+    "أعادت شركة التمويل الدفعة. يعالج المحاسب عكسها قبل أن يمكن تسجيل الدفعة البديلة.",
+  ],
+  ManagerCancelsFinalizedDeal: [
+    "A manager cancels a finalized deal.",
+    "يلغي المدير الصفقة المُنهاة.",
+  ],
+  RecordForwardTitle: [
+    "Record payment to the finance company",
+    "تسجيل الدفع لشركة التمويل",
+  ],
+  RecordForwardDesc: [
+    "The finance company sends the full approved amount. Record here what the dealership pays it back: the customer's deposit and the dealership's own contribution. Nothing is deducted.",
+    "ترسل شركة التمويل المبلغ المعتمد كاملاً. سجّل هنا ما يدفعه المعرض لها: عربون العميل ومساهمة المعرض. لا يُخصم شيء.",
+  ],
+  RecordForwardAmount: ["Amount to pay", "المبلغ المستحق الدفع"],
+  RecordForwardDeposit: ["Customer deposit", "عربون العميل"],
+  RecordForwardContribution: ["Dealership contribution", "مساهمة المعرض"],
+  RecordForwardConfirm: ["Record payment", "تسجيل الدفع"],
+  ForwardRecordedSuccess: [
+    "Payment to the finance company recorded",
+    "تم تسجيل الدفع لشركة التمويل",
+  ],
+  ForwardVoidAction: ["Void the payment", "إلغاء الدفع"],
+  ForwardReturnedAction: ["Report returned by the company", "الإبلاغ عن إرجاع الشركة للمبلغ"],
+  ForwardVoidTitle: ["Void the payment to the finance company", "إلغاء الدفع لشركة التمويل"],
+  ForwardVoidDesc: [
+    "Use this when the payment was recorded by mistake and the finance company has not sent the transfer yet. The payment is reversed on the books and becomes due again.",
+    "استخدمه إذا سُجّل الدفع بالخطأ ولم ترسل شركة التمويل التحويل بعد. يُعكس الدفع في الدفاتر ويصبح مستحقاً من جديد.",
+  ],
+  ForwardReturnedTitle: ["Report the payment returned", "الإبلاغ عن إرجاع الدفع"],
+  ForwardReturnedDesc: [
+    "Use this when the finance company sent the payment back. It is reversed on the books and becomes due again, so the deal can be cancelled or the payment recorded once more.",
+    "استخدمه إذا أعادت شركة التمويل الدفع. يُعكس في الدفاتر ويصبح مستحقاً من جديد، فيمكن إلغاء الصفقة أو تسجيل الدفع مرة أخرى.",
+  ],
+  ForwardReasonLabel: ["Reason", "السبب"],
+  ForwardReasonRequired: ["A reason is required.", "السبب مطلوب."],
+  ForwardCorrectionSuccess: ["Payment to the finance company corrected", "تم تصحيح الدفع لشركة التمويل"],
+  ForwardVoidAfterTransfer: [
+    "The finance company's transfer is now confirmed, so this payment can no longer be voided. If the company sent it back, report it as returned.",
+    "تم تأكيد تحويل شركة التمويل، لذا لم يعد بالإمكان إلغاء هذا الدفع. إذا أعادته الشركة، أبلغ عن إرجاعه.",
+  ],
   /** Settlement node while the payment step is live: it closes only once the money arrives. */
   BlockerSettlementAfterFinancePayment: [
     "Completes after the finance company pays",

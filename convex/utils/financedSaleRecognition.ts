@@ -4,9 +4,11 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { computeExpectedRemittance } from "../../lib/financingEconomics";
 import {
   buildFinancedSalePostingPlan,
+  buildFinancedSalePostingPlanV2,
   checkLegalInvoice,
   treatmentPosting,
   type FinancedSalePostingPlan,
+  type FinancedSalePostingPlanV2,
   type SettlementComponentInput,
 } from "./financedSalePostingPlan";
 import {
@@ -435,7 +437,7 @@ function rowsUnavailableReason(read: "FEES" | "CUSTODY", error: unknown): Closin
 export async function evaluateClosingReadiness(
   ctx: QueryCtx | MutationCtx,
   app: Doc<"financeApplications">,
-  opts: { settlesDirect: boolean; currency: string }
+  opts: { settlesDirect: boolean; currency: string; planVersion?: 1 | 2 }
 ): Promise<ClosingReadinessEvaluation> {
   const planCovered = financedSaleRecognitionApplies(app, opts);
   // The scope of the cost gate is decided HERE, once, for the readiness query
@@ -455,7 +457,11 @@ export async function evaluateClosingReadiness(
   // the honest answer is to refuse rather than fall back to the approved
   // amount, the quotation, or the customer's financing principal.
   planOnly("REMITTANCE_KNOWN", () => {
-    if (app.expectedDealerRemittanceMinor !== undefined) return ["READY", null];
+    // v2 (SCRUM-435): the company transfers the full approved amount, so a known
+    // approved amount IS the figure - no retained/netted remittance can leave a
+    // deal with nothing to record and nowhere to go.
+    if (opts.planVersion !== 1 && app.approvedDealerPurchaseAmountMinor !== undefined) return ["READY", null];
+    if (app.expectedDealerRemittanceMinor !== undefined && opts.planVersion === 1) return ["READY", null];
     if (app.approvedDealerPurchaseAmountMinor === undefined) {
       return [
         "UNAVAILABLE",
@@ -670,8 +676,14 @@ export async function resolveFinancedSalePlan(
      * caller can forget to decide.
      */
     mayReadMoney: boolean;
+    /**
+     * SCRUM-435. Defaults to 2 (finance-company forward): `finalizeDeal` is
+     * always v2. 1 exists so the v1 builder stays exercised by its own tests
+     * and is never recomputed for a deal already finalized under it.
+     */
+    planVersion?: 1 | 2;
   }
-): Promise<FinancedSalePostingPlan | undefined> {
+): Promise<FinancedSalePostingPlan | FinancedSalePostingPlanV2 | undefined> {
   // The finalize door re-runs the SAME evaluator the deal screen shows — never
   // a client's verdict, never the retired stamp — and refuses on the first
   // unmet condition, before anything is written (SCRUM-407 P1.4).
@@ -714,7 +726,11 @@ export async function resolveFinancedSalePlan(
   // So this refuses, and says what is missing. It is the same rule the plan
   // builder applies to a fee whose treatment has no mapping; the only difference
   // is that here the treatment does not exist to be mapped.
+  // v2 (SCRUM-435): the company transfers the FULL approved amount and the
+  // dealership forwards the contribution, so how the company's own policy would
+  // have netted it is irrelevant and is not refused.
   if (
+    opts.planVersion === 1 &&
     dealerContributionSettlement === "NETTED_FROM_REMITTANCE" &&
     dealerContributionMinor > 0
   ) {
@@ -861,6 +877,32 @@ export async function resolveFinancedSalePlan(
     throw new ConvexError(
       "This deal records the customer's money both as a deposit held by the dealership and as a contribution paid to the financing company. Record which of the two actually happened before finalizing."
     );
+  }
+
+  if (opts.planVersion !== 1) {
+    // SCRUM-435, owner ruling Option A: G is the approved amount in full. A
+    // held deposit applied "to the dealer amount" would be netted off that
+    // receivable, which is exactly the superseded model - refused with a
+    // guided message rather than silently re-interpreted.
+    if (depositHeldMajor > 0 && opts.depositTreatment === "APPLY_TO_DEALER_AMOUNT") {
+      throw new ConvexError(
+        "On a deal financed by a finance company the customer's deposit is forwarded to the company, not applied against the dealer's amount. Choose to apply it to the transaction settlement, or refund or forfeit it, before finalizing."
+      );
+    }
+    const v2 = buildFinancedSalePostingPlanV2({
+      currency: opts.currency,
+      legalInvoiceConsiderationMinor: app.legalInvoiceAmountMinor,
+      legalInvoiceIssuedTo: app.legalInvoiceIssuedTo,
+      financierIsConfiguredExternal: true,
+      approvedAmountMinor: app.approvedDealerPurchaseAmountMinor,
+      hasSettlementComponents: components.length > 0,
+      customerReceivableMinor,
+      depositLiabilityAppliedMinor,
+      dealerContributionMinor,
+      customerFirstPaymentMinor: app.customerFirstPaymentMinor,
+    });
+    if (!v2.ok) throw new ConvexError(v2.refusal.message);
+    return v2.plan;
   }
 
   const result = buildFinancedSalePostingPlan({

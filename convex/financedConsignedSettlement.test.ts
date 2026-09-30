@@ -817,7 +817,7 @@ describe("a reservation deposit on the direct route", () => {
 
     // 20,000 invoiced, 3,000 already held, so 17,000 left to come.
     const receivable = await financeReceivableOf(s, applicationId);
-    expect(receivable?.originalAmountMinor).toBe((VEHICLE_PRICE - 3_000) * SCALE);
+    expect(receivable?.originalAmountMinor).toBe(VEHICLE_PRICE * SCALE /* SCRUM-435: the company sends the FULL approved amount */);
 
     // The hold is consumed exactly once, and the application row records it.
     const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
@@ -6784,7 +6784,7 @@ describe("the closing matrix c16216 requires", () => {
 
     // And asked the company for the remainder rather than the whole invoice.
     const receivable = await financeReceivableOf(s, applicationId);
-    expect(receivable?.originalAmountMinor).toBe((VEHICLE_PRICE - 3_000) * SCALE);
+    expect(receivable?.originalAmountMinor).toBe(VEHICLE_PRICE * SCALE /* SCRUM-435: the company sends the FULL approved amount */);
   });
 
   test("a multi-vehicle quote cannot become a financed deal at all", async () => {
@@ -6905,7 +6905,7 @@ describe("the closing matrix c16216 requires", () => {
     const atSale = await ledgerBySystemKey(s);
     expect(atSale[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(0);
     expect(atSale[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES] ?? 0).toBe(
-      (VEHICLE_PRICE - 3_000) * SCALE
+      VEHICLE_PRICE * SCALE /* SCRUM-435: the company sends the FULL approved amount */
     );
 
     await s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
@@ -7007,7 +7007,7 @@ describe("the closing matrix c16216 requires", () => {
 
     // And the receivable was not re-opened at a different figure.
     const receivable = await financeReceivableOf(s, applicationId);
-    expect(receivable?.originalAmountMinor).toBe((VEHICLE_PRICE - 3_000) * SCALE);
+    expect(receivable?.originalAmountMinor).toBe(VEHICLE_PRICE * SCALE /* SCRUM-435: the company sends the FULL approved amount */);
   });
 
   test("a deposit belonging to another organization refuses before anything is written", async () => {
@@ -7220,7 +7220,9 @@ describe("the closing matrix c16216 requires", () => {
         downPayment: 3_000,
         depositResolution: { treatment: "APPLY_TO_DEALER_AMOUNT" },
       })
-    ).rejects.toThrow(/exceeds what the dealership billed/i);
+    // SCRUM-435 (v2): refused earlier and in the owner's terms - the deposit is
+    // forwarded to the company, so it cannot be applied against the dealer's amount.
+    ).rejects.toThrow(/deposit is forwarded to the company/i);
 
     // Nothing written, and the deposit is still held for a real decision.
     const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());

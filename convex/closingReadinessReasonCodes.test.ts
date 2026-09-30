@@ -69,10 +69,11 @@ async function custody(s: Seeded, patch: Partial<Doc<"financeDealCustody">> = {}
   );
 }
 
-async function checks(s: Seeded) {
+/** v1 = the pre-SCRUM-435 netted plan these fixtures were written against; v2 twins pass 2. */
+async function checks(s: Seeded, planVersion: 1 | 2 = 1) {
   const readiness = await s.t.run(async (ctx) => {
     const app = (await ctx.db.get(s.applicationId))!;
-    return (await evaluateClosingReadiness(ctx, app, { settlesDirect: false, currency: "JOD" })).readiness;
+    return (await evaluateClosingReadiness(ctx, app, { settlesDirect: false, currency: "JOD", planVersion })).readiness;
   });
   return new Map(readiness.checks.map((check) => [check.key, check]));
 }
@@ -92,6 +93,19 @@ describe("SCRUM-414 — every unmet readiness check carries a code, its params a
     );
     expect(approved.get("REMITTANCE_KNOWN")).toMatchObject({ status: "BLOCKED", reason: { code: "REMITTANCE_UNKNOWN" } });
     expect(approved.get("FIRST_PAYMENT_RECORDED")).toMatchObject({ status: "BLOCKED", reason: { code: "FIRST_PAYMENT_MISSING" } });
+  });
+
+  test("v2 (SCRUM-435): the approved amount IS the transfer, so no separately recorded remittance is required", async () => {
+    const approved = await checks(
+      await seed({ approvedDealerPurchaseAmountMinor: jod(10_000), submittedQuotationMinor: jod(10_000) }),
+      2
+    );
+    expect(approved.get("REMITTANCE_KNOWN")).toEqual({ key: "REMITTANCE_KNOWN", status: "READY", reason: null });
+    // Without an approval the check still names what is missing.
+    const noApproval = await checks(await seed(), 2);
+    expect(noApproval.get("REMITTANCE_KNOWN")).toMatchObject({
+      status: "UNAVAILABLE", reason: { code: "REMITTANCE_APPROVAL_MISSING" },
+    });
   });
 
   test("legal invoice: an unusable amount and a wrong recipient are distinct codes", async () => {
@@ -191,7 +205,7 @@ describe("SCRUM-414 — the finalize door's refusal carries the same code", () =
     const error = await s.t.run(async (ctx) => {
       const app = (await ctx.db.get(s.applicationId))!;
       try {
-        await resolveFinancedSalePlan(ctx, app, { settlesDirect: false, currency: "JOD", mayReadMoney: true });
+        await resolveFinancedSalePlan(ctx, app, { settlesDirect: false, currency: "JOD", mayReadMoney: true, planVersion: 1 });
         return null;
       } catch (caught) {
         return caught instanceof ConvexError ? { data: caught.data as unknown, message: caught.message } : { data: "not a ConvexError", message: "" };
@@ -213,7 +227,7 @@ describe("SCRUM-414 R1 — below the finance tier the resolver throws only the c
     const data = await s.t.run(async (ctx) => {
       const app = (await ctx.db.get(s.applicationId))!;
       try {
-        await resolveFinancedSalePlan(ctx, app, { settlesDirect: false, currency: "JOD", mayReadMoney: false });
+        await resolveFinancedSalePlan(ctx, app, { settlesDirect: false, currency: "JOD", mayReadMoney: false, planVersion: 1 });
         return null;
       } catch (caught) {
         return caught instanceof ConvexError ? (caught.data as unknown) : "not a ConvexError";

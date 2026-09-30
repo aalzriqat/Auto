@@ -30,6 +30,8 @@ import {
   assertReservationAdoptableWithoutDeposit,
 } from "./utils/depositRequestGuards";
 import { completeSale } from "./utils/saleCompletion";
+import { planVersionOf } from "./utils/financedSalePostingPlan";
+import { deriveForwardState, forwardCancelRefusal, forwardGateRefusal } from "./utils/financeCompanyForward";
 import {
   resolveFinancedSalePlan,
   financedSaleRecognitionDate,
@@ -1971,7 +1973,12 @@ export const dealCockpit = query({
     // is finished. The rail is qualitative — stage names and blocker keys, no
     // amounts — so it is safe to show a caller who cannot see the money.
     const settlementFacts = await resolveSettlement(ctx, app);
+    // SCRUM-435: the ONE forward proof feeds the rail, the cockpit view and the
+    // gates; nothing here derives it a second time.
+    const forwardProof = await deriveForwardState(ctx, app);
     const stages = deriveDealStages({
+      forwardState: forwardProof.state,
+      forwardExceptionOpen: forwardProof.returnedExceptionOpen,
       settlementComplete: settlementFacts.moneySettled,
       financierLeg: settlementFacts.financierLeg,
       dealCancelled: settlementFacts.saleCancelled,
@@ -2223,6 +2230,40 @@ export const dealCockpit = query({
        */
       settlementAdviceDiscrepancy: null as SettlementAdviceEvidence | null,
       stages,
+      /**
+       * SCRUM-435 - the dealership's payment of the deposit and its
+       * contribution to the finance company. STATUS ONLY here: no amount, no
+       * deposit or contribution split. The figures are FINANCE-tier and ride
+       * in `money.forward` for a caller who may see money.
+       */
+      forward: {
+        /** v2 deal (the manager-cancels rule applies, whether or not anything is due). */
+        planV2: planVersionOf(app) === 2,
+        applies: forwardProof.applies,
+        state: forwardProof.state,
+        returnedExceptionOpen: forwardProof.returnedExceptionOpen,
+        /**
+         * The payment currently on the books, for the void / report-returned
+         * actions. An id, not an amount. Null when nothing settled is on the books.
+         */
+        onBooksForwardId: forwardProof.onBooksForwardId,
+        /** After the transfer a payment can only be reported returned, not voided. */
+        transferConfirmed: app.disbursedAt !== undefined,
+        /** Exactly the permissions the commands require. */
+        mayRecord:
+          isSystemOwnerRole(role) ||
+          (role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT) &&
+            role.permissions.includes(PERMISSIONS.VIEW_FINANCE)),
+        /**
+         * A finalized v2 deal is cancelled by a manager. False for a caller the
+         * server would refuse, so the screen offers only what is accepted.
+         */
+        mayCancelFinalized:
+          isSystemOwnerRole(role) ||
+          (role.permissions.includes(PERMISSIONS.CREATE_FINANCE_APPLICATION) &&
+            role.permissions.includes(PERMISSIONS.FINALIZE_FINANCED_DEAL) &&
+            role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT)),
+      },
       documents,
       timeline: timeline
         .slice()
@@ -2267,7 +2308,19 @@ export const dealCockpit = query({
     return {
       ...base,
       settlementAdviceDiscrepancy: settlementAdviceEvidence,
-      money: await buildCockpitMoney(ctx, app, quote, settlementFacts),
+      money: {
+        ...(await buildCockpitMoney(ctx, app, quote, settlementFacts)),
+        // SCRUM-435 FINANCE tier: what is owed onward, and what it is made of.
+        forward: {
+          dueMinor: forwardProof.dueMinor,
+          depositMinor: app.forwardDepositPortionMinor ?? 0,
+          contributionMinor: app.forwardContributionPortionMinor ?? 0,
+          onBooksMinor: forwardProof.versions.reduce(
+            (sum, version) => (version.state === "ON_BOOKS" ? sum + version.amountMinor : sum),
+            0
+          ),
+        },
+      },
       firstPaymentCorrection: {
         /** null when the server would accept the correction. */
         block: firstPaymentBlock,
@@ -3102,6 +3155,19 @@ export const cancelApplication = mutation({
           // posted GL — require finalization authority (the same permission
           // needed to close the deal in the first place), not just approval.
           await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.FINALIZE_FINANCED_DEAL]);
+
+          // SCRUM-435 (v2 deals only; v1 is unchanged): the deal has payments the
+          // finance company holds, so a manager cancels it - never sales or an
+          // accountant alone - and only when the forward proof allows it.
+          if (planVersionOf(app) === 2) {
+            try {
+              await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
+            } catch {
+              throw new ConvexError("A manager cancels a finalized deal.");
+            }
+            const forwardBlock = forwardCancelRefusal(await deriveForwardState(ctx, app));
+            if (forwardBlock !== null) throw new ConvexError(forwardBlock);
+          }
 
           if (app.disbursedAt) {
             throw new ConvexError(
@@ -4201,6 +4267,13 @@ export const finalizeDeal = mutation({
                 customerReceivableMinor: financedSalePlan.customerReceivableMinor,
                 depositLiabilityAppliedMinor:
                   financedSalePlan.depositLiabilityAppliedMinor,
+                // v2 (SCRUM-435): H and C are owed onward to the company.
+                ...(financedSalePlan.version === 2
+                  ? {
+                      forwardDepositMinor: financedSalePlan.forwardDepositMinor,
+                      forwardContributionMinor: financedSalePlan.forwardContributionMinor,
+                    }
+                  : {}),
                 components: financedSalePlan.components.map((component) => ({
                   sourceKind: component.sourceKind,
                   sourceId: component.sourceId,
@@ -4301,6 +4374,15 @@ export const finalizeDeal = mutation({
                 financedSaleRecognitionFingerprint: financedSalePlan.fingerprint,
                 financedSaleNetReceivableMinor:
                   financedSalePlan.financeCompanyReceivableMinor,
+                // SCRUM-435: frozen forward due (H + C) and its split.
+                ...(financedSalePlan.version === 2
+                  ? {
+                      financedSalePlanVersion: 2 as const,
+                      financeCompanyForwardDueMinor: financedSalePlan.forwardDueMinor,
+                      forwardDepositPortionMinor: financedSalePlan.forwardDepositMinor,
+                      forwardContributionPortionMinor: financedSalePlan.forwardContributionMinor,
+                    }
+                  : {}),
               }
             : {}),
         });
@@ -4469,6 +4551,17 @@ export const confirmDisbursement = mutation({
           throw new ConvexError(
             "This deal settles directly with the supplier, so the finance company's payment never reaches the dealership's account and there is nothing here to receive. Record the company's payment to the supplier instead, and collect the dealership's margin from the supplier when he pays it."
           );
+        }
+
+        // SCRUM-435 (v2): the finance company transfers the FULL approved amount,
+        // and the dealership owes it the deposit and its contribution onward.
+        // The transfer is confirmed only once that forward is proven on the
+        // books (or nothing is due) - by the ONE proof, never a second check.
+        // The refusal names who acts next and never carries the forward amounts.
+        if (planVersionOf(app) === 2) {
+          const forward = await deriveForwardState(ctx, app);
+          const forwardRefusal = forwardGateRefusal(forward.state);
+          if (forwardRefusal !== null) throw new ConvexError(forwardRefusal);
         }
 
         const quote = await ctx.db.get(app.quoteId);
