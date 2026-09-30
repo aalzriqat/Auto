@@ -1115,19 +1115,37 @@ export function DealCockpit({
   // replacement cheque) just because a colleague returned the v1 cheque while it
   // stood open.
   const [confirmObservedVersion, setConfirmObservedVersion] = useState(1);
+  // A ref mirror of the state above: an async confirm closes over the render it
+  // was clicked in, so a late answer must compare against THIS, not its closure.
+  const confirmObservedVersionRef = useRef(1);
+  // The version a confirm was SENT under whose outcome this screen does not know
+  // (sent, no answer yet or a lost response). A server answer - success or any
+  // refusal - makes the outcome known and clears it. It is what decides whether
+  // "nothing was confirmed" is still a true thing to say.
+  const confirmUnknownOutcomeVersionRef = useRef<number | null>(null);
   const observedDisbursementVersion = app?.disbursementVersion ?? 1;
+  // `app` is undefined while loading or reconnecting and null if not found: no
+  // version is observed then, and `?? 1` above must not read as "moved to v1".
+  const appObserved = app != null;
   const setConfirmingDisbursementObserved = (open: boolean) => {
     if (open) setConfirmObservedVersion(observedDisbursementVersion);
     setConfirmingDisbursement(open);
   };
+  useEffect(() => {
+    confirmObservedVersionRef.current = confirmObservedVersion;
+  }, [confirmObservedVersion]);
   // The version moved under an open dialog: close it, drop the kept key, say so.
   useEffect(() => {
-    if (!confirmingDisbursement) return;
+    if (!appObserved || !confirmingDisbursement) return;
     if (observedDisbursementVersion === confirmObservedVersion) return;
+    // "Nothing was confirmed" is true only if nothing was sent under this
+    // dialog's version; a sent confirm with a lost response may have committed.
+    const outcomeUnknown = confirmUnknownOutcomeVersionRef.current === confirmObservedVersion;
     confirmDisbursementKeyRef.current = null;
+    confirmUnknownOutcomeVersionRef.current = null;
     setConfirmingDisbursement(false);
-    toast.error(t("DisbursementChangedWhileConfirming"));
-  }, [confirmingDisbursement, observedDisbursementVersion, confirmObservedVersion, t]);
+    toast.error(t(outcomeUnknown ? "DisbursementChangedOutcomeUnknown" : "DisbursementChangedWhileConfirming"));
+  }, [appObserved, confirmingDisbursement, observedDisbursementVersion, confirmObservedVersion, t]);
   const confirmSupplierDisbursementKeyRef = useRef<string | null>(null);
   // `deposits.release` gets a GENERATION-AWARE retained identity instead of a
   // plain key ref (SCRUM-313; the full reasoning lives at the release path in
@@ -2958,17 +2976,21 @@ export function DealCockpit({
                 onOpenChange: setConfirmingDisbursementObserved,
                 onConfirm: async () => {
                   if (!expectedDisbursementMinor) return;
+                  // The version captured when the dialog OPENED, not the one the
+                  // screen shows now (the dialog closes itself if that moves).
+                  // Held in the closure so this request's answer, however late,
+                  // is judged against ITS version.
+                  const observedVersion = confirmObservedVersion;
                   setDisbursementSubmitting(true);
                   try {
-                    // The version captured when the dialog OPENED, not the one the
-                    // screen shows now (the dialog closes itself if that moves).
-                    const observedVersion = confirmObservedVersion;
                     if (confirmDisbursementKeyVersionRef.current !== observedVersion) {
                       confirmDisbursementKeyRef.current = null;
                     }
                     confirmDisbursementKeyVersionRef.current = observedVersion;
                     confirmDisbursementKeyRef.current ??= `confirm-disbursement:${crypto.randomUUID()}`;
                     const disbursementKey = confirmDisbursementKeyRef.current;
+                    // Sent: until the server answers, the outcome is unknown here.
+                    confirmUnknownOutcomeVersionRef.current = observedVersion;
                     await trackRecorded(
                       () =>
                         confirmDisbursement({
@@ -2987,15 +3009,33 @@ export function DealCockpit({
                       "DisbursementConfirmedSuccess",
                       { reflectedWhen: financeDisbursementReflected }
                     );
-                    confirmDisbursementKeyRef.current = null;
-                    setConfirmingDisbursement(false);
+                    // The server answered: the outcome of THIS request is known.
+                    if (confirmUnknownOutcomeVersionRef.current === observedVersion) {
+                      confirmUnknownOutcomeVersionRef.current = null;
+                    }
+                    // A late answer to an OLD attempt must not touch a dialog
+                    // reopened at a newer version (its key, its open state).
+                    if (confirmObservedVersionRef.current === observedVersion) {
+                      confirmDisbursementKeyRef.current = null;
+                      setConfirmingDisbursement(false);
+                    }
                   } catch (error) {
+                    // A server answer (a ConvexError) means the request was
+                    // refused and nothing committed; anything else is a lost
+                    // response whose outcome stays unknown.
+                    const answeredByServer = isConvexError(error);
+                    if (answeredByServer && confirmUnknownOutcomeVersionRef.current === observedVersion) {
+                      confirmUnknownOutcomeVersionRef.current = null;
+                    }
                     // A stale-version refusal is final for this key: the next click
                     // (after the screen refreshes) mints a fresh one.
-                    const refusedCode = isConvexError(error)
+                    const refusedCode = answeredByServer
                       ? (error.data as { code?: unknown } | null)?.code
                       : undefined;
-                    if (refusedCode === "FINANCE_CONFIRM_STALE_REQUEST") {
+                    if (
+                      refusedCode === "FINANCE_CONFIRM_STALE_REQUEST" &&
+                      confirmObservedVersionRef.current === observedVersion
+                    ) {
                       confirmDisbursementKeyRef.current = null;
                       // The dialog was prepared against a version that is gone:
                       // reopening it observes the current one.

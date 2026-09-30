@@ -2866,6 +2866,10 @@ describe("cheque returned by the bank - applications.returnFinanceDisbursementCh
       fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
       fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
     };
+    // The toast mock is module-wide and never reset: a notice asserted ABSENT must not be one an earlier test raised.
+    beforeEach(() => {
+      vi.mocked(toast.error).mockClear();
+    });
 
     test("DEP-2 deploy skew: at version 1 the key expectedDisbursementVersion is ABSENT from the call (an older backend rejects undeclared args)", async () => {
       permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
@@ -2955,7 +2959,8 @@ describe("cheque returned by the bank - applications.returnFinanceDisbursementCh
       show(2);
       view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-      expect(toast.error).toHaveBeenCalledWith("DisbursementChangedWhileConfirming");
+      // A confirm WAS sent at v1 and its answer was lost, so "nothing was confirmed" would be untrue (round 5).
+      expect(toast.error).toHaveBeenCalledWith("DisbursementChangedOutcomeUnknown");
       // Nothing was confirmed at v2 by the stale dialog.
       expect(confirmCalls()).toHaveLength(1);
       expect(Object.keys(confirmCalls()[0])).not.toContain("expectedDisbursementVersion");
@@ -2966,10 +2971,117 @@ describe("cheque returned by the bank - applications.returnFinanceDisbursementCh
       expect(confirmCalls()[1].idempotencyKey).not.toBe(confirmCalls()[0].idempotencyKey);
     });
 
+    test("round 5 (control): a version move with NOTHING sent shows the plain 'nothing was confirmed' notice", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(toast.error).toHaveBeenCalledWith("DisbursementChangedWhileConfirming");
+      expect(toast.error).not.toHaveBeenCalledWith("DisbursementChangedOutcomeUnknown");
+      expect(confirmCalls()).toHaveLength(0);
+    });
+
+    test("round 5 F1: a confirm sent at v1 whose outcome is UNKNOWN (transport error), then the version moves - the notice must not claim nothing was confirmed", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      // The mutation may have committed; only the response was lost.
+      stubs.mutationFailures.set("applications:confirmDisbursement", "connection lost");
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      vi.mocked(toast.error).mockClear();
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      // A colleague returns the cheque.
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(toast.error).toHaveBeenCalledWith("DisbursementChangedOutcomeUnknown");
+      expect(toast.error).not.toHaveBeenCalledWith("DisbursementChangedWhileConfirming");
+    });
+
+    test("round 5 F1: a KNOWN refusal (the server answered, nothing committed) clears the unknown-outcome state, so a later version move says nothing was confirmed", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      stubs.mutationFailures.set("applications:confirmDisbursement", "refused:Amount does not match");
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      vi.mocked(toast.error).mockClear();
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(toast.error).toHaveBeenCalledWith("DisbursementChangedWhileConfirming");
+      expect(toast.error).not.toHaveBeenCalledWith("DisbursementChangedOutcomeUnknown");
+    });
+
+    test("round 5 F2: a late stale-refusal for an OLD attempt does not close a dialog reopened at a newer version", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      let settleOld!: () => void;
+      stubs.mutationHolds.set(
+        "applications:confirmDisbursement",
+        new Promise<void>((resolve) => {
+          settleOld = resolve;
+        })
+      );
+      stubs.mutationFailures.set(
+        "applications:confirmDisbursement",
+        "coded:FINANCE_CONFIRM_STALE_REQUEST|This confirmation was prepared before the deal's cheque was returned, so it cannot be applied. Nothing has been changed. Reopen the deal and confirm again."
+      );
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      // The version moves: the v1 dialog closes; the operator reopens at v2.
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      vi.mocked(toast.error).mockClear();
+      // The OLD attempt's answer arrives now.
+      settleOld();
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+    });
+
+    test("round 5 F3: the app query going undefined at v2 does not make the effect close the dialog or toast", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show(2);
+      const view = renderCockpit();
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      // The app read drops out (reconnecting): `?? 1` would read this as a move from v2 to v1.
+      queryResults.delete(GET_QUERY);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(toast.error).not.toHaveBeenCalled());
+      // The app comes back at the SAME version: the dialog it had is still open.
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+    });
+
     test("round 4: the moved-version notice exists in EN and AR", async () => {
       const { salesEn, salesAr } = await import("../../../lib/i18n/domains/sales");
       expect((salesEn as Record<string, string>).DisbursementChangedWhileConfirming).toMatch(/Nothing was confirmed/);
       expect((salesAr as Record<string, string>).DisbursementChangedWhileConfirming).toMatch(/[؀-ۿ]/);
+    });
+
+    test("round 5: the unknown-outcome notice exists in EN and AR and does not claim nothing was confirmed", async () => {
+      const { salesEn, salesAr } = await import("../../../lib/i18n/domains/sales");
+      const en = (salesEn as Record<string, string>).DisbursementChangedOutcomeUnknown;
+      const ar = (salesAr as Record<string, string>).DisbursementChangedOutcomeUnknown;
+      expect(en).toMatch(/result is not known/);
+      expect(en).not.toMatch(/Nothing was confirmed/);
+      expect(ar).toMatch(/[؀-ۿ]/);
+      expect(ar).toMatch(/غير معروفة/);
     });
 
     test("an unrelated lost response still keeps the key (control for the retirement above)", async () => {
