@@ -141,6 +141,8 @@ import {
   resolveCreationRuleSnapshot,
 } from "./utils/creationEconomics";
 
+import { isManualFinanceApplication, isManualLetterUnitIntact, MANUAL_GAP_TO_FINANCIER_REFUSAL, manualPayerLabel, manualPayerOf } from "./utils/manualFinancePayer";
+
 /** sourceType used for the canonical finance-company receivable opened at finalizeDeal. */
 const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
 
@@ -153,7 +155,9 @@ async function ensureFinanceCompanyReceivable(
   args: {
     orgId: Id<"organizations">;
     applicationId: Id<"financeApplications">;
-    financeCompanyId: Id<"financeCompanies">;
+    /** Exactly one of this / `payerNameSnapshot` (SCRUM-27). */
+    financeCompanyId?: Id<"financeCompanies">;
+    payerNameSnapshot?: string;
     customerId: Id<"customers">;
     amountMinor: number;
     currency: string;
@@ -161,11 +165,15 @@ async function ensureFinanceCompanyReceivable(
     now: number;
   }
 ) {
+  if ((args.financeCompanyId === undefined) === (args.payerNameSnapshot === undefined)) {
+    throw new ConvexError("A finance-company receivable needs exactly one payer identity.");
+  }
   return await ensureReceivableDocument(ctx, {
     orgId: args.orgId,
     documentType: "INVOICE",
-    payerType: "FINANCE_COMPANY",
+    payerType: args.financeCompanyId ? "FINANCE_COMPANY" : "MANUAL_FINANCE_COMPANY",
     financeCompanyId: args.financeCompanyId,
+    payerNameSnapshot: args.payerNameSnapshot,
     customerId: args.customerId,
     sourceType: FINANCE_APP_RECEIVABLE_SOURCE,
     sourceId: args.applicationId,
@@ -216,7 +224,20 @@ async function proveFinanceReceiptAuthority(
       "No finance-company receivable is recorded for this deal, so there is nothing for this payment to settle. The deal must be finalized, with its receivable opened, before the company's payment can be received."
     );
   }
-  if (receivable.payerType !== "FINANCE_COMPANY" || receivable.financeCompanyId !== app.companyId) {
+  if (app.companyId === undefined && manualPayerOf(app) !== null) {
+    // SCRUM-27 (D7): a manual company has no id to compare. Its identity is the
+    // receivable's own source (matched by the index above) AND the name frozen
+    // on the application at finalize, both server-derived before any write.
+    if (
+      receivable.payerType !== "MANUAL_FINANCE_COMPANY" ||
+      receivable.financeCompanyId !== undefined ||
+      receivable.payerNameSnapshot !== manualPayerOf(app)?.name
+    ) {
+      throw new ConvexError(
+        "The receivable recorded for this deal is not owed by this deal's financing company, so this payment cannot settle it."
+      );
+    }
+  } else if (receivable.payerType !== "FINANCE_COMPANY" || receivable.financeCompanyId !== app.companyId) {
     throw new ConvexError(
       "The receivable recorded for this deal is not owed by this deal's financing company, so this payment cannot settle it."
     );
@@ -287,12 +308,34 @@ async function getActiveReceivableAllocations(
 }
 
 /**
+ * A MANUAL finance company deal advances only on a complete, consistent letter
+ * unit (SCRUM-27): the letter, `approvedDealerPurchaseAmountMinor` equal to the
+ * letter's amount, the MANUAL basis and a derived gap, all present together.
+ * Then a positive gap must be settled, and only to dealer-bound destinations.
+ * Every refusal is before any write and carries no figures.
+ */
+function assertManualLetterReady(app: Doc<"financeApplications">, action: string): void {
+  if (!isManualLetterUnitIntact(app)) {
+    throw new ConvexError(
+      `This deal's finance company approval letter is not fully recorded. Enter (or re-enter) the letter's approved amount, the company's name and the amount the dealership sends it before ${action}.`
+    );
+  }
+  // Defence against a row a writer bypassed: OR-12 never sends a gap to the financier.
+  if ((app.customerGapToFinanceCompanyMinor ?? 0) > 0) {
+    throw new ConvexError(MANUAL_GAP_TO_FINANCIER_REFUSAL);
+  }
+  assertAppraisalGapSettledToAdvance(app, action);
+}
+
+/**
  * Refuses to advance a deal whose dealer-side economics are not actually there.
  *
  * A reappraisal or a reopened approval clears the approved purchase amount
  * while `status` stays APPROVED throughout, so status alone cannot be the gate.
  * Deals with no quotation recorded predate this model entirely and are let
- * through, so nothing in flight is stranded.
+ * through, so nothing in flight is stranded. The one exception is a manual
+ * finance company: it never has a quotation, but it does carry an appraisal gap
+ * (sale price minus the letter, OR-12), which is still gated.
  *
  * One copy, two callers: handover and finalization applied the same two checks
  * in the same order and differed only in the closing verb. Two copies of a
@@ -305,7 +348,14 @@ function assertDealerEconomicsReady(
 ): void {
   const action =
     opts.phase === "HANDOVER" ? "handing over the vehicle" : "finalizing";
-  if (app.submittedQuotationMinor === undefined) return;
+  if (app.submittedQuotationMinor === undefined) {
+    // A manual deal has no quotation but its letter, approved amount, MANUAL
+    // basis and OR-12 appraisal gap are one unit, and it is gated on all of
+    // them: keyed on "is manual", NOT on "has a letter", or a deal with no
+    // letter at all would sail through handover and strand at finalization.
+    if (isManualFinanceApplication(app)) assertManualLetterReady(app, action);
+    return;
+  }
   if (app.approvedDealerPurchaseAmountMinor === undefined) {
     throw new ConvexError(
       `The finance company's approved purchase amount is not recorded on this deal. Record it before ${action}.`
@@ -413,7 +463,7 @@ async function settlementPayerForApplication(
   return settlementPayer({
     quoteMode: await dealModeOf(ctx, app),
     financeCompanyId: app.companyId,
-    manualProviderName: app.manualFinanceSnapshot?.providerName,
+    manualProviderName: manualPayerLabel(app),
   });
 }
 
@@ -704,7 +754,11 @@ function resolveFinancierLeg(
   ) {
     return "NONE";
   }
-  return app.companyId ? "EXPECTED" : "UNKNOWN";
+  // SCRUM-27: a manual finance company whose approval letter has been entered
+  // owes the full approved amount exactly like a configured one. Before the
+  // letter is entered nobody knows who the payer is, so it stays UNKNOWN
+  // (waiting) - never NONE.
+  return app.companyId || manualPayerOf(app) ? "EXPECTED" : "UNKNOWN";
 }
 
 /** What the finance company still owes. */
@@ -1352,7 +1406,7 @@ async function buildCockpitMoney(
         },
     {
       party: "FINANCIER" as const,
-      name: app.manualFinanceSnapshot?.providerName ?? "",
+      name: manualPayerLabel(app) ?? "",
       position: financierPosition({
         routeKnown,
         settlesDirect,
@@ -1603,16 +1657,17 @@ export const list = query({
         // same rule — this file has been corrected twice already for exactly
         // that. The pure form, because `quote` is loaded here anyway for the
         // financed amounts, so it costs no extra read.
+        const payerLabel = manualPayerLabel(app);
         const payer = settlementPayer({
           quoteMode: app.quoteModeAtSubmission ?? quote?.mode,
           financeCompanyId: app.companyId,
-          manualProviderName: app.manualFinanceSnapshot?.providerName,
+          manualProviderName: payerLabel,
         });
         // Trimmed, matching `settlementPayer` — `saveQuote` applies no trim, so
         // a whitespace-only provider name is reachable, and raw truthiness
         // would render it as a blank cell while the resolver correctly called
         // the payer unnamed.
-        const manualProviderName = app.manualFinanceSnapshot?.providerName?.trim() || undefined;
+        const manualProviderName = payerLabel?.trim() || undefined;
 
         return {
           // The list spreads the whole document too, and it authorizes on the
@@ -2152,7 +2207,7 @@ export const dealCockpit = query({
         profile: vehicleProfile,
       },
       salespersonName: salesperson?.name ?? "",
-      financeCompanyName: company?.name ?? app.manualFinanceSnapshot?.providerName ?? "",
+      financeCompanyName: company?.name ?? manualPayerLabel(app) ?? "",
       /**
        * That the recorded settlement advice disagrees with what the deal was
        * approved at — and nothing about by how much.
@@ -3356,7 +3411,9 @@ export const cancelApplication = mutation({
           // deliberately changes nothing about `confirmDisbursement`, the
           // remittance economics, the settlement route, or the deal teardown
           // below.
-          const financeReceivable = app.companyId
+          // SCRUM-27 (D5): found by SOURCE for a manual company too. Gating on
+          // `companyId` alone would skip both the allocation guard and the void.
+          const financeReceivable = app.companyId || manualPayerOf(app)
             ? await ctx.db
                 .query("receivableDocuments")
                 .withIndex("by_org_source", (q) =>
@@ -3490,7 +3547,7 @@ export const cancelApplication = mutation({
           // there is nothing on the books and cancels anything still queued, so
           // gating on the live amount only created holes."
           if (
-            app.companyId &&
+            (app.companyId || manualPayerOf(app)) &&
             ((quote?.totalFinancedAmount ?? 0) > 0 || financeReceivable)
           ) {
             await hookFinanceDisbursementCancelled(ctx, {
@@ -4656,7 +4713,11 @@ export const finalizeDeal = mutation({
             ? {
                 version: financedSalePlan.version,
                 fingerprint: financedSalePlan.fingerprint,
-                financeCompanyId: app.companyId as string,
+                // Exactly one of the two identities (SCRUM-27): a configured
+                // company's id, or the manual company's letter name.
+                ...(app.companyId
+                  ? { financeCompanyId: app.companyId as string }
+                  : { payerNameSnapshot: manualPayerOf(app)?.name }),
                 legalInvoiceConsiderationMinor:
                   financedSalePlan.legalInvoiceConsiderationMinor,
                 financeCompanyReceivableMinor:
@@ -4781,6 +4842,15 @@ export const finalizeDeal = mutation({
                       forwardContributionPortionMinor: financedSalePlan.forwardContributionMinor,
                     }
                   : {}),
+                // SCRUM-27: a manual deal's dealership contribution is derived
+                // at this moment (S minus the deposits held) and frozen here, so
+                // the cockpit and forward readers see the figure that posted.
+                ...(!app.companyId && financedSalePlan.version === 2
+                  ? {
+                      dealerContributionMinor: financedSalePlan.forwardContributionMinor,
+                      economicsRevision: (app.economicsRevision ?? 0) + 1,
+                    }
+                  : {}),
               }
             : {}),
         });
@@ -4820,7 +4890,9 @@ export const finalizeDeal = mutation({
             await ensureFinanceCompanyReceivable(ctx, {
               orgId: args.orgId,
               applicationId: args.applicationId,
-              financeCompanyId: app.companyId as Id<"financeCompanies">,
+              ...(app.companyId
+                ? { financeCompanyId: app.companyId }
+                : { payerNameSnapshot: manualPayerOf(app)?.name }),
               customerId: app.customerId,
               amountMinor: financedSalePlan.financeCompanyReceivableMinor,
               currency: financedSalePlan.currency,
@@ -4919,7 +4991,7 @@ export const confirmDisbursement = mutation({
         if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found.");
         if (app.status !== "CLOSED") throw new ConvexError("Disbursement can only be confirmed on a closed application.");
         if (app.disbursedAt) throw new ConvexError("Disbursement has already been confirmed for this application.");
-        if (!app.companyId) {
+        if (!app.companyId && manualPayerOf(app) === null) {
           // Same resolver as the cockpit, so the screen and this guard cannot
           // disagree about whether a finance company pays on this deal.
           const { sale, route } = await loadDealRoute(ctx, app);
@@ -4975,6 +5047,12 @@ export const confirmDisbursement = mutation({
           const forward = await deriveForwardState(ctx, app);
           const forwardRefusal = forwardGateRefusal(forward.state);
           if (forwardRefusal !== null) throw new ConvexError(forwardRefusal);
+        } else if (!app.companyId) {
+          // SCRUM-27: a manual company only ever exists on the current plan. One
+          // that does not carry it has no proven forward and must not receive.
+          throw new ConvexError(
+            "This deal was not finalized on the current sale plan, so the finance company's transfer cannot be confirmed here. A manager reviews the deal."
+          );
         }
 
         const quote = await ctx.db.get(app.quoteId);
@@ -5070,7 +5148,11 @@ export const confirmDisbursement = mutation({
         await hookFinanceCashReceived(ctx, {
           orgId: args.orgId,
           applicationId: args.applicationId,
-          financeCompanyId: app.companyId,
+          // Exactly one identity (SCRUM-27): the configured id, or the manual
+          // company's name frozen on the application.
+          ...(app.companyId
+            ? { financeCompanyId: app.companyId }
+            : { payerNameSnapshot: manualPayerOf(app)?.name }),
           customerId: app.customerId,
           amountMinor: receiptMinor,
           currency,
@@ -5092,8 +5174,9 @@ export const confirmDisbursement = mutation({
         const canonicalPaymentId = await createCanonicalPayment(ctx, {
           orgId: args.orgId,
           direction: "IN",
-          payerType: "FINANCE_COMPANY",
+          payerType: app.companyId ? "FINANCE_COMPANY" : "MANUAL_FINANCE_COMPANY",
           financeCompanyId: app.companyId,
+          payerNameSnapshot: app.companyId ? undefined : manualPayerOf(app)?.name,
           method: disbursementMethod,
           amountMinor: receiptMinor,
           currency,
@@ -5328,7 +5411,12 @@ export const confirmSupplierDisbursement = mutation({
         // simply untrue, and this record is the only place the settlement
         // advice's counterparty is written down.
         let payerName = "The finance company";
-        if (payer.counterparty.kind === "MANUAL_PROVIDER") {
+        const letterPayer = manualPayerOf(app);
+        if (letterPayer !== null) {
+          // SCRUM-27: the name exactly as on the approval letter, which the
+          // manager entered, outranks the quote-time provider label.
+          payerName = letterPayer.name;
+        } else if (payer.counterparty.kind === "MANUAL_PROVIDER") {
           payerName = payer.counterparty.name;
         } else if (app.companyId) {
           const company = await ctx.db.get(app.companyId);

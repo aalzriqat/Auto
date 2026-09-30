@@ -732,6 +732,8 @@ export default defineSchema({
     vehicleId: v.optional(v.id("vehicles")),
     customerId: v.optional(v.id("customers")),
     financeCompanyId: v.optional(v.id("financeCompanies")),
+    /** SCRUM-27: the name of a MANUAL finance company (no party row), exactly as on its approval letter. */
+    payerNameSnapshot: v.optional(v.string()),
     salespersonId: v.optional(v.id("users")),
     cashierId: v.optional(v.id("users")),
     description: v.optional(v.string()),
@@ -756,9 +758,11 @@ export default defineSchema({
       v.literal("REFUND_PAYABLE"),
     ),
     documentNumber: v.string(),
-    payerType: v.union(v.literal("CUSTOMER"), v.literal("FINANCE_COMPANY")),
+    payerType: v.union(v.literal("CUSTOMER"), v.literal("FINANCE_COMPANY"), v.literal("MANUAL_FINANCE_COMPANY")),
     customerId: v.optional(v.id("customers")),
     financeCompanyId: v.optional(v.id("financeCompanies")),
+    /** SCRUM-27: set exactly when payerType is MANUAL_FINANCE_COMPANY (no party row exists). */
+    payerNameSnapshot: v.optional(v.string()),
     sourceType: v.string(),
     sourceId: v.string(),
     originalAmountMinor: v.number(),
@@ -798,9 +802,11 @@ export default defineSchema({
     orgId: v.id("organizations"),
     branchId: v.optional(v.id("branches")),
     direction: v.union(v.literal("IN"), v.literal("OUT")),
-    payerType: v.optional(v.union(v.literal("CUSTOMER"), v.literal("FINANCE_COMPANY"))),
+    payerType: v.optional(v.union(v.literal("CUSTOMER"), v.literal("FINANCE_COMPANY"), v.literal("MANUAL_FINANCE_COMPANY"))),
     customerId: v.optional(v.id("customers")),
     financeCompanyId: v.optional(v.id("financeCompanies")),
+    /** SCRUM-27: set exactly when payerType is MANUAL_FINANCE_COMPANY. */
+    payerNameSnapshot: v.optional(v.string()),
     method: v.union(
       v.literal("CASH"),
       v.literal("BANK_TRANSFER"),
@@ -2763,6 +2769,19 @@ export default defineSchema({
       monthlyInstallment: v.optional(v.number()),
       totalProfit: v.optional(v.number()),
     })),
+    /**
+     * SCRUM-27: what the manager read off the MANUAL finance company's approval
+     * letter (OR-8/OR-11). Present only on a manual application; cleared with the
+     * approval it belongs to. `dealerSendsMinor` is S = held deposit + dealership
+     * contribution - an explicit 0 is a fact, an absent field is "not entered".
+     */
+    manualApproval: v.optional(v.object({
+      approvedAmountMinor: v.number(),
+      financierName: v.string(),
+      dealerSendsMinor: v.number(),
+      enteredBy: v.id("users"),
+      enteredAt: v.number(),
+    })),
     approvedBy: v.optional(v.id("users")),
     approvedAt: v.optional(v.number()),
     finalizedSaleId: v.optional(v.id("sales")),
@@ -3354,7 +3373,9 @@ export default defineSchema({
   financeCompanyForwards: defineTable({
     orgId: v.id("organizations"),
     applicationId: v.id("financeApplications"),
-    financeCompanyId: v.id("financeCompanies"),
+    // SCRUM-27: exactly ONE of the two is set - a configured company by id, a manual one by the name on its letter.
+    financeCompanyId: v.optional(v.id("financeCompanies")),
+    payerNameSnapshot: v.optional(v.string()),
     version: v.number(),
     amountMinor: v.number(),
     depositPortionMinor: v.number(),

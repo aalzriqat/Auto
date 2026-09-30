@@ -1094,10 +1094,49 @@ export function assertAppraisalGapSettledToAdvance(
   // SCRUM-117 projection and `register:vehicle_handover` is held by roles the
   // projection withholds it from; a refusal is a response like any other.
   throw new ConvexError(
-    `The finance company approved less than the quotation on this deal, and who covers the difference has not been agreed. Resolve the appraisal gap before ${action}.`
+    `The finance company approved less than the amount requested on this deal, and who covers the difference has not been agreed. Resolve the appraisal gap before ${action}.`
   );
 }
 
+
+/** Every field a settled appraisal-gap split writes; clearing them voids the split. */
+export const GAP_RESOLUTION_CLEARED = Object.freeze({
+  customerGapShareMinor: undefined,
+  dealerGapShareMinor: undefined,
+  customerGapCashToDealerMinor: undefined,
+  customerGapInstallmentToDealerMinor: undefined,
+  customerGapToFinanceCompanyMinor: undefined,
+  gapResolvedAt: undefined,
+  gapResolvedBy: undefined,
+  gapResolutionNotes: undefined,
+});
+
+/**
+ * The `gapResolution` write (and split clearing) an approval implies once its
+ * raw gap is known, or null when nothing should be written. Shared by the
+ * configured and manual approvals so they cannot drift.
+ *
+ * A moved gap voids whatever was agreed against the old number, so the shares
+ * are cleared. FAILED is written when a deal is rejected or cancelled with a gap
+ * open; REJECTED -> PENDING_DOCS is a legal transition, so a reopened deal would
+ * carry "negotiation failed" against a live shortfall unless it is reopened here.
+ */
+export function gapResolutionTransition(
+  newRawGapMinor: number,
+  previousRawGapMinor: number,
+  currentResolution: GapResolution
+):
+  | ({ gapResolution: "NOT_REQUIRED" | "PENDING_NEGOTIATION" } & Partial<typeof GAP_RESOLUTION_CLEARED>)
+  | null {
+  const changed = newRawGapMinor !== previousRawGapMinor;
+  if (newRawGapMinor <= 0) {
+    return { gapResolution: "NOT_REQUIRED", ...(changed ? GAP_RESOLUTION_CLEARED : {}) };
+  }
+  if (changed || currentResolution === undefined || currentResolution === "FAILED") {
+    return { gapResolution: "PENDING_NEGOTIATION", ...(changed ? GAP_RESOLUTION_CLEARED : {}) };
+  }
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // Keeping the dimensions in step with the legacy status

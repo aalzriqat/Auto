@@ -2539,7 +2539,9 @@ export async function hookFinanceCashReceived(
   args: {
     orgId: Id<"organizations">;
     applicationId: Id<"financeApplications">;
-    financeCompanyId: Id<"financeCompanies">;
+    /** Exactly one of this / `payerNameSnapshot` (SCRUM-27: a manual company has no id). */
+    financeCompanyId?: Id<"financeCompanies">;
+    payerNameSnapshot?: string;
     customerId?: Id<"customers">;
     amountMinor: number;
     currency: string;
@@ -2558,7 +2560,8 @@ export async function hookFinanceCashReceived(
     actorId: args.actorId,
     payload: {
       applicationId: args.applicationId.toString(),
-      financeCompanyId: args.financeCompanyId.toString(),
+      financeCompanyId: args.financeCompanyId?.toString(),
+      ...(args.payerNameSnapshot !== undefined ? { payerNameSnapshot: args.payerNameSnapshot } : {}),
       amountMinor: args.amountMinor,
       currency: args.currency,
       customerId: args.customerId?.toString(),
@@ -3539,7 +3542,8 @@ export async function hookFinanceCompanyForwardPaid(
     orgId: Id<"organizations">;
     applicationId: Id<"financeApplications">;
     forwardId: Id<"financeCompanyForwards">;
-    financeCompanyId: Id<"financeCompanies">;
+    financeCompanyId?: Id<"financeCompanies">;
+    payerNameSnapshot?: string;
     version: number;
     amountMinor: number;
     currency: string;
@@ -3567,7 +3571,8 @@ export async function hookFinanceCompanyForwardPaid(
     payload: {
       forwardId: args.forwardId.toString(),
       applicationId: args.applicationId.toString(),
-      financeCompanyId: args.financeCompanyId.toString(),
+      financeCompanyId: args.financeCompanyId?.toString(),
+      ...(args.payerNameSnapshot !== undefined ? { payerNameSnapshot: args.payerNameSnapshot } : {}),
       amountMinor: args.amountMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
