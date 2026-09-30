@@ -78,6 +78,35 @@ export async function dealSettlesDirect(ctx: QueryCtx | MutationCtx, app: Doc<"f
   return vehicle != null && isConsignedAgentSale(vehicle);
 }
 
+/** The deal modes a quote or application carries. */
+export type DealMode = NonNullable<Doc<"financeApplications">["quoteModeAtSubmission"]>;
+
+/**
+ * The deal's mode as finalizeDeal reads it: frozen at submission, else the
+ * quote's (same organization only).
+ */
+export async function dealModeOf(ctx: QueryCtx | MutationCtx, app: Doc<"financeApplications">): Promise<DealMode | undefined> {
+  if (app.quoteModeAtSubmission !== undefined) return app.quoteModeAtSubmission;
+  const quote = await ctx.db.get(app.quoteId);
+  return quote && quote.orgId === app.orgId ? quote.mode : undefined;
+}
+
+/**
+ * Whether COSTS_CLOSABLE applies (SCRUM-446): the deal settles through the
+ * dealership AND either the plan covers it (a configured company) or its mode
+ * is a financed one that names no configured company. CASH and an absent mode
+ * stay out of scope (deferred to SCRUM-455). The ONE predicate both the
+ * readiness query and finalization reach through `evaluateClosingReadiness`.
+ */
+export function costsGateApplies(
+  app: Doc<"financeApplications">,
+  opts: { settlesDirect: boolean; mode?: DealMode }
+): boolean {
+  if (opts.settlesDirect) return false;
+  if (financedSaleRecognitionApplies(app, opts)) return true;
+  return opts.mode === "MANUAL_FINANCE_COMPANY" || opts.mode === "LEASE" || opts.mode === "INTERNAL_INSTALLMENT";
+}
+
 /** Deals this model covers. Everything else posts the way it always did. */
 export function financedSaleRecognitionApplies(
   app: Doc<"financeApplications">,
@@ -411,6 +440,9 @@ export async function evaluateClosingReadiness(
   opts: { settlesDirect: boolean; currency: string; planVersion?: 1 | 2 }
 ): Promise<ClosingReadinessEvaluation> {
   const planCovered = financedSaleRecognitionApplies(app, opts);
+  // The scope of the cost gate is decided HERE, once, for the readiness query
+  // and for finalization alike (both reach this evaluator).
+  const costsGateOn = costsGateApplies(app, { settlesDirect: opts.settlesDirect, mode: await dealModeOf(ctx, app) });
   const checks: ClosingReadinessCheck[] = [];
   const add = (key: ClosingReadinessCheckKey, status: ClosingReadinessCheckStatus, reason: ClosingReadinessReason | null) => {
     checks.push({ key, status, reason });
@@ -468,15 +500,20 @@ export async function evaluateClosingReadiness(
    * read; otherwise READY, or BLOCKED with the refusal. A ConvexError thrown
    * while judging becomes `onThrow` with its message, coded `throwCode` —
    * stated per check, since a refusal (BLOCKED) and an unreadable input
-   * (UNAVAILABLE) are different verdicts. `planOnly` checks are
-   * NOT_APPLICABLE off the plan's route.
+   * (UNAVAILABLE) are different verdicts. A check with `applies: false` is
+   * NOT_APPLICABLE.
    */
   const onRows = async (
     key: ClosingReadinessCheckKey,
-    spec: { onThrow: "BLOCKED" | "UNAVAILABLE"; throwCode?: "CUSTODY_LEDGER_UNVERIFIABLE" | "HANDOVER_DIRECT_LEDGER_UNVERIFIABLE"; planOnly?: boolean },
+    spec: {
+      onThrow: "BLOCKED" | "UNAVAILABLE";
+      throwCode?: "CUSTODY_LEDGER_UNVERIFIABLE" | "HANDOVER_DIRECT_LEDGER_UNVERIFIABLE";
+      /** false: NOT_APPLICABLE (wider than the plan's own coverage; see `costsGateApplies`). */
+      applies?: boolean;
+    },
     judge: (read: NonNullable<typeof rows>) => ClosingReadinessReason | null | Promise<ClosingReadinessReason | null>
   ) => {
-    if (spec.planOnly && !planCovered) return add(key, "NOT_APPLICABLE", null);
+    if (spec.applies === false) return add(key, "NOT_APPLICABLE", null);
     if (rows === null) return add(key, "UNAVAILABLE", rowsUnavailable);
     try {
       const refusal = await judge(rows);
@@ -511,7 +548,10 @@ export async function evaluateClosingReadiness(
   await onRows("CUSTODY_SETTLED", { onThrow: "BLOCKED" }, ({ fees, custody }) => custodySettledRefusal(custody, fees));
 
   // The CURRENT state of the deal's costs, judged on the rows just read.
-  await onRows("COSTS_CLOSABLE", { onThrow: "BLOCKED", planOnly: true }, ({ fees }) =>
+  // Applies where `costsGateApplies` says (SCRUM-446): plan-covered deals, and
+  // financed-mode deals that name no company. CASH and mode-less deals are out
+  // of scope (SCRUM-455); the direct route is exempt.
+  await onRows("COSTS_CLOSABLE", { onThrow: "BLOCKED", applies: costsGateOn }, ({ fees }) =>
     costsClosableRefusal(fees, opts.currency)
   );
 

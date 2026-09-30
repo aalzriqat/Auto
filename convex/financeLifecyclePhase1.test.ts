@@ -1,6 +1,6 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { registerHandover } from "../test-utils/convexTest";
+import { recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -54,6 +54,8 @@ async function seedFinanceLifecycleDealer(): Promise<SetupResult> {
         "view:customers",
         "register:vehicle_handover",
         "register:expected_payment",
+        // SCRUM-446: recording the cost evidence a deal needs to close.
+        "create:finance_application",
       ],
     })
   );
@@ -264,6 +266,7 @@ describe("Finance lifecycle phase 1 quote mode", () => {
       method: "CASH",
       expectedDate: Date.now(),
     });
+    await recordReconciledZeroCost(asUser, api, orgId, applicationId);
     await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId });
 
     await t.run(async (ctx) => {
