@@ -852,3 +852,49 @@ describe("supplier receipt actionability", () => {
     }
   });
 });
+
+/**
+ * SCRUM-435: the stage rail reads the ONE forward proof. The transfer stage names
+ * what is actually blocking it, and the dealership (not the finance company) is
+ * the one acting while a payment to the company is outstanding.
+ */
+describe("the disbursement stage while the dealership owes the finance company a forward", () => {
+  const closed = {
+    status: "CLOSED" as const,
+    finalizedSaleId: "sale1",
+    creditDecision: "APPROVED" as const,
+    appraisalStatus: "FINALIZED" as const,
+    approvedDealerPurchaseAmountMinor: 12_500_000,
+    requiredDocumentsComplete: true,
+    vehicleHandoverAt: Date.UTC(2026, 6, 1),
+  };
+
+  test("v1, settled and not-due deals keep the ordinary transfer blocker", () => {
+    for (const forwardState of [undefined, "NOT_DUE", "SETTLED"] as const) {
+      expect(stages({ ...closed, forwardState }).blocker("DISBURSEMENT")).toBe("AwaitingDisbursement");
+    }
+  });
+
+  test("a DUE forward names the payment to the finance company as the blocker", () => {
+    expect(stages({ ...closed, forwardState: "DUE" }).blocker("DISBURSEMENT")).toBe(
+      "AwaitingForwardToFinanceCompany"
+    );
+  });
+
+  test("every unsettled forward state names the unsettled payment, never the transfer", () => {
+    for (const forwardState of ["POSTING_PENDING", "POSTING_FAILED", "REVERSAL_PENDING", "NEEDS_REPAIR"] as const) {
+      expect(stages({ ...closed, forwardState }).blocker("DISBURSEMENT")).toBe("ForwardNotSettled");
+    }
+  });
+  test("a returned payment keeps the transfer stage open even after the transfer was confirmed", () => {
+    const after = { ...closed, disbursedAt: Date.UTC(2026, 8, 1) };
+    const open = stages({ ...after, forwardState: "DUE", forwardExceptionOpen: true });
+    expect(open.blocker("DISBURSEMENT")).toBe("AwaitingForwardToFinanceCompany");
+    expect(open.state("DISBURSEMENT")).not.toBe("COMPLETE");
+    for (const forwardState of ["POSTING_PENDING", "POSTING_FAILED", "REVERSAL_PENDING", "NEEDS_REPAIR"] as const) {
+      expect(stages({ ...after, forwardState, forwardExceptionOpen: true }).blocker("DISBURSEMENT")).toBe("ForwardNotSettled");
+    }
+    // Once the replacement settles the exception closes and the stage is complete again.
+    expect(stages({ ...after, forwardState: "SETTLED", forwardExceptionOpen: false }).state("DISBURSEMENT")).toBe("COMPLETE");
+  });
+});

@@ -344,35 +344,17 @@ describe("SCRUM-241 — finance-company receipt settles the exact recorded recei
     const { applicationId } = await approvedDealWithPinnedEconomics(s);
     const withheld = 375 * JOD_SCALE;
     await prepareForFinalize(s, applicationId, { withheldMinor: withheld });
-    await finalize(s, applicationId);
-    const closed = await app(s, applicationId);
-    const net = VEHICLE_PRICE * JOD_SCALE - withheld;
-    expect(closed?.financedSaleNetReceivableMinor).toBe(net);
+    // SCRUM-435 (owner ruling, Option A): the finance company transfers the FULL
+    // approved amount and never deducts. A cost that would be netted from the
+    // transfer is refused at finalization, guided, before any sale exists. (The
+    // netted v1 plan is still read for historical rows - see the v1 fixtures in
+    // `financedSalePostingPlan.test.ts`; nothing new can be finalized under it.)
     const before = await economicDelta(s, applicationId);
-    expect(before.receivable).toMatchObject({ currency: "JOD", status: "OPEN", originalAmountMinor: net });
-
-    const refusal = await refusalOf(
-      s.asUser.mutation(api.applications.confirmDisbursement, {
-        orgId: s.orgId,
-        applicationId,
-        disbursedAmountMinor: VEHICLE_PRICE * JOD_SCALE,
-        idempotencyKey: "s241-net-principal",
-      })
-    );
-    expect(refusal).toMatch(/not what this financing company owes/i);
+    const refusal = await refusalOf(finalize(s, applicationId));
+    expect(refusal).toMatch(/transfers the full approved amount/i);
+    expect(refusal).toMatch(/normal deal cost/i);
     expect(await economicDelta(s, applicationId)).toEqual(before);
-
-    await s.asUser.mutation(api.applications.confirmDisbursement, {
-      orgId: s.orgId,
-      applicationId,
-      disbursedAmountMinor: net,
-      idempotencyKey: "s241-net",
-    });
-    const after = await economicDelta(s, applicationId);
-    expect(after.receivable).toMatchObject({ currency: "JOD", status: "PAID" });
-    expect(after.financeCompanyPayments).toEqual([{ currency: "JOD", amountMinor: net, scale: 3 }]);
-    expect(after.allocations).toEqual([{ amountMinor: net, status: "ACTIVE" }]);
-    expect(after.cashReceivedEvents).toEqual([{ currency: "JOD", amountMinor: net }]);
+    expect((await app(s, applicationId))?.status).not.toBe("CLOSED");
   });
 
   test("BEFORE FINALIZATION, different scale (JOD→USD) — finalizeDeal refuses the incompatible denomination before any sale, receivable or journal exists", async () => {
