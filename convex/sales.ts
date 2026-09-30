@@ -39,6 +39,7 @@ import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompany
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
+import { assertOperatedDealMode } from "./utils/dealModes";
 import { getOrgCurrency, hookCommissionAccrued, hookCommissionAdjusted, hookCommissionPaid, hookSaleCancelled, isPostableNow, reverseCommissionForSale, commissionAccountingDate, commissionAccrualStrandedReason, commissionEntriesOutstandingStatus, hasCommissionAccrual, recognizedCommissionMinor, safeAdjustmentSeq, MAX_COMMISSION_ADJUSTMENTS } from "./accounting/workflowHooks";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 import { depositMethodValidator } from "./utils/depositRecording";
@@ -366,6 +367,11 @@ export const create = mutation({
 
     validateInput(CreateSaleSchema, args);
 
+    // SCRUM-495 (OR-7): LEASE is no longer a financing type a sale may be recorded
+    // in. The validators stay wide so a legacy row still parses; the refusal is
+    // here, before any write.
+    assertOperatedDealMode(args.financingType);
+
     return await runWithIdempotency(
       ctx,
       {
@@ -550,6 +556,10 @@ export const createDraft = mutation({
 
     validateInput(CreateDraftSaleSchema, args);
 
+    // SCRUM-495 (OR-7): as `create` — a draft in a retired financing type could
+    // only ever be a dead end, so it is not created.
+    assertOperatedDealMode(args.financingType);
+
     return await runWithIdempotency(
       ctx,
       {
@@ -656,6 +666,12 @@ export const update = mutation({
     const sale = await ctx.db.get(args.saleId);
     if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
       throwAppError(AppErrorCode.SALE_NOT_FOUND, "Sale not found in this organization.");
+    }
+    // SCRUM-495 (OR-7): refuse only a change INTO a retired financing type, so a legacy
+    // LEASE draft stays editable and cancellable even if a client (mobile, an older
+    // web build) resends the stored LEASE: a legacy row is never a dead end.
+    if (args.financingType !== undefined && args.financingType !== sale.financingType) {
+      assertOperatedDealMode(args.financingType);
     }
     if (args.status === "COMPLETED" && sale.status !== "COMPLETED") {
       throwAppError(

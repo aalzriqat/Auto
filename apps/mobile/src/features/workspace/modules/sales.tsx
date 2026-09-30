@@ -2,7 +2,7 @@ import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { useState } from "react";
 import { Linking, Text, View } from "react-native";
 import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepFlow";
-import { api, type MobileFinancingType, type MobileMyMembership, type MobileSale } from "../../../convexApi";
+import { api, type MobileOperatedFinancingType, type MobileMyMembership, type MobileSale } from "../../../convexApi";
 import { hapticSuccess } from "../../../haptics";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { getMobileAppUrl } from "../../../config/env";
@@ -42,7 +42,7 @@ export function SalesModule({
     salespersonId: myMembership.userId,
     salePrice: "",
     downPayment: "",
-    financingType: "CASH" as MobileFinancingType,
+    financingType: "CASH" as MobileOperatedFinancingType,
   });
   const statusOptions: Array<Option<MobileSaleStatusFilter>> = [
     { value: "ALL", label: locale === "ar" ? "الكل" : "All" },
@@ -319,8 +319,7 @@ export function SalesModule({
               <SelectField label={locale === "ar" ? "طريقة التمويل" : "Financing"} value={form.financingType} options={[
                 { label: locale === "ar" ? "نقدا" : "Cash", value: "CASH" },
                 { label: locale === "ar" ? "تمويل" : "Financed", value: "FINANCED" },
-                { label: locale === "ar" ? "تأجير" : "Lease", value: "LEASE" },
-              ]} onChange={(financingType) => setForm((prev) => ({ ...prev, financingType: financingType as MobileFinancingType }))} />
+              ]} onChange={(financingType) => setForm((prev) => ({ ...prev, financingType: financingType as MobileOperatedFinancingType }))} />
               <View style={styles.metricGrid}>
                 <MetricCard title={locale === "ar" ? "السعر" : "Price"} value={money(salePricePreview, locale)} caption={locale === "ar" ? "سعر البيع" : "sale price"} />
                 <MetricCard title={locale === "ar" ? "المتبقي" : "Balance"} value={money(remainingBalancePreview, locale)} caption={locale === "ar" ? "بعد الدفعة" : "after deposit"} />

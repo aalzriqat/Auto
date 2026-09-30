@@ -1,5 +1,6 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
 import { convexTestWithComponents, recordReconciledZeroCost } from "../test-utils/convexTest";
+import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -533,8 +534,31 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
   //        its costs must be evidenced BEFORE it can close ──────────────────
   describe("costs are evidenced before a no-company deal closes", () => {
     /** A pre-close application that has passed every finalizeDeal precondition except its costs. */
-    async function readyToFinalize(s: Seed, opts: DealOpts = {}) {
-      const { applicationId } = await insertDeal(s, { status: "APPROVED", sale: "none", ...opts });
+    /**
+     * SCRUM-27 interaction: a manual finance company deal cannot finalize until its approval letter is
+     * recorded, and the letter freezes at handover, so it is recorded (through the public mutation, by an
+     * approver who is not the salesperson) BEFORE the handover patch below. G equals the target selling
+     * amount, so there is no shortfall and no appraisal-gap step intervenes.
+     */
+    async function recordManualLetter(s: Seed, applicationId: Id<"financeApplications">) {
+      const roleId = await s.t.run(async (ctx) => (await ctx.db.query("roles").first())!._id);
+      const approverUserId = await s.t.run((ctx) =>
+        ctx.db.insert("users", { clerkId: `ap_${applicationId}`, email: `ap.${applicationId}@example.com`, name: "FL Approver" })
+      );
+      await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: s.orgId, userId: approverUserId, roleId }));
+      await s.t.withIdentity({ subject: `ap_${applicationId}` }).mutation(api.financingEconomics.recordManualFinanceApproval, {
+        orgId: s.orgId,
+        applicationId,
+        approvedAmountMinor: 12_000_000,
+        financierName: "Al-Ameen Islamic Finance",
+        dealerSendsMinor: 1_650_000,
+      });
+    }
+
+    async function readyToFinalize(s: Seed, opts: DealOpts & { manualLetter?: boolean } = {}) {
+      const { manualLetter, ...dealOpts } = opts;
+      const { applicationId } = await insertDeal(s, { status: "APPROVED", sale: "none", ...dealOpts });
+      if (manualLetter) await recordManualLetter(s, applicationId);
       await s.t.run(async (ctx) => {
         await ctx.db.patch(applicationId, {
           vehicleHandoverAt: Date.now(),
@@ -543,6 +567,25 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
         });
         await ctx.db.patch(s.vehicleId, { status: "AVAILABLE" });
       });
+      return applicationId;
+    }
+
+    /**
+     * An otherwise-finalizable manual finance company deal: letter, handover, expected payment, legal invoice
+     * (issued to the company, = G) and customer first payment (no deposit held => 0). Only its costs are open,
+     * so a test built on it isolates the cost gate.
+     */
+    async function readyManualDeal(s: Seed) {
+      const applicationId = await readyToFinalize(s, { mode: "MANUAL_FINANCE_COMPANY", manualLetter: true });
+      await s.asOwner.mutation(api.financeDealCosts.recordLegalInvoice, {
+        orgId: s.orgId,
+        applicationId,
+        legalInvoiceAmountMinor: 12_000_000,
+        legalInvoiceNumber: `INV-${applicationId}`,
+        legalInvoiceDate: Date.now(),
+        issuedTo: "FINANCE_COMPANY",
+      });
+      await s.t.run((ctx) => ctx.db.patch(applicationId, { customerFirstPaymentMinor: 0 }));
       return applicationId;
     }
 
@@ -570,24 +613,37 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
 
     test("finalizeDeal refuses a no-company through-dealership deal with no cost line, and closes nothing", async () => {
       const s = await seed("cc_refuse");
-      const applicationId = await readyToFinalize(s);
-      await expect(finalize(s, applicationId)).rejects.toThrow(/COSTS_NONE/);
-      const after = await s.t.run((ctx) => ctx.db.get(applicationId));
+      // SCRUM-495: re-based from INTERNAL_INSTALLMENT (now refused before the costs gate) onto the operated
+      // no-company shape, a manual finance company. The COSTS_NONE assertion is unchanged.
+      // SCRUM-27 ordering: with no approval letter recorded, finalizeDeal is refused on the letter, before the costs gate.
+      const noLetter = await readyToFinalize(s, { mode: "MANUAL_FINANCE_COMPANY" });
+      await expect(finalize(s, noLetter)).rejects.toThrow(/approval letter is not fully recorded/);
+      const s2 = await seed("cc_refuse_letter");
+      const applicationId = await readyManualDeal(s2);
+      expect((await costsCheck(s2, applicationId)).status).toBe("BLOCKED");
+      await expect(finalize(s2, applicationId)).rejects.toThrow(/COSTS_NONE/);
+      const after = await s2.t.run((ctx) => ctx.db.get(applicationId));
       expect(after?.status).toBe("APPROVED");
       expect(after?.finalizedSaleId).toBeUndefined();
     });
 
     test("positive control: a reconciled zero line makes it READY, it finalizes, and the rail reads finished", async () => {
       const s = await seed("cc_ready");
-      const applicationId = await readyToFinalize(s);
+      // SCRUM-495: re-based onto a manual finance company (see cc_refuse above).
+      const applicationId = await readyManualDeal(s);
       await recordReconciledZeroCost(s.asOwner, api, s.orgId, applicationId);
       expect((await costsCheck(s, applicationId)).status).toBe("READY");
       await finalize(s, applicationId);
       const after = await s.t.run((ctx) => ctx.db.get(applicationId));
       expect(after?.status).toBe("CLOSED");
+      // SCRUM-495: a manual finance company owes the dealership (OR-1), so its disbursement stage is
+      // BLOCKED until the money is confirmed and the rail is NOT finished. The "no financier leg reads
+      // NOT_APPLICABLE and the rail finishes" contract this test used to pin belonged to
+      // INTERNAL_INSTALLMENT, which can no longer be finalized; that contract stays covered on stored
+      // closed rows by the ac_true / stop_control / no-orphan tests in this file.
       const { all, disbursement } = await stagesOf(s, applicationId);
-      expect(disbursement.state).toBe("NOT_APPLICABLE");
-      expect(allComplete(all)).toBe(true);
+      expect(disbursement.state).toBe("BLOCKED");
+      expect(allComplete(all)).toBe(false);
     });
 
     test("control: the direct route with no cost line keeps COSTS_CLOSABLE NOT_APPLICABLE", async () => {
@@ -615,6 +671,59 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
       const s = await seed("cc_configured");
       const applicationId = await readyToFinalize(s, { mode: "CONFIGURED_FINANCE_COMPANY", configured: true });
       expect((await costsCheck(s, applicationId)).status).toBe("BLOCKED");
+    });
+
+    // SCRUM-495: a retired-mode deal cannot be finalized even with every other precondition met; the
+    // control above (MANUAL_FINANCE_COMPANY) finalizes on the identical fixture.
+    const RETIRED = [{ mode: "LEASE" }, { mode: "INTERNAL_INSTALLMENT" }] as const;
+
+    test.each(RETIRED)(
+      "finalizeDeal refuses a $mode deal with the retired-mode message, closes nothing and creates no sale",
+      async ({ mode }) => {
+        const s = await seed(`retired_finalize_${mode}`);
+        const applicationId = await readyToFinalize(s, { mode });
+        await recordReconciledZeroCost(s.asOwner, api, s.orgId, applicationId);
+        await expectRetiredDealMode(finalize(s, applicationId));
+        const after = await s.t.run((ctx) => ctx.db.get(applicationId));
+        expect(after?.status).toBe("APPROVED");
+        expect(after?.finalizedSaleId).toBeUndefined();
+        const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
+        expect(sales).toHaveLength(0);
+      }
+    );
+
+    // Coverage gap found by neutralizing finalizeDeal's own assertOperatedDealMode: the later readiness
+    // check states the same refusal, so a fully-ready retired deal cannot tell the two apart. The
+    // guard's own job is to refuse FIRST, before any other precondition: a retired deal with no
+    // handover recorded is refused as retired, not sent off to register a handover.
+    test.each(RETIRED)(
+      "finalizeDeal refuses a $mode deal as retired BEFORE any other precondition (handover not yet registered)",
+      async ({ mode }) => {
+        const s = await seed(`retired_first_${mode}`);
+        const applicationId = await readyToFinalize(s, { mode });
+        await s.t.run((ctx) => ctx.db.patch(applicationId, { vehicleHandoverAt: undefined }));
+        await expectRetiredDealMode(finalize(s, applicationId));
+      }
+    );
+
+    test.each(RETIRED)(
+      "getClosingReadiness states DEAL_MODE_RETIRED as a BLOCKED check for a $mode deal",
+      async ({ mode }) => {
+        const s = await seed(`retired_ready_${mode}`);
+        const applicationId = await readyToFinalize(s, { mode });
+        const r = await s.asOwner.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
+        const check = r.checks.find((c) => c.key === "DEAL_MODE_RETIRED");
+        expect(check?.status).toBe("BLOCKED");
+        expect(check?.reasonCode).toBe("DEAL_MODE_RETIRED");
+        expect(r.state).toBe("BLOCKED");
+      }
+    );
+
+    test("control: an operated deal carries no DEAL_MODE_RETIRED check at all", async () => {
+      const s = await seed("retired_ready_control");
+      const applicationId = await readyToFinalize(s, { mode: "MANUAL_FINANCE_COMPANY" });
+      const r = await s.asOwner.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
+      expect(r.checks.some((c) => c.key === "DEAL_MODE_RETIRED")).toBe(false);
     });
   });
 

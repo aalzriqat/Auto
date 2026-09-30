@@ -30,6 +30,7 @@ import {
   assertNoPendingDepositRequest,
   assertReservationAdoptableWithoutDeposit,
 } from "./utils/depositRequestGuards";
+import { assertOperatedDealMode } from "./utils/dealModes";
 import { completeSale } from "./utils/saleCompletion";
 import { planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal, forwardGateRefusal } from "./utils/financeCompanyForward";
@@ -2524,6 +2525,8 @@ export const createFromQuote = mutation({
     if (!quote || quote.orgId !== args.orgId) {
       throw new ConvexError("Quote not found.");
     }
+    // SCRUM-495: a quote left in a retired mode does not become an application.
+    assertOperatedDealMode(quote.mode);
     const customer = await ctx.db.get(quote.customerId);
     if (!customer || customer.orgId !== args.orgId) {
       throw new ConvexError("Quote customer not found in this organization.");
@@ -4491,6 +4494,8 @@ export const finalizeDeal = mutation({
         if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
         if (app.status === "CLOSED" && app.finalizedSaleId) return app.finalizedSaleId;
         if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before finalizing");
+        // SCRUM-495: readiness mirrors this for the screen.
+        assertOperatedDealMode(app.quoteModeAtSubmission ?? (await dealModeOf(ctx, app)));
         // SCRUM-444 DA-03: a waiting deposit request would be orphaned by the
         // deal closing. Refused up front so the message is this one, not a
         // later readiness refusal.

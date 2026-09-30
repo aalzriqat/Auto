@@ -19,6 +19,7 @@ import type { DepositMethod } from "./depositRecording";
 import { throwAppError, AppErrorCode } from "./errors";
 import { requireOrgMember } from "./tenancy";
 import { assertNoPendingDepositRequest } from "./depositRequestGuards";
+import { assertOperatedDealMode } from "./dealModes";
 import {
   assertSaleMayCompleteForVehicle,
   consumeRootForSale,
@@ -201,6 +202,10 @@ async function prepareSaleCompletion(
   args: SaleCompletionArgs,
   intent: SalePreparationIntent
 ): Promise<PreparedSaleCompletion> {
+  // SCRUM-495 (OR-7): every sale creation and completion path passes here, so a LEASE draft
+  // cannot be completed; it can still be edited or cancelled via `sales.update`.
+  assertOperatedDealMode(args.financingType);
+
   const vehicle = await ctx.db.get(args.vehicleId);
   if (vehicle?.orgId !== args.orgId) {
     throwAppError(AppErrorCode.VEHICLE_NOT_FOUND, "Vehicle not found in this organization.");
@@ -239,6 +244,9 @@ async function prepareSaleCompletion(
     if (quote.customerId !== args.customerId || !quoteVehicleIds.includes(args.vehicleId)) {
       throw new ConvexError("Quote does not match the sale customer and vehicle.");
     }
+    // SCRUM-495 (OR-6 / OR-7): a quote left in a retired mode does not become a
+    // sale, whatever financing type the caller names.
+    assertOperatedDealMode(quote.mode);
     leadId = quote.leadId;
 
     // SCRUM-444 DA-03: the shared boundary of `sales.create`,
@@ -267,6 +275,9 @@ async function prepareSaleCompletion(
     ) {
       throw new ConvexError("Finance application does not match the sale source records.");
     }
+    // SCRUM-495: the mode the application froze at submission is the one its
+    // deal reads everywhere, so it is refused on the same footing as the quote.
+    assertOperatedDealMode(app.quoteModeAtSubmission);
   }
 
   const membership = await requireOrgMember(ctx, args.orgId, args.salespersonId);

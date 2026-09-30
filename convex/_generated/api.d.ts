@@ -166,6 +166,7 @@ import type * as utils_custodySourceLedger from "../utils/custodySourceLedger.js
 import type * as utils_dealCostLimits from "../utils/dealCostLimits.js";
 import type * as utils_dealCustodyPosting from "../utils/dealCustodyPosting.js";
 import type * as utils_dealFinancialSummary from "../utils/dealFinancialSummary.js";
+import type * as utils_dealModes from "../utils/dealModes.js";
 import type * as utils_dealVehicleProfile from "../utils/dealVehicleProfile.js";
 import type * as utils_dedup from "../utils/dedup.js";
 import type * as utils_defaultChart from "../utils/defaultChart.js";
@@ -419,6 +420,7 @@ declare const fullApi: ApiFromModules<{
   "utils/dealCostLimits": typeof utils_dealCostLimits;
   "utils/dealCustodyPosting": typeof utils_dealCustodyPosting;
   "utils/dealFinancialSummary": typeof utils_dealFinancialSummary;
+  "utils/dealModes": typeof utils_dealModes;
   "utils/dealVehicleProfile": typeof utils_dealVehicleProfile;
   "utils/dedup": typeof utils_dedup;
   "utils/defaultChart": typeof utils_defaultChart;

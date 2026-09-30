@@ -1274,6 +1274,7 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingCheckBlocked: ["Needs action", "يحتاج إجراء"],
   ClosingCheckUnavailable: ["Cannot be checked", "تعذّر الفحص"],
   ClosingCheckNotApplicable: ["Not needed on this deal", "غير مطلوب في هذه الصفقة"],
+  ClosingCheck_DEAL_MODE_RETIRED: ["The deal is a cash or finance-company deal", "الصفقة نقدية أو عبر شركة تمويل"],
   ClosingCheck_REMITTANCE_KNOWN: ["What the finance company remits is established", "المبلغ الذي تحوّله شركة التمويل محدَّد"],
   ClosingCheck_CONFIGURED_FEES_RECORDED: ["Every fee the finance company configures is recorded", "كل رسم تضبطه شركة التمويل مسجَّل"],
   ClosingCheck_CUSTODY_ON_LEDGER: ["Employee custody is on the books", "عهدة الموظفين مرحَّلة إلى الدفاتر"],
@@ -1424,6 +1425,14 @@ const dealOverviewMessages = defineBilingualMessages({
     "تعذّر تحديد مدخلات إغلاق هذه الصفقة من سجلاتها، لذلك لا يمكن فحص الجاهزية.",
   ],
   ClosingReason_NOT_READY: ["This deal is not ready to be closed.", "هذه الصفقة غير جاهزة للإغلاق."],
+  ClosingReason_DEAL_MODE_RETIRED: [
+    "Lease and in-house instalment deals are no longer offered, so this deal cannot be finalized. Cancel it and start a cash or finance-company deal.",
+    "لم تعد صفقات التأجير والتقسيط الداخلي متاحة، لذلك لا يمكن إنهاء هذه الصفقة. ألغِها وابدأ صفقة نقدية أو عبر شركة تمويل.",
+  ],
+  ClosingReason_WITHHELD_DEAL_MODE_RETIRED: [
+    "This deal is in a mode that is no longer offered.",
+    "هذه الصفقة بنمط لم يعد متاحًا.",
+  ],
   ClosingReason_WITHHELD_REMITTANCE_KNOWN: [
     "What the finance company will remit is not established yet.",
     "لم يُحدَّد بعد المبلغ الذي ستحوّله شركة التمويل.",
@@ -1631,6 +1640,7 @@ export const salesEn = {
   SelectSave: "Select & Save",
   Financed: "Financed",
   Lease: "Lease",
+  LeaseRetired: "Lease (retired)",
   LoanAmount: "Loan Amount",
   APR: "APR (%)",
   TermMonths: "Term (Months)",
@@ -2701,6 +2711,7 @@ export const salesAr = {
   Cash: "نقدي",
   Financed: "تقسيط",
   Lease: "تأجير",
+  LeaseRetired: "تأجير (متوقف)",
   LoanAmount: "مبلغ القرض",
   APR: "نسبة الربح (%)",
   TermMonths: "المدة (أشهر)",
