@@ -4961,7 +4961,12 @@ export const confirmSupplierDisbursement = mutation({
         // simply untrue, and this record is the only place the settlement
         // advice's counterparty is written down.
         let payerName = "The finance company";
-        if (payer.counterparty.kind === "MANUAL_PROVIDER") {
+        const letterPayer = manualPayerOf(app);
+        if (letterPayer !== null) {
+          // SCRUM-27: the name exactly as on the approval letter, which the
+          // manager entered, outranks the quote-time provider label.
+          payerName = letterPayer.name;
+        } else if (payer.counterparty.kind === "MANUAL_PROVIDER") {
           payerName = payer.counterparty.name;
         } else if (app.companyId) {
           const company = await ctx.db.get(app.companyId);

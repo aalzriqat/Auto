@@ -13,6 +13,7 @@
  * Evidence boundary: convex-test only - repository behaviour, not the Convex
  * runtime (no OCC, no paginated-query limit) and not production data.
  */
+import { reverseAccountingEvent } from "./accounting/reversals";
 import { convexTestWithComponents, registerHandover, recordReconciledZeroCost } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
@@ -501,5 +502,31 @@ describe("SCRUM-27 - refusals and red-team cases", () => {
     const one = await finalizedManualDeal("two_a", c);
     const rows = await one.s.t.run((ctx) => ctx.db.query("receivableDocuments").collect());
     expect(rows.filter((r) => r.sourceType === "finance_application" && r.payerNameSnapshot === LETTER_NAME)).toHaveLength(1);
+  });
+});
+
+describe("SCRUM-27 - reversing a manual payer's posting", () => {
+  test("reversing the forward twice reverses once, and the reversal lines keep the payer's name", async () => {
+    const c = CASES[0];
+    const { s, applicationId } = await finalizedManualDeal("revtwice", c);
+    await record(s, applicationId, c);
+    const result = await s.t.run(async (ctx) => {
+      const original = (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect())
+        .find((e) => e.eventType === "FINANCE_COMPANY_FORWARD_PAID" && e.status === "POSTED")!;
+      const actorId = (await ctx.db.query("users").first())!._id;
+      const cmd = { orgId: s.orgId, originalEventId: original._id, reversalDate: Date.now(), reason: "test", actorId, idempotencyKey: `rev-${original._id}` };
+      const first = await reverseAccountingEvent(ctx, cmd);
+      const second = await reverseAccountingEvent(ctx, cmd);
+      const reversals = (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect())
+        .filter((e) => e.eventType === "JOURNAL_REVERSAL");
+      const lines = await ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", first.reversalJournalEntryId)).collect();
+      return { first, second, reversalCount: reversals.length, names: lines.map((l) => l.payerNameSnapshot ?? null), fcIds: lines.map((l) => l.financeCompanyId ?? null) };
+    });
+    expect(result.first.alreadyReversed).toBe(false);
+    expect(result.second.alreadyReversed).toBe(true);
+    expect(result.second.reversalEventId).toBe(result.first.reversalEventId);
+    expect(result.reversalCount).toBe(1);
+    expect(result.names).toContain(LETTER_NAME);
+    expect(result.fcIds.every((x) => x === null)).toBe(true);
   });
 });
