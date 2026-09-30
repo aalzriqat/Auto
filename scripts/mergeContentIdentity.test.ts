@@ -8,8 +8,16 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { contentIdentity, sameContentIdentity } from "./mergeContentIdentity.mjs";
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { contentIdentity, runCli, sameContentIdentity } from "./mergeContentIdentity.mjs";
+import { resolveTrustedGitExecutable } from "./trustedGit.mjs";
+
+// Wrap (not replace) the resolver so tests can observe and override it while the
+// default behaviour stays the real one.
+vi.mock("./trustedGit.mjs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./trustedGit.mjs")>();
+  return { resolveTrustedGitExecutable: vi.fn(actual.resolveTrustedGitExecutable) };
+});
 
 let repo = "";
 const git = (args: string[], env: Record<string, string> = {}) =>
@@ -135,5 +143,106 @@ describe("merge content identity CLI (subprocess)", () => {
     const r = run(...args());
     expect(r.status).toBe(status);
     expect(r.stdout).not.toContain("SAME");
+  });
+});
+
+describe("merge content identity CLI (in-process runCli)", () => {
+  const out = () => vi.spyOn(console, "log").mockImplementation(() => {});
+  const err = () => vi.spyOn(console, "error").mockImplementation(() => {});
+  afterEach(() => vi.restoreAllMocks());
+
+  test("SAME prints exactly SAME and returns 0", () => {
+    const log = out();
+    const error = err();
+    expect(runCli(["--repo", repo, "same", merge1, merge2])).toBe(0);
+    expect(log.mock.calls).toEqual([["SAME"]]);
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  test("defaults --repo to the current directory", () => {
+    const log = out();
+    const error = err();
+    // No --repo: "." is used, which here is the AutoFlow repo, so the SHAs are not present.
+    expect(runCli(["same", merge1, merge2])).toBe(1);
+    expect(log).not.toHaveBeenCalled();
+    expect(error.mock.calls[0][0]).toMatch(/not a commit present/);
+  });
+
+  test("DIFFERENT returns 1 with nothing on stdout", () => {
+    const log = out();
+    const error = err();
+    const other = commitTree(otherTree, [base, head], "2026-04-01T00:00:00Z");
+    expect(runCli(["--repo", repo, "same", merge1, other])).toBe(1);
+    expect(log).not.toHaveBeenCalled();
+    expect(error.mock.calls[0][0]).toMatch(/differ/);
+  });
+
+  test.each([
+    ["wrong command", () => ["--repo", repo, "diff", merge1, merge2]],
+    ["too few args", () => ["--repo", repo, "same", merge1]],
+    ["too many args", () => ["--repo", repo, "same", merge1, merge2, merge1]],
+    ["no args", () => []],
+  ])("usage error (%s) returns 2 with nothing on stdout", (_l, args) => {
+    const log = out();
+    const error = err();
+    expect(runCli(args())).toBe(2);
+    expect(log).not.toHaveBeenCalled();
+    expect(error.mock.calls[0][0]).toMatch(/usage:/);
+  });
+
+  test("a bad SHA returns 1 without SAME", () => {
+    const log = out();
+    const error = err();
+    expect(runCli(["--repo", repo, "same", merge1, "nope"])).toBe(1);
+    expect(log).not.toHaveBeenCalled();
+    expect(error.mock.calls[0][0]).toMatch(/mergeContentIdentity: .*40-hex/);
+  });
+
+  test("a non-Error throw is still reported and fails closed", () => {
+    const log = out();
+    const error = err();
+    vi.mocked(resolveTrustedGitExecutable).mockImplementationOnce(() => {
+      throw "boom";
+    });
+    expect(runCli(["--repo", repo, "same", merge1, merge2])).toBe(1);
+    expect(log).not.toHaveBeenCalled();
+    expect(error.mock.calls[0][0]).toBe("mergeContentIdentity: boom");
+  });
+
+  test("resolver failure fails closed: contentIdentity throws, CLI returns 1, no SAME", () => {
+    const log = out();
+    const error = err();
+    const failing = () => {
+      throw new Error("A trusted absolute Git executable was not found");
+    };
+    vi.mocked(resolveTrustedGitExecutable).mockImplementation(failing);
+    try {
+      expect(() => contentIdentity(repo, merge1)).toThrow(/trusted absolute Git/);
+      expect(runCli(["--repo", repo, "same", merge1, merge2])).toBe(1);
+    } finally {
+      vi.mocked(resolveTrustedGitExecutable).mockReset();
+    }
+    expect(log).not.toHaveBeenCalled();
+    expect(error.mock.calls[0][0]).toMatch(/trusted absolute Git/);
+  });
+});
+
+describe("git is resolved to an absolute trusted path, never via PATH", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  test("the real resolver returns an absolute path to an existing file", () => {
+    const real = resolveTrustedGitExecutable();
+    expect(path.isAbsolute(real)).toBe(true);
+    expect(real).not.toBe("git");
+  });
+
+  test("contentIdentity executes exactly the path the resolver returns", () => {
+    // A resolver result that does not exist makes the lookup fail closed; if the
+    // code used a bare "git" from PATH instead, it would succeed and this would fail.
+    vi.mocked(resolveTrustedGitExecutable).mockImplementationOnce(() =>
+      path.join(tmpdir(), "no-such-dir", "git-not-here"),
+    );
+    expect(() => contentIdentity(repo, merge1)).toThrow(/not a commit present/);
+    expect(contentIdentity(repo, merge1).tree).toBe(tree);
   });
 });

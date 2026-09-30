@@ -11,6 +11,7 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveTrustedGitExecutable } from "./trustedGit.mjs";
 
 const SHA_RE = /^[0-9a-f]{40}$/i;
 
@@ -20,10 +21,12 @@ export function contentIdentity(repo, sha) {
     throw new Error("merge SHA is not a 40-hex commit id");
   }
   const notCommit = () => new Error(`${sha} is not a commit present in the repository`);
+  // Resolved outside the try: a missing trusted git must surface as its own error.
+  const gitExecutable = resolveTrustedGitExecutable();
   let out;
   try {
     // `cat-file --batch` does not peel tags: an annotated tag reports type "tag".
-    out = execFileSync("git", ["-C", repo, "cat-file", "--batch"], {
+    out = execFileSync(gitExecutable, ["-C", repo, "cat-file", "--batch"], {
       input: `${sha}\n`,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -55,7 +58,8 @@ export function sameContentIdentity(repo, shaA, shaB) {
   return a.tree === b.tree && a.first === b.first && a.second === b.second;
 }
 
-function main(argv) {
+/** CLI entry; returns the process exit code (0 SAME, 1 refused/error, 2 usage). */
+export function runCli(argv) {
   const args = [...argv];
   let repo = ".";
   if (args[0] === "--repo") {
@@ -81,5 +85,5 @@ function main(argv) {
 
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : undefined;
 if (invokedPath && invokedPath === fileURLToPath(import.meta.url)) {
-  process.exit(main(process.argv.slice(2)));
+  process.exit(runCli(process.argv.slice(2)));
 }
