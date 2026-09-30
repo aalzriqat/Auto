@@ -29,11 +29,16 @@ const workflowPath = process.env.SONAR_PR_WORKFLOW_FILE
   ? path.resolve(process.env.SONAR_PR_WORKFLOW_FILE)
   : path.resolve(process.cwd(), ".github/workflows/sonar-pr-report.yml");
 const workflow = parseYaml(readFileSync(workflowPath, "utf8")) as Workflow;
-const reportStep = workflow.jobs["scan-report"].steps.find((s) => s.id === "report");
-const verdictStep = workflow.jobs.verdict.steps.find((s) => s.name === "Publish trusted Sonar verdict");
-const scanStep = workflow.jobs["scan-report"].steps.find((s) => String(s.uses ?? "").startsWith("SonarSource/sonarqube-scan-action"));
-const reportScript = String(reportStep?.run ?? "").replace(/\r/g, "");
-const verdictScript = String(verdictStep?.run ?? "").replace(/\r/g, "");
+function requireStep(job: string, label: string, pick: (s: Step) => boolean): Step {
+  const step = workflow.jobs[job].steps.find(pick);
+  if (!step) throw new Error(`workflow step not found: ${label}`);
+  return step;
+}
+const reportStep = requireStep("scan-report", "report", (s) => s.id === "report");
+const verdictStep = requireStep("verdict", "Publish trusted Sonar verdict", (s) => s.name === "Publish trusted Sonar verdict");
+const scanStep = requireStep("scan-report", "SonarSource/sonarqube-scan-action", (s) => String(s.uses ?? "").startsWith("SonarSource/sonarqube-scan-action"));
+const reportScript = String(reportStep.run ?? "").replace(/\r/g, "");
+const verdictScript = String(verdictStep.run ?? "").replace(/\r/g, "");
 
 function findBash(): string | null {
   const candidates = [process.env.BASH_FOR_TESTS, "C:\\Program Files\\Git\\bin\\bash.exe", "bash"].filter(Boolean) as string[];
@@ -194,7 +199,7 @@ function runScript(
   const dir = mkdtempSync(path.join(workRoot, "case-"));
   const runnerTemp = path.join(dir, "runner-temp");
   mkdirSync(runnerTemp, { recursive: true });
-  if (opts.reportTask !== undefined && opts.reportTask !== null) {
+  if (opts.reportTask != null) {
     mkdirSync(path.join(runnerTemp, "sonar-scannerwork"), { recursive: true });
     writeFileSync(path.join(runnerTemp, "sonar-scannerwork", "report-task.txt"), opts.reportTask);
   }
@@ -282,6 +287,10 @@ function reportRun(o: {
 
 const posts = (r: RunResult, needle: string) => r.calls.filter((c) => c.tool === "curl" && c.method === "POST" && c.url?.includes(needle));
 const gateOk = (r: RunResult) => /^gate_ok=true$/m.test(r.githubOutput);
+const expectFailClosed = (r: RunResult) => {
+  expect(gateOk(r)).toBe(false);
+  expect(r.status).not.toBe(0);
+};
 const gateUrls = (r: RunResult) => r.calls.filter((c) => c.url?.includes("qualitygates/project_status")).map((c) => c.url);
 
 describe.skipIf(!bash)("sonar-pr-report.yml `report` step behaviour", () => {
@@ -291,7 +300,7 @@ describe.skipIf(!bash)("sonar-pr-report.yml `report` step behaviour", () => {
   });
 
   it("scan writes its working directory outside the candidate tree at the path the report step reads", () => {
-    const args = String(scanStep?.with?.args ?? "");
+    const args = String(scanStep.with?.args ?? "");
     expect(args).toContain("-Dsonar.working.directory=${{ runner.temp }}/sonar-scannerwork");
     expect(reportScript).toContain("$RUNNER_TEMP/sonar-scannerwork/report-task.txt");
   });
@@ -302,30 +311,26 @@ describe.skipIf(!bash)("sonar-pr-report.yml `report` step behaviour", () => {
       newGate: "ERROR",
       priorGate: "OK",
     });
-    expect(gateOk(r)).toBe(false);
-    expect(r.status).not.toBe(0);
+    expectFailClosed(r);
     // The comment is still written before the gate verdict fails the step.
     expect(posts(r, `/issues/${PR}/comments`)).toHaveLength(1);
   });
 
   it("does NOT emit gate_ok while the CE task never finishes (bounded wait, fail closed)", { timeout: 60_000 }, () => {
     const r = reportRun({ ce: [{ task: { status: "PENDING" } }], priorGate: "OK" });
-    expect(gateOk(r)).toBe(false);
-    expect(r.status).not.toBe(0);
+    expectFailClosed(r);
     expect(gateUrls(r).every((u) => !u?.includes("pullRequest="))).toBe(true);
   });
 
   it.each(["FAILED", "CANCELED"])("fails closed when the CE task is %s even if a prior analysis is OK", (status) => {
     const r = reportRun({ ce: [{ task: { status } }], priorGate: "OK" });
-    expect(gateOk(r)).toBe(false);
-    expect(r.status).not.toBe(0);
+    expectFailClosed(r);
     expect(posts(r, `/issues/${PR}/comments`)).toHaveLength(0);
   });
 
   it("fails closed when the CE task succeeds without an analysisId", () => {
     const r = reportRun({ ce: [{ task: { status: "SUCCESS" } }], priorGate: "OK" });
-    expect(gateOk(r)).toBe(false);
-    expect(r.status).not.toBe(0);
+    expectFailClosed(r);
   });
 
   it.each([
@@ -336,8 +341,7 @@ describe.skipIf(!bash)("sonar-pr-report.yml `report` step behaviour", () => {
     ["ambiguous duplicate ceTaskId", "ceTaskId=one\nceTaskId=two\n"],
   ])("fails closed on %s", (_label, reportTask) => {
     const r = reportRun({ reportTask, priorGate: "OK" });
-    expect(gateOk(r)).toBe(false);
-    expect(r.status).not.toBe(0);
+    expectFailClosed(r);
   });
 
   it("emits gate_ok=true only for the OK gate of this run's analysis, queried by analysisId", () => {
@@ -388,6 +392,8 @@ function verdictRun(o: {
   });
 }
 
+const TESTED_FAILURE = [{ sha: TESTED, state: "failure", context: "autoflow/trusted-sonar-pr" }];
+
 function statuses(r: RunResult): Array<{ sha: string; state: string; context: string }> {
   return posts(r, "/statuses/").map((c) => {
     const body = JSON.parse(String(c.body)) as { state: string; context: string };
@@ -398,13 +404,8 @@ function statuses(r: RunResult): Array<{ sha: string; state: string; context: st
 describe.skipIf(!bash)("sonar-pr-report.yml `Publish trusted Sonar verdict` step behaviour", () => {
   it("settles TESTED_SHA with failure, and posts nowhere else, when the merge-ref fetch fails", () => {
     const r = verdictRun({ mergeFetchFails: true });
-    expect(statuses(r)).toEqual([{ sha: TESTED, state: "failure", context: "autoflow/trusted-sonar-pr" }]);
+    expect(statuses(r)).toEqual(TESTED_FAILURE);
     expect(r.status).not.toBe(0);
-  });
-
-  it("never posts success to TESTED_SHA when the merge ref cannot be fetched, even with a verified gate", () => {
-    const r = verdictRun({ mergeFetchFails: true, gateOk: "true", scanResult: "success" });
-    expect(statuses(r).some((s) => s.state === "success")).toBe(false);
   });
 
   it("equal SHA + SAME + gate OK posts success to TESTED_SHA only and exits 0", () => {
@@ -423,23 +424,19 @@ describe.skipIf(!bash)("sonar-pr-report.yml `Publish trusted Sonar verdict` step
 
   it("regenerated merge whose tested SHA cannot be fetched is stale: failure on TESTED_SHA only", () => {
     const r = verdictRun({ current: REGEN, testedFetchFails: true });
-    expect(statuses(r)).toEqual([{ sha: TESTED, state: "failure", context: "autoflow/trusted-sonar-pr" }]);
+    expect(statuses(r)).toEqual(TESTED_FAILURE);
     expect(r.status).not.toBe(0);
   });
 
   it.each([
-    ["EMPTY", "helper prints nothing"],
-    ["DIFFERENT", "helper says DIFFERENT"],
-    ["FAIL", "helper exits non-zero"],
-  ])("current merge with %s (%s) posts failure on TESTED_SHA only", (same) => {
-    const r = verdictRun({ current: REGEN, same });
-    expect(statuses(r)).toEqual([{ sha: TESTED, state: "failure", context: "autoflow/trusted-sonar-pr" }]);
+    ["EMPTY", "helper prints nothing", REGEN],
+    ["DIFFERENT", "helper says DIFFERENT", REGEN],
+    ["FAIL", "helper exits non-zero", REGEN],
+    ["EMPTY", "byte-equal SHA but helper does not answer SAME", TESTED],
+  ])("helper %s (%s) posts failure on TESTED_SHA only", (same, _label, current) => {
+    const r = verdictRun({ current, same });
+    expect(statuses(r)).toEqual(TESTED_FAILURE);
     expect(r.status).not.toBe(0);
-  });
-
-  it("equal SHA but helper does not answer SAME is still a failure", () => {
-    const r = verdictRun({ same: "EMPTY" });
-    expect(statuses(r)).toEqual([{ sha: TESTED, state: "failure", context: "autoflow/trusted-sonar-pr" }]);
   });
 
   it.each(["", "false"])("GATE_OK=%j yields failure even on a SAME merge", (gate) => {
@@ -451,7 +448,7 @@ describe.skipIf(!bash)("sonar-pr-report.yml `Publish trusted Sonar verdict` step
 
   it("failed scan job yields failure", () => {
     const r = verdictRun({ scanResult: "failure", gateOk: "" });
-    expect(statuses(r)).toEqual([{ sha: TESTED, state: "failure", context: "autoflow/trusted-sonar-pr" }]);
+    expect(statuses(r)).toEqual(TESTED_FAILURE);
     expect(r.status).not.toBe(0);
   });
 });

@@ -146,8 +146,6 @@ describe("pull-request workflow secret boundary", () => {
     expect(source).toContain("-Dsonar.working.directory=${{ runner.temp }}/sonar-scannerwork");
     expect(reportRun).toContain('task_file="$RUNNER_TEMP/sonar-scannerwork/report-task.txt"');
     expect(reportRun).toContain('--data-urlencode "analysisId=$analysis_id"');
-    // SCRUM-494-4: the verdict's merge-ref fetch may fail without skipping the terminal post.
-    expect(verdictRun).toMatch(/if git fetch --no-tags origin \\\n\s*"refs\/pull\/\$\{PR_NUMBER\}\/merge:refs\/autoflow\/sonar-final-merge" &&/);
     expect(source.indexOf("sonar-report-merge")).toBeGreaterThan(source.indexOf("sonar-pr-report-payload.json"));
     expect(source.indexOf("sonar-report-merge")).toBeLessThan(source.indexOf("-X PATCH"));
     expect(source).toContain("tested-merge-sha.txt");
