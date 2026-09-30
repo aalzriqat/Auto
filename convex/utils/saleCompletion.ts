@@ -76,6 +76,14 @@ type SaleCompletionArgs = {
    * leave a sale row behind.
    */
   financedSalePlan?: FinancedSalePlanPayload;
+  /**
+   * SCRUM-390 (OR-5): G and C of the v2 financed-sale plan this completion
+   * froze, in minor units of `currency`. Supplied ONLY by
+   * `applications.finalizeDeal` and only under plan v2. It applies only to a
+   * dealer-owned car (a consigned sale ignores it) and is frozen onto the sale
+   * row so `recalculateCommission` never re-derives from the application.
+   */
+  commissionBase?: CommissionBase;
   taxRate?: number;
   taxAmount?: number;
   dealerFees?: number;
@@ -151,11 +159,15 @@ async function quoteLineIndexFor(
   return index >= 0 ? index : undefined;
 }
 
+type CommissionBase = { approvedMinor: number; contributionMinor: number; currency: string };
+
 type PreparedSaleCompletion = {
   vehicle: Doc<"vehicles">;
   customer: Doc<"customers">;
   leadId?: Id<"leads">;
   commissionAmount?: number;
+  /** The frozen OR-5 operands, present only when they apply to this completion. */
+  commissionBase?: CommissionBase;
   currency: string;
   // True when the commission amount is already known at completion, in EITHER
   // mode. MANUAL used to defer accrual to payment time so the amount stayed
@@ -327,6 +339,27 @@ async function prepareSaleCompletion(
     throw new ConvexError(FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT);
   }
 
+  // SCRUM-390 (OR-5): applies to a completion of a dealer-owned car only; a consigned
+  // sale keeps its frozen-margin basis and a draft commits nothing.
+  let commissionBase: CommissionBase | undefined;
+  if (intent === "COMPLETION" && args.commissionBase && !isConsignedAgentSale(vehicle)) {
+    const base = args.commissionBase;
+    if (base.currency !== currency) {
+      throw new ConvexError(
+        `This deal's financing figures are recorded in ${base.currency} but the dealership now reports in ${currency}, so the commissionable vehicle margin cannot be worked out. Settle the deal's currency before completing it.`
+      );
+    }
+    if (
+      !Number.isSafeInteger(base.approvedMinor) ||
+      base.approvedMinor < 0 ||
+      !Number.isSafeInteger(base.contributionMinor) ||
+      base.contributionMinor < 0
+    ) {
+      throw new ConvexError("The approved amount or the contribution recorded on this deal is not a usable amount.");
+    }
+    commissionBase = base;
+  }
+
   let accrueAtCompletion = false;
   if (commissionMode === "MANUAL") {
     commissionAmount = args.existingCommissionAmount;
@@ -348,6 +381,12 @@ async function prepareSaleCompletion(
           : undefined,
       settlementRoute: args.supplierSettlementRoute,
       externallyFinanced: args.financingType === "FINANCED" || args.financingType === "LEASE",
+      financedMargin: commissionBase
+        ? {
+            approved: fromMinorUnits(commissionBase.approvedMinor, currency),
+            contribution: fromMinorUnits(commissionBase.contributionMinor, currency),
+          }
+        : undefined,
     });
     accrueAtCompletion = commissionAmount != null;
   }
@@ -402,7 +441,7 @@ async function prepareSaleCompletion(
     }
   }
 
-  return { vehicle, customer, leadId, commissionAmount, currency, accrueAtCompletion };
+  return { vehicle, customer, leadId, commissionAmount, commissionBase, currency, accrueAtCompletion };
 }
 
 /**
@@ -456,6 +495,14 @@ export async function computeAutoCommissionAmount(
      * GL, the supplier claim and every report disagreed with.
      */
     frozenRecognizedEarnings?: number;
+    /**
+     * SCRUM-390 (OR-5): G and C, in major units, of a dealer-owned financed sale
+     * completed under a v2 plan. When given, the base is the "Commissionable
+     * vehicle margin" G - C - cost (never below 0) instead of salePrice - cost.
+     * Completion and recalculation feed it from the SAME frozen sale-row
+     * values; nothing is read from the application.
+     */
+    financedMargin?: { approved: number; contribution: number };
   }
 ): Promise<number | undefined> {
   let grossProfit: number;
@@ -470,14 +517,16 @@ export async function computeAutoCommissionAmount(
     // capitalized reconditioning expenses) so commission, the GL, and the
     // operational reports all show the same margin for a sale.
     const vehicleCost = await computeVehicleCapitalizedCost(ctx, args.vehicle);
-    grossProfit = commissionableEarnings({
-      salePrice: args.salePrice,
-      vehicleCost,
-      vehicle: args.vehicle,
-      supplierGrossReceipt: args.supplierGrossReceipt,
-      settlementRoute: args.settlementRoute,
-      externallyFinanced: args.externallyFinanced,
-    });
+    grossProfit = args.financedMargin
+      ? Math.max(0, args.financedMargin.approved - args.financedMargin.contribution - vehicleCost)
+      : commissionableEarnings({
+          salePrice: args.salePrice,
+          vehicleCost,
+          vehicle: args.vehicle,
+          supplierGrossReceipt: args.supplierGrossReceipt,
+          settlementRoute: args.settlementRoute,
+          externallyFinanced: args.externallyFinanced,
+        });
   }
   if (args.commissionMode === "AUTO_TIERS") {
     return calculateCommissionFromTiers(grossProfit, args.commissionTiers);
@@ -586,6 +635,14 @@ async function insertSaleRecord(
     gapCost: args.gapCost,
     gapTermMonths: args.gapTermMonths,
     commissionAmount,
+    // SCRUM-390 (OR-5): frozen only on a completion that used the margin base.
+    ...(status === "COMPLETED" && prepared.commissionBase
+      ? {
+          commissionBaseApprovedMinor: prepared.commissionBase.approvedMinor,
+          commissionBaseContributionMinor: prepared.commissionBase.contributionMinor,
+          commissionBaseCurrency: prepared.commissionBase.currency,
+        }
+      : {}),
     quoteId: args.quoteId,
     applicationId: args.applicationId,
     leadId: prepared.leadId,

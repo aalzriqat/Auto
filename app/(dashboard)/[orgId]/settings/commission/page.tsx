@@ -11,7 +11,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { toast } from "@/components/ui/sonner";
-import { Plus, Trash2, Zap, PenLine, Users } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Info, Plus, Trash2, Zap, PenLine, Users } from "lucide-react";
 import { getErrorMessage } from "@/lib/errors";
 
 interface Tier {
@@ -93,6 +94,13 @@ export default function CommissionSettingsPage() {
         <h1 className="text-2xl font-bold tracking-tight">{t("CommissionStructure")}</h1>
         <p className="text-muted-foreground text-sm mt-1">{t("CommissionStructureDesc")}</p>
       </div>
+
+      {/* SCRUM-390 (OR-17): static notice; tier thresholds are unchanged. */}
+      <Alert>
+        <Info className="h-4 w-4" />
+        <AlertTitle>{t("CommissionMarginNoticeTitle")}</AlertTitle>
+        <AlertDescription>{t("CommissionMarginNoticeDesc")}</AlertDescription>
+      </Alert>
 
       {/* Commission Mode Selector */}
       <Card>

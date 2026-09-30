@@ -4744,6 +4744,17 @@ export const finalizeDeal = mutation({
                 })),
               }
             : undefined,
+          // SCRUM-390 (OR-5): G and C for the "Commissionable vehicle margin", plan
+          // v2 only. `completeSale` applies it to a dealer-owned car alone and
+          // freezes it onto the sale row.
+          commissionBase:
+            financedSalePlan?.version === 2
+              ? {
+                  approvedMinor: financedSalePlan.financeCompanyReceivableMinor,
+                  contributionMinor: financedSalePlan.forwardContributionMinor,
+                  currency: financedSalePlan.currency,
+                }
+              : undefined,
           // Carried from the application onto the sale. Without this every
           // financed consigned deal posted THROUGH_DEALERSHIP no matter what
           // was agreed, because an absent route reads as that — so a deal whose

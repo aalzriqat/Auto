@@ -1985,6 +1985,23 @@ export default defineSchema({
      */
     consignedMarginCurrency: v.optional(v.string()),
     /**
+     * SCRUM-390 (OR-5): the operands of the "Commissionable vehicle margin" on
+     * a dealer-owned, financed sale completed by `applications.finalizeDeal`
+     * under a v2 financed-sale plan, frozen at completion.
+     *
+     *   commissionable margin = approved (G) - contribution (C) - acquisition cost
+     *
+     * G is the finance company's full transfer and C the showroom contribution,
+     * both in minor units of `commissionBaseCurrency`. Frozen because the
+     * application and the letter they came from can still move afterwards, and
+     * `recalculateCommission` must never re-derive payroll from them. Absent on
+     * every other sale (cash, `sales.create`, consigned, plan v1 / none) and on
+     * every row written before this field; those keep salePrice - cost.
+     */
+    commissionBaseApprovedMinor: v.optional(v.number()),
+    commissionBaseContributionMinor: v.optional(v.number()),
+    commissionBaseCurrency: v.optional(v.string()),
+    /**
      * What the supplier is owed for the car, in minor units, frozen at
      * completion — his entitlement, denominated in `consignedMarginCurrency`.
      *
