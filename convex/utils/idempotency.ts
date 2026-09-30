@@ -45,6 +45,13 @@ type IdempotencyArgsBase = {
   orgId: Id<"organizations">;
   operation: string;
   actorId?: Id<"users">;
+  /**
+   * Replaces the plain-string refusal of a replay whose fingerprint differs from
+   * the stored one (e.g. to raise a coded, translatable refusal). It must throw;
+   * it runs before anything is written. Omitted, the default refusal is raised
+   * exactly as before.
+   */
+  onFingerprintConflict?: () => never;
 };
 
 type EconomicIdempotencyArgs = IdempotencyArgsBase & {
@@ -119,6 +126,7 @@ export async function runWithIdempotency<T>(
       // whether this is the same intent" must never take the permissive branch
       // on a money path.
       if (existing.fingerprint !== args.fingerprint) {
+        if (args.onFingerprintConflict) args.onFingerprintConflict();
         throw new ConvexError(
           "Idempotency key reused with different request content. Use a new key for a different operation."
         );
@@ -128,6 +136,7 @@ export async function runWithIdempotency<T>(
       existing.fingerprint &&
       existing.fingerprint !== args.fingerprint
     ) {
+      if (args.onFingerprintConflict) args.onFingerprintConflict();
       throw new ConvexError(
         "Idempotency key reused with different request content. Use a new key for a different operation."
       );

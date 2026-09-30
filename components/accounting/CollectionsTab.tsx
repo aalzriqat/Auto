@@ -446,7 +446,7 @@ export function CollectionsTab() {
                               <Button
                                 size="sm"
                                 variant="outline"
-                                disabled={["REPLACED", "CANCELLED"].includes(cheque.status) || isChequeBusy}
+                                disabled={["RETURNED", "REPLACED", "CANCELLED"].includes(cheque.status) || isChequeBusy}
                                 onClick={() => setReturnTarget(cheque)}
                               >
                                 {t("Return" as any)}

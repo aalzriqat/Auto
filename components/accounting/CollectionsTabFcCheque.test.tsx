@@ -105,6 +105,18 @@ describe("Collections, Cheques tab: Return", () => {
     expect(screen.queryByRole("button", { name: "Replace" })).toBeNull();
   });
 
+  test.each([true, false])(
+    "a RETURNED cheque (finance-company: %s) has Return disabled - it is terminal for returning",
+    async (isFinanceCompanyCheque) => {
+      stubs.paginated.set("collections:listCheques", [
+        cheque({ _id: "c1", isFinanceCompanyCheque, status: "RETURNED" }),
+      ]);
+      await openChequesTab();
+      const ret = screen.getByRole("button", { name: "Return" }) as HTMLButtonElement;
+      expect(ret.disabled).toBe(true);
+    },
+  );
+
   test("a customer's cheque keeps Return", async () => {
     stubs.paginated.set("collections:listCheques", [
       cheque({ _id: "c2", isFinanceCompanyCheque: false, customerName: "Omar Nasser" }),

@@ -2013,9 +2013,18 @@ export const returnCheque = mutation({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const cheque = await ctx.db.get(args.chequeId);
-    if (!cheque || cheque.orgId !== args.orgId) throw new ConvexError("Cheque not found.");
+    if (!cheque || cheque.orgId !== args.orgId) {
+      throwAppError(AppErrorCode.CHEQUE_NOT_FOUND, FC_RETURN_MESSAGES.CHEQUE_NOT_FOUND);
+    }
+    // SCRUM-239: RETURNED is terminal for returning, whichever door recorded it
+    // (this one, or the deal's "Cheque returned by bank"). A second return would
+    // overwrite returnedAt/returnReason, re-notify managers and - for a customer
+    // cheque - re-flag the receivable and queue another reminder.
+    if (cheque.status === "RETURNED") {
+      throwAppError(AppErrorCode.CHEQUE_ALREADY_RETURNED, FC_RETURN_MESSAGES.CHEQUE_ALREADY_RETURNED);
+    }
     if (cheque.status === "CLEARED" || cheque.status === "REPLACED" || cheque.status === "CANCELLED") {
-      throw new ConvexError("This cheque can no longer be returned.");
+      throwAppError(AppErrorCode.CHEQUE_NOT_RETURNABLE, FC_RETURN_MESSAGES.CHEQUE_NOT_RETURNABLE);
     }
 
     await ctx.db.patch(args.chequeId, {

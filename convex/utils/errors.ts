@@ -54,6 +54,14 @@ export const AppErrorCode = {
   FINANCE_RETURN_REASON_REQUIRED: "FINANCE_RETURN_REASON_REQUIRED",
   FINANCE_RETURN_REASON_TOO_LONG: "FINANCE_RETURN_REASON_TOO_LONG",
   FINANCE_CHEQUE_RETURN_FROM_DEAL: "FINANCE_CHEQUE_RETURN_FROM_DEAL",
+  // SCRUM-239 follow-up. One code for a missing and a foreign-organisation row,
+  // so the refusal never discloses that another tenant's row exists.
+  FINANCE_RETURN_NOT_FOUND: "FINANCE_RETURN_NOT_FOUND",
+  FINANCE_RETURN_KEY_CONFLICT: "FINANCE_RETURN_KEY_CONFLICT",
+  // `collections.returnCheque`: RETURNED is terminal for returning.
+  CHEQUE_ALREADY_RETURNED: "CHEQUE_ALREADY_RETURNED",
+  CHEQUE_NOT_RETURNABLE: "CHEQUE_NOT_RETURNABLE",
+  CHEQUE_NOT_FOUND: "CHEQUE_NOT_FOUND",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];

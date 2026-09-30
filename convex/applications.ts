@@ -5315,13 +5315,18 @@ export const returnFinanceDisbursementCheque = mutation({
           chequeId: args.chequeId,
           returnReason,
         }),
+        onFingerprintConflict: () => refuseFinanceReturn("FINANCE_RETURN_KEY_CONFLICT"),
       },
       async () => {
-        const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId, "Application not found.");
+        // A missing row and another organisation's row answer identically, so the
+        // refusal never discloses that a foreign row exists.
+        const app = await ctx.db.get(args.applicationId);
+        if (!app || app.orgId !== args.orgId) refuseFinanceReturn("FINANCE_RETURN_NOT_FOUND");
         if (app.disbursedAt === undefined || app.disbursedAmountMinor === undefined) {
           refuseFinanceReturn("FINANCE_RETURN_NOT_DISBURSED");
         }
-        const cheque = await requireOwnedRow(ctx, args.orgId, "postDatedCheques", args.chequeId, "Cheque not found.");
+        const cheque = await ctx.db.get(args.chequeId);
+        if (!cheque || cheque.orgId !== args.orgId) refuseFinanceReturn("FINANCE_RETURN_NOT_FOUND");
         if (cheque.status !== "CLEARED" || cheque.isDeleted === true) {
           refuseFinanceReturn("FINANCE_RETURN_CHEQUE_NOT_CLEARED");
         }

@@ -1669,6 +1669,26 @@ const serverErrorMessages = defineBilingualMessages({
     "This is a finance-company cheque. Its return is recorded from the deal screen with the \"Cheque returned by bank\" action, not from customer collections. Nothing has been changed.",
     "هذا شيك شركة تمويل، ويُسجَّل إرجاعه من شاشة الصفقة عبر إجراء «شيك مرتجع من البنك» وليس من تحصيلات العملاء. لم يتم تغيير أي شيء.",
   ],
+  ServerError_FINANCE_RETURN_NOT_FOUND: [
+    "The deal or the cheque could not be found. Nothing has been changed.",
+    "تعذّر العثور على الصفقة أو الشيك. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_RETURN_KEY_CONFLICT: [
+    "This request reuses the identity of an earlier request that had different content (another cheque or reason). Nothing has been changed. Reopen the dialog and try again.",
+    "يعيد هذا الطلب استخدام معرّف طلب سابق كان محتواه مختلفًا (شيك أو سبب آخر). لم يتم تغيير أي شيء. أعد فتح النافذة وحاول مرة أخرى.",
+  ],
+  ServerError_CHEQUE_ALREADY_RETURNED: [
+    "This cheque has already been returned, so it cannot be returned again. Nothing has been changed.",
+    "سبق تسجيل هذا الشيك كمرتجع، لذلك لا يمكن إرجاعه مرة أخرى. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CHEQUE_NOT_RETURNABLE: [
+    "This cheque can no longer be returned. Nothing has been changed.",
+    "لا يمكن إرجاع هذا الشيك بعد الآن. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CHEQUE_NOT_FOUND: [
+    "Cheque not found. Nothing has been changed.",
+    "لم يتم العثور على الشيك. لم يتم تغيير أي شيء.",
+  ],
 });
 
 export const salesEn = {

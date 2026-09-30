@@ -2736,6 +2736,11 @@ export function DealCockpit({
                     { reflectedWhen: disbursementReturnReflected(chequeId) }
                   );
                   chequeReturnKeyRef.current = null;
+                  // The return reopens the deal for the NEXT disbursement version.
+                  // A confirm key kept after a lost response belongs to the
+                  // disbursement just returned; reusing it would make the server
+                  // replay that old result and never record the next one.
+                  confirmDisbursementKeyRef.current = null;
                   setChequeReturnOpen(false);
                 } catch (error) {
                   // The server answered: the next attempt is a new command. A lost response keeps the key.

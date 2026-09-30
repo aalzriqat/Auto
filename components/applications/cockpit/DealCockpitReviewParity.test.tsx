@@ -2723,4 +2723,52 @@ describe("cheque returned by the bank - applications.returnFinanceDisbursementCh
     expect(typeof first.idempotencyKey).toBe("string");
     expect(second.idempotencyKey).toBe(first.idempotencyKey);
   });
+
+  test("F3: a confirm whose response was lost keeps its key, but a successful return resets it - the next confirm is a new command", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    const confirmStages = [
+      { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+      { key: "DISBURSEMENT", state: "BLOCKED", blocker: "AwaitingDisbursement", authority: "MIRROR" },
+      { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+      { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
+    ];
+    const awaitingConfirm = () => {
+      queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages: confirmStages }));
+      queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    };
+    const confirmCalls = () => (mutationCalls.get("applications:confirmDisbursement") ?? []) as Array<Record<string, unknown>>;
+
+    awaitingConfirm();
+    const view = renderCockpit();
+    // v1: the operator confirms; the response is lost, so the key is kept for a retry.
+    stubs.mutationFailures.set("applications:confirmDisbursement", "connection lost");
+    fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+    await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    // The operator cancels the dialog; the key stays on the page.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // The deal shows the disbursement (it DID commit) and the bank returns the cheque.
+    setDeal();
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+    openDealDetails();
+    fireEvent.click(screen.getByTestId(ACTION));
+    fireEvent.change(screen.getByLabelText("ChequeReturnedByBankReasonLabel"), { target: { value: "Insufficient funds" } });
+    fireEvent.click(screen.getByRole("button", { name: "ChequeReturnedByBankConfirm" }));
+    await waitFor(() => expect(mutationCalls.get(RETURN_MUTATION)).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // The return reopened the deal for disbursement version 2: confirming again is a NEW command.
+    awaitingConfirm();
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+    openDealDetails();
+    fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+    await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+    const [v1, v2] = confirmCalls();
+    expect(String(v2.idempotencyKey)).toMatch(/^confirm-disbursement:/);
+    expect(v2.idempotencyKey).not.toBe(v1.idempotencyKey);
+  });
 });

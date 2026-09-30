@@ -699,3 +699,194 @@ describe("SCRUM-239 - the cockpit's disbursementReturn gate is computed on the s
     expect(await flag(d.s.owner.as)).toEqual({ mayReturn: false, chequeId: null, lastReturnedChequeId: cheque._id });
   });
 });
+
+describe("SCRUM-239 F1 - RETURNED is terminal for collections.returnCheque", () => {
+  const returnFromCollections = (s: Seeded, chequeId: Id<"postDatedCheques">, over: { returnedAt?: number; returnReason?: string } = {}) =>
+    s.owner.as.mutation(api.collections.returnCheque, { orgId: s.orgId, chequeId, ...over });
+  const errorOf = (promise: Promise<unknown>) =>
+    promise.then(() => null, (e: unknown) => e as { data?: { code?: string; message?: string } });
+  const world = (s: Seeded) =>
+    s.t.run(async (ctx) => ({
+      cheques: await ctx.db.query("postDatedCheques").collect(),
+      notifications: await ctx.db.query("notifications").collect(),
+      reminders: await ctx.db.query("collectionReminders").collect(),
+      receivables: await ctx.db.query("receivables").collect(),
+    }));
+  const addManager = (s: Seeded) =>
+    s.t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: "f1_mgr", email: "f1.mgr@example.com", name: "mgr" });
+      const roleId = await ctx.db.insert("roles", { orgId: s.orgId, name: "MGR", permissions: ["manage:users"] });
+      await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
+    });
+
+  test("a finance-company cheque returned from the deal is refused a second return from Collections, and nothing is written", async () => {
+    const d = await finalizedChequeDeal("f1a", "OPEN_YEAR");
+    await addManager(d.s);
+    await d.confirm();
+    const [cheque] = await d.cheques();
+    await d.giveBack(cheque._id);
+    const before = await world(d.s);
+    const returnedBefore = (await d.cheques())[0];
+    expect(returnedBefore.status).toBe("RETURNED");
+
+    const error = await errorOf(returnFromCollections(d.s, cheque._id, { returnedAt: Date.now() + 9_000, returnReason: "a different reason" }));
+    expect(error?.data?.code).toBe("CHEQUE_ALREADY_RETURNED");
+    expect(error?.data?.message).toBe(FC_RETURN_MESSAGES.CHEQUE_ALREADY_RETURNED);
+    expect(await world(d.s)).toEqual(before);
+    const after = (await d.cheques())[0];
+    expect(after.returnedAt).toBe(returnedBefore.returnedAt);
+    expect(after.returnReason).toBe(returnedBefore.returnReason);
+  });
+
+  test("a RETURNED customer cheque is refused a second return: receivable and reminders are untouched", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      const s = await seed("f1b", "OPEN_YEAR");
+      const receivableId = await s.owner.as.mutation(api.collections.createReceivable, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId: s.orgId,
+        customerId: s.customerId,
+        sourceType: "INTERNAL_INSTALLMENT",
+        title: "Returned twice",
+        amount: 500,
+        dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+        creditSystemKey: "MISCELLANEOUS_INCOME",
+      });
+      const chequeId = await s.owner.as.mutation(api.collections.registerCheque, {
+        orgId: s.orgId, receivableId, customerId: s.customerId, bank: "Arab Bank", chequeNumber: "F1B-1",
+        chequeDate: Date.now() + 86_400_000, amount: 100,
+      });
+      await returnFromCollections(s, chequeId, { returnReason: "NSF" });
+      const before = await world(s);
+      expect(before.reminders.length).toBeGreaterThan(0);
+      const error = await errorOf(returnFromCollections(s, chequeId, { returnedAt: Date.now() + 9_000, returnReason: "again" }));
+      expect(error?.data?.code).toBe("CHEQUE_ALREADY_RETURNED");
+      expect(await world(s)).toEqual(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("(c) HELD and DEPOSITED cheques, finance-company and customer, are still returnable; the other terminal states keep their own coded refusal", async () => {
+    for (const status of ["HELD", "DEPOSITED"] as const) {
+      const d = await finalizedChequeDeal(`f1c${status}`, "OPEN_YEAR");
+      const [cheque] = await d.cheques();
+      if (status === "DEPOSITED") await d.s.t.run((ctx) => ctx.db.patch(cheque._id, { status: "DEPOSITED" }));
+      await returnFromCollections(d.s, cheque._id, { returnReason: "NSF" });
+      expect((await d.cheques())[0]).toMatchObject({ status: "RETURNED", returnReason: "NSF" });
+    }
+    const d = await finalizedChequeDeal("f1cx", "OPEN_YEAR");
+    const [cheque] = await d.cheques();
+    await d.s.t.run((ctx) => ctx.db.patch(cheque._id, { status: "CANCELLED" }));
+    const error = await errorOf(returnFromCollections(d.s, cheque._id));
+    expect(error?.data?.code).toBe("CHEQUE_NOT_RETURNABLE");
+    const missing = await errorOf(
+      d.s.owner.as.mutation(api.collections.returnCheque, {
+        orgId: d.s.orgId,
+        chequeId: await d.s.t.run(async (ctx) => {
+          const id = await ctx.db.insert("postDatedCheques", {
+            orgId: d.s.orgId, customerId: d.s.customerId, bank: "x", chequeNumber: "gone", chequeDate: Date.now(),
+            amount: 1, status: "HELD", createdBy: d.s.owner.userId, createdAt: Date.now(), updatedAt: Date.now(),
+          });
+          await ctx.db.delete(id);
+          return id;
+        }),
+      })
+    );
+    expect(missing?.data?.code).toBe("CHEQUE_NOT_FOUND");
+  });
+});
+
+describe("SCRUM-239 F2 - coded refusals in the finance return command", () => {
+  const snapshotAll = (d: Awaited<ReturnType<typeof finalizedChequeDeal>>) =>
+    d.s.t.run(async (ctx) => ({
+      app: await ctx.db.get(d.applicationId),
+      cheques: await ctx.db.query("postDatedCheques").collect(),
+      payments: await ctx.db.query("canonicalPayments").collect(),
+      allocations: await ctx.db.query("paymentAllocations").collect(),
+      events: await ctx.db.query("accountingEvents").collect(),
+      pending: await ctx.db.query("pendingAccountingEvents").collect(),
+      audits: await ctx.db.query("financialAuditLog").collect(),
+      idempotency: await ctx.db.query("commandIdempotency").collect(),
+    }));
+
+  test("the same key with a different reason is refused with FINANCE_RETURN_KEY_CONFLICT and writes nothing", async () => {
+    const d = await finalizedChequeDeal("f2a", "OPEN_YEAR");
+    await d.confirm();
+    const [cheque] = await d.cheques();
+    const key = crypto.randomUUID();
+    await d.giveBack(cheque._id, { key });
+    const before = await snapshotAll(d);
+    const error = await d.giveBack(cheque._id, { key, reason: "a different reason" }).then(() => null, (e: unknown) => e as { data?: { code?: string; message?: string } });
+    expect(error?.data?.code).toBe("FINANCE_RETURN_KEY_CONFLICT");
+    expect(error?.data?.message).toBe(FC_RETURN_MESSAGES.FINANCE_RETURN_KEY_CONFLICT);
+    expect(await snapshotAll(d)).toEqual(before);
+  });
+
+  test("a wrong-organisation application and a wrong-organisation cheque both answer FINANCE_RETURN_NOT_FOUND, exactly like a missing row", async () => {
+    const d = await finalizedChequeDeal("f2b", "OPEN_YEAR");
+    await d.confirm();
+    const [cheque] = await d.cheques();
+    const other = await seed("f2c", "NONE");
+    const foreignCheque = await other.t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", {
+        orgId: other.orgId, customerId: other.customerId, bank: "x", chequeNumber: "foreign", chequeDate: Date.now(),
+        amount: 1, status: "CLEARED", createdBy: other.owner.userId, createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
+    const before = await snapshotAll(d);
+    // The caller belongs to the other organisation but names this deal.
+    expect(
+      await refusalCode(
+        other.owner.as.mutation(api.applications.returnFinanceDisbursementCheque, {
+          orgId: other.orgId, applicationId: d.applicationId, chequeId: cheque._id, returnReason: "x", idempotencyKey: crypto.randomUUID(),
+        })
+      )
+    ).toBe("FINANCE_RETURN_NOT_FOUND");
+    // The caller owns the deal but names another organisation's cheque.
+    expect(await refusalCode(d.giveBack(foreignCheque as never))).toBe("FINANCE_RETURN_NOT_FOUND");
+    expect(await snapshotAll(d)).toEqual(before);
+  });
+
+  test("every new refusal renders its Arabic text in the AR locale and its English text in EN", () => {
+    const codes = [
+      "FINANCE_RETURN_NOT_FOUND",
+      "FINANCE_RETURN_KEY_CONFLICT",
+      "CHEQUE_ALREADY_RETURNED",
+      "CHEQUE_NOT_RETURNABLE",
+      "CHEQUE_NOT_FOUND",
+    ] as const;
+    for (const code of codes) {
+      const error = new ConvexError({ code, message: (FC_RETURN_MESSAGES as Record<string, string>)[code] });
+      const en = getLocalizedErrorMessage(error, (k) => (salesEn as Record<string, string>)[k] ?? k);
+      const ar = getLocalizedErrorMessage(error, (k) => (salesAr as Record<string, string>)[k] ?? k);
+      expect(en, code).toBe((FC_RETURN_MESSAGES as Record<string, string>)[code]);
+      expect(ar, code).toMatch(/[\u0600-\u06FF]/);
+      expect(ar, code).not.toBe(en);
+      expect(ar, code).toContain("لم يتم تغيير أي شيء");
+    }
+  });
+});
+
+describe("SCRUM-239 F4 - audit: a RETURNED stamped cheque whose payment row is missing is a finding", () => {
+  test("a missing canonical payment is RETURN_DISBURSEMENT_NOT_UNDONE, not silently accepted", async () => {
+    const d = await finalizedChequeDeal("f4a", "OPEN_YEAR");
+    await d.confirm();
+    const [cheque] = await d.cheques();
+    await d.giveBack(cheque._id);
+    const clean = await d.s.owner.as.query(api.chequeLineageAudit.auditFinanceCompanyCheques, { orgId: d.s.orgId, paginationOpts: { numItems: 100, cursor: null } });
+    expect(clean.findings.filter((f) => f.chequeId === cheque._id)).toEqual([]);
+
+    const keys = financeDisbursementKeys(d.applicationId, 1);
+    await d.s.t.run(async (ctx) => {
+      const payment = await ctx.db
+        .query("canonicalPayments")
+        .withIndex("by_org_idempotency", (q) => q.eq("orgId", d.s.orgId).eq("idempotencyKey", keys.paymentKey))
+        .unique();
+      await ctx.db.delete(payment!._id);
+    });
+    const report = await d.s.owner.as.query(api.chequeLineageAudit.auditFinanceCompanyCheques, { orgId: d.s.orgId, paginationOpts: { numItems: 100, cursor: null } });
+    const mine = report.findings.filter((f) => f.chequeId === cheque._id);
+    expect(mine.map((f) => [f.class, f.verdict])).toContainEqual(["RETURN_DISBURSEMENT_NOT_UNDONE", "FINDING"]);
+  });
+});

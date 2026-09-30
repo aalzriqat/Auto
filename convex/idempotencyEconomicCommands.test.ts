@@ -499,6 +499,7 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
     "cancelApplication",
     "finalizeDeal",
     "confirmDisbursement",
+    "returnFinanceDisbursementCheque",
     "confirmSupplierDisbursement",
     "amendSupplierDisbursementAdvice",
   ],
@@ -636,7 +637,8 @@ describe("SCRUM-57 — classification ratchet", () => {
     // a handover cost (HANDOVER_COST_PAID_DIRECT) — runWithIdempotency with
     // economic: true, method/date/reference/actual in its fingerprint.
     // 45 -> 48 by SCRUM-435: the three finance-company forward commands.
-    expect(checked).toBe(48);
+    // 48 -> 49 by SCRUM-239: `applications.returnFinanceDisbursementCheque`.
+    expect(checked).toBe(49);
   });
 
   /**
@@ -700,9 +702,10 @@ describe("SCRUM-57 — classification ratchet", () => {
     // 40 -> 42 / 41 -> 43: SCRUM-389's two supplier-cost-recovery commands.
     // 42 -> 44 / 43 -> 45: SCRUM-444's `depositRequests.request` and `.confirm`.
     // 44 -> 45 / 45 -> 46: SCRUM-443's `financeDealCosts.recordDirectFeePayment`.
-    expect(economicInSource.size).toBe(48);
+    // 48 -> 49 by SCRUM-239: `applications.returnFinanceDisbursementCheque`.
+    expect(economicInSource.size).toBe(49);
     expect([...nonEconomicInSource].sort()).toEqual(["sales.createDraft"]);
-    expect(economicInSource.size + nonEconomicInSource.size).toBe(49);
+    expect(economicInSource.size + nonEconomicInSource.size).toBe(50);
   });
 
   /**

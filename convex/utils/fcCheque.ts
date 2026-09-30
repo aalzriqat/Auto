@@ -137,6 +137,16 @@ export const FC_RETURN_MESSAGES = {
     "The return reason is too long (the most is 500 characters). Nothing has been changed.",
   FINANCE_CHEQUE_RETURN_FROM_DEAL:
     "This is a finance-company cheque. Its return is recorded from the deal screen with the \"Cheque returned by bank\" action, not from customer collections. Nothing has been changed.",
+  FINANCE_RETURN_NOT_FOUND:
+    "The deal or the cheque could not be found. Nothing has been changed.",
+  FINANCE_RETURN_KEY_CONFLICT:
+    "This request reuses the identity of an earlier request that had different content (another cheque or reason). Nothing has been changed. Reopen the dialog and try again.",
+  CHEQUE_ALREADY_RETURNED:
+    "This cheque has already been returned, so it cannot be returned again. Nothing has been changed.",
+  CHEQUE_NOT_RETURNABLE:
+    "This cheque can no longer be returned. Nothing has been changed.",
+  CHEQUE_NOT_FOUND:
+    "Cheque not found. Nothing has been changed.",
 } as const;
 /** SCRUM-447 B4: longest operator note kept with a face attestation. */
 export const ATTESTATION_NOTE_MAX_LENGTH = 500;

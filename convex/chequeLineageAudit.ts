@@ -234,7 +234,11 @@ export const auditFinanceCompanyCheques = query({
             .query("canonicalPayments")
             .withIndex("by_org_idempotency", (q) => q.eq("orgId", args.orgId).eq("idempotencyKey", keys.paymentKey))
             .unique();
-          if (payment !== null && payment.status !== "VOIDED") {
+          if (payment === null) {
+            // The command refuses without the payment, so a stamped return with
+            // none cannot be proven undone: it is reported, never accepted.
+            push(row, "RETURN_DISBURSEMENT_NOT_UNDONE", "FINDING", "The cheque was returned but its disbursement payment row is missing, so the return cannot be proven undone.");
+          } else if (payment.status !== "VOIDED") {
             push(row, "RETURN_DISBURSEMENT_NOT_UNDONE", "FINDING", "The cheque was returned but its disbursement payment is still standing.");
           }
           const queuedReversal = await ctx.db
