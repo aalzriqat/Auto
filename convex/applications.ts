@@ -29,6 +29,7 @@ import {
   assertNoPendingDepositRequest,
   assertReservationAdoptableWithoutDeposit,
 } from "./utils/depositRequestGuards";
+import { assertOperatedDealMode } from "./utils/dealModes";
 import { completeSale } from "./utils/saleCompletion";
 import { planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal, forwardGateRefusal } from "./utils/financeCompanyForward";
@@ -2404,6 +2405,12 @@ export const createFromQuote = mutation({
       throw new ConvexError("Quote customer not found in this organization.");
     }
 
+    // SCRUM-495 (OR-6 / OR-7): a quote written before LEASE and INTERNAL_INSTALLMENT
+    // were retired must not become a new application. Refused before any read
+    // that could write, and only HERE and at finalize: cancelling or rejecting a
+    // legacy application stays open.
+    assertOperatedDealMode(quote.mode);
+
     const quoteVehicleItems = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId, unitPrice: quote.vehiclePrice }];
     // Financed deals stay single-vehicle for now — finalizeDeal only ever
     // completes app.vehicleId's sale, so a multi-vehicle quote reaching this
@@ -4074,6 +4081,12 @@ export const finalizeDeal = mutation({
         if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
         if (app.status === "CLOSED" && app.finalizedSaleId) return app.finalizedSaleId;
         if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before finalizing");
+        // SCRUM-495 (OR-6 / OR-7): a legacy deal in a retired mode is not closed. After
+        // the replay shortcut above (an already-closed deal still answers its own
+        // retry) and before every deposit / handover / readiness refusal, so this is
+        // the message an operator sees. The mode is the one the deal reads
+        // everywhere else: frozen at submission, else the quote's.
+        assertOperatedDealMode(await dealModeOf(ctx, app));
         // SCRUM-444 DA-03: a waiting deposit request would be orphaned by the
         // deal closing. Refused up front so the message is this one, not a
         // later readiness refusal.

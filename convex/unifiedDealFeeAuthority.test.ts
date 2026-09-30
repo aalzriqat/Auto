@@ -2547,7 +2547,9 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
       test("14. non-Murabaha modes never preserve caller-fabricated financing economics", async () => {
         const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
 
-        const unfinancedModes = ["CASH", "INTERNAL_INSTALLMENT", "LEASE", undefined] as const;
+        // SCRUM-495: INTERNAL_INSTALLMENT and LEASE can no longer be saved, so the stripping rule is
+        // exercised on the modes that still can; the two retired ones are asserted as refused below.
+        const unfinancedModes = ["CASH", undefined] as const;
 
         for (const mode of unfinancedModes) {
           const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
@@ -2577,6 +2579,26 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
             expect(quote.totalProfit).toBeUndefined();
           }
           expect(quote.customerQuotePricingSnapshot).toBeUndefined();
+        }
+
+        for (const mode of ["INTERNAL_INSTALLMENT", "LEASE"] as const) {
+          await expect(
+            asOwner.mutation(api.quotes.saveQuote, {
+              orgId,
+              customerId,
+              vehicleId,
+              mode,
+              vehiclePrice: 20_000,
+              downPayment: 5_000,
+              termMonths: 48,
+              totalFinancedAmount: 15_000,
+              monthlyInstallment: 350,
+              profitRateApplied: 8,
+              totalProfit: 1800,
+            })
+          ).rejects.toThrow(
+            "Lease and in-house instalment deals are no longer offered. Choose cash or a finance company."
+          );
         }
       });
     });

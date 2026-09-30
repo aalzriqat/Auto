@@ -254,6 +254,12 @@ async function runDeal(
 ) {
   const downPayment = opts.downPayment ?? 0;
   const mode = opts.mode ?? "CONFIGURED_FINANCE_COMPANY";
+  // SCRUM-495: LEASE and INTERNAL_INSTALLMENT can no longer be SAVED, so a legacy row in either mode
+  // is built the way one actually exists: saved through an operated mode with no company (the same
+  // no-companyId shape those modes had), then stamped into the retired mode below. Everything the
+  // readers derive (`quote.mode` and `quoteModeAtSubmission`) is therefore what a real legacy row carries.
+  const retiredMode = mode === "LEASE" || mode === "INTERNAL_INSTALLMENT" ? mode : undefined;
+  const savedMode = retiredMode ? "MANUAL_FINANCE_COMPANY" : mode;
   const quoteId = await s.asUser.mutation(api.quotes.saveQuote, {
     orgId: s.orgId,
     customerId: s.customerId,
@@ -261,17 +267,17 @@ async function runDeal(
     vehiclePrice: VEHICLE_PRICE,
     downPayment,
     termMonths: 48,
-    mode,
+    mode: savedMode,
     ...(mode === "CONFIGURED_FINANCE_COMPANY"
       ? {
           companyId: s.companyId,
           customerEligibilityStatusIds: [s.customerStatusId],
         }
       : {}),
-    ...(mode === "MANUAL_FINANCE_COMPANY" && opts.manualProviderName !== undefined
+    ...(savedMode === "MANUAL_FINANCE_COMPANY" && opts.manualProviderName !== undefined
       ? { manualProviderName: opts.manualProviderName }
       : {}),
-    ...(mode === "MANUAL_FINANCE_COMPANY" ? { manualAdminFees: 0 } : {}),
+    ...(savedMode === "MANUAL_FINANCE_COMPANY" ? { manualAdminFees: 0 } : {}),
     totalFinancedAmount: VEHICLE_PRICE - downPayment,
   });
 
@@ -288,6 +294,14 @@ async function runDeal(
     orgId: s.orgId,
     quoteId,
   });
+  if (retiredMode) {
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(quoteId, { mode: retiredMode });
+      await ctx.db.patch(applicationId, { quoteModeAtSubmission: retiredMode });
+      // A legacy retired-mode row never carried the manual-provider snapshot the operated mode stamps.
+      await ctx.db.patch(applicationId, { manualFinanceSnapshot: undefined });
+    });
+  }
   if (opts.omitMode) {
     await s.t.run(async (ctx) => {
       await ctx.db.patch(quoteId, { mode: undefined });
@@ -1054,7 +1068,11 @@ describe("an external financier the deal does not name with a companyId", () => 
 describe("a lease, which is external but has no provider identity", () => {
   test("is asked the settlement route before finalizing", async () => {
     const s = await seedDealership("lease1");
-    await expect(runDeal(s, { mode: "LEASE" })).rejects.toThrow(/record the settlement route/i);
+    // SCRUM-495: a lease can no longer be finalized at all, so it is refused the retired-mode message
+    // before it is ever asked the route question (was: /record the settlement route/i).
+    await expect(runDeal(s, { mode: "LEASE" })).rejects.toThrow(
+      "Lease and in-house instalment deals are no longer offered. Choose cash or a finance company."
+    );
   });
 
   test("is refused the direct route, naming the missing provider as the reason", async () => {
@@ -1068,15 +1086,20 @@ describe("a lease, which is external but has no provider identity", () => {
     ).rejects.toThrow(/leasing provider is not recorded/i);
   });
 
-  test("finalizes normally once it is told to settle through the dealership", async () => {
+  test("is refused at finalization even once it is told to settle through the dealership", async () => {
     const s = await seedDealership("lease3");
-    // SCRUM-446: a no-company deal through the dealership needs reconciled cost evidence to close.
-    const { saleId } = await runDeal(s, {
-      mode: "LEASE",
-      route: "THROUGH_DEALERSHIP",
-      beforeFinalize: (applicationId) => recordReconciledZeroCost(s.asUser, api, s.orgId, applicationId),
-    });
-    expect(saleId).toBeTruthy();
+    // SCRUM-495: was "finalizes normally once it is told to settle through the dealership". A lease can
+    // no longer be finalized, so the same fully-prepared deal (route chosen, reconciled cost evidence) is
+    // refused with the retired-mode message and closes nothing.
+    await expect(
+      runDeal(s, {
+        mode: "LEASE",
+        route: "THROUGH_DEALERSHIP",
+        beforeFinalize: (applicationId) => recordReconciledZeroCost(s.asUser, api, s.orgId, applicationId),
+      })
+    ).rejects.toThrow("Lease and in-house instalment deals are no longer offered. Choose cash or a finance company.");
+    const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
+    expect(sales).toHaveLength(0);
   });
 });
 

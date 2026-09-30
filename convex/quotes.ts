@@ -24,6 +24,7 @@ import { calculateUnifiedMurabaha, minimumDownPaymentForFinancingLimit } from ".
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { assertMajorAmountRepresentable } from "./utils/money";
 import { assertNoPendingDepositRequest } from "./utils/depositRequestGuards";
+import { assertOperatedDealMode } from "./utils/dealModes";
 
 function assertFiniteNumber(val: unknown, name: string): void {
   if (val !== undefined && (typeof val !== "number" || !Number.isFinite(val))) {
@@ -109,6 +110,11 @@ export const saveQuote = mutation({
     // gated to VIEW_SALES (held by SALES/MANAGER/ACCOUNTANT/OWNER) rather
     // than CREATE_SALES, which is reserved for finalizing an actual sale.
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+
+    // SCRUM-495 (OR-6 / OR-7): LEASE and INTERNAL_INSTALLMENT are no longer deal
+    // modes. The union above stays wide so a historical quote still validates
+    // and renders; a NEW one is refused here, before anything is read or written.
+    assertOperatedDealMode(args.mode);
 
     // Finite checks on all numeric inputs and caller-supplied outputs
     assertFiniteNumber(args.vehiclePrice, "Vehicle price");

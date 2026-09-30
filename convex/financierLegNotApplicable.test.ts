@@ -570,7 +570,9 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
 
     test("finalizeDeal refuses a no-company through-dealership deal with no cost line, and closes nothing", async () => {
       const s = await seed("cc_refuse");
-      const applicationId = await readyToFinalize(s);
+      // SCRUM-495: re-based from INTERNAL_INSTALLMENT (now refused before the costs gate) onto the operated
+      // no-company shape, a manual finance company. The COSTS_NONE assertion is unchanged.
+      const applicationId = await readyToFinalize(s, { mode: "MANUAL_FINANCE_COMPANY" });
       await expect(finalize(s, applicationId)).rejects.toThrow(/COSTS_NONE/);
       const after = await s.t.run((ctx) => ctx.db.get(applicationId));
       expect(after?.status).toBe("APPROVED");
@@ -579,15 +581,21 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
 
     test("positive control: a reconciled zero line makes it READY, it finalizes, and the rail reads finished", async () => {
       const s = await seed("cc_ready");
-      const applicationId = await readyToFinalize(s);
+      // SCRUM-495: re-based onto a manual finance company (see cc_refuse above).
+      const applicationId = await readyToFinalize(s, { mode: "MANUAL_FINANCE_COMPANY" });
       await recordReconciledZeroCost(s.asOwner, api, s.orgId, applicationId);
       expect((await costsCheck(s, applicationId)).status).toBe("READY");
       await finalize(s, applicationId);
       const after = await s.t.run((ctx) => ctx.db.get(applicationId));
       expect(after?.status).toBe("CLOSED");
+      // SCRUM-495: a manual finance company owes the dealership (OR-1), so its disbursement stage is
+      // BLOCKED until the money is confirmed and the rail is NOT finished. The "no financier leg reads
+      // NOT_APPLICABLE and the rail finishes" contract this test used to pin belonged to
+      // INTERNAL_INSTALLMENT, which can no longer be finalized; that contract stays covered on stored
+      // closed rows by the ac_true / stop_control / no-orphan tests in this file.
       const { all, disbursement } = await stagesOf(s, applicationId);
-      expect(disbursement.state).toBe("NOT_APPLICABLE");
-      expect(allComplete(all)).toBe(true);
+      expect(disbursement.state).toBe("BLOCKED");
+      expect(allComplete(all)).toBe(false);
     });
 
     test("control: the direct route with no cost line keeps COSTS_CLOSABLE NOT_APPLICABLE", async () => {
@@ -615,6 +623,48 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
       const s = await seed("cc_configured");
       const applicationId = await readyToFinalize(s, { mode: "CONFIGURED_FINANCE_COMPANY", configured: true });
       expect((await costsCheck(s, applicationId)).status).toBe("BLOCKED");
+    });
+
+    // SCRUM-495 (OR-6 / OR-7): a deal frozen in a retired mode cannot be finalized, even when every
+    // other precondition (handover, payment method, a reconciled zero cost) is met, so the refusal
+    // cannot be confused with any other. The control above (MANUAL_FINANCE_COMPANY) finalizes on
+    // the identical fixture.
+    const RETIRED_MESSAGE =
+      "Lease and in-house instalment deals are no longer offered. Choose cash or a finance company.";
+
+    test.each<{ mode: "LEASE" | "INTERNAL_INSTALLMENT" }>([{ mode: "LEASE" }, { mode: "INTERNAL_INSTALLMENT" }])(
+      "finalizeDeal refuses a $mode deal with the retired-mode message, closes nothing and creates no sale",
+      async ({ mode }) => {
+        const s = await seed(`retired_finalize_${mode}`);
+        const applicationId = await readyToFinalize(s, { mode });
+        await recordReconciledZeroCost(s.asOwner, api, s.orgId, applicationId);
+        await expect(finalize(s, applicationId)).rejects.toThrow(RETIRED_MESSAGE);
+        const after = await s.t.run((ctx) => ctx.db.get(applicationId));
+        expect(after?.status).toBe("APPROVED");
+        expect(after?.finalizedSaleId).toBeUndefined();
+        const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
+        expect(sales).toHaveLength(0);
+      }
+    );
+
+    test.each<{ mode: "LEASE" | "INTERNAL_INSTALLMENT" }>([{ mode: "LEASE" }, { mode: "INTERNAL_INSTALLMENT" }])(
+      "getClosingReadiness states DEAL_MODE_RETIRED as a BLOCKED check for a $mode deal",
+      async ({ mode }) => {
+        const s = await seed(`retired_ready_${mode}`);
+        const applicationId = await readyToFinalize(s, { mode });
+        const r = await s.asOwner.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
+        const check = r.checks.find((c) => c.key === "DEAL_MODE_RETIRED");
+        expect(check?.status).toBe("BLOCKED");
+        expect(check?.reasonCode).toBe("DEAL_MODE_RETIRED");
+        expect(r.state).toBe("BLOCKED");
+      }
+    );
+
+    test("control: an operated deal carries no DEAL_MODE_RETIRED check at all", async () => {
+      const s = await seed("retired_ready_control");
+      const applicationId = await readyToFinalize(s, { mode: "MANUAL_FINANCE_COMPANY" });
+      const r = await s.asOwner.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
+      expect(r.checks.some((c) => c.key === "DEAL_MODE_RETIRED")).toBe(false);
     });
   });
 

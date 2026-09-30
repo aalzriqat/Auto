@@ -38,6 +38,7 @@ import { DirectProofBudget, directPaymentLedgerProof } from "./handoverDirectPro
 import { heldDepositRowsForVehicle } from "./saleCompletion";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { toMinorUnits } from "./money";
+import { RETIRED_DEAL_MODE_MESSAGE, isRetiredDealMode } from "./dealModes";
 import { requireCustomerGapToDealer } from "./financingEconomics";
 import { summarizeFees } from "./feeSummary";
 import { consignedSettlementRoute, dealershipCollectsGross, isConsignedAgentSale } from "./vehicleOwnership";
@@ -442,11 +443,18 @@ export async function evaluateClosingReadiness(
   const planCovered = financedSaleRecognitionApplies(app, opts);
   // The scope of the cost gate is decided HERE, once, for the readiness query
   // and for finalization alike (both reach this evaluator).
-  const costsGateOn = costsGateApplies(app, { settlesDirect: opts.settlesDirect, mode: await dealModeOf(ctx, app) });
+  const dealMode = await dealModeOf(ctx, app);
+  const costsGateOn = costsGateApplies(app, { settlesDirect: opts.settlesDirect, mode: dealMode });
   const checks: ClosingReadinessCheck[] = [];
   const add = (key: ClosingReadinessCheckKey, status: ClosingReadinessCheckStatus, reason: ClosingReadinessReason | null) => {
     checks.push({ key, status, reason });
   };
+  // SCRUM-495: a deal in a retired mode is BLOCKED first, so the screen never offers
+  // Finalize that `finalizeDeal` would refuse. Added ONLY when retired: an operated
+  // deal's checks list is exactly what it was.
+  if (isRetiredDealMode(dealMode)) {
+    add("DEAL_MODE_RETIRED", "BLOCKED", reasonOf("DEAL_MODE_RETIRED", RETIRED_DEAL_MODE_MESSAGE));
+  }
   const planOnly = (key: ClosingReadinessCheckKey, judge: () => [ClosingReadinessCheckStatus, ClosingReadinessReason | null]) => {
     if (!planCovered) add(key, "NOT_APPLICABLE", null);
     else add(key, ...judge());

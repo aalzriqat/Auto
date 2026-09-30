@@ -725,8 +725,9 @@ describe("protected source content pins", () => {
       // SCRUM-446 RENEWAL 2026-09-29: `resolveFinancierLeg` (DISBURSEMENT NOT_APPLICABLE only on proven evidence), the cancelled-sale guard on `moneySettled`, and the `confirmDisbursement` refusal wording; previous postimage bytes 243195, sha256 b42c6e1801d6af32ff2b66f67d46a71f30264f3b9fc7b19cbb17f36412e4e580. Recomputed from the file with this test's own normalization.
       // SCRUM-446 RENEWAL 2026-09-30: `resolveFinancierLeg` takes the deal mode (`dealModeOf`) and returns NONE only for INTERNAL_INSTALLMENT (OR-1/OR-2, SCRUM-486 c21360); MANUAL_FINANCE_COMPANY, LEASE, CASH and mode-less deals stay UNKNOWN. Merged with origin/main (SCRUM-435 forward proof) so the pin below covers both. Recomputed from the merged file with this test's own normalization.
       // SCRUM-446 /simplify 2026-09-30: `loadDealRoute` shared by the cockpit and the confirmDisbursement guard; previous postimage bytes 251598, sha256 068aa9d4b4090407fbef8d68bd6703a1b79af70ca3a71ebdd2ac2e416de00ee9.
-      bytes: 251934,
-      sha256: "ad2b302db906f1606703c16b24194e57275a3f918df4cfab1c223d00fde7f0f3",
+      // SCRUM-495 RENEWAL 2026-09-30: retired deal modes. `createFromQuote` and `finalizeDeal` call `assertOperatedDealMode` (convex/utils/dealModes.ts) and refuse LEASE / INTERNAL_INSTALLMENT with one shared message; `getClosingReadiness` is unchanged (the new DEAL_MODE_RETIRED check lives in the shared evaluator). Purely additive refusals before any write (an import and 2 call sites); no permission, schema, index, posting or idempotency change. previous postimage bytes 251934, sha256 ad2b302db906f1606703c16b24194e57275a3f918df4cfab1c223d00fde7f0f3. Recomputed from the file with this test's own normalization.
+      bytes: 252782,
+      sha256: "361893addb014ea8aa1b1bba4898250cbbf9f7efe8397d2b563407cfc7cae234",
     },
     {
       /**
