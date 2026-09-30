@@ -1701,6 +1701,46 @@ const serverErrorMessages = defineBilingualMessages({
     "This confirmation was prepared before the deal's cheque was returned, so it cannot be applied. Nothing has been changed. Reopen the deal and confirm again.",
     "جرى تجهيز هذا التأكيد قبل إرجاع شيك الصفقة، لذلك لا يمكن تطبيقه. لم يتم تغيير أي شيء. أعد فتح الصفقة وأكّد من جديد.",
   ],
+  ServerError_FINANCE_CONFIRM_ALREADY_CONFIRMED: [
+    "Disbursement has already been confirmed for this application. Nothing has been changed.",
+    "تم تأكيد الصرف لهذا الطلب مسبقًا. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_CONFIRM_CHEQUE_ALREADY_CLEARED: [
+    "This deal's cheque is already marked cleared but the disbursement was never confirmed. Ask accounting to review it before confirming. Nothing has been changed.",
+    "شيك هذه الصفقة مُعلَّم كمصفّى بالفعل لكن الصرف لم يُؤكَّد قط. اطلب من المحاسبة مراجعته قبل التأكيد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_CONFIRM_CHEQUE_RETURNED_OR_CANCELLED: [
+    "This cheque was returned or cancelled. Correct the expected payment, then register the new payment, before confirming disbursement. Nothing has been changed.",
+    "تم إرجاع هذا الشيك أو إلغاؤه. صحّح الدفعة المتوقعة ثم سجّل الدفعة الجديدة قبل تأكيد الصرف. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_CONFIRM_CHEQUE_NOT_FOUND: [
+    "Expected cheque record not found for this application. Nothing has been changed.",
+    "لم يتم العثور على سجل الشيك المتوقع لهذا الطلب. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_CONFIRM_MULTIPLE_LIVE_CHEQUES: [
+    "This deal has more than one live finance-company cheque. Resolve the duplicate before confirming disbursement. Nothing has been changed.",
+    "لهذه الصفقة أكثر من شيك فعّال واحد لشركة التمويل. عالج التكرار قبل تأكيد الصرف. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_CONFIRM_CHEQUE_FACE_UNRECORDED: [
+    "This cheque's face amount was never recorded in minor units. Have a finance manager attest the face from the deal before confirming disbursement. Nothing has been changed.",
+    "لم يُسجَّل المبلغ المكتوب على هذا الشيك بالوحدات الصغرى قط. اطلب من مدير مالي إقرار المبلغ من الصفقة قبل تأكيد الصرف. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_CONFIRM_CHEQUE_FACE_MISMATCH: [
+    "The cheque's recorded face does not equal the disbursement being confirmed. Correct the expected payment or the cheque before confirming. Nothing has been changed.",
+    "المبلغ المسجَّل على الشيك لا يساوي الصرف الذي يتم تأكيده. صحّح الدفعة المتوقعة أو الشيك قبل التأكيد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CHEQUE_BANK_FEE_INVALID: [
+    "The bank fee must be a whole, non-negative amount in minor currency units. Nothing has been changed.",
+    "يجب أن تكون رسوم البنك مبلغًا صحيحًا غير سالب بالوحدات الصغرى للعملة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CHEQUE_RETURN_NO_RECEIPT_LINEAGE: [
+    "This cleared cheque has no persisted receipt lineage, so what it moved cannot be determined, and returning it would reopen the debt without reversing the receipt. Nothing has been changed.",
+    "لا يوجد سجل محفوظ لقيد الاستلام المرتبط بهذا الشيك المصفّى، لذلك لا يمكن تحديد ما حرّكه، وإرجاعه سيعيد فتح الدين دون عكس الاستلام. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CHEQUE_RETURN_NO_PAYMENT_TO_REVERSE: [
+    "This cleared cheque has no collection payment to reverse, so reopening the debt would leave it owed and collected at the same time. Nothing has been changed.",
+    "لا توجد دفعة تحصيل لهذا الشيك المصفّى ليتم عكسها، وإعادة فتح الدين ستجعله مستحقًا ومحصّلًا في الوقت نفسه. لم يتم تغيير أي شيء.",
+  ],
 });
 
 export const salesEn = {

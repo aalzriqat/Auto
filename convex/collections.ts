@@ -2196,7 +2196,7 @@ export const returnClearedCheque = mutation({
       args.bankFeeMinor !== undefined &&
       (!Number.isSafeInteger(args.bankFeeMinor) || args.bankFeeMinor < 0)
     ) {
-      throw new ConvexError("Bank fee must be a non-negative integer minor-unit amount.");
+      throwAppError(AppErrorCode.CHEQUE_BANK_FEE_INVALID, FC_RETURN_MESSAGES.CHEQUE_BANK_FEE_INVALID);
     }
 
     return await runWithIdempotency(
@@ -2212,6 +2212,10 @@ export const returnClearedCheque = mutation({
           bankFeeMinor: args.bankFeeMinor ?? 0,
           returnReason: args.returnReason ?? null,
         }),
+        // Coded, so the operator reads it in their language instead of the
+        // default English key-reuse text.
+        onFingerprintConflict: (): never =>
+          throwAppError(AppErrorCode.FINANCE_RETURN_KEY_CONFLICT, FC_RETURN_MESSAGES.FINANCE_RETURN_KEY_CONFLICT),
       },
       async () => {
         const cheque = await ctx.db.get(args.chequeId);
@@ -2355,9 +2359,9 @@ export const returnClearedCheque = mutation({
             )
             .unique();
           if (!movement) {
-            throw new ConvexError(
-              "This cleared cheque has no persisted receipt lineage, so what it moved cannot be " +
-                "determined and returning it would reopen the debt without reversing the receipt."
+            throwAppError(
+              AppErrorCode.CHEQUE_RETURN_NO_RECEIPT_LINEAGE,
+              FC_RETURN_MESSAGES.CHEQUE_RETURN_NO_RECEIPT_LINEAGE
             );
           }
 
@@ -2449,9 +2453,9 @@ export const returnClearedCheque = mutation({
           // owed on one row and collected on its canonical twin. The reversal and
           // the reopening are two halves of one movement: either both happen or
           // the mutation fails closed.
-          throw new ConvexError(
-            "This cleared cheque has no collection payment to reverse, so reopening the debt would " +
-              "leave it owed and collected at the same time."
+          throwAppError(
+            AppErrorCode.CHEQUE_RETURN_NO_PAYMENT_TO_REVERSE,
+            FC_RETURN_MESSAGES.CHEQUE_RETURN_NO_PAYMENT_TO_REVERSE
           );
         }
 

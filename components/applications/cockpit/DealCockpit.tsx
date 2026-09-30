@@ -2955,6 +2955,9 @@ export function DealCockpit({
                           applicationId,
                           disbursedAmountMinor: expectedDisbursementMinor,
                           idempotencyKey: disbursementKey,
+                          // The version this screen observed: the server refuses a
+                          // confirm whose version it has since moved past.
+                          expectedDisbursementVersion: observedVersion,
                         }),
                       "DisbursementConfirmedSuccess",
                       { reflectedWhen: financeDisbursementReflected }
@@ -2962,6 +2965,14 @@ export function DealCockpit({
                     confirmDisbursementKeyRef.current = null;
                     setConfirmingDisbursement(false);
                   } catch (error) {
+                    // A stale-version refusal is final for this key: the next click
+                    // (after the screen refreshes) mints a fresh one.
+                    const refusedCode = isConvexError(error)
+                      ? (error.data as { code?: unknown } | null)?.code
+                      : undefined;
+                    if (refusedCode === "FINANCE_CONFIRM_STALE_REQUEST") {
+                      confirmDisbursementKeyRef.current = null;
+                    }
                     toast.error(getLocalizedErrorMessage(error, t));
                   } finally {
                     setDisbursementSubmitting(false);

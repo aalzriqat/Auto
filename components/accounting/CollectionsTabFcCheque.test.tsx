@@ -163,4 +163,24 @@ describe("Collections, Cheques tab: the Return dialog shows a translated refusal
     expect(shown).toBe((salesAr as Record<string, string>).ServerError_CHEQUE_ALREADY_RETURNED);
     expect(shown).not.toContain('{"code"');
   });
+
+  test("a coded CHEQUE_BANK_FEE_INVALID refusal on a cleared customer cheque is rendered in Arabic, not as raw JSON", async () => {
+    stubs.t = (key: string) => (key.startsWith("ServerError_") ? (salesAr as Record<string, string>)[key] ?? key : key);
+    const returnClearedCheque = vi.fn().mockRejectedValue(
+      new ConvexError({ code: "CHEQUE_BANK_FEE_INVALID", message: "The bank fee must be a whole, non-negative amount in minor currency units. Nothing has been changed." })
+    );
+    stubs.mutations.set("collections:returnClearedCheque", returnClearedCheque);
+    stubs.paginated.set("collections:listCheques", [cheque({ _id: "c3", isFinanceCompanyCheque: false, status: "CLEARED" })]);
+    await openChequesTab();
+    fireEvent.click(screen.getAllByRole("button", { name: "Return" })[0]);
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getAllByRole("button", { name: "Return" }).at(-1)!);
+    await waitFor(() => expect(returnClearedCheque).toHaveBeenCalledTimes(1));
+    const { toast } = await import("@/components/ui/sonner");
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    const shown = String(vi.mocked(toast.error).mock.calls.at(-1)?.[0]);
+    expect(shown).toBe((salesAr as Record<string, string>).ServerError_CHEQUE_BANK_FEE_INVALID);
+    expect(shown).toMatch(/[\u0600-\u06FF]/);
+    expect(shown).not.toContain('{"code"');
+  });
 });

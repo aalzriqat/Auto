@@ -401,7 +401,7 @@ describe("Collections", () => {
         bankFeeMinor: -1,
         idempotencyKey: "return-cleared-bad-fee",
       })
-    ).rejects.toThrow(/non-negative integer/i);
+    ).rejects.toThrow(/CHEQUE_BANK_FEE_INVALID/);
   });
 
   test("approved_refund_posts_outbound_payment_and_reopens_balance", async () => {

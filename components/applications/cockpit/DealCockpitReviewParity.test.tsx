@@ -2849,4 +2849,73 @@ describe("cheque returned by the bank - applications.returnFinanceDisbursementCh
     expect(shown).toBe((salesAr as Record<string, string>).ServerError_FINANCE_CONFIRM_STALE_REQUEST);
     expect(shown).not.toContain('{"code"');
   });
+
+  describe("SCRUM-239 round 3: the confirm is bound to the version the confirmer observed", () => {
+    const stages = [
+      { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+      { key: "DISBURSEMENT", state: "BLOCKED", blocker: "AwaitingDisbursement", authority: "MIRROR" },
+      { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+      { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
+    ];
+    const show = (disbursementVersion?: number) => {
+      queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages }));
+      queryResults.set(GET_QUERY, application({ status: "CLOSED", ...(disbursementVersion ? { disbursementVersion } : {}) }));
+    };
+    const confirmCalls = () => (mutationCalls.get("applications:confirmDisbursement") ?? []) as Array<Record<string, unknown>>;
+    const clickConfirm = () => {
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+      fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+    };
+
+    test("the confirm always sends expectedDisbursementVersion: 1 for an application that carries no version, and the version it shows otherwise", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      renderCockpit();
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      expect(confirmCalls()[0].expectedDisbursementVersion).toBe(1);
+    });
+
+    test("a version-2 screen sends expectedDisbursementVersion: 2", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show(2);
+      renderCockpit();
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      expect(confirmCalls()[0].expectedDisbursementVersion).toBe(2);
+    });
+
+    test("a coded stale-request refusal retires the key: the next click sends a DIFFERENT key", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      renderCockpit();
+      stubs.mutationFailures.set(
+        "applications:confirmDisbursement",
+        "coded:FINANCE_CONFIRM_STALE_REQUEST|This confirmation was prepared before the deal's cheque was returned, so it cannot be applied. Nothing has been changed. Reopen the deal and confirm again."
+      );
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      stubs.mutationFailures.delete("applications:confirmDisbursement");
+      // The dialog is still open; confirming again is a new command.
+      fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      const [first, second] = confirmCalls();
+      expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
+    });
+
+    test("an unrelated lost response still keeps the key (control for the retirement above)", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      renderCockpit();
+      stubs.mutationFailures.set("applications:confirmDisbursement", "connection lost");
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      stubs.mutationFailures.delete("applications:confirmDisbursement");
+      fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      expect(confirmCalls()[1].idempotencyKey).toBe(confirmCalls()[0].idempotencyKey);
+    });
+  });
 });

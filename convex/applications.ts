@@ -5004,6 +5004,9 @@ export const confirmDisbursement = mutation({
     applicationId: v.id("financeApplications"),
     disbursedAmountMinor: v.number(),
     idempotencyKey: v.string(),
+    // SCRUM-239 round 3: the disbursement version the confirmer OBSERVED. The
+    // server refuses a mismatch before the idempotency probe and any write.
+    expectedDisbursementVersion: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     // The expected-amount comparison further down is skipped whenever the quote
@@ -5021,7 +5024,22 @@ export const confirmDisbursement = mutation({
     // still replay. A missing or foreign row leaves the legacy shape; the body
     // refuses it exactly as before.
     const knownApp = await ctx.db.get(args.applicationId);
-    const version = knownApp && knownApp.orgId === args.orgId ? disbursementVersionOf(knownApp) : 1;
+    const ownedApp = knownApp && knownApp.orgId === args.orgId ? knownApp : null;
+    const version = ownedApp ? disbursementVersionOf(ownedApp) : 1;
+
+    // SCRUM-239 round 3: a request is bound to the version the CONFIRMER SAW. A
+    // fresh key from a screen that observed version n must not confirm version
+    // n+1's replacement cheque it never saw, so the comparison cannot rest on the
+    // idempotency fingerprint (a fresh key has no row). Only an application of
+    // this organisation is compared: a missing or foreign row falls through and
+    // the body refuses it as before, leaking nothing across tenants. A legacy
+    // client (no expected version) may confirm only a first disbursement.
+    if (ownedApp) {
+      const observed = args.expectedDisbursementVersion;
+      if ((observed !== undefined && observed !== version) || (observed === undefined && version > 1)) {
+        refuseFinanceReturn("FINANCE_CONFIRM_STALE_REQUEST");
+      }
+    }
 
     return await runWithIdempotency(
       ctx,
@@ -5046,7 +5064,7 @@ export const confirmDisbursement = mutation({
         const app = await ctx.db.get(args.applicationId);
         if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found.");
         if (app.status !== "CLOSED") throw new ConvexError("Disbursement can only be confirmed on a closed application.");
-        if (app.disbursedAt) throw new ConvexError("Disbursement has already been confirmed for this application.");
+        if (app.disbursedAt) refuseFinanceReturn("FINANCE_CONFIRM_ALREADY_CONFIRMED");
         if (!app.companyId && manualPayerOf(app) === null) {
           // Same resolver as the cockpit, so the screen and this guard cannot
           // disagree about whether a finance company pays on this deal.
@@ -5137,37 +5155,27 @@ export const confirmDisbursement = mutation({
           // beside it (live HELD, RETURNED), so it is named FIRST, before any
           // write and before the correct-the-payment refusal.
           if (hasClearedLinkedCheque(allRows)) {
-            throw new ConvexError(
-              "This deal's cheque is already marked cleared but the disbursement was never confirmed. Ask accounting to review it before confirming."
-            );
+            refuseFinanceReturn("FINANCE_CONFIRM_CHEQUE_ALREADY_CLEARED");
           }
           const liveRows = allRows.filter(isLiveFcCheque);
           if (liveRows.length === 0) {
             if (allRows.some((row) => row.status === "RETURNED" || row.status === "CANCELLED")) {
-              throw new ConvexError(
-                "This cheque was returned or cancelled. Correct the expected payment, then register the new payment, before confirming disbursement."
-              );
+              refuseFinanceReturn("FINANCE_CONFIRM_CHEQUE_RETURNED_OR_CANCELLED");
             }
-            throw new ConvexError("Expected cheque record not found for this application.");
+            refuseFinanceReturn("FINANCE_CONFIRM_CHEQUE_NOT_FOUND");
           }
           if (liveRows.length > 1) {
-            throw new ConvexError(
-              "This deal has more than one live finance-company cheque. Resolve the duplicate before confirming disbursement."
-            );
+            refuseFinanceReturn("FINANCE_CONFIRM_MULTIPLE_LIVE_CHEQUES");
           }
           const cheque = liveRows[0];
           // D1: the instrument's operator-recorded (or attested) face must equal
           // the receipt exactly, in the receipt's currency. A legacy row with no
           // recorded face is refused, never assumed equal. All before any write.
           if (cheque.amountMinor === undefined) {
-            throw new ConvexError(
-              "This cheque's face amount was never recorded in minor units. Have a finance manager attest the face from the deal before confirming disbursement."
-            );
+            refuseFinanceReturn("FINANCE_CONFIRM_CHEQUE_FACE_UNRECORDED");
           }
           if (cheque.currency !== currency || cheque.amountMinor !== receiptMinor) {
-            throw new ConvexError(
-              "The cheque's recorded face does not equal the disbursement being confirmed. Correct the expected payment or the cheque before confirming."
-            );
+            refuseFinanceReturn("FINANCE_CONFIRM_CHEQUE_FACE_MISMATCH");
           }
           chequeToClear = cheque;
         }

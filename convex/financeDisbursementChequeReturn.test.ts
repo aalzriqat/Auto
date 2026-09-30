@@ -162,9 +162,11 @@ async function finalizedChequeDeal(tag: string, ledger: Ledger, opts: { forward?
     idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
   });
 
-  const confirm = () =>
+  // `expected` is the disbursement version the confirmer observed (round 3).
+  const confirm = (expected?: number) =>
     s.owner.as.mutation(api.applications.confirmDisbursement, {
       orgId: s.orgId, applicationId, disbursedAmountMinor: G, idempotencyKey: crypto.randomUUID(),
+      ...(expected !== undefined ? { expectedDisbursementVersion: expected } : {}),
     });
   const cheques = () =>
     s.t.run(async (ctx) =>
@@ -339,7 +341,7 @@ describe("SCRUM-239 - re-confirm after a return (DA-F1)", () => {
     // A fresh instrument for the same deal, then the second disbursement.
     await s.owner.as.mutation(api.applications.correctExpectedPayment, { orgId: s.orgId, applicationId, reason: "Bank returned the cheque" });
     await d.registerCheque("CHQ-239-2");
-    await d.confirm();
+    await d.confirm(2);
     const afterConfirm2 = (await d.app())!;
     expect(afterConfirm2.disbursementVersion).toBe(2);
     expect(afterConfirm2.disbursedAt).toBeGreaterThan(0);
@@ -892,9 +894,10 @@ describe("SCRUM-239 F4 - audit: a RETURNED stamped cheque whose payment row is m
 });
 
 describe("SCRUM-239 round 2 - stale confirm key, coded return refusals", () => {
-  const confirmWith = (d: Awaited<ReturnType<typeof finalizedChequeDeal>>, key: string) =>
+  const confirmWith = (d: Awaited<ReturnType<typeof finalizedChequeDeal>>, key: string, expected?: number) =>
     d.s.owner.as.mutation(api.applications.confirmDisbursement, {
       orgId: d.s.orgId, applicationId: d.applicationId, disbursedAmountMinor: G, idempotencyKey: key,
+      ...(expected !== undefined ? { expectedDisbursementVersion: expected } : {}),
     });
   const confirmRow = (s: Seeded, key: string) =>
     s.t.run((ctx) =>
@@ -934,7 +937,7 @@ describe("SCRUM-239 round 2 - stale confirm key, coded return refusals", () => {
       events: await ctx.db.query("accountingEvents").collect(),
     }))).toEqual(before);
 
-    await confirmWith(d, "confirm-disbursement:fresh");
+    await confirmWith(d, "confirm-disbursement:fresh", 2);
     expect((await paymentByKey(s, v2.paymentKey))?.status).toBe("SETTLED");
     expect((await cashEvents(s)).map((e) => [e.eventVersion, e.status])).toEqual([[1, "REVERSED"], [2, "POSTED"]]);
   });
@@ -1006,6 +1009,227 @@ describe("SCRUM-239 round 2 - stale confirm key, coded return refusals", () => {
       expect(ar, code).toMatch(/[\u0600-\u06FF]/);
       expect(ar, code).toContain("لم يتم تغيير أي شيء");
       expect(en, code).toContain("Nothing has been changed.");
+    }
+  });
+});
+
+describe("SCRUM-239 round 3 - a confirm is bound to the version the confirmer observed", () => {
+  type Deal = Awaited<ReturnType<typeof finalizedChequeDeal>>;
+  const confirmWith = (d: Deal, key: string, expected?: number) =>
+    d.s.owner.as.mutation(api.applications.confirmDisbursement, {
+      orgId: d.s.orgId, applicationId: d.applicationId, disbursedAmountMinor: G, idempotencyKey: key,
+      ...(expected !== undefined ? { expectedDisbursementVersion: expected } : {}),
+    });
+  const errOf = (promise: Promise<unknown>) =>
+    promise.then(() => null, (e: unknown) => e as { data?: { code?: string; message?: string } });
+  const world = (d: Deal) =>
+    d.s.t.run(async (ctx) => ({
+      app: await ctx.db.get(d.applicationId),
+      cheques: await ctx.db.query("postDatedCheques").collect(),
+      payments: await ctx.db.query("canonicalPayments").collect(),
+      allocations: await ctx.db.query("paymentAllocations").collect(),
+      events: await ctx.db.query("accountingEvents").collect(),
+      idempotency: await ctx.db.query("commandIdempotency").collect(),
+    }));
+  /** Confirm v1, return it, and register a same-face replacement: the application is at version 2. */
+  const atVersionTwo = async (tag: string) => {
+    const d = await finalizedChequeDeal(tag, "OPEN_YEAR");
+    await d.confirm();
+    const [first] = await d.cheques();
+    await d.giveBack(first._id);
+    await d.s.owner.as.mutation(api.applications.correctExpectedPayment, { orgId: d.s.orgId, applicationId: d.applicationId, reason: "Bank returned the cheque" });
+    await d.registerCheque("CHQ-239-2");
+    return d;
+  };
+
+  test("R1: a FRESH key from a version-1 screen cannot confirm the version-2 replacement; expected 2 books exactly one payment and event", async () => {
+    const d = await atVersionTwo("r3a");
+    const { s, applicationId } = d;
+    const v2 = financeDisbursementKeys(applicationId, 2);
+    const before = await world(d);
+    const error = await errOf(confirmWith(d, "confirm-disbursement:fresh-from-stale-screen", 1));
+    expect(error?.data?.code).toBe("FINANCE_CONFIRM_STALE_REQUEST");
+    expect(await world(d)).toEqual(before);
+    expect(await paymentByKey(s, v2.paymentKey)).toBeNull();
+    expect((await cashEvents(s)).map((e) => [e.eventVersion, e.status])).toEqual([[1, "REVERSED"]]);
+    const replacement = (await d.cheques())[1];
+    expect(replacement.status).toBe("HELD");
+    expect(((await d.app())!).disbursedAt).toBeUndefined();
+
+    await confirmWith(d, "confirm-disbursement:fresh-observed-v2", 2);
+    expect((await paymentByKey(s, v2.paymentKey))?.status).toBe("SETTLED");
+    expect((await s.t.run((ctx) => ctx.db.query("canonicalPayments").collect())).filter((p) => p.idempotencyKey === v2.paymentKey)).toHaveLength(1);
+    expect((await cashEvents(s)).map((e) => [e.eventVersion, e.status])).toEqual([[1, "REVERSED"], [2, "POSTED"]]);
+  });
+
+  test("R1: a legacy client with no expected version cannot confirm at version 2, and nothing is written", async () => {
+    const d = await atVersionTwo("r3b");
+    const before = await world(d);
+    expect((await errOf(confirmWith(d, "confirm-disbursement:legacy-at-v2")))?.data?.code).toBe("FINANCE_CONFIRM_STALE_REQUEST");
+    expect(await world(d)).toEqual(before);
+  });
+
+  test("R1: at version 1 a legacy client with no expected version still confirms", async () => {
+    const d = await finalizedChequeDeal("r3c", "OPEN_YEAR");
+    await confirmWith(d, "confirm-disbursement:legacy-v1");
+    expect(((await d.app())!).disbursedAt).toBeGreaterThan(0);
+    expect(await cashEvents(d.s)).toHaveLength(1);
+  });
+
+  test("R1: v2 -> v3: a confirmer that observed version 2 cannot confirm the version-3 replacement", async () => {
+    const d = await atVersionTwo("r3d");
+    await confirmWith(d, "confirm-disbursement:v2", 2);
+    const cheques = await d.cheques();
+    await d.giveBack(cheques[1]._id, { reason: "Returned again" });
+    await d.s.owner.as.mutation(api.applications.correctExpectedPayment, { orgId: d.s.orgId, applicationId: d.applicationId, reason: "Bank returned the cheque again" });
+    await d.registerCheque("CHQ-239-3");
+    expect(((await d.app())!).disbursementVersion).toBe(3);
+    const before = await world(d);
+    expect((await errOf(confirmWith(d, "confirm-disbursement:stale-v2", 2)))?.data?.code).toBe("FINANCE_CONFIRM_STALE_REQUEST");
+    expect(await world(d)).toEqual(before);
+    await confirmWith(d, "confirm-disbursement:observed-v3", 3);
+    expect((await cashEvents(d.s)).map((e) => [e.eventVersion, e.status])).toEqual([[1, "REVERSED"], [2, "REVERSED"], [3, "POSTED"]]);
+  });
+
+  test("R1: a same-version retry of one key with the expected version still dedupes to one payment", async () => {
+    const d = await finalizedChequeDeal("r3e", "OPEN_YEAR");
+    const first = await confirmWith(d, "confirm-disbursement:retry", 1);
+    const second = await confirmWith(d, "confirm-disbursement:retry", 1);
+    expect(second).toEqual(first);
+    expect(await d.s.t.run((ctx) => ctx.db.query("canonicalPayments").collect())).toHaveLength(1);
+    expect(await cashEvents(d.s)).toHaveLength(1);
+  });
+
+  test("R1: the expected version is not part of the fingerprint (version 1 stays byte-identical)", async () => {
+    const d = await finalizedChequeDeal("r3f", "OPEN_YEAR");
+    await confirmWith(d, "confirm-disbursement:fp-expected", 1);
+    const row = await d.s.t.run((ctx) =>
+      ctx.db.query("commandIdempotency").withIndex("by_org_operation_key", (q) =>
+        q.eq("orgId", d.s.orgId).eq("operation", "applications.confirmDisbursement").eq("idempotencyKey", "confirm-disbursement:fp-expected")
+      ).unique()
+    );
+    expect(row?.fingerprint).toBe(JSON.stringify({ applicationId: d.applicationId, disbursedAmountMinor: G }));
+  });
+
+  test("tenant: an expected version for another organisation's application answers the ordinary not-found refusal, never STALE", async () => {
+    const d = await atVersionTwo("r3g");
+    const other = await seed("r3h", "NONE");
+    const before = await world(d);
+    const error = await errOf(
+      other.owner.as.mutation(api.applications.confirmDisbursement, {
+        orgId: other.orgId, applicationId: d.applicationId, disbursedAmountMinor: G,
+        idempotencyKey: crypto.randomUUID(), expectedDisbursementVersion: 1,
+      })
+    );
+    expect(error?.data?.code).not.toBe("FINANCE_CONFIRM_STALE_REQUEST");
+    expect(String((error as unknown as Error)?.message)).toContain("Application not found.");
+    expect(await world(d)).toEqual(before);
+  });
+});
+
+describe("SCRUM-239 round 3 - every reachable confirm-after-return refusal is coded", () => {
+  type Deal = Awaited<ReturnType<typeof finalizedChequeDeal>>;
+  const errOf = (promise: Promise<unknown>) =>
+    promise.then(() => null, (e: unknown) => e as { data?: { code?: string; message?: string } });
+  const world = (d: Deal) =>
+    d.s.t.run(async (ctx) => ({
+      app: await ctx.db.get(d.applicationId),
+      cheques: await ctx.db.query("postDatedCheques").collect(),
+      payments: await ctx.db.query("canonicalPayments").collect(),
+      events: await ctx.db.query("accountingEvents").collect(),
+    }));
+  const expectRefusal = async (d: Deal, code: string, expected?: number) => {
+    const before = await world(d);
+    const error = await errOf(d.confirm(expected));
+    expect(error?.data?.code).toBe(code);
+    expect(error?.data?.message).toBe((FC_RETURN_MESSAGES as Record<string, string>)[code]);
+    expect(await world(d)).toEqual(before);
+  };
+
+  test("a second confirmation of an already-confirmed application: FINANCE_CONFIRM_ALREADY_CONFIRMED", async () => {
+    const d = await finalizedChequeDeal("c3a", "OPEN_YEAR");
+    await d.confirm();
+    await expectRefusal(d, "FINANCE_CONFIRM_ALREADY_CONFIRMED");
+  });
+
+  test("a cleared-but-unconfirmed linked cheque: FINANCE_CONFIRM_CHEQUE_ALREADY_CLEARED", async () => {
+    const d = await finalizedChequeDeal("c3b", "OPEN_YEAR");
+    const [cheque] = await d.cheques();
+    await d.s.t.run((ctx) => ctx.db.patch(cheque._id, { status: "CLEARED" }));
+    await expectRefusal(d, "FINANCE_CONFIRM_CHEQUE_ALREADY_CLEARED");
+  });
+
+  test("only a returned cheque remains: FINANCE_CONFIRM_CHEQUE_RETURNED_OR_CANCELLED", async () => {
+    const d = await finalizedChequeDeal("c3c", "OPEN_YEAR");
+    await d.confirm();
+    const [cheque] = await d.cheques();
+    await d.giveBack(cheque._id);
+    await expectRefusal(d, "FINANCE_CONFIRM_CHEQUE_RETURNED_OR_CANCELLED", 2);
+  });
+
+  test("no cheque row at all: FINANCE_CONFIRM_CHEQUE_NOT_FOUND", async () => {
+    const d = await finalizedChequeDeal("c3d", "OPEN_YEAR");
+    const [cheque] = await d.cheques();
+    await d.s.t.run((ctx) => ctx.db.delete(cheque._id));
+    await expectRefusal(d, "FINANCE_CONFIRM_CHEQUE_NOT_FOUND");
+  });
+
+  test("two live cheques: FINANCE_CONFIRM_MULTIPLE_LIVE_CHEQUES", async () => {
+    const d = await finalizedChequeDeal("c3e", "OPEN_YEAR");
+    const [cheque] = await d.cheques();
+    await d.s.t.run(async (ctx) => {
+      const { _id, _creationTime, ...rest } = cheque;
+      void _id; void _creationTime;
+      await ctx.db.insert("postDatedCheques", { ...rest, chequeNumber: "CHQ-239-DUP" });
+    });
+    await expectRefusal(d, "FINANCE_CONFIRM_MULTIPLE_LIVE_CHEQUES");
+  });
+
+  test("a cheque whose face was never recorded: FINANCE_CONFIRM_CHEQUE_FACE_UNRECORDED", async () => {
+    const d = await finalizedChequeDeal("c3f", "OPEN_YEAR");
+    const [cheque] = await d.cheques();
+    await d.s.t.run((ctx) => ctx.db.patch(cheque._id, { amountMinor: undefined }));
+    await expectRefusal(d, "FINANCE_CONFIRM_CHEQUE_FACE_UNRECORDED");
+  });
+
+  test("a cheque whose face differs from the receipt: FINANCE_CONFIRM_CHEQUE_FACE_MISMATCH", async () => {
+    const d = await finalizedChequeDeal("c3g", "OPEN_YEAR");
+    const [cheque] = await d.cheques();
+    await d.s.t.run((ctx) => ctx.db.patch(cheque._id, { amountMinor: G + 1 }));
+    await expectRefusal(d, "FINANCE_CONFIRM_CHEQUE_FACE_MISMATCH");
+  });
+
+  test("returnClearedCheque: a fresh-body reuse of a key is the coded FINANCE_RETURN_KEY_CONFLICT; a bad bank fee is CHEQUE_BANK_FEE_INVALID", async () => {
+    const d = await finalizedChequeDeal("c3h", "OPEN_YEAR");
+    const [cheque] = await d.cheques();
+    const call = (extra: Record<string, unknown>, key = crypto.randomUUID()) =>
+      errOf(d.s.owner.as.mutation(api.collections.returnClearedCheque, { orgId: d.s.orgId, chequeId: cheque._id, idempotencyKey: key, ...extra }));
+    expect((await call({ bankFeeMinor: -1 }))?.data?.code).toBe("CHEQUE_BANK_FEE_INVALID");
+    expect((await call({ bankFeeMinor: 1.5 }))?.data?.code).toBe("CHEQUE_BANK_FEE_INVALID");
+    // Same key, different content: the conflict needs a stored row, so seed one.
+    const key = crypto.randomUUID();
+    await d.s.t.run(async (ctx) => {
+      await ctx.db.insert("commandIdempotency", {
+        orgId: d.s.orgId, operation: "collections.returnClearedCheque", idempotencyKey: key,
+        fingerprint: "{\"different\":true}", status: "COMPLETED", createdBy: d.s.owner.userId, createdAt: Date.now(),
+      });
+    });
+    const conflict = await call({}, key);
+    expect(conflict?.data?.code).toBe("FINANCE_RETURN_KEY_CONFLICT");
+  });
+
+  test("every new confirm/return refusal has EN text equal to the server text, AR text, and the nothing-changed sentence", () => {
+    for (const code of [
+      "FINANCE_CONFIRM_ALREADY_CONFIRMED", "FINANCE_CONFIRM_CHEQUE_ALREADY_CLEARED", "FINANCE_CONFIRM_CHEQUE_RETURNED_OR_CANCELLED",
+      "FINANCE_CONFIRM_CHEQUE_NOT_FOUND", "FINANCE_CONFIRM_MULTIPLE_LIVE_CHEQUES", "FINANCE_CONFIRM_CHEQUE_FACE_UNRECORDED",
+      "FINANCE_CONFIRM_CHEQUE_FACE_MISMATCH", "CHEQUE_BANK_FEE_INVALID", "CHEQUE_RETURN_NO_RECEIPT_LINEAGE", "CHEQUE_RETURN_NO_PAYMENT_TO_REVERSE",
+    ] as const) {
+      const error = new ConvexError({ code, message: FC_RETURN_MESSAGES[code] });
+      const en = getLocalizedErrorMessage(error, (k) => (salesEn as Record<string, string>)[k] ?? k);
+      const ar = getLocalizedErrorMessage(error, (k) => (salesAr as Record<string, string>)[k] ?? k);
+      expect(en, code).toBe(FC_RETURN_MESSAGES[code]);
+      expect(ar, code).toMatch(/[\u0600-\u06FF]/);
+      expect(ar, code).toContain("لم يتم تغيير أي شيء");
     }
   });
 });

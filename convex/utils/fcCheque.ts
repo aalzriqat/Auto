@@ -153,6 +153,28 @@ export const FC_RETURN_MESSAGES = {
     "The request identity is missing or too long (at most 200 characters). Nothing has been changed. Reopen the dialog and try again.",
   FINANCE_CONFIRM_STALE_REQUEST:
     "This confirmation was prepared before the deal's cheque was returned, so it cannot be applied. Nothing has been changed. Reopen the deal and confirm again.",
+  // SCRUM-239 round 3: every refusal an operator can reach on the
+  // confirm-after-return and cheque-return paths is coded.
+  FINANCE_CONFIRM_ALREADY_CONFIRMED:
+    "Disbursement has already been confirmed for this application. Nothing has been changed.",
+  FINANCE_CONFIRM_CHEQUE_ALREADY_CLEARED:
+    "This deal's cheque is already marked cleared but the disbursement was never confirmed. Ask accounting to review it before confirming. Nothing has been changed.",
+  FINANCE_CONFIRM_CHEQUE_RETURNED_OR_CANCELLED:
+    "This cheque was returned or cancelled. Correct the expected payment, then register the new payment, before confirming disbursement. Nothing has been changed.",
+  FINANCE_CONFIRM_CHEQUE_NOT_FOUND:
+    "Expected cheque record not found for this application. Nothing has been changed.",
+  FINANCE_CONFIRM_MULTIPLE_LIVE_CHEQUES:
+    "This deal has more than one live finance-company cheque. Resolve the duplicate before confirming disbursement. Nothing has been changed.",
+  FINANCE_CONFIRM_CHEQUE_FACE_UNRECORDED:
+    "This cheque's face amount was never recorded in minor units. Have a finance manager attest the face from the deal before confirming disbursement. Nothing has been changed.",
+  FINANCE_CONFIRM_CHEQUE_FACE_MISMATCH:
+    "The cheque's recorded face does not equal the disbursement being confirmed. Correct the expected payment or the cheque before confirming. Nothing has been changed.",
+  CHEQUE_BANK_FEE_INVALID:
+    "The bank fee must be a whole, non-negative amount in minor currency units. Nothing has been changed.",
+  CHEQUE_RETURN_NO_RECEIPT_LINEAGE:
+    "This cleared cheque has no persisted receipt lineage, so what it moved cannot be determined, and returning it would reopen the debt without reversing the receipt. Nothing has been changed.",
+  CHEQUE_RETURN_NO_PAYMENT_TO_REVERSE:
+    "This cleared cheque has no collection payment to reverse, so reopening the debt would leave it owed and collected at the same time. Nothing has been changed.",
 } as const;
 /** SCRUM-447 B4: longest operator note kept with a face attestation. */
 export const ATTESTATION_NOTE_MAX_LENGTH = 500;
