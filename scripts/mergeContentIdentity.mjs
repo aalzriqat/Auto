@@ -1,50 +1,32 @@
 #!/usr/bin/env node
 /**
  * Merge CONTENT identity for the trusted Sonar PR workflow (SCRUM-494).
- *
- * GitHub regenerates refs/pull/N/merge with an identical tree and identical
- * parents but a new committer date, hence a new commit SHA. Comparing merge
- * commit SHAs therefore refuses coverage that was produced from exactly the
- * content Sonar analyses. The identity that matters is the ordered triple
- * (tree, first parent, second parent). This module is the single definition
- * of that identity; every comparison in .github/workflows/sonar-pr-report.yml
- * goes through it.
- *
- * Fails closed: any input that is not a 40-hex SHA of a commit present in the
- * repository, or a commit that is not an exact two-parent merge, throws. The
- * commit object is read with `git cat-file`; nothing is executed or evaluated.
- *
- * CLI (repo defaults to the cwd):
- *   node mergeContentIdentity.mjs [--repo <dir>] identity <sha>
- *   node mergeContentIdentity.mjs [--repo <dir>] same <shaA> <shaB>
- * `same` exits 0 only when both identities are equal; every failure exits 1.
+ * GitHub regenerates refs/pull/N/merge with the same tree and parents but a new
+ * commit date/SHA, so merges are compared by (tree, first parent, second parent).
+ * Fails closed: anything that is not a 40-hex SHA of a present, exact two-parent
+ * merge commit throws. CLI: mergeContentIdentity.mjs [--repo <dir>] same <a> <b>
  */
 import { execFileSync } from "node:child_process";
-import { pathToFileURL } from "node:url";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const SHA_RE = /^[0-9a-f]{40}$/i;
-
-function git(repo, args) {
-  return execFileSync("git", ["-C", repo, ...args], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-}
 
 /** Returns { tree, first, second } (lower-cased) or throws. */
 export function contentIdentity(repo, sha) {
   if (typeof sha !== "string" || !SHA_RE.test(sha)) {
     throw new Error("merge SHA is not a 40-hex commit id");
   }
-  let type;
+  let raw;
   try {
-    type = git(repo, ["cat-file", "-t", sha]).trim();
+    raw = execFileSync("git", ["-C", repo, "cat-file", "commit", sha], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
   } catch {
-    throw new Error(`commit ${sha} is not present in the repository`);
+    throw new Error(`${sha} is not a commit present in the repository`);
   }
-  if (type !== "commit") throw new Error(`object ${sha} is a ${type}, not a commit`);
-
-  const header = git(repo, ["cat-file", "commit", sha]).split("\n\n", 1)[0];
+  const header = raw.split("\n\n", 1)[0];
   let tree = null;
   const parents = [];
   for (const line of header.split("\n")) {
@@ -66,32 +48,27 @@ export function sameContentIdentity(repo, shaA, shaB) {
 }
 
 function main(argv) {
-  let repo = ".";
   const args = [...argv];
+  let repo = ".";
   if (args[0] === "--repo") {
     repo = args[1];
     args.splice(0, 2);
   }
-  const [cmd, ...rest] = args;
-  try {
-    if (cmd === "identity" && rest.length === 1) {
-      const id = contentIdentity(repo, rest[0]);
-      console.log(`${id.tree} ${id.first} ${id.second}`);
-      return 0;
-    }
-    if (cmd === "same" && rest.length === 2) {
-      if (sameContentIdentity(repo, rest[0], rest[1])) return 0;
-      console.error("merge content identities differ (tree or parents)");
-      return 1;
-    }
-    console.error("usage: mergeContentIdentity.mjs [--repo <dir>] identity <sha> | same <shaA> <shaB>");
+  const [cmd, shaA, shaB] = args;
+  if (cmd !== "same" || args.length !== 3) {
+    console.error("usage: mergeContentIdentity.mjs [--repo <dir>] same <shaA> <shaB>");
     return 2;
+  }
+  try {
+    if (sameContentIdentity(repo, shaA, shaB)) return 0;
+    console.error("merge content identities differ (tree or parents)");
   } catch (error) {
     console.error(`mergeContentIdentity: ${error instanceof Error ? error.message : String(error)}`);
-    return 1;
   }
+  return 1;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : undefined;
+if (invokedPath && invokedPath === fileURLToPath(import.meta.url)) {
   process.exit(main(process.argv.slice(2)));
 }

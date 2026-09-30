@@ -63,25 +63,16 @@ describe("merge content identity", () => {
     expect(contentIdentity(repo, merge1)).toEqual({ tree, first: base, second: head });
   });
 
-  test("different tree is refused", () => {
-    const m = commitTree(otherTree, [base, head], "2026-02-01T02:00:00Z");
-    expect(sameContentIdentity(repo, merge1, m)).toBe(false);
-  });
-
-  test("swapped parents are refused", () => {
-    const m = commitTree(tree, [head, base], "2026-02-01T03:00:00Z");
-    expect(sameContentIdentity(repo, merge1, m)).toBe(false);
-  });
-
-  test("different first parent is refused", () => {
-    const m = commitTree(tree, [otherBase, head], "2026-02-01T04:00:00Z");
-    expect(sameContentIdentity(repo, merge1, m)).toBe(false);
-  });
-
-  test("different second parent is refused", () => {
-    const otherHead = commitTree(treeOf("head2"), [base], "2026-01-04T00:00:00Z");
-    const m = commitTree(tree, [base, otherHead], "2026-02-01T05:00:00Z");
-    expect(sameContentIdentity(repo, merge1, m)).toBe(false);
+  test.each([
+    ["different tree", () => commitTree(otherTree, [base, head], "2026-02-01T02:00:00Z")],
+    ["swapped parents", () => commitTree(tree, [head, base], "2026-02-01T03:00:00Z")],
+    ["different first parent", () => commitTree(tree, [otherBase, head], "2026-02-01T04:00:00Z")],
+    [
+      "different second parent",
+      () => commitTree(tree, [base, commitTree(treeOf("head2"), [base], "2026-01-04T00:00:00Z")], "2026-02-01T05:00:00Z"),
+    ],
+  ])("%s is refused", (_name, make) => {
+    expect(sameContentIdentity(repo, merge1, make())).toBe(false);
   });
 
   test("one-parent and three-parent commits are refused", () => {
@@ -101,11 +92,11 @@ describe("merge content identity", () => {
   });
 
   test("a well-formed SHA that is not in the repository (unfetchable) is refused", () => {
-    expect(() => contentIdentity(repo, "1".repeat(40))).toThrow(/not present/);
-    expect(() => sameContentIdentity(repo, merge1, "1".repeat(40))).toThrow(/not present/);
+    expect(() => contentIdentity(repo, "1".repeat(40))).toThrow(/not a commit present/);
+    expect(() => sameContentIdentity(repo, merge1, "1".repeat(40))).toThrow(/not a commit present/);
   });
 
   test("a non-commit object is refused", () => {
-    expect(() => contentIdentity(repo, tree)).toThrow(/not a commit/);
+    expect(() => contentIdentity(repo, tree)).toThrow(/not a commit present/);
   });
 });

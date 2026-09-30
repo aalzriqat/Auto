@@ -104,20 +104,18 @@ describe("pull-request workflow secret boundary", () => {
     expect(source).toContain("refs/pull/${PR_NUMBER}/head:refs/autoflow/sonar-pr-head");
     expect(source).toContain("refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-pr-merge");
     expect(source).toContain("FIRST_PARENT");
-    expect(source).toContain("TRIGGER_STARTED_AT");
-    expect(source).toContain("MERGE_COMMIT_EPOCH");
     expect(source).toContain("mismatched coverage provenance");
     expect(source).toContain("refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-final-merge");
     expect(source).toContain("still-current exact merge");
     expect(source).toContain("+refs/pull/${PR_NUMBER}/merge:refs/autoflow/sonar-report-merge");
-    expect(source).toContain('if [ "$current_merge" != "$TESTED_SHA" ] &&');
-    expect(source).toContain('mergeContentIdentity.mjs --repo trusted same "$current_merge" "$TESTED_SHA"');
-    expect(source).toContain('mergeContentIdentity.mjs same "$current_merge" "$TESTED_SHA"');
+    // Every merge comparison (coverage, stale report, verdict) goes through the
+    // content-identity helper; a bare SHA comparison would refuse a regenerated merge.
+    expect(source.match(/mergeContentIdentity\.mjs (?:--repo trusted )?same "\$(?:coverage_merge|current_merge)" "\$TESTED_SHA"/g)?.length).toBe(3);
+    expect(source).not.toContain('"$current_merge" != "$TESTED_SHA"');
+    expect(source).not.toContain('"$coverage_merge" != "$TESTED_SHA"');
     expect(source.indexOf("sonar-report-merge")).toBeGreaterThan(source.indexOf("sonar-pr-report-payload.json"));
     expect(source.indexOf("sonar-report-merge")).toBeLessThan(source.indexOf("-X PATCH"));
     expect(source).toContain("tested-merge-sha.txt");
-    expect(source).toContain('if [ "$coverage_merge" != "$TESTED_SHA" ]; then');
-    expect(source).toContain('mergeContentIdentity.mjs --repo trusted same "$coverage_merge" "$TESTED_SHA"');
     expect(source).toContain('=~ ^[0-9a-fA-F]{40}$ ]]');
     expect(source).toContain('git merge-base --is-ancestor "$FIRST_PARENT" refs/autoflow/sonar-main');
     expect(source).toContain('if [ "$live_base_ref" != "main" ]; then');
