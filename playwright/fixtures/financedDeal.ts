@@ -445,3 +445,23 @@ export async function buildDealWithRecordedEconomics(
 
   return dealUrl;
 }
+
+/**
+ * Open the cockpit's "Deal details" record.
+ *
+ * SCRUM-417 UX3 (#368) promotes only the LIVE step's panel under the next-step
+ * card and folds every other panel into a record that starts COLLAPSED
+ * (`hidden`, not unmounted). Once the approved amount is recorded the live
+ * step is handover, so the finance-company decision card — and the funding
+ * split it carries — is in that record and not painted until it is opened.
+ * A spec that reads those figures therefore opens it first, exactly as an
+ * operator would. Idempotent: it only clicks when the record is closed, so it
+ * never collapses a record that is already open.
+ */
+export async function openDealDetails(page: Page): Promise<void> {
+  const toggle = page.getByTestId("deal-details-toggle");
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+    await toggle.click();
+  }
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+}
