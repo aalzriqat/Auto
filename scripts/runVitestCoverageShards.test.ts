@@ -10,7 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -139,6 +139,8 @@ async function run(mode: string, env: Record<string, string | undefined> = {}) {
     "AUTOFLOW_COVERAGE_BLOB_DIR",
     "AUTOFLOW_COVERAGE_REPORTS_DIR",
     "AUTOFLOW_COVERAGE_DISCOVERY_ROOT",
+    "AUTOFLOW_COVERAGE_PHASE",
+    "AUTOFLOW_COVERAGE_SLICE",
   ]) {
     delete process.env[key];
   }
@@ -326,6 +328,150 @@ describe("runVitestCoverageShards", () => {
     expect(diagnostic.some((arg) => /\.test\.tsx?$/.test(arg))).toBe(true);
     expect(stderr.join("")).toContain("Vitest coverage subprocess failed (status=7");
     expect(stderr.join("")).toContain("Re-running failing batch without coverage");
+  });
+
+  describe("SCRUM-359 parallel slices", () => {
+    const isAuthority = (call: (typeof childBoundary.calls)[number]) =>
+      rawArgs(call).some((arg) => arg.endsWith("unified-deal-authority.json"));
+    const isMerge = (call: (typeof childBoundary.calls)[number]) =>
+      rawArgs(call).some((arg) => arg.startsWith("--merge-reports="));
+
+    async function callsFor(mode: string, env: Record<string, string>) {
+      childBoundary.calls.length = 0;
+      await run(mode, env);
+      return childBoundary.calls.map((call) => ({ ...call, args: [...call.args] }));
+    }
+
+    function fakeDiscoveryRoot(count: number): string {
+      const directory = mkdtempSync(path.join(os.tmpdir(), "autoflow-coverage-slices-"));
+      tempDiscoveryRoots.push(directory);
+      mkdirSync(path.join(directory, "lib"));
+      for (let index = 1; index <= count; index += 1) {
+        writeFileSync(path.join(directory, "lib", `f${String(index).padStart(2, "0")}.test.ts`), "");
+      }
+      return directory;
+    }
+
+    function writeBlobs(names: string[]) {
+      const directory = path.join(process.cwd(), TEST_BLOB_DIR);
+      mkdirSync(directory, { recursive: true });
+      for (const name of names) writeFileSync(path.join(directory, name), "{}");
+    }
+
+    test("unit slices partition the exact batches of a full run: same args, each once, authority once, no merge", async () => {
+      const root = fakeDiscoveryRoot(11);
+      const base = { VITEST_COVERAGE_BATCH_SIZE: "2", AUTOFLOW_COVERAGE_DISCOVERY_ROOT: root };
+      const full = await callsFor("unit", base);
+      const fullWork = full.filter((call) => !isMerge(call)).map(rawArgs);
+      expect(fullWork).toHaveLength(1 + 6);
+
+      const sliced: string[][] = [];
+      for (let slice = 1; slice <= 3; slice += 1) {
+        const calls = await callsFor("unit", {
+          ...base,
+          AUTOFLOW_COVERAGE_PHASE: "run",
+          AUTOFLOW_COVERAGE_SLICE: `${slice}/3`,
+        });
+        expect(calls.filter(isMerge)).toHaveLength(0);
+        expect(calls.filter(isAuthority)).toHaveLength(slice === 1 ? 1 : 0);
+        expect(calls.length).toBeGreaterThan(0);
+        sliced.push(...calls.map(rawArgs));
+      }
+      const key = (args: string[]) => JSON.stringify(args);
+      expect(sliced.map(key).sort()).toEqual(fullWork.map(key).sort());
+      expect(new Set(sliced.map(key)).size).toBe(sliced.length);
+    });
+
+    test("Sonar slices partition the exact shards of a full run", async () => {
+      const full = await callsFor("sonar", { VITEST_COVERAGE_SHARDS: "5" });
+      const fullWork = full.filter((call) => !isMerge(call)).map(rawArgs);
+      const sliced: string[][] = [];
+      for (let slice = 1; slice <= 4; slice += 1) {
+        const calls = await callsFor("sonar", {
+          VITEST_COVERAGE_SHARDS: "5",
+          AUTOFLOW_COVERAGE_PHASE: "run",
+          AUTOFLOW_COVERAGE_SLICE: `${slice}/4`,
+        });
+        expect(calls.filter(isMerge)).toHaveLength(0);
+        sliced.push(...calls.map(rawArgs));
+      }
+      const key = (args: string[]) => JSON.stringify(args);
+      expect(sliced.map(key).sort()).toEqual(fullWork.map(key).sort());
+      expect(new Set(sliced.map(key)).size).toBe(sliced.length);
+    });
+
+    test.each([
+      [{ AUTOFLOW_COVERAGE_PHASE: "slice" }, "AUTOFLOW_COVERAGE_PHASE must be one of"],
+      [{ AUTOFLOW_COVERAGE_PHASE: "run" }, "AUTOFLOW_COVERAGE_SLICE is required with"],
+      [{ AUTOFLOW_COVERAGE_SLICE: "1/4" }, "AUTOFLOW_COVERAGE_SLICE is required with"],
+      [{ AUTOFLOW_COVERAGE_PHASE: "merge", AUTOFLOW_COVERAGE_SLICE: "1/4" }, "AUTOFLOW_COVERAGE_SLICE is required with"],
+      ...["0/4", "5/4", "1/1", "1/17", "a/b", "2", " 1/4"].map(
+        (spec) =>
+          [{ AUTOFLOW_COVERAGE_PHASE: "run", AUTOFLOW_COVERAGE_SLICE: spec }, "AUTOFLOW_COVERAGE_SLICE must be"] as const,
+      ),
+    ])("rejects %o before any subprocess", async (env, message) => {
+      await expect(run("unit", env)).rejects.toThrow(message);
+      expect(childBoundary.calls).toHaveLength(0);
+    });
+
+    test("merge refuses a missing blob directory without running anything", async () => {
+      await expect(run("sonar", { VITEST_COVERAGE_SHARDS: "2", AUTOFLOW_COVERAGE_PHASE: "merge" })).rejects.toThrow(
+        /incomplete for sonar merge \(expected 3, found 0\)/,
+      );
+      expect(childBoundary.calls).toHaveLength(0);
+    });
+
+    test("merge refuses a blob set missing one slice's work and names it", async () => {
+      writeBlobs(["unified-deal-authority.json", "sonar-1.json", "sonar-3.json"]);
+      await expect(run("sonar", { VITEST_COVERAGE_SHARDS: "3", AUTOFLOW_COVERAGE_PHASE: "merge" })).rejects.toThrow(
+        "Missing: sonar-2.json. Unexpected: none.",
+      );
+      expect(childBoundary.calls).toHaveLength(0);
+    });
+
+    test("merge refuses a stray blob from another run", async () => {
+      writeBlobs(["unified-deal-authority.json", "sonar-1.json", "sonar-2.json", "unit-batch-1.json"]);
+      await expect(run("sonar", { VITEST_COVERAGE_SHARDS: "2", AUTOFLOW_COVERAGE_PHASE: "merge" })).rejects.toThrow(
+        "Missing: none. Unexpected: unit-batch-1.json.",
+      );
+      expect(childBoundary.calls).toHaveLength(0);
+    });
+
+    test("merge refuses a unit blob set whose authority blob is missing", async () => {
+      const root = fakeDiscoveryRoot(3);
+      writeBlobs(["unit-batch-1.json", "unit-batch-2.json"]);
+      await expect(
+        run("unit", {
+          VITEST_COVERAGE_BATCH_SIZE: "2",
+          AUTOFLOW_COVERAGE_DISCOVERY_ROOT: root,
+          AUTOFLOW_COVERAGE_PHASE: "merge",
+        }),
+      ).rejects.toThrow("Missing: unified-deal-authority.json.");
+      expect(childBoundary.calls).toHaveLength(0);
+    });
+
+    test.each(["unit", "sonar"])(
+      "%s merge on a complete blob set runs only the merge, with the same args as a full run, and keeps the blobs",
+      async (mode) => {
+        const root = fakeDiscoveryRoot(5);
+        const env = {
+          VITEST_COVERAGE_BATCH_SIZE: "2",
+          VITEST_COVERAGE_SHARDS: "2",
+          AUTOFLOW_COVERAGE_DISCOVERY_ROOT: root,
+        };
+        const fullMerge = (await callsFor(mode, env)).filter(isMerge).map(rawArgs);
+        expect(fullMerge).toHaveLength(1);
+
+        const blobs =
+          mode === "unit"
+            ? ["unified-deal-authority.json", "unit-batch-1.json", "unit-batch-2.json", "unit-batch-3.json"]
+            : ["unified-deal-authority.json", "sonar-1.json", "sonar-2.json"];
+        writeBlobs(blobs);
+        const calls = await callsFor(mode, { ...env, AUTOFLOW_COVERAGE_PHASE: "merge" });
+        expect(calls.map(rawArgs)).toEqual(fullMerge);
+        expect(readdirSync(path.join(process.cwd(), TEST_BLOB_DIR)).sort()).toEqual([...blobs].sort());
+      },
+    );
   });
 
   test("propagates a child-process launch error instead of converting it into a green result", async () => {
