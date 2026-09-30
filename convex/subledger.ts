@@ -77,9 +77,11 @@ export async function createReceivableDocument(
   args: {
     orgId: Id<"organizations">;
     documentType: "INVOICE" | "INSTALLMENT" | "DEBIT_ADJUSTMENT" | "CREDIT_ADJUSTMENT" | "WRITE_OFF" | "REFUND_PAYABLE";
-    payerType: "CUSTOMER" | "FINANCE_COMPANY";
+    payerType: "CUSTOMER" | "FINANCE_COMPANY" | "MANUAL_FINANCE_COMPANY";
     customerId?: Id<"customers">;
     financeCompanyId?: Id<"financeCompanies">;
+    /** SCRUM-27: the manual finance company's name off its approval letter (MANUAL_FINANCE_COMPANY only). */
+    payerNameSnapshot?: string;
     sourceType: string;
     sourceId: string;
     originalAmountMinor: number;
@@ -109,6 +111,7 @@ export async function createReceivableDocument(
     payerType: args.payerType,
     customerId: args.customerId,
     financeCompanyId: args.financeCompanyId,
+    payerNameSnapshot: args.payerNameSnapshot,
     sourceType: args.sourceType,
     sourceId: args.sourceId,
     originalAmountMinor: args.originalAmountMinor,
@@ -142,9 +145,10 @@ export async function createCanonicalPayment(
   args: {
     orgId: Id<"organizations">;
     direction: "IN" | "OUT";
-    payerType?: "CUSTOMER" | "FINANCE_COMPANY";
+    payerType?: "CUSTOMER" | "FINANCE_COMPANY" | "MANUAL_FINANCE_COMPANY";
     customerId?: Id<"customers">;
     financeCompanyId?: Id<"financeCompanies">;
+    payerNameSnapshot?: string;
     method: "CASH" | "BANK_TRANSFER" | "CARD" | "PAYMENT_LINK" | "CHEQUE" | "INTERNAL_TRANSFER" | "TRADE_IN" | "OTHER";
     amountMinor: number;
     currency: string;
@@ -182,6 +186,7 @@ export async function createCanonicalPayment(
     payerType: args.payerType,
     customerId: args.customerId,
     financeCompanyId: args.financeCompanyId,
+    payerNameSnapshot: args.payerNameSnapshot,
     method: args.method,
     amountMinor: args.amountMinor,
     currency,
@@ -239,6 +244,14 @@ export async function allocatePaymentToReceivable(
     payment.financeCompanyId &&
     receivable.financeCompanyId &&
     payment.financeCompanyId !== receivable.financeCompanyId
+  ) {
+    throw new ConvexError("Payment finance company does not match the receivable's finance company.");
+  }
+
+  if (
+    payment.payerNameSnapshot &&
+    receivable.payerNameSnapshot &&
+    payment.payerNameSnapshot !== receivable.payerNameSnapshot
   ) {
     throw new ConvexError("Payment finance company does not match the receivable's finance company.");
   }
