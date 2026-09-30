@@ -89,7 +89,9 @@ async function paint(page: Page, locale: (typeof LOCALES)[number], theme: (typeo
   const file = resolve(RUN_DIR, `page-${locale}-${theme}.html`);
   writeFileSync(file, documentFor(locale, theme));
   await page.goto(`file:///${file.replace(/\\/g, "/")}`);
-  await page.waitForTimeout(200);
+  // Painted = the notice is in the DOM and the web fonts have settled.
+  await page.locator('[role="alert"]').waitFor();
+  await page.evaluate(() => document.fonts.ready);
 }
 
 for (const locale of LOCALES) {
@@ -158,7 +160,10 @@ for (const locale of LOCALES) {
             return main.scrollHeight + 80;
           });
           await page.setViewportSize({ width: viewport.width, height: Math.max(viewport.height, Math.min(height, 2600)) });
-          await page.waitForTimeout(100);
+          // Wait for the resized viewport to lay out (two frames) instead of a fixed delay.
+          await page.evaluate(
+            () => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())))
+          );
           await page.screenshot({ path: resolve(SHOTS, `page-${locale}-${theme}-${viewport.name}.png`) });
           // Close-up of the notice.
           await page.locator('[role="alert"]').screenshot({ path: resolve(SHOTS, `notice-${locale}-${theme}-${viewport.name}.png`) });

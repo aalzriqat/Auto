@@ -421,6 +421,6 @@ describe("SCRUM-390 OR-5: commissionable vehicle margin on a v2 financed sale", 
     expect(after?._id).toBe(first?._id);
     expect(after?.commissionAmount).toBe(first?.commissionAmount);
     expect(after?.commissionBase).toEqual(first?.commissionBase);
-    expect((await sales()).length).toBe(countBefore);
+    expect(await sales()).toHaveLength(countBefore);
   });
 });

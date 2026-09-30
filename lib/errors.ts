@@ -162,22 +162,33 @@ export function serverErrorMessageKey(code: string): string {
  */
 export function getLocalizedErrorMessage(error: unknown, t: (key: string) => string): string {
   try {
-    if (isConvexError(error) && typeof error.data === "object" && error.data !== null) {
-      const data = error.data as Record<string, unknown>;
-      if (typeof data.code === "string") {
-        const key = serverErrorMessageKey(data.code);
-        const template = t(key);
-        if (typeof template === "string" && template !== "" && template !== key) {
-          const values: Record<string, string | number> = {};
-          for (const [name, value] of Object.entries(data)) {
-            if (typeof value === "string" || typeof value === "number") values[name] = value;
-          }
-          return interpolate(template, values);
-        }
+    const data = codedPayloadOf(error);
+    if (data !== null) {
+      const key = serverErrorMessageKey(data.code as string);
+      const template = t(key);
+      if (typeof template === "string" && template !== "" && template !== key) {
+        return interpolate(template, scalarFields(data));
       }
     }
   } catch {
     // fall through to the untranslated message
   }
   return getErrorMessage(error);
+}
+
+/** The `ConvexError.data` object when it carries a string `code`, else null. */
+function codedPayloadOf(error: unknown): Record<string, unknown> | null {
+  if (!isConvexError(error)) return null;
+  const data = error.data;
+  if (typeof data !== "object" || data === null) return null;
+  return typeof (data as { code?: unknown }).code === "string" ? (data as Record<string, unknown>) : null;
+}
+
+/** The string and number fields of a payload - the only values a `{placeholder}` can take. */
+function scalarFields(data: Record<string, unknown>): Record<string, string | number> {
+  const values: Record<string, string | number> = {};
+  for (const [name, value] of Object.entries(data)) {
+    if (typeof value === "string" || typeof value === "number") values[name] = value;
+  }
+  return values;
 }
