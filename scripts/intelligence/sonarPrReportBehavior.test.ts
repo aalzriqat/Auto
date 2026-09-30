@@ -37,6 +37,8 @@ function requireStep(job: string, label: string, pick: (s: Step) => boolean): St
 const reportStep = requireStep("scan-report", "report", (s) => s.id === "report");
 const verdictStep = requireStep("verdict", "Publish trusted Sonar verdict", (s) => s.name === "Publish trusted Sonar verdict");
 const scanStep = requireStep("scan-report", "SonarSource/sonarqube-scan-action", (s) => String(s.uses ?? "").startsWith("SonarSource/sonarqube-scan-action"));
+const sanitizeStep = requireStep("scan-report", "Sanitize scanner inputs", (s) => s.name === "Sanitize scanner inputs");
+const sanitizeScript = String(sanitizeStep.run ?? "").replace(/\r/g, "");
 const reportScript = String(reportStep.run ?? "").replace(/\r/g, "");
 const verdictScript = String(verdictStep.run ?? "").replace(/\r/g, "");
 
@@ -194,7 +196,7 @@ type RunResult = { status: number | null; stdout: string; stderr: string; github
 
 function runScript(
   script: string,
-  opts: { env: Record<string, string>; routes?: Route[]; git?: Record<string, unknown>; same?: string; reportTask?: string | null },
+  opts: { env: Record<string, string>; routes?: Route[]; git?: Record<string, unknown>; same?: string; reportTask?: string | null; setup?: (dir: string, runnerTemp: string) => void },
 ): RunResult {
   const dir = mkdtempSync(path.join(workRoot, "case-"));
   const runnerTemp = path.join(dir, "runner-temp");
@@ -209,6 +211,7 @@ function runScript(
   writeFileSync(scenario, JSON.stringify({ routes: opts.routes ?? [], git: opts.git ?? {} }));
   writeFileSync(log, "");
   writeFileSync(ghOut, "");
+  opts.setup?.(dir, runnerTemp);
   writeFileSync(path.join(dir, "step.sh"), script);
   const env: NodeJS.ProcessEnv = { ...process.env };
   Object.assign(env, {
@@ -450,5 +453,91 @@ describe.skipIf(!bash)("sonar-pr-report.yml `Publish trusted Sonar verdict` step
     const r = verdictRun({ scanResult: "failure", gateOk: "" });
     expect(statuses(r)).toEqual(TESTED_FAILURE);
     expect(r.status).not.toBe(0);
+  });
+});
+
+const LCOV_OK = "TN:\nSF:convex/a.ts\nDA:1,1\nend_of_record\n";
+
+// `testedMergeFile`: undefined = write `tested`-independent default; null = file absent.
+function sanitizeRun(o: { testedMergeFile?: string | null; same?: string; mergeFetchFails?: boolean }) {
+  const coverageMerge = o.testedMergeFile === undefined ? TESTED : o.testedMergeFile;
+  const fetchFail: string[] = [];
+  if (o.mergeFetchFails) fetchFail.push(`origin ${REGEN}`);
+  return runScript(sanitizeScript, {
+    env: { TESTED_SHA: TESTED },
+    git: { fetchFail },
+    same: o.same,
+    setup: (dir, runnerTemp) => {
+      mkdirSync(path.join(dir, "candidate"), { recursive: true });
+      mkdirSync(path.join(dir, "trusted"), { recursive: true });
+      writeFileSync(path.join(dir, "trusted", "sonar-project.properties"), "sonar.projectKey=x\n");
+      const cov = path.join(runnerTemp, "sonar-coverage");
+      mkdirSync(cov, { recursive: true });
+      writeFileSync(path.join(cov, "lcov.info"), LCOV_OK);
+      if (coverageMerge !== null) writeFileSync(path.join(cov, "tested-merge-sha.txt"), coverageMerge + "\n");
+    },
+  });
+}
+
+const expectRefused = (r: RunResult, message: RegExp) => {
+  expect(r.status).not.toBe(0);
+  expect(r.stdout + r.stderr).toMatch(message);
+  // A refusal must stop before the scanner inputs are staged.
+  expect(r.stdout + r.stderr).not.toMatch(/lcov.info exceeds/);
+};
+
+describe.skipIf(!bash)("sonar-pr-report.yml `Sanitize scanner inputs` coverage-merge refusal behaviour", () => {
+  it("extracts the sanitize script", () => {
+    expect(sanitizeScript).toContain("same_merge");
+  });
+
+  it("byte-equal SHAs + helper SAME proceeds and exits 0", () => {
+    const r = sanitizeRun({ testedMergeFile: TESTED });
+    expect(r.status).toBe(0);
+    expect(r.calls.some((c) => c.tool === "helper")).toBe(true);
+    expect(r.calls.some((c) => c.tool === "git" && c.args?.includes("fetch"))).toBe(false);
+  });
+
+  it("regenerated merge (different SHA, helper SAME) proceeds and exits 0 after fetching it", () => {
+    const r = sanitizeRun({ testedMergeFile: REGEN });
+    expect(r.status).toBe(0);
+    expect(r.calls.some((c) => c.tool === "git" && c.args?.includes(`fetch --no-tags origin ${REGEN}`))).toBe(true);
+    expect(r.stdout).toContain("content-identical");
+  });
+
+  it.each([
+    ["DIFFERENT", REGEN],
+    ["EMPTY", REGEN],
+    ["FAIL", REGEN],
+    ["DIFFERENT", TESTED],
+    ["EMPTY", TESTED],
+    ["FAIL", TESTED],
+  ])("helper %s with coverage merge %s.. is refused (non-zero)", (same, merge) => {
+    const r = sanitizeRun({ testedMergeFile: merge, same });
+    expectRefused(r, /content differs from the analysed merge/);
+    expect(r.calls.some((c) => c.tool === "helper")).toBe(true);
+  });
+
+  it("coverage merge that cannot be fetched is refused, even though the helper would say SAME", () => {
+    const r = sanitizeRun({ testedMergeFile: REGEN, mergeFetchFails: true, same: "SAME" });
+    expectRefused(r, /cannot be fetched from origin/);
+    expect(r.calls.some((c) => c.tool === "helper")).toBe(false);
+  });
+
+  it.each([
+    ["too short", "abc123"],
+    ["non-hex 40 chars", "z".repeat(40)],
+    ["injection attempt", "$(touch pwned)" + "a".repeat(30)],
+    ["empty", ""],
+  ])("malformed tested-merge-sha.txt (%s) is refused even though the helper would say SAME", (_label, content) => {
+    const r = sanitizeRun({ testedMergeFile: content, same: "SAME" });
+    expectRefused(r, /malformed tested merge/);
+    expect(r.calls.some((c) => c.tool === "helper" || c.tool === "git")).toBe(false);
+  });
+
+  it("missing tested-merge-sha.txt is refused", () => {
+    const r = sanitizeRun({ testedMergeFile: null, same: "SAME" });
+    expectRefused(r, /does not name its tested merge/);
+    expect(r.calls.some((c) => c.tool === "helper")).toBe(false);
   });
 });
