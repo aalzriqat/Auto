@@ -52,14 +52,15 @@ test.use({ actionTimeout: 25_000 });
 
 test.describe("recording a financed deal's economics through the interface", () => {
   /**
-   * ⚠️ SKIPPED BY OWNER RULING — the deal screen is being redesigned.
+   * This spec RUNS on Trusted Main E2E; it is not skipped. Since SCRUM-417 UX3
+   * the deal record sits behind a "Deal details" toggle, so it is opened with
+   * openDealDetails() before the record's controls are used.
    *
    * This drives the deal cockpit end to end: the quotation, the approved
    * amount, the handover and the finalize are all entered through that screen's
-   * controls. A redesign moves every one of them, so these assertions would
-   * fail on the interface being replaced.
+   * controls. A redesign moves every one of them.
    *
-   * ⚠️ SKIPPED, NOT DELETED. What this proves is not a layout detail — it is
+   * What this proves is not a layout detail — it is
    * that an operator can REACH the economics writers at all. SCRUM-68 exists
    * because they could not: the mutations were real and had no caller, and a
    * configured deal stopped dead after its credit decision. It is also the only
@@ -199,11 +200,16 @@ test.describe("recording a financed deal's economics through the interface", () 
       // substring anywhere on the page, so it passed while nothing closed.
       // The close is withheld first, and says why, rather than offered and
       // refused.
-      const close = nextStep.getByRole("button", { name: "Close the deal" });
+      // exact: the step checklist inside this container renders its current
+      // "close-deal" item as a button named "Close the deal Next", which a
+      // substring match would also take.
+      const close = nextStep.getByRole("button", { name: "Close the deal", exact: true });
       await expect(nextStep).toContainText("The deal is not ready to close yet");
       await expect(close).toHaveCount(0);
 
       // No costs were borne: that is stated as a zero-cost line, then checked.
+      // The costs panel lives in the record at this step (idempotent).
+      await openDealDetails(managerPage);
       const costs = managerPage.getByTestId("deal-handover-costs");
       await costs.getByRole("button", { name: "Add cost" }).click();
       const addCost = costs.getByTestId("deal-handover-cost-add");
@@ -235,7 +241,10 @@ test.describe("recording a financed deal's economics through the interface", () 
       // The legal invoice, made out to the finance company (the dialog's
       // default). The plan must balance: with no deposit, no customer gap and
       // nothing deducted, revenue is exactly the 13,000 the company remits.
-      await checklist.getByRole("button", { name: "Record Legal Invoice" }).click();
+      // The checklist's own link for the blocked check opens the same dialog
+      // (both call legalInvoice.onRecord); the card-header button shares the
+      // name, so a role+name lookup matches two elements.
+      await checklist.getByTestId("closing-check-go-LEGAL_INVOICE_RECORDED").click();
       const invoiceDialog = managerPage.getByRole("dialog");
       await invoiceDialog.locator("#legal-invoice-amount").fill("13000");
       await invoiceDialog.locator("#legal-invoice-number").fill(`INV-E2E-${testDataSuffix()}`);

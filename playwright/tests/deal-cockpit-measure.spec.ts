@@ -113,15 +113,15 @@ test.use({ actionTimeout: 25_000 });
 
 test.describe("the deal cockpit's reading measure", () => {
   /**
-   * ⚠️ SKIPPED BY OWNER RULING — the deal screen is being redesigned.
+   * This spec RUNS on Trusted Main E2E; it is not skipped. Since SCRUM-417 UX3
+   * the deal record sits behind a "Deal details" toggle, so it is opened with
+   * openDealDetails() before measuring.
    *
    * Every assertion below measures the CURRENT cockpit's layout: the pixel
    * distance between a label and the figure it names, at two widths and in two
-   * languages. A redesign changes exactly that, so these would fail on the
-   * layout being replaced rather than on anything the redesign got wrong, and
-   * fixing them against the old markup would be work thrown away twice.
+   * languages. A redesign changes exactly that.
    *
-   * ⚠️ SKIPPED, NOT DELETED, and skipped LOUDLY. The reading-measure defect this
+   * The reading-measure defect this
    * gate exists for — `justify-between` on an unbounded row, which the owner
    * had to zoom to 50% to read around — is a real product defect that a
    * redesign can reintroduce. Re-enable this against the new screen; do not let
