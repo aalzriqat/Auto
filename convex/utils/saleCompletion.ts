@@ -1,4 +1,5 @@
 import { ConvexError } from "convex/values";
+import { isManualFinanceApplication } from "./manualFinancePayer";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
 import { notifyManagers, getActorName } from "./notifications";
@@ -1328,7 +1329,12 @@ async function applySaleCompletionSideEffects(
   //
   // Resolved here rather than inside the builder below, which is synchronous.
   const financedByConfiguredCompany = args.applicationId
-    ? (await ctx.db.get(args.applicationId))?.companyId !== undefined
+    ? await (async () => {
+        const financingApp = await ctx.db.get(args.applicationId!);
+        // SCRUM-27: a manual company is a financier too - without a plan the
+        // consignment guard must refuse it exactly as it does a configured one.
+        return financingApp !== null && (financingApp.companyId !== undefined || isManualFinanceApplication(financingApp));
+      })()
     : false;
 
   const consignment = isSourced

@@ -316,6 +316,13 @@ const FIELD_VISIBILITY: Record<
    */
   approvedDealerPurchaseAmountMinor: "APPROVAL_WORKFLOW",
   /**
+   * SCRUM-27. The manual finance company's approval letter, as the manager
+   * typed it: approved amount, the company's name, and what the dealership sends
+   * it. Same tier as the approved amount because the same role enters it and
+   * must read back what it entered; a caller outside that tier gets none of it.
+   */
+  manualApproval: "APPROVAL_WORKFLOW",
+  /**
    * The ONLY member of `DISBURSEMENT_WORKFLOW`, and the narrow exception ruling
    * #3 permits for an already-approved workflow tier. Load-bearing, not
    * cosmetic: `confirmDisbursement` checks the caller's amount against this

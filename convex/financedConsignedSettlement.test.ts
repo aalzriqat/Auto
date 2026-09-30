@@ -378,6 +378,24 @@ async function runDeal(
     }
   }
 
+  // SCRUM-27: a MANUAL finance company deal cannot be handed over until the
+  // manager has entered its approval letter (G, name, S). A deal whose quote
+  // names the provider gets the letter here, naming the same company at the
+  // vehicle price, so the payer identity every test below reads is unchanged.
+  // A deal whose quote names NO provider has no name a letter could carry, so it
+  // stops here - before handover - which is all its route/label assertions need.
+  if (mode === "MANUAL_FINANCE_COMPANY") {
+    const providerName = opts.manualProviderName?.trim();
+    if (providerName) {
+      await s.asApprover.mutation(api.financingEconomics.recordManualFinanceApproval, {
+        orgId: s.orgId, applicationId,
+        approvedAmountMinor: VEHICLE_PRICE * SCALE, financierName: providerName, dealerSendsMinor: 0,
+      });
+    } else if (opts.finalize === false) {
+      return { quoteId, applicationId, saleId: null };
+    }
+  }
+
   // Anything that must be on the record BEFORE the vehicle goes out.
   //
   // Handover seals the approved amount: `approveDealerPurchaseAmount` now

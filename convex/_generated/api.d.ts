@@ -201,6 +201,7 @@ import type * as utils_instagramApi from "../utils/instagramApi.js";
 import type * as utils_leadActivity from "../utils/leadActivity.js";
 import type * as utils_leadAssignment from "../utils/leadAssignment.js";
 import type * as utils_leadStageHelpers from "../utils/leadStageHelpers.js";
+import type * as utils_manualFinancePayer from "../utils/manualFinancePayer.js";
 import type * as utils_marketplaceMatching from "../utils/marketplaceMatching.js";
 import type * as utils_materialization from "../utils/materialization.js";
 import type * as utils_metaText from "../utils/metaText.js";
@@ -453,6 +454,7 @@ declare const fullApi: ApiFromModules<{
   "utils/leadActivity": typeof utils_leadActivity;
   "utils/leadAssignment": typeof utils_leadAssignment;
   "utils/leadStageHelpers": typeof utils_leadStageHelpers;
+  "utils/manualFinancePayer": typeof utils_manualFinancePayer;
   "utils/marketplaceMatching": typeof utils_marketplaceMatching;
   "utils/materialization": typeof utils_materialization;
   "utils/metaText": typeof utils_metaText;
