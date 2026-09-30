@@ -5,6 +5,9 @@ import type { SchemaDefinition, GenericSchema } from "convex/server";
 import aggregateComponentSchema from "../node_modules/@convex-dev/aggregate/src/component/schema";
 import rateLimiterComponentSchema from "../node_modules/@convex-dev/rate-limiter/src/component/schema";
 import { aggregateTriggers } from "../convex/aggregates";
+import type { api as ApiRef } from "../convex/_generated/api";
+import type { Id } from "../convex/_generated/dataModel";
+import type schema from "../convex/schema";
 
 /**
  * `convexTest`, with every mounted component registered and `t.run` wired to
@@ -118,13 +121,15 @@ export function convexTestWithComponents<
  * screen collects — so a fixture about something else can reach `finalizeDeal`.
  * Must run before the deal closes (closing refuses new costs).
  */
+type AsIdentity = ReturnType<TestConvex<typeof schema>["withIdentity"]>;
+
 export async function recordReconciledZeroCost(
-  as: { mutation: (ref: any, args: any) => Promise<any> },
-  api: any,
-  orgId: unknown,
-  applicationId: unknown,
+  as: AsIdentity,
+  api: typeof ApiRef,
+  orgId: Id<"organizations">,
+  applicationId: Id<"financeApplications">,
   /** Reconciling takes a different authority from recording; defaults to `as`. */
-  asReconciler: { mutation: (ref: any, args: any) => Promise<any> } = as
+  asReconciler: AsIdentity = as
 ): Promise<void> {
   const feeId = await as.mutation(api.financeDealCosts.recordDealFee, {
     orgId,

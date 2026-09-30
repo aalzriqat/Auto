@@ -398,13 +398,8 @@ async function settlementPayerForApplication(
   ctx: QueryCtx | MutationCtx,
   app: Doc<"financeApplications">
 ): Promise<SettlementPayer> {
-  let quoteMode = app.quoteModeAtSubmission;
-  if (quoteMode === undefined) {
-    const quote = await ctx.db.get(app.quoteId);
-    if (quote && quote.orgId === app.orgId) quoteMode = quote.mode;
-  }
   return settlementPayer({
-    quoteMode,
+    quoteMode: await dealModeOf(ctx, app),
     financeCompanyId: app.companyId,
     manualProviderName: app.manualFinanceSnapshot?.providerName,
   });
@@ -747,7 +742,12 @@ function resolveFinancierObligation(
     : "OPEN";
 }
 
-async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">) {
+/**
+ * The org-checked finalized sale, the vehicle, whether the sale is an agent
+ * sale, and the resolved route. The ONE loader behind the cockpit and the
+ * `confirmDisbursement` guard, so they cannot compute different routes.
+ */
+async function loadDealRoute(ctx: QueryCtx | MutationCtx, app: Doc<"financeApplications">) {
   const vehicle = await ctx.db.get(app.vehicleId);
   /**
    * ⚠️ SCRUM-42 — through the SHARED classifier once a sale exists.
@@ -793,11 +793,13 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
       })
     : vehicle != null && isConsignedAgentSale(vehicle);
 
-  const { routeKnown, settlesDirect, saleCancelled } = resolveDealRoute(app, {
-    vehicle,
-    consigned,
-    sale,
-  });
+  const route = resolveDealRoute(app, { vehicle, consigned, sale });
+  return { vehicle, sale, consigned, route };
+}
+
+async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">) {
+  const { vehicle, sale, consigned, route } = await loadDealRoute(ctx, app);
+  const { routeKnown, settlesDirect, saleCancelled } = route;
 
   const supplierClaim = app.finalizedSaleId
     ? (
@@ -837,7 +839,11 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
     app,
     { routeKnown, settlesDirect, saleCancelled },
     sale,
-    await dealModeOf(ctx, app)
+    // Only a CLOSED, company-less deal with a finalized sale can resolve NONE,
+    // and only then does the mode matter (see `resolveFinancierLeg`).
+    app.status === "CLOSED" && !app.companyId && app.finalizedSaleId !== undefined
+      ? await dealModeOf(ctx, app)
+      : undefined
   );
   const financierObligation = resolveFinancierObligation(app, settlesDirect, financierLeg);
 
@@ -4538,15 +4544,13 @@ export const confirmDisbursement = mutation({
         if (!app.companyId) {
           // Same resolver as the cockpit, so the screen and this guard cannot
           // disagree about whether a finance company pays on this deal.
-          const saleRow = app.finalizedSaleId ? await ctx.db.get(app.finalizedSaleId) : null;
-          const sale = saleRow && saleRow.orgId === app.orgId ? saleRow : null;
-          const route = resolveDealRoute(app, { vehicle: null, consigned: false, sale });
-          if (resolveFinancierLeg(app, route, sale, await dealModeOf(ctx, app)) === "NONE") {
-            throw new ConvexError(
-              "No finance company pays the dealership on this deal, so there is no disbursement to confirm."
-            );
-          }
-          throw new ConvexError("This application has no finance company — no disbursement expected.");
+          const { sale, route } = await loadDealRoute(ctx, app);
+          const leg = resolveFinancierLeg(app, route, sale, await dealModeOf(ctx, app));
+          throw new ConvexError(
+            leg === "NONE"
+              ? "No finance company pays the dealership on this deal, so there is no disbursement to confirm."
+              : "This application has no finance company — no disbursement expected."
+          );
         }
         if (args.disbursedAmountMinor <= 0) throw new ConvexError("Disbursement amount must be positive.");
 

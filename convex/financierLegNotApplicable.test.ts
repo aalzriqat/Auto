@@ -1,5 +1,5 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
-import { convexTestWithComponents } from "../test-utils/convexTest";
+import { convexTestWithComponents, recordReconciledZeroCost } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -171,30 +171,18 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
       })
     );
     if (opts.reconciledFee) {
-      await reconcileZeroFee(s, applicationId);
+      await recordReconciledZeroCost(s.asOwner, api, s.orgId, applicationId);
       await s.t.run((ctx) => ctx.db.patch(applicationId, closedFields));
     }
     return { applicationId, finalizedSaleId };
   }
 
-  async function reconcileZeroFee(s: Seed, applicationId: Id<"financeApplications">) {
-    const feeId = await s.asOwner.mutation(api.financeDealCosts.recordDealFee, {
+  async function confirm(s: Seed, applicationId: Id<"financeApplications">) {
+    return s.asOwner.mutation(api.applications.confirmDisbursement, {
       orgId: s.orgId,
       applicationId,
-      feeType: "OTHER_CLOSING_EXPENSE",
-      paidBy: "DEALER",
-      paidTo: "OTHER",
-      accountingTreatment: "SELLING_EXPENSE",
-      deductedFromSettlement: false,
-      actualAmountMinor: 0,
-      description: "No closing costs.",
-      expectedCurrency: "JOD",
+      disbursedAmountMinor: 1_000,
       idempotencyKey: crypto.randomUUID(),
-    });
-    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, {
-      orgId: s.orgId,
-      feeId,
-      notes: "Nothing to match.",
     });
   }
 
@@ -222,7 +210,6 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
       const s = await seed(`waits_${mode}`);
       const { applicationId } = await insertDeal(s, { mode });
       const { disbursement, settlement } = await stagesOf(s, applicationId);
-      expect(disbursement.state).not.toBe("NOT_APPLICABLE");
       expect(disbursement.state).toBe("BLOCKED");
       expect(settlement.state).not.toBe("COMPLETE");
     });
@@ -230,20 +217,14 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
     test("confirmDisbursement keeps the pre-existing no-finance-company refusal, not the NONE one", async () => {
       const s = await seed(`refwait_${mode}`);
       const { applicationId } = await insertDeal(s, { mode });
-      const attempt = s.asOwner.mutation(api.applications.confirmDisbursement, {
-        orgId: s.orgId,
-        applicationId,
-        disbursedAmountMinor: 1_000,
-        idempotencyKey: crypto.randomUUID(),
-      });
+      const attempt = confirm(s, applicationId);
       await expect(attempt).rejects.toThrow(/no finance company — no disbursement expected/i);
       await expect(attempt).rejects.not.toThrow(/no finance company pays the dealership/i);
     });
   });
 
-  describe.each<{ name: string; mode: Mode }>([
-    { name: "an internal instalment", mode: "INTERNAL_INSTALLMENT" },
-  ])("$name, closed through the dealership with a completed sale", ({ mode }) => {
+  describe("an internal instalment, closed through the dealership with a completed sale", () => {
+    const mode: Mode = "INTERNAL_INSTALLMENT";
     test("DISBURSEMENT is NOT_APPLICABLE, never blocked and never complete", async () => {
       const s = await seed(`na_${mode}`);
       const { applicationId } = await insertDeal(s, { mode });
@@ -335,7 +316,6 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
     const s = await seed("missingsale");
     const { applicationId } = await insertDeal(s, { sale: "deleted" });
     const { disbursement, settlement } = await stagesOf(s, applicationId);
-    expect(disbursement.state).not.toBe("NOT_APPLICABLE");
     expect(disbursement.state).toBe("BLOCKED");
     expect(settlement.state).not.toBe("COMPLETE");
   });
@@ -398,14 +378,7 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
     const s = await seed("refuse");
     const { applicationId } = await insertDeal(s);
     expect((await stagesOf(s, applicationId)).disbursement.state).toBe("NOT_APPLICABLE");
-    await expect(
-      s.asOwner.mutation(api.applications.confirmDisbursement, {
-        orgId: s.orgId,
-        applicationId,
-        disbursedAmountMinor: 1_000,
-        idempotencyKey: crypto.randomUUID(),
-      })
-    ).rejects.toThrow(/no finance company pays the dealership/i);
+    await expect(confirm(s, applicationId)).rejects.toThrow(/no finance company pays the dealership/i);
     const after = await s.t.run((ctx) => ctx.db.get(applicationId));
     expect(after?.disbursedAt).toBeUndefined();
   });
@@ -413,14 +386,7 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
   test("confirmDisbursement on an UNKNOWN deal keeps refusing", async () => {
     const s = await seed("refuseunknown");
     const { applicationId } = await insertDeal(s, { sale: "deleted" });
-    await expect(
-      s.asOwner.mutation(api.applications.confirmDisbursement, {
-        orgId: s.orgId,
-        applicationId,
-        disbursedAmountMinor: 1_000,
-        idempotencyKey: crypto.randomUUID(),
-      })
-    ).rejects.toThrow();
+    await expect(confirm(s, applicationId)).rejects.toThrow();
   });
 
   // ── 9. L-1: STOPPED beats NOT_APPLICABLE; no orphaned PENDING; allComplete ─
@@ -567,7 +533,7 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
     test("positive control: a reconciled zero line makes it READY, it finalizes, and the rail reads finished", async () => {
       const s = await seed("cc_ready");
       const applicationId = await readyToFinalize(s);
-      await reconcileZeroFee(s, applicationId);
+      await recordReconciledZeroCost(s.asOwner, api, s.orgId, applicationId);
       expect((await costsCheck(s, applicationId)).status).toBe("READY");
       await finalize(s, applicationId);
       const after = await s.t.run((ctx) => ctx.db.get(applicationId));
