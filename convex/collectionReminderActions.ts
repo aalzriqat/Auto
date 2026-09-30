@@ -62,6 +62,16 @@ export const sendCollectionReminder = internalAction({
       return { success: false };
     }
 
+    // SCRUM-447 D5': never send a finance-company cheque reminder to the customer.
+    if (payload.fcLineageSuppressed) {
+      await ctx.runMutation(internal.collections.markReminderResult, {
+        reminderId: args.reminderId,
+        status: "SKIPPED",
+        error: "Finance-company cheque — not chased from the customer.",
+      });
+      return { success: false, skipped: true };
+    }
+
     const type = reminderNotificationType(payload.reminder.messageType);
     const data = reminderData(payload);
     const locale: "en" | "ar" = "ar";

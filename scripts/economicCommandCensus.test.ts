@@ -53,6 +53,8 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "applications.finalizeDeal": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "applications.repairQuoteEconomicsLineage": { bucket: "NON_ECONOMIC", mechanism: "fills missing quotation lineage fields after exact quote and tenant validation; it creates no payment, receivable, journal, or accounting event" },
   "applications.registerExpectedPayment": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
+  "applications.correctExpectedPayment": { bucket: "NON_ECONOMIC", mechanism: "SCRUM-447: withdraws an unposted expected payment and its HELD cheque (status to CANCELLED); refuses DEPOSITED/CLEARED rows and any receivable allocation; no posting call is reachable from its own body" },
+  "applications.attestChequeFace": { bucket: "NON_ECONOMIC", mechanism: "SCRUM-447: records the operator-attested face on a live unposted cheque (amountMinor/currency/attestedBy); never touches `amount` and posts nothing; the face only gates confirmDisbursement" },
   "applications.registerVehicleHandover": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "applications.setSupplierSettlementRoute": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "applications.updateStatus": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
@@ -289,8 +291,11 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // then deleted outright with its classification entry.
     // 121 → 122: `depositRequests.confirm` (SCRUM-444); `request` writes only a pending row and is not in the population.
     // 122 → 123: `financeDealCosts.recordDirectFeePayment` (SCRUM-443).
+    // 123 → 125: `applications.correctExpectedPayment` and
+    // `applications.attestChequeFace` (SCRUM-447).
     // 123 -> 126: `financeCompanyForward.recordFinanceCompanyForward`, `.reverseFinanceCompanyForward` and `.reportFinanceCompanyForwardReturned` (SCRUM-435).
-    expect(population).toHaveLength(126);
+    // 126 -> 128: the two SCRUM-447 mutations above, on top of the SCRUM-435 three (merge of origin/main into SCRUM-447).
+    expect(population).toHaveLength(128);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {
