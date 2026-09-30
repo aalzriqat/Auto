@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { APPROVER_AUTH_FILE, USER_AUTH_FILE } from "../utils";
-import { buildDealWithRecordedEconomics } from "../fixtures/financedDeal";
+import { buildDealWithRecordedEconomics, openDealDetails } from "../fixtures/financedDeal";
 
 /**
  * The deal cockpit's reading measure, in a real engine, in both languages, at
@@ -202,6 +202,11 @@ test.describe("the deal cockpit's reading measure", () => {
           await expect
             .poll(() => page.evaluate(() => document.documentElement.dir))
             .toBe(locale === "ar" ? "rtl" : "ltr");
+
+          // The fixture deal is at handover, so the decision card is in the
+          // collapsed "Deal details" record (SCRUM-417 UX3): `hidden` rows lay
+          // out at width 0 and measure as nothing. Open it, as an operator would.
+          await openDealDetails(page);
 
           // The split rows arrive on their OWN query, not the one that renders
           // the next-step card, so `deal-next-step` being visible says nothing
