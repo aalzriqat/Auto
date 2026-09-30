@@ -32,7 +32,7 @@ import {
   commissionAccountingDate,
 } from "../accounting/workflowHooks";
 import { computeResoldProductMargin, type FinancedSalePlanPayload } from "../accounting/postingRules";
-import { toMinorUnits, fromMinorUnits } from "./money";
+import { toMinorUnits, fromMinorUnits, denominationOf, isValidMinorAmount } from "./money";
 import { assertProfitApproved, saleRequiresMinimumProfit } from "./profitApproval";
 import { computeVehicleCapitalizedCost, vehicleHasCostBasis } from "./vehicleCost";
 import { computeConsignedSupplierPosition } from "../../lib/financingEconomics";
@@ -160,6 +160,25 @@ async function quoteLineIndexFor(
 }
 
 type CommissionBase = { approvedMinor: number; contributionMinor: number; currency: string };
+
+/**
+ * SCRUM-390 (OR-5): G and C in MAJOR units, or null when the recorded pair
+ * cannot be trusted - a currency other than the organization's, an unsupported
+ * currency, or an amount that is not a non-negative safe integer. One check for
+ * completion and recalculation, so neither can accept what the other refuses;
+ * each caller words its own refusal.
+ */
+export function financedMarginOf(
+  base: CommissionBase,
+  orgCurrency: string
+): { approved: number; contribution: number } | null {
+  if (base.currency !== orgCurrency || !denominationOf(base.currency)) return null;
+  if (!isValidMinorAmount(base.approvedMinor) || !isValidMinorAmount(base.contributionMinor)) return null;
+  return {
+    approved: fromMinorUnits(base.approvedMinor, base.currency),
+    contribution: fromMinorUnits(base.contributionMinor, base.currency),
+  };
+}
 
 type PreparedSaleCompletion = {
   vehicle: Doc<"vehicles">;
@@ -342,22 +361,16 @@ async function prepareSaleCompletion(
   // SCRUM-390 (OR-5): applies to a completion of a dealer-owned car only; a consigned
   // sale keeps its frozen-margin basis and a draft commits nothing.
   let commissionBase: CommissionBase | undefined;
+  let financedMargin: { approved: number; contribution: number } | undefined;
   if (intent === "COMPLETION" && args.commissionBase && !isConsignedAgentSale(vehicle)) {
-    const base = args.commissionBase;
-    if (base.currency !== currency) {
+    const margin = financedMarginOf(args.commissionBase, currency);
+    if (!margin) {
       throw new ConvexError(
-        `This deal's financing figures are recorded in ${base.currency} but the dealership now reports in ${currency}, so the commissionable vehicle margin cannot be worked out. Settle the deal's currency before completing it.`
+        `This deal's financing figures (recorded in ${args.commissionBase.currency}) cannot be used to work out the commissionable vehicle margin in the dealership's currency (${currency}). Settle the deal's currency and figures before completing it.`
       );
     }
-    if (
-      !Number.isSafeInteger(base.approvedMinor) ||
-      base.approvedMinor < 0 ||
-      !Number.isSafeInteger(base.contributionMinor) ||
-      base.contributionMinor < 0
-    ) {
-      throw new ConvexError("The approved amount or the contribution recorded on this deal is not a usable amount.");
-    }
-    commissionBase = base;
+    commissionBase = args.commissionBase;
+    financedMargin = margin;
   }
 
   let accrueAtCompletion = false;
@@ -381,12 +394,7 @@ async function prepareSaleCompletion(
           : undefined,
       settlementRoute: args.supplierSettlementRoute,
       externallyFinanced: args.financingType === "FINANCED" || args.financingType === "LEASE",
-      financedMargin: commissionBase
-        ? {
-            approved: fromMinorUnits(commissionBase.approvedMinor, currency),
-            contribution: fromMinorUnits(commissionBase.contributionMinor, currency),
-          }
-        : undefined,
+      financedMargin,
     });
     accrueAtCompletion = commissionAmount != null;
   }
@@ -517,16 +525,15 @@ export async function computeAutoCommissionAmount(
     // capitalized reconditioning expenses) so commission, the GL, and the
     // operational reports all show the same margin for a sale.
     const vehicleCost = await computeVehicleCapitalizedCost(ctx, args.vehicle);
-    grossProfit = args.financedMargin
-      ? Math.max(0, args.financedMargin.approved - args.financedMargin.contribution - vehicleCost)
-      : commissionableEarnings({
-          salePrice: args.salePrice,
-          vehicleCost,
-          vehicle: args.vehicle,
-          supplierGrossReceipt: args.supplierGrossReceipt,
-          settlementRoute: args.settlementRoute,
-          externallyFinanced: args.externallyFinanced,
-        });
+    grossProfit = commissionableEarnings({
+      salePrice: args.salePrice,
+      vehicleCost,
+      vehicle: args.vehicle,
+      supplierGrossReceipt: args.supplierGrossReceipt,
+      settlementRoute: args.settlementRoute,
+      externallyFinanced: args.externallyFinanced,
+      financedMargin: args.financedMargin,
+    });
   }
   if (args.commissionMode === "AUTO_TIERS") {
     return calculateCommissionFromTiers(grossProfit, args.commissionTiers);
@@ -560,7 +567,10 @@ export async function computeAutoCommissionAmount(
  *
  * Every other case is unchanged and deliberately so:
  *   - an owned sale — the dealership sells its own car and the whole spread is
- *     its earning;
+ *     its earning. Except (SCRUM-390, OR-5) an owned sale completed under a
+ *     financed-sale plan v2, whose realized basis is G - C: the finance
+ *     company's approved amount less the dealership's forward contribution,
+ *     both frozen on the sale row. Never below 0 after cost;
  *   - a consigned THROUGH_DEALERSHIP sale — the dealership collects the gross
  *     and the customer is contractually liable for the full sale price, so the
  *     spread over the entitlement is genuinely recognized;
@@ -586,6 +596,8 @@ function commissionableEarnings(args: {
   supplierGrossReceipt?: number;
   settlementRoute?: ConsignedSettlementRoute;
   externallyFinanced: boolean;
+  /** OR-5: G and C in major units; owned sales only (a consigned sale never receives it). */
+  financedMargin?: { approved: number; contribution: number };
 }): number {
   const settlesDirect = !dealershipCollectsGross(
     consignedSettlementRoute({ supplierSettlementRoute: args.settlementRoute })
@@ -598,7 +610,9 @@ function commissionableEarnings(args: {
   }
   const realizedBasis = consignedDirect
     ? (args.supplierGrossReceipt ?? args.salePrice)
-    : args.salePrice;
+    : args.financedMargin
+      ? args.financedMargin.approved - args.financedMargin.contribution
+      : args.salePrice;
   return Math.max(0, realizedBasis - args.vehicleCost);
 }
 
@@ -635,14 +649,9 @@ async function insertSaleRecord(
     gapCost: args.gapCost,
     gapTermMonths: args.gapTermMonths,
     commissionAmount,
-    // SCRUM-390 (OR-5): frozen only on a completion that used the margin base.
-    ...(status === "COMPLETED" && prepared.commissionBase
-      ? {
-          commissionBaseApprovedMinor: prepared.commissionBase.approvedMinor,
-          commissionBaseContributionMinor: prepared.commissionBase.contributionMinor,
-          commissionBaseCurrency: prepared.commissionBase.currency,
-        }
-      : {}),
+    // SCRUM-390 (OR-5): set only by a COMPLETION that used the margin base
+    // (prepareSaleCompletion leaves it undefined for a draft).
+    commissionBase: prepared.commissionBase,
     quoteId: args.quoteId,
     applicationId: args.applicationId,
     leadId: prepared.leadId,

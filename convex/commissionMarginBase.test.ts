@@ -225,11 +225,7 @@ describe("SCRUM-390 OR-5: commissionable vehicle margin on a v2 financed sale", 
     expect(app?.financedSalePlanVersion).toBe(2);
     // The old base (sale price - cost = 3,000) would pay 300.
     expect(sale?.commissionAmount).toBeCloseTo(112.5, 6);
-    expect(sale).toMatchObject({
-      commissionBaseApprovedMinor: 12_500_000,
-      commissionBaseContributionMinor: 1_375_000,
-      commissionBaseCurrency: "JOD",
-    });
+    expect(sale?.commissionBase).toEqual({ approvedMinor: 12_500_000, contributionMinor: 1_375_000, currency: "JOD" });
   });
 
   test("2. manual company with a held deposit applied: G 12,000, S 1,650, H 500, C 1,150, cost 10,000 -> 850 -> 85", async () => {
@@ -238,11 +234,7 @@ describe("SCRUM-390 OR-5: commissionable vehicle margin on a v2 financed sale", 
     await finalize(s, applicationId);
     const sale = await saleOf(s, applicationId);
     expect(sale?.commissionAmount).toBeCloseTo(85, 6);
-    expect(sale).toMatchObject({
-      commissionBaseApprovedMinor: 12_000_000,
-      commissionBaseContributionMinor: 1_150_000,
-      commissionBaseCurrency: "JOD",
-    });
+    expect(sale?.commissionBase).toEqual({ approvedMinor: 12_000_000, contributionMinor: 1_150_000, currency: "JOD" });
   });
 
   test("3. no cost at finalize: commission is null; recalculation after the cost is recorded uses the FROZEN G and C, not the application", async () => {
@@ -251,8 +243,7 @@ describe("SCRUM-390 OR-5: commissionable vehicle margin on a v2 financed sale", 
     await finalize(s, applicationId);
     const before = await saleOf(s, applicationId);
     expect(before?.commissionAmount).toBeUndefined();
-    expect(before?.commissionAmount ?? null).toBeNull();
-    expect(before).toMatchObject({ commissionBaseApprovedMinor: 12_500_000, commissionBaseContributionMinor: 1_375_000 });
+    expect(before?.commissionBase).toMatchObject({ approvedMinor: 12_500_000, contributionMinor: 1_375_000 });
 
     // The application moves AFTER completion: nothing may be re-derived from it.
     await s.t.run((ctx) =>
@@ -280,33 +271,22 @@ describe("SCRUM-390 OR-5: commissionable vehicle margin on a v2 financed sale", 
     await finalize(s, applicationId);
     const sale = await saleOf(s, applicationId);
     expect(sale?.commissionAmount).toBeUndefined();
-    expect(sale?.commissionAmount ?? null).toBeNull();
   });
 
-  test("4b. a FINANCED sale with no application (sales.create) keeps sale price - cost", async () => {
-    const s = await seedDealership("ctl_fin", { cost: 10_000, price: 13_000 });
+  test.each([
+    ["4b. a FINANCED sale with no application (sales.create)", "FINANCED"],
+    ["4c. a cash sale", "CASH"],
+  ] as const)("%s keeps sale price - cost and freezes no commissionBase", async (_label, financingType) => {
+    const s = await seedDealership(`ctl_${financingType}`, { cost: 10_000, price: 13_000 });
     const saleId = await s.as.mutation(api.sales.create, {
       idempotencyKey: crypto.randomUUID(), orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId,
-      salespersonId: s.userId, salePrice: 13_000, saleDate: Date.now(), status: "COMPLETED", financingType: "FINANCED",
+      salespersonId: s.userId, salePrice: 13_000, saleDate: Date.now(), status: "COMPLETED", financingType,
     });
     const sale = await s.t.run((ctx) => ctx.db.get(saleId));
     expect(sale?.commissionAmount).toBeCloseTo(300, 6);
-    expect(sale?.commissionBaseApprovedMinor).toBeUndefined();
-    expect(sale?.commissionBaseContributionMinor).toBeUndefined();
+    expect(sale?.commissionBase).toBeUndefined();
   });
-
-  test("4c. a cash sale is unchanged", async () => {
-    const s = await seedDealership("ctl_cash", { cost: 10_000, price: 13_000 });
-    const saleId = await s.as.mutation(api.sales.create, {
-      idempotencyKey: crypto.randomUUID(), orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId,
-      salespersonId: s.userId, salePrice: 13_000, saleDate: Date.now(), status: "COMPLETED", financingType: "CASH",
-    });
-    const sale = await s.t.run((ctx) => ctx.db.get(saleId));
-    expect(sale?.commissionAmount).toBeCloseTo(300, 6);
-    expect(sale?.commissionBaseApprovedMinor).toBeUndefined();
-  });
-
-  test("6a. control: a consigned financed v2 deal through finalizeDeal keeps today's basis and freezes no commissionBase*", async () => {
+  test("6a. control: a consigned financed v2 deal through finalizeDeal keeps today's basis and freezes no commissionBase", async () => {
     const s = await seedDealership("consigned", { cost: 10_000, price: CONFIGURED.price, sourced: true });
     const { applicationId } = await readyConfiguredDeal(s, CONFIGURED);
     await s.t.run((ctx) => ctx.db.patch(applicationId, { supplierSettlementRoute: "THROUGH_DEALERSHIP" }));
@@ -315,9 +295,7 @@ describe("SCRUM-390 OR-5: commissionable vehicle margin on a v2 financed sale", 
     // The deal really is a v2 plan, so the exclusion is the ownership check and not a missing plan.
     expect(app?.financedSalePlanVersion).toBe(2);
     const sale = await saleOf(s, applicationId);
-    expect(sale?.commissionBaseApprovedMinor).toBeUndefined();
-    expect(sale?.commissionBaseContributionMinor).toBeUndefined();
-    expect(sale?.commissionBaseCurrency).toBeUndefined();
+    expect(sale?.commissionBase).toBeUndefined();
     // Today's consigned basis: sale price 13,000 - entitlement 10,000 = 3,000 at 10%.
     // (The new base would give 112.5.)
     expect(sale?.commissionAmount).toBeCloseTo(300, 6);
@@ -328,7 +306,7 @@ describe("SCRUM-390 OR-5: commissionable vehicle margin on a v2 financed sale", 
     const { applicationId } = await readyConfiguredDeal(s, CONFIGURED);
     await finalize(s, applicationId);
     const sale = await saleOf(s, applicationId);
-    expect(sale?.commissionAmount ?? null).toBeNull();
+    expect(sale?.commissionAmount).toBeUndefined();
     await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { purchasePrice: 10_000 }));
     return { s, saleId: sale!._id };
   }
@@ -343,16 +321,22 @@ describe("SCRUM-390 OR-5: commissionable vehicle margin on a v2 financed sale", 
       /different currency/i
     );
     const after = await s.t.run((ctx) => ctx.db.get(saleId));
-    expect(after?.commissionAmount ?? null).toBeNull();
+    expect(after?.commissionAmount).toBeUndefined();
   });
 
-  test("6c. recalculateCommission refuses a partial frozen record instead of falling back to salePrice - cost", async () => {
-    const { s, saleId } = await frozenNoCostSale("recalcpartial");
-    await s.t.run((ctx) => ctx.db.patch(saleId, { commissionBaseContributionMinor: undefined }));
+  test.each([
+    ["fractional", 1_375_000.5],
+    ["negative", -1],
+    ["not finite", Number.NaN],
+  ])("6c. recalculateCommission refuses a %s frozen amount instead of falling back to salePrice - cost", async (label, bad) => {
+    const { s, saleId } = await frozenNoCostSale(`recalcbad${label.replace(/\W/g, "")}`);
+    await s.t.run((ctx) =>
+      ctx.db.patch(saleId, { commissionBase: { approvedMinor: 12_500_000, contributionMinor: bad, currency: "JOD" } })
+    );
     await expect(s.as.mutation(api.sales.recalculateCommission, { orgId: s.orgId, saleId })).rejects.toThrow(
-      /incomplete/i
+      /unusable amount/i
     );
     const after = await s.t.run((ctx) => ctx.db.get(saleId));
-    expect(after?.commissionAmount ?? null).toBeNull();
+    expect(after?.commissionAmount).toBeUndefined();
   });
 });

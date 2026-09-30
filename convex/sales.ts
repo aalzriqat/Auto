@@ -32,7 +32,7 @@ import {
 } from "./utils/financingEconomics";
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
-import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN } from "./utils/saleCompletion";
+import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompanyForward";
@@ -1975,27 +1975,15 @@ export const recalculateCommission = mutation({
       // approval or letter can move afterwards. Absent (any other sale) keeps
       // salePrice - cost. A partial or foreign-currency record is refused rather
       // than silently falling back to the old base.
-      const hasBase =
-        sale.commissionBaseApprovedMinor !== undefined ||
-        sale.commissionBaseContributionMinor !== undefined ||
-        sale.commissionBaseCurrency !== undefined;
       let financedMargin: { approved: number; contribution: number } | undefined;
-      if (hasBase && !isConsignedAgentSale(vehicle)) {
-        const baseCurrency = sale.commissionBaseCurrency;
-        if (
-          sale.commissionBaseApprovedMinor === undefined ||
-          sale.commissionBaseContributionMinor === undefined ||
-          baseCurrency === undefined ||
-          baseCurrency !== (await getOrgCurrency(ctx, args.orgId))
-        ) {
+      if (sale.commissionBase && !isConsignedAgentSale(vehicle)) {
+        const margin = financedMarginOf(sale.commissionBase, orgSettings?.currency ?? "JOD");
+        if (!margin) {
           throw new ConvexError(
-            "This sale's recorded commissionable margin is incomplete or in a different currency from the organization's, so a commission cannot be worked out. Have the deal's figures corrected before recalculating; the existing commission has been left untouched."
+            "This sale's recorded commissionable margin is in a different currency from the organization's or holds an unusable amount, so a commission cannot be worked out. Have the deal's figures corrected before recalculating; the existing commission has been left untouched."
           );
         }
-        financedMargin = {
-          approved: fromMinorUnits(sale.commissionBaseApprovedMinor, baseCurrency),
-          contribution: fromMinorUnits(sale.commissionBaseContributionMinor, baseCurrency),
-        };
+        financedMargin = margin;
       }
 
       const amount = await computeAutoCommissionAmount(ctx, {
