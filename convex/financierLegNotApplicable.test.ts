@@ -102,7 +102,8 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
   }
 
   async function insertDeal(s: Seed, opts: DealOpts = {}) {
-    const mode = opts.mode ?? "MANUAL_FINANCE_COMPANY";
+    // INTERNAL_INSTALLMENT is the only mode with no financier leg (OR-1/OR-2), so it is the default for the NOT_APPLICABLE fixtures.
+    const mode = opts.mode ?? "INTERNAL_INSTALLMENT";
     const status = opts.status ?? "CLOSED";
     const saleKind = opts.sale ?? "COMPLETED";
     const companyId = opts.configured
@@ -209,9 +210,38 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
   }
 
   // ── 1. the population the defect is about ────────────────────────────────
+  // OR-1 / OR-2 (SCRUM-486 c21360): a MANUAL finance company and a LEASE company
+  // owe the dealership the full amount, so those deals are NEVER NOT_APPLICABLE.
   describe.each<{ name: string; mode: Mode }>([
     { name: "a manual finance company", mode: "MANUAL_FINANCE_COMPANY" },
     { name: "a lease", mode: "LEASE" },
+    { name: "a CASH-mode deal", mode: "CASH" },
+    { name: "a mode-less application", mode: "NONE" },
+  ])("$name, closed through the dealership with a completed sale, no company", ({ mode }) => {
+    test("DISBURSEMENT is NOT NOT_APPLICABLE: it keeps waiting (UNKNOWN evidence is never NONE)", async () => {
+      const s = await seed(`waits_${mode}`);
+      const { applicationId } = await insertDeal(s, { mode });
+      const { disbursement, settlement } = await stagesOf(s, applicationId);
+      expect(disbursement.state).not.toBe("NOT_APPLICABLE");
+      expect(disbursement.state).toBe("BLOCKED");
+      expect(settlement.state).not.toBe("COMPLETE");
+    });
+
+    test("confirmDisbursement keeps the pre-existing no-finance-company refusal, not the NONE one", async () => {
+      const s = await seed(`refwait_${mode}`);
+      const { applicationId } = await insertDeal(s, { mode });
+      const attempt = s.asOwner.mutation(api.applications.confirmDisbursement, {
+        orgId: s.orgId,
+        applicationId,
+        disbursedAmountMinor: 1_000,
+        idempotencyKey: crypto.randomUUID(),
+      });
+      await expect(attempt).rejects.toThrow(/no finance company — no disbursement expected/i);
+      await expect(attempt).rejects.not.toThrow(/no finance company pays the dealership/i);
+    });
+  });
+
+  describe.each<{ name: string; mode: Mode }>([
     { name: "an internal instalment", mode: "INTERNAL_INSTALLMENT" },
   ])("$name, closed through the dealership with a completed sale", ({ mode }) => {
     test("DISBURSEMENT is NOT_APPLICABLE, never blocked and never complete", async () => {
@@ -248,11 +278,12 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
     });
   });
 
-  test("the unnamed manual finance company case reaches the same verdict as a named one", async () => {
+  test("the unnamed manual finance company case is still not NOT_APPLICABLE", async () => {
     const s = await seed("unnamed");
     const { applicationId } = await insertDeal(s, { mode: "MANUAL_FINANCE_COMPANY" });
     await s.t.run((ctx) => ctx.db.patch(applicationId, { manualFinanceSnapshot: undefined }));
-    expect((await stagesOf(s, applicationId)).disbursement.state).toBe("NOT_APPLICABLE");
+    // OR-1: a manual finance company owes the dealership, named or not.
+    expect((await stagesOf(s, applicationId)).disbursement.state).not.toBe("NOT_APPLICABLE");
   });
 
   test("a legacy row with no lifecycle dimensions recorded reads the same", async () => {

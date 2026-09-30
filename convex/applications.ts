@@ -40,6 +40,8 @@ import {
   type ClosingReadiness,
   type ClosingReadinessCheck,
   type ClosingReadinessCheckKey,
+  type DealMode,
+  dealModeOf,
 } from "./utils/financedSaleRecognition";
 import {
   reasonOf,
@@ -658,11 +660,16 @@ async function resolveSupplierObligation(
  * Invariant: `NONE` is returned only when the server can PROVE, from records
  * that cannot drift under the deal, that no finance company ever pays the
  * dealership on it — the application is CLOSED, its linked sale exists in this
- * org and is COMPLETED, that sale settled through the dealership, and the
- * application names no finance company (so `financedSaleRecognitionApplies`
- * never opened a finance-company receivable). Every other shape of missing or
- * unreadable evidence is `UNKNOWN`, which keeps today's behaviour; it is never
- * read as `NONE`.
+ * org and is COMPLETED, that sale settled through the dealership, the
+ * application names no finance company, AND the deal's mode is exactly
+ * `INTERNAL_INSTALLMENT` (the dealership itself finances; the customer is the
+ * debtor). Owner rulings OR-1 / OR-2 (SCRUM-486 c21360): a MANUAL finance
+ * company and a LEASE company that purchases the vehicle owe the dealership the
+ * full amount exactly like a configured one, so MANUAL_FINANCE_COMPANY and
+ * LEASE with no `companyId` are money EXPECTED from a financier, never `NONE`.
+ * CASH, an absent or unreadable mode, and every other shape of missing evidence
+ * are `UNKNOWN`, which keeps today's waiting behaviour; unknown evidence is
+ * never read as `NONE`.
  *
  * Deliberately NOT `NONE`: a configured company with a zero net (SCRUM-315), a
  * direct-to-supplier deal (the financier pays the supplier and its own stage
@@ -674,11 +681,13 @@ async function resolveSupplierObligation(
 function resolveFinancierLeg(
   app: Doc<"financeApplications">,
   route: { routeKnown: boolean; settlesDirect: boolean; saleCancelled: boolean },
-  sale: Doc<"sales"> | null
+  sale: Doc<"sales"> | null,
+  mode: DealMode | undefined
 ): FinancierLeg {
   if (
     app.status === "CLOSED" &&
     !app.companyId &&
+    mode === "INTERNAL_INSTALLMENT" &&
     app.finalizedSaleId !== undefined &&
     sale !== null &&
     sale.status === "COMPLETED" &&
@@ -824,7 +833,12 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
     supplierClaim,
     margin,
   });
-  const financierLeg = resolveFinancierLeg(app, { routeKnown, settlesDirect, saleCancelled }, sale);
+  const financierLeg = resolveFinancierLeg(
+    app,
+    { routeKnown, settlesDirect, saleCancelled },
+    sale,
+    await dealModeOf(ctx, app)
+  );
   const financierObligation = resolveFinancierObligation(app, settlesDirect, financierLeg);
 
   const obligations: SettlementObligations = routeKnown
@@ -4527,7 +4541,7 @@ export const confirmDisbursement = mutation({
           const saleRow = app.finalizedSaleId ? await ctx.db.get(app.finalizedSaleId) : null;
           const sale = saleRow && saleRow.orgId === app.orgId ? saleRow : null;
           const route = resolveDealRoute(app, { vehicle: null, consigned: false, sale });
-          if (resolveFinancierLeg(app, route, sale) === "NONE") {
+          if (resolveFinancierLeg(app, route, sale, await dealModeOf(ctx, app)) === "NONE") {
             throw new ConvexError(
               "No finance company pays the dealership on this deal, so there is no disbursement to confirm."
             );

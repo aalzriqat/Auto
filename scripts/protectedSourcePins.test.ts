@@ -723,9 +723,9 @@ describe("protected source content pins", () => {
       // SCRUM-435 RENEWAL 2026-09-29 (2): returned-after-transfer dead end. `dealCockpit` passes one more fact to `deriveDealStages` (`forwardExceptionOpen: forwardProof.returnedExceptionOpen`, 1 insertion) so the transfer stage stays open while a returned payment is owed; previous postimage bytes 247994, sha256 9a69210109ef40519d99e4d92d8db3cf88f2c11e2d093db64b233a2f8f33ba5a. Recomputed from the file with this test's own normalization.
       // SCRUM-435 RENEWAL 2026-09-30 (CodeRabbit #376): `mayCancelFinalized` also requires CREATE_FINANCE_APPLICATION, which `cancelApplication` checks at entry (1 insertion, cockpit flag only; no mutation, posting or permission-check change); previous postimage bytes 248058, sha256 7cbb3cdb52357ce09b306eb57ab40eedf4bfc35bc158e908f67eb2c3a5b85103. Recomputed from the file with this test's own normalization.
       // SCRUM-446 RENEWAL 2026-09-29: `resolveFinancierLeg` (DISBURSEMENT NOT_APPLICABLE only on proven evidence), the cancelled-sale guard on `moneySettled`, and the `confirmDisbursement` refusal wording; previous postimage bytes 243195, sha256 b42c6e1801d6af32ff2b66f67d46a71f30264f3b9fc7b19cbb17f36412e4e580. Recomputed from the file with this test's own normalization.
-      // SCRUM-446 RENEWAL 2026-09-30 (merge of origin/main): merged with origin/main (SCRUM-435 forward proof) so the pin below covers both. Recomputed from the merged file with this test's own normalization.
-      bytes: 251035,
-      sha256: "5685b0e13db8e5be0703f56dae95e6900723507f67080dcdb4002966f3f04916",
+      // SCRUM-446 RENEWAL 2026-09-30: `resolveFinancierLeg` takes the deal mode (`dealModeOf`) and returns NONE only for INTERNAL_INSTALLMENT (OR-1/OR-2, SCRUM-486 c21360); MANUAL_FINANCE_COMPANY, LEASE, CASH and mode-less deals stay UNKNOWN. Merged with origin/main (SCRUM-435 forward proof) so the pin below covers both. Recomputed from the merged file with this test's own normalization.
+      bytes: 251598,
+      sha256: "068aa9d4b4090407fbef8d68bd6703a1b79af70ca3a71ebdd2ac2e416de00ee9",
     },
     {
       /**

@@ -1333,9 +1333,11 @@ export type DealStageState =
  * - `EXPECTED`: a payment from a finance company is part of this deal, so the
  *   stage waits on the action that records it.
  * - `NONE`: PROVEN that none is. The application is CLOSED, its linked sale
- *   exists and is COMPLETED, that sale settled through the dealership, and the
- *   application names no finance company, so no finance-company receivable was
- *   ever opened.
+ *   exists and is COMPLETED, that sale settled through the dealership, the
+ *   application names no finance company, AND the deal's mode is exactly
+ *   `INTERNAL_INSTALLMENT` (the dealership itself finances). Owner rulings
+ *   OR-1 / OR-2 (SCRUM-486 c21360): a MANUAL finance company and a LEASE company
+ *   owe the dealership the full amount, so those modes are never `NONE`.
  * - `UNKNOWN`: the evidence is missing or unreadable. Behaves exactly as before
  *   this fact existed. It is never read as `NONE`.
  */
