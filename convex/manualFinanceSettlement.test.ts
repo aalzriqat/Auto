@@ -812,4 +812,28 @@ describe("SCRUM-27 R1 - the letter, G, the basis and the gap are one unit", () =
       expect(await refusalOf(enterLetter(s, applicationId, { financierName: placeholder }, NO_DEPOSIT))).toMatch(/placeholder/i);
     }
   });
+
+  test("R2-1: the mobile wizard's quote placeholders are refused as a payer name; nothing is written", async () => {
+    const s = await seedDealership("r2_l3m");
+    const { applicationId } = await manualApplication(s);
+    const before = await read(s, applicationId);
+    const overridesOf = () => s.t.run((ctx) => ctx.db.query("financeApplicationOverrides").collect());
+    const overridesBefore = (await overridesOf()).length;
+    const placeholders = [
+      "Other provider", "  other PROVIDER  ", "جهة أخرى", "  جهة أخرى ",
+      "Others (Manual)", "جهة أخرى (يدوي)",
+    ];
+    for (const placeholder of placeholders) {
+      expect(await refusalOf(enterLetter(s, applicationId, { financierName: placeholder }, NO_DEPOSIT))).toMatch(/placeholder/i);
+    }
+    const after = await read(s, applicationId);
+    expect(after?.manualApproval).toBeUndefined();
+    expect(after?.approvedDealerPurchaseAmountMinor).toBeUndefined();
+    expect(after).toEqual(before);
+    expect(await overridesOf()).toHaveLength(overridesBefore);
+
+    // Control: a real name is still accepted (the other L-tests use LETTER_NAME; this proves it on the same row).
+    await enterLetter(s, applicationId, { financierName: "Custom Bank" }, NO_DEPOSIT);
+    expect((await read(s, applicationId))?.manualApproval?.financierName).toBe("Custom Bank");
+  });
 });

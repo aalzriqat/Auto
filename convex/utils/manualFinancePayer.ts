@@ -23,10 +23,14 @@ export type ManualFinanceApplicationShape = Pick<
 /** The names the wizard invents when the operator types none. Never a real company. */
 const PLACEHOLDER_NAMES = new Set([
   "other finance option", "other", "others", "n/a", "na", "none", "unknown", "manual", "-",
-  // The manual-quote wizard sends the translated "OtherFinanceOption" label
+  // WEB: the manual-quote wizard sends the translated "OtherFinanceOption" label
   // (lib/i18n/domains/sales.ts: "Others" / "أخرى"), so the Arabic UI's
   // placeholder is an equally invented name.
   "أخرى", "خيار تمويل آخر",
+  // MOBILE: the sales wizard saves these as `manualProviderName`
+  // (apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:
+  // "Other provider" / "جهة أخرى"), and shows the "(manual)" display variants.
+  "other provider", "جهة أخرى", "others (manual)", "جهة أخرى (يدوي)",
 ]);
 
 export const MANUAL_PAYER_NAME_MAX_LENGTH = 120;
