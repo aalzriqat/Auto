@@ -400,16 +400,19 @@ describe("runVitestCoverageShards", () => {
       expect(new Set(sliced.map(key)).size).toBe(sliced.length);
     });
 
-    test.each([
+    const invalidSliceEnvs: Array<[Record<string, string>, string]> = [
       [{ AUTOFLOW_COVERAGE_PHASE: "slice" }, "AUTOFLOW_COVERAGE_PHASE must be one of"],
       [{ AUTOFLOW_COVERAGE_PHASE: "run" }, "AUTOFLOW_COVERAGE_SLICE is required with"],
       [{ AUTOFLOW_COVERAGE_SLICE: "1/4" }, "AUTOFLOW_COVERAGE_SLICE is required with"],
       [{ AUTOFLOW_COVERAGE_PHASE: "merge", AUTOFLOW_COVERAGE_SLICE: "1/4" }, "AUTOFLOW_COVERAGE_SLICE is required with"],
       ...["0/4", "5/4", "1/1", "1/17", "a/b", "2", " 1/4"].map(
-        (spec) =>
-          [{ AUTOFLOW_COVERAGE_PHASE: "run", AUTOFLOW_COVERAGE_SLICE: spec }, "AUTOFLOW_COVERAGE_SLICE must be"] as const,
+        (spec): [Record<string, string>, string] => [
+          { AUTOFLOW_COVERAGE_PHASE: "run", AUTOFLOW_COVERAGE_SLICE: spec },
+          "AUTOFLOW_COVERAGE_SLICE must be",
+        ],
       ),
-    ])("rejects %o before any subprocess", async (env, message) => {
+    ];
+    test.each(invalidSliceEnvs)("rejects %o before any subprocess", async (env, message) => {
       await expect(run("unit", env)).rejects.toThrow(message);
       expect(childBoundary.calls).toHaveLength(0);
     });
@@ -433,6 +436,14 @@ describe("runVitestCoverageShards", () => {
       writeBlobs(["unified-deal-authority.json", "sonar-1.json", "sonar-2.json", "unit-batch-1.json"]);
       await expect(run("sonar", { VITEST_COVERAGE_SHARDS: "2", AUTOFLOW_COVERAGE_PHASE: "merge" })).rejects.toThrow(
         "Missing: none. Unexpected: unit-batch-1.json.",
+      );
+      expect(childBoundary.calls).toHaveLength(0);
+    });
+
+    test("merge refuses a stray file of any extension, because Vitest merges every file in the directory", async () => {
+      writeBlobs(["unified-deal-authority.json", "sonar-1.json", "sonar-2.json", "stray.blob"]);
+      await expect(run("sonar", { VITEST_COVERAGE_SHARDS: "2", AUTOFLOW_COVERAGE_PHASE: "merge" })).rejects.toThrow(
+        "Missing: none. Unexpected: stray.blob.",
       );
       expect(childBoundary.calls).toHaveLength(0);
     });

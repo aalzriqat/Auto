@@ -175,9 +175,11 @@ function assertCompleteBlobSet() {
       ? unitBatches().map((_, index) => `unit-batch-${index + 1}.json`)
       : Array.from({ length: shardCount }, (_, index) => `sonar-${index + 1}.json`);
   expected.push(authorityBlob);
+  // Every file counts, not only .json: Vitest's merge parses every file in the
+  // directory, so the gate must see exactly what the merge will read.
   let present = [];
   try {
-    present = readdirSync(blobDir).filter((name) => name.endsWith(".json"));
+    present = readdirSync(blobDir);
   } catch {
     present = [];
   }

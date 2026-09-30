@@ -83,9 +83,10 @@ jobs:
 
   unit-and-integration:
     needs: unit-and-integration-slice
-    # Runs even when a slice failed, so the required check reports a real
-    # failure instead of being skipped. A skipped required check is not green,
-    # but an explicit red is clearer.
+    # Runs even when a slice failed or the run was cancelled. This is
+    # load-bearing: a job skipped by its condition SATISFIES a required check,
+    # so without always() a failed slice would let this check pass. The first
+    # step below turns any non-success slice result into a real failure.
     if: always()
     runs-on: ubuntu-latest
 
