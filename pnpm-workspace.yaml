@@ -143,9 +143,12 @@ overrides:
   # old-API CommonJS consumers (minimatch@3 via eslint/exceljs) — forcing 5.x
   # there breaks them with "expand is not a function". Only the new-API >=3 line
   # (minimatch@9 via typescript-eslint) can safely take 5.x.
-  "brace-expansion@1": 1.1.18
-  "brace-expansion@2": 2.1.4
-  "brace-expansion@>=3.0.0": 5.0.9
+  # SCRUM-490: bumped to 1.1.20 / 2.1.6 / 5.0.11 for two new HIGH DoS advisories
+  # (nested-brace recursion; patched floors 1.1.20 / 2.1.6 / 5.0.11, all published
+  # 2026-09-14, so they clear the minimumReleaseAge gate). Same per-major pinning.
+  "brace-expansion@1": 1.1.20
+  "brace-expansion@2": 2.1.6
+  "brace-expansion@>=3.0.0": 5.0.11
   # @xmldom/xmldom: pin each line to its own patched release. A batch of HIGH
   # advisories published against this package broke the repo-wide required
   # dependency-audit check with no dependency change anywhere in this

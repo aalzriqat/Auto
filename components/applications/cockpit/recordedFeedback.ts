@@ -26,6 +26,8 @@ export type RecordedModel = Readonly<{
   deal:
     | Readonly<{
         expectedPaymentRegistered?: boolean;
+        /** SCRUM-239: the newest finance-company cheque returned after it cleared. */
+        disbursementReturn?: Readonly<{ lastReturnedChequeId?: string | null }>;
         stages: ReadonlyArray<Readonly<{ key: string; state: string }>>;
       }>
     | null
@@ -132,6 +134,19 @@ export const depositReleaseReflected =
 
 export const financeDisbursementReflected: ReflectedPredicate = (now) =>
   now.application?.disbursedAt != null;
+
+/**
+ * SCRUM-239: the returned cheque's disbursement is undone -- the application no
+ * longer shows a disbursement AND the deal names THIS cheque as the newest one
+ * returned after clearing. Both halves matter: a not-yet-loaded application has
+ * no `disbursedAt` either, so the first alone would "prove" an unloaded screen.
+ */
+export const disbursementReturnReflected =
+  (chequeId: string): ReflectedPredicate =>
+  (now) =>
+    now.application != null &&
+    now.application.disbursedAt == null &&
+    now.deal?.disbursementReturn?.lastReturnedChequeId === chequeId;
 
 export const supplierDisbursementReflected: ReflectedPredicate = (now) =>
   now.application?.supplierDisbursementStatus != null;

@@ -53,6 +53,9 @@ type AuditActionType =
   // his entitlement or holding a claim on him for its margin. The two produce
   // opposite balance sheets from the same sale.
   | "SET_SUPPLIER_SETTLEMENT_ROUTE"
+  // SCRUM-447: retiring a registered expected payment / attesting a cheque face.
+  | "CORRECT_EXPECTED_PAYMENT"
+  | "ATTEST_CHEQUE_FACE"
   // The finance company paid the supplier. Recorded as a fact off the
   // settlement advice, with no journal behind it — which is exactly why it
   // needs an audit trail: nothing in the ledger would otherwise show who
@@ -66,7 +69,12 @@ type AuditActionType =
   // visible only as the absence of a change nobody recorded. The deferred
   // half of the same decision lands on `pendingAccountingEvents`; this is the
   // synchronous half, which has no queue row to land on.
-  | "SETTLE_COMMITMENT_AUTHORITY";
+  | "SETTLE_COMMITMENT_AUTHORITY"
+  // SCRUM-239: the bank returned a finance-company disbursement cheque AFTER it
+  // cleared. One command undoes that disbursement (application receipt fields,
+  // allocations, payment, its cash-received posting); the trail records who
+  // asserted it and what was undone, because the ledger shows only the reversal.
+  | "RETURN_FINANCE_DISBURSEMENT_CHEQUE";
 
 // ─── Internal: write audit entry ─────────────────────────────────────────────
 

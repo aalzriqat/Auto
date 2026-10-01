@@ -732,6 +732,8 @@ export default defineSchema({
     vehicleId: v.optional(v.id("vehicles")),
     customerId: v.optional(v.id("customers")),
     financeCompanyId: v.optional(v.id("financeCompanies")),
+    /** SCRUM-27: the name of a MANUAL finance company (no party row), exactly as on its approval letter. */
+    payerNameSnapshot: v.optional(v.string()),
     salespersonId: v.optional(v.id("users")),
     cashierId: v.optional(v.id("users")),
     description: v.optional(v.string()),
@@ -756,9 +758,11 @@ export default defineSchema({
       v.literal("REFUND_PAYABLE"),
     ),
     documentNumber: v.string(),
-    payerType: v.union(v.literal("CUSTOMER"), v.literal("FINANCE_COMPANY")),
+    payerType: v.union(v.literal("CUSTOMER"), v.literal("FINANCE_COMPANY"), v.literal("MANUAL_FINANCE_COMPANY")),
     customerId: v.optional(v.id("customers")),
     financeCompanyId: v.optional(v.id("financeCompanies")),
+    /** SCRUM-27: set exactly when payerType is MANUAL_FINANCE_COMPANY (no party row exists). */
+    payerNameSnapshot: v.optional(v.string()),
     sourceType: v.string(),
     sourceId: v.string(),
     originalAmountMinor: v.number(),
@@ -798,9 +802,11 @@ export default defineSchema({
     orgId: v.id("organizations"),
     branchId: v.optional(v.id("branches")),
     direction: v.union(v.literal("IN"), v.literal("OUT")),
-    payerType: v.optional(v.union(v.literal("CUSTOMER"), v.literal("FINANCE_COMPANY"))),
+    payerType: v.optional(v.union(v.literal("CUSTOMER"), v.literal("FINANCE_COMPANY"), v.literal("MANUAL_FINANCE_COMPANY"))),
     customerId: v.optional(v.id("customers")),
     financeCompanyId: v.optional(v.id("financeCompanies")),
+    /** SCRUM-27: set exactly when payerType is MANUAL_FINANCE_COMPANY. */
+    payerNameSnapshot: v.optional(v.string()),
     method: v.union(
       v.literal("CASH"),
       v.literal("BANK_TRANSFER"),
@@ -901,6 +907,10 @@ export default defineSchema({
       v.literal("ALLOCATE_DEPOSIT"),
       v.literal("RESOLVE_DEPOSIT_ALLOCATION"),
       v.literal("SET_SUPPLIER_SETTLEMENT_ROUTE"),
+      // SCRUM-447: retiring a registered expected payment, and attesting the
+      // face of a legacy finance-company cheque.
+      v.literal("CORRECT_EXPECTED_PAYMENT"),
+      v.literal("ATTEST_CHEQUE_FACE"),
       v.literal("CONFIRM_SUPPLIER_DISBURSEMENT"),
       // Correcting a mistyped settlement advice. Distinct from recording one so
       // the audit trail shows an amendment as an amendment — a second
@@ -911,6 +921,8 @@ export default defineSchema({
       // organization is not on the canonical authority yet. See
       // utils/saleCancellation.ts.
       v.literal("SETTLE_COMMITMENT_AUTHORITY"),
+      // SCRUM-239: a cleared finance-company disbursement cheque came back.
+      v.literal("RETURN_FINANCE_DISBURSEMENT_CHEQUE"),
     ),
     resourceType: v.string(),
     resourceId: v.string(),
@@ -1975,6 +1987,28 @@ export default defineSchema({
      */
     consignedMarginCurrency: v.optional(v.string()),
     /**
+     * SCRUM-390 (OR-5): the operands of the "Commissionable vehicle margin" on
+     * a dealer-owned, financed sale completed by `applications.finalizeDeal`
+     * under a v2 financed-sale plan, frozen at completion.
+     *
+     *   commissionable margin = approved (G) - contribution (C) - acquisition cost
+     *
+     * G is the finance company's full transfer and C the showroom contribution,
+     * both in minor units of `currency`, written as ONE object so a partial
+     * record cannot exist. Frozen because the application and the letter they
+     * came from can still move afterwards, and `recalculateCommission` must
+     * never re-derive payroll from them. Absent on every other sale (cash,
+     * `sales.create`, consigned, plan v1 / none) and on every row written before
+     * this field; those keep salePrice - cost.
+     */
+    commissionBase: v.optional(
+      v.object({
+        approvedMinor: v.number(),
+        contributionMinor: v.number(),
+        currency: v.string(),
+      })
+    ),
+    /**
      * What the supplier is owed for the car, in minor units, frozen at
      * completion — his entitlement, denominated in `consignedMarginCurrency`.
      *
@@ -2759,6 +2793,19 @@ export default defineSchema({
       monthlyInstallment: v.optional(v.number()),
       totalProfit: v.optional(v.number()),
     })),
+    /**
+     * SCRUM-27: what the manager read off the MANUAL finance company's approval
+     * letter (OR-8/OR-11). Present only on a manual application; cleared with the
+     * approval it belongs to. `dealerSendsMinor` is S = held deposit + dealership
+     * contribution - an explicit 0 is a fact, an absent field is "not entered".
+     */
+    manualApproval: v.optional(v.object({
+      approvedAmountMinor: v.number(),
+      financierName: v.string(),
+      dealerSendsMinor: v.number(),
+      enteredBy: v.id("users"),
+      enteredAt: v.number(),
+    })),
     approvedBy: v.optional(v.id("users")),
     approvedAt: v.optional(v.number()),
     finalizedSaleId: v.optional(v.id("sales")),
@@ -2766,6 +2813,9 @@ export default defineSchema({
     disbursedAt: v.optional(v.number()),
     disbursedAmountMinor: v.optional(v.number()),
     disbursementIdempotencyKey: v.optional(v.string()),
+    // SCRUM-239: which disbursement of this application is live. Absent means 1;
+    // a returned cleared cheque bumps it so the next confirmation mints new keys.
+    disbursementVersion: v.optional(v.number()),
     // التنازل بالسيارة للعميل — vehicle handover to the customer, registered
     // before finalizeDeal is allowed to run.
     vehicleHandoverAt: v.optional(v.number()),
@@ -3031,6 +3081,18 @@ export default defineSchema({
      * correct payment wrong.
      */
     financedSaleNetReceivableMinor: v.optional(v.number()),
+
+    /**
+     * SCRUM-435 (finance-company forward). Written only by finalization. A
+     * plan-version-2 deal: the company transfers the FULL approved amount and
+     * the dealership forwards H (deposit) + C (its contribution) to it. Frozen
+     * at finalize so the forward due never re-derives from moving inputs.
+     * Absent on a v1 deal, which is never recomputed.
+     */
+    financedSalePlanVersion: v.optional(v.union(v.literal(1), v.literal(2))),
+    financeCompanyForwardDueMinor: v.optional(v.number()),
+    forwardDepositPortionMinor: v.optional(v.number()),
+    forwardContributionPortionMinor: v.optional(v.number()),
 
     // Appraisal gap and its negotiated split. The gap negotiated is the RAW
     // difference against the submitted quotation, not the change in the
@@ -3328,6 +3390,44 @@ export default defineSchema({
    * `reimbursedMinor` is different and IS stored, because money owed and money
    * actually paid back are separate facts and only the second closes the record.
    */
+  /**
+   * SCRUM-435: one row per forward VERSION (the dealership paying the finance
+   * company H + C). The row holds the payment facts and the reversal INTENT
+   * only. Whether the money is really on the books is DERIVED from the exact
+   * accounting events by `deriveForwardState` — there is deliberately no stored
+   * "pending" label that could disagree with the ledger.
+   */
+  financeCompanyForwards: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    // SCRUM-27: exactly ONE of the two is set - a configured company by id, a manual one by the name on its letter.
+    financeCompanyId: v.optional(v.id("financeCompanies")),
+    payerNameSnapshot: v.optional(v.string()),
+    version: v.number(),
+    amountMinor: v.number(),
+    depositPortionMinor: v.number(),
+    contributionPortionMinor: v.number(),
+    currency: v.string(),
+    method: v.union(
+      v.literal("CASH"),
+      v.literal("BANK_TRANSFER"),
+      v.literal("CHEQUE"),
+      v.literal("CARD")
+    ),
+    paidAt: v.number(),
+    reference: v.optional(v.string()),
+    actorId: v.id("users"),
+    createdAt: v.number(),
+    // Reversal intent (the ledger decides whether it happened).
+    reversalRequestedAt: v.optional(v.number()),
+    reversalIdempotencyKey: v.optional(v.string()),
+    reversalKind: v.optional(v.union(v.literal("VOID"), v.literal("RETURNED"))),
+    reverseReason: v.optional(v.string()),
+    reversedAt: v.optional(v.number()),
+    reversalActorId: v.optional(v.id("users")),
+  })
+    .index("by_org_application", ["orgId", "applicationId"]),
+
   financeDealCustody: defineTable({
     orgId: v.id("organizations"),
     applicationId: v.id("financeApplications"),
@@ -4419,7 +4519,30 @@ export default defineSchema({
     saleId: v.optional(v.id("sales")),
     // Set when this cheque is the registered expected-payment method for a
     // finance application, ahead of finalizeDeal — see registerExpectedPayment.
+    //
+    // SCRUM-447 D0 — PERMANENT LINEAGE. Once set, no writer clears it: it marks
+    // the cheque as a finance-company instrument for the rest of its life, and
+    // "active" is a STATUS question (HELD / DEPOSITED), never "is this set".
     applicationId: v.optional(v.id("financeApplications")),
+    // SCRUM-447 D1 — the cheque's FACE, as the operator recorded it (or as
+    // `attestChequeFace` attested it), in minor units of `currency`. `amount`
+    // stays the legacy display figure. A row with no `amountMinor` has an
+    // UNAVAILABLE face and can never be cleared by confirmDisbursement.
+    amountMinor: v.optional(v.number()),
+    currency: v.optional(v.string()),
+    faceAttestedBy: v.optional(v.id("users")),
+    faceAttestedAt: v.optional(v.number()),
+    // SCRUM-447 B4: the operator's stated reason the attested face is correct.
+    faceAttestationNote: v.optional(v.string()),
+    // SCRUM-447 D2 — who drew it. Absent on an application-linked row means the
+    // drawer is UNVERIFIED (history cannot prove it), never "the customer".
+    drawerType: v.optional(v.literal("FINANCE_COMPANY")),
+    financeCompanyId: v.optional(v.id("financeCompanies")),
+    // Immutable lineage anchor: the application this cheque was ever opened for.
+    originApplicationId: v.optional(v.id("financeApplications")),
+    cancelledAt: v.optional(v.number()),
+    cancelledBy: v.optional(v.id("users")),
+    cancellationReason: v.optional(v.string()),
     bank: v.string(),
     chequeNumber: v.string(),
     chequeDate: v.number(),
@@ -4438,6 +4561,8 @@ export default defineSchema({
     returnReason: v.optional(v.string()),
     clearedAt: v.optional(v.number()),
     returnedAfterClearing: v.optional(v.boolean()),
+    // SCRUM-239: the application disbursement version this FC cheque cleared under.
+    disbursementVersion: v.optional(v.number()),
     bankFeeMinor: v.optional(v.number()),
     idempotencyKey: v.optional(v.string()),
     notes: v.optional(v.string()),

@@ -19,6 +19,7 @@
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
+import { ConvexError } from "convex/values";
 import schema from "./schema";
 import { runWithIdempotency } from "./utils/idempotency";
 import { Id } from "./_generated/dataModel";
@@ -479,5 +480,49 @@ describe("SCRUM-57 B — identity reuse with a changed canonical intent fails cl
     await run(orgId);
     await run(otherOrgId);
     expect(ran).toBe(2);
+  });
+});
+
+describe("SCRUM-239 F2 - the fingerprint-conflict refusal can be supplied by the caller", () => {
+  const conflictingReplay = async (onFingerprintConflict?: () => never) => {
+    const { t, orgId } = await seedOrg();
+    let ran = 0;
+    const run = (fingerprint: string) =>
+      t.run(async (ctx) =>
+        runWithIdempotency(
+          ctx,
+          {
+            orgId,
+            operation: "test.economic",
+            economic: true,
+            idempotencyKey: "intent-1",
+            fingerprint,
+            ...(onFingerprintConflict ? { onFingerprintConflict } : {}),
+          },
+          async () => {
+            ran += 1;
+            return { ran };
+          }
+        )
+      );
+    await run(JSON.stringify({ a: 1 }));
+    const error = await run(JSON.stringify({ a: 2 })).then(() => null, (e: unknown) => e as Error);
+    return { error, ran };
+  };
+
+  test("with no override the default conflict message is unchanged", async () => {
+    const { error, ran } = await conflictingReplay();
+    expect(String(error?.message)).toContain(
+      "Idempotency key reused with different request content. Use a new key for a different operation."
+    );
+    expect(ran).toBe(1);
+  });
+
+  test("an override replaces the refusal and still runs nothing", async () => {
+    const { error, ran } = await conflictingReplay(() => {
+      throw new ConvexError({ code: "CUSTOM_CONFLICT", message: "custom" });
+    });
+    expect((error as { data?: { code?: string } }).data?.code).toBe("CUSTOM_CONFLICT");
+    expect(ran).toBe(1);
   });
 });

@@ -328,7 +328,11 @@ The gate is evaluated twice — in `authorize`, and again after approval — so 
 flake in either window refuses the release. That is fail-closed and correct. It
 does mean a release can need a CI re-run for reasons that have nothing to do with
 the release, and the right response is to re-run the job and read the result, not
-to loosen the required list.
+to loosen the required list. `unit-and-integration` is an aggregator over four
+`unit-and-integration slice N/4` jobs (SCRUM-359): after a flaky slice use
+"Re-run failed jobs", because re-running only the aggregator repeats the
+slice's failure. Slice coverage blobs are kept for one day, so after 24 hours
+use "Re-run all jobs".
 
 **SonarCloud is enforced with no waiver (SCRUM-128, 2026-09-26).** The release
 needs `sonarqubecloud / SonarCloud Code Analysis` = success at the exact tip. That

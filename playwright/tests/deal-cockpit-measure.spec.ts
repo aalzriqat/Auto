@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { APPROVER_AUTH_FILE, USER_AUTH_FILE } from "../utils";
-import { buildDealWithRecordedEconomics } from "../fixtures/financedDeal";
+import { buildDealWithRecordedEconomics, openDealDetails } from "../fixtures/financedDeal";
 
 /**
  * The deal cockpit's reading measure, in a real engine, in both languages, at
@@ -113,19 +113,19 @@ test.use({ actionTimeout: 25_000 });
 
 test.describe("the deal cockpit's reading measure", () => {
   /**
-   * ⚠️ SKIPPED BY OWNER RULING — the deal screen is being redesigned.
+   * This spec RUNS on Trusted Main E2E; it is not skipped. Since SCRUM-417 UX3
+   * the deal record sits behind a "Deal details" toggle, so it is opened with
+   * openDealDetails() before measuring.
    *
    * Every assertion below measures the CURRENT cockpit's layout: the pixel
    * distance between a label and the figure it names, at two widths and in two
-   * languages. A redesign changes exactly that, so these would fail on the
-   * layout being replaced rather than on anything the redesign got wrong, and
-   * fixing them against the old markup would be work thrown away twice.
+   * languages. A redesign changes exactly that.
    *
-   * ⚠️ SKIPPED, NOT DELETED, and skipped LOUDLY. The reading-measure defect this
-   * gate exists for — `justify-between` on an unbounded row, which the owner
-   * had to zoom to 50% to read around — is a real product defect that a
-   * redesign can reintroduce. Re-enable this against the new screen; do not let
-   * the redesign land with no measure at all.
+   * The reading-measure defect this gate exists for is `justify-between` on
+   * an unbounded row, which the owner had to zoom to 50% to read around. It is
+   * a real product defect that a redesign can reintroduce, so keep this gate
+   * pointed at the new screen; do not let the redesign land with no measure at
+   * all.
    *
    * Tracked with the redesign: SCRUM-63 (Unified Deal Workspace).
    */
@@ -202,6 +202,9 @@ test.describe("the deal cockpit's reading measure", () => {
           await expect
             .poll(() => page.evaluate(() => document.documentElement.dir))
             .toBe(locale === "ar" ? "rtl" : "ltr");
+
+          // Fixture deal is at handover: open the collapsed record (see openDealDetails).
+          await openDealDetails(page);
 
           // The split rows arrive on their OWN query, not the one that renders
           // the next-step card, so `deal-next-step` being visible says nothing

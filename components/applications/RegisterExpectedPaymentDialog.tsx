@@ -62,6 +62,7 @@ type RegisterExpectedPaymentDialogProps = {
     method: ExpectedPaymentMethod;
     expectedDate: number;
     chequeDetails?: { bank: string; chequeNumber: string };
+    faceAmount?: string;
   }) => void;
 };
 
@@ -83,6 +84,7 @@ export function RegisterExpectedPaymentDialog({
       expectedDate: todayLocalInput(),
       bank: "",
       chequeNumber: "",
+      faceAmount: "",
     },
   });
 
@@ -90,7 +92,7 @@ export function RegisterExpectedPaymentDialog({
 
   useEffect(() => {
     if (method !== "CHEQUE") {
-      form.clearErrors(["bank", "chequeNumber"]);
+      form.clearErrors(["bank", "chequeNumber", "faceAmount"]);
     }
   }, [method, form]);
 
@@ -107,6 +109,7 @@ export function RegisterExpectedPaymentDialog({
         values.method === "CHEQUE"
           ? { bank: values.bank ?? "", chequeNumber: values.chequeNumber ?? "" }
           : undefined,
+      faceAmount: values.method === "CHEQUE" ? values.faceAmount?.trim() : undefined,
     });
   }
 
@@ -190,6 +193,20 @@ export function RegisterExpectedPaymentDialog({
                       <FormControl>
                         <Input {...field} />
                       </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="faceAmount"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("FcChequeFaceLabel")}</FormLabel>
+                      <FormControl>
+                        <Input {...field} inputMode="decimal" dir="ltr" autoComplete="off" />
+                      </FormControl>
+                      <p className="text-xs text-muted-foreground">{t("FcChequeFaceHelp")}</p>
                       <FormMessage />
                     </FormItem>
                   )}

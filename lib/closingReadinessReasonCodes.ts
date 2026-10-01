@@ -15,6 +15,8 @@
 
 /** The accounting conditions a financed deal must meet before it can be finalized. */
 export const CLOSING_READINESS_CHECK_KEYS = [
+  // SCRUM-495: the deal is in a mode the dealership no longer operates.
+  "DEAL_MODE_RETIRED",
   "REMITTANCE_KNOWN",
   "CONFIGURED_FEES_RECORDED",
   "CUSTODY_ON_LEDGER",
@@ -29,6 +31,8 @@ export type ClosingReadinessCheckKey = (typeof CLOSING_READINESS_CHECK_KEYS)[num
 
 /** Every code the evaluator can state, with the names of the params its translation is filled with. */
 export const CLOSING_READINESS_REASON_PARAMS = {
+  // DEAL_MODE_RETIRED (SCRUM-495): a LEASE or in-house instalment deal cannot be finalized.
+  DEAL_MODE_RETIRED: [],
   // REMITTANCE_KNOWN
   REMITTANCE_APPROVAL_MISSING: [],
   REMITTANCE_UNKNOWN: [],
