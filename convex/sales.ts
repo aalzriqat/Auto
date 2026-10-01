@@ -32,7 +32,7 @@ import {
 } from "./utils/financingEconomics";
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
-import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, COMMISSION_BASE_UNUSABLE_RECALC_CODE, type CommissionBase } from "./utils/saleCompletion";
+import { classifySaleTimeCredits, customerBilledLinesMinor, sumBilledLinesMinor, completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, COMMISSION_BASE_UNUSABLE_RECALC_CODE, type CommissionBase } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompanyForward";
@@ -46,6 +46,7 @@ import { depositMethodValidator } from "./utils/depositRecording";
 import {
   toMinorUnits,
   fromMinorUnits,
+  isValidMinorAmount,
   assertFiniteNumber,
   toMinorSameCurrencyOrUndefined,
   outstandingMinorFromMajor,
@@ -195,7 +196,8 @@ export type BillOfSaleUnavailableReason =
   | "LINK_MISMATCH"
   | "CURRENCY_MISMATCH"
   | "MULTI_VEHICLE"
-  | "NOT_SUPPORTED";
+  | "NOT_SUPPORTED"
+  | "DOES_NOT_FOOT";
 
 /**
  * Every figure is in MAJOR units. Each kind carries EXACTLY these keys and no
@@ -206,6 +208,14 @@ export type BillOfSaleEconomics =
   | {
       kind: "CASH";
       currency: string;
+      /** The itemisation of `totalBilled`: the completion's own billing lines, which foot to it exactly. */
+      vehicle: number;
+      taxes: number;
+      dealerFees: number;
+      warranty: number;
+      gap: number;
+      /** The car was paid to the supplier directly, so `vehicle` is the billed 0, not the price. */
+      vehicleSettledWithSupplier: boolean;
       totalBilled: number;
       tradeInCredit: number;
       depositsApplied: number;
@@ -260,7 +270,6 @@ export const getBillOfSaleEconomics = query({
     // A pending or cancelled sale has no official figures.
     if (sale.status !== "COMPLETED") return billOfSaleUnavailable("NOT_COMPLETED");
 
-    const isFinanced = sale.financingType === "FINANCED";
     const isCash =
       sale.financingType === "CASH" ||
       (sale.financingType === undefined && sale.applicationId === undefined);
@@ -273,56 +282,72 @@ export const getBillOfSaleEconomics = query({
         receivable.orgId !== sale.orgId ||
         receivable.sourceType !== "sales" ||
         receivable.sourceId !== sale._id ||
-        !Number.isSafeInteger(receivable.originalAmountMinor) ||
-        receivable.originalAmountMinor < 0
+        !isValidMinorAmount(receivable.originalAmountMinor)
       ) {
         return billOfSaleUnavailable("NO_RECEIVABLE");
       }
       const currency = receivable.currency;
-
-      // Mirrors saleCompletion.ts (the trade-in payment allocated to the receivable).
-      const tradeInCreditMinor =
-        sale.tradeInVehicleId && sale.tradeInValue !== undefined && sale.tradeInValue > 0
-          ? toMinorUnits(sale.tradeInValue, currency)
-          : 0;
-
-      // Only the deposits that paid down THIS customer receivable. A deposit
-      // applied to the supplier settlement or folded into a financed sale's
-      // journal never reduced what the customer owes here.
-      const applications = await ctx.db
-        .query("depositApplications")
-        .withIndex("by_sale", (q) => q.eq("saleId", sale._id))
-        .collect();
-      let depositsAppliedMinor = 0;
-      for (const application of applications) {
-        if (application.orgId !== sale.orgId) continue;
-        if (application.treatment !== "CUSTOMER_RECEIVABLE" || application.status !== "APPLIED") continue;
-        if (application.currency !== currency) return billOfSaleUnavailable("CURRENCY_MISMATCH");
-        depositsAppliedMinor += application.amountMinor;
+      if (currency !== (await getOrgCurrency(ctx, sale.orgId))) {
+        return billOfSaleUnavailable("CURRENCY_MISMATCH");
       }
 
-      const balanceDueMinor = receivable.originalAmountMinor - tradeInCreditMinor - depositsAppliedMinor;
+      // The itemisation is the completion's own billing rule applied to the
+      // stored sale row, and it must foot to the ledger receivable. On a
+      // consigned direct-to-supplier sale the vehicle is NOT billed, so printing
+      // the sale price above a ledger total would not foot.
+      const vehicle = await ctx.db.get(sale.vehicleId);
+      if (!vehicle) {
+        console.error(`getBillOfSaleEconomics: vehicle missing for sale ${sale._id}`);
+        return billOfSaleUnavailable("DOES_NOT_FOOT");
+      }
+      const lines = customerBilledLinesMinor({
+        salePrice: sale.salePrice,
+        taxAmount: sale.taxAmount,
+        dealerFees: sale.dealerFees,
+        warrantySold: sale.warrantySold,
+        gapSold: sale.gapSold,
+        currency,
+        isSourced: vehicle.sourceType === "SOURCED",
+        settlementRoute: consignedSettlementRoute(sale),
+      });
+      if (sumBilledLinesMinor(lines) !== receivable.originalAmountMinor) {
+        console.error(`getBillOfSaleEconomics: cash itemisation does not foot for sale ${sale._id}`);
+        return billOfSaleUnavailable("DOES_NOT_FOOT");
+      }
+
+      // Credits come from the LEDGER allocations, never the sale row.
+      const credits = await classifySaleTimeCredits(ctx, sale, receivable);
+      if (!credits.ok) return billOfSaleUnavailable(credits.reason);
+
+      const balanceDueMinor = receivable.originalAmountMinor - credits.tradeInMinor - credits.depositsMinor;
       if (!Number.isSafeInteger(balanceDueMinor) || balanceDueMinor < 0) {
         console.error(`getBillOfSaleEconomics: negative balance for sale ${sale._id}`);
         return billOfSaleUnavailable("NO_RECEIVABLE");
       }
 
+      const major = (minor: number) => fromMinorUnits(minor, currency);
       return {
         kind: "CASH",
         currency,
-        totalBilled: fromMinorUnits(receivable.originalAmountMinor, currency),
-        tradeInCredit: fromMinorUnits(tradeInCreditMinor, currency),
-        depositsApplied: fromMinorUnits(depositsAppliedMinor, currency),
-        balanceDue: fromMinorUnits(balanceDueMinor, currency),
+        vehicle: major(lines.vehicle),
+        taxes: major(lines.taxes),
+        dealerFees: major(lines.dealerFees),
+        warranty: major(lines.warranty),
+        gap: major(lines.gap),
+        vehicleSettledWithSupplier: lines.vehicleSettledWithSupplier,
+        totalBilled: major(receivable.originalAmountMinor),
+        tradeInCredit: major(credits.tradeInMinor),
+        depositsApplied: major(credits.depositsMinor),
+        balanceDue: major(balanceDueMinor),
       };
     }
 
-    if (!isFinanced) return billOfSaleUnavailable("NOT_SUPPORTED");
+    if (sale.financingType !== "FINANCED") return billOfSaleUnavailable("NOT_SUPPORTED");
 
     // FINANCED. The application is read for IDENTITY and LINKAGE only.
     if (!sale.applicationId || !sale.quoteId) return billOfSaleUnavailable("LINK_MISMATCH");
     const application = await ctx.db.get(sale.applicationId);
-    if (!applicationProvesFinancing(application, sale) || application === null) {
+    if (application === null || !applicationProvesFinancing(application, sale)) {
       return billOfSaleUnavailable("LINK_MISMATCH");
     }
     if (application.quoteId !== sale.quoteId) return billOfSaleUnavailable("LINK_MISMATCH");
@@ -359,6 +384,7 @@ export const getBillOfSaleEconomics = query({
       console.error(
         `getBillOfSaleEconomics: itemisation does not foot for sale ${sale._id} (${footed} vs ${snapshot.totalFinancedAmount})`
       );
+      return billOfSaleUnavailable("DOES_NOT_FOOT");
     }
 
     // A manual finance company quote with no stated rate priced at 0 by default:
@@ -537,8 +563,9 @@ export const create = mutation({
     tradeInVehicleId: v.optional(v.id("vehicles")),
     tradeInValue: v.optional(v.number()),
     financingType: v.optional(v.union(v.literal("CASH"), v.literal("FINANCED"), v.literal("LEASE"))),
-    // SCRUM-258 phase 1: still accepted and stored exactly as before, but DISPLAY-DEAD: nothing prints it
-    // (the Bill of Sale reads sales.getBillOfSaleEconomics). Phase 2 (follow-up) will refuse it.
+    // loanAmount (SCRUM-258 phase 1): still accepted and stored exactly as before, but DISPLAY-DEAD. Nothing prints it
+    // (the Bill of Sale reads sales.getBillOfSaleEconomics) and the client no longer sends it. Phase 2 (follow-up) refuses it.
+    // The other two declarations below refer to this note.
     loanAmount: v.optional(v.number()),
     apr: v.optional(v.number()),
     termMonths: v.optional(v.number()),
@@ -728,8 +755,7 @@ export const createDraft = mutation({
     tradeInVehicleId: v.optional(v.id("vehicles")),
     tradeInValue: v.optional(v.number()),
     financingType: v.optional(v.union(v.literal("CASH"), v.literal("FINANCED"), v.literal("LEASE"))),
-    // SCRUM-258 phase 1: still accepted and stored exactly as before, but DISPLAY-DEAD: nothing prints it
-    // (the Bill of Sale reads sales.getBillOfSaleEconomics). Phase 2 (follow-up) will refuse it.
+    // loanAmount: display-dead, see the note at sales.create's args.
     loanAmount: v.optional(v.number()),
     apr: v.optional(v.number()),
     termMonths: v.optional(v.number()),
@@ -839,8 +865,7 @@ export const update = mutation({
     tradeInVehicleId: v.optional(v.id("vehicles")),
     tradeInValue: v.optional(v.number()),
     financingType: v.optional(v.union(v.literal("CASH"), v.literal("FINANCED"), v.literal("LEASE"))),
-    // SCRUM-258 phase 1: still accepted and stored exactly as before, but DISPLAY-DEAD: nothing prints it
-    // (the Bill of Sale reads sales.getBillOfSaleEconomics). Phase 2 (follow-up) will refuse it.
+    // loanAmount: display-dead, see the note at sales.create's args.
     loanAmount: v.optional(v.number()),
     apr: v.optional(v.number()),
     termMonths: v.optional(v.number()),
@@ -871,7 +896,8 @@ export const update = mutation({
     // web build) resends the stored LEASE: a legacy row is never a dead end.
     if (args.financingType !== undefined && args.financingType !== sale.financingType) {
       assertOperatedDealMode(args.financingType);
-      // SCRUM-504: a change INTO FINANCED needs the deal behind it. A legacy FINANCED draft may
+      // SCRUM-504: an EARLY, user-facing refusal. The enforcement point is prepareSaleCompletion, which every
+      // completion door passes. A change INTO FINANCED needs the deal behind it. A legacy FINANCED draft may
       // still be changed to CASH, cancelled or deleted, and a resend of its stored value is not a change.
       assertFinancedSaleHasDeal(args.financingType, sale.applicationId);
     }

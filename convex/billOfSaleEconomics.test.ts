@@ -134,21 +134,120 @@ async function financedSaleThroughDeal(s: Seeded, quoteExtra: Record<string, unk
   return { saleId: saleId as Id<"sales">, applicationId, quoteId };
 }
 
+/** A trade-in car: no purchase price (it is taken in, not bought). */
+const mkTradeIn = (s: Seeded, vin: string) =>
+  s.t.run((ctx) =>
+    ctx.db.insert("vehicles", {
+      orgId: s.orgId, vin: `VIN258TI${vin}`, make: "Toyota", model: "Yaris", year: 2018, mileage: 90_000,
+      color: "White", fuelType: "Gasoline", transmission: "Automatic",
+      sellingPrice: 2_000, status: "AVAILABLE", sourceType: "STOCK" as const,
+    })
+  );
+
+/** A sale taking a real trade-in through the normal door (the ledger trade-in payment is posted at completion). */
+async function cashSaleWithTradeIn(s: Seeded, tradeInValue: number) {
+  const tradeInVehicleId = await mkTradeIn(s, "A");
+  return await s.as.mutation(api.sales.create, {
+    idempotencyKey: crypto.randomUUID(), orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId,
+    salespersonId: s.userId, salePrice: 13_000, saleDate: Date.now(), status: "COMPLETED", financingType: "CASH",
+    tradeInVehicleId, tradeInValue,
+  });
+}
+
+/** A sale that consumes a real reservation deposit: quote -> deposits.create -> sales.create(quoteId). */
+async function cashSaleWithDeposit(s: Seeded, depositAmount: number) {
+  const quoteId = await s.as.mutation(api.quotes.saveQuote, {
+    orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId, vehiclePrice: 13_000, downPayment: 0, termMonths: 0,
+  });
+  await s.as.mutation(api.deposits.create, {
+    idempotencyKey: crypto.randomUUID(), orgId: s.orgId, quoteId, amount: depositAmount, method: "CASH",
+  });
+  return await s.as.mutation(api.sales.create, {
+    idempotencyKey: crypto.randomUUID(), orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId,
+    salespersonId: s.userId, salePrice: 13_000, saleDate: Date.now(), status: "COMPLETED", financingType: "CASH", quoteId,
+  });
+}
+
+/** The live ledger allocations of a sale's receivable, with the idempotency key of each payment. */
+async function allocationsOf(s: Seeded, saleId: Id<"sales">) {
+  return await s.t.run(async (ctx) => {
+    const sale = await ctx.db.get(saleId);
+    const rows = await ctx.db
+      .query("paymentAllocations")
+      .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", sale!.canonicalReceivableDocumentId!))
+      .collect();
+    return await Promise.all(
+      rows.map(async (a) => ({ ...a, key: (await ctx.db.get(a.paymentId))!.idempotencyKey }))
+    );
+  });
+}
+
 describe("getBillOfSaleEconomics - CASH", () => {
-  test("a plain cash sale states the ledger receivable and nothing else", async () => {
+  test("a plain cash sale states the ledger receivable, itemised, with the exact CASH keys", async () => {
     const s = await seedDealership("cash");
     const saleId = await cashSale(s);
-    const e = await query(s, saleId);
-    expect(e).toEqual({ kind: "CASH", currency: "JOD", totalBilled: 13_000, tradeInCredit: 0, depositsApplied: 0, balanceDue: 13_000 });
-    expect(Object.keys(e).sort()).toEqual(["balanceDue", "currency", "depositsApplied", "kind", "totalBilled", "tradeInCredit"]);
+    expect(await query(s, saleId)).toEqual({
+      kind: "CASH", currency: "JOD", vehicle: 13_000, taxes: 0, dealerFees: 0, warranty: 0, gap: 0,
+      vehicleSettledWithSupplier: false, totalBilled: 13_000, tradeInCredit: 0, depositsApplied: 0, balanceDue: 13_000,
+    });
+  });
+
+  test("tax, fees, warranty and GAP are itemised and foot to the receivable", async () => {
+    const s = await seedDealership("cashlines");
+    const saleId = await s.as.mutation(api.sales.create, {
+      idempotencyKey: crypto.randomUUID(), orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId,
+      salespersonId: s.userId, salePrice: 13_000, saleDate: Date.now(), status: "COMPLETED", financingType: "CASH",
+      taxAmount: 50, dealerFees: 100, warrantySold: 400, warrantyTermMonths: 24, gapSold: 200, gapTermMonths: 12,
+    });
+    expect(await query(s, saleId)).toEqual({
+      kind: "CASH", currency: "JOD", vehicle: 13_000, taxes: 50, dealerFees: 100, warranty: 400, gap: 200,
+      vehicleSettledWithSupplier: false, totalBilled: 13_750, tradeInCredit: 0, depositsApplied: 0, balanceDue: 13_750,
+    });
+  });
+
+  test("a consigned DIRECT_TO_SUPPLIER cash sale bills 0 for the car, itemises the fees and says it was paid to the supplier", async () => {
+    const s = await seedDealership("cashdirect");
+    const vehicleId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin: "VIN258DIRECT", make: "Toyota", model: "Camry", year: 2024, mileage: 10,
+        color: "White", fuelType: "Gasoline", transmission: "Automatic", sellingPrice: 13_000,
+        status: "AVAILABLE", sourceType: "SOURCED", sourcedFromName: "Amman Importer Co", sourceCost: 11_000,
+      })
+    );
+    const saleId = await s.as.mutation(api.sales.create, {
+      idempotencyKey: crypto.randomUUID(), orgId: s.orgId, vehicleId, customerId: s.customerId,
+      salespersonId: s.userId, salePrice: 13_000, saleDate: Date.now(), status: "COMPLETED", financingType: "CASH",
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER", dealerFees: 150,
+    });
+    expect(await query(s, saleId)).toEqual({
+      kind: "CASH", currency: "JOD", vehicle: 0, taxes: 0, dealerFees: 150, warranty: 0, gap: 0,
+      vehicleSettledWithSupplier: true, totalBilled: 150, tradeInCredit: 0, depositsApplied: 0, balanceDue: 150,
+    });
+  });
+
+  test("S1: an itemisation that does not foot to the receivable is UNAVAILABLE DOES_NOT_FOOT, never a printed total", async () => {
+    const s = await seedDealership("cashfoot");
+    const saleId = await cashSale(s);
+    await s.t.run(async (ctx) => {
+      const sale = await ctx.db.get(saleId);
+      const receivable = await ctx.db.get(sale!.canonicalReceivableDocumentId!);
+      await ctx.db.patch(receivable!._id, { originalAmountMinor: receivable!.originalAmountMinor + 1 });
+    });
+    expect(await query(s, saleId)).toEqual({ kind: "UNAVAILABLE", reason: "DOES_NOT_FOOT" });
+  });
+
+  test("S1: a sale row edited after completion (price no longer matches the receivable) is DOES_NOT_FOOT", async () => {
+    const s = await seedDealership("cashedit");
+    const saleId = await cashSale(s);
+    await s.t.run((ctx) => ctx.db.patch(saleId, { salePrice: 12_000 }));
+    expect(await query(s, saleId)).toEqual({ kind: "UNAVAILABLE", reason: "DOES_NOT_FOOT" });
   });
 
   test("a caller-supplied downPayment and loanAmount never move a CASH figure", async () => {
     const s = await seedDealership("cashdp");
     const saleId = await cashSale(s);
     await s.t.run((ctx) => ctx.db.patch(saleId, { downPayment: 4_000, loanAmount: 9_000 }));
-    const e = await query(s, saleId);
-    expect(e).toMatchObject({ kind: "CASH", totalBilled: 13_000, balanceDue: 13_000 });
+    expect(await query(s, saleId)).toMatchObject({ kind: "CASH", totalBilled: 13_000, balanceDue: 13_000 });
   });
 
   test("a trade-in value with no trade-in vehicle is not a credit", async () => {
@@ -158,68 +257,91 @@ describe("getBillOfSaleEconomics - CASH", () => {
     expect(await query(s, saleId)).toMatchObject({ kind: "CASH", tradeInCredit: 0, balanceDue: 13_000 });
   });
 
-  test("a trade-in vehicle credits its value against the balance", async () => {
+  test("S1b: a real trade-in is credited from its ledger allocation, equal to the trade-in payment", async () => {
     const s = await seedDealership("cashti");
-    const saleId = await cashSale(s);
-    const tradeIn = await s.mkVehicle("T");
-    await s.t.run((ctx) => ctx.db.patch(saleId, { tradeInVehicleId: tradeIn, tradeInValue: 2_000 }));
+    const saleId = await cashSaleWithTradeIn(s, 2_000);
+    const allocations = await allocationsOf(s, saleId);
+    const tradeIn = allocations.filter((a) => a.key === `trade_in_payment_${saleId}`);
+    expect(tradeIn).toHaveLength(1);
+    expect(tradeIn[0].amountMinor).toBe(2_000 * SCALE);
+    expect(await query(s, saleId)).toMatchObject({ kind: "CASH", tradeInCredit: 2_000, depositsApplied: 0, balanceDue: 11_000 });
+  });
+
+  test("S1b: the credit is the ledger's figure, not the sale row's (a later edit of tradeInValue moves nothing)", async () => {
+    const s = await seedDealership("cashtiedit");
+    const saleId = await cashSaleWithTradeIn(s, 2_000);
+    await s.t.run((ctx) => ctx.db.patch(saleId, { tradeInValue: 9_999 }));
     expect(await query(s, saleId)).toMatchObject({ kind: "CASH", tradeInCredit: 2_000, balanceDue: 11_000 });
   });
 
-  test("an applied customer-receivable deposit reduces the balance; reversed and supplier-settlement ones do not", async () => {
-    const s = await seedDealership("cashdep");
-    const saleId = await cashSale(s);
-    await s.t.run(async (ctx) => {
-      const depositId = await ctx.db.insert("deposits", {
-        orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId,
-        amount: 1_500, amountMinor: 1_500_000, currency: "JOD", method: "CASH", status: "APPLIED", holdActive: false,
-        createdBy: s.userId, createdAt: Date.now(),
-      } as never);
-      const base = {
-        orgId: s.orgId, depositId, vehicleId: s.vehicleId, saleId, customerId: s.customerId,
-        currency: "JOD", eventType: "x", eventSourceType: "x", eventSourceId: "x", eventVersion: 1,
-        appliedAt: Date.now(), appliedBy: s.userId,
-      };
-      await ctx.db.insert("depositApplications", { ...base, amountMinor: 1_500_000, treatment: "CUSTOMER_RECEIVABLE", status: "APPLIED", eventIdempotencyKey: "k1" });
-      await ctx.db.insert("depositApplications", { ...base, amountMinor: 700_000, treatment: "CUSTOMER_RECEIVABLE", status: "REVERSED", eventIdempotencyKey: "k2" });
-      await ctx.db.insert("depositApplications", { ...base, amountMinor: 900_000, treatment: "SUPPLIER_SETTLEMENT", status: "APPLIED", eventIdempotencyKey: "k3" });
-    });
-    expect(await query(s, saleId)).toMatchObject({ kind: "CASH", depositsApplied: 1_500, balanceDue: 11_500 });
+  test("S1b: a reversed trade-in allocation leaves a trade-in with no ledger credit - DOES_NOT_FOOT", async () => {
+    const s = await seedDealership("cashtirev");
+    const saleId = await cashSaleWithTradeIn(s, 2_000);
+    const [allocation] = (await allocationsOf(s, saleId)).filter((a) => a.key === `trade_in_payment_${saleId}`);
+    await s.t.run((ctx) => ctx.db.patch(allocation._id, { status: "REVERSED" }));
+    expect(await query(s, saleId)).toEqual({ kind: "UNAVAILABLE", reason: "DOES_NOT_FOOT" });
   });
 
-  test("a deposit in another currency than the receivable fails closed", async () => {
+  test("S1b: a real reservation deposit is credited from its ledger allocation", async () => {
+    const s = await seedDealership("cashdep");
+    const saleId = await cashSaleWithDeposit(s, 1_500);
+    const deposits = (await allocationsOf(s, saleId)).filter((a) => a.key.startsWith("deposit_received_"));
+    expect(deposits).toHaveLength(1);
+    expect(deposits[0].amountMinor).toBe(1_500 * SCALE);
+    expect(await query(s, saleId)).toMatchObject({ kind: "CASH", depositsApplied: 1_500, tradeInCredit: 0, balanceDue: 11_500 });
+  });
+
+  test("S1b: a reversed deposit allocation is not a credit", async () => {
+    const s = await seedDealership("cashdeprev");
+    const saleId = await cashSaleWithDeposit(s, 1_500);
+    const [allocation] = (await allocationsOf(s, saleId)).filter((a) => a.key.startsWith("deposit_received_"));
+    await s.t.run((ctx) => ctx.db.patch(allocation._id, { status: "REVERSED" }));
+    expect(await query(s, saleId)).toMatchObject({ kind: "CASH", depositsApplied: 0, balanceDue: 13_000 });
+  });
+
+  test("S1b: a customer collection allocated after completion is neither a trade-in nor a deposit and changes no figure", async () => {
+    const s = await seedDealership("cashlater");
+    const saleId = await cashSale(s);
+    const before = await query(s, saleId);
+    await s.t.run(async (ctx) => {
+      const sale = await ctx.db.get(saleId);
+      const paymentId = await ctx.db.insert("canonicalPayments", {
+        orgId: s.orgId, direction: "IN", payerType: "CUSTOMER", customerId: s.customerId, method: "CASH",
+        amountMinor: 3_000 * SCALE, currency: "JOD", scale: 3, status: "SETTLED",
+        idempotencyKey: "collection-after-completion", createdBy: s.userId, createdAt: Date.now(),
+      });
+      await ctx.db.insert("paymentAllocations", {
+        orgId: s.orgId, paymentId, receivableDocumentId: sale!.canonicalReceivableDocumentId!,
+        amountMinor: 3_000 * SCALE, currency: "JOD", scale: 3, allocationDate: Date.now(), status: "ACTIVE",
+        createdBy: s.userId, createdAt: Date.now(),
+      });
+    });
+    expect(await query(s, saleId)).toEqual(before);
+  });
+
+  test("a credit allocated in another currency than the receivable fails closed", async () => {
     const s = await seedDealership("cashcur");
+    const saleId = await cashSaleWithDeposit(s, 1_500);
+    const [allocation] = (await allocationsOf(s, saleId)).filter((a) => a.key.startsWith("deposit_received_"));
+    await s.t.run((ctx) => ctx.db.patch(allocation._id, { currency: "USD" }));
+    expect(await query(s, saleId)).toEqual({ kind: "UNAVAILABLE", reason: "CURRENCY_MISMATCH" });
+  });
+
+  test("S2: a receivable in another currency than the organisation's fails closed", async () => {
+    const s = await seedDealership("cashorgcur");
     const saleId = await cashSale(s);
     await s.t.run(async (ctx) => {
-      const depositId = await ctx.db.insert("deposits", {
-        orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId,
-        amount: 1, amountMinor: 100, currency: "USD", method: "CASH", status: "APPLIED", holdActive: false,
-        createdBy: s.userId, createdAt: Date.now(),
-      } as never);
-      await ctx.db.insert("depositApplications", {
-        orgId: s.orgId, depositId, vehicleId: s.vehicleId, saleId, customerId: s.customerId, currency: "USD",
-        amountMinor: 100, treatment: "CUSTOMER_RECEIVABLE", status: "APPLIED", eventType: "x", eventSourceType: "x",
-        eventSourceId: "x", eventVersion: 1, eventIdempotencyKey: "kc", appliedAt: Date.now(), appliedBy: s.userId,
-      });
+      const sale = await ctx.db.get(saleId);
+      await ctx.db.patch(sale!.canonicalReceivableDocumentId!, { currency: "USD" });
     });
     expect(await query(s, saleId)).toEqual({ kind: "UNAVAILABLE", reason: "CURRENCY_MISMATCH" });
   });
 
-  test("a consigned direct-route sale, whose receivable is 0, states 0 - the ledger's own figure", async () => {
-    const s = await seedDealership("cashzero");
-    const saleId = await cashSale(s);
-    await s.t.run(async (ctx) => {
-      const sale = await ctx.db.get(saleId);
-      await ctx.db.patch(sale!.canonicalReceivableDocumentId!, { originalAmountMinor: 0 });
-    });
-    expect(await query(s, saleId)).toMatchObject({ kind: "CASH", totalBilled: 0, balanceDue: 0 });
-  });
-
-  test("a negative balance is UNAVAILABLE, never a printed negative", async () => {
+  test("a credit larger than the bill is UNAVAILABLE, never a printed negative", async () => {
     const s = await seedDealership("cashneg");
-    const saleId = await cashSale(s);
-    const tradeIn = await s.mkVehicle("T");
-    await s.t.run((ctx) => ctx.db.patch(saleId, { tradeInVehicleId: tradeIn, tradeInValue: 99_000 }));
+    const saleId = await cashSaleWithTradeIn(s, 2_000);
+    const [allocation] = (await allocationsOf(s, saleId)).filter((a) => a.key === `trade_in_payment_${saleId}`);
+    await s.t.run((ctx) => ctx.db.patch(allocation._id, { amountMinor: 99_000 * SCALE }));
     expect(await query(s, saleId)).toEqual({ kind: "UNAVAILABLE", reason: "NO_RECEIVABLE" });
   });
 
@@ -264,15 +386,11 @@ describe("getBillOfSaleEconomics - FINANCED (through the Deal)", () => {
     const quote = await s.t.run((ctx) => ctx.db.get(quoteId));
     const snap = quote!.customerQuotePricingSnapshot!;
     const e = await query(s, saleId);
-    expect(e.kind).toBe("FINANCED");
-    expect(Object.keys(e).sort()).toEqual([
-      "amountFinanced", "capitalisedCommission", "currency", "downPayment", "executionFees",
-      "flatAnnualProfitRatePercent", "kind", "termMonths", "vehiclePrice",
-    ]);
-    expect(e).toMatchObject({
-      currency: "JOD", vehiclePrice: snap.vehiclePrice, downPayment: snap.downPayment,
-      executionFees: snap.executionFees, amountFinanced: snap.totalFinancedAmount, termMonths: 48,
-      flatAnnualProfitRatePercent: 5,
+    // toEqual pins the exact key set: no approval-tier field can ride along.
+    expect(e).toEqual({
+      kind: "FINANCED", currency: "JOD", vehiclePrice: snap.vehiclePrice, downPayment: snap.downPayment,
+      executionFees: snap.executionFees, capitalisedCommission: (e as { capitalisedCommission: number }).capitalisedCommission,
+      amountFinanced: snap.totalFinancedAmount, termMonths: 48, flatAnnualProfitRatePercent: 5,
     });
     // The finance-approval tier is not a source: moving every amount on the application changes nothing.
     await s.t.run((ctx) =>
@@ -306,6 +424,20 @@ describe("getBillOfSaleEconomics - FINANCED (through the Deal)", () => {
     const { saleId, quoteId } = await financedSaleThroughDeal(s);
     await s.t.run((ctx) => ctx.db.patch(quoteId, { customerQuotePricingSnapshot: undefined }));
     expect(await query(s, saleId)).toEqual({ kind: "UNAVAILABLE", reason: "NO_PRICING_SNAPSHOT" });
+  });
+
+  test("S3: a snapshot whose itemisation does not foot to the amount financed is DOES_NOT_FOOT, never a printed figure", async () => {
+    const s = await seedDealership("finfoot");
+    const { saleId, quoteId } = await financedSaleThroughDeal(s);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    await s.t.run(async (ctx) => {
+      const quote = await ctx.db.get(quoteId);
+      const snap = quote!.customerQuotePricingSnapshot!;
+      await ctx.db.patch(quoteId, { customerQuotePricingSnapshot: { ...snap, totalFinancedAmount: snap.totalFinancedAmount + 1 } });
+    });
+    expect(await query(s, saleId)).toEqual({ kind: "UNAVAILABLE", reason: "DOES_NOT_FOOT" });
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 
   test("an application that does not point back at the sale is a LINK_MISMATCH", async () => {
