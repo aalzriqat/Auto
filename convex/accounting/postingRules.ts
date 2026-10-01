@@ -80,6 +80,12 @@ export type EventType =
   // The delta that keeps the employee's out-of-pocket position in the
   // liability account rather than as a credit on the clearing asset.
   | "CUSTODY_PAYABLE_RECLASSIFIED"
+  // SCRUM-443: a handover cost the DEALERSHIP paid directly (not out of an
+  // employee's custody), one event per (fee line, version).
+  | "HANDOVER_COST_PAID_DIRECT"
+  // SCRUM-435: the dealership forwards the customer deposit + its own
+  // contribution to the finance company (clears AP-Finance).
+  | "FINANCE_COMPANY_FORWARD_PAID"
   | "JOURNAL_REVERSAL";
 
 export const ALL_EVENT_TYPES = new Set<string>([
@@ -106,6 +112,8 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "EMPLOYEE_ADVANCE_PAID", "EMPLOYEE_ADVANCE_RECOVERED", "PAYROLL_ACCRUED", "PAYROLL_PAID",
   "CUSTODY_CASH_ISSUED", "CUSTODY_CASH_RETURNED", "CUSTODY_REIMBURSED", "CUSTODY_FEE_PAID", "CUSTODY_WRITTEN_OFF",
   "CUSTODY_PAYABLE_RECLASSIFIED",
+  "HANDOVER_COST_PAID_DIRECT",
+  "FINANCE_COMPANY_FORWARD_PAID",
   // JOURNAL_REVERSAL is intentionally excluded: it is written directly by
   // reverseAccountingEvent() in reversals.ts and never goes through postAccountingEvent().
 ]);
@@ -120,6 +128,27 @@ export interface LineSpec {
   salespersonId?: string;
   cashierId?: string;
   financeCompanyId?: string;
+  /** SCRUM-27: a MANUAL finance company has no id; its letter name is its identity. */
+  payerNameSnapshot?: string;
+}
+
+/**
+ * The dimension that says WHICH finance company a line belongs to: the configured
+ * company's id, or - for a manual company - the name frozen on the application.
+ * Exactly one is required; neither is refused rather than posted to nobody.
+ */
+function financePayerDims(p: {
+  financeCompanyId?: string;
+  payerNameSnapshot?: string;
+}): Pick<LineSpec, "financeCompanyId" | "payerNameSnapshot"> {
+  if (p.financeCompanyId !== undefined && p.payerNameSnapshot !== undefined) {
+    throw new Error("A finance-company posting names both a configured company and a manual payer - refusing to post.");
+  }
+  if (p.financeCompanyId !== undefined) return { financeCompanyId: p.financeCompanyId };
+  if (p.payerNameSnapshot !== undefined && p.payerNameSnapshot.trim() !== "") {
+    return { payerNameSnapshot: p.payerNameSnapshot };
+  }
+  throw new Error("A finance-company posting names no payer - refusing to post.");
 }
 
 export interface RuleResult {
@@ -158,7 +187,7 @@ function cashAccountKey(
 // means the dealership ISSUES a cheque — crediting BANK_ACCOUNT (not
 // CHEQUES_IN_HAND, which is strictly an asset of customer cheques physically
 // held by the dealership). cashAccountKey is the inbound mapper.
-function disbursementAccountKey(method: string | undefined): SystemKey {
+export function disbursementAccountKey(method: string | undefined): SystemKey {
   if (method === "CHEQUE") return SYSTEM_KEYS.BANK_ACCOUNT;
   if (method === "BANK_TRANSFER") return SYSTEM_KEYS.BANK_ACCOUNT;
   if (method === "CARD") return SYSTEM_KEYS.BANK_ACCOUNT;
@@ -171,7 +200,7 @@ function line(
   debitMinor: number,
   creditMinor: number,
   description?: string,
-  dims?: Partial<Pick<LineSpec, "vehicleId" | "customerId" | "salespersonId" | "cashierId" | "financeCompanyId">>
+  dims?: Partial<Pick<LineSpec, "vehicleId" | "customerId" | "salespersonId" | "cashierId" | "financeCompanyId" | "payerNameSnapshot">>
 ): LineSpec {
   return { accountSystemKey, debitMinor, creditMinor, description, ...dims };
 }
@@ -242,7 +271,9 @@ export interface FinancedSalePlanLine {
 export interface FinancedSalePlanPayload {
   version: number;
   fingerprint: string;
-  financeCompanyId: string;
+  /** Exactly one of `financeCompanyId` / `payerNameSnapshot` (SCRUM-27). */
+  financeCompanyId?: string;
+  payerNameSnapshot?: string;
   /** The only figure the vehicle leg's revenue is posted from. */
   legalInvoiceConsiderationMinor: number;
   /** N — what the financing company will actually remit. */
@@ -259,6 +290,10 @@ export interface FinancedSalePlanPayload {
    * liability, and debiting cash here as well would book the same money twice.
    */
   depositLiabilityAppliedMinor: number;
+  /** v2 only: H forwarded to the finance company (credit AP-Finance). */
+  forwardDepositMinor?: number;
+  /** v2 only: C, the dealership contribution forwarded (contra-revenue / AP-Finance). */
+  forwardContributionMinor?: number;
   components: FinancedSalePlanLine[];
 }
 
@@ -764,9 +799,9 @@ interface SettlementFunding {
 
 function settlementFundingLines(
   plan: FinancedSalePlanPayload,
-  dims: Partial<Pick<LineSpec, "vehicleId" | "customerId" | "salespersonId" | "financeCompanyId">>
+  dims: Partial<Pick<LineSpec, "vehicleId" | "customerId" | "salespersonId" | "financeCompanyId" | "payerNameSnapshot">>
 ): SettlementFunding {
-  const financeDims = { ...dims, financeCompanyId: plan.financeCompanyId };
+  const financeDims = { ...dims, ...financePayerDims(plan) };
   const lines: LineSpec[] = [];
 
   if (plan.financeCompanyReceivableMinor > 0) {
@@ -812,6 +847,45 @@ function settlementFundingLines(
         dims
       )
     );
+  }
+  // v2 (SCRUM-435): the deposit H and the dealership's contribution C are owed
+  // ONWARD to the finance company, which transfers the full approved amount. H
+  // is the debit above (liability released) against AP-Finance; C is
+  // contra-revenue against AP-Finance. The forward payment later clears 2220.
+  if (plan.version === 2) {
+    const forwardDeposit = plan.forwardDepositMinor ?? 0;
+    const forwardContribution = plan.forwardContributionMinor ?? 0;
+    if (forwardDeposit > 0) {
+      lines.push(
+        line(
+          SYSTEM_KEYS.ACCOUNTS_PAYABLE_FINANCE_COMPANIES,
+          0,
+          forwardDeposit,
+          "Owed to finance company — customer deposit to forward",
+          financeDims
+        )
+      );
+    }
+    if (forwardContribution > 0) {
+      lines.push(
+        line(
+          SYSTEM_KEYS.SALES_CONSIDERATION_REDUCTIONS,
+          forwardContribution,
+          0,
+          "Dealership contribution to the finance company",
+          financeDims
+        )
+      );
+      lines.push(
+        line(
+          SYSTEM_KEYS.ACCOUNTS_PAYABLE_FINANCE_COMPANIES,
+          0,
+          forwardContribution,
+          "Owed to finance company — dealership contribution to forward",
+          financeDims
+        )
+      );
+    }
   }
   // One line per classified component, at the account its own treatment names.
   // Never summed into a single bucket: a commission, an appraisal fee and a
@@ -1953,7 +2027,8 @@ export interface ChequeDepositedPayload {
 export interface FinanceDisbursedPayload {
   applicationId: string;
   saleId: string;
-  financeCompanyId: string;
+  financeCompanyId?: string;
+  payerNameSnapshot?: string;
   amountMinor: number;
   currency: string;
   customerId: string;
@@ -1969,7 +2044,8 @@ export interface PaymentLinkReceivedPayload {
 
 export interface FinanceCashReceivedPayload {
   applicationId: string;
-  financeCompanyId: string;
+  financeCompanyId?: string;
+  payerNameSnapshot?: string;
   amountMinor: number;
   currency: string;
   customerId?: string;
@@ -1979,7 +2055,7 @@ export function ruleFinanceDisbursed(p: FinanceDisbursedPayload): RuleResult {
   return {
     lines: [
       // Transfer the receivable from the customer to the finance company
-      line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES, p.amountMinor, 0, "Finance company receivable", { financeCompanyId: p.financeCompanyId, customerId: p.customerId }),
+      line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES, p.amountMinor, 0, "Finance company receivable", { ...financePayerDims(p), customerId: p.customerId }),
       line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, 0, p.amountMinor, "Customer AR offset by finance co", { customerId: p.customerId }),
     ],
     memo: "Finance company disbursement expected",
@@ -1991,8 +2067,8 @@ export function ruleFinanceCashReceived(p: FinanceCashReceivedPayload): RuleResu
   return {
     lines: [
       // Actual receipt of funds from the finance company settles their receivable
-      line(SYSTEM_KEYS.BANK_ACCOUNT, p.amountMinor, 0, "Finance company disbursement received", { financeCompanyId: p.financeCompanyId }),
-      line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES, 0, p.amountMinor, "Finance company receivable settled", { financeCompanyId: p.financeCompanyId, customerId: p.customerId }),
+      line(SYSTEM_KEYS.BANK_ACCOUNT, p.amountMinor, 0, "Finance company disbursement received", financePayerDims(p)),
+      line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES, 0, p.amountMinor, "Finance company receivable settled", { ...financePayerDims(p), customerId: p.customerId }),
     ],
     memo: "Finance company disbursement received",
     category: "SYSTEM",
@@ -2792,6 +2868,98 @@ export function ruleCustodyFeePaid(p: CustodyFeePaidPayload): RuleResult {
   };
 }
 
+/** A handover cost the dealership paid directly, at its recorded actual (SCRUM-443). */
+export interface HandoverCostPaidDirectPayload {
+  feeId: string;
+  applicationId: string;
+  vehicleId?: string;
+  feeType: string;
+  accountingTreatment: FeeAccountingTreatment;
+  amountMinor: number;
+  currency: string;
+  /** How the money left: REQUIRED, never defaulted — see the rule. */
+  paymentMethod: string;
+}
+
+/**
+ * Dr the fee's canonical expense account (the SAME one `ruleCustodyFeePaid`
+ * and the financed-sale plan debit for that treatment) / Cr the OUTBOUND cash
+ * or bank account the dealership paid from. Posted exactly once per live
+ * (fee, amount) — a corrected amount or a void is a reversal, never a second
+ * forward entry beside the first.
+ *
+ * ⚠️ The credit is `disbursementAccountKey`, NOT `cashAccountKey`: this is money
+ * LEAVING the dealership, and a cheque here is one the dealership ISSUED
+ * (credit the bank), never one it holds (`CHEQUES_IN_HAND`). The method is
+ * refused when it is not one of the four the command admits — an absent method
+ * silently falling to CASH_ON_HAND is exactly the wrong-account posting the
+ * command's required argument exists to prevent.
+ */
+export function ruleHandoverCostPaidDirect(p: HandoverCostPaidDirectPayload): RuleResult {
+  assertCustodyAmount(p, "HANDOVER_COST_PAID_DIRECT");
+  if (
+    p.paymentMethod !== "CASH" &&
+    p.paymentMethod !== "BANK_TRANSFER" &&
+    p.paymentMethod !== "CHEQUE" &&
+    p.paymentMethod !== "CARD"
+  ) {
+    throw new Error(
+      `HANDOVER_COST_PAID_DIRECT carries a payment method that is not CASH, BANK_TRANSFER, CHEQUE or CARD (${String(p.paymentMethod)}) — refusing to post.`
+    );
+  }
+  const expense = custodyFeeExpenseKey(p.accountingTreatment);
+  if (expense.systemKey === null) throw new Error(expense.refusal);
+  return {
+    lines: [
+      line(expense.systemKey, p.amountMinor, 0, `Handover cost (${p.feeType}) paid directly by the dealership`, { vehicleId: p.vehicleId }),
+      line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor, "Handover cost paid by the dealership"),
+    ],
+    memo: "Handover cost paid directly by the dealership",
+    category: "SYSTEM",
+  };
+}
+
+/** The dealership pays the finance company what it forwards for the customer (SCRUM-435). */
+export interface FinanceCompanyForwardPaidPayload {
+  forwardId: string;
+  applicationId: string;
+  financeCompanyId?: string;
+  payerNameSnapshot?: string;
+  amountMinor: number;
+  currency: string;
+  /** How the money left: REQUIRED, never defaulted. */
+  paymentMethod: string;
+}
+
+/**
+ * Dr AP-Finance-companies (H + C) / Cr the OUTBOUND cash or bank account. The
+ * amount is exactly what the v2 sale posted as owed onward, so 2220 nets to
+ * zero. `disbursementAccountKey`, not `cashAccountKey`: this money LEAVES.
+ */
+export function ruleFinanceCompanyForwardPaid(p: FinanceCompanyForwardPaidPayload): RuleResult {
+  if (!Number.isInteger(p.amountMinor) || p.amountMinor <= 0) {
+    throw new Error("FINANCE_COMPANY_FORWARD_PAID needs a positive whole amount - refusing to post.");
+  }
+  if (
+    p.paymentMethod !== "CASH" &&
+    p.paymentMethod !== "BANK_TRANSFER" &&
+    p.paymentMethod !== "CHEQUE" &&
+    p.paymentMethod !== "CARD"
+  ) {
+    throw new Error(
+      `FINANCE_COMPANY_FORWARD_PAID carries a payment method that is not CASH, BANK_TRANSFER, CHEQUE or CARD (${String(p.paymentMethod)}) - refusing to post.`
+    );
+  }
+  return {
+    lines: [
+      line(SYSTEM_KEYS.ACCOUNTS_PAYABLE_FINANCE_COMPANIES, p.amountMinor, 0, "Forwarded to the finance company", financePayerDims(p)),
+      line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor, "Paid to the finance company"),
+    ],
+    memo: "Deposit and dealership contribution forwarded to the finance company",
+    category: "SYSTEM",
+  };
+}
+
 export interface CustodyWrittenOffPayload {
   custodyId: string;
   applicationId: string;
@@ -2911,6 +3079,8 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "CUSTODY_CASH_RETURNED": return ruleCustodyCashReturned(payload as unknown as CustodyCashPayload);
     case "CUSTODY_REIMBURSED": return ruleCustodyReimbursed(payload as unknown as CustodyCashPayload);
     case "CUSTODY_FEE_PAID": return ruleCustodyFeePaid(payload as unknown as CustodyFeePaidPayload);
+    case "HANDOVER_COST_PAID_DIRECT": return ruleHandoverCostPaidDirect(payload as unknown as HandoverCostPaidDirectPayload);
+    case "FINANCE_COMPANY_FORWARD_PAID": return ruleFinanceCompanyForwardPaid(payload as unknown as FinanceCompanyForwardPaidPayload);
     case "CUSTODY_WRITTEN_OFF": return ruleCustodyWrittenOff(payload as unknown as CustodyWrittenOffPayload);
     case "CUSTODY_PAYABLE_RECLASSIFIED": return ruleCustodyPayableReclassified(payload as unknown as CustodyPayableReclassifiedPayload);
     default:

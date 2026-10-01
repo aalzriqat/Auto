@@ -194,7 +194,13 @@ export function DealDocumentsPanel({
 
   return (
     <>
-      <Card data-testid="deal-documents">
+      <Card
+        data-testid="deal-documents"
+        // Marks work in progress for the cockpit: a stage change that moves this
+        // panel into the collapsed record must not hide an upload that is still
+        // in flight, or a file preview the operator has open.
+        data-active-task={uploadingRuleIds.size > 0 || previewFile !== null ? "" : undefined}
+      >
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <FileText className="h-4 w-4 shrink-0 text-primary" aria-hidden />
@@ -224,8 +230,12 @@ export function DealDocumentsPanel({
               return (
                 <div
                   key={rowKey}
-                  className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border p-2 text-sm"
+                  className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border p-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   data-testid={`deal-document-${rowKey}`}
+                  data-rule-id={doc.ruleId}
+                  // Focusable by script only (S7): after a document is recorded,
+                  // focus lands on the next one that still needs work.
+                  tabIndex={-1}
                 >
                   {verified ? (
                     <Check className="h-4 w-4 shrink-0 text-emerald-600" />

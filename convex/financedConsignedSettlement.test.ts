@@ -18,7 +18,8 @@
  */
 import * as applicationsModule from "./applications";
 import * as financingEconomicsModule from "./financingEconomics";
-import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import { convexTestWithComponents, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
+import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -161,6 +162,32 @@ async function seedDealership(tag: string, opts: { sourceType?: "STOCK" | "SOURC
 type Seeded = Awaited<ReturnType<typeof seedDealership>>;
 
 /**
+ * SCRUM-447 D4: `sales.update` now refuses to cancel a sale that belongs to a
+ * financed deal ("cancel this deal from the deal screen"), so no public door
+ * leaves an application CLOSED behind a CANCELLED sale any more. Several tests
+ * here need exactly that LEGACY state as their precondition (a deal cancelled
+ * through the old sales door). This reproduces it faithfully: the sale's
+ * application link is lifted for the duration of the cancel and restored, so
+ * the sale teardown runs exactly as it did and every later assertion sees the
+ * same rows. It is setup for legacy data, NOT a supported door.
+ */
+async function legacyCancelSaleThroughSalesDoor(s: Seeded, saleId: unknown) {
+  const id = saleId as Id<"sales">;
+  const applicationId = await s.t.run(async (ctx) => {
+    const sale = await ctx.db.get(id);
+    const link = sale?.applicationId;
+    await ctx.db.patch(id, { applicationId: undefined });
+    return link;
+  });
+  await s.asApprover.mutation(api.sales.update, {
+    orgId: s.orgId,
+    saleId: id,
+    status: "CANCELLED" as const,
+  });
+  await s.t.run((ctx) => ctx.db.patch(id, { applicationId }));
+}
+
+/**
  * Walks a deal to APPROVED and, unless told otherwise, finalizes it.
  *
  * `downPayment` is the customer's own money in the deal; `totalFinancedAmount`
@@ -254,6 +281,12 @@ async function runDeal(
 ) {
   const downPayment = opts.downPayment ?? 0;
   const mode = opts.mode ?? "CONFIGURED_FINANCE_COMPANY";
+  // SCRUM-495: LEASE and INTERNAL_INSTALLMENT can no longer be SAVED, so a legacy row in either mode
+  // is built the way one actually exists: saved through an operated mode with no company (the same
+  // no-companyId shape those modes had), then stamped into the retired mode below. Everything the
+  // readers derive (`quote.mode` and `quoteModeAtSubmission`) is therefore what a real legacy row carries.
+  const retiredMode = mode === "LEASE" || mode === "INTERNAL_INSTALLMENT" ? mode : undefined;
+  const savedMode = retiredMode ? "MANUAL_FINANCE_COMPANY" : mode;
   const quoteId = await s.asUser.mutation(api.quotes.saveQuote, {
     orgId: s.orgId,
     customerId: s.customerId,
@@ -261,23 +294,23 @@ async function runDeal(
     vehiclePrice: VEHICLE_PRICE,
     downPayment,
     termMonths: 48,
-    mode,
+    mode: savedMode,
     ...(mode === "CONFIGURED_FINANCE_COMPANY"
       ? {
           companyId: s.companyId,
           customerEligibilityStatusIds: [s.customerStatusId],
         }
       : {}),
-    ...(mode === "MANUAL_FINANCE_COMPANY" && opts.manualProviderName !== undefined
+    ...(savedMode === "MANUAL_FINANCE_COMPANY" && opts.manualProviderName !== undefined
       ? { manualProviderName: opts.manualProviderName }
       : {}),
-    ...(mode === "MANUAL_FINANCE_COMPANY" ? { manualAdminFees: 0 } : {}),
+    ...(savedMode === "MANUAL_FINANCE_COMPANY" ? { manualAdminFees: 0 } : {}),
     totalFinancedAmount: VEHICLE_PRICE - downPayment,
   });
 
   if (opts.deposit) {
     const taker = opts.depositTakenBy === "approver" ? s.asApprover : s.asUser;
-    await taker.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
+    await taker.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       quoteId,
       amount: opts.deposit,
@@ -288,6 +321,13 @@ async function runDeal(
     orgId: s.orgId,
     quoteId,
   });
+  if (retiredMode) {
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(quoteId, { mode: retiredMode });
+      // A legacy retired-mode row never carried the manual-provider snapshot the operated mode stamps.
+      await ctx.db.patch(applicationId, { quoteModeAtSubmission: retiredMode, manualFinanceSnapshot: undefined });
+    });
+  }
   if (opts.omitMode) {
     await s.t.run(async (ctx) => {
       await ctx.db.patch(quoteId, { mode: undefined });
@@ -308,7 +348,7 @@ async function runDeal(
   }
 
   if (opts.depositAfterRoute) {
-    await s.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
+    await s.asUser.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       quoteId,
       amount: opts.depositAfterRoute,
@@ -349,6 +389,24 @@ async function runDeal(
         basis: "MANUAL",
         notes: "Approved at the quotation.",
       });
+    }
+  }
+
+  // SCRUM-27: a MANUAL finance company deal cannot be handed over until the
+  // manager has entered its approval letter (G, name, S). A deal whose quote
+  // names the provider gets the letter here, naming the same company at the
+  // vehicle price, so the payer identity every test below reads is unchanged.
+  // A deal whose quote names NO provider has no name a letter could carry, so it
+  // stops here - before handover - which is all its route/label assertions need.
+  if (mode === "MANUAL_FINANCE_COMPANY") {
+    const providerName = opts.manualProviderName?.trim();
+    if (providerName) {
+      await s.asApprover.mutation(api.financingEconomics.recordManualFinanceApproval, {
+        orgId: s.orgId, applicationId,
+        approvedAmountMinor: VEHICLE_PRICE * SCALE, financierName: providerName, dealerSendsMinor: 0,
+      });
+    } else if (opts.finalize === false) {
+      return { quoteId, applicationId, saleId: null };
     }
   }
 
@@ -817,7 +875,7 @@ describe("a reservation deposit on the direct route", () => {
 
     // 20,000 invoiced, 3,000 already held, so 17,000 left to come.
     const receivable = await financeReceivableOf(s, applicationId);
-    expect(receivable?.originalAmountMinor).toBe((VEHICLE_PRICE - 3_000) * SCALE);
+    expect(receivable?.originalAmountMinor).toBe(VEHICLE_PRICE * SCALE /* SCRUM-435: the company sends the FULL approved amount */);
 
     // The hold is consumed exactly once, and the application row records it.
     const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
@@ -1054,7 +1112,9 @@ describe("an external financier the deal does not name with a companyId", () => 
 describe("a lease, which is external but has no provider identity", () => {
   test("is asked the settlement route before finalizing", async () => {
     const s = await seedDealership("lease1");
-    await expect(runDeal(s, { mode: "LEASE" })).rejects.toThrow(/record the settlement route/i);
+    // SCRUM-495: a lease can no longer be finalized at all, so it is refused the retired-mode message
+    // before it is ever asked the route question (was: /record the settlement route/i).
+    await expectRetiredDealMode(runDeal(s, { mode: "LEASE" }));
   });
 
   test("is refused the direct route, naming the missing provider as the reason", async () => {
@@ -1068,10 +1128,20 @@ describe("a lease, which is external but has no provider identity", () => {
     ).rejects.toThrow(/leasing provider is not recorded/i);
   });
 
-  test("finalizes normally once it is told to settle through the dealership", async () => {
+  test("is refused at finalization even once it is told to settle through the dealership", async () => {
     const s = await seedDealership("lease3");
-    const { saleId } = await runDeal(s, { mode: "LEASE", route: "THROUGH_DEALERSHIP" });
-    expect(saleId).toBeTruthy();
+    // SCRUM-495: was "finalizes normally once it is told to settle through the dealership". A lease can
+    // no longer be finalized, so the same fully-prepared deal (route chosen, reconciled cost evidence) is
+    // refused with the retired-mode message and closes nothing.
+    await expectRetiredDealMode(
+      runDeal(s, {
+        mode: "LEASE",
+        route: "THROUGH_DEALERSHIP",
+        beforeFinalize: (applicationId) => recordReconciledZeroCost(s.asUser, api, s.orgId, applicationId),
+      })
+    );
+    const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
+    expect(sales).toHaveLength(0);
   });
 });
 
@@ -2541,11 +2611,7 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
     const first = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
 
     // Cancelled before any receipt, so the supplier-paid guard does not fire.
-    await s.asApprover.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId: first.saleId as never,
-      status: "CANCELLED" as const,
-    });
+    await legacyCancelSaleThroughSalesDoor(s, first.saleId as never);
 
     // The financier leg of the DEAD deal is then closed. This ordering is the
     // reachable one: `sales.update` refuses to cancel a sale whose supplier
@@ -2886,11 +2952,7 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
         dealerContributionMinor: 0,
       });
     });
-    await s.asApprover.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId: saleId as never,
-      status: "CANCELLED" as const,
-    });
+    await legacyCancelSaleThroughSalesDoor(s, saleId as never);
 
     const profit = (await cockpitOf(s, applicationId))!.money!.managementProfit;
     expect(profit.available).toBe(false);
@@ -3164,11 +3226,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
       (APPROVED - SUPPLIER_ENTITLEMENT) * SCALE
     );
 
-    await s.asApprover.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId: saleId as never,
-      status: "CANCELLED" as const,
-    });
+    await legacyCancelSaleThroughSalesDoor(s, saleId as never);
 
     // The subledger claim is withdrawn...
     const claims = await supplierClaimsOf(s);
@@ -3392,20 +3450,24 @@ describe("cancelling a deal whose financing evidence cannot be read", () => {
     ).rejects.toThrow(/isn't possible to confirm whether the finance company has already paid/i);
   });
 
-  test("a readable application with nothing paid still cancels normally", async () => {
+  test("a readable application with nothing paid is refused only by the financed-deal rule", async () => {
     // The control. Without it the three refusals above are equally satisfied by
     // a guard that refuses every cancellation, which would be its own defect.
     const s = await seedDealership("cancelReadableClean");
     const { saleId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
 
-    await s.asApprover.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId: saleId as never,
-      status: "CANCELLED" as const,
-    });
+    // SCRUM-447 D4: the payment locks above pass, and the financed-deal refusal
+    // then applies — the sale is cancelled from the deal, never on its own.
+    await expect(
+      s.asApprover.mutation(api.sales.update, {
+        orgId: s.orgId,
+        saleId: saleId as never,
+        status: "CANCELLED" as const,
+      })
+    ).rejects.toThrow(/cancel this deal from the deal screen/i);
 
     const sale = (await s.t.run((ctx) => ctx.db.get(saleId as never))) as { status: string };
-    expect(sale.status).toBe("CANCELLED");
+    expect(sale.status).toBe("COMPLETED");
   });
 });
 
@@ -6278,11 +6340,7 @@ describe("the deal cockpit's canonical sale destination", () => {
     // A different actor: `sales.update` refuses to let a salesperson approve the
     // cancellation of their own sale, which is a real separation-of-duties rule
     // and not something to work around with a direct patch.
-    await s.asApprover.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId: saleId!,
-      status: "CANCELLED" as const,
-    });
+    await legacyCancelSaleThroughSalesDoor(s, saleId!);
     await s.asApprover.mutation(api.sales.softDelete, { orgId: s.orgId, saleId: saleId! });
 
     const view = await s.asUser.query(api.applications.dealCockpit, {
@@ -6779,7 +6837,7 @@ describe("the closing matrix c16216 requires", () => {
 
     // And asked the company for the remainder rather than the whole invoice.
     const receivable = await financeReceivableOf(s, applicationId);
-    expect(receivable?.originalAmountMinor).toBe((VEHICLE_PRICE - 3_000) * SCALE);
+    expect(receivable?.originalAmountMinor).toBe(VEHICLE_PRICE * SCALE /* SCRUM-435: the company sends the FULL approved amount */);
   });
 
   test("a multi-vehicle quote cannot become a financed deal at all", async () => {
@@ -6900,7 +6958,7 @@ describe("the closing matrix c16216 requires", () => {
     const atSale = await ledgerBySystemKey(s);
     expect(atSale[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(0);
     expect(atSale[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES] ?? 0).toBe(
-      (VEHICLE_PRICE - 3_000) * SCALE
+      VEHICLE_PRICE * SCALE /* SCRUM-435: the company sends the FULL approved amount */
     );
 
     await s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
@@ -7002,7 +7060,7 @@ describe("the closing matrix c16216 requires", () => {
 
     // And the receivable was not re-opened at a different figure.
     const receivable = await financeReceivableOf(s, applicationId);
-    expect(receivable?.originalAmountMinor).toBe((VEHICLE_PRICE - 3_000) * SCALE);
+    expect(receivable?.originalAmountMinor).toBe(VEHICLE_PRICE * SCALE /* SCRUM-435: the company sends the FULL approved amount */);
   });
 
   test("a deposit belonging to another organization refuses before anything is written", async () => {
@@ -7215,7 +7273,9 @@ describe("the closing matrix c16216 requires", () => {
         downPayment: 3_000,
         depositResolution: { treatment: "APPLY_TO_DEALER_AMOUNT" },
       })
-    ).rejects.toThrow(/exceeds what the dealership billed/i);
+    // SCRUM-435 (v2): refused earlier and in the owner's terms - the deposit is
+    // forwarded to the company, so it cannot be applied against the dealer's amount.
+    ).rejects.toThrow(/deposit is forwarded to the company/i);
 
     // Nothing written, and the deposit is still held for a real decision.
     const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
@@ -7403,7 +7463,7 @@ describe("a deposit released inside a sale journal stays locked until that journ
       downPayment: 3_000,
       beforeHandover: async (appId) => {
         const app = await s.t.run((ctx) => ctx.db.get(appId));
-        await s.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
+        await s.asUser.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(),
           orgId: s.orgId,
           quoteId: app!.quoteId,
           amount: 1_000,
@@ -7581,11 +7641,7 @@ describe("a stale finance application cannot tear down the sale that replaced it
       downPayment: 3_000,
     });
 
-    await s.asApprover.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId: saleId!,
-      status: "CANCELLED" as const,
-    });
+    await legacyCancelSaleThroughSalesDoor(s, saleId!);
 
     // The precondition of the whole defect, asserted rather than assumed:
     // cancelling the sale does NOT cancel the application.
@@ -7700,11 +7756,7 @@ describe("a stale finance application cannot tear down the sale that replaced it
       downPayment: 3_000,
     });
 
-    await s.asApprover.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId: saleId!,
-      status: "CANCELLED" as const,
-    });
+    await legacyCancelSaleThroughSalesDoor(s, saleId!);
 
     // Cancelling the sale reinstated the hold: that is the legitimate,
     // once-only restoration, and it is the state the replay must not repeat.

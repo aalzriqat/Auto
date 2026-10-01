@@ -23,6 +23,8 @@ import {
 import { calculateUnifiedMurabaha, minimumDownPaymentForFinancingLimit } from "../lib/financing";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { assertMajorAmountRepresentable } from "./utils/money";
+import { assertNoPendingDepositRequest } from "./utils/depositRequestGuards";
+import { assertOperatedDealMode } from "./utils/dealModes";
 
 function assertFiniteNumber(val: unknown, name: string): void {
   if (val !== undefined && (typeof val !== "number" || !Number.isFinite(val))) {
@@ -108,6 +110,11 @@ export const saveQuote = mutation({
     // gated to VIEW_SALES (held by SALES/MANAGER/ACCOUNTANT/OWNER) rather
     // than CREATE_SALES, which is reserved for finalizing an actual sale.
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+
+    // SCRUM-495 (OR-6 / OR-7): LEASE and INTERNAL_INSTALLMENT are no longer deal
+    // modes. The union above stays wide so a historical quote still validates
+    // and renders; a NEW one is refused here, before anything is read or written.
+    assertOperatedDealMode(args.mode);
 
     // Finite checks on all numeric inputs and caller-supplied outputs
     assertFiniteNumber(args.vehiclePrice, "Vehicle price");
@@ -515,6 +522,21 @@ export const updateQuoteStatus = mutation({
     await requireTenantAuth(ctx, orgId, [PERMISSIONS.VIEW_SALES]);
     const existing = await ctx.db.get(quoteId);
     if (!existing || existing.orgId !== orgId) throw new ConvexError("Not found");
+
+    // SCRUM-495: a quote stored in a retired mode may not be offered (SHARED) or
+    // accepted as if live. DRAFT and EXPIRED stay open: EXPIRED is its exit.
+    if (status === "SHARED" || status === "ACCEPTED") assertOperatedDealMode(existing.mode);
+
+    // SCRUM-444 DA-03: EXPIRED is the terminal quote status. A deposit request
+    // still waiting on the quote would be orphaned by it, so the quote cannot
+    // expire until the request is confirmed, rejected or withdrawn.
+    if (status === "EXPIRED") {
+      await assertNoPendingDepositRequest(ctx, {
+        orgId,
+        quoteId,
+        action: "expire this quote",
+      });
+    }
 
     await ctx.db.patch(quoteId, { status });
 

@@ -280,6 +280,27 @@ describe("the step the rail names is a step this screen can take", () => {
     expect(screen.queryByRole("button", { name: "FinalizeDealAction" })).toBeNull();
   });
 
+  test.each([
+    ["chequeNeedsCorrection"],
+    ["chequeNeedsAccountingReview"],
+  ])("the register step is withheld while %s is raised, and offered when it is not", (flag) => {
+    grantTheWholeTail();
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: false, [flag]: true })
+    );
+    renderCockpit();
+    expect(screen.queryByRole("button", { name: "RegisterExpectedPaymentAction" })).toBeNull();
+    cleanup();
+
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: false, [flag]: false })
+    );
+    renderCockpit();
+    expect(screen.getByRole("button", { name: "RegisterExpectedPaymentAction" })).toBeTruthy();
+  });
+
   test("closing is offered only once the payment fact the server demands is on file", () => {
     readyToClose();
     queryResults.set(
@@ -1131,5 +1152,66 @@ describe("the mutations behind the buttons", () => {
 
     const calls = mutationCalls.get(FINALIZE_MUTATION) as Array<Record<string, unknown>>;
     expect(calls[1].idempotencyKey).not.toBe(calls[0].idempotencyKey);
+  });
+});
+
+describe("SCRUM-447 finance-company cheque panel wiring in the cockpit", () => {
+  const FC_PANEL = {
+    chequePaymentRegistered: true,
+    chequeNeedsCorrection: false,
+    chequeNeedsAccountingReview: false,
+    chequeFaceAttested: false,
+    chequeFaceUnrecorded: true,
+    unattestedChequeId: "cheque_1",
+    expectedPaymentCorrectable: false,
+    expectedPaymentReRegistrable: false,
+  };
+
+  test("an attest with no unattested cheque to write to stays open and reports, never a success", async () => {
+    grantTheWholeTail();
+    permissions.add(PERMISSIONS.MANAGE_FINANCE);
+    queryResults.set(COCKPIT_QUERY, cockpit({ stages: stages("AFTER_HANDOVER"), ...FC_PANEL }));
+    vi.mocked(toast.success).mockClear();
+
+    const view = renderCockpit();
+    fireEvent.click(screen.getByRole("button", { name: "FcAttestChequeFace" }));
+    fireEvent.change(await screen.findByLabelText("FcChequeFaceLabel"), { target: { value: "1500" } });
+    fireEvent.change(screen.getByLabelText("FcAttestNoteLabel"), { target: { value: "read off the cheque" } });
+
+    // The deal refreshes underneath the open dialog: the cheque it named is gone.
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ stages: stages("AFTER_HANDOVER"), ...FC_PANEL, unattestedChequeId: null })
+    );
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("UnexpectedError");
+    expect(screen.getByLabelText("FcChequeFaceLabel")).toBeTruthy();
+    expect(mutationCalls.get("applications:attestChequeFace")).toBeUndefined();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  test("registering from the cheque panel opens the payment form clean of a stale refusal", async () => {
+    grantTheWholeTail();
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ stages: stages("AFTER_HANDOVER"), ...FC_PANEL, chequeFaceUnrecorded: false, unattestedChequeId: null, expectedPaymentReRegistrable: true })
+    );
+
+    renderCockpit();
+    // A first attempt through the rail is refused and the form shows why.
+    mutationFailures.set(EXPECTED_PAYMENT_MUTATION, "Stale refusal text");
+    fireEvent.click(screen.getByRole("button", { name: "RegisterExpectedPaymentAction" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Confirm$/ }));
+    await screen.findByText("Stale refusal text");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByText("Stale refusal text")).toBeNull());
+
+    // Reopened from the cheque panel instead: a fresh form, not the old refusal.
+    fireEvent.click(screen.getByRole("button", { name: "RegisterExpectedPayment" }));
+    await screen.findByRole("button", { name: /^Confirm$/ });
+    expect(screen.queryByText("Stale refusal text")).toBeNull();
   });
 });

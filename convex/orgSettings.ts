@@ -190,7 +190,12 @@ export const upsert = mutation({
       // company configured with a 120.000 JOD valuation fee while the org was
       // otherwise fresh, the org switched to USD, and every later deal expected
       // a 1,200.00 USD valuation. Presence of the row is the invariant.
-      const [ledger, pending, txns, comp, advances, expenseRow, obDraft, journal, dealFee, dealCustody, financeApp, financeCompany] = await Promise.all([
+      // `depositRequests` (SCRUM-444), PENDING only: a waiting request stores a
+      // minor-unit amount in the currency it was raised in and posts nothing, so
+      // on a fresh org nothing else here is present. Switching currency and then
+      // confirming it would post that amount at the new currency's scale. A
+      // resolved request is history, and confirm re-checks the currency too.
+      const [ledger, pending, txns, comp, advances, expenseRow, obDraft, journal, dealFee, dealCustody, financeApp, financeCompany, pendingDepositRequest] = await Promise.all([
         ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
         ctx.db.query("pendingAccountingEvents").withIndex("by_org_status", (q) => q.eq("orgId", args.orgId)).first(),
         ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
@@ -206,10 +211,14 @@ export const upsert = mutation({
         ctx.db.query("financeDealCustody").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
         ctx.db.query("financeApplications").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
         ctx.db.query("financeCompanies").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
+        ctx.db
+          .query("depositRequests")
+          .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
+          .first(),
       ]);
       if (
         ledger || pending || txns || comp || advances || expenseRow || obDraft || journal ||
-        dealFee || dealCustody || financeApp || financeCompany
+        dealFee || dealCustody || financeApp || financeCompany || pendingDepositRequest
       ) {
         throw new ConvexError(
           "The organization currency cannot be changed after financial records exist — stored amounts are not converted and would be misread. Contact support for a currency migration."

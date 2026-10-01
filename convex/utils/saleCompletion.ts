@@ -1,4 +1,5 @@
 import { ConvexError } from "convex/values";
+import { isManualFinanceApplication } from "./manualFinancePayer";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
 import { notifyManagers, getActorName } from "./notifications";
@@ -17,6 +18,8 @@ import {
 import type { DepositMethod } from "./depositRecording";
 import { throwAppError, AppErrorCode } from "./errors";
 import { requireOrgMember } from "./tenancy";
+import { assertNoPendingDepositRequest } from "./depositRequestGuards";
+import { assertOperatedDealMode } from "./dealModes";
 import {
   assertSaleMayCompleteForVehicle,
   consumeRootForSale,
@@ -29,7 +32,7 @@ import {
   commissionAccountingDate,
 } from "../accounting/workflowHooks";
 import { computeResoldProductMargin, type FinancedSalePlanPayload } from "../accounting/postingRules";
-import { toMinorUnits, fromMinorUnits } from "./money";
+import { toMinorUnits, fromMinorUnits, denominationOf, isValidMinorAmount } from "./money";
 import { assertProfitApproved, saleRequiresMinimumProfit } from "./profitApproval";
 import { computeVehicleCapitalizedCost, vehicleHasCostBasis } from "./vehicleCost";
 import { computeConsignedSupplierPosition } from "../../lib/financingEconomics";
@@ -73,6 +76,14 @@ type SaleCompletionArgs = {
    * leave a sale row behind.
    */
   financedSalePlan?: FinancedSalePlanPayload;
+  /**
+   * SCRUM-390 (OR-5): G and C of the v2 financed-sale plan this completion
+   * froze, in minor units of `currency`. Supplied ONLY by
+   * `applications.finalizeDeal` and only under plan v2. It applies only to a
+   * dealer-owned car (a consigned sale ignores it) and is frozen onto the sale
+   * row so `recalculateCommission` never re-derives from the application.
+   */
+  commissionBase?: CommissionBase;
   taxRate?: number;
   taxAmount?: number;
   dealerFees?: number;
@@ -148,11 +159,33 @@ async function quoteLineIndexFor(
   return index >= 0 ? index : undefined;
 }
 
+export type CommissionBase = { approvedMinor: number; contributionMinor: number; currency: string };
+
+/**
+ * SCRUM-390 (OR-5): the frozen G and C, still in integer MINOR units of the sale
+ * currency, or null when the recorded pair cannot be trusted - a currency other
+ * than the organization's, an unsupported currency, or an amount that is not a
+ * non-negative safe integer. They stay minor so the margin subtraction is exact
+ * and a tier threshold is never straddled by float error. One check for
+ * completion and recalculation, so neither can accept what the other refuses;
+ * each caller words its own refusal.
+ */
+export function financedMarginOf(
+  base: CommissionBase,
+  orgCurrency: string
+): CommissionBase | null {
+  if (base.currency !== orgCurrency || !denominationOf(base.currency)) return null;
+  if (!isValidMinorAmount(base.approvedMinor) || !isValidMinorAmount(base.contributionMinor)) return null;
+  return base;
+}
+
 type PreparedSaleCompletion = {
   vehicle: Doc<"vehicles">;
   customer: Doc<"customers">;
   leadId?: Id<"leads">;
   commissionAmount?: number;
+  /** The frozen OR-5 operands, present only when they apply to this completion. */
+  commissionBase?: CommissionBase;
   currency: string;
   // True when the commission amount is already known at completion, in EITHER
   // mode. MANUAL used to defer accrual to payment time so the amount stayed
@@ -170,6 +203,11 @@ type PreparedSaleCompletion = {
  */
 export const FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT =
   "This is a financed sale of the supplier's car settled directly with him, so what the finance company approved is what he actually receives — and the dealership's claim on him is measured from it. That amount lives on the finance application, so this deal has to be completed through the financing workflow rather than recorded as a sale directly.";
+
+/** SCRUM-390: `ConvexError.data.code` of a finalize refused for an unusable commission base. */
+export const COMMISSION_BASE_UNUSABLE_CODE = "COMMISSION_BASE_UNUSABLE";
+/** SCRUM-390: `ConvexError.data.code` of a commission recalculation refused for an unusable frozen base. */
+export const COMMISSION_BASE_UNUSABLE_RECALC_CODE = "COMMISSION_BASE_UNUSABLE_RECALC";
 
 /**
  * Why a commission cannot be recalculated on an already-completed financed
@@ -199,6 +237,10 @@ async function prepareSaleCompletion(
   args: SaleCompletionArgs,
   intent: SalePreparationIntent
 ): Promise<PreparedSaleCompletion> {
+  // SCRUM-495 (OR-7): every sale creation and completion path passes here, so a LEASE draft
+  // cannot be completed; it can still be edited or cancelled via `sales.update`.
+  assertOperatedDealMode(args.financingType);
+
   const vehicle = await ctx.db.get(args.vehicleId);
   if (vehicle?.orgId !== args.orgId) {
     throwAppError(AppErrorCode.VEHICLE_NOT_FOUND, "Vehicle not found in this organization.");
@@ -237,7 +279,23 @@ async function prepareSaleCompletion(
     if (quote.customerId !== args.customerId || !quoteVehicleIds.includes(args.vehicleId)) {
       throw new ConvexError("Quote does not match the sale customer and vehicle.");
     }
+    // SCRUM-495 (OR-6 / OR-7): a quote left in a retired mode does not become a
+    // sale, whatever financing type the caller names.
+    assertOperatedDealMode(quote.mode);
     leadId = quote.leadId;
+
+    // SCRUM-444 DA-03: the shared boundary of `sales.create`,
+    // `sales.completeFromQuote`, `sales.completeDraft` and
+    // `applications.finalizeDeal`. A deposit request still waiting on this deal
+    // would be orphaned by the sale closing it, so completion refuses first —
+    // before any write. A DRAFT commits nothing and is not gated.
+    if (intent === "COMPLETION") {
+      await assertNoPendingDepositRequest(ctx, {
+        orgId: args.orgId,
+        quoteId: args.quoteId,
+        action: "complete the sale",
+      });
+    }
   }
 
   if (args.applicationId) {
@@ -252,6 +310,9 @@ async function prepareSaleCompletion(
     ) {
       throw new ConvexError("Finance application does not match the sale source records.");
     }
+    // SCRUM-495: the mode the application froze at submission is the one its
+    // deal reads everywhere, so it is refused on the same footing as the quote.
+    assertOperatedDealMode(app.quoteModeAtSubmission);
   }
 
   const membership = await requireOrgMember(ctx, args.orgId, args.salespersonId);
@@ -301,6 +362,26 @@ async function prepareSaleCompletion(
     throw new ConvexError(FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT);
   }
 
+  // SCRUM-390 (OR-5): applies to a completion of a dealer-owned car only; a consigned
+  // sale keeps its frozen-margin basis and a draft commits nothing.
+  let commissionBase: CommissionBase | undefined;
+  let financedMargin: CommissionBase | undefined;
+  if (intent === "COMPLETION" && args.commissionBase && !isConsignedAgentSale(vehicle)) {
+    const margin = financedMarginOf(args.commissionBase, currency);
+    if (!margin) {
+      // Coded so an Arabic screen can translate it (lib/errors.ts getLocalizedErrorMessage);
+      // `message` stays the English text every existing caller already shows.
+      throw new ConvexError({
+        code: COMMISSION_BASE_UNUSABLE_CODE,
+        message: `This deal's financing figures (recorded in ${args.commissionBase.currency}) cannot be used to work out the commissionable vehicle margin in the dealership's currency (${currency}). Settle the deal's currency and figures before completing it.`,
+        baseCurrency: args.commissionBase.currency,
+        orgCurrency: currency,
+      });
+    }
+    commissionBase = args.commissionBase;
+    financedMargin = margin;
+  }
+
   let accrueAtCompletion = false;
   if (commissionMode === "MANUAL") {
     commissionAmount = args.existingCommissionAmount;
@@ -322,6 +403,7 @@ async function prepareSaleCompletion(
           : undefined,
       settlementRoute: args.supplierSettlementRoute,
       externallyFinanced: args.financingType === "FINANCED" || args.financingType === "LEASE",
+      financedMargin,
     });
     accrueAtCompletion = commissionAmount != null;
   }
@@ -376,7 +458,7 @@ async function prepareSaleCompletion(
     }
   }
 
-  return { vehicle, customer, leadId, commissionAmount, currency, accrueAtCompletion };
+  return { vehicle, customer, leadId, commissionAmount, commissionBase, currency, accrueAtCompletion };
 }
 
 /**
@@ -430,6 +512,14 @@ export async function computeAutoCommissionAmount(
      * GL, the supplier claim and every report disagreed with.
      */
     frozenRecognizedEarnings?: number;
+    /**
+     * SCRUM-390 (OR-5): G and C, in integer minor units, of a dealer-owned financed sale
+     * completed under a v2 plan. When given, the base is the "Commissionable
+     * vehicle margin" G - C - cost (never below 0) instead of salePrice - cost.
+     * Completion and recalculation feed it from the SAME frozen sale-row
+     * values; nothing is read from the application.
+     */
+    financedMargin?: CommissionBase;
   }
 ): Promise<number | undefined> {
   let grossProfit: number;
@@ -451,6 +541,7 @@ export async function computeAutoCommissionAmount(
       supplierGrossReceipt: args.supplierGrossReceipt,
       settlementRoute: args.settlementRoute,
       externallyFinanced: args.externallyFinanced,
+      financedMargin: args.financedMargin,
     });
   }
   if (args.commissionMode === "AUTO_TIERS") {
@@ -485,7 +576,10 @@ export async function computeAutoCommissionAmount(
  *
  * Every other case is unchanged and deliberately so:
  *   - an owned sale — the dealership sells its own car and the whole spread is
- *     its earning;
+ *     its earning. Except (SCRUM-390, OR-5) an owned sale completed under a
+ *     financed-sale plan v2, whose realized basis is G - C: the finance
+ *     company's approved amount less the dealership's forward contribution,
+ *     both frozen on the sale row. Never below 0 after cost;
  *   - a consigned THROUGH_DEALERSHIP sale — the dealership collects the gross
  *     and the customer is contractually liable for the full sale price, so the
  *     spread over the entitlement is genuinely recognized;
@@ -511,6 +605,8 @@ function commissionableEarnings(args: {
   supplierGrossReceipt?: number;
   settlementRoute?: ConsignedSettlementRoute;
   externallyFinanced: boolean;
+  /** OR-5: G and C in minor units; owned sales only (a consigned sale never receives it). */
+  financedMargin?: CommissionBase;
 }): number {
   const settlesDirect = !dealershipCollectsGross(
     consignedSettlementRoute({ supplierSettlementRoute: args.settlementRoute })
@@ -521,9 +617,14 @@ function commissionableEarnings(args: {
       "This sale is the supplier's car, financed, and settled directly with him, but the amount the finance company actually paid him was not recorded on it. Commission is earned on what the dealership recognized over the supplier's entitlement, and without that amount it cannot be worked out. Record the approved purchase amount on the deal first."
     );
   }
-  const realizedBasis = consignedDirect
-    ? (args.supplierGrossReceipt ?? args.salePrice)
-    : args.salePrice;
+  if (!consignedDirect && args.financedMargin) {
+    // OR-5: G - C - cost in integer minor units, converted once, so no tier
+    // threshold is straddled by float error; cost rounds as the ledger's COGS does.
+    const { approvedMinor, contributionMinor, currency } = args.financedMargin;
+    const marginMinor = approvedMinor - contributionMinor - toMinorUnits(args.vehicleCost, currency);
+    return fromMinorUnits(Math.max(0, marginMinor), currency);
+  }
+  const realizedBasis = consignedDirect ? (args.supplierGrossReceipt ?? args.salePrice) : args.salePrice;
   return Math.max(0, realizedBasis - args.vehicleCost);
 }
 
@@ -560,6 +661,9 @@ async function insertSaleRecord(
     gapCost: args.gapCost,
     gapTermMonths: args.gapTermMonths,
     commissionAmount,
+    // SCRUM-390 (OR-5): set only by a COMPLETION that used the margin base
+    // (prepareSaleCompletion leaves it undefined for a draft).
+    commissionBase: prepared.commissionBase,
     quoteId: args.quoteId,
     applicationId: args.applicationId,
     leadId: prepared.leadId,
@@ -1314,7 +1418,12 @@ async function applySaleCompletionSideEffects(
   //
   // Resolved here rather than inside the builder below, which is synchronous.
   const financedByConfiguredCompany = args.applicationId
-    ? (await ctx.db.get(args.applicationId))?.companyId !== undefined
+    ? await (async () => {
+        const financingApp = await ctx.db.get(args.applicationId!);
+        // SCRUM-27: a manual company is a financier too - without a plan the
+        // consignment guard must refuse it exactly as it does a configured one.
+        return financingApp !== null && (financingApp.companyId !== undefined || isManualFinanceApplication(financingApp));
+      })()
     : false;
 
   const consignment = isSourced

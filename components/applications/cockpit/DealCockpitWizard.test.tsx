@@ -410,6 +410,40 @@ describe("G5 — the documents step is an action that opens and focuses the chec
     expect(stepButton()).toBeNull();
     expect(step().textContent).toContain("DocumentsNeedUploader");
   });
+
+  /**
+   * SCRUM-422 (R1 follow-up 1): a closed deal still derives DELIVERY_ACTIONS
+   * from the live document rules, so a rule added after closing re-opens the
+   * stage. The server refuses every document write on a settled deal, so the
+   * step names that fact instead of sending a full-permission caller to a
+   * checklist with nothing to press.
+   */
+  test("a closed deal's documents step is not offered, and says why", () => {
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VERIFY_FINANCE_DOCUMENTS);
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit(
+        "CLOSED",
+        [{ key: "DELIVERY_ACTIONS", state: "BLOCKED", blocker: "DocumentsIncomplete", authority: "DEALER" }],
+        { documents: [{ ruleId: "r1", name: "هوية العميل", required: true, status: "MISSING" }] }
+      )
+    );
+    renderCockpit();
+    expect(stepButton()?.textContent).not.toBe("CompleteDocumentsAction");
+    expect(step().textContent).toContain("DocumentsSettled");
+  });
+
+  test("CONTROL — the same caller on an open deal gets the working step", () => {
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VERIFY_FINANCE_DOCUMENTS);
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    queryResults.set(COCKPIT_QUERY, delivery());
+    renderCockpit();
+    expect(stepButton()?.textContent).toBe("CompleteDocumentsAction");
+    expect(step().textContent).not.toContain("DocumentsSettled");
+  });
 });
 
 /**

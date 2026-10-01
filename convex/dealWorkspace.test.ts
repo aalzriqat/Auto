@@ -298,7 +298,11 @@ describe("dealWorkspace.financedDealCockpit", () => {
 
       // The added keys, and ONLY those.
       const added = Object.keys(wrapped!).filter((k) => !(k in direct!));
-      expect(added.sort()).toEqual(["activeAppraisalProvider", "pendingDepositResolution"]);
+      expect(added.sort()).toEqual([
+        "activeAppraisalProvider",
+        "pendingDepositRequests",
+        "pendingDepositResolution",
+      ]);
 
       // And every pre-existing field is identical — this is what makes "the
       // cockpit stays authoritative" a checked claim rather than a comment.
@@ -306,6 +310,7 @@ describe("dealWorkspace.financedDealCockpit", () => {
       // rather than silently passing.
       const {
         pendingDepositResolution: _flag,
+        pendingDepositRequests: _requests,
         activeAppraisalProvider: _provider,
         ...rest
       } = wrapped!;

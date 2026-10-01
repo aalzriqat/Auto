@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, test } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { dictionaries } from "@/lib/i18n/dictionaries";
 import { WITHHELD_READINESS_REASON_FALLBACK, closingReadinessRefusalOf } from "@/lib/closingReadinessReasonCodes";
 import { DealClosingReadinessList, closingReasonText, type ClosingReadinessView } from "./DealClosingReadinessList";
@@ -127,5 +127,69 @@ describe("closingReasonText — the refused-finalize toast uses the panel's tran
     expect(closingReadinessRefusalOf("Register how and when the payment is expected before finalizing the deal.")).toBeNull();
     expect(closingReadinessRefusalOf({ code: "SOME_FUTURE_CODE", message: ENGLISH })).toBeNull();
     expect(closingReadinessRefusalOf({ code: "UNAUTHORIZED", message: "No." })).toBeNull();
+  });
+});
+
+/**
+ * SCRUM-417 UX1 (S4): a failed check is a destination. The container-side
+ * mapping decides WHICH panel a check opens; the list only offers the control
+ * on a row that is not satisfied and has somewhere to go.
+ */
+describe("DealClosingReadinessList — destinations", () => {
+  const many = (): ClosingReadinessView =>
+    ({
+      state: "BLOCKED",
+      open: true,
+      checks: [
+        { key: "CUSTODY_SETTLED", status: "BLOCKED", reason: "open", reasonCode: null },
+        { key: "COSTS_CLOSABLE", status: "READY", reason: null, reasonCode: null },
+        { key: "REMITTANCE_KNOWN", status: "BLOCKED", reason: "no remittance", reasonCode: null },
+        { key: "HANDOVER_COSTS_PAID", status: "UNAVAILABLE", reason: "unknown", reasonCode: null },
+      ],
+      unavailableReason: null,
+      moneyWithheld: false,
+    }) as unknown as ClosingReadinessView;
+
+  test("a blocked row with a destination offers it, and it goes there", () => {
+    const onGo = vi.fn();
+    render(
+      <DealClosingReadinessList
+        t={(key) => key}
+        readiness={many()}
+        destinations={{ CUSTODY_SETTLED: { labelKey: "ClosingCheckGoToCustody", onGo } }}
+      />
+    );
+    const go = screen.getByTestId("closing-check-go-CUSTODY_SETTLED");
+    expect(go.textContent).toContain("ClosingCheckGoToCustody");
+    fireEvent.click(go);
+    expect(onGo).toHaveBeenCalledTimes(1);
+  });
+
+  test("an UNAVAILABLE row with a destination offers it too", () => {
+    render(
+      <DealClosingReadinessList
+        t={(key) => key}
+        readiness={many()}
+        destinations={{ HANDOVER_COSTS_PAID: { labelKey: "ClosingCheckGoToCosts", onGo: () => {} } }}
+      />
+    );
+    expect(screen.getByTestId("closing-check-go-HANDOVER_COSTS_PAID")).toBeTruthy();
+  });
+
+  test("CONTROL -- a satisfied row, and a blocked row with no destination, offer nothing", () => {
+    render(
+      <DealClosingReadinessList
+        t={(key) => key}
+        readiness={many()}
+        destinations={{ COSTS_CLOSABLE: { labelKey: "ClosingCheckGoToCosts", onGo: () => {} } }}
+      />
+    );
+    expect(screen.queryByTestId("closing-check-go-COSTS_CLOSABLE")).toBeNull();
+    expect(screen.queryByTestId("closing-check-go-REMITTANCE_KNOWN")).toBeNull();
+  });
+
+  test("with no destinations at all the list is unchanged", () => {
+    render(<DealClosingReadinessList t={(key) => key} readiness={many()} />);
+    expect(screen.queryByTestId("closing-check-go-CUSTODY_SETTLED")).toBeNull();
   });
 });

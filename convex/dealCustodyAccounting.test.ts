@@ -10,6 +10,7 @@ import { deriveRecommendedCustody } from "./financeDealCosts";
 import { drainEntries } from "./accountingOutbox";
 import { hookCustodyFeePaid, hookCustodyFeeReversed } from "./accounting/workflowHooks";
 import { getDocumentSize } from "convex/values";
+import { feeDocBytes, MAX_FEE_DOC_BYTES } from "./utils/feeDocLimits";
 import {
   assertStoredVersion,
   CUSTODY_PROOF_CALLER_RESERVE_BYTES,
@@ -1179,6 +1180,31 @@ describe("who may be handed the cash (frozen-candidate finding 3)", () => {
     expect(theirs.candidates.find((c) => c.userId === seed.employeeId)?.isActor).toBe(true);
     expect(theirs.candidates.find((c) => c.userId === seed.userId)?.isActor).toBe(false);
   });
+
+  // SCRUM-439 review (Sol F4 / Sonnet R2): the list is capped, so a caller can
+  // fall outside it. The caller's own id comes back regardless, so the deal
+  // screen never reads "absent from the list" as "not the caller".
+  test("a caller past the member cap is still named by the read", async () => {
+    const seed = await seedDeal("candidates-cap");
+    const lateActor = await seed.t.run(async (ctx) => {
+      const ownerRole = await ctx.db.insert("roles", { orgId: seed.orgId, name: "OWNER2", permissions: ALL_PERMISSIONS });
+      const viewerRole = await ctx.db.insert("roles", { orgId: seed.orgId, name: "FILLER", permissions: [] });
+      for (let i = 0; i < 200; i++) {
+        const filler = await ctx.db.insert("users", { clerkId: `cu_fill_${i}`, email: `f${i}@x.com`, name: `F${i}` });
+        await ctx.db.insert("memberships", { orgId: seed.orgId, userId: filler, roleId: viewerRole });
+      }
+      const late = await ctx.db.insert("users", { clerkId: "cu_late_actor", email: "late@x.com", name: "Late" });
+      await ctx.db.insert("memberships", { orgId: seed.orgId, userId: late, roleId: ownerRole });
+      return late;
+    });
+    const asLate = seed.t.withIdentity({ subject: "cu_late_actor" });
+    const read = await asLate.query(api.financeDealCosts.listCustodyCandidates, { orgId: seed.orgId });
+    expect(read.truncated).toBe(true);
+    expect(read.candidates.some((c) => c.userId === lateActor)).toBe(false);
+    expect(read.actorId).toBe(lateActor);
+    const mine = await seed.asUser.query(api.financeDealCosts.listCustodyCandidates, { orgId: seed.orgId });
+    expect(mine.actorId).toBe(seed.userId);
+  });
 });
 
 describe("planned versus actual", () => {
@@ -1511,6 +1537,33 @@ describe("B — a custody family is on the books completely, or the deal does no
     expect(await pending(seed)).toHaveLength(0);
 
     await classify(seed);
+  });
+
+  test("SCRUM-443 byte cap: a legacy line whose custody posting record would take it past the cap refuses the migration, writing nothing", async () => {
+    const seed = await seedDeal("legacy-bytes", { templates: false });
+    const { custodyId, feeId, t0 } = await seedLegacyFamily(seed);
+    const row = (await seed.t.run((ctx) => ctx.db.get(feeId)))!;
+    const posted = {
+      custodyPosted: { version: 1, amountMinor: jod(650), custodyId, occurredAt: t0 + DAY },
+      custodyPostingVersion: 1,
+      updatedAt: Date.now(),
+    };
+    // Exactly at the cap without the posting record: the row is legal today,
+    // and the migration's own patch is what would take it over.
+    const bytesWith = (n: number, extra: Record<string, unknown>) => feeDocBytes({ ...row, ...extra, description: "x".repeat(n) });
+    let lo = 0;
+    let hi = MAX_FEE_DOC_BYTES;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (bytesWith(mid, {}) <= MAX_FEE_DOC_BYTES) lo = mid;
+      else hi = mid - 1;
+    }
+    await seed.t.run((ctx) => ctx.db.patch(feeId, { description: "x".repeat(lo) }));
+    expect(bytesWith(lo, {})).toBeLessThanOrEqual(MAX_FEE_DOC_BYTES);
+    expect(bytesWith(lo, posted)).toBeGreaterThan(MAX_FEE_DOC_BYTES);
+    await expect(migrate(seed, custodyId)).rejects.toThrow(/too large to store/);
+    expect(await events(seed)).toHaveLength(0);
+    expect((await seed.t.run((ctx) => ctx.db.get(feeId)))?.custodyPosted).toBeUndefined();
   });
 
   test("a legacy OPEN record with an out-of-pocket position migrates its payable too; a written-off one posts its shortage", async () => {

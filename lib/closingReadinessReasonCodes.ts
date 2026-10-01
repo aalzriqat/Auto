@@ -15,11 +15,14 @@
 
 /** The accounting conditions a financed deal must meet before it can be finalized. */
 export const CLOSING_READINESS_CHECK_KEYS = [
+  // SCRUM-495: the deal is in a mode the dealership no longer operates.
+  "DEAL_MODE_RETIRED",
   "REMITTANCE_KNOWN",
   "CONFIGURED_FEES_RECORDED",
   "CUSTODY_ON_LEDGER",
   "CUSTODY_SETTLED",
   "COSTS_CLOSABLE",
+  "HANDOVER_COSTS_PAID",
   "FIRST_PAYMENT_RECORDED",
   "LEGAL_INVOICE_RECORDED",
 ] as const;
@@ -28,6 +31,8 @@ export type ClosingReadinessCheckKey = (typeof CLOSING_READINESS_CHECK_KEYS)[num
 
 /** Every code the evaluator can state, with the names of the params its translation is filled with. */
 export const CLOSING_READINESS_REASON_PARAMS = {
+  // DEAL_MODE_RETIRED (SCRUM-495): a LEASE or in-house instalment deal cannot be finalized.
+  DEAL_MODE_RETIRED: [],
   // REMITTANCE_KNOWN
   REMITTANCE_APPROVAL_MISSING: [],
   REMITTANCE_UNKNOWN: [],
@@ -54,6 +59,32 @@ export const CLOSING_READINESS_REASON_PARAMS = {
   COSTS_AWAITING_RECONCILIATION: ["count"],
   COSTS_NOT_RECONCILED: [],
   COSTS_TREATMENT_UNMAPPED: ["feeLabel", "treatment"],
+  // HANDOVER_COSTS_PAID (SCRUM-443) — every dealer-borne handover cost is
+  // either charged to the employee custody that paid it or paid directly by
+  // the dealership. Which lines is served beside the reason (`feeIds`).
+  HANDOVER_COSTS_NO_ACTUAL: ["count"],
+  HANDOVER_COSTS_UNPAID: ["count"],
+  HANDOVER_COSTS_CONFLICT: ["count"],
+  // A REAL dealer-borne cost no supported source can pay (SCRUM-443 v6): its
+  // treatment posts nowhere, or it is withheld from a settlement no configured
+  // plan recognises. It would reach no ledger account, so it blocks closing.
+  HANDOVER_COSTS_UNSUPPORTED_TREATMENT: ["count"],
+  HANDOVER_COSTS_DEDUCTION_NOT_RECOGNISED: ["count"],
+  // The same two blocked states, but on a line recorded from the finance
+  // company's LEGACY fee template: nothing on the deal can correct it, so the
+  // reason sends the user to an accountant, never to "remove and add again"
+  // (SCRUM-443 v7).
+  HANDOVER_COSTS_LEGACY_TEMPLATE_REVIEW: ["count"],
+  // A direct payment is recorded on the line but is not (yet) on the ledger:
+  // its posting is queued (no open accounting period), failed, or an earlier
+  // version's reversal has not landed.
+  HANDOVER_DIRECT_NOT_ON_LEDGER: ["count"],
+  // A direct payment that was TAKEN BACK on its line (removed, set to zero,
+  // replaced) is still on the ledger: its reversal is waiting for an accounting
+  // period to open. The row no longer says it was paid; the ledger does.
+  HANDOVER_DIRECT_REVERSAL_PENDING: ["count"],
+  // The ledger could not be read completely, so "on the books" cannot be proven.
+  HANDOVER_DIRECT_LEDGER_UNVERIFIABLE: [],
   // FIRST_PAYMENT_RECORDED
   FIRST_PAYMENT_MISSING: [],
   // LEGAL_INVOICE_RECORDED

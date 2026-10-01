@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
+import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 
 export const JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 export const JEV_MODEL = "jev-latest";
@@ -332,24 +333,6 @@ export function deterministicInvariantImpact(changedFiles, invariants) {
       };
     })
     .filter((impact) => impact !== undefined);
-}
-
-function resolveTrustedGitExecutable() {
-  const candidates =
-    process.platform === "win32"
-      ? [
-          "C:\\Program Files\\Git\\cmd\\git.exe",
-          "C:\\Program Files\\Git\\bin\\git.exe",
-          "C:\\Program Files (x86)\\Git\\cmd\\git.exe",
-        ]
-      : process.platform === "darwin"
-        ? ["/usr/bin/git", "/opt/homebrew/bin/git", "/usr/local/bin/git"]
-        : ["/usr/bin/git", "/bin/git"];
-  const executable = candidates.find((candidate) => existsSync(candidate));
-  if (!executable) {
-    throw new Error("A trusted absolute Git executable was not found");
-  }
-  return executable;
 }
 
 function safeGit(repoRoot, args) {

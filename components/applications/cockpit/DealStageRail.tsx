@@ -1,6 +1,6 @@
 "use client";
 
-import { Check } from "lucide-react";
+import { Check, Minus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   isLiveStageState,
@@ -40,46 +40,53 @@ export type RailStage = Readonly<{
  *
  * `aria-current="step"` marks the live node and each node's accessible name
  * carries its label, state, owner and blocker, so none of this is colour alone.
+ *
+ * SCRUM-417 UX4 (O3): each node is a real button. Pressing it only chooses
+ * which step is SHOWN (`onSelect`); the live node clears that choice. It never
+ * changes what the deal is waiting on.
  */
 export function DealStageRail({
   stages,
   t,
-}: Readonly<{ stages: ReadonlyArray<RailStage>; t: (key: string) => string }>) {
+  viewedKey = null,
+  onSelect,
+}: Readonly<{
+  stages: ReadonlyArray<RailStage>;
+  t: (key: string) => string;
+  /** The non-live step being looked at (SCRUM-417 UX4, O3), if any. */
+  viewedKey?: string | null;
+  /** Shows that step in the view above the working surface (`null` = back to the live one). */
+  onSelect: (key: string | null) => void;
+}>) {
   return (
     <ol className="flex flex-wrap gap-y-3" data-testid="deal-stage-rail">
       {stages.map((stage, index) => {
         const live = isLiveStageState(stage.state);
+        const viewed = !live && stage.key === viewedKey;
         // The accessible NAME of the node — label, state, owner, blocker, in
-        // that order — and the tooltip says the same thing.
-        const name = [stage.label, t(STAGE_STATE_KEY[stage.state]), stage.owner, stage.blocker]
+        // that order — and the tooltip says the same thing. The step being
+        // looked at says so in words too, so it is never colour alone.
+        const name = [
+          stage.label,
+          t(STAGE_STATE_KEY[stage.state]),
+          stage.owner,
+          stage.blocker,
+          viewed ? t("StageViewing") : undefined,
+        ]
           .filter(Boolean)
           .join(" · ");
-        return (
-          <li
-            key={stage.key}
-            className="relative flex min-w-0 basis-1/4 flex-col items-center gap-1 px-1 text-center sm:flex-1"
-            aria-current={live ? "step" : undefined}
-            aria-label={name}
-            title={name}
-          >
-            {/* The connector, drawn behind the node from the previous one.
-                Hidden on the first node and on phones, where the rail wraps
-                four to a row and a line across a row break would connect
-                the wrong stages. */}
-            {index > 0 && (
-              <span
-                aria-hidden
-                className="absolute top-[13px] hidden h-0.5 w-full bg-border sm:block ltr:-left-1/2 rtl:-right-1/2"
-              />
-            )}
+        const content = (
+          <>
             <span
-              className={`relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 text-xs font-semibold ${STAGE_NODE_CLASS[stage.state]}`}
+              className={`relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 text-xs font-semibold ${STAGE_NODE_CLASS[stage.state]} ${
+                viewed ? "ring-2 ring-primary ring-offset-2 ring-offset-background" : ""
+              }`}
             >
               {stageNodeContent(stage.state, index)}
             </span>
             <span
               className={`min-w-0 max-w-full break-words text-xs leading-snug ${
-                live ? "font-semibold text-foreground" : "text-muted-foreground"
+                live || viewed ? "font-semibold text-foreground" : "text-muted-foreground"
               }`}
             >
               {stage.label}
@@ -96,6 +103,36 @@ export function DealStageRail({
                 <bdi>{stage.owner}</bdi>
               </span>
             )}
+          </>
+        );
+        return (
+          <li
+            key={stage.key}
+            className="relative flex min-w-0 basis-1/4 flex-col items-center px-1 sm:flex-1"
+          >
+            {/* The connector, drawn behind the node from the previous one.
+                Hidden on the first node and on phones, where the rail wraps
+                four to a row and a line across a row break would connect
+                the wrong stages. */}
+            {index > 0 && (
+              <span
+                aria-hidden
+                className="absolute top-[13px] hidden h-0.5 w-full bg-border sm:block ltr:-left-1/2 rtl:-right-1/2"
+              />
+            )}
+            {/* A real button: keyboard-reachable, Enter and Space activate it,
+                and it names its step. The live node clears the view. */}
+            <button
+              type="button"
+              data-testid={`deal-stage-node-${stage.key}`}
+              className="flex w-full min-w-0 cursor-pointer flex-col items-center gap-1 rounded-md py-1 text-center hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-current={live ? "step" : undefined}
+              aria-label={name}
+              title={name}
+              onClick={() => onSelect(live ? null : stage.key)}
+            >
+              {content}
+            </button>
           </li>
         );
       })}
@@ -112,31 +149,58 @@ export function DealStageRail({
  */
 export function DealStagesComplete({
   count,
+  notNeeded = 0,
   expanded,
   onToggle,
   t,
 }: Readonly<{
+  /** Stages that are COMPLETE. */
   count: number;
+  /** Stages the server proved are not needed. They are finished, never "complete". */
+  notNeeded?: number;
   expanded: boolean;
   onToggle: () => void;
   t: (key: string) => string;
 }>) {
+  // A not-needed stage is finished but was never completed, so the summary
+  // makes no completion claim and wears no success tick: a quiet dash and the
+  // two counts apart. An all-COMPLETE deal keeps its tick, copy and count.
+  const mixed = notNeeded > 0;
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-emerald-700 bg-emerald-500/15 text-emerald-800 dark:border-emerald-400 dark:bg-emerald-400/15 dark:text-emerald-200">
-        <Check className="h-4 w-4" aria-hidden />
-      </span>
-      <p className="min-w-0 flex-1 text-sm font-medium">
-        {t("DealAllStagesComplete")}{" "}
-        <span className="text-muted-foreground">
-          (<bdi dir="ltr">{count}</bdi>)
+      {mixed ? (
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-dotted border-border bg-transparent text-muted-foreground">
+          <Minus className="h-4 w-4" aria-hidden />
         </span>
+      ) : (
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-emerald-700 bg-emerald-500/15 text-emerald-800 dark:border-emerald-400 dark:bg-emerald-400/15 dark:text-emerald-200">
+          <Check className="h-4 w-4" aria-hidden />
+        </span>
+      )}
+      <p className="min-w-0 flex-1 text-sm font-medium">
+        {mixed ? (
+          <>
+            {t("DealStagesFinished")}{" "}
+            <span className="text-muted-foreground">
+              (<span className="whitespace-nowrap"><bdi dir="ltr">{count}</bdi> {t("DealStagesCompleteCount")}</span> ·{" "}
+              <span className="whitespace-nowrap"><bdi dir="ltr">{notNeeded}</bdi> {t("DealStagesNotNeededCount")}</span>)
+            </span>
+          </>
+        ) : (
+          <>
+            {t("DealAllStagesComplete")}{" "}
+            <span className="text-muted-foreground">
+              (<bdi dir="ltr">{count}</bdi>)
+            </span>
+          </>
+        )}
       </p>
       <Button
         type="button"
         variant="ghost"
         size="sm"
         className="h-9"
+        data-testid="deal-stages-toggle"
         aria-expanded={expanded}
         onClick={onToggle}
       >

@@ -10,6 +10,9 @@ import { QuotePrintTemplate } from "../../QuotePrintTemplate";
 import { ReceiptVoucherPrintTemplate } from "../../ReceiptVoucherPrintTemplate";
 import { RecordDepositDialog } from "../components/RecordDepositDialog";
 import { QuoteDepositManager } from "@/components/deposits/QuoteDepositManager";
+import { QuoteDepositRequests } from "@/components/deposits/DepositRequests";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 import { ConsignedSettlementSection } from "../../ConsignedSettlementSection";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -57,6 +60,11 @@ export function Step4QuoteSuccess({
 
   const [depositDialogOpen, setDepositDialogOpen] = useState(false);
   const [depositRecorded, setDepositRecorded] = useState(false);
+  // A salesperson asks; a manager or accountant records (SCRUM-444). The button
+  // says which one this person is doing, so it never promises money that only
+  // a confirmation can put on the books.
+  const { hasPermission } = usePermissions();
+  const canRecordDeposit = hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
   const [depositId, setDepositId] = useState<Id<"deposits"> | null>(null);
   const voucher = useQuery(
     api.paymentVouchers.getByDeposit,
@@ -443,7 +451,9 @@ export function Step4QuoteSuccess({
             <HandCoins className="w-4 h-4 me-2" />
             {depositRecorded
               ? (t("DepositRecorded" as any) ?? "Deposit Recorded ✓")
-              : (t("RecordDeposit" as any) ?? "Record Deposit")}
+              : canRecordDeposit
+                ? (t("RecordDeposit" as any) ?? "Record Deposit")
+                : t("RequestDeposit" as any)}
           </Button>
 
           {depositRecorded && voucher && (
@@ -591,6 +601,7 @@ export function Step4QuoteSuccess({
 
       {activeOrgId ? (
         <div className="space-y-4">
+          <QuoteDepositRequests orgId={activeOrgId} quoteId={quoteId} />
           <QuoteDepositManager
             orgId={activeOrgId}
             quoteId={quoteId}

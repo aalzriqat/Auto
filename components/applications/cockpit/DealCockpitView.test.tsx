@@ -153,7 +153,13 @@ function dealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
 }
 
 function renderCockpit(deal: DealCockpitData | null | undefined = dealFixture()) {
-  return render(<DealCockpitView deal={deal} onRecordSupplierReceipt={async () => {}} />);
+  const view = render(<DealCockpitView deal={deal} onRecordSupplierReceipt={async () => {}} />);
+  // The rest of the deal sits behind "Deal details", `hidden` (out of the
+  // accessibility tree) while collapsed; these tests read what is in it, so
+  // they open it the way an operator does.
+  const toggle = screen.queryByTestId("deal-details-toggle");
+  if (toggle?.getAttribute("aria-expanded") === "false") fireEvent.click(toggle);
+  return view;
 }
 
 /**
@@ -241,7 +247,8 @@ describe("a corrupt moment in the header or essentials never loses the screen", 
     const header = screen.getByTestId("deal-header");
     expect(header.textContent).toContain("DealCockpitTitle");
     expect(header.textContent).toContain("LastUpdated: —");
-    expect(screen.getByText("DealOwner").parentElement?.textContent).toContain("—");
+    // Both copies of the identity strip (desktop + phone) say the same thing.
+    for (const owner of screen.getAllByText("DealOwner")) expect(owner.parentElement?.textContent).toContain("—");
     // The rest of the screen is intact, not a blank error boundary.
     expect(screen.getByText(/2,410/)).toBeTruthy();
   });
@@ -249,7 +256,7 @@ describe("a corrupt moment in the header or essentials never loses the screen", 
   test("a corrupt updatedAt alone is guarded too, without touching a valid createdAt", () => {
     renderCockpit(dealFixture({ updatedAt: Number.NaN }));
     expect(screen.getByTestId("deal-header").textContent).toContain("LastUpdated: —");
-    expect(screen.getByText("DealOwner").parentElement?.textContent).toMatch(/Jul 2026/);
+    for (const owner of screen.getAllByText("DealOwner")) expect(owner.parentElement?.textContent).toMatch(/يوليو 2026/);
   });
 });
 
@@ -456,7 +463,7 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
   function summaryTile(labelKey: string): string | null {
     const label = screen
       .queryAllByText(labelKey)
-      .find((el) => el.tagName === "P" && el.closest("details") === null);
+      .find((el) => el.tagName === "P" && el.closest("details, [hidden]") === null);
     return label?.parentElement?.textContent ?? null;
   }
 
@@ -538,7 +545,7 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
     );
     const tiles = screen
       .getAllByText(/^Line/)
-      .filter((el) => el.tagName === "P" && el.closest("details") === null)
+      .filter((el) => el.tagName === "P" && el.closest("details, [hidden]") === null)
       .map((el) => el.textContent);
     expect(tiles).toEqual([
       "LineApprovedPurchase",
@@ -589,7 +596,7 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
     ];
     // Tiles: one per line, server order, zeros spelled with their sign.
     const tiles = Array.from(container.querySelectorAll("p"))
-      .filter((el) => served.includes(el.textContent ?? "") && el.closest("details") === null)
+      .filter((el) => served.includes(el.textContent ?? "") && el.closest("details, [hidden]") === null)
       .map((el) => el.textContent);
     expect(tiles).toEqual(served);
     expect(summaryTile("LineCustomerPlannedToDealer")).toMatch(/LineCustomerPlannedToDealer0 د\.أ/);
@@ -1644,8 +1651,11 @@ describe("the current stage has exactly one working surface, beneath the rail", 
       />
     );
 
-    // Rail node + panel heading, and nothing else names the stage.
-    expect(screen.getAllByText("StageHandover")).toHaveLength(2);
+    // Rail node + panel heading, and nothing else names the stage -- bar the
+    // phone-only "Step N of M" bar (O4), which is the rail folded, not a third card.
+    expect(
+      screen.getAllByText("StageHandover").filter((node) => !node.closest('[data-testid="deal-mobile-stepbar"]'))
+    ).toHaveLength(2);
     expect(screen.queryByText("NextStepHeading")).toBeNull();
     // The rail marks exactly the stage the panel is working.
     const rail = screen.getByTestId("deal-stage-rail");
@@ -1655,8 +1665,8 @@ describe("the current stage has exactly one working surface, beneath the rail", 
     const focus = screen.getByTestId("deal-next-step");
     expect(focus.textContent).toContain("StageHandover");
     expect(focus.textContent).toContain("RegisterHandoverAction");
-    // The rail is a readout: no button lives on it.
-    expect(rail.querySelector("button")).toBeNull();
+    // UX4 (O3): each node is a real button that selects a step to LOOK at.
+    expect(rail.querySelectorAll("button").length).toBeGreaterThan(0);
     // Exactly one recommended CTA on the whole screen.
     expect(screen.getAllByRole("button", { name: "RegisterHandoverAction" })).toHaveLength(1);
   });
@@ -1703,25 +1713,25 @@ describe("the current stage has exactly one working surface, beneath the rail", 
     );
     // The ACCESSIBLE NAME of each node carries label, state, owner and
     // blocker — asserted through the role, not by scraping text content.
-    const items = within(screen.getByTestId("deal-stage-rail")).getAllByRole("listitem");
+    const items = within(screen.getByTestId("deal-stage-rail")).getAllByRole("button");
     expect(items).toHaveLength(4);
     expect(
-      within(screen.getByTestId("deal-stage-rail")).getByRole("listitem", {
+      within(screen.getByTestId("deal-stage-rail")).getByRole("button", {
         name: /StageApplication.*StageStateComplete.*StageOwnerDealership/,
       })
     ).toBeTruthy();
     expect(
-      within(screen.getByTestId("deal-stage-rail")).getByRole("listitem", {
+      within(screen.getByTestId("deal-stage-rail")).getByRole("button", {
         name: /StageCreditDecision.*StageStateBlocked.*StageOwnerFinanceCompany.*BlockerAwaitingCreditDecision/,
       })
     ).toBeTruthy();
     expect(
-      within(screen.getByTestId("deal-stage-rail")).getByRole("listitem", {
+      within(screen.getByTestId("deal-stage-rail")).getByRole("button", {
         name: /StageHandover.*StageStatePending.*StageOwnerDealership/,
       })
     ).toBeTruthy();
     expect(
-      within(screen.getByTestId("deal-stage-rail")).getByRole("listitem", {
+      within(screen.getByTestId("deal-stage-rail")).getByRole("button", {
         name: /StageSettlement.*StageStateStopped/,
       })
     ).toBeTruthy();
@@ -1832,6 +1842,19 @@ describe("the live step leads to the documents it is waiting on", () => {
     expect(screen.queryByTestId("deal-go-to-documents")).toBeNull();
   });
 
+  // SCRUM-417 UX1 (S3): the container's verdict on whether THIS caller can act
+  // on documents. False withholds the passive link; true (and absent) keeps it.
+  test("no link when the container says the caller cannot act on documents", () => {
+    render(<DealCockpitView deal={dealFixture()} documentsActionable={false} onRecordSupplierReceipt={async () => {}} />);
+    expect(screen.getByTestId("deal-next-step").textContent).toContain("BlockerDocumentsIncomplete");
+    expect(screen.queryByTestId("deal-go-to-documents")).toBeNull();
+  });
+
+  test("CONTROL -- the link stays when the caller can act on documents", () => {
+    render(<DealCockpitView deal={dealFixture()} documentsActionable onRecordSupplierReceipt={async () => {}} />);
+    expect(screen.getByTestId("deal-go-to-documents")).toBeTruthy();
+  });
+
   test("no link, and no tabs, when the deal has no documents to go to", () => {
     renderCockpit(dealFixture({ documents: [] }));
     expect(screen.queryByTestId("deal-lower-tabs")).toBeNull();
@@ -1860,13 +1883,16 @@ describe("last updated on a phone", () => {
     );
     expect(headerStamp?.className).toMatch(/(^|\s)hidden(\s|$)/);
     expect(headerStamp?.className).toContain("sm:inline");
-    const cell = screen.getByTestId("deal-essentials-last-updated");
+    // The phone copy of the strip is the one visible below md; scope to it.
+    const cell = within(screen.getByTestId("deal-identity-mobile")).getByTestId("deal-essentials-last-updated");
     expect(cell.className).toContain("sm:hidden");
-    expect(cell.textContent).toMatch(/LastUpdated.*Aug 2026/);
+    expect(cell.textContent).toMatch(/LastUpdated.*أغسطس 2026/);
   });
 
   test("the essentials copy keeps the calm dash for a corrupt moment", () => {
     renderCockpit(dealFixture({ createdAt: Number.NaN, updatedAt: undefined }));
-    expect(screen.getByTestId("deal-essentials-last-updated").textContent).toContain("—");
+    expect(
+      within(screen.getByTestId("deal-identity-mobile")).getByTestId("deal-essentials-last-updated").textContent
+    ).toContain("—");
   });
 });
