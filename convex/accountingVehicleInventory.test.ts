@@ -1060,7 +1060,7 @@ async function pumpScheduler(t: Ctx["t"]) {
   }
 }
 
-async function drainPendingForOrg(t: Ctx["t"], orgId: Id<"organizations">) {
+async function drainQueuedAccountingEventsForOrg(t: Ctx["t"], orgId: Id<"organizations">) {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
   try {
     await t.run(async (ctx) => {
@@ -1129,7 +1129,7 @@ describe("SCRUM-537 — F&I recognition posts one GL occurrence per month", () =
     const early = (await s.asOwner.query(api.accountingPeriods.list, { orgId: s.orgId }))
       .find((p) => p.startDate === Date.UTC(2018, 0, 1))!;
     await s.asOwner.mutation(api.accountingPeriods.open, { orgId: s.orgId, periodId: early._id });
-    await drainPendingForOrg(s.t, s.orgId);
+    await drainQueuedAccountingEventsForOrg(s.t, s.orgId);
 
     const events = (await s.fiEvents()).sort((a, b) => a.eventVersion - b.eventVersion);
     expect(events.map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"], [2, "POSTED"]]);
