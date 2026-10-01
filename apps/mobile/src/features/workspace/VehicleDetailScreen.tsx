@@ -1,4 +1,5 @@
 import { useAuth } from "@clerk/expo";
+import { isConvexError } from "@autoflow/shared";
 import { useMutation, useQuery } from "convex/react";
 import { useRouter } from "expo-router";
 import { Component, useEffect, useRef, useState, type ReactNode } from "react";
@@ -32,7 +33,6 @@ import {
   parseOptionalNumber,
   useGenericError,
 } from "./modules/moduleShared";
-import { isConvexRefusal } from "./modules/convexRefusal";
 import { useStyles } from "./modules/moduleStyles";
 
 const PERMISSION = {
@@ -394,6 +394,10 @@ function VehicleDetailContent({
       pendingPayout?.intent ??
       `release-deposit:${String(depositId)}:${resolution}:${method}:gen${observedReleaseCount}`;
     if (!pendingPayout) pendingPayoutsRef.current.set(depositId, { resolution, method: String(method), intent });
+    const settle = () => {
+      commandId.retire(intent);
+      pendingPayoutsRef.current.delete(depositId);
+    };
     try {
       await releaseDeposit({
         orgId,
@@ -402,16 +406,10 @@ function VehicleDetailContent({
         refundMethod: resolution === "REFUNDED" ? chosenMethod : undefined,
         idempotencyKey: commandId.for(intent),
       });
-      commandId.retire(intent);
-      pendingPayoutsRef.current.delete(depositId);
+      settle();
     } catch (error) {
-      // SCRUM-530: the record and its kept key exist only while the outcome is
-      // UNKNOWN. A definite server refusal (ConvexError) retires both; any other
-      // error keeps them (it may have committed).
-      if (isConvexRefusal(error)) {
-        commandId.retire(intent);
-        pendingPayoutsRef.current.delete(depositId);
-      }
+      // SCRUM-530: only a definite server refusal settles; any other error may have committed.
+      if (isConvexError(error)) settle();
       reportError("Mobile deposit release failed", error);
     } finally {
       setReleasingDepositId(null);

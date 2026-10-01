@@ -53,13 +53,7 @@ export type PendingDepositPayouts = {
   record: (depositId: string, payout: PendingPayout) => void;
   confirm: (depositId: string) => void;
   dismiss: (depositId: string) => void;
-  /**
-   * SCRUM-530 — call from the release catch. The record and its kept key exist
-   * only while the outcome is UNKNOWN: a `ConvexError` is the server's definite
-   * refusal (thrown inside the mutation, so it rolled back and nothing moved), and
-   * retires both exactly like `dismiss`. Anything else (a plain "Server Error",
-   * transport failure, timeout) may have committed, so both are kept.
-   */
+  /** SCRUM-530: a `ConvexError` (definite refusal) dismisses like `dismiss`; any other error keeps the record. */
   settleFailure: (depositId: string, error: unknown) => void;
   /** Deposits whose recorded attempt is blocking a different decision, for the notice. */
   blocked: Readonly<Record<string, PendingPayout>>;

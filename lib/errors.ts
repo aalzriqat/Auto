@@ -29,16 +29,12 @@
  * throw the good payload away.
  */
 
+import { isConvexError } from "@autoflow/shared/convexError";
 import { interpolate } from "./i18n/interpolate";
 
-export const GENERIC_ERROR_MESSAGE = "An unexpected error occurred. Please try again later.";
+export { isConvexError } from "@autoflow/shared/convexError";
 
-/**
- * Convex stamps this on every `ConvexError`. Preferred over `instanceof`
- * because more than one copy of the `convex` package can be resolved at once
- * (pnpm keeps one per peer set), and `instanceof` fails across those copies.
- */
-const CONVEX_ERROR_MARKER = Symbol.for("ConvexError");
+export const GENERIC_ERROR_MESSAGE = "An unexpected error occurred. Please try again later.";
 
 /** The developer-thrown message sitting inside Convex's transport wrapper. */
 const CONVEX_INNER_MESSAGE = /Uncaught\s+(?:ConvexError|Error)\s*:\s*([\s\S]*)$/;
@@ -62,19 +58,6 @@ function usableMessage(value: string): string | null {
   if (trimmed.length === 0) return null;
   if (LEAKS_INTERNALS.test(trimmed)) return null;
   return trimmed;
-}
-
-/**
- * Whether a caught value is the server's own refusal (`ConvexError`) rather
- * than a transport failure. The distinction matters to a caller deciding what
- * it knows: a `ConvexError` is thrown inside the mutation and rolls it back,
- * so nothing was committed; anything else may have committed before the
- * response was lost.
- */
-export function isConvexError(error: unknown): error is { data: unknown } {
-  if (typeof error !== "object" || error === null) return false;
-  const candidate = error as Record<PropertyKey, unknown>;
-  return candidate[CONVEX_ERROR_MARKER] === true || candidate.name === "ConvexError";
 }
 
 function hasStringMessage(error: unknown): error is { message: string } {
