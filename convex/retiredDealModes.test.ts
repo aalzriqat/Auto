@@ -286,13 +286,13 @@ describe("sales doors", () => {
   // shared completion boundary either, whatever financing type the caller names. The caller names
   // CASH here: a FINANCED `create` is refused earlier, by SCRUM-504, before the quote is read.
   test.each([
-    { quoteMode: "INTERNAL_INSTALLMENT", financingType: "CASH", refused: true },
-    { quoteMode: "LEASE", financingType: "CASH", refused: true },
-    { quoteMode: "CASH", financingType: "CASH", refused: false },
-  ] as const)("sales.create against a $quoteMode quote + $financingType: refused=$refused", async ({ quoteMode, financingType, refused }) => {
+    { quoteMode: "INTERNAL_INSTALLMENT", refused: true },
+    { quoteMode: "LEASE", refused: true },
+    { quoteMode: "CASH", refused: false },
+  ] as const)("sales.create (CASH) against a $quoteMode quote: refused=$refused", async ({ quoteMode, refused }) => {
     const s = await seed(`sq_${quoteMode}`);
     const quoteId = await quoteIn(s, quoteMode, { accepted: true });
-    const create = s.asUser.mutation(api.sales.create, createArgs(s, financingType, { quoteId }));
+    const create = s.asUser.mutation(api.sales.create, createArgs(s, "CASH", { quoteId }));
     if (refused) {
       await expectRetiredDealMode(create);
       expect(await saleRows(s)).toEqual([]);

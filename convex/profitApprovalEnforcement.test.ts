@@ -661,10 +661,9 @@ describe("SCRUM-260: every completion door enforces the rule on the persisted pr
     expect(saleId).toBeTruthy();
   });
 
-  test("SCRUM-504: even an approved price cannot complete a FINANCED sale through the direct door", async () => {
+  test("SCRUM-504: a FINANCED sale through the direct door is refused, whatever the price", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "directok", 1000);
-    await approveLegacyRequest(t, ids, 400);
 
     await expectFinancedSaleRequiresDeal(
       ids.asOwner.mutation(api.sales.create, { ...directFinancedSale(ids, 20400), status: "COMPLETED" as const })
