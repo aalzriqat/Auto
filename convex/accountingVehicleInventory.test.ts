@@ -1018,7 +1018,7 @@ describe("Monthly F&I commission recognition cron", () => {
 // Months 2..N used to share (eventType, sourceType, sourceId, eventVersion 1)
 // with month 1, so postAccountingEvent returned "already posted" and wrote no
 // journal while the subledger advanced.
-async function seedFiDeferral(suffix: string, saleDate: number, termMonths = 3) {
+async function seedFiDeferral(suffix: string, saleDate: number) {
   const seed = await seedDealer(suffix);
   const { t, orgId, asOwner, customerId, userId } = seed;
   const vehicleId = await asOwner.mutation(api.vehicles.create, {
@@ -1028,7 +1028,7 @@ async function seedFiDeferral(suffix: string, saleDate: number, termMonths = 3) 
   // Margin = 100 minor units (JOD scale 3): 34 + 34 + 32 over 3 months.
   const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
     orgId, vehicleId, customerId, salespersonId: userId,
-    salePrice: 15000, warrantySold: 0.100, warrantyCost: 0, warrantyTermMonths: termMonths,
+    salePrice: 15000, warrantySold: 0.100, warrantyCost: 0, warrantyTermMonths: 3,
     saleDate, status: "COMPLETED",
   });
   const deferral = await t.run((ctx) =>
@@ -1049,15 +1049,6 @@ async function seedFiDeferral(suffix: string, saleDate: number, termMonths = 3) 
     );
   const deferralNow = () => t.run((ctx) => ctx.db.get(deferral!._id));
   return { ...seed, saleId, deferral: deferral!, recognize, fiEvents, deferralNow };
-}
-
-/** Signed (debit - credit) total of every journal line on an account. */
-async function accountNet(t: Ctx["t"], orgId: Id<"organizations">, systemKey: string) {
-  const account = await accountBySystemKey(t, orgId, systemKey);
-  const lines = await t.run((ctx) => ctx.db.query("journalLines").collect());
-  return lines
-    .filter((l) => l.accountId === account._id)
-    .reduce((sum, l) => sum + (l.debitMinor ?? 0) - (l.creditMinor ?? 0), 0);
 }
 
 async function pumpScheduler(t: Ctx["t"]) {
@@ -1112,7 +1103,7 @@ describe("SCRUM-537 — F&I recognition posts one GL occurrence per month", () =
     expect(after?.status).toBe("FULLY_RECOGNIZED");
     expect(after?.recognizedMinor).toBe(100);
     expect(debited).toBe(100);
-    expect(await accountNet(s.t, s.orgId, "DEFERRED_FI_COMMISSION")).toBe(0);
+    expect(await glBalanceMinor(s.t, s.orgId, "DEFERRED_FI_COMMISSION")).toBe(0);
   });
 
   test("T2: a queued month 1 and a posted month 2 both reach the ledger once drained", async () => {
@@ -1148,7 +1139,7 @@ describe("SCRUM-537 — F&I recognition posts one GL occurrence per month", () =
     const s = await seedFiDeferral("fi537_t3", Date.now() - 120 * 86_400_000);
     await s.recognize("2025-05", Date.now() - 60 * 86_400_000);
     await s.recognize("2025-06", Date.now() - 30 * 86_400_000);
-    expect((await s.fiEvents()).map((e) => e.eventVersion).sort()).toEqual([1, 2]);
+    expect((await s.fiEvents()).map((e) => e.eventVersion).sort((a, b) => a - b)).toEqual([1, 2]);
 
     const asApprover = await addCancellationApprover(s.t, s.orgId, "fi537_t3");
     await asApprover.mutation(api.sales.update, { orgId: s.orgId, saleId: s.saleId, status: "CANCELLED" });
@@ -1157,8 +1148,8 @@ describe("SCRUM-537 — F&I recognition posts one GL occurrence per month", () =
     expect(events).toHaveLength(2);
     expect(events.every((e) => e.status === "REVERSED")).toBe(true);
     expect((await s.deferralNow())?.status).toBe("CANCELLED");
-    expect(await accountNet(s.t, s.orgId, "DEFERRED_FI_COMMISSION")).toBe(0);
-    expect(await accountNet(s.t, s.orgId, "FI_COMMISSION_REVENUE")).toBe(0);
+    expect(await glBalanceMinor(s.t, s.orgId, "DEFERRED_FI_COMMISSION")).toBe(0);
+    expect(await glBalanceMinor(s.t, s.orgId, "FI_COMMISSION_REVENUE")).toBe(0);
   });
 
   test("T4: recognition waits (counted skip) until the sale-completion journal has posted", async () => {
@@ -1188,32 +1179,35 @@ describe("SCRUM-537 — F&I recognition posts one GL occurrence per month", () =
       })
     );
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const blocked = await s.recognize("2025-06", Date.UTC(2025, 5, 15));
-    expect(blocked).toEqual({ posted: false, reason: "ledger_occurrence_conflict" });
-    expect(errorSpy).toHaveBeenCalled();
-    let after = await s.deferralNow();
-    expect(after?.monthsRecognized).toBe(1);
-    expect(after?.lastRecognizedYearMonth).toBe("2025-05");
-    expect(after?.recognizedMinor).toBe(34);
+    try {
+      const blocked = await s.recognize("2025-06", Date.UTC(2025, 5, 15));
+      expect(blocked).toEqual({ posted: false, reason: "ledger_occurrence_conflict" });
+      expect(errorSpy).toHaveBeenCalled();
+      let after = await s.deferralNow();
+      expect(after?.monthsRecognized).toBe(1);
+      expect(after?.lastRecognizedYearMonth).toBe("2025-05");
+      expect(after?.recognizedMinor).toBe(34);
 
-    // A queued row already holding this month's key is the same refusal.
-    await s.t.run((ctx) => ctx.db.delete(rogueId));
-    await s.t.run((ctx) =>
-      ctx.db.insert("pendingAccountingEvents", {
-        orgId: s.orgId, kind: "POST", status: "PENDING",
-        idempotencyKey: `fi_commission_${s.deferral._id}_2025-06`,
-        accountingDate: Date.UTC(2025, 5, 15), actorId: s.userId, attempts: 0, createdAt: Date.now(),
-        sourceType: "dealerProductDeferrals", sourceId: s.deferral._id.toString(),
-        eventType: "FI_COMMISSION_RECOGNIZED", eventVersion: 9, currency: "JOD",
-        occurredAt: Date.UTC(2025, 5, 15), payload: {},
-      })
-    );
-    const blockedByQueue = await s.recognize("2025-06", Date.UTC(2025, 5, 15));
-    expect(blockedByQueue).toEqual({ posted: false, reason: "ledger_occurrence_conflict" });
-    after = await s.deferralNow();
-    expect(after?.monthsRecognized).toBe(1);
-    expect(after?.recognizedMinor).toBe(34);
-    errorSpy.mockRestore();
+      // A queued row already holding this month's key is the same refusal.
+      await s.t.run((ctx) => ctx.db.delete(rogueId));
+      await s.t.run((ctx) =>
+        ctx.db.insert("pendingAccountingEvents", {
+          orgId: s.orgId, kind: "POST", status: "PENDING",
+          idempotencyKey: `fi_commission_${s.deferral._id}_2025-06`,
+          accountingDate: Date.UTC(2025, 5, 15), actorId: s.userId, attempts: 0, createdAt: Date.now(),
+          sourceType: "dealerProductDeferrals", sourceId: s.deferral._id.toString(),
+          eventType: "FI_COMMISSION_RECOGNIZED", eventVersion: 9, currency: "JOD",
+          occurredAt: Date.UTC(2025, 5, 15), payload: {},
+        })
+      );
+      const blockedByQueue = await s.recognize("2025-06", Date.UTC(2025, 5, 15));
+      expect(blockedByQueue).toEqual({ posted: false, reason: "ledger_occurrence_conflict" });
+      after = await s.deferralNow();
+      expect(after?.monthsRecognized).toBe(1);
+      expect(after?.recognizedMinor).toBe(34);
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
 describe("vehicleInventoryReconciliation", () => {

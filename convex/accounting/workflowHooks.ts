@@ -2786,14 +2786,18 @@ export async function hookDepreciationPosted(
   });
 }
 
+/** Idempotency key of one deferral's commission recognition for one month. */
+export function fiCommissionRecognizedKey(
+  deferralId: Id<"dealerProductDeferrals">,
+  yearMonth: string
+): string {
+  return `fi_commission_${deferralId}_${yearMonth}`;
+}
+
 /**
- * One FI_COMMISSION_RECOGNIZED event per recognized month, all against the same
- * `sourceId` (the deferral). `occurrence` — the 1-based ordinal of the month
- * being recognized — is the eventVersion, because postAccountingEvent dedupes
- * on (eventType, sourceType, sourceId, eventVersion) as well as the key: at a
- * constant version, months 2..N returned "already posted" and wrote no journal
- * while the subledger advanced (SCRUM-537). The idempotency key stays per
- * (deferral, yearMonth).
+ * One FI_COMMISSION_RECOGNIZED event per recognized month. eventVersion is the
+ * 1-based month ordinal; postAccountingEvent dedupes on (eventType, sourceType,
+ * sourceId, eventVersion), so it must differ per month (SCRUM-537).
  */
 export async function hookFiCommissionRecognized(
   ctx: MutationCtx,
@@ -2817,7 +2821,7 @@ export async function hookFiCommissionRecognized(
     sourceType: "dealerProductDeferrals",
     sourceId: args.deferralId.toString(),
     eventVersion: args.occurrence,
-    idempotencyKey: `fi_commission_${args.deferralId}_${args.yearMonth}`,
+    idempotencyKey: fiCommissionRecognizedKey(args.deferralId, args.yearMonth),
     currency: args.currency,
     occurredAt: args.occurredAt,
     actorId: args.actorId,
@@ -2969,9 +2973,9 @@ export async function hookPrepaidExpenseWrittenOff(
  * Claws back every month of F&I commission already recognized for a
  * deferral whose sale was cancelled — unlike makeReversalHook's single-event
  * lookup, a deferral has one FI_COMMISSION_RECOGNIZED event per recognized
- * month (eventVersion = the month's ordinal), so each is reversed individually. reverseAccountingEvent
- * is a no-op (returns alreadyReversed) on an event it's already reversed, so
- * this is safe to call more than once for the same deferral. Also drops any
+ * month (eventVersion = the month's ordinal), so each is reversed
+ * individually. reverseAccountingEvent is a no-op (returns alreadyReversed) on an
+ * event it's already reversed, so this is safe to call more than once for the same deferral. Also drops any
  * month that was enqueued but never posted, so it never posts later.
  */
 export async function hookFiCommissionRecognitionsReversed(
