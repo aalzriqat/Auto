@@ -466,7 +466,9 @@ describe("SCRUM-302 F4 — F&I deferral recognition cron vs org lifecycle", () =
       {
         orgId: dealer.orgId,
         deferralId,
-        yearMonth: `${new Date().getUTCFullYear()}-01`,
+        // S230-R2: the month must be the sale's own (sale + deferral are created now)
+        // and occurredAt must fall inside it.
+        yearMonth: new Date().toISOString().slice(0, 7),
         occurredAt: Date.now(),
         systemActorId: dealer.userId,
       }

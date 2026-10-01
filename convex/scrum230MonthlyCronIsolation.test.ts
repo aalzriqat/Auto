@@ -659,6 +659,145 @@ describe("F&I recognition is floored by the sale's accounting month (S230-R1)", 
   });
 });
 
+// ─── 8b. S230-R2/R3: the month floor holds at the MUTATION boundary ───────────
+
+/** Everything a refused recognition must leave untouched. */
+async function recognitionFootprint(t: Harness, orgId: Id<"organizations">, deferralId: Id<"dealerProductDeferrals">) {
+  return await t.run(async (ctx) => ({
+    deferral: await ctx.db.get(deferralId),
+    events: await ctx.db.query("accountingEvents").withIndex("by_org_eventType", (q) => q.eq("orgId", orgId)).collect(),
+    pending: await ctx.db.query("pendingAccountingEvents").withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING")).collect(),
+    entries: await ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+    lines: await ctx.db.query("journalLines").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+  }));
+}
+
+function recognizeDirect(
+  t: Harness, org: Org, deferralId: Id<"dealerProductDeferrals">, yearMonth: string, occurredAt: number
+) {
+  return t.mutation(internal.dealerProductDeferrals.recognizeDeferredCommissionForMonth, {
+    orgId: org.orgId, deferralId, yearMonth, occurredAt, systemActorId: org.userId,
+  });
+}
+
+async function expectRefusedWithoutTrace(
+  t: Harness, org: Org, deferralId: Id<"dealerProductDeferrals">, yearMonth: string, occurredAt: number
+) {
+  const before = await recognitionFootprint(t, org.orgId, deferralId);
+  await expect(recognizeDirect(t, org, deferralId, yearMonth, occurredAt)).rejects.toThrow(/recognition refused/);
+  expect(await recognitionFootprint(t, org.orgId, deferralId)).toEqual(before);
+}
+
+describe("recognizeDeferredCommissionForMonth enforces the month floor itself (S230-R2)", () => {
+  const JAN_15 = Date.UTC(2026, 0, 15, 9, 0, 0);
+  const MAR_3 = Date.UTC(2026, 2, 3, 9, 0, 0);
+
+  test("1. a direct call for a month BEFORE the sale month throws and changes nothing", async () => {
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
+    const org = await seedOrg(t, "r2_before");
+    const deferralId = await createDeferral(t, org, "000021"); // sale + creation: Feb 10
+    await expectRefusedWithoutTrace(t, org, deferralId, "2026-01", JAN_15);
+    expect(await fiEvents(t, org.orgId)).toEqual([]);
+  });
+
+  test("2. a direct call whose occurredAt lies outside yearMonth throws and changes nothing", async () => {
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
+    const org = await seedOrg(t, "r2_occ");
+    const deferralId = await createDeferral(t, org, "000022");
+    await expectRefusedWithoutTrace(t, org, deferralId, "2026-02", MAR_3);
+    await expectRefusedWithoutTrace(t, org, deferralId, "2026-02", Number.NaN);
+  });
+
+  test("3. a malformed yearMonth throws and changes nothing", async () => {
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
+    const org = await seedOrg(t, "r2_fmt");
+    const deferralId = await createDeferral(t, org, "000023");
+    await expectRefusedWithoutTrace(t, org, deferralId, "2026-13", Date.UTC(2026, 2, 3));
+    await expectRefusedWithoutTrace(t, org, deferralId, "2026-1", FEB_10);
+    await expectRefusedWithoutTrace(t, org, deferralId, "2026-02-01", FEB_10);
+  });
+
+  test("4. a missing sale, a cross-org sale, or an out-of-range saleDate throws and changes nothing", async () => {
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
+    const orgA = await seedOrg(t, "r2_a");
+    const orgB = await seedOrg(t, "r2_b");
+    const orphanId = await createDeferral(t, orgA, "000024");
+    const crossId = await createDeferral(t, orgA, "000025");
+    const hugeId = await createDeferral(t, orgA, "000026");
+    const orphan = (await t.run((ctx) => ctx.db.get(orphanId)))!;
+    const cross = (await t.run((ctx) => ctx.db.get(crossId)))!;
+    const huge = (await t.run((ctx) => ctx.db.get(hugeId)))!;
+    await t.run((ctx) => ctx.db.delete(orphan.saleId));
+    await t.run((ctx) => ctx.db.patch(cross.saleId, { orgId: orgB.orgId }));
+    await t.run((ctx) => ctx.db.patch(huge.saleId, { saleDate: 1e20 }));
+
+    await expectRefusedWithoutTrace(t, orgA, orphanId, "2026-02", FEB_10);
+    await expectRefusedWithoutTrace(t, orgA, crossId, "2026-02", FEB_10);
+    await expectRefusedWithoutTrace(t, orgA, hugeId, "2026-02", FEB_10);
+  });
+
+  test("5. CONTROL: a same-month direct call posts exactly as before", async () => {
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
+    const org = await seedOrg(t, "r2_same");
+    const deferralId = await createDeferral(t, org, "000027");
+
+    const result = await recognizeDirect(t, org, deferralId, "2026-02", FEB_10);
+
+    expect(result.posted).toBe(true);
+    const deferral = await t.run((ctx) => ctx.db.get(deferralId));
+    expect(deferral?.monthsRecognized).toBe(1);
+    expect(deferral?.lastRecognizedYearMonth).toBe("2026-02");
+    expect((await fiEvents(t, org.orgId)).map((e) => monthOf(e.occurredAt))).toEqual(["2026-02"]);
+  });
+
+  test("6. CONTROL: a back-dated sale is floored by the creation month, not the earlier sale month", async () => {
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
+    const org = await seedOrg(t, "r2_back");
+    const deferralId = await createDeferral(t, org, "000028", Date.UTC(2026, 0, 5, 9, 0, 0)); // created Feb 10, sale Jan 5
+
+    await expectRefusedWithoutTrace(t, org, deferralId, "2026-01", JAN_15);
+    const result = await recognizeDirect(t, org, deferralId, "2026-02", FEB_10);
+
+    expect(result.posted).toBe(true);
+    expect((await fiEvents(t, org.orgId)).map((e) => monthOf(e.occurredAt))).toEqual(["2026-02"]);
+  });
+
+  test("7. CONTROL: replaying an already-recognized month stays a counted skip, never a throw", async () => {
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
+    const org = await seedOrg(t, "r2_replay");
+    const deferralId = await createDeferral(t, org, "000029");
+
+    expect((await recognizeDirect(t, org, deferralId, "2026-02", FEB_10)).posted).toBe(true);
+    const second = await recognizeDirect(t, org, deferralId, "2026-02", FEB_10);
+
+    expect(second.posted).toBe(false);
+    expect(second.reason).toBe("not_after_last_recognized_month");
+    expect(await fiEvents(t, org.orgId)).toHaveLength(1);
+  });
+});
+
+describe("a deferral whose sale date is out of range is an item failure in the cron (S230-R3)", () => {
+  test("8. saleDate = 1e20 counts as failed, posts nothing, and the other items still post", async () => {
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
+    const orgA = await seedOrg(t, "r3_a");
+    const orgB = await seedOrg(t, "r3_b");
+    const hugeId = await createDeferral(t, orgA, "000031");
+    const goodId = await createDeferral(t, orgB, "000032");
+    const huge = (await t.run((ctx) => ctx.db.get(hugeId)))!;
+    await t.run((ctx) => ctx.db.patch(huge.saleId, { saleDate: 1e20 })); // finite, but not a representable date
+    vi.setSystemTime(APR_15);
+
+    const summary = await runRecognition(t);
+
+    expect(summary).toMatch(/1 failed/);
+    expect(summary).toMatch(/posted 1\/2/);
+    expect(await fiEvents(t, orgA.orgId)).toEqual([]);
+    expect((await fiEvents(t, orgB.orgId)).map((e) => monthOf(e.occurredAt))).toEqual(["2026-02", "2026-03", "2026-04"]);
+    expect((await t.run((ctx) => ctx.db.get(goodId)))?.monthsRecognized).toBe(3);
+    expect((await t.run((ctx) => ctx.db.get(hugeId)))?.monthsRecognized ?? 0).toBe(0);
+  });
+});
+
 // ─── 9. summary accounting: an item that posted then failed still counts as posted ─
 
 describe("posted-item accounting is independent of how the item ended", () => {

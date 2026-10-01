@@ -22,6 +22,7 @@ import { internalQuery } from "./_generated/server";
 import { internalMutation } from "./functions";
 import { fiCommissionRecognizedKey, hookFiCommissionRecognized } from "./accounting/workflowHooks";
 import { prereqPosted } from "./utils/commissionSourceLedger";
+import { firstOfferableMonthIndex, yearMonthIndex, yearMonthStringIndex } from "./utils/expenseAmortization";
 
 /** Not org-scoped: the monthly cron runs across every tenant, same reasoning as listActiveAssetsForDepreciation. */
 export const listActiveDeferralsForRecognition = internalQuery({
@@ -41,7 +42,10 @@ export const listActiveDeferralsForRecognition = internalQuery({
     const page = await Promise.all(
       result.page.map(async (deferral) => {
         const sale = await ctx.db.get(deferral.saleId);
-        const usable = sale && sale.orgId === deferral.orgId && Number.isFinite(sale.saleDate);
+        // S230-R3: `isFinite` alone admits 1e20, which is not a representable Date
+        // (yearMonthIndex -> NaN); require a real calendar month.
+        const usable =
+          sale && sale.orgId === deferral.orgId && Number.isFinite(yearMonthIndex(sale.saleDate));
         return { ...deferral, saleDate: usable ? sale.saleDate : null };
       })
     );
@@ -87,6 +91,36 @@ export const recognizeDeferredCommissionForMonth = internalMutation({
     const deferral = await ctx.db.get(args.deferralId);
     if (!deferral || deferral.orgId !== args.orgId) return { posted: false, reason: "not_found" };
     if (deferral.status !== "ACTIVE") return { posted: false, reason: "not_active" };
+
+    // ⚠️ S230-R2 — the month floor is enforced HERE, at the mutation boundary, not
+    // only in the cron's offer loop: this is an internal mutation any caller can
+    // invoke with any month. The deferral liability is created in the SALE's
+    // accounting month, so revenue may not be released for an earlier month, and
+    // the posting must be dated inside the month it claims. Thrown (not a counted
+    // skip): these are caller/data bugs, and a throw rolls the whole mutation
+    // back, so no patch or ledger hook runs. Deliberately NOT given
+    // `lastPostedYearMonth` — replay of an already-recognized month keeps its
+    // benign `not_after_last_recognized_month` return below.
+    const sale = await ctx.db.get(deferral.saleId);
+    const refuse = (why: string): never => {
+      throw new Error(`F&I recognition refused for deferral ${args.deferralId}: ${why}`);
+    };
+    if (!sale) refuse("owning sale is missing");
+    else if (sale.orgId !== deferral.orgId) refuse("owning sale belongs to another organization");
+    else if (!Number.isFinite(yearMonthIndex(sale.saleDate))) refuse("owning sale has no valid sale date");
+    else if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(args.yearMonth)) refuse("yearMonth is not YYYY-MM");
+    else if (
+      yearMonthStringIndex(args.yearMonth) <
+      firstOfferableMonthIndex({ startAt: sale.saleDate, createdAt: deferral.createdAt })
+    ) {
+      refuse(`${args.yearMonth} precedes the sale's accounting month`);
+    } else if (
+      !Number.isFinite(args.occurredAt) ||
+      yearMonthIndex(args.occurredAt) !== yearMonthStringIndex(args.yearMonth)
+    ) {
+      refuse(`occurredAt is not within ${args.yearMonth}`);
+    }
+
     // Lexicographic comparison is safe for "YYYY-MM" strings. Equality alone
     // (the old check) only blocked re-running the *same* month — it let a
     // stale/earlier month slip through as a genuine second posting (its
