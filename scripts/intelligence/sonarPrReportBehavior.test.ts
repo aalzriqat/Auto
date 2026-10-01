@@ -16,7 +16,7 @@
 // SONAR_PR_WORKFLOW_FILE points the harness at another copy of the workflow
 // (used to prove failing-first against an older revision and to run mutations).
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -464,6 +464,7 @@ describe.skipIf(!bash)("sonar-pr-report.yml `Publish trusted Sonar verdict` step
   });
 });
 
+const VALIDATOR_PATH = path.resolve(process.cwd(), ".github/scripts/validateLcovSources.cjs");
 const LCOV_OK = "TN:\nSF:convex/a.ts\nDA:1,1\nend_of_record\n";
 
 // `testedMergeFile`: undefined = write `tested`-independent default; null = file absent.
@@ -476,8 +477,13 @@ function sanitizeRun(o: { testedMergeFile?: string | null; same?: string; mergeF
     git: { fetchFail },
     same: o.same,
     setup: (dir, runnerTemp) => {
-      mkdirSync(path.join(dir, "candidate"), { recursive: true });
-      mkdirSync(path.join(dir, "trusted"), { recursive: true });
+      // The candidate merge checkout must contain the source LCOV_OK names: the trusted
+      // validator refuses an SF record that is not an existing regular file there.
+      mkdirSync(path.join(dir, "candidate", "convex"), { recursive: true });
+      writeFileSync(path.join(dir, "candidate", "convex", "a.ts"), "export {};\n");
+      // Real CI runs the validator from the trusted checkout; stage the real script there.
+      mkdirSync(path.join(dir, "trusted", ".github", "scripts"), { recursive: true });
+      copyFileSync(VALIDATOR_PATH, path.join(dir, "trusted", ".github", "scripts", "validateLcovSources.cjs"));
       writeFileSync(path.join(dir, "trusted", "sonar-project.properties"), "sonar.projectKey=x\n");
       const cov = path.join(runnerTemp, "sonar-coverage");
       mkdirSync(cov, { recursive: true });
