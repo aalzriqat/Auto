@@ -1,7 +1,7 @@
 import { ConvexError } from "convex/values";
 import { isManualFinanceApplication } from "./manualFinancePayer";
 import { Doc, Id } from "../_generated/dataModel";
-import { MutationCtx } from "../_generated/server";
+import { MutationCtx, QueryCtx } from "../_generated/server";
 import { notifyManagers, getActorName } from "./notifications";
 import { calculateCommissionFromTiers, CommissionTier } from "./commission";
 import {
@@ -19,7 +19,7 @@ import type { DepositMethod } from "./depositRecording";
 import { throwAppError, AppErrorCode } from "./errors";
 import { requireOrgMember } from "./tenancy";
 import { assertNoPendingDepositRequest } from "./depositRequestGuards";
-import { assertOperatedDealMode } from "./dealModes";
+import { assertFinancedSaleHasDeal, assertOperatedDealMode } from "./dealModes";
 import {
   assertSaleMayCompleteForVehicle,
   consumeRootForSale,
@@ -32,7 +32,7 @@ import {
   commissionAccountingDate,
 } from "../accounting/workflowHooks";
 import { computeResoldProductMargin, type FinancedSalePlanPayload } from "../accounting/postingRules";
-import { toMinorUnits, fromMinorUnits, denominationOf, isValidMinorAmount } from "./money";
+import { toMinorUnits, fromMinorUnits, denominationOf, isValidMinorAmount, addMinor } from "./money";
 import { assertProfitApproved, saleRequiresMinimumProfit } from "./profitApproval";
 import { computeVehicleCapitalizedCost, vehicleHasCostBasis } from "./vehicleCost";
 import { computeConsignedSupplierPosition } from "../../lib/financingEconomics";
@@ -55,6 +55,129 @@ import {
   createCanonicalPayment,
   ensureReceivableDocument,
 } from "../subledger";
+
+/**
+ * What the customer is billed BY THE DEALERSHIP for one sale, line by line, in
+ * minor units. This is the single billing rule: completion sums it into the
+ * receivable's `originalAmountMinor`, and the Bill of Sale (SCRUM-258) reads the
+ * same lines back from the stored sale row, so the printed itemisation cannot
+ * be a different derivation from the one that produced the receivable.
+ *
+ * On a consigned sale settled DIRECT_TO_SUPPLIER the vehicle itself is NOT
+ * billed by the dealership: the buyer paid the supplier, the dealership issued
+ * no invoice for the car, and the customer owes it nothing for it
+ * (`vehicleSettledWithSupplier`). With a financed settlement plan the financing
+ * company is the legal buyer of the car, so the vehicle line is only what the
+ * plan says the customer independently owes. Sales tax is billed ON TOP of the
+ * price (SCRUM-22) and so is part of the receivable.
+ */
+export type CustomerBilledLinesMinor = {
+  vehicle: number;
+  taxes: number;
+  dealerFees: number;
+  warranty: number;
+  gap: number;
+  /** True when the car was paid for outside the dealership's receivable. */
+  vehicleSettledWithSupplier: boolean;
+};
+
+export function customerBilledLinesMinor(input: {
+  salePrice: number;
+  taxAmount?: number | null;
+  dealerFees?: number | null;
+  warrantySold?: number | null;
+  gapSold?: number | null;
+  currency: string;
+  isSourced: boolean;
+  settlementRoute: ConsignedSettlementRoute;
+  financedSalePlan?: { customerReceivableMinor: number } | null;
+}): CustomerBilledLinesMinor {
+  const positiveMinor = (amount: number | null | undefined): number =>
+    amount != null && amount > 0 ? toMinorUnits(amount, input.currency) : 0;
+
+  const vehicleSettledWithSupplier =
+    !input.financedSalePlan && input.isSourced && !dealershipCollectsGross(input.settlementRoute);
+  const vehicle = input.financedSalePlan
+    ? input.financedSalePlan.customerReceivableMinor
+    : vehicleSettledWithSupplier
+      ? 0
+      : toMinorUnits(input.salePrice, input.currency);
+
+  return {
+    vehicle,
+    taxes: positiveMinor(input.taxAmount),
+    dealerFees: positiveMinor(input.dealerFees),
+    warranty: positiveMinor(input.warrantySold),
+    gap: positiveMinor(input.gapSold),
+    vehicleSettledWithSupplier,
+  };
+}
+
+export function sumBilledLinesMinor(lines: CustomerBilledLinesMinor): number {
+  return lines.vehicle + lines.taxes + lines.dealerFees + lines.warranty + lines.gap;
+}
+
+/**
+ * The credits booked against a sale's receivable AT THE POINT OF SALE, read back
+ * from the LEDGER (the canonical payment allocations), never from the sale row
+ * or the deposit tables: the trade-in (`trade_in_payment_<saleId>`) and each
+ * applied reservation deposit (`deposit_received_<depositId>`), exactly the two
+ * payments `applySaleCompletionSideEffects` books. Any other allocation is a
+ * later collection payment and is not part of the position the Bill of Sale
+ * states. Query-safe (reads only).
+ *
+ * Follow-up: `getSafelyReversiblePaymentKeys` in saleCancellation.ts classifies
+ * the same two keys and should share this.
+ */
+export type SaleTimeCredits =
+  | { ok: true; tradeInMinor: number; depositsMinor: number }
+  | { ok: false; reason: "CURRENCY_MISMATCH" | "DOES_NOT_FOOT" };
+
+export async function classifySaleTimeCredits(
+  ctx: QueryCtx,
+  sale: Doc<"sales">,
+  receivable: Doc<"receivableDocuments">
+): Promise<SaleTimeCredits> {
+  const allocations = await ctx.db
+    .query("paymentAllocations")
+    .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", receivable._id))
+    .collect();
+
+  const tradeInKey = `trade_in_payment_${sale._id}`;
+  let tradeInMinor = 0;
+  let tradeInFound = false;
+  let depositsMinor = 0;
+  try {
+    for (const allocation of allocations) {
+      if (allocation.status !== "ACTIVE" || allocation.orgId !== sale.orgId) continue;
+      const payment = await ctx.db.get(allocation.paymentId);
+      if (!payment || payment.status === "VOIDED" || payment.orgId !== sale.orgId) continue;
+
+      const isTradeIn = payment.idempotencyKey === tradeInKey;
+      const isDeposit = payment.idempotencyKey.startsWith("deposit_received_");
+      if (!isTradeIn && !isDeposit) continue;
+
+      if (allocation.currency !== receivable.currency) return { ok: false, reason: "CURRENCY_MISMATCH" };
+      if (!isValidMinorAmount(allocation.amountMinor)) return { ok: false, reason: "DOES_NOT_FOOT" };
+      if (isTradeIn) {
+        tradeInFound = true;
+        tradeInMinor = addMinor(tradeInMinor, allocation.amountMinor);
+      } else {
+        depositsMinor = addMinor(depositsMinor, allocation.amountMinor);
+      }
+    }
+  } catch (error) {
+    console.error(error);
+    return { ok: false, reason: "DOES_NOT_FOOT" };
+  }
+
+  // The sale says a trade-in was taken but the ledger holds no live credit for
+  // it (reversed, voided or never booked): the position cannot be stated.
+  if (sale.tradeInVehicleId && sale.tradeInValue !== undefined && sale.tradeInValue > 0 && !tradeInFound) {
+    return { ok: false, reason: "DOES_NOT_FOOT" };
+  }
+  return { ok: true, tradeInMinor, depositsMinor };
+}
 
 type SaleStatus = "PENDING" | "COMPLETED" | "CANCELLED";
 type FinancingType = "CASH" | "FINANCED" | "LEASE";
@@ -240,6 +363,9 @@ async function prepareSaleCompletion(
   // SCRUM-495 (OR-7): every sale creation and completion path passes here, so a LEASE draft
   // cannot be completed; it can still be edited or cancelled via `sales.update`.
   assertOperatedDealMode(args.financingType);
+  // SCRUM-504: createDraft, create and completeDraft (via completeExistingSale) all pass here,
+  // inside their idempotent run. finalizeDeal passes its application, so it is unaffected.
+  assertFinancedSaleHasDeal(args.financingType, args.applicationId);
 
   const vehicle = await ctx.db.get(args.vehicleId);
   if (vehicle?.orgId !== args.orgId) {
@@ -1209,30 +1335,22 @@ async function applySaleCompletionSideEffects(
   // independently owe — usually nothing. `ruleSaleCompleted` debits AR-Customers
   // from the same figure, so the canonical document and the GL cannot disagree
   // about what this customer was billed.
-  const vehicleReceivableMinor = args.financedSalePlan
-    ? args.financedSalePlan.customerReceivableMinor
-    : isSourced && !dealershipCollectsGross(settlementRoute)
-      ? 0
-      : toMinorUnits(args.salePrice, prepared.currency);
-  // Sales tax is billed ON TOP of the price, so it is part of what the customer
-  // owes (SCRUM-22). It has to be here as well as in `ruleSaleCompleted`'s AR
-  // debit, or the canonical receivable document and the GL diverge by exactly
-  // the tax for the same sale.
   //
-  // Safe on the consigned branch above without a further condition: an agency
-  // sale carrying tax is refused outright further down and by
-  // `consignedAgentSaleLines`, so `taxMinor` is always 0 by the time a sourced
-  // sale reaches here.
-  const saleTaxMinor =
-    args.taxAmount != null && args.taxAmount > 0
-      ? toMinorUnits(args.taxAmount, prepared.currency)
-      : 0;
-  const customerBillableMinor =
-    vehicleReceivableMinor +
-    saleTaxMinor +
-    (dealerFeesMinor ?? 0) +
-    (warrantySoldMinor ?? 0) +
-    (gapSoldMinor ?? 0);
+  // SCRUM-258: the rule itself is `customerBilledLinesMinor`, shared with the
+  // Bill of Sale query so the printed itemisation is the very derivation that
+  // produced the receivable.
+  const billedLines = customerBilledLinesMinor({
+    salePrice: args.salePrice,
+    taxAmount: args.taxAmount,
+    dealerFees: args.dealerFees,
+    warrantySold: args.warrantySold,
+    gapSold: args.gapSold,
+    currency: prepared.currency,
+    isSourced,
+    settlementRoute,
+    financedSalePlan: args.financedSalePlan,
+  });
+  const customerBillableMinor = sumBilledLinesMinor(billedLines);
 
   // Hoisted above the deposit resolution because the settlement treatment is
   // capped at the margin, and the margin cannot be known without the cost.
