@@ -49,9 +49,9 @@ const MAX_RESPONSE_BYTES = 64 * 1024;
 // unbounded; twelve hours keeps a live run's preview alive through long queues.
 export const PIN_TTL_MS = 12 * 60 * 60 * 1000;
 const SAFE_PREVIEW_NAME = /^[a-z0-9][a-z0-9._-]{0,60}$/;
-const DEPLOYMENT_NAME = /^[a-z]+-[a-z]+-\d+$/;
+export const DEPLOYMENT_NAME = /^[a-z]+-[a-z]+-\d+$/;
 // Production. The key cannot reach it; this list makes the refusal local too.
-const PROTECTED_DEPLOYMENTS = new Set(["kindly-hound-172"]);
+export const PROTECTED_DEPLOYMENTS = new Set(["kindly-hound-172"]);
 
 export class PreviewLifecycleRefusal extends Error {}
 
@@ -77,7 +77,20 @@ function readInputs(env) {
   return { deployKey, previewName, deploymentName };
 }
 
-async function callManagementApi(fetchImpl, deployKey, method, pathname, body) {
+/**
+ * One Management API call with a hard timeout, a response size cap and
+ * key-safe errors. `maxBytes` and `Refusal` let a sibling script (the prune
+ * job) reuse it with its own cap and refusal class; refusals of that class
+ * pass through unchanged, anything else becomes a fixed literal.
+ */
+export async function callManagementApi(
+  fetchImpl,
+  deployKey,
+  method,
+  pathname,
+  body,
+  { maxBytes = MAX_RESPONSE_BYTES, Refusal = PreviewLifecycleRefusal } = {},
+) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
@@ -93,14 +106,14 @@ async function callManagementApi(fetchImpl, deployKey, method, pathname, body) {
       signal: controller.signal,
     });
     const raw = await response.text();
-    if (Buffer.byteLength(raw, "utf8") > MAX_RESPONSE_BYTES) {
-      refuse("Convex Management API response exceeds the size limit.");
+    if (Buffer.byteLength(raw, "utf8") > maxBytes) {
+      throw new Refusal("Convex Management API response exceeds the size limit.");
     }
     return { status: response.status, ok: response.ok, raw };
   } catch (error) {
-    if (error instanceof PreviewLifecycleRefusal) throw error;
+    if (error instanceof Refusal) throw error;
     // Neither branch echoes request details: the header holds the key.
-    refuse(
+    throw new Refusal(
       controller.signal.aborted
         ? "Convex Management API request timed out."
         : "Convex Management API request failed.",
