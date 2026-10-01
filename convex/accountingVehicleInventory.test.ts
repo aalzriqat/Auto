@@ -16,6 +16,7 @@ import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { postAccountingEvent } from "./accounting/postingEngine";
 import { IMPORT_BULK_MAX_POSTING_ROWS } from "./vehicles";
+import { drainEntries } from "./accountingOutbox";
 import { PURCHASE_IMPORT_MAX_ROWS } from "./utils/importLimits";
 
 vi.mock("./rateLimit", () => ({
@@ -1013,6 +1014,202 @@ describe("Monthly F&I commission recognition cron", () => {
   });
 });
 
+// ─── SCRUM-537 — one GL occurrence per recognized F&I month ──────────────────
+// Months 2..N used to share (eventType, sourceType, sourceId, eventVersion 1)
+// with month 1, so postAccountingEvent returned "already posted" and wrote no
+// journal while the subledger advanced.
+async function seedFiDeferral(suffix: string, saleDate: number) {
+  const seed = await seedDealer(suffix);
+  const { t, orgId, asOwner, customerId, userId } = seed;
+  const vehicleId = await asOwner.mutation(api.vehicles.create, {
+    idempotencyKey: crypto.randomUUID(),
+    orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+  });
+  // Margin = 100 minor units (JOD scale 3): 34 + 34 + 32 over 3 months.
+  const saleId = await asOwner.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
+    orgId, vehicleId, customerId, salespersonId: userId,
+    salePrice: 15000, warrantySold: 0.100, warrantyCost: 0, warrantyTermMonths: 3,
+    saleDate, status: "COMPLETED",
+  });
+  const deferral = await t.run((ctx) =>
+    ctx.db.query("dealerProductDeferrals").withIndex("by_sale", (q) => q.eq("saleId", saleId)).first()
+  );
+  expect(deferral?.totalMarginMinor).toBe(100);
+  const recognize = (yearMonth: string, occurredAt: number) =>
+    t.mutation(internal.dealerProductDeferrals.recognizeDeferredCommissionForMonth, {
+      orgId, deferralId: deferral!._id, yearMonth, occurredAt, systemActorId: userId,
+    });
+  const fiEvents = () =>
+    t.run((ctx) =>
+      ctx.db.query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "dealerProductDeferrals").eq("sourceId", deferral!._id.toString()))
+        .filter((q) => q.eq(q.field("eventType"), "FI_COMMISSION_RECOGNIZED"))
+        .collect()
+    );
+  const deferralNow = () => t.run((ctx) => ctx.db.get(deferral!._id));
+  return { ...seed, saleId, deferral: deferral!, recognize, fiEvents, deferralNow };
+}
+
+async function pumpScheduler(t: Ctx["t"]) {
+  for (let pass = 0; pass < 10; pass += 1) {
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    const queued = (await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect()))
+      .filter((f) => f.state.kind === "pending" || f.state.kind === "inProgress").length;
+    if (queued === 0) break;
+  }
+}
+
+async function drainQueuedAccountingEventsForOrg(t: Ctx["t"], orgId: Id<"organizations">) {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  try {
+    await t.run(async (ctx) => {
+      const rows = await ctx.db.query("pendingAccountingEvents")
+        .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING")).take(50);
+      for (const row of rows) if (row.dispatchState === undefined) await ctx.db.patch(row._id, { nextActionAt: undefined });
+      return await drainEntries(ctx, rows);
+    });
+    await pumpScheduler(t);
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+describe("SCRUM-537 — F&I recognition posts one GL occurrence per month", () => {
+  test("T1: three recognized months post three FI events (versions 1,2,3) summing to the margin", async () => {
+    const s = await seedFiDeferral("fi537_t1", Date.UTC(2025, 3, 1));
+    const deferred = await accountBySystemKey(s.t, s.orgId, "DEFERRED_FI_COMMISSION");
+    await s.recognize("2025-05", Date.UTC(2025, 4, 15));
+    await s.recognize("2025-06", Date.UTC(2025, 5, 15));
+    await s.recognize("2025-07", Date.UTC(2025, 6, 15));
+
+    const events = (await s.fiEvents()).sort((a, b) => a.eventVersion - b.eventVersion);
+    expect(events.map((e) => e.status)).toEqual(["POSTED", "POSTED", "POSTED"]);
+    expect(events.map((e) => e.eventVersion)).toEqual([1, 2, 3]);
+    expect(events.map((e) => e.idempotencyKey)).toEqual([
+      `fi_commission_${s.deferral._id}_2025-05`,
+      `fi_commission_${s.deferral._id}_2025-06`,
+      `fi_commission_${s.deferral._id}_2025-07`,
+    ]);
+
+    let debited = 0;
+    for (const e of events) {
+      const lines = await s.t.run((ctx) =>
+        ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", e.journalEntryId!)).collect()
+      );
+      debited += lines.filter((l) => l.accountId === deferred._id).reduce((n, l) => n + (l.debitMinor ?? 0), 0);
+    }
+    const after = await s.deferralNow();
+    expect(after?.status).toBe("FULLY_RECOGNIZED");
+    expect(after?.recognizedMinor).toBe(100);
+    expect(debited).toBe(100);
+    expect(await glBalanceMinor(s.t, s.orgId, "DEFERRED_FI_COMMISSION")).toBe(0);
+  });
+
+  test("T2: a queued month 1 and a posted month 2 both reach the ledger once drained", async () => {
+    const s = await seedFiDeferral("fi537_t2", Date.UTC(2025, 3, 1));
+    // Month 1 is dated before any period exists -> queued in the outbox.
+    await s.recognize("2025-05", Date.UTC(2019, 4, 15));
+    const queued = await s.t.run((ctx) =>
+      ctx.db.query("pendingAccountingEvents").withIndex("by_org_status", (q) => q.eq("orgId", s.orgId).eq("status", "PENDING"))
+        .filter((q) => q.eq(q.field("eventType"), "FI_COMMISSION_RECOGNIZED")).collect()
+    );
+    expect(queued).toHaveLength(1);
+    expect(queued[0].kind).toBe("POST");
+    expect(queued[0].eventVersion).toBe(1);
+
+    await s.recognize("2025-06", Date.UTC(2025, 5, 15));
+    expect((await s.fiEvents()).map((e) => [e.eventVersion, e.status])).toEqual([[2, "POSTED"]]);
+
+    // Open a period covering month 1's date, then drain.
+    await s.asOwner.mutation(api.accountingPeriods.create, {
+      orgId: s.orgId, startDate: Date.UTC(2018, 0, 1), endDate: Date.UTC(2019, 11, 31, 23, 59, 59, 999),
+      fiscalYear: 2018, periodNumber: 1,
+    });
+    const early = (await s.asOwner.query(api.accountingPeriods.list, { orgId: s.orgId }))
+      .find((p) => p.startDate === Date.UTC(2018, 0, 1))!;
+    await s.asOwner.mutation(api.accountingPeriods.open, { orgId: s.orgId, periodId: early._id });
+    await drainQueuedAccountingEventsForOrg(s.t, s.orgId);
+
+    const events = (await s.fiEvents()).sort((a, b) => a.eventVersion - b.eventVersion);
+    expect(events.map((e) => [e.eventVersion, e.status])).toEqual([[1, "POSTED"], [2, "POSTED"]]);
+  });
+
+  test("T3: cancelling after two recognized months leaves every FI event reversed and the accounts at zero", async () => {
+    const s = await seedFiDeferral("fi537_t3", Date.now() - 120 * 86_400_000);
+    await s.recognize("2025-05", Date.now() - 60 * 86_400_000);
+    await s.recognize("2025-06", Date.now() - 30 * 86_400_000);
+    expect((await s.fiEvents()).map((e) => e.eventVersion).sort((a, b) => a - b)).toEqual([1, 2]);
+
+    const asApprover = await addCancellationApprover(s.t, s.orgId, "fi537_t3");
+    await asApprover.mutation(api.sales.update, { orgId: s.orgId, saleId: s.saleId, status: "CANCELLED" });
+
+    const events = await s.fiEvents();
+    expect(events).toHaveLength(2);
+    expect(events.every((e) => e.status === "REVERSED")).toBe(true);
+    expect((await s.deferralNow())?.status).toBe("CANCELLED");
+    expect(await glBalanceMinor(s.t, s.orgId, "DEFERRED_FI_COMMISSION")).toBe(0);
+    expect(await glBalanceMinor(s.t, s.orgId, "FI_COMMISSION_REVENUE")).toBe(0);
+  });
+
+  test("T4: recognition waits (counted skip) until the sale-completion journal has posted", async () => {
+    // Sale dated before any period exists -> its SALE_COMPLETED entry is queued.
+    const s = await seedFiDeferral("fi537_t4", Date.UTC(2019, 5, 1));
+    const result = await s.recognize("2025-05", Date.UTC(2025, 4, 15));
+    expect(result).toEqual({ posted: false, reason: "source_sale_not_posted" });
+    const after = await s.deferralNow();
+    expect(after?.recognizedMinor).toBe(0);
+    expect(after?.monthsRecognized ?? 0).toBe(0);
+    expect(after?.lastRecognizedYearMonth).toBeUndefined();
+    expect(after?.status).toBe("ACTIVE");
+    expect(await s.fiEvents()).toHaveLength(0);
+  });
+
+  test("T5: a conflicting ledger occurrence is a counted refusal and the subledger does not advance", async () => {
+    const s = await seedFiDeferral("fi537_t5", Date.UTC(2025, 3, 1));
+    await s.recognize("2025-05", Date.UTC(2025, 4, 15));
+
+    // Occurrence 2 already exists in the ledger under a different key.
+    const rogueId = await s.t.run((ctx) =>
+      ctx.db.insert("accountingEvents", {
+        orgId: s.orgId, eventType: "FI_COMMISSION_RECOGNIZED", sourceType: "dealerProductDeferrals",
+        sourceId: s.deferral._id.toString(), eventVersion: 2, idempotencyKey: "rogue_key",
+        occurredAt: Date.UTC(2025, 5, 1), accountingDate: Date.UTC(2025, 5, 1), currency: "JOD",
+        payload: {}, status: "POSTED", createdBy: s.userId, createdAt: Date.now(),
+      })
+    );
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const blocked = await s.recognize("2025-06", Date.UTC(2025, 5, 15));
+      expect(blocked).toEqual({ posted: false, reason: "ledger_occurrence_conflict" });
+      expect(errorSpy).toHaveBeenCalled();
+      let after = await s.deferralNow();
+      expect(after?.monthsRecognized).toBe(1);
+      expect(after?.lastRecognizedYearMonth).toBe("2025-05");
+      expect(after?.recognizedMinor).toBe(34);
+
+      // A queued row already holding this month's key is the same refusal.
+      await s.t.run((ctx) => ctx.db.delete(rogueId));
+      await s.t.run((ctx) =>
+        ctx.db.insert("pendingAccountingEvents", {
+          orgId: s.orgId, kind: "POST", status: "PENDING",
+          idempotencyKey: `fi_commission_${s.deferral._id}_2025-06`,
+          accountingDate: Date.UTC(2025, 5, 15), actorId: s.userId, attempts: 0, createdAt: Date.now(),
+          sourceType: "dealerProductDeferrals", sourceId: s.deferral._id.toString(),
+          eventType: "FI_COMMISSION_RECOGNIZED", eventVersion: 9, currency: "JOD",
+          occurredAt: Date.UTC(2025, 5, 15), payload: {},
+        })
+      );
+      const blockedByQueue = await s.recognize("2025-06", Date.UTC(2025, 5, 15));
+      expect(blockedByQueue).toEqual({ posted: false, reason: "ledger_occurrence_conflict" });
+      after = await s.deferralNow();
+      expect(after?.monthsRecognized).toBe(1);
+      expect(after?.recognizedMinor).toBe(34);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+});
 describe("vehicleInventoryReconciliation", () => {
   test("an owned in-stock vehicle reconciles Vehicle Inventory GL against capitalized cost", async () => {
     const { orgId, asOwner } = await seedDealer("recon_a");

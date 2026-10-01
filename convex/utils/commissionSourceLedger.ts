@@ -43,7 +43,7 @@ const COMMISSION_SOURCE_DEPENDENT_EVENT_TYPES = new Set([
  * POSTED specifically — `accountingEvents.status` also admits PENDING and
  * FAILED, and treating either as posted would defeat the entire guard.
  */
-async function prereqPosted(
+export async function prereqPosted(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
   idempotencyKey: string
