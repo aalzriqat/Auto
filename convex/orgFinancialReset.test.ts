@@ -589,3 +589,61 @@ describe("resetOrgFinancialData never strands a surviving row's quote or sale re
     });
   });
 });
+
+/**
+ * SCRUM-546 — `payrollItems.runId` is REQUIRED. `payrollRuns` used to be listed
+ * (and deleted) BEFORE `payrollItems` with no `CHILD_TABLES` edge, so one pass
+ * whose item batch was smaller than the item count deleted the run while items
+ * survived: a committed, dangling required reference.
+ */
+describe("resetOrgFinancialData never strands a payrollItem's run reference", () => {
+  test("a partial pass keeps the payroll run while any of its items survive", async () => {
+    const t = setup();
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Payroll Order Motors", createdAt: Date.now() })
+    );
+
+    const runId = await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: "reset_u546", email: "u546@x.com" });
+      const id = await ctx.db.insert("payrollRuns", {
+        orgId, periodYear: 2026, periodMonth: 9, currency: "JOD", status: "DRAFT",
+        totalGrossMinor: 3000, totalNetMinor: 3000, createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      for (const n of [1000, 2000]) {
+        await ctx.db.insert("payrollItems", {
+          orgId, runId: id, userId, baseSalaryMinor: n, commissionMinor: 0,
+          otherEarningsMinor: 0, advanceDeductionMinor: 0, otherDeductionMinor: 0,
+          grossMinor: n, netMinor: n, currency: "JOD", commissionSaleIds: [],
+          createdAt: Date.now(),
+        });
+      }
+      return id;
+    });
+
+    let remaining = Number.POSITIVE_INFINITY;
+    for (let pass = 0; pass < 12 && remaining > 0; pass += 1) {
+      const res = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
+        orgId, dryRun: false, batchSize: 1,
+      });
+      remaining = res.remaining;
+      await t.run(async (ctx) => {
+        const items = await ctx.db.query("payrollItems").collect();
+        for (const item of items) {
+          expect(await ctx.db.get(item.runId), `pass ${pass}: payrollItem.runId`).not.toBeNull();
+        }
+        if (pass === 0) {
+          // Precondition: with batchSize 1 exactly one item survives pass 0 and so
+          // does its run; otherwise the loop above would pass vacuously.
+          expect(items, "pass 0: exactly one payrollItem survives").toHaveLength(1);
+          expect(await ctx.db.get(runId), "pass 0: the payroll run survives").not.toBeNull();
+        }
+      });
+    }
+
+    expect(remaining).toBe(0);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(runId)).toBeNull();
+      expect(await ctx.db.query("payrollItems").collect()).toHaveLength(0);
+    });
+  });
+});
