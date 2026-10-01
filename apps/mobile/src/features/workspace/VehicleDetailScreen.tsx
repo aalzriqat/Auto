@@ -32,6 +32,7 @@ import {
   parseOptionalNumber,
   useGenericError,
 } from "./modules/moduleShared";
+import { isConvexRefusal } from "./modules/convexRefusal";
 import { useStyles } from "./modules/moduleStyles";
 
 const PERMISSION = {
@@ -404,6 +405,13 @@ function VehicleDetailContent({
       commandId.retire(intent);
       pendingPayoutsRef.current.delete(depositId);
     } catch (error) {
+      // SCRUM-530: the record and its kept key exist only while the outcome is
+      // UNKNOWN. A definite server refusal (ConvexError) retires both; any other
+      // error keeps them (it may have committed).
+      if (isConvexRefusal(error)) {
+        commandId.retire(intent);
+        pendingPayoutsRef.current.delete(depositId);
+      }
       reportError("Mobile deposit release failed", error);
     } finally {
       setReleasingDepositId(null);

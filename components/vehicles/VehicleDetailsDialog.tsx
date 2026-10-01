@@ -344,6 +344,8 @@ export function VehicleDetailsDialog({
           : (t("DepositForfeitedSuccess" as any) ?? "Deposit forfeited")
       );
     } catch (error) {
+      // SCRUM-530: a definite refusal retires the pending record and its key.
+      pendingPayouts.settleFailure(String(depositId), error);
       toast.error(getErrorMessage(error));
     } finally {
       setReleasingDepositId(null);

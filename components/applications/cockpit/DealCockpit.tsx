@@ -3005,6 +3005,8 @@ export function DealCockpit({
                   commandId.retire(releaseIntent);
                   pendingPayouts.confirm(depositId);
                 } catch (error) {
+                  // SCRUM-530: a definite refusal retires the pending record and its key.
+                  pendingPayouts.settleFailure(depositId, error);
                   toast.error(getErrorMessage(error));
                   throw error;
                 } finally {

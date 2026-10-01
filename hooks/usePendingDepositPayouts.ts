@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import { isConvexError } from "@/lib/errors";
 
 /**
  * SCRUM-469 — the identity of a deposit payout that MAY have committed.
@@ -29,6 +30,10 @@ import { useMemo, useRef, useState } from "react";
  *     -- "refunded" for a submission that moved no money. `confirm` does NOT
  *     retire: callers already retire on success.
  *
+ * SCRUM-530: the record exists only while the outcome is genuinely UNKNOWN. A
+ * definite server refusal (`settleFailure` with a `ConvexError`) retires it and
+ * its key the same way; every other error keeps both (fail-safe).
+ *
  * It lives in a ref keyed by deposit id, so it survives the method picker
  * clearing and the dialog closing and reopening. It does not outlive the owning
  * component instance (nor does the command identity it retires).
@@ -48,6 +53,14 @@ export type PendingDepositPayouts = {
   record: (depositId: string, payout: PendingPayout) => void;
   confirm: (depositId: string) => void;
   dismiss: (depositId: string) => void;
+  /**
+   * SCRUM-530 — call from the release catch. The record and its kept key exist
+   * only while the outcome is UNKNOWN: a `ConvexError` is the server's definite
+   * refusal (thrown inside the mutation, so it rolled back and nothing moved), and
+   * retires both exactly like `dismiss`. Anything else (a plain "Server Error",
+   * transport failure, timeout) may have committed, so both are kept.
+   */
+  settleFailure: (depositId: string, error: unknown) => void;
   /** Deposits whose recorded attempt is blocking a different decision, for the notice. */
   blocked: Readonly<Record<string, PendingPayout>>;
 };
@@ -65,6 +78,11 @@ export function usePendingDepositPayouts(retire: (intent: string) => void): Pend
         return rest;
       });
     };
+    const dismiss = (depositId: string) => {
+      const existing = pendingRef.current.get(depositId);
+      if (existing) retire(existing.intent);
+      clear(depositId);
+    };
     return {
       check(depositId, resolution, method) {
         const existing = pendingRef.current.get(depositId);
@@ -79,10 +97,9 @@ export function usePendingDepositPayouts(retire: (intent: string) => void): Pend
         if (!pendingRef.current.has(depositId)) pendingRef.current.set(depositId, payout);
       },
       confirm: clear,
-      dismiss(depositId) {
-        const existing = pendingRef.current.get(depositId);
-        if (existing) retire(existing.intent);
-        clear(depositId);
+      dismiss,
+      settleFailure(depositId, error) {
+        if (isConvexError(error)) dismiss(depositId);
       },
       blocked,
     };
