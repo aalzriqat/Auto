@@ -402,6 +402,26 @@ export const dispose = mutation({
 });
 
 /**
+ * Every reason depreciateAssetForMonth can decline to post. crons.ts classifies
+ * each one (done vs abnormal) in a Record keyed by this union, so adding a
+ * reason here without classifying it fails typecheck.
+ */
+export type DepreciationSkipReason =
+  | "org_lifecycle_blocked"
+  | "not_found"
+  | "not_active"
+  | "not_after_last_depreciated_month"
+  | "not_capitalized_under_gl_phase_11"
+  | "before_depreciation_start"
+  | "fully_depreciated";
+
+// The `?: undefined` members keep `result.reason` / `result.amountMinor` readable
+// without narrowing, as the pre-existing callers and tests read them.
+export type DepreciateAssetResult =
+  | { posted: true; amountMinor: number; reason?: undefined }
+  | { posted: false; reason: DepreciationSkipReason; amountMinor?: undefined };
+
+/**
  * Cron-callable: posts one month of straight-line depreciation for a single
  * ACTIVE asset, if it isn't already fully depreciated and this month is after
  * whatever was last posted. Uses the same explicit month-count schedule as
@@ -422,7 +442,7 @@ export const depreciateAssetForMonth = internalMutation({
     occurredAt: v.number(),
     systemActorId: v.id("users"),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<DepreciateAssetResult> => {
     // ⚠️ SCRUM-302 — classified HERE, ahead of every other check, rather than
     // left to the engine's throw. This mutation is called once per asset from a
     // CROSS-ORG cron batch, and an uncaught throw inside such a batch aborts the

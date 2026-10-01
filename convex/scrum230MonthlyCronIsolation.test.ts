@@ -27,6 +27,7 @@ import { drainEntries } from "./accountingOutbox";
 import * as workflowHooks from "./accounting/workflowHooks";
 import * as webhookLog from "./utils/webhookLog";
 import * as orgLifecycle from "./utils/orgLifecycle";
+import { DEPRECIATION_REASON_CLASS, RECOGNITION_REASON_CLASS } from "./crons";
 import { firstOfferableMonthIndex, toYearMonth, yearMonthIndex } from "./utils/expenseAmortization";
 
 vi.mock("./rateLimit", () => ({
@@ -472,6 +473,36 @@ describe("an org blocked by its lifecycle costs one mutation per run and is not 
     expect(summary).toMatch(/posted 1\/4/);
     expect(summary).toMatch(/0 stopped abnormally/);
     expect(summary).toMatch(/0 failed/);
+  });
+});
+
+// ─── 9. the reason classification is total and as ruled ───────────────────────
+
+describe("every mutation skip reason is classified", () => {
+  // The compiler already forces a Record key per union member; this pins the
+  // ruled classification so a reclassification is a deliberate, visible change.
+  test("depreciation reasons", () => {
+    expect(DEPRECIATION_REASON_CLASS).toEqual({
+      org_lifecycle_blocked: "done",
+      not_found: "done",
+      not_active: "done",
+      not_after_last_depreciated_month: "done",
+      before_depreciation_start: "done",
+      fully_depreciated: "done",
+      not_capitalized_under_gl_phase_11: "abnormal",
+    });
+  });
+
+  test("recognition reasons", () => {
+    expect(RECOGNITION_REASON_CLASS).toEqual({
+      org_lifecycle_blocked: "done",
+      not_found: "done",
+      not_active: "done",
+      not_after_last_recognized_month: "done",
+      fully_recognized: "done",
+      source_sale_not_posted: "done",
+      ledger_occurrence_conflict: "abnormal",
+    });
   });
 });
 

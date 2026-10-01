@@ -37,6 +37,26 @@ export const listActiveDeferralsForRecognition = internalQuery({
   },
 });
 
+/**
+ * Every reason recognizeDeferredCommissionForMonth can decline to post. crons.ts
+ * classifies each one (done vs abnormal) in a Record keyed by this union, so
+ * adding a reason here without classifying it fails typecheck.
+ */
+export type RecognitionSkipReason =
+  | "org_lifecycle_blocked"
+  | "not_found"
+  | "not_active"
+  | "not_after_last_recognized_month"
+  | "fully_recognized"
+  | "source_sale_not_posted"
+  | "ledger_occurrence_conflict";
+
+// The `?: undefined` members keep `result.reason` / `result.amountMinor` readable
+// without narrowing, as the pre-existing callers and tests read them.
+export type RecognizeDeferredCommissionResult =
+  | { posted: true; amountMinor: number; reason?: undefined }
+  | { posted: false; reason: RecognitionSkipReason; amountMinor?: undefined };
+
 export const recognizeDeferredCommissionForMonth = internalMutation({
   args: {
     orgId: v.id("organizations"),
@@ -45,7 +65,7 @@ export const recognizeDeferredCommissionForMonth = internalMutation({
     occurredAt: v.number(),
     systemActorId: v.id("users"),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<RecognizeDeferredCommissionResult> => {
     // ⚠️ SCRUM-302 — see the identical note in `fixedAssets.depreciateAssetForMonth`.
     // Classified before anything else so a blocked organization is a counted
     // skip in a cross-org cron batch, never a throw that poisons the batch.
@@ -79,13 +99,14 @@ export const recognizeDeferredCommissionForMonth = internalMutation({
     const flatMonthlyAmount = Math.ceil(deferral.totalMarginMinor / deferral.termMonths);
     const amountMinor = isFinalContractualMonth ? remaining : Math.min(flatMonthlyAmount, remaining);
 
-    // ⚠️ SCRUM-537 — a counted skip, never a throw (cross-org cron loop, no
-    // per-row try/catch). The deferred balance this releases is created by the
-    // sale-completion journal; recognizing before it has POSTED would credit
-    // revenue out of a balance that is not yet in the ledger. Recognition
-    // resumes on the first monthly run after the sale posts; months skipped
-    // meanwhile are not caught up (the cron passes only the current month —
-    // catch-up is SCRUM-230).
+    // ⚠️ SCRUM-537 — a counted skip, never a throw. The deferred balance this
+    // releases is created by the sale-completion journal; recognizing before it
+    // has POSTED would credit revenue out of a balance that is not yet in the
+    // ledger. This is a normal waiting state, not an error. The cron isolates
+    // each item (SCRUM-230: one item's throw never stops the cross-org run) and
+    // catches up: the item stops at this month, and the first monthly run after
+    // the sale posts offers every missed month in order, each dated in its own
+    // month.
     if (!(await prereqPosted(ctx, args.orgId, `sale_completed_${deferral.saleId}`))) {
       return { posted: false, reason: "source_sale_not_posted" };
     }

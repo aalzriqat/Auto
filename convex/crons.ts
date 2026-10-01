@@ -7,6 +7,9 @@ import { notifyManagers, notifyUser } from "./utils/notifications";
 import { PLANS, PlanId } from "./subscriptions";
 import { Doc, Id } from "./_generated/dataModel";
 import { isSystemOwnerRole } from "./utils/permissions";
+import { toYearMonth } from "./utils/expenseAmortization";
+import type { DepreciationSkipReason } from "./fixedAssets";
+import type { RecognitionSkipReason } from "./dealerProductDeferrals";
 import { firstOfferableMonthIndex, occurredAtForMonthIndex, yearMonthFromIndex, yearMonthIndex } from "./utils/expenseAmortization";
 
 const crons = cronJobs();
@@ -466,8 +469,6 @@ export const triggerSocialAutoReplyRetries = internalAction({
   },
 });
 
-// ─── GL Phase 11: monthly fixed-asset depreciation cron ──────────────────────
-
 // ─── Shared engine for the two monthly per-row GL crons (SCRUM-230) ──────────
 // Fixed-asset depreciation and F&I commission recognition share one discipline:
 //  · ISOLATION — one item's throw ends that item for this run and nothing else;
@@ -481,7 +482,11 @@ export const triggerSocialAutoReplyRetries = internalAction({
 /** Per-run cap on individual failure rows, so a systemic fault cannot flood webhookLogs (zeroState DIAGNOSTIC_ROW_BOUNDS). */
 const MAX_ITEM_FAILURE_ROWS = 20;
 
-type MonthlyCronSource = "fixed-asset-depreciation" | "fi-commission-recognition";
+/** How a non-posting mutation `reason` ends an item: an ordinary state, or one that should never be routine. */
+type ReasonClass = "done" | "abnormal";
+
+/** The mutation reason a suspended / purged organization is refused with (SCRUM-302). */
+const ORG_BLOCKED_REASON = "org_lifecycle_blocked";
 
 type MonthlyCronStats = {
   total: number;
@@ -489,51 +494,54 @@ type MonthlyCronStats = {
   posted: number;
   monthsPosted: number;
   skippedNoOwner: number;
-  /** Items that ended for an ordinary reason (not due, already run, fully done, left ACTIVE). */
+  /** Items that ended for an ordinary reason (not due, already run, fully done, left ACTIVE, org blocked, sale not yet posted). */
   done: number;
   /** Items that stopped for a reason that should never be routine, by reason. */
   abnormalByReason: Record<string, number>;
   failed: number;
-  failureRowsWritten: number;
-  failureRowsSuppressed: number;
 };
 
-type MonthlyPostResult = { posted: boolean; reason?: string };
+type MonthlyPostResult<R extends string> = { posted: true } | { posted: false; reason: R };
 
 type MonthlyCronItem = { _id: string; orgId: Id<"organizations"> };
 
-type MonthlyCronSpec<T extends MonthlyCronItem> = {
-  source: MonthlyCronSource;
+type MonthlyCronSpec<T extends MonthlyCronItem, R extends string> = {
+  source: "fixed-asset-depreciation" | "fi-commission-recognition";
   /** Row noun for the failure rows ("asset" / "deferral"). */
   noun: string;
-  /** Mutation `reason`s that are normal ends of an item; any other non-posting reason is abnormal. */
-  doneReasons: ReadonlySet<string>;
+  /** Summary-line prefix, followed by the run's year-month. */
+  label: string;
+  /** What the "skipped" bucket of the summary line covers (the `done` reasons, in prose). */
+  doneText: string;
+  /** Exhaustive over every reason the mutation can return: adding a reason without classifying it fails typecheck. */
+  reasonClass: Record<R, ReasonClass>;
+  /** One page of ACTIVE items across every org. */
+  listPage: (ctx: ActionCtx, cursor: string | undefined) => Promise<{ page: T[]; isDone: boolean; continueCursor: string }>;
   firstOfferableMonthIndex: (item: T) => number;
   postMonth: (
     ctx: ActionCtx,
     item: T,
     args: { systemActorId: Id<"users">; yearMonth: string; occurredAt: number }
-  ) => Promise<MonthlyPostResult>;
+  ) => Promise<MonthlyPostResult<R>>;
+};
+
+/** Run-scoped state shared by every item of one cron run. */
+type MonthlyCronRun = {
+  stats: MonthlyCronStats;
+  ownerByOrg: Map<string, Id<"users"> | null>;
+  /** Orgs the mutation already refused for their lifecycle this run: their remaining items are skipped without a call. */
+  blockedOrgs: Set<string>;
+  now: number;
 };
 
 function newMonthlyCronStats(): MonthlyCronStats {
-  return {
-    total: 0,
-    posted: 0,
-    monthsPosted: 0,
-    skippedNoOwner: 0,
-    done: 0,
-    abnormalByReason: {},
-    failed: 0,
-    failureRowsWritten: 0,
-    failureRowsSuppressed: 0,
-  };
+  return { total: 0, posted: 0, monthsPosted: 0, skippedNoOwner: 0, done: 0, abnormalByReason: {}, failed: 0 };
 }
 
 /** The failure row must never be able to break isolation: it has its own try/catch. */
-async function recordMonthlyItemFailure<T extends MonthlyCronItem>(
+async function recordMonthlyItemFailure<T extends MonthlyCronItem, R extends string>(
   ctx: ActionCtx,
-  spec: MonthlyCronSpec<T>,
+  spec: MonthlyCronSpec<T, R>,
   stats: MonthlyCronStats,
   item: T,
   yearMonth: string | null,
@@ -541,11 +549,8 @@ async function recordMonthlyItemFailure<T extends MonthlyCronItem>(
 ): Promise<void> {
   const message = err instanceof Error ? err.message : String(err);
   console.error(`${spec.source}: ${spec.noun} ${item._id} (org ${item.orgId}) failed at ${yearMonth ?? "owner lookup"}:`, err);
-  if (stats.failureRowsWritten >= MAX_ITEM_FAILURE_ROWS) {
-    stats.failureRowsSuppressed++;
-    return;
-  }
-  stats.failureRowsWritten++;
+  // stats.failed already counts this item: only the first MAX rows are written.
+  if (stats.failed > MAX_ITEM_FAILURE_ROWS) return;
   try {
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
       source: spec.source,
@@ -558,43 +563,48 @@ async function recordMonthlyItemFailure<T extends MonthlyCronItem>(
   }
 }
 
-async function runMonthlyCatchUpForItem<T extends MonthlyCronItem>(
+async function runMonthlyCatchUpForItem<T extends MonthlyCronItem, R extends string>(
   ctx: ActionCtx,
-  spec: MonthlyCronSpec<T>,
-  stats: MonthlyCronStats,
-  item: T,
-  args: { ownerByOrg: Map<string, Id<"users"> | null>; now: number }
+  spec: MonthlyCronSpec<T, R>,
+  run: MonthlyCronRun,
+  item: T
 ): Promise<void> {
+  const { stats } = run;
   stats.total++;
+  const orgKey = item.orgId.toString();
+  // A blocked org is refused identically for every one of its items: one mutation per run, not one per item.
+  if (run.blockedOrgs.has(orgKey)) {
+    stats.done++;
+    return;
+  }
   let yearMonth: string | null = null;
   try {
-    const systemActorId = await getCachedOrgOwnerUserId(ctx, args.ownerByOrg, item.orgId);
+    const systemActorId = await getCachedOrgOwnerUserId(ctx, run.ownerByOrg, item.orgId);
     if (!systemActorId) {
       stats.skippedNoOwner++;
       return;
     }
-    const currentIdx = yearMonthIndex(args.now);
+    const currentIdx = yearMonthIndex(run.now);
     let postedAny = false;
-    let endedAbnormally = false;
-    let endReason: string | undefined;
+    let abnormalReason: R | undefined;
     for (let idx = spec.firstOfferableMonthIndex(item); idx <= currentIdx; idx++) {
       yearMonth = yearMonthFromIndex(idx);
       const result = await spec.postMonth(ctx, item, {
         systemActorId,
         yearMonth,
-        occurredAt: occurredAtForMonthIndex(idx, args.now),
+        occurredAt: occurredAtForMonthIndex(idx, run.now),
       });
       if (!result.posted) {
-        endReason = result.reason ?? "unknown";
-        endedAbnormally = !spec.doneReasons.has(endReason);
+        if (result.reason === ORG_BLOCKED_REASON) run.blockedOrgs.add(orgKey);
+        if (spec.reasonClass[result.reason] === "abnormal") abnormalReason = result.reason;
         break;
       }
       postedAny = true;
       stats.monthsPosted++;
     }
     if (postedAny) stats.posted++;
-    if (endedAbnormally && endReason) {
-      stats.abnormalByReason[endReason] = (stats.abnormalByReason[endReason] ?? 0) + 1;
+    if (abnormalReason) {
+      stats.abnormalByReason[abnormalReason] = (stats.abnormalByReason[abnormalReason] ?? 0) + 1;
     } else if (!postedAny) {
       stats.done++;
     }
@@ -604,32 +614,71 @@ async function runMonthlyCatchUpForItem<T extends MonthlyCronItem>(
   }
 }
 
-function monthlyCronSummary(prefix: string, noun: string, doneText: string, stats: MonthlyCronStats): string {
+/** Drains every page so items past the page cap are not silently skipped. */
+async function runMonthlyCron<T extends MonthlyCronItem, R extends string>(
+  ctx: ActionCtx,
+  spec: MonthlyCronSpec<T, R>,
+  now: number
+): Promise<MonthlyCronStats> {
+  const run: MonthlyCronRun = { stats: newMonthlyCronStats(), ownerByOrg: new Map(), blockedOrgs: new Set(), now };
+  let cursor: string | undefined;
+  do {
+    const page = await spec.listPage(ctx, cursor);
+    for (const item of page.page) {
+      await runMonthlyCatchUpForItem(ctx, spec, run, item);
+    }
+    cursor = page.isDone ? undefined : page.continueCursor;
+  } while (cursor);
+  return run.stats;
+}
+
+function monthlyCronSummary<T extends MonthlyCronItem, R extends string>(
+  spec: MonthlyCronSpec<T, R>,
+  yearMonth: string,
+  stats: MonthlyCronStats
+): string {
   const abnormal = Object.entries(stats.abnormalByReason);
   const abnormalCount = abnormal.reduce((n, [, c]) => n + c, 0);
   const abnormalDetail = abnormalCount > 0 ? ` (${abnormal.map(([reason, c]) => `${reason}=${c}`).join(", ")})` : "";
-  const suppressed =
-    stats.failureRowsSuppressed > 0 ? ` (${stats.failureRowsSuppressed} further failure row(s) not logged individually)` : "";
-  return `${prefix}: posted ${stats.posted}/${stats.total} ${noun}(s) (${stats.monthsPosted} month(s)), ${stats.skippedNoOwner} skipped (no org owner), ${stats.done} skipped (${doneText}), ${abnormalCount} stopped abnormally${abnormalDetail}, ${stats.failed} failed${suppressed}.`;
+  const suppressed = Math.max(0, stats.failed - MAX_ITEM_FAILURE_ROWS);
+  const suppressedText = suppressed > 0 ? ` (${suppressed} further failure row(s) not logged individually)` : "";
+  return `${spec.label} ${yearMonth}: posted ${stats.posted}/${stats.total} ${spec.noun}(s) (${stats.monthsPosted} month(s)), ${stats.skippedNoOwner} skipped (no org owner), ${stats.done} skipped (${spec.doneText}), ${abnormalCount} stopped abnormally${abnormalDetail}, ${stats.failed} failed${suppressedText}.`;
 }
 
 /** A run that failed any item is reported as an error row, but the action itself still returns. */
-async function logMonthlyCronSummary(
+async function logMonthlyCronSummary<T extends MonthlyCronItem, R extends string>(
   ctx: ActionCtx,
-  source: MonthlyCronSource,
+  spec: MonthlyCronSpec<T, R>,
   summary: string,
   stats: MonthlyCronStats
 ): Promise<void> {
   await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-    source,
+    source: spec.source,
     status: stats.failed > 0 ? "error" : "success",
     summary,
     ...(stats.failed > 0 ? { error: `${stats.failed} row(s) failed this run; see the failure rows logged under this source.` } : {}),
   });
 }
 
-function currentYearMonthOf(now: number): string {
-  return yearMonthFromIndex(yearMonthIndex(now));
+/** The action body shared by both monthly crons: run, summarise, log; a run-level throw is logged and rethrown. */
+function monthlyCronHandler<T extends MonthlyCronItem, R extends string>(spec: MonthlyCronSpec<T, R>) {
+  return async (ctx: ActionCtx): Promise<string> => {
+    try {
+      const now = Date.now();
+      const stats = await runMonthlyCron(ctx, spec, now);
+      const summary = monthlyCronSummary(spec, toYearMonth(now), stats);
+      await logMonthlyCronSummary(ctx, spec, summary, stats);
+      return summary;
+    } catch (err) {
+      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+        source: spec.source,
+        status: "error",
+        summary: `${spec.source} cron failed`,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  };
 }
 
 async function getCachedOrgOwnerUserId(
@@ -645,18 +694,28 @@ async function getCachedOrgOwnerUserId(
   return ownerByOrg.get(orgKey) ?? null;
 }
 
-const DEPRECIATION_DONE_REASONS: ReadonlySet<string> = new Set([
-  "not_found",
-  "not_active",
-  "not_after_last_depreciated_month",
-  "before_depreciation_start",
-  "fully_depreciated",
-]);
+/**
+ * Every depreciation skip reason, classified. `done` = an ordinary end for the
+ * item (including a suspended org, which is a deliberate counted refusal); any
+ * `abnormal` reason is surfaced in the run summary.
+ */
+export const DEPRECIATION_REASON_CLASS: Record<DepreciationSkipReason, ReasonClass> = {
+  org_lifecycle_blocked: "done",
+  not_found: "done",
+  not_active: "done",
+  not_after_last_depreciated_month: "done",
+  before_depreciation_start: "done",
+  fully_depreciated: "done",
+  not_capitalized_under_gl_phase_11: "abnormal",
+};
 
-const depreciationSpec: MonthlyCronSpec<Doc<"fixedAssets">> = {
+const depreciationSpec: MonthlyCronSpec<Doc<"fixedAssets">, DepreciationSkipReason> = {
   source: "fixed-asset-depreciation",
   noun: "asset",
-  doneReasons: DEPRECIATION_DONE_REASONS,
+  label: "Depreciation",
+  doneText: "already run / not yet started / inactive / fully depreciated / org suspended",
+  reasonClass: DEPRECIATION_REASON_CLASS,
+  listPage: (ctx, cursor) => ctx.runQuery(internal.fixedAssets.listActiveAssetsForDepreciation, { cursor }),
   firstOfferableMonthIndex: (asset) =>
     firstOfferableMonthIndex({
       lastPostedYearMonth: asset.lastDepreciatedYearMonth,
@@ -673,51 +732,14 @@ const depreciationSpec: MonthlyCronSpec<Doc<"fixedAssets">> = {
     }),
 };
 
-async function runFixedAssetDepreciation(ctx: ActionCtx, args: { now: number }): Promise<MonthlyCronStats> {
-  const ownerByOrg = new Map<string, Id<"users"> | null>();
-  const stats = newMonthlyCronStats();
-
-  // Drain every page so assets past the page cap are not silently skipped.
-  let cursor: string | undefined;
-  do {
-    const page = await ctx.runQuery(internal.fixedAssets.listActiveAssetsForDepreciation, { cursor });
-    for (const asset of page.page) {
-      await runMonthlyCatchUpForItem(ctx, depreciationSpec, stats, asset, { ownerByOrg, now: args.now });
-    }
-    cursor = page.isDone ? undefined : page.continueCursor;
-  } while (cursor);
-
-  return stats;
-}
-
-function depreciationSummary(yearMonth: string, stats: MonthlyCronStats): string {
-  return monthlyCronSummary(
-    `Depreciation ${yearMonth}`,
-    "asset",
-    "already run / not yet started / inactive / fully depreciated",
-    stats
-  );
-}
+// ─── GL Phase 11: monthly fixed-asset depreciation cron ──────────────────────
+// Posts one month of straight-line depreciation for every ACTIVE fixed asset,
+// across every org (shared engine above). depreciateAssetForMonth is idempotent
+// per (assetId, yearMonth), so a redrive/redeploy can't double-post.
 
 export const triggerFixedAssetDepreciation = internalAction({
   args: {},
-  handler: async (ctx: ActionCtx): Promise<string> => {
-    try {
-      const now = Date.now();
-      const stats = await runFixedAssetDepreciation(ctx, { now });
-      const summary = depreciationSummary(currentYearMonthOf(now), stats);
-      await logMonthlyCronSummary(ctx, "fixed-asset-depreciation", summary, stats);
-      return summary;
-    } catch (err) {
-      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-        source: "fixed-asset-depreciation",
-        status: "error",
-        summary: "fixed-asset-depreciation cron failed",
-        error: err instanceof Error ? err.message : String(err),
-      });
-      throw err;
-    }
-  },
+  handler: monthlyCronHandler(depreciationSpec),
 });
 
 // ─── GL Phase 19: monthly F&I commission recognition cron ────────────────────
@@ -725,17 +747,28 @@ export const triggerFixedAssetDepreciation = internalAction({
 // paginated cross-org scan, cached per-org owner resolution, per-item
 // isolation + month catch-up, admin audit log on completion/failure.
 
-const RECOGNITION_DONE_REASONS: ReadonlySet<string> = new Set([
-  "not_found",
-  "not_active",
-  "not_after_last_recognized_month",
-  "fully_recognized",
-]);
+/**
+ * Every recognition skip reason, classified. `source_sale_not_posted` is a
+ * normal waiting state (the sale journal has not posted yet); a ledger
+ * occurrence conflict means the subledger and GL diverged and is abnormal.
+ */
+export const RECOGNITION_REASON_CLASS: Record<RecognitionSkipReason, ReasonClass> = {
+  org_lifecycle_blocked: "done",
+  not_found: "done",
+  not_active: "done",
+  not_after_last_recognized_month: "done",
+  fully_recognized: "done",
+  source_sale_not_posted: "done",
+  ledger_occurrence_conflict: "abnormal",
+};
 
-const recognitionSpec: MonthlyCronSpec<Doc<"dealerProductDeferrals">> = {
+const recognitionSpec: MonthlyCronSpec<Doc<"dealerProductDeferrals">, RecognitionSkipReason> = {
   source: "fi-commission-recognition",
   noun: "deferral",
-  doneReasons: RECOGNITION_DONE_REASONS,
+  label: "F&I commission recognition",
+  doneText: "already run / fully recognized / not active / org suspended / sale not yet posted",
+  reasonClass: RECOGNITION_REASON_CLASS,
+  listPage: (ctx, cursor) => ctx.runQuery(internal.dealerProductDeferrals.listActiveDeferralsForRecognition, { cursor }),
   firstOfferableMonthIndex: (deferral) =>
     firstOfferableMonthIndex({
       lastPostedYearMonth: deferral.lastRecognizedYearMonth,
@@ -751,51 +784,11 @@ const recognitionSpec: MonthlyCronSpec<Doc<"dealerProductDeferrals">> = {
     }),
 };
 
-async function runFiCommissionRecognition(ctx: ActionCtx, args: { now: number }): Promise<MonthlyCronStats> {
-  const ownerByOrg = new Map<string, Id<"users"> | null>();
-  const stats = newMonthlyCronStats();
-
-  let cursor: string | undefined;
-  do {
-    const page = await ctx.runQuery(internal.dealerProductDeferrals.listActiveDeferralsForRecognition, { cursor });
-    for (const deferral of page.page) {
-      await runMonthlyCatchUpForItem(ctx, recognitionSpec, stats, deferral, { ownerByOrg, now: args.now });
-    }
-    cursor = page.isDone ? undefined : page.continueCursor;
-  } while (cursor);
-
-  return stats;
-}
-
-function recognitionSummary(yearMonth: string, stats: MonthlyCronStats): string {
-  return monthlyCronSummary(
-    `F&I commission recognition ${yearMonth}`,
-    "deferral",
-    "already run / fully recognized / not active",
-    stats
-  );
-}
-
 export const triggerFiCommissionRecognition = internalAction({
   args: {},
-  handler: async (ctx: ActionCtx): Promise<string> => {
-    try {
-      const now = Date.now();
-      const stats = await runFiCommissionRecognition(ctx, { now });
-      const summary = recognitionSummary(currentYearMonthOf(now), stats);
-      await logMonthlyCronSummary(ctx, "fi-commission-recognition", summary, stats);
-      return summary;
-    } catch (err) {
-      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-        source: "fi-commission-recognition",
-        status: "error",
-        summary: "fi-commission-recognition cron failed",
-        error: err instanceof Error ? err.message : String(err),
-      });
-      throw err;
-    }
-  },
+  handler: monthlyCronHandler(recognitionSpec),
 });
+
 // ─── Monthly prepaid-expense amortization cron ───────────────────────────────
 // Same shape as the F&I commission recognition cron above — paginated cross-org
 // scan, cached per-org owner resolution, one mutation call per schedule row,
