@@ -371,7 +371,11 @@ type CompletionDoor = {
 const SALE_COMPLETES_THROUGH_FINANCE_APPLICATION_MESSAGE =
   "This car has a finance application in progress. Complete the sale from the deal page.";
 
-/** Stale ACTIVE claims accumulate (nothing transitions a claim), so the bound is generous. */
+/**
+ * Stale ACTIVE FINANCE claims accumulate (nothing transitions a claim), but only one per finance
+ * application on that car, so the bound is generous. RESERVATION and DEPOSIT history is not
+ * counted: the scan is kind-scoped by index.
+ */
 const FINANCE_CLAIM_SCAN_LIMIT = 256;
 
 /**
@@ -388,8 +392,12 @@ async function assertFinanceHeldVehicleCompletesThroughDeal(
 ): Promise<void> {
   const claims = await ctx.db
     .query("vehicleCommitmentClaims")
-    .withIndex("by_org_vehicle_status", (q) =>
-      q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId).eq("status", "ACTIVE")
+    .withIndex("by_org_vehicle_kind_status", (q) =>
+      q
+        .eq("orgId", args.orgId)
+        .eq("vehicleId", args.vehicleId)
+        .eq("evidenceKind", "FINANCE")
+        .eq("status", "ACTIVE")
     )
     .take(FINANCE_CLAIM_SCAN_LIMIT + 1);
   const refuse = (): never =>
@@ -404,7 +412,6 @@ async function assertFinanceHeldVehicleCompletesThroughDeal(
   // The door's own application is exempt; every other FINANCE claim is judged below.
   const others = claims.filter(
     (claim) =>
-      claim.evidenceKind === "FINANCE" &&
       !(
         args.door !== undefined &&
         args.door.kind === "FINANCE_FINALIZATION" &&
