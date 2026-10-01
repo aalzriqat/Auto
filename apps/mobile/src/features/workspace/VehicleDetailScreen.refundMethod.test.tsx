@@ -192,6 +192,58 @@ describe("VehicleDetailScreen an unconfirmed payout keeps its identity (SCRUM-46
     expect(releaseDeposit).toHaveBeenCalledTimes(2);
     expect(releaseDeposit.mock.calls[1]![0].idempotencyKey).toBe(releaseDeposit.mock.calls[0]![0].idempotencyKey);
   });
+  // SCRUM-530: the shape `convex/react` rejects with for a server-thrown ConvexError.
+  const refusal = () => Object.assign(new Error("[CONVEX M(deposits:release)] Server Error"), { name: "ConvexError", data: "Deposit is not releasable" });
+
+  test.each(["BANK_TRANSFER", "CASH"])(
+    "SCRUM-530: a definite server refusal retires the pending payout: retrying with %s sends a NEW key and no notice",
+    async (retryMethod) => {
+      releaseDeposit.mockRejectedValueOnce(refusal()).mockResolvedValue(undefined);
+      const view = await render(tree());
+      await refund(view, "CASH");
+      await refund(view, retryMethod);
+
+      expect(releaseDeposit).toHaveBeenCalledTimes(2);
+      expect(noticeShown()).toBe(false);
+      expect(releaseDeposit.mock.calls[1]![0].refundMethod).toBe(retryMethod);
+      expect(releaseDeposit.mock.calls[1]![0].idempotencyKey).not.toBe(releaseDeposit.mock.calls[0]![0].idempotencyKey);
+    },
+  );
+
+  test("SCRUM-530 control: a plain 'Server Error' (not a ConvexError) is UNKNOWN: the record and key are kept", async () => {
+    releaseDeposit.mockRejectedValueOnce(new Error("[CONVEX M(deposits:release)] Server Error")).mockResolvedValue(undefined);
+    const view = await render(tree());
+    await refund(view, "CASH");
+    await refund(view, "BANK_TRANSFER");
+    expect(releaseDeposit).toHaveBeenCalledTimes(1);
+    expect(noticeShown()).toBe(true);
+
+    await pressAlert("إعادة الدفعة السابقة");
+    expect(releaseDeposit).toHaveBeenCalledTimes(2);
+    expect(releaseDeposit.mock.calls[1]![0].idempotencyKey).toBe(releaseDeposit.mock.calls[0]![0].idempotencyKey);
+  });
+
+  test("SCRUM-530 F1: a refusal of a RETRY never retires a payout whose earlier outcome is unknown", async () => {
+    releaseDeposit
+      .mockRejectedValueOnce(new Error("[CONVEX M(deposits:release)] Server Error"))
+      .mockRejectedValueOnce(refusal())
+      .mockResolvedValue(undefined);
+    const view = await render(tree());
+    await refund(view, "CASH");
+    await refund(view, "BANK_TRANSFER");
+    await pressAlert("إعادة الدفعة السابقة");
+    expect(releaseDeposit).toHaveBeenCalledTimes(2);
+
+    // The earlier attempt may have committed: still blocked, original key reused.
+    alertSpy.mockClear();
+    await refund(view, "BANK_TRANSFER");
+    expect(releaseDeposit).toHaveBeenCalledTimes(2);
+    expect(noticeShown()).toBe(true);
+    await pressAlert("إعادة الدفعة السابقة");
+    expect(releaseDeposit).toHaveBeenCalledTimes(3);
+    expect(releaseDeposit.mock.calls[2]![0].idempotencyKey).toBe(releaseDeposit.mock.calls[0]![0].idempotencyKey);
+  });
+
   test("the notice's retry replays the recorded attempt with its own method and key", async () => {
     releaseDeposit.mockRejectedValueOnce(new Error("lost")).mockResolvedValue(undefined);
     const view = await render(tree());

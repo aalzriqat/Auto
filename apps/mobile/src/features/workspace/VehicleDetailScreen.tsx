@@ -1,4 +1,5 @@
 import { useAuth } from "@clerk/expo";
+import { isConvexError } from "@autoflow/shared";
 import { useMutation, useQuery } from "convex/react";
 import { useRouter } from "expo-router";
 import { Component, useEffect, useRef, useState, type ReactNode } from "react";
@@ -229,7 +230,11 @@ function VehicleDetailContent({
   // (a new one is opened per vehicle), exactly like `commandId`. Dismissal also
   // RETIRES the recorded intent's key: otherwise resubmitting the same method
   // at a stale generation rebuilds the same intent and replays the earlier result.
-  const pendingPayoutsRef = useRef<Map<string, { resolution: "REFUNDED" | "FORFEITED"; method: string; intent: string }>>(
+  // SCRUM-530 F1: `uncertain` is set once any attempt under the record had an
+  // unknown outcome; from then on only success or dismissal retires it.
+  const pendingPayoutsRef = useRef<
+    Map<string, { resolution: "REFUNDED" | "FORFEITED"; method: string; intent: string; uncertain?: boolean }>
+  >(
     new Map(),
   );
   const upsertLandedCosts = useMutation(api.vehicles.upsertLandedCosts);
@@ -393,6 +398,12 @@ function VehicleDetailContent({
       pendingPayout?.intent ??
       `release-deposit:${String(depositId)}:${resolution}:${method}:gen${observedReleaseCount}`;
     if (!pendingPayout) pendingPayoutsRef.current.set(depositId, { resolution, method: String(method), intent });
+    // A retry of an attempt that never confirmed: its outcome is unknown.
+    else pendingPayout.uncertain = true;
+    const settle = () => {
+      commandId.retire(intent);
+      pendingPayoutsRef.current.delete(depositId);
+    };
     try {
       await releaseDeposit({
         orgId,
@@ -401,9 +412,15 @@ function VehicleDetailContent({
         refundMethod: resolution === "REFUNDED" ? chosenMethod : undefined,
         idempotencyKey: commandId.for(intent),
       });
-      commandId.retire(intent);
-      pendingPayoutsRef.current.delete(depositId);
+      settle();
     } catch (error) {
+      // SCRUM-530: only a definite refusal of the FIRST attempt settles. Any other error, or a
+      // refusal once an earlier attempt had an unknown outcome, may have committed: keep both.
+      const entry = pendingPayoutsRef.current.get(depositId);
+      if (entry?.intent === intent) {
+        if (isConvexError(error) && !entry.uncertain) settle();
+        else entry.uncertain = true;
+      }
       reportError("Mobile deposit release failed", error);
     } finally {
       setReleasingDepositId(null);

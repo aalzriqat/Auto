@@ -293,42 +293,43 @@ export function VehicleDetailsDialog({
     const gate = pendingPayouts.check(String(depositId), resolution, String(refundMethod));
     if (gate.status === "blocked") return;
     setReleasingDepositId(depositId);
+    // SCRUM-313 — a GENERATION-AWARE retained identity. This line has been
+    // wrong twice in two opposite directions, so both failures are recorded:
+    //
+    //   1. A key DERIVED from (deposit, resolution) held FOREVER. The SECOND
+    //      genuine payout — the free part today, the rest when the cars it was
+    //      held against fall away — matched the first's stored command: the
+    //      mutation returned without running, moved no money, and the operator
+    //      was told the customer had been refunded.
+    //   2. A key minted PER ATTEMPT (`renew`) to escape (1). That fixes the
+    //      second payout by giving up retry safety entirely: a lost response
+    //      plus one more tap is two payouts of the same free balance.
+    //
+    // Both are avoidable because the server keeps an authoritative monotonic
+    // discriminator. `releaseCount` is incremented inside the same patch that
+    // pays the money out (`convex/utils/depositHelpers.ts`), so it names the
+    // GENERATION of this payout:
+    //
+    //   same generation + same decision -> same key -> a retry is deduped;
+    //   an unknown/lost response        -> the key is NOT retired, so the
+    //                                      retry reuses it;
+    //   a confirmed payout              -> releaseCount advances, so a later
+    //                                      genuine payout is a NEW generation
+    //                                      and gets its OWN identity.
+    //
+    // The refund method is in the intent because it is part of the decision
+    // being made, not a presentation detail: refunding to CASH and refunding
+    // to BANK_TRANSFER are different commands and must not share an identity.
+    //
+    // The intent is the one recorded with the FIRST attempt: a retry after the
+    // generation moved (the lost response had in fact committed, or freed money
+    // arrived) must still be that attempt, not a new command. It is also the
+    // attempt this call belongs to, so a late failure cannot settle a newer record.
+    const intent =
+      gate.recordedIntent ??
+      `release-deposit:${String(depositId)}:${resolution}:${refundMethod}:gen${observedReleaseCount}`;
+    pendingPayouts.record(String(depositId), { resolution, method: String(refundMethod), intent });
     try {
-      // SCRUM-313 — a GENERATION-AWARE retained identity. This line has been
-      // wrong twice in two opposite directions, so both failures are recorded:
-      //
-      //   1. A key DERIVED from (deposit, resolution) held FOREVER. The SECOND
-      //      genuine payout — the free part today, the rest when the cars it was
-      //      held against fall away — matched the first's stored command: the
-      //      mutation returned without running, moved no money, and the operator
-      //      was told the customer had been refunded.
-      //   2. A key minted PER ATTEMPT (`renew`) to escape (1). That fixes the
-      //      second payout by giving up retry safety entirely: a lost response
-      //      plus one more tap is two payouts of the same free balance.
-      //
-      // Both are avoidable because the server keeps an authoritative monotonic
-      // discriminator. `releaseCount` is incremented inside the same patch that
-      // pays the money out (`convex/utils/depositHelpers.ts`), so it names the
-      // GENERATION of this payout:
-      //
-      //   same generation + same decision -> same key -> a retry is deduped;
-      //   an unknown/lost response        -> the key is NOT retired, so the
-      //                                      retry reuses it;
-      //   a confirmed payout              -> releaseCount advances, so a later
-      //                                      genuine payout is a NEW generation
-      //                                      and gets its OWN identity.
-      //
-      // The refund method is in the intent because it is part of the decision
-      // being made, not a presentation detail: refunding to CASH and refunding
-      // to BANK_TRANSFER are different commands and must not share an identity.
-      //
-      // The intent is the one recorded with the FIRST attempt: a retry after the
-      // generation moved (the lost response had in fact committed, or freed money
-      // arrived) must still be that attempt, not a new command.
-      const intent =
-        gate.recordedIntent ??
-        `release-deposit:${String(depositId)}:${resolution}:${refundMethod}:gen${observedReleaseCount}`;
-      pendingPayouts.record(String(depositId), { resolution, method: String(refundMethod), intent });
       await releaseDeposit({
         orgId: activeOrgId,
         depositId,
@@ -344,6 +345,7 @@ export function VehicleDetailsDialog({
           : (t("DepositForfeitedSuccess" as any) ?? "Deposit forfeited")
       );
     } catch (error) {
+      pendingPayouts.settleFailure(String(depositId), error, intent);
       toast.error(getErrorMessage(error));
     } finally {
       setReleasingDepositId(null);

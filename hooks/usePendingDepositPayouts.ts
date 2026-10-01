@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import { isConvexError } from "@/lib/errors";
 
 /**
  * SCRUM-469 — the identity of a deposit payout that MAY have committed.
@@ -29,6 +30,12 @@ import { useMemo, useRef, useState } from "react";
  *     -- "refunded" for a submission that moved no money. `confirm` does NOT
  *     retire: callers already retire on success.
  *
+ * SCRUM-530: the record exists only while the outcome is genuinely UNKNOWN. A
+ * definite server refusal (`settleFailure` with a `ConvexError`) retires it and
+ * its key the same way, but ONLY while no earlier attempt under that record had an
+ * unknown outcome (a refused retry proves nothing about the first attempt);
+ * every other error keeps both (fail-safe).
+ *
  * It lives in a ref keyed by deposit id, so it survives the method picker
  * clearing and the dialog closing and reopening. It does not outlive the owning
  * component instance (nor does the command identity it retires).
@@ -38,6 +45,13 @@ export type PendingPayout = {
   /** The refund method, or "NONE" for a forfeit. */
   method: string;
   intent: string;
+  /**
+   * SCRUM-530 F1: set once an attempt under this record has had an UNKNOWN outcome (a
+   * non-definite failure, or a retry was sent). A later refusal of a retry proves nothing
+   * about the earlier attempt, so such a record is retired only by `confirm` or an explicit
+   * `dismiss`. Hook-internal: callers never set it.
+   */
+  uncertain?: boolean;
 };
 
 export type PayoutGate = { status: "go"; recordedIntent?: string } | { status: "blocked"; pending: PendingPayout };
@@ -48,6 +62,12 @@ export type PendingDepositPayouts = {
   record: (depositId: string, payout: PendingPayout) => void;
   confirm: (depositId: string) => void;
   dismiss: (depositId: string) => void;
+  /**
+   * SCRUM-530: a `ConvexError` (definite refusal) of the FIRST attempt dismisses like `dismiss`.
+   * Any other error, or any error once an earlier attempt had an unknown outcome, keeps the
+   * record. `intent` binds the answer to the attempt it belongs to.
+   */
+  settleFailure: (depositId: string, error: unknown, intent: string) => void;
   /** Deposits whose recorded attempt is blocking a different decision, for the notice. */
   blocked: Readonly<Record<string, PendingPayout>>;
 };
@@ -65,24 +85,35 @@ export function usePendingDepositPayouts(retire: (intent: string) => void): Pend
         return rest;
       });
     };
+    const dismiss = (depositId: string) => {
+      const existing = pendingRef.current.get(depositId);
+      if (existing) retire(existing.intent);
+      clear(depositId);
+    };
     return {
       check(depositId, resolution, method) {
         const existing = pendingRef.current.get(depositId);
         if (!existing) return { status: "go" };
         if (existing.resolution === resolution && existing.method === method) {
+          // A retry of an attempt that never confirmed: its outcome is unknown.
+          existing.uncertain = true;
           return { status: "go", recordedIntent: existing.intent };
         }
         setBlocked((current) => ({ ...current, [depositId]: existing }));
         return { status: "blocked", pending: existing };
       },
       record(depositId, payout) {
-        if (!pendingRef.current.has(depositId)) pendingRef.current.set(depositId, payout);
+        // Copied: the record carries hook-owned state (`uncertain`) the caller's object must not.
+        if (!pendingRef.current.has(depositId)) pendingRef.current.set(depositId, { ...payout });
       },
       confirm: clear,
-      dismiss(depositId) {
+      dismiss,
+      settleFailure(depositId, error, intent) {
         const existing = pendingRef.current.get(depositId);
-        if (existing) retire(existing.intent);
-        clear(depositId);
+        // A late answer for an older attempt must not touch a newer record.
+        if (!existing || existing.intent !== intent) return;
+        if (isConvexError(error) && !existing.uncertain) dismiss(depositId);
+        else existing.uncertain = true;
       },
       blocked,
     };

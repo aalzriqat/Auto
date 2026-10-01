@@ -8,6 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { ConvexError } from "convex/values";
 import type { ReactElement } from "react";
 
 const state = vi.hoisted(() => ({
@@ -18,7 +19,7 @@ const state = vi.hoisted(() => ({
   toastError: [] as string[],
   releaseCalls: [] as Array<Record<string, unknown>>,
   /** Outcome of the next deposits.release call: a lost response, or success. */
-  releaseOutcomes: [] as Array<"lost" | "ok">,
+  releaseOutcomes: [] as Array<"lost" | "refused" | "ok">,
 }));
 
 vi.mock("@/components/ui/select", async () => {
@@ -52,7 +53,10 @@ vi.mock("convex/react", async () => {
     useMutation: (reference: never) => async (args: Record<string, unknown>) => {
       if (getFunctionName(reference) === "deposits:release") {
         state.releaseCalls.push(args);
-        if (state.releaseOutcomes.shift() === "lost") throw new Error("Network error: response lost");
+        const outcome = state.releaseOutcomes.shift();
+        if (outcome === "lost") throw new Error("Network error: response lost");
+        // SCRUM-530: a definite server refusal (a ConvexError rolls the mutation back).
+        if (outcome === "refused") throw new ConvexError("Deposit is not releasable");
         return undefined;
       }
       if (getFunctionName(reference) !== "vehicles:createReservation") return undefined;
@@ -374,6 +378,62 @@ describe("vehicle dialog: an unconfirmed payout keeps its identity (SCRUM-469 ro
     reopen(view);
     await chooseAndRefund("CASH");
 
+    await waitFor(() => expect(state.releaseCalls).toHaveLength(2));
+    expect(state.releaseCalls[1]!.idempotencyKey).toBe(firstKey);
+  });
+
+  test.each(["BANK_TRANSFER", "CASH"])(
+    "SCRUM-530: a definite server refusal retires the pending payout: retrying with %s sends a NEW key and no notice",
+    async (retryMethod) => {
+      state.releaseOutcomes = ["refused", "ok"];
+      render(ui());
+      await chooseAndRefund("CASH");
+      const firstKey = state.releaseCalls[0]!.idempotencyKey;
+      expect(state.toastError).toHaveLength(1);
+
+      await chooseAndRefund(retryMethod);
+
+      await waitFor(() => expect(state.releaseCalls).toHaveLength(2));
+      expect(notice()).toBeNull();
+      expect(state.releaseCalls[1]!.refundMethod).toBe(retryMethod);
+      expect(state.releaseCalls[1]!.idempotencyKey).not.toBe(firstKey);
+    },
+  );
+
+  test("SCRUM-530 F1: a refusal of a RETRY never retires a payout whose earlier outcome is unknown", async () => {
+    state.releaseOutcomes = ["lost", "refused", "ok"];
+    render(ui());
+    await chooseAndRefund("CASH");
+    const firstKey = state.releaseCalls[0]!.idempotencyKey;
+    await chooseAndRefund("BANK_TRANSFER");
+    expect(notice()).not.toBeNull();
+
+    // The retry of the unknown attempt is refused (e.g. permission revoked).
+    fireEvent.click(screen.getByRole("button", { name: "PayoutUnconfirmedRetry", hidden: true }));
+    await waitFor(() => expect(state.releaseCalls).toHaveLength(2));
+    await waitFor(() => expect(state.toastError).toHaveLength(2));
+    expect(state.releaseCalls[1]!.idempotencyKey).toBe(firstKey);
+
+    // The earlier attempt may have committed: still blocked, and a further retry reuses the ORIGINAL key.
+    await chooseAndRefund("BANK_TRANSFER");
+    expect(state.releaseCalls).toHaveLength(2);
+    expect(notice()).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "PayoutUnconfirmedRetry", hidden: true }));
+    await waitFor(() => expect(state.releaseCalls).toHaveLength(3));
+    expect(state.releaseCalls[2]!.idempotencyKey).toBe(firstKey);
+  });
+
+  test("SCRUM-530 control: a non-ConvexError failure keeps the record (notice for a different method) and the key for a same-method retry", async () => {
+    state.releaseOutcomes = ["lost", "ok"];
+    render(ui());
+    await chooseAndRefund("CASH");
+    const firstKey = state.releaseCalls[0]!.idempotencyKey;
+
+    await chooseAndRefund("BANK_TRANSFER");
+    expect(state.releaseCalls).toHaveLength(1);
+    expect(notice()).not.toBeNull();
+
+    await chooseAndRefund("CASH");
     await waitFor(() => expect(state.releaseCalls).toHaveLength(2));
     expect(state.releaseCalls[1]!.idempotencyKey).toBe(firstKey);
   });
