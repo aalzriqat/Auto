@@ -414,7 +414,7 @@ async function prepareSaleCompletion(
     // `sales.completeFromQuote`, `sales.completeDraft` and
     // `applications.finalizeDeal`. A deposit request still waiting on this deal
     // would be orphaned by the sale closing it, so completion refuses first —
-    // before any write. A DRAFT commits nothing and is not gated.
+    // before any write. A DRAFT commits nothing and is not gated, and carries no quote (SCRUM-425), so completeDraft reaches this guard only through the other doors' lineage.
     if (intent === "COMPLETION") {
       await assertNoPendingDepositRequest(ctx, {
         orgId: args.orgId,
