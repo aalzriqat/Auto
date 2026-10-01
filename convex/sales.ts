@@ -196,6 +196,8 @@ export type BillOfSaleUnavailableReason =
   | "LINK_MISMATCH"
   | "CURRENCY_MISMATCH"
   | "MULTI_VEHICLE"
+  | "VEHICLE_MISMATCH"
+  | "NEGATIVE_BALANCE"
   | "NOT_SUPPORTED"
   | "DOES_NOT_FOOT";
 
@@ -322,7 +324,7 @@ export const getBillOfSaleEconomics = query({
       const balanceDueMinor = receivable.originalAmountMinor - credits.tradeInMinor - credits.depositsMinor;
       if (!Number.isSafeInteger(balanceDueMinor) || balanceDueMinor < 0) {
         console.error(`getBillOfSaleEconomics: negative balance for sale ${sale._id}`);
-        return billOfSaleUnavailable("NO_RECEIVABLE");
+        return billOfSaleUnavailable("NEGATIVE_BALANCE");
       }
 
       const major = (minor: number) => fromMinorUnits(minor, currency);
@@ -355,9 +357,8 @@ export const getBillOfSaleEconomics = query({
     const quote = await ctx.db.get(application.quoteId);
     if (!quote || quote.orgId !== sale.orgId) return billOfSaleUnavailable("LINK_MISMATCH");
 
-    if ((quote.vehicleItems?.length ?? 0) > 1 || quote.vehicleId !== sale.vehicleId) {
-      return billOfSaleUnavailable("MULTI_VEHICLE");
-    }
+    if ((quote.vehicleItems?.length ?? 0) > 1) return billOfSaleUnavailable("MULTI_VEHICLE");
+    if (quote.vehicleId !== sale.vehicleId) return billOfSaleUnavailable("VEHICLE_MISMATCH");
 
     const snapshot = quote.customerQuotePricingSnapshot;
     if (!snapshot) return billOfSaleUnavailable("NO_PRICING_SNAPSHOT");

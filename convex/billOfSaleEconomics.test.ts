@@ -342,7 +342,7 @@ describe("getBillOfSaleEconomics - CASH", () => {
     const saleId = await cashSaleWithTradeIn(s, 2_000);
     const [allocation] = (await allocationsOf(s, saleId)).filter((a) => a.key === `trade_in_payment_${saleId}`);
     await s.t.run((ctx) => ctx.db.patch(allocation._id, { amountMinor: 99_000 * SCALE }));
-    expect(await query(s, saleId)).toEqual({ kind: "UNAVAILABLE", reason: "NO_RECEIVABLE" });
+    expect(await query(s, saleId)).toEqual({ kind: "UNAVAILABLE", reason: "NEGATIVE_BALANCE" });
   });
 
   test("no canonical receivable is UNAVAILABLE, not 0", async () => {
@@ -389,7 +389,7 @@ describe("getBillOfSaleEconomics - FINANCED (through the Deal)", () => {
     // toEqual pins the exact key set: no approval-tier field can ride along.
     expect(e).toEqual({
       kind: "FINANCED", currency: "JOD", vehiclePrice: snap.vehiclePrice, downPayment: snap.downPayment,
-      executionFees: snap.executionFees, capitalisedCommission: (e as { capitalisedCommission: number }).capitalisedCommission,
+      executionFees: snap.executionFees, capitalisedCommission: 0,
       amountFinanced: snap.totalFinancedAmount, termMonths: 48, flatAnnualProfitRatePercent: 5,
     });
     // The finance-approval tier is not a source: moving every amount on the application changes nothing.
@@ -468,6 +468,34 @@ describe("getBillOfSaleEconomics - FINANCED (through the Deal)", () => {
     );
     expect(await query(s, saleId)).toEqual({ kind: "UNAVAILABLE", reason: "MULTI_VEHICLE" });
   });
+
+  test("a quote for a different vehicle than the sale is VEHICLE_MISMATCH, not MULTI_VEHICLE", async () => {
+    const s = await seedDealership("finvmis");
+    const { saleId, quoteId } = await financedSaleThroughDeal(s);
+    const other = await s.mkVehicle("B");
+    await s.t.run((ctx) => ctx.db.patch(quoteId, { vehicleId: other }));
+    expect(await query(s, saleId)).toEqual({ kind: "UNAVAILABLE", reason: "VEHICLE_MISMATCH" });
+  });
+
+  // R3 F3: the Bill of Sale states the customer-priced snapshot, itemised. Every expected figure
+  // below is an independent literal (price - down + fees [+ commission when NOT carried in the debt]),
+  // never a value read back from the result under test.
+  test.each([
+    { includes: true, capitalisedCommission: 0, amountFinanced: 10_100 },
+    { includes: false, capitalisedCommission: 300, amountFinanced: 10_400 },
+  ])(
+    "a real Deal with a down payment, execution fees and commission itemises exactly (includesCommissionInDebt=$includes)",
+    async ({ includes, capitalisedCommission, amountFinanced }) => {
+      const s = await seedDealership(`finitem${includes ? "T" : "F"}`);
+      const { saleId } = await financedSaleThroughDeal(s, {
+        downPayment: 2_000, manualAdminFees: 100, manualCommission: 300, manualIncludesCommissionInDebt: includes,
+      });
+      expect(await query(s, saleId)).toEqual({
+        kind: "FINANCED", currency: "JOD", vehiclePrice: 12_000, downPayment: 2_000, executionFees: 100,
+        capitalisedCommission, amountFinanced, termMonths: 48, flatAnnualProfitRatePercent: 5,
+      });
+    }
+  );
 
   test("a FINANCED row with no application at all (legacy) is LINK_MISMATCH", async () => {
     const s = await seedDealership("finlegacy");
@@ -554,7 +582,15 @@ describe("SCRUM-504 - a financed sale exists only through the Deal", () => {
     expect((await s.t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("PENDING");
   });
 
-  test("a legacy FINANCED draft can still be CANCELLED or moved to CASH (never a dead end)", async () => {
+  test("a legacy FINANCED draft can still be CANCELLED (never a dead end)", async () => {
+    const s = await seedDealership("r504cancel");
+    const saleId = await s.as.mutation(api.sales.createDraft, draft(s, "CASH"));
+    await s.t.run((ctx) => ctx.db.patch(saleId, { financingType: "FINANCED" }));
+    await s.approver.mutation(api.sales.update, { orgId: s.orgId, saleId, status: "CANCELLED" });
+    expect((await s.t.run((ctx) => ctx.db.get(saleId)))).toMatchObject({ status: "CANCELLED", financingType: "FINANCED" });
+  });
+
+  test("a legacy FINANCED draft can still be moved to CASH (never a dead end)", async () => {
     const s = await seedDealership("r504exit");
     const saleId = await s.as.mutation(api.sales.createDraft, draft(s, "CASH"));
     await s.t.run((ctx) => ctx.db.patch(saleId, { financingType: "FINANCED" }));
