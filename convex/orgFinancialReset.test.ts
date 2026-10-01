@@ -503,3 +503,89 @@ describe("resetOrgFinancialData refuses an org carrying authority lifecycle stat
     expect(await countFor(t, "customers", orgId)).toBe(1);
   });
 });
+
+/**
+ * SCRUM-534 — NO PASS MAY DELETE A ROW THAT A SURVIVING ROW STILL REFERENCES.
+ *
+ * `financeApplications.quoteId` is REQUIRED. `quotes` used to be listed (and
+ * deleted) BEFORE the finance-application group with no `CHILD_TABLES` edge, so
+ * one pass whose finance children exceeded the batch deleted every quote while
+ * the applications survived — a committed, dangling required reference that
+ * SCRUM-528's finalizeDeal then refuses mid-reset with a confusing error.
+ */
+describe("resetOrgFinancialData never strands a surviving row's quote or sale reference", () => {
+  test("a partial pass keeps the quote and sale while applications or their children survive", async () => {
+    const t = setup();
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Quote Order Motors", createdAt: Date.now() })
+    );
+
+    const ids = await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: "reset_u534", email: "u534@x.com" });
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, vin: "VINRESET534", make: "Kia", model: "Rio", year: 2024, mileage: 10,
+        color: "Red", fuelType: "Gas", transmission: "Auto", sellingPrice: 15000,
+        status: "AVAILABLE",
+      });
+      const customerId = await ctx.db.insert("customers", {
+        orgId, firstName: "Order", lastName: "Customer",
+      });
+      const quoteId = await ctx.db.insert("quotes", {
+        orgId, customerId, vehicleId, vehiclePrice: 15000, downPayment: 1000,
+        termMonths: 48, status: "ACCEPTED", createdBy: userId, createdAt: Date.now(),
+      });
+      const applicationId = await ctx.db.insert("financeApplications", {
+        orgId, quoteId, customerId, vehicleId, salespersonId: userId,
+        status: "APPROVED", createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      const saleId = await ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId, salePrice: 15000,
+        saleDate: Date.now(), status: "COMPLETED" as const, quoteId, applicationId,
+      });
+      for (const n of [1000, 2000]) {
+        await ctx.db.insert("financeDealFees", {
+          orgId, applicationId, feeType: "LICENSING", currency: "JOD",
+          actualAmountMinor: n, paidBy: "DEALER", paidTo: "GOVERNMENT",
+          accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+          includedInQuotation: false, deductedFromSettlement: false, refundable: false,
+          source: "MANUAL", createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+        });
+      }
+      return { quoteId, applicationId, saleId };
+    });
+
+    const assertNoDanglingReference = async (pass: number) => {
+      await t.run(async (ctx) => {
+        const apps = await ctx.db.query("financeApplications").collect();
+        for (const app of apps) {
+          expect(await ctx.db.get(app.quoteId), `pass ${pass}: application.quoteId`).not.toBeNull();
+        }
+        const sales = await ctx.db.query("sales").collect();
+        for (const sale of sales) {
+          if (sale.quoteId) {
+            expect(await ctx.db.get(sale.quoteId), `pass ${pass}: sale.quoteId`).not.toBeNull();
+          }
+          if (sale.applicationId) {
+            expect(await ctx.db.get(sale.applicationId), `pass ${pass}: sale.applicationId`).not.toBeNull();
+          }
+        }
+      });
+    };
+
+    let remaining = Number.POSITIVE_INFINITY;
+    for (let pass = 0; pass < 12 && remaining > 0; pass += 1) {
+      const res = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
+        orgId, dryRun: false, batchSize: 1,
+      });
+      remaining = res.remaining;
+      await assertNoDanglingReference(pass);
+    }
+
+    expect(remaining).toBe(0);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(ids.saleId)).toBeNull();
+      expect(await ctx.db.get(ids.applicationId)).toBeNull();
+      expect(await ctx.db.get(ids.quoteId)).toBeNull();
+    });
+  });
+});
