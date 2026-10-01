@@ -111,9 +111,6 @@ const RESET_TABLES = [
   "payrollRuns",
   "payrollItems",
   "employeeCompensation",
-  // Sales
-  "sales",
-  "quotes",
   // Finance applications and their children. Ordering IS a safety property,
   // contrary to what this comment used to claim: the batch limit applies to
   // each table separately, so a run that clears one of two fee rows and then
@@ -128,6 +125,21 @@ const RESET_TABLES = [
   "financeDealCustody",
   "applicationStatusLog",
   "financeApplications",
+  // Sales, then quotes — LAST, because both are referenced by rows above.
+  //
+  // ⚠️ SCRUM-534. `quotes` and `sales` used to sit BEFORE the finance group with
+  // no `CHILD_TABLES` edge. `financeApplications.quoteId` is REQUIRED, so one
+  // pass whose finance children (or applications) exceeded the batch deleted
+  // every quote while the applications survived: a committed, dangling required
+  // reference. Nothing here can be reached from a quote, so it goes last.
+  //
+  // `sales` follows `financeApplications` (sale.applicationId and
+  // application.finalizedSaleId are both OPTIONAL and form a cycle, so one of
+  // the two must briefly dangle whichever way round this is ordered; neither
+  // may be REQUIRED-dangling, and the required edge — application -> quote — is
+  // the one this order protects). `quotes` follows `sales`.
+  "sales",
+  "quotes",
 ] as const;
 
 /**
@@ -179,6 +191,18 @@ const CHILD_TABLES: Partial<Record<(typeof RESET_TABLES)[number], readonly strin
   // SCRUM-389 — the partial-drain half for the supplier-cost recovery chain.
   supplierCostRecoveries: ["supplierCostRecoveryReceipts"],
   expenses: ["supplierCostRecoveries"],
+  // SCRUM-534 — every in-scope table that references a sale or a quote. The
+  // required reference is financeApplications.quoteId; the rest are optional
+  // but are deferred the same way so no pass leaves any of them dangling.
+  sales: [
+    "financeApplications",
+    "deposits",
+    "receivables",
+    "collectionPayments",
+    "postDatedCheques",
+    "transactions",
+  ],
+  quotes: ["sales", "financeApplications", "deposits", "receivables"],
 };
 
 /**
