@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { PIN_TTL_MS } from "./previewDeploymentLifecycle.mjs";
 import { main, prune } from "./pruneConvexPreviews.mjs";
 
 const TOKEN = "prj-unit-test-token-bytes";
@@ -93,6 +94,18 @@ async function run(deps: Dep[], opts: ApiOptions = {}, e: NodeJS.ProcessEnv = en
 
 const CONFIRM = { PRUNE_CONFIRM: "PRUNE" };
 
+/** Wraps a fetch so any request matching `predicate` throws; logs every request. */
+function flakyFetch(inner: typeof fetch, predicate: (method: string, url: string) => boolean) {
+  const log: string[] = [];
+  const fetchImpl = (async (url: string, init: RequestInit) => {
+    const method = String(init.method ?? "GET");
+    log.push(method + " " + url);
+    if (predicate(method, url)) throw new Error("socket reset " + TOKEN);
+    return inner(url, init);
+  }) as unknown as typeof fetch;
+  return { fetchImpl, log };
+}
+
 describe("SCRUM-548 prune leaked Convex previews", () => {
   it("dry run plans aged previews and makes zero POSTs", async () => {
     const { calls, result, out } = await run([dep("aaa-bbb-1"), dep("ccc-ddd-2")]);
@@ -125,6 +138,14 @@ describe("SCRUM-548 prune leaked Convex previews", () => {
     expect(result.rows.find((r: { name: string }) => r.name === "young-one-1")?.action).toMatch(/too young/);
   });
 
+  it.each([6 * 60 * 1000, HOUR])("never POSTs a createTime %i ms in the future", async (ahead) => {
+    const { calls, result } = await run([dep("aaa-bbb-1", { createTime: NOW + ahead })], {}, env(CONFIRM));
+    expect(posts(calls)).toEqual([]);
+    expect(calls.filter((c) => c.url.includes("/deployments/"))).toEqual([]);
+    expect(result.rows[0].action).toBe("skipped: implausible createTime");
+    expect(result.exitCode).toBe(0);
+  });
+
   it.each([
     ["protected production name", dep("kindly-hound-172")],
     ["isDefault true", dep("aaa-bbb-1", { isDefault: true })],
@@ -140,8 +161,6 @@ describe("SCRUM-548 prune leaked Convex previews", () => {
     ["below the 12h default", dep("aaa-bbb-1", { createTime: NOW - 11 * HOUR })],
     ["createTime in seconds", dep("aaa-bbb-1", { createTime: 1.7e9 })],
     ["createTime before 2020", dep("aaa-bbb-1", { createTime: Date.UTC(2019, 11, 31) })],
-    ["createTime beyond 5 minutes ahead", dep("aaa-bbb-1", { createTime: NOW + 6 * 60 * 1000 })],
-    ["future createTime", dep("aaa-bbb-1", { createTime: NOW + HOUR })],
     ["missing createTime", dep("aaa-bbb-1", { createTime: undefined })],
     ["zero createTime", dep("aaa-bbb-1", { createTime: 0 })],
     ["fractional createTime", dep("aaa-bbb-1", { createTime: 1.5 })],
@@ -215,6 +234,23 @@ describe("SCRUM-548 prune leaked Convex previews", () => {
     const deps = [dep("aaa-bbb-1", { createTime: NOW - 13 * HOUR })];
     expect(deleted((await run(deps, {}, env({ ...CONFIRM, PRUNE_MIN_AGE_HOURS: "14" }))).calls)).toEqual([]);
     expect(deleted((await run(deps, {}, env({ ...CONFIRM, PRUNE_MIN_AGE_HOURS: "" }))).calls)).toEqual(["aaa-bbb-1"]);
+  });
+
+  it("the default minimum age is PIN_TTL_MS: exactly at it is deleted, a minute short is not", async () => {
+    const old = dep("aaa-bbb-1", { createTime: NOW - PIN_TTL_MS });
+    const short = dep("ccc-ddd-2", { createTime: NOW - PIN_TTL_MS + 60 * 1000 });
+    const { calls, result } = await run([old, short], {}, env(CONFIRM));
+    expect(deleted(calls)).toEqual(["aaa-bbb-1"]);
+    expect(result.rows.find((r: { name: string }) => r.name === "ccc-ddd-2")?.action).toBe("skipped: too young");
+  });
+
+  it("blank PRUNE_MIN_AGE_HOURS and PRUNE_MAX_DELETIONS yield the defaults (PIN_TTL_MS and 60)", async () => {
+    const deps = Array.from({ length: 62 }, (_, i) => dep("aaa-bbb-" + (i + 1), { createTime: NOW - PIN_TTL_MS - (i + 1) * 1000 }));
+    deps.push(dep("young-one-1", { createTime: NOW - PIN_TTL_MS + 60 * 1000 }));
+    const blank = await run(deps, {}, env({ ...CONFIRM, PRUNE_MIN_AGE_HOURS: "", PRUNE_MAX_DELETIONS: "" }));
+    expect(deleted(blank.calls)).toHaveLength(60);
+    expect(blank.result.rows.filter((r: { action: string }) => /cap 60 reached/.test(r.action))).toHaveLength(2);
+    expect(blank.result.rows.find((r: { name: string }) => r.name === "young-one-1")?.action).toBe("skipped: too young");
   });
 
   it("caps deletions per run and reports the rest as deferred", async () => {
@@ -346,13 +382,8 @@ describe("SCRUM-548 review fixes", () => {
   });
 
   it("F3: a thrown delete is unknown, the sweep continues, lines stream in order", async () => {
-    const { fetchImpl } = api([A, B, C]);
-    const calls: string[] = [];
-    const flaky = (async (url: string, init: RequestInit) => {
-      calls.push(String(init.method ?? "GET") + " " + url);
-      if (init.method === "POST" && url.includes("ccc-ddd-2")) throw new Error("socket hang up " + TOKEN);
-      return fetchImpl(url, init);
-    }) as unknown as typeof fetch;
+    const { fetchImpl: inner } = api([A, B, C]);
+    const { fetchImpl: flaky, log: calls } = flakyFetch(inner, (method, url) => method === "POST" && url.includes("ccc-ddd-2"));
     const out: string[] = [];
     const result = await prune({ env: env(CONFIRM), fetchImpl: flaky, now: () => NOW, write: (l: string) => out.push(l) });
     expect(result.exitCode).not.toBe(0);
@@ -371,12 +402,7 @@ describe("SCRUM-548 review fixes", () => {
 
   it("F3: a thrown re-read is skipped and the next candidate is still processed", async () => {
     const { fetchImpl, calls } = api([A, B]);
-    const flaky = (async (url: string, init: RequestInit) => {
-      if (init.method === undefined || init.method === "GET") {
-        if (url.endsWith("/deployments/aaa-bbb-1")) throw new Error("reset");
-      }
-      return fetchImpl(url, init);
-    }) as unknown as typeof fetch;
+    const { fetchImpl: flaky } = flakyFetch(fetchImpl, (method, url) => method === "GET" && url.endsWith("/deployments/aaa-bbb-1"));
     const result = await prune({ env: env(CONFIRM), fetchImpl: flaky, now: () => NOW, write: () => {} });
     expect(deleted(calls)).toEqual(["ccc-ddd-2"]);
     expect(result.rows[0].action).toMatch(/^skipped: re-read/);
@@ -447,8 +473,10 @@ describe("SCRUM-548 prune workflow", () => {
       PRUNE_MAX_DELETIONS: "${{ inputs.max_deletions }}",
       PRUNE_EXPECTED_PROJECT_ID: "${{ vars.CONVEX_PROJECT_ID }}",
     });
-    expect((wf.on.workflow_dispatch as { inputs: Record<string, { default: string }> }).inputs.max_deletions.default).toBe("60");
-    expect((wf.on.workflow_dispatch as { inputs: Record<string, { default: string }> }).inputs.min_age_hours.default).toBe("12");
+    // Blank defaults: the script owns the real defaults (60 and PIN_TTL_MS).
+    const inputs = (wf.on.workflow_dispatch as { inputs: Record<string, { default: string }> }).inputs;
+    expect(inputs.max_deletions.default).toBe("");
+    expect(inputs.min_age_hours.default).toBe("");
     expect(text.match(/\$\{\{\s*inputs\./g)).toHaveLength(3);
     expect(text.match(/\$\{\{\s*secrets\./g)).toHaveLength(1);
   });

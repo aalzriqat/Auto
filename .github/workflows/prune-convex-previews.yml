@@ -13,15 +13,15 @@ on:
         required: false
         default: ""
       min_age_hours:
-        description: "Only previews at least this many hours old (minimum 1; default is the 12h pin TTL)"
+        description: "Only previews at least this many hours old (minimum 1; blank uses the 12h pin TTL)"
         type: string
         required: false
-        default: "12"
+        default: ""
       max_deletions:
-        description: "Delete at most this many previews per run (1 to 100)"
+        description: "Delete at most this many previews per run (1 to 100; blank uses 60)"
         type: string
         required: false
-        default: "60"
+        default: ""
 
 permissions:
   contents: read

@@ -25,20 +25,21 @@
 // not have happened); a failed re-read is "skipped". None stops the sweep, one
 // line is printed as each candidate is decided, and the run exits non-zero on
 // any failed/unknown outcome, or when every candidate was skipped on re-read.
-// A dry run performs the same read-only re-read and reports what would go. Messages carry fixed
-// literals, HTTP statuses and deployment names only, never token or headers.
+// A dry run performs the same read-only re-read and reports what would go.
+// Messages carry fixed literals, HTTP statuses and deployment names only, never
+// token or headers.
 import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   DEPLOYMENT_NAME,
+  PIN_TTL_MS,
   PROTECTED_DEPLOYMENTS,
   callManagementApi,
 } from "./previewDeploymentLifecycle.mjs";
 
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const HOUR_MS = 60 * 60 * 1000;
-const DEFAULT_MIN_AGE_HOURS = 12; // the pin TTL: a younger preview may still be a live CI run
 const MIN_PLAUSIBLE_CREATE_TIME = Date.UTC(2020, 0, 1);
 const FUTURE_SKEW_MS = 5 * 60 * 1000;
 const DEFAULT_MAX_DELETIONS = 60;
@@ -68,7 +69,8 @@ function readExpectedProjectId(env) {
 
 function readMinAgeMs(env) {
   const raw = env.PRUNE_MIN_AGE_HOURS;
-  if (raw === undefined || raw === "") return DEFAULT_MIN_AGE_HOURS * HOUR_MS;
+  // Default is the pin TTL: a younger preview may still be a live CI run.
+  if (raw === undefined || raw === "") return PIN_TTL_MS;
   if (!/^\d+(\.\d+)?$/.test(raw) || Number(raw) < 1 || !Number.isFinite(Number(raw))) {
     refuse("PRUNE_MIN_AGE_HOURS must be a number of at least 1.");
   }
@@ -104,19 +106,26 @@ const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v)
 const sameProject = (value, expected) =>
   (typeof value === "string" || Number.isSafeInteger(value)) && String(value) === expected;
 
-/** Why this deployment may not be deleted, or null if it is a candidate. */
-function ineligibleReason(d, projectId, nowMs) {
-  if (!isObject(d)) return "malformed entry";
-  if (typeof d.name !== "string" || !DEPLOYMENT_NAME.test(d.name)) return "malformed name";
-  if (PROTECTED_DEPLOYMENTS.has(d.name)) return "protected deployment";
-  if (d.kind !== "cloud") return "not a cloud deployment";
-  if (d.deploymentType !== "preview") return "not a preview";
-  if (d.isDefault !== false) return "default deployment";
-  if (!sameProject(d.projectId, projectId)) return "other project";
-  if (!Number.isSafeInteger(d.createTime) || d.createTime <= 0) return "missing createTime";
+const refused = (reason) => ({ outcome: "refused", reason });
+
+/**
+ * The single eligibility predicate (listing and re-read). Returns null when the
+ * deployment is a candidate, otherwise { outcome, reason }. `young` marks the
+ * one reason that is otherwise valid, so the listing can still de-duplicate it.
+ */
+function ineligibleReason(d, expectedProjectId, nowMs, minAgeMs) {
+  if (!isObject(d)) return refused("malformed entry");
+  if (typeof d.name !== "string" || !DEPLOYMENT_NAME.test(d.name)) return refused("malformed name");
+  if (PROTECTED_DEPLOYMENTS.has(d.name)) return refused("protected deployment");
+  if (d.kind !== "cloud") return refused("not a cloud deployment");
+  if (d.deploymentType !== "preview") return refused("not a preview");
+  if (d.isDefault !== false) return refused("default deployment");
+  if (!sameProject(d.projectId, expectedProjectId)) return refused("other project");
+  if (!Number.isSafeInteger(d.createTime)) return refused("missing createTime");
   if (d.createTime < MIN_PLAUSIBLE_CREATE_TIME || d.createTime > nowMs + FUTURE_SKEW_MS) {
-    return "implausible createTime";
+    return { outcome: "skipped", reason: "implausible createTime" };
   }
+  if (nowMs - d.createTime < minAgeMs) return { outcome: "skipped", reason: "too young", young: true };
   return null;
 }
 
@@ -155,12 +164,6 @@ export async function prune({
   },
 } = {}) {
   const rows = [];
-  let failures = 0;
-  const addRow = (d, action, nowMs) => {
-    const r = row(d, action, nowMs);
-    rows.push(r);
-    write("[prune] " + r.name + ": " + action);
-  };
   const emit = (list, mode) => {
     const table = render(list, mode);
     write(table);
@@ -173,6 +176,11 @@ export async function prune({
     const maxDeletions = readMaxDeletions(env);
     const confirmed = env.PRUNE_CONFIRM === "PRUNE";
     const nowMs = now();
+    const addRow = (d, action) => {
+      const r = row(d, action, nowMs);
+      rows.push(r);
+      write("[prune] " + r.name + ": " + action);
+    };
 
     const details = await callApi(fetchImpl, token, "GET", "/token_details");
     if (!details.ok) refuse("Token check failed with HTTP " + details.status + ".");
@@ -183,13 +191,14 @@ export async function prune({
     if (!sameProject(t.projectId, expectedProjectId)) {
       refuse("Token project does not match PRUNE_EXPECTED_PROJECT_ID; refusing.");
     }
-    const projectId = expectedProjectId;
 
+    // The server-side filter is not trusted: the per-row project check guards
+    // against the listing returning another project's rows.
     const listed = await callApi(
       fetchImpl,
       token,
       "GET",
-      "/projects/" + encodeURIComponent(String(projectId)) + "/list_deployments?deploymentType=preview&isDefault=false",
+      "/projects/" + encodeURIComponent(String(expectedProjectId)) + "/list_deployments?deploymentType=preview&isDefault=false",
     );
     if (!listed.ok) refuse("Listing deployments failed with HTTP " + listed.status + ".");
     const list = parseJson(listed.raw);
@@ -198,79 +207,74 @@ export async function prune({
     const candidates = [];
     const seen = new Set();
     for (const d of list) {
-      const reason = ineligibleReason(d, projectId, nowMs);
-      if (reason) {
-        addRow(d, (reason === "implausible createTime" ? "skipped: " : "refused: ") + reason, nowMs);
-      } else if (seen.has(d.name)) {
-        continue;
-      } else if (nowMs - d.createTime < minAgeMs) {
+      const why = ineligibleReason(d, expectedProjectId, nowMs, minAgeMs);
+      if (why && !why.young) {
+        addRow(d, why.outcome + ": " + why.reason);
+      } else if (!seen.has(d.name)) {
         seen.add(d.name);
-        addRow(d, "skipped: too young", nowMs);
-      } else {
-        seen.add(d.name);
-        candidates.push(d);
+        if (why) addRow(d, why.outcome + ": " + why.reason);
+        else candidates.push(d);
       }
     }
     candidates.sort((a, b) => a.createTime - b.createTime); // oldest first
 
-    let attempted = 0;
-    let eligible = 0;
-    for (const d of candidates) {
-      const push = (action) => addRow(d, action, nowMs);
-      if (attempted >= maxDeletions) {
-        push("deferred: deletion cap " + maxDeletions + " reached");
-        continue;
-      }
-      attempted += 1;
-      const endpoint = "/deployments/" + encodeURIComponent(d.name);
-      let phase = "re-read";
+    // Fresh read right before the delete; a thrown request is "skipped".
+    const recheck = async (d) => {
       try {
-        const reread = await callApi(fetchImpl, token, "GET", endpoint);
-        if (reread.status === 404) {
-          push("skipped: already gone");
-          continue;
-        }
-        if (!reread.ok) {
-          push("skipped: re-read failed (HTTP " + reread.status + ")");
-          continue;
-        }
+        const reread = await callApi(fetchImpl, token, "GET", "/deployments/" + encodeURIComponent(d.name));
+        if (reread.status === 404) return { skip: "already gone" };
+        if (!reread.ok) return { skip: "re-read failed (HTTP " + reread.status + ")" };
         let current;
         try {
           current = JSON.parse(reread.raw);
         } catch {
-          push("skipped: re-read was not JSON");
-          continue;
+          return { skip: "re-read was not JSON" };
         }
-        const why = ineligibleReason(current, projectId, nowMs);
+        const why = ineligibleReason(current, expectedProjectId, nowMs, minAgeMs);
         if (why || current.name !== d.name) {
-          push("skipped: re-read failed checks (" + (why ?? "name mismatch") + ")");
-          continue;
+          return { skip: "re-read failed checks (" + (why?.reason ?? "name mismatch") + ")" };
         }
-        if (current.createTime !== d.createTime) {
-          push("skipped: createTime changed since listing");
-          continue;
-        }
-        eligible += 1;
-        if (!confirmed) {
-          push("would delete");
-          continue;
-        }
-        phase = "delete";
-        const res = await callApi(fetchImpl, token, "POST", endpoint + "/delete");
-        if (res.status === 404) push("skipped: already gone");
-        else if (res.ok) push("deleted");
-        else {
-          failures += 1;
-          push("delete failed (HTTP " + res.status + ")");
-        }
+        if (current.createTime !== d.createTime) return { skip: "createTime changed since listing" };
+        return { ok: true };
       } catch {
-        if (phase === "delete") {
-          failures += 1;
-          push("unknown: delete request errored, it may or may not have happened");
-        } else {
-          push("skipped: re-read request errored");
-        }
+        return { skip: "re-read request errored" };
       }
+    };
+
+    // The delete outcome as an action; a thrown request is "unknown".
+    const remove = async (d) => {
+      try {
+        const res = await callApi(fetchImpl, token, "POST", "/deployments/" + encodeURIComponent(d.name) + "/delete");
+        if (res.status === 404) return { action: "skipped: already gone" };
+        if (res.ok) return { action: "deleted" };
+        return { action: "delete failed (HTTP " + res.status + ")", failed: true };
+      } catch {
+        return { action: "unknown: delete request errored, it may or may not have happened", failed: true };
+      }
+    };
+
+    let failures = 0;
+    let attempted = 0;
+    let eligible = 0;
+    for (const d of candidates) {
+      if (attempted >= maxDeletions) {
+        addRow(d, "deferred: deletion cap " + maxDeletions + " reached");
+        continue;
+      }
+      attempted += 1;
+      const checked = await recheck(d);
+      if (checked.skip) {
+        addRow(d, "skipped: " + checked.skip);
+        continue;
+      }
+      eligible += 1;
+      if (!confirmed) {
+        addRow(d, "would delete");
+        continue;
+      }
+      const removed = await remove(d);
+      if (removed.failed) failures += 1;
+      addRow(d, removed.action);
     }
     const allSkipped = attempted > 0 && eligible === 0;
     emit(rows, confirmed ? "PRUNE" : "dry run");
