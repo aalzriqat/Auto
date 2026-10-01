@@ -46,6 +46,9 @@ export const AppErrorCode = {
   // SCRUM-504. A financed sale exists only through the Deal (`applications.finalizeDeal`),
   // which carries the finance application; a sale door that names FINANCED without one refuses.
   FINANCED_SALE_REQUIRES_DEAL: "FINANCED_SALE_REQUIRES_DEAL",
+  // SCRUM-528. `finalizeDeal` builds the sale only from quote economics that still agree with
+  // the pricing frozen on the finance application; a disagreement refuses before any write.
+  QUOTE_ECONOMICS_DRIFTED: "QUOTE_ECONOMICS_DRIFTED",
   // SCRUM-239. Returning a cleared finance-company cheque from the deal; each
   // refusal is raised before the first write and is translated under
   // ServerError_<code>.

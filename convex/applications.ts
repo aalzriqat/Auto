@@ -31,6 +31,7 @@ import {
   assertReservationAdoptableWithoutDeposit,
 } from "./utils/depositRequestGuards";
 import { assertOperatedDealMode } from "./utils/dealModes";
+import { assertQuoteEconomicsMatchFrozen } from "./utils/quoteEconomicsAnchor";
 import { completeSale } from "./utils/saleCompletion";
 import { planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal, forwardGateRefusal } from "./utils/financeCompanyForward";
@@ -4656,6 +4657,10 @@ export const finalizeDeal = mutation({
         if (quote.companyId && quote.companyId !== app.companyId) {
           throw new ConvexError("Application finance company does not match the quote.");
         }
+        // SCRUM-528. The sale below is built from the quote's economics, so they must still agree
+        // with the pricing frozen on this application (before any write).
+        const quoteMode: QuoteMode | undefined = app.quoteModeAtSubmission ?? quote.mode;
+        assertQuoteEconomicsMatchFrozen(app, quote, quoteMode);
         await assertRequiredApplicationDocumentsComplete(ctx, app, quote);
 
         // SCRUM-195 M3, DOOR 4. COMPLETION-TIME OWNERSHIP IS NOT REDUNDANT
@@ -4677,7 +4682,6 @@ export const finalizeDeal = mutation({
         // `completeSale`'s shared boundary (SCRUM-260), against the price this
         // sale persists — `quote.vehiclePrice` below.
 
-        const quoteMode: QuoteMode | undefined = app.quoteModeAtSubmission ?? quote.mode;
         const financingType =
           quoteMode === "LEASE"
             ? "LEASE"

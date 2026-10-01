@@ -27,7 +27,7 @@ import {
   obligationFromRow,
   positionForObligation,
   supplierReceiptActionability,
-  type CustomerQuotePricingSnapshot,
+  pricingSnapshotsEqual,
   type ObligationState,
   type SupplierClaimStatus,
 } from "./utils/financingEconomics";
@@ -238,29 +238,6 @@ export type BillOfSaleEconomics =
     }
   | { kind: "UNAVAILABLE"; reason: BillOfSaleUnavailableReason };
 
-/** Field-by-field equality of two customer pricing snapshots (optional fields: both absent or both equal). */
-export const pricingSnapshotsEqual = (
-  a: CustomerQuotePricingSnapshot,
-  b: CustomerQuotePricingSnapshot | undefined
-): boolean =>
-  b !== undefined &&
-  a.currency === b.currency &&
-  a.vehiclePrice === b.vehiclePrice &&
-  a.downPayment === b.downPayment &&
-  a.termMonths === b.termMonths &&
-  a.executionFees === b.executionFees &&
-  a.commission === b.commission &&
-  a.profitRate === b.profitRate &&
-  a.insuranceRate === b.insuranceRate &&
-  a.gracePeriodMonths === b.gracePeriodMonths &&
-  a.includesCommissionInDebt === b.includesCommissionInDebt &&
-  a.totalFinancedAmount === b.totalFinancedAmount &&
-  a.totalContractValue === b.totalContractValue &&
-  a.monthlyInstallment === b.monthlyInstallment &&
-  a.totalProfit === b.totalProfit &&
-  a.takafulAmount === b.takafulAmount &&
-  a.companyRuleVersion === b.companyRuleVersion;
-
 const billOfSaleUnavailable = (reason: BillOfSaleUnavailableReason): BillOfSaleEconomics => ({
   kind: "UNAVAILABLE",
   reason,
@@ -387,8 +364,8 @@ export const getBillOfSaleEconomics = query({
 
     // SCRUM-258 S258-01. The printed figures come from the snapshot FROZEN on the
     // finance application (`financeApplications` is a financial table: the
-    // generic admin edit is refused). `quotes` is editable after the sale, so the
-    // quote copy is only a cross-check: any disagreement is UNAVAILABLE.
+    // generic admin edit is refused). `quotes` is a financial table too (SCRUM-528), so the quote
+    // copy is only a cross-check, a backstop against direct-DB drift: any disagreement is UNAVAILABLE.
     const snapshot = application.customerQuotePricingSnapshot;
     if (!snapshot) return billOfSaleUnavailable("NO_PRICING_SNAPSHOT");
     if (!pricingSnapshotsEqual(snapshot, quote.customerQuotePricingSnapshot)) {
