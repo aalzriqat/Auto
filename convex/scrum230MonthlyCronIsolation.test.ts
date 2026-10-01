@@ -123,7 +123,7 @@ async function capitalizeAsset(org: Org, name: string) {
   });
 }
 
-async function createDeferral(t: Harness, org: Org, tag: string) {
+async function createDeferral(t: Harness, org: Org, tag: string, saleDate: number = Date.now()) {
   const vehicleId = await org.asOwner.mutation(api.vehicles.create, {
     idempotencyKey: crypto.randomUUID(),
     orgId: org.orgId,
@@ -135,7 +135,7 @@ async function createDeferral(t: Harness, org: Org, tag: string) {
     idempotencyKey: crypto.randomUUID(),
     orgId: org.orgId, vehicleId, customerId: org.customerId, salespersonId: org.userId,
     salePrice: 15000, warrantySold: 500, warrantyCost: 300, warrantyTermMonths: 12,
-    saleDate: Date.now(), status: "COMPLETED",
+    saleDate, status: "COMPLETED",
   });
   const deferral = await t.run((ctx) =>
     ctx.db.query("dealerProductDeferrals").withIndex("by_sale", (q) => q.eq("saleId", saleId)).first()
@@ -560,5 +560,125 @@ describe("abnormal stop reasons are counted apart from normal completions", () =
 
     expect(summary).toMatch(/0 stopped abnormally/);
     expect(summary).toMatch(/0 failed/);
+  });
+});
+
+// ─── 8. S230-R1: recognition never precedes the sale's accounting month ──────
+
+const OCT_20 = Date.UTC(2026, 9, 20, 9, 0, 0);
+const OCT_25 = Date.UTC(2026, 9, 25, 9, 0, 0);
+const NOV_1 = Date.UTC(2026, 10, 1, 9, 0, 0);
+const NOV_5 = Date.UTC(2026, 10, 5, 9, 0, 0);
+const DEC_1 = Date.UTC(2026, 11, 1, 9, 0, 0);
+
+async function pendingFi(t: Harness, orgId: Id<"organizations">) {
+  const rows = await t.run((ctx) =>
+    ctx.db.query("pendingAccountingEvents").withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING")).collect()
+  );
+  return rows.filter((r) => r.eventType === "FI_COMMISSION_RECOGNIZED");
+}
+
+describe("F&I recognition is floored by the sale's accounting month (S230-R1)", () => {
+  test("(a) a future-dated sale: nothing posts in the creation month before the sale month", async () => {
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
+    const org = await seedOrg(t, "r1_future");
+    vi.setSystemTime(OCT_20);
+    const deferralId = await createDeferral(t, org, "000011", NOV_5); // created Oct 20, sale dated Nov 5
+
+    // Oct 25: October is the creation month AND the current month — but the sale is November's.
+    vi.setSystemTime(OCT_25);
+    await runRecognition(t);
+    // Nov 1: October is still before the sale month.
+    vi.setSystemTime(NOV_1);
+    await runRecognition(t);
+
+    const beforeSaleMonth = (await fiEvents(t, org.orgId)).filter((e) => monthOf(e.occurredAt) < "2026-11");
+    expect(beforeSaleMonth).toEqual([]);
+    expect((await pendingFi(t, org.orgId)).filter((r) => r.occurredAt === undefined || monthOf(r.occurredAt) < "2026-11")).toEqual([]);
+
+    vi.setSystemTime(DEC_1);
+    await runRecognition(t);
+
+    const events = await fiEvents(t, org.orgId);
+    expect(events.map((e) => monthOf(e.occurredAt)).filter((m) => m < "2026-11")).toEqual([]);
+    expect(events.map((e) => e.eventVersion)).toEqual(events.map((_, i) => i + 1));
+    expect(monthOf(events[0].occurredAt)).toBe("2026-11");
+    const deferral = await t.run((ctx) => ctx.db.get(deferralId));
+    expect(deferral?.lastRecognizedYearMonth).toBe("2026-12");
+    expect(deferral?.monthsRecognized).toBe(events.length);
+  });
+
+  test("(b) same-month control: a sale dated in the creation month recognizes from that month", async () => {
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
+    const org = await seedOrg(t, "r1_same");
+    await createDeferral(t, org, "000012"); // Feb 10, saleDate Feb 10
+    vi.setSystemTime(APR_15);
+
+    await runRecognition(t);
+
+    const events = await fiEvents(t, org.orgId);
+    expect(events.map((e) => monthOf(e.occurredAt))).toEqual(["2026-02", "2026-03", "2026-04"]);
+  });
+
+  test("(c) back-dated control: a sale dated before creation is still floored by the creation month", async () => {
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
+    const org = await seedOrg(t, "r1_back");
+    await createDeferral(t, org, "000013", Date.UTC(2026, 0, 5, 9, 0, 0)); // created Feb 10, saleDate Jan 5
+    vi.setSystemTime(APR_15);
+
+    await runRecognition(t);
+
+    const events = await fiEvents(t, org.orgId);
+    expect(events.map((e) => monthOf(e.occurredAt))).toEqual(["2026-02", "2026-03", "2026-04"]);
+  });
+
+  test("(d) a missing or cross-org sale fails that item only, posts no month, and isolates the rest", async () => {
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
+    const orgA = await seedOrg(t, "r1_a");
+    const orgB = await seedOrg(t, "r1_b");
+    const orphanId = await createDeferral(t, orgA, "000014");
+    const crossId = await createDeferral(t, orgA, "000015");
+    const goodId = await createDeferral(t, orgB, "000016");
+    const orphan = (await t.run((ctx) => ctx.db.get(orphanId)))!;
+    const cross = (await t.run((ctx) => ctx.db.get(crossId)))!;
+    await t.run((ctx) => ctx.db.delete(orphan.saleId));
+    await t.run((ctx) => ctx.db.patch(cross.saleId, { orgId: orgB.orgId }));
+    vi.setSystemTime(APR_15);
+
+    const summary = await runRecognition(t);
+
+    expect(summary).toMatch(/2 failed/);
+    expect(summary).toMatch(/posted 1\/3/);
+    expect(await fiEvents(t, orgA.orgId)).toEqual([]);
+    expect(await pendingFi(t, orgA.orgId)).toEqual([]);
+    expect((await fiEvents(t, orgB.orgId)).map((e) => monthOf(e.occurredAt))).toEqual(["2026-02", "2026-03", "2026-04"]);
+    const good = await t.run((ctx) => ctx.db.get(goodId));
+    expect(good?.monthsRecognized).toBe(3);
+    const failures = (await cronReports(t, "fi-commission-recognition")).filter((r) => r.status === "error");
+    expect(failures.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// ─── 9. summary accounting: an item that posted then failed still counts as posted ─
+
+describe("posted-item accounting is independent of how the item ended", () => {
+  test("recognition: posts month 1 then throws at month 2 -> posted 1/1 (1 month(s)) and 1 failed", async () => {
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
+    const org = await seedOrg(t, "sum_fi");
+    await createDeferral(t, org, "000017");
+    vi.setSystemTime(APR_15);
+
+    const original = workflowHooks.hookFiCommissionRecognized;
+    let calls = 0;
+    vi.spyOn(workflowHooks, "hookFiCommissionRecognized").mockImplementation(async (ctx, args) => {
+      calls += 1;
+      if (calls === 2) throw new Error("injected failure at month 2");
+      return await original(ctx, args);
+    });
+
+    const summary = await runRecognition(t);
+
+    expect(summary).toMatch(/posted 1\/1 deferral\(s\) \(1 month\(s\)\)/);
+    expect(summary).toMatch(/1 failed/);
   });
 });

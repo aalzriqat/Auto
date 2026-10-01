@@ -30,10 +30,22 @@ export const listActiveDeferralsForRecognition = internalQuery({
     numItems: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const result = await ctx.db
       .query("dealerProductDeferrals")
       .withIndex("by_status", (q) => q.eq("status", "ACTIVE"))
       .paginate({ cursor: args.cursor ?? null, numItems: args.numItems ?? 200 });
+    // S230-R1: the deferral liability is created in the SALE's accounting month,
+    // so recognition may not start before it. `saleDate` is null when the owning
+    // sale is missing, belongs to another org, or has no usable date — the cron
+    // treats null as an item-level failure, never as "no floor".
+    const page = await Promise.all(
+      result.page.map(async (deferral) => {
+        const sale = await ctx.db.get(deferral.saleId);
+        const usable = sale && sale.orgId === deferral.orgId && Number.isFinite(sale.saleDate);
+        return { ...deferral, saleDate: usable ? sale.saleDate : null };
+      })
+    );
+    return { ...result, page };
   },
 });
 

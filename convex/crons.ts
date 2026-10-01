@@ -599,10 +599,12 @@ async function runMonthlyCatchUpForItem<T extends MonthlyCronItem, R extends str
         if (spec.reasonClass[result.reason] === "abnormal") abnormalReason = result.reason;
         break;
       }
+      // Counted at the FIRST posted month, not after the loop: an item that posts month 1 and
+      // then throws on month 2 still posted (and also failed) — both counters say so.
+      if (!postedAny) stats.posted++;
       postedAny = true;
       stats.monthsPosted++;
     }
-    if (postedAny) stats.posted++;
     if (abnormalReason) {
       stats.abnormalByReason[abnormalReason] = (stats.abnormalByReason[abnormalReason] ?? 0) + 1;
     } else if (!postedAny) {
@@ -762,18 +764,27 @@ export const RECOGNITION_REASON_CLASS: Record<RecognitionSkipReason, ReasonClass
   ledger_occurrence_conflict: "abnormal",
 };
 
-const recognitionSpec: MonthlyCronSpec<Doc<"dealerProductDeferrals">, RecognitionSkipReason> = {
+type RecognitionItem = Doc<"dealerProductDeferrals"> & { saleDate: number | null };
+
+const recognitionSpec: MonthlyCronSpec<RecognitionItem, RecognitionSkipReason> = {
   source: "fi-commission-recognition",
   noun: "deferral",
   label: "F&I commission recognition",
   doneText: "already run / fully recognized / not active / org suspended / sale not yet posted",
   reasonClass: RECOGNITION_REASON_CLASS,
   listPage: (ctx, cursor) => ctx.runQuery(internal.dealerProductDeferrals.listActiveDeferralsForRecognition, { cursor }),
-  firstOfferableMonthIndex: (deferral) =>
-    firstOfferableMonthIndex({
+  firstOfferableMonthIndex: (deferral) => {
+    // S230-R1: never fall back to an earlier month. Thrown inside the item's try, so it
+    // is an ordinary item-level failure (counted, failure row, other items unaffected).
+    if (deferral.saleDate === null) {
+      throw new Error(`deferral ${deferral._id} has no valid owning sale (missing, cross-org or undated); recognition refused`);
+    }
+    return firstOfferableMonthIndex({
       lastPostedYearMonth: deferral.lastRecognizedYearMonth,
+      startAt: deferral.saleDate,
       createdAt: deferral.createdAt,
-    }),
+    });
+  },
   postMonth: (ctx, deferral, a) =>
     ctx.runMutation(internal.dealerProductDeferrals.recognizeDeferredCommissionForMonth, {
       orgId: deferral.orgId,
