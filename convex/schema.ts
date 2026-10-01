@@ -4085,6 +4085,10 @@ export default defineSchema({
     resolvedReason: v.optional(v.string()),
   })
     .index("by_org_vehicle_status", ["orgId", "vehicleId", "status"])
+    // SCRUM-69 — the finance-held-car guard reads ONLY FINANCE claims. RESERVATION and DEPOSIT
+    // rows are insert-only and pile up on a car forever, so a kind-blind scan could be pushed
+    // past its bound by unrelated history and refuse a car with no finance hold.
+    .index("by_org_vehicle_kind_status", ["orgId", "vehicleId", "evidenceKind", "status"])
     .index("by_root_status", ["rootId", "status"])
     .index("by_consumed_sale", ["consumedBySaleId"])
     .index("by_restored_from", ["restoredFromClaimId"])

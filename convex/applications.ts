@@ -4828,7 +4828,9 @@ export const finalizeDeal = mutation({
             | undefined,
           idempotencyKey: args.idempotencyKey,
           actorId: auth.user._id,
-        });
+        },
+        // SCRUM-69: the finance door for this application.
+        { kind: "FINANCE_FINALIZATION", applicationId: args.applicationId });
 
         const now = Date.now();
         // Resolved once, before anything reads it: the patch below and the
