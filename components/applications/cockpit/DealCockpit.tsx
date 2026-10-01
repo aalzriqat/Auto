@@ -1145,6 +1145,7 @@ export function DealCockpit({
   // that, in the commit where the id changes, the owed mark is gone before that
   // effect can read it.
   const confirmStateApplicationIdRef = useRef(applicationId);
+  const confirmSupplierDisbursementKeyRef = useRef<string | null>(null);
   // Bumped on every deal switch. A confirm captures it when it starts; an answer
   // that settles under a different generation belongs to a deal that is gone and
   // may change NOTHING (no key, no mark, no dialog, no notice, no in-flight flag).
@@ -1161,6 +1162,13 @@ export function DealCockpit({
     confirmObservedVersionRef.current = 1;
     setConfirmObservedVersion(1);
     setConfirmingDisbursement(false);
+    // The supplier-advice and cheque-return writers share the same invariant: no
+    // key, dialog or flag of deal A survives on deal B.
+    confirmSupplierDisbursementKeyRef.current = null;
+    setConfirmingSupplierDisbursement(false);
+    chequeReturnKeyRef.current = null;
+    setChequeReturnOpen(false);
+    setChequeReturnSubmitting(false);
   }, [applicationId]);
   // SCRUM-239 round 7: the ONE place a version move is reconciled, whether the
   // dialog is open or closed. `confirmUnknownOutcomeVersionRef` is the record that
@@ -1171,7 +1179,18 @@ export function DealCockpit({
   // While this operator's own cheque return is in flight a version move may be
   // that very return (which proves the confirm committed), so the reconcile waits
   // for it to settle and re-runs then.
+  // In the commit where the deal switches, this closure still holds deal A's
+  // `confirmingDisbursement` / `confirmObservedVersion` (the switch effect's resets
+  // only land on the NEXT render) and would compare them with B's observed
+  // version. The switch effect runs first and has already cleared the refs, so
+  // this commit is skipped once per deal; the reset state re-triggers the effect
+  // (its deps change) and every later pass sees B's own state.
+  const reconciledApplicationIdRef = useRef(applicationId);
   useEffect(() => {
+    if (reconciledApplicationIdRef.current !== applicationId) {
+      reconciledApplicationIdRef.current = applicationId;
+      return;
+    }
     if (!appObserved || chequeReturnSubmitting) return;
     const owedUnknown =
       confirmUnknownOutcomeVersionRef.current !== null &&
@@ -1185,8 +1204,7 @@ export function DealCockpit({
     confirmUnknownOutcomeVersionRef.current = null;
     if (movedUnderDialog) setConfirmingDisbursement(false);
     toast.error(t(owedUnknown ? "DisbursementChangedOutcomeUnknown" : "DisbursementChangedWhileConfirming"));
-  }, [appObserved, chequeReturnSubmitting, confirmingDisbursement, observedDisbursementVersion, confirmObservedVersion, t]);
-  const confirmSupplierDisbursementKeyRef = useRef<string | null>(null);
+  }, [appObserved, applicationId, chequeReturnSubmitting, confirmingDisbursement, observedDisbursementVersion, confirmObservedVersion, t]);
   // `deposits.release` gets a GENERATION-AWARE retained identity instead of a
   // plain key ref (SCRUM-313; the full reasoning lives at the release path in
   // `components/vehicles/VehicleDetailsDialog.tsx`). That command pays out
@@ -2806,6 +2824,8 @@ export function DealCockpit({
                 // A LOADED app without the field is version 1.
                 const returnedVersion = appObserved ? observedDisbursementVersion : undefined;
                 setChequeReturnSubmitting(true);
+                const chequeGeneration = confirmGenerationRef.current;
+                const chequeSuperseded = () => confirmGenerationRef.current !== chequeGeneration;
                 // One key per dialog open: a retry after a lost response is the SAME command.
                 if (chequeReturnKeyRef.current?.reason !== reason) {
                   chequeReturnKeyRef.current = { key: `return-fc-cheque:${crypto.randomUUID()}`, reason };
@@ -2825,6 +2845,8 @@ export function DealCockpit({
                     // The disbursement is gone from the application AND this cheque is the newest returned one.
                     { reflectedWhen: disbursementReturnReflected(chequeId) }
                   );
+                  // A late answer for deal A must not drop B's kept key or owed notice.
+                  if (chequeSuperseded()) return;
                   chequeReturnKeyRef.current = null;
                   // The return reopens the deal for the NEXT disbursement version.
                   // A confirm key kept after a lost response belongs to the
@@ -2846,11 +2868,12 @@ export function DealCockpit({
                   }
                   setChequeReturnOpen(false);
                 } catch (error) {
+                  if (chequeSuperseded()) return;
                   // The server answered: the next attempt is a new command. A lost response keeps the key.
                   if (isConvexError(error)) chequeReturnKeyRef.current = null;
                   toast.error(getLocalizedErrorMessage(error, t));
                 } finally {
-                  setChequeReturnSubmitting(false);
+                  if (!chequeSuperseded()) setChequeReturnSubmitting(false);
                 }
               },
             }
@@ -3226,6 +3249,8 @@ export function DealCockpit({
                 onOpenChange: setConfirmingSupplierDisbursement,
                 onConfirm: async (advice) => {
                   setDisbursementSubmitting(true);
+                  const generation = confirmGenerationRef.current;
+                  const superseded = () => confirmGenerationRef.current !== generation;
                   try {
                     confirmSupplierDisbursementKeyRef.current ??= `confirm-supplier-disbursement:${crypto.randomUUID()}`;
                     const supplierDisbursementKey = confirmSupplierDisbursementKeyRef.current;
@@ -3244,12 +3269,15 @@ export function DealCockpit({
                       "SupplierDisbursementConfirmedSuccess",
                       { reflectedWhen: supplierDisbursementReflected }
                     );
+                    // Answer for a deal that is gone: change nothing on this one.
+                    if (superseded()) return;
                     confirmSupplierDisbursementKeyRef.current = null;
                     setConfirmingSupplierDisbursement(false);
                   } catch (error) {
+                    if (superseded()) return;
                     toast.error(getErrorMessage(error));
                   } finally {
-                    setDisbursementSubmitting(false);
+                    if (!superseded()) setDisbursementSubmitting(false);
                   }
                 },
               },

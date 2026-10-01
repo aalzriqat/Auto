@@ -3652,6 +3652,113 @@ describe("SCRUM-522: the finance-company confirm dialog and its retained state",
     test("A's confirm RESOLVES late: B's dialog stays open, B is not marked in flight, no toast", () => lateAnswer("resolve"));
     test("A's confirm is REJECTED late (lost response): B's dialog stays open, no A notice, B's key is its own", () => lateAnswer("reject"));
   });
+  test("F2: switching deals in the same commit as a version move does not raise A's 'moved under the dialog' notice on B", async () => {
+    show();
+    const view = renderCockpit();
+    // A's confirm dialog is open at version 1 (nothing sent).
+    fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+    expect(screen.queryByRole("dialog")).not.toBeNull();
+    vi.mocked(toast.error).mockClear();
+
+    show(2); // B is observed at version 2, in the very render that switches the id
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP_B} />);
+    await act(async () => {});
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  describe("L-C reversed, supplier-advice mode and the cheque return", () => {
+    const SUPPLIER = "applications:confirmSupplierDisbursement";
+    const supplierCalls = () => (mutationCalls.get(SUPPLIER) ?? []) as Array<Record<string, unknown>>;
+    const showSupplier = () => {
+      queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages }));
+      queryResults.set(
+        GET_QUERY,
+        application({
+          status: "CLOSED",
+          vehicle: { sourceType: "SOURCED", sourcedFromName: "أبو خالد" },
+          supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+          canSettleDirectToSupplier: true,
+        })
+      );
+    };
+    const openSupplier = () =>
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmSupplierDisbursement" }));
+    const recorded = () => screen.getByRole("button", { name: "ConfirmRecorded" }) as HTMLButtonElement;
+
+    const supplierLateAnswer = async (kind: "resolve" | "reject") => {
+      showSupplier();
+      const view = renderCockpit();
+      let settleA: (value: unknown) => void = () => {};
+      let settleB: (value: unknown) => void = () => {};
+      stubs.mutationHolds.set(SUPPLIER, new Promise((resolve) => { settleA = resolve; }));
+      if (kind === "reject") stubs.mutationFailures.set(SUPPLIER, "connection lost");
+      openSupplier();
+      fireEvent.click(recorded());
+      await waitFor(() => expect(supplierCalls()).toHaveLength(1));
+      vi.mocked(toast.error).mockClear();
+
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP_B} />);
+      stubs.mutationHolds.set(SUPPLIER, new Promise((resolve) => { settleB = resolve; }));
+      openSupplier();
+      fireEvent.click(recorded());
+      await waitFor(() => expect(supplierCalls()).toHaveLength(2));
+      expect(supplierCalls()[1].applicationId).toBe(APP_B);
+      // A's key must not be reused for B: the server fingerprints the applicationId.
+      expect(supplierCalls()[1].idempotencyKey).not.toBe(supplierCalls()[0].idempotencyKey);
+
+      settleA(null);
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+      // B is still in flight and still open; nothing of A's answer touched it.
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      expect(
+        (within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled
+      ).toBe(true);
+      expect(toast.error).not.toHaveBeenCalled();
+      settleB(null);
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    };
+
+    test("supplier: A's confirm RESOLVES late - B has its own key, stays in flight and open", () => supplierLateAnswer("resolve"));
+    test("supplier: A's confirm is REJECTED late - no A notice, B has its own key, stays in flight and open", () => supplierLateAnswer("reject"));
+
+    test("a late A cheque return does not drop B's kept confirm key", async () => {
+      const RETURN = "applications:returnFinanceDisbursementCheque";
+      queryResults.set(
+        COCKPIT_QUERY,
+        cockpit({
+          status: "CLOSED",
+          stages,
+          forward: { planV2: true, applies: true, state: "SETTLED", returnedExceptionOpen: false, onBooksForwardId: null, transferConfirmed: true, mayRecord: false, mayCancelFinalized: true },
+          disbursementReturn: { mayReturn: true, chequeId: "chq_fc1", lastReturnedChequeId: null },
+        })
+      );
+      queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+      const view = renderCockpit();
+      let settleReturn: (value: unknown) => void = () => {};
+      stubs.mutationHolds.set(RETURN, new Promise((resolve) => { settleReturn = resolve; }));
+      fireEvent.click(screen.getByTestId("deal-cheque-returned-by-bank"));
+      fireEvent.change(screen.getByLabelText("ChequeReturnedByBankReasonLabel"), { target: { value: "Insufficient funds" } });
+      fireEvent.click(screen.getByRole("button", { name: "ChequeReturnedByBankConfirm" }));
+      await waitFor(() => expect(mutationCalls.get(RETURN)).toHaveLength(1));
+
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP_B} />);
+      // B: a confirm whose response is lost keeps its key (and an owed mark).
+      stubs.mutationFailures.set(CONFIRM, "connection lost");
+      openAndConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+
+      settleReturn(null);
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+      // The retry on B is the SAME command: A's late return did not retire B's key.
+      stubs.mutationFailures.delete(CONFIRM);
+      openAndConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      expect(confirmCalls()[1].applicationId).toBe(APP_B);
+      expect(confirmCalls()[1].idempotencyKey).toBe(confirmCalls()[0].idempotencyKey);
+    });
+  });
   test("L-C: the owed outcome-unknown notice for deal A is not raised on deal B when the version moves", async () => {
     show();
     const view = renderCockpit();
