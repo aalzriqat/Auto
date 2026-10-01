@@ -7,18 +7,25 @@
 //
 // Invariant: a deployment is deleted only when ALL of these hold, checked on
 // the listing AND again on a fresh read immediately before the delete:
-//   - the token is a PROJECT token (a team token is refused: least privilege),
-//     and the deployment belongs to that project;
+//   - the token is a PROJECT token (a team token is refused: least privilege)
+//     whose project equals PRUNE_EXPECTED_PROJECT_ID, which comes from trusted
+//     repository configuration and never from the token itself; the script
+//     fails closed when it is unset, and every deployment must carry that id;
 //   - kind "cloud", deploymentType "preview", isDefault false, a well formed
 //     random name, not on the protected (production) list;
-//   - createTime is a positive integer at least PRUNE_MIN_AGE_HOURS old, and
+//   - createTime is a plausible epoch-millisecond integer (not before 2020, not
+//     more than 5 minutes ahead) at least PRUNE_MIN_AGE_HOURS old, and
 //     identical in listing and re-read (a recreated deployment is not the one
 //     that was planned).
 // Dry run unless PRUNE_CONFIRM is exactly "PRUNE". The server-side list filters
 // are not trusted: every condition is re-checked client-side.
 //
-// Failure policy: a failed delete does not stop the sweep (the remaining
-// previews still free quota) but the run exits non-zero. Messages carry fixed
+// Failure policy: each candidate is handled on its own. A failed delete is
+// "delete failed"; a delete that errors in transport is "unknown" (it may or may
+// not have happened); a failed re-read is "skipped". None stops the sweep, one
+// line is printed as each candidate is decided, and the run exits non-zero on
+// any failed/unknown outcome, or when every candidate was skipped on re-read.
+// A dry run performs the same read-only re-read and reports what would go. Messages carry fixed
 // literals, HTTP statuses and deployment names only, never token or headers.
 import { appendFileSync } from "node:fs";
 import path from "node:path";
@@ -31,7 +38,9 @@ import {
 
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const HOUR_MS = 60 * 60 * 1000;
-const DEFAULT_MIN_AGE_HOURS = 3;
+const DEFAULT_MIN_AGE_HOURS = 12; // the pin TTL: a younger preview may still be a live CI run
+const MIN_PLAUSIBLE_CREATE_TIME = Date.UTC(2020, 0, 1);
+const FUTURE_SKEW_MS = 5 * 60 * 1000;
 const DEFAULT_MAX_DELETIONS = 60;
 const HARD_MAX_DELETIONS = 100;
 
@@ -47,6 +56,14 @@ function readToken(env) {
   // PowerShell-set secrets carry a trailing \r; refuse rather than trim.
   if (/\s/.test(token)) refuse("CONVEX_PREVIEW_PRUNE_TOKEN contains whitespace.");
   return token;
+}
+
+function readExpectedProjectId(env) {
+  const raw = env.PRUNE_EXPECTED_PROJECT_ID;
+  if (typeof raw !== "string" || !/^[1-9]\d{0,15}$/.test(raw)) {
+    refuse("PRUNE_EXPECTED_PROJECT_ID is not configured (a positive integer is required).");
+  }
+  return raw;
 }
 
 function readMinAgeMs(env) {
@@ -83,16 +100,23 @@ function parseJson(raw) {
 
 const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
+// Compare as normalized integer strings; a non-integer id never matches.
+const sameProject = (value, expected) =>
+  (typeof value === "string" || Number.isSafeInteger(value)) && String(value) === expected;
+
 /** Why this deployment may not be deleted, or null if it is a candidate. */
-function ineligibleReason(d, projectId) {
+function ineligibleReason(d, projectId, nowMs) {
   if (!isObject(d)) return "malformed entry";
   if (typeof d.name !== "string" || !DEPLOYMENT_NAME.test(d.name)) return "malformed name";
   if (PROTECTED_DEPLOYMENTS.has(d.name)) return "protected deployment";
   if (d.kind !== "cloud") return "not a cloud deployment";
   if (d.deploymentType !== "preview") return "not a preview";
   if (d.isDefault !== false) return "default deployment";
-  if (d.projectId !== projectId) return "other project";
+  if (!sameProject(d.projectId, projectId)) return "other project";
   if (!Number.isSafeInteger(d.createTime) || d.createTime <= 0) return "missing createTime";
+  if (d.createTime < MIN_PLAUSIBLE_CREATE_TIME || d.createTime > nowMs + FUTURE_SKEW_MS) {
+    return "implausible createTime";
+  }
   return null;
 }
 
@@ -132,6 +156,11 @@ export async function prune({
 } = {}) {
   const rows = [];
   let failures = 0;
+  const addRow = (d, action, nowMs) => {
+    const r = row(d, action, nowMs);
+    rows.push(r);
+    write("[prune] " + r.name + ": " + action);
+  };
   const emit = (list, mode) => {
     const table = render(list, mode);
     write(table);
@@ -139,6 +168,7 @@ export async function prune({
   };
   try {
     const token = readToken(env);
+    const expectedProjectId = readExpectedProjectId(env);
     const minAgeMs = readMinAgeMs(env);
     const maxDeletions = readMaxDeletions(env);
     const confirmed = env.PRUNE_CONFIRM === "PRUNE";
@@ -150,11 +180,10 @@ export async function prune({
     if (!isObject(t) || t.type !== "projectToken") {
       refuse("Token is not a project token; refusing (a team token is too broad).");
     }
-    const projectId = t.projectId;
-    const validId =
-      (typeof projectId === "string" && /^[A-Za-z0-9_-]+$/.test(projectId)) ||
-      (Number.isSafeInteger(projectId) && projectId > 0);
-    if (!validId) refuse("Token details carry no usable projectId.");
+    if (!sameProject(t.projectId, expectedProjectId)) {
+      refuse("Token project does not match PRUNE_EXPECTED_PROJECT_ID; refusing.");
+    }
+    const projectId = expectedProjectId;
 
     const listed = await callApi(
       fetchImpl,
@@ -169,14 +198,14 @@ export async function prune({
     const candidates = [];
     const seen = new Set();
     for (const d of list) {
-      const reason = ineligibleReason(d, projectId);
+      const reason = ineligibleReason(d, projectId, nowMs);
       if (reason) {
-        rows.push(row(d, "refused: " + reason, nowMs));
+        addRow(d, (reason === "implausible createTime" ? "skipped: " : "refused: ") + reason, nowMs);
       } else if (seen.has(d.name)) {
         continue;
       } else if (nowMs - d.createTime < minAgeMs) {
         seen.add(d.name);
-        rows.push(row(d, "skipped: too young", nowMs));
+        addRow(d, "skipped: too young", nowMs);
       } else {
         seen.add(d.name);
         candidates.push(d);
@@ -185,55 +214,69 @@ export async function prune({
     candidates.sort((a, b) => a.createTime - b.createTime); // oldest first
 
     let attempted = 0;
+    let eligible = 0;
     for (const d of candidates) {
-      const push = (action) => rows.push(row(d, action, nowMs));
+      const push = (action) => addRow(d, action, nowMs);
       if (attempted >= maxDeletions) {
         push("deferred: deletion cap " + maxDeletions + " reached");
         continue;
       }
       attempted += 1;
-      if (!confirmed) {
-        push("would delete");
-        continue;
-      }
       const endpoint = "/deployments/" + encodeURIComponent(d.name);
-      const reread = await callApi(fetchImpl, token, "GET", endpoint);
-      if (reread.status === 404) {
-        push("skipped: already gone");
-        continue;
-      }
-      if (!reread.ok) {
-        push("skipped: re-read failed (HTTP " + reread.status + ")");
-        continue;
-      }
-      let current;
+      let phase = "re-read";
       try {
-        current = JSON.parse(reread.raw);
+        const reread = await callApi(fetchImpl, token, "GET", endpoint);
+        if (reread.status === 404) {
+          push("skipped: already gone");
+          continue;
+        }
+        if (!reread.ok) {
+          push("skipped: re-read failed (HTTP " + reread.status + ")");
+          continue;
+        }
+        let current;
+        try {
+          current = JSON.parse(reread.raw);
+        } catch {
+          push("skipped: re-read was not JSON");
+          continue;
+        }
+        const why = ineligibleReason(current, projectId, nowMs);
+        if (why || current.name !== d.name) {
+          push("skipped: re-read failed checks (" + (why ?? "name mismatch") + ")");
+          continue;
+        }
+        if (current.createTime !== d.createTime) {
+          push("skipped: createTime changed since listing");
+          continue;
+        }
+        eligible += 1;
+        if (!confirmed) {
+          push("would delete");
+          continue;
+        }
+        phase = "delete";
+        const res = await callApi(fetchImpl, token, "POST", endpoint + "/delete");
+        if (res.status === 404) push("skipped: already gone");
+        else if (res.ok) push("deleted");
+        else {
+          failures += 1;
+          push("delete failed (HTTP " + res.status + ")");
+        }
       } catch {
-        push("skipped: re-read was not JSON");
-        continue;
-      }
-      const why = ineligibleReason(current, projectId);
-      if (why || current.name !== d.name) {
-        push("skipped: re-read failed checks (" + (why ?? "name mismatch") + ")");
-        continue;
-      }
-      if (current.createTime !== d.createTime) {
-        push("skipped: createTime changed since listing");
-        continue;
-      }
-      const res = await callApi(fetchImpl, token, "POST", endpoint + "/delete");
-      if (res.status === 404) push("skipped: already gone");
-      else if (res.ok) push("deleted");
-      else {
-        failures += 1;
-        push("delete failed (HTTP " + res.status + ")");
+        if (phase === "delete") {
+          failures += 1;
+          push("unknown: delete request errored, it may or may not have happened");
+        } else {
+          push("skipped: re-read request errored");
+        }
       }
     }
-
+    const allSkipped = attempted > 0 && eligible === 0;
     emit(rows, confirmed ? "PRUNE" : "dry run");
-    if (failures > 0) write("::error::" + failures + " deployment delete(s) failed.");
-    return { exitCode: failures > 0 ? 1 : 0, rows };
+    if (failures > 0) write("::error::" + failures + " deployment delete(s) failed or are unknown.");
+    if (allSkipped) write("::error::Every candidate was skipped on re-read; nothing could be verified.");
+    return { exitCode: failures > 0 || allSkipped ? 1 : 0, rows };
   } catch (error) {
     const message = error instanceof PruneRefusal ? error.message : "Unexpected failure.";
     write("::error::Convex preview prune refused: " + message);

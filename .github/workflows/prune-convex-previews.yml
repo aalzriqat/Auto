@@ -13,10 +13,15 @@ on:
         required: false
         default: ""
       min_age_hours:
-        description: "Only previews at least this many hours old (minimum 1)"
+        description: "Only previews at least this many hours old (minimum 1; default is the 12h pin TTL)"
         type: string
         required: false
-        default: "3"
+        default: "12"
+      max_deletions:
+        description: "Delete at most this many previews per run (1 to 100)"
+        type: string
+        required: false
+        default: "60"
 
 permissions:
   contents: read
@@ -29,6 +34,8 @@ jobs:
   prune:
     name: prune-convex-previews
     if: github.ref == 'refs/heads/main'
+    # The project token lives in this environment, restricted to main.
+    environment: convex-preview-prune
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -47,4 +54,7 @@ jobs:
           CONVEX_PREVIEW_PRUNE_TOKEN: ${{ secrets.CONVEX_PREVIEW_PRUNE_TOKEN }}
           PRUNE_CONFIRM: ${{ inputs.confirm }}
           PRUNE_MIN_AGE_HOURS: ${{ inputs.min_age_hours }}
+          PRUNE_MAX_DELETIONS: ${{ inputs.max_deletions }}
+          # Trusted expected project: a repository variable, never the token.
+          PRUNE_EXPECTED_PROJECT_ID: ${{ vars.CONVEX_PROJECT_ID }}
         run: node scripts/pruneConvexPreviews.mjs

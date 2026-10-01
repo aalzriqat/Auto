@@ -22,7 +22,7 @@ function dep(name: string, overrides: Dep = {}): Dep {
     isDefault: false,
     projectId: PROJECT_ID,
     previewIdentifier: "e2e-pr-1-" + name,
-    createTime: NOW - 10 * HOUR,
+    createTime: NOW - 13 * HOUR,
     expiresAt: null,
     ...overrides,
   };
@@ -75,6 +75,7 @@ function api(deps: Dep[], options: ApiOptions = {}) {
 function env(overrides: Record<string, string | undefined> = {}) {
   return {
     CONVEX_PREVIEW_PRUNE_TOKEN: TOKEN,
+    PRUNE_EXPECTED_PROJECT_ID: String(PROJECT_ID),
     ...overrides,
   } as unknown as NodeJS.ProcessEnv;
 }
@@ -112,9 +113,9 @@ describe("SCRUM-548 prune leaked Convex previews", () => {
     const { calls, result } = await run(
       [
         dep("young-one-1", { createTime: NOW - 2 * HOUR }),
-        dep("aaa-bbb-2", { createTime: NOW - 4 * HOUR }),
+        dep("aaa-bbb-2", { createTime: NOW - 14 * HOUR }),
         dep("ccc-ddd-3", { createTime: NOW - 30 * HOUR }),
-        dep("exact-edge-4", { createTime: NOW - 3 * HOUR }),
+        dep("exact-edge-4", { createTime: NOW - 12 * HOUR }),
       ],
       {},
       env(CONFIRM),
@@ -136,6 +137,10 @@ describe("SCRUM-548 prune leaked Convex previews", () => {
     ["malformed name", dep("Not_A-Deployment")],
     ["name with no digits", dep("aaa-bbb")],
     ["too young", dep("aaa-bbb-1", { createTime: NOW - 1 * HOUR })],
+    ["below the 12h default", dep("aaa-bbb-1", { createTime: NOW - 11 * HOUR })],
+    ["createTime in seconds", dep("aaa-bbb-1", { createTime: 1.7e9 })],
+    ["createTime before 2020", dep("aaa-bbb-1", { createTime: Date.UTC(2019, 11, 31) })],
+    ["createTime beyond 5 minutes ahead", dep("aaa-bbb-1", { createTime: NOW + 6 * 60 * 1000 })],
     ["future createTime", dep("aaa-bbb-1", { createTime: NOW + HOUR })],
     ["missing createTime", dep("aaa-bbb-1", { createTime: undefined })],
     ["zero createTime", dep("aaa-bbb-1", { createTime: 0 })],
@@ -173,7 +178,7 @@ describe("SCRUM-548 prune leaked Convex previews", () => {
   );
 
   it.each<[string, Dep | null, RegExp]>([
-    ["changed createTime", dep("aaa-bbb-1", { createTime: NOW - 4 * HOUR }), /createTime changed/],
+    ["changed createTime", dep("aaa-bbb-1", { createTime: NOW - 14 * HOUR }), /createTime changed/],
     ["404 (already gone)", null, /already gone/],
     ["now prod", dep("aaa-bbb-1", { deploymentType: "prod" }), /^skipped/],
     ["now default", dep("aaa-bbb-1", { isDefault: true }), /^skipped/],
@@ -184,7 +189,8 @@ describe("SCRUM-548 prune leaked Convex previews", () => {
     const { calls, result } = await run([dep("aaa-bbb-1")], { reread: { "aaa-bbb-1": current } }, env(CONFIRM));
     expect(posts(calls)).toEqual([]);
     expect(result.rows[0].action).toMatch(action);
-    expect(result.exitCode).toBe(0);
+    // F6: a lone candidate skipped on re-read means nothing was verified.
+    expect(result.exitCode).toBe(1);
   });
 
   it("re-read HTTP failure is skipped, never deleted", async () => {
@@ -205,14 +211,14 @@ describe("SCRUM-548 prune leaked Convex previews", () => {
     },
   );
 
-  it("honours PRUNE_MIN_AGE_HOURS and defaults to 3 when blank", async () => {
-    const deps = [dep("aaa-bbb-1", { createTime: NOW - 5 * HOUR })];
-    expect(deleted((await run(deps, {}, env({ ...CONFIRM, PRUNE_MIN_AGE_HOURS: "6" }))).calls)).toEqual([]);
+  it("honours PRUNE_MIN_AGE_HOURS and defaults to 12 when blank", async () => {
+    const deps = [dep("aaa-bbb-1", { createTime: NOW - 13 * HOUR })];
+    expect(deleted((await run(deps, {}, env({ ...CONFIRM, PRUNE_MIN_AGE_HOURS: "14" }))).calls)).toEqual([]);
     expect(deleted((await run(deps, {}, env({ ...CONFIRM, PRUNE_MIN_AGE_HOURS: "" }))).calls)).toEqual(["aaa-bbb-1"]);
   });
 
   it("caps deletions per run and reports the rest as deferred", async () => {
-    const deps = [1, 2, 3, 4].map((i) => dep("aaa-bbb-" + i, { createTime: NOW - (10 + i) * HOUR }));
+    const deps = [1, 2, 3, 4].map((i) => dep("aaa-bbb-" + i, { createTime: NOW - (13 + i) * HOUR }));
     const { calls, result } = await run(deps, {}, env({ ...CONFIRM, PRUNE_MAX_DELETIONS: "2" }));
     expect(deleted(calls)).toEqual(["aaa-bbb-4", "aaa-bbb-3"]);
     expect(result.rows.filter((r: { action: string }) => /cap/.test(r.action))).toHaveLength(2);
@@ -225,7 +231,7 @@ describe("SCRUM-548 prune leaked Convex previews", () => {
   });
 
   it("a failed delete exits non-zero but the remaining previews are still processed", async () => {
-    const deps = [dep("aaa-bbb-1", { createTime: NOW - 20 * HOUR }), dep("ccc-ddd-2", { createTime: NOW - 10 * HOUR })];
+    const deps = [dep("aaa-bbb-1", { createTime: NOW - 20 * HOUR }), dep("ccc-ddd-2", { createTime: NOW - 15 * HOUR })];
     const { calls, result, out } = await run(deps, { deleteStatus: { "aaa-bbb-1": 500 } }, env(CONFIRM));
     expect(deleted(calls)).toEqual(["aaa-bbb-1", "ccc-ddd-2"]);
     expect(result.exitCode).not.toBe(0);
@@ -300,6 +306,97 @@ describe("SCRUM-548 prune leaked Convex previews", () => {
   });
 });
 
+describe("SCRUM-548 review fixes", () => {
+  const A = dep("aaa-bbb-1", { createTime: NOW - 30 * HOUR });
+  const B = dep("ccc-ddd-2", { createTime: NOW - 20 * HOUR });
+  const C = dep("eee-fff-3", { createTime: NOW - 15 * HOUR });
+
+  it.each(["", "abc", "0", "-5", "42.5", "4242 ", "01"])(
+    "F1: refuses PRUNE_EXPECTED_PROJECT_ID=%j before any fetch",
+    async (v) => {
+      const { calls, result, out } = await run([A], {}, env({ ...CONFIRM, PRUNE_EXPECTED_PROJECT_ID: v }));
+      expect(calls).toEqual([]);
+      expect(result.exitCode).not.toBe(0);
+      expect(out.join("\n")).toContain("PRUNE_EXPECTED_PROJECT_ID is not configured");
+    },
+  );
+
+  it("F1: refuses when the variable is absent entirely", async () => {
+    const { calls, result } = await run([A], {}, env({ ...CONFIRM, PRUNE_EXPECTED_PROJECT_ID: undefined }));
+    expect(calls).toEqual([]);
+    expect(result.exitCode).not.toBe(0);
+  });
+
+  it("F1: a token for another project is refused, nothing listed or deleted", async () => {
+    const { calls, result } = await run(
+      [A],
+      { tokenDetails: { type: "projectToken", projectId: PROJECT_ID + 1 } },
+      env(CONFIRM),
+    );
+    expect(calls.map((c) => c.url)).toEqual(["https://api.convex.dev/v1/token_details"]);
+    expect(posts(calls)).toEqual([]);
+    expect(result.exitCode).not.toBe(0);
+  });
+
+  it("F1: a matching token (string or number id) proceeds", async () => {
+    const asString = await run([A], { tokenDetails: { type: "projectToken", projectId: String(PROJECT_ID) } }, env(CONFIRM));
+    expect(deleted(asString.calls)).toEqual(["aaa-bbb-1"]);
+    const asNumber = await run([A], {}, env(CONFIRM));
+    expect(deleted(asNumber.calls)).toEqual(["aaa-bbb-1"]);
+  });
+
+  it("F3: a thrown delete is unknown, the sweep continues, lines stream in order", async () => {
+    const { fetchImpl } = api([A, B, C]);
+    const calls: string[] = [];
+    const flaky = (async (url: string, init: RequestInit) => {
+      calls.push(String(init.method ?? "GET") + " " + url);
+      if (init.method === "POST" && url.includes("ccc-ddd-2")) throw new Error("socket hang up " + TOKEN);
+      return fetchImpl(url, init);
+    }) as unknown as typeof fetch;
+    const out: string[] = [];
+    const result = await prune({ env: env(CONFIRM), fetchImpl: flaky, now: () => NOW, write: (l: string) => out.push(l) });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.rows.map((r: { action: string }) => r.action.split(":")[0].split(" ")[0])).toEqual([
+      "deleted",
+      "unknown",
+      "deleted",
+    ]);
+    expect(calls.filter((c) => c.startsWith("POST"))).toHaveLength(3);
+    const lines = out.filter((l) => l.startsWith("[prune]"));
+    expect(lines.map((l) => l.split(":")[0])).toEqual(["[prune] aaa-bbb-1", "[prune] ccc-ddd-2", "[prune] eee-fff-3"]);
+    // Streamed lines appear before the final table.
+    expect(out.findIndex((l) => l.startsWith("### "))).toBeGreaterThan(out.indexOf(lines[2]));
+    expect(out.join("\n")).not.toContain(TOKEN);
+  });
+
+  it("F3: a thrown re-read is skipped and the next candidate is still processed", async () => {
+    const { fetchImpl, calls } = api([A, B]);
+    const flaky = (async (url: string, init: RequestInit) => {
+      if (init.method === undefined || init.method === "GET") {
+        if (url.endsWith("/deployments/aaa-bbb-1")) throw new Error("reset");
+      }
+      return fetchImpl(url, init);
+    }) as unknown as typeof fetch;
+    const result = await prune({ env: env(CONFIRM), fetchImpl: flaky, now: () => NOW, write: () => {} });
+    expect(deleted(calls)).toEqual(["ccc-ddd-2"]);
+    expect(result.rows[0].action).toMatch(/^skipped: re-read/);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("F6: a dry run re-reads each candidate and reports only what would be deleted", async () => {
+    const { calls, result } = await run([A, B], { reread: { "aaa-bbb-1": null } });
+    expect(posts(calls)).toEqual([]);
+    expect(calls.filter((c) => /\/deployments\/[^/]+$/.test(c.url))).toHaveLength(2);
+    expect(result.rows.map((r: { action: string }) => r.action)).toEqual(["skipped: already gone", "would delete"]);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it.each([{}, CONFIRM])("F6: exits non-zero when every candidate was skipped on re-read (%j)", async (extra) => {
+    const { calls, result } = await run([A, B], { reread: { "aaa-bbb-1": null, "ccc-ddd-2": null } }, env(extra));
+    expect(posts(calls)).toEqual([]);
+    expect(result.exitCode).not.toBe(0);
+  });
+});
 describe("SCRUM-548 prune workflow", () => {
   const file = path.join(process.cwd(), ".github", "workflows", "prune-convex-previews.yml");
   const text = readFileSync(file, "utf8");
@@ -308,14 +405,14 @@ describe("SCRUM-548 prune workflow", () => {
     on: Record<string, unknown>;
     permissions: Record<string, string>;
     concurrency: Record<string, unknown>;
-    jobs: Record<string, { if?: string; permissions?: unknown; "timeout-minutes"?: number; steps: Step[] }>;
+    jobs: Record<string, { if?: string; environment?: unknown; permissions?: unknown; "timeout-minutes"?: number; steps: Step[] }>;
   };
   const wf = parse(text) as Wf;
   const job = Object.values(wf.jobs)[0];
 
   it("is workflow_dispatch only", () => {
     expect(Object.keys(wf.on)).toEqual(["workflow_dispatch"]);
-    expect(Object.keys((wf.on.workflow_dispatch as { inputs: object }).inputs).sort()).toEqual(["confirm", "min_age_hours"]);
+    expect(Object.keys((wf.on.workflow_dispatch as { inputs: object }).inputs).sort()).toEqual(["confirm", "max_deletions", "min_age_hours"]);
   });
 
   it("has a single job with contents: read as the only permission", () => {
@@ -331,6 +428,11 @@ describe("SCRUM-548 prune workflow", () => {
     expect(job["timeout-minutes"]).toBeLessThanOrEqual(15);
   });
 
+  it("runs in the convex-preview-prune environment on main only", () => {
+    expect(job.environment).toBe("convex-preview-prune");
+    expect(job.if).toBe("github.ref == 'refs/heads/main'");
+  });
+
   it("pins every action by SHA", () => {
     for (const s of job.steps.filter((x) => x.uses)) expect(s.uses).toMatch(/@[0-9a-f]{40}\b/);
   });
@@ -342,8 +444,12 @@ describe("SCRUM-548 prune workflow", () => {
       CONVEX_PREVIEW_PRUNE_TOKEN: "${{ secrets.CONVEX_PREVIEW_PRUNE_TOKEN }}",
       PRUNE_CONFIRM: "${{ inputs.confirm }}",
       PRUNE_MIN_AGE_HOURS: "${{ inputs.min_age_hours }}",
+      PRUNE_MAX_DELETIONS: "${{ inputs.max_deletions }}",
+      PRUNE_EXPECTED_PROJECT_ID: "${{ vars.CONVEX_PROJECT_ID }}",
     });
-    expect(text.match(/\$\{\{\s*inputs\./g)).toHaveLength(2);
+    expect((wf.on.workflow_dispatch as { inputs: Record<string, { default: string }> }).inputs.max_deletions.default).toBe("60");
+    expect((wf.on.workflow_dispatch as { inputs: Record<string, { default: string }> }).inputs.min_age_hours.default).toBe("12");
+    expect(text.match(/\$\{\{\s*inputs\./g)).toHaveLength(3);
     expect(text.match(/\$\{\{\s*secrets\./g)).toHaveLength(1);
   });
 });
