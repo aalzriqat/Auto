@@ -666,92 +666,6 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                       </FormItem>
                     )}
                   />
-                  <FormField
-                    control={form.control}
-                    name="warrantySold"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>{t("Warranty" as any)}</FormLabel>
-                        <FormControl>
-                          <Input type="number" {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  {!!Number(watchAll.warrantySold) && (
-                    <>
-                      <FormField
-                        control={form.control}
-                        name="warrantyCost"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>{t("WarrantyCost" as any)}</FormLabel>
-                            <FormControl>
-                              <Input type="number" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                      <FormField
-                        control={form.control}
-                        name="warrantyTermMonths"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>{t("WarrantyTermMonths" as any)}</FormLabel>
-                            <FormControl>
-                              <Input type="number" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                    </>
-                  )}
-                  <FormField
-                    control={form.control}
-                    name="gapSold"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>{t("GAPInsurance" as any)}</FormLabel>
-                        <FormControl>
-                          <Input type="number" {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  {!!Number(watchAll.gapSold) && (
-                    <>
-                      <FormField
-                        control={form.control}
-                        name="gapCost"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>{t("GAPCost" as any)}</FormLabel>
-                            <FormControl>
-                              <Input type="number" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                      <FormField
-                        control={form.control}
-                        name="gapTermMonths"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>{t("GAPTermMonths" as any)}</FormLabel>
-                            <FormControl>
-                              <Input type="number" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                    </>
-                  )}
                 </div>
                 <div className="mt-4 flex items-center justify-between border-t pt-4 border-primary/20">
                   <span className="font-semibold text-lg">{t("EstMonthlyPayment" as any)}</span>
@@ -759,6 +673,99 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                 </div>
               </div>
             )}
+
+            {/* SCRUM-504: warranty and GAP are billed on any sale, not only a financed one, so their
+                inputs do not live inside the FINANCED block (FINANCED is no longer freely selectable). */}
+            <div className="bg-muted p-4 rounded-lg space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <FormField
+                  control={form.control}
+                  name="warrantySold"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("Warranty" as any)}</FormLabel>
+                      <FormControl>
+                        <Input type="number" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                {!!Number(watchAll.warrantySold) && (
+                  <>
+                    <FormField
+                      control={form.control}
+                      name="warrantyCost"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t("WarrantyCost" as any)}</FormLabel>
+                          <FormControl>
+                            <Input type="number" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name="warrantyTermMonths"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t("WarrantyTermMonths" as any)}</FormLabel>
+                          <FormControl>
+                            <Input type="number" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </>
+                )}
+                <FormField
+                  control={form.control}
+                  name="gapSold"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("GAPInsurance" as any)}</FormLabel>
+                      <FormControl>
+                        <Input type="number" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                {!!Number(watchAll.gapSold) && (
+                  <>
+                    <FormField
+                      control={form.control}
+                      name="gapCost"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t("GAPCost" as any)}</FormLabel>
+                          <FormControl>
+                            <Input type="number" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name="gapTermMonths"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t("GAPTermMonths" as any)}</FormLabel>
+                          <FormControl>
+                            <Input type="number" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </>
+                )}
+              </div>
+            </div>
 
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
