@@ -398,6 +398,25 @@ async function seedActiveDeferral(
       status: "COMPLETED" as const,
     })
   );
+  // SCRUM-537: recognition waits for the sale-completion journal to have POSTED,
+  // so a deferral seeded straight into the table needs that event too.
+  await t.run((ctx) =>
+    ctx.db.insert("accountingEvents", {
+      orgId,
+      eventType: "SALE_COMPLETED",
+      sourceType: "sales",
+      sourceId: saleId.toString(),
+      eventVersion: 1,
+      idempotencyKey: `sale_completed_${saleId}`,
+      occurredAt: Date.now(),
+      accountingDate: Date.now(),
+      currency: "JOD",
+      payload: {},
+      status: "POSTED",
+      createdBy: userId,
+      createdAt: Date.now(),
+    })
+  );
   return await t.run((ctx) =>
     ctx.db.insert("dealerProductDeferrals", {
       orgId,

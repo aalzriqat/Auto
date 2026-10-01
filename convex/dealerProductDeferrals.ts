@@ -76,10 +76,59 @@ export const recognizeDeferredCommissionForMonth = internalMutation({
     const flatMonthlyAmount = Math.ceil(deferral.totalMarginMinor / deferral.termMonths);
     const amountMinor = isFinalContractualMonth ? remaining : Math.min(flatMonthlyAmount, remaining);
 
+    // The ledger identity of this recognition: the Nth recognized month is the
+    // Nth FI_COMMISSION_RECOGNIZED occurrence on this deferral. Taken from the
+    // PRE-patch row so it is stable for the rest of this call.
+    const occurrence = monthsRecognized + 1;
+
+    // ⚠️ SCRUM-537 — a counted skip, never a throw (cross-org cron loop, no
+    // per-row try/catch). The deferred balance this releases is created by the
+    // sale-completion journal; recognizing before it has POSTED would credit
+    // revenue out of a balance that is not yet in the ledger. The next monthly
+    // run catches it up once the sale posts.
+    const saleKey = `sale_completed_${deferral.saleId}`;
+    const salePosted = await ctx.db
+      .query("accountingEvents")
+      .withIndex("by_org_idempotency", (q) => q.eq("orgId", args.orgId).eq("idempotencyKey", saleKey))
+      .filter((q) => q.eq(q.field("status"), "POSTED"))
+      .first();
+    if (!salePosted) return { posted: false, reason: "source_sale_not_posted" };
+
+    // ⚠️ SCRUM-537 — the subledger must never advance without creating a NEW
+    // ledger occurrence. If the ledger already holds this occurrence number, or
+    // anything under this month's key, the two have diverged; advancing would
+    // post nothing and leave recognizedMinor ahead of the GL. Refuse, loudly.
+    const monthKey = `fi_commission_${args.deferralId}_${args.yearMonth}`;
+    const occurrenceTaken = await ctx.db
+      .query("accountingEvents")
+      .withIndex("by_org_event_source_version", (q) =>
+        q
+          .eq("orgId", args.orgId)
+          .eq("eventType", "FI_COMMISSION_RECOGNIZED")
+          .eq("sourceType", "dealerProductDeferrals")
+          .eq("sourceId", args.deferralId.toString())
+          .eq("eventVersion", occurrence)
+      )
+      .first();
+    const monthKeyPosted = await ctx.db
+      .query("accountingEvents")
+      .withIndex("by_org_idempotency", (q) => q.eq("orgId", args.orgId).eq("idempotencyKey", monthKey))
+      .first();
+    const monthKeyQueued = await ctx.db
+      .query("pendingAccountingEvents")
+      .withIndex("by_org_idempotency", (q) => q.eq("orgId", args.orgId).eq("idempotencyKey", monthKey))
+      .first();
+    if (occurrenceTaken || monthKeyPosted || monthKeyQueued) {
+      console.error(
+        `SCRUM-537: ledger_occurrence_conflict deferral=${args.deferralId} yearMonth=${args.yearMonth} occurrence=${occurrence}`
+      );
+      return { posted: false, reason: "ledger_occurrence_conflict" };
+    }
+
     const newRecognizedMinor = deferral.recognizedMinor + amountMinor;
     await ctx.db.patch(args.deferralId, {
       recognizedMinor: newRecognizedMinor,
-      monthsRecognized: monthsRecognized + 1,
+      monthsRecognized: occurrence,
       lastRecognizedYearMonth: args.yearMonth,
       status: newRecognizedMinor >= deferral.totalMarginMinor ? "FULLY_RECOGNIZED" : "ACTIVE",
     });
@@ -88,6 +137,7 @@ export const recognizeDeferredCommissionForMonth = internalMutation({
       orgId: args.orgId,
       deferralId: args.deferralId,
       yearMonth: args.yearMonth,
+      occurrence,
       amountMinor,
       currency: deferral.currency,
       actorId: args.systemActorId,

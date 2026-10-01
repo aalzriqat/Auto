@@ -2786,12 +2786,22 @@ export async function hookDepreciationPosted(
   });
 }
 
+/**
+ * One FI_COMMISSION_RECOGNIZED event per recognized month, all against the same
+ * `sourceId` (the deferral). `occurrence` — the 1-based ordinal of the month
+ * being recognized — is the eventVersion, because postAccountingEvent dedupes
+ * on (eventType, sourceType, sourceId, eventVersion) as well as the key: at a
+ * constant version, months 2..N returned "already posted" and wrote no journal
+ * while the subledger advanced (SCRUM-537). The idempotency key stays per
+ * (deferral, yearMonth).
+ */
 export async function hookFiCommissionRecognized(
   ctx: MutationCtx,
   args: {
     orgId: Id<"organizations">;
     deferralId: Id<"dealerProductDeferrals">;
     yearMonth: string; // "YYYY-MM", used only for the idempotency key
+    occurrence: number; // 1-based ordinal of this recognized month -> eventVersion
     amountMinor: number;
     currency: string;
     actorId: Id<"users">;
@@ -2806,6 +2816,7 @@ export async function hookFiCommissionRecognized(
     eventType: "FI_COMMISSION_RECOGNIZED",
     sourceType: "dealerProductDeferrals",
     sourceId: args.deferralId.toString(),
+    eventVersion: args.occurrence,
     idempotencyKey: `fi_commission_${args.deferralId}_${args.yearMonth}`,
     currency: args.currency,
     occurredAt: args.occurredAt,
@@ -2957,8 +2968,8 @@ export async function hookPrepaidExpenseWrittenOff(
 /**
  * Claws back every month of F&I commission already recognized for a
  * deferral whose sale was cancelled — unlike makeReversalHook's single-event
- * lookup, a deferral can have one FI_COMMISSION_RECOGNIZED event per
- * recognized month, so each is reversed individually. reverseAccountingEvent
+ * lookup, a deferral has one FI_COMMISSION_RECOGNIZED event per recognized
+ * month (eventVersion = the month's ordinal), so each is reversed individually. reverseAccountingEvent
  * is a no-op (returns alreadyReversed) on an event it's already reversed, so
  * this is safe to call more than once for the same deferral. Also drops any
  * month that was enqueued but never posted, so it never posts later.
