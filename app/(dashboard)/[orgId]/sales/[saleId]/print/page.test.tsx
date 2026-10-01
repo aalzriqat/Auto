@@ -268,6 +268,17 @@ describe("Bill of Sale print page", () => {
       expect(note!.textContent).not.toContain("BARTER");
     });
 
+    test("AR footnote states the term as label: value, with no plural-agreement noun", () => {
+      stubs.real = true;
+      stubs.locale = "ar";
+      stubs.sale = sale("FINANCED");
+      stubs.economics = financedEconomics;
+      const { container } = render(<PrintBillOfSalePage />);
+      const note = Array.from(container.querySelectorAll("p")).find((p) => p.className.includes("text-xs"))!;
+      expect(note.textContent).toContain("مدة التمويل (بالأشهر)");
+      expect(note.textContent).not.toContain("أشهر •");
+      expect(note.textContent).not.toContain("48 أشهر");
+    });
     test.each(["en", "ar"] as const)("FINANCED footnote (%s): the rate and the term sit inside dir=ltr", (locale) => {
       stubs.real = true;
       stubs.locale = locale;

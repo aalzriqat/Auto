@@ -390,7 +390,7 @@ function FinancialTotals({ sale, view }: { sale: PrintableSale; view: TotalsView
         {economics.kind === "FINANCED" && (
           <>
             {" • "}
-            <bdi dir="ltr">{economics.termMonths}</bdi> {t("Months")}
+            {t("FinancingTermMonths")}: <bdi dir="ltr">{economics.termMonths}</bdi>
             {" • "}
             {economics.flatAnnualProfitRatePercent === null ? (
               t("RateNotStated")
