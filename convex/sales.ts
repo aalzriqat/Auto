@@ -39,7 +39,7 @@ import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompany
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
-import { assertOperatedDealMode } from "./utils/dealModes";
+import { assertFinancedSaleHasDeal, assertOperatedDealMode } from "./utils/dealModes";
 import { getOrgCurrency, hookCommissionAccrued, hookCommissionAdjusted, hookCommissionPaid, hookSaleCancelled, isPostableNow, reverseCommissionForSale, commissionAccountingDate, commissionAccrualStrandedReason, commissionEntriesOutstandingStatus, hasCommissionAccrual, recognizedCommissionMinor, safeAdjustmentSeq, MAX_COMMISSION_ADJUSTMENTS } from "./accounting/workflowHooks";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 import { depositMethodValidator } from "./utils/depositRecording";
@@ -53,7 +53,7 @@ import {
 import { allocatedDepositForVehicle } from "./utils/depositAllocation";
 import { planDepositSettlementApplication } from "./utils/depositSettlementPlan";
 import { checkPostingAllowed } from "./accountingPeriods";
-import { hasVerifiedFinancingApplication } from "./utils/financingProvenance";
+import { applicationProvesFinancing, hasVerifiedFinancingApplication } from "./utils/financingProvenance";
 import { assertFinancedDepositsSurviveParentReversal } from "./utils/depositApplications";
 import { projectDealVehicleProfile } from "./utils/dealVehicleProfile";
 
@@ -183,6 +183,199 @@ export const get = query({
       salesperson: salesperson
         ? { _id: salesperson._id, name: salesperson.name, email: salesperson.email }
         : null,
+    };
+  },
+});
+
+/** Why the Bill of Sale cannot state its figures. A code, never a number: the document shows "unavailable". */
+export type BillOfSaleUnavailableReason =
+  | "NOT_COMPLETED"
+  | "NO_RECEIVABLE"
+  | "NO_PRICING_SNAPSHOT"
+  | "LINK_MISMATCH"
+  | "CURRENCY_MISMATCH"
+  | "MULTI_VEHICLE"
+  | "NOT_SUPPORTED";
+
+/**
+ * Every figure is in MAJOR units. Each kind carries EXACTLY these keys and no
+ * others: widening one is a decision about what the printed legal document may
+ * state, never a convenience.
+ */
+export type BillOfSaleEconomics =
+  | {
+      kind: "CASH";
+      currency: string;
+      totalBilled: number;
+      tradeInCredit: number;
+      depositsApplied: number;
+      balanceDue: number;
+    }
+  | {
+      kind: "FINANCED";
+      currency: string;
+      vehiclePrice: number;
+      downPayment: number;
+      executionFees: number;
+      capitalisedCommission: number;
+      amountFinanced: number;
+      termMonths: number;
+      flatAnnualProfitRatePercent: number | null;
+    }
+  | { kind: "UNAVAILABLE"; reason: BillOfSaleUnavailableReason };
+
+const billOfSaleUnavailable = (reason: BillOfSaleUnavailableReason): BillOfSaleEconomics => ({
+  kind: "UNAVAILABLE",
+  reason,
+});
+
+/**
+ * SCRUM-258 / SCRUM-504. The ONLY source of the totals printed on a Bill of Sale.
+ *
+ * Invariant: every figure comes from server-authoritative sale/customer
+ * economics — for CASH the ledger receivable and its ledger-backed credits, for
+ * FINANCED the customer's server-priced quote snapshot — and never from a
+ * caller-supplied value (`sales.loanAmount`, `sales.downPayment`, `apr`) and never
+ * from a finance-approval-tier amount (G, gap, allocation, funding composition,
+ * or anything on the finance application beyond identity/linkage). When no
+ * authoritative source exists the answer is UNAVAILABLE, never a number and
+ * never 0.
+ *
+ * A pure query: it writes nothing and repairs nothing. Missing or inconsistent
+ * data fails closed.
+ */
+export const getBillOfSaleEconomics = query({
+  args: {
+    orgId: v.id("organizations"),
+    saleId: v.id("sales"),
+  },
+  handler: async (ctx, args): Promise<BillOfSaleEconomics> => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+
+    const sale = await ctx.db.get(args.saleId);
+    if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
+      throwAppError(AppErrorCode.SALE_NOT_FOUND, "Sale not found in this organization.");
+    }
+
+    // A pending or cancelled sale has no official figures.
+    if (sale.status !== "COMPLETED") return billOfSaleUnavailable("NOT_COMPLETED");
+
+    const isFinanced = sale.financingType === "FINANCED";
+    const isCash =
+      sale.financingType === "CASH" ||
+      (sale.financingType === undefined && sale.applicationId === undefined);
+
+    if (isCash) {
+      if (!sale.canonicalReceivableDocumentId) return billOfSaleUnavailable("NO_RECEIVABLE");
+      const receivable = await ctx.db.get(sale.canonicalReceivableDocumentId);
+      if (
+        !receivable ||
+        receivable.orgId !== sale.orgId ||
+        receivable.sourceType !== "sales" ||
+        receivable.sourceId !== sale._id ||
+        !Number.isSafeInteger(receivable.originalAmountMinor) ||
+        receivable.originalAmountMinor < 0
+      ) {
+        return billOfSaleUnavailable("NO_RECEIVABLE");
+      }
+      const currency = receivable.currency;
+
+      // Mirrors saleCompletion.ts (the trade-in payment allocated to the receivable).
+      const tradeInCreditMinor =
+        sale.tradeInVehicleId && sale.tradeInValue !== undefined && sale.tradeInValue > 0
+          ? toMinorUnits(sale.tradeInValue, currency)
+          : 0;
+
+      // Only the deposits that paid down THIS customer receivable. A deposit
+      // applied to the supplier settlement or folded into a financed sale's
+      // journal never reduced what the customer owes here.
+      const applications = await ctx.db
+        .query("depositApplications")
+        .withIndex("by_sale", (q) => q.eq("saleId", sale._id))
+        .collect();
+      let depositsAppliedMinor = 0;
+      for (const application of applications) {
+        if (application.orgId !== sale.orgId) continue;
+        if (application.treatment !== "CUSTOMER_RECEIVABLE" || application.status !== "APPLIED") continue;
+        if (application.currency !== currency) return billOfSaleUnavailable("CURRENCY_MISMATCH");
+        depositsAppliedMinor += application.amountMinor;
+      }
+
+      const balanceDueMinor = receivable.originalAmountMinor - tradeInCreditMinor - depositsAppliedMinor;
+      if (!Number.isSafeInteger(balanceDueMinor) || balanceDueMinor < 0) {
+        console.error(`getBillOfSaleEconomics: negative balance for sale ${sale._id}`);
+        return billOfSaleUnavailable("NO_RECEIVABLE");
+      }
+
+      return {
+        kind: "CASH",
+        currency,
+        totalBilled: fromMinorUnits(receivable.originalAmountMinor, currency),
+        tradeInCredit: fromMinorUnits(tradeInCreditMinor, currency),
+        depositsApplied: fromMinorUnits(depositsAppliedMinor, currency),
+        balanceDue: fromMinorUnits(balanceDueMinor, currency),
+      };
+    }
+
+    if (!isFinanced) return billOfSaleUnavailable("NOT_SUPPORTED");
+
+    // FINANCED. The application is read for IDENTITY and LINKAGE only.
+    if (!sale.applicationId || !sale.quoteId) return billOfSaleUnavailable("LINK_MISMATCH");
+    const application = await ctx.db.get(sale.applicationId);
+    if (!applicationProvesFinancing(application, sale) || application === null) {
+      return billOfSaleUnavailable("LINK_MISMATCH");
+    }
+    if (application.quoteId !== sale.quoteId) return billOfSaleUnavailable("LINK_MISMATCH");
+
+    const quote = await ctx.db.get(application.quoteId);
+    if (!quote || quote.orgId !== sale.orgId) return billOfSaleUnavailable("LINK_MISMATCH");
+
+    if ((quote.vehicleItems?.length ?? 0) > 1 || quote.vehicleId !== sale.vehicleId) {
+      return billOfSaleUnavailable("MULTI_VEHICLE");
+    }
+
+    const snapshot = quote.customerQuotePricingSnapshot;
+    if (!snapshot) return billOfSaleUnavailable("NO_PRICING_SNAPSHOT");
+
+    const orgCurrency = await getOrgCurrency(ctx, sale.orgId);
+    if (snapshot.currency !== orgCurrency) return billOfSaleUnavailable("CURRENCY_MISMATCH");
+
+    const figures = [
+      snapshot.vehiclePrice,
+      snapshot.downPayment,
+      snapshot.executionFees,
+      snapshot.commission,
+      snapshot.totalFinancedAmount,
+      snapshot.termMonths,
+    ];
+    if (!figures.every((n) => Number.isFinite(n))) return billOfSaleUnavailable("NO_PRICING_SNAPSHOT");
+
+    // Same rule as `calculateUnifiedMurabaha`: when the commission is carried in
+    // the debt it is added flat to the contract value, NOT to the financed base.
+    const capitalisedCommission = snapshot.includesCommissionInDebt ? 0 : snapshot.commission;
+    const footed =
+      snapshot.vehiclePrice - snapshot.downPayment + snapshot.executionFees + capitalisedCommission;
+    if (Math.abs(footed - snapshot.totalFinancedAmount) > 0.005) {
+      console.error(
+        `getBillOfSaleEconomics: itemisation does not foot for sale ${sale._id} (${footed} vs ${snapshot.totalFinancedAmount})`
+      );
+    }
+
+    // A manual finance company quote with no stated rate priced at 0 by default:
+    // that 0 is an absence, not a rate, and must never print as "0%".
+    const rateNotStated =
+      quote.mode === "MANUAL_FINANCE_COMPANY" && quote.manualProfitRate === undefined;
+
+    return {
+      kind: "FINANCED",
+      currency: snapshot.currency,
+      vehiclePrice: snapshot.vehiclePrice,
+      downPayment: snapshot.downPayment,
+      executionFees: snapshot.executionFees,
+      capitalisedCommission,
+      amountFinanced: snapshot.totalFinancedAmount,
+      termMonths: snapshot.termMonths,
+      flatAnnualProfitRatePercent: rateNotStated ? null : snapshot.profitRate,
     };
   },
 });
@@ -344,6 +537,8 @@ export const create = mutation({
     tradeInVehicleId: v.optional(v.id("vehicles")),
     tradeInValue: v.optional(v.number()),
     financingType: v.optional(v.union(v.literal("CASH"), v.literal("FINANCED"), v.literal("LEASE"))),
+    // SCRUM-258 phase 1: still accepted and stored exactly as before, but DISPLAY-DEAD: nothing prints it
+    // (the Bill of Sale reads sales.getBillOfSaleEconomics). Phase 2 (follow-up) will refuse it.
     loanAmount: v.optional(v.number()),
     apr: v.optional(v.number()),
     termMonths: v.optional(v.number()),
@@ -533,6 +728,8 @@ export const createDraft = mutation({
     tradeInVehicleId: v.optional(v.id("vehicles")),
     tradeInValue: v.optional(v.number()),
     financingType: v.optional(v.union(v.literal("CASH"), v.literal("FINANCED"), v.literal("LEASE"))),
+    // SCRUM-258 phase 1: still accepted and stored exactly as before, but DISPLAY-DEAD: nothing prints it
+    // (the Bill of Sale reads sales.getBillOfSaleEconomics). Phase 2 (follow-up) will refuse it.
     loanAmount: v.optional(v.number()),
     apr: v.optional(v.number()),
     termMonths: v.optional(v.number()),
@@ -642,6 +839,8 @@ export const update = mutation({
     tradeInVehicleId: v.optional(v.id("vehicles")),
     tradeInValue: v.optional(v.number()),
     financingType: v.optional(v.union(v.literal("CASH"), v.literal("FINANCED"), v.literal("LEASE"))),
+    // SCRUM-258 phase 1: still accepted and stored exactly as before, but DISPLAY-DEAD: nothing prints it
+    // (the Bill of Sale reads sales.getBillOfSaleEconomics). Phase 2 (follow-up) will refuse it.
     loanAmount: v.optional(v.number()),
     apr: v.optional(v.number()),
     termMonths: v.optional(v.number()),
@@ -672,6 +871,9 @@ export const update = mutation({
     // web build) resends the stored LEASE: a legacy row is never a dead end.
     if (args.financingType !== undefined && args.financingType !== sale.financingType) {
       assertOperatedDealMode(args.financingType);
+      // SCRUM-504: a change INTO FINANCED needs the deal behind it. A legacy FINANCED draft may
+      // still be changed to CASH, cancelled or deleted, and a resend of its stored value is not a change.
+      assertFinancedSaleHasDeal(args.financingType, sale.applicationId);
     }
     if (args.status === "COMPLETED" && sale.status !== "COMPLETED") {
       throwAppError(
