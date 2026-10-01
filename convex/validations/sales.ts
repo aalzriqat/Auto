@@ -76,9 +76,12 @@ export const CreateSaleSchema = BaseSaleSchema.extend({
   .refine(warrantyTermRequiredWhenSold, warrantyTermRefinement)
   .refine(gapTermRequiredWhenSold, gapTermRefinement);
 
-export const CreateDraftSaleSchema = BaseSaleSchema.extend({
-  status: z.literal("PENDING").optional(),
-})
+// A draft never names a quote (SCRUM-425). The mutation's Convex validator is
+// what refuses the argument; this keeps the Zod shape from implying otherwise.
+export const CreateDraftSaleSchema = BaseSaleSchema.omit({ quoteId: true })
+  .extend({
+    status: z.literal("PENDING").optional(),
+  })
   .refine(downPaymentDoesNotExceedSalePrice, downPaymentRefinement)
   .refine(warrantyTermRequiredWhenSold, warrantyTermRefinement)
   .refine(gapTermRequiredWhenSold, gapTermRefinement);

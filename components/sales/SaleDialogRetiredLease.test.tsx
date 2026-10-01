@@ -122,14 +122,27 @@ describe("a retired LEASE sale in the sale form", () => {
 });
 
 describe("financing type changes on an operated sale", () => {
-  test("positive control: changing CASH to FINANCED is sent as financingType FINANCED", async () => {
-    open(sale("CASH"));
-    const native = Array.from(document.querySelectorAll("select")).find((el) =>
-      Array.from(el.options).some((o) => o.value === "FINANCED")
-    );
+  const nativeWith = (value: string) =>
+    Array.from(document.querySelectorAll("select")).find((el) => Array.from(el.options).some((o) => o.value === value));
+
+  // SCRUM-504: FINANCED is no longer a plain form choice (the server refuses it without the Deal's
+  // application), so the positive control moves a Deal-created FINANCED sale to CASH instead.
+  test("positive control: changing a Deal-created FINANCED sale to CASH is sent as financingType CASH", async () => {
+    open({ ...sale("FINANCED"), applicationId: "app1" as Id<"financeApplications"> } as Doc<"sales">);
+    const native = nativeWith("CASH");
     expect(native).toBeDefined();
-    fireEvent.change(native!, { target: { value: "FINANCED" } });
+    fireEvent.change(native!, { target: { value: "CASH" } });
     const args = await saveAndGetUpdateArgs();
-    expect(args.financingType).toBe("FINANCED");
+    expect(args.financingType).toBe("CASH");
+  });
+
+  test("SCRUM-504: FINANCED is not offered on a sale with no finance application", () => {
+    open(sale("CASH"));
+    expect(nativeWith("FINANCED")).toBeUndefined();
+  });
+
+  test("SCRUM-504: a Deal-created FINANCED sale keeps showing FINANCED", () => {
+    open({ ...sale("FINANCED"), applicationId: "app1" as Id<"financeApplications"> } as Doc<"sales">);
+    expect(nativeWith("FINANCED")?.value).toBe("FINANCED");
   });
 });
