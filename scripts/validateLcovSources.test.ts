@@ -64,7 +64,6 @@ describe("validateLcovSources", () => {
     "packages/shared/srcx/x.ts",
     "packages/shared/package.json",
     "packages/other/src/x.ts",
-    "packages/shared/src/../../convex/x.ts",
     ".github/workflows/w.yml",
     ".github/scripts/v.cjs",
     ".github/scriptsx/v.cjs",
@@ -77,6 +76,12 @@ describe("validateLcovSources", () => {
     "convex/a.ts ",
   ])("refuses out-of-scope or malformed source %s", (sf) => {
     expect(() => validate(rec(sf))).toThrow(/refuses/);
+  });
+
+  test("refuses a packages/shared/src traversal that resolves to an existing in-scope file for the dot-segment reason", () => {
+    // Resolves to convex/x.ts, which the fixture creates, so only the segment check can refuse it.
+    expect(fs.existsSync(path.join(root, "packages/shared/src/../../../convex/x.ts"))).toBe(true);
+    expect(() => validate(rec("packages/shared/src/../../../convex/x.ts"))).toThrow(/empty, '\.' or '\.\.' segment/);
   });
 
   test("refuses an artifact with a bare CR smuggling a second SF", () => {
