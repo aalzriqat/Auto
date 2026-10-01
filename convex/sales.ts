@@ -387,8 +387,8 @@ export const getBillOfSaleEconomics = query({
 
     // SCRUM-258 S258-01. The printed figures come from the snapshot FROZEN on the
     // finance application (`financeApplications` is a financial table: the
-    // generic admin edit is refused). `quotes` is editable after the sale, so the
-    // quote copy is only a cross-check: any disagreement is UNAVAILABLE.
+    // generic admin edit is refused). `quotes` is a financial table too (SCRUM-528), so the quote
+    // copy is only a cross-check, a backstop against direct-DB drift: any disagreement is UNAVAILABLE.
     const snapshot = application.customerQuotePricingSnapshot;
     if (!snapshot) return billOfSaleUnavailable("NO_PRICING_SNAPSHOT");
     if (!pricingSnapshotsEqual(snapshot, quote.customerQuotePricingSnapshot)) {

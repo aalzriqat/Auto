@@ -16,6 +16,9 @@ const FINANCIAL_TABLES = new Set<string>([
   "partnerEquity",
   "claims",
   "financeApplications",
+  // SCRUM-528: a quote's economics feed `finalizeDeal` (price, down payment, loan, term), so no
+  // generic admin path may edit, restore or delete one; use the quote's own domain mutations.
+  "quotes",
   "financeCompanies",
   "vehicleValuations",
   "accountingEvents",

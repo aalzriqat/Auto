@@ -1647,6 +1647,10 @@ const serverErrorMessages = defineBilingualMessages({
     "A financed sale can only be created through the deal, with its finance application. Start the deal from the quote instead of recording a financed sale directly.",
     "لا يمكن تسجيل عملية بيع بالتمويل مباشرة؛ فعملية البيع الممولة تُنشأ فقط من خلال الصفقة مع طلب التمويل الخاص بها. ابدأ الصفقة من عرض السعر بدلاً من تسجيل بيع ممول بشكل مباشر.",
   ],
+  ServerError_QUOTE_ECONOMICS_DRIFTED: [
+    "The quotation's pricing no longer matches the pricing frozen on this finance application, so the deal cannot be finalized. Cancel the finance application and start again from a new quotation.",
+    "لم يعد تسعير عرض السعر مطابقاً للتسعير المثبت في طلب التمويل، لذلك لا يمكن إتمام الصفقة. ألغِ طلب التمويل وابدأ من عرض سعر جديد.",
+  ],
   ServerError_COMMISSION_BASE_UNUSABLE_RECALC: [
     "This sale's recorded commissionable margin is in a different currency from the organization's or holds an unusable amount, so a commission cannot be worked out. Have the deal's figures corrected before recalculating; the existing commission has been left untouched.",
     "هامش المركبة الخاضع للعمولة المسجل لعملية البيع هذه بعملة مختلفة عن عملة المؤسسة أو يحتوي على مبلغ غير صالح، لذا لا يمكن احتساب العمولة. يرجى تصحيح أرقام الصفقة قبل إعادة الاحتساب؛ لم يتم تغيير العمولة الحالية.",
