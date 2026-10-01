@@ -247,6 +247,7 @@ export async function reverseAccountingEvent(
       salespersonId: l.salespersonId,
       cashierId: l.cashierId,
       financeCompanyId: l.financeCompanyId,
+      payerNameSnapshot: l.payerNameSnapshot,
       description: l.description ? `[REVERSAL] ${l.description}` : "[REVERSAL]",
     });
     await incrementAccountSnapshot(ctx, {

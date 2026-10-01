@@ -40,7 +40,8 @@ import {
 import { SearchableSelect } from "@/components/ui/searchable-select";
 
 import { saleSchema, SaleFormValues, SaleDialogProps } from "./sale.schema";
-import { getErrorMessage } from "@/lib/errors";
+import Link from "next/link";
+import { getLocalizedErrorMessage } from "@/lib/errors";
 import { ConsignedSettlementSection } from "./ConsignedSettlementSection";
 import { ProfitApprovalNotice, useProfitApproval } from "./ProfitApprovalNotice";
 
@@ -91,7 +92,6 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
       tradeInVehicleId: "",
       tradeInValue: 0,
       financingType: "CASH",
-      loanAmount: 0,
       apr: 0,
       termMonths: 0,
       warrantySold: 0,
@@ -132,6 +132,9 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     return payment;
   })();
 
+  // The stored value (never mapped to CASH), for the reset below and for the changed-check on save.
+  const initialFinancingType = sale?.financingType || "CASH";
+
   useEffect(() => {
     if (sale && open) {
       const date = new Date(sale.saleDate);
@@ -149,8 +152,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
         downPayment: sale.downPayment || 0,
         tradeInVehicleId: sale.tradeInVehicleId || "none",
         tradeInValue: sale.tradeInValue || 0,
-        financingType: sale.financingType || "CASH",
-        loanAmount: sale.loanAmount || 0,
+        financingType: initialFinancingType,
         apr: sale.apr || 0,
         termMonths: sale.termMonths || 0,
         warrantySold: sale.warrantySold || 0,
@@ -175,7 +177,6 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
         tradeInVehicleId: "none",
         tradeInValue: 0,
         financingType: "CASH",
-        loanAmount: 0,
         apr: 0,
         termMonths: 0,
         warrantySold: 0,
@@ -187,22 +188,10 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
       supplierSettlementRoute: "THROUGH_DEALERSHIP",
       });
     }
-  }, [sale, open, form]);
+  }, [sale, open, form, initialFinancingType]);
 
 
-  const salePrice = form.watch("salePrice");
-  const taxAmount = form.watch("taxAmount");
-  const dealerFees = form.watch("dealerFees");
-  const downPayment = form.watch("downPayment");
-  const tradeInValue = form.watch("tradeInValue");
-  const warrantySold = form.watch("warrantySold");
-  const gapSold = form.watch("gapSold");
-  const financingType = form.watch("financingType");
-
-  useEffect(() => {
-    const total = (Number(salePrice) || 0) + (Number(taxAmount) || 0) + (Number(dealerFees) || 0) + (Number(warrantySold) || 0) + (Number(gapSold) || 0) - (Number(downPayment) || 0) - (Number(tradeInValue) || 0);
-    form.setValue("loanAmount", total > 0 ? total : 0);
-  }, [salePrice, taxAmount, dealerFees, downPayment, tradeInValue, warrantySold, gapSold, form]);
+  const taxAmount = watchAll.taxAmount;
 
   // An agency sale has no agreed tax treatment, so the ledger refuses to post
   // one. Asked here rather than discovered on save: see `consignedTaxRefusal`
@@ -271,8 +260,11 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
           downPayment: values.downPayment,
           tradeInVehicleId: values.tradeInVehicleId && values.tradeInVehicleId !== "none" ? values.tradeInVehicleId as Id<"vehicles"> : undefined,
           tradeInValue: values.tradeInValue,
-          financingType: values.financingType,
-          loanAmount: values.loanAmount,
+          // SCRUM-495: sent only when the user CHANGED it, so a legacy LEASE row is neither
+          // re-stated nor rewritten to CASH. (The server independently refuses only a
+          // change INTO a retired type.)
+          ...(values.financingType !== initialFinancingType ? { financingType: values.financingType } : {}),
+          // loanAmount is no longer sent: display-dead, see the note at `sales.create`'s args (convex/sales.ts).
           apr: values.apr,
           termMonths: values.termMonths,
           warrantySold: values.warrantySold,
@@ -317,7 +309,6 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
           tradeInVehicleId: values.tradeInVehicleId && values.tradeInVehicleId !== "none" ? values.tradeInVehicleId as Id<"vehicles"> : undefined,
           tradeInValue: values.tradeInValue,
           financingType: values.financingType,
-          loanAmount: values.loanAmount,
           apr: values.apr,
           termMonths: values.termMonths,
           warrantySold: values.warrantySold,
@@ -342,7 +333,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
       }
       onOpenChange(false);
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setIsSubmitting(false);
     }
@@ -470,9 +461,25 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                           <SelectContent>
                             <SelectItem value="PENDING">{t("PendingStatus" as any)}</SelectItem>
                             <SelectItem value="COMPLETED">{t("CompletedStatus" as any)}</SelectItem>
-                            {sale && <SelectItem value="CANCELLED">{t("CancelledStatus" as any)}</SelectItem>}
+                            {/* SCRUM-447 D4: a financed deal is cancelled from the deal
+                                screen, which resolves its cheque; the server refuses
+                                the cancel here too. */}
+                            {sale && (!sale.applicationId || sale.status === "CANCELLED") && (
+                              <SelectItem value="CANCELLED">{t("CancelledStatus" as any)}</SelectItem>
+                            )}
                           </SelectContent>
                         </Select>
+                        {sale?.applicationId && sale.status !== "CANCELLED" && (
+                          <p className="text-xs text-muted-foreground" data-testid="sale-cancel-from-deal">
+                            {t("FcSaleCancelFromDeal" as any)}{" "}
+                            <Link
+                              className="inline-flex min-h-11 items-center font-medium underline underline-offset-2 sm:min-h-0"
+                              href={`/${activeOrgId}/sales/${sale._id}/deal`}
+                            >
+                              {t("FcOpenDeal" as any)}
+                            </Link>
+                          </p>
+                        )}
                         <FormMessage />
                       </FormItem>
                     )}
@@ -607,23 +614,19 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                           </FormControl>
                           <SelectContent>
                             <SelectItem value="CASH">{t("Cash" as any)}</SelectItem>
-                            <SelectItem value="FINANCED">{t("Financed" as any)}</SelectItem>
-                            <SelectItem value="LEASE">{t("Lease" as any)}</SelectItem>
+                            {/* SCRUM-504: a financed sale exists only through the deal (its finance application),
+                                so FINANCED is not offered for a sale that has none. A stored FINANCED value
+                                still shows what it is, read-only. */}
+                            {(field.value === "FINANCED" || !!sale?.applicationId) && (
+                              <SelectItem value="FINANCED" disabled={!sale?.applicationId}>{t("Financed" as any)}</SelectItem>
+                            )}
+                            {/* SCRUM-495: LEASE is no longer offered. A stored LEASE sale still
+                                shows what it is, as a disabled, non-selectable item. */}
+                            {field.value === "LEASE" && (
+                              <SelectItem value="LEASE" disabled>{t("LeaseRetired" as any)}</SelectItem>
+                            )}
                           </SelectContent>
                         </Select>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-
-                  <FormField
-                    control={form.control}
-                    name="loanAmount"
-                    render={({ field }) => (
-                      <FormItem className="md:col-span-2">
-                        <FormLabel>{t("TotalLoanAmount" as any)}</FormLabel>
-                        <FormControl><Input type="number" step="0.01" disabled {...field} className="font-bold bg-muted" /></FormControl>
-                        <p className="text-xs text-muted-foreground">{t("CalculatedAutomatically" as any)}</p>
                         <FormMessage />
                       </FormItem>
                     )}
@@ -663,92 +666,6 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                       </FormItem>
                     )}
                   />
-                  <FormField
-                    control={form.control}
-                    name="warrantySold"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>{t("Warranty" as any)}</FormLabel>
-                        <FormControl>
-                          <Input type="number" {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  {!!Number(watchAll.warrantySold) && (
-                    <>
-                      <FormField
-                        control={form.control}
-                        name="warrantyCost"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>{t("WarrantyCost" as any)}</FormLabel>
-                            <FormControl>
-                              <Input type="number" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                      <FormField
-                        control={form.control}
-                        name="warrantyTermMonths"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>{t("WarrantyTermMonths" as any)}</FormLabel>
-                            <FormControl>
-                              <Input type="number" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                    </>
-                  )}
-                  <FormField
-                    control={form.control}
-                    name="gapSold"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>{t("GAPInsurance" as any)}</FormLabel>
-                        <FormControl>
-                          <Input type="number" {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  {!!Number(watchAll.gapSold) && (
-                    <>
-                      <FormField
-                        control={form.control}
-                        name="gapCost"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>{t("GAPCost" as any)}</FormLabel>
-                            <FormControl>
-                              <Input type="number" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                      <FormField
-                        control={form.control}
-                        name="gapTermMonths"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>{t("GAPTermMonths" as any)}</FormLabel>
-                            <FormControl>
-                              <Input type="number" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                    </>
-                  )}
                 </div>
                 <div className="mt-4 flex items-center justify-between border-t pt-4 border-primary/20">
                   <span className="font-semibold text-lg">{t("EstMonthlyPayment" as any)}</span>
@@ -756,6 +673,99 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                 </div>
               </div>
             )}
+
+            {/* SCRUM-504: warranty and GAP are billed on any sale, not only a financed one, so their
+                inputs do not live inside the FINANCED block (FINANCED is no longer freely selectable). */}
+            <div className="bg-muted p-4 rounded-lg space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <FormField
+                  control={form.control}
+                  name="warrantySold"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("Warranty" as any)}</FormLabel>
+                      <FormControl>
+                        <Input type="number" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                {!!Number(watchAll.warrantySold) && (
+                  <>
+                    <FormField
+                      control={form.control}
+                      name="warrantyCost"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t("WarrantyCost" as any)}</FormLabel>
+                          <FormControl>
+                            <Input type="number" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name="warrantyTermMonths"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t("WarrantyTermMonths" as any)}</FormLabel>
+                          <FormControl>
+                            <Input type="number" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </>
+                )}
+                <FormField
+                  control={form.control}
+                  name="gapSold"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("GAPInsurance" as any)}</FormLabel>
+                      <FormControl>
+                        <Input type="number" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                {!!Number(watchAll.gapSold) && (
+                  <>
+                    <FormField
+                      control={form.control}
+                      name="gapCost"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t("GAPCost" as any)}</FormLabel>
+                          <FormControl>
+                            <Input type="number" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name="gapTermMonths"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t("GAPTermMonths" as any)}</FormLabel>
+                          <FormControl>
+                            <Input type="number" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </>
+                )}
+              </div>
+            </div>
 
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>

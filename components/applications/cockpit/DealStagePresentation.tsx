@@ -31,6 +31,7 @@ export const STAGE_STATE_KEY: Record<DealStageState, string> = {
   BLOCKED: "StageStateBlocked",
   PENDING: "StageStatePending",
   STOPPED: "StageStateStopped",
+  NOT_APPLICABLE: "StageStateNotApplicable",
 };
 
 /**
@@ -48,6 +49,10 @@ export const STAGE_NODE_CLASS: Record<DealStageState, string> = {
   COMPLETE: "border-border bg-card text-muted-foreground",
   PENDING: "border-border bg-card text-muted-foreground",
   STOPPED: "border-dashed border-border bg-card text-muted-foreground",
+  // Proven not to happen on this deal: quieter than PENDING (no fill, dotted
+  // ring, dimmer foreground) and never the success or the warning colour --
+  // nobody is claiming money arrived, and nobody is waiting on anything.
+  NOT_APPLICABLE: "border-dotted border-border bg-transparent text-muted-foreground/70",
 };
 
 const LIVE_STAGE_STATE: Record<DealStageState, boolean> = {
@@ -56,7 +61,19 @@ const LIVE_STAGE_STATE: Record<DealStageState, boolean> = {
   COMPLETE: false,
   PENDING: false,
   STOPPED: false,
+  NOT_APPLICABLE: false,
 };
+
+/**
+ * Whether the stage is over for the purpose of "is this deal finished".
+ * NOT_APPLICABLE counts: a stage the server PROVED will never happen is not
+ * outstanding work, so it must not hold a finished deal on the full rail. It is
+ * still not COMPLETE, and nothing that reads recorded evidence may treat it as
+ * such.
+ */
+export function isFinishedStageState(state: DealStageState): boolean {
+  return state === "COMPLETE" || state === "NOT_APPLICABLE";
+}
 
 /** Whether the state is the one the deal is ON — the node the eye must land on. */
 export function isLiveStageState(state: DealStageState): boolean {
@@ -66,6 +83,8 @@ export function isLiveStageState(state: DealStageState): boolean {
 const STAGE_NODE_GLYPH: Record<DealStageState, React.ReactNode | null> = {
   COMPLETE: <Check className="h-3.5 w-3.5" aria-hidden />,
   STOPPED: <Minus className="h-3.5 w-3.5" aria-hidden />,
+  // A dash reads as "skipped"; a crossed circle would read as "refused".
+  NOT_APPLICABLE: <Minus className="h-3.5 w-3.5" aria-hidden />,
   CURRENT: null,
   BLOCKED: null,
   PENDING: null,
@@ -90,4 +109,5 @@ export const STAGE_ICON: Record<DealStageState, React.ReactNode> = {
   BLOCKED: <AlertTriangle className="h-4 w-4 text-amber-600" />,
   CURRENT: <CircleDot className="h-4 w-4 text-primary" />,
   PENDING: <Minus className="h-4 w-4 text-muted-foreground/60" />,
+  NOT_APPLICABLE: <Minus className="h-4 w-4 text-muted-foreground/60" />,
 };

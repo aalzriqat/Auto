@@ -859,24 +859,32 @@ describe("DA-03: every terminal door refuses while a request is PENDING", () => 
     );
   });
 
-  test("sales.completeDraft (a draft is allowed; completing it is not)", async () => {
+  test("sales.completeDraft: a draft cannot carry the quote, so it cannot orphan a request", async () => {
     const s = await setup();
     const { quoteId, requestId } = await withPending(s);
-    const saleId = await s.manager.as.mutation(api.sales.createDraft, {
+    const draftArgs = {
       orgId: s.orgId,
       vehicleId: s.vehicleId,
       customerId: s.customerId,
       salespersonId: s.manager.userId,
       salePrice: 22000,
       saleDate: Date.now(),
-      quoteId,
-      idempotencyKey: "draft-1",
-    });
-    await expectBlockedThenFreed(s, requestId, () =>
-      s.manager.as.mutation(api.sales.completeDraft, { orgId: s.orgId, saleId, idempotencyKey: "draft-complete-1" })
-    );
-  });
+    };
+    // SCRUM-425: the door is closed structurally — a draft never names a quote.
+    await expect(
+      s.manager.as.mutation(api.sales.createDraft, { ...draftArgs, quoteId, idempotencyKey: "draft-with-quote" } as never)
+    ).rejects.toThrow(/quoteId/);
 
+    const saleId = await s.manager.as.mutation(api.sales.createDraft, { ...draftArgs, idempotencyKey: "draft-1" });
+    // Control: completing the quote-less draft never reaches the pending-request guard.
+    try {
+      await s.manager.as.mutation(api.sales.completeDraft, { orgId: s.orgId, saleId, idempotencyKey: "draft-complete-1" });
+    } catch (error) {
+      expect(String(error)).not.toMatch(STILL_WAITING);
+    }
+    // The request was never touched.
+    expect((await s.t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("PENDING");
+  });
   test("applications.finalizeDeal", async () => {
     const s = await setup();
     const { quoteId, requestId } = await withPending(s);

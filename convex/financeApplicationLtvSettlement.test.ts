@@ -457,8 +457,14 @@ describe("SCRUM-117 settlement consequence — one fixture, two arms", () => {
       line.debitMinor,
       line.creditMinor,
     ]);
+    // SCRUM-435 (v2): the dealership's 4,000 contribution is no longer settled by
+    // the company deducting it. The sale carries it as contra-revenue (4180)
+    // against what the dealership owes the company (2220), and the company still
+    // sends the full 20,000.
     expect(posted).toEqual([
       ["1210", VEHICLE_PRICE * SCALE, 0],
+      ["4180", 4_000 * SCALE, 0],
+      ["2220", 0, 4_000 * SCALE],
       ["4100", 0, VEHICLE_PRICE * SCALE],
       ["5100", PURCHASE_COST * SCALE, 0],
       ["1400", 0, PURCHASE_COST * SCALE],
@@ -609,12 +615,21 @@ describe("SCRUM-117 settlement consequence — one fixture, two arms", () => {
       expect(approvalRefusal).toBeNull();
       expect(afterApproval?.appliedLtvPercent).toBe(SNAPSHOT_LTV);
       expect(afterApproval?.dealerContributionMinor).toBe(4_000_000);
-      expect(walk.stoppedAt).toBe("finalizeDeal");
-      expect(walk.message ?? "").toMatch(/settlement-deducted cost/i);
+      // SCRUM-435 (Option A): the company never deducts anything, so the
+      // NETTED setting no longer makes this deal unfinalizable. It finalizes and
+      // posts the FULL 20,000 receivable; the 4,000 contribution is carried as
+      // contra-revenue against what the dealership owes the company. The
+      // poisoned arm below stays refused: the authority guard is unchanged.
+      expect(walk.stoppedAt).toBeNull();
+      const sale = entries.filter((entry) => entry.sourceType === "sales");
+      expect(sale).toHaveLength(1);
+      const receivable = sale[0].lines.find((line) => line.account.startsWith("1210"));
+      expect(receivable?.debitMinor).toBe(VEHICLE_PRICE * SCALE);
+      const contribution = sale[0].lines.find((line) => line.account.startsWith("4180"));
+      expect(contribution?.debitMinor).toBe(4_000 * SCALE);
     }
 
-    // Neither arm may post. The poisoned one because it was refused; the
-    // legitimate one because the deal genuinely is not ready to finalize.
-    expect(entries).toEqual([]);
+    // The poisoned arm never posts, because it was refused.
+    if (poisoned) expect(entries).toEqual([]);
   }, 180_000);
 });
