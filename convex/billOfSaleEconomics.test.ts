@@ -3,7 +3,8 @@
  * Bill of Sale, and the refusal that a financed sale exists only through the Deal.
  *
  * Invariant under test: every printed figure is server-authoritative (CASH: the ledger receivable
- * and its ledger-backed credits; FINANCED: the customer's server-priced quote snapshot), never a
+ * and its ledger-backed credits; FINANCED: the customer pricing snapshot frozen on the finance application,
+ * cross-checked against the quote), never a
  * caller-supplied sale field and never a finance-approval-tier amount. With no authoritative source
  * the answer is UNAVAILABLE, never a number and never 0.
  *
@@ -13,7 +14,7 @@ import { convexTestWithComponents, registerHandover, recordReconciledZeroCost } 
 import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
 import { expectQuoteEconomicsDrifted } from "../test-utils/quoteEconomicsDrifted";
 import { expectAppError } from "../test-utils/expectAppError";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -425,6 +426,22 @@ describe("getBillOfSaleEconomics - FINANCED (through the Deal)", () => {
     expect(await query(s, saleId)).toMatchObject({ kind: "FINANCED", flatAnnualProfitRatePercent: null });
   });
 
+  test("SCRUM-529: a MANUAL_FINANCE_COMPANY quote saved with no rate, through saveQuote -> createFromQuote -> finalizeDeal, prints rate null, never 0", async () => {
+    const s = await seedDealership("finnoratedoor");
+    // No manualProfitRate at all (not patched away afterwards): the real door.
+    const { saleId, applicationId, quoteId } = await financedSaleThroughDeal(s, { manualProfitRate: undefined });
+    const { quote, application } = await s.t.run(async (ctx) => ({
+      quote: await ctx.db.get(quoteId),
+      application: await ctx.db.get(applicationId),
+    }));
+    // Control: the quote really carried no stated rate, so the null below is not a vacuous pass.
+    expect(quote!.manualProfitRate).toBeUndefined();
+    expect(application!.manualFinanceSnapshot?.profitRate).toBeUndefined();
+    const economics = await query(s, saleId);
+    expect(economics).toMatchObject({ kind: "FINANCED", flatAnnualProfitRatePercent: null });
+    expect((economics as Extract<typeof economics, { kind: "FINANCED" }>).flatAnnualProfitRatePercent).not.toBe(0);
+  });
+
   test("S258-01 (g): the printed rate does not follow a post-sale edit of quote.manualProfitRate", async () => {
     const s = await seedDealership("finratefrozen");
     const { saleId, quoteId } = await financedSaleThroughDeal(s);
@@ -814,6 +831,50 @@ describe("SCRUM-528 - finalizeDeal builds the sale only from quote economics tha
       await expectRefusedWithZeroWrites(s, applicationId);
     });
 
+    test("SCRUM-536 positive control: a CONFIGURED quote with a company and an untouched snapshot finalizes through the anchor", async () => {
+      const s = await seedDealership("d528cfgok");
+      const companyId = await s.t.run((ctx) =>
+        ctx.db.insert("financeCompanies", {
+          orgId: s.orgId, name: "Configured Finance", profitRate: 5, maxTermMonths: 60, gracePeriodMonths: 0,
+          isActive: true, adminFees: 0, defaultLtvPercent: 100,
+        })
+      );
+      const customerStatusId = await s.t.run((ctx) =>
+        ctx.db.insert("orgCustomerStatuses", { orgId: s.orgId, label: "Eligible", isActive: true, order: 1 })
+      );
+      const quoteId = await s.as.mutation(api.quotes.saveQuote, {
+        orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId, vehiclePrice: 12_000, downPayment: 0, termMonths: 48,
+        mode: "CONFIGURED_FINANCE_COMPANY", companyId, customerEligibilityStatusIds: [customerStatusId], totalFinancedAmount: 12_000,
+      });
+      const applicationId = await s.as.mutation(api.applications.createFromQuote, { orgId: s.orgId, quoteId });
+      await s.as.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "UNDER_REVIEW" });
+      await s.approver.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "APPROVED" });
+      await s.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: s.orgId, applicationId, submittedQuotationMinor: 12_000 * SCALE, source: "MANUAL_ENTRY",
+      });
+      await s.approver.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: s.orgId, applicationId, approvedAmountMinor: 12_000 * SCALE, basis: "MANUAL", notes: "Approved.",
+      });
+      await registerHandover(s.as, api, s.orgId, applicationId);
+      await s.as.mutation(api.applications.registerExpectedPayment, {
+        orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
+      });
+      await s.as.mutation(api.financeDealCosts.recordLegalInvoice, {
+        orgId: s.orgId, applicationId, legalInvoiceAmountMinor: 12_000 * SCALE, legalInvoiceNumber: `INV-${applicationId}`,
+        legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
+      });
+      await recordReconciledZeroCost(s.as, api, s.orgId, applicationId);
+
+      // Anchor preconditions: a frozen snapshot on the application, a company, configured mode - and untouched.
+      const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+      expect(app).toMatchObject({ quoteModeAtSubmission: "CONFIGURED_FINANCE_COMPANY", companyId });
+      expect(app!.customerQuotePricingSnapshot).toBeDefined();
+
+      const saleId = (await finalize(s, applicationId)) as Id<"sales">;
+      expect(await s.t.run((ctx) => ctx.db.get(saleId))).toMatchObject({ financingType: "FINANCED", status: "COMPLETED" });
+      expect(await query(s, saleId)).toMatchObject({ kind: "FINANCED", flatAnnualProfitRatePercent: 5 });
+    });
+
     test("control: a mode-less application with no company and no snapshot is not compared (CASH)", async () => {
       const s = await seedDealership("d528nosnapcash");
       const { applicationId, quoteId } = await readyFinancedDeal(s);
@@ -828,10 +889,14 @@ describe("SCRUM-528 - finalizeDeal builds the sale only from quote economics tha
   });
 
   describe("no generic admin path may change a quote (quotes is a financial table)", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
     async function superAdmin(s: Seeded) {
-      process.env.SUPER_ADMIN_EMAILS = "s528.admin@autoflow.dev";
-      process.env.CLERK_JWT_ISSUER_DOMAIN ??= "https://test.clerk.accounts.dev";
-      process.env.NEXT_PUBLIC_APP_URL ??= "https://test.example.com";
+      // Stubbed, not assigned: restored by the afterEach below so the allow-list never leaks into other tests.
+      vi.stubEnv("SUPER_ADMIN_EMAILS", "s528.admin@autoflow.dev");
+      if (!process.env.CLERK_JWT_ISSUER_DOMAIN) vi.stubEnv("CLERK_JWT_ISSUER_DOMAIN", "https://test.clerk.accounts.dev");
+      if (!process.env.NEXT_PUBLIC_APP_URL) vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://test.example.com");
       await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "s528_sa", email: "s528.admin@autoflow.dev", name: "sa" }));
       return s.t.withIdentity({ subject: "s528_sa", clerkId: "s528_sa" });
     }
