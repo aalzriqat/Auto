@@ -1543,21 +1543,28 @@ describe("P2-F M3 finalization barrier — CONSUME", () => {
       expectedDate: Date.now() + 86_400_000,
     });
 
-    // The deal is closed through a DIFFERENT door — a direct sale on the same
-    // quote, which F.8a requires to consume the root.
-    const saleId = await directSale(seed, quoteA, v, seed.customerA);
+    // SCRUM-69 / SCRUM-532 (how this test changed): it used to close the deal through a DIFFERENT
+    // door, a direct sale on the same quote, then cancel that sale. That door now refuses while
+    // the application is in flight (F.9e-0 below), so the sequence is no longer reachable
+    // through the product. The post-cancellation state is SEEDED instead: the root is CONSUMED
+    // and stays CONSUMED (F.27), and the application is untouched and remains APPROVED
+    // (`saleCancellation.ts` never reads `financeApplications`). The assertions that follow are
+    // the original regression, unchanged.
+    await seed.t.run(async (ctx) => {
+      const rootA = (await ctx.db.query("commitmentRoots").collect()).filter((r) => r.vehicleId === v)[0];
+      await ctx.db.patch(rootA._id, {
+        status: "CONSUMED",
+        closedAt: Date.now(),
+        closedReason: "seeded: post-cancellation state (SCRUM-69 F.9e)",
+      });
+    });
     expect(
       (await rootsOn(seed, v))[0].status,
-      "precondition (F.8a): the direct sale consumed the root"
+      "precondition: the seeded root is CONSUMED"
     ).toBe("CONSUMED");
-
-    // The sale is then cancelled. F.27 requires the root to STAY CONSUMED — and
-    // `saleCancellation.ts` contains zero references to `financeApplications`,
-    // so the application never learns and remains APPROVED.
-    await cancelSale(seed, saleId);
     expect(
       (await seed.t.run((ctx) => ctx.db.get(applicationId)))?.status,
-      "the application is untouched by the cancellation"
+      "the application is untouched"
     ).toBe("APPROVED");
 
     // The car is genuinely free now, so another customer legitimately takes it.
@@ -1599,6 +1606,29 @@ describe("P2-F M3 finalization barrier — CONSUME", () => {
       ),
       "and no second live sale was created"
     ).toHaveLength(0);
+    expect(
+      (await seed.t.run((ctx) => ctx.db.get(v)))?.status,
+      "and the car did not move to SOLD"
+    ).not.toBe("SOLD");
+  });
+
+  test("F.9e-0 (SCRUM-69/532) a direct sale on a car with an APPROVED finance application is REFUSED", async () => {
+    const seed = await seedDealer("f9e0");
+    const v = await vehicle(seed);
+    const quoteA = await quoteFor(seed, seed.customerA, [v]);
+    await depositOn(seed, quoteA, 5_000);
+    const applicationId = await approvedApplication(seed, quoteA);
+    await registerHandover(seed.asUser, api, seed.orgId, applicationId);
+
+    // This is the door F.9e used to close the deal through. The car is held by the application,
+    // so it now refuses before any write; the sale -> cancel -> stale-application sequence F.9e
+    // exercised is no longer reachable through the product.
+    await expect(directSale(seed, quoteA, v, seed.customerA)).rejects.toMatchObject({
+      data: { code: "SALE_COMPLETES_THROUGH_FINANCE_APPLICATION" },
+    });
+    expect((await seed.t.run((ctx) => ctx.db.query("sales").collect())).length, "no sale row").toBe(0);
+    expect((await seed.t.run((ctx) => ctx.db.get(v)))?.status, "car not sold").not.toBe("SOLD");
+    expect((await rootsOn(seed, v))[0].status, "root still OPEN").toBe("OPEN");
   });
 
   test("F.10 one sale stamps exactly one root — sale -> root provenance is a function", async () => {

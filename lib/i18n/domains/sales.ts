@@ -1647,6 +1647,10 @@ const serverErrorMessages = defineBilingualMessages({
     "A financed sale can only be created through the deal, with its finance application. Start the deal from the quote instead of recording a financed sale directly.",
     "لا يمكن تسجيل عملية بيع بالتمويل مباشرة؛ فعملية البيع الممولة تُنشأ فقط من خلال الصفقة مع طلب التمويل الخاص بها. ابدأ الصفقة من عرض السعر بدلاً من تسجيل بيع ممول بشكل مباشر.",
   ],
+  ServerError_SALE_COMPLETES_THROUGH_FINANCE_APPLICATION: [
+    "This car has a finance application in progress. Complete the sale from the deal page.",
+    "هذه السيارة عليها طلب تمويل قيد المعالجة. أكمل البيع من صفحة الصفقة.",
+  ],
   ServerError_QUOTE_ECONOMICS_DRIFTED: [
     "The quotation's pricing no longer matches the pricing frozen on this finance application, so the deal cannot be finalized. Cancel the finance application and start again from a new quotation.",
     "لم يعد تسعير عرض السعر مطابقاً للتسعير المثبت في طلب التمويل، لذلك لا يمكن إتمام الصفقة. ألغِ طلب التمويل وابدأ من عرض سعر جديد.",

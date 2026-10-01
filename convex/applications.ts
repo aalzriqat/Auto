@@ -4828,7 +4828,10 @@ export const finalizeDeal = mutation({
             | undefined,
           idempotencyKey: args.idempotencyKey,
           actorId: auth.user._id,
-        });
+        },
+        // SCRUM-69 / SCRUM-532: the only door that may complete a finance-held car, and only
+        // for this application. A separate positional argument, never a caller-supplied arg.
+        { kind: "FINANCE_FINALIZATION", applicationId: args.applicationId });
 
         const now = Date.now();
         // Resolved once, before anything reads it: the patch below and the
