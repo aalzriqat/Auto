@@ -18,6 +18,7 @@ import {
 import type { DepositMethod } from "./depositRecording";
 import { throwAppError, AppErrorCode } from "./errors";
 import { requireOrgMember } from "./tenancy";
+import { IN_FLIGHT_FINANCE_STATUSES } from "./financeStatuses";
 import { assertNoPendingDepositRequest } from "./depositRequestGuards";
 import { assertFinancedSaleHasDeal, assertOperatedDealMode } from "./dealModes";
 import {
@@ -355,10 +356,86 @@ export const CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN =
  */
 type SalePreparationIntent = "DRAFT" | "COMPLETION";
 
+/**
+ * SCRUM-69 / SCRUM-532. The one door that may complete a car held by a finance
+ * application. It is a SEPARATE positional parameter of `completeSale`, never a
+ * field of `SaleCompletionArgs`: `sales.create` spreads its validated args into
+ * `completeSale`, so a field there would be caller-presentable.
+ */
+type CompletionDoor = {
+  kind: "FINANCE_FINALIZATION";
+  applicationId: Id<"financeApplications">;
+};
+
+/** SCRUM-69. Must equal `ServerError_SALE_COMPLETES_THROUGH_FINANCE_APPLICATION` (en) in lib/i18n/domains/sales.ts. */
+const SALE_COMPLETES_THROUGH_FINANCE_APPLICATION_MESSAGE =
+  "This car has a finance application in progress. Complete the sale from the deal page.";
+
+/**
+ * Stale ACTIVE FINANCE claims accumulate (nothing transitions a claim), but only one per finance
+ * application on that car, so the bound is generous. RESERVATION and DEPOSIT history is not
+ * counted: the scan is kind-scoped by index.
+ */
+const FINANCE_CLAIM_SCAN_LIMIT = 256;
+
+/**
+ * INVARIANT: while a vehicle carries a LIVE finance claim (an ACTIVE FINANCE claim whose
+ * application is DRAFT, PENDING_DOCS, UNDER_REVIEW or APPROVED), it becomes SOLD only through
+ * `applications.finalizeDeal` for that application. Liveness is judged by the application's
+ * status, the same way `resolveCanonicalBinding` does, because a claim row is never
+ * transitioned after a rejection or cancellation. Fail closed: a claim with no application, a
+ * missing or foreign-org application, or more rows than the bound refuses.
+ */
+async function assertFinanceHeldVehicleCompletesThroughDeal(
+  ctx: MutationCtx,
+  args: { orgId: Id<"organizations">; vehicleId: Id<"vehicles">; door?: CompletionDoor }
+): Promise<void> {
+  const claims = await ctx.db
+    .query("vehicleCommitmentClaims")
+    .withIndex("by_org_vehicle_kind_status", (q) =>
+      q
+        .eq("orgId", args.orgId)
+        .eq("vehicleId", args.vehicleId)
+        .eq("evidenceKind", "FINANCE")
+        .eq("status", "ACTIVE")
+    )
+    .take(FINANCE_CLAIM_SCAN_LIMIT + 1);
+  const refuse = (): never =>
+    throwAppError(
+      AppErrorCode.SALE_COMPLETES_THROUGH_FINANCE_APPLICATION,
+      SALE_COMPLETES_THROUGH_FINANCE_APPLICATION_MESSAGE
+    );
+  if (claims.length > FINANCE_CLAIM_SCAN_LIMIT) {
+    console.error("assertFinanceHeldVehicleCompletesThroughDeal: claim scan bound exceeded", args.vehicleId);
+    refuse();
+  }
+  // The door's own application is exempt; every other FINANCE claim is judged below.
+  const others = claims.filter(
+    (claim) =>
+      !(
+        args.door !== undefined &&
+        args.door.kind === "FINANCE_FINALIZATION" &&
+        claim.applicationId === args.door.applicationId
+      )
+  );
+  // A claim with no application cannot be shown dead: fail closed.
+  if (others.some((claim) => !claim.applicationId)) refuse();
+  const uniqueIds = [...new Set(others.map((claim) => claim.applicationId!))];
+  const applications = await Promise.all(uniqueIds.map((id) => ctx.db.get(id)));
+  for (const application of applications) {
+    const holdsCar =
+      !application ||
+      application.orgId !== args.orgId ||
+      IN_FLIGHT_FINANCE_STATUSES.includes(application.status);
+    if (holdsCar) refuse();
+  }
+}
+
 async function prepareSaleCompletion(
   ctx: MutationCtx,
   args: SaleCompletionArgs,
-  intent: SalePreparationIntent
+  intent: SalePreparationIntent,
+  door?: CompletionDoor
 ): Promise<PreparedSaleCompletion> {
   // SCRUM-495 (OR-7): every sale creation and completion path passes here, so a LEASE draft
   // cannot be completed; it can still be edited or cancelled via `sales.update`.
@@ -539,6 +616,15 @@ async function prepareSaleCompletion(
     // occupied (both completion callers ran it immediately after this
     // function returned and before their first write).
     assertCompletableSaleAmounts(args, currency);
+
+    // SCRUM-69 / SCRUM-532: a car held by a finance application in flight completes only
+    // through finalizeDeal for that application. Read-only, and ahead of anything that
+    // consumes or releases a claim.
+    await assertFinanceHeldVehicleCompletesThroughDeal(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      door,
+    });
 
     // === SCRUM-195 M3 — THE CANONICAL COMMITMENT CHECK ===================
     //
@@ -2017,7 +2103,8 @@ export async function createDraftSale(
 
 export async function completeSale(
   ctx: MutationCtx,
-  args: SaleCompletionArgs
+  args: SaleCompletionArgs,
+  door?: CompletionDoor
 ): Promise<Id<"sales">> {
   if (args.status !== "COMPLETED") {
     throwAppError(
@@ -2029,7 +2116,7 @@ export async function completeSale(
   // Amounts and the canonical commitment check both run inside this call,
   // before the insert, so a refusal leaves no sale row, no vehicle status
   // change, no receivable and no queued accounting event behind.
-  const prepared = await prepareSaleCompletion(ctx, args, "COMPLETION");
+  const prepared = await prepareSaleCompletion(ctx, args, "COMPLETION", door);
   const saleId = await insertSaleRecord(ctx, args, prepared, "COMPLETED", prepared.commissionAmount);
   await applySaleCompletionSideEffects(ctx, args, prepared, saleId);
 
