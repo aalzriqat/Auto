@@ -32,11 +32,14 @@ import {
 } from "./utils/financingEconomics";
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
-import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN } from "./utils/saleCompletion";
+import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, COMMISSION_BASE_UNUSABLE_RECALC_CODE, type CommissionBase } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
+import { planVersionOf } from "./utils/financedSalePostingPlan";
+import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompanyForward";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
+import { assertOperatedDealMode } from "./utils/dealModes";
 import { getOrgCurrency, hookCommissionAccrued, hookCommissionAdjusted, hookCommissionPaid, hookSaleCancelled, isPostableNow, reverseCommissionForSale, commissionAccountingDate, commissionAccrualStrandedReason, commissionEntriesOutstandingStatus, hasCommissionAccrual, recognizedCommissionMinor, safeAdjustmentSeq, MAX_COMMISSION_ADJUSTMENTS } from "./accounting/workflowHooks";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 import { depositMethodValidator } from "./utils/depositRecording";
@@ -364,6 +367,11 @@ export const create = mutation({
 
     validateInput(CreateSaleSchema, args);
 
+    // SCRUM-495 (OR-7): LEASE is no longer a financing type a sale may be recorded
+    // in. The validators stay wide so a legacy row still parses; the refusal is
+    // here, before any write.
+    assertOperatedDealMode(args.financingType);
+
     return await runWithIdempotency(
       ctx,
       {
@@ -548,6 +556,10 @@ export const createDraft = mutation({
 
     validateInput(CreateDraftSaleSchema, args);
 
+    // SCRUM-495 (OR-7): as `create` — a draft in a retired financing type could
+    // only ever be a dead end, so it is not created.
+    assertOperatedDealMode(args.financingType);
+
     return await runWithIdempotency(
       ctx,
       {
@@ -654,6 +666,12 @@ export const update = mutation({
     const sale = await ctx.db.get(args.saleId);
     if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
       throwAppError(AppErrorCode.SALE_NOT_FOUND, "Sale not found in this organization.");
+    }
+    // SCRUM-495 (OR-7): refuse only a change INTO a retired financing type, so a legacy
+    // LEASE draft stays editable and cancellable even if a client (mobile, an older
+    // web build) resends the stored LEASE: a legacy row is never a dead end.
+    if (args.financingType !== undefined && args.financingType !== sale.financingType) {
+      assertOperatedDealMode(args.financingType);
     }
     if (args.status === "COMPLETED" && sale.status !== "COMPLETED") {
       throwAppError(
@@ -771,6 +789,21 @@ export const update = mutation({
           );
         }
         {
+          // SCRUM-435: a v2 deal has payments held by the finance company. This door
+          // applies the SAME manager gate and the SAME forward proof as
+          // `cancelApplication`, so it is never a way round them.
+          if (planVersionOf(app) === 2) {
+            try {
+              await requireTenantAuth(ctx, args.orgId, [
+                PERMISSIONS.FINALIZE_FINANCED_DEAL,
+                PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+              ]);
+            } catch {
+              throw new ConvexError("A manager cancels a finalized deal.");
+            }
+            const forwardBlock = forwardCancelRefusal(await deriveForwardState(ctx, app));
+            if (forwardBlock !== null) throw new ConvexError(forwardBlock);
+          }
           if (app.disbursedAt) {
             throw new ConvexError(
               "The finance company has already paid the dealership on this deal, so it can't be cancelled from here. Void it through a manual accounting correction instead."
@@ -797,6 +830,18 @@ export const update = mutation({
             );
           }
         }
+      }
+
+      // SCRUM-447 D4: AFTER the payment locks above (which stay as defence in
+      // depth and keep their specific refusals). A financed deal is cancelled
+      // from the deal, where its finance-company cheque is resolved with it;
+      // cancelling only the sale would leave that cheque live on a dead deal.
+      // Cash sales are unchanged.
+      if (sale.applicationId) {
+        throwAppError(
+          AppErrorCode.VALIDATION_FAILED,
+          "This sale belongs to a financed deal — cancel this deal from the deal screen."
+        );
       }
 
       const cancellationDate = Date.now();
@@ -1925,10 +1970,29 @@ export const recalculateCommission = mutation({
         throw new ConvexError(CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN);
       }
 
+      // SCRUM-390 (OR-5): a dealer-owned sale that froze G and C at finalize is
+      // recalculated from THOSE values only - never from the application, whose
+      // approval or letter can move afterwards. Absent (any other sale) keeps
+      // salePrice - cost. A partial or foreign-currency record is refused rather
+      // than silently falling back to the old base.
+      let financedMargin: CommissionBase | undefined;
+      if (sale.commissionBase && !isConsignedAgentSale(vehicle)) {
+        const margin = financedMarginOf(sale.commissionBase, orgSettings?.currency ?? "JOD");
+        if (!margin) {
+          throw new ConvexError({
+            code: COMMISSION_BASE_UNUSABLE_RECALC_CODE,
+            message:
+              "This sale's recorded commissionable margin is in a different currency from the organization's or holds an unusable amount, so a commission cannot be worked out. Have the deal's figures corrected before recalculating; the existing commission has been left untouched.",
+          });
+        }
+        financedMargin = margin;
+      }
+
       const amount = await computeAutoCommissionAmount(ctx, {
         salePrice: sale.salePrice,
         vehicle,
         frozenRecognizedEarnings,
+        financedMargin,
         commissionMode: mode,
         memberCommissionRate: membership?.commissionRate,
         commissionTiers: orgSettings?.commissionTiers ?? [],

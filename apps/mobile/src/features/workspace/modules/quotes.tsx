@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Text, View } from "react-native";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepFlow";
-import { api, type MobileQuote, type MobileQuoteMode, type MobileQuoteStatus } from "../../../convexApi";
+import { api, type MobileQuote, type MobileOperatedQuoteMode, type MobileQuoteStatus } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { SELECTOR_PAGE_SIZE, type Option, money, dateLabel, maybeText, parseOptionalNumber, parseRequiredNumber, parseRequiredPositiveNumber, invalidNumberMessage, requiredSelectionMessage, useFormErrors, useGenericError, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
@@ -32,7 +32,7 @@ export function QuotesModule({ orgId }: { orgId: string }) {
     customerId: "",
     vehicleId: "",
     companyId: "",
-    mode: "CASH" as MobileQuoteMode,
+    mode: "CASH" as MobileOperatedQuoteMode,
     vehiclePrice: "",
     downPayment: "0",
     termMonths: "60",
@@ -40,12 +40,10 @@ export function QuotesModule({ orgId }: { orgId: string }) {
     recipientName: "",
   });
   const quoteStatusOptions: MobileQuoteStatus[] = ["DRAFT", "SHARED", "ACCEPTED", "EXPIRED"];
-  const quoteModeOptions: Array<Option<MobileQuoteMode>> = [
+  const quoteModeOptions: Array<Option<MobileOperatedQuoteMode>> = [
     { label: "CASH", value: "CASH" },
     { label: "CONFIGURED", value: "CONFIGURED_FINANCE_COMPANY" },
     { label: "MANUAL", value: "MANUAL_FINANCE_COMPANY" },
-    { label: "INSTALLMENT", value: "INTERNAL_INSTALLMENT" },
-    { label: "LEASE", value: "LEASE" },
   ];
   const selectedQuoteCustomerLabel = getOptionLabel(customerOptions, form.customerId, locale === "ar" ? "لم يتم الاختيار" : "Not selected");
   const selectedQuoteVehicleLabel = getOptionLabel(vehicleOptions, form.vehicleId, locale === "ar" ? "لم يتم الاختيار" : "Not selected");

@@ -137,6 +137,8 @@ function financedDeal(): FinancedDealCockpitData {
       { key: "HANDOVER", state: "PENDING", authority: "DEALER" },
       { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
     ],
+    forward: { planV2: false, applies: false, state: "NOT_DUE" as const, returnedExceptionOpen: false, onBooksForwardId: null, transferConfirmed: false, mayRecord: false, mayCancelFinalized: false },
+    disbursementReturn: { mayReturn: false, chequeId: null, lastReturnedChequeId: null },
     documents: [
       {
         ruleId: "r1" as Id<"companyDocumentRules">,
@@ -231,6 +233,7 @@ function financedDeal(): FinancedDealCockpitData {
       // THROUGH_DEALERSHIP: nothing to collect from the supplier on this route.
       supplierReceipt: { actionable: false, reason: "NOT_DIRECT_ROUTE" },
       appraisalGapMinor: 300 * SCALE,
+      forward: { dueMinor: 0, depositMinor: 0, contributionMinor: 0, onBooksMinor: 0 },
     },
     handoverEvidence: {
       approvedPurchaseAmountMinor: 12_500 * SCALE,
@@ -242,6 +245,14 @@ function financedDeal(): FinancedDealCockpitData {
     settlementAdviceDiscrepancy: null,
     settlementAdviceRequiresReconciliation: false,
     expectedPaymentRegistered: false,
+    chequeFaceUnrecorded: false,
+    unattestedChequeId: null,
+    chequePaymentRegistered: false,
+    expectedPaymentCorrectable: false,
+    expectedPaymentReRegistrable: false,
+    chequeNeedsCorrection: false,
+    chequeNeedsAccountingReview: false,
+    chequeFaceAttested: false,
     supplierSettlementRouteRequired: false,
     economicsRecorded: true,
     economicsStamp: "fixture-economics-stamp",
@@ -1065,6 +1076,112 @@ describe.skipIf(!GENERATE)("deal cockpit visual fixture", () => {
     writeFileSync(resolve(outDir, `deal-cockpit-${locale}-readiness-access.html`), html);
   });
 
+  // SCRUM-435: the transfer step while the dealership still owes the finance
+  // company the customer's deposit and its own contribution. `due` offers the
+  // recording; `unsettled` offers nothing and names the accountant.
+  const forwardMarkup = (locale: "en" | "ar", variant: "due" | "unsettled") => {
+    language.locale = locale;
+    const base = financedDeal();
+    const deal: FinancedDealCockpitData = {
+      ...base,
+      status: "CLOSED",
+      stages: base.stages.map((stage) => {
+        if (stage.key === "DISBURSEMENT") {
+          return {
+            ...stage,
+            state: "BLOCKED" as const,
+            blocker: variant === "due" ? "AwaitingForwardToFinanceCompany" : "ForwardNotSettled",
+            authority: "DEALER" as const,
+          };
+        }
+        return {
+          ...stage,
+          state: stage.key === "SETTLEMENT" ? ("PENDING" as const) : ("COMPLETE" as const),
+          blocker: undefined,
+        };
+      }),
+      forward: {
+        planV2: true,
+        applies: true,
+        state: variant === "due" ? "DUE" : "POSTING_PENDING",
+        returnedExceptionOpen: false,
+        onBooksForwardId: null,
+        transferConfirmed: false,
+        mayRecord: true,
+        mayCancelFinalized: true,
+      },
+    };
+    return renderToStaticMarkup(
+      <DealCockpitView
+        deal={deal}
+        backHref="/org_1/deals"
+        activeAppraisalProvider={deal.activeAppraisalProvider}
+        onRecordSupplierReceipt={async () => {}}
+        financialOverview={{ data: financedOverview(), loading: false }}
+        custody={custodyWiring()}
+        custodyMoney={custodyMoney}
+        workflowAction={{
+          stageKey: "DISBURSEMENT",
+          actionKey: "RecordForwardToFinanceCompany",
+          onStart: () => {},
+          unavailableReasonKey: variant === "due" ? undefined : "ForwardNotSettledReason",
+        }}
+        financingPlan={{ facts: FINANCING_PLAN, formatMajor: (major, currency) => `${major.toLocaleString()} ${currency}` }}
+        handoverCosts={handoverCostsWiring()}
+      />
+    );
+  };
+  test.each(
+    (["en", "ar"] as const).flatMap((locale) => (["due", "unsettled"] as const).map((variant) => [locale, variant] as const))
+  )("writes the %s markup for the forward step %s", (locale, variant) => {
+    expect(OUT_DIR, "DEAL_COCKPIT_VISUAL_FIXTURE_DIR must name this run's fresh directory").toBeTruthy();
+    const outDir = resolve(OUT_DIR!);
+    const html = forwardMarkup(locale, variant);
+    expect(html).toContain("data-testid=\"deal-next-step\"");
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(resolve(outDir, `deal-cockpit-${locale}-forward-${variant}.html`), html);
+  });
+  // SCRUM-239: a financed deal whose finance-company transfer is confirmed and whose
+  // linked cheque CLEARED: the header offers "Cheque returned by bank" (the server's
+  // `disbursementReturn.mayReturn`), beside the Cancel action.
+  test.each(["en", "ar"] as const)("writes the %s markup with the cheque-returned-by-bank action", (locale) => {
+    expect(OUT_DIR, "DEAL_COCKPIT_VISUAL_FIXTURE_DIR must name this run's fresh directory").toBeTruthy();
+    const outDir = resolve(OUT_DIR!);
+    language.locale = locale;
+    const base = financedDeal();
+    const deal: FinancedDealCockpitData = {
+      ...base,
+      stages: base.stages.map((stage) => ({
+        ...stage,
+        state:
+          stage.key === "HANDOVER" ? ("CURRENT" as const) : stage.key === "SETTLEMENT" ? ("PENDING" as const) : ("COMPLETE" as const),
+        blocker: undefined,
+      })),
+      forward: { ...base.forward, transferConfirmed: true },
+      disbursementReturn: { mayReturn: true, chequeId: "cheque_1" as Id<"postDatedCheques">, lastReturnedChequeId: null },
+    };
+    const html = renderToStaticMarkup(
+      <DealCockpitView
+        deal={deal}
+        backHref="/org_1/deals"
+        activeAppraisalProvider={deal.activeAppraisalProvider}
+        onRecordSupplierReceipt={async () => {}}
+        financialOverview={{ data: financedOverview(), loading: false }}
+        custody={custodyWiring()}
+        custodyMoney={custodyMoney}
+        chequeReturn={{ open: false, submitting: false, onOpen: () => {}, onClose: () => {}, onConfirm: () => {} }}
+        financingPlan={{ facts: FINANCING_PLAN, formatMajor: (major, currency) => `${major.toLocaleString()} ${currency}` }}
+        handoverCosts={handoverCostsWiring()}
+      />
+    );
+    const table = dictionaries[locale] as Record<string, string>;
+    expect(table.ChequeReturnedByBankAction, `${locale} dictionary lacks ChequeReturnedByBankAction`).toBeTruthy();
+    if (locale === "ar") expect(table.ChequeReturnedByBankAction).toMatch(/[؀-ۿ]/);
+    expect(html).toContain("data-testid=\"deal-cheque-returned-by-bank\"");
+    expect(html).toContain(table.ChequeReturnedByBankAction);
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(resolve(outDir, `deal-cockpit-${locale}-cheque-return.html`), html);
+  });
   // SCRUM-417 UX4 (O2/O3): the sub-step checklist on a live Handover, and the
   // read-only past / future step views a rail click (or ?stage=) opens.
   const ux4Markup = (

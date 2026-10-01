@@ -51,6 +51,12 @@ describe("Sonar coverage resource contract", () => {
     );
   });
 
+  test("SCRUM-359: the aggregator's final V8 merge keeps the same heap ceiling", () => {
+    expect(namedWorkflowStep(source(TEST_WORKFLOW), "Merge coverage from every slice")).toMatch(
+      /NODE_OPTIONS:\s*--max-old-space-size=5632/,
+    );
+  });
+
   test("SCRUM-384: main Sonar job budget is about twice a normal ~20-min run", () => {
     const workflow = parseYaml(source(SONAR_MAIN_WORKFLOW)) as {
       jobs: { scan: { "timeout-minutes"?: number } };

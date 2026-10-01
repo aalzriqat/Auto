@@ -1,0 +1,246 @@
+import { ConvexError } from "convex/values";
+import type { Doc, Id } from "../_generated/dataModel";
+import type { QueryCtx } from "../_generated/server";
+import { assertSupportedDenomination, scaleForCurrency } from "./money";
+import { disbursementVersionOf } from "./financeDisbursementKeys";
+
+/**
+ * SCRUM-447 — finance-company cheque lineage.
+ *
+ * INVARIANT: a cheque with finance-company lineage names its real drawer or says
+ * UNVERIFIED; it reaches CLEARED only through `applications.confirmDisbursement`
+ * with a face exactly equal to the receipt; it never outlives its deal; it is
+ * never presented to, chased from, cleared against or replaced for the customer.
+ * LINEAGE IS PERMANENT: no writer removes it. "Active" is a status question.
+ *
+ * One shared module so the predicate cannot drift between the writers
+ * (collections.ts), the disbursement door (applications.ts) and the audit.
+ */
+
+type ChequeLineageShape = Pick<
+  Doc<"postDatedCheques">,
+  "applicationId" | "originApplicationId" | "drawerType"
+>;
+
+/** A cheque that is, or ever was, a finance-company instrument. */
+export function isFcLineage(row: ChequeLineageShape): boolean {
+  return (
+    row.applicationId !== undefined ||
+    row.originApplicationId !== undefined ||
+    row.drawerType === "FINANCE_COMPANY"
+  );
+}
+
+/** FC lineage AND still an open instrument (HELD / DEPOSITED) AND not deleted. */
+export function isLiveFcCheque(
+  row: ChequeLineageShape & Pick<Doc<"postDatedCheques">, "status" | "isDeleted">
+): boolean {
+  return (
+    isFcLineage(row) &&
+    row.isDeleted !== true &&
+    (row.status === "HELD" || row.status === "DEPOSITED")
+  );
+}
+
+/** Every non-deleted cheque linked to the application, any status. */
+export async function chequesForApplication(
+  ctx: QueryCtx,
+  applicationId: Id<"financeApplications">
+): Promise<Array<Doc<"postDatedCheques">>> {
+  const rows = await ctx.db
+    .query("postDatedCheques")
+    .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+    .collect();
+  return rows.filter((row) => row.isDeleted !== true);
+}
+
+/**
+ * SCRUM-447 N1: a linked cheque reached CLEARED. On an undisbursed deal that is
+ * an accounting-review state (the cheque cleared outside the disbursement door),
+ * whatever else is linked beside it. The ONE predicate behind the cockpit's
+ * `chequeNeedsAccountingReview` and `confirmDisbursement`'s refusal, so the
+ * screen withholds exactly what the server refuses.
+ */
+export function hasClearedLinkedCheque(rows: ReadonlyArray<Pick<Doc<"postDatedCheques">, "status">>): boolean {
+  return rows.some((row) => row.status === "CLEARED");
+}
+/**
+ * SCRUM-239: the CLEARED finance-company cheque that IS the application's
+ * current confirmed disbursement - same version, cleared at the instant the
+ * application was disbursed. The cockpit's return gate reads it, so the screen
+ * offers the return only for a cheque the command's first binding accepts.
+ */
+export function clearedDisbursementCheque(
+  rows: ReadonlyArray<Doc<"postDatedCheques">>,
+  app: Pick<Doc<"financeApplications">, "disbursedAt" | "disbursementVersion">
+): Doc<"postDatedCheques"> | null {
+  if (app.disbursedAt === undefined) return null;
+  const version = disbursementVersionOf(app);
+  return (
+    rows.find(
+      (row) =>
+        row.status === "CLEARED" &&
+        isFcLineage(row) &&
+        disbursementVersionOf(row) === version &&
+        row.clearedAt === app.disbursedAt
+    ) ?? null
+  );
+}
+
+/** SCRUM-239: the newest cheque of this application returned AFTER it cleared, or null. */
+export function latestReturnedAfterClearing(
+  rows: ReadonlyArray<Doc<"postDatedCheques">>
+): Doc<"postDatedCheques"> | null {
+  let latest: Doc<"postDatedCheques"> | null = null;
+  for (const row of rows) {
+    if (row.status !== "RETURNED" || row.returnedAfterClearing !== true) continue;
+    if (latest === null || (row.returnedAt ?? 0) > (latest.returnedAt ?? 0)) latest = row;
+  }
+  return latest;
+}
+
+/** The application's LIVE finance-company cheques. Never `.unique()`. */
+export async function liveChequesForApplication(
+  ctx: QueryCtx,
+  applicationId: Id<"financeApplications">
+): Promise<Array<Doc<"postDatedCheques">>> {
+  return (await chequesForApplication(ctx, applicationId)).filter(isLiveFcCheque);
+}
+
+/** SCRUM-239: the longest return reason kept on the cheque and in the audit log. */
+export const FC_RETURN_REASON_MAX_LENGTH = 500;
+
+/**
+ * SCRUM-239: the coded refusals of returning a cleared finance-company cheque.
+ * The English text is the server's own `message`; `lib/i18n/domains/sales.ts`
+ * carries the same sentence and its Arabic under `ServerError_<code>`, and a
+ * test holds the two together. Static on purpose: no placeholders, and no
+ * amounts or ids.
+ */
+export const FC_RETURN_MESSAGES = {
+  FINANCE_RETURN_NOT_DISBURSED:
+    "This deal has no confirmed finance-company disbursement, so there is no cleared cheque to return. Nothing has been changed.",
+  FINANCE_RETURN_CHEQUE_NOT_CLEARED:
+    "Only a cleared finance-company cheque can be returned from the deal, and this cheque is not cleared. Nothing has been changed.",
+  FINANCE_RETURN_CHAIN_MISMATCH:
+    "This cheque does not match the deal's recorded disbursement (the cheque, amount, currency or payment). Nothing has been changed. An accountant reviews the deal.",
+  FINANCE_RETURN_ALLOCATION_SHAPE:
+    "The disbursement payment is not allocated exactly to this deal's finance-company receivable, so it cannot be reversed safely. Nothing has been changed. An accountant reviews the deal.",
+  FINANCE_RETURN_REVERSAL_UNPROVEN:
+    "The finance company's receipt could not be confirmed as reversed on the books, so the return was not recorded. Nothing has been changed. An accountant reviews the deal.",
+  FINANCE_RETURN_REASON_REQUIRED:
+    "Give the reason the bank returned the cheque. Nothing has been changed.",
+  // The one message with a placeholder: the server sends `max` beside the code,
+  // and the dictionary entry reads `{max}`; this English fallback is the same
+  // sentence with the limit filled in.
+  FINANCE_RETURN_REASON_TOO_LONG:
+    "The return reason is too long (the most is 500 characters). Nothing has been changed.",
+  FINANCE_CHEQUE_RETURN_FROM_DEAL:
+    "This is a finance-company cheque. Its return is recorded from the deal screen with the \"Cheque returned by bank\" action, not from customer collections. Nothing has been changed.",
+  FINANCE_RETURN_NOT_FOUND:
+    "The deal or the cheque could not be found. Nothing has been changed.",
+  FINANCE_RETURN_KEY_CONFLICT:
+    "This request reuses the identity of an earlier request that had different content (another cheque or reason). Nothing has been changed. Reopen the dialog and try again.",
+  CHEQUE_ALREADY_RETURNED:
+    "This cheque has already been returned, so it cannot be returned again. Nothing has been changed.",
+  CHEQUE_NOT_RETURNABLE:
+    "This cheque can no longer be returned. Nothing has been changed.",
+  CHEQUE_NOT_FOUND:
+    "Cheque not found. Nothing has been changed.",
+  CHEQUE_NOT_CLEARED:
+    "Only cleared cheques can be returned after clearing. Nothing has been changed.",
+  FINANCE_RETURN_KEY_INVALID:
+    "The request identity is missing or too long (at most 200 characters). Nothing has been changed. Reopen the dialog and try again.",
+  FINANCE_CONFIRM_STALE_REQUEST:
+    "This confirmation was prepared before the deal's cheque was returned, so it cannot be applied. Nothing has been changed. Reopen the deal and confirm again.",
+  // SCRUM-239 round 3: every refusal an operator can reach on the
+  // confirm-after-return and cheque-return paths is coded.
+  FINANCE_CONFIRM_ALREADY_CONFIRMED:
+    "Disbursement has already been confirmed for this application. Nothing has been changed.",
+  FINANCE_CONFIRM_CHEQUE_ALREADY_CLEARED:
+    "This deal's cheque is already marked cleared but the disbursement was never confirmed. Ask accounting to review it before confirming. Nothing has been changed.",
+  FINANCE_CONFIRM_CHEQUE_RETURNED_OR_CANCELLED:
+    "This cheque was returned or cancelled. Correct the expected payment, then register the new payment, before confirming disbursement. Nothing has been changed.",
+  FINANCE_CONFIRM_CHEQUE_NOT_FOUND:
+    "Expected cheque record not found for this application. Nothing has been changed.",
+  FINANCE_CONFIRM_MULTIPLE_LIVE_CHEQUES:
+    "This deal has more than one live finance-company cheque. Resolve the duplicate before confirming disbursement. Nothing has been changed.",
+  FINANCE_CONFIRM_CHEQUE_FACE_UNRECORDED:
+    "This cheque's face amount was never recorded in minor units. Have a finance manager attest the face from the deal before confirming disbursement. Nothing has been changed.",
+  FINANCE_CONFIRM_CHEQUE_FACE_MISMATCH:
+    "The cheque's recorded face does not equal the disbursement being confirmed. Correct the expected payment or the cheque before confirming. Nothing has been changed.",
+  CHEQUE_BANK_FEE_INVALID:
+    "The bank fee must be a whole, non-negative amount in minor currency units. Nothing has been changed.",
+  CHEQUE_RETURN_NO_RECEIPT_LINEAGE:
+    "This cleared cheque has no persisted receipt lineage, so what it moved cannot be determined, and returning it would reopen the debt without reversing the receipt. Nothing has been changed. An accountant reviews the deal.",
+  CHEQUE_RETURN_NO_PAYMENT_TO_REVERSE:
+    "This cleared cheque has no collection payment to reverse, so reopening the debt would leave it owed and collected at the same time. Nothing has been changed. An accountant reviews the deal.",
+  // SCRUM-239 round 4: `collections.returnClearedCheque` fingerprints the bank fee too.
+  CHEQUE_RETURN_KEY_CONFLICT:
+    "This same request was already sent with a different cheque, reason or bank fee. Nothing has been changed. Close and reopen the dialog to try again.",
+} as const;
+/** SCRUM-447 B4: longest operator note kept with a face attestation. */
+export const ATTESTATION_NOTE_MAX_LENGTH = 500;
+
+/** The operator-facing next step for every customer-collection refusal. */
+export const FC_CHEQUE_DEAL_NEXT_STEP =
+  "This is a finance-company cheque. It is handled from the deal, never from customer collections.";
+
+/**
+ * A decimal string parsed at the deal currency's scale — no floats, no rounding.
+ *
+ * More fractional digits than the scale, non-numeric, zero, negative, signed,
+ * exponent notation or above Number.MAX_SAFE_INTEGER minor units are refused.
+ */
+export function parseFaceAmountMinor(faceAmount: string | undefined, currency: string): number {
+  if (typeof faceAmount !== "string" || faceAmount.trim() === "") {
+    throw new ConvexError("Record the cheque's face amount exactly as printed on the instrument.");
+  }
+  const scale = scaleForCurrency(currency);
+  const text = faceAmount.trim();
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(text);
+  if (!match) {
+    throw new ConvexError(
+      "The cheque's face amount must be a plain decimal number such as 20000 or 20000.500."
+    );
+  }
+  const whole = match[1];
+  const fraction = match[2] ?? "";
+  if (fraction.length > scale) {
+    throw new ConvexError(
+      `The cheque's face amount has more decimal places than ${currency} allows (${scale}). Record it exactly as printed.`
+    );
+  }
+  const minor = BigInt(whole) * BigInt(10) ** BigInt(scale) + BigInt(fraction.padEnd(scale, "0") || "0");
+  if (minor <= BigInt(0)) {
+    throw new ConvexError("The cheque's face amount must be greater than zero.");
+  }
+  if (minor > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new ConvexError("The cheque's face amount is too large to record.");
+  }
+  return Number(minor);
+}
+
+/**
+ * The denomination a deal's cheque face is recorded in: the deal's frozen
+ * `economicsCurrency`, else the finance-company receivable's currency, else the
+ * organization's. Always a supported denomination or a refusal.
+ */
+export async function dealChequeCurrency(
+  ctx: QueryCtx,
+  app: Doc<"financeApplications">,
+  orgCurrency: string
+): Promise<string> {
+  let currency: string | undefined = app.economicsCurrency;
+  if (currency === undefined) {
+    const receivable = await ctx.db
+      .query("receivableDocuments")
+      .withIndex("by_org_source", (q) =>
+        q.eq("orgId", app.orgId).eq("sourceType", "finance_application").eq("sourceId", app._id)
+      )
+      .unique();
+    currency = receivable?.currency ?? orgCurrency;
+  }
+  assertSupportedDenomination(currency, "recording a cheque face");
+  return currency;
+}

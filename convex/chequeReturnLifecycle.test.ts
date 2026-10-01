@@ -1085,7 +1085,7 @@ describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
     const before = await worldSnapshot(t);
     await expect(
       asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId })
-    ).rejects.toThrow(/finance application/i);
+    ).rejects.toThrow(/Cheque returned by bank/);
     expect(await worldSnapshot(t), "the refusal was not zero-delta").toEqual(before);
   });
 
@@ -1118,6 +1118,8 @@ describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
       asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId })
     ).rejects.toThrow(/owed and collected at the same time/i);
     expect(await worldSnapshot(t), "the refusal was not zero-delta").toEqual(before);
+    const refused = await asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId }).then(() => null, (e: unknown) => e as { data?: { code?: string } });
+    expect(refused?.data?.code).toBe("CHEQUE_RETURN_NO_PAYMENT_TO_REVERSE");
 
     // The specific corruption, named: the debt did NOT reopen while the reversal
     // was skipped.
@@ -1141,6 +1143,8 @@ describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
       asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId })
     ).rejects.toThrow(/no persisted receipt lineage/i);
     expect(await worldSnapshot(t), "the refusal was not zero-delta").toEqual(before);
+    const refused = await asAdmin.mutation(api.collections.returnClearedCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId }).then(() => null, (e: unknown) => e as { data?: { code?: string } });
+    expect(refused?.data?.code).toBe("CHEQUE_RETURN_NO_RECEIPT_LINEAGE");
   });
 
   test("F3 — a contradictory application lineage refuses before any write", async () => {

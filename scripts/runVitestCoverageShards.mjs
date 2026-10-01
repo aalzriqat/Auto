@@ -18,6 +18,35 @@ if (!Number.isInteger(shardCount) || shardCount < 2 || shardCount > 16) {
   throw new Error("VITEST_COVERAGE_SHARDS must be an integer between 2 and 16.");
 }
 
+// CI parallelism (SCRUM-359). "all" is the original single-process pipeline.
+// "run" executes only this slice's share of the SAME work units (authority
+// control, unit batches or Sonar shards) and writes blobs without merging.
+// "merge" runs no tests: it refuses unless the blob directory holds exactly the
+// blobs a full "all" run would have produced, then performs the identical
+// merge. Batch composition is always computed from the full sorted census, so
+// slicing changes which machine runs a batch, never what the batch contains.
+const phase = process.env.AUTOFLOW_COVERAGE_PHASE ?? "all";
+if (phase !== "all" && phase !== "run" && phase !== "merge") {
+  throw new Error("AUTOFLOW_COVERAGE_PHASE must be one of: all, run, merge.");
+}
+const sliceSpec = process.env.AUTOFLOW_COVERAGE_SLICE;
+if ((phase === "run") !== (sliceSpec !== undefined)) {
+  throw new Error("AUTOFLOW_COVERAGE_SLICE is required with, and only with, AUTOFLOW_COVERAGE_PHASE=run.");
+}
+let sliceIndex = 1;
+let sliceCount = 1;
+if (phase === "run") {
+  const match = /^(\d+)\/(\d+)$/.exec(sliceSpec);
+  sliceIndex = match ? Number(match[1]) : Number.NaN;
+  sliceCount = match ? Number(match[2]) : Number.NaN;
+  if (!(sliceCount >= 2 && sliceCount <= 16 && sliceIndex >= 1 && sliceIndex <= sliceCount)) {
+    throw new Error("AUTOFLOW_COVERAGE_SLICE must be <index>/<count> with 1 <= index <= count and 2 <= count <= 16.");
+  }
+}
+// Work unit N (1-based) belongs to slice ((N - 1) mod count) + 1. The authority
+// control is work unit 1, so exactly one slice runs it.
+const ownsWorkUnit = (ordinal) => (ordinal - 1) % sliceCount === sliceIndex - 1;
+
 const root = process.cwd();
 const vitestBin = path.join(root, "node_modules", "vitest", "vitest.mjs");
 const blobDir = path.resolve(
@@ -122,26 +151,9 @@ function collectUnitTestFiles(directory = discoveryRoot, relative = "") {
   return files;
 }
 
-rmSync(blobDir, { recursive: true, force: true });
-rmSync(coverageDir, { recursive: true, force: true });
-mkdirSync(blobDir, { recursive: true });
+const authorityBlob = "unified-deal-authority.json";
 
-// Negative control for the coverage pipeline itself: the release-critical
-// authority suite must produce a V8 coverage blob on every covered path. It is
-// deliberately isolated so coverage instrumentation cannot reintroduce the
-// long-lived-process OOM that motivated this runner.
-runVitest([
-  "run",
-  authorityTest,
-  "--reporter=blob",
-  `--outputFile=${path.join(blobDir, "unified-deal-authority.json")}`,
-  "--coverage",
-  coverageReportsArg,
-  "--maxWorkers=1",
-  ...(mode === "sonar" ? sonarCoverageArgs : thresholdZeroArgs),
-]);
-
-if (mode === "unit") {
+function unitBatches() {
   const testFiles = collectUnitTestFiles().sort();
   if (testFiles.length === 0) throw new Error("No unit/integration test files discovered.");
 
@@ -149,9 +161,76 @@ if (mode === "unit") {
   if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 16) {
     throw new Error("VITEST_COVERAGE_BATCH_SIZE must be an integer between 1 and 16.");
   }
-  const batchCount = Math.ceil(testFiles.length / batchSize);
-  for (let offset = 0, batch = 1; offset < testFiles.length; offset += batchSize, batch += 1) {
-    const batchFiles = testFiles.slice(offset, offset + batchSize);
+  const batches = [];
+  for (let offset = 0; offset < testFiles.length; offset += batchSize) {
+    batches.push(testFiles.slice(offset, offset + batchSize));
+  }
+  return batches;
+}
+
+// The merge-phase completeness gate: a missing slice, a slice that stopped
+// early, or a stray blob from another run must not reach the merge, because
+// Vitest merges whatever blobs it finds and would report the smaller census
+// as green.
+function assertCompleteBlobSet() {
+  const expected =
+    mode === "unit"
+      ? unitBatches().map((_, index) => `unit-batch-${index + 1}.json`)
+      : Array.from({ length: shardCount }, (_, index) => `sonar-${index + 1}.json`);
+  expected.push(authorityBlob);
+  // Every file counts, not only .json: Vitest's merge parses every file in the
+  // directory, so the gate must see exactly what the merge will read.
+  let present = [];
+  try {
+    present = readdirSync(blobDir);
+  } catch {
+    present = [];
+  }
+  const missing = expected.filter((name) => !present.includes(name));
+  const unexpected = present.filter((name) => !expected.includes(name));
+  if (missing.length > 0 || unexpected.length > 0) {
+    throw new Error(
+      `Coverage blob set is incomplete for ${mode} merge (expected ${expected.length}, found ${present.length}). ` +
+        `Missing: ${missing.join(", ") || "none"}. Unexpected: ${unexpected.join(", ") || "none"}.`,
+    );
+  }
+  process.stdout.write(`Coverage blob set complete for ${mode} merge: ${expected.length} blobs.\n`);
+}
+
+rmSync(coverageDir, { recursive: true, force: true });
+if (phase === "merge") {
+  assertCompleteBlobSet();
+} else {
+  rmSync(blobDir, { recursive: true, force: true });
+  mkdirSync(blobDir, { recursive: true });
+}
+
+// Negative control for the coverage pipeline itself: the release-critical
+// authority suite must produce a V8 coverage blob on every covered path. It is
+// deliberately isolated so coverage instrumentation cannot reintroduce the
+// long-lived-process OOM that motivated this runner.
+if (phase !== "merge" && ownsWorkUnit(1)) {
+  runVitest([
+    "run",
+    authorityTest,
+    "--reporter=blob",
+    `--outputFile=${path.join(blobDir, authorityBlob)}`,
+    "--coverage",
+    coverageReportsArg,
+    "--maxWorkers=1",
+    ...(mode === "sonar" ? sonarCoverageArgs : thresholdZeroArgs),
+  ]);
+}
+
+if (phase === "merge") {
+  // Tests already ran in the slices; fall through to the merge.
+} else if (mode === "unit") {
+  const batches = unitBatches();
+  const batchCount = batches.length;
+  for (let batch = 1; batch <= batchCount; batch += 1) {
+    // Work unit 1 is the authority control, so batch N is work unit N + 1.
+    if (!ownsWorkUnit(batch + 1)) continue;
+    const batchFiles = batches[batch - 1];
     process.stdout.write(
       `Coverage batch ${batch}/${batchCount}: ${batchFiles.join(" ")}\n`,
     );
@@ -170,6 +249,7 @@ if (mode === "unit") {
   }
 } else {
   for (let shard = 1; shard <= shardCount; shard += 1) {
+    if (!ownsWorkUnit(shard + 1)) continue;
     runVitest([
       "run",
       "convex",
@@ -194,4 +274,10 @@ const mergeArgs = [
   coverageReportsArg,
   ...(mode === "sonar" ? sonarCoverageArgs : []),
 ];
-runVitest(mergeArgs);
+if (phase === "run") {
+  process.stdout.write(
+    `Coverage slice ${sliceIndex}/${sliceCount} (${mode}) wrote its blobs; the merge runs in the aggregator.\n`,
+  );
+} else {
+  runVitest(mergeArgs);
+}

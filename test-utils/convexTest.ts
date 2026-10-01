@@ -5,6 +5,9 @@ import type { SchemaDefinition, GenericSchema } from "convex/server";
 import aggregateComponentSchema from "../node_modules/@convex-dev/aggregate/src/component/schema";
 import rateLimiterComponentSchema from "../node_modules/@convex-dev/rate-limiter/src/component/schema";
 import { aggregateTriggers } from "../convex/aggregates";
+import type { api as ApiRef } from "../convex/_generated/api";
+import type { Id } from "../convex/_generated/dataModel";
+import type schema from "../convex/schema";
 
 /**
  * `convexTest`, with every mounted component registered and `t.run` wired to
@@ -109,6 +112,39 @@ export function convexTestWithComponents<
       fn(aggregateTriggers.wrapDB(ctx as never) as never)) as never)) as typeof t.run;
 
   return t as TestConvex<Schema> & { runUnwrapped: TestConvex<Schema>["run"] };
+}
+
+/**
+ * SCRUM-446: a financed deal that settles through the dealership cannot close
+ * without cost evidence, configured company or not. This records the dealer's
+ * "no closing costs" line at zero and reconciles it — the same evidence a
+ * screen collects — so a fixture about something else can reach `finalizeDeal`.
+ * Must run before the deal closes (closing refuses new costs).
+ */
+type AsIdentity = ReturnType<TestConvex<typeof schema>["withIdentity"]>;
+
+export async function recordReconciledZeroCost(
+  as: AsIdentity,
+  api: typeof ApiRef,
+  orgId: Id<"organizations">,
+  applicationId: Id<"financeApplications">,
+  /** Reconciling takes a different authority from recording; defaults to `as`. */
+  asReconciler: AsIdentity = as
+): Promise<void> {
+  const feeId = await as.mutation(api.financeDealCosts.recordDealFee, {
+    orgId,
+    applicationId,
+    feeType: "OTHER_CLOSING_EXPENSE",
+    paidBy: "DEALER",
+    paidTo: "OTHER",
+    accountingTreatment: "SELLING_EXPENSE",
+    deductedFromSettlement: false,
+    actualAmountMinor: 0,
+    description: "No closing costs.",
+    expectedCurrency: "JOD",
+    idempotencyKey: crypto.randomUUID(),
+  });
+  await asReconciler.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId, notes: "Nothing to match." });
 }
 
 /**

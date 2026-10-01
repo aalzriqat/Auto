@@ -468,6 +468,7 @@ export function HandoverCostsPanel({
   onRecordTemplateActual,
   onAbandonTemplateActual,
   canRecordDirectPayment = false,
+  canReconcile = false,
   onRecordDirectPayment,
   onAbandonDirectPayment,
   postingHoldFeeIds = [],
@@ -524,6 +525,13 @@ export function HandoverCostsPanel({
    * money). Everyone else is told who can, never offered a button that refuses.
    */
   canRecordDirectPayment?: boolean;
+  /**
+   * `confirm:finance_disbursement` — the permission `reconcileDealFee` checks,
+   * which is NOT the one that records the line (`create:finance_application`).
+   * Without it a line awaiting reconciliation shows who can, never a button
+   * that refuses (SCRUM-446).
+   */
+  canReconcile?: boolean;
   /** Records the dealership's own payment of a line. Rejects with `HandoverCostAttemptError`. */
   onRecordDirectPayment?: (feeId: string, values: DirectHandoverPayment) => Promise<void>;
   /** The form closed after an attempt whose result never arrived: that identity is over. */
@@ -699,6 +707,10 @@ export function HandoverCostsPanel({
   const lineFor = (row: ExpectedHandoverRow): HandoverCostLine | undefined =>
     row.actual === null ? undefined : costs?.lines.find((line) => line._id === row.actual?.feeId);
   const canAdd = canManage;
+  // Reconciling is its own permission, held by the accountant tier that may
+  // not edit costs (`canManage`), so it is offered independently of editing —
+  // and, like editing, never once the deal's economics are frozen.
+  const mayReconcile = canReconcile && !dealClosed;
   const adding = openIntent !== null;
   /**
    * The payment state of one line (SCRUM-443), under the line's own row and
@@ -1015,9 +1027,14 @@ export function HandoverCostsPanel({
                                   {t("RecordTemplateActual")}
                                 </Button>
                               )}
-                              {canManage && row.actual !== null && row.actual.currency === denomination.code && lineFor(row) && (
+                              {(canManage || mayReconcile) && row.actual !== null && row.actual.currency === denomination.code && lineFor(row) && (
                                 <div className="flex gap-1">
-                                  {row.actual.status !== "RECONCILED" && onReconcile && (
+                                  {canManage && row.actual.status !== "RECONCILED" && onReconcile && !canReconcile && (
+                                    <span className="text-xs text-muted-foreground" data-testid={`deal-handover-reconcile-${row.actual.feeId}-waiting`}>
+                                      {t("ReconcileNeedsAccountant")}
+                                    </span>
+                                  )}
+                                  {mayReconcile && row.actual.status !== "RECONCILED" && onReconcile && (
                                     <Button
                                       type="button"
                                       variant="ghost"
@@ -1036,40 +1053,44 @@ export function HandoverCostsPanel({
                                       <CheckCheck className="h-3.5 w-3.5" />
                                     </Button>
                                   )}
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-7 w-7"
-                                    aria-label={t("RecordActualCost")}
-                                    disabled={submittingAny || paymentPending}
-                                    onClick={() => {
-                                      if (!closeAddForm()) return;
-                                      setRecordingTemplateIndex(null);
-                                      setVoidingId(null);
-                                      setReconcilingId(null);
-                                      setEditingId(row.actual?.feeId ?? null);
-                                    }}
-                                  >
-                                    <Pencil className="h-3.5 w-3.5" />
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-7 w-7 text-destructive hover:text-destructive"
-                                    aria-label={t("RemoveHandoverCost")}
-                                    disabled={submittingAny || paymentPending}
-                                    onClick={() => {
-                                      if (!closeAddForm()) return;
-                                      setRecordingTemplateIndex(null);
-                                      setEditingId(null);
-                                      setReconcilingId(null);
-                                      setVoidingId(row.actual?.feeId ?? null);
-                                    }}
-                                  >
-                                    <Trash2 className="h-3.5 w-3.5" />
-                                  </Button>
+                                  {canManage && (
+                                    <>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-7 w-7"
+                                        aria-label={t("RecordActualCost")}
+                                        disabled={submittingAny || paymentPending}
+                                        onClick={() => {
+                                          if (!closeAddForm()) return;
+                                          setRecordingTemplateIndex(null);
+                                          setVoidingId(null);
+                                          setReconcilingId(null);
+                                          setEditingId(row.actual?.feeId ?? null);
+                                        }}
+                                      >
+                                        <Pencil className="h-3.5 w-3.5" />
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-7 w-7 text-destructive hover:text-destructive"
+                                        aria-label={t("RemoveHandoverCost")}
+                                        disabled={submittingAny || paymentPending}
+                                        onClick={() => {
+                                          if (!closeAddForm()) return;
+                                          setRecordingTemplateIndex(null);
+                                          setEditingId(null);
+                                          setReconcilingId(null);
+                                          setVoidingId(row.actual?.feeId ?? null);
+                                        }}
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </Button>
+                                    </>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -1214,9 +1235,14 @@ export function HandoverCostsPanel({
                             {t("HandoverCostCurrencyDiffers")}
                           </span>
                         )}
-                        {canManage && isHandoverType(line.feeType) && line.currency === denomination.code && (
+                        {(canManage || mayReconcile) && isHandoverType(line.feeType) && line.currency === denomination.code && (
                           <div className="flex gap-1">
-                            {line.actualAmountMinor !== undefined && line.status !== "RECONCILED" && onReconcile && (
+                            {canManage && line.actualAmountMinor !== undefined && line.status !== "RECONCILED" && onReconcile && !canReconcile && (
+                              <span className="text-xs text-muted-foreground" data-testid={`deal-handover-reconcile-${line._id}-waiting`}>
+                                {t("ReconcileNeedsAccountant")}
+                              </span>
+                            )}
+                            {mayReconcile && line.actualAmountMinor !== undefined && line.status !== "RECONCILED" && onReconcile && (
                               <Button
                                 type="button"
                                 variant="ghost"
@@ -1234,38 +1260,42 @@ export function HandoverCostsPanel({
                                 <CheckCheck className="h-3.5 w-3.5" />
                               </Button>
                             )}
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7"
-                              aria-label={t("RecordActualCost")}
-                              disabled={submittingAny || paymentPending}
-                              onClick={() => {
-                                if (!closeAddForm()) return;
-                                setVoidingId(null);
-                                setReconcilingId(null);
-                                setEditingId(line._id);
-                              }}
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7 text-destructive hover:text-destructive"
-                              aria-label={t("RemoveHandoverCost")}
-                              disabled={submittingAny || paymentPending}
-                              onClick={() => {
-                                if (!closeAddForm()) return;
-                                setEditingId(null);
-                                setReconcilingId(null);
-                                setVoidingId(line._id);
-                              }}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
+                            {canManage && (
+                              <>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7"
+                                  aria-label={t("RecordActualCost")}
+                                  disabled={submittingAny || paymentPending}
+                                  onClick={() => {
+                                    if (!closeAddForm()) return;
+                                    setVoidingId(null);
+                                    setReconcilingId(null);
+                                    setEditingId(line._id);
+                                  }}
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 text-destructive hover:text-destructive"
+                                  aria-label={t("RemoveHandoverCost")}
+                                  disabled={submittingAny || paymentPending}
+                                  onClick={() => {
+                                    if (!closeAddForm()) return;
+                                    setEditingId(null);
+                                    setReconcilingId(null);
+                                    setVoidingId(line._id);
+                                  }}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </>
+                            )}
                           </div>
                         )}
                       </div>

@@ -4,6 +4,7 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { ruleCollectionRefund } from "./accounting/postingRules";
+import { registerChequeCore } from "./collections";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import {
   occurrenceReversalIdempotencyKey,
@@ -400,7 +401,7 @@ describe("Collections", () => {
         bankFeeMinor: -1,
         idempotencyKey: "return-cleared-bad-fee",
       })
-    ).rejects.toThrow(/non-negative integer/i);
+    ).rejects.toThrow(/CHEQUE_BANK_FEE_INVALID/);
   });
 
   test("approved_refund_posts_outbound_payment_and_reopens_balance", async () => {
@@ -1544,13 +1545,16 @@ describe("Collections", () => {
         updatedAt: Date.now(),
       })
     );
+    // SCRUM-447: a finance-company row is replaceable only while it is the
+    // deal's registered payment, and the replacement states its face exactly.
+    await t.run((ctx) => ctx.db.patch(applicationId, { expectedPaymentMethod: "CHEQUE" }));
     const replacementId = await asFinance.mutation(api.collections.replaceCheque, {
       orgId,
       chequeId: appChequeId,
       bank: "Replacement Bank",
       chequeNumber: "APP-2",
       chequeDate: Date.now() + 3 * 86_400_000,
-      amount: 150,
+      faceAmount: "150",
       notes: "Customer changed bank",
     });
     await t.run(async (ctx) => {
@@ -1560,7 +1564,9 @@ describe("Collections", () => {
         status: "REPLACED",
         replacementChequeId: replacementId,
       });
-      expect(oldCheque?.applicationId).toBeUndefined();
+      // SCRUM-447 D0: lineage is permanent — the replaced row keeps its application.
+      expect(oldCheque?.applicationId).toBe(applicationId);
+      expect(oldCheque?.originApplicationId).toBe(applicationId);
       expect(replacement).toMatchObject({
         status: "HELD",
         applicationId,
@@ -2246,6 +2252,59 @@ describe("Collections", () => {
     const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
     expect(draft).toMatchObject({ complete: true, expectedCash: 40, paymentCount: 1 });
   });
+  test("SCRUM-447 reminders never chase a finance-company cheque from the customer", async () => {
+    vi.useFakeTimers();
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, userId } = await seedFinanceMember(t);
+    const now = Date.now();
+    const dueDate = now + 2 * 24 * 60 * 60 * 1000;
+    const base = {
+      orgId,
+      customerId,
+      bank: "FC Bank",
+      chequeDate: dueDate,
+      amount: 500,
+      status: "HELD" as const,
+      createdBy: userId,
+      createdAt: now,
+      updatedAt: now,
+    };
+    // One row carrying each lineage mark on its own: a drawer type, and the
+    // origin anchor a replacement leaves behind. Neither has a live applicationId.
+    const drawerOnly = await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", { ...base, chequeNumber: "FC-D", drawerType: "FINANCE_COMPANY" as const })
+    );
+    const ordinary = await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", { ...base, chequeNumber: "CUST-1" })
+    );
+
+    const result = await t.mutation(internal.collections.processDailyCollectionReminders, {});
+    // Only the ordinary customer cheque is reminded.
+    expect(result).toMatchObject({ queued: 1 });
+    const reminders = await t.run((ctx) =>
+      ctx.db.query("collectionReminders").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(reminders.map((r) => r.chequeId)).toEqual([ordinary]);
+
+    // Send-time re-read: a reminder queued BEFORE the row was recognised as
+    // finance-company is suppressed by the payload, not sent.
+    const staleReminderId = await t.run((ctx) =>
+      ctx.db.insert("collectionReminders", {
+        orgId,
+        customerId,
+        chequeId: drawerOnly,
+        channel: "SMS",
+        messageType: "CHEQUE_UPCOMING",
+        status: "PENDING",
+        scheduledAt: now,
+        createdAt: now,
+      })
+    );
+    const payload = await t.query(internal.collections.getReminderPayload, { reminderId: staleReminderId });
+    expect(payload?.fcLineageSuppressed).toBe(true);
+    const ordinaryPayload = await t.query(internal.collections.getReminderPayload, { reminderId: reminders[0]._id });
+    expect(ordinaryPayload?.fcLineageSuppressed).toBe(false);
+  });
   test("daily_collection_reminders_queue_channels_dedupe_and_mark_results", async () => {
     // Installed before anything schedules: vitest fake timers only control
     // timers created after this call, so installing them at drain time leaves
@@ -2640,5 +2699,83 @@ describe("SCRUM-263 recordPayment refuses a deposit application", () => {
       expect(payment?.method, method).toBe(method);
       expect(payment?.status, method).toBe("POSTED");
     }
+  });
+});
+
+describe("SCRUM-447 FC cheque face is rounded in its own denomination", () => {
+  // Invariant: a cheque row carrying {amountMinor, currency} stores
+  // amount === fromMinorUnits(amountMinor, currency). An org can switch
+  // currency after a deal froze its economics, so the deal's denomination
+  // (JOD, 3dp) can have more decimals than the org's (USD, 2dp).
+  async function seedMixedCurrencyDeal() {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const seeded = await seedFinanceMember(t);
+    await t.run((ctx) =>
+      ctx.db.insert("orgSettings", {
+        orgId: seeded.orgId,
+        currency: "USD",
+        currencySymbol: "$",
+        enabledPaymentTypes: [],
+      })
+    );
+    const deal = await seedVehicleQuoteSaleAndApplication(t, seeded);
+    await t.run((ctx) =>
+      ctx.db.patch(deal.applicationId, { economicsCurrency: "JOD", expectedPaymentMethod: "CHEQUE" })
+    );
+    return { t, ...seeded, ...deal };
+  }
+
+  test("replaceCheque stores the face at the deal currency's precision", async () => {
+    const { t, orgId, userId, customerId, vehicleId, applicationId, asFinance } = await seedMixedCurrencyDeal();
+    const oldChequeId = await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", {
+        orgId,
+        customerId,
+        vehicleId,
+        applicationId,
+        bank: "FC Bank",
+        chequeNumber: "FC-MIX-1",
+        chequeDate: Date.now() + 86_400_000,
+        amount: 1000,
+        status: "HELD",
+        createdBy: userId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
+    const newId = await asFinance.mutation(api.collections.replaceCheque, {
+      orgId,
+      chequeId: oldChequeId,
+      bank: "FC Bank",
+      chequeNumber: "FC-MIX-2",
+      chequeDate: Date.now() + 2 * 86_400_000,
+      faceAmount: "1234.567",
+    });
+    const row = await t.run((ctx) => ctx.db.get(newId));
+    expect(row?.currency).toBe("JOD");
+    expect(row?.amountMinor).toBe(1_234_567);
+    expect(row?.amount).toBe(1234.567);
+  });
+
+  test("registerChequeCore rounds a supplied face in its own currency", async () => {
+    const { t, orgId, userId, customerId, vehicleId, applicationId } = await seedMixedCurrencyDeal();
+    const newId = await t.run((ctx) =>
+      registerChequeCore(ctx, {
+        orgId,
+        customerId,
+        vehicleId,
+        applicationId,
+        bank: "FC Bank",
+        chequeNumber: "FC-MIX-3",
+        chequeDate: Date.now() + 86_400_000,
+        amount: 1234.567,
+        amountMinor: 1_234_567,
+        currency: "JOD",
+        actorId: userId,
+      })
+    );
+    const row = await t.run((ctx) => ctx.db.get(newId));
+    expect(row?.amountMinor).toBe(1_234_567);
+    expect(row?.amount).toBe(1234.567);
   });
 });

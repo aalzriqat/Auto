@@ -415,6 +415,10 @@ describe("Finance lifecycle Phase 4", () => {
       })
     ).rejects.toThrow(/confirm:finance_disbursement/);
 
+    // SCRUM-447 B1: confirming consumes a registered tender.
+    await t.run((ctx) =>
+      ctx.db.patch(applicationId, { expectedPaymentMethod: "BANK_TRANSFER", expectedPaymentDate: Date.now() })
+    );
     await asAccountant.mutation(api.applications.confirmDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId,
       applicationId,

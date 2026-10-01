@@ -4,9 +4,11 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { computeExpectedRemittance } from "../../lib/financingEconomics";
 import {
   buildFinancedSalePostingPlan,
+  buildFinancedSalePostingPlanV2,
   checkLegalInvoice,
   treatmentPosting,
   type FinancedSalePostingPlan,
+  type FinancedSalePostingPlanV2,
   type SettlementComponentInput,
 } from "./financedSalePostingPlan";
 import {
@@ -36,6 +38,8 @@ import { DirectProofBudget, directPaymentLedgerProof } from "./handoverDirectPro
 import { heldDepositRowsForVehicle } from "./saleCompletion";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { toMinorUnits } from "./money";
+import { RETIRED_DEAL_MODE_MESSAGE, isRetiredDealMode } from "./dealModes";
+import { isManualFinanceApplication } from "./manualFinancePayer";
 import { requireCustomerGapToDealer } from "./financingEconomics";
 import { summarizeFees } from "./feeSummary";
 import { consignedSettlementRoute, dealershipCollectsGross, isConsignedAgentSale } from "./vehicleOwnership";
@@ -76,6 +80,35 @@ export async function dealSettlesDirect(ctx: QueryCtx | MutationCtx, app: Doc<"f
   return vehicle != null && isConsignedAgentSale(vehicle);
 }
 
+/** The deal modes a quote or application carries. */
+export type DealMode = NonNullable<Doc<"financeApplications">["quoteModeAtSubmission"]>;
+
+/**
+ * The deal's mode as finalizeDeal reads it: frozen at submission, else the
+ * quote's (same organization only).
+ */
+export async function dealModeOf(ctx: QueryCtx | MutationCtx, app: Doc<"financeApplications">): Promise<DealMode | undefined> {
+  if (app.quoteModeAtSubmission !== undefined) return app.quoteModeAtSubmission;
+  const quote = await ctx.db.get(app.quoteId);
+  return quote && quote.orgId === app.orgId ? quote.mode : undefined;
+}
+
+/**
+ * Whether COSTS_CLOSABLE applies (SCRUM-446): the deal settles through the
+ * dealership AND either the plan covers it (a configured company) or its mode
+ * is a financed one that names no configured company. CASH and an absent mode
+ * stay out of scope (deferred to SCRUM-455). The ONE predicate both the
+ * readiness query and finalization reach through `evaluateClosingReadiness`.
+ */
+export function costsGateApplies(
+  app: Doc<"financeApplications">,
+  opts: { settlesDirect: boolean; mode?: DealMode }
+): boolean {
+  if (opts.settlesDirect) return false;
+  if (financedSaleRecognitionApplies(app, opts)) return true;
+  return opts.mode === "MANUAL_FINANCE_COMPANY" || opts.mode === "LEASE" || opts.mode === "INTERNAL_INSTALLMENT";
+}
+
 /** Deals this model covers. Everything else posts the way it always did. */
 export function financedSaleRecognitionApplies(
   app: Doc<"financeApplications">,
@@ -85,7 +118,9 @@ export function financedSaleRecognitionApplies(
   // dealership-side finance receivable exists to recognise. Without a configured
   // company there is no counterparty to owe one.
   if (opts.settlesDirect) return false;
-  return app.companyId !== undefined;
+  // SCRUM-27: a MANUAL finance company is a counterparty too - identified by the
+  // name on its approval letter rather than by a configured row.
+  return app.companyId !== undefined || isManualFinanceApplication(app);
 }
 
 /**
@@ -406,13 +441,23 @@ function rowsUnavailableReason(read: "FEES" | "CUSTODY", error: unknown): Closin
 export async function evaluateClosingReadiness(
   ctx: QueryCtx | MutationCtx,
   app: Doc<"financeApplications">,
-  opts: { settlesDirect: boolean; currency: string }
+  opts: { settlesDirect: boolean; currency: string; planVersion?: 1 | 2 }
 ): Promise<ClosingReadinessEvaluation> {
   const planCovered = financedSaleRecognitionApplies(app, opts);
+  // The scope of the cost gate is decided HERE, once, for the readiness query
+  // and for finalization alike (both reach this evaluator).
+  const dealMode = await dealModeOf(ctx, app);
+  const costsGateOn = costsGateApplies(app, { settlesDirect: opts.settlesDirect, mode: dealMode });
   const checks: ClosingReadinessCheck[] = [];
   const add = (key: ClosingReadinessCheckKey, status: ClosingReadinessCheckStatus, reason: ClosingReadinessReason | null) => {
     checks.push({ key, status, reason });
   };
+  // SCRUM-495: a deal in a retired mode is BLOCKED first, so the screen never offers
+  // Finalize that `finalizeDeal` would refuse. Added ONLY when retired: an operated
+  // deal's checks list is exactly what it was.
+  if (isRetiredDealMode(dealMode)) {
+    add("DEAL_MODE_RETIRED", "BLOCKED", reasonOf("DEAL_MODE_RETIRED", RETIRED_DEAL_MODE_MESSAGE));
+  }
   const planOnly = (key: ClosingReadinessCheckKey, judge: () => [ClosingReadinessCheckStatus, ClosingReadinessReason | null]) => {
     if (!planCovered) add(key, "NOT_APPLICABLE", null);
     else add(key, ...judge());
@@ -423,7 +468,11 @@ export async function evaluateClosingReadiness(
   // the honest answer is to refuse rather than fall back to the approved
   // amount, the quotation, or the customer's financing principal.
   planOnly("REMITTANCE_KNOWN", () => {
-    if (app.expectedDealerRemittanceMinor !== undefined) return ["READY", null];
+    // v2 (SCRUM-435): the company transfers the full approved amount, so a known
+    // approved amount IS the figure - no retained/netted remittance can leave a
+    // deal with nothing to record and nowhere to go.
+    if (opts.planVersion !== 1 && app.approvedDealerPurchaseAmountMinor !== undefined) return ["READY", null];
+    if (app.expectedDealerRemittanceMinor !== undefined && opts.planVersion === 1) return ["READY", null];
     if (app.approvedDealerPurchaseAmountMinor === undefined) {
       return [
         "UNAVAILABLE",
@@ -462,15 +511,20 @@ export async function evaluateClosingReadiness(
    * read; otherwise READY, or BLOCKED with the refusal. A ConvexError thrown
    * while judging becomes `onThrow` with its message, coded `throwCode` —
    * stated per check, since a refusal (BLOCKED) and an unreadable input
-   * (UNAVAILABLE) are different verdicts. `planOnly` checks are
-   * NOT_APPLICABLE off the plan's route.
+   * (UNAVAILABLE) are different verdicts. A check with `applies: false` is
+   * NOT_APPLICABLE.
    */
   const onRows = async (
     key: ClosingReadinessCheckKey,
-    spec: { onThrow: "BLOCKED" | "UNAVAILABLE"; throwCode?: "CUSTODY_LEDGER_UNVERIFIABLE" | "HANDOVER_DIRECT_LEDGER_UNVERIFIABLE"; planOnly?: boolean },
+    spec: {
+      onThrow: "BLOCKED" | "UNAVAILABLE";
+      throwCode?: "CUSTODY_LEDGER_UNVERIFIABLE" | "HANDOVER_DIRECT_LEDGER_UNVERIFIABLE";
+      /** false: NOT_APPLICABLE (wider than the plan's own coverage; see `costsGateApplies`). */
+      applies?: boolean;
+    },
     judge: (read: NonNullable<typeof rows>) => ClosingReadinessReason | null | Promise<ClosingReadinessReason | null>
   ) => {
-    if (spec.planOnly && !planCovered) return add(key, "NOT_APPLICABLE", null);
+    if (spec.applies === false) return add(key, "NOT_APPLICABLE", null);
     if (rows === null) return add(key, "UNAVAILABLE", rowsUnavailable);
     try {
       const refusal = await judge(rows);
@@ -505,7 +559,10 @@ export async function evaluateClosingReadiness(
   await onRows("CUSTODY_SETTLED", { onThrow: "BLOCKED" }, ({ fees, custody }) => custodySettledRefusal(custody, fees));
 
   // The CURRENT state of the deal's costs, judged on the rows just read.
-  await onRows("COSTS_CLOSABLE", { onThrow: "BLOCKED", planOnly: true }, ({ fees }) =>
+  // Applies where `costsGateApplies` says (SCRUM-446): plan-covered deals, and
+  // financed-mode deals that name no company. CASH and mode-less deals are out
+  // of scope (SCRUM-455); the direct route is exempt.
+  await onRows("COSTS_CLOSABLE", { onThrow: "BLOCKED", applies: costsGateOn }, ({ fees }) =>
     costsClosableRefusal(fees, opts.currency)
   );
 
@@ -630,8 +687,14 @@ export async function resolveFinancedSalePlan(
      * caller can forget to decide.
      */
     mayReadMoney: boolean;
+    /**
+     * SCRUM-435. Defaults to 2 (finance-company forward): `finalizeDeal` is
+     * always v2. 1 exists so the v1 builder stays exercised by its own tests
+     * and is never recomputed for a deal already finalized under it.
+     */
+    planVersion?: 1 | 2;
   }
-): Promise<FinancedSalePostingPlan | undefined> {
+): Promise<FinancedSalePostingPlan | FinancedSalePostingPlanV2 | undefined> {
   // The finalize door re-runs the SAME evaluator the deal screen shows — never
   // a client's verdict, never the retired stamp — and refuses on the first
   // unmet condition, before anything is written (SCRUM-407 P1.4).
@@ -674,7 +737,11 @@ export async function resolveFinancedSalePlan(
   // So this refuses, and says what is missing. It is the same rule the plan
   // builder applies to a fee whose treatment has no mapping; the only difference
   // is that here the treatment does not exist to be mapped.
+  // v2 (SCRUM-435): the company transfers the FULL approved amount and the
+  // dealership forwards the contribution, so how the company's own policy would
+  // have netted it is irrelevant and is not refused.
   if (
+    opts.planVersion === 1 &&
     dealerContributionSettlement === "NETTED_FROM_REMITTANCE" &&
     dealerContributionMinor > 0
   ) {
@@ -820,6 +887,61 @@ export async function resolveFinancedSalePlan(
   ) {
     throw new ConvexError(
       "This deal records the customer's money both as a deposit held by the dealership and as a contribution paid to the financing company. Record which of the two actually happened before finalizing."
+    );
+  }
+
+  if (opts.planVersion !== 1) {
+    // SCRUM-435, owner ruling Option A: G is the approved amount in full. A
+    // held deposit applied "to the dealer amount" would be netted off that
+    // receivable, which is exactly the superseded model - refused with a
+    // guided message rather than silently re-interpreted.
+    if (depositHeldMajor > 0 && opts.depositTreatment === "APPLY_TO_DEALER_AMOUNT") {
+      throw new ConvexError(
+        "On a deal financed by a finance company the customer's deposit is forwarded to the company, not applied against the dealer's amount. Choose to apply it to the transaction settlement, or refund or forfeit it, before finalizing."
+      );
+    }
+    // SCRUM-27: for a manual company the contribution is NOT a stored figure.
+    // The letter says how much the dealership sends (S); the deposits already
+    // held are part of that, so the dealership's own money is S minus H. It is
+    // derived here, at the moment H is proven, because the deposits can still
+    // change after the letter is entered. Never `?? 0`: an absent letter is
+    // refused, and S below H would mean a negative contribution.
+    let contributionForPlanMinor = dealerContributionMinor;
+    if (isManualFinanceApplication(app)) {
+      const letter = app.manualApproval;
+      if (letter === undefined) {
+        throw new ConvexError(
+          "Enter the finance company's approval letter (its name, the approved amount and the amount the dealership sends it) before finalizing this deal."
+        );
+      }
+      contributionForPlanMinor = letter.dealerSendsMinor - depositLiabilityAppliedMinor;
+      if (contributionForPlanMinor < 0) {
+        throw new ConvexError(
+          "The amount the approval letter says the dealership sends the finance company is less than the deposit already held for this deal. Correct the letter figures or the deposit before finalizing."
+        );
+      }
+    }
+    const v2 = buildFinancedSalePostingPlanV2({
+      currency: opts.currency,
+      legalInvoiceConsiderationMinor: app.legalInvoiceAmountMinor,
+      legalInvoiceIssuedTo: app.legalInvoiceIssuedTo,
+      financierIsConfiguredExternal: true,
+      approvedAmountMinor: app.approvedDealerPurchaseAmountMinor,
+      hasSettlementComponents: components.length > 0,
+      customerReceivableMinor,
+      depositLiabilityAppliedMinor,
+      dealerContributionMinor: contributionForPlanMinor,
+      customerFirstPaymentMinor: app.customerFirstPaymentMinor,
+    });
+    if (!v2.ok) throw new ConvexError(v2.refusal.message);
+    return v2.plan;
+  }
+
+  if (isManualFinanceApplication(app)) {
+    // Plan v1 posts through hooks that identify the payer by a configured
+    // company id. A manual deal has none, so v1 must stay unreachable for it.
+    throw new ConvexError(
+      "A deal financed by a manual finance company can only be finalized on the current sale plan. Reopen it from the current version of the deal."
     );
   }
 
