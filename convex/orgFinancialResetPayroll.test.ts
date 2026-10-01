@@ -68,6 +68,14 @@ describe("resetOrgFinancialData never strands a payroll item's commissionSaleIds
             expect(await ctx.db.get(saleId), `pass ${pass}: payrollItem.commissionSaleIds`).not.toBeNull();
           }
         }
+        if (pass === 0) {
+          // Explicit, ordering-independent precondition (SCRUM-546 c21549): the
+          // item holding the sale id MUST still exist after pass 0, otherwise
+          // the loop above would pass vacuously.
+          const holders = items.filter((item) => item.commissionSaleIds.includes(ids.saleId));
+          expect(holders, "pass 0: the payroll item holding the sale id survives").toHaveLength(1);
+          expect(await ctx.db.get(ids.saleId), "pass 0: the sale survives").not.toBeNull();
+        }
       });
     }
 

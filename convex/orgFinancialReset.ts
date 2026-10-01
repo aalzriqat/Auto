@@ -107,9 +107,10 @@ const RESET_TABLES = [
   "supplierCostRecoveryReceipts",
   "supplierCostRecoveries",
   "expenses",
-  // Payroll
-  "payrollRuns",
+  // Payroll. ⚠️ SCRUM-546: `payrollItems.runId` is REQUIRED, so items go BEFORE
+  // their run (and `CHILD_TABLES` defers the run while any item remains).
   "payrollItems",
+  "payrollRuns",
   "employeeCompensation",
   // Finance applications and their children. Ordering IS a safety property,
   // contrary to what this comment used to claim: the batch limit applies to
@@ -192,8 +193,9 @@ const CHILD_TABLES: Partial<Record<(typeof RESET_TABLES)[number], readonly strin
   supplierCostRecoveries: ["supplierCostRecoveryReceipts"],
   expenses: ["supplierCostRecoveries"],
   // SCRUM-534 — every in-scope table that references a sale or a quote. The
-  // required reference is financeApplications.quoteId; the rest are optional
-  // but are deferred the same way so no pass leaves any of them dangling.
+  // required references are financeApplications.quoteId and
+  // payrollItems.commissionSaleIds; the rest are optional but are deferred the
+  // same way so no pass leaves any of them dangling.
   sales: [
     "financeApplications",
     "deposits",
@@ -205,6 +207,7 @@ const CHILD_TABLES: Partial<Record<(typeof RESET_TABLES)[number], readonly strin
     "payrollItems",
   ],
   quotes: ["sales", "financeApplications", "deposits", "receivables"],
+  payrollRuns: ["payrollItems"],
 };
 
 /**
