@@ -12,10 +12,11 @@
 import { convexTestWithComponents, registerHandover, recordReconciledZeroCost } from "../test-utils/convexTest";
 import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
 import { expectQuoteEconomicsDrifted } from "../test-utils/quoteEconomicsDrifted";
+import { expectAppError } from "../test-utils/expectAppError";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -758,12 +759,16 @@ describe("SCRUM-528 - finalizeDeal builds the sale only from quote economics tha
     expect(await s.as.mutation(api.applications.finalizeDeal, args)).toBe(first);
     expect(await s.t.run((ctx) => ctx.db.query("sales").collect())).toHaveLength(1);
   });
-  test("a drift only inside quote.customerQuotePricingSnapshot refuses", async () => {
-    const s = await seedDealership("d528snapdrift");
+
+  test.each<[string, (snap: NonNullable<Doc<"quotes">["customerQuotePricingSnapshot"]>) => Partial<Doc<"quotes">>]>([
+    ["a drift only inside quote.customerQuotePricingSnapshot refuses", (snap) => ({ customerQuotePricingSnapshot: { ...snap, profitRate: 9 } })],
+    ["a quote whose snapshot was removed refuses", () => ({ customerQuotePricingSnapshot: undefined })],
+  ])("%s", async (_name, quotePatch) => {
+    const s = await seedDealership("d528quotesnap");
     const { applicationId, quoteId } = await readyFinancedDeal(s);
     await s.t.run(async (ctx) => {
       const q = await ctx.db.get(quoteId);
-      await ctx.db.patch(quoteId, { customerQuotePricingSnapshot: { ...q!.customerQuotePricingSnapshot!, profitRate: 9 } });
+      await ctx.db.patch(quoteId, quotePatch(q!.customerQuotePricingSnapshot!));
     });
     await expectRefusedWithZeroWrites(s, applicationId);
   });
@@ -782,37 +787,17 @@ describe("SCRUM-528 - finalizeDeal builds the sale only from quote economics tha
     await expectRefusedWithZeroWrites(s, applicationId);
   });
 
-  test("a quote whose snapshot was removed refuses", async () => {
-    const s = await seedDealership("d528nosnapq");
-    const { applicationId, quoteId } = await readyFinancedDeal(s);
-    await s.t.run((ctx) => ctx.db.patch(quoteId, { customerQuotePricingSnapshot: undefined }));
-    await expectRefusedWithZeroWrites(s, applicationId);
-  });
-
   describe("no snapshot on the application: a financed deal fails closed", () => {
-    test("MANUAL_FINANCE_COMPANY application refuses", async () => {
-      const s = await seedDealership("d528nosnapman");
+    test.each<[string, Partial<Doc<"financeApplications">>]>([
+      ["MANUAL_FINANCE_COMPANY application refuses", {}],
+      ["a legacy application whose MANUAL mode is only on its quote (no quoteModeAtSubmission) refuses", { quoteModeAtSubmission: undefined }],
+      ["CONFIGURED_FINANCE_COMPANY mode refuses", { quoteModeAtSubmission: "CONFIGURED_FINANCE_COMPANY" }],
+    ])("%s", async (_name, appPatch) => {
+      const s = await seedDealership("d528nosnap");
       const { applicationId } = await readyFinancedDeal(s);
-      await s.t.run((ctx) => ctx.db.patch(applicationId, { customerQuotePricingSnapshot: undefined }));
+      await s.t.run((ctx) => ctx.db.patch(applicationId, { ...appPatch, customerQuotePricingSnapshot: undefined }));
       await expectRefusedWithZeroWrites(s, applicationId);
     });
-
-    test("a legacy application whose MANUAL mode is only on its quote (no quoteModeAtSubmission) refuses", async () => {
-      const s = await seedDealership("d528nosnaplegacy");
-      const { applicationId } = await readyFinancedDeal(s);
-      await s.t.run((ctx) => ctx.db.patch(applicationId, { customerQuotePricingSnapshot: undefined, quoteModeAtSubmission: undefined }));
-      await expectRefusedWithZeroWrites(s, applicationId);
-    });
-
-    test("CONFIGURED_FINANCE_COMPANY mode refuses", async () => {
-      const s = await seedDealership("d528nosnapcfg");
-      const { applicationId } = await readyFinancedDeal(s);
-      await s.t.run((ctx) =>
-        ctx.db.patch(applicationId, { customerQuotePricingSnapshot: undefined, quoteModeAtSubmission: "CONFIGURED_FINANCE_COMPANY" })
-      );
-      await expectRefusedWithZeroWrites(s, applicationId);
-    });
-
     test("a mode-less application WITH a company refuses", async () => {
       const s = await seedDealership("d528nosnapco");
       const { applicationId, quoteId } = await readyFinancedDeal(s);
@@ -850,34 +835,35 @@ describe("SCRUM-528 - finalizeDeal builds the sale only from quote economics tha
       await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "s528_sa", email: "s528.admin@autoflow.dev", name: "sa" }));
       return s.t.withIdentity({ subject: "s528_sa", clerkId: "s528_sa" });
     }
-    async function expectForbidden(attempt: Promise<unknown>) {
-      const error = await attempt.then(
-        () => {
-          throw new Error("expected a FORBIDDEN refusal but the call resolved");
-        },
-        (caught: unknown) => caught as { data?: { code?: string; message?: string } }
-      );
-      expect(error?.data?.code).toBe("FORBIDDEN");
-      expect(error?.data?.message).toContain('Financial table "quotes"');
-    }
+    const forbidden = (action: string) =>
+      `Financial table "quotes" cannot be changed through ${action}. Use a domain reversal, cancellation, or audited correction workflow.`;
+    const draftQuote = async (s: Seeded) =>
+      (await s.as.mutation(api.quotes.saveQuote, {
+        orgId: s.orgId, customerId: s.customerId, vehicleId: await s.mkVehicle("B"), vehiclePrice: 12_000, downPayment: 0,
+        termMonths: 48, mode: "MANUAL_FINANCE_COMPANY", manualProviderName: "Other finance option", manualAdminFees: 0,
+        manualProfitRate: 5,
+      } as never)) as Id<"quotes">;
 
-    test.each(["with an application", "a DRAFT with no application"])("update / restore / hard delete refuse a quote %s", async (kind) => {
-      const s = await seedDealership(`d528adm${kind.length}`);
-      let quoteId: Id<"quotes">;
-      if (kind === "with an application") {
-        ({ quoteId } = await readyFinancedDeal(s));
-      } else {
-        const vehicleId = await s.mkVehicle("B");
-        quoteId = await s.as.mutation(api.quotes.saveQuote, {
-          orgId: s.orgId, customerId: s.customerId, vehicleId, vehiclePrice: 12_000, downPayment: 0, termMonths: 48,
-          mode: "MANUAL_FINANCE_COMPANY", manualProviderName: "Other finance option", manualAdminFees: 0, manualProfitRate: 5,
-        } as never);
-      }
+    test.each<[string, string, (s: Seeded) => Promise<Id<"quotes">>]>([
+      ["with an application", "d528admapp", async (s) => (await readyFinancedDeal(s)).quoteId],
+      ["a DRAFT with no application", "d528admdraft", draftQuote],
+    ])("update / restore / hard delete refuse a quote %s", async (_label, seedKey, setup) => {
+      const s = await seedDealership(seedKey);
+      const quoteId = await setup(s);
       const admin = await superAdmin(s);
       const before = await s.t.run((ctx) => ctx.db.get(quoteId));
-      await expectForbidden(admin.mutation(api.adminData.adminUpdateRecord, { table: "quotes", id: quoteId, patch: { vehiclePrice: 1 } }));
-      await expectForbidden(admin.mutation(api.adminData.adminRestoreRecords, { table: "quotes", ids: [quoteId] }));
-      await expectForbidden(admin.mutation(api.adminData.adminHardDelete, { table: "quotes", id: quoteId }));
+      await expectAppError(
+        admin.mutation(api.adminData.adminUpdateRecord, { table: "quotes", id: quoteId, patch: { vehiclePrice: 1 } }),
+        "FORBIDDEN", forbidden("adminUpdateRecord")
+      );
+      await expectAppError(
+        admin.mutation(api.adminData.adminRestoreRecords, { table: "quotes", ids: [quoteId] }),
+        "FORBIDDEN", forbidden("adminRestoreRecords")
+      );
+      await expectAppError(
+        admin.mutation(api.adminData.adminHardDelete, { table: "quotes", id: quoteId }),
+        "FORBIDDEN", forbidden("adminHardDelete")
+      );
       expect(await s.t.run((ctx) => ctx.db.get(quoteId))).toEqual(before);
     });
   });

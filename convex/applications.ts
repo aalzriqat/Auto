@@ -4659,7 +4659,8 @@ export const finalizeDeal = mutation({
         }
         // SCRUM-528. The sale below is built from the quote's economics, so they must still agree
         // with the pricing frozen on this application (before any write).
-        assertQuoteEconomicsMatchFrozen(app, quote, app.quoteModeAtSubmission ?? quote.mode);
+        const quoteMode: QuoteMode | undefined = app.quoteModeAtSubmission ?? quote.mode;
+        assertQuoteEconomicsMatchFrozen(app, quote, quoteMode);
         await assertRequiredApplicationDocumentsComplete(ctx, app, quote);
 
         // SCRUM-195 M3, DOOR 4. COMPLETION-TIME OWNERSHIP IS NOT REDUNDANT
@@ -4681,7 +4682,6 @@ export const finalizeDeal = mutation({
         // `completeSale`'s shared boundary (SCRUM-260), against the price this
         // sale persists — `quote.vehiclePrice` below.
 
-        const quoteMode: QuoteMode | undefined = app.quoteModeAtSubmission ?? quote.mode;
         const financingType =
           quoteMode === "LEASE"
             ? "LEASE"

@@ -1,5 +1,5 @@
 import type { Doc } from "../_generated/dataModel";
-import { pricingSnapshotsEqual } from "../sales";
+import { pricingSnapshotsEqual } from "./financingEconomics";
 import { throwAppError, AppErrorCode } from "./errors";
 import { isManualFinanceApplication } from "./manualFinancePayer";
 

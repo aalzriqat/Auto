@@ -406,6 +406,29 @@ export type CustomerQuotePricingSnapshot = {
   companyRuleVersion?: number;
 };
 
+/** Field-by-field equality of two customer pricing snapshots (optional fields: both absent or both equal). */
+export const pricingSnapshotsEqual = (
+  a: CustomerQuotePricingSnapshot,
+  b: CustomerQuotePricingSnapshot | undefined
+): boolean =>
+  b !== undefined &&
+  a.currency === b.currency &&
+  a.vehiclePrice === b.vehiclePrice &&
+  a.downPayment === b.downPayment &&
+  a.termMonths === b.termMonths &&
+  a.executionFees === b.executionFees &&
+  a.commission === b.commission &&
+  a.profitRate === b.profitRate &&
+  a.insuranceRate === b.insuranceRate &&
+  a.gracePeriodMonths === b.gracePeriodMonths &&
+  a.includesCommissionInDebt === b.includesCommissionInDebt &&
+  a.totalFinancedAmount === b.totalFinancedAmount &&
+  a.totalContractValue === b.totalContractValue &&
+  a.monthlyInstallment === b.monthlyInstallment &&
+  a.totalProfit === b.totalProfit &&
+  a.takafulAmount === b.takafulAmount &&
+  a.companyRuleVersion === b.companyRuleVersion;
+
 /**
  * Customer eligibility snapshot for financing quotations.
  *
