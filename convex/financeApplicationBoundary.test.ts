@@ -742,6 +742,28 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
     expect(scan(doors, QUOTATION_SENTINELS)).toEqual([]);
   });
 
+  /**
+   * SCRUM-239: `disbursementVersion` is the counter the confirmer must echo back
+   * to `confirmDisbursement`. It is projected in the DISBURSEMENT_WORKFLOW tier
+   * so the default MANAGER (confirm, no view:finance) observes it; a caller with
+   * neither permission does not.
+   */
+  test("disbursementVersion reaches the default MANAGER and not the default SALES", async () => {
+    const seeded = await seedSentinelDeal("dvTier");
+    await seeded.t.run((ctx) => ctx.db.patch(seeded.applicationId, { disbursementVersion: 2 }));
+    const read = async (caller: Caller) =>
+      (await caller.query(api.applications.get, {
+        orgId: seeded.orgId,
+        applicationId: seeded.applicationId,
+      })) as { disbursementVersion?: number } | null;
+
+    const manager = await read(await seeded.asRole(templateFor("MANAGER")));
+    expect(manager?.disbursementVersion).toBe(2);
+    const sales = await read(await seeded.asRole(templateFor("SALES")));
+    expect(sales).not.toBeNull();
+    expect(sales?.disbursementVersion).toBeUndefined();
+  });
+
   test.each([
     ["default ACCOUNTANT", () => templateFor("ACCOUNTANT"), false],
     ["the system OWNER", () => templateFor("OWNER") ?? [], true],

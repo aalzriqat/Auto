@@ -16,8 +16,10 @@ import {
   requiresLtvPercentFor,
 } from "./utils/financeApplicationProjection";
 import { PERMISSIONS } from "./utils/permissions";
+import { isManualFinanceApplication, isManualLetterUnitIntact, MANUAL_GAP_TO_FINANCIER_REFUSAL, normalizeManualPayerName } from "./utils/manualFinancePayer";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import {
+  computeAppraisalGap,
   computeSubmittedQuotation,
   FinancingEconomicsError,
   isApprovalFarFromEvidence,
@@ -47,6 +49,8 @@ import {
   deriveEconomics,
   economicsStamp,
   evaluateQuotationException,
+  GAP_RESOLUTION_CLEARED,
+  gapResolutionTransition,
   requireCustomerGapToDealer,
   resolveAppliedLtv,
   selectActiveAppraisal,
@@ -154,6 +158,11 @@ async function recomputeAndPatchEconomics(
   // without its own check, the bad denomination stops here rather than being
   // persisted and scaled by a guess further downstream.
   assertSupportedDenomination(app.economicsCurrency, "recomputing these economics");
+  // SCRUM-27: a manual finance company has no configured rule to derive a split
+  // from. Its figures come from the approval letter (G, S) and are frozen at
+  // finalize; deriving here would need a company that does not exist and would
+  // overwrite the letter-derived contribution.
+  if (isManualFinanceApplication(app)) return false;
   const snapshot = await resolveRuleSnapshot(ctx, app);
   // Pinning is the moment an unpinned deal's denomination becomes permanent.
   // It must agree with the cost/custody rows already recorded against the deal
@@ -2124,20 +2133,17 @@ export const recordAppraisal = mutation({
             expectedDealerRemittanceMinor: undefined,
             rawAppraisalGapMinor: undefined,
             gapResolution: undefined,
-            customerGapShareMinor: undefined,
-            dealerGapShareMinor: undefined,
-            customerGapCashToDealerMinor: undefined,
-            customerGapInstallmentToDealerMinor: undefined,
-            customerGapToFinanceCompanyMinor: undefined,
-            gapResolvedAt: undefined,
-            gapResolvedBy: undefined,
-            // The note says things like "customer agreed to absorb the full
-            // 1,000" — it cannot outlive the 1,000.
-            gapResolutionNotes: undefined,
+            // Includes the note, which says things like "customer agreed to absorb the
+            // full 1,000" — it cannot outlive the 1,000.
+            ...GAP_RESOLUTION_CLEARED,
             // Out of READY: nothing may be handed over against an approval that
             // no longer exists. finalizeDeal's own guard (below) is the other
             // half of this.
             handoverStatus: "BLOCKED" as const,
+            // A manual company's letter is part of the approval this appraisal
+            // withdraws (same as a configured deal, whose approval is voided):
+            // the letter is re-entered, which re-derives G, the basis and the gap.
+            ...(isManualFinanceApplication(app) ? { manualApproval: undefined } : {}),
           }
         : {}),
     });
@@ -2241,6 +2247,13 @@ export const approveDealerPurchaseAmount = mutation({
     );
     if (app.status === "CLOSED" || app.status === "CANCELLED") {
       throw new ConvexError("This application is closed. Its approval can no longer be changed.");
+    }
+    // SCRUM-27: a manual finance company has its own door. This one resolves
+    // rule snapshots and LTV that a manual application does not have.
+    if (isManualFinanceApplication(app)) {
+      throw new ConvexError(
+        "This application is financed by a manual finance company. Enter its approval letter with the manual approval form instead."
+      );
     }
     /**
      * At the TOP of the handler, so every approval route runs it.
@@ -2583,56 +2596,14 @@ export const approveDealerPurchaseAmount = mutation({
     }
 
     const rawGapMinor = refreshed.rawAppraisalGapMinor ?? 0;
-    const gapChanged = rawGapMinor !== previousRawGapMinor;
-
-    if (rawGapMinor <= 0) {
-      // Nothing left to negotiate. Any shares agreed against the old gap are
-      // void — leaving them would let a resolution reconciled against a
-      // different number stay attached to this deal.
-      await ctx.db.patch(args.applicationId, {
-        gapResolution: "NOT_REQUIRED",
-        ...(gapChanged
-          ? {
-              customerGapShareMinor: undefined,
-              dealerGapShareMinor: undefined,
-              customerGapCashToDealerMinor: undefined,
-              customerGapInstallmentToDealerMinor: undefined,
-              customerGapToFinanceCompanyMinor: undefined,
-              gapResolvedAt: undefined,
-              gapResolvedBy: undefined,
-              gapResolutionNotes: undefined,
-            }
-          : {}),
-      });
-    } else if (
-      gapChanged ||
-      refreshed.gapResolution === undefined ||
-      // FAILED is written when a deal is rejected or cancelled with a gap open.
-      // REJECTED -> PENDING_DOCS is a legal transition, so a reopened deal
-      // carried "negotiation failed" against a live shortfall and this branch
-      // never reopened it, because FAILED is neither undefined nor a change.
-      refreshed.gapResolution === "FAILED"
-    ) {
-      // The gap moved, so whatever the parties agreed was agreed about a
-      // different amount. Reopen the negotiation rather than carrying a stale
-      // NOT_REQUIRED (or a stale split) against a live shortfall.
-      await ctx.db.patch(args.applicationId, {
-        gapResolution: "PENDING_NEGOTIATION",
-        ...(gapChanged
-          ? {
-              customerGapShareMinor: undefined,
-              dealerGapShareMinor: undefined,
-              customerGapCashToDealerMinor: undefined,
-              customerGapInstallmentToDealerMinor: undefined,
-              customerGapToFinanceCompanyMinor: undefined,
-              gapResolvedAt: undefined,
-              gapResolvedBy: undefined,
-              gapResolutionNotes: undefined,
-            }
-          : {}),
-      });
+    const transition = gapResolutionTransition(
+      rawGapMinor,
+      previousRawGapMinor,
+      refreshed.gapResolution
+    );
+    if (transition !== null) {
+      await ctx.db.patch(args.applicationId, transition);
     }
-
     return args.applicationId;
   },
 });
@@ -2717,20 +2688,15 @@ export const reopenApproval = mutation({
       approvedPurchaseApprovedBy: undefined,
       approvedPurchaseApprovedAt: undefined,
       approvedPurchaseNotes: undefined,
+      // SCRUM-27: the letter is the approval for a manual company.
+      manualApproval: undefined,
       financeCompanyFundedPortionMinor: undefined,
       unfinancedPortionMinor: undefined,
       dealerContributionMinor: undefined,
       expectedDealerRemittanceMinor: undefined,
       rawAppraisalGapMinor: undefined,
       gapResolution: undefined,
-      customerGapShareMinor: undefined,
-      dealerGapShareMinor: undefined,
-      customerGapCashToDealerMinor: undefined,
-      customerGapInstallmentToDealerMinor: undefined,
-      customerGapToFinanceCompanyMinor: undefined,
-      gapResolvedAt: undefined,
-      gapResolvedBy: undefined,
-      gapResolutionNotes: undefined,
+      ...GAP_RESOLUTION_CLEARED,
       // Only when there was one. A MANUAL approval needs no appraisal, and
       // upgrading PENDING to COMPLETED here asserted a completed appraisal on a
       // deal with no appraisal rows at all — the same false claim removed from
@@ -3058,6 +3024,11 @@ export const resolveAppraisalGap = mutation({
       );
     }
 
+    // OR-12: a manual company never receives the shortfall. Refused before any write.
+    if (isManualFinanceApplication(app) && args.customerGapToFinanceCompanyMinor > 0) {
+      throw new ConvexError(MANUAL_GAP_TO_FINANCIER_REFUSAL);
+    }
+
     const settlement = {
       customerGapShareMinor: args.customerGapShareMinor,
       dealerGapShareMinor: args.dealerGapShareMinor,
@@ -3231,6 +3202,164 @@ export const resolveFinancingReconciliation = mutation({
       updatedAt: Date.now(),
     });
 
+    return args.applicationId;
+  },
+});
+
+/**
+ * SCRUM-27 - the manager enters what a MANUAL finance company's approval letter
+ * says. Three facts, all from the letter, none derived:
+ *   - the approved amount G (what the company will pay),
+ *   - the company's name exactly as printed (its identity: it has no party row),
+ *   - S, the amount the dealership must send the company (explicit 0 is real;
+ *     unknown is refused, never read as 0).
+ *
+ * This is the manual sibling of `approveDealerPurchaseAmount` and deliberately
+ * skips everything that mutation does that a manual company has no rows for:
+ * quotation, appraisal, LTV and rule snapshots. The dealer contribution is NOT
+ * written here: it is S minus the deposits held at finalize, and the deposits can
+ * still change after the letter, so finalizeDeal derives it from S.
+ */
+export const recordManualFinanceApproval = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    approvedAmountMinor: v.number(),
+    financierName: v.string(),
+    dealerSendsMinor: v.number(),
+  },
+  returns: v.id("financeApplications"),
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.APPROVE_FINANCE_APPLICATION,
+    ]);
+    assertMinorAmount(args.approvedAmountMinor, "Approved amount");
+    if (args.approvedAmountMinor <= 0) {
+      throw new ConvexError("The approved amount must be greater than zero.");
+    }
+    // 0 is a real answer ("send nothing"); a missing or malformed one is not.
+    assertMinorAmount(args.dealerSendsMinor, "Amount the dealership sends the finance company");
+    const financierName = normalizeManualPayerName(args.financierName);
+
+    const app = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId,
+      APPLICATION_NOT_FOUND
+    );
+    if (!isManualFinanceApplication(app)) {
+      throw new ConvexError(
+        "This application is financed by a configured finance company. Record its approval with the purchase-amount approval instead."
+      );
+    }
+    if (app.status === "CLOSED" || app.status === "CANCELLED") {
+      throw new ConvexError("This application is closed. Its approval can no longer be changed.");
+    }
+    const previous = app.manualApproval;
+    // After handover and before finalize the letter is frozen EXCEPT for S alone:
+    // G and the name are sealed with the handover, but S is checked against the
+    // held deposits only at finalize, so a mistyped S would otherwise strand the
+    // deal. Anything that also moves G or the name keeps the refusal.
+    const sameLetter =
+      previous !== undefined &&
+      previous.approvedAmountMinor === args.approvedAmountMinor &&
+      previous.financierName === financierName;
+    if (app.financedSalePlanVersion !== undefined || (app.vehicleHandoverAt && !sameLetter)) {
+      throw new ConvexError(
+        "This deal has already been finalized or handed over, so the approval letter can no longer be changed. Cancel the application to reverse it instead."
+      );
+    }
+    assertSupportedDenomination(app.economicsCurrency, "recording this approval");
+    if (user._id === app.salespersonId) {
+      throw new ConvexError("You cannot approve the purchase amount on your own application.");
+    }
+
+    const now = Date.now();
+    if (app.vehicleHandoverAt && previous !== undefined) {
+      if (previous.dealerSendsMinor === args.dealerSendsMinor) return args.applicationId;
+      // ONLY S, with the audit row and the revision; G, the gap and the split are untouched.
+      await recordOverride(ctx, {
+        orgId: args.orgId,
+        applicationId: args.applicationId,
+        field: "manualApproval",
+        previousValue: `dealership sends ${previous.dealerSendsMinor}`,
+        newValue: `dealership sends ${args.dealerSendsMinor}, entered by ${user._id}`,
+        reason: "Amount the dealership sends the finance company corrected after handover.",
+        changedBy: user._id,
+      });
+      await ctx.db.patch(args.applicationId, {
+        manualApproval: { ...previous, dealerSendsMinor: args.dealerSendsMinor, enteredBy: user._id, enteredAt: now },
+        economicsRevision: (app.economicsRevision ?? 0) + 1,
+        updatedAt: now,
+      });
+      return args.applicationId;
+    }
+
+    const changed =
+      previous === undefined ||
+      previous.approvedAmountMinor !== args.approvedAmountMinor ||
+      previous.financierName !== financierName ||
+      previous.dealerSendsMinor !== args.dealerSendsMinor;
+    // A retry is a no-op, not a re-stamp - but only when the WHOLE unit is intact.
+    // A letter present with G, the basis or the gap missing (a superseded
+    // approval, a legacy row) is re-derived from the letter, never left half-written.
+    if (!changed && isManualLetterUnitIntact(app)) return args.applicationId;
+    if (previous !== undefined) {
+      await recordOverride(ctx, {
+        orgId: args.orgId,
+        applicationId: args.applicationId,
+        field: "manualApproval",
+        previousValue: `${previous.approvedAmountMinor} from "${previous.financierName}", dealership sends ${previous.dealerSendsMinor}, entered by ${previous.enteredBy}`,
+        newValue: `${args.approvedAmountMinor} from "${financierName}", dealership sends ${args.dealerSendsMinor}, entered by ${user._id}`,
+        reason: "Approval letter figures re-entered.",
+        changedBy: user._id,
+      });
+    }
+
+    // OR-12: a manual company works like a configured one. The shortfall is the
+    // sale price the customer buys at minus the letter's approved amount. The
+    // price is the one the application already carries from the quote
+    // (targetSellingAmountMinor, set once in createFromQuote and never rewritten
+    // for a manual deal), NOT the legal invoice, which is recorded later. It is
+    // not optional: a gap measured against an unknown price would read as none.
+    const salePriceMinor = app.targetSellingAmountMinor;
+    if (salePriceMinor === undefined) {
+      throw new ConvexError(
+        "This application carries no sale price, so the shortfall against the approval letter cannot be measured. Reconcile the quotation economics first."
+      );
+    }
+    const gapMinor = computeAppraisalGap({
+      submittedQuotationMinor: salePriceMinor,
+      approvedDealerPurchaseAmountMinor: args.approvedAmountMinor,
+      appliedLtvPercent: 100, // inert for rawAppraisalGapMinor
+    }).rawAppraisalGapMinor;
+    const transition = gapResolutionTransition(
+      gapMinor,
+      app.rawAppraisalGapMinor ?? 0,
+      app.gapResolution
+    );
+
+    await ctx.db.patch(args.applicationId, {
+      rawAppraisalGapMinor: gapMinor,
+      ...(transition ?? {}),
+      economicsRevision: (app.economicsRevision ?? 0) + 1,
+      manualApproval: {
+        approvedAmountMinor: args.approvedAmountMinor,
+        financierName,
+        dealerSendsMinor: args.dealerSendsMinor,
+        enteredBy: user._id,
+        enteredAt: now,
+      },
+      approvedDealerPurchaseAmountMinor: args.approvedAmountMinor,
+      approvedPurchaseBasis: "MANUAL",
+      approvedPurchaseApprovedBy: user._id,
+      approvedPurchaseApprovedAt: now,
+      updatedAt: now,
+    });
+    if (app.handoverStatus === "BLOCKED" && app.status === "APPROVED") {
+      await ctx.db.patch(args.applicationId, { handoverStatus: "READY" });
+    }
     return args.applicationId;
   },
 });

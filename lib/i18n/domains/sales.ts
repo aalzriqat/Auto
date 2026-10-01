@@ -80,6 +80,15 @@ const dealStepMessages = defineBilingualMessages({
     "This step stopped when the deal was rejected or cancelled. Nothing more will happen here.",
     "توقفت هذه الخطوة عند رفض الصفقة أو إلغائها. لن يحدث شيء آخر هنا.",
   ],
+  // SCRUM-446: a step the server proved is not needed on this deal.
+  StageViewNotApplicableNote: [
+    "This step is not needed on this deal.",
+    "هذه الخطوة غير مطلوبة في هذه الصفقة.",
+  ],
+  StageNotApplicableReasonDisbursement: [
+    "No finance company pays the dealership on this deal.",
+    "لا توجد شركة تمويل تدفع للمعرض في هذه الصفقة.",
+  ],
   StageViewAnnounceShowing: ["Showing step", "عرض الخطوة"],
   StageViewAnnounceBack: ["Back to the current step", "العودة إلى الخطوة الحالية"],
   // ROUND 2 (SCRUM-417 UX4): the deal is closed and this step waits on the finance company.
@@ -211,6 +220,97 @@ const dealRailMessages = defineBilingualMessages({
     "بانتظار صرف شركة التمويل",
   ],
 
+  /**
+   * SCRUM-435. The finance company sends the FULL approved amount; before that
+   * transfer is confirmed the dealership pays it the customer's deposit and its
+   * own contribution. These name the dealership as the one to act.
+   */
+  BlockerAwaitingForwardToFinanceCompany: [
+    "The deposit and the dealership's contribution are paid to the finance company first",
+    "يُدفع العربون ومساهمة المعرض لشركة التمويل أولاً",
+  ],
+  BlockerForwardNotSettled: [
+    "The payment to the finance company is not settled on the books yet",
+    "الدفعة المسدَّدة لشركة التمويل لم تُسوَّ في الدفاتر بعد",
+  ],
+  RecordForwardToFinanceCompany: [
+    "Record payment to the finance company",
+    "سجّل الدفع لشركة التمويل",
+  ],
+  ForwardNeedsPermission: [
+    "A manager or accountant records the payment to the finance company.",
+    "يسجّل المدير أو المحاسب الدفع لشركة التمويل.",
+  ],
+  ForwardNotSettledReason: [
+    "An accountant resolves the payment to the finance company before the transfer can be confirmed.",
+    "يعالج المحاسب الدفع لشركة التمويل قبل أن يمكن تأكيد التحويل.",
+  ],
+  ForwardReturnedNotSettledReason: [
+    "The finance company returned the payment. An accountant resolves its reversal before the replacement payment can be recorded.",
+    "أعادت شركة التمويل الدفعة. يعالج المحاسب عكسها قبل أن يمكن تسجيل الدفعة البديلة.",
+  ],
+  ManagerCancelsFinalizedDeal: [
+    "A manager cancels a finalized deal.",
+    "يلغي المدير الصفقة المُنهاة.",
+  ],
+  RecordForwardTitle: [
+    "Record payment to the finance company",
+    "تسجيل الدفع لشركة التمويل",
+  ],
+  RecordForwardDesc: [
+    "The finance company sends the full approved amount. Record here what the dealership pays it back: the customer's deposit and the dealership's own contribution. Nothing is deducted.",
+    "ترسل شركة التمويل المبلغ المعتمد كاملاً. سجّل هنا ما يدفعه المعرض لها: عربون العميل ومساهمة المعرض. لا يُخصم شيء.",
+  ],
+  RecordForwardAmount: ["Amount to pay", "المبلغ المستحق الدفع"],
+  RecordForwardDeposit: ["Customer deposit", "عربون العميل"],
+  RecordForwardContribution: ["Dealership contribution", "مساهمة المعرض"],
+  RecordForwardConfirm: ["Record payment", "تسجيل الدفع"],
+  ForwardRecordedSuccess: [
+    "Payment to the finance company recorded",
+    "تم تسجيل الدفع لشركة التمويل",
+  ],
+  ForwardVoidAction: ["Void the payment", "إلغاء الدفع"],
+  ForwardReturnedAction: ["Report returned by the company", "الإبلاغ عن إرجاع الشركة للمبلغ"],
+  ForwardVoidTitle: ["Void the payment to the finance company", "إلغاء الدفع لشركة التمويل"],
+  ForwardVoidDesc: [
+    "Use this when the payment was recorded by mistake and the finance company has not sent the transfer yet. The payment is reversed on the books and becomes due again.",
+    "استخدمه إذا سُجّل الدفع بالخطأ ولم ترسل شركة التمويل التحويل بعد. يُعكس الدفع في الدفاتر ويصبح مستحقاً من جديد.",
+  ],
+  ForwardReturnedTitle: ["Report the payment returned", "الإبلاغ عن إرجاع الدفع"],
+  ForwardReturnedDesc: [
+    "Use this when the finance company sent the payment back. It is reversed on the books and becomes due again, so the deal can be cancelled or the payment recorded once more.",
+    "استخدمه إذا أعادت شركة التمويل الدفع. يُعكس في الدفاتر ويصبح مستحقاً من جديد، فيمكن إلغاء الصفقة أو تسجيل الدفع مرة أخرى.",
+  ],
+  ForwardReasonLabel: ["Reason", "السبب"],
+  ForwardReasonRequired: ["A reason is required.", "السبب مطلوب."],
+  ForwardCorrectionSuccess: ["Payment to the finance company corrected", "تم تصحيح الدفع لشركة التمويل"],
+  // SCRUM-239: the bank returned the finance company's cheque after it cleared.
+  ChequeReturnedByBankAction: ["Cheque returned by bank", "شيك مرتجع من البنك"],
+  ChequeReturnedByBankTitle: ["Cheque returned by bank", "شيك مرتجع من البنك"],
+  ChequeReturnedByBankDesc: [
+    "Use this when the bank returned the finance company's cheque after it was cleared. The finance company's receipt comes off the books, the finance company's receivable reopens, and the deal goes back to waiting for a new cheque and a new disbursement.",
+    "استخدمه إذا أرجع البنك شيك شركة التمويل بعد صرفه. يُلغى قيد استلام مبلغ شركة التمويل من الدفاتر، وتعود ذمة شركة التمويل مفتوحة، وتعود الصفقة بانتظار شيك جديد وصرف التمويل من جديد.",
+  ],
+  ChequeReturnedByBankReasonLabel: ["Return reason", "سبب الإرجاع"],
+  ChequeReturnedByBankConfirm: ["Record the return", "تسجيل الإرجاع"],
+  ChequeReturnedByBankSuccess: [
+    "Cheque return recorded. The deal is waiting for a new cheque.",
+    "تم تسجيل الشيك المرتجع. الصفقة بانتظار شيك جديد.",
+  ],
+  // SCRUM-239 round 4: the deal's disbursement moved while the confirm dialog was open.
+  DisbursementChangedWhileConfirming: [
+    "This deal's disbursement changed while the confirmation was open (a cheque was returned). Nothing was confirmed. Reopen and review before confirming.",
+    "تغيّر صرف هذه الصفقة أثناء فتح نافذة التأكيد (تم إرجاع شيك). لم يتم تأكيد أي شيء. أعد فتح النافذة وراجع قبل التأكيد.",
+  ],
+  // SCRUM-239 round 5: same, but a confirmation had been SENT and its answer never arrived here.
+  DisbursementChangedOutcomeUnknown: [
+    "This deal's disbursement changed (a cheque was returned) after a confirmation was sent, and that confirmation's result is not known on this screen. Review the deal's receipts and cheque history before confirming again.",
+    "تغيّر صرف هذه الصفقة (تم إرجاع شيك) بعد إرسال تأكيد، ونتيجة ذلك التأكيد غير معروفة على هذه الشاشة. راجع مقبوضات الصفقة وسجل الشيكات قبل التأكيد مرة أخرى.",
+  ],
+  ForwardVoidAfterTransfer: [
+    "The finance company's transfer is now confirmed, so this payment can no longer be voided. If the company sent it back, report it as returned.",
+    "تم تأكيد تحويل شركة التمويل، لذا لم يعد بالإمكان إلغاء هذا الدفع. إذا أعادته الشركة، أبلغ عن إرجاعه.",
+  ],
   /** Settlement node while the payment step is live: it closes only once the money arrives. */
   BlockerSettlementAfterFinancePayment: [
     "Completes after the finance company pays",
@@ -448,6 +548,10 @@ const dealRailMessages = defineBilingualMessages({
   RecordedAllDone: ["Nothing left to do on this deal.", "لا يوجد ما تبقى للقيام به في هذه الصفقة."],
   DismissRecorded: ["Dismiss", "إغلاق"],
   DealAllStagesComplete: ["All stages complete", "اكتملت جميع المراحل"],
+  /** Every stage is finished but at least one was not needed: no "complete" claim. */
+  DealStagesFinished: ["All stages finished", "انتهت جميع المراحل"],
+  DealStagesCompleteCount: ["complete", "مكتملة"],
+  DealStagesNotNeededCount: ["not needed", "غير مطلوبة"],
   ShowStages: ["Show stages", "عرض المراحل"],
   HideStages: ["Hide stages", "إخفاء المراحل"],
   FinancialSummaryHeading: ["Financial summary", "الملخص المالي"],
@@ -460,6 +564,7 @@ const dealRailMessages = defineBilingualMessages({
   StageStateBlocked: ["Blocked", "متوقفة"],
   StageStatePending: ["Not started", "لم تبدأ"],
   StageStateStopped: ["Will not continue", "لن تستكمل"],
+  StageStateNotApplicable: ["Not needed", "غير مطلوبة"],
   ProfitBreakdownToggle: ["How this is calculated", "طريقة الاحتساب"],
   /** The headline is served but its working is not — distinct from "never recorded". */
   ProfitBreakdownUnavailable: ["Breakdown unavailable", "التفصيل غير متاح"],
@@ -711,6 +816,10 @@ const dealRailMessages = defineBilingualMessages({
     "دفعه موظف: حمِّله على عهدة ذلك الموظف من قسم عهدة الموظف النقدية.",
   ],
   RecordDirectPayment: ["Record direct payment", "تسجيل دفع مباشر"],
+  ReconcileNeedsAccountant: [
+    "Waiting for an accountant or a manager to reconcile this cost.",
+    "بانتظار محاسب أو مدير لمطابقة هذه التكلفة.",
+  ],
   DirectPaymentWaiting: [
     "Waiting for a manager or an accountant to record the payment.",
     "بانتظار مدير أو محاسب لتسجيل الدفع.",
@@ -1188,6 +1297,7 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingCheckBlocked: ["Needs action", "يحتاج إجراء"],
   ClosingCheckUnavailable: ["Cannot be checked", "تعذّر الفحص"],
   ClosingCheckNotApplicable: ["Not needed on this deal", "غير مطلوب في هذه الصفقة"],
+  ClosingCheck_DEAL_MODE_RETIRED: ["The deal is a cash or finance-company deal", "الصفقة نقدية أو عبر شركة تمويل"],
   ClosingCheck_REMITTANCE_KNOWN: ["What the finance company remits is established", "المبلغ الذي تحوّله شركة التمويل محدَّد"],
   ClosingCheck_CONFIGURED_FEES_RECORDED: ["Every fee the finance company configures is recorded", "كل رسم تضبطه شركة التمويل مسجَّل"],
   ClosingCheck_CUSTODY_ON_LEDGER: ["Employee custody is on the books", "عهدة الموظفين مرحَّلة إلى الدفاتر"],
@@ -1338,6 +1448,14 @@ const dealOverviewMessages = defineBilingualMessages({
     "تعذّر تحديد مدخلات إغلاق هذه الصفقة من سجلاتها، لذلك لا يمكن فحص الجاهزية.",
   ],
   ClosingReason_NOT_READY: ["This deal is not ready to be closed.", "هذه الصفقة غير جاهزة للإغلاق."],
+  ClosingReason_DEAL_MODE_RETIRED: [
+    "Lease and in-house instalment deals are no longer offered, so this deal cannot be finalized. Cancel it and start a cash or finance-company deal.",
+    "لم تعد صفقات التأجير والتقسيط الداخلي متاحة، لذلك لا يمكن إنهاء هذه الصفقة. ألغِها وابدأ صفقة نقدية أو عبر شركة تمويل.",
+  ],
+  ClosingReason_WITHHELD_DEAL_MODE_RETIRED: [
+    "This deal is in a mode that is no longer offered.",
+    "هذه الصفقة بنمط لم يعد متاحًا.",
+  ],
   ClosingReason_WITHHELD_REMITTANCE_KNOWN: [
     "What the finance company will remit is not established yet.",
     "لم يُحدَّد بعد المبلغ الذي ستحوّله شركة التمويل.",
@@ -1515,7 +1633,132 @@ const dealOverviewMessages = defineBilingualMessages({
   Save: ["Save", "حفظ"],
 });
 
+/**
+ * Coded server refusals (`ConvexError.data.code`), translated by
+ * `getLocalizedErrorMessage` under `ServerError_<code>`. The English text must
+ * equal the server's own `message`; the placeholders are the payload's fields.
+ */
+const serverErrorMessages = defineBilingualMessages({
+  ServerError_COMMISSION_BASE_UNUSABLE: [
+    "This deal's financing figures (recorded in {baseCurrency}) cannot be used to work out the commissionable vehicle margin in the dealership's currency ({orgCurrency}). Settle the deal's currency and figures before completing it.",
+    "لا يمكن استخدام أرقام التمويل لهذه الصفقة (المسجلة بعملة {baseCurrency}) لاحتساب هامش المركبة الخاضع للعمولة بعملة المعرض ({orgCurrency}). يرجى تسوية عملة الصفقة وأرقامها قبل إتمامها.",
+  ],
+  ServerError_COMMISSION_BASE_UNUSABLE_RECALC: [
+    "This sale's recorded commissionable margin is in a different currency from the organization's or holds an unusable amount, so a commission cannot be worked out. Have the deal's figures corrected before recalculating; the existing commission has been left untouched.",
+    "هامش المركبة الخاضع للعمولة المسجل لعملية البيع هذه بعملة مختلفة عن عملة المؤسسة أو يحتوي على مبلغ غير صالح، لذا لا يمكن احتساب العمولة. يرجى تصحيح أرقام الصفقة قبل إعادة الاحتساب؛ لم يتم تغيير العمولة الحالية.",
+  ],
+  ServerError_FINANCE_RETURN_NOT_DISBURSED: [
+    "This deal has no confirmed finance-company disbursement, so there is no cleared cheque to return. Nothing has been changed.",
+    "لا يوجد صرف مؤكد من شركة التمويل لهذه الصفقة، لذلك لا يوجد شيك مصروف ليُسجَّل كمرتجع. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_RETURN_CHEQUE_NOT_CLEARED: [
+    "Only a cleared finance-company cheque can be returned from the deal, and this cheque is not cleared. Nothing has been changed.",
+    "لا يمكن تسجيل إرجاع شيك شركة التمويل من شاشة الصفقة إلا إذا كان قد تم صرفه، وهذا الشيك لم يُصرف بعد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_RETURN_CHAIN_MISMATCH: [
+    "This cheque does not match the deal's recorded disbursement (the cheque, amount, currency or payment). Nothing has been changed. An accountant reviews the deal.",
+    "هذا الشيك لا يطابق صرف التمويل المسجَّل على الصفقة (الشيك أو المبلغ أو العملة أو الدفعة). لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
+  ],
+  ServerError_FINANCE_RETURN_ALLOCATION_SHAPE: [
+    "The disbursement payment is not allocated exactly to this deal's finance-company receivable, so it cannot be reversed safely. Nothing has been changed. An accountant reviews the deal.",
+    "دفعة صرف التمويل غير موزَّعة بالكامل على ذمة شركة التمويل الخاصة بهذه الصفقة، لذلك لا يمكن عكسها بأمان. لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
+  ],
+  ServerError_FINANCE_RETURN_REVERSAL_UNPROVEN: [
+    "The finance company's receipt could not be confirmed as reversed on the books, so the return was not recorded. Nothing has been changed. An accountant reviews the deal.",
+    "تعذّر التأكد من عكس قيد استلام مبلغ شركة التمويل في الدفاتر، لذلك لم يُسجَّل المرتجع. لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
+  ],
+  ServerError_FINANCE_RETURN_REASON_REQUIRED: [
+    "Give the reason the bank returned the cheque. Nothing has been changed.",
+    "اكتب سبب إرجاع البنك للشيك. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_RETURN_REASON_TOO_LONG: [
+    "The return reason is too long (the most is {max} characters). Nothing has been changed.",
+    "سبب الإرجاع طويل جدًا (الحد الأقصى {max} حرفًا). لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_CHEQUE_RETURN_FROM_DEAL: [
+    "This is a finance-company cheque. Its return is recorded from the deal screen with the \"Cheque returned by bank\" action, not from customer collections. Nothing has been changed.",
+    "هذا شيك شركة تمويل، ويُسجَّل إرجاعه من شاشة الصفقة عبر إجراء «شيك مرتجع من البنك» وليس من تحصيلات العملاء. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_RETURN_NOT_FOUND: [
+    "The deal or the cheque could not be found. Nothing has been changed.",
+    "تعذّر العثور على الصفقة أو الشيك. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_RETURN_KEY_CONFLICT: [
+    "This request reuses the identity of an earlier request that had different content (another cheque or reason). Nothing has been changed. Reopen the dialog and try again.",
+    "يعيد هذا الطلب استخدام معرّف طلب سابق كان محتواه مختلفًا (شيك أو سبب آخر). لم يتم تغيير أي شيء. أعد فتح النافذة وحاول مرة أخرى.",
+  ],
+  ServerError_CHEQUE_ALREADY_RETURNED: [
+    "This cheque has already been returned, so it cannot be returned again. Nothing has been changed.",
+    "سبق تسجيل هذا الشيك كمرتجع، لذلك لا يمكن إرجاعه مرة أخرى. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CHEQUE_NOT_RETURNABLE: [
+    "This cheque can no longer be returned. Nothing has been changed.",
+    "لا يمكن إرجاع هذا الشيك بعد الآن. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CHEQUE_NOT_FOUND: [
+    "Cheque not found. Nothing has been changed.",
+    "لم يتم العثور على الشيك. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CHEQUE_NOT_CLEARED: [
+    "Only cleared cheques can be returned after clearing. Nothing has been changed.",
+    "لا يمكن إرجاع الشيك بعد التصفية إلا إذا كان الشيك مصفّى. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_RETURN_KEY_INVALID: [
+    "The request identity is missing or too long (at most 200 characters). Nothing has been changed. Reopen the dialog and try again.",
+    "معرّف الطلب مفقود أو أطول من الحد المسموح (200 حرف كحد أقصى). لم يتم تغيير أي شيء. أعد فتح النافذة وحاول مرة أخرى.",
+  ],
+  ServerError_FINANCE_CONFIRM_STALE_REQUEST: [
+    "This confirmation was prepared before the deal's cheque was returned, so it cannot be applied. Nothing has been changed. Reopen the deal and confirm again.",
+    "جرى تجهيز هذا التأكيد قبل إرجاع شيك الصفقة، لذلك لا يمكن تطبيقه. لم يتم تغيير أي شيء. أعد فتح الصفقة وأكّد من جديد.",
+  ],
+  ServerError_FINANCE_CONFIRM_ALREADY_CONFIRMED: [
+    "Disbursement has already been confirmed for this application. Nothing has been changed.",
+    "تم تأكيد الصرف لهذا الطلب مسبقًا. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_CONFIRM_CHEQUE_ALREADY_CLEARED: [
+    "This deal's cheque is already marked cleared but the disbursement was never confirmed. Ask accounting to review it before confirming. Nothing has been changed.",
+    "شيك هذه الصفقة مُعلَّم كمصفّى بالفعل لكن الصرف لم يُؤكَّد قط. اطلب من المحاسبة مراجعته قبل التأكيد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_CONFIRM_CHEQUE_RETURNED_OR_CANCELLED: [
+    "This cheque was returned or cancelled. Correct the expected payment, then register the new payment, before confirming disbursement. Nothing has been changed.",
+    "تم إرجاع هذا الشيك أو إلغاؤه. صحّح الدفعة المتوقعة ثم سجّل الدفعة الجديدة قبل تأكيد الصرف. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_CONFIRM_CHEQUE_NOT_FOUND: [
+    "Expected cheque record not found for this application. Nothing has been changed.",
+    "لم يتم العثور على سجل الشيك المتوقع لهذا الطلب. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_CONFIRM_MULTIPLE_LIVE_CHEQUES: [
+    "This deal has more than one live finance-company cheque. Resolve the duplicate before confirming disbursement. Nothing has been changed.",
+    "لهذه الصفقة أكثر من شيك واحد فعّال لشركة التمويل. عالج التكرار قبل تأكيد الصرف. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_CONFIRM_CHEQUE_FACE_UNRECORDED: [
+    "This cheque's face amount was never recorded in minor units. Have a finance manager attest the face from the deal before confirming disbursement. Nothing has been changed.",
+    "لم يُسجَّل المبلغ المكتوب على هذا الشيك بالوحدات الصغرى قط. اطلب من مدير مالي إقرار المبلغ من الصفقة قبل تأكيد الصرف. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FINANCE_CONFIRM_CHEQUE_FACE_MISMATCH: [
+    "The cheque's recorded face does not equal the disbursement being confirmed. Correct the expected payment or the cheque before confirming. Nothing has been changed.",
+    "المبلغ المسجَّل على الشيك لا يساوي مبلغ الصرف الذي يتم تأكيده. صحّح الدفعة المتوقعة أو الشيك قبل التأكيد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CHEQUE_BANK_FEE_INVALID: [
+    "The bank fee must be a whole, non-negative amount in minor currency units. Nothing has been changed.",
+    "يجب أن تكون رسوم البنك عددًا صحيحًا غير سالب بالوحدات الصغرى للعملة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CHEQUE_RETURN_NO_RECEIPT_LINEAGE: [
+    "This cleared cheque has no persisted receipt lineage, so what it moved cannot be determined, and returning it would reopen the debt without reversing the receipt. Nothing has been changed. An accountant reviews the deal.",
+    "لا يوجد سجل محفوظ لقيد الاستلام المرتبط بهذا الشيك المصفّى، لذلك لا يمكن تحديد ما حرّكه، وإرجاعه سيعيد فتح الدين دون عكس الاستلام. لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
+  ],
+  ServerError_CHEQUE_RETURN_NO_PAYMENT_TO_REVERSE: [
+    "This cleared cheque has no collection payment to reverse, so reopening the debt would leave it owed and collected at the same time. Nothing has been changed. An accountant reviews the deal.",
+    "لا توجد دفعة تحصيل لهذا الشيك المصفّى ليتم عكسها، وإعادة فتح الدين ستجعله مستحقًا ومحصّلًا في الوقت نفسه. لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
+  ],
+  ServerError_CHEQUE_RETURN_KEY_CONFLICT: [
+    "This same request was already sent with a different cheque, reason or bank fee. Nothing has been changed. Close and reopen the dialog to try again.",
+    "سبق إرسال هذا الطلب نفسه مع شيك أو سبب أو رسوم بنكية مختلفة. لم يتم تغيير أي شيء. أغلق النافذة وأعد فتحها للمحاولة مرة أخرى.",
+  ],
+});
+
 export const salesEn = {
+  ...serverErrorMessages.en,
   ...dealRailMessages.en,
   ...dealStepMessages.en,
   ...profitApprovalMessages.en,
@@ -1545,6 +1788,7 @@ export const salesEn = {
   SelectSave: "Select & Save",
   Financed: "Financed",
   Lease: "Lease",
+  LeaseRetired: "Lease (retired)",
   LoanAmount: "Loan Amount",
   APR: "APR (%)",
   TermMonths: "Term (Months)",
@@ -2255,6 +2499,34 @@ export const salesEn = {
   SettlementAdviceRecorded: "Advice records",
   SettlementAdviceApproved: "Approved to pay",
   SettlementAdviceDifference: "Difference",
+  FcChequeRegisteredNote: "A finance company cheque is registered as this deal's payment.",
+  FcChequeFaceLabel: "Face amount printed on the cheque",
+  FcChequeFaceHelp: "Type the amount exactly as printed on the instrument. It is never taken from the quote.",
+  FcChequeFaceRequired: "Enter the face amount printed on the cheque",
+  FcCorrectExpectedPayment: "Correct expected payment",
+  FcCorrectExpectedPaymentDesc: "Withdraws the registered payment and its open cheque so the payment can be registered again correctly. A cheque that has been deposited or cleared cannot be withdrawn here.",
+  FcCorrectReasonLabel: "Why is the registered payment being corrected?",
+  FcCorrectReasonPlaceholder: "e.g. wrong bank or wrong face amount entered",
+  FcCorrectExpectedPaymentDone: "Expected payment withdrawn. Register it again to continue.",
+  FcAttestChequeFace: "Record cheque face",
+  FcAttestChequeFaceDesc: "This cheque was registered before its face amount was recorded. Enter the amount printed on it. The disbursement can only be confirmed when this equals the receipt.",
+  FcAttestDone: "Cheque face recorded.",
+  FcAttestNoteLabel: "Why is this face being attested?",
+  FcAttestNotePlaceholder: "For example: read from the printed instrument in the file.",
+  FcFaceAttestedBadge: "Face attested by finance",
+  FcCorrectNeededNotice: "The registered cheque was returned or cancelled. Correct the expected payment, then register the new one.",
+  FcAccountingReviewNotice: "This deal's cheque is marked cleared but the disbursement was never confirmed. Accounting must review it.",
+  FcNeedsFinanceAttest: "A finance manager must record this cheque face before the disbursement can be confirmed.",
+  FcNeedsFinanceCorrect: "A finance manager must correct the expected payment before a new one can be registered.",
+  FcNeedsRegisterPermission: "Registering the expected payment needs the register-expected-payment permission. Ask a finance manager or sales manager.",
+  FcChequeFaceUnrecordedNotice: "The face amount of this deal's cheque is not recorded, so the disbursement cannot be confirmed yet.",
+  FcReRegisterNotice: "No expected payment is registered on this closed deal. Register it to confirm the disbursement.",
+  FcDrawerLine: "Drawer: {name}",
+  FcDrawerUnverified: "Drawer unverified",
+  FcChequeBadge: "Finance company cheque",
+  FcHandledFromDeal: "Handled from the deal",
+  FcSaleCancelFromDeal: "This sale belongs to a financed deal. Cancel the deal from the deal screen.",
+  FcOpenDeal: "Open the deal",
   CorrectSettlementAdvice: "Correct the advice",
   CorrectSettlementAdviceDescription:
     "Corrects what was entered from the settlement advice. It does not change the approved purchase amount, which the supplier's debt and this deal's reported profit are both measured from.",
@@ -2566,6 +2838,7 @@ export const salesEn = {
 };
 
 export const salesAr = {
+  ...serverErrorMessages.ar,
   ...dealRailMessages.ar,
   ...dealStepMessages.ar,
   ...profitApprovalMessages.ar,
@@ -2587,6 +2860,7 @@ export const salesAr = {
   Cash: "نقدي",
   Financed: "تقسيط",
   Lease: "تأجير",
+  LeaseRetired: "تأجير (متوقف)",
   LoanAmount: "مبلغ القرض",
   APR: "نسبة الربح (%)",
   TermMonths: "المدة (أشهر)",
@@ -3288,6 +3562,34 @@ export const salesAr = {
   SettlementAdviceRecorded: "المسجّل في الإشعار",
   SettlementAdviceApproved: "المعتمد للدفع",
   SettlementAdviceDifference: "الفرق",
+  FcChequeRegisteredNote: "شيك شركة تمويل مسجّل كدفعة لهذه الصفقة.",
+  FcChequeFaceLabel: "المبلغ المطبوع على وجه الشيك",
+  FcChequeFaceHelp: "اكتب المبلغ كما هو مطبوع على الشيك تمامًا. لا يؤخذ أبدًا من عرض السعر.",
+  FcChequeFaceRequired: "أدخل المبلغ المطبوع على الشيك",
+  FcCorrectExpectedPayment: "تصحيح الدفعة المتوقعة",
+  FcCorrectExpectedPaymentDesc: "يسحب الدفعة المسجّلة وشيكها المفتوح لتتمكن من تسجيلها من جديد بالشكل الصحيح. لا يمكن سحب شيك تم إيداعه أو تحصيله من هنا.",
+  FcCorrectReasonLabel: "ما سبب تصحيح الدفعة المسجّلة؟",
+  FcCorrectReasonPlaceholder: "مثال: إدخال بنك أو مبلغ خاطئ",
+  FcCorrectExpectedPaymentDone: "تم سحب الدفعة المتوقعة. سجّلها من جديد للمتابعة.",
+  FcAttestChequeFace: "تسجيل مبلغ الشيك",
+  FcAttestChequeFaceDesc: "سُجّل هذا الشيك قبل تسجيل مبلغه. أدخل المبلغ المطبوع عليه. لا يمكن تأكيد الصرف إلا إذا ساوى المبلغ المستلم.",
+  FcAttestDone: "تم تسجيل مبلغ الشيك.",
+  FcAttestNoteLabel: "لماذا يُعتمد هذا المبلغ؟",
+  FcAttestNotePlaceholder: "مثال: قُرئ من الشيك المطبوع في الملف.",
+  FcFaceAttestedBadge: "المبلغ معتمد من المالية",
+  FcCorrectNeededNotice: "أُعيد الشيك المسجّل أو أُلغي. صحّح الدفعة المتوقعة ثم سجّل الدفعة الجديدة.",
+  FcAccountingReviewNotice: "شيك هذه الصفقة مُعلَّم كمُحصَّل لكن الصرف لم يُؤكَّد. يجب أن يراجعه المحاسب.",
+  FcNeedsFinanceAttest: "يجب على مدير مالي تسجيل مبلغ هذا الشيك قبل تأكيد الصرف.",
+  FcNeedsFinanceCorrect: "يجب على مدير مالي تصحيح الدفعة المتوقعة قبل تسجيل دفعة جديدة.",
+  FcNeedsRegisterPermission: "تسجيل الدفعة المتوقعة يتطلب صلاحية تسجيل الدفعة المتوقعة. اطلب من مدير مالي أو مدير مبيعات.",
+  FcChequeFaceUnrecordedNotice: "مبلغ شيك هذه الصفقة غير مسجّل، لذا لا يمكن تأكيد الصرف بعد.",
+  FcReRegisterNotice: "لا توجد دفعة متوقعة مسجّلة على هذه الصفقة المغلقة. سجّلها لتأكيد الصرف.",
+  FcDrawerLine: "الساحب: {name}",
+  FcDrawerUnverified: "الساحب غير موثّق",
+  FcChequeBadge: "شيك شركة تمويل",
+  FcHandledFromDeal: "يُعالج من الصفقة",
+  FcSaleCancelFromDeal: "هذا البيع تابع لصفقة ممولة. ألغِ الصفقة من شاشة الصفقة.",
+  FcOpenDeal: "افتح الصفقة",
   CorrectSettlementAdvice: "تصحيح الإشعار",
   CorrectSettlementAdviceDescription:
     "يصحّح ما أُدخل من إشعار التسوية. ولا يغيّر المبلغ المعتمد للشراء، فهو الأساس الذي يُحتسب عليه دين المورّد وربح هذه الصفقة معاً.",

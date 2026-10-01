@@ -13,6 +13,7 @@
  * carry, so they agree before the migration runs as well as after.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -1595,10 +1596,12 @@ describe("a financed consigned sale settled directly with the supplier", () => {
     expect(state.status).toBe("AVAILABLE");
   });
 
-  test("a LEASE is refused the same way — it is financed for this purpose too", async () => {
+  test("a LEASE is refused — SCRUM-495: now by the retired-mode refusal, before the direct-route rule", async () => {
     const { s, vehicleId, attempt } = await financedDirect("finLease", { financingType: "LEASE" });
 
-    await expect(attempt()).rejects.toThrow(/finance application|financing workflow/i);
+    // Was /finance application|financing workflow/i (the financed-direct rule). A LEASE sale can no longer
+    // be created at all; the outcome this test protects (no supplier claim is written) is unchanged.
+    await expectRetiredDealMode(attempt());
 
     const claims = await s.t.run(async (ctx) =>
       (await ctx.db.query("vehicleSupplierReceivables").collect()).filter((r) => r.vehicleId === vehicleId)
