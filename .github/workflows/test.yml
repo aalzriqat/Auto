@@ -138,6 +138,17 @@ jobs:
         AUTOFLOW_COVERAGE_PHASE: merge
         NODE_OPTIONS: --max-old-space-size=5632
 
+    # SCRUM-293: mobile jest coverage (apps/mobile/src, repo-relative SF paths)
+    # is merged into the single lcov.info Sonar reads. The append step fails if
+    # the mobile report is missing, empty, or has an out-of-scope source path.
+    # Runs once, here, after the slice merge has written coverage/lcov.info; no
+    # always(), so a failed slice or merge still fails closed.
+    - name: Mobile coverage for Sonar
+      run: |
+        pnpm mobile:coverage:sonar
+        node scripts/appendMobileLcov.mjs
+      env:
+        NODE_ENV: test
     - name: Record the tested merge for trusted Sonar
       if: always() && steps.slices.outcome == 'success' && github.event_name == 'pull_request'
       # A re-run keeps its original merge, so the trusted Sonar workflow binds
