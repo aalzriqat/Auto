@@ -19,6 +19,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { seedOrgWithMember } from "../test-utils/seedOrg";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
+import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -222,7 +223,6 @@ describe("sales doors", () => {
   test.each([
     { door: "create", financingType: "CASH", vehicle: "SOLD", call: (s: Seeded) => s.asUser.mutation(api.sales.create, createArgs(s, "CASH")) },
     { door: "createDraft", financingType: "CASH", vehicle: undefined, call: (s: Seeded) => s.asUser.mutation(api.sales.createDraft, draftArgs(s, "CASH")) },
-    { door: "createDraft", financingType: "FINANCED", vehicle: undefined, call: (s: Seeded) => s.asUser.mutation(api.sales.createDraft, draftArgs(s, "FINANCED")) },
   ])("control: sales.$door with $financingType succeeds in the same fixture", async ({ door, financingType, vehicle, call }) => {
     const s = await seed(`sc_${door}_${financingType}`);
     await call(s);
@@ -238,11 +238,22 @@ describe("sales doors", () => {
     expect(await s.t.run((ctx) => ctx.db.get(saleId))).toEqual(before);
   });
 
-  test("control: sales.update CASH -> FINANCED succeeds in the same fixture", async () => {
+  // SCRUM-504: FINANCED is no longer a plain sale-form value. It is refused with its own code
+  // (not the retired-mode one) at every public sale door; the Deal reaches it with an application.
+  test("SCRUM-504: sales.createDraft with FINANCED is refused with its own code and no sale is written", async () => {
+    const s = await seed("sc_createDraft_FINANCED");
+    await expectFinancedSaleRequiresDeal(s.asUser.mutation(api.sales.createDraft, draftArgs(s, "FINANCED")));
+    expect(await saleRows(s)).toEqual([]);
+  });
+
+  test("SCRUM-504: sales.update CASH -> FINANCED is refused with its own code and the stored value is unchanged", async () => {
     const s = await seed("su_ctrl");
     const saleId = await insertDraft(s, "CASH");
-    await s.asUser.mutation(api.sales.update, { orgId: s.orgId, saleId, financingType: "FINANCED" });
-    expect((await s.t.run((ctx) => ctx.db.get(saleId)))?.financingType).toBe("FINANCED");
+    const before = await s.t.run((ctx) => ctx.db.get(saleId));
+    await expectFinancedSaleRequiresDeal(
+      s.asUser.mutation(api.sales.update, { orgId: s.orgId, saleId, financingType: "FINANCED" })
+    );
+    expect(await s.t.run((ctx) => ctx.db.get(saleId))).toEqual(before);
   });
 
   test.each([
@@ -272,15 +283,16 @@ describe("sales doors", () => {
   });
 
   // D4: a legacy quote in a retired mode must not be turned into a sale by the
-  // shared completion boundary either.
+  // shared completion boundary either, whatever financing type the caller names. The caller names
+  // CASH here: a FINANCED `create` is refused earlier, by SCRUM-504, before the quote is read.
   test.each([
-    { quoteMode: "INTERNAL_INSTALLMENT", financingType: "FINANCED", refused: true },
-    { quoteMode: "LEASE", financingType: "FINANCED", refused: true },
-    { quoteMode: "CASH", financingType: "CASH", refused: false },
-  ] as const)("sales.create against a $quoteMode quote + $financingType: refused=$refused", async ({ quoteMode, financingType, refused }) => {
+    { quoteMode: "INTERNAL_INSTALLMENT", refused: true },
+    { quoteMode: "LEASE", refused: true },
+    { quoteMode: "CASH", refused: false },
+  ] as const)("sales.create (CASH) against a $quoteMode quote: refused=$refused", async ({ quoteMode, refused }) => {
     const s = await seed(`sq_${quoteMode}`);
     const quoteId = await quoteIn(s, quoteMode, { accepted: true });
-    const create = s.asUser.mutation(api.sales.create, createArgs(s, financingType, { quoteId }));
+    const create = s.asUser.mutation(api.sales.create, createArgs(s, "CASH", { quoteId }));
     if (refused) {
       await expectRetiredDealMode(create);
       expect(await saleRows(s)).toEqual([]);

@@ -17,7 +17,6 @@ export const saleSchema = z.object({
   tradeInVehicleId: z.string().optional(),
   tradeInValue: z.coerce.number().min(0).optional(),
   financingType: z.enum(["CASH", "FINANCED", "LEASE"]).optional(),
-  loanAmount: z.coerce.number().min(0).optional(),
   apr: z.coerce.number().min(0).optional(),
   termMonths: z.coerce.number().min(0).optional(),
   warrantySold: z.coerce.number().min(0).optional(),

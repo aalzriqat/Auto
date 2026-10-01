@@ -14,6 +14,7 @@
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
+import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -1619,9 +1620,19 @@ describe("a financed consigned sale settled directly with the supplier", () => {
     expect(route).toBe("DIRECT_TO_SUPPLIER");
   });
 
-  test("a financed sale settled THROUGH the dealership is unaffected", async () => {
-    const { attempt } = await financedDirect("finThrough", { route: "THROUGH_DEALERSHIP" });
-    await expect(attempt()).resolves.toBeDefined();
+  // SCRUM-504: this used to show that the direct-route refusal is scoped to the DIRECT route and
+  // does not touch a financed sale settled through the dealership. `sales.create` can no longer
+  // record ANY financed sale (it needs the Deal's application), so the door now refuses both routes
+  // with the same code before the route is read. The through-dealership financed path is exercised
+  // end to end through `applications.finalizeDeal` in financedConsignedSettlement.test.ts.
+  test("a financed sale settled THROUGH the dealership is refused at this door too (SCRUM-504): the Deal is its only path", async () => {
+    const { s, vehicleId, attempt } = await financedDirect("finThrough", { route: "THROUGH_DEALERSHIP" });
+    await expectFinancedSaleRequiresDeal(attempt());
+    const state = await s.t.run(async (ctx) => ({
+      sales: (await ctx.db.query("sales").collect()).length,
+      status: (await ctx.db.get(vehicleId))?.status,
+    }));
+    expect(state).toEqual({ sales: 0, status: "AVAILABLE" });
   });
 });
 
