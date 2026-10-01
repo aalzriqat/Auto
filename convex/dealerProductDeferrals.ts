@@ -82,8 +82,10 @@ export const recognizeDeferredCommissionForMonth = internalMutation({
     // ⚠️ SCRUM-537 — a counted skip, never a throw (cross-org cron loop, no
     // per-row try/catch). The deferred balance this releases is created by the
     // sale-completion journal; recognizing before it has POSTED would credit
-    // revenue out of a balance that is not yet in the ledger. The next monthly
-    // run catches it up once the sale posts.
+    // revenue out of a balance that is not yet in the ledger. Recognition
+    // resumes on the first monthly run after the sale posts; months skipped
+    // meanwhile are not caught up (the cron passes only the current month —
+    // catch-up is SCRUM-230).
     if (!(await prereqPosted(ctx, args.orgId, `sale_completed_${deferral.saleId}`))) {
       return { posted: false, reason: "source_sale_not_posted" };
     }
