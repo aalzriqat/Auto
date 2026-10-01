@@ -49,9 +49,9 @@ const MAX_RESPONSE_BYTES = 64 * 1024;
 // unbounded; twelve hours keeps a live run's preview alive through long queues.
 export const PIN_TTL_MS = 12 * 60 * 60 * 1000;
 const SAFE_PREVIEW_NAME = /^[a-z0-9][a-z0-9._-]{0,60}$/;
-const DEPLOYMENT_NAME = /^[a-z]+-[a-z]+-\d+$/;
+export const DEPLOYMENT_NAME = /^[a-z]+-[a-z]+-\d+$/;
 // Production. The key cannot reach it; this list makes the refusal local too.
-const PROTECTED_DEPLOYMENTS = new Set(["kindly-hound-172"]);
+export const PROTECTED_DEPLOYMENTS = new Set(["kindly-hound-172"]);
 
 export class PreviewLifecycleRefusal extends Error {}
 
