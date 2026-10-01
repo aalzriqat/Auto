@@ -201,6 +201,8 @@ const CHILD_TABLES: Partial<Record<(typeof RESET_TABLES)[number], readonly strin
     "collectionPayments",
     "postDatedCheques",
     "transactions",
+    // payrollItems.commissionSaleIds is a REQUIRED v.array(v.id("sales")).
+    "payrollItems",
   ],
   quotes: ["sales", "financeApplications", "deposits", "receivables"],
 };
