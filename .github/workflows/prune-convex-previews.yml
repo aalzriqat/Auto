@@ -1,0 +1,60 @@
+name: Prune Convex Previews
+
+# SCRUM-548: manual backstop for leaked Convex preview deployments. Deletes only
+# aged, non-default, cloud PREVIEW deployments of the token's own project, and
+# only when `confirm` is exactly PRUNE; anything else is a dry run. The token is
+# a project token, never a team token. Inputs reach the script through env only.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type PRUNE to delete; anything else is a dry run"
+        type: string
+        required: false
+        default: ""
+      min_age_hours:
+        description: "Only previews at least this many hours old (minimum 1; blank uses the 12h pin TTL)"
+        type: string
+        required: false
+        default: ""
+      max_deletions:
+        description: "Delete at most this many previews per run (1 to 100; blank uses 60)"
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prune-convex-previews
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    name: prune-convex-previews
+    if: github.ref == 'refs/heads/main'
+    # The project token lives in this environment, restricted to main.
+    environment: convex-preview-prune
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+
+      - name: Prune leaked Convex previews
+        env:
+          CONVEX_PREVIEW_PRUNE_TOKEN: ${{ secrets.CONVEX_PREVIEW_PRUNE_TOKEN }}
+          PRUNE_CONFIRM: ${{ inputs.confirm }}
+          PRUNE_MIN_AGE_HOURS: ${{ inputs.min_age_hours }}
+          PRUNE_MAX_DELETIONS: ${{ inputs.max_deletions }}
+          # Trusted expected project: a repository variable, never the token.
+          PRUNE_EXPECTED_PROJECT_ID: ${{ vars.CONVEX_PROJECT_ID }}
+        run: node scripts/pruneConvexPreviews.mjs
