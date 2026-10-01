@@ -522,6 +522,91 @@ describe("T5 controls: what must keep working", () => {
   });
 });
 
+// ── T9 ──────────────────────────────────────────────────────────────────────
+
+/**
+ * RESERVATION / DEPOSIT claims are insert-only and accumulate on a car forever
+ * (reserve/release cycles). They must never make the FINANCE-only guard refuse a
+ * car that has no live finance hold. `count` ACTIVE RESERVATION claims are seeded
+ * directly (no product door writes this many) on a root that is RELEASED, so the
+ * rows are pure history.
+ */
+async function seedReservationHistory(
+  seed: Seed,
+  v: Id<"vehicles">,
+  count: number,
+  rootId?: Id<"commitmentRoots">
+) {
+  await seed.t.run(async (ctx) => {
+    const root =
+      rootId ??
+      (await ctx.db.insert("commitmentRoots", {
+        orgId: seed.orgId,
+        vehicleId: v,
+        customerId: seed.customerB,
+        status: "RELEASED" as const,
+        openedAt: Date.now(),
+        openedBy: seed.userId,
+        lineageGeneration: 0,
+      }));
+    for (let i = 0; i < count; i += 1) {
+      await ctx.db.insert("vehicleCommitmentClaims", {
+        orgId: seed.orgId,
+        rootId: root,
+        vehicleId: v,
+        evidenceKind: "RESERVATION" as const,
+        status: "ACTIVE" as const,
+        createdAt: Date.now(),
+        createdBy: seed.userId,
+      });
+    }
+  });
+}
+
+describe("T9 unrelated claim history never trips the finance-only guard (Codex R1)", () => {
+  test("257 historical RESERVATION claims and no finance application: a CASH sale completes", async () => {
+    const seed = await seedDealer("t9a");
+    const v = await vehicle(seed);
+    await seedReservationHistory(seed, v, 257);
+
+    await directSale(seed, undefined, v, seed.customerA);
+
+    expect(await vehicleStatus(seed, v)).toBe("SOLD");
+  });
+
+  test("256 historical RESERVATION claims and no finance application: unchanged control", async () => {
+    const seed = await seedDealer("t9c");
+    const v = await vehicle(seed);
+    await seedReservationHistory(seed, v, 256);
+
+    await directSale(seed, undefined, v, seed.customerA);
+
+    expect(await vehicleStatus(seed, v)).toBe("SOLD");
+  });
+
+  test("257 RESERVATION claims plus a live finance application: direct sale still refused, finalizeDeal is not blocked", async () => {
+    const seed = await seedDealer("t9b");
+    const v = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [v]);
+    await depositOn(seed, quoteId, 5_000);
+    const applicationId = await applicationIn(seed, quoteId, "APPROVED");
+    const financeRoot = await seed.t.run(async (ctx) => {
+      const claim = (await ctx.db.query("vehicleCommitmentClaims").collect()).find(
+        (c) => c.vehicleId === v && c.evidenceKind === "FINANCE"
+      );
+      return claim!.rootId;
+    });
+    await seedReservationHistory(seed, v, 257, financeRoot);
+
+    await expectAppError(directSale(seed, quoteId, v, seed.customerA), CODE, MESSAGE);
+    await expectNoResidue(seed, v, applicationId, "APPROVED");
+
+    const saleId = await finalizeDeal(seed, applicationId);
+    expect((await seed.t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("COMPLETED");
+    expect(await vehicleStatus(seed, v)).toBe("SOLD");
+  });
+});
+
 // ── T7 ──────────────────────────────────────────────────────────────────────
 
 describe("T7 the refusal is translatable", () => {
