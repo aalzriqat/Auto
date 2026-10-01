@@ -749,6 +749,15 @@ describe("SCRUM-528 - finalizeDeal builds the sale only from quote economics tha
     await expectRefusedWithZeroWrites(s, applicationId);
   });
 
+  test("a replay of a key that already finalized returns the stored sale even if the quote drifts afterwards (no second sale, no refusal)", async () => {
+    const s = await seedDealership("d528replay");
+    const { applicationId, quoteId } = await readyFinancedDeal(s);
+    const args = { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId };
+    const first = await s.as.mutation(api.applications.finalizeDeal, args);
+    await s.t.run((ctx) => ctx.db.patch(quoteId, { vehiclePrice: 1 }));
+    expect(await s.as.mutation(api.applications.finalizeDeal, args)).toBe(first);
+    expect(await s.t.run((ctx) => ctx.db.query("sales").collect())).toHaveLength(1);
+  });
   test("a drift only inside quote.customerQuotePricingSnapshot refuses", async () => {
     const s = await seedDealership("d528snapdrift");
     const { applicationId, quoteId } = await readyFinancedDeal(s);
@@ -788,6 +797,13 @@ describe("SCRUM-528 - finalizeDeal builds the sale only from quote economics tha
       await expectRefusedWithZeroWrites(s, applicationId);
     });
 
+    test("a legacy application whose MANUAL mode is only on its quote (no quoteModeAtSubmission) refuses", async () => {
+      const s = await seedDealership("d528nosnaplegacy");
+      const { applicationId } = await readyFinancedDeal(s);
+      await s.t.run((ctx) => ctx.db.patch(applicationId, { customerQuotePricingSnapshot: undefined, quoteModeAtSubmission: undefined }));
+      await expectRefusedWithZeroWrites(s, applicationId);
+    });
+
     test("CONFIGURED_FINANCE_COMPANY mode refuses", async () => {
       const s = await seedDealership("d528nosnapcfg");
       const { applicationId } = await readyFinancedDeal(s);
@@ -820,9 +836,9 @@ describe("SCRUM-528 - finalizeDeal builds the sale only from quote economics tha
         await ctx.db.patch(applicationId, { customerQuotePricingSnapshot: undefined, quoteModeAtSubmission: undefined });
         await ctx.db.patch(quoteId, { mode: undefined });
       });
-      // The anchor does not refuse; any later refusal would be a different code.
-      const attempt = await finalize(s, applicationId).then(() => "FINALIZED", (e: { data?: { code?: string } }) => e?.data?.code ?? "OTHER");
-      expect(attempt).not.toBe("QUOTE_ECONOMICS_DRIFTED");
+      // Not compared: the deal finalizes as a plain CASH sale.
+      const saleId = (await finalize(s, applicationId)) as Id<"sales">;
+      expect(await s.t.run((ctx) => ctx.db.get(saleId))).toMatchObject({ financingType: "CASH", status: "COMPLETED" });
     });
   });
 
