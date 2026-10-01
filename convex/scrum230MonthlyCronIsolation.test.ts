@@ -48,7 +48,7 @@ const PERMISSIONS = [
 const FEB_10 = Date.UTC(2026, 1, 10, 9, 0, 0);
 const APR_15 = Date.UTC(2026, 3, 15, 9, 0, 0);
 
-type Harness = ReturnType<typeof convexTestWithComponents>;
+type Harness = ReturnType<typeof convexTestWithComponents<typeof schema>>;
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });

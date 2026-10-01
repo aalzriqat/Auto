@@ -67,6 +67,24 @@ export function occurredAtForMonthIndex(idx: number, now: number): number {
   return Math.min(endOfMonthMs(idx), now);
 }
 
+/**
+ * First calendar month (absolute index) a monthly GL cron may offer an item —
+ * the lower bound of its catch-up range: never earlier than the month after the
+ * last one posted, the month the item was created (INCLUSIVE — months before
+ * the row existed are never back-filled), or its schedule start month (fixed
+ * assets' depreciation start / purchase date; omit for F&I deferrals).
+ */
+export function firstOfferableMonthIndex(input: {
+  lastPostedYearMonth?: string;
+  startAt?: number;
+  createdAt: number;
+}): number {
+  let first = yearMonthIndex(input.createdAt);
+  if (input.startAt !== undefined) first = Math.max(first, yearMonthIndex(input.startAt));
+  if (input.lastPostedYearMonth) first = Math.max(first, yearMonthStringIndex(input.lastPostedYearMonth) + 1);
+  return first;
+}
+
 /** Last millisecond of calendar month `idx` (year*12 + 0-based month). */
 export function endOfMonthMs(idx: number): number {
   const year = Math.floor(idx / 12);

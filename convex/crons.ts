@@ -7,6 +7,7 @@ import { notifyManagers, notifyUser } from "./utils/notifications";
 import { PLANS, PlanId } from "./subscriptions";
 import { Doc, Id } from "./_generated/dataModel";
 import { isSystemOwnerRole } from "./utils/permissions";
+import { firstOfferableMonthIndex, occurredAtForMonthIndex, yearMonthFromIndex, yearMonthIndex } from "./utils/expenseAmortization";
 
 const crons = cronJobs();
 
@@ -467,14 +468,169 @@ export const triggerSocialAutoReplyRetries = internalAction({
 
 // ─── GL Phase 11: monthly fixed-asset depreciation cron ──────────────────────
 
-type DepreciationOutcome = "posted" | "skippedNoOwner" | "skippedOther";
+// ─── Shared engine for the two monthly per-row GL crons (SCRUM-230) ──────────
+// Fixed-asset depreciation and F&I commission recognition share one discipline:
+//  · ISOLATION — one item's throw ends that item for this run and nothing else;
+//    the cross-org scan carries on, so no dealer is starved by another's data.
+//  · CATCH-UP — every calendar month from the item's first offerable month
+//    through the current one is offered in order, one mutation call per month,
+//    each dated in its OWN month. The item stops at the first month that does
+//    not post (never skipping ahead past a gap), so the schedule's strict
+//    month ordering is preserved and the next run resumes where this one ended.
 
-type DepreciationRunStats = {
+/** Per-run cap on individual failure rows, so a systemic fault cannot flood webhookLogs (zeroState DIAGNOSTIC_ROW_BOUNDS). */
+const MAX_ITEM_FAILURE_ROWS = 20;
+
+type MonthlyCronSource = "fixed-asset-depreciation" | "fi-commission-recognition";
+
+type MonthlyCronStats = {
   total: number;
+  /** Items that posted at least one month this run. */
   posted: number;
+  monthsPosted: number;
   skippedNoOwner: number;
-  skippedOther: number;
+  /** Items that ended for an ordinary reason (not due, already run, fully done, left ACTIVE). */
+  done: number;
+  /** Items that stopped for a reason that should never be routine, by reason. */
+  abnormalByReason: Record<string, number>;
+  failed: number;
+  failureRowsWritten: number;
+  failureRowsSuppressed: number;
 };
+
+type MonthlyPostResult = { posted: boolean; reason?: string };
+
+type MonthlyCronItem = { _id: string; orgId: Id<"organizations"> };
+
+type MonthlyCronSpec<T extends MonthlyCronItem> = {
+  source: MonthlyCronSource;
+  /** Row noun for the failure rows ("asset" / "deferral"). */
+  noun: string;
+  /** Mutation `reason`s that are normal ends of an item; any other non-posting reason is abnormal. */
+  doneReasons: ReadonlySet<string>;
+  firstOfferableMonthIndex: (item: T) => number;
+  postMonth: (
+    ctx: ActionCtx,
+    item: T,
+    args: { systemActorId: Id<"users">; yearMonth: string; occurredAt: number }
+  ) => Promise<MonthlyPostResult>;
+};
+
+function newMonthlyCronStats(): MonthlyCronStats {
+  return {
+    total: 0,
+    posted: 0,
+    monthsPosted: 0,
+    skippedNoOwner: 0,
+    done: 0,
+    abnormalByReason: {},
+    failed: 0,
+    failureRowsWritten: 0,
+    failureRowsSuppressed: 0,
+  };
+}
+
+/** The failure row must never be able to break isolation: it has its own try/catch. */
+async function recordMonthlyItemFailure<T extends MonthlyCronItem>(
+  ctx: ActionCtx,
+  spec: MonthlyCronSpec<T>,
+  stats: MonthlyCronStats,
+  item: T,
+  yearMonth: string | null,
+  err: unknown
+): Promise<void> {
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`${spec.source}: ${spec.noun} ${item._id} (org ${item.orgId}) failed at ${yearMonth ?? "owner lookup"}:`, err);
+  if (stats.failureRowsWritten >= MAX_ITEM_FAILURE_ROWS) {
+    stats.failureRowsSuppressed++;
+    return;
+  }
+  stats.failureRowsWritten++;
+  try {
+    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+      source: spec.source,
+      status: "error",
+      summary: `${spec.source} item failed: org ${item.orgId} ${spec.noun} ${item._id} month ${yearMonth ?? "n/a"}`,
+      error: message.slice(0, 1000),
+    });
+  } catch (recorderErr) {
+    console.error(`${spec.source}: could not record the failure row for ${spec.noun} ${item._id}:`, recorderErr);
+  }
+}
+
+async function runMonthlyCatchUpForItem<T extends MonthlyCronItem>(
+  ctx: ActionCtx,
+  spec: MonthlyCronSpec<T>,
+  stats: MonthlyCronStats,
+  item: T,
+  args: { ownerByOrg: Map<string, Id<"users"> | null>; now: number }
+): Promise<void> {
+  stats.total++;
+  let yearMonth: string | null = null;
+  try {
+    const systemActorId = await getCachedOrgOwnerUserId(ctx, args.ownerByOrg, item.orgId);
+    if (!systemActorId) {
+      stats.skippedNoOwner++;
+      return;
+    }
+    const currentIdx = yearMonthIndex(args.now);
+    let postedAny = false;
+    let endedAbnormally = false;
+    let endReason: string | undefined;
+    for (let idx = spec.firstOfferableMonthIndex(item); idx <= currentIdx; idx++) {
+      yearMonth = yearMonthFromIndex(idx);
+      const result = await spec.postMonth(ctx, item, {
+        systemActorId,
+        yearMonth,
+        occurredAt: occurredAtForMonthIndex(idx, args.now),
+      });
+      if (!result.posted) {
+        endReason = result.reason ?? "unknown";
+        endedAbnormally = !spec.doneReasons.has(endReason);
+        break;
+      }
+      postedAny = true;
+      stats.monthsPosted++;
+    }
+    if (postedAny) stats.posted++;
+    if (endedAbnormally && endReason) {
+      stats.abnormalByReason[endReason] = (stats.abnormalByReason[endReason] ?? 0) + 1;
+    } else if (!postedAny) {
+      stats.done++;
+    }
+  } catch (err) {
+    stats.failed++;
+    await recordMonthlyItemFailure(ctx, spec, stats, item, yearMonth, err);
+  }
+}
+
+function monthlyCronSummary(prefix: string, noun: string, doneText: string, stats: MonthlyCronStats): string {
+  const abnormal = Object.entries(stats.abnormalByReason);
+  const abnormalCount = abnormal.reduce((n, [, c]) => n + c, 0);
+  const abnormalDetail = abnormalCount > 0 ? ` (${abnormal.map(([reason, c]) => `${reason}=${c}`).join(", ")})` : "";
+  const suppressed =
+    stats.failureRowsSuppressed > 0 ? ` (${stats.failureRowsSuppressed} further failure row(s) not logged individually)` : "";
+  return `${prefix}: posted ${stats.posted}/${stats.total} ${noun}(s) (${stats.monthsPosted} month(s)), ${stats.skippedNoOwner} skipped (no org owner), ${stats.done} skipped (${doneText}), ${abnormalCount} stopped abnormally${abnormalDetail}, ${stats.failed} failed${suppressed}.`;
+}
+
+/** A run that failed any item is reported as an error row, but the action itself still returns. */
+async function logMonthlyCronSummary(
+  ctx: ActionCtx,
+  source: MonthlyCronSource,
+  summary: string,
+  stats: MonthlyCronStats
+): Promise<void> {
+  await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+    source,
+    status: stats.failed > 0 ? "error" : "success",
+    summary,
+    ...(stats.failed > 0 ? { error: `${stats.failed} row(s) failed this run; see the failure rows logged under this source.` } : {}),
+  });
+}
+
+function currentYearMonthOf(now: number): string {
+  return yearMonthFromIndex(yearMonthIndex(now));
+}
 
 async function getCachedOrgOwnerUserId(
   ctx: ActionCtx,
@@ -489,58 +645,44 @@ async function getCachedOrgOwnerUserId(
   return ownerByOrg.get(orgKey) ?? null;
 }
 
-async function depreciateCronAsset(
-  ctx: ActionCtx,
-  asset: Doc<"fixedAssets">,
-  args: {
-    ownerByOrg: Map<string, Id<"users"> | null>;
-    yearMonth: string;
-    occurredAt: number;
-  }
-): Promise<DepreciationOutcome> {
-  const systemActorId = await getCachedOrgOwnerUserId(ctx, args.ownerByOrg, asset.orgId);
-  if (!systemActorId) {
-    return "skippedNoOwner";
-  }
+const DEPRECIATION_DONE_REASONS: ReadonlySet<string> = new Set([
+  "not_found",
+  "not_active",
+  "not_after_last_depreciated_month",
+  "before_depreciation_start",
+  "fully_depreciated",
+]);
 
-  const result = await ctx.runMutation(internal.fixedAssets.depreciateAssetForMonth, {
-    orgId: asset.orgId,
-    assetId: asset._id,
-    yearMonth: args.yearMonth,
-    occurredAt: args.occurredAt,
-    systemActorId,
-  });
-  return result.posted ? "posted" : "skippedOther";
-}
+const depreciationSpec: MonthlyCronSpec<Doc<"fixedAssets">> = {
+  source: "fixed-asset-depreciation",
+  noun: "asset",
+  doneReasons: DEPRECIATION_DONE_REASONS,
+  firstOfferableMonthIndex: (asset) =>
+    firstOfferableMonthIndex({
+      lastPostedYearMonth: asset.lastDepreciatedYearMonth,
+      startAt: asset.depreciationStartDate ?? asset.purchaseDate,
+      createdAt: asset._creationTime,
+    }),
+  postMonth: (ctx, asset, a) =>
+    ctx.runMutation(internal.fixedAssets.depreciateAssetForMonth, {
+      orgId: asset.orgId,
+      assetId: asset._id,
+      yearMonth: a.yearMonth,
+      occurredAt: a.occurredAt,
+      systemActorId: a.systemActorId,
+    }),
+};
 
-function recordDepreciationOutcome(stats: DepreciationRunStats, outcome: DepreciationOutcome): void {
-  stats.total++;
-  stats[outcome]++;
-}
-
-async function runFixedAssetDepreciation(
-  ctx: ActionCtx,
-  args: { yearMonth: string; occurredAt: number }
-): Promise<DepreciationRunStats> {
+async function runFixedAssetDepreciation(ctx: ActionCtx, args: { now: number }): Promise<MonthlyCronStats> {
   const ownerByOrg = new Map<string, Id<"users"> | null>();
-  const stats: DepreciationRunStats = {
-    total: 0,
-    posted: 0,
-    skippedNoOwner: 0,
-    skippedOther: 0,
-  };
+  const stats = newMonthlyCronStats();
 
   // Drain every page so assets past the page cap are not silently skipped.
   let cursor: string | undefined;
   do {
     const page = await ctx.runQuery(internal.fixedAssets.listActiveAssetsForDepreciation, { cursor });
     for (const asset of page.page) {
-      const outcome = await depreciateCronAsset(ctx, asset, {
-        ownerByOrg,
-        yearMonth: args.yearMonth,
-        occurredAt: args.occurredAt,
-      });
-      recordDepreciationOutcome(stats, outcome);
+      await runMonthlyCatchUpForItem(ctx, depreciationSpec, stats, asset, { ownerByOrg, now: args.now });
     }
     cursor = page.isDone ? undefined : page.continueCursor;
   } while (cursor);
@@ -548,8 +690,13 @@ async function runFixedAssetDepreciation(
   return stats;
 }
 
-function depreciationSummary(yearMonth: string, stats: DepreciationRunStats): string {
-  return `Depreciation ${yearMonth}: posted ${stats.posted}/${stats.total} asset(s), ${stats.skippedNoOwner} skipped (no org owner), ${stats.skippedOther} skipped (already run / not yet started / inactive / fully depreciated).`;
+function depreciationSummary(yearMonth: string, stats: MonthlyCronStats): string {
+  return monthlyCronSummary(
+    `Depreciation ${yearMonth}`,
+    "asset",
+    "already run / not yet started / inactive / fully depreciated",
+    stats
+  );
 }
 
 export const triggerFixedAssetDepreciation = internalAction({
@@ -557,15 +704,9 @@ export const triggerFixedAssetDepreciation = internalAction({
   handler: async (ctx: ActionCtx): Promise<string> => {
     try {
       const now = Date.now();
-      const d = new Date(now);
-      const yearMonth = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-      const stats = await runFixedAssetDepreciation(ctx, { yearMonth, occurredAt: now });
-      const summary = depreciationSummary(yearMonth, stats);
-      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-        source: "fixed-asset-depreciation",
-        status: "success",
-        summary,
-      });
+      const stats = await runFixedAssetDepreciation(ctx, { now });
+      const summary = depreciationSummary(currentYearMonthOf(now), stats);
+      await logMonthlyCronSummary(ctx, "fixed-asset-depreciation", summary, stats);
       return summary;
     } catch (err) {
       await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
@@ -580,70 +721,45 @@ export const triggerFixedAssetDepreciation = internalAction({
 });
 
 // ─── GL Phase 19: monthly F&I commission recognition cron ────────────────────
-// Same shape as the fixed-asset depreciation cron above, one section up —
-// paginated cross-org scan, cached per-org owner resolution, one mutation
-// call per row, admin audit log on completion/failure.
+// Same shape as the fixed-asset depreciation cron above (shared engine):
+// paginated cross-org scan, cached per-org owner resolution, per-item
+// isolation + month catch-up, admin audit log on completion/failure.
 
-type RecognitionOutcome = "posted" | "skippedNoOwner" | "skippedOther";
+const RECOGNITION_DONE_REASONS: ReadonlySet<string> = new Set([
+  "not_found",
+  "not_active",
+  "not_after_last_recognized_month",
+  "fully_recognized",
+]);
 
-type RecognitionRunStats = {
-  total: number;
-  posted: number;
-  skippedNoOwner: number;
-  skippedOther: number;
+const recognitionSpec: MonthlyCronSpec<Doc<"dealerProductDeferrals">> = {
+  source: "fi-commission-recognition",
+  noun: "deferral",
+  doneReasons: RECOGNITION_DONE_REASONS,
+  firstOfferableMonthIndex: (deferral) =>
+    firstOfferableMonthIndex({
+      lastPostedYearMonth: deferral.lastRecognizedYearMonth,
+      createdAt: deferral.createdAt,
+    }),
+  postMonth: (ctx, deferral, a) =>
+    ctx.runMutation(internal.dealerProductDeferrals.recognizeDeferredCommissionForMonth, {
+      orgId: deferral.orgId,
+      deferralId: deferral._id,
+      yearMonth: a.yearMonth,
+      occurredAt: a.occurredAt,
+      systemActorId: a.systemActorId,
+    }),
 };
 
-async function recognizeCronDeferral(
-  ctx: ActionCtx,
-  deferral: Doc<"dealerProductDeferrals">,
-  args: {
-    ownerByOrg: Map<string, Id<"users"> | null>;
-    yearMonth: string;
-    occurredAt: number;
-  }
-): Promise<RecognitionOutcome> {
-  const systemActorId = await getCachedOrgOwnerUserId(ctx, args.ownerByOrg, deferral.orgId);
-  if (!systemActorId) {
-    return "skippedNoOwner";
-  }
-
-  const result = await ctx.runMutation(internal.dealerProductDeferrals.recognizeDeferredCommissionForMonth, {
-    orgId: deferral.orgId,
-    deferralId: deferral._id,
-    yearMonth: args.yearMonth,
-    occurredAt: args.occurredAt,
-    systemActorId,
-  });
-  return result.posted ? "posted" : "skippedOther";
-}
-
-function recordRecognitionOutcome(stats: RecognitionRunStats, outcome: RecognitionOutcome): void {
-  stats.total++;
-  stats[outcome]++;
-}
-
-async function runFiCommissionRecognition(
-  ctx: ActionCtx,
-  args: { yearMonth: string; occurredAt: number }
-): Promise<RecognitionRunStats> {
+async function runFiCommissionRecognition(ctx: ActionCtx, args: { now: number }): Promise<MonthlyCronStats> {
   const ownerByOrg = new Map<string, Id<"users"> | null>();
-  const stats: RecognitionRunStats = {
-    total: 0,
-    posted: 0,
-    skippedNoOwner: 0,
-    skippedOther: 0,
-  };
+  const stats = newMonthlyCronStats();
 
   let cursor: string | undefined;
   do {
     const page = await ctx.runQuery(internal.dealerProductDeferrals.listActiveDeferralsForRecognition, { cursor });
     for (const deferral of page.page) {
-      const outcome = await recognizeCronDeferral(ctx, deferral, {
-        ownerByOrg,
-        yearMonth: args.yearMonth,
-        occurredAt: args.occurredAt,
-      });
-      recordRecognitionOutcome(stats, outcome);
+      await runMonthlyCatchUpForItem(ctx, recognitionSpec, stats, deferral, { ownerByOrg, now: args.now });
     }
     cursor = page.isDone ? undefined : page.continueCursor;
   } while (cursor);
@@ -651,8 +767,13 @@ async function runFiCommissionRecognition(
   return stats;
 }
 
-function recognitionSummary(yearMonth: string, stats: RecognitionRunStats): string {
-  return `F&I commission recognition ${yearMonth}: posted ${stats.posted}/${stats.total} deferral(s), ${stats.skippedNoOwner} skipped (no org owner), ${stats.skippedOther} skipped (already run / fully recognized / not active).`;
+function recognitionSummary(yearMonth: string, stats: MonthlyCronStats): string {
+  return monthlyCronSummary(
+    `F&I commission recognition ${yearMonth}`,
+    "deferral",
+    "already run / fully recognized / not active",
+    stats
+  );
 }
 
 export const triggerFiCommissionRecognition = internalAction({
@@ -660,15 +781,9 @@ export const triggerFiCommissionRecognition = internalAction({
   handler: async (ctx: ActionCtx): Promise<string> => {
     try {
       const now = Date.now();
-      const d = new Date(now);
-      const yearMonth = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-      const stats = await runFiCommissionRecognition(ctx, { yearMonth, occurredAt: now });
-      const summary = recognitionSummary(yearMonth, stats);
-      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-        source: "fi-commission-recognition",
-        status: "success",
-        summary,
-      });
+      const stats = await runFiCommissionRecognition(ctx, { now });
+      const summary = recognitionSummary(currentYearMonthOf(now), stats);
+      await logMonthlyCronSummary(ctx, "fi-commission-recognition", summary, stats);
       return summary;
     } catch (err) {
       await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
@@ -681,7 +796,6 @@ export const triggerFiCommissionRecognition = internalAction({
     }
   },
 });
-
 // ─── Monthly prepaid-expense amortization cron ───────────────────────────────
 // Same shape as the F&I commission recognition cron above — paginated cross-org
 // scan, cached per-org owner resolution, one mutation call per schedule row,
