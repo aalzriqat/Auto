@@ -186,7 +186,7 @@ function BillOfSaleView({
       </div>
 
       {/* Printable Area */}
-      <div className="max-w-4xl mx-auto p-12 bg-white text-black" id="printable-area" dir={isRtl ? "rtl" : "ltr"}>
+      <div className="max-w-4xl mx-auto p-4 sm:p-12 bg-white text-black" id="printable-area" dir={isRtl ? "rtl" : "ltr"}>
         <DocumentLetterhead
           variant="legal"
           titleLabel={t("BillOfSale")}
@@ -199,7 +199,7 @@ function BillOfSaleView({
         />
         <p className="text-center text-sm mb-8 -mt-4">{t("OfficialRecordOfTransaction")}</p>
 
-        <div className="grid grid-cols-2 gap-12 mb-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 sm:gap-12 mb-8">
           <div>
             <h2 className="text-lg font-bold border-b border-black mb-2 uppercase">{t("SellerInformation")}</h2>
             <p className="font-semibold">{orgName}</p>
@@ -210,14 +210,14 @@ function BillOfSaleView({
             <p className="font-semibold">{customer.firstName} {customer.lastName}</p>
             <p>{t("Address")}: {customer.address || "—"}</p>
             <p>{t("Phone")}: {customer.phone || "—"}</p>
-            <p>{t("Email")}: {customer.email || "—"}</p>
+            <p className="break-all">{t("Email")}: {customer.email || "—"}</p>
             <p>{t("NationalId")}: {customer.nationalId || "—"}</p>
           </div>
         </div>
 
         <div className="mb-8">
           <h2 className="text-lg font-bold border-b border-black mb-2 uppercase">{t("PrintVehicleDescription")}</h2>
-          <table className="w-full text-left text-sm border-collapse">
+          <table className="w-full text-left text-sm border-collapse break-words">
             <tbody>
               <tr className="border-b">
                 <th className="py-2 font-semibold">{t("Make")}</th>
@@ -233,7 +233,7 @@ function BillOfSaleView({
               </tr>
               <tr className="border-b">
                 <th className="py-2 font-semibold">{t("VIN")}</th>
-                <td className="py-2 font-mono font-bold tracking-wider">{vehicle.vin}</td>
+                <td className="py-2 font-mono font-bold tracking-wider break-all">{vehicle.vin}</td>
                 <th className="py-2 font-semibold">{t("Color")}</th>
                 <td className="py-2">{vehicle.color}</td>
               </tr>
@@ -256,7 +256,7 @@ function BillOfSaleView({
           <p className="text-sm leading-relaxed mb-4 text-justify">{t("BillOfSaleDisclaimer")}</p>
           <p className="text-sm font-semibold mb-12">{t("OdometerStatement")}</p>
 
-          <div className="grid grid-cols-2 gap-12 mt-16">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 sm:gap-12 mt-16">
             <div>
               <div className="border-b border-black h-8 mb-2"></div>
               <p className="font-semibold text-sm">{t("SellerSignature")}</p>
@@ -272,6 +272,16 @@ function BillOfSaleView({
       </div>
     </div>
   );
+}
+
+/** U+2212, a true minus sign: unlike the hyphen it is not bidi-weak punctuation glued to the label. */
+const MINUS_SIGN = "\u2212";
+
+/** The sale type in the reader's language. An unknown value is "—", never a raw enum. */
+function financingTypeLabel(financingType: string | undefined, t: (key: string) => string): string {
+  if (financingType === "CASH") return t("Cash");
+  if (financingType === "FINANCED") return t("Financed");
+  return "—";
 }
 
 /** One line of the totals table. `total` is the bold closing line; `tone="credit"` marks a deduction. */
@@ -295,10 +305,19 @@ function Row({
         tone === "credit" ? "text-red-700" : "",
       ].join(" ").trim()}
     >
-      <th className={total ? "py-3 font-bold text-base" : "py-2 font-semibold"}>{label}</th>
-      <td className={total ? "py-3 text-right font-bold text-base" : "py-2 text-right"}>
-        {sign}
-        {amount}
+      <th className={total ? "py-3 text-start font-bold text-base" : "py-2 text-start font-semibold"}>{label}</th>
+      <td
+        className={
+          total
+            ? "py-3 w-40 text-end tabular-nums whitespace-nowrap font-bold text-base"
+            : "py-2 w-40 text-end tabular-nums whitespace-nowrap"
+        }
+      >
+        {/* One isolated left-to-right unit: the sign never detaches from its figure in RTL. */}
+        <bdi dir="ltr">
+          {sign === "-" ? MINUS_SIGN : sign}
+          {amount}
+        </bdi>
       </td>
     </tr>
   );
@@ -332,7 +351,7 @@ function FinancialTotals({ sale, view }: { sale: PrintableSale; view: TotalsView
 
   return (
     <>
-      <table className="w-full text-left text-sm border-collapse">
+      <table className="w-full text-start text-sm border-collapse">
         <tbody>
           {economics.kind === "CASH" ? (
             <>
@@ -367,14 +386,21 @@ function FinancialTotals({ sale, view }: { sale: PrintableSale; view: TotalsView
         </tbody>
       </table>
       <p className="text-xs text-gray-500 mt-2">
-        {t("PaymentMethodLabel")}: {sale.financingType}
-        {economics.kind === "FINANCED"
-          ? ` • ${economics.termMonths} ${t("Months")} • ${
-              economics.flatAnnualProfitRatePercent === null
-                ? t("RateNotStated")
-                : `${t("FlatAnnualProfitRate")} ${economics.flatAnnualProfitRatePercent}%`
-            }`
-          : ""}
+        {t("PaymentMethodLabel")}: {financingTypeLabel(sale.financingType, t)}
+        {economics.kind === "FINANCED" && (
+          <>
+            {" • "}
+            <bdi dir="ltr">{economics.termMonths}</bdi> {t("Months")}
+            {" • "}
+            {economics.flatAnnualProfitRatePercent === null ? (
+              t("RateNotStated")
+            ) : (
+              <>
+                {t("FlatAnnualProfitRate")} <bdi dir="ltr">{economics.flatAnnualProfitRatePercent}%</bdi>
+              </>
+            )}
+          </>
+        )}
       </p>
     </>
   );

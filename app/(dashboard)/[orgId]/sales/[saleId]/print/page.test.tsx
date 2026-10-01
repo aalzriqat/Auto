@@ -11,6 +11,9 @@ const stubs = vi.hoisted(() => ({
   sale: undefined as unknown,
   economics: undefined as unknown,
   economicsThrows: false,
+  /** When set, `t` resolves against the REAL dictionaries for `locale`; otherwise it echoes the key. */
+  real: false,
+  locale: "en" as "en" | "ar",
 }));
 
 vi.mock("convex/react", async () => {
@@ -32,9 +35,20 @@ vi.mock("next/navigation", () => ({
   useParams: () => ({ saleId: "sale1" }),
   useRouter: () => ({ back: vi.fn() }),
 }));
-vi.mock("@/components/providers/LanguageProvider", () => ({
-  useLanguage: () => ({ t: (key: string) => key, isRtl: false, locale: "en" }),
-}));
+vi.mock("@/components/providers/LanguageProvider", async () => {
+  const { dictionaries } = await import("@/lib/i18n/dictionaries");
+  return {
+    useLanguage: () => ({
+      t: (key: string) => {
+        if (!stubs.real) return key;
+        const table = dictionaries[stubs.locale] as Record<string, string>;
+        return table[key] || (dictionaries.en as Record<string, string>)[key] || key;
+      },
+      isRtl: stubs.locale === "ar",
+      locale: stubs.locale,
+    }),
+  };
+});
 vi.mock("@/components/providers/OrgProvider", () => ({ useOrg: () => ({ activeOrgId: "org1" }) }));
 vi.mock("@/hooks/useOrgSettings", () => ({
   useOrgSettings: () => ({ dealershipName: "Test Motors", currencySymbol: "JD" }),
@@ -75,6 +89,8 @@ afterEach(() => {
   stubs.sale = undefined;
   stubs.economics = undefined;
   stubs.economicsThrows = false;
+  stubs.real = false;
+  stubs.locale = "en";
 });
 
 /** Intl separates the currency code with a no-break space; compare with a plain one. */
@@ -118,8 +134,8 @@ describe("Bill of Sale print page", () => {
     expect(screen.getByText("BalanceDue")).toBeTruthy();
     // Three decimals: JOD. Every amount is rendered in economics.currency, not the org symbol.
     expect(text).toContain("JOD 13,150.000");
-    expect(text).toContain("-JOD 2,000.000");
-    expect(text).toContain("-JOD 500.000");
+    expect(text).toContain("\u2212JOD 2,000.000");
+    expect(text).toContain("\u2212JOD 500.000");
     expect(text).toContain("JOD 10,650.000");
     expect(text).not.toContain("JD");
     for (const lie of ["111,111", "222,222", "333,333", "77"]) expect(text).not.toContain(lie);
@@ -144,7 +160,7 @@ describe("Bill of Sale print page", () => {
     const { container } = render(<PrintBillOfSalePage />);
     const text = textOf(container);
     expect(screen.getByText("AmountFinanced")).toBeTruthy();
-    for (const figure of ["JOD 12,000.000", "-JOD 1,000.000", "+JOD 120.000", "+JOD 30.000", "JOD 11,150.000", "48", "5%"]) {
+    for (const figure of ["JOD 12,000.000", "\u2212JOD 1,000.000", "+JOD 120.000", "+JOD 30.000", "JOD 11,150.000", "48", "5%"]) {
       expect(text).toContain(figure);
     }
     for (const lie of ["111,111", "222,222", "333,333", "99"]) expect(text).not.toContain(lie);
@@ -192,4 +208,74 @@ describe("Bill of Sale print page", () => {
     expect(printButton().disabled).toBe(true);
     consoleError.mockRestore();
   });
-});
+
+  describe("SCRUM-258 R2: bidi-safe, localised totals", () => {
+    const financedEconomics = {
+      kind: "FINANCED", currency: "JOD", vehiclePrice: 20_000, downPayment: 5_000, executionFees: 150,
+      capitalisedCommission: 400, amountFinanced: 15_550, termMonths: 48, flatAnnualProfitRatePercent: 6.5,
+    };
+
+    test("every totals amount is ONE left-to-right unit and a deduction leads with U+2212", () => {
+      stubs.sale = sale("CASH");
+      stubs.economics = cash({ totalBilled: 13_150, tradeInCredit: 2_000, depositsApplied: 500, balanceDue: 10_650 });
+      const { container } = render(<PrintBillOfSalePage />);
+      const cells = Array.from(container.querySelectorAll<HTMLElement>("#printable-area table td.text-end"));
+      expect(cells.length).toBeGreaterThan(0);
+      for (const cell of cells) {
+        const unit = cell.querySelector('[dir="ltr"]');
+        expect(unit, `amount "${cell.textContent}" is not isolated`).not.toBeNull();
+        // The whole cell content is inside the isolate: no sign or digit left outside it.
+        expect(unit!.textContent).toBe(cell.textContent);
+      }
+      const deductions = cells.map((c) => c.textContent ?? "").filter((x) => /2,000|500\.000/.test(x));
+      expect(deductions.length).toBe(2);
+      for (const text of deductions) {
+        expect(text.startsWith("\u2212")).toBe(true);
+        expect(text).not.toContain("-");
+      }
+      // The label column starts at the reading edge: logical alignment, no physical left/right.
+      expect(container.querySelector("#printable-area table th.text-start")).not.toBeNull();
+      const totalsTable = cells[0].closest("table")!;
+      expect(totalsTable.className).toContain("text-start");
+      expect(totalsTable.className).not.toContain("text-left");
+      expect(totalsTable.querySelector(".text-right")).toBeNull();
+    });
+
+    test.each([
+      ["en", "CASH", "Cash"],
+      ["ar", "CASH", "نقدي"],
+      ["en", "FINANCED", "Financed"],
+      ["ar", "FINANCED", "تقسيط"],
+    ] as const)("footnote (%s, %s) shows the translated payment method, never the raw enum", (locale, type, label) => {
+      stubs.real = true;
+      stubs.locale = locale;
+      stubs.sale = sale(type);
+      stubs.economics = type === "CASH" ? cash({}) : financedEconomics;
+      const { container } = render(<PrintBillOfSalePage />);
+      const note = Array.from(container.querySelectorAll("p")).find((p) => p.className.includes("text-xs"));
+      expect(note).toBeTruthy();
+      expect(note!.textContent).toContain(label);
+      expect(note!.textContent).not.toContain(type);
+    });
+
+    test("an unknown financing type prints a dash, never the raw value", () => {
+      stubs.real = true;
+      stubs.sale = { ...sale("CASH"), financingType: "BARTER" };
+      stubs.economics = cash({});
+      const { container } = render(<PrintBillOfSalePage />);
+      const note = Array.from(container.querySelectorAll("p")).find((p) => p.className.includes("text-xs"));
+      expect(note!.textContent).toContain("—");
+      expect(note!.textContent).not.toContain("BARTER");
+    });
+
+    test.each(["en", "ar"] as const)("FINANCED footnote (%s): the rate and the term sit inside dir=ltr", (locale) => {
+      stubs.real = true;
+      stubs.locale = locale;
+      stubs.sale = sale("FINANCED");
+      stubs.economics = financedEconomics;
+      const { container } = render(<PrintBillOfSalePage />);
+      const isolated = Array.from(container.querySelectorAll('[dir="ltr"]')).map((el) => el.textContent);
+      expect(isolated).toContain("6.5%");
+      expect(isolated).toContain("48");
+    });
+  });});
