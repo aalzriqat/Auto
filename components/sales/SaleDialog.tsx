@@ -191,7 +191,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   }, [sale, open, form, initialFinancingType]);
 
 
-  const taxAmount = form.watch("taxAmount");
+  const taxAmount = watchAll.taxAmount;
 
   // An agency sale has no agreed tax treatment, so the ledger refuses to post
   // one. Asked here rather than discovered on save: see `consignedTaxRefusal`
@@ -264,8 +264,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
           // re-stated nor rewritten to CASH. (The server independently refuses only a
           // change INTO a retired type.)
           ...(values.financingType !== initialFinancingType ? { financingType: values.financingType } : {}),
-          // SCRUM-258: `loanAmount` is no longer recomputed or sent. It is display-dead (the Bill of Sale
-          // reads server economics) and the server still accepts and stores it for phase 1.
+          // loanAmount is no longer sent: display-dead, see the note at `sales.create`'s args (convex/sales.ts).
           apr: values.apr,
           termMonths: values.termMonths,
           warrantySold: values.warrantySold,

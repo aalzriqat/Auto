@@ -65,6 +65,11 @@ const sale = (financingType: "CASH" | "FINANCED") => ({
   salesperson: { name: "Rep" },
 });
 
+const cash = (over: Record<string, unknown>) => ({
+  kind: "CASH", currency: "JOD", vehicle: 13_000, taxes: 50, dealerFees: 100, warranty: 0, gap: 0,
+  vehicleSettledWithSupplier: false, totalBilled: 13_150, tradeInCredit: 0, depositsApplied: 0, balanceDue: 13_150, ...over,
+});
+
 afterEach(() => {
   cleanup();
   stubs.sale = undefined;
@@ -72,21 +77,51 @@ afterEach(() => {
   stubs.economicsThrows = false;
 });
 
+/** Intl separates the currency code with a no-break space; compare with a plain one. */
+const textOf = (container: HTMLElement) => (container.textContent ?? "").replace(/\u00a0/g, " ");
 const printButton = () => screen.getByRole("button", { name: /PrintDocumentBtn/ }) as HTMLButtonElement;
 
 describe("Bill of Sale print page", () => {
+  test("CASH: a consigned direct-to-supplier sale labels the car as paid to the supplier and bills 0 for it", () => {
+    stubs.sale = sale("CASH");
+    stubs.economics = cash({ vehicle: 0, vehicleSettledWithSupplier: true, totalBilled: 150, balanceDue: 150 });
+    const { container } = render(<PrintBillOfSalePage />);
+    expect(screen.getByText("VehiclePaidToSupplier")).toBeTruthy();
+    expect(screen.queryByText("SalePrice")).toBeNull();
+    const text = textOf(container);
+    expect(text).toContain("JOD 0.000");
+    // The sale row's own salePrice (13,000) is not a billed figure here and must not appear.
+    expect(text).not.toContain("13,000");
+  });
+
+  test("CASH: warranty and GAP rows appear only when billed", () => {
+    stubs.sale = sale("CASH");
+    stubs.economics = cash({ warranty: 400, gap: 0, totalBilled: 13_550, balanceDue: 13_550 });
+    render(<PrintBillOfSalePage />);
+    expect(screen.getByText("ExtendedWarranty")).toBeTruthy();
+    expect(screen.queryByText("GAPInsurance")).toBeNull();
+  });
+
+  test("a currency whose decimal scale is unknown is UNAVAILABLE, never printed at a guessed scale", () => {
+    stubs.sale = sale("CASH");
+    stubs.economics = cash({ currency: "XXX" });
+    render(<PrintBillOfSalePage />);
+    expect(screen.getByText("BillOfSaleFiguresUnavailable")).toBeTruthy();
+    expect(printButton().disabled).toBe(true);
+  });
+
   test("CASH: states the ledger figures and never the sale row's caller-supplied ones", () => {
     stubs.sale = sale("CASH");
-    stubs.economics = {
-      kind: "CASH", currency: "JOD", totalBilled: 13_150, tradeInCredit: 2_000, depositsApplied: 500, balanceDue: 10_650,
-    };
+    stubs.economics = cash({ totalBilled: 13_150, tradeInCredit: 2_000, depositsApplied: 500, balanceDue: 10_650 });
     const { container } = render(<PrintBillOfSalePage />);
-    const text = container.textContent ?? "";
+    const text = textOf(container);
     expect(screen.getByText("BalanceDue")).toBeTruthy();
-    expect(text).toContain("13,150.00");
-    expect(text).toContain("-2,000.00");
-    expect(text).toContain("-500.00");
-    expect(text).toContain("10,650.00");
+    // Three decimals: JOD. Every amount is rendered in economics.currency, not the org symbol.
+    expect(text).toContain("JOD 13,150.000");
+    expect(text).toContain("-JOD 2,000.000");
+    expect(text).toContain("-JOD 500.000");
+    expect(text).toContain("JOD 10,650.000");
+    expect(text).not.toContain("JD");
     for (const lie of ["111,111", "222,222", "333,333", "77"]) expect(text).not.toContain(lie);
     expect(text).not.toMatch(/APR/i);
     expect(printButton().disabled).toBe(false);
@@ -94,7 +129,7 @@ describe("Bill of Sale print page", () => {
 
   test("CASH: a zero trade-in and zero deposits print no credit rows", () => {
     stubs.sale = sale("CASH");
-    stubs.economics = { kind: "CASH", currency: "JOD", totalBilled: 13_150, tradeInCredit: 0, depositsApplied: 0, balanceDue: 13_150 };
+    stubs.economics = cash({});
     render(<PrintBillOfSalePage />);
     expect(screen.queryByText("TradeInCredit")).toBeNull();
     expect(screen.queryByText("DepositsApplied")).toBeNull();
@@ -107,9 +142,9 @@ describe("Bill of Sale print page", () => {
       capitalisedCommission: 30, amountFinanced: 11_150, termMonths: 48, flatAnnualProfitRatePercent: 5,
     };
     const { container } = render(<PrintBillOfSalePage />);
-    const text = container.textContent ?? "";
+    const text = textOf(container);
     expect(screen.getByText("AmountFinanced")).toBeTruthy();
-    for (const figure of ["12,000.00", "-1,000.00", "+120.00", "+30.00", "11,150.00", "48", "5%"]) {
+    for (const figure of ["JOD 12,000.000", "-JOD 1,000.000", "+JOD 120.000", "+JOD 30.000", "JOD 11,150.000", "48", "5%"]) {
       expect(text).toContain(figure);
     }
     for (const lie of ["111,111", "222,222", "333,333", "99"]) expect(text).not.toContain(lie);
@@ -135,14 +170,13 @@ describe("Bill of Sale print page", () => {
     const { container } = render(<PrintBillOfSalePage />);
     expect(screen.getByText("BillOfSaleFiguresUnavailable")).toBeTruthy();
     expect(screen.getByRole("alert")).toBeTruthy();
-    const text = container.textContent ?? "";
+    const text = textOf(container);
     for (const lie of ["111,111", "222,222", "333,333"]) expect(text).not.toContain(lie);
     expect(printButton().disabled).toBe(true);
   });
 
   test("loading: a spinner stands in for the totals and printing is disabled", () => {
     stubs.sale = sale("CASH");
-    stubs.economics = undefined;
     render(<PrintBillOfSalePage />);
     expect(screen.queryByText("BalanceDue")).toBeNull();
     expect(printButton().disabled).toBe(true);

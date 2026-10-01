@@ -9,6 +9,8 @@ import { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
+import { useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
+import { supportedCurrencyScale } from "@/components/accounting/AccountingTabShared";
 import { format } from "date-fns";
 import { Loader2, Printer, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -18,12 +20,44 @@ import { DocumentLetterhead } from "@/components/print/DocumentLetterhead";
 type Economics =
   | FunctionReturnType<typeof api.sales.getBillOfSaleEconomics>
   | { kind: "UNAVAILABLE"; reason: "LOAD_FAILED" };
+type StatedEconomics = Exclude<Economics, { kind: "UNAVAILABLE" }>;
 
 type SaleWithParties = NonNullable<FunctionReturnType<typeof api.sales.get>>;
+/** A sale whose vehicle and customer exist: the only thing the document can be printed for. */
+type PrintableSale = SaleWithParties & {
+  vehicle: NonNullable<SaleWithParties["vehicle"]>;
+  customer: NonNullable<SaleWithParties["customer"]>;
+};
 
-const LOAD_FAILED: Economics = { kind: "UNAVAILABLE", reason: "LOAD_FAILED" };
+function isPrintable(sale: SaleWithParties | null): sale is PrintableSale {
+  return sale !== null && !!sale.vehicle && !!sale.customer;
+}
 
-const money = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 2 });
+/** The one status of the totals block, derived once from `economics`. `printable` is `status === "ready"`. */
+type TotalsView =
+  | { status: "loading" }
+  | { status: "unavailable"; reason: string }
+  | { status: "ready"; economics: StatedEconomics; scale: number };
+
+function toTotalsView(economics: Economics | undefined): TotalsView {
+  if (economics === undefined) return { status: "loading" };
+  if (economics.kind === "UNAVAILABLE") return { status: "unavailable", reason: economics.reason };
+  // A currency whose decimal scale is unknown cannot be printed correctly: say so rather than guess.
+  const scale = supportedCurrencyScale(economics.currency);
+  if (scale === null) return { status: "unavailable", reason: "CURRENCY_MISMATCH" };
+  return { status: "ready", economics, scale };
+}
+
+/** Reason-specific text where it helps; every other reason shows the DEFAULT text. */
+const UNAVAILABLE_TEXT_KEY: Record<string, string> = {
+  NOT_COMPLETED: "BillOfSaleUnavailable_NOT_COMPLETED",
+  LOAD_FAILED: "BillOfSaleUnavailable_LOAD_FAILED",
+};
+
+type Branding = {
+  orgSettings: ReturnType<typeof useOrgSettings>;
+  logoUrl: string | null | undefined;
+};
 
 /**
  * Catches the economics query throwing (an older backend that does not have the function yet, or
@@ -45,12 +79,12 @@ class EconomicsBoundary extends Component<{ fallback: ReactNode; children: React
 
 export default function PrintBillOfSalePage() {
   const params = useParams();
-  const router = useRouter();
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
   const saleId = params.saleId as Id<"sales">;
-
-  const sale = useQuery(api.sales.get, activeOrgId ? { orgId: activeOrgId, saleId } : "skip");
+  // Hoisted: the branding reads do not depend on the sale, so they subscribe with the first render.
+  const orgSettings = useOrgSettings();
+  const logoUrl = useQuery(api.orgSettings.getLogoUrl, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const branding: Branding = { orgSettings, logoUrl };
 
   useEffect(() => {
     document.body.classList.add("print-mode");
@@ -58,6 +92,38 @@ export default function PrintBillOfSalePage() {
       document.body.classList.remove("print-mode");
     };
   }, []);
+
+  // The throwing useQuery stays inside the boundary. Economics subscribes in parallel with sales.get.
+  return (
+    <EconomicsBoundary
+      fallback={<BillOfSaleWithEconomics saleId={saleId} branding={branding} loadFailed />}
+    >
+      <BillOfSaleWithEconomics saleId={saleId} branding={branding} />
+    </EconomicsBoundary>
+  );
+}
+
+/**
+ * Reads the sale and the one authoritative source of the totals. The economics query throws when
+ * the backend lacks it: see EconomicsBoundary, which re-renders this with `loadFailed`.
+ */
+function BillOfSaleWithEconomics({
+  saleId,
+  branding,
+  loadFailed = false,
+}: {
+  saleId: Id<"sales">;
+  branding: Branding;
+  loadFailed?: boolean;
+}) {
+  const router = useRouter();
+  const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
+  const sale = useQuery(api.sales.get, activeOrgId ? { orgId: activeOrgId, saleId } : "skip");
+  const economics = useQuery(
+    api.sales.getBillOfSaleEconomics,
+    activeOrgId && !loadFailed ? { orgId: activeOrgId, saleId } : "skip"
+  );
 
   if (sale === undefined) {
     return (
@@ -67,7 +133,7 @@ export default function PrintBillOfSalePage() {
     );
   }
 
-  if (sale === null || !sale.vehicle || !sale.customer) {
+  if (!isPrintable(sale)) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen">
         <p className="text-xl font-bold mb-4">{t("SaleRecordNotFound")}</p>
@@ -77,41 +143,35 @@ export default function PrintBillOfSalePage() {
   }
 
   return (
-    <EconomicsBoundary fallback={<BillOfSaleView sale={sale} economics={LOAD_FAILED} />}>
-      <BillOfSaleWithEconomics sale={sale} />
-    </EconomicsBoundary>
+    <BillOfSaleView
+      sale={sale}
+      economics={loadFailed ? { kind: "UNAVAILABLE", reason: "LOAD_FAILED" } : economics}
+      branding={branding}
+    />
   );
-}
-
-/** Reads the one authoritative source of the totals. It throws when the backend lacks it: see EconomicsBoundary. */
-function BillOfSaleWithEconomics({ sale }: { sale: SaleWithParties }) {
-  const { activeOrgId } = useOrg();
-  const economics = useQuery(
-    api.sales.getBillOfSaleEconomics,
-    activeOrgId ? { orgId: activeOrgId, saleId: sale._id } : "skip"
-  );
-  return <BillOfSaleView sale={sale} economics={economics} />;
 }
 
 /**
  * SCRUM-258: every total on this document comes from `economics`, never from the sale row's own
  * `loanAmount` / `downPayment` / `apr` / `termMonths`, and never from a finance-approval amount.
  */
-function BillOfSaleView({ sale, economics }: { sale: SaleWithParties; economics: Economics | undefined }) {
+function BillOfSaleView({
+  sale,
+  economics,
+  branding,
+}: {
+  sale: PrintableSale;
+  economics: Economics | undefined;
+  branding: Branding;
+}) {
   const router = useRouter();
-  const { activeOrgId } = useOrg();
   const { t, isRtl } = useLanguage();
-  const orgSettings = useOrgSettings();
-  const logoUrl = useQuery(
-    api.orgSettings.getLogoUrl,
-    activeOrgId ? { orgId: activeOrgId } : "skip"
-  );
+  const { orgSettings, logoUrl } = branding;
 
   const { vehicle, customer } = sale;
-  if (!vehicle || !customer) return null;
   const orgName = orgSettings?.dealershipName || "AutoFlow";
-  const currencySymbol = orgSettings?.currencySymbol || "JOD";
-  const printable = economics !== undefined && economics.kind !== "UNAVAILABLE";
+  const view = toTotalsView(economics);
+  const printable = view.status === "ready";
 
   return (
     <div className="min-h-screen bg-white">
@@ -189,7 +249,7 @@ function BillOfSaleView({ sale, economics }: { sale: SaleWithParties; economics:
 
         <div className="mb-12">
           <h2 className="text-lg font-bold border-b border-black mb-2 uppercase">{t("FinancialDetails")}</h2>
-          <FinancialTotals sale={sale} economics={economics} currencySymbol={currencySymbol} />
+          <FinancialTotals sale={sale} view={view} />
         </div>
 
         <div className="mb-12">
@@ -214,19 +274,42 @@ function BillOfSaleView({ sale, economics }: { sale: SaleWithParties; economics:
   );
 }
 
-/** The itemisation and the total. One branch per kind of economics: each states its own arithmetic. */
-function FinancialTotals({
-  sale,
-  economics,
-  currencySymbol,
+/** One line of the totals table. `total` is the bold closing line; `tone="credit"` marks a deduction. */
+function Row({
+  label,
+  amount,
+  sign,
+  tone,
+  total,
 }: {
-  sale: SaleWithParties;
-  economics: Economics | undefined;
-  currencySymbol: string;
+  label: string;
+  amount: string;
+  sign?: "+" | "-";
+  tone?: "credit";
+  total?: boolean;
 }) {
-  const { t } = useLanguage();
+  return (
+    <tr
+      className={[
+        total ? "border-b-2 border-black bg-gray-50" : "border-b",
+        tone === "credit" ? "text-red-700" : "",
+      ].join(" ").trim()}
+    >
+      <th className={total ? "py-3 font-bold text-base" : "py-2 font-semibold"}>{label}</th>
+      <td className={total ? "py-3 text-right font-bold text-base" : "py-2 text-right"}>
+        {sign}
+        {amount}
+      </td>
+    </tr>
+  );
+}
 
-  if (economics === undefined) {
+/** The itemisation and the total. One branch per kind of economics: each states its own arithmetic. */
+function FinancialTotals({ sale, view }: { sale: PrintableSale; view: TotalsView }) {
+  const { t } = useLanguage();
+  const formatInCurrency = useCurrencyFormatterInCurrency();
+
+  if (view.status === "loading") {
     return (
       <div className="flex items-center justify-center py-6">
         <Loader2 className="h-6 w-6 animate-spin text-primary" />
@@ -234,11 +317,8 @@ function FinancialTotals({
     );
   }
 
-  if (economics.kind === "UNAVAILABLE") {
-    const reasonKey =
-      economics.reason === "NOT_COMPLETED" || economics.reason === "LOAD_FAILED"
-        ? (`BillOfSaleUnavailable_${economics.reason}` as const)
-        : "BillOfSaleUnavailable_DEFAULT";
+  if (view.status === "unavailable") {
+    const reasonKey = UNAVAILABLE_TEXT_KEY[view.reason] ?? "BillOfSaleUnavailable_DEFAULT";
     return (
       <div className="border border-black p-4 text-sm" role="alert">
         <p className="font-bold">{t("BillOfSaleFiguresUnavailable")}</p>
@@ -247,7 +327,8 @@ function FinancialTotals({
     );
   }
 
-  const unit = economics.currency || currencySymbol;
+  const { economics, scale } = view;
+  const fmt = (amount: number) => formatInCurrency(amount, economics.currency, scale);
 
   return (
     <>
@@ -255,71 +336,32 @@ function FinancialTotals({
         <tbody>
           {economics.kind === "CASH" ? (
             <>
-              <tr className="border-b">
-                <th className="py-2 font-semibold">{t("SalePrice")}</th>
-                <td className="py-2 text-right">{money(sale.salePrice)} {currencySymbol}</td>
-              </tr>
-              <tr className="border-b">
-                <th className="py-2 font-semibold">{t("DealerFees")}</th>
-                <td className="py-2 text-right">{money(sale.dealerFees || 0)} {currencySymbol}</td>
-              </tr>
-              <tr className="border-b">
-                <th className="py-2 font-semibold">{t("Taxes")}</th>
-                <td className="py-2 text-right">{money(sale.taxAmount || 0)} {currencySymbol}</td>
-              </tr>
-              <tr className="border-b">
-                <th className="py-2 font-semibold">{t("ExtendedWarranty")}</th>
-                <td className="py-2 text-right">{money(sale.warrantySold || 0)} {currencySymbol}</td>
-              </tr>
-              <tr className="border-b">
-                <th className="py-2 font-semibold">{t("GAPInsurance")}</th>
-                <td className="py-2 text-right">{money(sale.gapSold || 0)} {currencySymbol}</td>
-              </tr>
-              <tr className="border-b">
-                <th className="py-2 font-semibold">{t("TotalBilled")}</th>
-                <td className="py-2 text-right">{money(economics.totalBilled)} {unit}</td>
-              </tr>
+              <Row
+                label={t(economics.vehicleSettledWithSupplier ? "VehiclePaidToSupplier" : "SalePrice")}
+                amount={fmt(economics.vehicle)}
+              />
+              {economics.dealerFees > 0 && <Row label={t("DealerFees")} amount={fmt(economics.dealerFees)} />}
+              {economics.taxes > 0 && <Row label={t("Taxes")} amount={fmt(economics.taxes)} />}
+              {economics.warranty > 0 && <Row label={t("ExtendedWarranty")} amount={fmt(economics.warranty)} />}
+              {economics.gap > 0 && <Row label={t("GAPInsurance")} amount={fmt(economics.gap)} />}
+              <Row label={t("TotalBilled")} amount={fmt(economics.totalBilled)} />
               {economics.tradeInCredit > 0 && (
-                <tr className="border-b text-red-700">
-                  <th className="py-2 font-semibold">{t("TradeInCredit")}</th>
-                  <td className="py-2 text-right">-{money(economics.tradeInCredit)} {unit}</td>
-                </tr>
+                <Row label={t("TradeInCredit")} amount={fmt(economics.tradeInCredit)} sign="-" tone="credit" />
               )}
               {economics.depositsApplied > 0 && (
-                <tr className="border-b text-red-700">
-                  <th className="py-2 font-semibold">{t("DepositsApplied")}</th>
-                  <td className="py-2 text-right">-{money(economics.depositsApplied)} {unit}</td>
-                </tr>
+                <Row label={t("DepositsApplied")} amount={fmt(economics.depositsApplied)} sign="-" tone="credit" />
               )}
-              <tr className="border-b-2 border-black bg-gray-50">
-                <th className="py-3 font-bold text-base">{t("BalanceDue")}</th>
-                <td className="py-3 text-right font-bold text-base">{money(economics.balanceDue)} {unit}</td>
-              </tr>
+              <Row label={t("BalanceDue")} amount={fmt(economics.balanceDue)} total />
             </>
           ) : (
             <>
-              <tr className="border-b">
-                <th className="py-2 font-semibold">{t("VehiclePrice")}</th>
-                <td className="py-2 text-right">{money(economics.vehiclePrice)} {unit}</td>
-              </tr>
-              <tr className="border-b text-red-700">
-                <th className="py-2 font-semibold">{t("DownPayment")}</th>
-                <td className="py-2 text-right">-{money(economics.downPayment)} {unit}</td>
-              </tr>
-              <tr className="border-b">
-                <th className="py-2 font-semibold">{t("ExecutionFees")}</th>
-                <td className="py-2 text-right">+{money(economics.executionFees)} {unit}</td>
-              </tr>
+              <Row label={t("VehiclePrice")} amount={fmt(economics.vehiclePrice)} />
+              <Row label={t("DownPayment")} amount={fmt(economics.downPayment)} sign="-" tone="credit" />
+              <Row label={t("ExecutionFees")} amount={fmt(economics.executionFees)} sign="+" />
               {economics.capitalisedCommission > 0 && (
-                <tr className="border-b">
-                  <th className="py-2 font-semibold">{t("CapitalisedCommission")}</th>
-                  <td className="py-2 text-right">+{money(economics.capitalisedCommission)} {unit}</td>
-                </tr>
+                <Row label={t("CapitalisedCommission")} amount={fmt(economics.capitalisedCommission)} sign="+" />
               )}
-              <tr className="border-b-2 border-black bg-gray-50">
-                <th className="py-3 font-bold text-base">{t("AmountFinanced")}</th>
-                <td className="py-3 text-right font-bold text-base">{money(economics.amountFinanced)} {unit}</td>
-              </tr>
+              <Row label={t("AmountFinanced")} amount={fmt(economics.amountFinanced)} total />
             </>
           )}
         </tbody>
