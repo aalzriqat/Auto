@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { validateLcovSources, main } = require("../.github/scripts/validateLcovSources.cjs") as {
+const { validateLcovSources, main } = require("./validateLcovSources.cjs") as {
   validateLcovSources: (text: string, opts: { candidateRoot: string }) => number;
   main: (argv: string[]) => number;
 };
@@ -31,6 +31,7 @@ beforeEach(() => {
     "components/a.tsx",
     "lib/commission.ts",
     "Convex/a.ts",
+    "scripts/v.cjs",
     ".github/scripts/v.cjs",
     ".github/workflows/w.yml",
     ".github/scriptsx/v.cjs",
@@ -44,7 +45,7 @@ afterEach(() => {
 });
 
 describe("validateLcovSources", () => {
-  test.each(["convex/a.ts", "apps/mobile/src/a.tsx", "apps/mobile/app/(app)/x.tsx", ".github/scripts/v.cjs"])("accepts %s", (sf) => {
+  test.each(["convex/a.ts", "apps/mobile/src/a.tsx", "apps/mobile/app/(app)/x.tsx", "scripts/v.cjs"])("accepts %s", (sf) => {
     expect(validate(rec(sf))).toBe(1);
   });
 
@@ -56,6 +57,7 @@ describe("validateLcovSources", () => {
     "apps/mobile/appx/a.ts",
     "apps/mobile/jest.setup.ts",
     ".github/workflows/w.yml",
+    ".github/scripts/v.cjs",
     ".github/scriptsx/v.cjs",
     "components/a.tsx",
     "/abs/convex/a.ts",
@@ -112,8 +114,8 @@ describe("sonar-pr-report.yml wiring", () => {
   const source = fs.readFileSync(path.resolve(process.cwd(), ".github/workflows/sonar-pr-report.yml"), "utf8");
 
   test("runs the validator from the trusted checkout, never the candidate", () => {
-    expect(source).toContain("node trusted/.github/scripts/validateLcovSources.cjs");
-    expect(source).not.toMatch(/candidate\/\.github\/scripts/);
+    expect(source).toContain("node trusted/scripts/validateLcovSources.cjs");
+    expect(source).not.toMatch(/candidate\/scripts/);
   });
 
   test("validates before the candidate lcov is placed and the scan runs", () => {

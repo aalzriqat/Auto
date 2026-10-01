@@ -464,7 +464,7 @@ describe.skipIf(!bash)("sonar-pr-report.yml `Publish trusted Sonar verdict` step
   });
 });
 
-const VALIDATOR_PATH = path.resolve(process.cwd(), ".github/scripts/validateLcovSources.cjs");
+const VALIDATOR_PATH = path.resolve(process.cwd(), "scripts/validateLcovSources.cjs");
 const LCOV_OK = "TN:\nSF:convex/a.ts\nDA:1,1\nend_of_record\n";
 
 // `testedMergeFile`: undefined = write `tested`-independent default; null = file absent.
@@ -482,8 +482,8 @@ function sanitizeRun(o: { testedMergeFile?: string | null; same?: string; mergeF
       mkdirSync(path.join(dir, "candidate", "convex"), { recursive: true });
       writeFileSync(path.join(dir, "candidate", "convex", "a.ts"), "export {};\n");
       // Real CI runs the validator from the trusted checkout; stage the real script there.
-      mkdirSync(path.join(dir, "trusted", ".github", "scripts"), { recursive: true });
-      copyFileSync(VALIDATOR_PATH, path.join(dir, "trusted", ".github", "scripts", "validateLcovSources.cjs"));
+      mkdirSync(path.join(dir, "trusted", "scripts"), { recursive: true });
+      copyFileSync(VALIDATOR_PATH, path.join(dir, "trusted", "scripts", "validateLcovSources.cjs"));
       writeFileSync(path.join(dir, "trusted", "sonar-project.properties"), "sonar.projectKey=x\n");
       const cov = path.join(runnerTemp, "sonar-coverage");
       mkdirSync(cov, { recursive: true });

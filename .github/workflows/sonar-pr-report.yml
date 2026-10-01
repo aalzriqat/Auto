@@ -207,7 +207,7 @@ jobs:
 
           # SCRUM-293: the validator is read from the immutable trusted checkout, never the
           # candidate merge, and checks every SF record against the exact candidate checkout.
-          node trusted/.github/scripts/validateLcovSources.cjs "$LCOV" candidate
+          node trusted/scripts/validateLcovSources.cjs "$LCOV" candidate
 
           mkdir -p candidate/coverage
           cp "$RUNNER_TEMP/sonar-coverage/lcov.info" candidate/coverage/lcov.info

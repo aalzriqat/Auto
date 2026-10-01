@@ -41,7 +41,7 @@ export default defineConfig([
   },
   {
     // The same files eslint-config-next registers the react plugins for; a
-    // .cjs file (the trusted .github/scripts validator) is outside that set,
+    // .cjs file (the trusted scripts/validateLcovSources.cjs validator) is outside that set,
     // and an unscoped react/* rule on it crashes the whole lint run.
     files: ["**/*.{js,jsx,mjs,ts,tsx,mts,cts}"],
     rules: {
