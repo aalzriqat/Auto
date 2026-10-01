@@ -1543,21 +1543,16 @@ describe("P2-F M3 finalization barrier — CONSUME", () => {
       expectedDate: Date.now() + 86_400_000,
     });
 
-    // SCRUM-69 / SCRUM-532 (how this test changed): it used to close the deal through a DIFFERENT
-    // door, a direct sale on the same quote, then cancel that sale. That door now refuses while
-    // the application is in flight (F.9e-0 below), so the sequence is no longer reachable
-    // through the product. The post-cancellation state is SEEDED instead: the root is CONSUMED
-    // and stays CONSUMED (F.27), and the application is untouched and remains APPROVED
-    // (`saleCancellation.ts` never reads `financeApplications`). The assertions that follow are
-    // the original regression, unchanged.
-    await seed.t.run(async (ctx) => {
-      const rootA = (await ctx.db.query("commitmentRoots").collect()).filter((r) => r.vehicleId === v)[0];
-      await ctx.db.patch(rootA._id, {
+    // SCRUM-69: the old sale-then-cancel route is now refused while the application is in flight
+    // (F.9e-0), so the post-cancellation state (root CONSUMED, application still APPROVED) is seeded.
+    const [rootA] = await rootsOn(seed, v);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(rootA._id, {
         status: "CONSUMED",
         closedAt: Date.now(),
         closedReason: "seeded: post-cancellation state (SCRUM-69 F.9e)",
-      });
-    });
+      })
+    );
     expect(
       (await rootsOn(seed, v))[0].status,
       "precondition: the seeded root is CONSUMED"

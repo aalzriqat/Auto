@@ -62,6 +62,8 @@ const PRICE = 30_000;
 // ── fixtures ────────────────────────────────────────────────────────────────
 
 async function seedDealer(suffix: string) {
+  seedCounter += 1;
+  const phonePrefix = `+9627922${String(seedCounter).padStart(3, "0")}`;
   const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: `Dealer ${suffix}`, createdAt: Date.now() })
@@ -96,7 +98,7 @@ async function seedDealer(suffix: string) {
       orgId,
       firstName: "Customer",
       lastName: "A",
-      phone: `+96279221${suffix.length}1`,
+      phone: `${phonePrefix}1`,
       createdAt: Date.now(),
     })
   );
@@ -105,7 +107,7 @@ async function seedDealer(suffix: string) {
       orgId,
       firstName: "Customer",
       lastName: "B",
-      phone: `+96279221${suffix.length}2`,
+      phone: `${phonePrefix}2`,
       createdAt: Date.now(),
     })
   );
@@ -114,6 +116,7 @@ async function seedDealer(suffix: string) {
 
 type Seed = Awaited<ReturnType<typeof seedDealer>>;
 
+let seedCounter = 0;
 let vinCounter = 0;
 async function vehicle(seed: Seed) {
   vinCounter += 1;
@@ -182,7 +185,8 @@ async function toApproved(seed: Seed, applicationId: Id<"financeApplications">) 
   });
 }
 
-type InFlight = "DRAFT" | "PENDING_DOCS" | "UNDER_REVIEW" | "APPROVED";
+const IN_FLIGHT = ["DRAFT", "PENDING_DOCS", "UNDER_REVIEW", "APPROVED"] as const;
+type InFlight = (typeof IN_FLIGHT)[number];
 
 /**
  * An application in the given in-flight status. DRAFT is not reachable through
@@ -266,10 +270,6 @@ async function finalizeDeal(seed: Seed, applicationId: Id<"financeApplications">
 
 // ── observation ─────────────────────────────────────────────────────────────
 
-async function salesCount(seed: Seed) {
-  return await seed.t.run(async (ctx) => (await ctx.db.query("sales").collect()).length);
-}
-
 async function vehicleStatus(seed: Seed, v: Id<"vehicles">) {
   return (await seed.t.run((ctx) => ctx.db.get(v)))?.status;
 }
@@ -294,7 +294,7 @@ async function expectNoResidue(
   applicationId: Id<"financeApplications">,
   statusBefore: string | undefined
 ) {
-  expect(await salesCount(seed), "no sale row").toBe(0);
+  expect((await rowCounts(seed)).sales, "no sale row").toBe(0);
   expect(await vehicleStatus(seed, v), "the car is not SOLD").not.toBe("SOLD");
   expect(await applicationStatus(seed, applicationId), "the application did not move").toBe(statusBefore);
 }
@@ -316,13 +316,11 @@ async function expectFinanceClaimStillActive(seed: Seed, v: Id<"vehicles">) {
   expect(claims[0].status, "and it is still ACTIVE").toBe("ACTIVE");
 }
 
-const IN_FLIGHT: InFlight[] = ["DRAFT", "PENDING_DOCS", "UNDER_REVIEW", "APPROVED"];
-
 // ── T1 ──────────────────────────────────────────────────────────────────────
 
 describe("T1 sales.create refuses a car a finance application holds", () => {
   test.each(IN_FLIGHT)("application %s", async (status) => {
-    const seed = await seedDealer(`t1${status.length}`);
+    const seed = await seedDealer(`t1-${status}`);
     const v = await vehicle(seed);
     const quoteId = await quoteFor(seed, seed.customerA, [v]);
     const applicationId = await applicationIn(seed, quoteId, status);
@@ -405,6 +403,7 @@ describe("T3 sales.completeDraft refuses a stored draft that names the applicati
     await expectAppError(completeDraft(seed, draftId), CODE, MESSAGE);
 
     expect((await seed.t.run((ctx) => ctx.db.get(draftId)))?.status, "the draft stays a draft").toBe("PENDING");
+    // (not expectNoResidue: the draft itself is a sales row)
     expect(await vehicleStatus(seed, v)).not.toBe("SOLD");
     expect(await applicationStatus(seed, applicationId)).toBe("APPROVED");
     expect(await rowCounts(seed), "no writes").toEqual(before);
@@ -453,9 +452,7 @@ describe("T4 an application covering several cars holds each of them (Codex D2)"
 
     await expectAppError(directSale(seed, quoteAB, b, seed.customerA), CODE, MESSAGE);
 
-    expect(await salesCount(seed)).toBe(0);
-    expect(await vehicleStatus(seed, b)).not.toBe("SOLD");
-    expect(await applicationStatus(seed, applicationId)).toBe("APPROVED");
+    await expectNoResidue(seed, b, applicationId, "APPROVED");
   });
 });
 
@@ -481,37 +478,27 @@ describe("T5 controls: what must keep working", () => {
     expect(await vehicleStatus(seed, v3)).toBe("SOLD");
   });
 
-  test("a REJECTED application no longer holds the car", async () => {
-    const seed = await seedDealer("t5b");
+  test.each(["REJECTED", "CANCELLED"] as const)("a %s application no longer holds the car", async (status) => {
+    const seed = await seedDealer(`t5-${status}`);
     const v = await vehicle(seed);
     const quoteId = await quoteFor(seed, seed.customerA, [v]);
     const applicationId = await applicationFor(seed, quoteId);
-    await toUnderReview(seed, applicationId);
-    await seed.asManager.mutation(api.applications.updateStatus, {
-      orgId: seed.orgId,
-      applicationId,
-      status: "REJECTED" as const,
-    });
-    expect(await applicationStatus(seed, applicationId), "precondition").toBe("REJECTED");
-    await expectFinanceClaimStillActive(seed, v);
-
-    await directSale(seed, quoteId, v, seed.customerA);
-
-    expect(await vehicleStatus(seed, v)).toBe("SOLD");
-  });
-
-  test("a CANCELLED application no longer holds the car", async () => {
-    const seed = await seedDealer("t5c");
-    const v = await vehicle(seed);
-    const quoteId = await quoteFor(seed, seed.customerA, [v]);
-    const applicationId = await applicationFor(seed, quoteId);
-    await seed.asManager.mutation(api.applications.cancelApplication, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId: seed.orgId,
-      applicationId,
-      reason: "customer withdrew",
-    });
-    expect(await applicationStatus(seed, applicationId), "precondition").toBe("CANCELLED");
+    if (status === "REJECTED") {
+      await toUnderReview(seed, applicationId);
+      await seed.asManager.mutation(api.applications.updateStatus, {
+        orgId: seed.orgId,
+        applicationId,
+        status,
+      });
+    } else {
+      await seed.asManager.mutation(api.applications.cancelApplication, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId: seed.orgId,
+        applicationId,
+        reason: "customer withdrew",
+      });
+    }
+    expect(await applicationStatus(seed, applicationId), "precondition").toBe(status);
     await expectFinanceClaimStillActive(seed, v);
 
     await directSale(seed, quoteId, v, seed.customerA);
@@ -553,18 +540,23 @@ describe("T7 the refusal is translatable", () => {
 // ── T8 ──────────────────────────────────────────────────────────────────────
 
 describe("T8 the completion door cannot be forged by a client", () => {
-  test("sales.create rejects an extra `door` argument", async () => {
+  test("sales.create rejects an extra `door` argument, and only the validator does", async () => {
     const seed = await seedDealer("t8");
     const v = await vehicle(seed);
-    const quoteId = await quoteFor(seed, seed.customerA, [v]);
-    const applicationId = await applicationIn(seed, quoteId, "APPROVED");
+    // Never read: the argument validator must refuse before any handler code runs.
+    const forgedApplicationId = v as unknown as Id<"financeApplications">;
 
+    // The car has NO finance application, so the guard would let this sale through.
     await expect(
-      directSale(seed, quoteId, v, seed.customerA, {
-        door: { kind: "FINANCE_FINALIZATION", applicationId },
+      directSale(seed, undefined, v, seed.customerA, {
+        door: { kind: "FINANCE_FINALIZATION", applicationId: forgedApplicationId },
       })
-    ).rejects.toThrow();
+    ).rejects.toThrow(/door|extra field|ArgumentValidationError/i);
+    expect((await rowCounts(seed)).sales, "the forged call wrote nothing").toBe(0);
+    expect(await vehicleStatus(seed, v)).not.toBe("SOLD");
 
-    await expectNoResidue(seed, v, applicationId, "APPROVED");
+    // Positive control: the same call without `door` succeeds, so the rejection above is the field.
+    await directSale(seed, undefined, v, seed.customerA);
+    expect(await vehicleStatus(seed, v)).toBe("SOLD");
   });
 });
