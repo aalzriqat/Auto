@@ -23,10 +23,12 @@
 import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEPLOYMENT_NAME, PROTECTED_DEPLOYMENTS } from "./previewDeploymentLifecycle.mjs";
+import {
+  DEPLOYMENT_NAME,
+  PROTECTED_DEPLOYMENTS,
+  callManagementApi,
+} from "./previewDeploymentLifecycle.mjs";
 
-const MANAGEMENT_API = "https://api.convex.dev/v1";
-const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const HOUR_MS = 60 * 60 * 1000;
 const DEFAULT_MIN_AGE_HOURS = 3;
@@ -65,33 +67,11 @@ function readMaxDeletions(env) {
   return Number(raw);
 }
 
-async function callApi(fetchImpl, token, method, pathname) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    const response = await fetchImpl(MANAGEMENT_API + pathname, {
-      method,
-      headers: { authorization: "Bearer " + token, accept: "application/json" },
-      redirect: "error",
-      signal: controller.signal,
-    });
-    const raw = await response.text();
-    if (Buffer.byteLength(raw, "utf8") > MAX_RESPONSE_BYTES) {
-      refuse("Convex Management API response exceeds the size limit.");
-    }
-    return { status: response.status, ok: response.ok, raw };
-  } catch (error) {
-    if (error instanceof PruneRefusal) throw error;
-    // Never echo the underlying error: it may quote request details.
-    refuse(
-      controller.signal.aborted
-        ? "Convex Management API request timed out."
-        : "Convex Management API request failed.",
-    );
-  } finally {
-    clearTimeout(timeout);
-  }
-}
+const callApi = (fetchImpl, token, method, pathname) =>
+  callManagementApi(fetchImpl, token, method, pathname, undefined, {
+    maxBytes: MAX_RESPONSE_BYTES,
+    Refusal: PruneRefusal,
+  });
 
 function parseJson(raw) {
   try {
@@ -125,6 +105,15 @@ function ageHours(createTime, now) {
   return Number.isSafeInteger(createTime) ? Math.round(((now - createTime) / HOUR_MS) * 10) / 10 : null;
 }
 
+function row(d, action, nowMs) {
+  return {
+    name: isObject(d) && typeof d.name === "string" ? safeText(d.name) : "?",
+    previewIdentifier: safeText(d?.previewIdentifier),
+    ageHours: ageHours(d?.createTime, nowMs),
+    action,
+  };
+}
+
 function render(rows, mode) {
   const header = "| Deployment | Preview identifier | Age (h) | Action |\n| --- | --- | --- | --- |";
   const body = rows.map(
@@ -143,6 +132,11 @@ export async function prune({
 } = {}) {
   const rows = [];
   let failures = 0;
+  const emit = (list, mode) => {
+    const table = render(list, mode);
+    write(table);
+    if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, table, "utf8");
+  };
   try {
     const token = readToken(env);
     const minAgeMs = readMinAgeMs(env);
@@ -175,16 +169,14 @@ export async function prune({
     const candidates = [];
     const seen = new Set();
     for (const d of list) {
-      const name = isObject(d) && typeof d.name === "string" ? safeText(d.name) : "?";
-      const base = { name, previewIdentifier: safeText(isObject(d) ? d.previewIdentifier : undefined) };
       const reason = ineligibleReason(d, projectId);
       if (reason) {
-        rows.push({ ...base, ageHours: ageHours(isObject(d) ? d.createTime : undefined, nowMs), action: "refused: " + reason });
+        rows.push(row(d, "refused: " + reason, nowMs));
       } else if (seen.has(d.name)) {
         continue;
       } else if (nowMs - d.createTime < minAgeMs) {
         seen.add(d.name);
-        rows.push({ ...base, ageHours: ageHours(d.createTime, nowMs), action: "skipped: too young" });
+        rows.push(row(d, "skipped: too young", nowMs));
       } else {
         seen.add(d.name);
         candidates.push(d);
@@ -194,59 +186,52 @@ export async function prune({
 
     let attempted = 0;
     for (const d of candidates) {
-      const base = {
-        name: d.name,
-        previewIdentifier: safeText(d.previewIdentifier),
-        ageHours: ageHours(d.createTime, nowMs),
-      };
+      const push = (action) => rows.push(row(d, action, nowMs));
       if (attempted >= maxDeletions) {
-        rows.push({ ...base, action: "deferred: deletion cap " + maxDeletions + " reached" });
+        push("deferred: deletion cap " + maxDeletions + " reached");
         continue;
       }
       attempted += 1;
       if (!confirmed) {
-        rows.push({ ...base, action: "would delete" });
+        push("would delete");
         continue;
       }
       const endpoint = "/deployments/" + encodeURIComponent(d.name);
       const reread = await callApi(fetchImpl, token, "GET", endpoint);
       if (reread.status === 404) {
-        rows.push({ ...base, action: "skipped: already gone" });
+        push("skipped: already gone");
         continue;
       }
       if (!reread.ok) {
-        rows.push({ ...base, action: "skipped: re-read failed (HTTP " + reread.status + ")" });
+        push("skipped: re-read failed (HTTP " + reread.status + ")");
         continue;
       }
       let current;
       try {
         current = JSON.parse(reread.raw);
       } catch {
-        rows.push({ ...base, action: "skipped: re-read was not JSON" });
+        push("skipped: re-read was not JSON");
         continue;
       }
       const why = ineligibleReason(current, projectId);
       if (why || current.name !== d.name) {
-        rows.push({ ...base, action: "skipped: re-read failed checks (" + (why ?? "name mismatch") + ")" });
+        push("skipped: re-read failed checks (" + (why ?? "name mismatch") + ")");
         continue;
       }
       if (current.createTime !== d.createTime) {
-        rows.push({ ...base, action: "skipped: createTime changed since listing" });
+        push("skipped: createTime changed since listing");
         continue;
       }
       const res = await callApi(fetchImpl, token, "POST", endpoint + "/delete");
-      if (res.status === 404) rows.push({ ...base, action: "skipped: already gone" });
-      else if (res.ok) rows.push({ ...base, action: "deleted" });
+      if (res.status === 404) push("skipped: already gone");
+      else if (res.ok) push("deleted");
       else {
         failures += 1;
-        rows.push({ ...base, action: "delete failed (HTTP " + res.status + ")" });
+        push("delete failed (HTTP " + res.status + ")");
       }
     }
 
-    const mode = confirmed ? "PRUNE" : "dry run";
-    const table = render(rows, mode);
-    write(table);
-    if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, table, "utf8");
+    emit(rows, confirmed ? "PRUNE" : "dry run");
     if (failures > 0) write("::error::" + failures + " deployment delete(s) failed.");
     return { exitCode: failures > 0 ? 1 : 0, rows };
   } catch (error) {
@@ -254,9 +239,7 @@ export async function prune({
     write("::error::Convex preview prune refused: " + message);
     if (rows.length > 0) {
       // Partial progress must still be visible after a mid-run failure.
-      const table = render(rows, "aborted");
-      write(table);
-      if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, table, "utf8");
+      emit(rows, "aborted");
     }
     return { exitCode: 1, rows };
   }

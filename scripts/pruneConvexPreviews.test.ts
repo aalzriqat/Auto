@@ -172,35 +172,19 @@ describe("SCRUM-548 prune leaked Convex previews", () => {
     },
   );
 
-  it("re-read: changed createTime is skipped", async () => {
-    const d = dep("aaa-bbb-1");
-    const { calls, result } = await run([d], { reread: { "aaa-bbb-1": dep("aaa-bbb-1", { createTime: NOW - 4 * HOUR }) } }, env(CONFIRM));
+  it.each<[string, Dep | null, RegExp]>([
+    ["changed createTime", dep("aaa-bbb-1", { createTime: NOW - 4 * HOUR }), /createTime changed/],
+    ["404 (already gone)", null, /already gone/],
+    ["now prod", dep("aaa-bbb-1", { deploymentType: "prod" }), /^skipped/],
+    ["now default", dep("aaa-bbb-1", { isDefault: true }), /^skipped/],
+    ["now local", dep("aaa-bbb-1", { kind: "local" }), /^skipped/],
+    ["other project", dep("aaa-bbb-1", { projectId: 1 }), /^skipped/],
+    ["different name", dep("zzz-yyy-9"), /name mismatch/],
+  ])("re-read: %s is skipped, never deleted", async (_label, current, action) => {
+    const { calls, result } = await run([dep("aaa-bbb-1")], { reread: { "aaa-bbb-1": current } }, env(CONFIRM));
     expect(posts(calls)).toEqual([]);
-    expect(result.rows[0].action).toMatch(/createTime changed/);
+    expect(result.rows[0].action).toMatch(action);
     expect(result.exitCode).toBe(0);
-  });
-
-  it("re-read: 404 is skipped as already gone", async () => {
-    const { calls, result } = await run([dep("aaa-bbb-1")], { reread: { "aaa-bbb-1": null } }, env(CONFIRM));
-    expect(posts(calls)).toEqual([]);
-    expect(result.rows[0].action).toMatch(/already gone/);
-    expect(result.exitCode).toBe(0);
-  });
-
-  it.each([
-    ["now prod", { deploymentType: "prod" }],
-    ["now default", { isDefault: true }],
-    ["now local", { kind: "local" }],
-    ["other project", { projectId: 1 }],
-  ])("re-read: %s is skipped", async (_l, patch) => {
-    const { calls, result } = await run([dep("aaa-bbb-1")], { reread: { "aaa-bbb-1": dep("aaa-bbb-1", patch) } }, env(CONFIRM));
-    expect(posts(calls)).toEqual([]);
-    expect(result.rows[0].action).toMatch(/^skipped/);
-  });
-
-  it("re-read returning a different name is skipped", async () => {
-    const { calls } = await run([dep("aaa-bbb-1")], { reread: { "aaa-bbb-1": dep("zzz-yyy-9") } }, env(CONFIRM));
-    expect(posts(calls)).toEqual([]);
   });
 
   it("re-read HTTP failure is skipped, never deleted", async () => {
@@ -290,6 +274,23 @@ describe("SCRUM-548 prune leaked Convex previews", () => {
     expect(readFileSync(summary, "utf8")).toContain("aaa-bbb-1");
     // Untrusted previewIdentifier cannot break the markdown table.
     expect(readFileSync(summary, "utf8")).not.toContain("x|y");
+  });
+
+  it("client refusals surface their own message, not the generic failure", async () => {
+    const oversize = (async () => new Response("x".repeat(2 * 1024 * 1024 + 1), { status: 200 })) as unknown as typeof fetch;
+    const broken = (async () => {
+      throw new Error("boom " + TOKEN);
+    }) as unknown as typeof fetch;
+    for (const [fetchImpl, message] of [
+      [oversize, "exceeds the size limit"],
+      [broken, "request failed"],
+    ] as const) {
+      const out: string[] = [];
+      const result = await prune({ env: env(), fetchImpl, now: () => NOW, write: (l: string) => out.push(l) });
+      expect(result.exitCode).toBe(1);
+      expect(out.join("\n")).toContain(message);
+      expect(out.join("\n")).not.toContain("Unexpected failure");
+    }
   });
 
   it("main returns the exit code", async () => {
