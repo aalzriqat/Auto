@@ -6004,13 +6004,14 @@ describe("one recognized-earning rule, asked identically by every surface", () =
       purchasePaymentMethod: "CASH",
     } as never);
 
-    await s.asUser.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId,
-      financingType: "FINANCED",
-    } as never);
-
+    // SCRUM-504: `sales.update` can no longer move a sale into FINANCED, so the draft completes as
+    // CASH and the completed row is then stamped with the legacy shape this test is about (a
+    // dealer-owned, direct-routed, FINANCED sale, as written before the refusal). The readers under
+    // test (dashboard, report) classify from the stored row, so the stamp is what they see.
     await s.asUser.mutation(api.sales.completeDraft, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, saleId } as never);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { financingType: "FINANCED" });
+    });
 
     // The ranking tile is drawn only for a role that may see people at all, and
     // this file's default role does not carry it — without this the tile is

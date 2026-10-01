@@ -16,6 +16,7 @@
  * runtime and not production data.
  */
 import { convexTestWithComponents, registerHandover, recordReconciledZeroCost } from "../test-utils/convexTest";
+import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -281,14 +282,21 @@ describe("SCRUM-390 OR-5: commissionable vehicle margin on a v2 financed sale", 
     expect(sale?.commissionAmount).toBeUndefined();
   });
 
-  test.each([
-    ["4b. a FINANCED sale with no application (sales.create)", "FINANCED"],
-    ["4c. a cash sale", "CASH"],
-  ] as const)("%s keeps sale price - cost and freezes no commissionBase", async (_label, financingType) => {
-    const s = await seedDealership(`ctl_${financingType}`, { cost: 10_000, price: 13_000 });
+  test("4b. SCRUM-504: a FINANCED sale with no application can no longer be created (sales.create); nothing is written", async () => {
+    const s = await seedDealership("ctl_FINANCED", { cost: 10_000, price: 13_000 });
+    await expectFinancedSaleRequiresDeal(
+      s.as.mutation(api.sales.create, {
+        idempotencyKey: crypto.randomUUID(), orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId,
+        salespersonId: s.userId, salePrice: 13_000, saleDate: Date.now(), status: "COMPLETED", financingType: "FINANCED",
+      })
+    );
+    expect(await s.t.run((ctx) => ctx.db.query("sales").first())).toBeNull();
+  });
+  test("4c. a cash sale keeps sale price - cost and freezes no commissionBase", async () => {
+    const s = await seedDealership("ctl_CASH", { cost: 10_000, price: 13_000 });
     const saleId = await s.as.mutation(api.sales.create, {
       idempotencyKey: crypto.randomUUID(), orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId,
-      salespersonId: s.userId, salePrice: 13_000, saleDate: Date.now(), status: "COMPLETED", financingType,
+      salespersonId: s.userId, salePrice: 13_000, saleDate: Date.now(), status: "COMPLETED", financingType: "CASH",
     });
     const sale = await s.t.run((ctx) => ctx.db.get(saleId));
     expect(sale?.commissionAmount).toBeCloseTo(300, 6);

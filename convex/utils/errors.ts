@@ -43,6 +43,9 @@ export const AppErrorCode = {
   // SCRUM-495. LEASE and INTERNAL_INSTALLMENT are no longer offered; every door
   // that would create or finalize a deal in one refuses with this code.
   DEAL_MODE_RETIRED: "DEAL_MODE_RETIRED",
+  // SCRUM-504. A financed sale exists only through the Deal (`applications.finalizeDeal`),
+  // which carries the finance application; a sale door that names FINANCED without one refuses.
+  FINANCED_SALE_REQUIRES_DEAL: "FINANCED_SALE_REQUIRES_DEAL",
   // SCRUM-239. Returning a cleared finance-company cheque from the deal; each
   // refusal is raised before the first write and is translated under
   // ServerError_<code>.
