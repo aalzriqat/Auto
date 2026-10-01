@@ -11,6 +11,7 @@
  */
 import { convexTestWithComponents, registerHandover, recordReconciledZeroCost } from "../test-utils/convexTest";
 import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
+import { expectQuoteEconomicsDrifted } from "../test-utils/quoteEconomicsDrifted";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -103,8 +104,8 @@ async function cashSale(s: Seeded, price = 13_000) {
   });
 }
 
-/** A real Deal: manual finance company quote -> application -> approval -> finalizeDeal. */
-async function financedSaleThroughDeal(s: Seeded, quoteExtra: Record<string, unknown> = {}) {
+/** A finalize-ready manual finance deal: quote -> application -> approval -> handover -> invoice -> costs. NOT finalized. */
+async function readyFinancedDeal(s: Seeded, quoteExtra: Record<string, unknown> = {}) {
   const quoteId = await s.as.mutation(api.quotes.saveQuote, {
     orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId,
     vehiclePrice: 12_000, downPayment: 0, termMonths: 48,
@@ -128,9 +129,16 @@ async function financedSaleThroughDeal(s: Seeded, quoteExtra: Record<string, unk
     legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
   });
   await recordReconciledZeroCost(s.as, api, s.orgId, applicationId);
-  const saleId = await s.as.mutation(api.applications.finalizeDeal, {
-    idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
-  });
+  return { applicationId, quoteId };
+}
+
+const finalize = (s: Seeded, applicationId: Id<"financeApplications">) =>
+  s.as.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
+
+/** A real Deal: manual finance company quote -> application -> approval -> finalizeDeal. */
+async function financedSaleThroughDeal(s: Seeded, quoteExtra: Record<string, unknown> = {}) {
+  const { applicationId, quoteId } = await readyFinancedDeal(s, quoteExtra);
+  const saleId = await finalize(s, applicationId);
   return { saleId: saleId as Id<"sales">, applicationId, quoteId };
 }
 
@@ -443,15 +451,13 @@ describe("getBillOfSaleEconomics - FINANCED (through the Deal)", () => {
   describe("S258-01: the quote is editable after the sale; the application's frozen snapshot is the authority", () => {
     const UNAVAILABLE_MISMATCH = { kind: "UNAVAILABLE", reason: "SNAPSHOT_MISMATCH" };
 
-    /** The real super-admin door (`adminData.adminUpdateRecord`): `quotes` is allow-listed and not a financial table. */
+    /**
+     * A direct-DB edit of the quote after the sale (legacy / out-of-band drift). Since SCRUM-528 `quotes`
+     * is a financial table, so `adminData.adminUpdateRecord` refuses it; these tests keep covering the
+     * snapshot comparison as the backstop against drift that bypasses that door.
+     */
     async function adminPatchQuote(s: Seeded, quoteId: Id<"quotes">, patch: Record<string, unknown>) {
-      process.env.SUPER_ADMIN_EMAILS = "s258.admin@autoflow.dev";
-      process.env.CLERK_JWT_ISSUER_DOMAIN ??= "https://test.clerk.accounts.dev";
-      process.env.NEXT_PUBLIC_APP_URL ??= "https://test.example.com";
-      await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "s258_sa", email: "s258.admin@autoflow.dev", name: "sa" }));
-      await s.t
-        .withIdentity({ subject: "s258_sa", clerkId: "s258_sa" })
-        .mutation(api.adminData.adminUpdateRecord, { table: "quotes", id: quoteId, patch });
+      await s.t.run((ctx) => ctx.db.patch(quoteId, patch as never));
     }
     const quoteSnap = async (s: Seeded, quoteId: Id<"quotes">) =>
       (await s.t.run((ctx) => ctx.db.get(quoteId)))!.customerQuotePricingSnapshot!;
@@ -697,5 +703,166 @@ describe("SCRUM-504 - a financed sale exists only through the Deal", () => {
     const first = await s.as.mutation(api.sales.create, args);
     const again = await s.as.mutation(api.sales.create, args);
     expect(again).toBe(first);
+  });
+});
+
+describe("SCRUM-528 - finalizeDeal builds the sale only from quote economics that agree with the application's frozen snapshot", () => {
+  /** Every table's rows, so "zero writes" means the whole database, not a hand-picked list. */
+  const databaseState = (s: Seeded) =>
+    s.t.run(async (ctx) => {
+      const out: Record<string, unknown[]> = {};
+      for (const table of Object.keys(schema.tables)) {
+        out[table] = await ctx.db.query(table as never).collect();
+      }
+      return out;
+    });
+
+  /** The deal is refused with the coded error and NOTHING in the database changed. */
+  async function expectRefusedWithZeroWrites(s: Seeded, applicationId: Id<"financeApplications">) {
+    const before = await databaseState(s);
+    await expectQuoteEconomicsDrifted(finalize(s, applicationId));
+    expect(await databaseState(s)).toEqual(before);
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(app).toMatchObject({ status: "APPROVED" });
+    expect(app?.finalizedSaleId).toBeUndefined();
+    const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
+    expect(sales).toHaveLength(0);
+  }
+
+  test("control: with no drift the deal finalizes", async () => {
+    const s = await seedDealership("d528ctl");
+    const { applicationId } = await readyFinancedDeal(s);
+    const saleId = (await finalize(s, applicationId)) as Id<"sales">;
+    const sale = await s.t.run((ctx) => ctx.db.get(saleId));
+    expect(sale).toMatchObject({ salePrice: 12_000, downPayment: 0, loanAmount: 12_000, termMonths: 48, financingType: "FINANCED" });
+  });
+
+  test.each([
+    ["vehiclePrice", { vehiclePrice: 11_000 }],
+    ["downPayment", { downPayment: 1_000 }],
+    ["totalFinancedAmount", { totalFinancedAmount: 9_000 }],
+    ["termMonths", { termMonths: 60 }],
+  ])("a quote whose top-level %s drifted refuses with the coded error and writes nothing", async (field, patch) => {
+    const s = await seedDealership(`d528${field}`);
+    const { applicationId, quoteId } = await readyFinancedDeal(s);
+    await s.t.run((ctx) => ctx.db.patch(quoteId, patch));
+    await expectRefusedWithZeroWrites(s, applicationId);
+  });
+
+  test("a drift only inside quote.customerQuotePricingSnapshot refuses", async () => {
+    const s = await seedDealership("d528snapdrift");
+    const { applicationId, quoteId } = await readyFinancedDeal(s);
+    await s.t.run(async (ctx) => {
+      const q = await ctx.db.get(quoteId);
+      await ctx.db.patch(quoteId, { customerQuotePricingSnapshot: { ...q!.customerQuotePricingSnapshot!, profitRate: 9 } });
+    });
+    await expectRefusedWithZeroWrites(s, applicationId);
+  });
+
+  test("a BALANCED drift (top-level and quote snapshot changed consistently) still refuses: the application is the anchor", async () => {
+    const s = await seedDealership("d528balanced");
+    const { applicationId, quoteId } = await readyFinancedDeal(s);
+    await s.t.run(async (ctx) => {
+      const q = await ctx.db.get(quoteId);
+      const snap = q!.customerQuotePricingSnapshot!;
+      const next = { ...snap, downPayment: snap.downPayment + 1_000, totalFinancedAmount: snap.totalFinancedAmount - 1_000 };
+      await ctx.db.patch(quoteId, {
+        downPayment: next.downPayment, totalFinancedAmount: next.totalFinancedAmount, customerQuotePricingSnapshot: next,
+      });
+    });
+    await expectRefusedWithZeroWrites(s, applicationId);
+  });
+
+  test("a quote whose snapshot was removed refuses", async () => {
+    const s = await seedDealership("d528nosnapq");
+    const { applicationId, quoteId } = await readyFinancedDeal(s);
+    await s.t.run((ctx) => ctx.db.patch(quoteId, { customerQuotePricingSnapshot: undefined }));
+    await expectRefusedWithZeroWrites(s, applicationId);
+  });
+
+  describe("no snapshot on the application: a financed deal fails closed", () => {
+    test("MANUAL_FINANCE_COMPANY application refuses", async () => {
+      const s = await seedDealership("d528nosnapman");
+      const { applicationId } = await readyFinancedDeal(s);
+      await s.t.run((ctx) => ctx.db.patch(applicationId, { customerQuotePricingSnapshot: undefined }));
+      await expectRefusedWithZeroWrites(s, applicationId);
+    });
+
+    test("CONFIGURED_FINANCE_COMPANY mode refuses", async () => {
+      const s = await seedDealership("d528nosnapcfg");
+      const { applicationId } = await readyFinancedDeal(s);
+      await s.t.run((ctx) =>
+        ctx.db.patch(applicationId, { customerQuotePricingSnapshot: undefined, quoteModeAtSubmission: "CONFIGURED_FINANCE_COMPANY" })
+      );
+      await expectRefusedWithZeroWrites(s, applicationId);
+    });
+
+    test("a mode-less application WITH a company refuses", async () => {
+      const s = await seedDealership("d528nosnapco");
+      const { applicationId, quoteId } = await readyFinancedDeal(s);
+      const companyId = await s.t.run((ctx) =>
+        ctx.db.insert("financeCompanies", {
+          orgId: s.orgId, name: "Configured Finance", profitRate: 5, maxTermMonths: 60, gracePeriodMonths: 0,
+          isActive: true, adminFees: 0, defaultLtvPercent: 100,
+        })
+      );
+      await s.t.run(async (ctx) => {
+        await ctx.db.patch(applicationId, { customerQuotePricingSnapshot: undefined, quoteModeAtSubmission: undefined, companyId });
+        await ctx.db.patch(quoteId, { mode: undefined, companyId });
+      });
+      await expectRefusedWithZeroWrites(s, applicationId);
+    });
+
+    test("control: a mode-less application with no company and no snapshot is not compared (CASH)", async () => {
+      const s = await seedDealership("d528nosnapcash");
+      const { applicationId, quoteId } = await readyFinancedDeal(s);
+      await s.t.run(async (ctx) => {
+        await ctx.db.patch(applicationId, { customerQuotePricingSnapshot: undefined, quoteModeAtSubmission: undefined });
+        await ctx.db.patch(quoteId, { mode: undefined });
+      });
+      // The anchor does not refuse; any later refusal would be a different code.
+      const attempt = await finalize(s, applicationId).then(() => "FINALIZED", (e: { data?: { code?: string } }) => e?.data?.code ?? "OTHER");
+      expect(attempt).not.toBe("QUOTE_ECONOMICS_DRIFTED");
+    });
+  });
+
+  describe("no generic admin path may change a quote (quotes is a financial table)", () => {
+    async function superAdmin(s: Seeded) {
+      process.env.SUPER_ADMIN_EMAILS = "s528.admin@autoflow.dev";
+      process.env.CLERK_JWT_ISSUER_DOMAIN ??= "https://test.clerk.accounts.dev";
+      process.env.NEXT_PUBLIC_APP_URL ??= "https://test.example.com";
+      await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "s528_sa", email: "s528.admin@autoflow.dev", name: "sa" }));
+      return s.t.withIdentity({ subject: "s528_sa", clerkId: "s528_sa" });
+    }
+    async function expectForbidden(attempt: Promise<unknown>) {
+      const error = await attempt.then(
+        () => {
+          throw new Error("expected a FORBIDDEN refusal but the call resolved");
+        },
+        (caught: unknown) => caught as { data?: { code?: string; message?: string } }
+      );
+      expect(error?.data?.code).toBe("FORBIDDEN");
+      expect(error?.data?.message).toContain('Financial table "quotes"');
+    }
+
+    test.each(["with an application", "a DRAFT with no application"])("update / restore / hard delete refuse a quote %s", async (kind) => {
+      const s = await seedDealership(`d528adm${kind.length}`);
+      let quoteId: Id<"quotes">;
+      if (kind === "with an application") {
+        ({ quoteId } = await readyFinancedDeal(s));
+      } else {
+        const vehicleId = await s.mkVehicle("B");
+        quoteId = await s.as.mutation(api.quotes.saveQuote, {
+          orgId: s.orgId, customerId: s.customerId, vehicleId, vehiclePrice: 12_000, downPayment: 0, termMonths: 48,
+          mode: "MANUAL_FINANCE_COMPANY", manualProviderName: "Other finance option", manualAdminFees: 0, manualProfitRate: 5,
+        } as never);
+      }
+      const admin = await superAdmin(s);
+      const before = await s.t.run((ctx) => ctx.db.get(quoteId));
+      await expectForbidden(admin.mutation(api.adminData.adminUpdateRecord, { table: "quotes", id: quoteId, patch: { vehiclePrice: 1 } }));
+      await expectForbidden(admin.mutation(api.adminData.adminRestoreRecords, { table: "quotes", ids: [quoteId] }));
+      await expectForbidden(admin.mutation(api.adminData.adminHardDelete, { table: "quotes", id: quoteId }));
+      expect(await s.t.run((ctx) => ctx.db.get(quoteId))).toEqual(before);
+    });
   });
 });

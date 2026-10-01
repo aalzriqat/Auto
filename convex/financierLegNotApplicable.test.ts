@@ -560,7 +560,20 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
       const { applicationId } = await insertDeal(s, { status: "APPROVED", sale: "none", ...dealOpts });
       if (manualLetter) await recordManualLetter(s, applicationId);
       await s.t.run(async (ctx) => {
+        // SCRUM-528: `finalizeDeal` builds the sale only from quote economics that agree with the pricing
+        // frozen on the application. The hand-seeded rows carry none, so give both the same real snapshot,
+        // consistent with the quote's own figures (never a weaker predicate).
+        const quote = (await ctx.db.get(s.quoteId))!;
+        const financed = quote.vehiclePrice - quote.downPayment;
+        const snapshot = {
+          currency: "JOD", vehiclePrice: quote.vehiclePrice, downPayment: quote.downPayment, termMonths: quote.termMonths,
+          executionFees: 0, commission: 0, profitRate: 5, insuranceRate: 0, gracePeriodMonths: 0,
+          includesCommissionInDebt: false, totalFinancedAmount: financed, totalContractValue: financed,
+          monthlyInstallment: financed / quote.termMonths, totalProfit: 0, takafulAmount: 0,
+        };
+        await ctx.db.patch(s.quoteId, { totalFinancedAmount: financed, customerQuotePricingSnapshot: snapshot });
         await ctx.db.patch(applicationId, {
+          customerQuotePricingSnapshot: snapshot,
           vehicleHandoverAt: Date.now(),
           expectedPaymentMethod: "BANK_TRANSFER",
           expectedPaymentDate: Date.now(),
