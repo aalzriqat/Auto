@@ -21,7 +21,7 @@ import { api } from "@/convex/_generated/api";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { toast } from "@/components/ui/sonner";
 import { downloadElementAsPdf } from "@/lib/htmlToPdf";
-import { getErrorMessage } from "@/lib/errors";
+import { getErrorMessage, getLocalizedErrorMessage } from "@/lib/errors";
 import { decideDepositSubmission } from "@/lib/depositSettlementSubmission";
 import { supportedCurrencyScale } from "@/convex/utils/money";
 import { useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
@@ -242,7 +242,7 @@ export function Step4QuoteSuccess({
       completeSaleIdempotencyKeyRef.current = null;
       toast.success(t("SaleCompletedSuccess" as any) ?? "Cash sale completed");
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setIsCompletingSale(false);
     }
