@@ -26,7 +26,8 @@ import { Id } from "./_generated/dataModel";
 import { drainEntries } from "./accountingOutbox";
 import * as workflowHooks from "./accounting/workflowHooks";
 import * as webhookLog from "./utils/webhookLog";
-import { firstOfferableMonthIndex, yearMonthFromIndex, yearMonthIndex } from "./utils/expenseAmortization";
+import * as orgLifecycle from "./utils/orgLifecycle";
+import { firstOfferableMonthIndex, toYearMonth, yearMonthIndex } from "./utils/expenseAmortization";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -144,7 +145,7 @@ async function createDeferral(t: Harness, org: Org, tag: string) {
 
 // ─── observation ──────────────────────────────────────────────────────────────
 
-const monthOf = (ts: number) => yearMonthFromIndex(yearMonthIndex(ts));
+const monthOf = toYearMonth;
 
 async function depreciationEvents(t: Harness, orgId: Id<"organizations">) {
   const rows = await t.run((ctx) =>
@@ -443,6 +444,37 @@ describe("a back-dated month into a closed period is queued in its own month, ne
   });
 });
 
+// ─── 8. a suspended org is a deliberate, cheap, non-abnormal skip ─────────────
+
+describe("an org blocked by its lifecycle costs one mutation per run and is not abnormal", () => {
+  test("depreciation: three assets of a suspended org -> one mutation call, counted done", async () => {
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
+    const a = await seedOrg(t, "blk_a");
+    const b = await seedOrg(t, "blk_b");
+    await capitalizeAsset(a, "A1");
+    await capitalizeAsset(a, "A2");
+    await capitalizeAsset(a, "A3");
+    await capitalizeAsset(b, "B1");
+    await t.run((ctx) => ctx.db.patch(a.orgId, { suspended: true }));
+
+    const original = orgLifecycle.orgEconomicLifecycleBlock;
+    const checkedOrgs: string[] = [];
+    vi.spyOn(orgLifecycle, "orgEconomicLifecycleBlock").mockImplementation(async (ctx, orgId) => {
+      checkedOrgs.push(orgId.toString());
+      return await original(ctx, orgId);
+    });
+
+    const summary = await runDepreciation(t);
+
+    expect(checkedOrgs.filter((id) => id === a.orgId.toString())).toHaveLength(1);
+    expect(await depreciationEvents(t, a.orgId)).toHaveLength(0);
+    expect(await depreciationEvents(t, b.orgId)).toHaveLength(1);
+    expect(summary).toMatch(/posted 1\/4/);
+    expect(summary).toMatch(/0 stopped abnormally/);
+    expect(summary).toMatch(/0 failed/);
+  });
+});
+
 // ─── 6. abnormal vs done ──────────────────────────────────────────────────────
 
 describe("abnormal stop reasons are counted apart from normal completions", () => {
@@ -465,6 +497,27 @@ describe("abnormal stop reasons are counted apart from normal completions", () =
     expect(summary).toMatch(/1 stopped abnormally \(ledger_occurrence_conflict=1\)/);
     expect(summary).toMatch(/0 failed/);
     expect(await fiEvents(t, org.orgId)).toHaveLength(1); // only the foreign row; nothing new posted
+  });
+
+  test("source_sale_not_posted (waiting for the sale to post) is a normal skip, not abnormal", async () => {
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
+    const org = await seedOrg(t, "abn_sale");
+    const deferralId = await createDeferral(t, org, "000006");
+    const saleId = (await t.run((ctx) => ctx.db.get(deferralId)))!.saleId;
+    // The sale-completion journal has not posted yet.
+    await t.run(async (ctx) => {
+      const rows = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_idempotency", (q) => q.eq("orgId", org.orgId).eq("idempotencyKey", `sale_completed_${saleId}`))
+        .collect();
+      for (const row of rows) await ctx.db.delete(row._id);
+    });
+
+    const summary = await runRecognition(t);
+
+    expect(summary).toMatch(/0 stopped abnormally/);
+    expect(summary).toMatch(/0 failed/);
+    expect(await fiEvents(t, org.orgId)).toHaveLength(0);
   });
 
   test("a clean run reports zero abnormal stops", async () => {

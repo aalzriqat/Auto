@@ -57,6 +57,11 @@ export function yearMonthFromIndex(idx: number): string {
   return `${year}-${String(month + 1).padStart(2, "0")}`;
 }
 
+/** UTC "YYYY-MM" for a timestamp. */
+export function toYearMonth(timestamp: number): string {
+  return yearMonthFromIndex(yearMonthIndex(timestamp));
+}
+
 /**
  * A timestamp that falls inside calendar month `idx` (its last millisecond),
  * clamped to `now` so the in-progress current month posts as-of-now rather

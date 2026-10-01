@@ -49,6 +49,7 @@ import {
   yearMonthStringIndex,
   yearMonthFromIndex,
   occurredAtForMonthIndex,
+  toYearMonth,
 } from "./utils/expenseAmortization";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -62,11 +63,8 @@ import { drainEntries, reviveFailedEntry } from "./accountingOutbox";
 import { postedSourceExpenseEvent } from "./utils/prepaidSourceLedger";
 import { toMinorUnits, assertValidMinorAmount } from "./utils/money";
 
-/** UTC "YYYY-MM" for a timestamp — the month recognition of that expense begins. */
-export function toYearMonth(timestamp: number): string {
-  const d = new Date(timestamp);
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
+// Re-exported: existing callers/tests import `toYearMonth` from this module.
+export { toYearMonth };
 
 // ─── Schedule lifecycle helpers (called from expenses.ts, mutation context) ───
 
