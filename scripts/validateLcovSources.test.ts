@@ -28,6 +28,11 @@ beforeEach(() => {
     "apps/mobile/app/(app)/x.tsx",
     "apps/mobile/appx/a.ts",
     "apps/mobile/jest.setup.ts",
+    "packages/shared/src/x.ts",
+    "packages/shared/srcx/x.ts",
+    "packages/shared/package.json",
+    "packages/other/src/x.ts",
+    "convex/x.ts",
     "components/a.tsx",
     "lib/commission.ts",
     "Convex/a.ts",
@@ -45,7 +50,7 @@ afterEach(() => {
 });
 
 describe("validateLcovSources", () => {
-  test.each(["convex/a.ts", "apps/mobile/src/a.tsx", "apps/mobile/app/(app)/x.tsx", "scripts/v.cjs"])("accepts %s", (sf) => {
+  test.each(["convex/a.ts", "apps/mobile/src/a.tsx", "apps/mobile/app/(app)/x.tsx", "scripts/v.cjs", "packages/shared/src/x.ts"])("accepts %s", (sf) => {
     expect(validate(rec(sf))).toBe(1);
   });
 
@@ -56,6 +61,10 @@ describe("validateLcovSources", () => {
   test.each([
     "apps/mobile/appx/a.ts",
     "apps/mobile/jest.setup.ts",
+    "packages/shared/srcx/x.ts",
+    "packages/shared/package.json",
+    "packages/other/src/x.ts",
+    "packages/shared/src/../../convex/x.ts",
     ".github/workflows/w.yml",
     ".github/scripts/v.cjs",
     ".github/scriptsx/v.cjs",
@@ -84,9 +93,22 @@ describe("validateLcovSources", () => {
     expect(() => validate(rec("convex/missing.ts"))).toThrow(/not an existing regular file/);
   });
 
+  test("refuses a missing packages/shared/src file", () => {
+    expect(() => validate(rec("packages/shared/src/missing.ts"))).toThrow(/not an existing regular file/);
+  });
+
   test("refuses an SF that is a directory", () => {
     fs.mkdirSync(path.join(root, "convex", "dir.ts"));
     expect(() => validate(rec("convex/dir.ts"))).toThrow(/not an existing regular file/);
+  });
+
+  test("refuses a packages/shared/src symlink", () => {
+    try {
+      fs.symlinkSync(path.join(root, "lib/commission.ts"), path.join(root, "packages/shared/src/link.ts"));
+    } catch {
+      return; // symlink creation not permitted on this host; CI (linux) exercises it
+    }
+    expect(() => validate(rec("packages/shared/src/link.ts"))).toThrow(/not an existing regular file/);
   });
 
   test("refuses an SF that is a symlink", () => {
