@@ -1138,6 +1138,23 @@ export function DealCockpit({
   useEffect(() => {
     confirmObservedVersionRef.current = confirmObservedVersion;
   }, [confirmObservedVersion]);
+  // SCRUM-522 L-C: this state belongs to ONE deal. The cockpit can be re-rendered
+  // with another `applicationId` without a remount, and a key kept for deal A (or
+  // the record that an outcome-unknown notice for A is still owed) must never be
+  // sent for, or shown on, deal B. Declared BEFORE the reconcile effect below so
+  // that, in the commit where the id changes, the owed mark is gone before that
+  // effect can read it.
+  const confirmStateApplicationIdRef = useRef(applicationId);
+  useEffect(() => {
+    if (confirmStateApplicationIdRef.current === applicationId) return;
+    confirmStateApplicationIdRef.current = applicationId;
+    confirmDisbursementKeyRef.current = null;
+    confirmDisbursementKeyVersionRef.current = 1;
+    confirmUnknownOutcomeVersionRef.current = null;
+    confirmObservedVersionRef.current = 1;
+    setConfirmObservedVersion(1);
+    setConfirmingDisbursement(false);
+  }, [applicationId]);
   // SCRUM-239 round 7: the ONE place a version move is reconciled, whether the
   // dialog is open or closed. `confirmUnknownOutcomeVersionRef` is the record that
   // an outcome-unknown notice is still OWED for the kept key; it is cleared only by

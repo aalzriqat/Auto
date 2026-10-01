@@ -3540,3 +3540,91 @@ describe("cheque returned by the bank - applications.returnFinanceDisbursementCh
     });
   });
 });
+describe("SCRUM-522: the finance-company confirm dialog and its retained state", () => {
+  const stages = [
+    { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+    { key: "DISBURSEMENT", state: "BLOCKED", blocker: "AwaitingDisbursement", authority: "MIRROR" },
+    { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+    { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
+  ];
+  const APP_B = "app_9999" as Id<"financeApplications">;
+  const CONFIRM = "applications:confirmDisbursement";
+  const show = (disbursementVersion?: number) => {
+    queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages }));
+    queryResults.set(GET_QUERY, application({ status: "CLOSED", ...(disbursementVersion ? { disbursementVersion } : {}) }));
+  };
+  const confirmCalls = () => (mutationCalls.get(CONFIRM) ?? []) as Array<Record<string, unknown>>;
+  /** Opens the dialog unless it is already open, then presses the confirm button. */
+  const openAndConfirm = () => {
+    if (screen.queryByRole("button", { name: "ConfirmReceipt" }) === null) {
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+    }
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+  };
+  beforeEach(() => {
+    vi.mocked(toast.error).mockClear();
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+  });
+
+  test("while the confirm is in flight, Cancel is disabled and Cancel, Escape and an outside click leave the dialog open; once it settles they work again", async () => {
+    show();
+    renderCockpit();
+    let settle: (value: unknown) => void = () => {};
+    // A lost response, so the dialog stays open after settling and Cancel is the positive control.
+    stubs.mutationHolds.set(CONFIRM, new Promise((resolve) => { settle = resolve; }));
+    stubs.mutationFailures.set(CONFIRM, "connection lost");
+    openAndConfirm();
+    await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+    const dialog = screen.getByRole("dialog");
+    const cancel = within(dialog).getByRole("button", { name: "Cancel" }) as HTMLButtonElement;
+    expect(cancel.disabled).toBe(true);
+
+    fireEvent.click(cancel);
+    fireEvent.keyDown(dialog, { key: "Escape", code: "Escape" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fireEvent.pointerDown(document.body);
+    fireEvent.pointerUp(document.body);
+    fireEvent.click(document.body);
+    expect(screen.queryByRole("dialog")).not.toBeNull();
+
+    // Settled (a lost response keeps the dialog open): Cancel is live again.
+    settle(null);
+    await waitFor(() => expect((within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  test("L-C: a confirm key kept for deal A is never sent for deal B on the same mounted cockpit", async () => {
+    show();
+    const view = renderCockpit();
+    stubs.mutationFailures.set(CONFIRM, "connection lost");
+    openAndConfirm();
+    await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(confirmCalls()[0].applicationId).toBe(APP);
+
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP_B} />);
+    openAndConfirm();
+    await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+    expect(confirmCalls()[1].applicationId).toBe(APP_B);
+    expect(confirmCalls()[1].idempotencyKey).not.toBe(confirmCalls()[0].idempotencyKey);
+  });
+
+  test("L-C: the owed outcome-unknown notice for deal A is not raised on deal B when the version moves", async () => {
+    show();
+    const view = renderCockpit();
+    stubs.mutationFailures.set(CONFIRM, "connection lost");
+    openAndConfirm();
+    await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    vi.mocked(toast.error).mockClear();
+
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP_B} />);
+    show(2);
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP_B} />);
+    await act(async () => {});
+    const shown = vi.mocked(toast.error).mock.calls.map((call) => String(call[0]));
+    expect(shown).not.toContain("DisbursementChangedOutcomeUnknown");
+    expect(shown).not.toContain("DisbursementChangedWhileConfirming");
+  });
+});
