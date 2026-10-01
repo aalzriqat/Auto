@@ -140,7 +140,11 @@ export function DisbursementConfirmationDialog({
   const Icon = isReceipt ? Landmark : HandCoins;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    // Not dismissible while the confirm is in flight (same rule as `ConfirmFinalizeDialog`).
+    // Escape, the overlay, the built-in X and Cancel are all `onOpenChange(false)`,
+    // and none of them cancels the request: the receipt posts regardless, so a dialog
+    // that vanishes tells the operator the confirmation was stopped when it was not.
+    <Dialog open={open} onOpenChange={(next) => !submitting && onOpenChange(next)}>
       {withTrigger && (
         <DialogTrigger asChild>
           <Button
@@ -153,7 +157,12 @@ export function DisbursementConfirmationDialog({
           </Button>
         </DialogTrigger>
       )}
-      <DialogContent className="max-w-md">
+      <DialogContent
+        className="max-w-md"
+        onEscapeKeyDown={(event) => submitting && event.preventDefault()}
+        onPointerDownOutside={(event) => submitting && event.preventDefault()}
+        onInteractOutside={(event) => submitting && event.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle>{copy.title}</DialogTitle>
           <DialogDescription>{copy.description}</DialogDescription>
@@ -215,7 +224,7 @@ export function DisbursementConfirmationDialog({
           </div>
         )}
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" disabled={submitting} onClick={() => onOpenChange(false)}>
             {t("Cancel")}
           </Button>
           <Button
