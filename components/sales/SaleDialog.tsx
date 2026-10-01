@@ -41,7 +41,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 
 import { saleSchema, SaleFormValues, SaleDialogProps } from "./sale.schema";
 import Link from "next/link";
-import { getErrorMessage } from "@/lib/errors";
+import { getLocalizedErrorMessage } from "@/lib/errors";
 import { ConsignedSettlementSection } from "./ConsignedSettlementSection";
 import { ProfitApprovalNotice, useProfitApproval } from "./ProfitApprovalNotice";
 
@@ -92,7 +92,6 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
       tradeInVehicleId: "",
       tradeInValue: 0,
       financingType: "CASH",
-      loanAmount: 0,
       apr: 0,
       termMonths: 0,
       warrantySold: 0,
@@ -154,7 +153,6 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
         tradeInVehicleId: sale.tradeInVehicleId || "none",
         tradeInValue: sale.tradeInValue || 0,
         financingType: initialFinancingType,
-        loanAmount: sale.loanAmount || 0,
         apr: sale.apr || 0,
         termMonths: sale.termMonths || 0,
         warrantySold: sale.warrantySold || 0,
@@ -179,7 +177,6 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
         tradeInVehicleId: "none",
         tradeInValue: 0,
         financingType: "CASH",
-        loanAmount: 0,
         apr: 0,
         termMonths: 0,
         warrantySold: 0,
@@ -194,19 +191,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   }, [sale, open, form, initialFinancingType]);
 
 
-  const salePrice = form.watch("salePrice");
   const taxAmount = form.watch("taxAmount");
-  const dealerFees = form.watch("dealerFees");
-  const downPayment = form.watch("downPayment");
-  const tradeInValue = form.watch("tradeInValue");
-  const warrantySold = form.watch("warrantySold");
-  const gapSold = form.watch("gapSold");
-  const financingType = form.watch("financingType");
-
-  useEffect(() => {
-    const total = (Number(salePrice) || 0) + (Number(taxAmount) || 0) + (Number(dealerFees) || 0) + (Number(warrantySold) || 0) + (Number(gapSold) || 0) - (Number(downPayment) || 0) - (Number(tradeInValue) || 0);
-    form.setValue("loanAmount", total > 0 ? total : 0);
-  }, [salePrice, taxAmount, dealerFees, downPayment, tradeInValue, warrantySold, gapSold, form]);
 
   // An agency sale has no agreed tax treatment, so the ledger refuses to post
   // one. Asked here rather than discovered on save: see `consignedTaxRefusal`
@@ -279,7 +264,8 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
           // re-stated nor rewritten to CASH. (The server independently refuses only a
           // change INTO a retired type.)
           ...(values.financingType !== initialFinancingType ? { financingType: values.financingType } : {}),
-          loanAmount: values.loanAmount,
+          // SCRUM-258: `loanAmount` is no longer recomputed or sent. It is display-dead (the Bill of Sale
+          // reads server economics) and the server still accepts and stores it for phase 1.
           apr: values.apr,
           termMonths: values.termMonths,
           warrantySold: values.warrantySold,
@@ -324,7 +310,6 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
           tradeInVehicleId: values.tradeInVehicleId && values.tradeInVehicleId !== "none" ? values.tradeInVehicleId as Id<"vehicles"> : undefined,
           tradeInValue: values.tradeInValue,
           financingType: values.financingType,
-          loanAmount: values.loanAmount,
           apr: values.apr,
           termMonths: values.termMonths,
           warrantySold: values.warrantySold,
@@ -349,7 +334,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
       }
       onOpenChange(false);
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setIsSubmitting(false);
     }
@@ -630,7 +615,12 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                           </FormControl>
                           <SelectContent>
                             <SelectItem value="CASH">{t("Cash" as any)}</SelectItem>
-                            <SelectItem value="FINANCED">{t("Financed" as any)}</SelectItem>
+                            {/* SCRUM-504: a financed sale exists only through the deal (its finance application),
+                                so FINANCED is not offered for a sale that has none. A stored FINANCED value
+                                still shows what it is, read-only. */}
+                            {(field.value === "FINANCED" || !!sale?.applicationId) && (
+                              <SelectItem value="FINANCED" disabled={!sale?.applicationId}>{t("Financed" as any)}</SelectItem>
+                            )}
                             {/* SCRUM-495: LEASE is no longer offered. A stored LEASE sale still
                                 shows what it is, as a disabled, non-selectable item. */}
                             {field.value === "LEASE" && (
@@ -638,19 +628,6 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                             )}
                           </SelectContent>
                         </Select>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-
-                  <FormField
-                    control={form.control}
-                    name="loanAmount"
-                    render={({ field }) => (
-                      <FormItem className="md:col-span-2">
-                        <FormLabel>{t("TotalLoanAmount" as any)}</FormLabel>
-                        <FormControl><Input type="number" step="0.01" disabled {...field} className="font-bold bg-muted" /></FormControl>
-                        <p className="text-xs text-muted-foreground">{t("CalculatedAutomatically" as any)}</p>
                         <FormMessage />
                       </FormItem>
                     )}
