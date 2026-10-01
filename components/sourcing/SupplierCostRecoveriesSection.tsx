@@ -16,6 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PaymentMethodSelect } from "@/components/payments/PaymentMethodSelect";
+import { isChosenMethod } from "@/components/payments/paymentMethod";
 import { toast } from "@/components/ui/sonner";
 import { getErrorMessage } from "@/lib/errors";
 
@@ -67,7 +68,9 @@ export function SupplierCostRecoveriesSection() {
 
   const [target, setTarget] = useState<Recovery | null>(null);
   const [amount, setAmount] = useState("");
-  const [method, setMethod] = useState<RecoveryMethod>("CASH");
+  // SCRUM-469: no default. The method picks the ledger account the receipt is
+  // booked to; an unstated one used to be sent as CASH.
+  const [method, setMethod] = useState<RecoveryMethod | undefined>(undefined);
   const [receivedDate, setReceivedDate] = useState(() => new Date().toISOString().split("T")[0]);
   const [reference, setReference] = useState("");
   const [saving, setSaving] = useState(false);
@@ -84,13 +87,14 @@ export function SupplierCostRecoveriesSection() {
   const open = (row: Recovery) => {
     setTarget(row);
     setAmount(String(fromMinorUnits(row.remainingMinor, row.currency)));
-    setMethod("CASH");
+    setMethod(undefined);
     setReceivedDate(new Date().toISOString().split("T")[0]);
     setReference("");
   };
 
   const submit = async () => {
     if (!activeOrgId || !target) return;
+    if (!isChosenMethod(method)) return;
     let amountMinor: number;
     try {
       // Throws on anything that is not a safe integer in minor units (NaN included).
@@ -233,7 +237,19 @@ export function SupplierCostRecoveriesSection() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label>{t("RecoveryReceiptMethod" as any)}</Label>
-                  <PaymentMethodSelect t={t} value={method} onValueChange={setMethod} methods={RECOVERY_METHODS} />
+                  <PaymentMethodSelect
+                    t={t}
+                    value={method}
+                    onValueChange={setMethod}
+                    methods={RECOVERY_METHODS}
+                    ariaLabel={t("RecoveryReceiptMethod" as any)}
+                    placeholder={t("MoneyMethodChoose" as any)}
+                  />
+                  {!isChosenMethod(method) && (
+                    <p className="text-xs font-medium text-destructive" role="status">
+                      {t("MoneyMethodRequired" as any)}
+                    </p>
+                  )}
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="recovery-date">{t("RecoveryReceiptDate" as any)}</Label>
@@ -254,7 +270,7 @@ export function SupplierCostRecoveriesSection() {
                 <Button type="button" variant="outline" onClick={() => setTarget(null)}>
                   {t("Cancel" as any)}
                 </Button>
-                <Button type="button" disabled={saving} onClick={() => void submit()}>
+                <Button type="button" disabled={saving || !isChosenMethod(method)} onClick={() => void submit()}>
                   {saving ? t("Saving" as any) : t("RecordRecoveryReceipt" as any)}
                 </Button>
               </div>

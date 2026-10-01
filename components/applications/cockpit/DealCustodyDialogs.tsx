@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import { isChosenMethod } from "@/components/payments/paymentMethod";
 import type { Id } from "@/convex/_generated/dataModel";
 import { economicDateInputToMs, economicTodayDateInput } from "@/lib/dateInput";
 import {
@@ -149,7 +150,7 @@ function SubmitError({ message }: Readonly<{ message: string | null }>) {
   );
 }
 
-/** Hand over / return / reimburse. `kind` decides the copy, the bounds and the default method. */
+/** Hand over / return / reimburse. `kind` decides the copy and the bounds; the method is always chosen, never defaulted. */
 export function CustodyMovementDialog({
   open,
   intentId,
@@ -188,14 +189,16 @@ export function CustodyMovementDialog({
   onSubmit: (values: CustodyMovementValues) => void;
 }>) {
   const [amount, setAmount] = useState("");
-  const [method, setMethod] = useState<PaymentMethod>("CASH");
+  // SCRUM-469: no default. The method picks the ledger account the cash moves
+  // through (an omitted one books to the cash drawer), so it is chosen, never assumed.
+  const [method, setMethod] = useState<PaymentMethod | undefined>(undefined);
   const [reference, setReference] = useState("");
   const [date, setDate] = useState("");
   const [note, setNote] = useState("");
   const [userId, setUserId] = useState<string>("");
   useResetOnOpen(open, () => {
     setAmount(suggestedMinor ? String(suggestedMinor / Math.pow(10, scale)) : "");
-    setMethod("CASH");
+    setMethod(undefined);
     setReference("");
     setDate("");
     setNote("");
@@ -210,7 +213,8 @@ export function CustodyMovementDialog({
   // The recipient is the served row the selection names; an id that is not
   // in the list (stale default, empty picker) is not one to move money to.
   const recipient = needsPerson ? members.find((member) => member.userId === userId) : undefined;
-  const canSubmit = minor !== null && !exceeds && !busy && (!needsPerson || recipient !== undefined);
+  const canSubmit =
+    minor !== null && isChosenMethod(method) && !exceeds && !busy && (!needsPerson || recipient !== undefined);
 
   const copy = {
     ISSUED: { title: "CustodyIssueTitle", desc: "CustodyIssueDesc", cta: "CustodyIssueCash", exceed: "CustodyAmountExceedsIssued" },
@@ -272,7 +276,20 @@ export function CustodyMovementDialog({
 
           <div className="space-y-1.5">
             <Label>{t("CustodyAccount")}</Label>
-            <PaymentMethodSelect t={t} value={method} onValueChange={setMethod} ariaLabel={t("CustodyAccount")} />
+            <PaymentMethodSelect
+              t={t}
+              value={method}
+              onValueChange={setMethod}
+              ariaLabel={t("CustodyAccount")}
+              placeholder={t("MoneyMethodChoose")}
+            />
+            {!isChosenMethod(method) && (
+              // A standing hint, not an alert: it is true from the moment the dialog opens, and the
+              // amount-error alerts above must stay the only alerts a screen reader is interrupted by.
+              <p role="status" data-testid={`${id}-method-required`} className="text-xs font-medium text-destructive">
+                {t("MoneyMethodRequired")}
+              </p>
+            )}
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
@@ -304,6 +321,7 @@ export function CustodyMovementDialog({
             data-testid={`${id}-submit`}
             onClick={() =>
               minor !== null &&
+              isChosenMethod(method) &&
               onSubmit({
                 intentId,
                 amountMinor: minor,

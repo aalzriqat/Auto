@@ -244,7 +244,7 @@ describe("every writer refuses an oversize resulting financeDealFees document, w
 
   async function custodySeed(name: string) {
     const seed = await seedDeal(name);
-    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH",
       idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId,
       userId: seed.employeeId, issuedMinor: jod(700),
     });

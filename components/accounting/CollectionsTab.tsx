@@ -22,6 +22,7 @@ import { Doc, Id } from "@/convex/_generated/dataModel";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { dateInputToUtcMs, todayDateInput, daysFromTodayDateInput } from "@/lib/dateInput";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { isChosenMethod } from "@/components/payments/paymentMethod";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { usePermissions } from "@/hooks/use-permissions";
@@ -666,7 +667,7 @@ export function CollectionsTab() {
         <ReceivableDialog open={receivableDialog} onOpenChange={setReceivableDialog} />
         <PaymentDialog receivable={paymentTarget} onOpenChange={(open) => !open && setPaymentTarget(null)} />
         <ChequeDialog receivable={chequeTarget} onOpenChange={(open) => !open && setChequeTarget(null)} />
-        <ApprovalRequestDialog target={approvalTarget} onOpenChange={(open) => !open && setApprovalTarget(null)} />
+        <KeyedApprovalRequestDialog target={approvalTarget} onOpenChange={(open) => !open && setApprovalTarget(null)} />
         <ReplaceChequeDialog cheque={replaceTarget} onOpenChange={(open) => !open && setReplaceTarget(null)} />
         <ReturnChequeDialog cheque={returnTarget} onOpenChange={(open) => !open && setReturnTarget(null)} />
         <ReconciliationDialog open={reconcileOpen} onOpenChange={setReconcileOpen} />
@@ -1107,18 +1108,34 @@ function ChequeDialog({ receivable, onOpenChange }: { receivable: ReceivableRow 
 
 type DisbursementMethod = "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD";
 
-function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable: ReceivableRow; type: "REFUND" | "RESCHEDULE" | "CANCEL_RECEIVABLE" } | null; onOpenChange: (open: boolean) => void }) {
+type ApprovalTarget = { receivable: ReceivableRow; type: "REFUND" | "RESCHEDULE" | "CANCEL_RECEIVABLE" } | null;
+
+/**
+ * SCRUM-469: keyed by the target so every open is a NEW intent. The dialog is
+ * permanently mounted, so without the key the refund method (and amount, reason,
+ * date) typed for one receivable survived Cancel into the next. The key returns
+ * to "closed" when the dialog closes, so reopening the same receivable is fresh too.
+ */
+export function KeyedApprovalRequestDialog({ target, onOpenChange }: { target: ApprovalTarget; onOpenChange: (open: boolean) => void }) {
+  return <ApprovalRequestDialog key={target ? `${target.receivable._id}:${target.type}` : "closed"} target={target} onOpenChange={onOpenChange} />;
+}
+
+export function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable: ReceivableRow; type: "REFUND" | "RESCHEDULE" | "CANCEL_RECEIVABLE" } | null; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const requestApproval = useMutation(api.collections.requestApproval);
   const [amount, setAmount] = useState("");
   const [dueDate, setDueDate] = useState(todayInput);
-  const [disbursementMethod, setDisbursementMethod] = useState<DisbursementMethod>("CASH");
+  // SCRUM-469: a refund's method is chosen, never assumed - it picks the account
+  // the money is paid out of, and an unstated one used to be sent as CASH.
+  const [disbursementMethod, setDisbursementMethod] = useState<DisbursementMethod | undefined>(undefined);
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const refundMethodMissing = target?.type === "REFUND" && !isChosenMethod(disbursementMethod);
 
   async function submit() {
     if (!activeOrgId || !target) return;
+    if (refundMethodMissing) return;
     setSubmitting(true);
     try {
       await requestApproval({
@@ -1134,7 +1151,7 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
       onOpenChange(false);
       setAmount("");
       setReason("");
-      setDisbursementMethod("CASH");
+      setDisbursementMethod(undefined);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
@@ -1160,9 +1177,9 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
           {target?.type === "REFUND" && (
             <>
               <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={t("RefundAmount" as any)} />
-              <Select value={disbursementMethod} onValueChange={(v) => setDisbursementMethod(v as DisbursementMethod)}>
-                <SelectTrigger>
-                  <SelectValue placeholder={t("PaymentMethodLabel" as any)} />
+              <Select value={disbursementMethod ?? ""} onValueChange={(v) => setDisbursementMethod(v as DisbursementMethod)}>
+                <SelectTrigger aria-label={t("PaymentMethodLabel" as any)}>
+                  <SelectValue placeholder={t("RefundChooseMethod" as any)} />
                 </SelectTrigger>
                 <SelectContent>
                   {(Object.keys(disbursementLabels) as DisbursementMethod[]).map((method) => (
@@ -1170,6 +1187,9 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
                   ))}
                 </SelectContent>
               </Select>
+              {refundMethodMissing && (
+                <p className="text-sm font-medium text-destructive" role="status">{t("RefundMethodRequired" as any)}</p>
+              )}
             </>
           )}
           {target?.type === "RESCHEDULE" && <Input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />}
@@ -1177,7 +1197,7 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
-          <Button onClick={submit} disabled={submitting || !reason || (target?.type === "REFUND" && !amount)}>{submitting ? t("Submitting" as any) : t("Submit" as any)}</Button>
+          <Button onClick={submit} disabled={submitting || !reason || (target?.type === "REFUND" && !amount) || refundMethodMissing}>{submitting ? t("Submitting" as any) : t("Submit" as any)}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -44,7 +44,6 @@ import { releaseReservationDepositHold } from "./utils/commitmentWriters";
 import {
   amountToMinorOrThrow,
   depositMethodValidator,
-  methodOrDefault,
   normalizeCurrency,
   recordHeldDeposit,
   requireDepositMethod,
@@ -1790,9 +1789,9 @@ export const createReservation = mutation({
     const hasDeposit = args.depositAmount !== undefined;
     const currency = hasDeposit ? normalizeCurrency(await getOrgCurrency(ctx, args.orgId)) : undefined;
     // SCRUM-445: a deposit's method is asked, never defaulted to CASH.
-    const method = hasDeposit
-      ? requireDepositMethod(args.depositMethod)
-      : methodOrDefault(args.depositMethod);
+    // SCRUM-469: with no deposit there is no money and so no method to judge or
+    // store; it is undefined, not a fabricated CASH.
+    const method = hasDeposit ? requireDepositMethod(args.depositMethod) : undefined;
     const amountMinor = hasDeposit
       ? amountToMinorOrThrow(args.depositAmount!, currency!, "Reservation deposit amount")
       : undefined;
@@ -1914,7 +1913,7 @@ export const createReservation = mutation({
     });
 
     let reservationDepositId: Id<"deposits"> | undefined;
-    if (hasDeposit && amountMinor !== undefined && currency !== undefined) {
+    if (hasDeposit && amountMinor !== undefined && currency !== undefined && method !== undefined) {
       const depositId = await recordHeldDeposit(ctx, {
         orgId: args.orgId,
         vehicleId: args.vehicleId,

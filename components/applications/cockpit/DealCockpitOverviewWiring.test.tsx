@@ -10,6 +10,10 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { salesEn } from "@/lib/i18n/domains/sales";
+import { pickMethod } from "@/test-utils/paymentMethodSelect";
+
+// SCRUM-469: no money dialog pre-selects a method, so the tests choose one.
+vi.mock("@/components/payments/PaymentMethodSelect", () => import("@/test-utils/paymentMethodSelect"));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({
@@ -228,10 +232,12 @@ describe("the custody section", () => {
     fireEvent.click(within(panel).getByRole("button", { name: salesEn.CustodyRecordReturn }));
     const dialog = screen.getByTestId("custody-returned-dialog");
     fireEvent.change(within(dialog).getByLabelText(/Amount/), { target: { value: "100" } });
+    // SCRUM-469: nothing is pre-selected; the method sent is the one the operator chose.
+    pickMethod(dialog, "BANK_TRANSFER");
     fireEvent.click(within(dialog).getByTestId("custody-returned-submit"));
     const move = mutations.get("financeDealCosts:recordCustodyMovement")!;
     await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
-    expect(move.mock.calls[0][0]).toMatchObject({ orgId: ORG, custodyId: "cust1", kind: "RETURNED", amountMinor: 100_000, method: "CASH" });
+    expect(move.mock.calls[0][0]).toMatchObject({ orgId: ORG, custodyId: "cust1", kind: "RETURNED", amountMinor: 100_000, method: "BANK_TRANSFER" });
     expect(typeof move.mock.calls[0][0].idempotencyKey).toBe("string");
   });
 

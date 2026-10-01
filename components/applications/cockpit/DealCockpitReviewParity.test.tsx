@@ -16,6 +16,10 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { pickMethod } from "@/test-utils/paymentMethodSelect";
+
+// SCRUM-469: no money dialog pre-selects a method, so the tests choose one.
+vi.mock("@/components/payments/PaymentMethodSelect", () => import("@/test-utils/paymentMethodSelect"));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({ t: (key: string) => stubs.t(key), isRtl: false, locale: "en" }),
@@ -1028,6 +1032,12 @@ describe("held deposit on a stopped deal — deposits.release", () => {
 
     expect(screen.getByTestId("deal-deposit-awaiting-resolution")).toBeTruthy();
     fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    // SCRUM-469: the method is not pre-selected — nothing is sent until one is
+    // chosen (the deposit having been received by CASH does not choose it), and
+    // then exactly the chosen one is.
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    expect(mutationCalls.get("deposits:release")).toBeUndefined();
+    pickMethod(screen.getByRole("dialog"), "BANK_TRANSFER");
     fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
 
     await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(1));
@@ -1036,14 +1046,14 @@ describe("held deposit on a stopped deal — deposits.release", () => {
       orgId: ORG,
       depositId: "dep_1",
       resolution: "REFUNDED",
-      refundMethod: "CASH",
+      refundMethod: "BANK_TRANSFER",
     });
     // The GENERATION-AWARE identity (SCRUM-313): `deposits.release` pays out
     // whatever is FREE on the row, so two genuine payouts of one deposit are
     // byte-identical requests and only the server's `releaseCount` can tell a
     // retry from a second real payout. The intent names deposit, decision,
     // method and the generation observed when the operator decided.
-    expect(call.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:CASH:gen0:[0-9a-f-]{36}$/);
+    expect(call.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:BANK_TRANSFER:gen0:[0-9a-f-]{36}$/);
   });
 
   test("an unknown result keeps the SAME release identity for the retry; a confirmed payout that advanced the generation mints a NEW one", async () => {
@@ -1060,6 +1070,7 @@ describe("held deposit on a stopped deal — deposits.release", () => {
     renderCockpit();
 
     fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    pickMethod(screen.getByRole("dialog"));
     fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
     await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(1));
     // Retry the same decision after the lost response.
@@ -1081,11 +1092,117 @@ describe("held deposit on a stopped deal — deposits.release", () => {
     cleanup();
     renderCockpit();
     fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    pickMethod(screen.getByRole("dialog"));
     fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
     await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(3));
     const third = (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[2];
     expect(third.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:CASH:gen3:/);
     expect(third.idempotencyKey).not.toBe(first.idempotencyKey);
+  });
+
+  test("SCRUM-469 F1: after a lost response a DIFFERENT method is not sent; the notice offers retry-as-recorded (same key) or dismiss (new key)", async () => {
+    permissions.add(PERMISSIONS.APPROVE_REQUESTS);
+    queryResults.set(COCKPIT_QUERY, cockpit(rejected));
+    queryResults.set(
+      GET_QUERY,
+      application({ status: "REJECTED", deposits: [{ _id: "dep_1", amount: 500, status: "HELD", releaseCount: 0 }] })
+    );
+    stubs.mutationFailures.set("deposits:release", "network lost");
+    renderCockpit();
+
+    fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    pickMethod(screen.getByRole("dialog"), "CASH");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(1));
+    const firstKey = (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[0]!.idempotencyKey;
+
+    // The operator changes their mind about the method and presses Refund.
+    pickMethod(screen.getByRole("dialog"), "BANK_TRANSFER");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    const notice = await screen.findByTestId("unconfirmed-payout-notice");
+    expect(mutationCalls.get("deposits:release")).toHaveLength(1);
+
+    // Retry exactly as recorded: same method, same key.
+    fireEvent.click(within(notice).getByRole("button", { name: "PayoutUnconfirmedRetry" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(2));
+    const second = (mutationCalls.get("deposits:release") as Array<Record<string, unknown>>)[1]!;
+    expect(second.idempotencyKey).toBe(firstKey);
+    expect(second.refundMethod).toBe("CASH");
+
+    // The retry confirmed: the identity is retired and the notice is gone.
+    await waitFor(() => expect(screen.queryByTestId("unconfirmed-payout-notice")).toBeNull());
+
+    // A fresh unconfirmed attempt, then DISMISS: the next payout is a new command.
+    stubs.mutationFailures.set("deposits:release", "network lost");
+    fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    pickMethod(screen.getByRole("dialog"), "CASH");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(3));
+    const lostKey = (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[2]!.idempotencyKey;
+    expect(lostKey).not.toBe(firstKey);
+    pickMethod(screen.getByRole("dialog"), "BANK_TRANSFER");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    const secondNotice = await screen.findByTestId("unconfirmed-payout-notice");
+    expect(mutationCalls.get("deposits:release")).toHaveLength(3);
+    fireEvent.click(within(secondNotice).getByRole("button", { name: "PayoutUnconfirmedDismiss" }));
+    await waitFor(() => expect(screen.queryByTestId("unconfirmed-payout-notice")).toBeNull());
+    fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    pickMethod(screen.getByRole("dialog"), "BANK_TRANSFER");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(4));
+    const fourth = (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[3]!;
+    expect(fourth.idempotencyKey).not.toBe(lostKey);
+  });
+
+  test("SCRUM-469 R4-01: dismissing a possibly committed payout retires its key even when the SAME method is resubmitted at a stale generation", async () => {
+    permissions.add(PERMISSIONS.APPROVE_REQUESTS);
+    queryResults.set(COCKPIT_QUERY, cockpit(rejected));
+    queryResults.set(
+      GET_QUERY,
+      application({ status: "REJECTED", deposits: [{ _id: "dep_1", amount: 500, status: "HELD", releaseCount: 0 }] })
+    );
+    stubs.mutationFailures.set("deposits:release", "network lost");
+    renderCockpit();
+
+    fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    pickMethod(screen.getByRole("dialog"), "CASH");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(1));
+    const firstKey = (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[0]!.idempotencyKey;
+
+    pickMethod(screen.getByRole("dialog"), "BANK_TRANSFER");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    const notice = await screen.findByTestId("unconfirmed-payout-notice");
+    fireEvent.click(within(notice).getByRole("button", { name: "PayoutUnconfirmedDismiss" }));
+    await waitFor(() => expect(screen.queryByTestId("unconfirmed-payout-notice")).toBeNull());
+
+    // releaseCount is still 0 (stale): the intent string is the SAME as the dismissed one.
+    fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    pickMethod(screen.getByRole("dialog"), "CASH");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(2));
+    const second = (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[1]!;
+    expect(second.idempotencyKey).not.toBe(firstKey);
+  });
+
+  test("control: a same-method retry BEFORE dismissal reuses the first key at a stale generation", async () => {
+    permissions.add(PERMISSIONS.APPROVE_REQUESTS);
+    queryResults.set(COCKPIT_QUERY, cockpit(rejected));
+    queryResults.set(
+      GET_QUERY,
+      application({ status: "REJECTED", deposits: [{ _id: "dep_1", amount: 500, status: "HELD", releaseCount: 0 }] })
+    );
+    stubs.mutationFailures.set("deposits:release", "network lost");
+    renderCockpit();
+
+    fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    pickMethod(screen.getByRole("dialog"), "CASH");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(2));
+    const [first, second] = mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>;
+    expect(second!.idempotencyKey).toBe(first!.idempotencyKey);
   });
 
   test("forfeiting carries no refund method", async () => {
