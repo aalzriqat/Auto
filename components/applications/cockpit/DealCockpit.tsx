@@ -3005,7 +3005,7 @@ export function DealCockpit({
                   commandId.retire(releaseIntent);
                   pendingPayouts.confirm(depositId);
                 } catch (error) {
-                  pendingPayouts.settleFailure(depositId, error);
+                  pendingPayouts.settleFailure(depositId, error, releaseIntent);
                   toast.error(getErrorMessage(error));
                   throw error;
                 } finally {

@@ -293,6 +293,8 @@ export function VehicleDetailsDialog({
     const gate = pendingPayouts.check(String(depositId), resolution, String(refundMethod));
     if (gate.status === "blocked") return;
     setReleasingDepositId(depositId);
+    // The attempt this call belongs to, so a late failure cannot settle a newer record.
+    let attemptIntent: string | undefined;
     try {
       // SCRUM-313 — a GENERATION-AWARE retained identity. This line has been
       // wrong twice in two opposite directions, so both failures are recorded:
@@ -328,6 +330,7 @@ export function VehicleDetailsDialog({
       const intent =
         gate.recordedIntent ??
         `release-deposit:${String(depositId)}:${resolution}:${refundMethod}:gen${observedReleaseCount}`;
+      attemptIntent = intent;
       pendingPayouts.record(String(depositId), { resolution, method: String(refundMethod), intent });
       await releaseDeposit({
         orgId: activeOrgId,
@@ -344,7 +347,7 @@ export function VehicleDetailsDialog({
           : (t("DepositForfeitedSuccess" as any) ?? "Deposit forfeited")
       );
     } catch (error) {
-      pendingPayouts.settleFailure(String(depositId), error);
+      pendingPayouts.settleFailure(String(depositId), error, attemptIntent);
       toast.error(getErrorMessage(error));
     } finally {
       setReleasingDepositId(null);

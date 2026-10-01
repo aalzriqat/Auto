@@ -400,6 +400,29 @@ describe("vehicle dialog: an unconfirmed payout keeps its identity (SCRUM-469 ro
     },
   );
 
+  test("SCRUM-530 F1: a refusal of a RETRY never retires a payout whose earlier outcome is unknown", async () => {
+    state.releaseOutcomes = ["lost", "refused", "ok"];
+    render(ui());
+    await chooseAndRefund("CASH");
+    const firstKey = state.releaseCalls[0]!.idempotencyKey;
+    await chooseAndRefund("BANK_TRANSFER");
+    expect(notice()).not.toBeNull();
+
+    // The retry of the unknown attempt is refused (e.g. permission revoked).
+    fireEvent.click(screen.getByRole("button", { name: "PayoutUnconfirmedRetry", hidden: true }));
+    await waitFor(() => expect(state.releaseCalls).toHaveLength(2));
+    await waitFor(() => expect(state.toastError).toHaveLength(2));
+    expect(state.releaseCalls[1]!.idempotencyKey).toBe(firstKey);
+
+    // The earlier attempt may have committed: still blocked, and a further retry reuses the ORIGINAL key.
+    await chooseAndRefund("BANK_TRANSFER");
+    expect(state.releaseCalls).toHaveLength(2);
+    expect(notice()).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "PayoutUnconfirmedRetry", hidden: true }));
+    await waitFor(() => expect(state.releaseCalls).toHaveLength(3));
+    expect(state.releaseCalls[2]!.idempotencyKey).toBe(firstKey);
+  });
+
   test("SCRUM-530 control: a non-ConvexError failure keeps the record (notice for a different method) and the key for a same-method retry", async () => {
     state.releaseOutcomes = ["lost", "ok"];
     render(ui());

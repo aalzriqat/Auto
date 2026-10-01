@@ -223,6 +223,27 @@ describe("VehicleDetailScreen an unconfirmed payout keeps its identity (SCRUM-46
     expect(releaseDeposit.mock.calls[1]![0].idempotencyKey).toBe(releaseDeposit.mock.calls[0]![0].idempotencyKey);
   });
 
+  test("SCRUM-530 F1: a refusal of a RETRY never retires a payout whose earlier outcome is unknown", async () => {
+    releaseDeposit
+      .mockRejectedValueOnce(new Error("[CONVEX M(deposits:release)] Server Error"))
+      .mockRejectedValueOnce(refusal())
+      .mockResolvedValue(undefined);
+    const view = await render(tree());
+    await refund(view, "CASH");
+    await refund(view, "BANK_TRANSFER");
+    await pressAlert("إعادة الدفعة السابقة");
+    expect(releaseDeposit).toHaveBeenCalledTimes(2);
+
+    // The earlier attempt may have committed: still blocked, original key reused.
+    alertSpy.mockClear();
+    await refund(view, "BANK_TRANSFER");
+    expect(releaseDeposit).toHaveBeenCalledTimes(2);
+    expect(noticeShown()).toBe(true);
+    await pressAlert("إعادة الدفعة السابقة");
+    expect(releaseDeposit).toHaveBeenCalledTimes(3);
+    expect(releaseDeposit.mock.calls[2]![0].idempotencyKey).toBe(releaseDeposit.mock.calls[0]![0].idempotencyKey);
+  });
+
   test("the notice's retry replays the recorded attempt with its own method and key", async () => {
     releaseDeposit.mockRejectedValueOnce(new Error("lost")).mockResolvedValue(undefined);
     const view = await render(tree());
