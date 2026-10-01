@@ -12,6 +12,7 @@
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { registerHandover } from "../test-utils/convexTest";
+import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -595,9 +596,12 @@ describe("SCRUM-260: every completion door enforces the rule on the persisted pr
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "direct", 1000);
 
-    await expect(
+    // SCRUM-504: a FINANCED sale can no longer be created through this door at all, so the
+    // below-minimum rule is reached only through finalizeDeal (covered above). The door now
+    // refuses first, before the vehicle or the price is read, and writes nothing.
+    await expectFinancedSaleRequiresDeal(
       ids.asOwner.mutation(api.sales.create, { ...directFinancedSale(ids, 20400), status: "COMPLETED" as const })
-    ).rejects.toThrow(/below the minimum profit/i);
+    );
     expect(await salesOf(t, ids)).toHaveLength(0);
     const vehicle: any = await t.run((ctx: any) => ctx.db.get(ids.vehicleId));
     expect(vehicle.status).toBe("AVAILABLE");
@@ -607,11 +611,16 @@ describe("SCRUM-260: every completion door enforces the rule on the persisted pr
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "draft", 1000);
 
-    // A draft is not a sale and is not gated; completing it is.
-    const saleId = await ids.asOwner.mutation(api.sales.createDraft, directFinancedSale(ids, 20400));
-    await expect(
+    // SCRUM-504: a FINANCED draft can no longer be created through the public door, so the draft
+    // is seeded as the legacy row it would now be. Completing it is refused first by the same
+    // rule (a FINANCED sale needs the Deal's application); the price rule stays on finalizeDeal.
+    const { idempotencyKey: _key, ...draftFields } = directFinancedSale(ids, 20400);
+    const saleId = await t.run((ctx: any) =>
+      ctx.db.insert("sales", { ...draftFields, status: "PENDING", salespersonId: ids.userId })
+    );
+    await expectFinancedSaleRequiresDeal(
       ids.asOwner.mutation(api.sales.completeDraft, { orgId: ids.orgId, saleId, idempotencyKey: crypto.randomUUID() })
-    ).rejects.toThrow(/below the minimum profit/i);
+    );
     const draft: any = await t.run((ctx: any) => ctx.db.get(saleId));
     expect(draft.status).toBe("PENDING");
   });
@@ -652,13 +661,15 @@ describe("SCRUM-260: every completion door enforces the rule on the persisted pr
     expect(saleId).toBeTruthy();
   });
 
-  test("an approved price completes through the direct door", async () => {
+  test("SCRUM-504: even an approved price cannot complete a FINANCED sale through the direct door", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "directok", 1000);
     await approveLegacyRequest(t, ids, 400);
 
-    const saleId = await ids.asOwner.mutation(api.sales.create, { ...directFinancedSale(ids, 20400), status: "COMPLETED" as const });
-    expect(saleId).toBeTruthy();
+    await expectFinancedSaleRequiresDeal(
+      ids.asOwner.mutation(api.sales.create, { ...directFinancedSale(ids, 20400), status: "COMPLETED" as const })
+    );
+    expect(await salesOf(t, ids)).toHaveLength(0);
   });
 });
 

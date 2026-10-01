@@ -19,7 +19,7 @@ import type { DepositMethod } from "./depositRecording";
 import { throwAppError, AppErrorCode } from "./errors";
 import { requireOrgMember } from "./tenancy";
 import { assertNoPendingDepositRequest } from "./depositRequestGuards";
-import { assertOperatedDealMode } from "./dealModes";
+import { assertFinancedSaleHasDeal, assertOperatedDealMode } from "./dealModes";
 import {
   assertSaleMayCompleteForVehicle,
   consumeRootForSale,
@@ -240,6 +240,9 @@ async function prepareSaleCompletion(
   // SCRUM-495 (OR-7): every sale creation and completion path passes here, so a LEASE draft
   // cannot be completed; it can still be edited or cancelled via `sales.update`.
   assertOperatedDealMode(args.financingType);
+  // SCRUM-504: createDraft, create and completeDraft (via completeExistingSale) all pass here,
+  // inside their idempotent run. finalizeDeal passes its application, so it is unaffected.
+  assertFinancedSaleHasDeal(args.financingType, args.applicationId);
 
   const vehicle = await ctx.db.get(args.vehicleId);
   if (vehicle?.orgId !== args.orgId) {
