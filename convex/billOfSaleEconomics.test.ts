@@ -406,9 +406,23 @@ describe("getBillOfSaleEconomics - FINANCED (through the Deal)", () => {
 
   test("a manual quote with no stated profit rate reports the rate as null, never 0", async () => {
     const s = await seedDealership("finnorate");
+    const { saleId, applicationId } = await financedSaleThroughDeal(s);
+    // The rate is read from the application's frozen copy: remove it there (a deal that never stated one).
+    await s.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      const { profitRate: _dropped, ...rest } = app!.manualFinanceSnapshot!;
+      await ctx.db.patch(applicationId, { manualFinanceSnapshot: rest });
+    });
+    expect(await query(s, saleId)).toMatchObject({ kind: "FINANCED", flatAnnualProfitRatePercent: null });
+  });
+
+  test("S258-01 (g): the printed rate does not follow a post-sale edit of quote.manualProfitRate", async () => {
+    const s = await seedDealership("finratefrozen");
     const { saleId, quoteId } = await financedSaleThroughDeal(s);
     await s.t.run((ctx) => ctx.db.patch(quoteId, { manualProfitRate: undefined }));
-    expect(await query(s, saleId)).toMatchObject({ kind: "FINANCED", flatAnnualProfitRatePercent: null });
+    expect(await query(s, saleId)).toMatchObject({ kind: "FINANCED", flatAnnualProfitRatePercent: 5 });
+    await s.t.run((ctx) => ctx.db.patch(quoteId, { manualProfitRate: 9 }));
+    expect(await query(s, saleId)).toMatchObject({ kind: "FINANCED", flatAnnualProfitRatePercent: 5 });
   });
 
   test("a caller-supplied sale.loanAmount / downPayment / apr never moves a FINANCED figure", async () => {
@@ -419,21 +433,91 @@ describe("getBillOfSaleEconomics - FINANCED (through the Deal)", () => {
     expect(await query(s, saleId)).toEqual(before);
   });
 
-  test("no pricing snapshot on the quote is UNAVAILABLE", async () => {
+  test("no pricing snapshot on the application (the frozen, sale-bound copy) is UNAVAILABLE (f)", async () => {
     const s = await seedDealership("finnosnap");
-    const { saleId, quoteId } = await financedSaleThroughDeal(s);
-    await s.t.run((ctx) => ctx.db.patch(quoteId, { customerQuotePricingSnapshot: undefined }));
+    const { saleId, applicationId } = await financedSaleThroughDeal(s);
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { customerQuotePricingSnapshot: undefined }));
     expect(await query(s, saleId)).toEqual({ kind: "UNAVAILABLE", reason: "NO_PRICING_SNAPSHOT" });
+  });
+
+  describe("S258-01: the quote is editable after the sale; the application's frozen snapshot is the authority", () => {
+    const UNAVAILABLE_MISMATCH = { kind: "UNAVAILABLE", reason: "SNAPSHOT_MISMATCH" };
+
+    /** The real super-admin door (`adminData.adminUpdateRecord`): `quotes` is allow-listed and not a financial table. */
+    async function adminPatchQuote(s: Seeded, quoteId: Id<"quotes">, patch: Record<string, unknown>) {
+      process.env.SUPER_ADMIN_EMAILS = "s258.admin@autoflow.dev";
+      process.env.CLERK_JWT_ISSUER_DOMAIN ??= "https://test.clerk.accounts.dev";
+      process.env.NEXT_PUBLIC_APP_URL ??= "https://test.example.com";
+      await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "s258_sa", email: "s258.admin@autoflow.dev", name: "sa" }));
+      await s.t
+        .withIdentity({ subject: "s258_sa", clerkId: "s258_sa" })
+        .mutation(api.adminData.adminUpdateRecord, { table: "quotes", id: quoteId, patch });
+    }
+    const quoteSnap = async (s: Seeded, quoteId: Id<"quotes">) =>
+      (await s.t.run((ctx) => ctx.db.get(quoteId)))!.customerQuotePricingSnapshot!;
+
+    test("(e) untouched control: the figures are the literals", async () => {
+      const s = await seedDealership("s01e");
+      const { saleId } = await financedSaleThroughDeal(s);
+      expect(await query(s, saleId)).toEqual({
+        kind: "FINANCED", currency: "JOD", vehiclePrice: 12_000, downPayment: 0, executionFees: 0,
+        capitalisedCommission: 0, amountFinanced: 12_000, termMonths: 48, flatAnnualProfitRatePercent: 5,
+      });
+    });
+
+    test("(a) a BALANCED admin edit of the quote snapshot (down +1000, financed -1000) prints nothing", async () => {
+      const s = await seedDealership("s01a");
+      const { saleId, quoteId } = await financedSaleThroughDeal(s);
+      const snap = await quoteSnap(s, quoteId);
+      await adminPatchQuote(s, quoteId, {
+        customerQuotePricingSnapshot: { ...snap, downPayment: snap.downPayment + 1_000, totalFinancedAmount: snap.totalFinancedAmount - 1_000 },
+      });
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      expect(await query(s, saleId)).toEqual(UNAVAILABLE_MISMATCH);
+      consoleError.mockRestore();
+    });
+
+    test("(b) a price-only edit (footing broken) is SNAPSHOT_MISMATCH: the cross-check runs before footing", async () => {
+      const s = await seedDealership("s01b");
+      const { saleId, quoteId } = await financedSaleThroughDeal(s);
+      const snap = await quoteSnap(s, quoteId);
+      await adminPatchQuote(s, quoteId, { customerQuotePricingSnapshot: { ...snap, vehiclePrice: snap.vehiclePrice + 500 } });
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      expect(await query(s, saleId)).toEqual(UNAVAILABLE_MISMATCH);
+      consoleError.mockRestore();
+    });
+
+    test("(c) a rate-only edit (profitRate) is SNAPSHOT_MISMATCH", async () => {
+      const s = await seedDealership("s01c");
+      const { saleId, quoteId } = await financedSaleThroughDeal(s);
+      const snap = await quoteSnap(s, quoteId);
+      await adminPatchQuote(s, quoteId, { customerQuotePricingSnapshot: { ...snap, profitRate: snap.profitRate + 3 } });
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      expect(await query(s, saleId)).toEqual(UNAVAILABLE_MISMATCH);
+      consoleError.mockRestore();
+    });
+
+    test("(d) removing the quote's snapshot is SNAPSHOT_MISMATCH, not a number", async () => {
+      const s = await seedDealership("s01d");
+      const { saleId, quoteId } = await financedSaleThroughDeal(s);
+      await s.t.run((ctx) => ctx.db.patch(quoteId, { customerQuotePricingSnapshot: undefined }));
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      expect(await query(s, saleId)).toEqual(UNAVAILABLE_MISMATCH);
+      consoleError.mockRestore();
+    });
   });
 
   test("S3: a snapshot whose itemisation does not foot to the amount financed is DOES_NOT_FOOT, never a printed figure", async () => {
     const s = await seedDealership("finfoot");
-    const { saleId, quoteId } = await financedSaleThroughDeal(s);
+    const { saleId, quoteId, applicationId } = await financedSaleThroughDeal(s);
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     await s.t.run(async (ctx) => {
       const quote = await ctx.db.get(quoteId);
       const snap = quote!.customerQuotePricingSnapshot!;
-      await ctx.db.patch(quoteId, { customerQuotePricingSnapshot: { ...snap, totalFinancedAmount: snap.totalFinancedAmount + 1 } });
+      // Break the FROZEN copy (and the quote, so the cross-check agrees): only footing remains to refuse it.
+      const broken = { ...snap, totalFinancedAmount: snap.totalFinancedAmount + 1 };
+      await ctx.db.patch(quoteId, { customerQuotePricingSnapshot: broken });
+      await ctx.db.patch(applicationId, { customerQuotePricingSnapshot: broken });
     });
     expect(await query(s, saleId)).toEqual({ kind: "UNAVAILABLE", reason: "DOES_NOT_FOOT" });
     expect(consoleError).toHaveBeenCalled();
@@ -449,10 +533,12 @@ describe("getBillOfSaleEconomics - FINANCED (through the Deal)", () => {
 
   test("a snapshot in another currency than the organisation's is a CURRENCY_MISMATCH", async () => {
     const s = await seedDealership("fincur");
-    const { saleId, quoteId } = await financedSaleThroughDeal(s);
+    const { saleId, quoteId, applicationId } = await financedSaleThroughDeal(s);
     await s.t.run(async (ctx) => {
       const quote = await ctx.db.get(quoteId);
-      await ctx.db.patch(quoteId, { customerQuotePricingSnapshot: { ...quote!.customerQuotePricingSnapshot!, currency: "USD" } });
+      const usd = { ...quote!.customerQuotePricingSnapshot!, currency: "USD" };
+      await ctx.db.patch(quoteId, { customerQuotePricingSnapshot: usd });
+      await ctx.db.patch(applicationId, { customerQuotePricingSnapshot: usd });
     });
     expect(await query(s, saleId)).toEqual({ kind: "UNAVAILABLE", reason: "CURRENCY_MISMATCH" });
   });

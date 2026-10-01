@@ -27,6 +27,7 @@ import {
   obligationFromRow,
   positionForObligation,
   supplierReceiptActionability,
+  type CustomerQuotePricingSnapshot,
   type ObligationState,
   type SupplierClaimStatus,
 } from "./utils/financingEconomics";
@@ -193,6 +194,7 @@ export type BillOfSaleUnavailableReason =
   | "NOT_COMPLETED"
   | "NO_RECEIVABLE"
   | "NO_PRICING_SNAPSHOT"
+  | "SNAPSHOT_MISMATCH"
   | "LINK_MISMATCH"
   | "CURRENCY_MISMATCH"
   | "MULTI_VEHICLE"
@@ -235,6 +237,29 @@ export type BillOfSaleEconomics =
       flatAnnualProfitRatePercent: number | null;
     }
   | { kind: "UNAVAILABLE"; reason: BillOfSaleUnavailableReason };
+
+/** Field-by-field equality of two customer pricing snapshots (optional fields: both absent or both equal). */
+export const pricingSnapshotsEqual = (
+  a: CustomerQuotePricingSnapshot,
+  b: CustomerQuotePricingSnapshot | undefined
+): boolean =>
+  b !== undefined &&
+  a.currency === b.currency &&
+  a.vehiclePrice === b.vehiclePrice &&
+  a.downPayment === b.downPayment &&
+  a.termMonths === b.termMonths &&
+  a.executionFees === b.executionFees &&
+  a.commission === b.commission &&
+  a.profitRate === b.profitRate &&
+  a.insuranceRate === b.insuranceRate &&
+  a.gracePeriodMonths === b.gracePeriodMonths &&
+  a.includesCommissionInDebt === b.includesCommissionInDebt &&
+  a.totalFinancedAmount === b.totalFinancedAmount &&
+  a.totalContractValue === b.totalContractValue &&
+  a.monthlyInstallment === b.monthlyInstallment &&
+  a.totalProfit === b.totalProfit &&
+  a.takafulAmount === b.takafulAmount &&
+  a.companyRuleVersion === b.companyRuleVersion;
 
 const billOfSaleUnavailable = (reason: BillOfSaleUnavailableReason): BillOfSaleEconomics => ({
   kind: "UNAVAILABLE",
@@ -360,8 +385,16 @@ export const getBillOfSaleEconomics = query({
     if ((quote.vehicleItems?.length ?? 0) > 1) return billOfSaleUnavailable("MULTI_VEHICLE");
     if (quote.vehicleId !== sale.vehicleId) return billOfSaleUnavailable("VEHICLE_MISMATCH");
 
-    const snapshot = quote.customerQuotePricingSnapshot;
+    // SCRUM-258 S258-01. The printed figures come from the snapshot FROZEN on the
+    // finance application (`financeApplications` is a financial table: the
+    // generic admin edit is refused). `quotes` is editable after the sale, so the
+    // quote copy is only a cross-check: any disagreement is UNAVAILABLE.
+    const snapshot = application.customerQuotePricingSnapshot;
     if (!snapshot) return billOfSaleUnavailable("NO_PRICING_SNAPSHOT");
+    if (!pricingSnapshotsEqual(snapshot, quote.customerQuotePricingSnapshot)) {
+      console.error(`getBillOfSaleEconomics: quote snapshot disagrees with the application for sale ${sale._id}`);
+      return billOfSaleUnavailable("SNAPSHOT_MISMATCH");
+    }
 
     const orgCurrency = await getOrgCurrency(ctx, sale.orgId);
     if (snapshot.currency !== orgCurrency) return billOfSaleUnavailable("CURRENCY_MISMATCH");
@@ -389,9 +422,13 @@ export const getBillOfSaleEconomics = query({
     }
 
     // A manual finance company quote with no stated rate priced at 0 by default:
-    // that 0 is an absence, not a rate, and must never print as "0%".
+    // that 0 is an absence, not a rate, and must never print as "0%". Read from the
+    // application's frozen copy (mode and manual rate at submission), never the
+    // mutable quote. Fail-safe: an unknown mode hides the rate rather than print it.
     const rateNotStated =
-      quote.mode === "MANUAL_FINANCE_COMPANY" && quote.manualProfitRate === undefined;
+      application.quoteModeAtSubmission === undefined ||
+      (application.quoteModeAtSubmission === "MANUAL_FINANCE_COMPANY" &&
+        application.manualFinanceSnapshot?.profitRate === undefined);
 
     return {
       kind: "FINANCED",
