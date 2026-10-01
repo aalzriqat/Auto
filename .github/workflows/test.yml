@@ -149,6 +149,16 @@ jobs:
         node scripts/appendMobileLcov.mjs
       env:
         NODE_ENV: test
+    # SCRUM-552: same for packages/shared vitest coverage (packages/shared/src,
+    # repo-relative SF paths). Fails closed on a missing, empty, or
+    # out-of-scope report; no always(). Needs the trusted validator to accept
+    # packages/shared/src/ (SCRUM-552 part A).
+    - name: Shared coverage for Sonar
+      run: |
+        pnpm shared:coverage:sonar
+        node scripts/appendSharedLcov.mjs
+      env:
+        NODE_ENV: test
     - name: Record the tested merge for trusted Sonar
       if: always() && steps.slices.outcome == 'success' && github.event_name == 'pull_request'
       # A re-run keeps its original merge, so the trusted Sonar workflow binds
