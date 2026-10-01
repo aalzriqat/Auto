@@ -1145,9 +1145,16 @@ export function DealCockpit({
   // that, in the commit where the id changes, the owed mark is gone before that
   // effect can read it.
   const confirmStateApplicationIdRef = useRef(applicationId);
+  // Bumped on every deal switch. A confirm captures it when it starts; an answer
+  // that settles under a different generation belongs to a deal that is gone and
+  // may change NOTHING (no key, no mark, no dialog, no notice, no in-flight flag).
+  const confirmGenerationRef = useRef(0);
   useEffect(() => {
     if (confirmStateApplicationIdRef.current === applicationId) return;
     confirmStateApplicationIdRef.current = applicationId;
+    confirmGenerationRef.current += 1;
+    // B never inherits A's in-flight flag (A's late `finally` is fenced off below).
+    setDisbursementSubmitting(false);
     confirmDisbursementKeyRef.current = null;
     confirmDisbursementKeyVersionRef.current = 1;
     confirmUnknownOutcomeVersionRef.current = null;
@@ -3074,6 +3081,8 @@ export function DealCockpit({
                     confirmDisbursementKeyVersionRef.current === observedVersion &&
                     confirmUnknownOutcomeVersionRef.current === observedVersion;
                   setDisbursementSubmitting(true);
+                  const generation = confirmGenerationRef.current;
+                  const superseded = () => confirmGenerationRef.current !== generation;
                   try {
                     if (confirmDisbursementKeyVersionRef.current !== observedVersion) {
                       confirmDisbursementKeyRef.current = null;
@@ -3101,6 +3110,9 @@ export function DealCockpit({
                       "DisbursementConfirmedSuccess",
                       { reflectedWhen: financeDisbursementReflected }
                     );
+                    // The deal was switched while this was in flight: its answer
+                    // belongs to deal A and must not touch deal B's state.
+                    if (superseded()) return;
                     // The server answered: the outcome of THIS request is known.
                     if (confirmUnknownOutcomeVersionRef.current === observedVersion) {
                       confirmUnknownOutcomeVersionRef.current = null;
@@ -3112,6 +3124,7 @@ export function DealCockpit({
                       setConfirmingDisbursement(false);
                     }
                   } catch (error) {
+                    if (superseded()) return;
                     // A server answer (a ConvexError) means the request was
                     // refused and nothing committed; anything else is a lost
                     // response whose outcome stays unknown.
@@ -3153,7 +3166,7 @@ export function DealCockpit({
                     }
                     toast.error(getLocalizedErrorMessage(error, t));
                   } finally {
-                    setDisbursementSubmitting(false);
+                    if (!superseded()) setDisbursementSubmitting(false);
                   }
                 },
               },

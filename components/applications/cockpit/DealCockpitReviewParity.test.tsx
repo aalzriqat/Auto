@@ -3610,6 +3610,48 @@ describe("SCRUM-522: the finance-company confirm dialog and its retained state",
     expect(confirmCalls()[1].idempotencyKey).not.toBe(confirmCalls()[0].idempotencyKey);
   });
 
+  describe("L-C reversed: a late answer to deal A's confirm changes nothing on deal B", () => {
+    const lateAnswer = async (kind: "resolve" | "reject") => {
+      show();
+      const view = renderCockpit();
+      let settle: (value: unknown) => void = () => {};
+      stubs.mutationHolds.set(CONFIRM, new Promise((resolve) => { settle = resolve; }));
+      if (kind === "reject") stubs.mutationFailures.set(CONFIRM, "connection lost");
+      openAndConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      vi.mocked(toast.error).mockClear();
+      vi.mocked(toast.success).mockClear();
+
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP_B} />);
+      // B's own dialog, opened while A's request is still on the wire.
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+      const receipt = () => screen.getByRole("button", { name: "ConfirmReceipt" }) as HTMLButtonElement;
+      // B must not inherit A's in-flight flag.
+      expect(receipt().disabled).toBe(false);
+
+      settle(null);
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      expect(receipt().disabled).toBe(false);
+      expect(toast.error).not.toHaveBeenCalled();
+      // A real success of A is still announced, once, by the recorded-feedback hook
+      // (it settles a held outcome as a notice on a deal switch, by design: the
+      // operator is never left without an outcome for money that moved). That is
+      // the only toast allowed; nothing is raised for a lost response.
+      expect(vi.mocked(toast.success).mock.calls.map((call) => String(call[0]))).toEqual(
+        kind === "resolve" ? ["DisbursementConfirmedSuccess"] : []
+      );
+      // B's first confirm still mints its own key, for B.
+      fireEvent.click(receipt());
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      expect(confirmCalls()[1].applicationId).toBe(APP_B);
+      expect(confirmCalls()[1].idempotencyKey).not.toBe(confirmCalls()[0].idempotencyKey);
+    };
+
+    test("A's confirm RESOLVES late: B's dialog stays open, B is not marked in flight, no toast", () => lateAnswer("resolve"));
+    test("A's confirm is REJECTED late (lost response): B's dialog stays open, no A notice, B's key is its own", () => lateAnswer("reject"));
+  });
   test("L-C: the owed outcome-unknown notice for deal A is not raised on deal B when the version moves", async () => {
     show();
     const view = renderCockpit();
