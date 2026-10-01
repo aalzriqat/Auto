@@ -631,6 +631,12 @@ describe("resetOrgFinancialData never strands a payrollItem's run reference", ()
         for (const item of items) {
           expect(await ctx.db.get(item.runId), `pass ${pass}: payrollItem.runId`).not.toBeNull();
         }
+        if (pass === 0) {
+          // Precondition: with batchSize 1 exactly one item survives pass 0 and so
+          // does its run; otherwise the loop above would pass vacuously.
+          expect(items, "pass 0: exactly one payrollItem survives").toHaveLength(1);
+          expect(await ctx.db.get(runId), "pass 0: the payroll run survives").not.toBeNull();
+        }
       });
     }
 

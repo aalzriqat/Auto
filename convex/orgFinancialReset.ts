@@ -195,7 +195,11 @@ const CHILD_TABLES: Partial<Record<(typeof RESET_TABLES)[number], readonly strin
   // SCRUM-534 — every in-scope table that references a sale or a quote. The
   // required references are financeApplications.quoteId and
   // payrollItems.commissionSaleIds; the rest are optional but are deferred the
-  // same way so no pass leaves any of them dangling.
+  // same way so no pass leaves any of them dangling. One exception:
+  // commitmentAuthorityWork.saleId is a required sale reference that is NOT
+  // listed here. It is pinned as an open decision in the reference coverage test
+  // and is unreachable today because the preflight refuses a destructive reset
+  // while authority rows exist.
   sales: [
     "financeApplications",
     "deposits",

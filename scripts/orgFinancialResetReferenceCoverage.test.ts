@@ -18,6 +18,7 @@
  * Anything else, and any stale entry in the lists, fails.
  */
 import { describe, expect, test } from "vitest";
+import { v } from "convex/values";
 import schema from "../convex/schema";
 import { CHILD_TABLES_FOR_TEST, RESET_TABLES_FOR_TEST } from "../convex/orgFinancialReset";
 
@@ -64,8 +65,9 @@ function collect(
       if (validator.element) collect(table, validator.element, `${path}[]`, opt, out);
       return;
     case "record":
-      // A record value may be absent entirely, so it is never mandatory.
-      if (validator.value) collect(table, validator.value, `${path}{}`, true, out);
+      // Key and value are both visited; like array elements they inherit the parent's optionality.
+      if (validator.key) collect(table, validator.key, `${path}{key}`, opt, out);
+      if (validator.value) collect(table, validator.value, `${path}{}`, opt, out);
       return;
     case "union": {
       const members = validator.members ?? [];
@@ -73,8 +75,20 @@ function collect(
       for (const m of members) collect(table, m, path, opt || nullable, out);
       return;
     }
-    default:
+    // Leaf kinds that cannot hold a table id.
+    case "float64":
+    case "int64":
+    case "boolean":
+    case "bytes":
+    case "string":
+    case "null":
+    case "any":
+    case "literal":
       return;
+    default:
+      throw new Error(
+        `Unhandled validator kind "${validator.kind}" at ${table}.${path}: teach collect() about it so no id reference is skipped`
+      );
   }
 }
 
@@ -413,5 +427,24 @@ describe("organization financial reset covers every reset-to-reset reference", (
       allReferences()
     );
     expect(verdict.unaccounted).toContain("payrollItems.runId->payrollRuns");
+  });
+
+  test("MUTATION CONTROL: a v.record key id is collected", () => {
+    const out: Ref[] = [];
+    collect("t", v.record(v.id("payrollRuns"), v.string()) as unknown as ValidatorLike, "f", false, out);
+    expect(out).toEqual([{ table: "t", path: "f{key}", target: "payrollRuns", optional: false }]);
+  });
+
+  test("MUTATION CONTROL: a v.record value id inherits the parent optionality", () => {
+    const required: Ref[] = [];
+    collect("t", v.record(v.string(), v.id("payrollRuns")) as unknown as ValidatorLike, "f", false, required);
+    expect(required).toEqual([{ table: "t", path: "f{}", target: "payrollRuns", optional: false }]);
+    const optionalOut: Ref[] = [];
+    collect("t", v.record(v.string(), v.id("payrollRuns")) as unknown as ValidatorLike, "f", true, optionalOut);
+    expect(optionalOut[0]?.optional).toBe(true);
+  });
+
+  test("MUTATION CONTROL: an unknown validator kind throws instead of being skipped", () => {
+    expect(() => collect("t", { kind: "futureKind" }, "f", false, [])).toThrow(/futureKind.*t\.f|t\.f.*futureKind/);
   });
 });
