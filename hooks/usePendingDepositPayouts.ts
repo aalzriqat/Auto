@@ -45,6 +45,13 @@ export type PendingPayout = {
   /** The refund method, or "NONE" for a forfeit. */
   method: string;
   intent: string;
+  /**
+   * SCRUM-530 F1: set once an attempt under this record has had an UNKNOWN outcome (a
+   * non-definite failure, or a retry was sent). A later refusal of a retry proves nothing
+   * about the earlier attempt, so such a record is retired only by `confirm` or an explicit
+   * `dismiss`. Hook-internal: callers never set it.
+   */
+  uncertain?: boolean;
 };
 
 export type PayoutGate = { status: "go"; recordedIntent?: string } | { status: "blocked"; pending: PendingPayout };
@@ -60,24 +67,18 @@ export type PendingDepositPayouts = {
    * Any other error, or any error once an earlier attempt had an unknown outcome, keeps the
    * record. `intent` binds the answer to the attempt it belongs to.
    */
-  settleFailure: (depositId: string, error: unknown, intent?: string) => void;
+  settleFailure: (depositId: string, error: unknown, intent: string) => void;
   /** Deposits whose recorded attempt is blocking a different decision, for the notice. */
   blocked: Readonly<Record<string, PendingPayout>>;
 };
 
 export function usePendingDepositPayouts(retire: (intent: string) => void): PendingDepositPayouts {
   const pendingRef = useRef<Map<string, PendingPayout>>(new Map());
-  // SCRUM-530 F1: deposits whose recorded attempt has had an UNKNOWN outcome (a
-  // non-definite failure, or a retry was sent). A later refusal of a retry proves
-  // nothing about the earlier attempt, so such a record is retired only by
-  // `confirm` or an explicit `dismiss`.
-  const uncertainRef = useRef<Set<string>>(new Set());
   const [blocked, setBlocked] = useState<Record<string, PendingPayout>>({});
 
   return useMemo(() => {
     const clear = (depositId: string) => {
       pendingRef.current.delete(depositId);
-      uncertainRef.current.delete(depositId);
       setBlocked((current) => {
         if (!(depositId in current)) return current;
         const { [depositId]: _removed, ...rest } = current;
@@ -95,26 +96,24 @@ export function usePendingDepositPayouts(retire: (intent: string) => void): Pend
         if (!existing) return { status: "go" };
         if (existing.resolution === resolution && existing.method === method) {
           // A retry of an attempt that never confirmed: its outcome is unknown.
-          uncertainRef.current.add(depositId);
+          existing.uncertain = true;
           return { status: "go", recordedIntent: existing.intent };
         }
         setBlocked((current) => ({ ...current, [depositId]: existing }));
         return { status: "blocked", pending: existing };
       },
       record(depositId, payout) {
-        if (!pendingRef.current.has(depositId)) pendingRef.current.set(depositId, payout);
+        // Copied: the record carries hook-owned state (`uncertain`) the caller's object must not.
+        if (!pendingRef.current.has(depositId)) pendingRef.current.set(depositId, { ...payout });
       },
       confirm: clear,
       dismiss,
       settleFailure(depositId, error, intent) {
         const existing = pendingRef.current.get(depositId);
         // A late answer for an older attempt must not touch a newer record.
-        if (!existing || (intent !== undefined && existing.intent !== intent)) return;
-        if (!isConvexError(error)) {
-          uncertainRef.current.add(depositId);
-          return;
-        }
-        if (!uncertainRef.current.has(depositId)) dismiss(depositId);
+        if (!existing || existing.intent !== intent) return;
+        if (isConvexError(error) && !existing.uncertain) dismiss(depositId);
+        else existing.uncertain = true;
       },
       blocked,
     };

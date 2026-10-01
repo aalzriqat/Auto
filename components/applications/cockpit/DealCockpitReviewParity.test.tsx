@@ -1163,12 +1163,17 @@ describe("held deposit on a stopped deal — deposits.release", () => {
     );
     stubs.mutationFailures.set("deposits:release", "network lost");
     renderCockpit();
+    const releaseKey = (n: number) =>
+      (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[n]!.idempotencyKey;
+    const submitRefund = (method: string) => {
+      fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+      pickMethod(screen.getByRole("dialog"), method);
+      fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    };
 
-    fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
-    pickMethod(screen.getByRole("dialog"), "CASH");
-    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    submitRefund("CASH");
     await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(1));
-    const firstKey = (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[0]!.idempotencyKey;
+    const firstKey = releaseKey(0);
 
     pickMethod(screen.getByRole("dialog"), "BANK_TRANSFER");
     fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
@@ -1178,18 +1183,16 @@ describe("held deposit on a stopped deal — deposits.release", () => {
     stubs.mutationFailures.set("deposits:release", "refused:Not permitted");
     fireEvent.click(within(notice).getByRole("button", { name: "PayoutUnconfirmedRetry" }));
     await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(2));
-    expect((mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[1]!.idempotencyKey).toBe(firstKey);
+    expect(releaseKey(1)).toBe(firstKey);
 
     // The earlier attempt may have committed: a different method is still not sent, and a retry keeps the key.
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
-    pickMethod(screen.getByRole("dialog"), "BANK_TRANSFER");
-    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    submitRefund("BANK_TRANSFER");
     const stillNotice = await screen.findByTestId("unconfirmed-payout-notice");
     expect(mutationCalls.get("deposits:release")).toHaveLength(2);
     fireEvent.click(within(stillNotice).getByRole("button", { name: "PayoutUnconfirmedRetry" }));
     await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(3));
-    expect((mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[2]!.idempotencyKey).toBe(firstKey);
+    expect(releaseKey(2)).toBe(firstKey);
   });
 
   test("SCRUM-469 R4-01: dismissing a possibly committed payout retires its key even when the SAME method is resubmitted at a stale generation", async () => {
@@ -1201,12 +1204,17 @@ describe("held deposit on a stopped deal — deposits.release", () => {
     );
     stubs.mutationFailures.set("deposits:release", "network lost");
     renderCockpit();
+    const releaseKey = (n: number) =>
+      (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[n]!.idempotencyKey;
+    const submitRefund = (method: string) => {
+      fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+      pickMethod(screen.getByRole("dialog"), method);
+      fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    };
 
-    fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
-    pickMethod(screen.getByRole("dialog"), "CASH");
-    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    submitRefund("CASH");
     await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(1));
-    const firstKey = (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[0]!.idempotencyKey;
+    const firstKey = releaseKey(0);
 
     pickMethod(screen.getByRole("dialog"), "BANK_TRANSFER");
     fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
