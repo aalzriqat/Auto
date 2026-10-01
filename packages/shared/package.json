@@ -33,7 +33,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:coverage:sonar": "vitest run --config vitest.sonar.config.ts"
   },
   "devDependencies": {
     "typescript": "^6.0.3",

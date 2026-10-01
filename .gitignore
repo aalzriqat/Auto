@@ -95,3 +95,4 @@ sentry-wizard-installation-error-*.log
 # SCRUM-249 mutation-harness scratch output (never part of the branch)
 .mut.json
 apps/mobile/coverage-sonar/
+packages/shared/coverage-sonar/
