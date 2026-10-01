@@ -35,7 +35,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { getFunctionName } from "convex/server";
 import { convexTestWithComponents } from "../../test-utils/convexTest";
 import schema from "../../convex/schema";
@@ -541,6 +541,58 @@ describe("what each role can do with a released share", () => {
 
     expect(confirm).toHaveBeenCalled();
     expect(mutationCalls).toHaveLength(0);
+  });
+
+  test("a refund of a released share has no method until one is chosen, and sends exactly that one (SCRUM-469)", async () => {
+    // The method picks the ledger account the refund is credited to; an unstated
+    // one used to be shown as CASH and sent as CASH though nobody had chosen it.
+    const s = await releasedShareFor("refundMethod");
+    const allocation = await renderWith(s, PERMS_MANAGER);
+    const holdId = allocation!.vehicles.find((v) => v.vehicleId === s.vehicleA)!
+      .awaitingDecision[0]!.holdId;
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    const row = screen
+      .getAllByText("DepositRecordDecision")[0]!
+      .closest("div.space-y-2") as HTMLElement;
+    chooseTreatment(row, "DepositTreatmentRefund");
+
+    const record = () => screen.getAllByText("DepositRecordDecision")[0]!.closest("button") as HTMLButtonElement;
+    // Empty picker, a reason on screen, and the button refused.
+    expect(within(row).getByText("RefundChooseMethod")).toBeTruthy();
+    expect(within(row).getByRole("status").textContent).toBe("RefundMethodRequired");
+    expect(record().disabled).toBe(true);
+    fireEvent.click(record());
+    expect(mutationCalls).toHaveLength(0);
+
+    const methodTrigger = row.querySelectorAll("[role='combobox']")[1] as HTMLElement;
+    fireEvent.keyDown(methodTrigger, { key: "Enter", code: "Enter" });
+    fireEvent.click(screen.getByText("PaymentMethod_BANK_TRANSFER"));
+
+    expect(within(row).queryByRole("status")).toBeNull();
+    expect(record().disabled).toBe(false);
+    fireEvent.click(record());
+    expect(mutationCalls).toHaveLength(1);
+    expect(mutationCalls[0]!.args).toMatchObject({
+      holdId,
+      treatment: "REFUND_TO_CUSTOMER",
+      refundMethod: "BANK_TRANSFER",
+    });
+  });
+
+  test("treatments that move no cash never ask for a method (SCRUM-469)", async () => {
+    const s = await releasedShareFor("noMethodNeeded");
+    await renderWith(s, PERMS_MANAGER);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const row = screen
+      .getAllByText("DepositRecordDecision")[0]!
+      .closest("div.space-y-2") as HTMLElement;
+
+    chooseTreatment(row, "DepositTreatmentForfeit");
+    expect(within(row).queryByText("RefundChooseMethod")).toBeNull();
+    fireEvent.click(screen.getAllByText("DepositRecordDecision")[0]!.closest("button")!);
+    expect(mutationCalls).toHaveLength(1);
+    expect(mutationCalls[0]!.args).not.toHaveProperty("refundMethod");
   });
 
   test("and goes through once the confirmation is accepted", async () => {

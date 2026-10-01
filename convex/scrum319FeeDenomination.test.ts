@@ -396,7 +396,7 @@ describe("SCRUM-319 — the lock keeps onboarding open and closes every ordering
 
   test("CUSTODY ONLY — a custody advance is a money fact: it locks the currency and is denominated with the deal", async () => {
     const s = await seedDeal("custody");
-    await s.asUser.mutation(api.financeDealCosts.openDealCustody, {
+    await s.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH",
       orgId: s.orgId, applicationId: s.applicationId, userId: s.employeeId, issuedMinor: 500 * JOD_SCALE,
       idempotencyKey: `custody:${s.applicationId}:1`,
     });
@@ -440,7 +440,7 @@ describe("SCRUM-319 — no valid-looking scalar total across mixed currencies", 
 
   test("MIXED CUSTODY — a custody record whose paid lines are in another currency reports no summary", async () => {
     const s = await seedDeal("mixed_custody");
-    const custodyId = await s.asUser.mutation(api.financeDealCosts.openDealCustody, {
+    const custodyId = await s.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH",
       orgId: s.orgId, applicationId: s.applicationId, userId: s.employeeId, issuedMinor: 500 * JOD_SCALE,
       idempotencyKey: `custody:${s.applicationId}:1`,
     });

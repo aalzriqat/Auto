@@ -2830,6 +2830,34 @@ export const recordDirectFeePayment = mutation({
 // Employee custody
 // ---------------------------------------------------------------------------
 
+/**
+ * SCRUM-469 — a custody movement that moves cash must say which instrument it
+ * went through. The method picks the ledger account (`disbursementAccountKey`
+ * / `cashAccountKey`), and an omitted one used to fall through to CASH_ON_HAND
+ * — a bank transfer booked as drawer cash. Refused, with the next step, before
+ * anything is written. The validator stays optional so an older client gets this
+ * message rather than an argument-validation error.
+ *
+ * A REVERSAL is the one kind exempt: its whole accounting effect is the inverse
+ * of its target's journal, so it never reads a method of its own.
+ */
+function requireCustodyMethod<M extends string>(
+  method: M | undefined,
+  action: string
+): M {
+  if (method === undefined) {
+    throw new ConvexError(
+      `Choose how the money moved (cash, bank transfer, cheque or card) before ${action}. If this screen does not offer a method, update the app. Nothing has been recorded.`
+    );
+  }
+  return method;
+}
+
+/** True only for one of the four instruments a custody movement can name. */
+function isRecordedCustodyMethod(method: string | undefined | null): boolean {
+  return method === "CASH" || method === "BANK_TRANSFER" || method === "CHEQUE" || method === "CARD";
+}
+
 /** Posts one freshly inserted cash entry (ISSUED / RETURNED / REIMBURSED) against its custody record. */
 async function postCustodyEntry(
   ctx: MutationCtx,
@@ -2935,6 +2963,12 @@ export const openDealCustody = mutation({
         }),
       },
       async () => {
+        // A payment method belongs to a NEW money movement (SCRUM-469). It is
+        // checked INSIDE the section, not before it: a command that already
+        // completed (a pre-deploy client sent none) must replay its stored
+        // result, and only a genuinely new command is refused. The refusal is an
+        // uncaught throw, so the STARTED row rolls back with the transaction.
+        requireCustodyMethod(args.method, "handing cash to an employee");
         // ⚠️ Every MUTABLE-state check is inside the section (Codex
         // AF-CUST-06): a replay of an issuance that succeeded must return the
         // stored record even if the recipient has since begun offboarding, the
@@ -3103,6 +3137,13 @@ export const recordCustodyMovement = mutation({
         }),
       },
       async () => {
+        // A payment method belongs to a NEW money movement (SCRUM-469), so it is
+        // checked inside the section: a completed command replays its stored
+        // result even when it was sent without one (a pre-deploy client). A
+        // REVERSAL is exempt: it is the inverse of its target's journal.
+        if (args.kind !== "REVERSAL") {
+          requireCustodyMethod(args.method, "recording this custody movement");
+        }
         // Re-read inside the section: the row loaded for ownership above is
         // the same row, but the state it carries is what this attempt acts on.
         const current = await ctx.db.get(args.custodyId);
@@ -3427,6 +3468,22 @@ export const migrateLegacyCustodyToLedger = mutation({
         ) {
           throw new ConvexError(
             `This custody record's stored totals (issued ${custody.issuedMinor}, returned ${custody.returnedMinor}, reimbursed ${custody.reimbursedMinor}) do not match its own movement log (${projected.issuedMinor}, ${projected.returnedMinor}, ${projected.reimbursedMinor}), so it cannot be migrated as it stands. Correct the record first; nothing has been posted.`
+          );
+        }
+        // A payment method is an attribute of ONE money movement and is never
+        // inferred (SCRUM-469): a leg with no recorded instrument would be booked
+        // to CASH_ON_HAND by the posting rules. Every non-reversal entry is
+        // proven BEFORE the first leg posts, so the record is refused whole and
+        // nothing reaches the books.
+        const methodless = entries.filter(
+          (entry) => entry.kind !== "REVERSAL" && !isRecordedCustodyMethod(entry.method)
+        );
+        if (methodless.length > 0) {
+          const named = methodless
+            .map((entry) => `${entry.kind} ${entry.amountMinor} on ${new Date(entry.occurredAt).toISOString().slice(0, 10)} (${entry._id})`)
+            .join("; ");
+          throw new ConvexError(
+            `${methodless.length === 1 ? "A movement" : `${methodless.length} movements`} on this custody record has no method recorded (cash, bank transfer, cheque or card), so it cannot be posted to the ledger without guessing the account: ${named}. Have the movement reviewed and its method recorded; nothing has been posted.`
           );
         }
         const fees = await loadActiveFees(ctx, custody.applicationId);

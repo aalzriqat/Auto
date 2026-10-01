@@ -242,7 +242,7 @@ describe("a3 - the template path: a long configured description is shortened on 
 describe("a4 - setFeeCustody checks the link patch even when no posting follows", () => {
   async function custodySeed(name: string, actualAmountMinor: number | undefined) {
     const seed = await seedDeal(name);
-    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH",
       idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId,
       userId: seed.employeeId, issuedMinor: jod(700),
     });

@@ -175,14 +175,14 @@ describe("a retried submit does not spend money twice", () => {
 
   test("the same key replays a reimbursement instead of paying it again", async () => {
     const seed = await seedDeal();
-    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, applicationId: seed.applicationId,
       userId: seed.employeeId, issuedMinor: jod(700),
     });
     await addFee(seed, { actualAmountMinor: jod(750), paidBy: "EMPLOYEE", custodyId });
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+      await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH",
         orgId: seed.orgId, custodyId, kind: "REIMBURSED",
         amountMinor: jod(50), idempotencyKey: "reimburse-retry-1",
       });
@@ -204,14 +204,14 @@ describe("a retried submit does not spend money twice", () => {
 
   test("the same key replays an opened custody instead of erroring about the record it just created", async () => {
     const seed = await seedDeal();
-    const first = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+    const first = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH",
       orgId: seed.orgId, applicationId: seed.applicationId,
       userId: seed.employeeId, issuedMinor: jod(700), idempotencyKey: "custody-retry-1",
     });
     // The one-open-record rule used to run BEFORE the idempotency wrapper, so a
     // retry found the row its own first attempt had inserted and threw the very
     // error the key exists to prevent.
-    const second = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+    const second = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH",
       orgId: seed.orgId, applicationId: seed.applicationId,
       userId: seed.employeeId, issuedMinor: jod(700), idempotencyKey: "custody-retry-1",
     });
@@ -228,7 +228,7 @@ describe("a retried submit does not spend money twice", () => {
 
     // A genuine second request still fails — the rule is deferred, not removed.
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+      seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH",
         orgId: seed.orgId, applicationId: seed.applicationId,
         userId: seed.employeeId, issuedMinor: jod(200), idempotencyKey: "custody-different-2",
       })
@@ -364,7 +364,7 @@ describe("itemized deal costs", () => {
 describe("employee custody", () => {
   test("closes the identity when the balance is returned", async () => {
     const seed = await seedDeal();
-    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       applicationId: seed.applicationId,
       userId: seed.employeeId,
@@ -376,7 +376,7 @@ describe("employee custody", () => {
     expect(costs.custody[0]?.summary!.employeeOwesDealerMinor).toBe(jod(50));
     expect(costs.custody[0]?.summary!.settled).toBe(false);
 
-    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { idempotencyKey: crypto.randomUUID(),
+    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       custodyId,
       kind: "RETURNED",
@@ -390,7 +390,7 @@ describe("employee custody", () => {
 
   test("an employee who spent their own money is owed it, not charged for it", async () => {
     const seed = await seedDeal();
-    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       applicationId: seed.applicationId,
       userId: seed.employeeId,
@@ -417,7 +417,7 @@ describe("employee custody", () => {
 
   test("a debt to the employee is not settled until it is actually paid", async () => {
     const seed = await seedDeal();
-    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       applicationId: seed.applicationId,
       userId: seed.employeeId,
@@ -435,7 +435,7 @@ describe("employee custody", () => {
       })
     ).rejects.toThrow(/still owed to this person/i);
 
-    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { idempotencyKey: crypto.randomUUID(),
+    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, custodyId, kind: "REIMBURSED", amountMinor: jod(50),
     });
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(),
@@ -448,13 +448,13 @@ describe("employee custody", () => {
 
   test("totals are a sum of movements, so a correction stays visible", async () => {
     const seed = await seedDeal();
-    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       applicationId: seed.applicationId,
       userId: seed.employeeId,
       issuedMinor: jod(700),
     });
-    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { idempotencyKey: crypto.randomUUID(),
+    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, custodyId, kind: "ISSUED", amountMinor: jod(100),
       note: "Second handover for the insurance premium.",
     });
@@ -477,7 +477,7 @@ describe("employee custody", () => {
 
   test("an unbalanced record can only be closed as an explicit write-off", async () => {
     const seed = await seedDeal();
-    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       applicationId: seed.applicationId,
       userId: seed.employeeId,
@@ -509,7 +509,7 @@ describe("employee custody", () => {
     );
 
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+      seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         applicationId: seed.applicationId,
         userId: outsider,
@@ -537,7 +537,7 @@ describe("employee custody", () => {
     // the shared helper is the one that knows an offboarding membership is not
     // an active one.
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+      seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         applicationId: seed.applicationId,
         userId: seed.employeeId,
@@ -548,13 +548,13 @@ describe("employee custody", () => {
 
   test("a second open record for the same person on the same deal is refused", async () => {
     const seed = await seedDeal();
-    await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+    await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, applicationId: seed.applicationId,
       userId: seed.employeeId, issuedMinor: jod(700),
     });
 
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+      seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId, applicationId: seed.applicationId,
         userId: seed.employeeId, issuedMinor: jod(200),
       })
@@ -584,7 +584,7 @@ describe("employee custody", () => {
         status: "APPROVED", createdAt: Date.now(), updatedAt: Date.now(),
       });
     });
-    const otherCustodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+    const otherCustodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       applicationId: otherApplicationId,
       userId: seed.employeeId,
@@ -604,7 +604,7 @@ describe("employee custody", () => {
 
 describe("a closed record cannot go quietly wrong afterwards", () => {
   async function settledCustody(seed: Seed) {
-    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, applicationId: seed.applicationId,
       userId: seed.employeeId, issuedMinor: jod(700),
     });
@@ -715,7 +715,7 @@ describe("a closed record cannot go quietly wrong afterwards", () => {
 describe("money can only move in directions that are true", () => {
   test("a cost somebody else paid cannot be charged to an employee's custody", async () => {
     const seed = await seedDeal();
-    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, applicationId: seed.applicationId,
       userId: seed.employeeId, issuedMinor: jod(700),
     });
@@ -734,7 +734,7 @@ describe("money can only move in directions that are true", () => {
 
   test("a duplicate reimbursement is refused before any write — a reimbursement pays a stated debt, never more", async () => {
     const seed = await seedDeal();
-    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, applicationId: seed.applicationId,
       userId: seed.employeeId, issuedMinor: jod(700),
     });
@@ -742,11 +742,11 @@ describe("money can only move in directions that are true", () => {
 
     // Two people recording the same payment under two keys: the second one
     // is a payment nobody is owed, and it now moves real cash — refused.
-    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { idempotencyKey: crypto.randomUUID(),
+    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, custodyId, kind: "REIMBURSED", amountMinor: jod(50),
     });
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { idempotencyKey: crypto.randomUUID(),
+      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH", idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId, custodyId, kind: "REIMBURSED", amountMinor: jod(50),
       })
     ).rejects.toThrow(/Nothing is owed/i);
@@ -774,7 +774,7 @@ describe("money can only move in directions that are true", () => {
 
   test("a return larger than the advance is refused rather than inverting the balance", async () => {
     const seed = await seedDeal();
-    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, applicationId: seed.applicationId,
       userId: seed.employeeId, issuedMinor: jod(700),
     });
@@ -782,7 +782,7 @@ describe("money can only move in directions that are true", () => {
     // Left alone this drives the balance negative, and the module then
     // instructs somebody to pay a reimbursement that is not owed.
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { idempotencyKey: crypto.randomUUID(),
+      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH", idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: jod(800),
       })
     ).rejects.toThrow(/issued/i);
@@ -790,7 +790,7 @@ describe("money can only move in directions that are true", () => {
 
   test("a debt owed to an employee cannot be written off unpaid", async () => {
     const seed = await seedDeal();
-    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, applicationId: seed.applicationId,
       userId: seed.employeeId, issuedMinor: jod(700),
     });
@@ -810,7 +810,7 @@ describe("money can only move in directions that are true", () => {
 
   test("a mistyped issuance is corrected by a reversal, not by a fictitious return", async () => {
     const seed = await seedDeal();
-    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, applicationId: seed.applicationId,
       userId: seed.employeeId, issuedMinor: jod(7000),
     });
@@ -829,7 +829,7 @@ describe("money can only move in directions that are true", () => {
       reversesEntryId: entryId, amountMinor: jod(7000),
       note: "Mistyped: should have been 700.",
     });
-    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { idempotencyKey: crypto.randomUUID(),
+    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, custodyId, kind: "ISSUED", amountMinor: jod(700),
     });
 
@@ -854,7 +854,7 @@ describe("money can only move in directions that are true", () => {
 
   test("reversing an issuance cannot leave more returned than was ever issued", async () => {
     const seed = await seedDeal();
-    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, applicationId: seed.applicationId,
       userId: seed.employeeId, issuedMinor: jod(700),
     });
@@ -865,7 +865,7 @@ describe("money can only move in directions that are true", () => {
         .collect();
       return rows[0]._id;
     });
-    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { idempotencyKey: crypto.randomUUID(),
+    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: jod(700),
     });
 
@@ -888,7 +888,7 @@ describe("money can only move in directions that are true", () => {
 
   test("an issuance already settled against cannot be reversed out from under the settlement", async () => {
     const seed = await seedDeal();
-    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, applicationId: seed.applicationId,
       userId: seed.employeeId, issuedMinor: jod(700),
     });
@@ -901,7 +901,7 @@ describe("money can only move in directions that are true", () => {
     });
     // Spent 50 of their own money on top of the advance, and was paid it back.
     await addFee(seed, { actualAmountMinor: jod(750), paidBy: "EMPLOYEE", custodyId });
-    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { idempotencyKey: crypto.randomUUID(),
+    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, custodyId, kind: "REIMBURSED", amountMinor: jod(50),
     });
     expect((await readCosts(seed)).custody[0]?.summary!.settled).toBe(true);
@@ -927,7 +927,7 @@ describe("money can only move in directions that are true", () => {
 
   test("a reversal can only cancel a movement on its own custody record", async () => {
     const seed = await seedDeal();
-    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, applicationId: seed.applicationId,
       userId: seed.employeeId, issuedMinor: jod(700),
     });
@@ -945,7 +945,7 @@ describe("money can only move in directions that are true", () => {
     });
     const otherCustodyId = await seed.asUser.mutation(
       api.financeDealCosts.openDealCustody,
-      { idempotencyKey: crypto.randomUUID(),
+      { method: "CASH", idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId, applicationId: seed.applicationId,
         userId: otherUserId, issuedMinor: jod(300),
       }
@@ -968,7 +968,7 @@ describe("money can only move in directions that are true", () => {
 
   test("a reversal must cancel the whole movement, and only a reversal may name one", async () => {
     const seed = await seedDeal();
-    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, applicationId: seed.applicationId,
       userId: seed.employeeId, issuedMinor: jod(700),
     });
@@ -990,7 +990,7 @@ describe("money can only move in directions that are true", () => {
     ).rejects.toThrow(/whole movement/i);
 
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { idempotencyKey: crypto.randomUUID(),
+      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH", idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId, custodyId, kind: "RETURNED",
         reversesEntryId: entryId, amountMinor: jod(100),
       })
@@ -1034,7 +1034,7 @@ describe("money can only move in directions that are true", () => {
   test("custody cannot be issued to yourself", async () => {
     const seed = await seedDeal();
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+      seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId, applicationId: seed.applicationId,
         userId: seed.userId, issuedMinor: jod(700),
       })
@@ -1131,7 +1131,7 @@ describe("reconciled work is not destroyable from below", () => {
 
   test("reopening a written-off record keeps the reason the loss was accepted for", async () => {
     const seed = await seedDeal();
-    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, applicationId: seed.applicationId,
       userId: seed.employeeId, issuedMinor: jod(700),
     });
@@ -1204,7 +1204,7 @@ describe("the legal invoice and automatic closing readiness", () => {
 
   test("voided custody-cost history cannot strand reconciliation or closing readiness", async () => {
     const seed = await seedDeal("bounded-custody");
-    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH",
       orgId: seed.orgId,
       applicationId: seed.applicationId,
       userId: seed.employeeId,
@@ -1290,7 +1290,7 @@ describe("the legal invoice and automatic closing readiness", () => {
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: seed.orgId, feeId, notes: "Matched to the receipt.",
     });
-    await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+    await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, applicationId: seed.applicationId,
       userId: seed.employeeId, issuedMinor: jod(700),
     });
@@ -1480,7 +1480,7 @@ describe("tenancy", () => {
     ).rejects.toThrow(/not found/i);
 
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+      seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         applicationId: otherApplicationId,
         userId: seed.employeeId,
@@ -1499,7 +1499,7 @@ describe("input validation", () => {
     ).rejects.toThrow();
     await expect(addFee(seed, { actualAmountMinor: -1 })).rejects.toThrow();
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.openDealCustody, { idempotencyKey: crypto.randomUUID(),
+      seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         applicationId: seed.applicationId,
         userId: seed.employeeId,

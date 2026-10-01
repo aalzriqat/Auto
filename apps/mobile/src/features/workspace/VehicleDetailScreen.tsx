@@ -69,6 +69,11 @@ type EditableLandedItem = {
 
 let landedItemKeyCounter = 0;
 
+/** SCRUM-469: an unset or empty selection is NOT a chosen method. */
+function isChosenMethod<M extends string>(method: M | "" | null | undefined): method is M {
+  return typeof method === "string" && method !== "";
+}
+
 function nextLandedItemKey(): string {
   landedItemKeyCounter += 1;
   return `landed-${landedItemKeyCounter}`;
@@ -216,16 +221,38 @@ function VehicleDetailContent({
 
   const releaseDeposit = useMutation(api.deposits.release);
   const commandId = useCommandIdentity();
+  // SCRUM-469 F1: the identity (resolution + METHOD + intent) of a deposit payout
+  // that may have committed, per deposit. Kept until a CONFIRMED success or an
+  // explicit dismissal — not by the method picker clearing or the generation
+  // moving — so a different method chosen afterwards can never mint a second key
+  // for what may be the same money. It lives and dies with this screen instance
+  // (a new one is opened per vehicle), exactly like `commandId`. Dismissal also
+  // RETIRES the recorded intent's key: otherwise resubmitting the same method
+  // at a stale generation rebuilds the same intent and replays the earlier result.
+  const pendingPayoutsRef = useRef<Map<string, { resolution: "REFUNDED" | "FORFEITED"; method: string; intent: string }>>(
+    new Map(),
+  );
   const upsertLandedCosts = useMutation(api.vehicles.upsertLandedCosts);
   const createReservation = useMutation(api.vehicles.createReservation);
   // Minted at the user-intent boundary and held across attempts — with a
   // deposit this books real customer money.
-  const reservationKeyRef = useRef<string | null>(null);
+  // Per vehicle, cleared only by a CONFIRMED success: changing vehicle or
+  // leaving the tab is not confirmation of an attempt that may have committed.
+  const reservationKeysRef = useRef<Map<string, string>>(new Map());
   const releaseReservation = useMutation(api.vehicles.releaseReservation);
   const archiveVehicle = useMutation(api.vehicles.softDelete);
 
   const [releasingDepositId, setReleasingDepositId] = useState<string | null>(null);
-  const [refundMethodByDeposit, setRefundMethodByDeposit] = useState<Record<string, MobileDepositMethod>>({});
+  // SCRUM-469: a refund method belongs to ONE payout. It is stored with the
+  // payout generation (`releaseCount`) it was chosen for, so once a partial
+  // payout confirms and the generation advances the choice no longer applies.
+  const [refundChoiceByDeposit, setRefundChoiceByDeposit] = useState<
+    Record<string, { method: MobileDepositMethod; generation: number }>
+  >({});
+  const refundMethodFor = (deposit: { _id: string; releaseCount?: number }): MobileDepositMethod | undefined => {
+    const choice = refundChoiceByDeposit[deposit._id];
+    return choice && choice.generation === (deposit.releaseCount ?? 0) ? choice.method : undefined;
+  };
   const [landedItems, setLandedItems] = useState<EditableLandedItem[]>([]);
   const [savingCosts, setSavingCosts] = useState(false);
   const [reservationCustomerId, setReservationCustomerId] = useState("");
@@ -254,7 +281,7 @@ function VehicleDetailContent({
     setReservationDeposit("");
     setReservationMethod("");
     setReservationHoldDays("");
-    setRefundMethodByDeposit({});
+    setRefundChoiceByDeposit({});
   }, [vehicleId]);
 
   const paymentMethodOptions: Array<{ label: string; value: MobileLandedCostPaymentMethod }> = [
@@ -288,8 +315,59 @@ function VehicleDetailContent({
     depositId: string,
     resolution: "REFUNDED" | "FORFEITED",
     observedReleaseCount: number,
+    // Set only by the reconciliation notice's retry: the RECORDED attempt's own
+    // method, not whatever the picker holds now.
+    recordedMethod?: string,
   ) {
     if (!orgId) return;
+    // SCRUM-469: no default. A refund with no chosen method is refused here
+    // BEFORE the busy flag is raised (an early return after it would leave the
+    // row disabled forever), and the server refuses it too.
+    const chosenMethod =
+      (recordedMethod as MobileDepositMethod | undefined) ??
+      refundMethodFor({ _id: depositId, releaseCount: observedReleaseCount });
+    if (resolution === "REFUNDED" && !isChosenMethod(chosenMethod)) return;
+    const method = resolution === "REFUNDED" ? chosenMethod : "NONE";
+    const pendingPayout = pendingPayoutsRef.current.get(depositId);
+    if (pendingPayout && (pendingPayout.resolution !== resolution || pendingPayout.method !== method)) {
+      // A DIFFERENT decision than an earlier attempt that never confirmed: do not
+      // send it (it would mint a new key and could pay out twice). Tell the
+      // operator to reconcile: retry the recorded attempt, or dismiss it.
+      const attemptLabel =
+        pendingPayout.resolution === "FORFEITED"
+          ? locale === "ar" ? "مصادرة" : "Forfeit"
+          : (paymentMethodOptions.find((option) => option.value === pendingPayout.method)?.label ?? pendingPayout.method);
+      Alert.alert(
+        locale === "ar"
+          ? "قد تكون دفعة سابقة لهذا العربون قد نُفذت بالفعل."
+          : "An earlier payout for this deposit may already have gone through.",
+        locale === "ar"
+          ? `تحقق أولاً من سجل الرد لهذا العربون. المحاولة السابقة: ${attemptLabel}`
+          : `Check this deposit's refund history first. Earlier attempt: ${attemptLabel}`,
+        [
+          { text: locale === "ar" ? "إغلاق" : "Close", style: "cancel" },
+          {
+            text: locale === "ar" ? "إعادة الدفعة السابقة" : "Retry the earlier payout",
+            onPress: () =>
+              void handleReleaseDeposit(
+                depositId,
+                pendingPayout.resolution,
+                observedReleaseCount,
+                pendingPayout.resolution === "REFUNDED" ? pendingPayout.method : undefined,
+              ),
+          },
+          {
+            text: locale === "ar" ? "لم تُنفذ - تجاهل" : "It did not go through - dismiss",
+            style: "destructive",
+            onPress: () => {
+              commandId.retire(pendingPayout.intent);
+              pendingPayoutsRef.current.delete(depositId);
+            },
+          },
+        ],
+      );
+      return;
+    }
     setReleasingDepositId(depositId);
     // SCRUM-313 — a GENERATION-AWARE retained identity, mirroring the web caller
     // in `components/vehicles/VehicleDetailsDialog.tsx`, which carries the full
@@ -309,17 +387,22 @@ function VehicleDetailContent({
     //
     // The refund method is part of the decision, not presentation: refunding to
     // CASH and to BANK_TRANSFER must not share one identity.
-    const method = resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : "NONE";
-    const intent = `release-deposit:${String(depositId)}:${resolution}:${method}:gen${observedReleaseCount}`;
+    // The intent is the one recorded with the FIRST attempt, so a retry after the
+    // generation moved is still that attempt and not a new command.
+    const intent =
+      pendingPayout?.intent ??
+      `release-deposit:${String(depositId)}:${resolution}:${method}:gen${observedReleaseCount}`;
+    if (!pendingPayout) pendingPayoutsRef.current.set(depositId, { resolution, method: String(method), intent });
     try {
       await releaseDeposit({
         orgId,
         depositId,
         resolution,
-        refundMethod: resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : undefined,
+        refundMethod: resolution === "REFUNDED" ? chosenMethod : undefined,
         idempotencyKey: commandId.for(intent),
       });
       commandId.retire(intent);
+      pendingPayoutsRef.current.delete(depositId);
     } catch (error) {
       reportError("Mobile deposit release failed", error);
     } finally {
@@ -382,9 +465,14 @@ function VehicleDetailContent({
     const holdDays = parseOptionalNumber(reservationHoldDays);
     setSavingReservation(true);
     try {
-      reservationKeyRef.current ??= `vehicle-reservation:${crypto.randomUUID()}`;
+      const keys = reservationKeysRef.current;
+      let idempotencyKey = keys.get(vehicleId);
+      if (!idempotencyKey) {
+        idempotencyKey = `vehicle-reservation:${crypto.randomUUID()}`;
+        keys.set(vehicleId, idempotencyKey);
+      }
       await createReservation({
-        idempotencyKey: reservationKeyRef.current,
+        idempotencyKey,
         orgId,
         vehicleId,
         customerId: reservationCustomerId,
@@ -392,15 +480,27 @@ function VehicleDetailContent({
         depositMethod: parseOptionalNumber(reservationDeposit) !== undefined ? (reservationMethod as "CASH" | "BANK_TRANSFER" | "CARD" | "CHEQUE") : undefined,
         expiresAt: holdDays !== undefined && holdDays > 0 ? Date.now() + holdDays * 24 * 60 * 60 * 1000 : undefined,
       });
-      // Only a SUCCESS retires the identity.
-      reservationKeyRef.current = null;
+      // Only a CONFIRMED success retires this vehicle's identity.
+      keys.delete(vehicleId);
       setReservationCustomerId("");
       setReservationDeposit("");
       setReservationMethod("");
       setReservationHoldDays("");
       Alert.alert(locale === "ar" ? "تم إنشاء الحجز." : "Reservation created.");
     } catch (error) {
-      reportError("Mobile reservation create failed", error);
+      // The kept identity refuses a request that differs from an earlier,
+      // possibly-committed attempt; say so plainly instead of a generic failure.
+      const message = error instanceof Error ? error.message : "";
+      const data = typeof (error as { data?: unknown } | null)?.data === "string" ? (error as { data: string }).data : "";
+      if ((message + data).includes("Idempotency key reused with different request content")) {
+        Alert.alert(
+          locale === "ar"
+            ? "ربما تمت محاولة سابقة لإنشاء هذا الحجز بنجاح. راجع حجوزات السيارة، أو أعد إدخال العميل والعربون وطريقة الدفع نفسها كما كانت."
+            : "An earlier attempt to create this reservation may already have gone through. Check the vehicle's reservations, or re-enter the same customer, deposit and payment method as before.",
+        );
+      } else {
+        reportError("Mobile reservation create failed", error);
+      }
     } finally {
       setSavingReservation(false);
     }
@@ -566,18 +666,28 @@ function VehicleDetailContent({
                     <>
                       <SelectField
                         label={locale === "ar" ? "طريقة الاسترداد" : "Refund method"}
-                        value={refundMethodByDeposit[deposit._id] ?? "CASH"}
+                        value={refundMethodFor(deposit) ?? ""}
                         options={paymentMethodOptions}
                         onChange={(method) =>
-                          setRefundMethodByDeposit((prev) => ({
+                          setRefundChoiceByDeposit((prev) => ({
                             ...prev,
-                            [deposit._id]: method as MobileDepositMethod,
+                            [deposit._id]: {
+                              method: method as MobileDepositMethod,
+                              generation: deposit.releaseCount ?? 0,
+                            },
                           }))
                         }
                       />
+                      {!isChosenMethod(refundMethodFor(deposit)) ? (
+                        <Text accessibilityRole="summary" style={styles.mutedText}>
+                          {locale === "ar"
+                            ? "اختر طريقة الاسترداد لتتمكن من استرداد العربون."
+                            : "Choose the refund method to refund this deposit."}
+                        </Text>
+                      ) : null}
                       <View style={styles.cardActions}>
                         <PrimaryButton
-                          disabled={releasingDepositId === deposit._id}
+                          disabled={releasingDepositId === deposit._id || !isChosenMethod(refundMethodFor(deposit))}
                           label={locale === "ar" ? "استرداد" : "Refund"}
                           tone="muted"
                           onPress={() =>

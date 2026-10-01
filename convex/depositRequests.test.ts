@@ -655,6 +655,39 @@ describe("DA-01: a reservation that carries a deposit needs the money authority"
     expect(deposits).toHaveLength(1);
     expect(deposits[0].method).toBe("BANK_TRANSFER");
   });
+
+  test("a reservation with NO deposit has no deposit method to judge, and stores none (SCRUM-469)", async () => {
+    // The method is only meaningful when money is taken. It used to be computed
+    // for a no-deposit reservation too, never stored, and refused when it was
+    // OTHER - a rejection of a value that meant nothing.
+    const s = await setup();
+    const reservationId = await s.manager.as.mutation(api.vehicles.createReservation, {
+      orgId: s.orgId,
+      vehicleId: s.vehicleId,
+      customerId: s.customerId,
+      depositMethod: "OTHER",
+      idempotencyKey: crypto.randomUUID(),
+    });
+
+    const reservation = await s.t.run((ctx) => ctx.db.get(reservationId));
+    expect(reservation?.depositMethod).toBeUndefined();
+    expect(await moneyFootprint(s)).toMatchObject({ deposits: 0, transactions: 0, collectionPayments: 0 });
+  });
+
+  test("with a deposit, OTHER is still refused and nothing is written (SCRUM-469 control)", async () => {
+    const s = await setup();
+    await expect(
+      s.manager.as.mutation(api.vehicles.createReservation, {
+        orgId: s.orgId,
+        vehicleId: s.vehicleId,
+        customerId: s.customerId,
+        depositAmount: 500,
+        depositMethod: "OTHER",
+        idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(/OTHER is not accepted for a deposit/i);
+    expect(await moneyFootprint(s)).toEqual(NO_MONEY);
+  });
 });
 
 describe("DA-02: changing which car deposit money is committed to needs the money authority", () => {
