@@ -89,6 +89,10 @@ export function assertMonthClaim(claim: { yearMonth: string; occurredAt: number 
   }
 }
 
+function refuseFirstOfferable(inputName: string): never {
+  throw new Error(`first offerable month is not representable: ${inputName} is malformed or out of range`);
+}
+
 /**
  * First calendar month (absolute index) a monthly GL cron may offer an item —
  * the lower bound of its catch-up range: never earlier than the month after the
@@ -101,27 +105,19 @@ export function firstOfferableMonthIndex(input: {
   startAt?: number;
   createdAt: number;
 }): number {
-  // Math.max(x, NaN) is NaN, and NaN poisons both callers: the cron's
-  // `idx <= currentIdx` loop never runs (the item is silently counted done) and the
-  // recognition mutation's `< floor` guard silently passes. An unrepresentable input
-  // is refused loudly - never "nothing to do", never "no floor" - and the error names
-  // the FIRST offending input so the failure row is actionable.
-  const refuse = (inputName: string): never => {
-    throw new Error(`first offerable month is not representable: ${inputName} is malformed or out of range`);
-  };
+  // Math.max(x, NaN) is NaN, and NaN poisons both callers: the cron's `idx <= currentIdx`
+  // loop never runs (silently counted done) and the recognition `< floor` guard silently
+  // passes. Refuse loudly, naming the FIRST offending input.
   let first = yearMonthIndex(input.createdAt);
-  if (!Number.isFinite(first)) refuse("createdAt");
+  if (!Number.isFinite(first)) refuseFirstOfferable("createdAt");
   if (input.startAt !== undefined) {
     const startIdx = yearMonthIndex(input.startAt);
-    if (!Number.isFinite(startIdx)) refuse("startAt");
+    if (!Number.isFinite(startIdx)) refuseFirstOfferable("startAt");
     first = Math.max(first, startIdx);
   }
   if (input.lastPostedYearMonth) {
-    // "YYYY-M" stays accepted (legacy leniency); the month itself must be 1..12, so an
-    // impossible "2026-13" cannot silently floor the schedule into a later year.
-    const match = /^(\d{4})-(\d{1,2})$/.exec(input.lastPostedYearMonth);
-    const month = match ? Number(match[2]) : Number.NaN;
-    if (!match || month < 1 || month > 12) refuse("lastPostedYearMonth");
+    // "YYYY-M" stays accepted (legacy leniency); the month must be 1..12.
+    if (!/^\d{4}-(0?[1-9]|1[0-2])$/.test(input.lastPostedYearMonth)) refuseFirstOfferable("lastPostedYearMonth");
     first = Math.max(first, yearMonthStringIndex(input.lastPostedYearMonth) + 1);
   }
   return first;

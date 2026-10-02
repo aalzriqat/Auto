@@ -580,8 +580,7 @@ async function runMonthlyCatchUpForItem<T extends MonthlyCronItem, R extends str
     stats.done++;
     return;
   }
-  // What the item was doing when it threw; recorded verbatim in the failure row.
-  let phase: string = "owner lookup";
+  let phase = "owner lookup";
   try {
     const systemActorId = await getCachedOrgOwnerUserId(ctx, run.ownerByOrg, item.orgId);
     if (!systemActorId) {
@@ -942,11 +941,7 @@ async function findOrgOwnerUser(ctx: QueryCtx, orgId: Id<"organizations">): Prom
   const ownerRole = roles.find((r) => isSystemOwnerRole(r));
   if (!ownerRole) return null;
 
-  // by_org_role fixes orgId AND roleId, so the result is ordered by _creationTime
-  // — the same earliest owner membership the old by_org + filter(roleId) scan
-  // returned — without scanning every member of the org. An org with more members
-  // than any cap therefore still resolves its owner instead of silently skipping
-  // automated postings.
+  // by_org_role fixes orgId and roleId, so first() is the earliest owner membership (index order = _creationTime).
   const ownerMembership = await ctx.db
     .query("memberships")
     .withIndex("by_org_role", (q) => q.eq("orgId", orgId).eq("roleId", ownerRole._id))

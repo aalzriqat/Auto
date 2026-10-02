@@ -124,6 +124,18 @@ async function capitalizeAsset(org: Org, name: string) {
   });
 }
 
+/** A REVERSED event already owns March 2026's idempotency key for the asset: posting that month throws. */
+async function insertMarchPoison(t: Harness, org: Org, assetId: Awaited<ReturnType<typeof capitalizeAsset>>) {
+  return await t.run((ctx) =>
+    ctx.db.insert("accountingEvents", {
+      orgId: org.orgId, eventType: "DEPRECIATION_POSTED", sourceType: "fixedAssets",
+      sourceId: `depr_${assetId}_2026-03`, eventVersion: 1, idempotencyKey: `depr_${assetId}_2026-03`,
+      occurredAt: Date.UTC(2026, 2, 31), accountingDate: Date.UTC(2026, 2, 31), currency: "JOD",
+      payload: {}, status: "REVERSED", createdBy: org.userId, createdAt: Date.now(),
+    })
+  );
+}
+
 async function createDeferral(t: Harness, org: Org, tag: string, saleDate: number = Date.now()) {
   const vehicleId = await org.asOwner.mutation(api.vehicles.create, {
     idempotencyKey: crypto.randomUUID(),
@@ -349,16 +361,7 @@ describe("catch-up posts every missed month in its own month", () => {
     const org = await seedOrg(t, "mid_dep");
     const assetId = await capitalizeAsset(org, "Van");
     vi.setSystemTime(APR_15);
-    const userId = org.userId;
-    // A REVERSED event already owns March's idempotency key: posting it throws.
-    const poisonId = await t.run((ctx) =>
-      ctx.db.insert("accountingEvents", {
-        orgId: org.orgId, eventType: "DEPRECIATION_POSTED", sourceType: "fixedAssets",
-        sourceId: `depr_${assetId}_2026-03`, eventVersion: 1, idempotencyKey: `depr_${assetId}_2026-03`,
-        occurredAt: Date.UTC(2026, 2, 31), accountingDate: Date.UTC(2026, 2, 31), currency: "JOD",
-        payload: {}, status: "REVERSED", createdBy: userId, createdAt: Date.now(),
-      })
-    );
+    const poisonId = await insertMarchPoison(t, org, assetId);
 
     const first = await runDepreciation(t);
     expect(first).toMatch(/1 failed/);
@@ -877,22 +880,19 @@ describe("firstOfferableMonthIndex refuses an unrepresentable input (SCRUM-230 C
 describe("firstOfferableMonthIndex names the malformed input (SCRUM-558 L2 / S558-D1)", () => {
   const named = (input: string) => new RegExp(`first offerable month is not representable: ${input} is malformed`);
 
-  test("each malformed input is named in the error", () => {
-    expect(() => firstOfferableMonthIndex({ createdAt: Number.NaN })).toThrow(named("createdAt"));
-    expect(() => firstOfferableMonthIndex({ createdAt: FEB_10, startAt: Number.NaN })).toThrow(named("startAt"));
-    expect(() => firstOfferableMonthIndex({ createdAt: FEB_10, startAt: 1e20 })).toThrow(named("startAt"));
-    expect(() => firstOfferableMonthIndex({ createdAt: FEB_10, lastPostedYearMonth: "garbage" })).toThrow(named("lastPostedYearMonth"));
-  });
-
-  test("a well-shaped but impossible lastPostedYearMonth is refused, not silently floored", () => {
-    for (const bad of ["2026-13", "2026-00", "2026-03-extra"]) {
-      expect(() => firstOfferableMonthIndex({ createdAt: FEB_10, lastPostedYearMonth: bad })).toThrow(named("lastPostedYearMonth"));
-    }
-  });
-
-  test("the FIRST bad component is the one named", () => {
-    expect(() => firstOfferableMonthIndex({ createdAt: Number.NaN, startAt: Number.NaN, lastPostedYearMonth: "garbage" })).toThrow(named("createdAt"));
-    expect(() => firstOfferableMonthIndex({ createdAt: FEB_10, startAt: Number.NaN, lastPostedYearMonth: "garbage" })).toThrow(named("startAt"));
+  type FloorInput = Parameters<typeof firstOfferableMonthIndex>[0];
+  test.each<[string, FloorInput, string]>([
+    ["NaN createdAt", { createdAt: Number.NaN }, "createdAt"],
+    ["NaN startAt", { createdAt: FEB_10, startAt: Number.NaN }, "startAt"],
+    ["unrepresentable startAt", { createdAt: FEB_10, startAt: 1e20 }, "startAt"],
+    ["garbage lastPostedYearMonth", { createdAt: FEB_10, lastPostedYearMonth: "garbage" }, "lastPostedYearMonth"],
+    ["impossible month 13 (not silently floored)", { createdAt: FEB_10, lastPostedYearMonth: "2026-13" }, "lastPostedYearMonth"],
+    ["impossible month 00 (not silently floored)", { createdAt: FEB_10, lastPostedYearMonth: "2026-00" }, "lastPostedYearMonth"],
+    ["trailing component", { createdAt: FEB_10, lastPostedYearMonth: "2026-03-extra" }, "lastPostedYearMonth"],
+    ["FIRST bad component: createdAt beats startAt and lastPosted", { createdAt: Number.NaN, startAt: Number.NaN, lastPostedYearMonth: "garbage" }, "createdAt"],
+    ["FIRST bad component: startAt beats lastPosted", { createdAt: FEB_10, startAt: Number.NaN, lastPostedYearMonth: "garbage" }, "startAt"],
+  ])("%s is named in the error", (_label, input, expectedInputName) => {
+    expect(() => firstOfferableMonthIndex(input)).toThrow(named(expectedInputName));
   });
 
   test("CONTROLS: 'YYYY-M' accepted, empty string ignored, startAt 0 / pre-1970 are valid", () => {
@@ -908,6 +908,10 @@ describe("firstOfferableMonthIndex names the malformed input (SCRUM-558 L2 / S55
 describe("a monthly failure names the phase it failed in (SCRUM-558 L1)", () => {
   const failureSummaries = async (t: Harness, source: string) =>
     (await cronReports(t, source)).filter((r) => r.status === "error" && /item failed/.test(r.summary)).map((r) => r.summary);
+  const expectSingleFailureAt = (summaries: string[], phase: string) => {
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toContain(`at ${phase}`);
+  };
 
   test("month floor: an impossible lastDepreciatedYearMonth fails loudly at the floor, posts nothing, other org still posts", async () => {
     const t = convexTestWithComponents(schema, MODULE_GLOB);
@@ -921,10 +925,11 @@ describe("a monthly failure names the phase it failed in (SCRUM-558 L1)", () => 
 
     expect(summary).toMatch(/1 failed/);
     expect(summary).toMatch(/posted 1\/2/);
-    const summaries = await failureSummaries(t, "fixed-asset-depreciation");
-    expect(summaries).toHaveLength(1);
-    expect(summaries[0]).toContain("at month floor");
     const rows = (await cronReports(t, "fixed-asset-depreciation")).filter((r) => r.status === "error");
+    expectSingleFailureAt(
+      rows.filter((r) => /item failed/.test(r.summary)).map((r) => r.summary),
+      "month floor"
+    );
     expect(rows.some((r) => r.error?.includes("lastPostedYearMonth"))).toBe(true);
     expect(await depreciationEvents(t, a.orgId)).toHaveLength(0);
     expect(await pendingDepreciation(t, a.orgId)).toHaveLength(0);
@@ -936,20 +941,12 @@ describe("a monthly failure names the phase it failed in (SCRUM-558 L1)", () => 
     const org = await seedOrg(t, "ph_month");
     const assetId = await capitalizeAsset(org, "Van");
     vi.setSystemTime(APR_15);
-    await t.run((ctx) =>
-      ctx.db.insert("accountingEvents", {
-        orgId: org.orgId, eventType: "DEPRECIATION_POSTED", sourceType: "fixedAssets",
-        sourceId: `depr_${assetId}_2026-03`, eventVersion: 1, idempotencyKey: `depr_${assetId}_2026-03`,
-        occurredAt: Date.UTC(2026, 2, 31), accountingDate: Date.UTC(2026, 2, 31), currency: "JOD",
-        payload: {}, status: "REVERSED", createdBy: org.userId, createdAt: Date.now(),
-      })
-    );
+    await insertMarchPoison(t, org, assetId);
 
     await runDepreciation(t);
 
     const summaries = await failureSummaries(t, "fixed-asset-depreciation");
-    expect(summaries).toHaveLength(1);
-    expect(summaries[0]).toContain("at 2026-03");
+    expectSingleFailureAt(summaries, "2026-03");
     expect(summaries[0]).not.toContain("month floor");
   });
 
@@ -964,9 +961,7 @@ describe("a monthly failure names the phase it failed in (SCRUM-558 L1)", () => 
     const summary = await runDepreciation(t);
 
     expect(summary).toMatch(/1 failed/);
-    const summaries = await failureSummaries(t, "fixed-asset-depreciation");
-    expect(summaries).toHaveLength(1);
-    expect(summaries[0]).toContain("at owner lookup");
+    expectSingleFailureAt(await failureSummaries(t, "fixed-asset-depreciation"), "owner lookup");
     expect(await depreciationEvents(t, org.orgId)).toHaveLength(0);
   });
 });
@@ -1021,7 +1016,8 @@ describe("the org owner lookup is the earliest owner-role membership of THAT org
   test("prepaid amortization attributes its event to the earlier owner", async () => {
     const t = convexTestWithComponents(schema, MODULE_GLOB);
     const org = await seedOrg(t, "pp_owner");
-    const owner2 = await member(t, org.orgId, (await t.run((ctx) => ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", org.orgId)).first()))!._id, "pp_owner_2");
+    const roleId = (await t.run((ctx) => ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", org.orgId)).first()))!._id;
+    await member(t, org.orgId, roleId, "pp_owner_2");
     await org.asOwner.mutation(api.expenses.create, {
       idempotencyKey: crypto.randomUUID(), orgId: org.orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 1, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
@@ -1029,13 +1025,10 @@ describe("the org owner lookup is the earliest owner-role membership of THAT org
 
     await t.action(internal.crons.triggerPrepaidExpenseAmortization, {});
 
-    const events = (await t.run((ctx) =>
+    const events = await t.run((ctx) =>
       ctx.db.query("accountingEvents").withIndex("by_org_eventType", (q) => q.eq("orgId", org.orgId).eq("eventType", "PREPAID_EXPENSE_AMORTIZED")).collect()
-    ));
+    );
     expect(events.length).toBeGreaterThan(0);
-    for (const e of events) {
-      expect(e.createdBy).toBe(org.userId);
-      expect(e.createdBy).not.toBe(owner2);
-    }
+    for (const e of events) expect(e.createdBy).toBe(org.userId);
   });
 });
