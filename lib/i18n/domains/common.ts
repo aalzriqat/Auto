@@ -90,6 +90,14 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "The purchase date cannot be after today.",
     "لا يجوز أن يكون تاريخ الشراء لاحقاً لتاريخ اليوم.",
   ],
+  ServerError_ASSET_PURCHASE_DATE_INVALID: [
+    "The purchase date is not a valid date.",
+    "تاريخ الشراء غير صالح.",
+  ],
+  ServerError_ASSET_DEPRECIATION_START_DATE_INVALID: [
+    "The depreciation start date is not a valid date.",
+    "تاريخ بدء الاستهلاك غير صالح.",
+  ],
   FinanceCompanyReceivables: ["Finance-company receivables", "ذمم شركات التمويل"],
   FinanceCompanyReceivablesDesc: ["Amounts due from finance companies. Open the originating deal to review or settle them.", "المبالغ المستحقة من شركات التمويل. افتح الصفقة الأصلية للمراجعة أو التسوية."],
   DocumentNumber: ["Document number", "رقم المستند"],

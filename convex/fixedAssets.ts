@@ -26,7 +26,7 @@ import { paymentMethodValidator, PaymentMethod } from "./utils/paymentMethods";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertMonthClaim } from "./utils/expenseAmortization";
 import { AppErrorCode, throwAppError } from "./utils/errors";
-import { isFutureUtcDay, utcDay } from "./utils/ledgerCalendar";
+import { isFutureUtcDay, isRepresentableTimestamp, utcDay } from "./utils/ledgerCalendar";
 
 const methodValidator = v.literal("STRAIGHT_LINE");
 
@@ -42,6 +42,8 @@ export const FIXED_ASSET_DATE_REFUSALS = {
   ASSET_EVENT_BEFORE_DEPRECIATION: "The accounting date cannot be earlier than the asset's latest posted depreciation.",
   ASSET_EVENT_BEFORE_IMPAIRMENT: "The accounting date cannot be earlier than the day the asset was impaired.",
   ASSET_PURCHASE_DATE_IN_FUTURE: "The purchase date cannot be after today.",
+  ASSET_PURCHASE_DATE_INVALID: "The purchase date is not a valid date.",
+  ASSET_DEPRECIATION_START_DATE_INVALID: "The depreciation start date is not a valid date.",
 } as const satisfies Record<string, string>;
 
 function refuseAssetDate(code: keyof typeof FIXED_ASSET_DATE_REFUSALS): never {
@@ -63,7 +65,7 @@ async function assertAssetEventDate(
   input: { orgId: Id<"organizations">; asset: Doc<"fixedAssets">; occurredAt: number; kind: "IMPAIR" | "DISPOSE" }
 ): Promise<void> {
   const { orgId, asset, occurredAt, kind } = input;
-  if (!Number.isFinite(occurredAt)) refuseAssetDate("ASSET_EVENT_DATE_INVALID");
+  if (!isRepresentableTimestamp(occurredAt)) refuseAssetDate("ASSET_EVENT_DATE_INVALID");
   const day = utcDay(occurredAt);
   if (isFutureUtcDay(occurredAt, Date.now())) refuseAssetDate("ASSET_EVENT_DATE_IN_FUTURE");
 
@@ -178,6 +180,12 @@ export const capitalize = mutation({
     // The CAPITALIZE event is dated purchaseDate, and impair/dispose refuse any date
     // before it, so a future purchase day would strand the asset (SCRUM-542). A future
     // depreciationStartDate stays legitimate: the cron simply postpones it.
+    // Every stored date must be a representable whole-ms timestamp: the outbox and the
+    // depreciation cron both build `new Date(x).toISOString()` and would throw on one.
+    if (!isRepresentableTimestamp(args.purchaseDate)) refuseAssetDate("ASSET_PURCHASE_DATE_INVALID");
+    if (args.depreciationStartDate !== undefined && !isRepresentableTimestamp(args.depreciationStartDate)) {
+      refuseAssetDate("ASSET_DEPRECIATION_START_DATE_INVALID");
+    }
     if (isFutureUtcDay(args.purchaseDate, Date.now())) refuseAssetDate("ASSET_PURCHASE_DATE_IN_FUTURE");
 
     const currency = args.currency ?? (await getOrgCurrency(ctx, args.orgId));
