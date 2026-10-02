@@ -125,16 +125,15 @@ async function orgState(t: Harness, orgId: Id<"organizations">) {
 }
 
 async function footprint(t: Harness, orgId: Id<"organizations">) {
-  return await t.run(async (ctx) => ({
-    expenses: (await ctx.db.query("expenses").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).length,
-    transactions: (await ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).length,
-    commands: (
-      await ctx.db
-        .query("commandIdempotency")
-        .withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId))
-        .collect()
-    ).length,
-  }));
+  return await t.run(async (ctx) => {
+    const mine = (rows: { orgId?: unknown }[]) =>
+      rows.filter((r) => String(r.orgId) === String(orgId)).length;
+    return {
+      expenses: mine(await ctx.db.query("expenses").collect()),
+      transactions: mine(await ctx.db.query("transactions").collect()),
+      commands: mine(await ctx.db.query("commandIdempotency").collect()),
+    };
+  });
 }
 
 describe("SCRUM-563 R2 — replay guard", () => {
