@@ -437,8 +437,15 @@ const snippet = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 100);
  * Parsed with the TypeScript compiler API, like commitmentWriteGuard (SCRUM-208).
  * The previous text scanner was forged five ways (a table held in a const, a
  * space before the paren, an import alias, a `//` inside a string, an inner-scope
- * shadow of a const). Everything below fails CLOSED: what cannot be read is
- * reported as unparsed, never skipped. Identifier resolution is deliberately NOT
+ * shadow of a const), then five more ways through indirect calls. What fails
+ * closed, exactly: (1) a recognised call whose table, args object or `sourceType`
+ * cannot be read statically; (2) any value-position occurrence of a watched name
+ * (`insert`, the helpers, `createReceivable`) outside the recognised direct
+ * positions listed on `indirectUse`: element access, `.call`/`.apply`,
+ * destructuring, a stored reference, a parenthesised callee; (3) a helper
+ * re-exported under another name. NOT covered: a table or function reached by a
+ * computed (non-literal) element-access key, or any write that never names one of
+ * the watched names. Identifier resolution is deliberately NOT
  * heuristic (the SCRUM-208 lesson, "a number cannot be shadowed"): a name resolves
  * only when the file declares it exactly once, anywhere, as a top-level
  * `const NAME = "literal"`.
@@ -590,7 +597,9 @@ function scanReceivableDocumentWriters(rawText: string, file = "scanned.ts"): Re
         if (table === "receivableDocuments") record(sourceTypeOf(args[1], decls));
         else if (table === null) {
           sites++;
-          unparsed.push(`unresolved table: ${snippet(args[0] ? args[0].getText() : "(missing)")}`);
+          unparsed.push(
+            `insert with an unresolvable table: counted as a possible receivableDocuments writer: ${snippet(args[0] ? args[0].getText() : "(missing)")}`
+          );
         }
       } else if (ts.isIdentifier(callee) && aliases.has(callee.text)) {
         record(sourceTypeOf(args[1], decls));
@@ -602,9 +611,18 @@ function scanReceivableDocumentWriters(rawText: string, file = "scanned.ts"): Re
     } else if (ts.isExportSpecifier(node) && node.propertyName && RECEIVABLE_HELPERS.has(node.propertyName.text)) {
       sites++;
       unparsed.push(`re-export under a new name: ${snippet(node.getText())}`);
-    } else if (ts.isIdentifier(node) && aliases.has(node.text) && isEscapingReference(node)) {
+    }
+    // Name-keyed escape check, independent of the call shape above: EVERY value-position
+    // occurrence of a watched name must sit in a recognised direct position or it is a site.
+    let escape: string | null = null;
+    if (ts.isIdentifier(node)) escape = indirectUse(node, aliases);
+    else if (ts.isElementAccessExpression(node) && !inTypePosition(node)) {
+      const key = staticStringOf(node.argumentExpression);
+      if (key !== null && WATCHED_NAMES.has(key)) escape = `indirect use of ${key}: ${snippet(node.getText())}`;
+    }
+    if (escape !== null) {
       sites++;
-      unparsed.push(`helper used as a value: ${snippet(node.parent.getText())}`);
+      unparsed.push(escape);
     }
     ts.forEachChild(node, visit);
   };
@@ -612,17 +630,55 @@ function scanReceivableDocumentWriters(rawText: string, file = "scanned.ts"): Re
   return { sites, literals: [...literals].sort(), unparsed: unparsed.sort() };
 }
 
-/** A helper name used other than as a callee, a declaration, a specifier, a member name or in a type. */
-function isEscapingReference(id: ts.Identifier): boolean {
+/** `insert`, the helpers and the function-reference names: the only names that can write the table. */
+const WATCHED_NAMES: ReadonlySet<string> = new Set(["insert", ...RECEIVABLE_MUTATION_REFS]);
+
+/** Object/class member names are keys, not references. */
+const isKeyPosition = (p: ts.Node, id: ts.Identifier): boolean =>
+  (ts.isPropertyAssignment(p) ||
+    ts.isPropertySignature(p) ||
+    ts.isMethodDeclaration(p) ||
+    ts.isMethodSignature(p) ||
+    ts.isPropertyDeclaration(p) ||
+    ts.isEnumMember(p)) &&
+  p.name === id;
+
+/**
+ * The reason string when this identifier is a watched name used in a value position
+ * that is NOT one of the recognised direct positions, else null. Recognised:
+ * (a) the member name of a property access that is directly the callee (insert and
+ * the helpers); (b) an identifier callee that is a helper or import alias; (c) the
+ * member name of a property access passed directly as an argument (the function-
+ * reference form); (d) a function or variable declaration's own name; plus imports,
+ * exports (renames are reported separately), object keys and type positions.
+ * Destructuring, shorthand properties, element access and every other shape fail closed.
+ */
+function indirectUse(id: ts.Identifier, aliases: ReadonlySet<string>): string | null {
+  const name = id.text;
+  const base = WATCHED_NAMES.has(name);
+  if (!base && !aliases.has(name)) return null;
+  if (inTypePosition(id)) return null;
   const p = id.parent;
-  if (inTypePosition(id)) return false;
-  if (ts.isCallExpression(p) && p.expression === id) return false;
-  if (ts.isImportSpecifier(p) || ts.isImportClause(p) || ts.isExportSpecifier(p)) return false;
-  if (ts.isPropertyAccessExpression(p) && p.name === id) return false;
-  if (ts.isShorthandPropertyAssignment(p)) return true;
-  if ("name" in p && (p as { name?: ts.Node }).name === id) return false; // a declaration or a key
-  if (ts.isBindingElement(p) && p.propertyName === id) return false;
-  return true;
+  const bad = (n: ts.Node) => `indirect use of ${name}: ${snippet(n.getText())}`;
+  if (ts.isImportSpecifier(p) || ts.isImportClause(p) || ts.isNamespaceImport(p) || ts.isExportSpecifier(p)) return null;
+  if (ts.isBindingElement(p)) {
+    for (let a: ts.Node | undefined = p; a; a = a.parent) {
+      if (ts.isVariableDeclaration(a) || ts.isParameter(a)) return bad(a);
+    }
+    return bad(p);
+  }
+  if (ts.isShorthandPropertyAssignment(p)) return bad(p);
+  if (ts.isPropertyAccessExpression(p) && p.name === id) {
+    if (!base) return null; // an alias-only name as someone else's member
+    const g = p.parent;
+    if (ts.isCallExpression(g) && g.expression === p && (name === "insert" || RECEIVABLE_HELPERS.has(name))) return null;
+    if (ts.isCallExpression(g) && g.arguments.some((a) => a === p) && RECEIVABLE_MUTATION_REFS.has(name)) return null;
+    return bad(p);
+  }
+  if (isKeyPosition(p, id)) return null;
+  if ((ts.isFunctionDeclaration(p) || ts.isVariableDeclaration(p)) && p.name === id) return null;
+  if (ts.isCallExpression(p) && p.expression === id && aliases.has(name)) return null;
+  return bad(p);
 }
 
 interface CensusPin {
@@ -842,6 +898,54 @@ describe("receivableDocuments.sourceId opaque references stay pinned", () => {
     );
     expect(once.literals).toEqual(["kind_a"]);
     expect(once.unparsed).toEqual([]);
+  });
+
+  // ── SCRUM-559 R1 round 2: indirect-call escapes, keyed by NAME not call shape ──
+  test.each([
+    ["an element-access callee", 'await ctx.db["insert"]("receivableDocuments", { sourceType: "new_kind" });'],
+    ["insert.call", 'await ctx.db.insert.call(ctx.db, "receivableDocuments", { sourceType: "new_kind" });'],
+    ["insert.apply", 'await ctx.db.insert.apply(ctx.db, ["receivableDocuments", { sourceType: "new_kind" }]);'],
+    ["a destructured insert", 'const { insert } = ctx.db; await insert("receivableDocuments", { sourceType: "new_kind" });'],
+    ["a parenthesised insert callee", 'await (ctx.db.insert)("receivableDocuments", { sourceType: "new_kind" });'],
+    [
+      "a namespace helper stored in a variable",
+      'import * as sl from "./subledger"; const f = sl.ensureReceivableDocument; await f(ctx, { sourceType: "new_kind" });',
+    ],
+    [
+      "a helper destructured out of a namespace",
+      'import * as sl from "./subledger"; const { ensureReceivableDocument: f } = sl; await f(ctx, { sourceType: "new_kind" });',
+    ],
+    [
+      "a function reference stored in a variable",
+      'const ref = internal.subledger.createReceivable; await ctx.runMutation(ref, { sourceType: "new_kind" });',
+    ],
+    [
+      "a function reference through an element access",
+      'await ctx.runMutation(internal.subledger["createReceivable"], { sourceType: "new_kind" });',
+    ],
+  ])("MUTATION CONTROL: %s is reported, never skipped", (_name, source) => {
+    const scan = scanReceivableDocumentWriters(source);
+    expect(scan.unparsed.length).toBeGreaterThan(0);
+    expect(scan.unparsed.some((u) => /^indirect use of /.test(u))).toBe(true);
+  });
+
+  test("MUTATION CONTROL: benign look-alikes are NOT sites (no false red)", () => {
+    const scan = scanReceivableDocumentWriters(
+      [
+        'await ctx.db.insert("receivables", { a: 1 });',
+        "const o = { insert: 1 };",
+        "await aggregate.insertIfDoesNotExist(ctx, x);",
+      ].join("\n")
+    );
+    expect(scan).toEqual({ sites: 0, literals: [], unparsed: [] });
+  });
+
+  test("MUTATION CONTROL (F2): an unresolvable insert table says it is counted as a possible writer", () => {
+    const scan = scanReceivableDocumentWriters("await ctx.db.insert(table, { a: 1 });");
+    expect(scan.unparsed).toHaveLength(1);
+    expect(scan.unparsed[0]).toMatch(
+      /^insert with an unresolvable table: counted as a possible receivableDocuments writer: table/
+    );
   });
 
   test("MUTATION CONTROL (D2): a second identical pass-through site is not swallowed by the census", () => {

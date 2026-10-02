@@ -46,6 +46,8 @@ type Seed = (ctx: MutationCtx, b: Base) => Promise<void>;
 interface RefCheck {
   /** Every survivor whose reference no longer resolves. */
   dangling: string[];
+  /** Survivors whose id belongs to a table other than the pair's target: never counted as resolved. */
+  wrongTable: string[];
   /** Per `table.field`: how many survivors held an id that RESOLVED to a live row. */
   resolved: Record<string, number>;
 }
@@ -57,8 +59,8 @@ interface RefCheck {
  */
 async function checkRefs(t: T, orgId: Id<"organizations">, pairs: ReadonlyArray<Pair>): Promise<RefCheck> {
   return await t.run(async (ctx) => {
-    const db = ctx.db as unknown as LooseDb;
-    const out: RefCheck = { dangling: [], resolved: {} };
+    const db = ctx.db as unknown as LooseDb & { normalizeId(table: string, id: string): string | null };
+    const out: RefCheck = { dangling: [], wrongTable: [], resolved: {} };
     for (const [table, field, target] of pairs) {
       const key = `${table}.${field}`;
       out.resolved[key] = 0;
@@ -66,7 +68,9 @@ async function checkRefs(t: T, orgId: Id<"organizations">, pairs: ReadonlyArray<
         // A dotted field ("custodyPosted.custodyId") names a nested reference.
         const id = field.split(".").reduce<unknown>((v, k) => (v as Record<string, unknown> | null | undefined)?.[k], row);
         if (id == null) continue;
-        if ((await db.get(id)) === null) out.dangling.push(`${key} -> ${target}`);
+        // An id of ANOTHER table is not a reference to `target`, even when its row is live.
+        if (db.normalizeId(target, id as string) === null) out.wrongTable.push(`${key} -> ${target}`);
+        else if ((await db.get(id)) === null) out.dangling.push(`${key} -> ${target}`);
         else out.resolved[key] += 1;
       }
     }
@@ -399,6 +403,17 @@ describe("resetOrgFinancialData keeps a promoted reference resolving after a one
     const bad = await checkRefs(t, orgId, [misspelled]);
     expect(bad.dangling).toEqual([]); // the old check was silent here: it would have passed
     expect(vacuousPairs(bad)).toEqual(["financeDealFees.custodyPosted.custodyID"]);
+  });
+
+  test("CONTROL (F4): an id from a different table is not counted as resolved against the pair's target", async () => {
+    const { t, orgId } = await seedOrg(seedE4, "E4WrongTable");
+    await onePass(t, orgId);
+    // financeDealFees.applicationId holds a LIVE financeApplications id, not a financeDealCustody one.
+    const wrong: Pair = ["financeDealFees", "applicationId", "financeDealCustody"];
+    const check = await checkRefs(t, orgId, [wrong]);
+    expect(check.wrongTable).toEqual(["financeDealFees.applicationId -> financeDealCustody"]);
+    expect(check.resolved["financeDealFees.applicationId"]).toBe(0);
+    expect(vacuousPairs(check)).toEqual(["financeDealFees.applicationId"]);
   });
 });
 
