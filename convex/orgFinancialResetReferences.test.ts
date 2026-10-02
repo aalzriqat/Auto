@@ -391,6 +391,7 @@ describe("resetOrgFinancialData keeps a promoted reference resolving after a one
     expect(await survivors(t, orgId, pairs[0][0])).toBeGreaterThan(0);
     const check = await checkRefs(t, orgId, pairs);
     expect(check.dangling).toEqual([]);
+    expect(check.wrongTable).toEqual([]);
     // Every promoted pair must have RESOLVED at least one id, or the check above proved nothing.
     expect(vacuousPairs(check), `pairs that resolved no id: ${JSON.stringify(check.resolved)}`).toEqual([]);
   });

@@ -790,6 +790,9 @@ function scanConvex(): Record<string, ReceivableWriterScan> {
 }
 
 describe("receivableDocuments.sourceId opaque references stay pinned", () => {
+  // Parses the whole convex tree with the TS compiler API. Whole-tree AST tests carry their own
+  // explicit timeout (precedent: scripts/organizationReactivationGuard.test.ts L485-501): on CI
+  // under coverage they crossed vitest's 5000ms default. The scan itself is not narrowed.
   test("the writer census equals its pin and every kind is a pinned kind", () => {
     const scans = scanConvex();
     const literals = new Set(Object.values(scans).flatMap((s) => s.literals));
@@ -797,7 +800,7 @@ describe("receivableDocuments.sourceId opaque references stay pinned", () => {
     for (const kind of Object.keys(RECEIVABLE_DOCUMENT_SOURCE_KINDS)) expect(literals).toContain(kind);
     const problems = censusProblems(scans, WRITER_CENSUS);
     expect(problems, render("receivableDocuments writer census differs from its pin:", problems)).toEqual([]);
-  });
+  }, 60_000);
 
   test("MUTATION CONTROL: a direct insert with a new literal kind is detected", () => {
     const scan = scanReceivableDocumentWriters(
