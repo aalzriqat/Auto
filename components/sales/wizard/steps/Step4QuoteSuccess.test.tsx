@@ -19,6 +19,8 @@ const stubs = vi.hoisted(() => ({
   dictionary: null as Record<string, string> | null,
   /** When set, `sales.completeFromQuote` rejects with it. */
   completeError: null as unknown,
+  /** When set, `applications.createFromQuote` rejects with it. */
+  createError: null as unknown,
 }));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
@@ -51,6 +53,7 @@ vi.mock("convex/react", async () => {
       const name = getFunctionName(reference);
       return async () => {
         if (name === "sales:completeFromQuote" && stubs.completeError) throw stubs.completeError;
+        if (name === "applications:createFromQuote" && stubs.createError) throw stubs.createError;
         return name === "applications:createFromQuote" ? APP : null;
       };
     },
@@ -77,6 +80,7 @@ afterEach(() => {
   stubs.toastError.mockClear();
   stubs.dictionary = null;
   stubs.completeError = null;
+  stubs.createError = null;
 });
 
 describe("Step4QuoteSuccess — the started application opens its own deal", () => {
@@ -131,5 +135,36 @@ describe("Step4QuoteSuccess — SCRUM-69 refusal is shown in the user's language
     expect(stubs.toastError).toHaveBeenCalledWith(
       "هذه السيارة عليها طلب تمويل قيد المعالجة. أكمل البيع من صفحة الصفقة."
     );
+  });
+});
+
+describe("Step4QuoteSuccess — SCRUM-533 quote-pricing refusal is shown in the user's language", () => {
+  async function startApplicationRefused(locale: "en" | "ar") {
+    const { dictionaries } = await import("@/lib/i18n/dictionaries");
+    stubs.dictionary = dictionaries[locale] as Record<string, string>;
+    const { ConvexError } = await import("convex/values");
+    stubs.createError = new ConvexError({
+      code: "QUOTE_PRICING_SNAPSHOT_MISMATCH",
+      message: "server text that must not be shown when a translation exists",
+    });
+    render(
+      <Step4QuoteSuccess
+        paymentType="INSTALLMENT"
+        wizardData={{} as never}
+        selectedCustomer={{ firstName: "سامي", lastName: "خليل" } as Doc<"customers">}
+        quoteId={QUOTE}
+        selectedResult={null}
+        onClose={() => {}}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: stubs.dictionary.StartFinanceApplication }));
+    await waitFor(() => expect(stubs.toastError).toHaveBeenCalledTimes(1));
+    return dictionaries[locale] as Record<string, string>;
+  }
+
+  test.each(["en", "ar"] as const)("%s locale: the refusal renders the dictionary string", async (locale) => {
+    const dictionary = await startApplicationRefused(locale);
+    expect(stubs.toastError).toHaveBeenCalledWith(dictionary.ServerError_QUOTE_PRICING_SNAPSHOT_MISMATCH);
+    expect(dictionary.ServerError_QUOTE_PRICING_SNAPSHOT_MISMATCH).toBeTruthy();
   });
 });

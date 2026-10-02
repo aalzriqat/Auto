@@ -90,6 +90,29 @@ async function seedQuote(
     ...(args.monthlyInstallment !== undefined
       ? { monthlyInstallment: args.monthlyInstallment }
       : {}),
+    // SCRUM-533: a financed quote carries the pricing snapshot `saveQuote` would have frozen; its
+    // figures equal the quote's own (createFromQuote refuses any disagreement).
+    ...(args.companyId && args.totalFinancedAmount !== undefined && args.monthlyInstallment !== undefined
+      ? {
+          customerQuotePricingSnapshot: {
+            currency: "JOD",
+            vehiclePrice: 22000,
+            downPayment: 2000,
+            termMonths: 48,
+            executionFees: 0,
+            commission: 0,
+            profitRate: 5,
+            insuranceRate: 0,
+            gracePeriodMonths: 0,
+            includesCommissionInDebt: false,
+            totalFinancedAmount: args.totalFinancedAmount,
+            totalContractValue: args.totalFinancedAmount,
+            monthlyInstallment: args.monthlyInstallment,
+            totalProfit: 0,
+            takafulAmount: 0,
+          },
+        }
+      : {}),
   };
 
   return await t.run((ctx) => ctx.db.insert("quotes", quote));

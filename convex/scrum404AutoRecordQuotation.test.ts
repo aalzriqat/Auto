@@ -319,7 +319,15 @@ describe("creating a financed deal with the confirmed calculated quotation (SCRU
     const shown = await availableFigure(seed.asOwner, seed, quoteId);
 
     // The quote moves after the operator saw the figure.
-    await seed.t.run((ctx) => ctx.db.patch(quoteId, { downPayment: 900 }));
+    // SCRUM-533: both copies move together, since a quote that disagrees with its own snapshot is
+    // refused earlier (QUOTE_PRICING_SNAPSHOT_MISMATCH) and would never reach the confirmation check.
+    await seed.t.run(async (ctx) => {
+      const quote = (await ctx.db.get(quoteId))!;
+      await ctx.db.patch(quoteId, {
+        downPayment: 900,
+        customerQuotePricingSnapshot: { ...quote.customerQuotePricingSnapshot!, downPayment: 900 },
+      });
+    });
     const moved = await availableFigure(seed.asOwner, seed, quoteId);
     expect(moved).not.toBe(shown);
 

@@ -21,7 +21,7 @@ import { api } from "@/convex/_generated/api";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { toast } from "@/components/ui/sonner";
 import { downloadElementAsPdf } from "@/lib/htmlToPdf";
-import { getErrorMessage, getLocalizedErrorMessage } from "@/lib/errors";
+import { getLocalizedErrorMessage } from "@/lib/errors";
 import { decideDepositSubmission } from "@/lib/depositSettlementSubmission";
 import { supportedCurrencyScale } from "@/convex/utils/money";
 import { useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
@@ -139,7 +139,7 @@ export function Step4QuoteSuccess({
       setApplicationId(id);
       toast.success(t("ApplicationStartedSuccess" as any) ?? "Finance application started");
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setIsStartingApplication(false);
     }

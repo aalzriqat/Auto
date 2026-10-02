@@ -31,7 +31,12 @@ import {
   assertReservationAdoptableWithoutDeposit,
 } from "./utils/depositRequestGuards";
 import { assertOperatedDealMode } from "./utils/dealModes";
-import { assertQuoteEconomicsMatchFrozen } from "./utils/quoteEconomicsAnchor";
+import {
+  assertQuoteEconomicsMatchFrozen,
+  isFinancedDeal,
+  quoteAgreesWithSnapshot,
+  QUOTE_PRICING_SNAPSHOT_MISMATCH_MESSAGE,
+} from "./utils/quoteEconomicsAnchor";
 import { completeSale } from "./utils/saleCompletion";
 import { planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal, forwardGateRefusal } from "./utils/financeCompanyForward";
@@ -2633,24 +2638,17 @@ export const createFromQuote = mutation({
           `Quote currency (${quote.customerQuotePricingSnapshot.currency}) does not match organization currency (${economicsCurrency}).`
         );
       }
+      // SCRUM-533. Admit only a quote that satisfies the predicate `finalizeDeal` later applies
+      // (SCRUM-528), so every admitted application is finalizable unless the quote changes afterwards.
+      const snap = quote.customerQuotePricingSnapshot;
       if (
-        quote.monthlyInstallment !== undefined &&
-        Math.abs(quote.monthlyInstallment - quote.customerQuotePricingSnapshot.monthlyInstallment) > 1e-4
+        !quoteAgreesWithSnapshot(quote, snap) ||
+        (quote.monthlyInstallment !== undefined && quote.monthlyInstallment !== snap.monthlyInstallment)
       ) {
-        throw new ConvexError(
-          "Quotation monthly installment does not match its frozen customer pricing snapshot."
-        );
+        throwAppError(AppErrorCode.QUOTE_PRICING_SNAPSHOT_MISMATCH, QUOTE_PRICING_SNAPSHOT_MISMATCH_MESSAGE);
       }
-      if (
-        quote.totalFinancedAmount !== undefined &&
-        Math.abs(quote.totalFinancedAmount - quote.customerQuotePricingSnapshot.totalFinancedAmount) > 1e-4
-      ) {
-        throw new ConvexError(
-          "Quotation total financed amount does not match its frozen customer pricing snapshot."
-        );
-      }
-      proposedInstallment = quote.customerQuotePricingSnapshot.monthlyInstallment;
-      totalFinancedAmount = quote.customerQuotePricingSnapshot.totalFinancedAmount;
+      proposedInstallment = snap.monthlyInstallment;
+      totalFinancedAmount = snap.totalFinancedAmount;
     } else {
       proposedInstallment = quote.monthlyInstallment ?? 0;
       totalFinancedAmount = quote.totalFinancedAmount;
@@ -2781,6 +2779,13 @@ export const createFromQuote = mutation({
         companyRuleSnapshot,
         currency: economicsCurrency,
       });
+
+    // SCRUM-533. A financed deal with no snapshot has nothing for `finalizeDeal` to anchor to (SCRUM-528
+    // fails closed on it), so it is refused here, before any write. Raised after the creation-economics
+    // resolution above so a quote that is also misconfigured keeps reporting that more specific refusal.
+    if (!quote.customerQuotePricingSnapshot && isFinancedDeal(quote.mode, quote.companyId)) {
+      throwAppError(AppErrorCode.QUOTE_PRICING_SNAPSHOT_MISMATCH, QUOTE_PRICING_SNAPSHOT_MISMATCH_MESSAGE);
+    }
 
     // SCRUM-195: a live finance application is per-vehicle commitment evidence
     // in its own right — no deposit required. So creating one is an
