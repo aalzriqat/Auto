@@ -52,12 +52,14 @@ function orgRowsOrder(): string[] {
 }
 
 describe("SCRUM-563 R5(a) — ORGANIZATION_DELETION_STEPS order is frozen", () => {
-  test("the leading steps are exactly this sequence (a reorder skips steps for in-flight purges)", () => {
-    // The cursor is a numeric index into this array. If an entry moves, a purge
-    // that stored index N resumes at a DIFFERENT step and the steps that moved
-    // across N are skipped without error. Frozen prefix only: appending a table
-    // later in the list does not shift any earlier index and is allowed.
-    expect(ORGANIZATION_DELETION_STEPS.slice(0, 12).map((s) => (s.kind === "orgRows" ? s.table : s.kind))).toEqual([
+  // The cursor is a numeric index into ORGANIZATION_DELETION_STEPS. If an entry
+  // moves, is removed or is inserted mid-list, a purge that stored index N
+  // resumes at a DIFFERENT step and the steps that moved across N are skipped
+  // without error. The FULL current order is pinned (orgRows steps by table,
+  // special steps by kind). Appending at the END is the only allowed change: it
+  // shifts no existing index, so the pinned list must remain a prefix of the
+  // live one. Anything else must update this test AND handle in-flight purges.
+  const PINNED_ORDER: string[] = [
       "commandIdempotency",
       "chartOfAccounts",
       "accountingPeriods",
@@ -70,7 +72,37 @@ describe("SCRUM-563 R5(a) — ORGANIZATION_DELETION_STEPS order is frozen", () =
       "receiptApplications",
       "receiptRetainedPositions",
       "receiptMovements",
-    ]);
+      "paymentAllocations", "canonicalPayments", "receivableDocuments", "financialAuditLog",
+      "vehicleLandedCosts", "vehicleSupplierPayables", "vehicleSupplierReceivables",
+      "supplierCostRecoveryReceipts", "supplierCostRecoveries", "consignedSaleCorrections",
+      "vehiclePriceHistory", "vehicleReservations", "vehicleStatusRequests",
+      "vehicleEditsWithStorage", "vehiclesWithStorage",
+      "leads", "sales", "expenses", "tasks", "taskHistory",
+      "notifications", "notificationPreferences", "notificationBroadcasts",
+      "test_drives", "workOrders", "financeCompanies", "vehicleValuations", "guarantors",
+      "quotes", "applicationStatusLog",
+      "financeAppraisalsWithStorage", "financeApplicationOverrides", "financeCompanyForwards",
+      "financeDealCustodyEntries", "financeDealFeesWithStorage", "financeDealCustody",
+      "financeApplications", "vehicleOwnershipConversionsWithStorage", "financeCompanyRuleVersions",
+      "vehicleCommitmentClaims", "commitmentRoots", "depositApplications", "deposits", "depositRequests",
+      "receivables", "collectionPayments", "postDatedCheques", "cashierReconciliations",
+      "collectionApprovalRequests", "collectionReminders", "companyDocumentRules",
+      "applicationDocumentsWithStorage", "branches", "transactions", "fixedAssets", "partnerEquity",
+      "claims", "wizardDrafts", "orgSettingsWithStorage", "leadAssignmentCursors",
+      "websiteSettings", "websiteDomains", "websitePublishedSections", "websiteLeadRouting",
+      "websitePublishSnapshots", "siteVisitorEvents", "siteVisitors", "domainSearchLogs",
+      "oauthStates", "instagramEvents", "facebookEvents", "socialContacts", "socialConversations",
+      "socialMaterializationState", "facebookMessages", "socialPostsWithStorage",
+      "orgCustomFields", "orgCustomFieldValues", "orgLeadSources", "orgValuationCompanies",
+      "orgPipelineStages", "orgImportMappings", "orgCustomerStatuses", "profitApprovalRequests",
+      "feedback", "customers", "supportOrgAccessGrants", "liveChatThreads", "dmConversations",
+      "impersonationGrants", "paymentIntents", "subscriptions", "invitations", "memberships", "roles",
+  ];
+
+  test("the full current order is frozen; only appending at the end is allowed (a reorder skips steps for in-flight purges)", () => {
+    const live = ORGANIZATION_DELETION_STEPS.map((s) => (s.kind === "orgRows" ? s.table : s.kind));
+    expect(live.slice(0, PINNED_ORDER.length)).toEqual(PINNED_ORDER);
+    expect(live.length).toBeGreaterThanOrEqual(PINNED_ORDER.length);
   });
 
   test("accountingEvents, pendingAccountingEvents, journalLines, journalEntries keep their relative order and indexes", () => {
